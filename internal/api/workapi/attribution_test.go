@@ -16,7 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // tokenRow is the one row the guard's machine-token arm reads.
@@ -100,7 +100,7 @@ func TestAWriteThroughAMachineTokenIsRecordedAsTheToken(t *testing.T) {
 		t.Fatal("no work record was written")
 	}
 	for _, a := range r.writes.actors {
-		if a.Handle != "cto" || a.Kind != tracker.AuthorHuman || a.OperatorID != via {
+		if a.Handle != "cto" || a.Kind != worklet.AuthorHuman || a.OperatorID != via {
 			t.Errorf("a work record is written as %q (%s) through %q, want the "+
 				"owner's seat as a human, through %q", a.Handle, a.Kind,
 				a.OperatorID, via)

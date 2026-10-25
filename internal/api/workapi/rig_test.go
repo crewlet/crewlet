@@ -18,12 +18,12 @@ import (
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/workapi"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // ---- the chart ---------------------------------------------------------- //
@@ -97,7 +97,7 @@ func admin(seat string) iam.Principal {
 type reader struct {
 	builtin.WorkReader
 	mu    sync.Mutex
-	tasks map[string]tracker.TaskDetail
+	tasks map[string]worklet.TaskDetail
 	err   error
 
 	// asks are the open asks on each task, by the seat each one names — what
@@ -106,14 +106,14 @@ type reader struct {
 }
 
 func newReader() *reader {
-	task := func(id, key, project string, rank tracker.Rank) tracker.TaskDetail {
-		return tracker.TaskDetail{Task: tracker.Task{
+	task := func(id, key, project string, rank worklet.Rank) worklet.TaskDetail {
+		return worklet.TaskDetail{Task: worklet.Task{
 			ID: id, Key: key, Project: project, Title: "work " + key,
-			Status: tracker.StatusTodo, Rank: rank, Version: 3,
+			Status: worklet.StatusTodo, Rank: rank, Version: 3,
 		}, Complete: true}
 	}
-	r := &reader{tasks: map[string]tracker.TaskDetail{}}
-	for _, d := range []tracker.TaskDetail{
+	r := &reader{tasks: map[string]worklet.TaskDetail{}}
+	for _, d := range []worklet.TaskDetail{
 		task("t-1", "ENG-1", "ENG", "a1"),
 		task("t-2", "ENG-2", "ENG", "a5"),
 		task("t-9", "OPS-1", "OPS", "a3"),
@@ -123,23 +123,23 @@ func newReader() *reader {
 	return r
 }
 
-func (r *reader) Task(_ context.Context, ref string, want tracker.DetailWants,
-	_ statelog.Freshness) (tracker.TaskDetail, error) {
+func (r *reader) Task(_ context.Context, ref string, want worklet.DetailWants,
+	_ statelog.Freshness) (worklet.TaskDetail, error) {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.err != nil {
-		return tracker.TaskDetail{}, r.err
+		return worklet.TaskDetail{}, r.err
 	}
 	d, ok := r.tasks[ref]
 	if !ok {
-		return tracker.TaskDetail{}, tracker.ErrNoTask
+		return worklet.TaskDetail{}, worklet.ErrNoTask
 	}
 	if want.Comment != "" {
 		d.Comments = nil
 		for _, c := range r.tasks["comments:"+d.Task.ID].Comments {
 			if c.ID == want.Comment {
-				d.Comments = []tracker.Comment{c}
+				d.Comments = []worklet.Comment{c}
 			}
 		}
 	}
@@ -148,26 +148,26 @@ func (r *reader) Task(_ context.Context, ref string, want tracker.DetailWants,
 
 // Thread infers the one open ask a comment's author was asked, as the
 // tracker's reader does, and refuses an `answers` naming somebody else's.
-func (r *reader) Thread(_ context.Context, q tracker.ThreadQuery,
-	_ statelog.Freshness) (tracker.ResolvedThread, error) {
+func (r *reader) Thread(_ context.Context, q worklet.ThreadQuery,
+	_ statelog.Freshness) (worklet.ResolvedThread, error) {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	open := r.asks[q.Task]
-	out := tracker.ResolvedThread{ThreadParties: tracker.ThreadParties{Asked: q.Ask},
+	out := worklet.ResolvedThread{ThreadParties: worklet.ThreadParties{Asked: q.Ask},
 		Answers: q.Answers}
 	if out.Answers == "" && q.Author != "" {
 		out.Answers = open[q.Author]
 	}
 	if out.Answers != "" && open[q.Author] != out.Answers {
-		return tracker.ResolvedThread{}, fmt.Errorf("%w: %s asked somebody else",
-			tracker.ErrForbidden, out.Answers)
+		return worklet.ResolvedThread{}, fmt.Errorf("%w: %s asked somebody else",
+			worklet.ErrForbidden, out.Answers)
 	}
 	return out, nil
 }
 
 // addComment files a remark on a task, for the edit cases.
-func (r *reader) addComment(taskID string, c tracker.Comment) {
+func (r *reader) addComment(taskID string, c worklet.Comment) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	d := r.tasks["comments:"+taskID]
@@ -181,27 +181,27 @@ type writes struct {
 	mu      sync.Mutex
 	opIDs   []string
 	actors  []builtin.Actor
-	created []tracker.Task
-	updates []tracker.TaskPatch
-	placed  []tracker.Place
+	created []worklet.Task
+	updates []worklet.TaskPatch
+	placed  []worklet.Place
 	targets []string
 	purged  []string
 	edited  []string
 	inbox   []string
 	pins    []string
 	prios   []string
-	views   []tracker.View
-	authz   []tracker.PersonAuthority
+	views   []worklet.View
+	authz   []worklet.PersonAuthority
 
 	// result and err are what the next write answers.
 	result statelog.Result
 	err    error
 }
 
-func (w *writes) answer(opID string) (tracker.WriteResult, error) {
+func (w *writes) answer(opID string) (worklet.WriteResult, error) {
 	w.opIDs = append(w.opIDs, opID)
 	if w.err != nil {
-		return tracker.WriteResult{}, w.err
+		return worklet.WriteResult{}, w.err
 	}
 	res := w.result
 	if res.Outcome == "" {
@@ -209,7 +209,7 @@ func (w *writes) answer(opID string) (tracker.WriteResult, error) {
 	}
 	res.OpID = opID
 	res.Version = 4
-	return tracker.WriteResult{Result: res, Key: "ENG-7"}, nil
+	return worklet.WriteResult{Result: res, Key: "ENG-7"}, nil
 }
 
 // as is every per-actor writer seam at once.
@@ -222,8 +222,8 @@ func (w *writes) as(actor builtin.Actor) *bound {
 
 type bound struct{ w *writes }
 
-func (b *bound) CreateTask(_ context.Context, opID string, task tracker.Task,
-	_ *tracker.Notify) (tracker.WriteResult, error) {
+func (b *bound) CreateTask(_ context.Context, opID string, task worklet.Task,
+	_ *worklet.Notify) (worklet.WriteResult, error) {
 
 	b.w.mu.Lock()
 	defer b.w.mu.Unlock()
@@ -233,15 +233,15 @@ func (b *bound) CreateTask(_ context.Context, opID string, task tracker.Task,
 
 // CreateTaskAsking is a create that opens with a question to a seat: the same
 // task, recorded as a create.
-func (b *bound) CreateTaskAsking(ctx context.Context, opID string, task tracker.Task,
-	_ tracker.Comment, notify *tracker.Notify) (tracker.WriteResult, error) {
+func (b *bound) CreateTaskAsking(ctx context.Context, opID string, task worklet.Task,
+	_ worklet.Comment, notify *worklet.Notify) (worklet.WriteResult, error) {
 
 	return b.CreateTask(ctx, opID, task, notify)
 }
 
 func (b *bound) UpdateTask(_ context.Context, opID, _, _ string, _ uint64,
-	patch tracker.TaskPatch, _ tracker.ChangeKind,
-	_ *tracker.Notify) (tracker.WriteResult, error) {
+	patch worklet.TaskPatch, _ worklet.ChangeKind,
+	_ *worklet.Notify) (worklet.WriteResult, error) {
 
 	b.w.mu.Lock()
 	defer b.w.mu.Unlock()
@@ -250,7 +250,7 @@ func (b *bound) UpdateTask(_ context.Context, opID, _, _ string, _ uint64,
 }
 
 func (b *bound) RemoveTask(_ context.Context, opID, _, _ string, _ bool,
-	_ *tracker.Notify) (tracker.WriteResult, error) {
+	_ *worklet.Notify) (worklet.WriteResult, error) {
 
 	b.w.mu.Lock()
 	defer b.w.mu.Unlock()
@@ -258,25 +258,25 @@ func (b *bound) RemoveTask(_ context.Context, opID, _, _ string, _ bool,
 }
 
 func (b *bound) RestoreTask(_ context.Context, opID, _, _ string, _ bool,
-	_ *tracker.Notify) (tracker.WriteResult, error) {
+	_ *worklet.Notify) (worklet.WriteResult, error) {
 
 	b.w.mu.Lock()
 	defer b.w.mu.Unlock()
 	return b.w.answer(opID)
 }
 
-// MoveTaskToProject is the cross-project move. A [tracker.MoveStopped] in the
+// MoveTaskToProject is the cross-project move. A [worklet.MoveStopped] in the
 // rig's err comes WITH the root's receipt, as the tracker answers one: the
 // root moved, and it is the walk that stopped.
 func (b *bound) MoveTaskToProject(_ context.Context, opID, _, target string,
-	_ *tracker.Notify) (tracker.WriteResult, error) {
+	_ *worklet.Notify) (worklet.WriteResult, error) {
 
 	b.w.mu.Lock()
 	defer b.w.mu.Unlock()
 	b.w.targets = append(b.w.targets, target)
-	if stop := (*tracker.MoveStopped)(nil); errors.As(b.w.err, &stop) {
+	if stop := (*worklet.MoveStopped)(nil); errors.As(b.w.err, &stop) {
 		b.w.opIDs = append(b.w.opIDs, opID)
-		return tracker.WriteResult{Result: statelog.Result{
+		return worklet.WriteResult{Result: statelog.Result{
 			Outcome: statelog.OutcomeApplied, OpID: opID, Version: 4,
 		}}, b.w.err
 	}
@@ -286,21 +286,21 @@ func (b *bound) MoveTaskToProject(_ context.Context, opID, _, target string,
 // PlaceTask is a board drag: the card, the neighbour it was dropped beside
 // and the lane, as the tool resolved them. The order step answers as every
 // write here does; the lane step wrote nothing unless the drag named one.
-func (b *bound) PlaceTask(_ context.Context, opID string, place tracker.Place,
-	_ *tracker.Notify) (tracker.PlaceResult, error) {
+func (b *bound) PlaceTask(_ context.Context, opID string, place worklet.Place,
+	_ *worklet.Notify) (worklet.PlaceResult, error) {
 
 	b.w.mu.Lock()
 	defer b.w.mu.Unlock()
 	b.w.placed = append(b.w.placed, place)
 	order, err := b.w.answer(opID)
 	if err != nil {
-		return tracker.PlaceResult{}, err
+		return worklet.PlaceResult{}, err
 	}
-	return tracker.PlaceResult{Order: order, Rank: "a7", Version: order.Version}, nil
+	return worklet.PlaceResult{Order: order, Rank: "a7", Version: order.Version}, nil
 }
 
 func (b *bound) PurgeTask(_ context.Context, opID, id, project, reason string) (
-	tracker.WriteResult, error) {
+	worklet.WriteResult, error) {
 
 	b.w.mu.Lock()
 	defer b.w.mu.Unlock()
@@ -309,7 +309,7 @@ func (b *bound) PurgeTask(_ context.Context, opID, id, project, reason string) (
 }
 
 func (b *bound) EditComment(_ context.Context, opID, _, _, commentID, body string,
-	_ *tracker.Notify) (tracker.WriteResult, error) {
+	_ *worklet.Notify) (worklet.WriteResult, error) {
 
 	b.w.mu.Lock()
 	defer b.w.mu.Unlock()
@@ -318,7 +318,7 @@ func (b *bound) EditComment(_ context.Context, opID, _, _, commentID, body strin
 }
 
 func (b *bound) MarkInbox(_ context.Context, opID, handle string,
-	_ tracker.InboxGesture, authority tracker.PersonAuthority) (tracker.WriteResult, error) {
+	_ worklet.InboxGesture, authority worklet.PersonAuthority) (worklet.WriteResult, error) {
 
 	b.w.mu.Lock()
 	defer b.w.mu.Unlock()
@@ -327,8 +327,8 @@ func (b *bound) MarkInbox(_ context.Context, opID, handle string,
 	return b.w.answer(opID)
 }
 
-func (b *bound) WritePins(_ context.Context, opID, handle string, _ tracker.PinGesture,
-	authority tracker.PersonAuthority) (tracker.WriteResult, error) {
+func (b *bound) WritePins(_ context.Context, opID, handle string, _ worklet.PinGesture,
+	authority worklet.PersonAuthority) (worklet.WriteResult, error) {
 
 	b.w.mu.Lock()
 	defer b.w.mu.Unlock()
@@ -338,7 +338,7 @@ func (b *bound) WritePins(_ context.Context, opID, handle string, _ tracker.PinG
 }
 
 func (b *bound) WritePriorities(_ context.Context, opID, handle string, _ []string,
-	_ *uint64, authority tracker.PersonAuthority) (tracker.WriteResult, error) {
+	_ *uint64, authority worklet.PersonAuthority) (worklet.WriteResult, error) {
 
 	b.w.mu.Lock()
 	defer b.w.mu.Unlock()
@@ -367,12 +367,12 @@ func (d directory) HolderRecord(_ context.Context, login string) (string, error)
 	return "", fmt.Errorf("%w: %s", iam.ErrNoHolder, login)
 }
 
-func (b *bound) ViewPrior(context.Context, string) (tracker.ViewPrior, error) {
-	return tracker.ViewPrior{}, nil
+func (b *bound) ViewPrior(context.Context, string) (worklet.ViewPrior, error) {
+	return worklet.ViewPrior{}, nil
 }
 
-func (b *bound) WriteView(_ context.Context, opID string, view tracker.View,
-	_ tracker.ViewPrior) (tracker.WriteResult, error) {
+func (b *bound) WriteView(_ context.Context, opID string, view worklet.View,
+	_ worklet.ViewPrior) (worklet.WriteResult, error) {
 
 	b.w.mu.Lock()
 	defer b.w.mu.Unlock()
@@ -387,8 +387,8 @@ func (b *bound) WriteView(_ context.Context, opID string, view tracker.View,
 type kb struct {
 	builtin.PageReader
 	mu      sync.Mutex
-	page    pages.Detail
-	actors  []pages.Actor
+	page    doclet.Detail
+	actors  []doclet.Actor
 	did     []string
 	moderat []bool
 
@@ -396,72 +396,72 @@ type kb struct {
 }
 
 func newKB() *kb {
-	return &kb{page: pages.Detail{
-		Page:     pages.Page{ID: "p-1", Container: "ENG", Title: "Runbook", Version: 2},
-		Comments: []pages.Comment{{ID: "c-1", Author: "ana", Body: "stale step"}},
+	return &kb{page: doclet.Detail{
+		Page:     doclet.Page{ID: "p-1", Container: "ENG", Title: "Runbook", Version: 2},
+		Comments: []doclet.Comment{{ID: "c-1", Author: "ana", Body: "stale step"}},
 	}}
 }
 
-func (k *kb) Get(_ context.Context, ref string, _ statelog.Freshness) (pages.Detail, error) {
+func (k *kb) Get(_ context.Context, ref string, _ statelog.Freshness) (doclet.Detail, error) {
 	if ref != k.page.Page.ID {
-		return pages.Detail{}, pages.ErrNotFound
+		return doclet.Detail{}, doclet.ErrNotFound
 	}
 	return k.page, nil
 }
 
-func (k *kb) record(actor pages.Actor, what string) (pages.Written, error) {
+func (k *kb) record(actor doclet.Actor, what string) (doclet.Written, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.actors = append(k.actors, actor)
 	k.did = append(k.did, what)
 	if k.err != nil {
-		return pages.Written{}, k.err
+		return doclet.Written{}, k.err
 	}
-	return pages.Written{Page: k.page.Page, Revision: 9, Outcome: statelog.Result{
+	return doclet.Written{Page: k.page.Page, Revision: 9, Outcome: statelog.Result{
 		Outcome: statelog.OutcomeApplied,
 	}}, nil
 }
 
-func (k *kb) Create(_ context.Context, actor pages.Actor, in pages.NewPage) (pages.Written, error) {
+func (k *kb) Create(_ context.Context, actor doclet.Actor, in doclet.NewPage) (doclet.Written, error) {
 	return k.record(actor, "create "+in.Title)
 }
 
-func (k *kb) SavePage(_ context.Context, actor pages.Actor, id string, _ pages.Save) (pages.Written, error) {
+func (k *kb) SavePage(_ context.Context, actor doclet.Actor, id string, _ doclet.Save) (doclet.Written, error) {
 	return k.record(actor, "save "+id)
 }
 
-func (k *kb) Rename(_ context.Context, actor pages.Actor, id, title string, _ bool) (pages.Written, error) {
+func (k *kb) Rename(_ context.Context, actor doclet.Actor, id, title string, _ bool) (doclet.Written, error) {
 	return k.record(actor, "rename "+id+" "+title)
 }
 
-func (k *kb) Comment(_ context.Context, actor pages.Actor, id string,
-	in pages.NewComment) (pages.Comment, pages.Written, error) {
+func (k *kb) Comment(_ context.Context, actor doclet.Actor, id string,
+	in doclet.NewComment) (doclet.Comment, doclet.Written, error) {
 
 	written, err := k.record(actor, "comment "+id)
-	return pages.Comment{ID: "c-new", Body: in.Body}, written, err
+	return doclet.Comment{ID: "c-new", Body: in.Body}, written, err
 }
 
-func (k *kb) EditComment(_ context.Context, actor pages.Actor, id, cid, body string) (
-	pages.Comment, pages.Written, error) {
+func (k *kb) EditComment(_ context.Context, actor doclet.Actor, id, cid, body string) (
+	doclet.Comment, doclet.Written, error) {
 
 	written, err := k.record(actor, "edit "+cid+" "+body)
-	return pages.Comment{ID: cid, Body: body}, written, err
+	return doclet.Comment{ID: cid, Body: body}, written, err
 }
 
-func (k *kb) Trash(_ context.Context, actor pages.Actor, id string) (pages.Written, error) {
+func (k *kb) Trash(_ context.Context, actor doclet.Actor, id string) (doclet.Written, error) {
 	return k.record(actor, "trash "+id)
 }
 
-func (k *kb) Restore(_ context.Context, actor pages.Actor, id string) (pages.Written, error) {
+func (k *kb) Restore(_ context.Context, actor doclet.Actor, id string) (doclet.Written, error) {
 	return k.record(actor, "restore "+id)
 }
 
-func (k *kb) Purge(_ context.Context, actor pages.Actor, id, reason string) (pages.Written, error) {
+func (k *kb) Purge(_ context.Context, actor doclet.Actor, id, reason string) (doclet.Written, error) {
 	return k.record(actor, "purge "+id+" "+reason)
 }
 
-func (k *kb) RemoveComment(_ context.Context, actor pages.Actor, id, cid string,
-	authority pages.CommentAuthority) (pages.Written, error) {
+func (k *kb) RemoveComment(_ context.Context, actor doclet.Actor, id, cid string,
+	authority doclet.CommentAuthority) (doclet.Written, error) {
 
 	k.mu.Lock()
 	k.moderat = append(k.moderat, authority.Moderate)

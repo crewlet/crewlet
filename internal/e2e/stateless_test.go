@@ -19,6 +19,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -26,12 +27,11 @@ import (
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/notify"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A node that holds no data, end to end.
@@ -248,14 +248,14 @@ func TestASeatOnAStatelessNodeWritesThroughADataNode(t *testing.T) {
 	waitFor(t, "the stateless node to be admitted by a data node", hydrated(t, p.agent.engine))
 	waitForSeat(t, p.agent, "ceo")
 
-	p.agent.model.callOnExecute(tracker.CreateWorkItemTool, map[string]any{
+	p.agent.model.callOnExecute(worklet.CreateWorkItemTool, map[string]any{
 		"project": "ENG", "title": "filed from a node that holds nothing",
 	})
 	wakeWithMessage(t, p.agent, "ceo")
 
-	var detail tracker.TaskDetail
+	var detail worklet.TaskDetail
 	waitFor(t, "the task on the data node", func() bool {
-		got, err := p.data.engine.Tracker().Task(t.Context(), "ENG-1", tracker.DetailWants{},
+		got, err := p.data.engine.Tracker().Task(t.Context(), "ENG-1", worklet.DetailWants{},
 			statelog.Freshness{Level: statelog.ReadStale})
 		if err != nil {
 			return false
@@ -290,7 +290,7 @@ func TestASeatOnAStatelessNodeWritesThroughADataNode(t *testing.T) {
 func TestAStatelessNodeSearchesTheFleetsKnowledge(t *testing.T) {
 	t.Parallel()
 	p := startStatelessPair(t)
-	if _, err := p.data.engine.PagesStore().Create(t.Context(), pageOperator(), pages.NewPage{
+	if _, err := p.data.engine.PagesStore().Create(t.Context(), pageOperator(), doclet.NewPage{
 		Container: "ENG", Title: "Rollback runbook",
 		Body: "When a deploy hangs on rollback, drain the node before retrying.",
 	}); err != nil {

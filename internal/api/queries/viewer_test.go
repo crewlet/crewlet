@@ -17,7 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // viewerCompany holds two human seats, so "somebody else's handle" is a real
@@ -638,13 +638,13 @@ func TestEveryInboxFilterReachesTheReader(t *testing.T) {
 		t.Fatalf("work_inbox: %v", err)
 	}
 	q := work.inboxQuery
-	if !q.Unread || !q.PrimaryOnly || q.Snoozed != tracker.SnoozeOnly {
+	if !q.Unread || !q.PrimaryOnly || q.Snoozed != worklet.SnoozeOnly {
 		t.Errorf("the three filters reached the reader as %+v", q)
 	}
 	if q.Limit != 7 || q.Cursor != "c-9" {
 		t.Errorf("limit/cursor reached the reader as %d/%q", q.Limit, q.Cursor)
 	}
-	want := []tracker.Reason{tracker.ReasonMention, tracker.ReasonAsked}
+	want := []worklet.Reason{worklet.ReasonMention, worklet.ReasonAsked}
 	if len(q.Reasons) != len(want) || q.Reasons[0] != want[0] || q.Reasons[1] != want[1] {
 		t.Errorf("reasons reached the reader as %v, want %v", q.Reasons, want)
 	}
@@ -677,9 +677,9 @@ func TestTheSnoozedScopeDefaultsToExcludeAndRefusesAnUnknownOne(t *testing.T) {
 		map[string]any{}); err != nil {
 		t.Fatalf("work_inbox: %v", err)
 	}
-	if work.inboxQuery.Snoozed != tracker.SnoozeExclude {
+	if work.inboxQuery.Snoozed != worklet.SnoozeExclude {
 		t.Errorf("an absent `snoozed` reached the reader as %q, want %q",
-			work.inboxQuery.Snoozed, tracker.SnoozeExclude)
+			work.inboxQuery.Snoozed, worklet.SnoozeExclude)
 	}
 	_, err := askAsOperator(t, viewerSources(t, &stubWork{}), "work_inbox",
 		map[string]any{"snoozed": "bogus"})

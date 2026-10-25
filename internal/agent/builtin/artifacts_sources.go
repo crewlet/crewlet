@@ -21,7 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // WHERE AN AGENT'S FILES COME FROM: five sources, one write path.
@@ -433,7 +433,7 @@ func (s *fileSources) digest(ctx context.Context, from string,
 func (s *fileSources) projectFile(ctx context.Context, published string,
 	ref map[string]any) (artifactFile, *tools.Result) {
 
-	project := tracker.ProjectKey(strings.TrimSpace(argString(ref, "project")))
+	project := worklet.ProjectKey(strings.TrimSpace(argString(ref, "project")))
 	from := strings.TrimSpace(argString(ref, "path"))
 	if project == "" || from == "" {
 		r := failed(fmt.Sprintf("%s: `from_project_file` for %q takes `{project, path}`.",
@@ -449,13 +449,13 @@ func (s *fileSources) projectFile(ctx context.Context, published string,
 	// READING THE FILE IS read_project_file's VERB, asked as that tool's own
 	// gate asks it: a caller who may not read a project's files may not copy
 	// one into an artifact either.
-	if refusal := askAuthority(ctx, s.deps.authorize, authz.Action(tracker.ReadProjectFileTool),
+	if refusal := askAuthority(ctx, s.deps.authorize, authz.Action(worklet.ReadProjectFileTool),
 		authz.Object{}); refusal != nil {
 		return artifactFile{}, refusal
 	}
 	detail, err := work.Files.File(ctx, project, from, seatRead)
 	switch {
-	case errors.Is(err, tracker.ErrNoFile):
+	case errors.Is(err, worklet.ErrNoFile):
 		r := refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s: project %s has no "+
 			"file %q to copy into %q.", s.tool, project, clip(from), published))
 		return artifactFile{}, &r

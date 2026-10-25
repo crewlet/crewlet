@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
@@ -33,12 +33,12 @@ func linkedFrom(t *testing.T, x *search.Indexer, id string) search.Backlinks {
 func TestLinkedFromListsThePagesAndTasksThatCarryTheAddress(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db, db.Replicated().Reader()).WithLinks(pages.Links)
+	x := search.NewIndexer(db, db.Replicated().Reader()).WithLinks(doclet.Links)
 
 	page(t, db, runbookID, "ENG", "Provisioner runbook",
-		"Permalink: "+pages.AddressPrefix+runbookID, 1)
+		"Permalink: "+doclet.AddressPrefix+runbookID, 1)
 	page(t, db, oncallID, "ENG", "Scheduler on-call",
-		"When a host fails, follow [the runbook]("+pages.AddressPrefix+runbookID+").", 1)
+		"When a host fails, follow [the runbook]("+doclet.AddressPrefix+runbookID+").", 1)
 	page(t, db, postmortemID, "ENG", "Postmortem",
 		"An example link: `/pages/"+runbookID+"`.", 1)
 	item(t, db, "i.retry", "ENG", "Retry PXE boot",
@@ -64,7 +64,7 @@ func TestLinkedFromListsThePagesAndTasksThatCarryTheAddress(t *testing.T) {
 func TestAnIndexStillBuildingRefusesRatherThanAnsweringEmpty(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db, db.Replicated().Reader()).WithLinks(pages.Links)
+	x := search.NewIndexer(db, db.Replicated().Reader()).WithLinks(doclet.Links)
 
 	page(t, db, runbookID, "ENG", "Provisioner runbook", "The runbook.", 1)
 	page(t, db, oncallID, "ENG", "Scheduler on-call", "See /pages/"+runbookID, 1)
@@ -85,7 +85,7 @@ func TestAnIndexStillBuildingRefusesRatherThanAnsweringEmpty(t *testing.T) {
 func TestABacklinkLeavesWithTheEditOrTheSourceThatCarriedIt(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db, db.Replicated().Reader()).WithLinks(pages.Links)
+	x := search.NewIndexer(db, db.Replicated().Reader()).WithLinks(doclet.Links)
 
 	page(t, db, runbookID, "ENG", "Provisioner runbook", "The runbook.", 1)
 	page(t, db, oncallID, "ENG", "Scheduler on-call", "See /pages/"+runbookID, 1)
@@ -123,7 +123,7 @@ func TestARowIndexedUnderAnEarlierDerivationIsRederived(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	x := search.NewIndexer(db, db.Replicated().Reader()).WithLinks(pages.Links)
+	x := search.NewIndexer(db, db.Replicated().Reader()).WithLinks(doclet.Links)
 	indexAll(t, x)
 	if got := linkedFrom(t, x, runbookID); got.PagesTotal != 1 {
 		t.Errorf("after the bump's first laps: %+v, want the on-call page — the "+
@@ -137,7 +137,7 @@ func TestARowIndexedUnderAnEarlierDerivationIsRederived(t *testing.T) {
 func TestATaskLinkedByRelationOrByItsDescriptionIsLinkedFrom(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db, db.Replicated().Reader()).WithLinks(pages.Links)
+	x := search.NewIndexer(db, db.Replicated().Reader()).WithLinks(doclet.Links)
 
 	page(t, db, runbookID, "ENG", "Provisioner runbook", "The runbook.", 1)
 	item(t, db, "ENG-9", "ENG", "Flaky e2e", "No address here.", 1)
@@ -184,7 +184,7 @@ func TestATaskLinkedByRelationOrByItsDescriptionIsLinkedFrom(t *testing.T) {
 func TestABacklinkedTaskWhoseKeyAnotherClaimedSaysSo(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
-	x := search.NewIndexer(db, db.Replicated().Reader()).WithLinks(pages.Links)
+	x := search.NewIndexer(db, db.Replicated().Reader()).WithLinks(doclet.Links)
 
 	page(t, db, runbookID, "ENG", "Provisioner runbook", "The runbook.", 1)
 	item(t, db, "t-claimant", "ENG", "The claimant", "See /pages/"+runbookID, 1)

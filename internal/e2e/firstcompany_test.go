@@ -16,7 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A NODE WITH NO COMPANY SIGNS ITS TIER A TOKEN IN, TAKES ITS FIRST COMPANY BY
@@ -128,7 +128,7 @@ func TestANodeWithNoCompanySignsInAndServesWorkAfterItsFirstApply(t *testing.T) 
 	// written by the token, which no directory row binds to a seat, under
 	// its own whole login.
 	item := fileWork(t, n, operator, file)
-	assertAuthor(t, n, item, iam.TokenLogin(e2eTokenID), tracker.AuthorOperator)
+	assertAuthor(t, n, item, iam.TokenLogin(e2eTokenID), worklet.AuthorOperator)
 
 	// THE FIRST PERSON, now that the company declares the seat they will
 	// hold: invited onto it under the same token, signed in, and writing AS
@@ -138,7 +138,7 @@ func TestANodeWithNoCompanySignsInAndServesWorkAfterItsFirstApply(t *testing.T) 
 	theirs := fileWork(t, n, jane, map[string]any{
 		"title": "the second thing we do", "project": "ENG",
 	})
-	assertAuthor(t, n, theirs, janeSeat, tracker.AuthorHuman)
+	assertAuthor(t, n, theirs, janeSeat, worklet.AuthorHuman)
 }
 
 // e2eTokenID is the id of the fixture's Tier A entry ([withCredential]), and so
@@ -233,12 +233,12 @@ func fileWork(t *testing.T, n *node, b *browser, file map[string]any) string {
 
 // assertAuthor waits for this node to apply item and asserts who its last
 // change is recorded as written by.
-func assertAuthor(t *testing.T, n *node, item, actor string, kind tracker.AuthorKind) {
+func assertAuthor(t *testing.T, n *node, item, actor string, kind worklet.AuthorKind) {
 	t.Helper()
-	var change tracker.HistoryEntry
+	var change worklet.HistoryEntry
 	settle(t, "this node to apply "+item, func() (bool, string) {
 		detail, err := n.engine.Tracker().Task(t.Context(), item,
-			tracker.DetailWants{History: true},
+			worklet.DetailWants{History: true},
 			statelog.Freshness{Level: statelog.ReadSession})
 		if err != nil || len(detail.History) == 0 {
 			return false, ""

@@ -746,7 +746,7 @@ func TestARefusalWaitingCannotClearIsNeverToldToComeBack(t *testing.T) {
 			RetryAfter: statelog.RetryHint(code, 1_000, 100)}
 		// WRAPPED, because a surface meets it inside whatever the domain
 		// said about it.
-		got := statelog.RetryAfter(fmt.Errorf("tracker: read: %w", refused), otherwise)
+		got := statelog.RetryAfter(fmt.Errorf("worklet: read: %w", refused), otherwise)
 		switch {
 		case !code.Retryable() && got != 0:
 			t.Errorf("read refusal %q says come back in %s, and waiting on "+
@@ -792,7 +792,7 @@ func TestARefusalWaitingCannotClearIsNeverToldToComeBack(t *testing.T) {
 		if c.retryable {
 			want = otherwise
 		}
-		refused := fmt.Errorf("tracker: publish: %w",
+		refused := fmt.Errorf("worklet: publish: %w",
 			&statelog.Unavailable{Reason: c.reason, Detail: "a detail"})
 		if got := statelog.RetryAfter(refused, otherwise); got != want {
 			t.Errorf("write refusal %q says come back in %s, want %s", c.reason,

@@ -18,7 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A TURN ON A NODE WITHOUT `data` CHARGES THE TASK THAT WOKE IT, ON A DATA
@@ -110,22 +110,22 @@ func (billingModel) Complete(_ context.Context, req llm.Request) (*llm.Completio
 type servedWriter struct {
 	estate.TrackerWriter
 	mu    sync.Mutex
-	turns []tracker.TurnRecord
+	turns []worklet.TurnRecord
 	ops   []string
 }
 
 func (w *servedWriter) RecordTurn(_ context.Context, opID string,
-	turn tracker.TurnRecord) (tracker.WriteResult, error) {
+	turn worklet.TurnRecord) (worklet.WriteResult, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.turns, w.ops = append(w.turns, turn), append(w.ops, opID)
-	return tracker.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied}}, nil
+	return worklet.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied}}, nil
 }
 
-func (w *servedWriter) recorded() ([]tracker.TurnRecord, []string) {
+func (w *servedWriter) recorded() ([]worklet.TurnRecord, []string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return append([]tracker.TurnRecord(nil), w.turns...), append([]string(nil), w.ops...)
+	return append([]worklet.TurnRecord(nil), w.turns...), append([]string(nil), w.ops...)
 }
 
 // staticRoster names one data node.
@@ -200,14 +200,14 @@ func spendingEngine(t *testing.T) (*Engine, *servedWriter) {
 // stamps it.
 func taskWake(id, key string) *events.Event {
 	ev := events.New(types.ExternalNotification{
-		NotificationSource: tracker.Source, SourceEventType: "assigned",
+		NotificationSource: worklet.Source, SourceEventType: "assigned",
 		Sender: "lead", Subject: key + " assigned: a task",
 		Metadata: map[string]string{
-			tracker.MetaTaskID: id, tracker.MetaTaskKey: key,
-			tracker.MetaObject: string(tracker.KindTask), tracker.MetaObjectID: id,
-			tracker.MetaVia: "assignee",
+			worklet.MetaTaskID: id, worklet.MetaTaskKey: key,
+			worklet.MetaObject: string(worklet.KindTask), worklet.MetaObjectID: id,
+			worklet.MetaVia: "assignee",
 		},
 	}, events.TraceContext{})
-	ev.Source = "notify." + tracker.Source
+	ev.Source = "notify." + worklet.Source
 	return ev
 }

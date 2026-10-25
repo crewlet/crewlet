@@ -59,7 +59,7 @@
 --
 -- The rows are a pure function of `tracker_history`, so nothing has to be
 -- preserved for that day. But the rebuild is a GO job rather than a migration:
--- a span's `grp` comes from the status table in `internal/tracker/policy.go`,
+-- a span's `grp` comes from the status table in `internal/worklet/policy.go`,
 -- so SQL could only reach it by hard-coding a CASE that drifts from the Go —
 -- and a DML backfill against the replicated estate is what the applier's
 -- exclusivity rule forbids. The way back is the way `tracker_measure_spans`

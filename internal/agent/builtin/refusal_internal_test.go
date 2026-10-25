@@ -9,13 +9,13 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/learning"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // EVERY WRITE SENTINEL HAS ITS OWN CLASS, because the class is what a person's
@@ -31,20 +31,20 @@ func TestWriteFailureClassesEachSentinel(t *testing.T) {
 		err  error
 		want tools.Refusal
 	}{
-		{"no task", fmt.Errorf("x: %w", tracker.ErrNoTask), tools.RefusalNotFound},
+		{"no task", fmt.Errorf("x: %w", worklet.ErrNoTask), tools.RefusalNotFound},
 		{"lost race", fmt.Errorf("x: %w", statelog.ErrConflict), tools.RefusalConflict},
 		{"exists", fmt.Errorf("x: %w", statelog.ErrExists), tools.RefusalExists},
-		{"stale", fmt.Errorf("x: %w", tracker.ErrStaleVersion), tools.RefusalStaleVersion},
-		{"hand-offs", fmt.Errorf("x: %w", tracker.ErrReassignmentBudget),
+		{"stale", fmt.Errorf("x: %w", worklet.ErrStaleVersion), tools.RefusalStaleVersion},
+		{"hand-offs", fmt.Errorf("x: %w", worklet.ErrReassignmentBudget),
 			tools.RefusalReassignmentBudget},
-		{"authority", fmt.Errorf("x: %w", tracker.ErrForbidden), tools.RefusalForbidden},
+		{"authority", fmt.Errorf("x: %w", worklet.ErrForbidden), tools.RefusalForbidden},
 		// A FULL INBOX LIST asks for a different gesture, not a smaller
 		// one — read_through — so it is not a content refusal either.
-		{"inbox full", fmt.Errorf("x: %w", tracker.ErrInboxFull), tools.RefusalInboxFull},
+		{"inbox full", fmt.Errorf("x: %w", worklet.ErrInboxFull), tools.RefusalInboxFull},
 		// A SECOND ANSWER THAT LOST THE RACE is refused by the write's own
 		// snapshot, after the thread read passed it — typed, naming who
 		// answered. It is not the node's failure and not a retry.
-		{"already answered", fmt.Errorf("x: %w", &tracker.AlreadyAnsweredError{
+		{"already answered", fmt.Errorf("x: %w", &worklet.AlreadyAnsweredError{
 			Task: "t-1", Comment: "c-1", By: "ana"}), tools.RefusalAlreadyAnswered},
 		// A maintenance or sealed fleet has no publisher and an evicted,
 		// deferred or full-log node refuses the append: all of them
@@ -79,26 +79,26 @@ func TestWriteFailureClassesEachSentinel(t *testing.T) {
 		// THE WRITER'S OWN REFUSAL ON CONTENT, marked, which names what
 		// it refused: offering a retry for it would be a retry that
 		// never lands.
-		{"refused on content", fmt.Errorf("tracker: field estimate is exact "+
-			"to two places: %w", tracker.ErrInvalid), tools.RefusalInvalid},
-		{"text past its cap", fmt.Errorf("x: %w", &tracker.TextCapError{
-			Field: tracker.TextTitle, Size: 600, Limit: tracker.MaxTitle}),
+		{"refused on content", fmt.Errorf("worklet: field estimate is exact "+
+			"to two places: %w", worklet.ErrInvalid), tools.RefusalInvalid},
+		{"text past its cap", fmt.Errorf("x: %w", &worklet.TextCapError{
+			Field: worklet.TextTitle, Size: 600, Limit: worklet.MaxTitle}),
 			tools.RefusalInvalid},
 		// A TAG THAT CANNOT BE DECLARED is what the call asked for, and its
 		// sentence names the tag and the way past it.
-		{"a clashing tag", fmt.Errorf("x: %w", &tracker.TagClash{Project: "OPS",
-			Slug: "api", Label: "API", Other: tracker.Tag{Slug: "backend-api",
+		{"a clashing tag", fmt.Errorf("x: %w", &worklet.TagClash{Project: "OPS",
+			Slug: "api", Label: "API", Other: worklet.Tag{Slug: "backend-api",
 				Label: "API"}}), tools.RefusalInvalid},
-		{"a full tag set", fmt.Errorf("x: %w", &tracker.TagsFull{Project: "OPS",
+		{"a full tag set", fmt.Errorf("x: %w", &worklet.TagsFull{Project: "OPS",
 			Slug: "api"}), tools.RefusalInvalid},
 		// A GESTURE STOPPED AT A STEP WHOSE OUTCOME IS UNKNOWN may have
 		// written part of what it asked for, so it is never a refusal of
 		// what was asked: it is the class an interrupted call answers,
 		// the node's and not the request's — see [writeCause].
 		{"a step whose outcome is unknown", fmt.Errorf("x: %w",
-			tracker.ErrStepUnresolved), tools.RefusalUnavailable},
+			worklet.ErrStepUnresolved), tools.RefusalUnavailable},
 		{"a step this node cannot vouch for", fmt.Errorf("x: %w",
-			tracker.ErrStepUnvouched), tools.RefusalUnavailable},
+			worklet.ErrStepUnvouched), tools.RefusalUnavailable},
 		// AN UNMARKED FAILURE IS THE NODE'S, AND A FAULT. These arrive raw
 		// from the publisher and the writer's own reads — telling a person
 		// to fix their input over a disk error is one lie these rows pin,
@@ -111,7 +111,7 @@ func TestWriteFailureClassesEachSentinel(t *testing.T) {
 		// stay faults — the marks are what their own packages decided, and
 		// a classifier reading text would call any error naming a lock a
 		// wait.
-		{"re-spread unreadable", errors.New("tracker: read the re-spread " +
+		{"re-spread unreadable", errors.New("worklet: read the re-spread " +
 			"window in ENG: database is locked"), tools.RefusalInternalError},
 		{"broker words with no mark", errors.New("publish x: nats: no " +
 			"responders available for request"), tools.RefusalInternalError},
@@ -130,7 +130,7 @@ func TestWriteFailureClassesEachSentinel(t *testing.T) {
 			}
 			// AND ONLY A STOPPED STEP IS AN UNKNOWN: a refusal read as one
 			// tells a surface the write may have landed when nothing did.
-			wantUnknown := errors.Is(c.err, tracker.ErrStepUnresolved)
+			wantUnknown := errors.Is(c.err, worklet.ErrStepUnresolved)
 			if tools.UnknownOf(got) != wantUnknown {
 				t.Errorf("UnknownOf(writeFailure(%v)) = %v, want %v", c.err,
 					tools.UnknownOf(got), wantUnknown)
@@ -174,7 +174,7 @@ func TestAReusedOperationIsTheCallersToChange(t *testing.T) {
 // — "the sentence names the argument"), so it must not carry the node-failure
 // wording written for a model, nor anything the person never typed. A title
 // filed from the dashboard at 600 bytes came back as "create_work_item did not
-// land (tracker: the title on task 68c5… is 600 bytes …). The change was NOT
+// land (worklet: the title on task 68c5… is 600 bytes …). The change was NOT
 // made — do not report it as done." — a tool name, a Go error prefix, the id
 // of a task that was never created, and an instruction meant for a model.
 func TestAContentRefusalIsASentenceForAPerson(t *testing.T) {
@@ -184,15 +184,15 @@ func TestAContentRefusalIsASentenceForAPerson(t *testing.T) {
 		err   error
 		names []string
 	}{
-		{"a title", &tracker.TextCapError{Field: tracker.TextTitle, Size: 600,
-			Limit: tracker.MaxTitle}, []string{"`title`", "600", "256", "title"}},
-		{"a description", &tracker.TextCapError{Field: tracker.TextBody,
-			Size: tracker.MaxBody + 1, Limit: tracker.MaxBody},
-			[]string{"`body`", "description", fmt.Sprint(tracker.MaxBody)}},
-		{"a comment", &tracker.TextCapError{Field: tracker.TextComment,
-			Size: tracker.MaxCommentBody + 9, Limit: tracker.MaxCommentBody},
-			[]string{"`body`", "comment", fmt.Sprint(tracker.MaxCommentBody + 9)}},
-		{"any other content refusal", tracker.Decision{Question: "Which?"}.Validate(),
+		{"a title", &worklet.TextCapError{Field: worklet.TextTitle, Size: 600,
+			Limit: worklet.MaxTitle}, []string{"`title`", "600", "256", "title"}},
+		{"a description", &worklet.TextCapError{Field: worklet.TextBody,
+			Size: worklet.MaxBody + 1, Limit: worklet.MaxBody},
+			[]string{"`body`", "description", fmt.Sprint(worklet.MaxBody)}},
+		{"a comment", &worklet.TextCapError{Field: worklet.TextComment,
+			Size: worklet.MaxCommentBody + 9, Limit: worklet.MaxCommentBody},
+			[]string{"`body`", "comment", fmt.Sprint(worklet.MaxCommentBody + 9)}},
+		{"any other content refusal", worklet.Decision{Question: "Which?"}.Validate(),
 			[]string{"a decision has 0 option(s)"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -206,10 +206,10 @@ func TestAContentRefusalIsASentenceForAPerson(t *testing.T) {
 				}
 			}
 			// NEITHER THE NODE-FAILURE WORDING NOR THE GO PREFIX: the
-			// class is printed to a person as it stands, and "tracker:" is
+			// class is printed to a person as it stands, and "worklet:" is
 			// a word for a log about where the error came from.
 			for _, never := range []string{"did not land", "do not report it as done",
-				"tracker:"} {
+				"worklet:"} {
 				if strings.Contains(got.Output, never) {
 					t.Errorf("a content refusal a person reads carries %q: %s",
 						never, got.Output)
@@ -218,9 +218,9 @@ func TestAContentRefusalIsASentenceForAPerson(t *testing.T) {
 		})
 	}
 	// THE TEXT CAP IS COMPOSED FROM ITS FIELDS, never the writer's Go error.
-	got := writeFailure(t.Context(), Actor{}, CreateWorkItemTool, &tracker.TextCapError{
-		Field: tracker.TextTitle, Size: 600, Limit: tracker.MaxTitle})
-	for _, never := range []string{"tracker:", CreateWorkItemTool} {
+	got := writeFailure(t.Context(), Actor{}, CreateWorkItemTool, &worklet.TextCapError{
+		Field: worklet.TextTitle, Size: 600, Limit: worklet.MaxTitle})
+	for _, never := range []string{"worklet:", CreateWorkItemTool} {
 		if strings.Contains(got.Output, never) {
 			t.Errorf("the text-cap sentence carries %q: %s", never, got.Output)
 		}
@@ -235,13 +235,13 @@ func TestPageWriteFailureClassesEachSentinel(t *testing.T) {
 		err  error
 		want tools.Refusal
 	}{
-		{fmt.Errorf("x: %w", pages.ErrInvalid), tools.RefusalInvalid},
-		{fmt.Errorf("x: %w", pages.ErrTitleTaken), tools.RefusalExists},
-		{fmt.Errorf("x: %w", pages.ErrStaleVersion), tools.RefusalStaleVersion},
-		{fmt.Errorf("x: %w", pages.ErrConflict), tools.RefusalConflict},
-		{fmt.Errorf("x: %w", pages.ErrNotFound), tools.RefusalNotFound},
+		{fmt.Errorf("x: %w", doclet.ErrInvalid), tools.RefusalInvalid},
+		{fmt.Errorf("x: %w", doclet.ErrTitleTaken), tools.RefusalExists},
+		{fmt.Errorf("x: %w", doclet.ErrStaleVersion), tools.RefusalStaleVersion},
+		{fmt.Errorf("x: %w", doclet.ErrConflict), tools.RefusalConflict},
+		{fmt.Errorf("x: %w", doclet.ErrNotFound), tools.RefusalNotFound},
 		{&statelog.Unavailable{Reason: statelog.ReasonLogFull}, tools.RefusalUnavailable},
-		{errors.New("pages: read the container ENG: disk I/O"), tools.RefusalInternalError},
+		{errors.New("doclet: read the container ENG: disk I/O"), tools.RefusalInternalError},
 	} {
 		if got := pageWriteFailure(t.Context(), "save_page", c.err); !got.Failed || tools.RefusalOf(got) != c.want {
 			t.Errorf("pageWriteFailure(%v) = failed %v class %q, want %q",
@@ -291,12 +291,12 @@ func TestAnAnswerTheReaderRefusesCarriesItsClass(t *testing.T) {
 		err  error
 		want tools.Refusal
 	}{
-		{"no such comment", fmt.Errorf("x: %w", tracker.ErrNoComment), tools.RefusalNotFound},
-		{"somebody else's question", fmt.Errorf("x: %w", tracker.ErrForbidden),
+		{"no such comment", fmt.Errorf("x: %w", worklet.ErrNoComment), tools.RefusalNotFound},
+		{"somebody else's question", fmt.Errorf("x: %w", worklet.ErrForbidden),
 			tools.RefusalForbidden},
-		{"already answered", fmt.Errorf("x: %w", tracker.ErrAlreadyAnswered),
+		{"already answered", fmt.Errorf("x: %w", worklet.ErrAlreadyAnswered),
 			tools.RefusalAlreadyAnswered},
-		{"not a question", fmt.Errorf("x: %w", tracker.ErrInvalid), tools.RefusalInvalid},
+		{"not a question", fmt.Errorf("x: %w", worklet.ErrInvalid), tools.RefusalInvalid},
 	} {
 		got, ok := answerRefusal(c.err)
 		if !ok || !got.Failed || tools.RefusalOf(got) != c.want {
@@ -304,7 +304,7 @@ func TestAnAnswerTheReaderRefusesCarriesItsClass(t *testing.T) {
 				c.name, ok, got.Failed, tools.RefusalOf(got), c.want)
 		}
 	}
-	if _, ok := answerRefusal(errors.New("tracker: read the ask c1: disk I/O")); ok {
+	if _, ok := answerRefusal(errors.New("worklet: read the ask c1: disk I/O")); ok {
 		t.Error("a read failure was classed as the reader's refusal of an answer")
 	}
 }
@@ -335,7 +335,7 @@ func TestRefreshMemorySaysWhatALimitLeftOff(t *testing.T) {
 func TestAmbiguousAnswerCandidatesAreWholeOrReferenced(t *testing.T) {
 	t.Parallel()
 	opening := strings.Repeat("About the release plan for next week, ", 4)
-	e := &tracker.ErrAmbiguousAnswer{Task: "ENG-1", Actor: "ana", Asks: []tracker.AskCandidate{
+	e := &worklet.ErrAmbiguousAnswer{Task: "ENG-1", Actor: "ana", Asks: []worklet.AskCandidate{
 		{Comment: "c-1", Author: "bo", Body: opening + "should we ship on Friday?"},
 		{Comment: "c-2", Author: "cy", Body: opening + "who signs off the migration?"},
 		{Comment: "c-3", Author: "di", Question: "Pick a region", Body: "context"},

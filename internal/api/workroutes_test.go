@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/workapi"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/doclet"
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
 )
 
@@ -74,10 +74,10 @@ type (
 
 // Rename is ambiguous between the two embedded seams it satisfies, so it is
 // named once here — which is also why it is never called.
-func (unreadPages) Rename(context.Context, pages.Actor, string, string, bool) (
-	pages.Written, error) {
+func (unreadPages) Rename(context.Context, doclet.Actor, string, string, bool) (
+	doclet.Written, error) {
 
-	return pages.Written{}, nil
+	return doclet.Written{}, nil
 }
 
 // THE REAL WRITE SURFACE MOUNTS BESIDE EVERY READ THE APP ALREADY SERVES.

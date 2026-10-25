@@ -19,7 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // EVERY ANSWER THIS SURFACE GIVES IS ITS OWN STATUS, because each sends a
@@ -55,7 +55,7 @@ func TestEachOutcomeIsItsOwnStatus(t *testing.T) {
 			map[string]any{"status": "done"}, nil, http.StatusNotFound},
 		{"somebody moved it first", chart{}, as(admin("ana")),
 			http.MethodPatch, "/work/items/ENG-1", map[string]any{"status": "done"},
-			func(r *rig) { r.writes.err = tracker.ErrStaleVersion }, http.StatusConflict},
+			func(r *rig) { r.writes.err = worklet.ErrStaleVersion }, http.StatusConflict},
 		{"the domain refused the request", chart{}, as(admin("ana")),
 			http.MethodPost, "/work/items", map[string]any{"project": "ENG"}, nil,
 			http.StatusUnprocessableEntity},
@@ -333,7 +333,7 @@ func TestAWriteIsAuthoredByThePrincipal(t *testing.T) {
 		t.Fatal("nothing was written")
 	}
 	actor := r.writes.actors[len(r.writes.actors)-1]
-	if actor.Handle != "ana" || actor.Kind != tracker.AuthorHuman {
+	if actor.Handle != "ana" || actor.Kind != worklet.AuthorHuman {
 		t.Errorf("the write is authored as %q (%s), want the seat as a human",
 			actor.Handle, actor.Kind)
 	}
@@ -532,7 +532,7 @@ func TestARankMovePlacesAnItemBesideItsNeighbour(t *testing.T) {
 	}
 	// THE TRACKER'S OWN REFUSAL — a neighbour on another project's board —
 	// reaches the caller as the domain's.
-	r.writes.err = fmt.Errorf("%w: OPS-1 is on another board", tracker.ErrInvalid)
+	r.writes.err = fmt.Errorf("%w: OPS-1 is on another board", worklet.ErrInvalid)
 	if got := r.do(as(colleague("ana")), http.MethodPost, "/work/items/ENG-1/rank",
 		map[string]any{"before": "OPS-1"}, "If-Match", "3"); got.status != http.StatusUnprocessableEntity {
 		t.Errorf("a card placed on another project's board answered %d", got.status)
@@ -555,8 +555,8 @@ func TestARankMovePlacesAnItemBesideItsNeighbour(t *testing.T) {
 func TestAWorkCommentIsEditedByItsAuthor(t *testing.T) {
 	t.Parallel()
 	r := newRig(t, chart{})
-	r.reader.addComment("t-1", tracker.Comment{ID: "c-1", Task: "t-1",
-		Author: "ana", AuthorKind: tracker.AuthorHuman, Body: "first"})
+	r.reader.addComment("t-1", worklet.Comment{ID: "c-1", Task: "t-1",
+		Author: "ana", AuthorKind: worklet.AuthorHuman, Body: "first"})
 	if got := r.do(as(colleague("bo")), http.MethodPatch,
 		"/work/items/ENG-1/comments/c-1", map[string]any{"body": "second"}); got.status != http.StatusForbidden || len(r.writes.edited) != 0 {
 		t.Fatalf("somebody else's edit answered %d and wrote %v",
@@ -570,7 +570,7 @@ func TestAWorkCommentIsEditedByItsAuthor(t *testing.T) {
 		t.Errorf("the writer was asked %v", r.writes.edited)
 	}
 	// AND THE WRITER'S OWN REFUSAL IS AN AUTHORITY ANSWER, not a domain one.
-	r.writes.err = tracker.ErrNotAuthor
+	r.writes.err = worklet.ErrNotAuthor
 	if got := r.do(as(admin("root")), http.MethodPatch,
 		"/work/items/ENG-1/comments/c-1", map[string]any{"body": "third"}); got.status != http.StatusForbidden {
 		t.Errorf("an administrator rewriting a remark answered %d", got.status)
@@ -879,7 +879,7 @@ func TestEveryWriteThisSurfaceServesIsAudited(t *testing.T) {
 		op      any
 		actor   string
 	}{
-		{tracker.CreateWorkItemTool, types.AuditApplied, created.body["op_id"], "ana"},
+		{worklet.CreateWorkItemTool, types.AuditApplied, created.body["op_id"], "ana"},
 		{string(authz.ActionWorkPurge), types.AuditApplied, purged.body["op_id"], "ana"},
 		{string(authz.ActionWorkPurge), types.AuditRefused, nil, "bo"},
 	}

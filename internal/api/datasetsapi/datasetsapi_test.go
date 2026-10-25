@@ -19,7 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/tokens"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // sampleAnswers are each bound question's answer built from the domain's OWN
@@ -30,12 +30,12 @@ func sampleAnswers(t *testing.T) map[string]any {
 	t.Helper()
 	due := time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC)
 	return map[string]any{
-		"tracker.items": map[string]any{"items": []tracker.TaskRow{{
+		"tracker.items": map[string]any{"items": []worklet.TaskRow{{
 			Key: "ENG-1", Title: "Ship it", Status: "in_progress", StatusGroup: "active",
 			Priority: "high", Assignee: "ana", Project: "ENG", Due: &due, Updated: due,
 			Points: 3, Blocked: true, Overdue: true,
 		}}},
-		"tracker.workload": tracker.WorkloadAnswer{Rows: []tracker.WorkloadRow{{
+		"tracker.workload": worklet.WorkloadAnswer{Rows: []worklet.WorkloadRow{{
 			Handle: "ana", Open: 4, Points: 9, Blocked: 1, Overdue: 2, Unscheduled: 1}}},
 		"spend.seats": tokens.Rollup{ByAgent: []tokens.AgentRow{{Role: "Ana", Handle: "ana",
 			Person: true, Bucket: tokens.Bucket{TotalTokens: 30, InputTokens: 20, OutputTokens: 10, Calls: 2}}}},
@@ -193,8 +193,8 @@ func TestTheCataloguesSpendBoundsAreTheUsageDomains(t *testing.T) {
 			tokens.DefaultSeriesGroups)
 	}
 	for _, src := range dashspec.Catalogue() {
-		if src.Domain == dashspec.DomainTracker && src.MaxRows > tracker.PageMax {
-			t.Errorf("%s answers %d rows and the tracker pages %d", src.Name, src.MaxRows, tracker.PageMax)
+		if src.Domain == dashspec.DomainTracker && src.MaxRows > worklet.PageMax {
+			t.Errorf("%s answers %d rows and the tracker pages %d", src.Name, src.MaxRows, worklet.PageMax)
 		}
 	}
 }

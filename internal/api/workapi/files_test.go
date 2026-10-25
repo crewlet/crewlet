@@ -27,7 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The byte routes: an upload streamed into one object and then recorded, a
@@ -139,8 +139,8 @@ type fakeFiles struct {
 	work time.Duration
 
 	mu       sync.Mutex
-	file     *tracker.File
-	puts     []tracker.FilePut
+	file     *worklet.File
+	puts     []worklet.FilePut
 	removals []string
 	opIDs    []string
 	objects  int
@@ -167,32 +167,32 @@ func newFakeFiles(t *testing.T) *fakeFiles {
 func (f *fakeFiles) paceLog() *paceLog { return &paceLog{clock: f.clock} }
 
 // holding stores content as the file at reports/q3.bin, and answers its row.
-func (f *fakeFiles) holding(t *testing.T, content []byte) tracker.File {
+func (f *fakeFiles) holding(t *testing.T, content []byte) worklet.File {
 	t.Helper()
-	o, err := f.store.Put(t.Context(), bytes.NewReader(content), tracker.MaxFileBytes, objstore.PutMeta{})
+	o, err := f.store.Put(t.Context(), bytes.NewReader(content), worklet.MaxFileBytes, objstore.PutMeta{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	file := tracker.File{Version: 2, Project: "ENG", Path: "reports/q3.bin",
+	file := worklet.File{Version: 2, Project: "ENG", Path: "reports/q3.bin",
 		Hash: o.Hash, Size: o.Size, Object: o.Key}
 	f.file = &file
 	return file
 }
 
-func (f *fakeFiles) Files(context.Context, tracker.FileQuery) (tracker.FileListing, error) {
-	return tracker.FileListing{}, errors.New("fake: the listing is the read surface's")
+func (f *fakeFiles) Files(context.Context, worklet.FileQuery) (worklet.FileListing, error) {
+	return worklet.FileListing{}, errors.New("fake: the listing is the read surface's")
 }
 
-func (f *fakeFiles) File(context.Context, string, string, statelog.Freshness) (tracker.FileDetail, error) {
+func (f *fakeFiles) File(context.Context, string, string, statelog.Freshness) (worklet.FileDetail, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.readErr != nil {
-		return tracker.FileDetail{}, f.readErr
+		return worklet.FileDetail{}, f.readErr
 	}
 	if f.file == nil {
-		return tracker.FileDetail{}, tracker.ErrNoFile
+		return worklet.FileDetail{}, worklet.ErrNoFile
 	}
-	return tracker.FileDetail{File: *f.file}, nil
+	return worklet.FileDetail{File: *f.file}, nil
 }
 
 func (f *fakeFiles) Open(ctx context.Context, o objstore.Object) (io.ReadCloser, error) {
@@ -207,25 +207,25 @@ func (f *fakeFiles) Put(ctx context.Context, r io.Reader, limit int64,
 	return f.store.Put(ctx, working{r: r, work: f.work, clock: f.clock}, limit, m)
 }
 
-func (f *fakeFiles) PutFile(_ context.Context, opID string, put tracker.FilePut) (
-	tracker.WriteResult, error) {
+func (f *fakeFiles) PutFile(_ context.Context, opID string, put worklet.FilePut) (
+	worklet.WriteResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.opIDs = append(f.opIDs, opID)
 	if f.refuse != nil {
-		return tracker.WriteResult{}, f.refuse
+		return worklet.WriteResult{}, f.refuse
 	}
 	f.puts = append(f.puts, put)
 	return f.written(opID), nil
 }
 
 func (f *fakeFiles) RemoveFile(_ context.Context, opID, project, path string, _ uint64) (
-	tracker.WriteResult, error) {
+	worklet.WriteResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.opIDs = append(f.opIDs, opID)
 	if f.refuse != nil {
-		return tracker.WriteResult{}, f.refuse
+		return worklet.WriteResult{}, f.refuse
 	}
 	f.removals = append(f.removals, project+"/"+path)
 	return f.written(opID), nil
@@ -233,13 +233,13 @@ func (f *fakeFiles) RemoveFile(_ context.Context, opID, project, path string, _ 
 
 // written is what the next write answers: the case's result, applied by
 // default.
-func (f *fakeFiles) written(opID string) tracker.WriteResult {
+func (f *fakeFiles) written(opID string) worklet.WriteResult {
 	res := f.result
 	if res.Outcome == "" {
 		res.Outcome = statelog.OutcomeApplied
 	}
 	res.OpID, res.Version = opID, 3
-	return tracker.WriteResult{Result: res}
+	return worklet.WriteResult{Result: res}
 }
 
 // projects is the tracker's read side as an upload's early refusal reads it:
@@ -250,21 +250,21 @@ type projects struct {
 	f *fakeFiles
 }
 
-func (p projects) Projects(context.Context, tracker.ProjectQuery) (tracker.ProjectListing, error) {
-	return tracker.ProjectListing{}, errors.New("fake: not in this suite")
+func (p projects) Projects(context.Context, worklet.ProjectQuery) (worklet.ProjectListing, error) {
+	return worklet.ProjectListing{}, errors.New("fake: not in this suite")
 }
 
 // Project refuses a read naming no level, as the tracker's reader does — the
 // surface resolves one, and a route that forgot would refuse every upload.
-func (p projects) Project(_ context.Context, q tracker.ProjectDetailQuery) (
-	tracker.ProjectDetail, error) {
+func (p projects) Project(_ context.Context, q worklet.ProjectDetailQuery) (
+	worklet.ProjectDetail, error) {
 	if q.Level == "" {
-		return tracker.ProjectDetail{}, errors.New("fake: this project read names no level")
+		return worklet.ProjectDetail{}, errors.New("fake: this project read names no level")
 	}
 	if q.Project != "ENG" {
-		return tracker.ProjectDetail{}, fmt.Errorf("%w: %s", tracker.ErrNoProject, q.Project)
+		return worklet.ProjectDetail{}, fmt.Errorf("%w: %s", worklet.ErrNoProject, q.Project)
 	}
-	return tracker.ProjectDetail{Key: "ENG", Archived: p.f.archived}, nil
+	return worklet.ProjectDetail{Key: "ENG", Archived: p.f.archived}, nil
 }
 
 // halves are the tracker's file half and the object store over this fake.
@@ -472,7 +472,7 @@ func TestAnUploadRefusedByWhatIsKnownReadsNothing(t *testing.T) {
 		s := filesSurface(t, fake, chart{})
 		req := httptest.NewRequest(http.MethodPut, "/work/files/ENG/big.bin",
 			&failingReader{err: errors.New("the body was read")})
-		req.ContentLength = tracker.MaxFileBytes + 1
+		req.ContentLength = worklet.MaxFileBytes + 1
 		rec := httptest.NewRecorder()
 		if aborted := s.serve(rec, req, admin("ana")); aborted != nil {
 			t.Fatal(aborted)
@@ -541,11 +541,11 @@ func TestTheWritersRefusalsReadAsTheFileRoutesDocument(t *testing.T) {
 		status int
 		code   httpjson.Code
 	}{
-		{"a version moved past", fmt.Errorf("%w: reports/q3.bin is at 4", tracker.ErrStaleVersion),
+		{"a version moved past", fmt.Errorf("%w: reports/q3.bin is at 4", worklet.ErrStaleVersion),
 			http.StatusPreconditionFailed, httpjson.CodeVersionMoved},
-		{"an upload too old to name", fmt.Errorf("%w: minted 13h ago", tracker.ErrUploadStale),
+		{"an upload too old to name", fmt.Errorf("%w: minted 13h ago", worklet.ErrUploadStale),
 			http.StatusConflict, httpjson.CodeUploadExpired},
-		{"a project gone since the early read", fmt.Errorf("%w: ENG", tracker.ErrNoProject),
+		{"a project gone since the early read", fmt.Errorf("%w: ENG", worklet.ErrNoProject),
 			http.StatusNotFound, httpjson.CodeNoProject},
 		{"a race the domain names", fmt.Errorf("%w: another write landed", statelog.ErrConflict),
 			http.StatusConflict, httpjson.CodeConflict},
@@ -807,7 +807,7 @@ func TestADownloadOfADamagedObjectNeverEndsWhole(t *testing.T) {
 func TestADownloadOfALiveFileNamingNoObjectIsAFault(t *testing.T) {
 	t.Parallel()
 	fake := newFakeFiles(t)
-	fake.file = &tracker.File{Version: 1, Project: "ENG", Path: "reports/q3.bin",
+	fake.file = &worklet.File{Version: 1, Project: "ENG", Path: "reports/q3.bin",
 		Hash: objstore.HashOf([]byte("no object")), Size: 9}
 	s := filesSurface(t, fake, chart{})
 	rec := httptest.NewRecorder()

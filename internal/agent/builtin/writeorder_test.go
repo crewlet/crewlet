@@ -8,7 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A CALL IS DECIDED WHOLE BEFORE ITS FIRST WRITE.
@@ -83,7 +83,7 @@ func TestARefusedCallDeclaresNoLabelFirst(t *testing.T) {
 func TestAnUpdateWhoseDependenciesFailedReportsTheChangeItMade(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	trk.dependErr = errors.New("tracker: ENG-2 already waits on the most items one may")
+	trk.dependErr = errors.New("worklet: ENG-2 already waits on the most items one may")
 	reg := workRegistry(t, builtin.WorkDeps{
 		Reader: trk, Writer: trk.as, Dependencies: trk.depends,
 	})
@@ -192,7 +192,7 @@ func TestAnUnreadableReferenceCarriesTheReadsError(t *testing.T) {
 	got := callWork(t, workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as}),
 		builtin.CreateWorkItemTool,
 		map[string]any{"title": "x", "project": "ENG", "parent": "ENG-404"})
-	if !got.Failed || errors.Is(got.Cause, tracker.ErrNoTask) {
+	if !got.Failed || errors.Is(got.Cause, worklet.ErrNoTask) {
 		t.Errorf("a parent nobody filed answered %q with cause %v", got.Output,
 			got.Cause)
 	}

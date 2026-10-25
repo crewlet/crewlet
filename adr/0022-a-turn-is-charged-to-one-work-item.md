@@ -3,7 +3,7 @@
 - **Status:** accepted
 - **Authority:** `internal/engine`
 - **Enforced-by:** `internal/engine.TestTaskSpendNeverExceedsTheRollup`
-- **Cost-when-tried:** `tracker.Writer.RecordTurn` existed with the applier behind it and had no caller, so every task's `spend_*` columns read zero for every task in every company while the docs promised "spend is on the task". The turn records that should have named the item declared a `task_id` nothing assigned. And the applier gated a purge's marker for the task's own records only: a turn decided while its task existed and landing after the task's purge found no row, which the applier reads as a writer's bug and stops on — on every node, since every node applies the same log in the same order.
+- **Cost-when-tried:** `worklet.Writer.RecordTurn` existed with the applier behind it and had no caller, so every task's `spend_*` columns read zero for every task in every company while the docs promised "spend is on the task". The turn records that should have named the item declared a `task_id` nothing assigned. And the applier gated a purge's marker for the task's own records only: a turn decided while its task existed and landing after the task's purge found no row, which the applier reads as a writer's bug and stops on, on every node, since every node applies the same log in the same order.
 - **Tag-status:** unreleased
 
 ## The decision
@@ -26,8 +26,8 @@ is not charged to the item. A parked segment charged to nothing hands what it
 spent on with the suspended conversation, and the segment that finishes the
 turn pays it when a sole write charges the turn.
 
-Only a **native** item is charged: the counters are rows in the engine's own
-tracker. The write is `tracker.Writer.RecordTurn`, the one additive record,
+Only a **Worklet** item is charged: the counters are rows in Worklet's own
+tables. The write is `worklet.Writer.RecordTurn`, the one additive record,
 which refuses a task the writer cannot see or one that was purged and charges a
 tombstoned one; a turn that lands after its task's purge is read past by the
 deletion gate, never applied.

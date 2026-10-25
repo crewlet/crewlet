@@ -12,7 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE DOCUMENTED READ ROUTES EXIST.
@@ -294,102 +294,102 @@ func TestALiteralWorkRouteCarriesItsQueryString(t *testing.T) {
 // test must not depend on what a tracker would have said.
 type stubWorkReader struct{}
 
-func (stubWorkReader) Inbox(_ context.Context, q tracker.InboxQuery, _ time.Time) (
-	tracker.InboxAnswer, error) {
-	return tracker.InboxAnswer{Handle: q.Handle}, nil
+func (stubWorkReader) Inbox(_ context.Context, q worklet.InboxQuery, _ time.Time) (
+	worklet.InboxAnswer, error) {
+	return worklet.InboxAnswer{Handle: q.Handle}, nil
 }
 
-func (stubWorkReader) Routing(context.Context, tracker.RoutingQuery, time.Time) (
-	tracker.RoutingAnswer, error) {
-	return tracker.RoutingAnswer{}, nil
+func (stubWorkReader) Routing(context.Context, worklet.RoutingQuery, time.Time) (
+	worklet.RoutingAnswer, error) {
+	return worklet.RoutingAnswer{}, nil
 }
 
-func (stubWorkReader) Tasks(context.Context, tracker.Query, time.Time) (tracker.Answer, error) {
-	return tracker.Answer{}, nil
+func (stubWorkReader) Tasks(context.Context, worklet.Query, time.Time) (worklet.Answer, error) {
+	return worklet.Answer{}, nil
 }
 
-func (stubWorkReader) Task(context.Context, string, tracker.DetailWants,
-	statelog.Freshness) (tracker.TaskDetail, error) {
-	return tracker.TaskDetail{}, tracker.ErrNoTask
+func (stubWorkReader) Task(context.Context, string, worklet.DetailWants,
+	statelog.Freshness) (worklet.TaskDetail, error) {
+	return worklet.TaskDetail{}, worklet.ErrNoTask
 }
 
 func (stubWorkReader) TurnsOf(context.Context, string, string, int,
-	statelog.Freshness) (tracker.TaskTurns, error) {
-	return tracker.TaskTurns{}, tracker.ErrNoTask
+	statelog.Freshness) (worklet.TaskTurns, error) {
+	return worklet.TaskTurns{}, worklet.ErrNoTask
 }
 
-func (stubWorkReader) EveryView(context.Context, tracker.EveryViewQuery) (tracker.ViewListing, error) {
-	return tracker.ViewListing{}, nil
+func (stubWorkReader) EveryView(context.Context, worklet.EveryViewQuery) (worklet.ViewListing, error) {
+	return worklet.ViewListing{}, nil
 }
 
-func (stubWorkReader) Views(context.Context, tracker.ViewQuery) (tracker.ViewListing, error) {
-	return tracker.ViewListing{}, nil
+func (stubWorkReader) Views(context.Context, worklet.ViewQuery) (worklet.ViewListing, error) {
+	return worklet.ViewListing{}, nil
 }
 
-func (stubWorkReader) ExpandedQuery(context.Context, map[string]any, tracker.Viewer,
-	time.Time, *time.Location) (tracker.Query, error) {
-	return tracker.Query{}, nil
+func (stubWorkReader) ExpandedQuery(context.Context, map[string]any, worklet.Viewer,
+	time.Time, *time.Location) (worklet.Query, error) {
+	return worklet.Query{}, nil
 }
 
-func (stubWorkReader) Catalogue(context.Context, tracker.CatalogueQuery) (
-	tracker.CatalogueAnswer, error) {
-	return tracker.CatalogueAnswer{}, nil
+func (stubWorkReader) Catalogue(context.Context, worklet.CatalogueQuery) (
+	worklet.CatalogueAnswer, error) {
+	return worklet.CatalogueAnswer{}, nil
 }
 
-func (stubWorkReader) Projects(context.Context, tracker.ProjectQuery) (
-	tracker.ProjectListing, error) {
-	return tracker.ProjectListing{}, nil
+func (stubWorkReader) Projects(context.Context, worklet.ProjectQuery) (
+	worklet.ProjectListing, error) {
+	return worklet.ProjectListing{}, nil
 }
 
-func (stubWorkReader) Project(context.Context, tracker.ProjectDetailQuery) (
-	tracker.ProjectDetail, error) {
-	return tracker.ProjectDetail{}, nil
+func (stubWorkReader) Project(context.Context, worklet.ProjectDetailQuery) (
+	worklet.ProjectDetail, error) {
+	return worklet.ProjectDetail{}, nil
 }
 
-func (stubWorkReader) Workload(_ context.Context, q tracker.WorkloadQuery, _ time.Time,
-	_ *time.Location) (tracker.WorkloadAnswer, error) {
-	return tracker.WorkloadAnswer{
-		Rows: []tracker.WorkloadRow{{Handle: q.Unit, Open: 1}},
+func (stubWorkReader) Workload(_ context.Context, q worklet.WorkloadQuery, _ time.Time,
+	_ *time.Location) (worklet.WorkloadAnswer, error) {
+	return worklet.WorkloadAnswer{
+		Rows: []worklet.WorkloadRow{{Handle: q.Unit, Open: 1}},
 	}, nil
 }
 
-func (stubWorkReader) Activity(context.Context, tracker.ActivityQuery, time.Time) (
-	tracker.ActivityAnswer, error) {
-	return tracker.ActivityAnswer{}, nil
+func (stubWorkReader) Activity(context.Context, worklet.ActivityQuery, time.Time) (
+	worklet.ActivityAnswer, error) {
+	return worklet.ActivityAnswer{}, nil
 }
 
-func (stubWorkReader) MyWork(context.Context, tracker.MyWorkQuery, time.Time,
-	*time.Location) (tracker.MyWork, error) {
-	return tracker.MyWork{}, nil
+func (stubWorkReader) MyWork(context.Context, worklet.MyWorkQuery, time.Time,
+	*time.Location) (worklet.MyWork, error) {
+	return worklet.MyWork{}, nil
 }
 
-func (stubWorkReader) Person(context.Context, tracker.PersonQuery, time.Time) (
-	tracker.PersonState, error) {
-	return tracker.PersonState{}, nil
+func (stubWorkReader) Person(context.Context, worklet.PersonQuery, time.Time) (
+	worklet.PersonState, error) {
+	return worklet.PersonState{}, nil
 }
 
-func (stubWorkReader) Flow(context.Context, tracker.FlowQuery, time.Time,
-	*time.Location) (tracker.FlowAnswer, error) {
-	return tracker.FlowAnswer{}, nil
+func (stubWorkReader) Flow(context.Context, worklet.FlowQuery, time.Time,
+	*time.Location) (worklet.FlowAnswer, error) {
+	return worklet.FlowAnswer{}, nil
 }
 
-func (stubWorkReader) CompanyFeed(context.Context, tracker.FeedQuery) (tracker.FeedPage, error) {
-	return tracker.FeedPage{}, nil
+func (stubWorkReader) CompanyFeed(context.Context, worklet.FeedQuery) (worklet.FeedPage, error) {
+	return worklet.FeedPage{}, nil
 }
 
-func (stubWorkReader) Decisions(context.Context, tracker.DecisionsQuery, time.Time,
-	*time.Location) (tracker.DecisionsAnswer, error) {
-	return tracker.DecisionsAnswer{}, nil
+func (stubWorkReader) Decisions(context.Context, worklet.DecisionsQuery, time.Time,
+	*time.Location) (worklet.DecisionsAnswer, error) {
+	return worklet.DecisionsAnswer{}, nil
 }
 
 func (stubWorkReader) TurnPlaces(context.Context, []string,
-	statelog.Freshness) (map[string]tracker.TurnPlace, error) {
-	return map[string]tracker.TurnPlace{}, nil
+	statelog.Freshness) (map[string]worklet.TurnPlace, error) {
+	return map[string]worklet.TurnPlace{}, nil
 }
 
-func (stubWorkReader) Thread(context.Context, tracker.ThreadQuery,
-	statelog.Freshness) (tracker.ResolvedThread, error) {
-	return tracker.ResolvedThread{}, nil
+func (stubWorkReader) Thread(context.Context, worklet.ThreadQuery,
+	statelog.Freshness) (worklet.ResolvedThread, error) {
+	return worklet.ResolvedThread{}, nil
 }
 
 // THE INBOX IS A LITERAL SEGMENT, not a task called "inbox".

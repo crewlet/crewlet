@@ -12,7 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/natsobj"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A company's files, end to end.
@@ -118,12 +118,12 @@ func TestASeatOnAStatelessNodeWritesAFileTheDataNodeServes(t *testing.T) {
 	waitForSeat(t, p.agent, "ceo")
 	const body = "# Launch plan\n\nShip the migration on Thursday.\n"
 
-	p.agent.model.callOnExecute(tracker.WriteProjectFileTool, map[string]any{
+	p.agent.model.callOnExecute(worklet.WriteProjectFileTool, map[string]any{
 		"project": "ENG", "path": "plans/launch.md", "content": body,
 	})
 	wakeWithMessage(t, p.agent, "ceo")
 
-	var detail tracker.FileDetail
+	var detail worklet.FileDetail
 	t.Cleanup(func() {
 		if t.Failed() {
 			t.Logf("what the seat's tools answered: %q", p.agent.model.toolResults())

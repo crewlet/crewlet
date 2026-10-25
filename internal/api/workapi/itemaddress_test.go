@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/sourcetree"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A GESTURE NO TOOL MAKES NAMES ITS ITEM AS EVERY TOOL'S RECEIPT DOES.
@@ -30,8 +30,8 @@ func TestAGestureNoToolMakesNamesADuplicateByItsID(t *testing.T) {
 	dup := r.reader.tasks["t-1"]
 	dup.Task.ID, dup.KeyCollision = "t-3", true
 	r.reader.tasks["t-3"] = dup
-	r.reader.addComment("t-3", tracker.Comment{ID: "c-1", Task: "t-3",
-		Author: "ana", AuthorKind: tracker.AuthorHuman, Body: "first"})
+	r.reader.addComment("t-3", worklet.Comment{ID: "c-1", Task: "t-3",
+		Author: "ana", AuthorKind: worklet.AuthorHuman, Body: "first"})
 	for name, call := range map[string]struct {
 		method, path string
 		body         map[string]any

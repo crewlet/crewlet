@@ -10,8 +10,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/estate"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -116,8 +116,8 @@ func assertUnserved(t *testing.T, what string, got tools.Result) {
 func TestAPageWriteNobodyAnsweredForIsAnUnknown(t *testing.T) {
 	t.Parallel()
 	unanswered := fmt.Errorf("%w (pages.comment, asked of data-b)", estate.ErrOutcomeUnknown)
-	operator := func(context.Context, *turnctx.Turn) (pages.Actor, error) {
-		return pages.Actor{Handle: "founder", Kind: pages.AuthorOperator,
+	operator := func(context.Context, *turnctx.Turn) (doclet.Actor, error) {
+		return doclet.Actor{Handle: "founder", Kind: doclet.AuthorOperator,
 			OperatorID: "founder"}, nil
 	}
 

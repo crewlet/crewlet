@@ -13,15 +13,15 @@ import (
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/learning/memread"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // memorySandbox is a pending-run store with nothing in it: this sweep is
@@ -139,140 +139,140 @@ func (emptyBroker) List(context.Context) (engine.BrokerView, error) {
 // emptyFiles is a project with no files.
 type emptyFiles struct{}
 
-func (emptyFiles) Files(context.Context, tracker.FileQuery) (tracker.FileListing, error) {
-	return tracker.FileListing{}, nil
+func (emptyFiles) Files(context.Context, worklet.FileQuery) (worklet.FileListing, error) {
+	return worklet.FileListing{}, nil
 }
 
 // emptyWork and emptyPages are the native readers with nothing in them, on
 // fakeChannels' terms: this sweep is about which NAMES exist.
 type emptyWork struct{}
 
-func (emptyWork) Tasks(context.Context, tracker.Query, time.Time) (tracker.Answer, error) {
-	return tracker.Answer{}, nil
+func (emptyWork) Tasks(context.Context, worklet.Query, time.Time) (worklet.Answer, error) {
+	return worklet.Answer{}, nil
 }
 
-func (emptyWork) Task(context.Context, string, tracker.DetailWants,
-	statelog.Freshness) (tracker.TaskDetail, error) {
+func (emptyWork) Task(context.Context, string, worklet.DetailWants,
+	statelog.Freshness) (worklet.TaskDetail, error) {
 
-	return tracker.TaskDetail{}, nil
+	return worklet.TaskDetail{}, nil
 }
 
 func (emptyWork) TurnsOf(context.Context, string, string, int,
-	statelog.Freshness) (tracker.TaskTurns, error) {
+	statelog.Freshness) (worklet.TaskTurns, error) {
 
-	return tracker.TaskTurns{Turns: []tracker.TaskTurn{}}, nil
+	return worklet.TaskTurns{Turns: []worklet.TaskTurn{}}, nil
 }
 
-func (emptyWork) EveryView(context.Context, tracker.EveryViewQuery) (tracker.ViewListing, error) {
-	return tracker.ViewListing{}, nil
+func (emptyWork) EveryView(context.Context, worklet.EveryViewQuery) (worklet.ViewListing, error) {
+	return worklet.ViewListing{}, nil
 }
 
-func (emptyWork) Views(context.Context, tracker.ViewQuery) (tracker.ViewListing, error) {
-	return tracker.ViewListing{}, nil
+func (emptyWork) Views(context.Context, worklet.ViewQuery) (worklet.ViewListing, error) {
+	return worklet.ViewListing{}, nil
 }
 
 func (emptyWork) ExpandedQuery(_ context.Context, params map[string]any,
-	_ tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error) {
+	_ worklet.Viewer, now time.Time, loc *time.Location) (worklet.Query, error) {
 
-	return tracker.ParseQuery(tracker.MapParams(params), now, loc)
+	return worklet.ParseQuery(worklet.MapParams(params), now, loc)
 }
 
-func (emptyWork) Catalogue(context.Context, tracker.CatalogueQuery) (tracker.CatalogueAnswer, error) {
-	return tracker.CatalogueAnswer{}, nil
+func (emptyWork) Catalogue(context.Context, worklet.CatalogueQuery) (worklet.CatalogueAnswer, error) {
+	return worklet.CatalogueAnswer{}, nil
 }
 
-func (emptyWork) Projects(context.Context, tracker.ProjectQuery) (
-	tracker.ProjectListing, error) {
+func (emptyWork) Projects(context.Context, worklet.ProjectQuery) (
+	worklet.ProjectListing, error) {
 
-	return tracker.ProjectListing{}, nil
+	return worklet.ProjectListing{}, nil
 }
 
-func (emptyWork) Project(context.Context, tracker.ProjectDetailQuery) (
-	tracker.ProjectDetail, error) {
+func (emptyWork) Project(context.Context, worklet.ProjectDetailQuery) (
+	worklet.ProjectDetail, error) {
 
-	return tracker.ProjectDetail{}, nil
+	return worklet.ProjectDetail{}, nil
 }
 
-func (emptyWork) Workload(context.Context, tracker.WorkloadQuery, time.Time,
-	*time.Location) (tracker.WorkloadAnswer, error) {
+func (emptyWork) Workload(context.Context, worklet.WorkloadQuery, time.Time,
+	*time.Location) (worklet.WorkloadAnswer, error) {
 
-	return tracker.WorkloadAnswer{}, nil
+	return worklet.WorkloadAnswer{}, nil
 }
 
-func (emptyWork) Activity(context.Context, tracker.ActivityQuery, time.Time) (
-	tracker.ActivityAnswer, error) {
+func (emptyWork) Activity(context.Context, worklet.ActivityQuery, time.Time) (
+	worklet.ActivityAnswer, error) {
 
-	return tracker.ActivityAnswer{}, nil
+	return worklet.ActivityAnswer{}, nil
 }
 
-func (emptyWork) MyWork(context.Context, tracker.MyWorkQuery, time.Time,
-	*time.Location) (tracker.MyWork, error) {
+func (emptyWork) MyWork(context.Context, worklet.MyWorkQuery, time.Time,
+	*time.Location) (worklet.MyWork, error) {
 
-	return tracker.MyWork{}, nil
+	return worklet.MyWork{}, nil
 }
 
-func (emptyWork) Person(context.Context, tracker.PersonQuery, time.Time) (tracker.PersonState, error) {
-	return tracker.PersonState{}, nil
+func (emptyWork) Person(context.Context, worklet.PersonQuery, time.Time) (worklet.PersonState, error) {
+	return worklet.PersonState{}, nil
 }
 
-func (emptyWork) Inbox(context.Context, tracker.InboxQuery, time.Time) (
-	tracker.InboxAnswer, error) {
-	return tracker.InboxAnswer{}, nil
+func (emptyWork) Inbox(context.Context, worklet.InboxQuery, time.Time) (
+	worklet.InboxAnswer, error) {
+	return worklet.InboxAnswer{}, nil
 }
 
-func (emptyWork) Routing(context.Context, tracker.RoutingQuery, time.Time) (
-	tracker.RoutingAnswer, error) {
-	return tracker.RoutingAnswer{}, nil
+func (emptyWork) Routing(context.Context, worklet.RoutingQuery, time.Time) (
+	worklet.RoutingAnswer, error) {
+	return worklet.RoutingAnswer{}, nil
 }
 
-func (emptyWork) Flow(context.Context, tracker.FlowQuery, time.Time, *time.Location) (
-	tracker.FlowAnswer, error) {
-	return tracker.FlowAnswer{Points: []tracker.FlowPoint{}}, nil
+func (emptyWork) Flow(context.Context, worklet.FlowQuery, time.Time, *time.Location) (
+	worklet.FlowAnswer, error) {
+	return worklet.FlowAnswer{Points: []worklet.FlowPoint{}}, nil
 }
 
-func (emptyWork) CompanyFeed(context.Context, tracker.FeedQuery) (tracker.FeedPage, error) {
-	return tracker.FeedPage{Rows: []tracker.FeedRow{}}, nil
+func (emptyWork) CompanyFeed(context.Context, worklet.FeedQuery) (worklet.FeedPage, error) {
+	return worklet.FeedPage{Rows: []worklet.FeedRow{}}, nil
 }
 
-func (emptyWork) Decisions(context.Context, tracker.DecisionsQuery, time.Time, *time.Location) (
-	tracker.DecisionsAnswer, error) {
-	return tracker.DecisionsAnswer{Asks: []tracker.AskRow{}}, nil
+func (emptyWork) Decisions(context.Context, worklet.DecisionsQuery, time.Time, *time.Location) (
+	worklet.DecisionsAnswer, error) {
+	return worklet.DecisionsAnswer{Asks: []worklet.AskRow{}}, nil
 }
 
 func (emptyWork) TurnPlaces(context.Context, []string, statelog.Freshness) (
-	map[string]tracker.TurnPlace, error) {
-	return map[string]tracker.TurnPlace{}, nil
+	map[string]worklet.TurnPlace, error) {
+	return map[string]worklet.TurnPlace{}, nil
 }
 
-func (emptyWork) Search(context.Context, tracker.SearchQuery) (tracker.SearchAnswer, error) {
-	return tracker.SearchAnswer{}, nil
+func (emptyWork) Search(context.Context, worklet.SearchQuery) (worklet.SearchAnswer, error) {
+	return worklet.SearchAnswer{}, nil
 }
 
-func (emptyWork) Thread(context.Context, tracker.ThreadQuery, statelog.Freshness) (
-	tracker.ResolvedThread, error) {
-	return tracker.ResolvedThread{}, nil
+func (emptyWork) Thread(context.Context, worklet.ThreadQuery, statelog.Freshness) (
+	worklet.ResolvedThread, error) {
+	return worklet.ResolvedThread{}, nil
 }
 
 type emptyPages struct{}
 
-func (emptyPages) List(context.Context, pages.Filter, statelog.Freshness) (pages.Listing, error) {
-	return pages.Listing{}, nil
+func (emptyPages) List(context.Context, doclet.Filter, statelog.Freshness) (doclet.Listing, error) {
+	return doclet.Listing{}, nil
 }
 
-func (emptyPages) Get(context.Context, string, statelog.Freshness) (pages.Detail, error) {
-	return pages.Detail{}, nil
+func (emptyPages) Get(context.Context, string, statelog.Freshness) (doclet.Detail, error) {
+	return doclet.Detail{}, nil
 }
 
-func (emptyPages) Activity(context.Context, pages.PageActivityQuery) (pages.PageActivity, error) {
-	return pages.PageActivity{}, nil
+func (emptyPages) Activity(context.Context, doclet.PageActivityQuery) (doclet.PageActivity, error) {
+	return doclet.PageActivity{}, nil
 }
 
 func (emptyPages) Revision(context.Context, string, int, statelog.Freshness) (
-	pages.Revision, bool, error) {
-	return pages.Revision{}, false, nil
+	doclet.Revision, bool, error) {
+	return doclet.Revision{}, false, nil
 }
 
-func (emptyPages) Containers(context.Context, statelog.Freshness) ([]pages.ContainerListing, error) {
+func (emptyPages) Containers(context.Context, statelog.Freshness) ([]doclet.ContainerListing, error) {
 	return nil, nil
 }
 
@@ -389,7 +389,7 @@ func TestEveryWakeReasonReadsAsEnglishOnTheClient(t *testing.T) {
 	if len(phrased) == 0 {
 		t.Fatal("no phrases were found at all, so this gate certifies nothing")
 	}
-	for _, reason := range tracker.Reasons {
+	for _, reason := range worklet.Reasons {
 		if !phrased[string(reason)] {
 			t.Errorf("the engine writes %q and the client has no phrase for it, "+
 				"so it renders as its own snake_case value on the one screen a "+

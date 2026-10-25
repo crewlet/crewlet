@@ -5,7 +5,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -66,11 +66,11 @@ func workActor(ctx context.Context, turn *turnctx.Turn) (builtin.Actor, error) {
 }
 
 // pageActor is [workActor] for the knowledge base, which binds the call's
-// operation to what each write says itself ([pages.Actor.OpKey]).
-func pageActor(ctx context.Context, turn *turnctx.Turn) (pages.Actor, error) {
+// operation to what each write says itself ([doclet.Actor.OpKey]).
+func pageActor(ctx context.Context, turn *turnctx.Turn) (doclet.Actor, error) {
 	actor, err := builtin.PrincipalPageActor(ctx, turn)
 	if err != nil {
-		return pages.Actor{}, err
+		return doclet.Actor{}, err
 	}
 	actor.OpKey = keyFrom(ctx)
 	return actor, nil

@@ -5,11 +5,11 @@ import (
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/compact"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // Deps are the node-level things the builtins act through.
@@ -261,19 +261,19 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		// follow-up — and without this the gate sees only builtins,
 		// concludes the turn reached nobody, and corrects it into another
 		// round. The SURFACE is what stops the opposite error: these reach
-		// the engine's own tracker and knowledge base, and a founder
-		// waiting in a chat thread is on neither of them.
+		// Worklet and Doclet, and a founder waiting in a chat thread is on
+		// neither of them.
 		// THE FEED'S OWN SOURCE NAME, never a second spelling. The gate
 		// compares a delivery's surface against the NotificationSource an
 		// inbound wake carried, and these two feeds publish under
-		// [tracker.Source] and [pages.Source] — so inventing `tracker`
-		// and `pages` here made every native obligation unreachable and
+		// [worklet.Source] and [doclet.Source], so inventing `tracker`
+		// and `pages` here made every Worklet and Doclet obligation unreachable and
 		// the check silently fell back to "any delivery counts".
 		switch {
 		case slices.Contains(WorkWrites(), c.tool.Name()):
-			opts = append(opts, tools.DeliversTo(tracker.Source))
+			opts = append(opts, tools.DeliversTo(worklet.Source))
 		case slices.Contains(PageWrites(), c.tool.Name()):
-			opts = append(opts, tools.DeliversTo(pages.Source))
+			opts = append(opts, tools.DeliversTo(doclet.Source))
 		}
 		// THE GATE WRAPS EVERY ONE, and it wraps HERE rather than at
 		// each tool: the authority table is keyed on the tool's own
@@ -380,13 +380,13 @@ func annotationsFor(name string) tools.Annotations {
 		// box, and a second set of commits.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
 	case ListWorkItemsTool, GetWorkItemTool, ListPagesTool, GetPageTool,
-		tracker.GetWorkCatalogueTool, tracker.ListProjectsTool,
-		tracker.DescribeProjectTool,
-		tracker.TaskActivityTool, tracker.MyWorkTool,
-		tracker.SearchWorkItemsTool,
-		tracker.GetPersonTool, tracker.WorkInboxTool,
-		tracker.ListWorkViewsTool,
-		tracker.ListProjectFilesTool, tracker.ReadProjectFileTool:
+		worklet.GetWorkCatalogueTool, worklet.ListProjectsTool,
+		worklet.DescribeProjectTool,
+		worklet.TaskActivityTool, worklet.MyWorkTool,
+		worklet.SearchWorkItemsTool,
+		worklet.GetPersonTool, worklet.WorkInboxTool,
+		worklet.ListWorkViewsTool,
+		worklet.ListProjectFilesTool, worklet.ReadProjectFileTool:
 		// Reads, and idempotent: asking twice costs a round and changes
 		// nothing. The catalogue lookup belongs here with the rest — left
 		// out, it fell to the default arm, whose ReadOnly=No with
@@ -395,7 +395,7 @@ func annotationsFor(name string) tools.Annotations {
 		// lookup was refused it as a write to a surface a human reads
 		// while list_work_items beside it was admitted.
 		return tools.Annotations{ReadOnly: mcp.Yes, Idempotent: mcp.Yes}
-	case tracker.MarkInboxTool, tracker.SetPinsTool:
+	case worklet.MarkInboxTool, worklet.SetPinsTool:
 		// A PERSON'S OWN STATE IS NOT A SHARED SURFACE, and saying so
 		// takes an explicit `OpenWorld: No` — these two fell to the
 		// default arm, whose `ReadOnly: No` with OpenWorld UNSET is
@@ -412,7 +412,7 @@ func annotationsFor(name string) tools.Annotations {
 			ReadOnly: mcp.No, Destructive: mcp.No,
 			Idempotent: mcp.Yes, OpenWorld: mcp.No,
 		}
-	case tracker.SetPrioritiesTool:
+	case worklet.SetPrioritiesTool:
 		// THE ONE PERSON WRITE THAT REACHES ACROSS PEOPLE, which is why
 		// it is not in the arm above: a LEAD may set the queue of
 		// somebody in their line, and that person opens their day on
@@ -427,7 +427,7 @@ func annotationsFor(name string) tools.Annotations {
 			ReadOnly: mcp.No, Destructive: mcp.No,
 			Idempotent: mcp.Yes, OpenWorld: mcp.Yes,
 		}
-	case tracker.MergeWorkItemTool:
+	case worklet.MergeWorkItemTool:
 		// A WRITE EVERYBODY SEES: the duplicate is closed on every board
 		// in the company and its subtasks move to somebody else's item,
 		// so OpenWorld is Yes and [mcp.WritesToSharedSurface] reads true
@@ -444,7 +444,7 @@ func annotationsFor(name string) tools.Annotations {
 		return tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.Yes, OpenWorld: mcp.Yes,
 		}
-	case tracker.WriteProjectFileTool:
+	case worklet.WriteProjectFileTool:
 		// A WRITE EVERYBODY ON THE PROJECT SEES, so OpenWorld is Yes and
 		// [mcp.WritesToSharedSurface] reads true, which keeps it away from
 		// a sub-agent acting under its parent's name.
@@ -457,14 +457,14 @@ func annotationsFor(name string) tools.Annotations {
 		return tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.Yes, Idempotent: mcp.Yes, OpenWorld: mcp.Yes,
 		}
-	case tracker.RemoveProjectFileTool:
+	case worklet.RemoveProjectFileTool:
 		// DESTRUCTIVE and shared for the put's reason: the file leaves the
 		// project and its content is collected. NOT idempotent — a second
 		// removal is refused, the file being gone.
 		return tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.Yes, OpenWorld: mcp.Yes,
 		}
-	case tracker.MoveWorkItemTool:
+	case worklet.MoveWorkItemTool:
 		// A WRITE EVERYBODY SEES — an item and its subtree leave one
 		// project's board for another's and every key in it changes — so
 		// OpenWorld is Yes and [mcp.WritesToSharedSurface] reads true,
@@ -479,7 +479,7 @@ func annotationsFor(name string) tools.Annotations {
 		return tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes,
 		}
-	case tracker.WriteProjectTool:
+	case worklet.WriteProjectTool:
 		// A WRITE EVERYBODY SEES — a declared tag is a filter on
 		// everybody's board and an archived project takes no work from
 		// anyone — so OpenWorld is Yes and [mcp.WritesToSharedSurface]
@@ -501,7 +501,7 @@ func annotationsFor(name string) tools.Annotations {
 		return tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.Yes, OpenWorld: mcp.Yes,
 		}
-	case tracker.RemoveWorkItemTool, tracker.RestoreWorkItemTool:
+	case worklet.RemoveWorkItemTool, worklet.RestoreWorkItemTool:
 		// WRITES EVERYBODY SEES — a removal takes an item off every board
 		// in the company — so OpenWorld is Yes and
 		// [mcp.WritesToSharedSurface] reads true, which keeps them away
@@ -517,7 +517,7 @@ func annotationsFor(name string) tools.Annotations {
 			ReadOnly: mcp.No, Destructive: mcp.No,
 			Idempotent: mcp.Yes, OpenWorld: mcp.Yes,
 		}
-	case tracker.PlaceWorkItemTool:
+	case worklet.PlaceWorkItemTool:
 		// A WRITE EVERYBODY SEES — the board is shared, and a lane change
 		// is a status change the item's people are woken about — so
 		// OpenWorld is Yes and [mcp.WritesToSharedSurface] reads true.

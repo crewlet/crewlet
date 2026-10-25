@@ -320,7 +320,7 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 			false, authz.ReasonUnnamed},
 		// BUT THE TOOL ITSELF IS THE APP: adding a label is open to
 		// everybody who uses the tracker, and gating the whole verb as the
-		// container's refused a colleague the one facet internal/tracker
+		// container's refused a colleague the one facet internal/worklet
 		// grants them.
 		{"a colleague declares a label", seat("sre", tracker),
 			authz.ActionProjectWrite,

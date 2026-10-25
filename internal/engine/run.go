@@ -59,7 +59,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracing"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // Engine is one process running a company.
@@ -208,7 +208,7 @@ type Engine struct {
 
 	// onInbox is told whose inbox each committed tracker batch moved on
 	// this node. Nil tells nobody — see [Engine.SetOnInboxMoved].
-	onInbox atomic.Pointer[func([]tracker.InboxMovement)]
+	onInbox atomic.Pointer[func([]worklet.InboxMovement)]
 
 	// onInboxGap is told that the movements onInbox hears have a gap. Nil
 	// tells nobody — see [Engine.SetOnInboxGap].

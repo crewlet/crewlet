@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
-	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The merged questions over a node whose native halves are wired but not all
@@ -64,9 +64,9 @@ func TestDecisionsAnswerTheParkedRunsWhereTheTrackerIsNotKept(t *testing.T) {
 	askedAt := time.Date(2031, 4, 16, 10, 0, 0, 0, time.UTC)
 	runs := fixedRuns{{TurnID: "parked", AgentHandle: "swe", Status: sandbox.StatusAwaiting,
 		AudienceHandles: []string{"ana"}, UpdatedAt: askedAt.Add(-time.Hour)}}
-	stub := &stubWork{decisions: tracker.DecisionsAnswer{
-		Asks:  []tracker.AskRow{{Comment: "c-1", AskedAt: askedAt}},
-		Total: tracker.ClaimTotal{Total: 1},
+	stub := &stubWork{decisions: worklet.DecisionsAnswer{
+		Asks:  []worklet.AskRow{{Comment: "c-1", AskedAt: askedAt}},
+		Total: worklet.ClaimTotal{Total: 1},
 	}}
 	for _, tc := range []struct {
 		name    string
@@ -140,14 +140,14 @@ func TestTheFeedKeepsOnlyTheKindsWhoseHalfIsKept(t *testing.T) {
 	// A STUB PER CASE: each records what it was asked, and the cases run in
 	// parallel, so one stub shared between them was written by two at once.
 	work := func() *stubWork {
-		return &stubWork{feed: tracker.FeedPage{Rows: []tracker.FeedRow{
-			{Task: "a", Kind: tracker.FeedCompleted, At: base,
-				Cursor: tracker.FeedCursor{At: base, Seq: 9}.String()},
+		return &stubWork{feed: worklet.FeedPage{Rows: []worklet.FeedRow{
+			{Task: "a", Kind: worklet.FeedCompleted, At: base,
+				Cursor: worklet.FeedCursor{At: base, Seq: 9}.String()},
 		}, Complete: true}}
 	}
 	wiki := func() *stubPages {
-		return &stubPages{changes: []pages.PageChange{
-			{ID: "h-1", PageID: "p", Kind: pages.ChangeSaved, At: base.Add(-time.Hour), LogSeq: 4},
+		return &stubPages{changes: []doclet.PageChange{
+			{ID: "h-1", PageID: "p", Kind: doclet.ChangeSaved, At: base.Add(-time.Hour), LogSeq: 4},
 		}}
 	}
 

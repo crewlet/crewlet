@@ -355,7 +355,7 @@ jobs:
   # THE LONGEST PACKAGES START FIRST in `test (race)`, which needs no second
   # runner. `go test` starts package runs in command-line order and go list's
   # is alphabetical, which started internal/search, internal/store and
-  # internal/tracker last of their half; `go doc ./internal/solo/partition` has
+  # internal/worklet last of their half; `go doc ./internal/solo/partition` has
   # the measurement. So the job restores the package durations main's last
   # passing run of it measured, hands them to the partition as TEST_WEIGHTS,
   # and on main keeps its own run's as the next one's. With none (the first

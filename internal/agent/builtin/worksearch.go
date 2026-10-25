@@ -9,7 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // Finding a work item by what it SAYS.
@@ -33,7 +33,7 @@ import (
 // # And why it is not `search_knowledge`
 //
 // That seam is backend-neutral with Confluence behind it, and Confluence has
-// no work items. See tracker/search.go.
+// no work items. See worklet/search.go.
 
 // WorkSearcher ranks work items by text, declared by the consumer.
 //
@@ -41,7 +41,7 @@ import (
 // not been wired — and the tool is then OMITTED rather than refusing at the
 // call, on [Register]'s own rule.
 type WorkSearcher interface {
-	Search(ctx context.Context, q tracker.SearchQuery) (tracker.SearchAnswer, error)
+	Search(ctx context.Context, q worklet.SearchQuery) (worklet.SearchAnswer, error)
 }
 
 // ---- search_work_items --------------------------------------------------- //
@@ -50,7 +50,7 @@ type searchWorkItems struct{ deps WorkDeps }
 
 var _ tools.SeatCallable = (*searchWorkItems)(nil)
 
-func (t *searchWorkItems) Name() string { return tracker.SearchWorkItemsTool }
+func (t *searchWorkItems) Name() string { return worklet.SearchWorkItemsTool }
 
 func (t *searchWorkItems) Description() string {
 	return "Find work items by what they SAY — ranked over every item's title " +
@@ -74,7 +74,7 @@ func (t *searchWorkItems) Parameters() map[string]any {
 			"limit": map[string]any{
 				"type": "integer",
 				"description": fmt.Sprintf("How many to return, 1..%d (default %d).",
-					tracker.MaxSearchLimit, tracker.SearchLimit),
+					worklet.MaxSearchLimit, worklet.SearchLimit),
 			},
 			"mode": map[string]any{
 				"type": "string",
@@ -100,10 +100,10 @@ func (t *searchWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 
 	if _, err := t.deps.actor(ctx, turn); err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(tracker.SearchWorkItemsTool), nil
+		return notInATurn(worklet.SearchWorkItemsTool), nil
 	}
 	if t.deps.Search == nil {
-		return unconfigured(tracker.SearchWorkItemsTool), nil
+		return unconfigured(worklet.SearchWorkItemsTool), nil
 	}
 	text := strings.TrimSpace(argString(args, "text"))
 	if text == "" {
@@ -129,11 +129,11 @@ func (t *searchWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return failed(fmt.Sprintf("search_work_items: %v.", err)), nil
 	}
-	answer, err := t.deps.Search.Search(ctx, tracker.SearchQuery{
+	answer, err := t.deps.Search.Search(ctx, worklet.SearchQuery{
 		Text: text, Limit: argInt(args, "limit", 0), Mode: mode,
 	})
 	switch {
-	case errors.Is(err, tracker.ErrIndexBuilding):
+	case errors.Is(err, worklet.ErrIndexBuilding):
 		// NOT AN EMPTY ANSWER. "There is nothing" is what a model acts
 		// on by filing a duplicate, and the honest answer while a node
 		// is still building its index is that it cannot say yet.
@@ -142,11 +142,11 @@ func (t *searchWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"about whether the work exists. Try again shortly, or narrow it "+
 			"with list_work_items."), nil
 	case err != nil:
-		return readFailure(ctx, tracker.SearchWorkItemsTool, err), nil
+		return readFailure(ctx, worklet.SearchWorkItemsTool, err), nil
 	}
 	hits := answer.Hits
 	if hits == nil {
-		hits = []tracker.Ranked{}
+		hits = []worklet.Ranked{}
 	}
 	out := map[string]any{"query": text, "matches": hits, "count": len(hits),
 		"mode": string(answer.ServedMode)}

@@ -9,10 +9,10 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -50,17 +50,17 @@ func PageWrites() []string {
 // writes, and that is what stops a turn that just created a page from
 // concluding the page does not exist and creating it again.
 type PageReader interface {
-	List(ctx context.Context, f pages.Filter, fresh statelog.Freshness) (pages.Listing, error)
-	Get(ctx context.Context, ref string, fresh statelog.Freshness) (pages.Detail, error)
+	List(ctx context.Context, f doclet.Filter, fresh statelog.Freshness) (doclet.Listing, error)
+	Get(ctx context.Context, ref string, fresh statelog.Freshness) (doclet.Detail, error)
 }
 
 // PageWriter is what these tools need from the write side.
 type PageWriter interface {
-	Create(ctx context.Context, actor pages.Actor, in pages.NewPage) (pages.Written, error)
-	SavePage(ctx context.Context, actor pages.Actor, pageID string, save pages.Save) (pages.Written, error)
-	Rename(ctx context.Context, actor pages.Actor, pageID, title string, quiet bool) (pages.Written, error)
-	Comment(ctx context.Context, actor pages.Actor, pageID string, in pages.NewComment) (pages.Comment, pages.Written, error)
-	EditComment(ctx context.Context, actor pages.Actor, pageID, commentID, body string) (pages.Comment, pages.Written, error)
+	Create(ctx context.Context, actor doclet.Actor, in doclet.NewPage) (doclet.Written, error)
+	SavePage(ctx context.Context, actor doclet.Actor, pageID string, save doclet.Save) (doclet.Written, error)
+	Rename(ctx context.Context, actor doclet.Actor, pageID, title string, quiet bool) (doclet.Written, error)
+	Comment(ctx context.Context, actor doclet.Actor, pageID string, in doclet.NewComment) (doclet.Comment, doclet.Written, error)
+	EditComment(ctx context.Context, actor doclet.Actor, pageID, commentID, body string) (doclet.Comment, doclet.Written, error)
 }
 
 // PageDeps are the knowledge base's halves plus what a write needs.
@@ -100,11 +100,11 @@ type PageDeps struct {
 	//
 	// AND IT CARRIES THE CALLER'S OPERATION KEY where the caller's
 	// transport names one: a surface that takes an `Idempotency-Key` sets
-	// it as [pages.Actor.OpKey] on the actor it returns, which is the one
+	// it as [doclet.Actor.OpKey] on the actor it returns, which is the one
 	// way a key reaches a page write outside a turn — the store derives
 	// every write's id from it, bound to what that write says. In a turn
 	// the key is the turn's ([pageOpKey]), whatever the actor carries.
-	Actor func(ctx context.Context, turn *turnctx.Turn) (pages.Actor, error)
+	Actor func(ctx context.Context, turn *turnctx.Turn) (doclet.Actor, error)
 
 	// Await is handed the position every page write landed at, so the next
 	// read sees it. See [WorkDeps.Await]: same seam, same reason, the same
@@ -116,10 +116,10 @@ type PageDeps struct {
 }
 
 // pageOpKey is the operation key every page write this call makes is derived
-// from, set on [pages.Actor.OpKey] — the package doc's one rule, "How a write
+// from, set on [doclet.Actor.OpKey]: the package doc's one rule, "How a write
 // is made once", for the knowledge base, whose store derives each write's id
 // from the key, the verb, the object and a digest of what the write says
-// ([pages.Store]):
+// ([doclet.Store]):
 //
 //   - IN A TURN, a key derived from the turn's seed ([turnKey]), the instant
 //     it began ([turnSince]), the tool and this call's repeat count in the
@@ -133,7 +133,7 @@ type PageDeps struct {
 //     it by internal/api/opkey;
 //   - or none, and the store mints a fresh id for each write.
 func pageOpKey(turn *turnctx.Turn, tool string, args map[string]any,
-	actor pages.Actor) string {
+	actor doclet.Actor) string {
 
 	seed := turnKey(turn)
 	if seed == "" {
@@ -185,19 +185,19 @@ func (d PageDeps) settle(ctx context.Context, at statelog.Position) {
 	}
 }
 
-func pageActor(turn *turnctx.Turn) (pages.Actor, error) {
+func pageActor(turn *turnctx.Turn) (doclet.Actor, error) {
 	seat, err := turn.RequireSeat()
 	if err != nil {
-		return pages.Actor{}, err
+		return doclet.Actor{}, err
 	}
-	return pages.Actor{
-		Handle: seat.Handle(), Kind: pages.AuthorAgent,
+	return doclet.Actor{
+		Handle: seat.Handle(), Kind: doclet.AuthorAgent,
 		TurnID: turn.RunID, Chain: turn.Chain,
 	}, nil
 }
 
 // actor resolves who this call writes as — see [PageDeps.Actor].
-func (d PageDeps) actor(ctx context.Context, turn *turnctx.Turn) (pages.Actor, error) {
+func (d PageDeps) actor(ctx context.Context, turn *turnctx.Turn) (doclet.Actor, error) {
 	if d.Actor != nil {
 		return d.Actor(ctx, turn)
 	}
@@ -213,7 +213,7 @@ func (d PageDeps) actor(ctx context.Context, turn *turnctx.Turn) (pages.Actor, e
 // skills container's pages are pages. But they are also the instructions the
 // engine injects into a phase of every seat's turn, so writing one rewrites
 // the prompt the whole company runs under, and a credential holding only the
-// knowledge base could do it: internal/pages refuses an AGENT every write
+// knowledge base could do it: internal/doclet refuses an AGENT every write
 // there, and exempts every person, because whether a person may is a matter of
 // capability and the store holds no grants. This is where that capability is
 // asked, once the container is known — from the arguments on a create, and
@@ -223,15 +223,15 @@ func (d PageDeps) actor(ctx context.Context, turn *turnctx.Turn) (pages.Actor, e
 // routes for a rename, the trash, a restore and a purge — so the question is
 // spelled once however the write arrives.
 //
-// THE KEY IS CANONICALISED on both sides, for [pages.ContainerKey]'s reason: a
+// THE KEY IS CANONICALISED on both sides, for [doclet.ContainerKey]'s reason: a
 // comparison that read `ts` and `TS` as two containers would let the one a
 // caller was refused be written under the other spelling.
 func (d PageDeps) SkillPage(container string) (authz.Object, bool) {
 	if d.SkillsContainer == nil {
 		return authz.Object{}, false
 	}
-	skills := pages.ContainerKey(d.SkillsContainer())
-	key := pages.ContainerKey(container)
+	skills := doclet.ContainerKey(d.SkillsContainer())
+	key := doclet.ContainerKey(container)
 	if skills == "" || key != skills {
 		return authz.Object{}, false
 	}
@@ -247,7 +247,7 @@ func (d PageDeps) SkillPage(container string) (authz.Object, bool) {
 // EXPORTED for the surface that renames, trashes and restores pages without a
 // tool — the HTTP routes — so the object is formed once however the verb
 // arrives.
-func PageObject(page pages.Page) authz.Object {
+func PageObject(page doclet.Page) authz.Object {
 	return authz.Object{Kind: authz.KindPage, Container: page.Container,
 		Author: page.Author}
 }
@@ -302,7 +302,7 @@ func (t *listPages) Parameters() map[string]any {
 			"limit": map[string]any{
 				"type": "integer",
 				"description": fmt.Sprintf("How many to return, 1..%d (default %d).",
-					pages.MaxLimit, pages.DefaultLimit),
+					doclet.MaxLimit, doclet.DefaultLimit),
 			},
 		},
 	}
@@ -326,12 +326,12 @@ func (t *listPages) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 	// PUBLISHED ONLY, and not a parameter: a draft is somebody's
 	// unfinished thought, and an agent given the option to list drafts
 	// would act on one.
-	got, err := t.deps.Reader.List(ctx, pages.Filter{
+	got, err := t.deps.Reader.List(ctx, doclet.Filter{
 		Container: strings.TrimSpace(argString(args, "container")),
 		ParentID:  strings.TrimSpace(argString(args, "parent")),
 		Title:     strings.TrimSpace(argString(args, "title")),
 		Label:     strings.TrimSpace(argString(args, "label")),
-		Status:    []pages.Status{pages.StatusPublished},
+		Status:    []doclet.Status{doclet.StatusPublished},
 		Limit:     argInt(args, "limit", 0),
 	}, seatRead)
 	if err != nil {
@@ -415,14 +415,14 @@ func (t *getPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[
 	}
 	detail, err := t.deps.Reader.Get(ctx, ref, seatRead)
 	switch {
-	case errors.Is(err, pages.ErrNotFound):
+	case errors.Is(err, doclet.ErrNotFound):
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("There is no page %q. "+
 			"Check the container and title, or use search_knowledge to find it.",
 			clip(ref))), nil
 	case err != nil:
 		return pageReadFailure(ctx, GetPageTool, err), nil
 	}
-	note(ctx, t.events, turn, knowledgeRead(turn, types.ReadViaGetPage, pages.Backend, "",
+	note(ctx, t.events, turn, knowledgeRead(turn, types.ReadViaGetPage, doclet.Backend, "",
 		[]types.KnowledgeReadPage{{
 			ID: detail.Page.ID, Container: detail.Page.Container, Title: detail.Page.Title,
 		}}))
@@ -442,11 +442,11 @@ func (t *getPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[
 // one line to a colleague's page has sent the colleague's words back
 // unchanged, and labelling the result `own` would launder whatever the colleague
 // wrote into the one trust a seat relies on most. A page keeps its last
-// [pages.RevisionsKept] revisions, each written at the version it produced
+// [doclet.RevisionsKept] revisions, each written at the version it produced
 // and the first by the page's author, so a page with more versions than that
 // has writers this read cannot name, and its body is labelled as such
 // ([provenance.TrustForPartial]).
-func fencePage(read *foreignRead, at fieldPath, d pages.Detail) {
+func fencePage(read *foreignRead, at fieldPath, d doclet.Detail) {
 	var writers []provenance.Author
 	partial := false
 	name := func(handle string) {
@@ -520,11 +520,11 @@ func (t *writePage) Parameters() map[string]any {
 			"labels": map[string]any{
 				"type": "array", "items": map[string]any{"type": "string"},
 				"description": fmt.Sprintf("Labels to file the page under: at "+
-					"most %d, each at most %d bytes.", pages.MaxLabels, pages.MaxLabelLength),
+					"most %d, each at most %d bytes.", doclet.MaxLabels, doclet.MaxLabelLength),
 			},
 			"status": map[string]any{
 				"type": "string",
-				"enum": []any{string(pages.StatusPublished), string(pages.StatusDraft)},
+				"enum": []any{string(doclet.StatusPublished), string(doclet.StatusDraft)},
 				"description": "published, the default, is a page every reader " +
 					"and every search finds. draft is unfinished: it is listed " +
 					"in its container marked as a draft, and no search returns " +
@@ -560,7 +560,7 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 	// WITHOUT THE FENCE a body copied from a read still wears: those two
 	// lines are this turn's label, never the page's text.
 	body := unfence(turn, argString(args, "body"))
-	in := pages.NewPage{
+	in := doclet.NewPage{
 		Title:     strings.TrimSpace(argString(args, "title")),
 		Body:      body,
 		Container: strings.ToUpper(strings.TrimSpace(argString(args, "container"))),
@@ -616,31 +616,31 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 // the trash is a state a page is MOVED into, with the thirty days that start
 // then. An absent or empty status is published, which is what every caller
 // that predates the argument meant.
-func createStatus(args map[string]any) (pages.Status, string) {
+func createStatus(args map[string]any) (doclet.Status, string) {
 	raw, present := args["status"]
 	if !present || raw == nil {
-		return pages.StatusPublished, ""
+		return doclet.StatusPublished, ""
 	}
 	text, ok := raw.(string)
-	switch status := pages.Status(strings.TrimSpace(text)); {
+	switch status := doclet.Status(strings.TrimSpace(text)); {
 	case ok && status == "":
-		return pages.StatusPublished, ""
-	case ok && (status == pages.StatusPublished || status == pages.StatusDraft):
+		return doclet.StatusPublished, ""
+	case ok && (status == doclet.StatusPublished || status == doclet.StatusDraft):
 		return status, ""
 	}
 	return "", fmt.Sprintf("write_page writes a page as `%s` or `%s`, and was "+
 		"asked for %s. Leave `status` out to publish it.",
-		pages.StatusPublished, pages.StatusDraft, clip(fmt.Sprint(raw)))
+		doclet.StatusPublished, doclet.StatusDraft, clip(fmt.Sprint(raw)))
 }
 
 // ---- save_page --------------------------------------------------------- //
 
 // pageLinkExample is how a body links another page: the address
-// [pages.Links] reads back, so the linked page lists this one under "Linked
+// [doclet.Links] reads back, so the linked page lists this one under "Linked
 // from". BY ID, never by title — a title is an address that a rename moves,
 // and a `[[CONTAINER/Title]]` wiki link is a grammar nothing in the engine
 // reads: it renders as literal brackets and is invisible to the backlinks.
-const pageLinkExample = "[its title](" + pages.AddressPrefix + "<page id>)"
+const pageLinkExample = "[its title](" + doclet.AddressPrefix + "<page id>)"
 
 // pageLinkHelp is the sentence both page-writing tools carry on `body`.
 const pageLinkHelp = "Link another page as " + pageLinkExample +
@@ -731,7 +731,7 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	}
 	detail, err := t.deps.Reader.Get(ctx, ref, seatRead)
 	switch {
-	case errors.Is(err, pages.ErrNotFound):
+	case errors.Is(err, doclet.ErrNotFound):
 		return refusedBy(tools.RefusalNotFound, err,
 			fmt.Sprintf("There is no page %q.", clip(ref))), nil
 	case err != nil:
@@ -759,7 +759,7 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 			return *refused, nil
 		}
 	}
-	save := pages.Save{BaseVersion: base, Message: strings.TrimSpace(argString(args, "message"))}
+	save := doclet.Save{BaseVersion: base, Message: strings.TrimSpace(argString(args, "message"))}
 	if _, ok := args["body"]; ok {
 		// The body get_page answered arrives fenced, and the likeliest edit
 		// sends the fence back with it; see [unfence].
@@ -944,7 +944,7 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	}
 	detail, err := t.deps.Reader.Get(ctx, ref, seatRead)
 	switch {
-	case errors.Is(err, pages.ErrNotFound):
+	case errors.Is(err, doclet.ErrNotFound):
 		return refusedBy(tools.RefusalNotFound, err,
 			fmt.Sprintf("There is no page %q.", clip(ref))), nil
 	case err != nil:
@@ -976,7 +976,7 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		})
 	}
 
-	in := pages.NewComment{
+	in := doclet.NewComment{
 		Body:    body,
 		ReplyTo: strings.TrimSpace(argString(args, "reply_to")),
 	}
@@ -1069,7 +1069,7 @@ func pageUnknownText(name string, result statelog.Result, next string) string {
 //
 // THE UNMARKED REMAINDER IS THE NODE'S, as the tracker's is ([writeFailure]):
 // the pages writer wraps every refusal it decides on content in one of its own
-// sentinels — [pages.ErrInvalid] included — so what reaches the end of this
+// sentinels ([doclet.ErrInvalid] included), so what reaches the end of this
 // switch is a log that refused the append, which is a CONDITION
 // ([tools.RefusalUnavailable]), or a read or an encode that broke, which is a
 // FAULT ([tools.RefusalInternalError], its error in the log — [faulted]).
@@ -1089,30 +1089,30 @@ func pageWriteFailure(ctx context.Context, name string, err error) tools.Result 
 			"failed. Read the page with get_page before writing it again: if this "+
 			"write landed, writing it again makes it twice.", name, Unanswered),
 			Failed: true, Cause: UnknownCause("", err)}
-	case errors.Is(err, pages.ErrInvalid):
+	case errors.Is(err, doclet.ErrInvalid):
 		// THE WRITER'S SENTENCE ALONE, for the reason writeFailure gives:
 		// a person's surface prints this class as it stands.
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused that: %s",
-			name, pages.Sentence(err)))
-	case errors.Is(err, pages.ErrReserved):
+			name, doclet.Sentence(err)))
+	case errors.Is(err, doclet.ErrReserved):
 		// THE STORE'S RULE, not a tool's: a reserved container refuses an
 		// agent there whichever surface the write came by, and its own
 		// sentence says which container and why.
 		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s refused that: %v. "+
 			"Write this somewhere a reader will find it.", name, err))
-	case errors.Is(err, pages.ErrTitleTaken):
+	case errors.Is(err, doclet.ErrTitleTaken):
 		return refusedBy(tools.RefusalExists, err, fmt.Sprintf("%v\n\nThat page already "+
 			"exists — read it with get_page and edit it with save_page rather "+
 			"than writing a second page on the same subject.", err))
-	case errors.Is(err, pages.ErrStaleVersion):
+	case errors.Is(err, doclet.ErrStaleVersion):
 		return refusedBy(tools.RefusalStaleVersion, err, fmt.Sprintf("%v\n\nRead the "+
 			"page again with get_page, re-apply your change on top of what it "+
 			"says now, and save with the version you just read.", err))
-	case errors.Is(err, pages.ErrConflict):
+	case errors.Is(err, doclet.ErrConflict):
 		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s could not land: "+
 			"%v. Somebody else is editing this page. Read it again before "+
 			"retrying.", name, err))
-	case errors.Is(err, pages.ErrNotFound):
+	case errors.Is(err, doclet.ErrNotFound):
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("%s: %v", name, err))
 	}
 	if why, ok := Condition(err); ok {

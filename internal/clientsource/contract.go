@@ -92,17 +92,17 @@ var contract = []Entry{
 	{"BudgetState", ReadUnion, "internal/events/types.TestTheDashboardKnowsExactlyTheBudgetStatesTheEngineSends"},
 
 	// work.ts
-	{"WorkViewShape", ReadUnion, "internal/tracker.TestEveryViewShapeTheEngineMintsHasARenderer"},
-	{"COLUMN_SORT_KEYS", ReadLiteral, "internal/tracker.TestEveryGridSortKeyIsOneTheGrammarTakes"},
+	{"WorkViewShape", ReadUnion, "internal/worklet.TestEveryViewShapeTheEngineMintsHasARenderer"},
+	{"COLUMN_SORT_KEYS", ReadLiteral, "internal/worklet.TestEveryGridSortKeyIsOneTheGrammarTakes"},
 	{"PROJECT_SORT_KEYS", ReadLiteral,
-		"internal/tracker.TestTheProjectsDirectorySortsOnExactlyTheOrderingsTheEngineTakes"},
-	{"CHANGES", ReadLiteral, "internal/tracker.TestEveryChangeKindTheEngineWritesHasAMarkAndAPhrase"},
-	{"GROUP_AXES", ReadLiteral, "internal/tracker.TestEveryGroupingTheDashboardOffersIsOneTheGrammarTakes"},
-	{"TASK_TITLE_MAX_BYTES", ReadScalar, "internal/tracker.TestTheDashboardBoundsTrackerTextAtTheEnginesCaps"},
-	{"TASK_BODY_MAX_BYTES", ReadScalar, "internal/tracker.TestTheDashboardBoundsTrackerTextAtTheEnginesCaps"},
-	{"VIEW_NAME_MAX_BYTES", ReadScalar, "internal/tracker.TestTheDashboardBoundsTrackerTextAtTheEnginesCaps"},
+		"internal/worklet.TestTheProjectsDirectorySortsOnExactlyTheOrderingsTheEngineTakes"},
+	{"CHANGES", ReadLiteral, "internal/worklet.TestEveryChangeKindTheEngineWritesHasAMarkAndAPhrase"},
+	{"GROUP_AXES", ReadLiteral, "internal/worklet.TestEveryGroupingTheDashboardOffersIsOneTheGrammarTakes"},
+	{"TASK_TITLE_MAX_BYTES", ReadScalar, "internal/worklet.TestTheDashboardBoundsTrackerTextAtTheEnginesCaps"},
+	{"TASK_BODY_MAX_BYTES", ReadScalar, "internal/worklet.TestTheDashboardBoundsTrackerTextAtTheEnginesCaps"},
+	{"VIEW_NAME_MAX_BYTES", ReadScalar, "internal/worklet.TestTheDashboardBoundsTrackerTextAtTheEnginesCaps"},
 	{"DECISION_QUESTION_MAX_BYTES", ReadScalar,
-		"internal/tracker.TestTheDashboardBoundsTrackerTextAtTheEnginesCaps"},
+		"internal/worklet.TestTheDashboardBoundsTrackerTextAtTheEnginesCaps"},
 
 	// backups.ts
 	{"BackupsAnswer", ReadInterface, "internal/api/queries.TestTheBackupsScreenReadsWhatTheAnswerSends"},
@@ -125,7 +125,7 @@ var contract = []Entry{
 	{"McpServerState", ReadUnion, "internal/api/queries.TestTheToolsScreenReadsWhatTheServerStatusSends"},
 
 	// attribution.ts
-	{"CHANGE_FIELDS", ReadLiteral, "internal/tracker.TestAttributionFieldsAreTheEngines"},
+	{"CHANGE_FIELDS", ReadLiteral, "internal/worklet.TestAttributionFieldsAreTheEngines"},
 
 	// references.ts
 	{"REFERENCE_NAME", ReadScalar, "internal/envref.TestTheDashboardReadsAReferenceByTheEnginesGrammar"},
@@ -294,7 +294,7 @@ var contract = []Entry{
 	{"OBJECTS_STATES", ReadLiteral, "internal/api.TestTheDashboardKnowsEveryObjectsState"},
 
 	// links.ts
-	{"PAGE_ADDRESS_PREFIX", ReadScalar, "internal/pages.TestTheDashboardAddressesAPageTheWayTheBacklinksReadIt"},
+	{"PAGE_ADDRESS_PREFIX", ReadScalar, "internal/doclet.TestTheDashboardAddressesAPageTheWayTheBacklinksReadIt"},
 
 	// pages.ts
 	{"PageReadsAnswer", ReadInterface, "internal/api/queries.TestThePageScreenReadsWhatTheseAnswersSend"},
@@ -305,12 +305,12 @@ var contract = []Entry{
 	{"PageLink", ReadInterface, "internal/api/queries.TestThePageScreenReadsWhatTheseAnswersSend"},
 	{"TaskLink", ReadInterface, "internal/api/queries.TestThePageScreenReadsWhatTheseAnswersSend"},
 	{"LinkedFromStatus", ReadUnion, "internal/api/queries.TestTheDashboardKnowsExactlyTheBacklinkStatuses"},
-	{"PAGE_TITLE_MAX_BYTES", ReadScalar, "internal/pages.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
-	{"PAGE_MESSAGE_MAX_BYTES", ReadScalar, "internal/pages.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
-	{"PAGE_BODY_MAX_BYTES", ReadScalar, "internal/pages.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
-	{"PAGE_LABELS_MAX", ReadScalar, "internal/pages.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
-	{"PAGE_LABEL_MAX_BYTES", ReadScalar, "internal/pages.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
-	{"PAGE_CHANGES", ReadLiteral, "internal/pages.TestEveryPageChangeTheEngineWritesReadsAsASentence"},
+	{"PAGE_TITLE_MAX_BYTES", ReadScalar, "internal/doclet.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
+	{"PAGE_MESSAGE_MAX_BYTES", ReadScalar, "internal/doclet.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
+	{"PAGE_BODY_MAX_BYTES", ReadScalar, "internal/doclet.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
+	{"PAGE_LABELS_MAX", ReadScalar, "internal/doclet.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
+	{"PAGE_LABEL_MAX_BYTES", ReadScalar, "internal/doclet.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
+	{"PAGE_CHANGES", ReadLiteral, "internal/doclet.TestEveryPageChangeTheEngineWritesReadsAsASentence"},
 
 	// artifacts.ts
 	{"ARTIFACT_KINDS", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardSpeaksTheArtifactsVocabulary"},

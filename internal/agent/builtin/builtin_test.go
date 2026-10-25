@@ -23,7 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 const companyDoc = `
@@ -245,11 +245,11 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		// The tracker's and the knowledge base's own reads.
 		builtin.ListWorkItemsTool:    false,
 		builtin.GetWorkItemTool:      false,
-		tracker.GetWorkCatalogueTool: false,
-		tracker.ListProjectsTool:     false,
-		tracker.DescribeProjectTool:  false,
-		tracker.TaskActivityTool:     false,
-		tracker.MyWorkTool:           false,
+		worklet.GetWorkCatalogueTool: false,
+		worklet.ListProjectsTool:     false,
+		worklet.DescribeProjectTool:  false,
+		worklet.TaskActivityTool:     false,
+		worklet.MyWorkTool:           false,
 		builtin.ListPagesTool:        false,
 		builtin.GetPageTool:          false,
 
@@ -266,28 +266,28 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 
 		// A project's own settings, which every seat holds for one
 		// facet: a declared tag is a filter on everybody's board.
-		tracker.WriteProjectTool: true,
+		worklet.WriteProjectTool: true,
 
 		// A FOLD IS A SHARED WRITE: it closes somebody's item on every
 		// board and moves its subtasks to another.
-		tracker.MergeWorkItemTool: true,
+		worklet.MergeWorkItemTool: true,
 
 		// SO IS A MOVE: an item and its subtree leave one board for
 		// another, and every key in it changes.
-		tracker.MoveWorkItemTool: true,
+		worklet.MoveWorkItemTool: true,
 
 		// AND THE RANKED SEARCH IS A READ. It sat on the default arm,
 		// whose ReadOnly=No with OpenWorld unset is exactly what
 		// WritesToSharedSurface reads as TRUE — so a worker granted it
 		// was refused it, while list_work_items beside it was admitted.
-		tracker.SearchWorkItemsTool: false,
+		worklet.SearchWorkItemsTool: false,
 
 		// A PROJECT'S FILES: reading one is a read, and writing or
 		// removing one changes what everybody on the project opens.
-		tracker.ListProjectFilesTool:  false,
-		tracker.ReadProjectFileTool:   false,
-		tracker.WriteProjectFileTool:  true,
-		tracker.RemoveProjectFileTool: true,
+		worklet.ListProjectFilesTool:  false,
+		worklet.ReadProjectFileTool:   false,
+		worklet.WriteProjectFileTool:  true,
+		worklet.RemoveProjectFileTool: true,
 
 		// THE ARTIFACTS: the four reads (the company's brand among them)
 		// are reads, and every write is read by the people the artifact is

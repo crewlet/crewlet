@@ -16,14 +16,14 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
-	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // probe answers a sequence's stored instant from a table, and reports which
@@ -558,7 +558,7 @@ func trimmedTracker(t *testing.T) (*Engine, *Backends, *runningLog) {
 	// THE NODE'S OWN TRIM IS THE OTHER WRITER of both the floor and the
 	// log's first sequence; stopped, it waits out an in-flight tick.
 	e.stopRetention()
-	running := e.core.Load().log.Domain(tracker.Domain{}.Name())
+	running := e.core.Load().log.Domain(worklet.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
 	}
@@ -1230,7 +1230,7 @@ func TestTheRetentionReportShowsOnlyAFloorAtTheDomainsGeneration(t *testing.T) {
 	// failing the case for a reason that is not the rule under test.
 	e.stopRetention()
 	r := &retention{fleet: e.backends.Fleet, state: s, nodeID: "node-a"}
-	trackerName, pagesName := tracker.Domain{}.Name(), pages.Domain{}.Name()
+	trackerName, pagesName := worklet.Domain{}.Name(), doclet.Domain{}.Name()
 
 	// A FLOOR AT EACH DOMAIN'S CURRENT GENERATION, blocked, so every field
 	// the row carries is one the report could show.
@@ -1374,7 +1374,7 @@ func TestTheRetentionReportNamesARecreatedLog(t *testing.T) {
 	s := e.core.Load().log
 	e.stopRetention()
 	r := &retention{fleet: e.backends.Fleet, state: s, nodeID: "node-a"}
-	pagesName := pages.Domain{}.Name()
+	pagesName := doclet.Domain{}.Name()
 
 	rebuildLog(t, js, s.Domain(pagesName).spec)
 	s.publishPositions(t.Context())

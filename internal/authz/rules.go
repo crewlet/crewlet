@@ -584,7 +584,7 @@ var rules = map[Action]rule{
 	ActionWorkThread: {class: ClassEverybody, recency: iam.RecencyAny},
 
 	// `write_project` IS TWO GESTURES AND ONLY ONE IS THE LEAD'S, which is
-	// what internal/tracker's own tag rule has always said: adding a label
+	// what internal/worklet's own tag rule has always said: adding a label
 	// is open to everybody who uses the tracker, and renaming or archiving
 	// one takes the word off everybody's board. So the TOOL takes the app
 	// and the lead-only facets — a rename, an archive, any policy edit —
@@ -645,8 +645,8 @@ var rules = map[Action]rule{
 	ActionPageRead:      {class: ClassApp, app: iam.GrantKnowledge, recency: iam.RecencyAny},
 	ActionPageList:      {class: ClassApp, app: iam.GrantKnowledge, recency: iam.RecencyAny},
 	ActionKnowledgeRead: {class: ClassApp, app: iam.GrantKnowledge, recency: iam.RecencyAny},
-	// WHERE A PAGE MAY BE CREATED is internal/pages' store's to decide — a
-	// space the company declares — for every author alike; this row decides
+	// WHERE A PAGE MAY BE CREATED is internal/doclet's store's to decide (a
+	// space the company declares) for every author alike; this row decides
 	// only WHO.
 	ActionPageCreate:  {class: ClassApp, app: iam.GrantKnowledge, recency: iam.RecencyAny},
 	ActionPageSave:    {class: ClassApp, app: iam.GrantKnowledge, recency: iam.RecencyAny},
@@ -734,7 +734,7 @@ var rules = map[Action]rule{
 	// instructions, so writing one rewrites the prompt the whole company
 	// runs under — the same reach as editing the company document, and it
 	// takes admin rather than the knowledge app that authors an ordinary
-	// page. AND NEVER AN AGENT'S, which internal/pages' store also refuses:
+	// page. AND NEVER AN AGENT'S, which internal/doclet's store also refuses:
 	// a seat writing the instructions every seat obeys is a model editing
 	// the rules it is judged by.
 	ActionSkillPageWrite: {class: ClassAdmin, humanOnly: true, recency: iam.RecencyAny},

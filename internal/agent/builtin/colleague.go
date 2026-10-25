@@ -33,7 +33,7 @@
 //     surface — carries the `Idempotency-Key` a retry repeats, held to the
 //     operation grammar and scoped to the principal by internal/api/opkey,
 //     as [Actor.WorkKey] with its instant as [Actor.WorkSince] (and as
-//     [pages.Actor.OpKey] for a page write), so a request is a unit of work
+//     [doclet.Actor.OpKey] for a page write), so a request is a unit of work
 //     exactly as a turn's trigger is and every id is derived from it as a
 //     turn's are. The operator's assistant over MCP names the call's
 //     OPERATION ([Actor.Operation]) instead: it brings back the `op_id` its

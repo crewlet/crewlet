@@ -244,8 +244,9 @@ type Option func(*Entry)
 //
 // The surface name has to be the SAME vocabulary the trigger's own source is
 // reported in, because the delivery gate compares the two: an engine builtin
-// says `tracker` or `pages`, and a vendor's tool takes its MCP server's name,
-// which is what an inbound notification reports itself as.
+// says `work` or `page` (Worklet's and Doclet's feed sources), and a vendor's
+// tool takes its MCP server's name, which is what an inbound notification
+// reports itself as.
 func DeliversTo(surface string) Option { return func(e *Entry) { e.Surface = surface } }
 
 // RegisterWith adds a tool together with its annotations.

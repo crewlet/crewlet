@@ -5,7 +5,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/search"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // Ranking work items over the node's own index.
@@ -16,13 +16,13 @@ import (
 // is the same scan the knowledge search makes, with `task` where that one puts
 // `page`, and the two rankings cannot drift because there is only one.
 
-// itemRanker is [tracker.Ranker] over this node's index and fan-out.
+// itemRanker is [worklet.Ranker] over this node's index and fan-out.
 type itemRanker struct {
 	fan   *search.FanOut
 	index *search.Indexer
 }
 
-// Candidates implements [tracker.Ranker]: each method the query's mode runs,
+// Candidates implements [worklet.Ranker]: each method the query's mode runs,
 // its top candidates over this node's corpus of work items, the item behind
 // each with the index's excerpt, and what the ranking did.
 //
@@ -31,9 +31,9 @@ type itemRanker struct {
 // coverage rides in the answer's outcome to whichever surface asked, which is
 // where a person or a seat can act on it. It used to be a log line, which
 // nobody asking could see.
-func (r itemRanker) Candidates(ctx context.Context, q tracker.SearchQuery) (tracker.RankedCandidates, error) {
+func (r itemRanker) Candidates(ctx context.Context, q worklet.SearchQuery) (worklet.RankedCandidates, error) {
 	if r.fan == nil || r.index == nil {
-		return tracker.RankedCandidates{}, nil
+		return worklet.RankedCandidates{}, nil
 	}
 	answer, err := r.fan.Search(ctx, search.FanQuery{
 		Text:    q.Text,
@@ -45,25 +45,25 @@ func (r itemRanker) Candidates(ctx context.Context, q tracker.SearchQuery) (trac
 		Limit: search.FuseN,
 	})
 	if err != nil {
-		return tracker.RankedCandidates{}, err
+		return worklet.RankedCandidates{}, err
 	}
-	out := tracker.RankedCandidates{Candidates: answer.Candidates, Outcome: answer.Outcome()}
+	out := worklet.RankedCandidates{Candidates: answer.Candidates, Outcome: answer.Outcome()}
 	keys := answer.Candidates.Keys()
 	if len(keys) == 0 {
 		return out, nil
 	}
 	hits, err := r.index.Hydrate(ctx, keys, q.Text)
 	if err != nil {
-		return tracker.RankedCandidates{}, err
+		return worklet.RankedCandidates{}, err
 	}
-	out.Docs = make(map[string]tracker.RankedDoc, len(hits))
+	out.Docs = make(map[string]worklet.RankedDoc, len(hits))
 	for _, hit := range hits {
-		out.Docs[hit.Key] = tracker.RankedDoc{ID: hit.ID, Snippet: hit.Snippet}
+		out.Docs[hit.Key] = worklet.RankedDoc{ID: hit.ID, Snippet: hit.Snippet}
 	}
 	return out, nil
 }
 
-// Building implements [tracker.Ranker].
+// Building implements [worklet.Ranker].
 func (r itemRanker) Building(_ context.Context) bool {
 	return r.index != nil && !r.index.Ready()
 }
@@ -73,7 +73,7 @@ func (r itemRanker) Building(_ context.Context) bool {
 // or a node that has not met its company yet. The lexical index is built for
 // either native backend, so a nil here is decided by the tracker rather than
 // by whether an index exists.
-func (e *Engine) WorkSearch() *tracker.Searcher {
+func (e *Engine) WorkSearch() *worklet.Searcher {
 	n := e.native.Load()
 	if n == nil || n.itemSearch == nil {
 		return nil
@@ -86,7 +86,7 @@ func (e *Engine) WorkSearch() *tracker.Searcher {
 // operator's MCP endpoint being the one that is.
 //
 // IT ANSWERS AN UNTYPED NIL for a node with no index, rather than a non-nil
-// interface holding a nil [tracker.Searcher], because that is the shape a
+// interface holding a nil [worklet.Searcher], because that is the shape a
 // `deps.Search != nil` gate reads correctly: handed the other one it registers
 // a search tool that can only fail.
 //

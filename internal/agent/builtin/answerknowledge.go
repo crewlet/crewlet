@@ -17,16 +17,16 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/compact"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // Answering a person's question from the company's knowledge: the command
@@ -196,8 +196,8 @@ type AnswerBudget interface {
 // TaskReader reads one work item whole, for the description an answer is
 // written from.
 type TaskReader interface {
-	Task(ctx context.Context, idOrKey string, want tracker.DetailWants,
-		fresh statelog.Freshness) (tracker.TaskDetail, error)
+	Task(ctx context.Context, idOrKey string, want worklet.DetailWants,
+		fresh statelog.Freshness) (worklet.TaskDetail, error)
 }
 
 // AnswerDeps are what answering needs beyond the search seams the operator
@@ -320,7 +320,7 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	// A PERSON BOUND TO A SEAT, and nobody else: [iam.ActorFor] names
 	// exactly that asker kind human, by the seat. See the file head.
-	if actor.Kind != tracker.AuthorHuman || strings.TrimSpace(actor.Handle) == "" {
+	if actor.Kind != worklet.AuthorHuman || strings.TrimSpace(actor.Handle) == "" {
 		return refused(tools.RefusalForbidden, fmt.Sprintf("%s runs on the auxiliary "+
 			"model of the seat its asker is bound to, and %q is bound to no seat, so "+
 			"there is no model to answer on and nobody the spend is charged for. A "+
@@ -553,11 +553,11 @@ func (t *answerKnowledge) retrieve(ctx context.Context, question string,
 	}
 
 	if reach.tasks && t.items != nil {
-		answer, err := t.items.Search(ctx, tracker.SearchQuery{
+		answer, err := t.items.Search(ctx, worklet.SearchQuery{
 			Text: question, Limit: AnswerTaskSources, Mode: knowledge.ModeHybrid,
 		})
 		switch {
-		case errors.Is(err, tracker.ErrIndexBuilding):
+		case errors.Is(err, worklet.ErrIndexBuilding):
 			// This node's index is behind; the pages still answer.
 			log.DebugContext(ctx, "knowledge_answer_items_building")
 		case err != nil:
@@ -644,7 +644,7 @@ const SnippetOnly = "(only the search snippet — the source itself could not be
 // node's to read, so its snippet is what the model reads — and a model told
 // it is reading a snippet does not conclude the page says nothing more.
 func (t *answerKnowledge) pageText(ctx context.Context, hit knowledge.Hit) string {
-	if t.pages != nil && hit.Backend == pages.Backend && hit.PageID != "" {
+	if t.pages != nil && hit.Backend == doclet.Backend && hit.PageID != "" {
 		detail, err := t.pages.Get(ctx, hit.PageID, seatRead)
 		if err == nil {
 			return detail.Page.Body
@@ -657,9 +657,9 @@ func (t *answerKnowledge) pageText(ctx context.Context, hit knowledge.Hit) strin
 
 // taskText is the item's description WHOLE, else the index's snippet, said to
 // be one.
-func (t *answerKnowledge) taskText(ctx context.Context, hit tracker.Ranked) string {
+func (t *answerKnowledge) taskText(ctx context.Context, hit worklet.Ranked) string {
 	if t.tasks != nil && hit.ID != "" {
-		detail, err := t.tasks.Task(ctx, hit.ID, tracker.DetailWants{}, seatRead)
+		detail, err := t.tasks.Task(ctx, hit.ID, worklet.DetailWants{}, seatRead)
 		if err == nil {
 			return detail.Task.Body
 		}

@@ -7,7 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/doclet"
 )
 
 // The tool-skill path, end to end: a page an operator published reaches the
@@ -41,9 +41,9 @@ func skillPageText(s skills.Skill) string {
 }
 
 // writeSkillsPage writes one page into the company's skills container.
-func writeSkillsPage(t *testing.T, n *node, title, body string) pages.Written {
+func writeSkillsPage(t *testing.T, n *node, title, body string) doclet.Written {
 	t.Helper()
-	written, err := n.engine.PagesStore().Create(t.Context(), pageOperator(), pages.NewPage{
+	written, err := n.engine.PagesStore().Create(t.Context(), pageOperator(), doclet.NewPage{
 		Container: config.DefaultSkillsContainer, Title: title, Body: body,
 	})
 	if err != nil {
@@ -54,10 +54,10 @@ func writeSkillsPage(t *testing.T, n *node, title, body string) pages.Written {
 
 // publish writes each skill as a page in the skills container and waits for
 // every one of them to reach the node's registry.
-func publish(t *testing.T, n *node, in ...skills.Skill) []pages.Written {
+func publish(t *testing.T, n *node, in ...skills.Skill) []doclet.Written {
 	t.Helper()
 	waitFor(t, "the native backends to hydrate", hydrated(t, n.engine))
-	out := make([]pages.Written, 0, len(in))
+	out := make([]doclet.Written, 0, len(in))
 	for _, s := range in {
 		out = append(out, writeSkillsPage(t, n, s.Title, skillPageText(s)))
 	}
@@ -227,7 +227,7 @@ func TestASkillPagePublishedNativelyReachesTheRegistry(t *testing.T) {
 	const frontmatter = "---\nkey: deploy-conventions\ntitle: Deploying\n" +
 		"summary: how this company deploys\nphases: [execute]\n" +
 		"trigger:\n  tool: run_sandbox\n---\n"
-	written, err := n.engine.PagesStore().Create(t.Context(), pageOperator(), pages.NewPage{
+	written, err := n.engine.PagesStore().Create(t.Context(), pageOperator(), doclet.NewPage{
 		Container: "TS", Title: "Deploying",
 		Body: frontmatter + "Tag the release before you announce it.",
 	})
@@ -241,7 +241,7 @@ func TestASkillPagePublishedNativelyReachesTheRegistry(t *testing.T) {
 
 	body := "This used to be a skill and is now a note."
 	if _, err := n.engine.PagesStore().SavePage(t.Context(), pageOperator(),
-		written.Page.ID, pages.Save{BaseVersion: written.Page.Version, Body: &body}); err != nil {
+		written.Page.ID, doclet.Save{BaseVersion: written.Page.Version, Body: &body}); err != nil {
 		t.Fatalf("edit the page into an ordinary one: %v", err)
 	}
 	waitFor(t, "the skill to leave the registry", func() bool {

@@ -30,7 +30,7 @@ import (
 // operator acting on an erasure request runs from a terminal and a runbook
 // rather than from a screen. It goes through that same surface's own route.
 //
-// That operation had no caller anywhere. `tracker.Writer.PurgeTask` existed,
+// That operation had no caller anywhere. `worklet.Writer.PurgeTask` existed,
 // the applier handled its record, the deletion marker stopped a redelivery
 // resurrecting anything — and no CLI verb, no route and no tool reached it. So
 // a company could not destroy a task under any circumstances: an erasure

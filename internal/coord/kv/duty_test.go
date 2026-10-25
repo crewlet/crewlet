@@ -65,7 +65,7 @@ func TestEveryEngineDutyIsHonouredBesideTheProductionSeatTTL(t *testing.T) {
 }
 
 // trackerClaimTTL and largestBulkTTL are the TTLs the tracker claims its walks
-// and its bulk admission at (tracker.ClaimTTL, and twice tracker.MaxBulkTasks
+// and its bulk admission at (worklet.ClaimTTL, and twice worklet.MaxBulkTasks
 // rows at the one-row-a-second drain floor the admission projects from before
 // a drain is measured), restated because this package must not import the
 // tracker.

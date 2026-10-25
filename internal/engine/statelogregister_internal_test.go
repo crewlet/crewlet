@@ -12,14 +12,14 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iamdomain"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/usage"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The register is the one place a domain is declared, so these are the tests
@@ -115,8 +115,8 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 	// table naming three of five pinned nothing about the identity
 	// estate's, and docs/guides/consistency.md publishes all of them.
 	shipped := map[string]bool{
-		tracker.Domain{}.Name():   true,
-		pages.Domain{}.Name():     true,
+		worklet.Domain{}.Name():   true,
+		doclet.Domain{}.Name():    true,
 		iamdomain.Domain{}.Name(): true,
 		search.Domain{}.Name():    false,
 		usage.Domain{}.Name():     false,
@@ -145,7 +145,7 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 			"so a domain could lose its linearizable read with nothing to read off the source")
 	}
 	both := register()
-	both[1].Barrier = tracker.EncodeBarrier
+	both[1].Barrier = worklet.EncodeBarrier
 	if err := checkRegister(both); err == nil {
 		t.Error("an entry that states both a barrier and NoBarrier passed the boot check")
 	}
@@ -241,7 +241,7 @@ func TestEveryIdentityLogHasANodeGateWriter(t *testing.T) {
 func TestAFeedThatDisagreesWithItsDeclarationFailsTheBootCheck(t *testing.T) {
 	trackerFeed := func() func(*Engine, domainFeed) (changefeed.Translator, changefeed.Opener) {
 		for _, entry := range register() {
-			if entry.Domain.Name() == (tracker.Domain{}).Name() {
+			if entry.Domain.Name() == (worklet.Domain{}).Name() {
 				return entry.Feed
 			}
 		}
@@ -254,11 +254,11 @@ func TestAFeedThatDisagreesWithItsDeclarationFailsTheBootCheck(t *testing.T) {
 		edit   func(*registration)
 		names  string
 	}{
-		{"a declared feed nobody runs", pages.Domain{}.Name(),
+		{"a declared feed nobody runs", doclet.Domain{}.Name(),
 			func(r *registration) { r.Feed = nil }, "runs none"},
 		{"a feed nobody declared", search.Domain{}.Name(),
 			func(r *registration) { r.Feed = trackerFeed }, "declares no wake feed"},
-		{"a feed under another domain's group", pages.Domain{}.Name(),
+		{"a feed under another domain's group", doclet.Domain{}.Name(),
 			func(r *registration) { r.Feed = trackerFeed }, "its feed runs as"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -313,10 +313,10 @@ type identityWithoutListing struct{ unregisteredDomain }
 func (identityWithoutListing) Name() string         { return "listless" }
 func (identityWithoutListing) ClaimsIdentity() bool { return true }
 func (identityWithoutListing) EvictionSubject(node string) statelog.Subject {
-	return tracker.Domain{}.EvictionSubject(node)
+	return worklet.Domain{}.EvictionSubject(node)
 }
 func (identityWithoutListing) Evicts(payload []byte) (bool, error) {
-	return tracker.Domain{}.Evicts(payload)
+	return worklet.Domain{}.Evicts(payload)
 }
 
 // identityWithoutProbe lists its evictions and cannot be asked of its log.
@@ -325,7 +325,7 @@ type identityWithoutProbe struct{ unregisteredDomain }
 func (identityWithoutProbe) Name() string         { return "probeless" }
 func (identityWithoutProbe) ClaimsIdentity() bool { return true }
 func (identityWithoutProbe) Evictions(ctx context.Context, db store.ReplicatedReader) ([]statelog.EvictionRow, error) {
-	return tracker.Domain{}.Evictions(ctx, db)
+	return worklet.Domain{}.Evictions(ctx, db)
 }
 
 // TestEveryRegisteredDomainHasACeilingCase walks the ceiling the way the boot
@@ -367,9 +367,9 @@ func TestEveryRegisteredDomainHasACeilingCase(t *testing.T) {
 // every revision, so the core runs exactly these seven logs.
 func TestTheRegisteredOrderIsTheDeclaredOrder(t *testing.T) {
 	want := []string{
-		tracker.Domain{}.Name(),
+		worklet.Domain{}.Name(),
 		search.Domain{}.Name(),
-		pages.Domain{}.Name(),
+		doclet.Domain{}.Name(),
 		iamdomain.Domain{}.Name(),
 		usage.Domain{}.Name(),
 		artifactsdomain.Domain{}.Name(),
@@ -517,7 +517,7 @@ func TestEveryRegisteredDomainsSeamsAreComplete(t *testing.T) {
 func TestAnEntryShortOfASeamFailsItsDomainsStart(t *testing.T) {
 	t.Parallel()
 	s := seamsStateLog(t)
-	entry, ok := registrationFor(tracker.Domain{}.Name())
+	entry, ok := registrationFor(worklet.Domain{}.Name())
 	if !ok {
 		t.Fatal("the register has no tracker domain")
 	}

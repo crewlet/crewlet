@@ -369,7 +369,7 @@ type Object struct {
 	// the tracker app.
 	//
 	// SET ONLY BY A CALLER THAT HAS READ THE ITEM and resolved its asks
-	// (internal/tracker's AskedOn), never from an argument: an asked arm a
+	// (internal/worklet's AskedOn), never from an argument: an asked arm a
 	// caller could fill in for themselves would be the tracker app handed to
 	// anybody who typed their own name. Empty means nobody is asked, or
 	// nobody has looked.

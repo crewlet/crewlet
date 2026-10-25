@@ -20,10 +20,10 @@ import (
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -473,28 +473,28 @@ func (postureNoSeats) Seat(context.Context, string) (session.Seat, bool, error) 
 // matrix asserts who is admitted, never what a page says.
 type posturePages struct{}
 
-func (posturePages) List(context.Context, pages.Filter, statelog.Freshness) (
-	pages.Listing, error) {
-	return pages.Listing{}, nil
+func (posturePages) List(context.Context, doclet.Filter, statelog.Freshness) (
+	doclet.Listing, error) {
+	return doclet.Listing{}, nil
 }
 
-func (posturePages) Get(context.Context, string, statelog.Freshness) (pages.Detail, error) {
-	return pages.Detail{}, pages.ErrNotFound
+func (posturePages) Get(context.Context, string, statelog.Freshness) (doclet.Detail, error) {
+	return doclet.Detail{}, doclet.ErrNotFound
 }
 
 func (posturePages) Containers(context.Context, statelog.Freshness) (
-	[]pages.ContainerListing, error) {
+	[]doclet.ContainerListing, error) {
 	return nil, nil
 }
 
-func (posturePages) Activity(context.Context, pages.PageActivityQuery) (
-	pages.PageActivity, error) {
-	return pages.PageActivity{}, nil
+func (posturePages) Activity(context.Context, doclet.PageActivityQuery) (
+	doclet.PageActivity, error) {
+	return doclet.PageActivity{}, nil
 }
 
 func (posturePages) Revision(context.Context, string, int, statelog.Freshness) (
-	pages.Revision, bool, error) {
-	return pages.Revision{}, false, nil
+	doclet.Revision, bool, error) {
+	return doclet.Revision{}, false, nil
 }
 
 // postureSecrets is the real /secrets surface over a memory fleet, so the

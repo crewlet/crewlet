@@ -23,7 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/slack"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // Which work item a turn is on — the rules in worksubject.go, driven through
@@ -38,12 +38,12 @@ var nativeTask = types.WorkItem{
 // trackerWake is a native tracker wake about task-1, as the parser writes it.
 func trackerWake() *events.Event {
 	return events.New(types.ExternalNotification{
-		NotificationSource: tracker.Source, SourceEventType: "assigned",
+		NotificationSource: worklet.Source, SourceEventType: "assigned",
 		Subject: "ENG-1: fix the build", Addressed: true,
 		Metadata: map[string]string{
-			tracker.MetaTaskID: "task-1", tracker.MetaTaskKey: "ENG-1",
-			tracker.MetaProject: "ENG", tracker.MetaObject: "task",
-			tracker.MetaObjectID: "task-1",
+			worklet.MetaTaskID: "task-1", worklet.MetaTaskKey: "ENG-1",
+			worklet.MetaProject: "ENG", worklet.MetaObject: "task",
+			worklet.MetaObjectID: "task-1",
 		},
 	}, events.TraceContext{})
 }
@@ -107,9 +107,9 @@ func TestATrackerWakeNamesItsItem(t *testing.T) {
 func TestAPersonWakeHasNoItem(t *testing.T) {
 	t.Parallel()
 	start, summary, done := turnRecords(t, events.New(types.ExternalNotification{
-		NotificationSource: tracker.Source, SourceEventType: "prioritised",
+		NotificationSource: worklet.Source, SourceEventType: "prioritised",
 		Metadata: map[string]string{
-			tracker.MetaObject: "person", tracker.MetaObjectID: "ada",
+			worklet.MetaObject: "person", worklet.MetaObjectID: "ada",
 		},
 	}, events.TraceContext{}))
 	if start.WorkItem != nil || summary.WorkItem != nil || done.WorkItem != nil {

@@ -18,29 +18,29 @@ import (
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The native tracker's tool names, re-exported from the package that owns the
 // vocabulary.
 //
-// DECLARED IN internal/tracker rather than here, because the tracker's own
+// DECLARED IN internal/worklet rather than here, because the tracker's own
 // notification prompt names them — it tells a woken seat which tool to reach
 // for — and a constant defined here and read there is an import cycle. The
 // domain owns its vocabulary; this package implements it.
 const (
-	ListWorkItemsTool   = tracker.ListWorkItemsTool
-	GetWorkItemTool     = tracker.GetWorkItemTool
-	CreateWorkItemTool  = tracker.CreateWorkItemTool
-	UpdateWorkItemTool  = tracker.UpdateWorkItemTool
-	CommentOnWorkTool   = tracker.CommentOnWorkTool
-	MergeWorkItemTool   = tracker.MergeWorkItemTool
-	SearchWorkItemsTool = tracker.SearchWorkItemsTool
+	ListWorkItemsTool   = worklet.ListWorkItemsTool
+	GetWorkItemTool     = worklet.GetWorkItemTool
+	CreateWorkItemTool  = worklet.CreateWorkItemTool
+	UpdateWorkItemTool  = worklet.UpdateWorkItemTool
+	CommentOnWorkTool   = worklet.CommentOnWorkTool
+	MergeWorkItemTool   = worklet.MergeWorkItemTool
+	SearchWorkItemsTool = worklet.SearchWorkItemsTool
 )
 
 // WorkTools are the whole native catalogue, so a caller registering them names
 // one thing.
-func WorkTools() []string { return tracker.Tools() }
+func WorkTools() []string { return worklet.Tools() }
 
 // WorkWrites are the five that count as a DELIVERY.
 //
@@ -49,7 +49,7 @@ func WorkTools() []string { return tracker.Tools() }
 // such a turn is corrected and looped for having "done nothing". Reading is
 // not delivering, which is why get and list are not here: a turn that only
 // read is exactly the turn the gate exists to catch.
-func WorkWrites() []string { return tracker.WriteTools() }
+func WorkWrites() []string { return worklet.WriteTools() }
 
 // WorkReader is what these tools need from the tracker's read side.
 //
@@ -57,16 +57,16 @@ func WorkWrites() []string { return tracker.WriteTools() }
 // over many rows and returns what a card renders; one task is "tell me
 // everything about this" and every part of it comes from a different table.
 type WorkReader interface {
-	Tasks(ctx context.Context, q tracker.Query, now time.Time) (tracker.Answer, error)
-	Task(ctx context.Context, idOrKey string, want tracker.DetailWants,
-		fresh statelog.Freshness) (tracker.TaskDetail, error)
-	Views(ctx context.Context, q tracker.ViewQuery) (tracker.ViewListing, error)
+	Tasks(ctx context.Context, q worklet.Query, now time.Time) (worklet.Answer, error)
+	Task(ctx context.Context, idOrKey string, want worklet.DetailWants,
+		fresh statelog.Freshness) (worklet.TaskDetail, error)
+	Views(ctx context.Context, q worklet.ViewQuery) (worklet.ViewListing, error)
 	ExpandedQuery(ctx context.Context, params map[string]any,
-		viewer tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error)
-	Catalogue(ctx context.Context, q tracker.CatalogueQuery) (tracker.CatalogueAnswer, error)
-	Person(ctx context.Context, q tracker.PersonQuery, now time.Time) (tracker.PersonState, error)
-	Thread(ctx context.Context, q tracker.ThreadQuery,
-		fresh statelog.Freshness) (tracker.ResolvedThread, error)
+		viewer worklet.Viewer, now time.Time, loc *time.Location) (worklet.Query, error)
+	Catalogue(ctx context.Context, q worklet.CatalogueQuery) (worklet.CatalogueAnswer, error)
+	Person(ctx context.Context, q worklet.PersonQuery, now time.Time) (worklet.PersonState, error)
+	Thread(ctx context.Context, q worklet.ThreadQuery,
+		fresh statelog.Freshness) (worklet.ResolvedThread, error)
 }
 
 // WorkWriter is what these tools need from the tracker's write side.
@@ -77,20 +77,20 @@ type WorkReader interface {
 // rejected attempt cannot dedupe against itself, so the only case a stable id
 // collapses is a retry after a copy that already landed.
 type WorkWriter interface {
-	CreateTask(ctx context.Context, opID string, task tracker.Task,
-		notify *tracker.Notify) (tracker.WriteResult, error)
+	CreateTask(ctx context.Context, opID string, task worklet.Task,
+		notify *worklet.Notify) (worklet.WriteResult, error)
 	// CreateTaskAsking files a task AS a question — the task and the ask
 	// on it in one record, so the question can never land without the
 	// item or the item without the question.
-	CreateTaskAsking(ctx context.Context, opID string, task tracker.Task,
-		ask tracker.Comment, notify *tracker.Notify) (tracker.WriteResult, error)
+	CreateTaskAsking(ctx context.Context, opID string, task worklet.Task,
+		ask worklet.Comment, notify *worklet.Notify) (worklet.WriteResult, error)
 	// UpdateTask takes the change KIND beside the notification because
 	// they are two facts: what happened, and who is told about it. A tool
 	// that stated only the second left the record's kind to be guessed
 	// from the operation whenever nobody was listening.
 	UpdateTask(ctx context.Context, opID, id, project string, ifMatch uint64,
-		patch tracker.TaskPatch, kind tracker.ChangeKind,
-		notify *tracker.Notify) (tracker.WriteResult, error)
+		patch worklet.TaskPatch, kind worklet.ChangeKind,
+		notify *worklet.Notify) (worklet.WriteResult, error)
 }
 
 // WorkDepender writes a dependency, which is the one gesture here that is a
@@ -103,8 +103,8 @@ type WorkWriter interface {
 // first append. A build without one refuses the dependency arguments by name
 // and still serves every other edit.
 type WorkDepender interface {
-	Depend(ctx context.Context, opID string, change tracker.DependencyChange,
-		leads tracker.Leads) (tracker.DependencyResult, error)
+	Depend(ctx context.Context, opID string, change worklet.DependencyChange,
+		leads worklet.Leads) (worklet.DependencyResult, error)
 }
 
 // WorkMerger folds one item into another, which is the second gesture here
@@ -114,7 +114,7 @@ type WorkDepender interface {
 // replicated estate can do.
 type WorkMerger interface {
 	MergeDuplicates(ctx context.Context, opID, duplicate, into string,
-		reparent bool, notify *tracker.Notify) (tracker.WriteResult, error)
+		reparent bool, notify *worklet.Notify) (worklet.WriteResult, error)
 }
 
 // WorkMover moves a top-level item, and its whole subtree, to another
@@ -122,7 +122,7 @@ type WorkMerger interface {
 // reason: it reads the subtree and takes a fleet claim before its first append.
 type WorkMover interface {
 	MoveTaskToProject(ctx context.Context, opID, taskID, target string,
-		notify *tracker.Notify) (tracker.WriteResult, error)
+		notify *worklet.Notify) (worklet.WriteResult, error)
 }
 
 // WorkDeps are the tracker halves plus what a write needs to attribute itself.
@@ -276,7 +276,7 @@ type WorkDeps struct {
 	// Units resolves a project's chart-owned unit at READ time — the
 	// tracker holds no org, because the applier may not read one. Nil
 	// renders every unit unresolved, which is honest rather than empty.
-	Units tracker.Units
+	Units worklet.Units
 
 	// Mentions resolves the handles a comment names, so a mention wakes
 	// the person the author meant. Nil resolves nothing, which degrades to
@@ -320,7 +320,7 @@ type WorkDeps struct {
 	// Leads resolves the two fallbacks a wake may need — a project's lead
 	// and a unit's. Nil carries neither, which degrades to a change that
 	// reaches the people already on the task and nobody else.
-	Leads tracker.Leads
+	Leads worklet.Leads
 
 	// Now is the clock a query's relative dates resolve against, and Zone
 	// the company's clock they resolve in (ADR-0018). Injected because
@@ -390,7 +390,7 @@ type Actor struct {
 	// deciding from the string alone would show a credential as a
 	// colleague.
 	Handle string
-	Kind   tracker.AuthorKind
+	Kind   worklet.AuthorKind
 
 	// OperatorID is the credential the write was made under, recorded
 	// BESIDE the author rather than instead of it: a person acting through
@@ -443,10 +443,10 @@ type Actor struct {
 	Chain []string
 
 	// Thread is the chat surface and conversation the turn was woken on,
-	// which every task it files states — see [tracker.Origin]. Nil outside
+	// which every task it files states (see [worklet.Origin]). Nil outside
 	// a turn and for a turn no chat message woke: a person at the
 	// dashboard files from no thread.
-	Thread *tracker.Origin
+	Thread *worklet.Origin
 
 	// Written is the turn's own record of the work items its writes
 	// committed to — see [turnctx.Written]. The writer reports each
@@ -579,7 +579,7 @@ func actorFor(turn *turnctx.Turn) (Actor, error) {
 	}
 	return Actor{
 		Handle:    seat.Handle(),
-		Kind:      tracker.AuthorAgent,
+		Kind:      worklet.AuthorAgent,
 		TurnID:    turn.RunID,
 		WorkKey:   turn.WorkKey,
 		WorkSince: turn.WorkSince,
@@ -592,11 +592,11 @@ func actorFor(turn *turnctx.Turn) (Actor, error) {
 
 // threadOf is where a turn was woken, as a create states it: the chat surface
 // and the conversation on it, or nil for a turn no chat message woke.
-func threadOf(turn *turnctx.Turn) *tracker.Origin {
+func threadOf(turn *turnctx.Turn) *worklet.Origin {
 	if turn == nil || strings.TrimSpace(turn.Transport) == "" {
 		return nil
 	}
-	return &tracker.Origin{Surface: turn.Transport, Conversation: turn.ConversationKey}
+	return &worklet.Origin{Surface: turn.Transport, Conversation: turn.ConversationKey}
 }
 
 // Provenance is the trail this actor's writes carry, and where they report
@@ -606,8 +606,8 @@ func threadOf(turn *turnctx.Turn) *tracker.Origin {
 // project settings, the dependency sequence, the merge — because each is the
 // same writer in another shape, and a shape that dropped the turn's write log
 // would be a tool whose writes a turn could never be charged by.
-func (a Actor) Provenance() tracker.Provenance {
-	provenance := tracker.Provenance{
+func (a Actor) Provenance() worklet.Provenance {
+	provenance := worklet.Provenance{
 		OperatorID: a.OperatorID, TurnID: a.TurnID, Chain: a.Chain,
 		Origin: a.Thread,
 	}
@@ -705,8 +705,8 @@ func unconfigured(name string) tools.Result {
 // # Why the four renames are written down rather than only performed
 //
 // Because a SECOND reader needs them and it is prose: a saved view stores the
-// GRAMMAR's keys — that is what [tracker.ParseQuery] validates and what the
-// expansion reads back — while this tool's arguments are the model's
+// GRAMMAR's keys (that is what [worklet.ParseQuery] validates and what the
+// expansion reads back), while this tool's arguments are the model's
 // vocabulary. save_work_view told a model the parameters were "list_work_items'
 // own", so a model saving the query it had just run wrote `project`, `text`,
 // `label` and `open_only` into a view, and every one of them was refused as
@@ -787,7 +787,7 @@ func (t *listWorkItems) Parameters() map[string]any {
 			},
 			"preset": map[string]any{
 				"type": "string",
-				"enum": tracker.Presets,
+				"enum": worklet.Presets,
 				"description": "A saved question. `my_queue` is YOUR open " +
 					"work, most important first; `blocked` is open work that " +
 					"cannot move; `overdue` is open work past its due date. " +
@@ -882,7 +882,7 @@ func (t *listWorkItems) Parameters() map[string]any {
 			},
 			"limit": map[string]any{
 				"type":        "integer",
-				"description": fmt.Sprintf("How many to return, 1..%d (default %d).", tracker.PageMax, tracker.PageDefault),
+				"description": fmt.Sprintf("How many to return, 1..%d (default %d).", worklet.PageMax, worklet.PageDefault),
 			},
 		},
 	}
@@ -966,7 +966,7 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 			if slug == "" {
 				continue
 			}
-			params[tracker.FieldKeyPrefix+slug] = value
+			params[worklet.FieldKeyPrefix+slug] = value
 		}
 	}
 	// THE GRAMMAR'S TEXT KEY IS `q`, and the tool's argument is `text`
@@ -1004,7 +1004,7 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// THE VIEWER IS THE SEAT AND ITS OWN PROJECT, because `preset=my_queue`
 	// asks two things about the reader: what they hold, and what is
 	// unclaimed in THEIR container.
-	q, err := t.deps.Reader.ExpandedQuery(ctx, params, tracker.Viewer{
+	q, err := t.deps.Reader.ExpandedQuery(ctx, params, worklet.Viewer{
 		// THE ACTOR'S OWN RECORD, which is its handle: a person the
 		// identity directory binds to a seat writes AS that seat
 		// ([PrincipalActor]), so `preset=my_queue` answers their queue
@@ -1025,12 +1025,12 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// AND THE CHART THE UNIT FILTERS RESOLVE THROUGH, set here for the
 	// reason the level is: it belongs to this surface rather than to the
 	// grammar. A model types the team name it remembers, and the rows hold
-	// the key the chart chose — see [tracker.Units].
+	// the key the chart chose (see [worklet.Units]).
 	q.Units = t.deps.Units
 	// AND THE ROWS ARE THE ROWS THAT MATCH, which is the one promise this
 	// tool makes and the default took away.
 	//
-	// The grammar's default is [tracker.SubtasksCollapsed], where the filter
+	// The grammar's default is [worklet.SubtasksCollapsed], where the filter
 	// is a predicate on the ROOT and its whole subtree rides along
 	// UNFILTERED. That is right for a board, which draws a tree. It is wrong
 	// for an answer a model reads as a list: measured against a running
@@ -1045,7 +1045,7 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// board furniture, which this tool already declines along with `group_by`
 	// and `totals` — see the passthrough list above. A model that wants a
 	// subtree asks with `parent`, which the mode does not apply to at all.
-	q.Subtasks = tracker.SubtasksSeparate
+	q.Subtasks = worklet.SubtasksSeparate
 	// AND THE ROW IS THE ROW A MODEL HAS ALWAYS READ. `fields=` is a board
 	// card's opt-in — labels, "blocks 3", an open question, what the task
 	// cost — and a saved `view` built on a board carries it; forwarded here,
@@ -1057,7 +1057,7 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	q.RowFields, q.Around = nil, ""
 	answer, err := t.deps.Reader.Tasks(ctx, q, t.deps.now())
 	switch {
-	case errors.Is(err, tracker.ErrTooBroad):
+	case errors.Is(err, worklet.ErrTooBroad):
 		// NOT [readFailure], whose entire advice is "try again": this
 		// refusal is about the QUERY rather than about the node, and the
 		// same keys refuse again for ever. What the model needs is the
@@ -1071,7 +1071,7 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// reported as "no work items match" is a seat about to file the
 	// duplicate. AND HAVING COLUMNS IS NOT HAVING WORK: a closed axis
 	// carries every column the query admits whether or not anything is in
-	// it (see internal/tracker's grouping doc), so the question is whether
+	// it (see internal/worklet's grouping doc), so the question is whether
 	// any column COUNTS anything.
 	if len(answer.Rows) == 0 && boardEmpty(answer.Groups) && answer.Complete {
 		return tools.Result{Output: "No work items match that filter."}, nil
@@ -1121,7 +1121,7 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 // IN WORDS RATHER THAN A FLAG, because the model's correct response is a
 // behaviour — say you could not check — and a boolean beside a list of rows
 // reads as metadata rather than as a caveat about the rows.
-func incompleteNote(in *tracker.Incomplete) string {
+func incompleteNote(in *worklet.Incomplete) string {
 	if in == nil {
 		return "This node could not account for part of the tracker, so this " +
 			"list may be missing items. Do not conclude something has not been " +
@@ -1213,8 +1213,8 @@ func (t *getWorkItem) Parameters() map[string]any {
 // so it answers the item and that comment and no other part. An explicit
 // `include` still wins: a caller that asks for the comment AND the fields
 // means it.
-func detailWants(args map[string]any) (tracker.DetailWants, bool, string) {
-	want := tracker.DetailWants{
+func detailWants(args map[string]any) (worklet.DetailWants, bool, string) {
+	want := worklet.DetailWants{
 		CommentCursor: strings.TrimSpace(argString(args, "comments_cursor")),
 		Comment:       strings.TrimSpace(argString(args, "comment")),
 	}
@@ -1302,10 +1302,10 @@ func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	want.Units = t.deps.Units
 	detail, err := t.deps.Reader.Task(ctx, id, want, seatRead)
 	switch {
-	case errors.Is(err, tracker.ErrNoTask):
+	case errors.Is(err, worklet.ErrNoTask):
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("There is no work item %q. Check the key, or "+
 			"use list_work_items to find it.", clip(id))), nil
-	case errors.Is(err, tracker.ErrNoComment):
+	case errors.Is(err, worklet.ErrNoComment):
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("Work item %q has no comment %q. Comment ids "+
 			"come from the `comments` in a read of the item itself — drop "+
 			"`comment` to see the thread.", clip(id), clip(want.Comment))), nil
@@ -1349,7 +1349,7 @@ func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 // revisions this read does not hold), so a body past its first version is
 // labelled as text with unnamed writers, for the reason [fencePage] gives: an
 // edit sends the whole body, including whatever the earlier writer put there.
-func fenceTask(read *foreignRead, at fieldPath, d tracker.TaskDetail) {
+func fenceTask(read *foreignRead, at fieldPath, d worklet.TaskDetail) {
 	var writers []provenance.Author
 	partial := d.Task.BodyVersion > 1
 	if author := strings.TrimSpace(d.Task.BodyAuthor); author != "" {
@@ -1492,8 +1492,8 @@ func (t *createWorkItem) Parameters() map[string]any {
 // person's screen write it there — and the body beside it is the context,
 // which the item already carries. An ask row with no text would render as
 // nothing in the thread and in the asked person's `asked_of_me`.
-func (t *createWorkItem) askFor(ctx context.Context, actor Actor, task tracker.Task,
-	args map[string]any) (*tracker.Comment, *tools.Result) {
+func (t *createWorkItem) askFor(ctx context.Context, actor Actor, task worklet.Task,
+	args map[string]any) (*worklet.Comment, *tools.Result) {
 
 	asked := strings.TrimSpace(argString(args, "ask"))
 	rawDecision, decided := args["decision"]
@@ -1509,7 +1509,7 @@ func (t *createWorkItem) askFor(ctx context.Context, actor Actor, task tracker.T
 	if refusal != "" {
 		return nil, refusalOf(failed(refusal))
 	}
-	ask := &tracker.Comment{
+	ask := &worklet.Comment{
 		// DERIVED LIKE EVERY COMMENT'S, so a re-run turn — or the same
 		// call brought back under its operation — files one question
 		// rather than two.
@@ -1568,18 +1568,18 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// Without the fence a description copied from a read still wears; see
 	// [unfence].
 	body := unfence(turn, argString(args, "body"))
-	task := tracker.Task{
-		V:           tracker.DocumentVersion,
+	task := worklet.Task{
+		V:           worklet.DocumentVersion,
 		Title:       strings.TrimSpace(argString(args, "title")),
 		Body:        body,
 		Type:        strings.TrimSpace(argString(args, "type")),
 		Project:     strings.ToUpper(strings.TrimSpace(argString(args, "project"))),
 		Assignee:    strings.TrimSpace(argString(args, "assignee")),
 		Reporter:    actor.Handle,
-		Priority:    tracker.Priority(strings.TrimSpace(argString(args, "priority"))),
-		Status:      tracker.StatusTodo,
-		StatusGroup: tracker.GroupNotStarted,
-		Rank:        tracker.RankOrigin,
+		Priority:    worklet.Priority(strings.TrimSpace(argString(args, "priority"))),
+		Status:      worklet.StatusTodo,
+		StatusGroup: worklet.GroupNotStarted,
+		Rank:        worklet.RankOrigin,
 		Tags:        argStrings(args, "labels"),
 		CreatedAt:   now,
 		UpdatedAt:   now,
@@ -1605,10 +1605,10 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	}
 	plan.applyToTask(&task)
 	if task.Type == "" {
-		task.Type = tracker.DefaultType
+		task.Type = worklet.DefaultType
 	}
 	if task.Priority == "" {
-		task.Priority = tracker.PriorityNone
+		task.Priority = worklet.PriorityNone
 	}
 	if !task.Priority.Valid() {
 		return failed(fmt.Sprintf("%q is not a priority. The priorities are: %s.",
@@ -1623,7 +1623,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// it exactly as it does for a move, so a task filed `done` is done from
 	// its first row.
 	if raw := strings.TrimSpace(argString(args, "status")); raw != "" {
-		status := tracker.Status(raw)
+		status := worklet.Status(raw)
 		if !status.Valid() {
 			return failed(fmt.Sprintf("%q is not a status. The statuses are: %s.",
 				clip(raw), statusList())), nil
@@ -1765,10 +1765,10 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	if labelRefusal != nil {
 		return *labelRefusal, nil
 	}
-	notify := tracker.Wake{
-		Kind: tracker.ChangeCreated, After: task, Comment: ask,
+	notify := worklet.Wake{
+		Kind: worklet.ChangeCreated, After: task, Comment: ask,
 	}.Notify(t.deps.Leads)
-	var got tracker.WriteResult
+	var got worklet.WriteResult
 	if ask != nil {
 		got, err = writer.CreateTaskAsking(ctx, opID, task, *ask, notify)
 	} else {
@@ -1809,7 +1809,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// and writing it before the create would name a task no node holds.
 	if len(blockers) > 0 {
 		result, err := t.deps.Dependencies(actor).Depend(ctx,
-			opIDFor(actor, t.Name(), "depend", task.ID, args), tracker.DependencyChange{
+			opIDFor(actor, t.Name(), "depend", task.ID, args), worklet.DependencyChange{
 				Task: task.ID, Project: task.Project, WaitingOnAdd: blockers,
 			}, t.deps.Leads)
 		if err != nil {
@@ -1852,15 +1852,15 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 // answer as it was.
 //
 // THE VERSION IS THIS ITEM'S OWN, never the sequence's last commit's: a
-// dependency change writes other items too — each blocker's mirror, each
-// dependent's edge — and [tracker.DependencyResult]'s version is the one its
+// dependency change writes other items too (each blocker's mirror, each
+// dependent's edge), and [worklet.DependencyResult]'s version is the one its
 // commits on THIS item's subject reached, zero where it landed none there.
 // Where both wrote this item the dependency's is the newer, since its
 // `waiting_on` commit lands on the same subject after the patch; answering the
 // patch's handed the caller an `if_match` its own call's second write had
 // already moved past.
 func joinDepend(outcome statelog.Outcome, at statelog.Position, version int64,
-	result tracker.DependencyResult) (statelog.Outcome, statelog.Position, int64) {
+	result worklet.DependencyResult) (statelog.Outcome, statelog.Position, int64) {
 
 	if !result.Wrote() {
 		return outcome, at, version
@@ -1885,11 +1885,11 @@ func joinDepend(outcome statelog.Outcome, at statelog.Position, version int64,
 //
 // What it tells the caller to do next is [unknownNext]'s, which every
 // tracker write that can answer `unknown` shares.
-func createUnknown(actor Actor, opID, id string, got tracker.WriteResult) tools.Result {
+func createUnknown(actor Actor, opID, id string, got worklet.WriteResult) tools.Result {
 	filed := ""
 	if got.Key != "" {
 		filed = fmt.Sprintf(" If this attempt filed it, it is %s.",
-			tracker.ItemNamed(id, got.Key, got.KeyCollision))
+			worklet.ItemNamed(id, got.Key, got.KeyCollision))
 	}
 	return unknownWrite(actor, CreateWorkItemTool, "the work item was filed",
 		opID, got.Unvouched, filed+" "+unknownNext(got.Unvouched,
@@ -2016,7 +2016,7 @@ func restateNext(look string) string {
 // update_work_item takes the whole `waiting_on` set and records whatever of it
 // is still missing, under an operation of its own, on every surface alike.
 //
-// THE CALL IT PRESCRIBES NAMES THE ITEM'S ADDRESS ([tracker.ItemAddress]): an
+// THE CALL IT PRESCRIBES NAMES THE ITEM'S ADDRESS ([worklet.ItemAddress]): an
 // item filed on a key another task already holds is reached by its id, and the
 // call on its key would set the dependencies of that other task.
 //
@@ -2025,14 +2025,14 @@ func restateNext(look string) string {
 func dependencyFailure(id, key string, collision bool, why string) string {
 	filed := key + " (" + id + ")"
 	if collision {
-		filed = tracker.ItemNamed(id, key, collision)
+		filed = worklet.ItemNamed(id, key, collision)
 	}
 	return fmt.Sprintf("The item WAS filed, as %s, but recording what it "+
 		"waits on did not finish: %s. Do NOT call create_work_item again — that "+
 		"files a second item. Set its dependencies with update_work_item on %s, "+
 		"giving the same waiting_on: it records whichever of them are still "+
 		"missing, and says so if one cannot be.", filed, why,
-		tracker.ItemAddress(id, key, collision))
+		worklet.ItemAddress(id, key, collision))
 }
 
 // updateDependencyFailure explains an update whose PATCH landed and whose
@@ -2045,7 +2045,7 @@ func dependencyFailure(id, key string, collision bool, why string) string {
 // still missing — while the whole call reworded is a new operation that sets
 // every field a second time, and refused as stale by the patch it already
 // landed if it names `if_match`.
-func updateDependencyFailure(item tracker.TaskDetail, why string) string {
+func updateDependencyFailure(item worklet.TaskDetail, why string) string {
 	return fmt.Sprintf("The change to %s WAS made, but its dependency change "+
 		"did not finish: %s. Do not report the dependencies as set. Set them "+
 		"with update_work_item on %s giving only the same waiting_on and "+
@@ -2058,7 +2058,7 @@ func updateDependencyFailure(item tracker.TaskDetail, why string) string {
 //
 // # Why this is not optional plumbing
 //
-// [tracker.Relation.Other] and [tracker.Task.Parent] are IDs: the applier
+// [worklet.Relation.Other] and [worklet.Task.Parent] are IDs: the applier
 // derives a subtree's root and depth from the parent pointer, and the relation
 // duty writes a mirror edge onto the task the id names. Storing a KEY in
 // either produces an edge that resolves to nothing on every node forever — the
@@ -2086,21 +2086,21 @@ func (d WorkDeps) resolveRef(ctx context.Context, tool, field,
 // resolveTask is [WorkDeps.resolveRef] answering the whole task, for a caller
 // that needs more of it than the id — a subtask's project is its parent's.
 func (d WorkDeps) resolveTask(ctx context.Context, tool, field,
-	ref string) (tracker.Task, *tools.Result) {
+	ref string) (worklet.Task, *tools.Result) {
 
 	if d.Reader == nil {
-		return tracker.Task{}, refusalOf(unconfigured(tool))
+		return worklet.Task{}, refusalOf(unconfigured(tool))
 	}
-	got, err := d.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
+	got, err := d.Reader.Task(ctx, ref, worklet.DetailWants{}, seatRead)
 	switch {
-	case errors.Is(err, tracker.ErrNoTask):
-		return tracker.Task{}, refusalOf(failed(fmt.Sprintf("%s names %s %q "+
+	case errors.Is(err, worklet.ErrNoTask):
+		return worklet.Task{}, refusalOf(failed(fmt.Sprintf("%s names %s %q "+
 			"and there is no such work item. Check the key with list_work_items "+
 			"rather than guessing — a link to an item that does not exist "+
 			"renders as a dead reference on everybody's board.", tool, field,
 			clip(ref))))
 	case err != nil:
-		return tracker.Task{}, refusalOf(readFailure(ctx, tool, err))
+		return worklet.Task{}, refusalOf(readFailure(ctx, tool, err))
 	}
 	return got.Task, nil
 }
@@ -2114,7 +2114,7 @@ func refusalOf(r tools.Result) *tools.Result { return &r }
 // # Why a handle is validated AT ALL, when nothing used to
 //
 // Because an unknown one fails silently and permanently. It is stored, it
-// rides the routing snapshot, it becomes a candidate — and [tracker.Route]
+// rides the routing snapshot, it becomes a candidate, and [worklet.Route]
 // drops it against the live roster with no error, no per-candidate log and no
 // metric. The write answers `outcome: applied` and the person it named never
 // hears anything, so a misspelling is indistinguishable from a colleague who
@@ -2559,9 +2559,9 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	if ref == "" {
 		return failed("update_work_item needs an `item` — a key like ENG-42, or an id."), nil
 	}
-	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
+	before, err := t.deps.Reader.Task(ctx, ref, worklet.DetailWants{}, seatRead)
 	switch {
-	case errors.Is(err, tracker.ErrNoTask):
+	case errors.Is(err, worklet.ErrNoTask):
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("There is no work item %q.",
 			clip(ref))), nil
 	case err != nil:
@@ -2595,8 +2595,8 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	}
 	if checklist != nil {
 		patch.Checklist = checklist
-		if kind == tracker.ChangeFields {
-			kind = tracker.ChangeChecklist
+		if kind == worklet.ChangeFields {
+			kind = worklet.ChangeChecklist
 		}
 	}
 	// IF-MATCH IS THE MODEL'S OWN PRECONDITION, passed through rather than
@@ -2655,8 +2655,8 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			unit = resolved.Key
 		}
 		patch.RoutingUnit = &unit
-		if kind == tracker.ChangeFields {
-			kind = tracker.ChangeRouted
+		if kind == worklet.ChangeFields {
+			kind = worklet.ChangeRouted
 		}
 	}
 	// THE INERT EDGES RIDE THE PATCH and the DEPENDENCIES DO NOT, because
@@ -2670,8 +2670,8 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	}
 	if inert != nil {
 		patch.Relate = inert
-		if kind == tracker.ChangeFields {
-			kind = tracker.ChangeRelations
+		if kind == worklet.ChangeFields {
+			kind = worklet.ChangeRelations
 		}
 	}
 	change, dependencyRefusal := t.deps.dependencyChange(ctx, UpdateWorkItemTool, args, before.Task)
@@ -2729,7 +2729,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	if !patch.Empty() {
 		got, err := writer.UpdateTask(ctx, opID, before.Task.ID,
 			before.Task.Project, ifMatch, patch, kind,
-			tracker.Wake{
+			worklet.Wake{
 				Kind:   kind,
 				Before: before.Task,
 				After:  patched(before.Task, patch),
@@ -2817,8 +2817,8 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 // change that lands, so a read showing it past the one this call started from
 // is the one thing that can say the change is there — or that somebody else's
 // is, which the thread and history on the same read tell apart.
-func updateUnknown(actor Actor, opID string, got tracker.WriteResult,
-	before tracker.TaskDetail, dependencies bool) tools.Result {
+func updateUnknown(actor Actor, opID string, got worklet.WriteResult,
+	before worklet.TaskDetail, dependencies bool) tools.Result {
 
 	look := fmt.Sprintf("Read %s with get_work_item (a version past %d means "+
 		"something landed, and its history says whether it was this)",
@@ -2953,8 +2953,8 @@ type labelWrite struct {
 func labelFailure(ctx context.Context, actor Actor, write labelWrite, opID, project string,
 	labels []string, err error) tools.Result {
 
-	var clash *tracker.TagClash
-	var full *tracker.TagsFull
+	var clash *worklet.TagClash
+	var full *worklet.TagsFull
 	switch {
 	case errors.As(err, &clash):
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s was refused, "+
@@ -2976,10 +2976,10 @@ func labelFailure(ctx context.Context, actor Actor, write labelWrite, opID, proj
 			"(describe_project lists them) or leave %s out of `labels`; or have "+
 			"%s's lead archive tags it no longer files under (write_project's "+
 			"tags_archive), then make this call again.", write.tool, full.Slug,
-			full.Project, tracker.MaxTagsPerProject, full.Project, full.Slug,
+			full.Project, worklet.MaxTagsPerProject, full.Project, full.Slug,
 			full.Project))
-	case errors.Is(err, tracker.ErrStepUnresolved):
-		unvouched := errors.Is(err, tracker.ErrStepUnvouched)
+	case errors.Is(err, worklet.ErrStepUnresolved):
+		unvouched := errors.Is(err, worklet.ErrStepUnvouched)
 		why := "the write's acknowledgement was lost"
 		if unvouched {
 			why = "this node's operation ledger may have lost the record of " +
@@ -3061,10 +3061,10 @@ func labelFailure(ctx context.Context, actor Actor, write labelWrite, opID, proj
 // find out what happened. The order below is that judgement, most specific
 // first.
 func patchFromArgs(args map[string]any, actor Actor, now time.Time,
-	loc *time.Location) (tracker.TaskPatch, tracker.ChangeKind, string) {
+	loc *time.Location) (worklet.TaskPatch, worklet.ChangeKind, string) {
 
-	var patch tracker.TaskPatch
-	kind := tracker.ChangeFields
+	var patch worklet.TaskPatch
+	kind := worklet.ChangeFields
 
 	// THE SCHEDULING HALF FIRST, so a refusal about a date a model typed
 	// arrives before anything else is decided — and so the kind below can
@@ -3088,10 +3088,10 @@ func patchFromArgs(args map[string]any, actor Actor, now time.Time,
 	if _, held := args["assignee"]; held {
 		assignee := strings.TrimSpace(argString(args, "assignee"))
 		patch.Assignee = &assignee
-		kind = tracker.ChangeAssignee
+		kind = worklet.ChangeAssignee
 	}
 	if raw := strings.TrimSpace(argString(args, "priority")); raw != "" {
-		priority := tracker.Priority(raw)
+		priority := worklet.Priority(raw)
 		if !priority.Valid() {
 			return patch, kind, fmt.Sprintf("%q is not a priority. The "+
 				"priorities are: %s.", clip(raw), priorityList())
@@ -3104,31 +3104,31 @@ func patchFromArgs(args map[string]any, actor Actor, now time.Time,
 		// Snapshot.Person rather than from the task.
 		//
 		// Setting it here was silently worse than picking the wrong
-		// word: ChangePrioritised is not in [tracker.ChangeKind.TaskCommit],
+		// word: ChangePrioritised is not in [worklet.ChangeKind.TaskCommit],
 		// so a task's priority change woke no assignee, no collaborator
 		// and no watcher — while Snapshot.Person was empty on this path,
 		// so the one arm that does route it added nobody either. A
 		// priority change reached NOBODY AT ALL.
 	}
 	if raw := strings.TrimSpace(argString(args, "status")); raw != "" {
-		status := tracker.Status(raw)
+		status := worklet.Status(raw)
 		if !status.Valid() {
 			return patch, kind, fmt.Sprintf("%q is not a status. The statuses "+
 				"are: %s.", clip(raw), statusList())
 		}
 		patch.Status = &status
-		kind = tracker.ChangeStatus
+		kind = worklet.ChangeStatus
 	}
 	if _, held := args["labels"]; held {
 		labels := argStrings(args, "labels")
 		patch.Tags = &labels
-		if kind == tracker.ChangeFields {
-			kind = tracker.ChangeTags
+		if kind == worklet.ChangeFields {
+			kind = worklet.ChangeTags
 		}
 	}
 	if watch, held := args["watch"].(bool); held {
 		// A GESTURE ABOUT ONE PERSON, never the set. This tool cannot
-		// form the watcher list: [tracker.TaskPatch]'s collections are
+		// form the watcher list: [worklet.TaskPatch]'s collections are
 		// carried whole, so writing `watchers: [me]` here removed
 		// everybody else — and, the change kind being ChangeWatchers,
 		// announced their removal in the wake. The writer resolves it
@@ -3140,9 +3140,9 @@ func patchFromArgs(args map[string]any, actor Actor, now time.Time,
 		// the watch lands on the seat every later wake resolves. The
 		// credential they acted through is [Actor.OperatorID], beside it
 		// on the commit, and never an address.
-		patch.Watch = &tracker.WatchIntent{Handle: actor.Handle, Watch: watch}
-		if kind == tracker.ChangeFields {
-			kind = tracker.ChangeWatchers
+		patch.Watch = &worklet.WatchIntent{Handle: actor.Handle, Watch: watch}
+		if kind == worklet.ChangeFields {
+			kind = worklet.ChangeWatchers
 		}
 	}
 	if raw, held := args["fields"]; held {
@@ -3186,15 +3186,15 @@ func appendMissing(all []string, handle string, add bool) []string {
 // state this change produces and the change has not landed yet — a read after
 // the write would race every other writer, and on a lagging node would return
 // the state before it.
-func patched(task tracker.Task, patch tracker.TaskPatch) tracker.Task {
+func patched(task worklet.Task, patch worklet.TaskPatch) worklet.Task {
 	// THE WRITER'S OWN MERGE, not a copy of it. This was a field-by-field
-	// reimplementation, so every field added to [tracker.TaskPatch] had to
+	// reimplementation, so every field added to [worklet.TaskPatch] had to
 	// be remembered here too — and when the schedule fields arrived the
-	// durable row took them and this snapshot did not. [tracker.TaskDeltas]
+	// durable row took them and this snapshot did not. [worklet.TaskDeltas]
 	// then compared a task against itself on exactly those fields, so a due
 	// date, an estimate or a size a seat moved reached its notification as
 	// a change that changed nothing.
-	task = tracker.Patched(task, patch)
+	task = worklet.Patched(task, patch)
 
 	if patch.Watch != nil {
 		// THE GESTURE APPLIED TO THE SNAPSHOT THIS TOOL READ, which is
@@ -3217,7 +3217,7 @@ func patched(task tracker.Task, patch tracker.TaskPatch) tracker.Task {
 		// as they are for a watch. A gesture this read cannot resolve (an
 		// item added since) leaves the snapshot as read: the decide is the
 		// authority and resolves it against the task as it lands.
-		if lists, err := tracker.ApplyChecklist(task.Checklists, *patch.Checklist); err == nil {
+		if lists, err := worklet.ApplyChecklist(task.Checklists, *patch.Checklist); err == nil {
 			task.Checklists = lists
 		}
 	}
@@ -3345,11 +3345,11 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refused != nil {
 		return *refused, nil
 	}
-	var before tracker.TaskDetail
+	var before worklet.TaskDetail
 	if holder {
-		before, err = t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
+		before, err = t.deps.Reader.Task(ctx, ref, worklet.DetailWants{}, seatRead)
 		switch {
-		case errors.Is(err, tracker.ErrNoTask):
+		case errors.Is(err, worklet.ErrNoTask):
 			return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("There is no work item %q.",
 				clip(ref))), nil
 		case err != nil:
@@ -3369,7 +3369,7 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 
 	now := t.deps.now()
-	comment := &tracker.Comment{
+	comment := &worklet.Comment{
 		// THE ID IS DERIVED FROM THE OPERATION, not minted fresh, so a
 		// re-run turn posts once rather than saying the same thing
 		// twice. The engine's redelivery guarantees make a re-run turn
@@ -3407,7 +3407,7 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		ask = resolved
 	}
-	query := tracker.ThreadQuery{
+	query := worklet.ThreadQuery{
 		Task:    before.Task.ID,
 		ReplyTo: strings.TrimSpace(argString(args, "reply_to")),
 		Ask:     ask,
@@ -3422,7 +3422,7 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Comment: comment.ID,
 		Choice:  comment.Choice,
 	}
-	var thread tracker.ResolvedThread
+	var thread worklet.ResolvedThread
 	var threadRefusal *tools.Result
 	if holder {
 		thread, threadRefusal = t.deps.resolveThread(ctx, query)
@@ -3464,17 +3464,17 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// made a comment a last-write-wins over that collection: somebody who
 	// watched or unwatched between this read and the append had their
 	// change silently discarded by a comment that was not about them. It
-	// could also push the set past [tracker.MaxWatchers] with nothing
+	// could also push the set past [worklet.MaxWatchers] with nothing
 	// checking, after which the cap refused every unwatch and nobody
 	// could leave. The gesture is resolved against the CURRENT row inside
 	// the decide, and it is `Auto` because nobody pressed watch: at the
 	// cap the comment lands and the watch is skipped.
-	patch := tracker.TaskPatch{Comment: comment}
+	patch := worklet.TaskPatch{Comment: comment}
 	if holder {
 		// NOT FOR SOMEBODY ADMITTED ONLY TO ANSWER: following the item
 		// would wake them on every later change to a board they do not
 		// use, and the asker hears their answer whether or not they do.
-		patch.Watch = &tracker.WatchIntent{
+		patch.Watch = &worklet.WatchIntent{
 			// THE AUTHOR'S, the same address the explicit gesture
 			// takes.
 			Handle: actor.Handle, Watch: true, Auto: true,
@@ -3485,9 +3485,9 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// A COMMENT NEVER CONDITIONS ON A VERSION: it adds to the thread
 		// rather than replacing anybody's value, so there is nothing a
 		// concurrent edit could make it clobber.
-		tracker.NoIfMatch, patch, tracker.ChangeComment,
-		tracker.Wake{
-			Kind:   tracker.ChangeComment,
+		worklet.NoIfMatch, patch, worklet.ChangeComment,
+		worklet.Wake{
+			Kind:   worklet.ChangeComment,
 			Before: before.Task,
 			// THROUGH THE SAME SIMULATION EVERY OTHER WRITE USES, so the
 			// gesture is applied once rather than here and again in
@@ -3550,7 +3550,7 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 
 // unansweredWarning says when a comment will wake somebody who is not being
 // asked anything.
-func unansweredWarning(task tracker.Task, actor Actor, comment *tracker.Comment) string {
+func unansweredWarning(task worklet.Task, actor Actor, comment *worklet.Comment) string {
 	switch {
 	// AGAINST THE AUTHOR, which is a bound person's seat: an assignee is
 	// a seat, and a person commenting on their own task is not waking
@@ -3632,7 +3632,7 @@ func jsonResult(v any) (tools.Result, error) {
 //
 // AND IT NEVER SAYS "TRY AGAIN" ABOUT THE REQUEST. A read refused for what it
 // asked — a feed's cursor that is not a position, a cursor or `since` from
-// another log, a text search wider than the feed scans ([tracker.ErrBadQuery]),
+// another log, a text search wider than the feed scans ([worklet.ErrBadQuery]),
 // a floor on another log ([statelog.ErrForeignPosition]) — is refused the same
 // on every attempt, so the sentence that told a model the tracker could not be
 // read "right now" sent it round with the same arguments. It names the
@@ -3652,7 +3652,7 @@ func jsonResult(v any) (tools.Result, error) {
 // unavailable carrying the error's text. The read's own error rides beneath
 // the class whichever it is ([tools.Classify]).
 func readFailure(ctx context.Context, name string, err error) tools.Result {
-	if errors.Is(err, tracker.ErrBadQuery) || errors.Is(err, statelog.ErrForeignPosition) {
+	if errors.Is(err, worklet.ErrBadQuery) || errors.Is(err, statelog.ErrForeignPosition) {
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused "+
 			"what it was asked: %v. Nothing is wrong with the tracker — change "+
 			"the arguments, because the same ones are refused again.", name, err))
@@ -3679,11 +3679,11 @@ func readFailure(ctx context.Context, name string, err error) tools.Result {
 // other's thing.
 //
 // A CONTENT REFUSAL IS MARKED AND EVERYTHING UNMARKED IS THE NODE'S. The
-// tracker's writer wraps [tracker.ErrInvalid] on every refusal it writes about
+// tracker's writer wraps [worklet.ErrInvalid] on every refusal it writes about
 // what was asked — a custom-field value it will not round, a tombstoned item
 // that must be restored first, a rank key that is not well formed — and its
 // sentence names what to change. A text past its cap is TYPED
-// ([tracker.TextCapError]) and gets a sentence composed from its fields, since
+// ([worklet.TextCapError]) and gets a sentence composed from its fields, since
 // it is the content refusal a person filing by hand reaches most. What the
 // writer does NOT write arrives unmarked from places it does not own: a SQL
 // read of the decide's snapshot, the log's last message, the operation
@@ -3716,10 +3716,10 @@ func writeFailure(ctx context.Context, actor Actor, name string, err error) tool
 	if reused := reusedOperation(actor, name, err); reused != "" {
 		return out(tools.RefusalInvalid, reused)
 	}
-	var clash *tracker.TagClash
-	var full *tracker.TagsFull
+	var clash *worklet.TagClash
+	var full *worklet.TagsFull
 	switch {
-	case errors.As(err, &clash) && name == tracker.WriteProjectTool:
+	case errors.As(err, &clash) && name == worklet.WriteProjectTool:
 		// THE DECLARATION ITSELF, so the remedy is this call with another
 		// label, or the tag that already has this one.
 		return out(tools.RefusalInvalid, fmt.Sprintf("%s was refused, and nothing was written: %s already "+
@@ -3751,22 +3751,22 @@ func writeFailure(ctx context.Context, actor Actor, name string, err error) tool
 			"Archive tags %s no longer files under (write_project's "+
 			"tags_archive — its lead's decision), or take %s off the items with "+
 			"update_work_item, then make this call again.", name, full.Project,
-			tracker.MaxTagsPerProject, full.Slug, full.Project, full.Slug))
-	case errors.Is(err, tracker.ErrNoTask):
+			worklet.MaxTagsPerProject, full.Slug, full.Project, full.Slug))
+	case errors.Is(err, worklet.ErrNoTask):
 		return out(tools.RefusalNotFound, fmt.Sprintf("%s: %v", name, err))
-	case errors.Is(err, tracker.ErrForbidden):
+	case errors.Is(err, worklet.ErrForbidden):
 		// NOT A RACE. The sentence names who may, which is the only part
 		// of it a caller can act on; re-reading changes nothing.
 		return out(tools.RefusalForbidden, fmt.Sprintf("%s was refused: "+
 			"%s. Re-reading will not change this — ask whoever the refusal "+
-			"names.", name, tracker.Sentence(err)))
+			"names.", name, worklet.Sentence(err)))
 	case errors.Is(err, statelog.ErrConflict):
 		return out(tools.RefusalConflict, fmt.Sprintf("%s could not land: "+
 			"%v. Somebody else is editing this item. Read it again with "+
 			"get_work_item and decide from what it says now.", name, err))
 	case errors.Is(err, statelog.ErrExists):
 		return out(tools.RefusalExists, fmt.Sprintf("%s: %v", name, err))
-	case errors.Is(err, tracker.ErrStaleVersion):
+	case errors.Is(err, worklet.ErrStaleVersion):
 		// THE ONE REFUSAL WHOSE ANSWER IS "READ IT AGAIN". Nothing is
 		// wrong with the patch, so a model told only "it failed" would
 		// re-send the same one against the same moved item forever.
@@ -3774,20 +3774,20 @@ func writeFailure(ctx context.Context, actor Actor, name string, err error) tool
 			"refused: %v. Nothing is wrong with your edit — somebody "+
 			"changed the item after you read it. Call get_work_item again "+
 			"and decide from what it says now.", name, err))
-	case errors.Is(err, tracker.ErrAlreadyAnswered):
+	case errors.Is(err, worklet.ErrAlreadyAnswered):
 		// THE ANSWER THAT LOST A RACE. The thread read passed it and the
 		// write's own snapshot found the question answered in between,
 		// so the sentence names who answered and when — the move is to
 		// read that answer, never to send this one again.
 		return out(tools.RefusalAlreadyAnswered, fmt.Sprintf("%s was "+
 			"refused: %v. Nothing was posted.", name, err))
-	case errors.Is(err, tracker.ErrInboxFull):
+	case errors.Is(err, worklet.ErrInboxFull):
 		// NOT A SMALLER GESTURE BUT A DIFFERENT ONE: the sentence names
 		// `read_through`, which marks everything up to a notice in one move
 		// and is what empties the lists this refusal is about.
 		return out(tools.RefusalInboxFull, fmt.Sprintf("%s was refused: "+
 			"%v.", name, err))
-	case errors.Is(err, tracker.ErrStepUnvouched):
+	case errors.Is(err, worklet.ErrStepUnvouched):
 		// NEITHER DONE NOR NOT MADE, AND NOT FINISHED BY ASKING AGAIN
 		// HERE. It is an ErrStepUnresolved, so this arm goes first: the
 		// retry that one asks for stops at the same step on this node
@@ -3800,7 +3800,7 @@ func writeFailure(ctx context.Context, actor Actor, name string, err error) tool
 			"done or as failed, and do not redo it by other means: read the "+
 			"items it touches with get_work_item, and say which part is "+
 			"unconfirmed.", name, err, name))
-	case errors.Is(err, tracker.ErrStepUnresolved):
+	case errors.Is(err, worklet.ErrStepUnresolved):
 		// NEITHER DONE NOR NOT MADE. A gesture that walks — a move, a
 		// merge, a dependency — stopped at a step whose outcome is
 		// unknown, so the default below ("the change was NOT made") would
@@ -3819,7 +3819,7 @@ func writeFailure(ctx context.Context, actor Actor, name string, err error) tool
 			"it may already have landed. %s — the retry answers what landed "+
 			"and finishes the rest. Do not report it as done until a call "+
 			"answers without this error.", name, err, capitalize(again)))
-	case errors.Is(err, tracker.ErrReassignmentBudget):
+	case errors.Is(err, worklet.ErrReassignmentBudget):
 		// THE REFUSAL THAT MUST NOT INVITE ANOTHER ATTEMPT: this item is
 		// circulating between agents, and a message that reads like a
 		// transient failure is exactly what keeps it circulating.
@@ -3828,20 +3828,20 @@ func writeFailure(ctx context.Context, actor Actor, name string, err error) tool
 			"saying what is blocking it and who you think should own it, "+
 			"and leave it where it is.", name, err))
 	}
-	var capped *tracker.TextCapError
+	var capped *worklet.TextCapError
 	if errors.As(err, &capped) {
 		return out(tools.RefusalInvalid, textCapRefusal(capped))
 	}
-	if errors.Is(err, tracker.ErrInvalid) {
+	if errors.Is(err, worklet.ErrInvalid) {
 		// WHAT WAS ASKED, and the sentence is the writer's, which names
 		// what to change. NOT the node-failure wording below: "did not
 		// land … do not report it as done" is an instruction to a model
 		// about a failure it could not see, and this class — with the
 		// forbidden one above — is what a person's surface prints as it
 		// stands (`contract/errors.ts`), so it carries the writer's
-		// sentence alone rather than the Go error's "tracker:" in front.
+		// sentence alone rather than the Go error's "worklet:" in front.
 		return out(tools.RefusalInvalid, fmt.Sprintf("%s refused that: %s",
-			name, tracker.Sentence(err)))
+			name, worklet.Sentence(err)))
 	}
 	if why, ok := Condition(err); ok {
 		return out(tools.RefusalUnavailable, fmt.Sprintf("%s did not land (%s). "+
@@ -3861,15 +3861,15 @@ func writeFailure(ctx context.Context, actor Actor, name string, err error) tool
 // invalid class is shown to a person verbatim.
 //
 // COMPOSED FROM THE TYPED FIELDS rather than from the writer's sentence,
-// which is a Go error: it starts "tracker:", and it used to quote the id of
+// which is a Go error: it starts "worklet:", and it used to quote the id of
 // the task being created — a uuid minted for a task the refusal meant would
 // never exist.
-func textCapRefusal(e *tracker.TextCapError) string {
+func textCapRefusal(e *worklet.TextCapError) string {
 	argument, holds := "`title`", "a task's title"
 	switch e.Field {
-	case tracker.TextBody:
+	case worklet.TextBody:
 		argument, holds = "`body`", "a task's description"
-	case tracker.TextComment:
+	case worklet.TextComment:
 		argument, holds = "`body`", "a comment"
 	}
 	return fmt.Sprintf("%s is %d bytes and %s holds at most %d, so nothing was "+
@@ -4171,8 +4171,8 @@ func (d WorkDeps) zone() *time.Location {
 	return time.UTC
 }
 
-func statusList() string   { return joinValues(tracker.Statuses) }
-func priorityList() string { return joinValues(tracker.Priorities) }
+func statusList() string   { return joinValues(worklet.Statuses) }
+func priorityList() string { return joinValues(worklet.Priorities) }
 
 // openGroups is the status groups where work has not finished, DERIVED from
 // the closed set rather than listed.
@@ -4181,8 +4181,8 @@ func priorityList() string { return joinValues(tracker.Priorities) }
 // group and stops meaning what it says — and, before that, it is how
 // `open_only` came to name two groups that do not exist.
 func openGroups() []string {
-	out := make([]string, 0, len(tracker.StatusGroups))
-	for _, group := range tracker.StatusGroups {
+	out := make([]string, 0, len(worklet.StatusGroups))
+	for _, group := range worklet.StatusGroups {
 		if group.Open() {
 			out = append(out, string(group))
 		}
@@ -4263,7 +4263,7 @@ var seatRead = statelog.Freshness{Level: seatReadLevel}
 // boardEmpty reports whether a grouped answer holds no task at all — which,
 // on a closed axis, is a board of columns every one of which counts zero, and
 // on a flat answer is no groups at all.
-func boardEmpty(groups []tracker.Group) bool {
+func boardEmpty(groups []worklet.Group) bool {
 	for _, group := range groups {
 		if group.Count > 0 {
 			return false

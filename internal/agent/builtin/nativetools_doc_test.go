@@ -15,7 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // nativeTools is what registering the native tracker, or the native knowledge
@@ -54,7 +54,7 @@ func nativeTools(t *testing.T) (tracker, pages []string) {
 
 // operatorOnlyTools is what the operator's surface serves that no seat's
 // registry does, counted from both catalogues with every write side wired —
-// never from [tracker.OperatorOnlyTools], which is the list the pages below
+// never from [worklet.OperatorOnlyTools], which is the list the pages below
 // would otherwise be checked against their own copy of.
 func operatorOnlyTools(t *testing.T) []string {
 	t.Helper()
@@ -81,11 +81,11 @@ func operatorOnlyTools(t *testing.T) []string {
 			only = append(only, tool.Name())
 		}
 	}
-	if len(only) != len(tracker.OperatorOnlyTools()) {
+	if len(only) != len(worklet.OperatorOnlyTools()) {
 		t.Fatalf("the operator surface adds %v over a seat's registry, and the "+
 			"tracker declares %v operator-only — the fixture wires a different "+
 			"surface than the one these pages describe", only,
-			tracker.OperatorOnlyTools())
+			worklet.OperatorOnlyTools())
 	}
 	return only
 }
@@ -112,7 +112,7 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 		t.Fatalf("register: %v", err)
 	}
 	actor := func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
-		return builtin.Actor{Handle: "founder", Kind: tracker.AuthorOperator}, nil
+		return builtin.Actor{Handle: "founder", Kind: worklet.AuthorOperator}, nil
 	}
 	company := &org.Organization{Name: "Acme"}
 	answers := newAnswerRig()

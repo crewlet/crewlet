@@ -70,8 +70,8 @@
 //   - the act route and the human write surface take it from the
 //     `Idempotency-Key` header (internal/api/opkey), SCOPED by the principal
 //     that sent it, and every write the call makes derives its id from that
-//     key — the tracker's through [builtin.Actor.WorkKey], the knowledge
-//     base's through [pages.Actor.OpKey] — so the request sent again is the
+//     key (Worklet's through [builtin.Actor.WorkKey], Doclet's through
+//     [doclet.Actor.OpKey]), so the request sent again is the
 //     first attempt's writes rather than new ones;
 //   - an MCP client names none, so each of its calls is a new operation, and a
 //     tracker write answers with the `op_id` that operation was, which the

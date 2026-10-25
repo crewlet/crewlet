@@ -15,7 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // WHO MAY CALL A TOOL, AND WHY THE DECISION IS TAKEN HERE.
@@ -208,7 +208,7 @@ var subjectOf = map[string]subject{
 	// they name, is a stored row ([authz.ClassAppOrAsked]). A tracker
 	// holder is admitted before anything is read; anybody else is told
 	// [authz.ErrUnresolved], and the tool reads the item, probes its asks
-	// ([tracker.AskedOn]) and decides again. See [getWorkItem.CallForTurn]
+	// ([worklet.AskedOn]) and decides again. See [getWorkItem.CallForTurn]
 	// and [commentOnWorkItem.CallForTurn].
 	"get_work_item":        {kind: authz.KindTask, inTool: true},
 	"comment_on_work_item": {kind: authz.KindTask, inTool: true},
@@ -405,17 +405,17 @@ func containerArg(args map[string]any, field string) (authz.ObjectKind, string) 
 	}
 	kind, id, found := strings.Cut(raw, ":")
 	if !found {
-		if strings.EqualFold(raw, tracker.ContainerWorkspace) {
-			return authz.KindCompany, tracker.ContainerWorkspace
+		if strings.EqualFold(raw, worklet.ContainerWorkspace) {
+			return authz.KindCompany, worklet.ContainerWorkspace
 		}
-		return authz.KindProject, tracker.ProjectKey(raw)
+		return authz.KindProject, worklet.ProjectKey(raw)
 	}
-	if kind == tracker.ContainerWorkspace {
+	if kind == worklet.ContainerWorkspace {
 		// THE WORKSPACE CARRIES NO ID, so `workspace:x` names nothing —
 		// the tool refuses the spelling with the grammar in its message.
 		return "", ""
 	}
-	return containerObject(tracker.Container{Kind: kind, ID: id})
+	return containerObject(worklet.Container{Kind: kind, ID: id})
 }
 
 // containerObject is a tracker container as the authority table's kind and
@@ -424,15 +424,15 @@ func containerArg(args map[string]any, field string) (authz.ObjectKind, string) 
 // ONE MAPPING for both of the places a view's container reaches a decision —
 // the argument the gate reads and the STORED view `save_work_view` asks about
 // once it has read it — so the two cannot decide one container two ways.
-func containerObject(c tracker.Container) (authz.ObjectKind, string) {
+func containerObject(c worklet.Container) (authz.ObjectKind, string) {
 	switch c.Kind {
-	case tracker.ContainerWorkspace:
-		return authz.KindCompany, tracker.ContainerWorkspace
-	case tracker.ContainerProject:
-		return authz.KindProject, tracker.ProjectKey(c.ID)
-	case tracker.ContainerUnit:
+	case worklet.ContainerWorkspace:
+		return authz.KindCompany, worklet.ContainerWorkspace
+	case worklet.ContainerProject:
+		return authz.KindProject, worklet.ProjectKey(c.ID)
+	case worklet.ContainerUnit:
 		return authz.KindUnit, c.ID
-	case tracker.ContainerPerson:
+	case worklet.ContainerPerson:
 		return authz.KindPerson, c.ID
 	}
 	// A KIND THIS BUILD DOES NOT KNOW NAMES NOTHING, which every class
@@ -445,7 +445,7 @@ func containerObject(c tracker.Container) (authz.ObjectKind, string) {
 // viewObject is a saved view as [authz.ClassSavedView] decides it: its owner,
 // which makes it that person's record, and its container, which makes a
 // shared one that container's lead's.
-func viewObject(owner string, c tracker.Container) authz.Object {
+func viewObject(owner string, c worklet.Container) authz.Object {
 	o := authz.Object{Kind: authz.KindView, Owner: owner}
 	o.ContainerKind, o.Container = containerObject(c)
 	return o

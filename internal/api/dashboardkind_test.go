@@ -27,7 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE EXIT TESTS OF THE DASHBOARD KIND (adr/0043), through the whole API: the
@@ -100,32 +100,32 @@ type companyWork struct {
 	reads *int
 }
 
-var companyTasks = []tracker.TaskRow{
+var companyTasks = []worklet.TaskRow{
 	{Key: "ENG-1", Title: "Alice's migration", Assignee: "token:alice", Status: "in_progress"},
 	{Key: "ENG-2", Title: "Alice's review", Assignee: "token:alice", Status: "todo"},
 	{Key: "OPS-7", Title: "Bob's rotation", Assignee: "token:bob", Status: "todo"},
 }
 
-func (companyWork) ExpandedQuery(_ context.Context, params map[string]any, _ tracker.Viewer, _ time.Time,
-	_ *time.Location) (tracker.Query, error) {
-	var q tracker.Query
+func (companyWork) ExpandedQuery(_ context.Context, params map[string]any, _ worklet.Viewer, _ time.Time,
+	_ *time.Location) (worklet.Query, error) {
+	var q worklet.Query
 	if who, ok := params["assignee"]; ok {
 		q.Assignee = []string{fmt.Sprint(who)}
 	}
 	return q, nil
 }
 
-func (w companyWork) Tasks(_ context.Context, q tracker.Query, _ time.Time) (tracker.Answer, error) {
+func (w companyWork) Tasks(_ context.Context, q worklet.Query, _ time.Time) (worklet.Answer, error) {
 	w.mu.Lock()
 	*w.reads++
 	w.mu.Unlock()
-	var rows []tracker.TaskRow
+	var rows []worklet.TaskRow
 	for _, row := range companyTasks {
 		if len(q.Assignee) == 0 || slices.Contains(q.Assignee, row.Assignee) {
 			rows = append(rows, row)
 		}
 	}
-	return tracker.Answer{Rows: rows, TotalHint: len(rows), Complete: true}, nil
+	return worklet.Answer{Rows: rows, TotalHint: len(rows), Complete: true}, nil
 }
 
 // boardData is the board's datastore: a pipeline collection an agent writes.

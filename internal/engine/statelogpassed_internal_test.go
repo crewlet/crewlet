@@ -21,7 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A NODE A PEER RE-ANCHORED PAST IS SENT TO ADOPT, BY THE JOIN AND BY THE
@@ -45,7 +45,7 @@ func TestANodeAPeerReanchoredPastIsSentToAdopt(t *testing.T) {
 	for _, name := range s.held().order {
 		logs[name] = s.Domain(name).log
 	}
-	trackerName, vectorsName := tracker.Domain{}.Name(), search.Domain{}.Name()
+	trackerName, vectorsName := worklet.Domain{}.Name(), search.Domain{}.Name()
 	running := s.Domain(trackerName)
 	own := running.runner.Committed()
 	// A VECTORS CHECKPOINT, which a node with no embeddings configured has
@@ -151,7 +151,7 @@ func TestANodeLeftOnARebuiltLogAdoptsTheReanchoredGeneration(t *testing.T) {
 	e, back, q := bootRejoinNode(t)
 	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	s := e.core.Load().log
-	running := s.Domain(tracker.Domain{}.Name())
+	running := s.Domain(worklet.Domain{}.Name())
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
 		res.Outcome != statelog.OutcomeApplied {
 		t.Fatalf("a write before the rebuild: %+v, %v", res, err)
@@ -162,7 +162,7 @@ func TestANodeLeftOnARebuiltLogAdoptsTheReanchoredGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("jetstream: %v", err)
 	}
-	rebuildLog(t, js, tracker.Domain{}.Stream())
+	rebuildLog(t, js, worklet.Domain{}.Stream())
 	stats, err := running.log.Stats(t.Context())
 	if err != nil {
 		t.Fatalf("read the rebuilt log: %v", err)
@@ -241,7 +241,7 @@ func TestANodeARestoredReanchorLeftBehindStopsOnItsRecordAndAdopts(t *testing.T)
 	e, back, q := bootRejoinNode(t)
 	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	s := e.core.Load().log
-	running := s.Domain(tracker.Domain{}.Name())
+	running := s.Domain(worklet.Domain{}.Name())
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
 		res.Outcome != statelog.OutcomeApplied {
 		t.Fatalf("a write: %+v, %v", res, err)
@@ -257,7 +257,7 @@ func TestANodeARestoredReanchorLeftBehindStopsOnItsRecordAndAdopts(t *testing.T)
 
 	// THE PEER'S REANCHOR, the restored case: its checkpoint at the log's end
 	// in the next generation, and its generation record right after it.
-	record, keeps, err := tracker.GenerationRecord{}.GenerationRecord(statelog.GenerationFacts{
+	record, keeps, err := worklet.GenerationRecord{}.GenerationRecord(statelog.GenerationFacts{
 		Generation: next, Case: statelog.ReanchorRestored, By: "ops-1", Writer: "donor",
 		At: time.Now().UTC(),
 		Inputs: statelog.ReanchorInputs{

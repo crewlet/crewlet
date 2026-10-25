@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // EVERY TOOL THIS BUILD REGISTERS HAS AN AUTHORITY RULE.
@@ -148,7 +148,7 @@ func TestNoSeatOnlyVerbIsOfferedToAPerson(t *testing.T) {
 func TestEveryAppRowHasItsKindsApp(t *testing.T) {
 	t.Parallel()
 	for app, names := range map[iam.Grant][]string{
-		iam.GrantTracker:   append(builtin.WorkTools(), tracker.OperatorOnlyTools()...),
+		iam.GrantTracker:   append(builtin.WorkTools(), worklet.OperatorOnlyTools()...),
 		iam.GrantKnowledge: append(builtin.PageTools(), builtin.SearchKnowledgeTool),
 	} {
 		for _, name := range names {
@@ -226,7 +226,7 @@ func operatorDeps(t *testing.T) builtin.OperatorDeps {
 			Seats:          func() []colleague.Seat { return nil },
 			DefaultProject: func(string) string { return "ENG" },
 			Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
-				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
+				return builtin.Actor{Handle: "ops", Kind: worklet.AuthorOperator}, nil
 			},
 		},
 		Pages:        full.Pages,

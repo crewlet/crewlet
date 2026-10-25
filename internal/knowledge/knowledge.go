@@ -14,7 +14,7 @@
 //
 // TWO IMPLEMENTATIONS SHIP, which is what the seam was built for and is now
 // the argument for it rather than a promise about one: the engine's own pages
-// ([internal/pages.Searcher], the default) and Confluence. The interface is
+// ([internal/doclet.Searcher], the default) and Confluence. The interface is
 // declared by its CONSUMERS, so the second backend was one new implementation
 // rather than a rewrite of everything that searches — and a caller that knew
 // Confluence's own narrowing vocabulary would have been a caller to rewrite

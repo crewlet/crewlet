@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // AN EVICTED NODE'S OWN WRITES, MADE THROUGH ITS REAL WRITERS, ARE DROPPED BY
@@ -52,12 +52,12 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 	s.rejoinMu.Lock()
 	s.rejoin = func(context.Context) error { return nil }
 	s.rejoinMu.Unlock()
-	trackerLog := s.Domain(tracker.Domain{}.Name())
-	pagesLog := s.Domain(pages.Domain{}.Name())
+	trackerLog := s.Domain(worklet.Domain{}.Name())
+	pagesLog := s.Domain(doclet.Domain{}.Name())
 	iamLog := s.Domain(iamdomain.Domain{}.Name())
 	logs := []*runningLog{trackerLog, pagesLog, iamLog}
 
-	writeView := func(ctx context.Context, opID, id string) tracker.WriteResult {
+	writeView := func(ctx context.Context, opID, id string) worklet.WriteResult {
 		t.Helper()
 		prior, err := n.writer.ViewPrior(ctx, id)
 		if err != nil {
@@ -99,8 +99,8 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 
 	// THE NODE STOPS APPLYING, and the fleet evicts it on every log.
 	s.haltAppliers()
-	appendRecord(t, trackerLog, tracker.EvictionSubject(self).String(), trackerEviction(t, self))
-	appendRecord(t, pagesLog, pages.EvictionSubject(self).String(), pagesEviction(t, self))
+	appendRecord(t, trackerLog, worklet.EvictionSubject(self).String(), trackerEviction(t, self))
+	appendRecord(t, pagesLog, doclet.EvictionSubject(self).String(), pagesEviction(t, self))
 	appendRecord(t, iamLog, iamdomain.EvictionSubject(self).String(), iamEviction(t, self))
 
 	// ITS OWN WRITES, THROUGH ITS REAL WRITERS: its fence reads its own
@@ -162,11 +162,11 @@ func TestAnEvictedNodesRealWritesAreDroppedByTheApplier(t *testing.T) {
 		opID  string
 		at    statelog.Position
 	}{
-		{"tracker", tracker.NewGates(back.Store.Replicated().Reader()),
-			statelog.Subject{Kind: string(tracker.KindView), ID: "v-evicted"},
+		{"tracker", worklet.NewGates(back.Store.Replicated().Reader()),
+			statelog.Subject{Kind: string(worklet.KindView), ID: "v-evicted"},
 			"op-view-evicted", viewAt},
-		{"pages", pages.NewGates(back.Store.Replicated().Reader()),
-			statelog.Subject{Kind: string(pages.KindContainer), ID: "EVICTED"}, "", pageAt},
+		{"pages", doclet.NewGates(back.Store.Replicated().Reader()),
+			statelog.Subject{Kind: string(doclet.KindContainer), ID: "EVICTED"}, "", pageAt},
 		{"iam", iamdomain.NewGates(back.Store.Replicated().Reader()),
 			statelog.Subject{Kind: string(iamdomain.KindInvalidation)},
 			invalidated.OpID, invalidated.Position},
@@ -209,10 +209,10 @@ const haltedWriteBudget = time.Second
 
 // evictedView is a shared workspace view, the smallest thing the tracker's
 // writer publishes that leaves a row a case can look for.
-func evictedView(id string) tracker.View {
-	return tracker.View{
-		ID: id, Name: "View " + id, Type: tracker.ViewList,
-		Container: tracker.Container{Kind: tracker.ContainerWorkspace},
+func evictedView(id string) worklet.View {
+	return worklet.View{
+		ID: id, Name: "View " + id, Type: worklet.ViewList,
+		Container: worklet.Container{Kind: worklet.ContainerWorkspace},
 	}
 }
 
@@ -220,20 +220,20 @@ func evictedView(id string) tracker.View {
 // written by that peer.
 func trackerEviction(t *testing.T, node string) []byte {
 	t.Helper()
-	body, err := json.Marshal(tracker.Eviction{
-		V: tracker.DocumentVersion, NodeID: node, EvictedBy: "operator",
+	body, err := json.Marshal(worklet.Eviction{
+		V: worklet.DocumentVersion, NodeID: node, EvictedBy: "operator",
 		EvictedAt: time.Now().UTC(),
 	})
 	if err != nil {
 		t.Fatalf("encode the eviction: %v", err)
 	}
-	payload, err := tracker.MutationRecord{
-		RecordEnvelope: tracker.RecordEnvelope{
-			V: tracker.RecordVersion, OpID: "op-evict-" + node,
-			Subject: tracker.EvictionSubject(node), Op: tracker.OpEviction,
-			Writer: "node-peer", Scope: tracker.ScopeSet{Subject: true},
+	payload, err := worklet.MutationRecord{
+		RecordEnvelope: worklet.RecordEnvelope{
+			V: worklet.RecordVersion, OpID: "op-evict-" + node,
+			Subject: worklet.EvictionSubject(node), Op: worklet.OpEviction,
+			Writer: "node-peer", Scope: worklet.ScopeSet{Subject: true},
 		},
-		Mutation: body, Actor: "node-peer", ActorKind: tracker.AuthorSystem,
+		Mutation: body, Actor: "node-peer", ActorKind: worklet.AuthorSystem,
 	}.Encode()
 	if err != nil {
 		t.Fatalf("encode the eviction record: %v", err)
@@ -244,20 +244,20 @@ func trackerEviction(t *testing.T, node string) []byte {
 // pagesEviction is the same for the knowledge base's log.
 func pagesEviction(t *testing.T, node string) []byte {
 	t.Helper()
-	body, err := json.Marshal(pages.Eviction{
-		V: pages.DocumentVersion, NodeID: node, EvictedBy: "operator",
+	body, err := json.Marshal(doclet.Eviction{
+		V: doclet.DocumentVersion, NodeID: node, EvictedBy: "operator",
 		EvictedAt: time.Now().UTC(),
 	})
 	if err != nil {
 		t.Fatalf("encode the eviction: %v", err)
 	}
-	payload, err := pages.Encode(pages.MutationRecord{
-		RecordEnvelope: pages.RecordEnvelope{
-			V: pages.RecordVersion, OpID: "op-evict-" + node,
-			Subject: pages.EvictionSubject(node), Op: pages.OpEviction,
-			Writer: "node-peer", Scope: pages.ScopeSet{Subject: true},
+	payload, err := doclet.Encode(doclet.MutationRecord{
+		RecordEnvelope: doclet.RecordEnvelope{
+			V: doclet.RecordVersion, OpID: "op-evict-" + node,
+			Subject: doclet.EvictionSubject(node), Op: doclet.OpEviction,
+			Writer: "node-peer", Scope: doclet.ScopeSet{Subject: true},
 		},
-		Mutation: body, Actor: "node-peer", ActorKind: pages.AuthorOperator,
+		Mutation: body, Actor: "node-peer", ActorKind: doclet.AuthorOperator,
 	})
 	if err != nil {
 		t.Fatalf("encode the eviction record: %v", err)

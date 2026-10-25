@@ -26,7 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // recordedAudit is every event an app published as a runtime audit record,
@@ -56,16 +56,16 @@ func (r *recordedAudit) take() ([]string, []*events.Event) {
 // auditWork is a tracker writer that lands every create at one position.
 type auditWork struct{}
 
-func (a auditWork) CreateTaskAsking(ctx context.Context, opID string, task tracker.Task,
-	_ tracker.Comment, notify *tracker.Notify) (tracker.WriteResult, error) {
+func (a auditWork) CreateTaskAsking(ctx context.Context, opID string, task worklet.Task,
+	_ worklet.Comment, notify *worklet.Notify) (worklet.WriteResult, error) {
 
 	return a.CreateTask(ctx, opID, task, notify)
 }
 
-func (auditWork) CreateTask(context.Context, string, tracker.Task,
-	*tracker.Notify) (tracker.WriteResult, error) {
+func (auditWork) CreateTask(context.Context, string, worklet.Task,
+	*worklet.Notify) (worklet.WriteResult, error) {
 
-	return tracker.WriteResult{
+	return worklet.WriteResult{
 		Result: statelog.Result{
 			Outcome:  statelog.OutcomeApplied,
 			Position: statelog.Position{Stream: "CREWLET_TRACKER_LOG", Generation: 1, Seq: 7},
@@ -76,9 +76,9 @@ func (auditWork) CreateTask(context.Context, string, tracker.Task,
 }
 
 func (auditWork) UpdateTask(context.Context, string, string, string, uint64,
-	tracker.TaskPatch, tracker.ChangeKind, *tracker.Notify) (tracker.WriteResult, error) {
+	worklet.TaskPatch, worklet.ChangeKind, *worklet.Notify) (worklet.WriteResult, error) {
 
-	return tracker.WriteResult{}, nil
+	return worklet.WriteResult{}, nil
 }
 
 // auditedApp is an app serving the act transport and the backup route, both
@@ -169,27 +169,27 @@ func TestEachRuntimeWriteEmitsOneAuditedEvent(t *testing.T) {
 	}{{
 		name: "an act that lands",
 		run: func(t *testing.T, a *api.App) (int, string) {
-			return actRequest(t, a, "founder-secret", tracker.CreateWorkItemTool,
+			return actRequest(t, a, "founder-secret", worklet.CreateWorkItemTool,
 				`{"title":"Rotate the signing key","project":"ENG"}`)
 		},
 		status:   http.StatusOK,
 		operated: true,
 		want: &want{eventType: "operator_acted", outcome: types.AuditApplied, fields: map[string]any{
-			"transport": types.TransportAct, "tool": tracker.CreateWorkItemTool,
+			"transport": types.TransportAct, "tool": worklet.CreateWorkItemTool,
 			"position": "CREWLET_TRACKER_LOG@1:7",
 		}},
 	}, {
 		name: "an act the tool refuses",
 		run: func(t *testing.T, a *api.App) (int, string) {
-			return actRequest(t, a, "founder-secret", tracker.CreateWorkItemTool, `{"project":"ENG"}`)
+			return actRequest(t, a, "founder-secret", worklet.CreateWorkItemTool, `{"project":"ENG"}`)
 		},
 		status: http.StatusUnprocessableEntity,
 		want: &want{eventType: "operator_acted", outcome: types.AuditRefused, failed: true,
-			fields: map[string]any{"refusal": "invalid", "tool": tracker.CreateWorkItemTool}},
+			fields: map[string]any{"refusal": "invalid", "tool": worklet.CreateWorkItemTool}},
 	}, {
 		name: "a read refused on the write transport",
 		run: func(t *testing.T, a *api.App) (int, string) {
-			return actRequest(t, a, "founder-secret", tracker.ListWorkItemsTool, `{}`)
+			return actRequest(t, a, "founder-secret", worklet.ListWorkItemsTool, `{}`)
 		},
 		status: http.StatusBadRequest,
 	}, {
@@ -198,13 +198,13 @@ func TestEachRuntimeWriteEmitsOneAuditedEvent(t *testing.T) {
 		// they may not make.
 		name: "an act the authority table refuses",
 		run: func(t *testing.T, a *api.App) (int, string) {
-			return actRequest(t, a, "ci-secret", tracker.CreateWorkItemTool,
+			return actRequest(t, a, "ci-secret", worklet.CreateWorkItemTool,
 				`{"title":"Rotate the signing key","project":"ENG"}`)
 		},
 		status: http.StatusForbidden,
 		caller: "token:ci",
 		want: &want{eventType: "operator_acted", outcome: types.AuditRefused, failed: true,
-			fields: map[string]any{"refusal": "forbidden", "tool": tracker.CreateWorkItemTool}},
+			fields: map[string]any{"refusal": "forbidden", "tool": worklet.CreateWorkItemTool}},
 	}, {
 		name:  "a backup that is taken",
 		taker: &fakeBackup{took: backup.Manifest{Streams: make([]backup.StreamArtifact, 3)}},

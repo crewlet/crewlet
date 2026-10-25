@@ -19,12 +19,12 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/opkey"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The act transport is the dashboard's write path. Every case drives the real
@@ -80,13 +80,13 @@ func (r *recordingWork) writer(actor builtin.Actor) builtin.WorkWriter {
 }
 
 func (w recordingWriter) CreateTaskAsking(ctx context.Context, opID string,
-	task tracker.Task, _ tracker.Comment, notify *tracker.Notify) (tracker.WriteResult, error) {
+	task worklet.Task, _ worklet.Comment, notify *worklet.Notify) (worklet.WriteResult, error) {
 
 	return w.CreateTask(ctx, opID, task, notify)
 }
 
-func (w recordingWriter) CreateTask(_ context.Context, opID string, task tracker.Task,
-	_ *tracker.Notify) (tracker.WriteResult, error) {
+func (w recordingWriter) CreateTask(_ context.Context, opID string, task worklet.Task,
+	_ *worklet.Notify) (worklet.WriteResult, error) {
 
 	w.w.mu.Lock()
 	defer w.w.mu.Unlock()
@@ -97,7 +97,7 @@ func (w recordingWriter) CreateTask(_ context.Context, opID string, task tracker
 	if outcome == "" {
 		outcome = statelog.OutcomeApplied
 	}
-	return tracker.WriteResult{
+	return worklet.WriteResult{
 		Result: statelog.Result{
 			Outcome:  outcome,
 			Position: statelog.Position{Stream: "CREWLET_TRACKER_LOG", Generation: 1, Seq: 4711},
@@ -108,9 +108,9 @@ func (w recordingWriter) CreateTask(_ context.Context, opID string, task tracker
 }
 
 func (w recordingWriter) UpdateTask(context.Context, string, string, string, uint64,
-	tracker.TaskPatch, tracker.ChangeKind, *tracker.Notify) (tracker.WriteResult, error) {
+	worklet.TaskPatch, worklet.ChangeKind, *worklet.Notify) (worklet.WriteResult, error) {
 
-	return tracker.WriteResult{}, nil
+	return worklet.WriteResult{}, nil
 }
 
 func (r *recordingWork) writes() ([]builtin.Actor, []string) {
@@ -215,7 +215,7 @@ func TestAnyResolvedPrincipalMayAct(t *testing.T) {
 			t.Parallel()
 			work := &recordingWork{}
 			status, answer := act(t, guarded(actSurface(t, work)), tc.bearer,
-				tracker.CreateWorkItemTool, "application/json", createBody(), newKey())
+				worklet.CreateWorkItemTool, "application/json", createBody(), newKey())
 			if status != tc.status || (tc.code != "" && answer["error"] != string(tc.code)) {
 				t.Fatalf("answered %d %v, want %d %s", status, answer, tc.status, tc.code)
 			}
@@ -234,7 +234,7 @@ func TestAnActTheTableRefusesIsAnsweredInTheEnvelope(t *testing.T) {
 	t.Parallel()
 	work := &recordingWork{}
 	status, answer := act(t, guarded(actSurface(t, work)), "reader",
-		tracker.CreateWorkItemTool, "application/json", createBody(), newKey())
+		worklet.CreateWorkItemTool, "application/json", createBody(), newKey())
 	if status != http.StatusForbidden || answer["error"] != string(httpjson.CodeUnauthorized) {
 		t.Fatalf("a reader's create answered %d %v, want 403 unauthorized", status, answer)
 	}
@@ -258,17 +258,17 @@ func TestAnActWriteIsMadeAsItsPrincipal(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		bearer, author, credential string
-		kind                       tracker.AuthorKind
+		kind                       worklet.AuthorKind
 	}{
-		"a bound person":   {"founder", "jane-founder", "jane.founder", tracker.AuthorHuman},
-		"an unbound token": {"ci", "token:ci", "token:ci", tracker.AuthorOperator},
+		"a bound person":   {"founder", "jane-founder", "jane.founder", worklet.AuthorHuman},
+		"an unbound token": {"ci", "token:ci", "token:ci", worklet.AuthorOperator},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			work := &recordingWork{}
 			key := newKey()
 			status, answer := act(t, guarded(actSurface(t, work)), tc.bearer,
-				tracker.CreateWorkItemTool, "application/json; charset=utf-8",
+				worklet.CreateWorkItemTool, "application/json; charset=utf-8",
 				createBody(), key)
 			if status != http.StatusOK {
 				t.Fatalf("the create answered %d %v", status, answer)
@@ -293,7 +293,7 @@ func TestAnActWriteIsMadeAsItsPrincipal(t *testing.T) {
 				t.Errorf("the write's operation carries the instant %v, want the "+
 					"key's own %v", derived, at)
 			}
-			if answer["tool"] != tracker.CreateWorkItemTool || answer["outcome"] != "applied" ||
+			if answer["tool"] != worklet.CreateWorkItemTool || answer["outcome"] != "applied" ||
 				answer["position"] != "CREWLET_TRACKER_LOG@1:4711" {
 
 				t.Errorf("the act answered %v, want the tool, applied and the position", answer)
@@ -320,11 +320,11 @@ func TestARetriedActIsOneWrite(t *testing.T) {
 	work := &recordingWork{}
 	h := guarded(actSurface(t, work))
 	first, second := newKey(), newKey()
-	_, answer := act(t, h, "founder", tracker.CreateWorkItemTool, "application/json",
+	_, answer := act(t, h, "founder", worklet.CreateWorkItemTool, "application/json",
 		createBody(), first)
 	returned, _ := answer["op_id"].(string)
 	for _, key := range []string{first, returned, second} {
-		if status, answer := act(t, h, "founder", tracker.CreateWorkItemTool,
+		if status, answer := act(t, h, "founder", worklet.CreateWorkItemTool,
 			"application/json", createBody(), key); status != http.StatusOK {
 			t.Fatalf("key %s answered %d %v", key, status, answer)
 		}
@@ -344,11 +344,11 @@ func TestARetriedActIsOneWrite(t *testing.T) {
 
 	other := &recordingWork{}
 	both := guarded(actSurface(t, other))
-	act(t, both, "founder", tracker.CreateWorkItemTool, "application/json", createBody(), first)
-	act(t, both, "cofounder", tracker.CreateWorkItemTool, "application/json", createBody(), first)
+	act(t, both, "founder", worklet.CreateWorkItemTool, "application/json", createBody(), first)
+	act(t, both, "cofounder", worklet.CreateWorkItemTool, "application/json", createBody(), first)
 	// AND THE OP_ID THE FIRST PERSON WAS ANSWERED, sent by somebody else,
 	// is scoped again under the sender rather than taken as it is.
-	act(t, both, "cofounder", tracker.CreateWorkItemTool, "application/json", createBody(), returned)
+	act(t, both, "cofounder", worklet.CreateWorkItemTool, "application/json", createBody(), returned)
 	if _, crossed := other.writes(); len(crossed) != 3 ||
 		crossed[1] == crossed[0] || crossed[2] == crossed[0] {
 
@@ -372,7 +372,7 @@ func TestAnActWhoseWriteIsUnknownSaysSo(t *testing.T) {
 	work := &recordingWork{outcome: statelog.OutcomeUnknown}
 	key := newKey()
 	h := guarded(actSurface(t, work))
-	r := httptest.NewRequest(http.MethodPost, operator.ActPathPrefix+tracker.CreateWorkItemTool,
+	r := httptest.NewRequest(http.MethodPost, operator.ActPathPrefix+worklet.CreateWorkItemTool,
 		strings.NewReader(createBody()))
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Authorization", "Bearer founder")
@@ -433,7 +433,7 @@ func TestARetriedActIsOneWriteOnEveryStore(t *testing.T) {
 			"application/json", comment, key); status != http.StatusOK {
 			t.Fatalf("comment_on_page answered %d %v", status, answer)
 		}
-		if status, answer := act(t, h, "founder", tracker.WriteProjectTool,
+		if status, answer := act(t, h, "founder", worklet.WriteProjectTool,
 			"application/json", tags, key); status != http.StatusOK {
 			t.Fatalf("write_project answered %d %v", status, answer)
 		}
@@ -462,18 +462,18 @@ type recordingProject struct {
 	opIDs []string
 }
 
-func (p *recordingProject) WriteProject(context.Context, string, string, tracker.ProjectEdit,
-	tracker.ProjectAuthority) (tracker.WriteResult, error) {
-	return tracker.WriteResult{}, nil
+func (p *recordingProject) WriteProject(context.Context, string, string, worklet.ProjectEdit,
+	worklet.ProjectAuthority) (worklet.WriteResult, error) {
+	return worklet.WriteResult{}, nil
 }
 
-func (p *recordingProject) WriteTags(_ context.Context, opID, _ string, _ tracker.TagEdit,
-	_ tracker.TagAuthority) (tracker.WriteResult, error) {
+func (p *recordingProject) WriteTags(_ context.Context, opID, _ string, _ worklet.TagEdit,
+	_ worklet.TagAuthority) (worklet.WriteResult, error) {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.opIDs = append(p.opIDs, opID)
-	return tracker.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied}}, nil
+	return worklet.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied}}, nil
 }
 
 func (p *recordingProject) EnsureTags(context.Context, string, string, []string) ([]string, []string, error) {
@@ -501,12 +501,12 @@ func TestActsOffersTheAnswerToAPersonWithoutTracker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Acts: %v", err)
 	}
-	if !slices.Contains(acts, tracker.CommentOnWorkTool) {
+	if !slices.Contains(acts, worklet.CommentOnWorkTool) {
 		t.Errorf("somebody without the tracker is not offered %s, so an ask put "+
 			"to them could never be answered from a screen: %v",
-			tracker.CommentOnWorkTool, acts)
+			worklet.CommentOnWorkTool, acts)
 	}
-	for _, write := range []string{tracker.CreateWorkItemTool, tracker.UpdateWorkItemTool} {
+	for _, write := range []string{worklet.CreateWorkItemTool, worklet.UpdateWorkItemTool} {
 		if slices.Contains(acts, write) {
 			t.Errorf("somebody without the tracker is offered %s, which no ask "+
 				"admits them to: %v", write, acts)
@@ -522,7 +522,7 @@ func TestAReadToolIsRefusedOnTheActTransport(t *testing.T) {
 	t.Parallel()
 	s := actSurface(t, &recordingWork{})
 	body := `{"args":{"container":"workspace"}}`
-	status, answer := act(t, guarded(s), "founder", tracker.ListWorkItemsTool,
+	status, answer := act(t, guarded(s), "founder", worklet.ListWorkItemsTool,
 		"application/json", body, newKey())
 	if status != http.StatusBadRequest || answer["error"] != string(httpjson.CodeReadOnlyTool) {
 		t.Fatalf("a read answered %d %v, want 400 read_only_tool", status, answer)
@@ -531,15 +531,15 @@ func TestAReadToolIsRefusedOnTheActTransport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Acts: %v", err)
 	}
-	if slices.Contains(acts, tracker.ListWorkItemsTool) {
+	if slices.Contains(acts, worklet.ListWorkItemsTool) {
 		t.Errorf("the act list %v offers a read", acts)
 	}
-	if !slices.Contains(acts, tracker.CreateWorkItemTool) {
+	if !slices.Contains(acts, worklet.CreateWorkItemTool) {
 		t.Errorf("the act list %v does not offer the create the founder may make", acts)
 	}
 	// AND WHAT THE TABLE WOULD NEVER ADMIT IS NOT OFFERED: a screen enables
 	// exactly the controls a press of could be served.
-	if acts, _ := s.Acts(t.Context(), reader); slices.Contains(acts, tracker.CreateWorkItemTool) {
+	if acts, _ := s.Acts(t.Context(), reader); slices.Contains(acts, worklet.CreateWorkItemTool) {
 		t.Errorf("a reader is offered %v, including a create the table refuses them", acts)
 	}
 	status, answer = act(t, guarded(s), "founder", "run_sandbox",
@@ -600,7 +600,7 @@ func TestAFormPostCannotReachTheActTransport(t *testing.T) {
 			t.Parallel()
 			work := &recordingWork{}
 			status, answer := act(t, guarded(actSurface(t, work)), "founder",
-				tracker.CreateWorkItemTool, tc.contentType, tc.body, tc.key)
+				worklet.CreateWorkItemTool, tc.contentType, tc.body, tc.key)
 			if status != tc.status || answer["error"] != string(tc.code) {
 				t.Fatalf("answered %d %v, want %d %s", status, answer, tc.status, tc.code)
 			}
@@ -693,13 +693,13 @@ func TestAToolRefusalIsAnsweredByItsClass(t *testing.T) {
 	t.Parallel()
 	body := `{"args":{"item":"ENG-404","status":"done"}}`
 	status, answer := act(t, guarded(actSurface(t, &recordingWork{})), "founder",
-		tracker.UpdateWorkItemTool, "application/json", body, newKey())
+		worklet.UpdateWorkItemTool, "application/json", body, newKey())
 	if status != http.StatusNotFound || answer["error"] != string(crewletmcp.RefusalNotFound) {
 		t.Fatalf("an update of a missing item answered %d %v, want 404 not_found",
 			status, answer)
 	}
 	if detail, _ := answer["detail"].(string); !strings.Contains(detail, "ENG-404") ||
-		answer["tool"] != tracker.UpdateWorkItemTool {
+		answer["tool"] != worklet.UpdateWorkItemTool {
 
 		t.Errorf("the refusal %v does not carry the tool and its own sentence", answer)
 	}
@@ -711,8 +711,8 @@ func TestAToolRefusalIsAnsweredByItsClass(t *testing.T) {
 // cap at the page's own size refused a page the store would have taken.
 func TestTheLargestLegalPageFitsTheActBody(t *testing.T) {
 	t.Parallel()
-	pageBody := strings.Repeat("\"\\\n", pages.MaxBody/3)
-	pageBody += strings.Repeat("\"", pages.MaxBody-len(pageBody))
+	pageBody := strings.Repeat("\"\\\n", doclet.MaxBody/3)
+	pageBody += strings.Repeat("\"", doclet.MaxBody-len(pageBody))
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	// JSON.stringify does not escape <, > and &; Go's encoder does unless
@@ -720,14 +720,14 @@ func TestTheLargestLegalPageFitsTheActBody(t *testing.T) {
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(map[string]any{
 		"args": map[string]any{
-			"container": "ENG", "title": strings.Repeat("T", pages.MaxTitle),
+			"container": "ENG", "title": strings.Repeat("T", doclet.MaxTitle),
 			"body": pageBody, "labels": []string{"runbook", "security"},
 			"message": strings.Repeat("m", 512),
 		},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if buf.Len() <= pages.MaxBody*2 {
+	if buf.Len() <= doclet.MaxBody*2 {
 		t.Fatalf("the envelope is %d bytes; the case is not measuring the worst escape", buf.Len())
 	}
 	status, answer := act(t, guarded(actSurface(t, &recordingWork{})), "founder",
@@ -806,11 +806,11 @@ func TestAPageWriteStatesItsOutcomeAndPosition(t *testing.T) {
 // position.
 type positionedPages struct{ recordingPages }
 
-func (p *positionedPages) Comment(ctx context.Context, actor pages.Actor, id string,
-	in pages.NewComment) (pages.Comment, pages.Written, error) {
+func (p *positionedPages) Comment(ctx context.Context, actor doclet.Actor, id string,
+	in doclet.NewComment) (doclet.Comment, doclet.Written, error) {
 
 	comment, _, err := p.recordingPages.Comment(ctx, actor, id, in)
-	return comment, pages.Written{Revision: 88, Outcome: statelog.Result{
+	return comment, doclet.Written{Revision: 88, Outcome: statelog.Result{
 		Outcome:  statelog.OutcomePending,
 		Position: statelog.Position{Stream: "CREWLET_PAGES_LOG", Generation: 2, Seq: 88},
 	}}, err

@@ -9,8 +9,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/trashreap"
 )
@@ -80,7 +80,7 @@ type trashReaper struct {
 // it has been stopped.
 //
 // THE TERM IS artifacts.TrashRetention for every source, the thirty days the
-// knowledge base already promised (pages.StatusTrashed): one term, so a
+// knowledge base already promised (doclet.StatusTrashed): one term, so a
 // person deleting a page and an artifact on the same day can take both back
 // until the same day.
 func (e *Engine) startTrashReaper(ctx context.Context) {
@@ -203,7 +203,7 @@ func (a artifactsTrash) PurgeTrashed(ctx context.Context, id string, cutoff time
 }
 
 // pagesTrash is the knowledge base's trash, as the reaper reaches it.
-type pagesTrash struct{ store *pages.Store }
+type pagesTrash struct{ store *doclet.Store }
 
 func (pagesTrash) Name() string { return "pages" }
 
@@ -215,14 +215,14 @@ func (p pagesTrash) TrashedBefore(ctx context.Context, cutoff time.Time,
 
 // PurgeTrashed purges one page past its term as the engine, under the
 // operation the reaper derived, which the store keys the purge on
-// ([pages.Actor.OpKey]) so a retry in the same slot collapses into the first.
+// ([doclet.Actor.OpKey]) so a retry in the same slot collapses into the first.
 func (p pagesTrash) PurgeTrashed(ctx context.Context, id string, cutoff time.Time,
 	opID string) error {
 
-	actor := pages.SystemActor(trashreap.Name)
+	actor := doclet.SystemActor(trashreap.Name)
 	actor.OpKey = opID
 	written, err := p.store.PurgeTrashed(ctx, actor, id, cutoff)
-	return reapAnswer(written.Outcome, err, pages.ErrNotInTrash, pages.ErrNotFound)
+	return reapAnswer(written.Outcome, err, doclet.ErrNotInTrash, doclet.ErrNotFound)
 }
 
 // reapAnswer turns a domain's answer to one purge into the one a

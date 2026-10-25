@@ -18,8 +18,8 @@ func keysOf(got []chartContainer) []string {
 // THE KNOWLEDGE CONTAINERS A COMPANY NAMES ARE OBJECTS, and until this
 // resolver had a caller they were not.
 //
-// [pages.Store.EnsureContainer] had none at all — its own doc says it "runs on
-// every boot for every unit's space" and nothing ever ran it — so
+// [doclet.Store.EnsureContainer] had none at all (its own doc says it "runs on
+// every boot for every unit's space" and nothing ever ran it), so
 // `pages_containers` was empty in every deployment: the Knowledge rail said
 // "this node knows about no containers yet" beside a company whose agents had
 // written pages, and `GET /containers` answered an empty list for ever.

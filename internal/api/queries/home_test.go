@@ -11,13 +11,13 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // fixedRuns is a pending-run store holding exactly these runs.
@@ -44,12 +44,12 @@ func TestDecisionsCountsAsksAndRunsForThePerson(t *testing.T) {
 	askedAt := time.Date(2031, 4, 16, 10, 0, 0, 0, time.UTC)
 	oldest := askedAt.Add(-5 * time.Hour)
 	parkedAt := askedAt.Add(-time.Hour)
-	work := &stubWork{decisions: tracker.DecisionsAnswer{
-		Asks: []tracker.AskRow{
+	work := &stubWork{decisions: worklet.DecisionsAnswer{
+		Asks: []worklet.AskRow{
 			{Comment: "c-1", AskedAt: askedAt},
 			{Comment: "c-2", AskedAt: oldest},
 		},
-		Total:    tracker.ClaimTotal{Total: 7},
+		Total:    worklet.ClaimTotal{Total: 7},
 		OldestAt: &oldest,
 	}}
 	sources := viewerSources(t, work)
@@ -158,7 +158,7 @@ func TestWorkFlowParams(t *testing.T) {
 			work.flowQuery.Points, queries.DefaultFlowPoints)
 	}
 	for _, params := range []map[string]any{
-		{"points": tracker.MaxFlowPoints + 1},
+		{"points": worklet.MaxFlowPoints + 1},
 		{"points": 0},
 		{"bucket": "month"},
 	} {
@@ -173,14 +173,14 @@ func TestWorkFlowParams(t *testing.T) {
 func TestTheCompanyFeedMergesItsSources(t *testing.T) {
 	t.Parallel()
 	base := time.Date(2031, 4, 16, 10, 0, 0, 0, time.UTC)
-	work := &stubWork{feed: tracker.FeedPage{Rows: []tracker.FeedRow{
-		{Task: "a", Kind: tracker.FeedCompleted, At: base,
-			Cursor: tracker.FeedCursor{At: base, Seq: 9}.String()},
-		{Task: "b", Kind: tracker.FeedCreated, At: base.Add(-2 * time.Hour),
-			Cursor: tracker.FeedCursor{At: base.Add(-2 * time.Hour), Seq: 5}.String()},
+	work := &stubWork{feed: worklet.FeedPage{Rows: []worklet.FeedRow{
+		{Task: "a", Kind: worklet.FeedCompleted, At: base,
+			Cursor: worklet.FeedCursor{At: base, Seq: 9}.String()},
+		{Task: "b", Kind: worklet.FeedCreated, At: base.Add(-2 * time.Hour),
+			Cursor: worklet.FeedCursor{At: base.Add(-2 * time.Hour), Seq: 5}.String()},
 	}, Complete: true}}
-	pageStore := &stubPages{changes: []pages.PageChange{
-		{ID: "h-1", PageID: "p", Kind: pages.ChangeSaved, At: base.Add(-time.Hour), LogSeq: 4},
+	pageStore := &stubPages{changes: []doclet.PageChange{
+		{ID: "h-1", PageID: "p", Kind: doclet.ChangeSaved, At: base.Add(-time.Hour), LogSeq: 4},
 	}}
 	sources := queries.Sources{Work: work, Pages: pageStore}
 	got, err := askNative(t, sources, "company_feed", map[string]any{"limit": 2})
@@ -255,9 +255,9 @@ func TestTheFeedFoldsASchedulesRunsAndLeavesItsSkippedTicksOut(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	work := &stubWork{feed: tracker.FeedPage{Rows: []tracker.FeedRow{
-		{Task: "a", Kind: tracker.FeedCompleted, At: base,
-			Cursor: tracker.FeedCursor{At: base, Seq: 9}.String()},
+	work := &stubWork{feed: worklet.FeedPage{Rows: []worklet.FeedRow{
+		{Task: "a", Kind: worklet.FeedCompleted, At: base,
+			Cursor: worklet.FeedCursor{At: base, Seq: 9}.String()},
 	}, Complete: true}}
 	sources := queries.Sources{Work: work, Usage: db.Replicated()}
 	for _, kinds := range []string{"", "schedule"} {
@@ -324,12 +324,12 @@ func TestTheFeedShowsOnlyTheAppsTheCallerHolds(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			work := &stubWork{feed: tracker.FeedPage{Rows: []tracker.FeedRow{
-				{Task: "a", Kind: tracker.FeedCompleted, At: base,
-					Cursor: tracker.FeedCursor{At: base, Seq: 9}.String()},
+			work := &stubWork{feed: worklet.FeedPage{Rows: []worklet.FeedRow{
+				{Task: "a", Kind: worklet.FeedCompleted, At: base,
+					Cursor: worklet.FeedCursor{At: base, Seq: 9}.String()},
 			}, Complete: true}}
-			pageStore := &stubPages{changes: []pages.PageChange{
-				{ID: "h-1", PageID: "p", Kind: pages.ChangeSaved,
+			pageStore := &stubPages{changes: []doclet.PageChange{
+				{ID: "h-1", PageID: "p", Kind: doclet.ChangeSaved,
 					At: base.Add(-time.Hour), LogSeq: 4},
 			}}
 			r := queries.NewRegistry()
@@ -371,9 +371,9 @@ func TestTheFeedShowsOnlyTheAppsTheCallerHolds(t *testing.T) {
 // record by the person-read rule, and the first half goes red.
 func TestYourOwnAsksNeedNoTracker(t *testing.T) {
 	t.Parallel()
-	work := &stubWork{decisions: tracker.DecisionsAnswer{Asks: []tracker.AskRow{
+	work := &stubWork{decisions: worklet.DecisionsAnswer{Asks: []worklet.AskRow{
 		{Comment: "c-1", AskedAt: time.Date(2031, 4, 16, 10, 0, 0, 0, time.UTC)},
-	}, Total: tracker.ClaimTotal{Total: 1}}}
+	}, Total: worklet.ClaimTotal{Total: 1}}}
 	s := viewerSources(t, work)
 	s.Sandbox = fixedRuns{parkedRun()}
 	got, err := askHolding(t, s, "ana", "decisions", nil)

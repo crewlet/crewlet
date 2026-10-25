@@ -18,18 +18,18 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // fakeInbox is the engine's half of the inbox feed: it keeps what the app
 // registered, and a case fires it the way a committed tracker batch would.
 type fakeInbox struct {
 	mu  sync.Mutex
-	fn  func([]tracker.InboxMovement)
+	fn  func([]worklet.InboxMovement)
 	gap func()
 }
 
-func (f *fakeInbox) SetOnInboxMoved(fn func([]tracker.InboxMovement)) {
+func (f *fakeInbox) SetOnInboxMoved(fn func([]worklet.InboxMovement)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.fn = fn
@@ -55,7 +55,7 @@ func (f *fakeInbox) fireGap(t *testing.T) {
 }
 
 // fire hands one committed batch's movements to whatever the app registered.
-func (f *fakeInbox) fire(t *testing.T, moved ...tracker.InboxMovement) {
+func (f *fakeInbox) fire(t *testing.T, moved ...worklet.InboxMovement) {
 	t.Helper()
 	f.mu.Lock()
 	fn := f.fn
@@ -128,11 +128,11 @@ func TestInboxChangedReachesOnlyTheSocketsHoldingThatSeat(t *testing.T) {
 
 	// Two batches IN ORDER, so a socket that received alice's frame would
 	// have it queued in front of its own.
-	feed.fire(t, tracker.InboxMovement{
-		Handle: "alice-seat", UnreadDelta: 1, Subject: "task:1f0c", Reason: tracker.ReasonAssignee,
+	feed.fire(t, worklet.InboxMovement{
+		Handle: "alice-seat", UnreadDelta: 1, Subject: "task:1f0c", Reason: worklet.ReasonAssignee,
 	})
-	feed.fire(t, tracker.InboxMovement{
-		Handle: "bob-seat", UnreadDelta: -2, Subject: "task:9a1e", Reason: tracker.ReasonMention,
+	feed.fire(t, worklet.InboxMovement{
+		Handle: "bob-seat", UnreadDelta: -2, Subject: "task:9a1e", Reason: worklet.ReasonMention,
 	})
 
 	got := alice.nextInbox(t)

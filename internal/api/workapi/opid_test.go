@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // assertMintedWith holds one operation id a write was published under to the
@@ -282,8 +282,8 @@ func TestAWriteOnWhatAPurgeDestroyedIsNotFound(t *testing.T) {
 func TestAStoppedSubtreeSaysHowToFinishItHere(t *testing.T) {
 	t.Parallel()
 	r := newRig(t, chart{})
-	r.writes.err = &tracker.SubtreeStopped{Verb: "removal", Root: "t-1",
-		Followed: 2, Of: 5, OpID: "op", Err: tracker.ErrStepUnvouched}
+	r.writes.err = &worklet.SubtreeStopped{Verb: "removal", Root: "t-1",
+		Followed: 2, Of: 5, OpID: "op", Err: worklet.ErrStepUnvouched}
 	got := r.do(as(admin("ana")), http.MethodDelete, "/work/items/ENG-1",
 		map[string]any{"subtree": true})
 	stopped, _ := got.body["subtree_stopped"].(string)
@@ -321,25 +321,25 @@ func TestAStoppedSubtreeSaysHowToFinishItHere(t *testing.T) {
 func TestAStoppedMoveSaysHowToFinishItHere(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		stop tracker.MoveStopped
+		stop worklet.MoveStopped
 		want []string
 	}{
 		"a refused step": {
-			stop: tracker.MoveStopped{Root: "t-1", Key: "OPS-7", Target: "OPS",
+			stop: worklet.MoveStopped{Root: "t-1", Key: "OPS-7", Target: "OPS",
 				Followed: 2, Of: 5, Err: errors.New("refused")},
 			want: []string{"ENG-1 moved to OPS as OPS-7", "2 of the 5",
 				"SAME " + opkey.Header, "send op_id back",
 				"A new key is refused"},
 		},
 		"a task in the trash": {
-			stop: tracker.MoveStopped{Root: "t-1", Key: "OPS-7", Target: "OPS",
+			stop: worklet.MoveStopped{Root: "t-1", Key: "OPS-7", Target: "OPS",
 				Followed: 4, Of: 5, Waiting: "ENG-9", Err: errors.New("frozen")},
 			want: []string{"ENG-9 is in the trash", "/work/items/ENG-9/restore",
 				"SAME " + opkey.Header, "send op_id back"},
 		},
 		"a step this node cannot vouch for": {
-			stop: tracker.MoveStopped{Root: "t-1", Key: "OPS-7", Target: "OPS",
-				Followed: 1, Of: 5, Err: tracker.ErrStepUnvouched},
+			stop: worklet.MoveStopped{Root: "t-1", Key: "OPS-7", Target: "OPS",
+				Followed: 1, Of: 5, Err: worklet.ErrStepUnvouched},
 			want: []string{"cannot vouch", "another node", "tracker duty",
 				"send op_id back"},
 		},
@@ -493,7 +493,7 @@ func TestAnUnknownStillSaysWhatItWasAbout(t *testing.T) {
 // elsewhere, a remark rewritten, a purge for another reason, each reported as
 // made and silently dropped. The tools behind the other routes already put a
 // digest of their arguments in every id they derive, and the knowledge base
-// binds every id to what its write says (internal/pages holds that); the
+// binds every id to what its write says (internal/doclet holds that); the
 // writes this surface makes itself are held to the same rule here: the same
 // request under the same key is the same operation (the retry), and any other
 // request under it is another.
@@ -526,8 +526,8 @@ func TestAKeySentWithAnotherRequestIsAnotherOperation(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			r := newRig(t, chart{})
-			r.reader.addComment("t-1", tracker.Comment{ID: "c-1", Task: "t-1",
-				Author: "ana", AuthorKind: tracker.AuthorHuman, Body: "first"})
+			r.reader.addComment("t-1", worklet.Comment{ID: "c-1", Task: "t-1",
+				Author: "ana", AuthorKind: worklet.AuthorHuman, Body: "first"})
 			key := statelog.NewOpID(time.Now(), "")
 			send := func(body any) {
 				t.Helper()
@@ -570,7 +570,7 @@ func TestAKeySentWithAnotherRequestIsAnotherOperation(t *testing.T) {
 //
 // It binds every operation it derives to what the write says — the title, the
 // body, the reason — so the same key sent with another request is another
-// operation there (internal/pages' own suite holds that). Bound here as well,
+// operation there (internal/doclet's own suite holds that). Bound here as well,
 // through the request's arguments, it was a second binding of one rule that
 // could only drift from the first, over a key the store then dated and
 // derived from: this surface's job is to hand over the request's operation —

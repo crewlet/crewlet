@@ -8,10 +8,10 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/pages"
 )
 
 // The three tools a seat reads the knowledge base through, and the record each
@@ -214,8 +214,8 @@ func TestAReadOutsideATurnRecordsNothing(t *testing.T) {
 	out := &recordingTelemetry{}
 	tool := registered(t, builtin.Deps{Pages: builtin.PageDeps{
 		Reader: newFakeKB(),
-		Actor: func(context.Context, *turnctx.Turn) (pages.Actor, error) {
-			return pages.Actor{Handle: "operator"}, nil
+		Actor: func(context.Context, *turnctx.Turn) (doclet.Actor, error) {
+			return doclet.Actor{Handle: "operator"}, nil
 		},
 	}, Events: out}, builtin.GetPageTool)
 	if res := callFor(t, tool, nil, map[string]any{"page": "p1"}); res.Failed {

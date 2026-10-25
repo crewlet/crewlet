@@ -12,7 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // answeringQuestions answers every question with answer, or refuses it with
@@ -71,7 +71,7 @@ func previewService(t *testing.T, q *answeringQuestions) *Service {
 // with its defaults, and a second preview within the cache's life answered
 // without asking the domain again.
 func TestAPreviewAnswersASourcesRowsAsTheViewer(t *testing.T) {
-	q := &answeringQuestions{answer: map[string]any{"items": []tracker.TaskRow{
+	q := &answeringQuestions{answer: map[string]any{"items": []worklet.TaskRow{
 		{Key: "ENG-1", Title: "Ship it", Status: "in_progress", StatusGroup: "active"},
 		{Key: "ENG-2", Title: "Plan it", Status: "todo", StatusGroup: "not_started"},
 	}}}

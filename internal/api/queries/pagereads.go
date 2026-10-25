@@ -10,13 +10,13 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tokens"
-	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/usage"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // WHO READ A PAGE, WHO LOADED IT AS A SKILL, AND WHO LINKS TO IT.
@@ -112,10 +112,10 @@ type PageReadRow struct {
 	// LastWorkItem is the task the newest read's run was charged to and
 	// its "Turn n" there — "turn 2 on ENG-412". Absent for a run charged to
 	// no task, or on a company whose tracker is not the engine's. A link to
-	// it is built by [tracker.ItemAddress] — the key, or the id where
+	// it is built by [worklet.ItemAddress]: the key, or the id where
 	// `key_collision` says another task claimed the key first and the key
 	// would open that one.
-	LastWorkItem *tracker.TurnPlace `json:"last_work_item,omitempty"`
+	LastWorkItem *worklet.TurnPlace `json:"last_work_item,omitempty"`
 }
 
 // SkillLoad is one seat a tool-skill page reached as a skill.
@@ -139,7 +139,7 @@ type PageBacklinks interface {
 // PageAnswer is the `page` answer: the page as its reader serves it, and what
 // the engine knows about it beside the page itself.
 type PageAnswer struct {
-	pages.Detail
+	doclet.Detail
 
 	// SkillLoadedBy is the seats this TOOL-SKILL page reached as a skill
 	// over the last [PageReadsMaxDays] company days, most recent first —
@@ -206,7 +206,7 @@ func (s Sources) page(ctx context.Context, p Params) (any, error) {
 	}
 	detail, err := s.Pages.Get(ctx, ref, fresh)
 	switch {
-	case errors.Is(err, pages.ErrNotFound):
+	case errors.Is(err, doclet.ErrNotFound):
 		return nil, ErrNotFound
 	case err != nil:
 		return nil, err
@@ -390,7 +390,7 @@ func foldPageReads(rows []usage.PageRead, f pageReadsFold) PageReadsAnswer {
 // [PageReadsMaxDays] company days, keyed by page id — every page listed,
 // an unloaded one as an empty list, so "nobody loaded it" is an answer rather
 // than a missing key.
-func (s Sources) skillLoads(ctx context.Context, listed []pages.Summary) (map[string][]SkillLoad, error) {
+func (s Sources) skillLoads(ctx context.Context, listed []doclet.Summary) (map[string][]SkillLoad, error) {
 	window := tokens.LastDays(PageReadsMaxDays, s.clock(), s.zone())
 	ids := make([]string, len(listed))
 	for i, p := range listed {

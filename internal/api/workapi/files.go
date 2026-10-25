@@ -21,7 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // ---- a project's file BYTES -------------------------------------------- //
@@ -95,7 +95,7 @@ func (s *Service) fileRoutes(mount mounter) {
 	project := func(a authz.Action) authz.Policy {
 		return authz.Policy{Action: a, Object: func(r *http.Request) authz.Object {
 			return authz.Object{Kind: authz.KindProject,
-				Container: tracker.ProjectKey(r.PathValue("project"))}
+				Container: worklet.ProjectKey(r.PathValue("project"))}
 		}}
 	}
 	route("GET "+filesPattern, project(authz.ActionFileRead), (*served).getFile)
@@ -113,7 +113,7 @@ const downloadHead = 32 << 10
 // getFile answers GET /work/files/{project}/{path...}: the file's bytes,
 // streamed, as an attachment.
 func (s *served) getFile(w http.ResponseWriter, r *http.Request) {
-	fresh, err := tracker.ParseFreshness(queries.FromQuery(r.URL.Query()))
+	fresh, err := worklet.ParseFreshness(queries.FromQuery(r.URL.Query()))
 	if err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
 			map[string]string{"detail": err.Error()})
@@ -170,7 +170,7 @@ func (s *served) getFile(w http.ResponseWriter, r *http.Request) {
 }
 
 // sendFile writes the file's headers and then its content, from src.
-func (s *served) sendFile(w http.ResponseWriter, f tracker.File, src io.Reader) {
+func (s *served) sendFile(w http.ResponseWriter, f worklet.File, src io.Reader) {
 	contentType := f.ContentType
 	if contentType == "" {
 		contentType = "application/octet-stream"
@@ -198,7 +198,7 @@ func (s *served) sendFile(w http.ResponseWriter, f tracker.File, src io.Reader) 
 // putFile answers PUT /work/files/{project}/{path...}: the body is the file,
 // streamed into one new object and then recorded.
 func (s *served) putFile(w http.ResponseWriter, r *http.Request) {
-	project := tracker.ProjectKey(r.PathValue("project"))
+	project := worklet.ProjectKey(r.PathValue("project"))
 	filePath, ok := filePathOf(w, r)
 	if !ok {
 		return
@@ -219,10 +219,10 @@ func (s *served) putFile(w http.ResponseWriter, r *http.Request) {
 	// declared length over the cap, and a project that takes no files.
 	// Either found after the body would have streamed up to a gibibyte into
 	// the store for nothing, and left it there for a day.
-	if r.ContentLength > tracker.MaxFileBytes {
+	if r.ContentLength > worklet.MaxFileBytes {
 		bytesFailed(w, r, fmt.Errorf("%w: the body declares %d bytes and a project's "+
 			"files are at most %d", objstore.ErrTooLarge, r.ContentLength,
-			int64(tracker.MaxFileBytes)), key)
+			int64(worklet.MaxFileBytes)), key)
 		return
 	}
 	if !s.acceptsFiles(w, r, project) {
@@ -235,7 +235,7 @@ func (s *served) putFile(w http.ResponseWriter, r *http.Request) {
 	// THE BYTES FIRST — see the file's head — paced as they arrive.
 	object, err := s.Objects.Put(r.Context(),
 		paced.NewBody(r.Body, http.NewResponseController(w), s.pace),
-		tracker.MaxFileBytes, objstore.PutMeta{ContentType: contentType})
+		worklet.MaxFileBytes, objstore.PutMeta{ContentType: contentType})
 	if err != nil {
 		bytesFailed(w, r, err, key)
 		return
@@ -253,7 +253,7 @@ func (s *served) putFile(w http.ResponseWriter, r *http.Request) {
 	asked := map[string]any{"hash": object.Hash, "content_type": contentType,
 		"if_match": version}
 	result, err := s.Work.FileWriter(actor).PutFile(r.Context(),
-		keyedOp(key, "file-put", project+"/"+filePath, asked), tracker.FilePut{
+		keyedOp(key, "file-put", project+"/"+filePath, asked), worklet.FilePut{
 			Project: project, Path: filePath, ContentType: contentType,
 			Object: object, IfMatch: version,
 		})
@@ -272,7 +272,7 @@ func (s *served) putFile(w http.ResponseWriter, r *http.Request) {
 // deleteFile answers DELETE /work/files/{project}/{path...}: the file is
 // stamped removed and its object dropped.
 func (s *served) deleteFile(w http.ResponseWriter, r *http.Request) {
-	project := tracker.ProjectKey(r.PathValue("project"))
+	project := worklet.ProjectKey(r.PathValue("project"))
 	filePath, ok := filePathOf(w, r)
 	if !ok {
 		return
@@ -304,24 +304,24 @@ func (s *served) deleteFile(w http.ResponseWriter, r *http.Request) {
 
 // acceptsFiles reads the project an upload names, refusing — before a byte of
 // the body is read — one there is none of and one that takes no files, in the
-// writer's own sentence ([tracker.AcceptFiles]). It reports whether to go on.
+// writer's own sentence ([worklet.AcceptFiles]). It reports whether to go on.
 //
 // AT THE LEVEL EVERY DECISION HERE READS AT ([decisionRead]), and only an
 // early refusal: the write's own decide is what actually judges the project.
 func (s *served) acceptsFiles(w http.ResponseWriter, r *http.Request, project string) bool {
 	projects, _ := s.Work.Reader.(builtin.ProjectReader)
-	detail, err := projects.Project(r.Context(), tracker.ProjectDetailQuery{
+	detail, err := projects.Project(r.Context(), worklet.ProjectDetailQuery{
 		Project: project, Level: decisionRead.Level,
 	})
 	if err == nil {
-		err = tracker.AcceptFiles(detail.Key, detail.Archived)
+		err = worklet.AcceptFiles(detail.Key, detail.Archived)
 	}
 	if err == nil {
 		return true
 	}
-	if errors.Is(err, tracker.ErrInvalid) {
+	if errors.Is(err, worklet.ErrInvalid) {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalid,
-			map[string]string{"detail": tracker.Sentence(err)})
+			map[string]string{"detail": worklet.Sentence(err)})
 		return false
 	}
 	fileReadFailed(w, r, err)
@@ -331,7 +331,7 @@ func (s *served) acceptsFiles(w http.ResponseWriter, r *http.Request, project st
 // filePathOf is the route's file path, normalised as the tracker keeps it —
 // refused `400 bad_path` naming what is wrong with it.
 func filePathOf(w http.ResponseWriter, r *http.Request) (string, bool) {
-	filePath, err := tracker.NormalizeFilePath(r.PathValue("path"))
+	filePath, err := worklet.NormalizeFilePath(r.PathValue("path"))
 	if err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadPath,
 			map[string]string{"detail": err.Error()})
@@ -360,7 +360,7 @@ func fileVersion(w http.ResponseWriter, r *http.Request) (uint64, bool) {
 // answerFile answers a file write that was MADE, in the THREE-VALUED
 // vocabulary every write here answers in ([answer]) — and its position and
 // version only where it is known to have landed.
-func answerFile(w http.ResponseWriter, key string, result tracker.WriteResult,
+func answerFile(w http.ResponseWriter, key string, result worklet.WriteResult,
 	body map[string]any) {
 
 	body["outcome"] = string(result.Outcome)
@@ -379,10 +379,10 @@ func answerFile(w http.ResponseWriter, key string, result tracker.WriteResult,
 // answered ([readFailed]).
 func fileReadFailed(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
-	case errors.Is(err, tracker.ErrNoProject):
+	case errors.Is(err, worklet.ErrNoProject):
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoProject,
 			map[string]string{"detail": err.Error()})
-	case errors.Is(err, tracker.ErrNoFile):
+	case errors.Is(err, worklet.ErrNoFile):
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoFile,
 			map[string]string{"detail": err.Error()})
 	default:
@@ -424,16 +424,16 @@ func bytesFailed(w http.ResponseWriter, r *http.Request, err error, key string) 
 // node's own read here as they read on every write.
 func fileWriteFailed(w http.ResponseWriter, r *http.Request, err error, key string) {
 	switch {
-	case errors.Is(err, tracker.ErrNoProject):
+	case errors.Is(err, worklet.ErrNoProject):
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoProject,
 			map[string]string{"detail": err.Error()})
-	case errors.Is(err, tracker.ErrNoFile):
+	case errors.Is(err, worklet.ErrNoFile):
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoFile,
 			map[string]string{"detail": err.Error()})
-	case errors.Is(err, tracker.ErrStaleVersion):
+	case errors.Is(err, worklet.ErrStaleVersion):
 		httpjson.FailWith(w, http.StatusPreconditionFailed, httpjson.CodeVersionMoved,
 			map[string]string{"detail": err.Error()})
-	case errors.Is(err, tracker.ErrUploadStale):
+	case errors.Is(err, worklet.ErrUploadStale):
 		// THE BYTES ARE STORED AND MAY NOT BE NAMED ANY MORE: the upload
 		// took longer than a write may name its object after
 		// ([objstore.RecordWithin]), and sending it again is the one thing
@@ -441,11 +441,11 @@ func fileWriteFailed(w http.ResponseWriter, r *http.Request, err error, key stri
 		// another.
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeUploadExpired,
 			map[string]string{"detail": err.Error()})
-	case errors.Is(err, tracker.ErrInvalid):
+	case errors.Is(err, worklet.ErrInvalid):
 		// THE WRITE CAN NEVER LAND AS SENT — an archived project, a
 		// content type no row may hold — which is the request's to change.
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalid,
-			map[string]string{"detail": tracker.Sentence(err)})
+			map[string]string{"detail": worklet.Sentence(err)})
 	default:
 		failErr(w, r, err, key)
 	}

@@ -8,21 +8,21 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/queue/memory"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // heardInbox is what one node's sockets were handed: every movement, and how
 // many times they were told to read every inbox again.
 type heardInbox struct {
 	mu    sync.Mutex
-	moved []tracker.InboxMovement
+	moved []worklet.InboxMovement
 	gaps  int
 	ping  chan struct{}
 }
 
 func newHeardInbox() *heardInbox { return &heardInbox{ping: make(chan struct{}, 64)} }
 
-func (h *heardInbox) deliver(moved []tracker.InboxMovement) {
+func (h *heardInbox) deliver(moved []worklet.InboxMovement) {
 	h.mu.Lock()
 	h.moved = append(h.moved, moved...)
 	h.mu.Unlock()
@@ -36,15 +36,15 @@ func (h *heardInbox) gap() {
 	h.ping <- struct{}{}
 }
 
-func (h *heardInbox) snapshot() ([]tracker.InboxMovement, int) {
+func (h *heardInbox) snapshot() ([]worklet.InboxMovement, int) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return append([]tracker.InboxMovement(nil), h.moved...), h.gaps
+	return append([]worklet.InboxMovement(nil), h.moved...), h.gaps
 }
 
 // waitFor waits until cond holds of what was heard, or fails naming what.
 func (h *heardInbox) waitFor(t *testing.T, what string,
-	cond func([]tracker.InboxMovement, int) bool) {
+	cond func([]worklet.InboxMovement, int) bool) {
 
 	t.Helper()
 	deadline := time.After(2 * inboxRelayWait)
@@ -62,7 +62,7 @@ func (h *heardInbox) waitFor(t *testing.T, what string,
 }
 
 // handles is every movement's handle, in the order heard.
-func handles(moved []tracker.InboxMovement) []string {
+func handles(moved []worklet.InboxMovement) []string {
 	out := make([]string, 0, len(moved))
 	for _, m := range moved {
 		out = append(out, m.Handle)
@@ -142,21 +142,21 @@ func TestAnOutOfServiceNodeHearsAPeersInboxMovements(t *testing.T) {
 	// THE SWITCH TO A PEER IS A RE-READ, once the follower knows where the
 	// peer stands.
 	b.heard.waitFor(t, "b switching to a's movements",
-		func(_ []tracker.InboxMovement, gaps int) bool { return gaps == 1 })
+		func(_ []worklet.InboxMovement, gaps int) bool { return gaps == 1 })
 
 	// b's own applier — halted, wrong, or simply not the one being heard —
 	// is withheld; a's is relayed.
-	b.engine.inboxMoved([]tracker.InboxMovement{{Handle: "from-b-own-applier", UnreadDelta: 1}})
-	a.engine.inboxMoved([]tracker.InboxMovement{{Handle: "ana", UnreadDelta: 1,
-		Subject: "t-1", Reason: tracker.ReasonAssignee}})
+	b.engine.inboxMoved([]worklet.InboxMovement{{Handle: "from-b-own-applier", UnreadDelta: 1}})
+	a.engine.inboxMoved([]worklet.InboxMovement{{Handle: "ana", UnreadDelta: 1,
+		Subject: "t-1", Reason: worklet.ReasonAssignee}})
 	b.heard.waitFor(t, "a's movement reaching b's sockets",
-		func(moved []tracker.InboxMovement, _ int) bool { return len(moved) > 0 })
+		func(moved []worklet.InboxMovement, _ int) bool { return len(moved) > 0 })
 	moved, _ := b.heard.snapshot()
 	if got := handles(moved); len(got) != 1 || got[0] != "ana" {
 		t.Fatalf("b's sockets heard %v, want a's movement for ana alone — b's own "+
 			"applier is not the source while its copy is out of service", got)
 	}
-	if moved[0].Subject != "t-1" || moved[0].Reason != tracker.ReasonAssignee {
+	if moved[0].Subject != "t-1" || moved[0].Reason != worklet.ReasonAssignee {
 		t.Errorf("the relayed movement lost its fields: %+v", moved[0])
 	}
 	// a's own sockets heard a's applier, as ever.
@@ -167,15 +167,15 @@ func TestAnOutOfServiceNodeHearsAPeersInboxMovements(t *testing.T) {
 	// BACK IN SERVICE: b's sockets hear b's own applier again, after a
 	// re-read covering whatever the switch skipped.
 	b.faulted.Store(false)
-	a.engine.inboxMoved([]tracker.InboxMovement{{Handle: "bo", UnreadDelta: 1}})
+	a.engine.inboxMoved([]worklet.InboxMovement{{Handle: "bo", UnreadDelta: 1}})
 	b.heard.waitFor(t, "b switching back to its own applier",
-		func(_ []tracker.InboxMovement, gaps int) bool { return gaps == 2 })
+		func(_ []worklet.InboxMovement, gaps int) bool { return gaps == 2 })
 	if b.relay.relaying.Load() {
 		t.Fatal("b is still relaying a peer's movements with its own copy back in service")
 	}
-	b.engine.inboxMoved([]tracker.InboxMovement{{Handle: "from-b-own-applier", UnreadDelta: 1}})
+	b.engine.inboxMoved([]worklet.InboxMovement{{Handle: "from-b-own-applier", UnreadDelta: 1}})
 	b.heard.waitFor(t, "b's own applier being heard again",
-		func(moved []tracker.InboxMovement, _ int) bool {
+		func(moved []worklet.InboxMovement, _ int) bool {
 			got := handles(moved)
 			return len(got) > 0 && got[len(got)-1] == "from-b-own-applier"
 		})
@@ -201,17 +201,17 @@ func TestAFollowerMovesToAnotherServerWhenItsServerStopsServing(t *testing.T) {
 	b.faulted.Store(true)
 	b.follow(t)
 	b.heard.waitFor(t, "b following its first server",
-		func(_ []tracker.InboxMovement, gaps int) bool { return gaps == 1 })
+		func(_ []worklet.InboxMovement, gaps int) bool { return gaps == 1 })
 
 	// a — the first in order — goes out of service; whatever it would say
 	// now is not to be trusted, and c's applier is.
 	a.faulted.Store(true)
-	a.engine.inboxMoved([]tracker.InboxMovement{{Handle: "from-a", UnreadDelta: 1}})
+	a.engine.inboxMoved([]worklet.InboxMovement{{Handle: "from-a", UnreadDelta: 1}})
 	b.heard.waitFor(t, "b moving to c",
-		func(_ []tracker.InboxMovement, gaps int) bool { return gaps == 2 })
-	c.engine.inboxMoved([]tracker.InboxMovement{{Handle: "from-c", UnreadDelta: 1}})
+		func(_ []worklet.InboxMovement, gaps int) bool { return gaps == 2 })
+	c.engine.inboxMoved([]worklet.InboxMovement{{Handle: "from-c", UnreadDelta: 1}})
 	b.heard.waitFor(t, "c's movement reaching b",
-		func(moved []tracker.InboxMovement, _ int) bool {
+		func(moved []worklet.InboxMovement, _ int) bool {
 			for _, h := range handles(moved) {
 				if h == "from-c" {
 					return true
@@ -240,7 +240,7 @@ func TestAServerSaysWhatAFollowerCannotPlaceItselfIn(t *testing.T) {
 
 	first, _ := r.answerNow(ctx, relayAsk{})
 	for range inboxRelayRing + 5 {
-		r.record([]tracker.InboxMovement{{Handle: "ana", UnreadDelta: 1}})
+		r.record([]worklet.InboxMovement{{Handle: "ana", UnreadDelta: 1}})
 	}
 	got, _ := r.answerNow(ctx, relayAsk{Epoch: first.Epoch, After: 1})
 	if !got.Gap || len(got.Batches) != 0 {

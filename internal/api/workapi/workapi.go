@@ -136,7 +136,7 @@
 // operations of its own, which land as asked. Bound to the key alone, the
 // ledger answered the second request with the first one's outcome — `applied`,
 // with nothing of it written — see [keyedOp], builtin's own binding for the
-// tools, and the knowledge base's ([pages.Store], which binds what each write
+// tools, and the knowledge base's ([doclet.Store], which binds what each write
 // says).
 //
 // # What is NOT here
@@ -165,13 +165,13 @@ import (
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 var log = logging.Get("api.workapi")
@@ -179,13 +179,13 @@ var log = logging.Get("api.workapi")
 // MaxBodyBytes bounds one request body.
 //
 // DERIVED FROM THE LARGEST THING A BODY CARRIES: a page at the knowledge
-// base's own cap ([pages.MaxBody]), doubled because JSON escaping a prose body
+// base's own cap ([doclet.MaxBody]), doubled because JSON escaping a prose body
 // heavy in quotes and backslashes can double it, plus 64 KiB for the rest of
 // the envelope — labels, custom fields, a message. A body under it but over
 // the domain's own cap is refused by the domain, naming the field, which is
 // the more useful refusal; this bound exists so a body nothing could accept is
 // not read into memory first.
-const MaxBodyBytes = 2*pages.MaxBody + 64<<10
+const MaxBodyBytes = 2*doclet.MaxBody + 64<<10
 
 // decisionRead is the level a route reads a row at before deciding on it.
 //
@@ -203,21 +203,21 @@ var decisionRead = statelog.Freshness{
 // `place_work_item`, reached through the dispatch like every other tool.
 type TrackerWriter interface {
 	PurgeTask(ctx context.Context, opID, id, project, reason string) (
-		tracker.WriteResult, error)
+		worklet.WriteResult, error)
 	EditComment(ctx context.Context, opID, taskID, project, commentID,
-		body string, notify *tracker.Notify) (tracker.WriteResult, error)
+		body string, notify *worklet.Notify) (worklet.WriteResult, error)
 }
 
 // PageStore is the knowledge base's write side for the verbs no tool makes.
 type PageStore interface {
-	Rename(ctx context.Context, actor pages.Actor, pageID, title string,
-		quiet bool) (pages.Written, error)
-	Trash(ctx context.Context, actor pages.Actor, pageID string) (pages.Written, error)
-	Restore(ctx context.Context, actor pages.Actor, pageID string) (pages.Written, error)
-	Purge(ctx context.Context, actor pages.Actor, pageID, reason string) (
-		pages.Written, error)
-	RemoveComment(ctx context.Context, actor pages.Actor, pageID, commentID string,
-		authority pages.CommentAuthority) (pages.Written, error)
+	Rename(ctx context.Context, actor doclet.Actor, pageID, title string,
+		quiet bool) (doclet.Written, error)
+	Trash(ctx context.Context, actor doclet.Actor, pageID string) (doclet.Written, error)
+	Restore(ctx context.Context, actor doclet.Actor, pageID string) (doclet.Written, error)
+	Purge(ctx context.Context, actor doclet.Actor, pageID, reason string) (
+		doclet.Written, error)
+	RemoveComment(ctx context.Context, actor doclet.Actor, pageID, commentID string,
+		authority doclet.CommentAuthority) (doclet.Written, error)
 }
 
 // Halves are the two halves this surface serves, as one request finds them:
@@ -532,12 +532,11 @@ func unavailableFor(w http.ResponseWriter, cause error, detail string) {
 // they did not — which is then handed back, so a retry can send it. It answers
 // false once it has refused a key that is not one ([opkey.Key]).
 //
-// Every id a write derives from the key carries the KEY'S instant — the
-// tracker's through [builtin.Actor.WorkSince], the knowledge base's inside
-// [pages.Store] — which is what the publisher vouches for a retry by; the
-// knowledge base refuses a key outside the grammar itself ([pages.ErrInvalid]
-// on `actor.op_key`), so without the check every page write through this
-// surface was refused.
+// Every id a write derives from the key carries the KEY'S instant (Worklet's
+// through [builtin.Actor.WorkSince], Doclet's inside [doclet.Store]), which is
+// what the publisher vouches for a retry by; Doclet refuses a key outside the
+// grammar itself ([doclet.ErrInvalid] on `actor.op_key`), so without the check
+// every page write through this surface was refused.
 //
 // BARE, with no name: the key is a SEED rather than the id of any one write —
 // each write derives its own, named for its verb and its object — so a name
@@ -614,12 +613,12 @@ func (s *Service) actor(w http.ResponseWriter, r *http.Request, key string) (
 // pageActor is [Service.actor] for the knowledge base, carrying the request's
 // key, which the store binds to what each write says.
 func (s *Service) pageActor(w http.ResponseWriter, r *http.Request,
-	key string) (pages.Actor, bool) {
+	key string) (doclet.Actor, bool) {
 
 	actor, err := builtin.PrincipalPageActor(r.Context(), nil)
 	if err != nil {
 		operator.RefuseDecision(w, r, "", authz.Decision{Err: err})
-		return pages.Actor{}, false
+		return doclet.Actor{}, false
 	}
 	actor.OpKey = key
 	return actor, true
@@ -887,7 +886,7 @@ func failErr(w http.ResponseWriter, r *http.Request, err error, key string) {
 // nor a fault, and it reached the fault's arm: a download floored on the wrong
 // log answered `500 internal_error` and logged an error about a request.
 func readFailed(w http.ResponseWriter, r *http.Request, err error) {
-	if errors.Is(err, tracker.ErrNoTask) || errors.Is(err, pages.ErrNotFound) {
+	if errors.Is(err, worklet.ErrNoTask) || errors.Is(err, doclet.ErrNotFound) {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound,
 			map[string]string{"detail": err.Error()})
 		return

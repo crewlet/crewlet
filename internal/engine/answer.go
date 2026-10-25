@@ -8,11 +8,11 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/compact"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/search"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // What the operator surface's `answer_knowledge` needs from the engine: the
@@ -116,7 +116,7 @@ func (e *Engine) KnowledgeCorpus() (string, bool) {
 	}
 	parts := make([]string, 0, 3)
 	for _, name := range []string{
-		tracker.Domain{}.Name(), pages.Domain{}.Name(), search.Domain{}.Name(),
+		worklet.Domain{}.Name(), doclet.Domain{}.Name(), search.Domain{}.Name(),
 	} {
 		running := c.log.Domain(name)
 		if running == nil || running.runner == nil {

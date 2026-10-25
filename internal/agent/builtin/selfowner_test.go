@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // recordSpy records whose record each person write landed on.
@@ -22,29 +22,29 @@ type recordSpy struct {
 	written []string
 }
 
-func (s *recordSpy) wrote(handle string) (tracker.WriteResult, error) {
+func (s *recordSpy) wrote(handle string) (worklet.WriteResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.written = append(s.written, handle)
-	return tracker.WriteResult{Result: statelog.Result{
+	return worklet.WriteResult{Result: statelog.Result{
 		Outcome: statelog.OutcomeApplied,
 	}}, nil
 }
 
 func (s *recordSpy) MarkInbox(_ context.Context, _, handle string,
-	_ tracker.InboxGesture, _ tracker.PersonAuthority) (tracker.WriteResult, error) {
+	_ worklet.InboxGesture, _ worklet.PersonAuthority) (worklet.WriteResult, error) {
 
 	return s.wrote(handle)
 }
 
 func (s *recordSpy) WritePins(_ context.Context, _, handle string,
-	_ tracker.PinGesture, _ tracker.PersonAuthority) (tracker.WriteResult, error) {
+	_ worklet.PinGesture, _ worklet.PersonAuthority) (worklet.WriteResult, error) {
 
 	return s.wrote(handle)
 }
 
 func (s *recordSpy) WritePriorities(_ context.Context, _, handle string, _ []string,
-	_ *uint64, _ tracker.PersonAuthority) (tracker.WriteResult, error) {
+	_ *uint64, _ worklet.PersonAuthority) (worklet.WriteResult, error) {
 
 	return s.wrote(handle)
 }
@@ -85,7 +85,7 @@ func TestAViewStripIsTheCallersOwn(t *testing.T) {
 				},
 				Authorize: builtin.Decide(chartRefuses),
 			}) {
-				if tool.Name() != tracker.ListWorkViewsTool {
+				if tool.Name() != worklet.ListWorkViewsTool {
 					continue
 				}
 				if _, declared := tool.Parameters()["properties"].(map[string]any)["viewer"]; declared {
@@ -189,11 +189,11 @@ func TestAPersonalVerbIsDecidedOnTheRecordItWrites(t *testing.T) {
 				// mark naming nothing is refused before it is decided.
 				args := map[string]any{}
 				switch tool.Name() {
-				case tracker.MarkInboxTool:
+				case worklet.MarkInboxTool:
 					args["read"] = []any{"r-1"}
-				case tracker.SetPinsTool:
+				case worklet.SetPinsTool:
 					args["views"] = map[string]any{"add": []any{"v-1"}}
-				case tracker.MyWorkTool:
+				case worklet.MyWorkTool:
 				default:
 					continue
 				}

@@ -11,7 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A BARE LIST IS REFUSED NAMING BOTH SHAPES, which is the whole reason these
@@ -56,9 +56,9 @@ func TestAWholeSetOfDependenciesBecomesADelta(t *testing.T) {
 	// THE ITEM ALREADY WAITS ON TWO, so a `set` naming one of them and a
 	// new one is exactly one add and one remove.
 	detail := trk.tasks["ENG-1"]
-	detail.Task.Relations = []tracker.Relation{
-		{Kind: tracker.RelationWaitingOn, Other: "id-2"},
-		{Kind: tracker.RelationWaitingOn, Other: "id-3"},
+	detail.Task.Relations = []worklet.Relation{
+		{Kind: worklet.RelationWaitingOn, Other: "id-2"},
+		{Kind: worklet.RelationWaitingOn, Other: "id-3"},
 	}
 	trk.tasks["ENG-1"] = detail
 	reg := workRegistry(t, builtin.WorkDeps{
@@ -174,12 +174,12 @@ func TestAnAskIsResolvedAndRoutes(t *testing.T) {
 	if wake == nil || wake.Snapshot.CommentAsk != "pm" {
 		t.Fatalf("the wake carries no ask, so `asked` routes to nobody: %+v", wake)
 	}
-	if !slices.ContainsFunc(tracker.Candidates(wake, false),
-		func(c tracker.Candidate) bool {
-			return c.Handle == "pm" && c.Reason == tracker.ReasonAsked && c.Addressed
+	if !slices.ContainsFunc(worklet.Candidates(wake, false),
+		func(c worklet.Candidate) bool {
+			return c.Handle == "pm" && c.Reason == worklet.ReasonAsked && c.Addressed
 		}) {
 		t.Errorf("the asked party is not an ADDRESSED candidate: %+v",
-			tracker.Candidates(wake, false))
+			worklet.Candidates(wake, false))
 	}
 	// AND AN UNKNOWN HANDLE IS REFUSED, because an ask addressed to a
 	// spelling wakes nobody and leaves a question open on the board for
@@ -247,8 +247,8 @@ func askable() []colleague.Seat {
 func TestAnAnswerToAnAnsweredQuestionIsRefusedAsSuch(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	trk.threadErr = fmt.Errorf("tracker: the question in comment c-1 on task "+
-		"t-1 is already answered: %w", tracker.ErrAlreadyAnswered)
+	trk.threadErr = fmt.Errorf("worklet: the question in comment c-1 on task "+
+		"t-1 is already answered: %w", worklet.ErrAlreadyAnswered)
 	reg := workRegistry(t, builtin.WorkDeps{
 		Reader: trk, Writer: trk.as, Seats: askable,
 	})
@@ -281,14 +281,14 @@ func TestAnAnswerToAnAnsweredQuestionIsRefusedAsSuch(t *testing.T) {
 // a commit on the item, and an If-Match with the older version is refused.
 func TestAWriteThatAlsoDependsAnswersForBothRecords(t *testing.T) {
 	t.Parallel()
-	later := tracker.DependencyResult{WriteResult: tracker.WriteResult{
+	later := worklet.DependencyResult{WriteResult: worklet.WriteResult{
 		Result: statelog.Result{
 			Outcome:  statelog.OutcomePending,
 			Position: statelog.Position{Stream: "S", Generation: 1, Seq: 41},
 			Version:  41,
 		},
 	}}
-	unknown := tracker.DependencyResult{WriteResult: tracker.WriteResult{
+	unknown := worklet.DependencyResult{WriteResult: worklet.WriteResult{
 		Result: statelog.Result{Outcome: statelog.OutcomeUnknown},
 	}}
 	calls := map[string]struct {

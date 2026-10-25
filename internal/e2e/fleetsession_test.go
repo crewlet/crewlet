@@ -22,7 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A PERSON'S SESSION IS THE FLEET'S, NOT THE NODE'S THAT MINTED IT.
@@ -281,10 +281,10 @@ func writesAsThePerson(t *testing.T, n *node, b *browser) {
 		t.Fatalf("the write answered no work item key: %v", filed)
 	}
 
-	var change tracker.HistoryEntry
+	var change worklet.HistoryEntry
 	settle(t, "member "+n.id+" to apply "+item, func() (bool, string) {
 		detail, err := n.engine.Tracker().Task(t.Context(), item,
-			tracker.DetailWants{History: true},
+			worklet.DetailWants{History: true},
 			statelog.Freshness{Level: statelog.ReadSession})
 		if err != nil || len(detail.History) == 0 {
 			return false, ""
@@ -292,7 +292,7 @@ func writesAsThePerson(t *testing.T, n *node, b *browser) {
 		change = detail.History[len(detail.History)-1]
 		return true, ""
 	})
-	if change.Actor != janeSeat || change.ActorKind != tracker.AuthorHuman ||
+	if change.Actor != janeSeat || change.ActorKind != worklet.AuthorHuman ||
 		!strings.HasPrefix(change.OperatorID, iam.SessionPrefix) {
 		t.Errorf("%s is written as %q (%s) through %q, want Jane's seat %q as a "+
 			"human, through her session", item, change.Actor, change.ActorKind,

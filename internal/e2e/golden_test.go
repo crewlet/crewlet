@@ -30,7 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // GATE G5, third leg — "a golden company runs end-to-end with the UI showing
@@ -946,7 +946,7 @@ func captureAct(t *testing.T, n *node, b *browser) []byte {
 		"/work/people/"+url.PathEscape(handle)+"?"+query.Encode(), "", nil)
 	var person struct {
 		Level     string             `json:"read_level"`
-		Favorites []tracker.Favorite `json:"favorites"`
+		Favorites []worklet.Favorite `json:"favorites"`
 	}
 	if status != http.StatusOK || json.Unmarshal(raw, &person) != nil {
 		t.Fatalf("a read at the act's floor was not served: %d %s", status, raw)
@@ -954,7 +954,7 @@ func captureAct(t *testing.T, n *node, b *browser) []byte {
 	if person.Level != "session" {
 		t.Errorf("a read at the act's floor was served at %q, want session", person.Level)
 	}
-	if !slices.Contains(person.Favorites, tracker.Favorite{Kind: "project", ID: "ENG"}) {
+	if !slices.Contains(person.Favorites, worklet.Favorite{Kind: "project", ID: "ENG"}) {
 		t.Errorf("a read at the act's floor does not hold the write: favorites %v",
 			person.Favorites)
 	}
@@ -1059,7 +1059,7 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	task.Assignee = "ceo"
 	// WITH ITS WAKE, built the way every create surface builds one: a
 	// record carrying no notification is a change nobody asked to hear about.
-	wake := tracker.Wake{Kind: tracker.ChangeCreated, After: task}.Notify(nil)
+	wake := worklet.Wake{Kind: worklet.ChangeCreated, After: task}.Notify(nil)
 	filed, err := operator(t, n).CreateTask(t.Context(), "e2e-replay-item", task, wake)
 	if err != nil {
 		t.Fatalf("file the task that wakes the seat: %v", err)

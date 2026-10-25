@@ -16,7 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // ownRecordCompany holds a seat whose NAME is an unbound person's login spelt
@@ -107,7 +107,7 @@ func TestYourOwnQueueIsNeverLookedUp(t *testing.T) {
 			for _, named := range []string{"", c.caller.Login, c.owner} {
 				person := &personSpy{}
 				surface := ownRecordTools(t, person, &viewStore{})
-				got, err := surface[tracker.SetPrioritiesTool].Call(
+				got, err := surface[worklet.SetPrioritiesTool].Call(
 					as(c.caller, grants...),
 					map[string]any{"handle": named, "items": []any{"ENG-1"}})
 				if err != nil {
@@ -159,7 +159,7 @@ func TestAMissedNameListsTheRosterToWhoeverMayReadIt(t *testing.T) {
 			refuseRoster(builtin.Decide(handleChart{})), false},
 	} {
 		surface := ownRecordToolsDecidedBy(t, &personSpy{}, &viewStore{}, c.authorize)
-		got, err := surface[tracker.SetPrioritiesTool].Call(
+		got, err := surface[worklet.SetPrioritiesTool].Call(
 			as(ownRecordCallers[0].caller, c.grants...),
 			map[string]any{"handle": "nobody-by-this-name", "items": []any{"ENG-1"}})
 		if err != nil {
@@ -188,9 +188,9 @@ func TestAMissedNameListsTheRosterToWhoeverMayReadIt(t *testing.T) {
 func TestAPersonalViewIsTheCallersOwnRecord(t *testing.T) {
 	t.Parallel()
 	for _, c := range ownRecordCallers {
-		views := &viewStore{stored: map[string]tracker.View{}}
+		views := &viewStore{stored: map[string]worklet.View{}}
 		surface := ownRecordTools(t, &personSpy{}, views)
-		got, err := surface[tracker.SaveWorkViewTool].Call(
+		got, err := surface[worklet.SaveWorkViewTool].Call(
 			as(c.caller, iam.GrantTracker),
 			map[string]any{
 				"container": "workspace", "name": "Mine", "type": "list",
@@ -212,7 +212,7 @@ func TestAPersonalViewIsTheCallersOwnRecord(t *testing.T) {
 	// the caller's own, so there is no argument through which to name
 	// somebody else's.
 	for _, tool := range ownRecordTools(t, &personSpy{}, &viewStore{}) {
-		if tool.Name() != tracker.SaveWorkViewTool {
+		if tool.Name() != worklet.SaveWorkViewTool {
 			continue
 		}
 		properties, _ := tool.Parameters()["properties"].(map[string]any)
@@ -284,11 +284,11 @@ func personVerbs() []personVerb {
 		}
 	}
 	return []personVerb{
-		{name: tracker.GetPersonTool, call: tool(tracker.GetPersonTool,
+		{name: worklet.GetPersonTool, call: tool(worklet.GetPersonTool,
 			func(n string) map[string]any { return map[string]any{"handle": n} })},
-		{name: tracker.WorkInboxTool, call: tool(tracker.WorkInboxTool,
+		{name: worklet.WorkInboxTool, call: tool(worklet.WorkInboxTool,
 			func(n string) map[string]any { return map[string]any{"handle": n} })},
-		{name: tracker.SetPrioritiesTool, write: true, call: tool(tracker.SetPrioritiesTool,
+		{name: worklet.SetPrioritiesTool, write: true, call: tool(worklet.SetPrioritiesTool,
 			func(n string) map[string]any {
 				return map[string]any{"handle": n, "items": []any{"ENG-1"}}
 			})},

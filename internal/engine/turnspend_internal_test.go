@@ -24,7 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 var nativeItem = types.WorkItem{Backend: types.WorkNative, ID: "t-1", Key: "ENG-1", Project: "ENG"}
@@ -339,9 +339,9 @@ type fakeRecorder struct {
 	err   error
 }
 
-func (f *fakeRecorder) RecordTurn(_ context.Context, opID string, _ tracker.TurnRecord) (tracker.WriteResult, error) {
+func (f *fakeRecorder) RecordTurn(_ context.Context, opID string, _ worklet.TurnRecord) (worklet.WriteResult, error) {
 	f.calls = append(f.calls, opID)
-	return tracker.WriteResult{}, f.err
+	return worklet.WriteResult{}, f.err
 }
 
 // A CHARGE THAT CANNOT BE WRITTEN DOES NOT FAIL THE TURN.
@@ -458,7 +458,7 @@ func TestATurnRecordSaysWhatTheSegmentDid(t *testing.T) {
 		t.Errorf("review = %d bytes, want the send-back's notes whole until the write",
 			len(got.Review))
 	}
-	want := []tracker.TurnTool{
+	want := []worklet.TurnTool{
 		{Name: "create_branch", Calls: 1}, {Name: "run_sandbox", Calls: 3},
 		{Name: "search_knowledge", Calls: 1},
 	}
@@ -527,7 +527,7 @@ func TestATurnCardIsWholeRewrittenOrPointedAway(t *testing.T) {
 		t.Errorf("a long account was not rewritten and marked: %q", got)
 	}
 	got := turnCard(t.Context(), compact.Bound{}, long)
-	if len(got) > tracker.MaxTurnSummary || strings.Contains(got, "investigated") ||
+	if len(got) > worklet.MaxTurnSummary || strings.Contains(got, "investigated") ||
 		!strings.Contains(got, "open the turn") {
 		t.Errorf("an account with no rewrite was %q, want a pointer to the turn and no fragment", got)
 	}

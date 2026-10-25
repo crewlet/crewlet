@@ -9,7 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // decisionRegistry is the seat surface with a tracker and a knowledge base, so
@@ -70,7 +70,7 @@ func TestACommentCanAskWithADecision(t *testing.T) {
 	}
 	decision := comment.Decision
 	if len(decision.Options) != 2 || decision.Recommended != "ship" ||
-		decision.Role != tracker.RoleApprover {
+		decision.Role != worklet.RoleApprover {
 		t.Errorf("the decision is %+v", decision)
 	}
 	if decision.Evidence[0].Ref != "id-2" || decision.Evidence[1].Ref != "p1" {
@@ -225,11 +225,11 @@ func TestACreateCanCarryItsAskInOneRecord(t *testing.T) {
 // fakeChannels is a chart with chat surfaces per seat and declared unit
 // channels.
 type fakeChannels struct {
-	surfaces map[string][]tracker.InformSurface
+	surfaces map[string][]worklet.InformSurface
 	channels []string
 }
 
-func (f fakeChannels) ChatSurfaces(handle string) []tracker.InformSurface {
+func (f fakeChannels) ChatSurfaces(handle string) []worklet.InformSurface {
 	return f.surfaces[handle]
 }
 
@@ -246,8 +246,8 @@ func informRegistry(t *testing.T, trk *fakeTracker,
 		Work: builtin.WorkDeps{
 			Reader: trk, Writer: trk.as, Actor: actor,
 			Channels: fakeChannels{
-				surfaces: map[string][]tracker.InformSurface{
-					"eng": {tracker.InformSlack},
+				surfaces: map[string][]worklet.InformSurface{
+					"eng": {worklet.InformSlack},
 				},
 				channels: []string{"releases", "product"},
 			},
@@ -277,7 +277,7 @@ func informedDecision(surface, channel string) map[string]any {
 func TestAnOperatorCannotAskTheEngineToInform(t *testing.T) {
 	t.Parallel()
 	operator := func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
-		return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator, OperatorID: "ops"}, nil
+		return builtin.Actor{Handle: "ops", Kind: worklet.AuthorOperator, OperatorID: "ops"}, nil
 	}
 	trk := newFakeTracker()
 	reg := informRegistry(t, trk, operator)
@@ -342,7 +342,7 @@ func TestAnInformChannelMustBeOneTheChartDeclares(t *testing.T) {
 		t.Fatalf("a declared channel on a held surface was refused: %s", got.Output)
 	}
 	inform := trk.patched[0].Comment.Decision.Inform
-	if inform == nil || inform.Surface != tracker.InformSlack || inform.Channel != "releases" {
+	if inform == nil || inform.Surface != worklet.InformSlack || inform.Channel != "releases" {
 		t.Errorf("the inform is stored as %+v, want slack/releases as the chart spells it",
 			inform)
 	}

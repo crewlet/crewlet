@@ -18,7 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // maintenanceDutyName is the fleet singleton the retention sweep claims.
@@ -162,7 +162,7 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 			// move, a one-sided dependency — and tell the tasks a close
 			// unblocked. Every one is GATED, so a tick with nothing to do
 			// costs one indexed read.
-			jobs = append(jobs, tracker.Jobs(tracker.DutyDeps{
+			jobs = append(jobs, worklet.Jobs(worklet.DutyDeps{
 				DB: trackerEstate, Writer: n.writer,
 				NodeID: core.nodeID,
 				// AND THE LEAD MAP, for the one repair whose commit
@@ -178,11 +178,11 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 			// `tracker_notifications` is Divergent, so each node holds
 			// its own rows and a singleton would tidy one and let the
 			// rest grow for ever. Contributed here rather than in
-			// tracker.Jobs because that list runs under the duty and
+			// worklet.Jobs because that list runs under the duty and
 			// this one must not. Its horizon is the one the PUBLISHED
 			// company states, asked at every sweep — the one the
-			// applier reads per batch — see [tracker.InboxJobs].
-			jobs = append(jobs, tracker.InboxJobs(trackerEstate, e.inboxRetention)...)
+			// applier reads per batch (see [worklet.InboxJobs]).
+			jobs = append(jobs, worklet.InboxJobs(trackerEstate, e.inboxRetention)...)
 		}
 		if core != nil {
 			// AND THE STATE LOG'S OWN OPERATION LEDGERS, one per

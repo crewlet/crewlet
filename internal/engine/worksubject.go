@@ -8,7 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // Which work item a turn is on.
@@ -61,7 +61,7 @@ var workItemNamers = func() map[string]workItemNamer {
 	for _, source := range []interface {
 		workItemNamer
 		Source() string
-	}{tracker.Prompt{}, jira.Prompt{}, github.Prompt{}, gitlab.Prompt{}} {
+	}{worklet.Prompt{}, jira.Prompt{}, github.Prompt{}, gitlab.Prompt{}} {
 		namers[source.Source()] = source
 	}
 	return namers

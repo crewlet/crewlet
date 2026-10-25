@@ -10,8 +10,8 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/pages"
 )
 
 // pageRoutes mounts the knowledge-base half.
@@ -118,7 +118,7 @@ func (s *served) postPageRename(w http.ResponseWriter, r *http.Request) {
 	}
 	quiet, _ := args["quiet"].(bool)
 	s.pageGesture(w, r, authz.ActionPageRename,
-		func(ctx context.Context, actor pages.Actor, id string) (pages.Written, error) {
+		func(ctx context.Context, actor doclet.Actor, id string) (doclet.Written, error) {
 			return s.PageStore.Rename(ctx, actor, id, title, quiet)
 		})
 }
@@ -163,7 +163,7 @@ func (s *served) postPagePurge(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if pages.NormalizeTitle(confirm) != pages.NormalizeTitle(detail.Page.Title) {
+	if doclet.NormalizeTitle(confirm) != doclet.NormalizeTitle(detail.Page.Title) {
 		httpjson.FailWith(w, http.StatusUnprocessableEntity, httpjson.CodeInvalid,
 			map[string]string{"detail": fmt.Sprintf("?confirm= says %q and the "+
 				"page is %q — nothing was destroyed", confirm, detail.Page.Title)})
@@ -197,7 +197,7 @@ func (s *served) postPagePurge(w http.ResponseWriter, r *http.Request) {
 // deletePageComment takes one remark down: its author, or a moderator.
 //
 // THE MODERATOR IS WHOEVER THE TABLE ADMITTED AS AN ADMIN rather than as the
-// author, and the store is told which through [pages.CommentAuthority]: the
+// author, and the store is told which through [doclet.CommentAuthority]: the
 // store holds no chart and no permissions, so it states the rule — the author, or
 // somebody the caller says may moderate — and this is where the second half
 // is decided.
@@ -225,7 +225,7 @@ func (s *served) deletePageComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	written, err := s.PageStore.RemoveComment(r.Context(), actor, detail.Page.ID,
-		comment.ID, pages.CommentAuthority{Moderate: d.Reason != authz.ReasonAuthor})
+		comment.ID, doclet.CommentAuthority{Moderate: d.Reason != authz.ReasonAuthor})
 	operator.AuditGesture(r.Context(), s.audit, types.TransportWork,
 		string(authz.ActionPageCommentRemove), key, written.Outcome.Outcome,
 		written.Outcome.Position, err)
@@ -243,7 +243,7 @@ func (s *served) deletePageComment(w http.ResponseWriter, r *http.Request) {
 // context, the one every other step here reads under.
 func (s *served) pageGesture(w http.ResponseWriter, r *http.Request,
 	action authz.Action,
-	act func(context.Context, pages.Actor, string) (pages.Written, error)) {
+	act func(context.Context, doclet.Actor, string) (doclet.Written, error)) {
 
 	detail, ok := s.readPage(w, r, r.PathValue("id"))
 	if !ok {
@@ -302,8 +302,8 @@ func (s *served) maySkillPage(w http.ResponseWriter, r *http.Request,
 }
 
 // answerPage renders a page write the store made.
-func answerPage(w http.ResponseWriter, key string, page pages.Page,
-	written pages.Written) {
+func answerPage(w http.ResponseWriter, key string, page doclet.Page,
+	written doclet.Written) {
 
 	answer(w, key, written.Outcome.Outcome, written.Outcome.Unvouched,
 		pageReceipt(page, written))
@@ -311,7 +311,7 @@ func answerPage(w http.ResponseWriter, key string, page pages.Page,
 
 // pageReceipt is what a page write answers with: the page it was about, the
 // revision it landed at, and where it is on the log.
-func pageReceipt(page pages.Page, written pages.Written) map[string]any {
+func pageReceipt(page doclet.Page, written doclet.Written) map[string]any {
 	outcome := written.Outcome.Outcome
 	if outcome == "" {
 		// A WRITE THAT CHANGED NOTHING APPENDED NOTHING, and there is
@@ -327,24 +327,24 @@ func pageReceipt(page pages.Page, written pages.Written) map[string]any {
 
 // readPage is a page read before a decision is taken on it.
 func (s *served) readPage(w http.ResponseWriter, r *http.Request, ref string) (
-	pages.Detail, bool) {
+	doclet.Detail, bool) {
 
 	detail, err := s.Pages.Reader.Get(r.Context(), strings.TrimSpace(ref),
 		decisionRead)
 	if err != nil {
 		readFailed(w, r, err)
-		return pages.Detail{}, false
+		return doclet.Detail{}, false
 	}
 	return detail, true
 }
 
 // readComment is the page and the one remark the path names.
 func (s *served) readComment(w http.ResponseWriter, r *http.Request) (
-	pages.Detail, pages.Comment, bool) {
+	doclet.Detail, doclet.Comment, bool) {
 
 	detail, ok := s.readPage(w, r, r.PathValue("id"))
 	if !ok {
-		return pages.Detail{}, pages.Comment{}, false
+		return doclet.Detail{}, doclet.Comment{}, false
 	}
 	cid := strings.TrimSpace(r.PathValue("cid"))
 	for _, comment := range detail.Comments {
@@ -355,5 +355,5 @@ func (s *served) readComment(w http.ResponseWriter, r *http.Request) (
 	httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound,
 		map[string]string{"detail": "there is no comment " + cid + " on " +
 			detail.Page.Title})
-	return pages.Detail{}, pages.Comment{}, false
+	return doclet.Detail{}, doclet.Comment{}, false
 }

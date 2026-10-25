@@ -11,7 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // workRoutes mounts the tracker half.
@@ -26,7 +26,7 @@ func (s *Service) workRoutes(mount mounter) {
 	project := func(a authz.Action) authz.Policy {
 		return authz.Policy{Action: a, Object: func(r *http.Request) authz.Object {
 			return authz.Object{Kind: authz.KindProject,
-				Container: tracker.ProjectKey(r.PathValue("key"))}
+				Container: worklet.ProjectKey(r.PathValue("key"))}
 		}}
 	}
 	// A PERSON IS NAMED BY THE PATH AND IS NOT THE PATH. `{handle}` is a
@@ -116,7 +116,7 @@ func (s *served) postItem(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.call(w, r, tracker.CreateWorkItemTool, args)
+	s.call(w, r, worklet.CreateWorkItemTool, args)
 }
 
 func (s *served) patchItem(w http.ResponseWriter, r *http.Request) {
@@ -125,7 +125,7 @@ func (s *served) patchItem(w http.ResponseWriter, r *http.Request) {
 		!ifMatch(w, r, args, "if_match") {
 		return
 	}
-	s.call(w, r, tracker.UpdateWorkItemTool, args)
+	s.call(w, r, worklet.UpdateWorkItemTool, args)
 }
 
 func (s *served) postItemComment(w http.ResponseWriter, r *http.Request) {
@@ -133,7 +133,7 @@ func (s *served) postItemComment(w http.ResponseWriter, r *http.Request) {
 	if !ok || !fromPath(w, args, "item", r.PathValue("key")) {
 		return
 	}
-	s.call(w, r, tracker.CommentOnWorkTool, args)
+	s.call(w, r, worklet.CommentOnWorkTool, args)
 }
 
 func (s *served) postDepend(w http.ResponseWriter, r *http.Request) {
@@ -143,7 +143,7 @@ func (s *served) postDepend(w http.ResponseWriter, r *http.Request) {
 		!ifMatch(w, r, args, "if_match") {
 		return
 	}
-	s.call(w, r, tracker.UpdateWorkItemTool, args)
+	s.call(w, r, worklet.UpdateWorkItemTool, args)
 }
 
 func (s *served) postRelate(w http.ResponseWriter, r *http.Request) {
@@ -153,7 +153,7 @@ func (s *served) postRelate(w http.ResponseWriter, r *http.Request) {
 		!ifMatch(w, r, args, "if_match") {
 		return
 	}
-	s.call(w, r, tracker.UpdateWorkItemTool, args)
+	s.call(w, r, worklet.UpdateWorkItemTool, args)
 }
 
 func (s *served) deleteItem(w http.ResponseWriter, r *http.Request) {
@@ -162,7 +162,7 @@ func (s *served) deleteItem(w http.ResponseWriter, r *http.Request) {
 		!fromPath(w, args, "item", r.PathValue("key")) {
 		return
 	}
-	s.call(w, r, tracker.RemoveWorkItemTool, args)
+	s.call(w, r, worklet.RemoveWorkItemTool, args)
 }
 
 func (s *served) postRestore(w http.ResponseWriter, r *http.Request) {
@@ -170,7 +170,7 @@ func (s *served) postRestore(w http.ResponseWriter, r *http.Request) {
 	if !ok || !only(w, args) || !fromPath(w, args, "item", r.PathValue("key")) {
 		return
 	}
-	s.call(w, r, tracker.RestoreWorkItemTool, args)
+	s.call(w, r, worklet.RestoreWorkItemTool, args)
 }
 
 // postMove is move_work_item: the item and everything under it, re-keyed into
@@ -185,7 +185,7 @@ func (s *served) postMove(w http.ResponseWriter, r *http.Request) {
 		!fromPath(w, args, "item", r.PathValue("key")) {
 		return
 	}
-	s.call(w, r, tracker.MoveWorkItemTool, args)
+	s.call(w, r, worklet.MoveWorkItemTool, args)
 }
 
 // putProject and postProjectTags are write_project's two facets: a project's
@@ -196,19 +196,19 @@ func (s *served) postMove(w http.ResponseWriter, r *http.Request) {
 func (s *served) putProject(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
 	if !ok || !only(w, args, "fields", "default_assignee", "archived") ||
-		!fromPath(w, args, "project", tracker.ProjectKey(r.PathValue("key"))) {
+		!fromPath(w, args, "project", worklet.ProjectKey(r.PathValue("key"))) {
 		return
 	}
-	s.call(w, r, tracker.WriteProjectTool, args)
+	s.call(w, r, worklet.WriteProjectTool, args)
 }
 
 func (s *served) postProjectTags(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
 	if !ok || !only(w, args, "tags_add", "tags_rename", "tags_archive") ||
-		!fromPath(w, args, "project", tracker.ProjectKey(r.PathValue("key"))) {
+		!fromPath(w, args, "project", worklet.ProjectKey(r.PathValue("key"))) {
 		return
 	}
-	s.call(w, r, tracker.WriteProjectTool, args)
+	s.call(w, r, worklet.WriteProjectTool, args)
 }
 
 func (s *served) postView(w http.ResponseWriter, r *http.Request) {
@@ -216,7 +216,7 @@ func (s *served) postView(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.call(w, r, tracker.SaveWorkViewTool, args)
+	s.call(w, r, worklet.SaveWorkViewTool, args)
 }
 
 func (s *served) putCatalogue(w http.ResponseWriter, r *http.Request) {
@@ -224,7 +224,7 @@ func (s *served) putCatalogue(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.call(w, r, tracker.WriteWorkCatalogueTool, args)
+	s.call(w, r, worklet.WriteWorkCatalogueTool, args)
 }
 
 // putPriorities is set_priorities, which names whose queue it sets and asks
@@ -235,7 +235,7 @@ func (s *served) putPriorities(w http.ResponseWriter, r *http.Request) {
 		!fromPath(w, args, "handle", strings.TrimSpace(r.PathValue("handle"))) {
 		return
 	}
-	s.call(w, r, tracker.SetPrioritiesTool, args)
+	s.call(w, r, worklet.SetPrioritiesTool, args)
 }
 
 // putInbox and putPins write one person's inbox or pins.
@@ -252,11 +252,11 @@ func (s *served) putPriorities(w http.ResponseWriter, r *http.Request) {
 // are not widened: no seat, and no assistant, gains a way to name another
 // person's record.
 func (s *served) putInbox(w http.ResponseWriter, r *http.Request) {
-	s.personRecord(w, r, tracker.MarkInboxTool, builtin.MarkInboxFor)
+	s.personRecord(w, r, worklet.MarkInboxTool, builtin.MarkInboxFor)
 }
 
 func (s *served) putPins(w http.ResponseWriter, r *http.Request) {
-	s.personRecord(w, r, tracker.SetPinsTool, builtin.SetPinsFor)
+	s.personRecord(w, r, worklet.SetPinsTool, builtin.SetPinsFor)
 }
 
 // personRecord is the one body both person routes share: the write, through
@@ -306,7 +306,7 @@ func (s *served) postRank(w http.ResponseWriter, r *http.Request) {
 		!ifMatch(w, r, args, "if_match") {
 		return
 	}
-	s.call(w, r, tracker.PlaceWorkItemTool, args)
+	s.call(w, r, worklet.PlaceWorkItemTool, args)
 }
 
 // patchItemComment rewrites one remark on a work item, AS ITS AUTHOR.
@@ -316,7 +316,7 @@ func (s *served) postRank(w http.ResponseWriter, r *http.Request) {
 // admin), and the tracker's writer answers "may you rewrite it" —
 // only its author, because a remark somebody else can rewrite is one
 // attributed to a person who did not make it. An administrator is admitted by
-// the first and refused by the second, which is internal/pages' own rule for
+// the first and refused by the second, which is internal/doclet's own rule for
 // the same gesture.
 func (s *served) patchItemComment(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
@@ -325,7 +325,7 @@ func (s *served) patchItemComment(w http.ResponseWriter, r *http.Request) {
 	}
 	body, _ := args["body"].(string)
 	cid := strings.TrimSpace(r.PathValue("cid"))
-	detail, ok := s.readTask(w, r, r.PathValue("key"), tracker.DetailWants{Comment: cid})
+	detail, ok := s.readTask(w, r, r.PathValue("key"), worklet.DetailWants{Comment: cid})
 	if !ok {
 		return
 	}
@@ -351,8 +351,8 @@ func (s *served) patchItemComment(w http.ResponseWriter, r *http.Request) {
 	}
 	edited := stored
 	edited.Body = strings.TrimSpace(body)
-	notify := tracker.Wake{
-		Kind: tracker.ChangeCommentEdited, Before: detail.Task, After: detail.Task,
+	notify := worklet.Wake{
+		Kind: worklet.ChangeCommentEdited, Before: detail.Task, After: detail.Task,
 		Comment: &edited, Mentions: edited.Mentions,
 	}.Notify(s.Work.Leads)
 	result, err := s.Tracker(actor).EditComment(r.Context(),
@@ -418,7 +418,7 @@ func (s *served) postPurge(w http.ResponseWriter, r *http.Request) {
 				"that survives"})
 		return
 	}
-	detail, ok := s.readTask(w, r, r.PathValue("key"), tracker.DetailWants{})
+	detail, ok := s.readTask(w, r, r.PathValue("key"), worklet.DetailWants{})
 	if !ok {
 		return
 	}
@@ -467,13 +467,13 @@ func purgeArgs(confirm, reason string) map[string]any {
 
 // readTask is a work item read before a decision is taken on it.
 func (s *served) readTask(w http.ResponseWriter, r *http.Request, ref string,
-	want tracker.DetailWants) (tracker.TaskDetail, bool) {
+	want worklet.DetailWants) (worklet.TaskDetail, bool) {
 
 	detail, err := s.Work.Reader.Task(r.Context(), strings.TrimSpace(ref),
 		want, decisionRead)
 	if err != nil {
 		readFailed(w, r, err)
-		return tracker.TaskDetail{}, false
+		return worklet.TaskDetail{}, false
 	}
 	return detail, true
 }

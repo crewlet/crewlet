@@ -25,7 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 	"github.com/crewlet/crewlet/static"
 )
 
@@ -1237,7 +1237,7 @@ func (a *App) Public() http.Handler { return a.public }
 // [engine.Engine.SetOnInboxMoved] and [engine.Engine.SetOnInboxGap]; a test
 // hands in a feed it fires by hand.
 type InboxFeed interface {
-	SetOnInboxMoved(func([]tracker.InboxMovement))
+	SetOnInboxMoved(func([]worklet.InboxMovement))
 	SetOnInboxGap(func())
 }
 
@@ -1251,7 +1251,7 @@ type InboxFeed interface {
 // rotation and its applier announces nothing it can trust, so for as long as
 // it is out the engine relays a sound peer's movements instead, and says when
 // it switched ([App.pushInboxGap]).
-func (a *App) pushInboxMoved(moved []tracker.InboxMovement) {
+func (a *App) pushInboxMoved(moved []worklet.InboxMovement) {
 	for _, m := range moved {
 		a.stream.InboxChanged(stream.InboxChange{
 			Handle: m.Handle, UnreadDelta: m.UnreadDelta,

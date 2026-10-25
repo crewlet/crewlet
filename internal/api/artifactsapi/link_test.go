@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 const linkENG12 = `{"work_item":"ENG-12"}`
@@ -157,7 +157,7 @@ func TestALinkNamesALiveWorkItemByItsKey(t *testing.T) {
 
 // trackerAt is a position on the tracker's own log.
 func trackerAt(seq uint64) statelog.Position {
-	return statelog.Position{Stream: tracker.Domain{}.Stream().Name, Generation: 1, Seq: seq}
+	return statelog.Position{Stream: worklet.Domain{}.Stream().Name, Generation: 1, Seq: seq}
 }
 
 // linkAfter is a link body naming ENG-12 and the position its create landed at.
@@ -287,7 +287,7 @@ func TestALinkRefusesAnAfterThatIsNotATrackerPosition(t *testing.T) {
 	began := time.Now()
 	w := g.do(jane, "POST", at(page, "/work-items"), linkAfter(foreign.String()), keyed()...)
 	if w.Code != http.StatusUnprocessableEntity || errorOf(t, w) != "invalid" ||
-		!strings.Contains(w.Body.String(), tracker.Domain{}.Stream().Name) {
+		!strings.Contains(w.Body.String(), worklet.Domain{}.Stream().Name) {
 		t.Errorf("a link after a position on another log: %d %s", w.Code, w.Body)
 	}
 	if waited := time.Since(began); waited >= statelog.ReadBudget {

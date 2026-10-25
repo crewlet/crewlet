@@ -18,7 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // directory resolves a bearer to a principal the way the guard does, from a
@@ -117,7 +117,7 @@ func list(t *testing.T, sess *mcp.ClientSession) (bool, string) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	res, err := sess.CallTool(ctx, &mcp.CallToolParams{
-		Name: tracker.ListWorkItemsTool, Arguments: map[string]any{},
+		Name: worklet.ListWorkItemsTool, Arguments: map[string]any{},
 	})
 	if err != nil {
 		t.Fatalf("CallTool: %v", err)
@@ -158,7 +158,7 @@ func TestAGrantWithdrawnMidSessionStopsTheNextCall(t *testing.T) {
 	}
 	// IN THE TOOL GATE'S OWN WORDS ([builtin.Refusal]), whatever they are:
 	// the verb, then why it did not run.
-	if lead := builtin.Refusal(tracker.ListWorkItemsTool, errors.New("")); !strings.HasPrefix(out, lead) {
+	if lead := builtin.Refusal(worklet.ListWorkItemsTool, errors.New("")); !strings.HasPrefix(out, lead) {
 		t.Errorf("the refusal does not read as the tool gate's (%q): %s", lead, out)
 	}
 
@@ -197,7 +197,7 @@ func TestAnotherCredentialCannotRideTheOpenersSession(t *testing.T) {
 		id = "the-founders-session"
 	}
 	body := `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"` +
-		tracker.ListWorkItemsTool + `","arguments":{}}}`
+		worklet.ListWorkItemsTool + `","arguments":{}}}`
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
 		server.URL+operator.MCPPath, strings.NewReader(body))
 	if err != nil {
@@ -281,7 +281,7 @@ func TestAnArgumentTheToolDoesNotReadIsRefusedOverMCP(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	res, err := sess.CallTool(ctx, &mcp.CallToolParams{
-		Name: tracker.ListWorkItemsTool, Arguments: map[string]any{"stauts": "todo"},
+		Name: worklet.ListWorkItemsTool, Arguments: map[string]any{"stauts": "todo"},
 	})
 	if err != nil {
 		t.Fatalf("CallTool: %v", err)

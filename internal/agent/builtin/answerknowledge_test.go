@@ -17,16 +17,16 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/compact"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // answerSearch ranks a fixed set of pages and records what it was asked.
@@ -48,29 +48,29 @@ func (s *answerSearch) Search(_ context.Context, q knowledge.Query) knowledge.Re
 
 // answerItems ranks a fixed set of work items.
 type answerItems struct {
-	hits  []tracker.Ranked
+	hits  []worklet.Ranked
 	err   error
-	asked []tracker.SearchQuery
+	asked []worklet.SearchQuery
 }
 
-func (s *answerItems) Search(_ context.Context, q tracker.SearchQuery) (tracker.SearchAnswer, error) {
+func (s *answerItems) Search(_ context.Context, q worklet.SearchQuery) (worklet.SearchAnswer, error) {
 	s.asked = append(s.asked, q)
-	return tracker.SearchAnswer{Hits: s.hits}, s.err
+	return worklet.SearchAnswer{Hits: s.hits}, s.err
 }
 
 // answerPages serves page bodies by id.
 type answerPages struct{ bodies map[string]string }
 
-func (answerPages) List(context.Context, pages.Filter, statelog.Freshness) (pages.Listing, error) {
-	return pages.Listing{}, nil
+func (answerPages) List(context.Context, doclet.Filter, statelog.Freshness) (doclet.Listing, error) {
+	return doclet.Listing{}, nil
 }
 
-func (p answerPages) Get(_ context.Context, ref string, _ statelog.Freshness) (pages.Detail, error) {
+func (p answerPages) Get(_ context.Context, ref string, _ statelog.Freshness) (doclet.Detail, error) {
 	body, ok := p.bodies[ref]
 	if !ok {
-		return pages.Detail{}, errors.New("no such page")
+		return doclet.Detail{}, errors.New("no such page")
 	}
-	return pages.Detail{Page: pages.Page{ID: ref, Body: body}}, nil
+	return doclet.Detail{Page: doclet.Page{ID: ref, Body: body}}, nil
 }
 
 // answerModel is a model with a known answer and a known cost, behind the
@@ -152,12 +152,12 @@ type answerRig struct {
 func newAnswerRig() *answerRig {
 	return &answerRig{
 		search: &answerSearch{hits: []knowledge.Hit{{
-			Title: "Deploy runbook", PageID: "p-1", Backend: pages.Backend,
+			Title: "Deploy runbook", PageID: "p-1", Backend: doclet.Backend,
 			Snippet: "how to deploy",
 		}, {
-			Title: "Rollback", PageID: "p-2", Backend: pages.Backend, Snippet: "undo a deploy",
+			Title: "Rollback", PageID: "p-2", Backend: doclet.Backend, Snippet: "undo a deploy",
 		}}},
-		items: &answerItems{hits: []tracker.Ranked{{
+		items: &answerItems{hits: []worklet.Ranked{{
 			ID: "t-1", Key: "ENG-7", Title: "Automate the deploy", Snippet: "script it",
 		}}},
 		pages: answerPages{bodies: map[string]string{

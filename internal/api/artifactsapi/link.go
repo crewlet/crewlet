@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // LINKING AN ARTIFACT THAT ALREADY EXISTS TO A TRACKER WORK ITEM, so the item's
@@ -27,8 +27,8 @@ import (
 // or by id, through the estate router, so a node holding no data reads it
 // through a data node.
 type WorkItems interface {
-	Task(ctx context.Context, idOrKey string, want tracker.DetailWants,
-		fresh statelog.Freshness) (tracker.TaskDetail, error)
+	Task(ctx context.Context, idOrKey string, want worklet.DetailWants,
+		fresh statelog.Freshness) (worklet.TaskDetail, error)
 }
 
 // ErrTrackerNotUp is a node not yet handed a company, so the company's own
@@ -203,42 +203,42 @@ func linkFreshness(w http.ResponseWriter, after string) (statelog.Freshness, boo
 // caller whose create had not landed yet nothing about why, or when to send
 // the link again.
 func (s *Service) liveWorkItem(w http.ResponseWriter, r *http.Request, ref string,
-	fresh statelog.Freshness) (tracker.Task, bool) {
+	fresh statelog.Freshness) (worklet.Task, bool) {
 	items, err := s.workItems()
 	switch {
 	case errors.Is(err, ErrTrackerNotUp):
 		httpjson.NoActiveRevision(w, httpjson.Detail{"detail": httpjson.NativeHalvesNotUp})
-		return tracker.Task{}, false
+		return worklet.Task{}, false
 	case errors.Is(err, ErrNoTracker):
 		invalid(w, "this company's work items are not kept in Crewlet's tracker, so there is "+
 			"no work item here to link the artifact to")
-		return tracker.Task{}, false
+		return worklet.Task{}, false
 	case err != nil:
 		unavailable(w, err, "this node could not reach the company's tracker; try again")
-		return tracker.Task{}, false
+		return worklet.Task{}, false
 	}
-	detail, err := items.Task(r.Context(), ref, tracker.DetailWants{}, fresh)
+	detail, err := items.Task(r.Context(), ref, worklet.DetailWants{}, fresh)
 	switch {
-	case errors.Is(err, tracker.ErrNoTask):
+	case errors.Is(err, worklet.ErrNoTask):
 		invalid(w, fmt.Sprintf("there is no work item %s", ref))
-		return tracker.Task{}, false
+		return worklet.Task{}, false
 	case errors.Is(err, statelog.ErrForeignPosition):
 		invalid(w, fmt.Sprintf("after names a position on another log; a work item's create "+
 			"answers with a position on the tracker's log, %s, and that is the one to send",
-			tracker.Domain{}.Stream().Name))
-		return tracker.Task{}, false
+			worklet.Domain{}.Stream().Name))
+		return worklet.Task{}, false
 	case errors.As(err, new(*statelog.Refused)):
 		u := stream.UnavailableOf(err)
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, u.RetryAfter, u.Fields())
-		return tracker.Task{}, false
+		return worklet.Task{}, false
 	case err != nil:
 		log.WarnContext(r.Context(), "artifacts_work_item_unread", "work_item", ref, "error", err.Error())
 		unavailable(w, err, "the tracker could not be read to check the work item; try again")
-		return tracker.Task{}, false
+		return worklet.Task{}, false
 	case detail.Task.Removed != nil:
 		invalid(w, fmt.Sprintf("work item %s was removed; restore it before linking an artifact to it",
 			detail.Task.Key))
-		return tracker.Task{}, false
+		return worklet.Task{}, false
 	}
 	return detail.Task, true
 }

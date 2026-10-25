@@ -20,16 +20,16 @@ import (
 	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/maintenance"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/version"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // This node's STATE-LOG RUNTIME: which domains it runs, and the four objects
@@ -330,7 +330,7 @@ type stateLog struct {
 	// drops those changes, so the apply is the only thing that sees both
 	// halves. Nil answers "not a skill", which is a build with no skill
 	// parser wired.
-	skills pages.SkillDetector
+	skills doclet.SkillDetector
 
 	// applyHooks is what each domain's applier calls after a committed
 	// batch — see [applyHooks].
@@ -511,7 +511,7 @@ type applyHooks struct {
 	// whose own copy is out of service relays a sound peer's announcements
 	// instead (inboxrelay.go), which this same hook feeds on that peer. It
 	// must not block.
-	inboxMoved func([]tracker.InboxMovement)
+	inboxMoved func([]worklet.InboxMovement)
 
 	// artifactsMoved is what the ARTIFACTS APPLIER calls after a committed
 	// batch, with what it moved ([artifactsdomain.Moved]): a new version, a
@@ -1489,7 +1489,7 @@ func barrierEncoder(domain statelog.Domain) func(statelog.Envelope) ([]byte, err
 // Until this existed [statelog.NewReader] and [statelog.NewReadIndex] were
 // constructed only by their own tests. Every domain reader read its rows
 // straight out of the replicated estate and ECHOED the level back in the
-// answer — `tracker.Reader.Tasks` assigning `answer.Level = q.Level`, and
+// answer: `worklet.Reader.Tasks` assigning `answer.Level = q.Level`, and
 // `Task` taking a level argument whose only use in the file was
 // `out.Level = level`. So a seat tool asking for `session` got whatever this
 // node happened to hold, a dashboard's `max_lag_seconds` bounded nothing, and

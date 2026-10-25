@@ -13,21 +13,21 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // placeSpy is the board-drag seam, recording every drop it was handed.
 type placeSpy struct {
 	mu     sync.Mutex
-	places []tracker.Place
+	places []worklet.Place
 	ops    []string
-	notify *tracker.Notify
-	result tracker.PlaceResult
+	notify *worklet.Notify
+	result worklet.PlaceResult
 	err    error
 }
 
-func (p *placeSpy) PlaceTask(_ context.Context, opID string, place tracker.Place,
-	notify *tracker.Notify) (tracker.PlaceResult, error) {
+func (p *placeSpy) PlaceTask(_ context.Context, opID string, place worklet.Place,
+	notify *worklet.Notify) (worklet.PlaceResult, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.places, p.ops, p.notify = append(p.places, place), append(p.ops, opID), notify
@@ -35,7 +35,7 @@ func (p *placeSpy) PlaceTask(_ context.Context, opID string, place tracker.Place
 }
 
 // last is the drop the spy was handed most recently, or nil.
-func (p *placeSpy) last() *tracker.Place {
+func (p *placeSpy) last() *worklet.Place {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if len(p.places) == 0 {
@@ -54,7 +54,7 @@ func placeTool(t *testing.T, spy *placeSpy,
 	work := newFakeTracker()
 	if actor == nil {
 		actor = func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
-			return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
+			return builtin.Actor{Handle: "ops", Kind: worklet.AuthorOperator}, nil
 		}
 	}
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
@@ -67,7 +67,7 @@ func placeTool(t *testing.T, spy *placeSpy,
 		// before the tool runs and these cases are about the drop.
 		Authorize: builtin.Decide(chartLeads),
 	}) {
-		if tool.Name() == tracker.PlaceWorkItemTool {
+		if tool.Name() == worklet.PlaceWorkItemTool {
 			return tool
 		}
 	}
@@ -97,38 +97,38 @@ func TestADropNamesItsNeighbourByIDAndItsLaneAsDropped(t *testing.T) {
 	for _, c := range []struct {
 		name   string
 		args   map[string]any
-		want   tracker.Place
+		want   worklet.Place
 		wakes  bool
 		status string
 	}{
 		{
 			name:   "within a lane",
 			args:   map[string]any{"item": "ENG-1", "before": "ENG-2", "status": "todo", "if_match": 7},
-			want:   tracker.Place{Task: "i1", Project: "ENG", Before: "id-2", IfMatch: 7},
+			want:   worklet.Place{Task: "i1", Project: "ENG", Before: "id-2", IfMatch: 7},
 			status: "todo",
 		},
 		{
 			name:  "across lanes",
 			args:  map[string]any{"item": "ENG-1", "after": "ENG-3", "status": "in_progress", "if_match": 7},
-			want:  tracker.Place{Task: "i1", Project: "ENG", After: "id-3", IfMatch: 7},
+			want:  worklet.Place{Task: "i1", Project: "ENG", After: "id-3", IfMatch: 7},
 			wakes: true, status: "in_progress",
 		},
 		{
 			name:  "into an empty lane",
 			args:  map[string]any{"item": "ENG-1", "status": "done", "if_match": 7},
-			want:  tracker.Place{Task: "i1", Project: "ENG", IfMatch: 7},
+			want:  worklet.Place{Task: "i1", Project: "ENG", IfMatch: 7},
 			wakes: true, status: "done",
 		},
 		{
 			name:   "into its own lane, beside nobody",
 			args:   map[string]any{"item": "ENG-1", "status": "todo", "if_match": 7},
-			want:   tracker.Place{Task: "i1", Project: "ENG", IfMatch: 7},
+			want:   worklet.Place{Task: "i1", Project: "ENG", IfMatch: 7},
 			status: "todo",
 		},
 		{
 			name: "a reorder naming no lane",
 			args: map[string]any{"item": "ENG-1", "before": "ENG-2", "if_match": 7},
-			want: tracker.Place{Task: "i1", Project: "ENG", Before: "id-2", IfMatch: 7},
+			want: worklet.Place{Task: "i1", Project: "ENG", Before: "id-2", IfMatch: 7},
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -198,12 +198,12 @@ func TestADropThatMeansNothingIsRefused(t *testing.T) {
 func TestAnUnplacedLaneChangeIsReportedNotFailed(t *testing.T) {
 	t.Parallel()
 	at := statelog.Position{Stream: "CREWLET_TRACKER_LOG", Generation: 1, Seq: 9}
-	spy := &placeSpy{result: tracker.PlaceResult{
-		Lane: tracker.WriteResult{Result: statelog.Result{
+	spy := &placeSpy{result: worklet.PlaceResult{
+		Lane: worklet.WriteResult{Result: statelog.Result{
 			Outcome: statelog.OutcomeApplied, Position: at, Version: 8,
 		}},
 		Version:  8,
-		Unplaced: fmt.Errorf("%w: task i1 moved", tracker.ErrStaleVersion),
+		Unplaced: fmt.Errorf("%w: task i1 moved", worklet.ErrStaleVersion),
 	}}
 	got, err := placeTool(t, spy, nil).Call(dropper(), map[string]any{
 		"item": "ENG-1", "before": "ENG-2", "status": "in_progress", "if_match": 7,
@@ -233,13 +233,13 @@ func TestAnUnplacedLaneChangeIsReportedNotFailed(t *testing.T) {
 // tracker write gives an unknown, naming the operation the retry repeats.
 func TestAnUnknownDropStepIsAnsweredUnknown(t *testing.T) {
 	t.Parallel()
-	unknown := tracker.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeUnknown}}
-	applied := tracker.WriteResult{Result: statelog.Result{
+	unknown := worklet.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeUnknown}}
+	applied := worklet.WriteResult{Result: statelog.Result{
 		Outcome:  statelog.OutcomeApplied,
 		Position: statelog.Position{Stream: "CREWLET_TRACKER_LOG", Generation: 1, Seq: 4},
 		Version:  8,
 	}}
-	for name, result := range map[string]tracker.PlaceResult{
+	for name, result := range map[string]worklet.PlaceResult{
 		"the lane":  {Lane: unknown, Unplaced: fmt.Errorf("the lane's outcome is unknown")},
 		"the order": {Lane: applied, Order: unknown, Rank: "a0V", Version: 8},
 	} {
@@ -309,7 +309,7 @@ func TestTheSameDropMadeAgainIsTheSameOperation(t *testing.T) {
 		since, _ := statelog.OpMintedAt(key)
 		spy := &placeSpy{}
 		tool := placeTool(t, spy, func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
-			return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator,
+			return builtin.Actor{Handle: "ops", Kind: worklet.AuthorOperator,
 				WorkKey: key, WorkSince: since}, nil
 		})
 		for range 2 {

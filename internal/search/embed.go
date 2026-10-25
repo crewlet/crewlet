@@ -1555,7 +1555,7 @@ const (
 //
 // EXPORTED FOR THE TRACKER'S INDEX GATE, which plans every statement that reads
 // `tracker_tasks` against the indexes the tracker declares
-// (internal/tracker's TestEveryIndexServesARegisteredQuery). A copy written
+// (internal/worklet's TestEveryIndexServesARegisteredQuery). A copy written
 // for the gate certifies a statement nothing runs, which is how an index on a
 // column nothing ever wrote was kept for this duty's "selection" while the
 // selection the duty does run was certified by nothing.

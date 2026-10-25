@@ -38,7 +38,7 @@ import (
 // after a reanchor, a probe-flag clear and an inbox sweep — and each had to
 // state its case in terms of the rule. The version reset is gone: its case did
 // not survive the arbitration anchor moving off `version` (see
-// internal/tracker/reanchor.go), and a reanchor now writes nothing but the
+// internal/worklet/reanchor.go), and a reanchor now writes nothing but the
 // framework's own checkpoint. The two that remain are allowed below.
 //
 // # What it walks, and what it cannot see
@@ -541,19 +541,19 @@ var allowedReplicatedWriter = []allowance{
 			"it. The only write is the schema.",
 	},
 	{
-		Prefix: "internal/tracker/apply", Kind: mechanism,
+		Prefix: "internal/worklet/apply", Kind: mechanism,
 		Why: "The tracker domain's applier, across the files it is split " +
 			"over: the record, the task, the objects, the history and the " +
 			"closure walk.",
 	},
 	{
-		Prefix: "internal/tracker/fieldvalues.go", Kind: mechanism,
+		Prefix: "internal/worklet/fieldvalues.go", Kind: mechanism,
 		Why: "Applier.explodeFieldValues and the two row writers it calls. " +
 			"It is applier code in a file the apply* prefix does not cover, " +
 			"which is why it is named rather than inferred from the name.",
 	},
 	{
-		Prefix: "internal/pages/apply", Kind: mechanism,
+		Prefix: "internal/doclet/apply", Kind: mechanism,
 		Why: "The knowledge base's applier — the container half and the " +
 			"page half.",
 	},
@@ -616,7 +616,7 @@ var allowedReplicatedWriter = []allowance{
 		Prefix: "internal/iamdomain/sweep.go", Kind: mechanism,
 		Why: "The identity estate's retention sweep, which is applier code " +
 			"in a file the apply* prefix does not cover — named rather than " +
-			"inferred, for internal/tracker/fieldvalues.go's reason. It is a " +
+			"inferred, for internal/worklet/fieldvalues.go's reason. It is a " +
 			"RECORD rather than a local delete because those rows are " +
 			"identity-claimed: two nodes sweeping on their own clocks would " +
 			"hold different bytes, and the claim that N copies are identical " +
@@ -639,14 +639,14 @@ var allowedReplicatedWriter = []allowance{
 	// record could own what it touches. Read these before adding a third.
 	// -----------------------------------------------------------------
 	{
-		Prefix: "internal/tracker/duty.go", Kind: exception,
+		Prefix: "internal/worklet/duty.go", Kind: exception,
 		Why: "clearProbe clears `rank_duplicate_pending`, a column written " +
 			"by every node's own applier from its own probe and by no " +
 			"record — so a record clearing it would be a record about a " +
 			"column no record owns.",
 	},
 	{
-		Prefix: "internal/tracker/inboxsweep.go", Kind: exception,
+		Prefix: "internal/worklet/inboxsweep.go", Kind: exception,
 		Why: "purgeInbox range-deletes `tracker_notifications`, which is " +
 			"statelog.Divergent: it travels inside a snapshot but is not in " +
 			"the identity claim, because what it holds depends on the " +

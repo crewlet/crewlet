@@ -11,7 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A PERSON THE IDENTITY DIRECTORY BINDS TO A SEAT ACTS AS THAT SEAT on every
@@ -141,7 +141,7 @@ func TestABoundPersonRoutesTheWorkTheirSeatLeads(t *testing.T) {
 			"bound to", chart.asked)
 	}
 	if len(trk.actors) != 1 || trk.actors[0].Handle != "jane-founder" ||
-		trk.actors[0].Kind != tracker.AuthorHuman ||
+		trk.actors[0].Kind != worklet.AuthorHuman ||
 		trk.actors[0].OperatorID != "jane.founder" {
 
 		t.Errorf("the re-route is authored by %+v, want the seat as a human "+
@@ -252,7 +252,7 @@ func TestABoundPersonsProjectEditIsDecidedOnTheirSeat(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	chart := janesChart()
-	if got := asJane(t, boundSurface(t, trk, chart), tracker.WriteProjectTool,
+	if got := asJane(t, boundSurface(t, trk, chart), worklet.WriteProjectTool,
 		map[string]any{"project": "ENG", "default_assignee": "cto"}); got.Failed {
 
 		t.Fatalf("the project edit failed: %s", got.Output)

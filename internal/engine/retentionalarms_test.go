@@ -15,7 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE ALARMS A NODE'S HEALTH CARRIES ARE THE RETENTION REPORT'S ALARMS.
@@ -84,7 +84,7 @@ func TestTheHealthAlarmsCountAKindOnTwoLogsOnce(t *testing.T) {
 	ctx := t.Context()
 	e := bootDirectoryNode(t, nil)
 	r := quietRetention(t, e)
-	logs := []string{tracker.Domain{}.Name(), iamdomain.Domain{}.Name()}
+	logs := []string{worklet.Domain{}.Name(), iamdomain.Domain{}.Name()}
 	for _, name := range logs {
 		generation := r.state.Domain(name).runner.Committed().Generation
 		ahead := coord.TrimFloor{Domain: name, Generation: generation + 1,

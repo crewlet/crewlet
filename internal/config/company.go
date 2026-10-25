@@ -782,7 +782,7 @@ const (
 	// KnowledgeNative is the engine's own knowledge base: the state log's
 	// pages domain. Every change is one record on the pages log, applied
 	// into the replicated estate every data node holds, and a node without
-	// `data` reads it through the estate router. See internal/pages.
+	// `data` reads it through the estate router. See internal/doclet.
 	KnowledgeNative KnowledgeBackend = "native"
 
 	// KnowledgeConfluence is Confluence, read live at query time.
@@ -891,7 +891,7 @@ const (
 	// TrackerNative is the engine's own work tracker: the state log's
 	// first domain. Every change is one record on the tracker log, applied
 	// into the replicated estate every data node holds, and a node without
-	// `data` reads it through the estate router. See internal/tracker.
+	// `data` reads it through the estate router. See internal/worklet.
 	TrackerNative TrackerBackend = "native"
 
 	// TrackerJira is Jira, whose state the engine reads through a seat's
