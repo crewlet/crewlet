@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/runtoken"
@@ -356,7 +357,7 @@ func TestASeatsNodeWithNoAPIPortBindsNothing(t *testing.T) {
 		listeners.close(context.Background(), logging.Get("test"))
 		t.Fatalf("bindListeners on api.port 0 = %v, %v; want nothing bound", listeners, err)
 	}
-	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, nil, listeners, logging.Get("test"))
+	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, nil, listeners, engine.DeepHost{}, logging.Get("test"))
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}

@@ -243,7 +243,7 @@ func (t *turn) runDeep(ctx context.Context, dc deepCall) (toolloop.ToolResult, e
 	runID := deepRunID(t.id, dc.prior.Step, dc.prior.Runs)
 	outcome, err := t.svc.deep.Run(runCtx, DeepRun{
 		ID:    runID,
-		Owner: t.person.ID, Turn: t.id,
+		Owner: t.person.ID, Seat: t.person.Seat, Turn: t.id,
 		System: deepSystem(c, t.person), Brief: dc.brief, Continue: dc.cont,
 		Inputs: inputs, Surface: bridge, Timeout: deadline.Sub(now),
 		Steps: max(cfg.Steps()-dc.prior.Calls, 1), Tokens: max(cfg.Tokens()-dc.prior.Spent, 1),

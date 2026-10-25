@@ -348,7 +348,7 @@ func TestAWorkerOnlyNodeServesNoHTTPAndSaysSo(t *testing.T) {
 			if err != nil || listeners != nil {
 				t.Fatalf("bindListeners on api.port 0 = %v, %v; want nothing bound", listeners, err)
 			}
-			surface, err := serveAPI(t.Context(), boot, nil, nil, nil, nil, nil, listeners, log)
+			surface, err := serveAPI(t.Context(), boot, nil, nil, nil, nil, nil, listeners, engine.DeepHost{}, log)
 			if err != nil {
 				t.Fatalf("serveAPI: %v", err)
 			}
@@ -806,7 +806,7 @@ func serveNodeWith(t *testing.T, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		return nil, reconciler, err
 	}
-	surface, err := serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface, nil, listeners, log)
+	surface, err := serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface, nil, listeners, engine.DeepHost{}, log)
 	if err != nil {
 		// THE CALLER'S TO CLOSE until the handover, as in runEngine.
 		listeners.close(context.Background(), log)

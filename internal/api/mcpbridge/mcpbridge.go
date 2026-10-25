@@ -49,6 +49,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -505,6 +506,25 @@ func (b *Bridge) resolve(token string) (s *Session, runID, reason string) {
 func (b *Bridge) Miss(token string) (runID, reason string) {
 	_, runID, reason = b.resolve(token)
 	return runID, reason
+}
+
+// LoopbackBase reports whether the URL a box dials names this host's loopback
+// interface: the one base a run confined on the engine host can be held to
+// ([Session.Loopback]), because its calls then arrive from loopback alone.
+func (b *Bridge) LoopbackBase() bool {
+	if b == nil {
+		return false
+	}
+	u, err := url.Parse(b.base)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // Mounted reports whether this process built the bridge's HTTP handler.

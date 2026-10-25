@@ -44,7 +44,10 @@ type DeepRun struct {
 	// run, and never a secret.
 	ID    string
 	Owner uuid.UUID
-	Turn  uuid.UUID
+	// Seat is the person's own seat handle, the spend history's name for
+	// whose run it was.
+	Seat string
+	Turn uuid.UUID
 	// System is the run's standing instructions and Brief its ask: the goal
 	// and plan, or for a continuation the person's decision.
 	System, Brief string

@@ -131,6 +131,10 @@ const (
 	// AuxAssistantTitle names a person's assistant conversation after its
 	// first answer.
 	AuxAssistantTitle AuxPurpose = "assistant_title"
+	// AuxAssistantDeepWork is a person's deep-work run: a coding CLI's own
+	// loop, recorded once when it ends with every token it reported, and
+	// charged to the company's windows by the turn's meter (ADR-0053).
+	AuxAssistantDeepWork AuxPurpose = "assistant_deep_work"
 )
 
 // auxCondensePrefix is what every compaction's purpose begins with.
@@ -158,7 +162,7 @@ var auxPurposes = []AuxPurpose{
 	AuxMemoryFilter, AuxKnowledgeQuery, AuxEpisodeSummary,
 	AuxPersistDecider, AuxCounterpartyProfiler, AuxSkillSynthesizer, AuxSkillRefiner,
 	AuxEpisodeCompaction, AuxSkillClustering, AuxSkillPromotion,
-	AuxAnswerKnowledge, AuxAssistantTurn, AuxAssistantTitle,
+	AuxAnswerKnowledge, AuxAssistantTurn, AuxAssistantTitle, AuxAssistantDeepWork,
 }
 
 // AuxPurposes is every purpose this build publishes, compactions included.
