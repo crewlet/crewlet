@@ -170,3 +170,25 @@ func TestAnEmissionClosesStillWaiting(t *testing.T) {
 		t.Fatalf("emitted %v", kinds(frames))
 	}
 }
+
+// A LOOP PARKED AT ANOTHER VERSION IS REFUSED BY NAME: resuming it says which
+// version it was parked at and which this build reads, and nothing runs.
+//
+// Mutation: fold the version check back into the decode error (wrapping a nil
+// error) and the refusal reads "%!w(<nil>)" with no version this build reads.
+func TestALoopParkedAtAnotherVersionIsRefusedByName(t *testing.T) {
+	t.Parallel()
+	f, accepted, p := parkedRig(t)
+	f.Store.Repark(accepted.TurnID, []byte(`{"v":99}`))
+	ctx := iam.WithPrincipal(context.Background(), f.Person)
+	_, err := f.Svc.Resume(ctx, approval.Resumption{Owner: f.Person.ID,
+		Conversation: f.Conversation, Turn: accepted.TurnID, Proposal: p.ID,
+		Read: f.Grant("approve"), State: wire.ProposalApplied,
+		Card: cardAt(p, wire.ProposalApplied)})
+	if err == nil || strings.Contains(err.Error(), "%!") || !strings.Contains(err.Error(), "version 99") {
+		t.Fatalf("resuming a loop parked at version 99 answered %v", err)
+	}
+	if rounds := len(f.Model.Requests()); rounds != 1 {
+		t.Errorf("the refused resume asked the model %d rounds in all, want the proposing 1", rounds)
+	}
+}

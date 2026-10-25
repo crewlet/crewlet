@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -94,15 +95,19 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 		return wire.TurnAccepted{}, s.readFailure(err)
 	}
 	var keep parked
-	if err := json.Unmarshal(raw, &keep); err != nil || keep.V != parkedVersion {
+	if err = json.Unmarshal(raw, &keep); err != nil {
 		return wire.TurnAccepted{}, fmt.Errorf("assistant: turn %s parked a loop this build "+
-			"does not read (version %d): %w", r.Turn, keep.V, err)
+			"cannot decode: %w", r.Turn, err)
+	}
+	if keep.V != parkedVersion {
+		return wire.TurnAccepted{}, fmt.Errorf("assistant: turn %s parked a loop at version %d, "+
+			"and this build reads version %d", r.Turn, keep.V, parkedVersion)
 	}
 	acts, err := s.acts(ctx, person)
 	if err != nil {
 		return wire.TurnAccepted{}, &Unavailable{RetryAfter: 2 * time.Second, Cause: err}
 	}
-	if err := s.admit(person); err != nil {
+	if err = s.admit(person); err != nil {
 		return wire.TurnAccepted{}, err
 	}
 	admitted := true
@@ -130,15 +135,15 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 	if provenance.Boundary(keep.Boundary).Valid() {
 		t.boundary = provenance.Boundary(keep.Boundary)
 	}
-	if err := s.records.ResumeTurn(ctx, t.write().Step("resume"), r.Turn, s.node); err != nil {
+	if err = s.records.ResumeTurn(ctx, t.write().Step("resume"), r.Turn, s.node); err != nil {
 		t.cancel(nil)
 		return wire.TurnAccepted{}, s.writeFailure(err)
 	}
 	t.steps, t.cards, t.messages = keep.Steps, keep.Cards, keep.Count+1
 	t.answer = assistantdomain.MessageID(r.Turn, t.messages)
-	messages := append(keep.Messages, llm.Message{Role: llm.RoleTool, Name: keep.PendingTool,
+	messages := slices.Concat(keep.Messages, []llm.Message{{Role: llm.RoleTool, Name: keep.PendingTool,
 		ToolCallID: keep.PendingCall, Content: resultOf(r, t.boundary),
-		Failed: r.State != wire.ProposalApplied})
+		Failed: r.State != wire.ProposalApplied}})
 
 	conversation, err := s.transcripts.Conversation(ctx, r.Owner, r.Conversation)
 	if err != nil {
@@ -164,7 +169,8 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 	}
 	admitted, started = false, true
 	s.track(t)
-	go t.run(loopRun{messages: messages, provider: provider, key: key, meter: meter,
+	go t.run(loopRun{ //nolint:contextcheck // the turn's own lifetime (t.ctx, under the service's base), never the request's: a turn outlives the POST that started it
+		messages: messages, provider: provider, key: key, meter: meter,
 		tools: s.catalogue.Offered(person, acts), steps: assistantCfg.Steps(),
 		timeout: assistantCfg.TurnTimeout()})
 	return wire.TurnAccepted{TurnID: r.Turn, StreamURL: StreamPath(r.Conversation, r.Turn),

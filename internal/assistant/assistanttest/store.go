@@ -102,6 +102,7 @@ func (s *Store) ownedTurn(owner, id uuid.UUID) (*storedTurn, error) {
 	return t, nil
 }
 
+// Conversations implements [assistant.Transcripts].
 func (s *Store) Conversations(_ context.Context, owner uuid.UUID, _ string, _ int) (wire.ConversationList, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -117,6 +118,7 @@ func (s *Store) Conversations(_ context.Context, owner uuid.UUID, _ string, _ in
 	return out, nil
 }
 
+// Conversation implements [assistant.Transcripts].
 func (s *Store) Conversation(_ context.Context, owner, id uuid.UUID) (assistantdomain.Conversation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -127,6 +129,7 @@ func (s *Store) Conversation(_ context.Context, owner, id uuid.UUID) (assistantd
 	return c.Conversation, nil
 }
 
+// Transcript implements [assistant.Transcripts].
 func (s *Store) Transcript(_ context.Context, owner, id uuid.UUID) (assistantdomain.Transcript, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -148,6 +151,7 @@ func (s *Store) Transcript(_ context.Context, owner, id uuid.UUID) (assistantdom
 	return t, nil
 }
 
+// Turn implements [assistant.Transcripts].
 func (s *Store) Turn(_ context.Context, owner, id uuid.UUID) (assistantdomain.Turn, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -158,6 +162,7 @@ func (s *Store) Turn(_ context.Context, owner, id uuid.UUID) (assistantdomain.Tu
 	return t.Turn, nil
 }
 
+// Parked implements [assistant.Transcripts].
 func (s *Store) Parked(_ context.Context, owner, turn uuid.UUID) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -171,6 +176,7 @@ func (s *Store) Parked(_ context.Context, owner, turn uuid.UUID) ([]byte, error)
 	return slices.Clone(raw), nil
 }
 
+// Card implements [assistant.Transcripts].
 func (s *Store) Card(_ context.Context, owner, id uuid.UUID) (assistantdomain.Card, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -187,6 +193,7 @@ func (s *Store) Card(_ context.Context, owner, id uuid.UUID) (assistantdomain.Ca
 	return assistantdomain.Card{}, fmt.Errorf("%w: card %s", assistantdomain.ErrNotFound, id)
 }
 
+// CreateConversation implements [assistant.Records].
 func (s *Store) CreateConversation(_ context.Context, w assistant.Write, id uuid.UUID, title string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -205,6 +212,7 @@ func (s *Store) CreateConversation(_ context.Context, w assistant.Write, id uuid
 	return nil
 }
 
+// TitleConversation implements [assistant.Records].
 func (s *Store) TitleConversation(_ context.Context, w assistant.Write, id uuid.UUID, title string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -219,6 +227,7 @@ func (s *Store) TitleConversation(_ context.Context, w assistant.Write, id uuid.
 	return nil
 }
 
+// ClearConversation implements [assistant.Records].
 func (s *Store) ClearConversation(_ context.Context, w assistant.Write, id uuid.UUID) (assistant.Written, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -237,6 +246,7 @@ func (s *Store) ClearConversation(_ context.Context, w assistant.Write, id uuid.
 	return assistant.Written{Outcome: "applied", Position: "CREWLET_ASSISTANT_LOG@1:1"}, nil
 }
 
+// OpenTurn implements [assistant.Records].
 func (s *Store) OpenTurn(_ context.Context, w assistant.Write, t assistantdomain.NewTurn) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -275,6 +285,7 @@ func (s *Store) child(owner, turn uuid.UUID) (*storedConversation, *storedTurn, 
 	return c, t, err
 }
 
+// RecordMessage implements [assistant.Records].
 func (s *Store) RecordMessage(_ context.Context, w assistant.Write, turn uuid.UUID, m assistantdomain.NewMessage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -291,6 +302,7 @@ func (s *Store) RecordMessage(_ context.Context, w assistant.Write, turn uuid.UU
 	return nil
 }
 
+// RecordStep implements [assistant.Records].
 func (s *Store) RecordStep(_ context.Context, w assistant.Write, turn uuid.UUID, step wire.StepEvent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -306,6 +318,7 @@ func (s *Store) RecordStep(_ context.Context, w assistant.Write, turn uuid.UUID,
 	return nil
 }
 
+// RecordCard implements [assistant.Records].
 func (s *Store) RecordCard(_ context.Context, w assistant.Write, turn uuid.UUID, card wire.CardEvent, apps []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -336,6 +349,7 @@ func (s *Store) move(owner, turn uuid.UUID, to wire.TurnState, from ...wire.Turn
 	return c, t, nil
 }
 
+// ParkTurn implements [assistant.Records].
 func (s *Store) ParkTurn(_ context.Context, w assistant.Write, turn uuid.UUID, parked []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -349,6 +363,7 @@ func (s *Store) ParkTurn(_ context.Context, w assistant.Write, turn uuid.UUID, p
 	return nil
 }
 
+// ResumeTurn implements [assistant.Records].
 func (s *Store) ResumeTurn(_ context.Context, w assistant.Write, turn uuid.UUID, node string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -362,6 +377,7 @@ func (s *Store) ResumeTurn(_ context.Context, w assistant.Write, turn uuid.UUID,
 	return err
 }
 
+// CloseTurn implements [assistant.Records].
 func (s *Store) CloseTurn(_ context.Context, w assistant.Write, turn uuid.UUID, end assistantdomain.TurnEnd) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -396,6 +412,14 @@ func (s *Store) CreateProposal(_ context.Context, w assistant.Write, p assistant
 		SourceRevision: p.SourceRevision, StepUp: p.StepUp, Card: p.Card,
 		State: wire.ProposalProposed, ExpiresAt: p.ExpiresAt, CreatedAt: s.now().UTC()}
 	return nil
+}
+
+// Repark replaces a parked turn's stored loop, for a suite about a loop this
+// build cannot take back up.
+func (s *Store) Repark(turn uuid.UUID, raw []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.parked[turn] = slices.Clone(raw)
 }
 
 // Proposals is every proposal the store keeps.
