@@ -30,6 +30,10 @@ type AssistantConversationRead struct {
 	ConversationID string `json:"conversation_id"`
 	OwnerID        string `json:"owner_id"`
 
+	// FileID is the one file of the conversation read, for a compliance
+	// download of a file it keeps; empty for a read of the transcript.
+	FileID string `json:"file_id,omitempty"`
+
 	// Reason is what the reader gave as the reason for the read.
 	Reason string `json:"reason"`
 }
@@ -42,5 +46,9 @@ func (e AssistantConversationRead) Actor() string { return e.ActorName }
 
 // SummaryFor names the read and its reason.
 func (e AssistantConversationRead) SummaryFor(actor string) string {
+	if e.FileID != "" {
+		return lead(actor, "downloaded a file of an assistant conversation for compliance: "+
+			e.Reason)
+	}
 	return lead(actor, "read an assistant conversation for compliance: "+e.Reason)
 }
