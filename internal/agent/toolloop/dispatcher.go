@@ -398,7 +398,9 @@ func (d *dispatcher) Serve(ctx context.Context, opts llm.ServeOptions) (llm.Serv
 	if title == "" {
 		title = d.cfg.Surface.Phase()
 	}
-	session, err := d.cfg.Host.Open(d.ctx, config.ToolServerName, title, d)
+	// THE RUN'S CONTEXT for its connection, which is the run's as much as its
+	// calls are; no call runs under it — see [callContext].
+	session, err := d.cfg.Host.Open(ctx, config.ToolServerName, title, d)
 	if err != nil {
 		return llm.Served{}, err
 	}
@@ -829,7 +831,7 @@ func (d *dispatcher) admit(in toolsession.Call) (*callRec, string) {
 func (d *dispatcher) recheck(c *callRec) string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.state == stateOpen && !(d.pend == stateFinished && c.exclusive) {
+	if d.state == stateOpen && (d.pend != stateFinished || !c.exclusive) {
 		return ""
 	}
 	why := notRun(c.recorded())
