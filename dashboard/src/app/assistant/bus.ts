@@ -45,6 +45,8 @@ export interface AssistantBusEvents {
     reason?: string;
     revision: string;
     receipt?: string;
+    /** The screen left an undo for it (`context.ts`), so its receipt may offer Undo. */
+    undoable?: boolean;
   };
   "assistant.context.invalidate": {
     reason: AssistantInvalidateReason;
