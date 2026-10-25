@@ -64,12 +64,10 @@ import {
   ColoursStep,
   IdentityStep,
   LogosStep,
-  ReviewStep,
   TypographyStep,
   VoiceStep,
-  setupWarnings,
-  warningKey,
 } from "./steps.tsx";
+import { ReviewStep, setupWarnings, warningKey } from "./Review.tsx";
 import { useSetupTarget, type SetupTarget } from "./useSetupTarget.ts";
 
 const TITLE = "Set up your brand";
@@ -364,11 +362,14 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
             labels={{ editing: "Draft" }}
           />
         }
-        actions={
-          <Button size="small" variant="ghost" onClick={() => nav.to(BRAND_PAGE)}>
+        // EXIT AT THE START OF THE FOOTER, apart from the step's own actions at
+        // its end; Review takes the page's width for its two columns.
+        footerStart={
+          <Button variant="ghost" onClick={() => nav.to(BRAND_PAGE)}>
             Exit
           </Button>
         }
+        wide={step === "review"}
         steps={steps}
         current={step}
         reached={reached}

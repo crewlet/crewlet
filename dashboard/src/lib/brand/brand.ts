@@ -106,8 +106,12 @@ export interface BrandLogoSpec {
   description: string;
   ground: "light" | "dark";
   shape: "wide" | "square";
-  /** Said under the slot while it is empty, for a reader who cannot fill it. */
-  emptyNote: string;
+  /**
+   * Said under the slot while it is empty, where the empty slot does not
+   * speak for itself; none for a dark-ground logo, whose empty dark ground
+   * says what is missing.
+   */
+  emptyNote?: string | undefined;
   /** Where the logo appears, as the setup says it: one sentence. */
   purpose: string;
   /** Whether an adoption needs it (the primary), or it is only recommended. */
@@ -135,8 +139,6 @@ export const BRAND_LOGO_SLOTS: readonly BrandLogoSpec[] = [
     description: "On dark grounds and dark mode",
     ground: "dark",
     shape: "wide",
-    emptyNote:
-      "Add a version for dark grounds. Until then, dark slides show the primary logo on a light plate.",
     purpose: "Used on dark slides and in dark mode.",
     required: false,
   },

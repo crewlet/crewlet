@@ -511,7 +511,9 @@ export function VoiceEditor({ edit, onEdit }: BrandEditorProps) {
           />
         )}
       </FormField>
-      <div className="brand-voice-lists">
+      {/* THE TWO LISTS STACKED, EACH FULL WIDTH, so every line keeps one row with
+          its actions at its end; side by side, a narrow column wrapped them. */}
+      <div className="brand-voice-fields">
         <ListInput
           label="Write like this"
           itemName="line"

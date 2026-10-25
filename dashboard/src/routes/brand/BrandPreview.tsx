@@ -65,6 +65,7 @@ export function BrandPreview({
   assets,
   draft,
   title = "Preview",
+  placement = "sticky",
 }: {
   document: BrandDocument;
   assets: BrandAssets;
@@ -72,11 +73,20 @@ export function BrandPreview({
   draft: boolean;
   /** The card's title, which also names its region. */
   title?: string;
+  /**
+   * `sticky` holds the card in view beside a long column (an aside); `inline`
+   * leaves it where it is laid out, in a column of its own on Review.
+   */
+  placement?: "sticky" | "inline";
 }) {
   const [kind, setKind] = useState<BrandSampleKind>("doc");
   const [mode, setMode] = useState<BrandSampleMode>("light");
   return (
-    <Card as="section" className="brand-preview" aria-label={title}>
+    <Card
+      as="section"
+      className={placement === "sticky" ? "brand-preview" : undefined}
+      aria-label={title}
+    >
       <Card.Header
         actions={
           <span className="brand-preview-controls">

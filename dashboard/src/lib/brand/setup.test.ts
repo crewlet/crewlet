@@ -18,7 +18,7 @@ import {
   stepAttention,
   stepDone,
 } from "./setup.ts";
-import { contrastSuggestions, pairReason } from "./suggest.ts";
+import { contrastSuggestions, pairNeeds, pairReason } from "./suggest.ts";
 import { adoptionProblem, draftReadiness, partProblem } from "./validate.ts";
 
 const edit = (document: BrandDocument): BrandEdit => ({ document, files: new Map() });
@@ -144,20 +144,29 @@ describe("the kit a setup writes", () => {
 });
 
 describe("the contrast panel's suggestions", () => {
-  test("a light primary is offered the nearest shade that reads, and moving it to dark grounds", () => {
+  test("a light primary is offered the nearest shade, the shade for text links, and dark grounds instead", () => {
     const colors = { primary: "#00baba" };
     const low = pair(colors, "primary", "light_ground");
-    expect(pairReason(low)).toBe(
-      "Links and buttons in #00baba will be hard to see on a light page.",
-    );
+    expect(pairReason(low)).toBe("Hard to see as links and buttons on light pages.");
+    expect(pairNeeds(low)).toBe("needs 3:1");
     const offers = contrastSuggestions(colors, low);
+    expect(offers.map((o) => o.key)).toEqual([
+      "primary/light_ground:shade",
+      "primary/light_ground:text",
+      "primary/light_ground:move",
+    ]);
+    // MEASURED, never the spec's example: each shade meets what it says.
     const shade = offers[0]!.set.primary!;
-    // MEASURED, never the spec's example: the shade meets the pair's minimum.
     expect(contrastRatio(shade, low.groundColor)!).toBeGreaterThanOrEqual(low.min);
-    expect(offers[0]!.label).toMatch(new RegExp(`^Use ${shade} \\(\\d+(\\.\\d+)?:1\\)$`));
-    expect(offers[1]).toEqual({
+    expect(offers[0]!.label).toMatch(new RegExp(`^Use ${shade} · \\d+(\\.\\d+)?:1$`));
+    expect(offers[0]!.color).toBe(shade);
+    const text = offers[1]!.set.primary!;
+    expect(contrastRatio(text, low.groundColor)!).toBeGreaterThanOrEqual(4.5);
+    expect(offers[1]!.label).toMatch(new RegExp(`^Use ${text} · [\\d.]+:1, best for text links$`));
+    expect(offers[2]).toEqual({
       key: "primary/light_ground:move",
-      label: "Move #00baba to Primary on dark grounds",
+      label: "Use on dark grounds instead",
+      color: "#00baba",
       set: { primary_on_dark: "#00baba", primary: shade },
     });
   });

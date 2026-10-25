@@ -246,7 +246,7 @@ test("the pair that blocks an adoption holds Colours until a suggested shade fix
     ).toBe(true),
   );
   expect(screen.getByRole("heading", { name: "Colours", level: 3 })).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: /^Use #[0-9a-f]{6} \(/ }));
+  fireEvent.click(screen.getByRole("button", { name: /^Use #[0-9a-f]{6} · / }));
   await waitFor(() => expect(screen.queryByText("Blocks adoption")).toBeNull());
 });
 
@@ -351,4 +351,48 @@ test("the rail says the current step is optional, or needs attention, as well as
   expect(within(rail).getByRole("button", { name: /Colours/ }).textContent).toMatch(
     /Needs attention/,
   );
+});
+
+test("Review shows each part's values and status beside the preview, then what to confirm before adopting", async () => {
+  engine(
+    whole({
+      colors: { primary: "#00baba" },
+      voice: { summary: "Plain, warm and exact.", avoid: ["Jargon."] },
+    }),
+  );
+  mount(["admin"], [brandKitRow()]);
+  expect(await stepHeading("Review")).toBeTruthy();
+  const identity = screen.getByRole("region", { name: "Identity" });
+  expect(within(identity).getByText("FairSplit")).toBeTruthy();
+  expect(within(identity).getByText("Complete")).toBeTruthy();
+  const colours = screen.getByRole("region", { name: "Colours" });
+  expect(within(colours).getByText("Uses defaults")).toBeTruthy();
+  expect(within(colours).getByText("#00baba")).toBeTruthy();
+  expect(within(colours).getByText("5 more use Crewlet's defaults.")).toBeTruthy();
+  const voice = screen.getByRole("region", { name: "Voice" });
+  expect(within(voice).getByText("Plain, warm and exact.")).toBeTruthy();
+  expect(within(voice).getByText("Write like this: 0 lines. Avoid: 1 line.")).toBeTruthy();
+  expect(screen.getByRole("region", { name: "Preview of your draft" })).toBeTruthy();
+  const before = screen.getByRole("region", { name: "Before you adopt" });
+  expect(within(before).getByRole("heading", { name: "When you adopt" })).toBeTruthy();
+  expect(within(before).getByText("Docs and dashboards switch to it right away.")).toBeTruthy();
+  expect(within(before).getAllByRole("checkbox").length).toBeGreaterThan(0);
+  // EXIT LEADS THE FOOTER, apart from the step's own actions.
+  expect(screen.getByRole("button", { name: "Exit" })).toBeTruthy();
+});
+
+test("a low pair says what it needs and why in one line, and offers shades and dark grounds instead", async () => {
+  engine(draft({ colors: { primary: "#00baba" } }));
+  mount(["admin"], [brandKitRow()]);
+  expect(await stepHeading("Typography")).toBeTruthy();
+  const rail = screen.getByRole("navigation", { name: "Brand setup steps" });
+  fireEvent.click(within(rail).getByRole("button", { name: /Colours/ }));
+  expect(await stepHeading("Colours")).toBeTruthy();
+  expect(screen.getByText("needs 3:1")).toBeTruthy();
+  expect(screen.getByText("Hard to see as links and buttons on light pages.")).toBeTruthy();
+  expect(screen.getByRole("button", { name: /^Use #[0-9a-f]{6} · [\d.]+:1$/ })).toBeTruthy();
+  expect(screen.getByRole("button", { name: /, best for text links$/ })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Use on dark grounds instead" }));
+  await waitFor(() => expect(screen.queryByText("needs 3:1")).toBeNull());
+  expect(screen.getAllByDisplayValue(/00baba/).length).toBeGreaterThan(0);
 });

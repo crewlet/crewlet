@@ -21,10 +21,7 @@ import {
   type LogoDigests,
 } from "~/lib/brand/brand.ts";
 import { adoptionProblem } from "~/lib/brand/validate.ts";
-
-/** What adopting makes public, said in every adopt dialog. */
-export const PUBLIC_FACE =
-  "Everything here becomes visible to everyone in the company, to every artifact and to agents, including agents talking to people outside the company. Docs and dashboards change now, pages and designs change when they are next published, and existing decks keep their look.";
+import { WhenYouAdopt } from "./WhenYouAdopt.tsx";
 
 export interface AdoptDialogProps {
   open: boolean;
@@ -128,9 +125,7 @@ export function AdoptDialog({
             ))}
           </ul>
         ) : null}
-        <Text as="p" variant="body" tone="secondary">
-          {PUBLIC_FACE}
-        </Text>
+        <WhenYouAdopt />
         {answer ? (
           <Text as="p" variant="body" className="brand-refusal" role="alert">
             {answer}

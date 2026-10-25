@@ -72,8 +72,19 @@
   padding: 0;
   list-style: none;
 }
-/* The contrast pairs: one a line, the badge and its verdict, then why a low
-   pair matters and the one-click changes that fix it. */
+/* The contrast pairs under their heading: one compact row a pair, the badge
+   and what a low pair needs, then one muted line on why it matters and the
+   one-click changes that fix it, each step of the kit's scale. */
+.brand-contrast {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+.brand-contrast-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
 .brand-contrast-pairs {
   display: flex;
   flex-direction: column;
@@ -97,9 +108,6 @@
 .brand-contrast-reason {
   margin: 0;
 }
-.brand-contrast-offers {
-  margin-top: var(--spacing-1);
-}
 .brand-faces {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr));
@@ -109,6 +117,12 @@
 .brand-editor-pair {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr));
+  gap: var(--spacing-4);
+}
+/* The Voice editor's two lists, one above the other at full width. */
+.brand-voice-fields {
+  display: flex;
+  flex-direction: column;
   gap: var(--spacing-4);
 }
 .brand-voice-list {
@@ -186,8 +200,8 @@
 .brand-diff-was {
   color: var(--color-text-tertiary);
 }
-/* The brand setup (`#/company/brand/setup`): each step's fields, and on
-   Review a summary card a step, two a row where they fit. */
+/* The brand setup (`#/company/brand/setup`): the Voice step's note, the
+   sentence that holds a finish, and Review's contrast checklist. */
 .brand-setup-note,
 .brand-setup-hold {
   margin: 0;
@@ -196,34 +210,68 @@
   color: var(--color-text-secondary);
   font-size: var(--font-size-compact);
 }
-.brand-setup-summaries {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr));
-  gap: var(--spacing-4);
-}
-.brand-setup-summary {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: var(--spacing-1) var(--spacing-3);
-  margin: 0;
-}
-.brand-setup-summary-row {
-  display: contents;
-}
-.brand-setup-summary-row dt {
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-compact);
-}
-.brand-setup-summary-row dd {
-  margin: 0;
-  color: var(--color-text-primary);
-  font-size: var(--font-size-compact);
-  overflow-wrap: anywhere;
-}
 .brand-setup-warnings {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-2);
+}
+/* The setup's Review: the summary cards and the preview in two columns (the
+   preview a fixed 320px), one column where the content is narrow; then the
+   card of what to confirm before adopting. */
+.brand-review {
+  container: brand-review / inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+}
+.brand-review-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: var(--spacing-5);
+  align-items: start;
+}
+@container brand-review (width < 44rem) {
+  .brand-review-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.brand-review-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(18rem, 100%), 1fr));
+  gap: var(--spacing-4);
+  align-items: start;
+}
+.brand-review-card-title,
+.brand-review-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.brand-review-card-glyph {
+  display: inline-flex;
+  color: var(--color-text-secondary);
+}
+.brand-review-name,
+.brand-review-voice {
+  margin: 0;
+}
+.brand-review-line {
+  margin: var(--spacing-1) 0 0;
+}
+.brand-review-logos {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--spacing-2);
+}
+.brand-review-swatches,
+.brand-review-faces,
+.brand-review-before-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+.brand-review-before-body {
+  gap: var(--spacing-4);
 }
 /* A brand kit's gallery cover: the sample doc on its own ground, filling the card. */
 .artifacts-preview-brand {

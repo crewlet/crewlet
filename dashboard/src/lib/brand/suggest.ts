@@ -15,30 +15,35 @@ import { nearestContrastShade } from "@crewlethq/tokens";
 import type { BrandDocument } from "~/protocol/index.ts";
 import { effectiveColors, isBrandColor, type BrandColorRole, type BrandContrast } from "./brand.ts";
 
-/** Why a pair matters, said with the colour that falls short. */
+/** Why a low pair matters, in one short line: what would be hard to read or see, and where. */
 export function pairReason(pair: BrandContrast): string {
-  const fg = pair.foregroundColor;
-  const ground = pair.groundColor;
   switch (`${pair.foreground}/${pair.ground}`) {
     case "text/light_ground":
-      return `Body text in ${fg} will be hard to read on ${ground}, in every branded doc.`;
+      return "Hard to read as body text on light pages.";
     case "on_primary/primary":
-      return `Labels on buttons and badges in ${ground} will be hard to read.`;
+      return "Hard to read as labels on buttons and badges.";
     case "dark_text/dark_ground":
-      return `Text will be hard to read on the dark ground ${ground}.`;
+      return "Hard to read as text on dark pages.";
     case "primary/light_ground":
-      return `Links and buttons in ${fg} will be hard to see on a light page.`;
+      return "Hard to see as links and buttons on light pages.";
     case "primary_on_dark/dark_ground":
-      return `Links and buttons in ${fg} will be hard to see on a dark page.`;
+      return "Hard to see as links and buttons on dark pages.";
     default:
-      return `${pair.label} measures below ${pair.min}:1.`;
+      return `Below ${pair.min}:1.`;
   }
+}
+
+/** What a low pair needs, beside its badge's measure: "needs 3:1". */
+export function pairNeeds(pair: BrandContrast): string {
+  return `needs ${pair.min}:1`;
 }
 
 /** One change a pair's panel offers: which role becomes which colour, and the button's words. */
 export interface ContrastSuggestion {
   key: string;
   label: string;
+  /** The colour the offer applies, for the chip on its button. */
+  color: string;
   /** The roles it sets, and to what. */
   set: Partial<Record<BrandColorRole, string>>;
 }
@@ -68,18 +73,29 @@ function fixOf(
   }
 }
 
-/** A colour and the ratio it reaches, as a button says it: "#007f80 (4.51:1)". */
-function shadeWords(shade: string, against: string): string {
+/** The minimum body text needs: the shade a link reads at when it is text. */
+const TEXT_MIN = 4.5;
+
+/** A shade's offer: "Use #00a0a0 · 3:1", with what it is best for where that differs. */
+function shadeOffer(
+  key: string,
+  role: BrandColorRole,
+  shade: string,
+  against: string,
+  note = "",
+): ContrastSuggestion {
   const ratio = contrastRatio(shade, against);
-  return ratio === null ? shade : `${shade} (${formatContrastRatio(ratio)}:1)`;
+  const measured = ratio === null ? "" : ` · ${formatContrastRatio(ratio)}:1`;
+  return { key, label: `Use ${shade}${measured}${note}`, color: shade, set: { [role]: shade } };
 }
 
 /**
  * What a pair that falls short offers: the nearest shade of the colour it
- * changes that meets the minimum ("Use #007f80 (4.51:1)"), and, for a primary
- * too light for a light page that reads on the dark ground, moving it to
- * Primary on dark grounds while the primary takes that shade. Nothing for a
- * pair that passes or cannot be measured yet.
+ * changes that meets the minimum ("Use #00a0a0 · 3:1"); for a primary too light
+ * for a light page, also the shade that reads as text links ("Use #007f7f ·
+ * 4.5:1, best for text links") and, where it reads on the dark ground, using
+ * it there instead (it moves to Primary on dark grounds and the primary takes
+ * the nearest shade). Nothing for a pair that passes or cannot be measured.
  */
 export function contrastSuggestions(
   colors: BrandDocument["colors"],
@@ -89,21 +105,24 @@ export function contrastSuggestions(
   const fix = fixOf(pair);
   if (!fix || !isBrandColor(fix.from)) return [];
   const out: ContrastSuggestion[] = [];
+  const id = `${pair.foreground}/${pair.ground}`;
   const shade = nearestContrastShade(fix.from, fix.against, pair.min);
-  if (shade) {
-    out.push({
-      key: `${pair.foreground}/${pair.ground}:shade`,
-      label: `Use ${shadeWords(shade, fix.against)}`,
-      set: { [fix.role]: shade },
-    });
+  if (shade) out.push(shadeOffer(`${id}:shade`, fix.role, shade, fix.against));
+  const primaryOnLight = pair.foreground === "primary" && pair.ground === "light_ground";
+  if (primaryOnLight && pair.min < TEXT_MIN) {
+    const text = nearestContrastShade(fix.from, fix.against, TEXT_MIN);
+    if (text && text !== shade) {
+      out.push(shadeOffer(`${id}:text`, fix.role, text, fix.against, ", best for text links"));
+    }
   }
-  if (pair.foreground === "primary" && pair.ground === "light_ground" && !colors.primary_on_dark) {
+  if (primaryOnLight && !colors.primary_on_dark) {
     const effective = effectiveColors(colors);
     const onDark = contrastRatio(fix.from, effective.dark_ground ?? "");
     if (onDark !== null && onDark >= pair.min) {
       out.push({
-        key: `${pair.foreground}/${pair.ground}:move`,
-        label: `Move ${fix.from} to Primary on dark grounds`,
+        key: `${id}:move`,
+        label: "Use on dark grounds instead",
+        color: fix.from,
         set: { primary_on_dark: fix.from, ...(shade ? { primary: shade } : {}) },
       });
     }
