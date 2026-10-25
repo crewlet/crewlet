@@ -350,8 +350,8 @@ function Proposal({
   const failure =
     local?.failure ??
     (proposal.failure
-      ? // THE ROUTE'S NEXT STEP after its sentence, until the card has a slot
-        // of its own for it.
+      ? // THE ROUTE'S NEXT STEP after its sentence, until ProposalCard's
+        // `failureHint` draws it on its own line in the failure strip.
         [proposal.failure.refusal.message, proposal.failure.refusal.hint].filter(Boolean).join(" ")
       : unknown
         ? "Could not confirm. It may have landed."
@@ -363,6 +363,10 @@ function Proposal({
       scope={proposal.scope}
       state={state}
       changes={screen ? screen.rows.map(previewRow) : changeRowsOf(proposal)}
+      // THE SCREEN'S GATE, said where the card says its consequence, until
+      // ProposalCard's `approveBlocked` holds Approve with it: Approve stays
+      // pressable meanwhile, and the page checks the gate again when it
+      // applies the change and reports `blocked`, so nothing it refuses lands.
       note={screen?.blocked ?? proposal.note}
       approveLabel={proposal.approve_label}
       onApprove={() => on.approve(proposal)}
