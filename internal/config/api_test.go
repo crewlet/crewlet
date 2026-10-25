@@ -210,6 +210,29 @@ func TestATokenBelowTheEntropyFloorIsRefused(t *testing.T) {
 	})
 }
 
+// A TOKEN SHAPED AS AN ASSISTANT GRANT IS REFUSED, because the guard reads
+// that shape as a grant before any Tier A comparison, so the token could never
+// authenticate as itself. Mutation: drop the prefix check and it validates.
+func TestATokenShapedAsAnAssistantGrantIsRefused(t *testing.T) {
+	t.Parallel()
+	b := serving()
+	value := iam.AssistBearerPrefix + "long-enough-to-pass-the-entropy-floor"
+	b.API.Auth.Tokens[0].Token = value
+	err := b.Validate()
+	if err == nil || !strings.Contains(err.Error(), "api.auth.tokens[0].token") ||
+		!strings.Contains(err.Error(), iam.AssistBearerPrefix) {
+		t.Fatalf("a token shaped as a grant answered %v, want a refusal naming the field "+
+			"and the reserved prefix", err)
+	}
+	if strings.Contains(err.Error(), value) {
+		t.Errorf("the refusal carries the token value: %v", err)
+	}
+	b.API.Auth.Tokens[0].Token = "long-enough-to-pass-the-entropy-floor-" + iam.AssistBearerPrefix
+	if err := b.Validate(); err != nil {
+		t.Errorf("a token carrying the prefix past its start was refused: %v", err)
+	}
+}
+
 // AND A REFERENCE IS NOT THE WAY AROUND IT, which is the arm that matters:
 // every credential in Tier A is written as a `${VAR}`, so a rule enforced on
 // the literal alone would be enforced on almost nothing. It is a case of its
