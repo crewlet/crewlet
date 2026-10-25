@@ -271,6 +271,11 @@ func TestARecordWithoutCountsIsChargedAnEstimateAsItGoes(t *testing.T) {
 	var before llm.Usage
 	var estimated bool
 	host.handle("search", func(context.Context, map[string]any) (string, bool) {
+		// As the tool loop's host does before it runs a call: the call and
+		// the record race, and the request is charged as the record shows it.
+		if !host.awaitRecorded("search") {
+			t.Error("the record never showed the request that asked for the call")
+		}
 		_, _, before, _ = host.snapshot()
 		_, _, _, spends := host.snapshot()
 		estimated = len(spends) > 0 && spends[0].Estimated
