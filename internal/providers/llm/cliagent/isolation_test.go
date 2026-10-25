@@ -232,6 +232,69 @@ func TestEveryShippedProfileDeclaresItsLocalToolsStance(t *testing.T) {
 	}
 }
 
+// THE ASSISTANT'S CLI HAS NO TOOL OF ITS OWN, BY CONSTRUCTION. Every profile
+// the Dashboard Assistant may run on leaves its model no shell, file tool or
+// tool server in the exact argv the assistant runs (web denied, as written and
+// streamed): checked off the argv, never taken from the profile's claim. The
+// set is pinned: Claude Code's empty allow list and pi's --no-tools were
+// measured; Codex keeps apply_patch, which has no switch, and OpenCode's
+// deny-all policy refuses a tool when called rather than removing it, so both
+// are refused. A seat's argv is untouched by any of it.
+func TestTheAssistantArgvLeavesTheCLIWithNoToolOfItsOwn(t *testing.T) {
+	t.Parallel()
+	if got, want := cliprofile.AssistantEligible(), []string{"claude-code", "pi"}; !slices.Equal(got, want) {
+		t.Errorf("assistant-eligible profiles = %v, want %v", got, want)
+	}
+	for _, name := range cliprofile.AssistantEligible() {
+		p, err := cliprofile.Load(name, map[string]any{"web_tools": "denied"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if problem := p.ToolsOffProblem(); problem != "" {
+			t.Errorf("%s: %s", name, problem)
+		}
+	}
+	claude, err := cliprofile.Load("claude-code", map[string]any{"web_tools": "denied"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if i := slices.Index(claude.CompleteArgs, "--tools"); i < 0 || i+1 >= len(claude.CompleteArgs) ||
+		claude.CompleteArgs[i+1] != "" {
+		t.Errorf("the assistant's claude-code argv %q does not carry the empty allow list", claude.CompleteArgs)
+	}
+	seat, err := cliprofile.Load("claude-code", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	builtin, _ := cliprofile.Builtin("claude-code")
+	if i := slices.Index(seat.CompleteArgs, "--tools"); !slices.Equal(seat.CompleteArgs, builtin.CompleteArgs) ||
+		i < 0 || seat.CompleteArgs[i+1] != "WebFetch,WebSearch" || seat.ToolsOffProblem() == "" {
+		t.Errorf("the seats' claude-code argv changed, or lost its web tools: %q", seat.CompleteArgs)
+	}
+	for _, name := range []string{"codex", "opencode"} {
+		p, err := cliprofile.Load(name, map[string]any{"web_tools": "denied"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.ToolsOffProblem() == "" {
+			t.Errorf("%s: its run is judged to have no tool of its own, which was never measured", name)
+		}
+	}
+	// AN OVERRIDE THAT BRINGS A TOOL BACK IS CAUGHT ON THE ARGV: a second
+	// --tools (the CLI takes the last) and a tool server's config.
+	for _, extra := range [][]string{{"--tools", "default"}, {"--mcp-config", "servers.json"}} {
+		args := append(slices.Clone(claude.CompleteArgs), extra...)
+		p, err := cliprofile.Load("claude-code", map[string]any{"web_tools": "denied",
+			"web_denial": map[string]any{"complete_args": toAny(args)}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.ToolsOffProblem() == "" {
+			t.Errorf("an argv ending %q is judged to have no tool", extra)
+		}
+	}
+}
+
 // The vendors that take their policy from a file get a file that parses and
 // says what the profile claims: local tools off, web on.
 func TestSeededSettingsFilesAreValidJSONThatKeepsTheWebOn(t *testing.T) {
@@ -573,8 +636,8 @@ func TestEveryAssistantProfileTurnsTheWebOff(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Load with web_tools denied: %v", err)
 			}
-			if p.EffectiveWebTools() != cliprofile.WebToolsDenied || p.LocalTools != cliprofile.LocalToolsDenied {
-				t.Errorf("web %q, local %q: an assistant profile denies both", p.EffectiveWebTools(), p.LocalTools)
+			if p.EffectiveWebTools() != cliprofile.WebToolsDenied {
+				t.Errorf("web %q: the denied profile keeps the web", p.EffectiveWebTools())
 			}
 			// EVERY ARGV A CALL CAN RUN: the profile as written, and the
 			// streamed variant a call asking for the token stream runs, which

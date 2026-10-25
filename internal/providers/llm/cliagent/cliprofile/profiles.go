@@ -92,6 +92,21 @@ func BuiltinNames() []string {
 	return names
 }
 
+// AssistantEligible lists the built-in profiles the Dashboard Assistant can
+// run on, sorted: those whose web-denied run is left with no tool of its own
+// by construction ([Profile.ToolsOffProblem]). Derived from the table, as
+// [WebDeniable] is, of which it is a subset.
+func AssistantEligible() []string {
+	var out []string
+	for _, name := range WebDeniable() {
+		p, err := Load(name, map[string]any{"web_tools": string(WebToolsDenied)})
+		if err == nil && p.ToolsOffProblem() == "" {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 // WebDeniable lists the built-in profiles that can run with their web tools
 // off ([Profile.CanDenyWeb]), sorted: the CLIs an entry may point the
 // Dashboard Assistant at. Derived from the table, so a profile that gains a
@@ -180,6 +195,14 @@ func (p Profile) Clone() Profile {
 	}
 	out.DeltaPaths = clonePaths(p.DeltaPaths)
 	out.DeltaEvents = append([]string(nil), p.DeltaEvents...)
+	if p.ToolsOff != nil {
+		args := make([][]string, len(p.ToolsOff.Args))
+		for i, run := range p.ToolsOff.Args {
+			args[i] = append([]string(nil), run...)
+		}
+		out.ToolsOff = &ToolsOff{Args: args, Refuses: append([]string(nil), p.ToolsOff.Refuses...),
+			Note: p.ToolsOff.Note}
+	}
 	if p.Stream != nil {
 		out.Stream = &Stream{
 			Args:          append([]string(nil), p.Stream.Args...),
