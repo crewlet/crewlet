@@ -247,17 +247,24 @@ test("Settings' column is locked where a grant is, and nowhere else", async () =
   const sections = new Map(
     (workspaceRow("settings")?.sections ?? []).map((s) => [`#/${s.path.join("/")}`, s.grants]),
   );
-  const rows = within(column).getAllByRole("link");
-  const locked = rows.filter((a) => (sections.get(a.getAttribute("href") ?? "") ?? []).length > 0);
-  expect(locked.length).toBeGreaterThan(5);
-  for (const a of rows) {
-    const at = a.getAttribute("href") ?? "";
-    if (locked.includes(a)) {
-      expect(a.textContent, at).toMatch(/, Needs (Admin|Tracker) access/);
-    } else {
-      expect(a.textContent, at).not.toMatch(/needs/);
+  // WAITED FOR, NOT READ OFF THE COLUMN: the column is drawn before the
+  // reading it draws its locks off has landed, and a busy machine reads it
+  // in between.
+  await waitFor(() => {
+    const rows = within(column).getAllByRole("link");
+    const locked = rows.filter(
+      (a) => (sections.get(a.getAttribute("href") ?? "") ?? []).length > 0,
+    );
+    expect(locked.length).toBeGreaterThan(5);
+    for (const a of rows) {
+      const at = a.getAttribute("href") ?? "";
+      if (locked.includes(a)) {
+        expect(a.textContent, at).toMatch(/, Needs (Admin|Tracker) access/);
+      } else {
+        expect(a.textContent, at).not.toMatch(/needs/);
+      }
     }
-  }
+  });
 });
 
 // A ROUTE'S OWN LOCK READS THE SESSION TOO: a session whose socket never

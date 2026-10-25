@@ -447,7 +447,8 @@ test("the saved view is an option in the strip rather than a chip or a menu row"
 // neither control.
 test("the month is the calendar's own control", async () => {
   await listAt("#/work?shape=calendar");
-  fireEvent.click(screen.getByRole("button", { name: "The month after" }));
+  // The bar is up before the calendar's own header: waited for, not assumed.
+  fireEvent.click(await screen.findByRole("button", { name: "The month after" }));
   await waitFor(() => expect(location.hash).toContain("month="));
   expect(document.querySelector(".work-chip-field")).toBeNull();
 });

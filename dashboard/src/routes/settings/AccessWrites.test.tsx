@@ -368,13 +368,14 @@ test("a reader without Admin sees no write control, and an administrator sees th
   mount(ADMIN);
   await screen.findAllByText("Bo Lang");
   await screen.findAllByText("sam@example.com");
-  await screen.findAllByRole("button", { name: "Invite person" });
+  // EACH CONTROL WAITED FOR ON ITS OWN: the directory's rows and the opened
+  // person's credentials answer apart, so one drawn says nothing of another.
   for (const name of ["Invite person", "Cancel", "Revoke"]) {
-    expect(screen.getAllByRole("button", { name: new RegExp(`^${name}`) }).length).toBeGreaterThan(
-      0,
-    );
+    expect(
+      (await screen.findAllByRole("button", { name: new RegExp(`^${name}`) })).length,
+    ).toBeGreaterThan(0);
   }
-  expect(screen.getByRole("button", { name: /^More for / })).toBeTruthy();
+  expect(await screen.findByRole("button", { name: /^More for / })).toBeTruthy();
   // A SEAT'S OWN GESTURES stay on the seat: this page invites through a picker.
   for (const name of ["Invite", "Add person"]) {
     expect(screen.queryByRole("button", { name })).toBeNull();
@@ -400,8 +401,9 @@ test("invite person picks an open seat, then invites onto it", async () => {
   mount(ADMIN);
   fireEvent.click(await screen.findByRole("button", { name: "Invite person" }));
   const picker = await screen.findByRole("dialog", { name: "Invite person" });
-  await settle();
-  pick(within(picker).getByLabelText(/^Seat/), /Lee Ops/);
+  // The seat field is drawn once the open seats it offers have answered, a
+  // render after the dialog itself.
+  pick(await within(picker).findByLabelText(/^Seat/), /Lee Ops/);
   fireEvent.click(within(picker).getByRole("button", { name: "Continue" }));
   const invite = await screen.findByRole("dialog", { name: "Invite someone as Lee Ops" });
   fireEvent.change(within(invite).getByLabelText("Email address"), {

@@ -206,8 +206,14 @@ describe("who the block says this is", () => {
   test("a person with no role to show draws their login alone under their name", async () => {
     engine({ "GET /auth/session": { status: 200, body: { ...PERSON, name: "Ada Lovelace" } } });
     render(block(ada, "Ada Lovelace"));
-    const who = await screen.findByRole("button", { name: /Ada Lovelace/ });
-    expect(who.querySelector(".crewlet-account-row__detail")?.textContent).toBe("ada.lovelace");
+    // WAITED FOR, NOT READ OFF THE BUTTON: the block is drawn under the seat's
+    // name before the session's answer gives the login it then shows there.
+    const detail = () =>
+      screen
+        .getByRole("button", { name: /Ada Lovelace/ })
+        .querySelector(".crewlet-account-row__detail")?.textContent;
+    await waitFor(() => expect(detail()).toBe("ada.lovelace"));
+    const who = screen.getByRole("button", { name: /Ada Lovelace/ });
     expect(who.textContent).not.toContain("human seat");
   });
 

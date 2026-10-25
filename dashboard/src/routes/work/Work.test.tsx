@@ -928,7 +928,15 @@ test("a column chip takes its name from the effective axis", async () => {
     work_projects: oneProject,
   });
   const { container } = mountWork();
-  await waitFor(() => expect(container.querySelector(".work-chips")).toBeTruthy());
+  // THE CHIP IS DRAWN BEFORE THE SAVED VIEW ANSWERS, from the address alone,
+  // and drawn again once the view says which axis its columns are cut on; so
+  // the case waits for the one word only the view's axis can produce — the
+  // person's name, which the address does not carry ("ada" is a handle) —
+  // rather than for the row of chips, which was there before the view
+  // answered and was read before it on a busy machine.
+  await waitFor(() =>
+    expect(container.querySelector(".work-chips")?.textContent).toContain("Ada Okonkwo"),
+  );
   const chips = container.querySelector(".work-chips")?.textContent ?? "";
   expect(chips).toContain("Assignee");
   expect(chips).toContain("Ada Okonkwo");

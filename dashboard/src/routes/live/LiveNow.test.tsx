@@ -411,7 +411,16 @@ test("Load older asks phases again with the cursor the page carried", async () =
     },
   });
   const card = await phasesCard(asked);
-  const more = await within(card).findByRole("button", { name: `Load ${PHASE_PAGE} older` });
+  // THE BUTTON IS DRAWN HELD until the first page answers with the cursor it
+  // continues from, and a press on a held button does nothing: waited for
+  // until it lets go, not found and pressed at once.
+  const more = await waitFor(() => {
+    const button = within(card).getByRole<HTMLButtonElement>("button", {
+      name: `Load ${PHASE_PAGE} older`,
+    });
+    expect(button.disabled).toBe(false);
+    return button;
+  });
   act(() => more.click());
   await within(card).findByText("Start of the record.");
   const pages = asked.filter((q) => q.kind === "phases");

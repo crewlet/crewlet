@@ -150,7 +150,8 @@ describe("a gesture that needs a fresher proof", () => {
     await refuseAndConfirm("correct horse battery staple");
 
     await waitFor(() => expect(outcome).toEqual({ stored: true }));
-    expect(screen.queryByRole("dialog")).toBeNull();
+    // The dialog goes in a render after the replay's answer is handed back.
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     // AND THE DIALOG'S OWN READ of whether a code is held, beside them.
     const asked = sent.filter((s) => s.path !== "/iam/credentials");
     expect(asked.map((s) => s.path)).toEqual([

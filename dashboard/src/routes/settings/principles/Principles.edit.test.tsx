@@ -326,8 +326,13 @@ test("the browser asks before closing a tab with unsaved writing, and not otherw
   fireEvent.change(mission, { target: { value: "Half a thought" } });
   expect(unload()).toBe(true);
   saveKey(mission);
+  // WAITED FOR, NOT READ OFF THE TOAST. The toast is drawn in the commit that
+  // clears the writing, but the page stops listening for an unload in that
+  // commit's passive effect, which React runs in a task of its own once a busy
+  // machine has run its render past the scheduler's slice; a find hands back
+  // on the toast and a zero-delay timer, which can come first.
   await screen.findByText("Mission saved");
-  expect(unload()).toBe(false);
+  await waitFor(() => expect(unload()).toBe(false));
 });
 
 // A READER WHO MAY NOT WRITE THE CHARTER never asks the route that would

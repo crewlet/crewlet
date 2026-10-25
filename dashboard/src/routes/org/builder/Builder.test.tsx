@@ -490,6 +490,10 @@ describe("checking the draft", () => {
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await checkChange();
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
+    // The edit's check is SENT, and its answer drawn a render later; the case
+    // reads that answer last, so it waits for it here, where nothing else is
+    // outstanding, rather than racing it to the end.
+    await screen.findByText("No problems");
     const field = document.createElement("input");
     document.querySelector(".org-builder")!.appendChild(field);
     fireEvent.keyDown(field, { key: "z", code: "KeyZ", metaKey: true });

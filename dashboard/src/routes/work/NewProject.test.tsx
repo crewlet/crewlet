@@ -191,7 +191,9 @@ describe("the dialog", () => {
   test("a key a project already has holds Continue with the reason", async () => {
     mount(["OLD"]);
     await screen.findByRole("dialog", { name: "New project" });
-    fireEvent.change(screen.getByRole("textbox", { name: "Project key" }), {
+    // The field is drawn once the viewer's grants are read, in a render after
+    // the dialog's own.
+    fireEvent.change(await screen.findByRole("textbox", { name: "Project key" }), {
       target: { value: "old" },
     });
     await screen.findByText("OLD is already a project.", {
