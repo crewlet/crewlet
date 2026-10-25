@@ -567,7 +567,9 @@ func readTools() []Tool {
 			schema: object([]string{"q"}, map[string]*schema{
 				"q": text("What to find, in plain words.", queryBytes),
 			}),
-			Routes: []string{"GET /query/{what}"}, Apps: knowledgeApp, Fence: true,
+			// EVERYBODY'S, as the knowledge question is: its answer holds
+			// each person to the pages they may read.
+			Routes: []string{"GET /query/{what}"}, Fence: true,
 			Build: func(a map[string]any) (exec.Request, error) {
 				return get("GET /query/{what}", map[string]string{"what": "knowledge"},
 					query(a).str("q", "q").values())
