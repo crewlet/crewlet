@@ -591,20 +591,20 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	for i := range c.Units {
 		p.wrap(c.Units[i].validate(idx(field("units"), i)))
 	}
-	p.wrap(c.Tracker.Native.validate(field("tracker.native")))
-	// A NATIVE BLOCK ON A COMPANY THAT IS NOT NATIVE describes nothing,
-	// and the failure that produces is silence: an operator sets an inbox
-	// horizon for inbox rows somebody else's tracker will never write.
+	p.wrap(c.Tracker.Worklet.validate(field("tracker.worklet")))
+	// A WORKLET BLOCK ON A COMPANY THAT DOES NOT RUN WORKLET describes
+	// nothing, and the failure that produces is silence: an operator sets an
+	// inbox horizon for inbox rows somebody else's tracker will never write.
 	//
 	// The check is against the DERIVED backend rather than the literal
 	// field, because an empty `backend` with no Jira integration IS
-	// native — refusing the default configuration would be the opposite of
-	// the intent.
-	if c.Tracker.Native != nil && c.TrackerBackendFor() != TrackerNative {
-		p.add(field("tracker.native"), ErrConflict,
-			"this company's tracker is %q, and `tracker.native` is the engine's "+
-				"own tracker's policy — nothing would read it. Remove the block, "+
-				"or run the native tracker", c.TrackerBackendFor())
+	// Worklet, and refusing the default configuration would be the opposite
+	// of the intent.
+	if c.Tracker.Worklet != nil && c.TrackerBackendFor() != TrackerWorklet {
+		p.add(field("tracker.worklet"), ErrConflict,
+			"this company's tracker is %q, and `tracker.worklet` is Worklet's "+
+				"policy, so nothing would read it. Remove the block, or run "+
+				"Worklet", c.TrackerBackendFor())
 	}
 
 	// The hierarchy's own rules (duplicate handles, human seats carrying
@@ -649,11 +649,11 @@ func (c *Company) validateKnowledgeBackend() error {
 
 	if b := c.Knowledge.Backend; b != "" && !b.Valid() {
 		p.add(field("knowledge.backend"), ErrShape,
-			"knowledge.backend must be native, confluence or none")
+			"knowledge.backend must be doclet, confluence or none")
 	}
 	if b := c.Tracker.Backend; b != "" && !b.Valid() {
 		p.add(field("tracker.backend"), ErrShape,
-			"tracker.backend must be native, jira or none")
+			"tracker.backend must be worklet, jira or none")
 	}
 
 	// A BACKEND AND ITS VENDOR TOGETHER IS THE MIRROR THE DOCTRINE FORBIDS.
@@ -662,21 +662,20 @@ func (c *Company) validateKnowledgeBackend() error {
 	// which is precisely the cache with no invalidation story that the
 	// no-task-engine decision was written against. Refused at the authored
 	// path so the message names what to delete.
-	if c.Knowledge.Backend == KnowledgeNative && c.Integrations.Confluence != nil {
+	if c.Knowledge.Backend == KnowledgeDoclet && c.Integrations.Confluence != nil {
 		p.add(field("knowledge.backend"), ErrConflict,
-			"a native knowledge base and integrations.confluence cannot both run: "+
-				"pages would live in two places and nothing would keep them in "+
-				"step. Remove one")
+			"Doclet and integrations.confluence cannot both run: pages would "+
+				"live in two places and nothing would keep them in step. Remove one")
 	}
 	if c.Knowledge.Backend == KnowledgeConfluence && c.Integrations.Confluence == nil {
 		p.add(field("knowledge.backend"), ErrConflict,
 			"knowledge.backend: confluence needs integrations.confluence")
 	}
-	if c.Tracker.Backend == TrackerNative && c.Integrations.Jira != nil {
+	if c.Tracker.Backend == TrackerWorklet && c.Integrations.Jira != nil {
 		p.add(field("tracker.backend"), ErrConflict,
-			"a native tracker and integrations.jira cannot both run: work would "+
-				"be filed in two places and a unit's project key would name two "+
-				"trackers. Remove one")
+			"Worklet and integrations.jira cannot both run: work would be filed "+
+				"in two places and a unit's project key would name two trackers. "+
+				"Remove one")
 	}
 	if c.Tracker.Backend == TrackerJira && c.Integrations.Jira == nil {
 		p.add(field("tracker.backend"), ErrConflict,
@@ -691,15 +690,14 @@ func (c *Company) validateKnowledgeBackend() error {
 				"a read scope needs a knowledge backend")
 		}
 		// VECTORS NEED SOMETHING TO SEARCH, and a knowledge base is not
-		// the only thing there is: the engine's own tracker is a corpus
-		// too, and a company that keeps its knowledge in Confluence's
-		// competitor's head and its work here is entitled to semantic
-		// recall over the work.
+		// the only thing there is: Worklet is a corpus too, and a company
+		// that keeps its knowledge in Confluence's competitor's head and its
+		// work here is entitled to semantic recall over the work.
 		if c.Knowledge.Vectors != nil && *c.Knowledge.Vectors &&
-			c.TrackerBackendFor() != TrackerNative {
+			c.TrackerBackendFor() != TrackerWorklet {
 			p.add(field("knowledge.vectors"), ErrConflict,
-				"vectors need a knowledge backend or a native tracker — with "+
-					"neither there is no corpus to embed")
+				"vectors need a knowledge backend or Worklet; with neither "+
+					"there is no corpus to embed")
 		}
 	}
 	if c.Knowledge.Vectors != nil && *c.Knowledge.Vectors && c.Providers.Embeddings == nil {
@@ -719,9 +717,9 @@ func (c *Company) validateKnowledgeBackend() error {
 // scope is how an agent ends up unable to read the page it was told to
 // follow.
 //
-// Empty is unscoped. On the native backend that means the whole company,
-// because the engine IS the boundary — every reader is a seat of one company
-// and there is no second account to launder a read through. On Confluence it
+// Empty is unscoped. On Doclet that means the whole company, because the
+// engine IS the boundary: every reader is a seat of one company and there is
+// no second account to launder a read through. On Confluence it
 // means whatever the asking seat's own account can read, which is why a
 // credential-less seat searching unscoped there gets nothing: an unscoped
 // query on a shared admin token would show one seat pages its own user never
@@ -731,13 +729,13 @@ type Knowledge struct {
 	//
 	// Empty DERIVES from what the company connected: one that declares
 	// integrations.confluence gets `confluence`, and one that declares
-	// nothing gets `native`, so a quickstart company has a wiki without
+	// nothing gets `doclet`, so a quickstart company has a wiki without
 	// asking for one. Connecting Confluence already says where the pages
-	// live — a native knowledge base beside it is refused, as two places
-	// pages live with nothing keeping them in step — so requiring
-	// `backend: confluence` as well would be a second spelling of one
-	// decision, with a refusal for the company that wrote only the first.
-	Backend KnowledgeBackend `yaml:"backend,omitempty" json:"backend,omitempty" js:"enum=native|confluence|none" desc:"Which knowledge base: native, confluence, or none. Empty derives from integrations.confluence."`
+	// live (Doclet beside it is refused, as two places pages live with
+	// nothing keeping them in step), so requiring `backend: confluence` as
+	// well would be a second spelling of one decision, with a refusal for
+	// the company that wrote only the first.
+	Backend KnowledgeBackend `yaml:"backend,omitempty" json:"backend,omitempty" js:"enum=doclet|confluence|none" desc:"Which knowledge base: doclet, confluence, or none. Empty derives from integrations.confluence."`
 
 	// KnowledgeScope narrows the search to these containers. Empty is
 	// unscoped — see the type doc for what that means per backend.
@@ -761,8 +759,8 @@ type Knowledge struct {
 	// at the top of the chain exactly where a new seat starts reading.
 	RootSpace *string `yaml:"root_space,omitempty" json:"root_space,omitempty" desc:"Container for org-level pages such as the root Onboarding. Absent takes the default."`
 
-	// Vectors adds semantic recall to the knowledge search and the
-	// tracker's item search.
+	// Vectors adds semantic recall to the knowledge search and Worklet's
+	// item search.
 	//
 	// A POINTER because the zero value is a real setting and the absent
 	// value is a different one: unset DERIVES from whether the company
@@ -779,11 +777,11 @@ type KnowledgeBackend string
 
 // The knowledge backends.
 const (
-	// KnowledgeNative is the engine's own knowledge base: the state log's
-	// pages domain. Every change is one record on the pages log, applied
-	// into the replicated estate every data node holds, and a node without
-	// `data` reads it through the estate router. See internal/doclet.
-	KnowledgeNative KnowledgeBackend = "native"
+	// KnowledgeDoclet is Doclet, the engine's own knowledge base: the state
+	// log's pages domain. Every change is one record on the pages log,
+	// applied into the replicated estate every data node holds, and a node
+	// without `data` reads it through the estate router. See internal/doclet.
+	KnowledgeDoclet KnowledgeBackend = "doclet"
 
 	// KnowledgeConfluence is Confluence, read live at query time.
 	KnowledgeConfluence KnowledgeBackend = "confluence"
@@ -796,7 +794,7 @@ const (
 // KnowledgeBackends is every knowledge backend, in the order the docs name
 // them: the closed set the schema offers, the validator accepts and the org
 // projection's `services.knowledge` carries, so each of those reads one list.
-var KnowledgeBackends = []KnowledgeBackend{KnowledgeNative, KnowledgeConfluence, KnowledgeNone}
+var KnowledgeBackends = []KnowledgeBackend{KnowledgeDoclet, KnowledgeConfluence, KnowledgeNone}
 
 // Valid reports whether b is a backend this build serves.
 func (b KnowledgeBackend) Valid() bool { return slices.Contains(KnowledgeBackends, b) }
@@ -804,37 +802,37 @@ func (b KnowledgeBackend) Valid() bool { return slices.Contains(KnowledgeBackend
 // Tracker is which work tracker the company runs.
 //
 // SEPARATE FROM THE KNOWLEDGE AXIS, because they are two products with
-// separate routing and separate lead maps: a company running a native tracker
-// against a Confluence wiki, or Jira against native pages, is an ordinary
-// arrangement rather than a mixture to refuse.
+// separate routing and separate lead maps: a company running Worklet against
+// a Confluence wiki, or Jira against Doclet, is an ordinary arrangement rather
+// than a mixture to refuse.
 type Tracker struct {
 	// Backend is which tracker this company runs. Empty derives: `jira`
-	// when integrations.jira is declared, `native` otherwise.
-	Backend TrackerBackend `yaml:"backend,omitempty" json:"backend,omitempty" js:"enum=native|jira|none" desc:"Which work tracker: native, jira, or none. Empty derives from integrations.jira."`
+	// when integrations.jira is declared, `worklet` otherwise.
+	Backend TrackerBackend `yaml:"backend,omitempty" json:"backend,omitempty" js:"enum=worklet|jira|none" desc:"Which work tracker: worklet, jira, or none. Empty derives from integrations.jira."`
 
-	// Native is the engine's own tracker's policy — the settings that
-	// exist because the company owns the tracker rather than renting one.
+	// Worklet is Worklet's policy: the settings that exist because the
+	// company owns the tracker rather than renting one.
 	//
-	// PRESENT ONLY ON A NATIVE COMPANY, and refused otherwise: an inbox
-	// horizon on a company running Jira is config that describes nothing,
-	// and the failure it produces is silence.
-	Native *TrackerNativeConfig `yaml:"native,omitempty" json:"native,omitempty"`
+	// PRESENT ONLY ON A COMPANY RUNNING WORKLET, and refused otherwise: an
+	// inbox horizon on a company running Jira is config that describes
+	// nothing, and the failure it produces is silence.
+	Worklet *WorkletConfig `yaml:"worklet,omitempty" json:"worklet,omitempty"`
 }
 
-// TrackerNativeConfig is the founder's policy over the engine's own tracker.
+// WorkletConfig is the founder's policy over Worklet.
 //
 // # Why this and nothing else
 //
 // Everything else a tracker could be told is either a fact about the operator
 // (which is Tier A, under `stream.`), a fact about the whole company rather
 // than its tracker, or a decision the engine makes once for everybody. What is
-// left is genuinely the tracker's own: how long a person's inbox keeps a row.
+// left is genuinely Worklet's own: how long a person's inbox keeps a row.
 //
 // The clock its dates mean USED to be here, and it is the company's top-level
-// `timezone` now (ADR-0018): the tracker's "today" and the scheduler's 09:00
+// `timezone` now (ADR-0018): Worklet's "today" and the scheduler's 09:00
 // are one company's calendar, and a clock held by one subsystem left every
 // other day boundary cut on UTC.
-type TrackerNativeConfig struct {
+type WorkletConfig struct {
 	// InboxRetentionDays is how long a person's inbox keeps a row.
 	//
 	// THE ONE HORIZON HERE THAT DELETES ANYTHING, and it deletes a row
@@ -861,7 +859,7 @@ const (
 )
 
 // InboxRetention is how long an inbox row lives, with the default applied.
-func (t *TrackerNativeConfig) InboxRetention() time.Duration {
+func (t *WorkletConfig) InboxRetention() time.Duration {
 	days := DefaultInboxRetentionDays
 	if t != nil && t.InboxRetentionDays > 0 {
 		days = t.InboxRetentionDays
@@ -869,7 +867,7 @@ func (t *TrackerNativeConfig) InboxRetention() time.Duration {
 	return time.Duration(days) * 24 * time.Hour
 }
 
-func (t *TrackerNativeConfig) validate(path Path) error {
+func (t *WorkletConfig) validate(path Path) error {
 	var p problems
 	if t == nil {
 		return nil
@@ -888,11 +886,11 @@ type TrackerBackend string
 
 // The trackers.
 const (
-	// TrackerNative is the engine's own work tracker: the state log's
-	// first domain. Every change is one record on the tracker log, applied
-	// into the replicated estate every data node holds, and a node without
-	// `data` reads it through the estate router. See internal/worklet.
-	TrackerNative TrackerBackend = "native"
+	// TrackerWorklet is Worklet, the engine's own work tracker: the state
+	// log's first domain. Every change is one record on the tracker log,
+	// applied into the replicated estate every data node holds, and a node
+	// without `data` reads it through the estate router. See internal/worklet.
+	TrackerWorklet TrackerBackend = "worklet"
 
 	// TrackerJira is Jira, whose state the engine reads through a seat's
 	// own tools and never mirrors.
@@ -907,7 +905,7 @@ const (
 
 // TrackerBackends is every tracker, in the order the docs name them, read on
 // [KnowledgeBackends]' terms.
-var TrackerBackends = []TrackerBackend{TrackerNative, TrackerJira, TrackerNone}
+var TrackerBackends = []TrackerBackend{TrackerWorklet, TrackerJira, TrackerNone}
 
 // Valid reports whether b is a tracker this build serves.
 func (b TrackerBackend) Valid() bool { return slices.Contains(TrackerBackends, b) }
@@ -981,7 +979,7 @@ func (c *Company) KnowledgeBackendFor() KnowledgeBackend {
 	if c.Integrations.Confluence != nil {
 		return KnowledgeConfluence
 	}
-	return KnowledgeNative
+	return KnowledgeDoclet
 }
 
 // TrackerBackendFor resolves the tracker, deriving an empty one.
@@ -992,7 +990,7 @@ func (c *Company) TrackerBackendFor() TrackerBackend {
 	if c.Integrations.Jira != nil {
 		return TrackerJira
 	}
-	return TrackerNative
+	return TrackerWorklet
 }
 
 // VectorsEnabled reports whether the corpus is embedded and searched by

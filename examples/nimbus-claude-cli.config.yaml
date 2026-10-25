@@ -84,11 +84,10 @@ logging:
 #
 # store_dir is NOT optional, and not merely inadvisable: leaving it empty
 # selects an in-memory server, and this company's own records live on that
-# stream.  The people who sign in to it do whatever backends it names —
-# the identity estate is a state-log domain — and its work items and its
-# pages do too, because it runs the engine's own tracker and knowledge
-# base (see tracker.backend and knowledge.backend in the company
-# document).  A restart would recreate those logs empty and this node
+# stream.  The people who sign in to it do whatever backends it names (the
+# identity estate is a state-log domain), and its work items and its pages
+# do too, because it runs Worklet and Doclet (see tracker.backend and
+# knowledge.backend in the company document).  A restart would recreate those logs empty and this node
 # would stop serving for good, so the engine refuses to boot without one
 # rather than losing the records — `crewlet validate` refuses it too,
 # naming stream.store_dir.  That is a rule about a broker MEMBER, which a

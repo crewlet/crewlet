@@ -448,5 +448,5 @@ func (e *Engine) inboxRetention() time.Duration {
 	if c == nil {
 		return config.DefaultInboxRetentionDays * 24 * time.Hour
 	}
-	return c.Config.Tracker.Native.InboxRetention()
+	return c.Config.Tracker.Worklet.InboxRetention()
 }

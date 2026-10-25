@@ -434,7 +434,7 @@ func TestANestedUnitWithNoIDIsWarnedAboutWhereItWasWritten(t *testing.T) {
 // was to embed, and wrong once the engine held the work items too. A company
 // that keeps its documents somewhere the engine cannot search and its work
 // here is entitled to semantic recall over the work.
-func TestVectorsNeedAKnowledgeBaseOrANativeTracker(t *testing.T) {
+func TestVectorsNeedAKnowledgeBaseOrWorklet(t *testing.T) {
 	t.Parallel()
 	on := true
 	for name, tc := range map[string]struct {
@@ -442,10 +442,10 @@ func TestVectorsNeedAKnowledgeBaseOrANativeTracker(t *testing.T) {
 		tracker   config.TrackerBackend
 		accept    bool
 	}{
-		"a knowledge base and a native tracker": {config.KnowledgeNative, config.TrackerNative, true},
-		"no knowledge base, native tracker":     {config.KnowledgeNone, config.TrackerNative, true},
-		"a knowledge base, no tracker":          {config.KnowledgeNative, config.TrackerNone, true},
-		"neither":                               {config.KnowledgeNone, config.TrackerNone, false},
+		"a knowledge base and Worklet": {config.KnowledgeDoclet, config.TrackerWorklet, true},
+		"no knowledge base, Worklet":   {config.KnowledgeNone, config.TrackerWorklet, true},
+		"a knowledge base, no tracker": {config.KnowledgeDoclet, config.TrackerNone, true},
+		"neither":                      {config.KnowledgeNone, config.TrackerNone, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := config.DefaultCompany()
@@ -465,7 +465,7 @@ func TestVectorsNeedAKnowledgeBaseOrANativeTracker(t *testing.T) {
 				if !refused {
 					t.Fatal("vectors with no corpus at all were accepted")
 				}
-				if !strings.Contains(err.Error(), "native tracker") {
+				if !strings.Contains(err.Error(), "Worklet") {
 					t.Errorf("refusal = %q, want it to name the other corpus", err)
 				}
 			}

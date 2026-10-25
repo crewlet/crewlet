@@ -16,7 +16,7 @@ import (
 //
 // `tracker_notifications` ships `tracker_notifications_swept_idx ON
 // (created_at)`, whose migration comment names "the per-node inbox retention
-// sweep, which is a range delete". `tracker.native.inbox_retention_days` is a
+// sweep, which is a range delete". `tracker.worklet.inbox_retention_days` is a
 // validated company setting with a default, a floor and a ceiling, and its
 // package doc says it is "the one horizon here that deletes anything". Nothing
 // deleted anything: the horizon was read at APPLY time, where it stops a whole-
@@ -54,7 +54,7 @@ import (
 // exactly the rows a replay would decline to write — the two must hold ONE
 // horizon, or an inbox grows back on every reanchor by the width of their
 // disagreement. The horizon is the company's
-// `tracker.native.inbox_retention_days` and an apply moves it under a running
+// `tracker.worklet.inbox_retention_days` and an apply moves it under a running
 // node; the applier follows an activation from its next batch, so the sweep
 // follows it from its next tick — handed a value, it kept the horizon the
 // node's first company stated for the life of the process while the applier

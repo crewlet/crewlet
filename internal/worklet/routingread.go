@@ -55,7 +55,7 @@ import (
 // them to look at a retention horizon. They are not the same errand.
 //
 // They are separated by the HORIZON, which the caller states: a change older
-// than `tracker.native.inbox_retention_days` is one whose rows the sweep is
+// than `tracker.worklet.inbox_retention_days` is one whose rows the sweep is
 // entitled to have taken and the applier is entitled never to have written, so
 // their absence is not evidence. A change newer than it would still have its
 // rows, so their absence IS evidence — nobody was reached.
@@ -231,7 +231,7 @@ type RoutingQuery struct {
 	// carry it.
 	RecordID string
 
-	// Retention is the company's `tracker.native.inbox_retention_days` as
+	// Retention is the company's `tracker.worklet.inbox_retention_days` as
 	// the caller is currently running it — see the file head. Zero states
 	// none, and an absent recipient set is then `unknown` rather than
 	// dated against a horizon nobody is keeping.

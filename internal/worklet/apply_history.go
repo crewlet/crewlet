@@ -343,6 +343,11 @@ func (a *Applier) stampStatusEntered(ctx context.Context, tx *sql.Tx, taskID str
 // back a year is a thing that happens.
 const InboxRetentionDefaultDays = 365
 
+// EpochInboxRetentionDays is the epoch key the company's
+// `tracker.worklet.inbox_retention_days` reaches the applier under: the
+// setting's own path, which the engine writes and [inboxHorizon] reads.
+const EpochInboxRetentionDays = "tracker.worklet.inbox_retention_days"
+
 // subjectKeys is what the applier already read off the object row, named so
 // the two are not passed as two bare strings a call site can swap.
 //
@@ -486,7 +491,7 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 // diverging rather than compared by the identity claim.
 func inboxHorizon(epoch map[string]any) time.Duration {
 	days := InboxRetentionDefaultDays
-	if raw, held := epoch["tracker.native.inbox_retention_days"]; held {
+	if raw, held := epoch[EpochInboxRetentionDays]; held {
 		switch v := raw.(type) {
 		case int:
 			days = v

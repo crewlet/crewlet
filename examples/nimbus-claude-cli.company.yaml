@@ -3,8 +3,8 @@
 #
 # A CHAT-ONLY company: Mattermost is the single integration, and a coding
 # CLI you already subscribe to is the single LLM.  Nothing else has to
-# exist — no code host, no metered API key, no public URL.  The work
-# tracker and the knowledge base are the ENGINE'S OWN, so this company
+# exist: no code host, no metered API key, no public URL.  The work
+# tracker is Worklet and the knowledge base is Doclet, so this company
 # files work and writes pages from its first turn with nothing to sign up
 # for.  Two commands stand the whole thing up:
 #
@@ -33,7 +33,7 @@
 #
 # MOVING TO A VENDOR TRACKER OR WIKI is the one change that is not purely
 # additive: Jira (docs/integrations/jira.md) and Confluence
-# (docs/integrations/confluence.md) REPLACE the native halves rather than
+# (docs/integrations/confluence.md) REPLACE Worklet or Doclet rather than
 # joining them, so adding either means changing the matching ``backend``
 # below. Work living in two places with nothing keeping them in step is
 # refused rather than allowed.
@@ -650,9 +650,9 @@ integrations:
       channels: [town-square, engineering, product]
       display_name_suffix: " (AI)"
 
-# Which tracker and which knowledge base this company runs.  Both are the
-# engine's OWN — work items and pages held in the fleet's own store,
-# replicated to every node, with no third-party account behind either.
+# Which tracker and which knowledge base this company runs: Worklet and
+# Doclet, with work items and pages held in the fleet's own store,
+# replicated to every node, and no third-party account behind either.
 # That is what makes this the SHORT path and still a complete company: the
 # seats file work, assign it, comment on it and publish pages from their
 # first turn, with nothing to sign up for and no credential to mint.
@@ -661,12 +661,12 @@ integrations:
 # vendor block, so both fields could be dropped; they are written out
 # because a reader should see the choice rather than infer it.
 tracker:
-  backend: native
+  backend: worklet
 
 knowledge:
-  backend: native
+  backend: doclet
 
-  # Read scope unset, which is the ordinary case natively: the pages are
+  # Read scope unset, which is the ordinary case on Doclet: the pages are
   # the company's own and every seat reads them through the engine, so
   # there is no third-party permission model underneath to mirror.  The
   # pages this company starts with are in examples/nimbus-docs/.
@@ -724,8 +724,8 @@ roles:
       # scripts/mattermost-dev-bootstrap.sh creates.  It is the only
       # contact identity this company can use: the others
       # (gitlab_username, github_login) name surfaces it does not
-      # connect.  The tracker and the knowledge base need none: they are
-      # the engine's own, and a seat is addressed there by its handle.
+      # connect.  Worklet and Doclet need none: a seat is addressed there by
+      # its handle.
       mattermost_user_id: founder
       # WHO SHE IS ON THE DASHBOARD is not written here: she signs in as
       # a person in the identity directory, which binds her to this seat
@@ -762,13 +762,14 @@ units:
         # so it is not repeated here.
         #
         # ``project`` and ``space`` are the unit's tracker and knowledge
-        # identity — the project it files work in and the container it
+        # identity: the project it files work in and the container it
         # writes pages to.  Inbound activity with no better recipient
         # (an unassigned item, a page change nobody was mentioned in)
         # routes to the unit lead.  The keys are VENDOR-NEUTRAL: here they
-        # name a native project and container, and they would name a Jira
-        # project and a Confluence space unchanged if this company moved
-        # to those — the org chart does not change when the backend does.
+        # name a Worklet project and a Doclet container, and they would name
+        # a Jira project and a Confluence space unchanged if this company
+        # moved to those; the org chart does not change when the backend
+        # does.
         project: "LEAD"
         space: "LEAD"
         roles:

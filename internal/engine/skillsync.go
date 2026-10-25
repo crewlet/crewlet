@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/skillsync"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
+	"github.com/crewlet/crewlet/internal/doclet"
 )
 
 // The tool-skill sync, wired.
@@ -76,24 +77,24 @@ func (e *Engine) skillSource(c *Company) skillsync.Source {
 		return skillsync.Source{}
 	}
 	backend := c.Config.KnowledgeBackendFor()
-	src := skillsync.Source{Backend: string(backend), Container: e.SkillsContainer(c)}
+	src := skillsync.Source{Backend: skillBackend(backend), Container: e.SkillsContainer(c)}
 	if src.Container == "" {
 		return src
 	}
 	switch backend {
 	case config.KnowledgeConfluence:
 		return e.confluenceSkillSource(src)
-	case config.KnowledgeNative:
+	case config.KnowledgeDoclet:
 		if r := e.remote.Load(); r != nil && r.wiki {
 			// THROUGH A DATA NODE, which answers only once its own copy
-			// is established — the wait a local walk does for itself.
+			// is established: the wait a local walk does for itself.
 			src.Walk = e.walkRemoteSkills
 			return src
 		}
 		if n := e.native.Load(); n == nil || n.pageReader == nil {
-			src.Unreadable = "the native knowledge base is not running on this " +
-				"node: it starts with the node, so a node that booted on another " +
-				"knowledge backend serves native skills after it restarts"
+			src.Unreadable = "Doclet is not running on this node: it starts " +
+				"with the node, so a node that booted on another knowledge " +
+				"backend serves Doclet's skills after it restarts"
 			return src
 		}
 		src.Walk = e.walkNativeSkills
@@ -103,6 +104,17 @@ func (e *Engine) skillSource(c *Company) skillsync.Source {
 			"tool-skill source this build can read"
 		return src
 	}
+}
+
+// skillBackend is the backend a skill's page is read under: the name every
+// record of a seat reading that page states ([doclet.Backend] for Doclet's
+// pages), so a skill's reads and the page's other reads are one page to
+// every reader. A backend whose pages state its config value states that.
+func skillBackend(backend config.KnowledgeBackend) string {
+	if backend == config.KnowledgeDoclet {
+		return doclet.Backend
+	}
+	return string(backend)
 }
 
 // confluenceSkillSource is the Confluence half of [Engine.skillSource].

@@ -2219,8 +2219,8 @@ func (c *Company) Epoch() map[string]any {
 		return nil
 	}
 	epoch := map[string]any{}
-	if native := c.Config.Tracker.Native; native != nil && native.InboxRetentionDays > 0 {
-		epoch["tracker.native.inbox_retention_days"] = native.InboxRetentionDays
+	if policy := c.Config.Tracker.Worklet; policy != nil && policy.InboxRetentionDays > 0 {
+		epoch[worklet.EpochInboxRetentionDays] = policy.InboxRetentionDays
 	}
 	return epoch
 }

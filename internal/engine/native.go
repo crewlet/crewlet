@@ -161,8 +161,8 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// this says — they are the core's — so a company on Jira and Confluence
 	// still applies the tracker's and the knowledge base's logs, and simply
 	// has no writer or reader over either.
-	runTracker := c.Config.TrackerBackendFor() == config.TrackerNative
-	wiki := c.Config.KnowledgeBackendFor() == config.KnowledgeNative
+	runTracker := c.Config.TrackerBackendFor() == config.TrackerWorklet
+	wiki := c.Config.KnowledgeBackendFor() == config.KnowledgeDoclet
 	nodeID, sl := core.nodeID, core.log
 
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
@@ -1859,10 +1859,10 @@ func (m seatMentions) Mentions(text string) []string {
 // every such node to walk its container through a data node. Several data
 // nodes announce one edit; a hearer coalesces them into one walk.
 //
-// NAMED AS THE NATIVE BACKEND'S, because the projection outlives an apply that
-// moves the company's skills to Confluence, and the loop ignores a refresh
-// from a backend its source is not on.
-func (e *Engine) nudgeSkills() { e.skillSync.Announce(string(config.KnowledgeNative)) }
+// NAMED AS DOCLET'S, because the projection outlives an apply that moves the
+// company's skills to Confluence, and the loop ignores a refresh from a
+// backend its source is not on.
+func (e *Engine) nudgeSkills() { e.skillSync.Announce(skillBackend(config.KnowledgeDoclet)) }
 
 // walkRemoteSkills reads the tool-skill container through a data node, for a
 // node that holds none.

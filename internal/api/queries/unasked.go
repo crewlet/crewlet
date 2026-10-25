@@ -192,5 +192,5 @@ func (s Sources) inboxRetention() time.Duration {
 	if company == nil {
 		return 0
 	}
-	return company.Tracker.Native.InboxRetention()
+	return company.Tracker.Worklet.InboxRetention()
 }
