@@ -83,6 +83,16 @@ type roster map[string]bool
 
 func (r roster) Present(_ context.Context, node string) (bool, error) { return r[node], nil }
 
+func (r roster) Nodes(context.Context) ([]string, error) {
+	var out []string
+	for n, ok := range r {
+		if ok {
+			out = append(out, n)
+		}
+	}
+	return out, nil
+}
+
 // server is a running node's turns, as the fleet half asks them.
 type server struct {
 	mu      sync.Mutex
@@ -109,6 +119,19 @@ func (s *server) ReplayHere(_ context.Context, who, turn uuid.UUID, after uint64
 		}
 	}
 	return out, false, nil
+}
+
+func (s *server) LastHere(_ context.Context, who, turn uuid.UUID) (uint64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	frames, ok := s.frames[turn]
+	switch {
+	case !ok || len(frames) == 0:
+		return 0, ErrNotRunning
+	case who != owner:
+		return 0, ErrNotYours
+	}
+	return frames[len(frames)-1].Seq, nil
 }
 
 func (s *server) StopHere(_ context.Context, who, turn uuid.UUID) (wire.TurnState, error) {

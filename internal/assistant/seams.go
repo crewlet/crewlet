@@ -179,6 +179,11 @@ type Remote interface {
 	// Stop asks node to stop owner's turn, answering the state it ended
 	// in where it was served. Another person's turn is [ErrNotFound].
 	Stop(ctx context.Context, owner, turn uuid.UUID, node string) (wire.TurnState, live.Reach, error)
+	// LastSeq is the newest seq any node numbered for owner's turn, and the
+	// node holding it: what a segment opened here continues after, so a
+	// client that drew frames from another node never meets a number it has
+	// seen, and where a stream of the turn's newest segment is answered.
+	LastSeq(ctx context.Context, owner, turn uuid.UUID) (string, uint64, error)
 }
 
 // TurnRate is the fleet's fixed-window counter (internal/coord's Counter as

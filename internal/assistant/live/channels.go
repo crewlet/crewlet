@@ -25,7 +25,11 @@ import (
 // Scattered to every node and answered only by the node the request names
 // ([ReplayRequest.Node]): the turn's row says where it runs, and only that
 // node can say it is NOT running it, which is how a follower tells a runner
-// that restarted from one that is slow.
+// that restarted from one that is slow. One request names no node: a PROBE
+// ([ReplayRequest.Probe]) asks every node the newest seq it numbered for a
+// turn, so a node opening the turn's next segment numbers it after all of
+// them, and a client that drew frames from one node never meets a number it
+// has already seen from another.
 
 // Answer is what a serving node answered a replay or a Stop.
 type Answer string
@@ -61,6 +65,10 @@ type ReplayRequest struct {
 	Owner    uuid.UUID `json:"owner"`
 	Turn     uuid.UUID `json:"turn"`
 	After    uint64    `json:"after"`
+	// Probe asks for no frames: only the newest seq the answering node
+	// numbered for the turn ([ReplayReply.Last]). Node is empty, and every
+	// node answers.
+	Probe bool `json:"probe,omitempty"`
 }
 
 // Binding is the request's id and deadline (internal/signedask).
@@ -69,13 +77,16 @@ func (r ReplayRequest) Binding() (string, time.Time) { return r.ID, r.Deadline }
 // ReplayReply is the running node's answer: the page of frames, encrypted
 // under [ReplayAAD] in Page, where Answer is [AnswerDone].
 type ReplayReply struct {
-	V          int       `json:"v"`
-	Request    string    `json:"request"`
-	Node       string    `json:"node"`
-	Turn       uuid.UUID `json:"turn"`
-	Answer     Answer    `json:"answer"`
-	Page       string    `json:"page,omitempty"`
-	Unverified string    `json:"unverified,omitempty"`
+	V       int       `json:"v"`
+	Request string    `json:"request"`
+	Node    string    `json:"node"`
+	Turn    uuid.UUID `json:"turn"`
+	Answer  Answer    `json:"answer"`
+	Page    string    `json:"page,omitempty"`
+	// Last is a probe's answer: the newest seq the node numbered for the
+	// turn. A number, never content.
+	Last       uint64 `json:"last,omitempty"`
+	Unverified string `json:"unverified,omitempty"`
 }
 
 // Answers is the id of the request the reply answers (internal/signedask).
@@ -146,26 +157,42 @@ type reply interface {
 func (r ReplayReply) from() (string, uuid.UUID) { return r.Node, r.Turn }
 func (r StopReply) from() (string, uuid.UUID)   { return r.Node, r.Turn }
 
-// ask scatters one request bound to a fresh id and the ask's deadline, and
-// answers the first reply the fleet signed for that id, from the node and
-// about the turn it named. answered is false when none did inside the
-// budget; an error is an ask that could not be made, which sent nothing.
+// ask scatters one request and answers the first reply from the node and
+// about the turn it named ([askEach]). answered is false when none did
+// inside the budget.
 func ask[Q addressed, R reply, PQ binder[Q]](ctx context.Context, f *Fleet,
 	ch *signedask.Channel[Q, R], subject string, req PQ) (R, bool, error) {
 
-	var zero R
+	var got R
+	answered := false
+	node, _ := (*req).target()
+	err := askEach(ctx, f, ch, subject, req, func(rep R) bool {
+		if from, _ := rep.from(); from != node {
+			return true
+		}
+		got, answered = rep, true
+		return false
+	})
+	return got, answered, err
+}
+
+// askEach scatters one request bound to a fresh id and the ask's deadline,
+// and hands each reply the fleet signed for that id, about the turn it named,
+// to each until it answers false or the budget ends. An error is an ask that
+// could not be made, which sent nothing.
+func askEach[Q addressed, R reply, PQ binder[Q]](ctx context.Context, f *Fleet,
+	ch *signedask.Channel[Q, R], subject string, req PQ, each func(R) bool) error {
+
 	askCtx, cancel := context.WithTimeout(ctx, f.askBudget)
 	defer cancel()
 	deadline, _ := askCtx.Deadline()
 	req.bind(signedask.NewID(), deadline)
 	id, _ := (*req).Binding()
-	node, turn := (*req).target()
+	_, turn := (*req).target()
 	sealed, err := ch.SealRequest(*req)
 	if err != nil {
-		return zero, false, fmt.Errorf("live: sign the request: %w", err)
+		return fmt.Errorf("live: sign the request: %w", err)
 	}
-	var got R
-	answered := false
 	err = f.broker.AskEach(askCtx, subject, sealed, func(raw []byte) bool {
 		rep, why, err := ch.OpenReply(raw, id)
 		switch {
@@ -178,16 +205,56 @@ func ask[Q addressed, R reply, PQ binder[Q]](ctx context.Context, f *Fleet,
 				"turn", turn, "detail", why)
 			return true
 		}
-		if from, about := rep.from(); from != node || about != turn {
+		if _, about := rep.from(); about != turn {
 			return true
 		}
-		got, answered = rep, true
-		return false
+		return each(rep)
 	})
 	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
-		return zero, false, fmt.Errorf("live: ask %s: %w", subject, err)
+		return fmt.Errorf("live: ask %s: %w", subject, err)
 	}
-	return got, answered, nil
+	return nil
+}
+
+// LastSeq is the newest seq any node of the fleet numbered for owner's turn,
+// and the node that holds it, zero and empty where none did: the floor a
+// node opening the turn's next segment numbers after ([Hub.Open]), and where
+// a stream of a turn no record names the newest segment of is answered. Every node the roster counts is asked at once,
+// and the probe ends as soon as each has answered; a roster that cannot be
+// read leaves it to wait out its budget for whoever answers.
+func (f *Fleet) LastSeq(ctx context.Context, owner, turn uuid.UUID) (string, uint64, error) {
+	nodes, err := f.roster.Nodes(ctx)
+	if err != nil {
+		f.log.WarnContext(ctx, "assistant_probe_roster_unread", "turn", turn, "error", err,
+			"detail", "the probe waits out its budget for every node that answers")
+		nodes = nil
+	}
+	req := ReplayRequest{V: FleetWireVersion, Owner: owner, Turn: turn, Probe: true}
+	heard := map[string]bool{}
+	var (
+		holder string
+		last   uint64
+	)
+	notYours := false
+	err = askEach(ctx, f, f.replays, topics.AssistantReplay, &req, func(rep ReplayReply) bool {
+		heard[rep.Node] = true
+		switch rep.Answer {
+		case AnswerDone:
+			if rep.Last > last {
+				holder, last = rep.Node, rep.Last
+			}
+		case AnswerNotYours:
+			notYours = true
+		}
+		return len(nodes) == 0 || len(heard) < len(nodes)
+	})
+	switch {
+	case err != nil:
+		return "", 0, err
+	case notYours:
+		return "", 0, ErrNotYours
+	}
+	return holder, last, nil
 }
 
 // askReplay asks node for owner's frames after seq after, and opens the page.
@@ -247,7 +314,8 @@ func admitted[Q addressed, R signedask.Reply](ctx context.Context, f *Fleet, ch 
 	a := ch.Admit(raw, seen, f.now())
 	switch a.Disposition {
 	case signedask.Admitted:
-		if node, _ := a.Request.target(); node != f.node {
+		// A request names this node, or none: a probe every node answers.
+		if node, _ := a.Request.target(); node != f.node && node != "" {
 			return zero, nil, errNotThisNode
 		}
 		return a.Request, nil, nil
@@ -302,6 +370,22 @@ func (f *Fleet) answerReplay(ctx context.Context, raw []byte) ([]byte, error) {
 	server := f.serving()
 	if server == nil {
 		return nil, errors.New("live: the fleet half is not started")
+	}
+	if req.Probe {
+		// EVERY NODE ANSWERS A PROBE, one that knows nothing of the turn
+		// included, so the asker can stop as soon as the roster has.
+		last, err := server.LastHere(ctx, req.Owner, req.Turn)
+		switch {
+		case errors.Is(err, ErrNotRunning):
+			out.Answer = AnswerNotRunning
+		case errors.Is(err, ErrNotYours):
+			out.Answer = AnswerNotYours
+		case err != nil:
+			return nil, fmt.Errorf("live: probe turn %s: %w", req.Turn, err)
+		default:
+			out.Answer, out.Last = AnswerDone, last
+		}
+		return f.replays.SealReply(out)
 	}
 	frames, ended, err := server.ReplayHere(ctx, req.Owner, req.Turn, req.After)
 	switch {

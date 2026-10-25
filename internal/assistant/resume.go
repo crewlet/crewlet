@@ -2,7 +2,6 @@ package assistant
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -90,19 +89,18 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 	if row.State != wire.TurnWaitingForApproval || row.Conversation != r.Conversation {
 		return wire.TurnAccepted{}, ErrTurnRunning
 	}
-	raw, err := s.transcripts.Parked(ctx, r.Owner, r.Turn)
+	keep, err := s.parkedLoop(ctx, r.Owner, r.Turn)
+	if err != nil {
+		return wire.TurnAccepted{}, err
+	}
+	// READ BEFORE THE RESUME RECORD, like everything that can fail: once it
+	// lands the turn is running on this node, and a return after it would
+	// leave it running with no runner.
+	conversation, err := s.transcripts.Conversation(ctx, r.Owner, r.Conversation)
 	if err != nil {
 		return wire.TurnAccepted{}, s.readFailure(err)
 	}
-	var keep parked
-	if err = json.Unmarshal(raw, &keep); err != nil {
-		return wire.TurnAccepted{}, fmt.Errorf("assistant: turn %s parked a loop this build "+
-			"cannot decode: %w", r.Turn, err)
-	}
-	if keep.V != parkedVersion {
-		return wire.TurnAccepted{}, fmt.Errorf("assistant: turn %s parked a loop at version %d, "+
-			"and this build reads version %d", r.Turn, keep.V, parkedVersion)
-	}
+	floor := s.continuing(ctx, r.Owner, r.Turn, keep.Seq)
 	acts, err := s.acts(ctx, person)
 	if err != nil {
 		return wire.TurnAccepted{}, &Unavailable{RetryAfter: 2 * time.Second, Cause: err}
@@ -145,12 +143,7 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 		ToolCallID: keep.PendingCall, Content: resultOf(r, t.boundary),
 		Failed: r.State != wire.ProposalApplied}})
 
-	conversation, err := s.transcripts.Conversation(ctx, r.Owner, r.Conversation)
-	if err != nil {
-		t.cancel(nil)
-		return wire.TurnAccepted{}, s.readFailure(err)
-	}
-	after := s.openStream(t, conversation, true)
+	after := s.openStream(t, conversation, true, floor)
 	if r.Card.Type != "" {
 		if err := s.showProposal(ctx, t, r.Proposal, r.Card); err != nil {
 			s.log.WarnContext(ctx, "assistant_proposal_card_unshown", "turn", r.Turn,
@@ -236,9 +229,14 @@ func (s *Service) Emit(ctx context.Context, owner, conversation, turn uuid.UUID,
 		return wire.TurnAccepted{}, fmt.Errorf("%w: frames are emitted on the owner's own "+
 			"decision", ErrNotFound)
 	}
+	keep, err := s.parkedLoop(ctx, owner, turn)
+	if err != nil {
+		return wire.TurnAccepted{}, err
+	}
+	floor := s.continuing(ctx, owner, turn, keep.Seq)
 	t := s.newTurn(person, conversation, turn, "", nil, nil, nil)
 	defer t.cancel(nil)
-	t.log = s.hub.Open(owner, conversation, turn)
+	t.log = s.hub.Open(owner, conversation, turn, floor)
 	after := t.log.Last()
 	if e.Card != nil {
 		if err := s.showProposal(ctx, t, uuid.Nil, *e.Card); err != nil {

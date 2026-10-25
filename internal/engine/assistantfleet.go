@@ -61,6 +61,21 @@ func (r nodeRoster) Present(ctx context.Context, node string) (bool, error) {
 	return lease != nil, nil
 }
 
+// Nodes is every node holding its presence lease now.
+func (r nodeRoster) Nodes(ctx context.Context) ([]string, error) {
+	leases, err := r.coord.ListLive(ctx, coord.ClassNode)
+	if err != nil {
+		return nil, fmt.Errorf("engine: list the fleet's nodes: %w", err)
+	}
+	nodes := make([]string, 0, len(leases))
+	for _, l := range leases {
+		if id, ok := coord.NodeID(l.Resource); ok {
+			nodes = append(nodes, id)
+		}
+	}
+	return nodes, nil
+}
+
 // AssistantTurnRate is the fleet's counter a person's turn starts are counted
 // on, or nil on a node with no fleet store, whose turns are counted on the
 // node alone. A NIL INTERFACE there, never one holding a nil store.

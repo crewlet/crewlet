@@ -6954,7 +6954,10 @@ its transcript holds it, then how it ended.
 turn follows it there: the frames it missed are asked of the running node, and
 the rest are heard as the running node tells the fleet, numbered as the running
 node numbered them, so a reconnect that lands on another node resumes exactly
-where it left off. Frames cross the broker encrypted under the fleet keyring,
+where it left off. The numbering continues across nodes too: a turn an approval
+resumes, or whose page action it emits, on a node that never ran it is numbered
+after every frame any node told of it, so `after_seq` and `Last-Event-ID` stay
+meaningful wherever the next request lands. Frames cross the broker encrypted under the fleet keyring,
 bound to their turn, and a node shows only a frame the fleet sealed. A turn whose
 runner is gone (its node restarted, or has left the fleet) is closed
 `interrupted` once, by whichever node notices first, and answered with

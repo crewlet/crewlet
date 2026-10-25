@@ -157,11 +157,16 @@ type Broker interface {
 	Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error)
 }
 
-// Roster says whether a node is still in the fleet: its presence lease
-// (internal/coord, ListLive's node class). (false, nil) is a node definitively
-// gone; an error is a store that could not say, which is never read as gone.
+// Roster is the fleet's membership: the presence leases (internal/coord,
+// ListLive's node class).
 type Roster interface {
+	// Present says whether a node is still in the fleet. (false, nil) is a
+	// node definitively gone; an error is a store that could not say, which
+	// is never read as gone.
 	Present(ctx context.Context, node string) (bool, error)
+	// Nodes is every node in the fleet now: how many answers a probe waits
+	// for.
+	Nodes(ctx context.Context) ([]string, error)
 }
 
 // Server is the running node's half: the service that holds its turns. The
@@ -176,6 +181,10 @@ type Server interface {
 	// StopHere stops owner's turn running on this node and answers the
 	// state it ended in. [ErrNotRunning] and [ErrNotYours] as above.
 	StopHere(ctx context.Context, owner, turn uuid.UUID) (wire.TurnState, error)
+	// LastHere is the newest seq this node numbered for owner's turn
+	// ([Hub.Known]). [ErrNotRunning] for a turn it knows nothing of, and
+	// [ErrNotYours] as above.
+	LastHere(ctx context.Context, owner, turn uuid.UUID) (uint64, error)
 }
 
 // Writer is a live stream as a follower writes to it: the assistant's
