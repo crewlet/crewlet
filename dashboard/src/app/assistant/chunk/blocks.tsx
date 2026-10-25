@@ -403,13 +403,11 @@ function Proposal({
   const unknown = proposal.state === "unknown";
   const stale = local?.pageMoved === true && proposal.state === "proposed";
   const state: ProposalState = stale ? "stale" : PROPOSAL_STATE[proposal.state];
-  const failure =
-    local?.failure ??
-    (proposal.failure
-      ? proposal.failure.refusal.message
-      : unknown
-        ? "Could not confirm. It may have landed."
-        : undefined);
+  // A FAILED CARD SAYS WHY in the page's words where the page refused it
+  // here first, else the engine's; one nobody could confirm says so in the
+  // card's own words (failureOutcome) and never "Nothing changed.".
+  const failure = local?.failure ?? proposal.failure?.refusal.message;
+  const refusal = local?.refusal;
   return (
     <ProposalCard
       title={proposal.title}
@@ -430,9 +428,15 @@ function Proposal({
       onRetry={unknown || proposal.failure?.retryable ? () => on.approve(proposal) : undefined}
       receipt={proposal.receipt?.summary}
       failure={failure}
+      failureOutcome={unknown ? "unknown" : undefined}
       // THE ROUTE'S NEXT STEP, on its own line in the failure strip, where the
       // engine's own refusal is shown (never beside the drawer's own words).
       failureHint={local?.failure ? undefined : proposal.failure?.refusal.hint}
+      // A DECISION THE ENGINE REFUSED, or nobody answered, while the card
+      // still waits: said above the decision, until the next press clears it.
+      decisionRefusal={
+        refusal ? { sentence: refusal.sentence, hint: refusal.hint ?? undefined } : undefined
+      }
     />
   );
 }

@@ -53,6 +53,7 @@ import {
   openTurn,
   reduce,
   type ConversationView,
+  type DecisionRefusal,
   type SendRefusal,
   type TurnEvent,
 } from "./turn.ts";
@@ -376,17 +377,25 @@ function undecided(proposal: AssistantProposalCard, err: unknown): void {
 }
 
 /**
- * What a decision the engine refused, or nobody answered, says on its card.
- * The refusal's own sentence and nothing after it: the card adds what it
- * left changed itself, so a sentence that said "Nothing changed." here read
- * it twice.
+ * What a decision the engine refused, or nobody answered, says on its card
+ * while the card still waits on one (ProposalCard's `decisionRefusal`): the
+ * refusal's own sentence and the route's next step, never "Nothing changed.",
+ * which is the card's to say, and only of a failed change.
  */
-export function decisionFailure(err: unknown): { failure: string; unknown: boolean } {
+export function decisionFailure(err: unknown): { refusal: DecisionRefusal; unknown: boolean } {
   if (err instanceof RestError) {
     const failed = writeFailed(err);
-    if (failed.kind !== "unknown") return { failure: failed.sentence, unknown: false };
+    if (failed.kind !== "unknown") {
+      return { refusal: { sentence: failed.sentence, hint: failed.hint || null }, unknown: false };
+    }
   }
-  return { failure: "Could not confirm. It may have landed.", unknown: true };
+  return {
+    refusal: {
+      sentence: "Could not confirm the approval. It may have landed.",
+      hint: "Approve again: it sends the same change, never a second one.",
+    },
+    unknown: true,
+  };
 }
 
 /**

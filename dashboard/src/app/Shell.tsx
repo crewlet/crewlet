@@ -753,6 +753,11 @@ function Frame({ children }: { children: ReactNode }) {
               ) : null
             }
             asideShape={assistantShape}
+            // AN OVERLAY LEAVES THE PAGE LIVE BESIDE IT: the assistant is
+            // read beside the screen it talks about, so no veil and no Tab
+            // trap, and Escape from inside still closes it. A column is never
+            // modal and a sheet always is, so this decides the overlay alone.
+            asideModal={false}
             asideWidth={assistantDrawn}
             asideReserve={sheetFloor(frame, peekShape === "column")}
             asideLabel="Crewlet Assistant"

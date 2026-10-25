@@ -97,18 +97,34 @@ test("a refused proposal draws the route's next step on its own line", () => {
   expect(screen.getByText("Restore it in Work.")).toBeTruthy();
 });
 
-// A REFUSED DECISION SAYS "NOTHING CHANGED." ONCE: the card adds what the
-// refusal left changed, so the words the drawer keeps for the refusal are its
-// sentence alone. Mutation: end the kept words with "Nothing changed." again
-// and the card reads it twice.
-test("a refused decision's card says nothing changed once", () => {
+// A REFUSED DECISION IS SAID ABOVE THE DECISION while the card still waits,
+// in the engine's sentence with its next step, and never followed by "Nothing
+// changed.", which a failed card says once, of itself. Mutation: keep the
+// refusal as the card's failure again and it is never shown on a pending card.
+test("a refused decision is said above the decision, and a failure once", () => {
   const refused = new RestError(409, {
     error: "proposal_digest_mismatch",
     message: "This is not the change you were shown.",
   });
-  const { failure } = decisionFailure(refused);
-  draw({ scope: "server", state: "failed" }, { pageMoved: false, failure });
-  const said = document.body.textContent ?? "";
+  const { refusal } = decisionFailure(refused);
+  draw({ scope: "server", state: "proposed" }, { pageMoved: false, failure: null, refusal });
+  let said = document.body.textContent ?? "";
+  expect(said).toContain(refusal.sentence);
+  expect(said).not.toContain("Nothing changed.");
+  cleanup();
+
+  draw(
+    { scope: "page", state: "failed" },
+    { pageMoved: false, failure: "The page refused it.", refusal: null },
+  );
+  said = document.body.textContent ?? "";
   expect(said.split("Nothing changed.").length - 1).toBe(1);
-  expect(said).toContain("This is not the change you were shown.");
+});
+
+// A CHANGE NOBODY COULD CONFIRM NEVER SAYS "NOTHING CHANGED.": the card's own
+// unknown outcome speaks for it. Mutation: drop failureOutcome and the card
+// claims nothing changed of a write that may have landed.
+test("an unconfirmed change never says nothing changed", () => {
+  draw({ scope: "server", state: "unknown" });
+  expect(document.body.textContent ?? "").not.toContain("Nothing changed.");
 });

@@ -247,12 +247,18 @@ describe("one row per move of the state machine", () => {
       {
         type: "approval_failed",
         proposalId: PROPOSAL_ID,
-        failure: "Not permitted.",
+        refusal: { sentence: "Not permitted.", hint: "Ask an admin." },
         unknown: false,
       },
     );
     expect(phase(view)).toBe("awaiting_approval");
-    expect(view.turns[0]!.proposals[PROPOSAL_ID]?.failure).toBe("Not permitted.");
+    expect(view.turns[0]!.proposals[PROPOSAL_ID]?.refusal).toEqual({
+      sentence: "Not permitted.",
+      hint: "Ask an admin.",
+    });
+    // THE NEXT PRESS CLEARS IT: the refusal was about the decision before.
+    const again = reduce(view, { type: "approve", proposalId: PROPOSAL_ID });
+    expect(again.turns[0]!.proposals[PROPOSAL_ID]?.refusal).toBeNull();
   });
 
   test("applying, the page applied it: working, the card applied with the page's receipt", () => {
@@ -328,7 +334,7 @@ describe("one row per move of the state machine", () => {
       {
         type: "approval_failed",
         proposalId: PROPOSAL_ID,
-        failure: "Could not confirm.",
+        refusal: { sentence: "Could not confirm.", hint: null },
         unknown: true,
       },
     );

@@ -109,8 +109,19 @@ export interface SendRefusal {
 export interface ProposalLocal {
   /** The page under the drawer moved since the change was prepared. */
   pageMoved: boolean;
-  /** An approval's failure, in the person's words, where one came back. */
+  /** Why a page change failed on this screen, in the screen's words. */
   failure: string | null;
+  /**
+   * Why the person's last decision was refused, or went unanswered, while
+   * the card still waits on one; cleared by the next press.
+   */
+  refusal: DecisionRefusal | null;
+}
+
+/** A decision the engine refused, or nobody answered, in the drawer's words. */
+export interface DecisionRefusal {
+  sentence: string;
+  hint: string | null;
 }
 
 /** One turn, and everything the drawer draws for it. */
@@ -192,7 +203,12 @@ export type TurnEvent =
   | { type: "stopped"; turnId: string; state: WireTurnState }
   | { type: "approve"; proposalId: string }
   | { type: "approval_settled"; proposalId: string; state: AssistantProposalCard["state"] }
-  | { type: "approval_failed"; proposalId: string; failure: string; unknown: boolean }
+  | {
+      type: "approval_failed";
+      proposalId: string;
+      refusal: DecisionRefusal;
+      unknown: boolean;
+    }
   | { type: "page_moved"; revision: string }
   | { type: "action_local"; actionId: string; local: ActionLocal }
   | { type: "transcript"; transcript: AssistantTranscript }
@@ -480,9 +496,17 @@ export function reduce(view: ConversationView, event: TurnEvent): ConversationVi
         (t) => ({ ...t, phase: phaseOf(event.state), stopping: false }),
       );
     case "approve":
-      return withProposal(view, event.proposalId, (turn) =>
-        turn.phase === "awaiting_approval" ? { ...turn, phase: "applying" } : turn,
-      );
+      return withProposal(view, event.proposalId, (turn) => {
+        // THE NEXT PRESS CLEARS THE LAST REFUSAL: it is about the decision
+        // before this one.
+        const local = turn.proposals[event.proposalId];
+        const proposals = local
+          ? { ...turn.proposals, [event.proposalId]: { ...local, refusal: null } }
+          : turn.proposals;
+        return turn.phase === "awaiting_approval"
+          ? { ...turn, proposals, phase: "applying" }
+          : { ...turn, proposals };
+      });
     case "approval_settled":
       return withProposal(view, event.proposalId, (turn) => {
         const cards = turn.cards.map((card) => {
@@ -501,7 +525,8 @@ export function reduce(view: ConversationView, event: TurnEvent): ConversationVi
           ...turn.proposals,
           [event.proposalId]: {
             pageMoved: turn.proposals[event.proposalId]?.pageMoved ?? false,
-            failure: event.failure,
+            failure: turn.proposals[event.proposalId]?.failure ?? null,
+            refusal: event.refusal,
           },
         },
         phase: !isOpen(turn.phase)
@@ -535,6 +560,7 @@ export function reduce(view: ConversationView, event: TurnEvent): ConversationVi
             ) {
               proposals[proposal.proposal_id] = {
                 failure: proposals[proposal.proposal_id]?.failure ?? null,
+                refusal: proposals[proposal.proposal_id]?.refusal ?? null,
                 pageMoved: true,
               };
               moved = true;
@@ -602,6 +628,7 @@ function actionSettled(turn: TurnView, actionId: string, local: ActionLocal): Tu
             [proposalId]: {
               pageMoved: next.proposals[proposalId]?.pageMoved ?? false,
               failure: local.words,
+              refusal: null,
             },
           }
         : next.proposals,

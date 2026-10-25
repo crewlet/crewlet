@@ -194,7 +194,7 @@ function view(): ConversationView {
   expect(faults).toEqual([]);
   expect(frames.filter((f) => f.kind === "card")).toHaveLength(cards().length);
   const start: TurnEvent[] = [
-    { type: "send", key: "k1", opKey: "op1", text: "What is on ENG-7?", page: null, at: AT },
+    { type: "send", key: "k1", text: "What is on ENG-7?", page: null, at: AT },
     { type: "accepted", key: "k1", turnId: TURN, afterSeq: 0 },
   ];
   return [...start, ...frames.map((frame): TurnEvent => ({ type: "frame", frame }))].reduce(
