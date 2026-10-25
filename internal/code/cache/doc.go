@@ -126,10 +126,15 @@
 // verified against its row on the way in (objstore), and the three sections
 // are held to the row by code.CheckBundle; a bundle that is not its row's is
 // refused and never retried, because the row and the bytes disagree and
-// neither is fixed by asking again. A pack the store does not have, in a
-// round that was not linearizable, is asked about again at linearizable
-// before it is called missing: a copy behind the log may name a pack a purge
-// has since removed.
+// neither is fixed by asking again. A pack the store does not have is asked
+// about again at linearizable, once, before it is called missing — whatever
+// level the round read at, since that read came before the store answered. A
+// copy behind the log may name a pack a purge has since removed, and even a
+// read at the log's head may name a row that has left the log since —
+// removed by a purge's part, or retired, its object kept only for its grace
+// (ADR-0051) — whose object the collector has deleted meanwhile. A head that
+// no longer names the pack converges the round to what the log holds; one
+// that still does makes it missing, final.
 //
 // A full round that leaves [MidxRoundPacks] or more packs and no
 // multi-pack-index writes one over exactly those packs — without a bitmap, a

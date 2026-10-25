@@ -714,60 +714,171 @@ func TestASyncInstallsPacksBeforeRefs(t *testing.T) {
 	}
 }
 
-// A MISSING PACK IS ASKED AGAIN LINEARIZABLY: a copy behind the log may name
-// a pack a purge has since removed with its row, so a round that was not
-// linearizable reads again at linearizable before it calls the pack missing —
-// where the repository may be gone, or the pack definitely is. Only that
+// A MISSING PACK IS ASKED AGAIN LINEARIZABLY, ONCE, WHATEVER THE ROUND READ
+// AT: a copy behind the log may name a pack a purge has since removed with its
+// row, and even a read at the log's head was made before the store answered,
+// so a round reads at linearizable once more before it calls the pack missing
+// — where the repository may be gone, or the pack definitely is. Only that
 // final answer is logged: a not-found the log's head explains is no alarm.
+// And it is final: a pack the store has lost costs its round one read more,
+// never a loop — a third read is failed, so a round that kept asking fails
+// the case rather than hangs it.
+//
+// Mutation: ask again only from a round below linearizable (the linearizable
+// rounds read once, and the purged one calls the pack missing).
 func TestAMissingPackIsAskedAgainLinearizably(t *testing.T) {
 	t.Parallel()
-	for _, purged := range []bool{true, false} {
-		t.Run(fmt.Sprintf("purged=%t", purged), func(t *testing.T) {
-			t.Parallel()
-			w := newSyncWorld(t, onMemory)
-			repo := w.repo(t, 1)
-			_, row := w.push(t, repo, "refs/heads/main", nil)
-			if err := w.store.Delete(t.Context(), row.Object); err != nil {
-				t.Fatal(err)
-			}
-			if purged {
+	thirdRead := errors.New("a round read its snapshot a third time")
+	for _, fresh := range []statelog.Freshness{stale, linearizable} {
+		for _, purged := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/purged=%t", fresh.Level, purged), func(t *testing.T) {
+				t.Parallel()
+				w := newSyncWorld(t, onMemory)
+				repo := w.repo(t, 1)
+				_, row := w.push(t, repo, "refs/heads/main", nil)
+				if err := w.store.Delete(t.Context(), row.Object); err != nil {
+					t.Fatal(err)
+				}
+				var reads atomic.Int32
 				w.log.set(func(f *fakeLog) {
-					f.hook = func(call fakeCall) error {
-						if call.Level == "linearizable" {
-							w.log.purge(repo)
+					f.hook = func(fakeCall) error {
+						switch reads.Add(1) {
+						case 2:
+							if purged {
+								// Between the round's read and the one it asks
+								// the log's head after the store's answer.
+								w.log.purge(repo)
+							}
+						case 3:
+							return thirdRead
 						}
 						return nil
 					}
 				})
-			}
+				c := w.open(t)
+				_, err := c.Sync(t.Context(), repo, fresh)
+				var levels []string
+				for _, call := range w.log.callsOf(repo) {
+					levels = append(levels, string(call.Level))
+				}
+				if want := fmt.Sprintf("[%s linearizable]", fresh.Level); fmt.Sprint(levels) != want {
+					t.Errorf("the round read at %v, want %s: its own read, then the log's head once", levels, want)
+				}
+				if purged {
+					if !errors.Is(err, code.ErrRepoNotFound) {
+						t.Errorf("Sync: %v, want code.ErrRepoNotFound", err)
+					}
+					// The pack was never missing: the read that named it
+					// predates a purge, and nothing is logged against the
+					// store.
+					if got := w.logs.lines(t, "code_pack_missing"); len(got) != 0 {
+						t.Errorf("logged %d code_pack_missing lines for a pack a purge removed with its row", len(got))
+					}
+					return
+				}
+				var missing *cache.ErrPackMissing
+				if !errors.As(err, &missing) || missing.Pack.PackID != row.PackID || missing.Pack.Object != row.Object ||
+					missing.Damaged || !errors.Is(err, objstore.ErrNotFound) {
+					t.Fatalf("Sync: %v, want *ErrPackMissing naming %s", err, row.PackID)
+				}
+				if got := w.logs.lines(t, "code_pack_missing"); len(got) != 1 {
+					t.Errorf("logged %d code_pack_missing lines, want the one the log's head made final", len(got))
+				}
+			})
+		}
+	}
+}
+
+// A PACK RETIRED UNDER A ROUND IS ASKED ABOUT AGAIN: even a linearizable
+// round's barrier is taken before it downloads what its snapshot names, and a
+// row can leave the log while it downloads — a compaction retires the packs it
+// merged into one, and once their grace has passed (ADR-0051) the collector
+// deletes their objects. So the store's not-found is asked of the log's head
+// once more, and a head that no longer names the pack converges the round to
+// what the log holds now: the merged pack, which holds every object the
+// retired ones did. Failing the round instead failed every caller of it for a
+// pack no row names, and logged code_pack_missing — the line the
+// objects_missing alarm stands behind — for a pack nobody lost.
+//
+// Both shapes of round: a cold one reading the rows whole, and a warm one's
+// delta from the position it holds. The log here retires the rows directly,
+// as a compaction's record applies them: the inputs leave the live rows, and
+// the merged pack is added at the record's own position.
+//
+// Mutation: ask the head again only from a round below linearizable (the
+// round fails ErrPackMissing naming a retired pack).
+func TestAPackRetiredUnderARoundIsAskedAboutAgain(t *testing.T) {
+	t.Parallel()
+	for _, warm := range []bool{false, true} {
+		t.Run(fmt.Sprintf("warm=%t", warm), func(t *testing.T) {
+			t.Parallel()
+			w := newSyncWorld(t, onMemory)
+			repo := w.repo(t, 1)
+			kept, _ := w.push(t, repo, "refs/heads/main", nil)
 			c := w.open(t)
-			_, err := c.Sync(t.Context(), repo, stale)
+			if warm {
+				w.sync(t, c, repo).Release()
+			}
+			_, first := w.push(t, repo, "refs/heads/main", nil)
+			tip, second := w.push(t, repo, "refs/heads/main", nil)
+			// The merge of the two, stored before its record as every pack is:
+			// one pack of every object either of them holds.
+			bare := gittest.Empty(t)
+			merged := w.storeBundle(t, gittest.Bundle(t, bare,
+				gittest.Pack(t, w.client, bare, w.repos[repo].work, tip, "^"+kept)), "")
+			var retired sync.Once
+			w.log.set(func(f *fakeLog) {
+				// Once the round has its answer, and before it downloads: the
+				// compaction applies, and its inputs' objects go, as the
+				// collector deletes them once their grace has passed.
+				f.after = func(fakeCall, *code.RepoSnapshot) {
+					retired.Do(func() {
+						w.log.set(func(f *fakeLog) {
+							r := f.repos[repo]
+							r.packs = slices.DeleteFunc(r.packs, func(p code.PackRow) bool {
+								return p.PackID == first.PackID || p.PackID == second.PackID
+							})
+							f.seq++
+							row := merged
+							row.Added = f.at()
+							r.packs = append(r.packs, row)
+						})
+						for _, gone := range []code.PackRow{first, second} {
+							if err := w.store.Delete(t.Context(), gone.Object); err != nil {
+								t.Errorf("collecting the retired pack %s: %v", gone.PackID, err)
+							}
+						}
+					})
+				}
+			})
+			pages := len(w.log.firstPages(repo))
+			s, err := c.Sync(t.Context(), repo, linearizable)
+			if err != nil {
+				t.Fatalf("a linearizable round whose packs were retired and collected under it = %v, "+
+					"want it converged on the merged pack", err)
+			}
+			defer s.Release()
 			var levels []string
-			for _, call := range w.log.callsOf(repo) {
+			for _, call := range w.log.firstPages(repo)[pages:] {
 				levels = append(levels, string(call.Level))
 			}
-			if fmt.Sprint(levels) != "[stale linearizable]" {
-				t.Errorf("the round read at %v, want stale then linearizable", levels)
+			if fmt.Sprint(levels) != "[linearizable linearizable]" {
+				t.Errorf("the round read its snapshot at %v, want at the log's head, and there once more after the "+
+					"store's not-found", levels)
 			}
-			if purged {
-				if !errors.Is(err, code.ErrRepoNotFound) {
-					t.Errorf("Sync: %v, want code.ErrRepoNotFound", err)
-				}
-				// The pack was never missing: the copy that named it was
-				// behind a purge, and nothing is logged against the store.
-				if got := w.logs.lines(t, "code_pack_missing"); len(got) != 0 {
-					t.Errorf("logged %d code_pack_missing lines for a pack a purge removed with its row", len(got))
-				}
-				return
+			if want := map[bool]cache.SyncKind{false: cache.SyncFull, true: cache.SyncDelta}[warm]; s.Kind != want {
+				t.Errorf("Kind = %s, want %s", s.Kind, want)
 			}
-			var missing *cache.ErrPackMissing
-			if !errors.As(err, &missing) || missing.Pack.PackID != row.PackID || missing.Pack.Object != row.Object ||
-				missing.Damaged || !errors.Is(err, objstore.ErrNotFound) {
-				t.Fatalf("Sync: %v, want *ErrPackMissing naming %s", err, row.PackID)
+			if got, want := w.image(t, c, repo), w.rebuilt(t, repo); got != want {
+				t.Errorf("the converged image:\n%s\nwant a fresh cache's of the rows the log holds now:\n%s", got, want)
 			}
-			if got := w.logs.lines(t, "code_pack_missing"); len(got) != 1 {
-				t.Errorf("logged %d code_pack_missing lines, want the one the log's head made final", len(got))
+			if _, err := runGit(t, w.pool, s.Dir, "", "cat-file", "-e", tip); err != nil {
+				t.Errorf("the converged copy does not hold the tip the retired packs carried: %v", err)
 			}
+			if got := w.logs.lines(t, "code_pack_missing"); len(got) != 0 {
+				t.Errorf("logged %d code_pack_missing lines for packs the log's head no longer names", len(got))
+			}
+			w.tmpEmpty(t)
 		})
 	}
 }

@@ -861,10 +861,14 @@ what such a rebuild read is not rebuilt again for a day unless something writes
 into it — and a copy still refused for its shape always has, so only the
 doubling wait holds it back; and every refusal is counted, and logged as
 `code_cache_rebuild_refused` at most once every ten minutes a repository. A
-pack the object store has lost — once a read at the log's head confirms a row
-still names it — or holds damaged fails the sync naming the pack, and the
-collector's daily audit raises the [`objects_missing`](object-store.md#alarms)
-alarm for the same object.
+pack the object store does not have is called lost only once a read at the
+log's head, made after the store said so, still names it: the sync's own read,
+even one at the head, came before that answer, and a row can leave the log in
+between — a deleted repository's purge removes its pack rows — in which case
+the sync carries on to what the log holds. A lost pack, or one the store holds
+damaged, fails the sync naming the pack, and the collector's daily audit
+raises the [`objects_missing`](object-store.md#alarms) alarm for the same
+object.
 
 **Checking a copy.** An operator asks a git node to check its copy of a
 repository against the rows — every pack hashed as the bundle its push stored,
@@ -1547,7 +1551,7 @@ A git node's [cache](#the-cache-on-a-git-node) logs under the component `code.ca
 | `code_cache_state_unreadable` | `WARN` | A repository's copy has no readable record of what it holds. It is kept, and its next fetch reads the repository whole, reusing every pack it already holds. Recurring, it is the disk. |
 | `code_cache_evicted` | `INFO` | A repository's copy was evicted to bring the cache back under its byte budget, least recently used first; `idle_for` is how long it had gone unused. Its next fetch is a cold sync. Frequent, the budget is too small for the repositories this node serves. |
 | `code_cache_over_budget` | `WARN` | A repository larger than the cache's whole byte budget is being served. It is evicted as soon as no request holds it, so every fetch of it is a cold sync: give the cache more room than the repository holds. |
-| `code_pack_missing` | `WARN` | A pack the code log still names, at the log's head, could not be had from the object store: absent, or held `damaged`. The sync that needed it fails naming the pack, and the collector's daily audit raises [`objects_missing`](object-store.md#alarms) for the same object — restore it as that alarm says. |
+| `code_pack_missing` | `WARN` | A pack the code log names could not be had from the object store: absent, and still named by a read at the log's head made after the store said so, or held `damaged`. The sync that needed it fails naming the pack, and the collector's daily audit raises [`objects_missing`](object-store.md#alarms) for the same object — restore it as that alarm says. |
 | `code_pack_checksum_mismatch` | `ERROR` | A pack's bytes arrived whole and matching their checksum, but are not the pack its row describes: a section's size or the pack's own checksum disagrees. No retry can help — the row or the push that stored it is wrong — so the sync fails at once. Keep the line and report it. |
 | `code_cache_log_recreated` | `INFO` | The code log was recreated under the cache (provisioned anew, as by a restore of the broker), so every repository on the node is read whole at its next fetch. |
 | `code_cache_log_rewound` | `WARN` | A read at the log's head found the code log behind what this node had already read from it: the log was restored from an older copy while the node ran. Every repository on the node is read whole at its next fetch and goes back to what the log holds. A restore is meant to be done with the fleet stopped; restart every node that ran across one. |
