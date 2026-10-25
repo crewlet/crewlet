@@ -363,16 +363,7 @@ function undecided(proposal: AssistantProposalCard, err: unknown): void {
         state: err.code === "proposal_expired" ? "expired" : "stale",
       });
     } else {
-      const failed = writeFailed(err);
-      dispatch({
-        type: "approval_failed",
-        proposalId,
-        failure:
-          failed.kind === "unknown"
-            ? "Could not confirm. It may have landed."
-            : `${failed.sentence} Nothing changed.`,
-        unknown: failed.kind === "unknown",
-      });
+      dispatch({ type: "approval_failed", proposalId, ...decisionFailure(err) });
     }
     // THE ENGINE ANSWERED, AND A REFUSED DECISION RESUMES THE TURN with that
     // result (an expired or moved change is told to the model), but no stream
@@ -381,12 +372,21 @@ function undecided(proposal: AssistantProposalCard, err: unknown): void {
     rejoin();
     return;
   }
-  dispatch({
-    type: "approval_failed",
-    proposalId,
-    failure: "Could not confirm. It may have landed.",
-    unknown: true,
-  });
+  dispatch({ type: "approval_failed", proposalId, ...decisionFailure(err) });
+}
+
+/**
+ * What a decision the engine refused, or nobody answered, says on its card.
+ * The refusal's own sentence and nothing after it: the card adds what it
+ * left changed itself, so a sentence that said "Nothing changed." here read
+ * it twice.
+ */
+export function decisionFailure(err: unknown): { failure: string; unknown: boolean } {
+  if (err instanceof RestError) {
+    const failed = writeFailed(err);
+    if (failed.kind !== "unknown") return { failure: failed.sentence, unknown: false };
+  }
+  return { failure: "Could not confirm. It may have landed.", unknown: true };
 }
 
 /**

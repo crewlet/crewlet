@@ -15,6 +15,9 @@ import {
   type PageActionSpec,
 } from "../context.ts";
 import { CardBlock, type CardHandlers } from "./blocks.tsx";
+import { decisionFailure } from "./session.ts";
+import type { ProposalLocal } from "./turn.ts";
+import { RestError } from "~/protocol/rest.ts";
 
 afterEach(() => {
   cleanup();
@@ -29,7 +32,7 @@ const on: CardHandlers = {
   undo: () => {},
 };
 
-function draw(proposal: Partial<AssistantProposalCard>) {
+function draw(proposal: Partial<AssistantProposalCard>, local?: ProposalLocal) {
   const event: AssistantCardEvent = {
     card_id: "c",
     message_id: "m",
@@ -51,7 +54,7 @@ function draw(proposal: Partial<AssistantProposalCard>) {
   };
   render(
     <Router>
-      <CardBlock event={event} local={undefined} on={on} opened={false} />
+      <CardBlock event={event} local={local} on={on} opened={false} />
     </Router>,
   );
 }
@@ -92,4 +95,20 @@ test("a refused proposal draws the route's next step on its own line", () => {
   });
   expect(screen.getByText(/The project is archived\./)).toBeTruthy();
   expect(screen.getByText("Restore it in Work.")).toBeTruthy();
+});
+
+// A REFUSED DECISION SAYS "NOTHING CHANGED." ONCE: the card adds what the
+// refusal left changed, so the words the drawer keeps for the refusal are its
+// sentence alone. Mutation: end the kept words with "Nothing changed." again
+// and the card reads it twice.
+test("a refused decision's card says nothing changed once", () => {
+  const refused = new RestError(409, {
+    error: "proposal_digest_mismatch",
+    message: "This is not the change you were shown.",
+  });
+  const { failure } = decisionFailure(refused);
+  draw({ scope: "server", state: "failed" }, { pageMoved: false, failure });
+  const said = document.body.textContent ?? "";
+  expect(said.split("Nothing changed.").length - 1).toBe(1);
+  expect(said).toContain("This is not the change you were shown.");
 });
