@@ -372,8 +372,13 @@ return.** Each `llm` key must name a `providers.llm` entry that is:
 
 - in **text mode**. An entry with `mode: agent` is refused: agent mode runs
   the CLI's own tool loop, whose calls never pass the engine's guard.
-- on a profile with **`local_tools: denied`**. A CLI with its own shell on
-  the engine host could read whatever the engine user can.
+- on a profile whose run has **no tool of its own, by construction**: its
+  profile declares `local_tools: denied` and a measured `tools_off`, and the
+  argv every assistant call runs carries it. A CLI with its own shell or file
+  reader on the engine host could read whatever the engine user can, the
+  engine's own data and keys included. Today that is `claude-code` and `pi`;
+  `codex` keeps `apply_patch`, which has no switch, and `opencode`'s policy has
+  not been measured to remove its tools, so both are refused.
 - **`web_tools: denied`**, set on the entry with
   `overrides: { web_tools: denied }`. A page the model fetched itself is text
   no authority decision saw, and a fetch is a way out for the person's data.
@@ -387,8 +392,10 @@ every `/config` write, each naming the chain member and the entry field to
 change. A stored revision that somehow carries one still applies, so every
 seat keeps running, and the assistant stays unavailable with that reason
 until the chain is fixed. Run `crewlet llm doctor assistant` before turning
-it on: on a denied entry it asks the CLI to fetch a page and reports a fetch
-that succeeded as a problem.
+it on: on the exact argv the assistant runs it asks the CLI to run a shell
+command, to read a file the doctor just wrote and to fetch a page, and reports
+any of the three that succeeded as a problem. Nothing records that run, so the
+chain cannot require it: it is the operator's check to make.
 
 ---
 
