@@ -1,0 +1,301 @@
+package assistant
+
+import (
+	"context"
+	"errors"
+	"slices"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/assistantdomain"
+	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/textcut"
+	"github.com/crewlet/crewlet/internal/tracing"
+)
+
+// A PERSON'S CONVERSATIONS, every read and write keyed on them: a
+// conversation somebody else owns is one that does not exist (ADR-0049).
+
+// Conversations is one page of p's conversations, the most recently used
+// first.
+func (s *Service) Conversations(ctx context.Context, p iam.Principal, cursor string,
+	limit int) (wire.ConversationList, error) {
+
+	if err := s.eligible(p); err != nil {
+		return wire.ConversationList{}, err
+	}
+	list, err := s.transcripts.Conversations(ctx, p.ID, cursor, limit)
+	if err != nil {
+		return wire.ConversationList{}, s.readFailure(err)
+	}
+	if list.Conversations == nil {
+		list.Conversations = []wire.ConversationSummary{}
+	}
+	return list, nil
+}
+
+// conversationNamespace is the UUIDv5 namespace a conversation's id is derived
+// in from the operation that created it, so a retried create is one
+// conversation.
+var conversationNamespace = uuid.MustParse("b6e1d4a2-7c3f-5a98-8d2e-4f1a6c9b3e57")
+
+// Create starts a conversation for p under the operation key, and answers it.
+// A retry under the same key is the same conversation.
+func (s *Service) Create(ctx context.Context, p iam.Principal, key string) (wire.ConversationSummary, error) {
+	if err := s.eligible(p); err != nil {
+		return wire.ConversationSummary{}, err
+	}
+	id := uuid.NewSHA1(conversationNamespace, []byte(key))
+	w := Write{Owner: p.ID, By: iam.ActorFor(p), Key: key, Steps: []string{"create"}}
+	if err := s.records.CreateConversation(ctx, w, id, ""); err != nil {
+		return wire.ConversationSummary{}, s.writeFailure(err)
+	}
+	c, err := s.transcripts.Conversation(ctx, p.ID, id)
+	if err != nil {
+		return wire.ConversationSummary{}, s.readFailure(err)
+	}
+	return c.Summary(), nil
+}
+
+// Transcript is one of p's conversations as they read it after a reload: its
+// messages, steps and cards, the turn still open, and every compliance read
+// of it. A card whose app p no longer holds is replaced by a notice, and a
+// proposal card carries its state now.
+func (s *Service) Transcript(ctx context.Context, p iam.Principal, id uuid.UUID) (wire.Transcript, error) {
+	if err := s.eligible(p); err != nil {
+		return wire.Transcript{}, err
+	}
+	t, err := s.transcripts.Transcript(ctx, p.ID, id)
+	if err != nil {
+		return wire.Transcript{}, s.readFailure(err)
+	}
+	out := wire.Transcript{Conversation: t.Conversation.Summary(), Messages: []wire.Message{},
+		Steps: []wire.StepEvent{}, Cards: []wire.CardEvent{}, AuditReads: []wire.AuditRead{}}
+	for _, m := range t.Messages {
+		out.Messages = append(out.Messages, m.Wire())
+	}
+	for _, st := range t.Steps {
+		out.Steps = append(out.Steps, st)
+	}
+	proposals := map[uuid.UUID]assistantdomain.Proposal{}
+	for _, pr := range t.Proposals {
+		proposals[pr.ID] = pr
+	}
+	held := iam.Expand(p.Grants)
+	for _, c := range t.Cards {
+		out.Cards = append(out.Cards, s.shown(c, held, proposals))
+	}
+	for _, a := range t.AuditReads {
+		out.AuditReads = append(out.AuditReads, a.Wire())
+	}
+	if open := t.Conversation.OpenTurn; open != uuid.Nil {
+		state := wire.TurnRunning
+		for _, turn := range t.Turns {
+			if turn.ID == open {
+				state = turn.State
+			}
+		}
+		var after uint64
+		if l, ok := s.hub.Get(open); ok {
+			after = l.Last()
+		}
+		out.OpenTurn = &wire.OpenTurn{TurnID: open, State: state,
+			StreamURL: StreamPath(id, open), AfterSeq: after}
+	}
+	return out, nil
+}
+
+// shown is a stored card as a reader holding held is shown it now.
+func (s *Service) shown(c assistantdomain.Card, held []iam.Grant,
+	proposals map[uuid.UUID]assistantdomain.Proposal) wire.CardEvent {
+
+	ev := c.Event()
+	if !holdsApps(held, c.Apps) {
+		ev.Card = withheldCard()
+		return ev
+	}
+	if ev.Card.Type == wire.CardProposal && ev.Card.Proposal != nil {
+		if pr, ok := proposals[ev.Card.Proposal.ProposalID]; ok {
+			proposal := *ev.Card.Proposal
+			proposal.State, proposal.Receipt, proposal.Failure = pr.State, pr.Receipt, pr.Failure
+			ev.Card.Proposal = &proposal
+		}
+	}
+	return ev
+}
+
+// holdsApps reports whether held covers every app a card needs.
+func holdsApps(held []iam.Grant, apps []string) bool {
+	for _, app := range apps {
+		if !slices.Contains(held, iam.Grant(app)) {
+			return false
+		}
+	}
+	return true
+}
+
+// withheldCard is what a card becomes for a reader who no longer holds an app
+// it was built from.
+func withheldCard() wire.Card {
+	return wire.Card{Type: wire.CardNotice, Notice: &wire.NoticeCard{Tone: wire.NoticeInfo,
+		Text: "This result is hidden because you no longer have access to the app it came from."}}
+}
+
+// Table is one of p's table cards, for its export: from the snapshot the
+// conversation stored, never a fresh read. A card p no longer holds every app
+// of, and a card that is not a table, are not found.
+func (s *Service) Table(ctx context.Context, p iam.Principal, card uuid.UUID) (wire.TableCard, error) {
+	if err := s.eligible(p); err != nil {
+		return wire.TableCard{}, err
+	}
+	c, err := s.transcripts.Card(ctx, p.ID, card)
+	if err != nil {
+		return wire.TableCard{}, s.readFailure(err)
+	}
+	if c.Card.Type != wire.CardTable || c.Card.Table == nil || !holdsApps(iam.Expand(p.Grants), c.Apps) {
+		return wire.TableCard{}, ErrNotFound
+	}
+	return *c.Card.Table, nil
+}
+
+// Clear purges one of p's conversations at once, the Clear gesture: a turn of
+// it running here is stopped, every grant of its open turn is ended, and the
+// purge record keeps any later record about it from writing a row.
+func (s *Service) Clear(ctx context.Context, p iam.Principal, id uuid.UUID, key string) (wire.PurgeAnswer, error) {
+	if err := s.eligible(p); err != nil {
+		return wire.PurgeAnswer{}, err
+	}
+	c, err := s.transcripts.Conversation(ctx, p.ID, id)
+	if err != nil {
+		return wire.PurgeAnswer{}, s.readFailure(err)
+	}
+	if open := c.OpenTurn; open != uuid.Nil {
+		if t, ok := s.local(p.ID, open); ok {
+			t.stop()
+		}
+		s.revoker.RevokeTurn(open)
+	}
+	written, err := s.records.ClearConversation(ctx, Write{Owner: p.ID, By: iam.ActorFor(p),
+		Key: key, Steps: []string{"clear"}}, id)
+	if err != nil {
+		return wire.PurgeAnswer{}, s.writeFailure(err)
+	}
+	if c.OpenTurn != uuid.Nil {
+		s.hub.Forget(c.OpenTurn)
+	}
+	answer := wire.PurgeAnswer{Outcome: written.Outcome}
+	if written.Position != "" {
+		position := written.Position
+		answer.Position = &position
+	}
+	return answer, nil
+}
+
+// title names a conversation after its first answer, in the background: one
+// model call, recorded on the ledger and charged through the turn's meter,
+// best effort. A title that cannot be had leaves the conversation untitled,
+// which the drawer draws as its first question.
+func (s *Service) title(t *turn, question, answer string, meter toolloop.BudgetMeter) {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.titlesWG.Add(1)
+	s.mu.Unlock()
+	go func() {
+		defer s.titlesWG.Done()
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.ctx), TitleTimeout)
+		defer cancel()
+		ctx = llm.WithSeat(ctx, assistantHome(t.person.ID))
+		if err := s.nameConversation(ctx, t, question, answer, meter); err != nil {
+			s.log.InfoContext(ctx, "assistant_title_skipped", "conversation", t.conversation,
+				"reason", redact.Secrets(err.Error()))
+		}
+	}()
+}
+
+// nameConversation makes the title call and records the title.
+func (s *Service) nameConversation(ctx context.Context, t *turn, question, answer string,
+	meter toolloop.BudgetMeter) error {
+
+	if err := toolloop.Refusal(ctx, meter); err != nil {
+		return err
+	}
+	use := auxspend.Use{Stage: types.AuxStageOperator, Purpose: types.AuxAssistantTitle,
+		TurnID: t.id.String()}
+	provider, _, err := s.models.Chain(ctx, t.person, use)
+	if err != nil {
+		return err
+	}
+	completion, err := provider.Complete(ctx, llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleSystem, Content: titleInstruction},
+		{Role: llm.RoleUser, Content: "Question: " + textcut.Within(question, 2000) +
+			"\n\nAnswer: " + textcut.Within(answer, 2000)},
+	}})
+	if completion != nil && meter != nil {
+		if _, err := meter.Spend(context.WithoutCancel(ctx),
+			completion.InputTokens+completion.OutputTokens); err != nil {
+			s.log.WarnContext(ctx, "assistant_title_uncounted", "error", err)
+		}
+	}
+	if err != nil {
+		return err
+	}
+	title := oneLine(redact.Secrets(strings.Trim(strings.TrimSpace(completion.Content), "\"'")))
+	if utf8.RuneCountInString(title) > TitleMaxRunes {
+		title = textcut.Within(title, TitleMaxRunes)
+	}
+	if title == "" {
+		return errors.New("the model answered no title")
+	}
+	return s.records.TitleConversation(ctx, Write{Owner: t.person.ID, By: t.by, Key: t.key,
+		Steps: []string{"title"}}, t.conversation, title)
+}
+
+// titleInstruction is the title call's whole instruction.
+const titleInstruction = "Write a title of at most eight words for this conversation " +
+	"between a person and their assistant. Answer with the title alone: no quotes, no " +
+	"full stop, no explanation."
+
+// traceOf is the trace a turn runs under, for its row and its done frame.
+func traceOf(ctx context.Context) string { return tracing.TraceOf(ctx).TraceID }
+
+// Close stops every turn this node runs, each ending interrupted, and waits
+// for their ends to be recorded and for any title in flight, within ctx.
+func (s *Service) Close(ctx context.Context) error {
+	s.mu.Lock()
+	s.closed = true
+	running := make([]*turn, 0, len(s.turns))
+	for _, t := range s.turns {
+		running = append(running, t)
+	}
+	s.mu.Unlock()
+	s.cancel(errDraining)
+	for _, t := range running {
+		select {
+		case <-t.done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	titled := make(chan struct{})
+	go func() { s.titlesWG.Wait(); close(titled) }()
+	select {
+	case <-titled:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(TitleTimeout):
+		return nil
+	}
+}

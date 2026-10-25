@@ -111,3 +111,14 @@ const (
 	ArtifactsReadyDuration = "crewlet.artifacts.ready.duration"
 	ObjectivesEvents       = "crewlet.objectives.events"
 )
+
+// THE DASHBOARD ASSISTANT'S INSTRUMENTS, recorded by internal/assistant. No
+// attribute names a person, a conversation or free text: every dimension is a
+// closed set of the assistant protocol's own (internal/assistant/wire).
+const (
+	AssistantTurns              = "crewlet.assistant.turns"
+	AssistantTurnDuration       = "crewlet.assistant.turn.duration"
+	AssistantFirstOutputLatency = "crewlet.assistant.first_output.latency"
+	AssistantSteps              = "crewlet.assistant.steps"
+	AssistantStreamsActive      = "crewlet.assistant.streams.active"
+)
