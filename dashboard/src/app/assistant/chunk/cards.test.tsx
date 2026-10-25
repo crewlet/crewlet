@@ -19,8 +19,12 @@ import {
   type CardHandlers,
 } from "./blocks.tsx";
 import type { TurnView } from "./turn.ts";
+import { resetCardFolds, setCardOpen } from "./fold.ts";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  resetCardFolds();
+});
 
 const on: CardHandlers = {
   approve: () => {},
@@ -30,7 +34,9 @@ const on: CardHandlers = {
   undo: () => {},
 };
 
+/** Draws one card, opened: these cases are about what an open card holds (fold.test.tsx folds). */
 function draw(card: AssistantCardEvent["card"], handlers: CardHandlers = on) {
+  setCardOpen("c", true);
   return render(
     <Router>
       <CardBlock

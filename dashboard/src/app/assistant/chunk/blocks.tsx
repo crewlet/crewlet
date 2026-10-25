@@ -14,6 +14,11 @@
  * asks of an approval is confirmed by the dashboard's one step-up dialog
  * (`protocol/rest.ts` replays the approval), never drawn as a failure.
  *
+ * A SUPPORTING READ IS ONE LINE: a table or a record a read built is folded
+ * to its head (its title, how much it holds, its downloads and its link) and
+ * opened by the person, because the answer is the model's prose. A proposal,
+ * a refusal and a receipt are the point of the turn and are drawn whole.
+ *
  * EVERY CARD IS THE ENGINE'S: built from tool results and its own route
  * table, never from the model's words. Only prose is the model's, and it is
  * drawn inert (`ASSISTANT_WORDS` in `lib/markdown.ts`): no live link and no
@@ -45,6 +50,7 @@ import {
 import { ArrowUpRightGlyph, LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
 import type {
   AssistantCardEvent,
+  AssistantEntityCard,
   AssistantProposalCard,
   AssistantStepEvent,
   AssistantTableCard,
@@ -58,6 +64,7 @@ import { youNeedWords } from "~/lib/access.ts";
 import { crumbsFor } from "../../crumbs.ts";
 import { href as hrefOf } from "../../router.tsx";
 import { openInApp, type InAppTarget } from "./openInApp.ts";
+import { useCardOpen } from "./fold.ts";
 import { pageActionPreview, usePageSnapshot, type PageActionPreview } from "../context.ts";
 import { changedNothing, type ActionLocal, type ActionLocalState } from "./pageActions.ts";
 import type { ProposalLocal, TurnPhase, TurnView } from "./turn.ts";
@@ -218,15 +225,30 @@ export function runChipOf(
   }
 }
 
+/**
+ * The shortest step whose time is said. Under it a step said "0.0s", which
+ * reads as a step that did nothing rather than one that was quick, so a step
+ * that quick says no time at all.
+ */
+export const STEP_DURATION_FLOOR_MS = 100;
+
+/** A step's time as its line says it, or nothing for one under the floor or not yet ended. */
+export function stepDuration(ms: number | undefined): string | undefined {
+  return ms === undefined || ms < STEP_DURATION_FLOOR_MS ? undefined : seconds(ms);
+}
+
 /** A turn's steps as `StepList` draws them: the label, the request it made in mono, its time. */
 export function stepsOf(turn: TurnView): StepListStep[] {
-  return turn.steps.map((step) => ({
-    id: step.step_id,
-    label: step.label,
-    state: STEP_STATE[step.state],
-    ...(step.duration_ms === undefined ? {} : { duration: seconds(step.duration_ms) }),
-    detail: stepDetail(step),
-  }));
+  return turn.steps.map((step) => {
+    const duration = stepDuration(step.duration_ms);
+    return {
+      id: step.step_id,
+      label: step.label,
+      state: STEP_STATE[step.state],
+      ...(duration === undefined ? {} : { duration }),
+      detail: stepDetail(step),
+    };
+  });
 }
 
 /**
@@ -449,15 +471,63 @@ function Proposal({
   );
 }
 
+/** A count of things in words: "1 row", "7 rows". */
+function countOf(n: number, one: string, many: string): string {
+  return `${fmtExact(n)} ${n === 1 ? one : many}`;
+}
+
+/** What a folded table says after its title: how many rows the read answered. */
+export function tableSummary(table: AssistantTableCard): string {
+  return countOf(table.row_count, "row", "rows");
+}
+
+/** The most fact labels a folded record names before it is cut short. */
+const SUMMARY_FACTS = 3;
+
+/**
+ * What a folded record says after its title: its subtitle where it has one
+ * (a task's key, a page's place), else the names of the facts it holds
+ * ("Mission, vision"), and how many entries its list holds ("6 policies").
+ * Nothing where it holds neither.
+ */
+export function entitySummary(entity: AssistantEntityCard): string | undefined {
+  const facts = (entity.facts ?? []).filter((fact) => !fact.detail).map((fact) => fact.label);
+  const head = entity.subtitle
+    ? [entity.subtitle]
+    : facts.slice(0, SUMMARY_FACTS).map((label, i) => (i === 0 ? label : inSentence(label)));
+  const items = entity.items?.length ?? 0;
+  const noun = entity.items_noun ?? { one: "entry", many: "entries" };
+  const parts = items > 0 ? [...head, countOf(items, noun.one, noun.many)] : head;
+  return parts.length > 0 ? parts.join(", ") : undefined;
+}
+
+/** A label inside a sentence: its first letter lowered, unless it opens an acronym ("URL"). */
+function inSentence(label: string): string {
+  const second = label.charAt(1);
+  return second !== "" && second === second.toUpperCase() && second !== second.toLowerCase()
+    ? label
+    : `${label.charAt(0).toLowerCase()}${label.slice(1)}`;
+}
+
+/** How a supporting read folds: closed until the person opens it, remembered for the session. */
+interface Fold {
+  collapsible: true;
+  summary: string | undefined;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
+
 /** A table card with its downloads from the stored snapshot. */
 function Table({
   table,
   cardId,
   on,
+  fold,
 }: {
   table: AssistantTableCard;
   cardId: string;
   on: CardHandlers;
+  fold: Fold;
 }) {
   // THE DRAWER DRAWS THE COLUMNS THE ENGINE CHOSE FOR IT, name first; the
   // rest stay in the card's downloads.
@@ -481,6 +551,7 @@ function Table({
     : undefined;
   return (
     <ResultTableCard
+      {...fold}
       title={table.title}
       window={table.window}
       headers={drawn.map((i) => table.columns[i]!.label)}
@@ -541,6 +612,14 @@ export function CardBlock({
   opened: boolean;
 }): ReactNode {
   const card = narrowCard(event.card);
+  // EVERY CARD ASKS, so the hooks run in one order; only a read uses it.
+  const [open, setOpen] = useCardOpen(event.card_id);
+  const fold = (summary: string | undefined): Fold => ({
+    collapsible: true,
+    summary,
+    open,
+    onOpenChange: setOpen,
+  });
   if (card === null) {
     return (
       <Callout variant="neutral">
@@ -550,11 +629,19 @@ export function CardBlock({
   }
   switch (card.type) {
     case "table":
-      return <Table table={card.table} cardId={event.card_id} on={on} />;
+      return (
+        <Table
+          table={card.table}
+          cardId={event.card_id}
+          on={on}
+          fold={fold(tableSummary(card.table))}
+        />
+      );
     case "proposal":
       return <Proposal proposal={card.proposal} local={local} on={on} />;
     case "entity": {
       const entity = card.entity;
+      const folded = fold(entitySummary(entity));
       const facts = (entity.facts ?? []).filter((fact) => !fact.detail);
       const items =
         entity.items && entity.items.length > 0
@@ -570,10 +657,11 @@ export function CardBlock({
       // vision over its policies, a company over its units) keeps both: drawn
       // as the list alone, the record's facts, text and link were dropped.
       if (items && facts.length === 0 && !entity.subtitle && !entity.text && !entity.open) {
-        return <EntityList title={entity.title} items={items} />;
+        return <EntityList {...folded} title={entity.title} items={items} />;
       }
       return (
         <StatusCard
+          {...folded}
           title={entity.title}
           subtitle={entity.subtitle}
           actions={entity.open ? <EngineLink link={entity.open} on={on} /> : undefined}
