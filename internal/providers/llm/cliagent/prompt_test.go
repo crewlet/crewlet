@@ -48,6 +48,29 @@ func TestAToolResultNamesTheCallItAnswers(t *testing.T) {
 	}
 }
 
+// A FAILED CALL IS MARKED AS ONE, beside the text that says why: the flag is
+// what the loop sets for a refusal, an error and arguments that never parsed,
+// and a model reading only the sentence takes a refusal for output.
+//
+// Drop the marker from renderMessage and the failed heading below is the
+// plain one.
+func TestAFailedToolResultIsMarkedFailed(t *testing.T) {
+	t.Parallel()
+	got, err := RenderPrompt(llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleTool, Name: "post", ToolCallID: "cli_0", Content: "posted", Failed: false},
+		{Role: llm.RoleTool, Name: "post", ToolCallID: "cli_1", Content: "channel not found", Failed: true},
+	}})
+	if err != nil {
+		t.Fatalf("RenderPrompt: %v", err)
+	}
+	if !strings.Contains(got, "## tool result: post (call cli_1) — failed") {
+		t.Errorf("the failed call is not marked failed:\n%s", got)
+	}
+	if strings.Contains(got, "(call cli_0) — failed") {
+		t.Errorf("a call that succeeded is marked failed:\n%s", got)
+	}
+}
+
 // A model shown its previous answer in one format and asked to reply in
 // another produces the format it was shown, so prior calls render in the
 // same shape the contract asks for.

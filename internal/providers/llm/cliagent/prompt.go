@@ -154,6 +154,13 @@ func renderMessage(msg llm.Message) string {
 		if msg.ToolCallID != "" {
 			fmt.Fprintf(&body, " (call %s)", msg.ToolCallID)
 		}
+		// A FAILED call says so in its heading, where the model reads it
+		// before the text: a refusal's sentence alone reads like any other
+		// output, and a model that took it for one acts on a write that
+		// never happened.
+		if msg.Failed {
+			body.WriteString(" — failed")
+		}
 		body.WriteString("\n\n")
 		body.WriteString(strings.TrimSpace(msg.Content))
 		body.WriteString("\n")
