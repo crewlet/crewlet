@@ -86,7 +86,7 @@ func TestApprovingASupersededTurnsProposalShowsItWithoutTheLoop(t *testing.T) {
 		t.Errorf("the step reads %s, the card %s and the turn ends %s", frames[0].Step.State,
 			frames[1].Card.Card.Proposal.State, frames[3].Done.State)
 	}
-	if err := f.Close(); err != nil {
+	if err := f.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	for _, req := range f.Model.Requests() {

@@ -30,7 +30,9 @@ func NewRig(t testing.TB, o evals.RigOptions) *Rig {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := r.Close(); err != nil {
+		// The test's context is already cancelled when cleanups run; Close
+		// keeps only its values and bounds the shutdown itself.
+		if err := r.Close(t.Context()); err != nil {
 			t.Errorf("close: %v", err)
 		}
 	})
@@ -40,7 +42,7 @@ func NewRig(t testing.TB, o evals.RigOptions) *Rig {
 // Follow reads a turn's stream from after seq after until it ends.
 func (r *Rig) Follow(turn uuid.UUID, after uint64) []wire.Frame {
 	r.t.Helper()
-	frames, err := r.Await(turn, after, 10*time.Second)
+	frames, err := r.Await(r.t.Context(), turn, after, 10*time.Second)
 	if err != nil {
 		r.t.Fatal(err)
 	}

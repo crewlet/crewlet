@@ -123,7 +123,7 @@ func runCase(ctx context.Context, c Case, o Options) (Trial, error) {
 		return Trial{}, err
 	}
 	defer func() {
-		if closeErr := rig.Close(); closeErr != nil {
+		if closeErr := rig.Close(ctx); closeErr != nil {
 			// THE TRIAL IS JUDGED ALREADY, from frames the turn drew; a
 			// service that did not stop in time is a fault of the run,
 			// said where the operator reads it.
@@ -139,7 +139,7 @@ func runCase(ctx context.Context, c Case, o Options) (Trial, error) {
 	if err != nil {
 		return Trial{}, err
 	}
-	frames, err := rig.Await(accepted.TurnID, 0, o.patience())
+	frames, err := rig.Await(ctx, accepted.TurnID, 0, o.patience())
 	if err != nil {
 		return Trial{}, err
 	}

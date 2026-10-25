@@ -125,9 +125,12 @@ func Assemble(o RigOptions) (*Rig, error) {
 	return r, nil
 }
 
-// Close stops every turn the rig's service runs.
-func (r *Rig) Close() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+// Close stops every turn the rig's service runs, within ten seconds of its
+// own: a run whose ctx was cancelled (a suite that ended, an operator's
+// interrupt) still stops its turns, so the shutdown is detached from ctx's
+// cancellation and keeps only its values.
+func (r *Rig) Close(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
 	return r.Svc.Close(ctx)
 }
@@ -185,9 +188,11 @@ func (c *Collector) Frames() []wire.Frame {
 }
 
 // Await reads a turn's stream from after seq after until it ends, or fails
-// when it has not ended within patience.
-func (r *Rig) Await(turn uuid.UUID, after uint64, patience time.Duration) ([]wire.Frame, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), patience)
+// when it has not ended within patience or ctx ends first.
+func (r *Rig) Await(ctx context.Context, turn uuid.UUID, after uint64, patience time.Duration) (
+	[]wire.Frame, error) {
+
+	ctx, cancel := context.WithTimeout(ctx, patience)
 	defer cancel()
 	c := &Collector{}
 	if err := r.Svc.Stream(ctx, r.Person.ID, r.Conversation, turn, after, c); err != nil {

@@ -95,7 +95,7 @@ func TestAPersonsStreamOpensAreRated(t *testing.T) {
 	}
 	f.Follow(accepted.TurnID, 0)
 	for i := 1; i < assistant.StreamOpenBurst; i++ {
-		if _, err := f.Await(accepted.TurnID, 0, 5*time.Second); err != nil {
+		if _, err := f.Await(t.Context(), accepted.TurnID, 0, 5*time.Second); err != nil {
 			t.Fatalf("open %d inside the burst: %v", i+1, err)
 		}
 	}
@@ -105,7 +105,7 @@ func TestAPersonsStreamOpensAreRated(t *testing.T) {
 		t.Fatalf("an open past the burst answered %v, want Busy with a Retry-After", err)
 	}
 	f.Clock.Advance(busy.RetryAfter)
-	if _, err := f.Await(accepted.TurnID, 0, 5*time.Second); err != nil {
+	if _, err := f.Await(t.Context(), accepted.TurnID, 0, 5*time.Second); err != nil {
 		t.Errorf("an open once the rate refilled: %v", err)
 	}
 }
