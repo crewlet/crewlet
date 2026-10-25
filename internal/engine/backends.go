@@ -431,6 +431,45 @@ func storeOptions(b *config.Bootstrap, c *config.Company) store.Options {
 // ends up without a fleet store — which is not a startup error but a panic
 // hours later in whichever subsystem reached for it first.
 func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
+	cfg, err := streamConfig(b)
+	if err != nil {
+		return nil, err
+	}
+	nodeID := cfg.ServerName
+	// THE SAME RESOLVED ID NAMES WHAT THIS NODE PUBLISHES. Every event
+	// leaves carrying it as its origin (queue.WithNode), because the event
+	// store is written inline on the publishing node and a reader holding
+	// any one row or frame has only that to find the node whose store holds
+	// the rest — see events.Event.Node.
+	out, conn, err := openStream(ctx, b, cfg, queue.WithNode(nodeID))
+	if err != nil {
+		return nil, err
+	}
+	out.rides = conn
+	out.api = cfg.API()
+	// IN THE API THE STREAM'S OWN CLIENT SPEAKS, over the connection
+	// coordination rides — see [jsapi] for why a client built any other
+	// way reaches a member's JetStream and times out on a leaf's.
+	js, err := out.api.Client(conn)
+	if err != nil {
+		return nil, out.abandon(ctx, fmt.Errorf("engine: coordination: %w", err))
+	}
+	out.coordination = js
+	if err = attachCoordination(ctx, b, out, js); err != nil {
+		return nil, out.abandon(ctx, err)
+	}
+	if err = openObjects(ctx, b, out, js); err != nil {
+		return nil, out.abandon(ctx, err)
+	}
+	return out, nil
+}
+
+// streamConfig is the broker a node configured as b runs or dials: the ONE
+// reading of Tier A's stream block, which the engine's own boot and a
+// `crewlet` command reaching the fleet's store with the engine stopped
+// ([OpenFleetStore]) both start from — two readings would be two brokers that
+// disagree about a setting, the server's name above all.
+func streamConfig(b *config.Bootstrap) (jetstream.Config, error) {
 	// THROUGH THE RESOLVER, never the raw field. `node.id` is only one of
 	// the three places a node's name comes from — the file, then
 	// CREWLET_NODE_ID, then the default — and the raw field is empty for
@@ -445,7 +484,7 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 	// "crewlet", quietly detaching the broker's identity from the node's.
 	nodeID, err := config.ResolveNodeID(b, nil)
 	if err != nil {
-		return nil, fmt.Errorf("engine: stream: %w", err)
+		return jetstream.Config{}, fmt.Errorf("engine: stream: %w", err)
 	}
 	cfg := jetstream.Config{
 		URL:              b.Stream.URL,
@@ -490,32 +529,7 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 	if b.Stream.EventRetentionHours > 0 {
 		cfg.EventRetention = b.Stream.EventRetention()
 	}
-	// THE SAME RESOLVED ID NAMES WHAT THIS NODE PUBLISHES. Every event
-	// leaves carrying it as its origin (queue.WithNode), because the event
-	// store is written inline on the publishing node and a reader holding
-	// any one row or frame has only that to find the node whose store holds
-	// the rest — see events.Event.Node.
-	out, conn, err := openStream(ctx, b, cfg, queue.WithNode(nodeID))
-	if err != nil {
-		return nil, err
-	}
-	out.rides = conn
-	out.api = cfg.API()
-	// IN THE API THE STREAM'S OWN CLIENT SPEAKS, over the connection
-	// coordination rides — see [jsapi] for why a client built any other
-	// way reaches a member's JetStream and times out on a leaf's.
-	js, err := out.api.Client(conn)
-	if err != nil {
-		return nil, out.abandon(ctx, fmt.Errorf("engine: coordination: %w", err))
-	}
-	out.coordination = js
-	if err = attachCoordination(ctx, b, out, js); err != nil {
-		return nil, out.abandon(ctx, err)
-	}
-	if err = openObjects(ctx, b, out, js); err != nil {
-		return nil, out.abandon(ctx, err)
-	}
-	return out, nil
+	return cfg, nil
 }
 
 // openObjects opens the backend the company's files are kept in, once the

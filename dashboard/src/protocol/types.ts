@@ -4038,13 +4038,14 @@ export interface SecretRow {
   /** Who last stored the value, and — beside them — what sort of author and
    *  the credential they stored it through, as a revision records the same
    *  three. The credential is empty on a row no credential wrote: the
-   *  engine's own, and one set on a stopped node and moved onto the fleet
-   *  at its next start. */
+   *  engine's own, and one a `crewlet` command wrote directly with its
+   *  node's engine stopped. */
   updated_by: string;
   updated_by_kind?: string;
   operator_id?: string;
   /** Which write path last stored it, in that path's own word — `api`,
-   *  `setup`, `provision` or `migrated` — never a word the writer chose.
+   *  `setup`, `provision`, `cli` or `llm-login` — never a word the writer
+   *  chose.
    *  What each means is `provenance` in routes/settings/Secrets.tsx. */
   source: string;
 }

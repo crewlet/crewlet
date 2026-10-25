@@ -248,9 +248,15 @@ crewlet run                     # roles come from the file
 
 Its store is created fresh, at the binary's own schema, every time it starts,
 so there is nothing to migrate — `crewlet migrate` refuses a scratch store and
-says so, and so do the offline `config`, `secrets` and `search eval` commands,
-because anything they wrote into it would be gone at the next boot. Configure
-the company through the API of a node that holds data.
+says so, and so do the offline `config` and `search eval` commands, because
+anything they wrote into it would be gone at the next boot. `crewlet secrets`,
+`crewlet llm`, the provisioners and every other command that resolves the
+company's `${VAR}`s refuse it too, for another reason: the company's secrets
+live on the fleet's store, never in a node's own file, and a command reaches
+that store itself only from a node that holds data — so from this one, name a
+running node that does with `-api`, with one of its Tier A tokens in
+`CREWLET_API_TOKEN`. Configure the company through the API of a node that
+holds data.
 
 A satellite that **holds data** is migrated on the satellite first:
 

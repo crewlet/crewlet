@@ -23,16 +23,16 @@ import (
 // The CLI's client for /secrets, and why the command has one at all.
 //
 // The company's secrets live on the coordination KV so every node reads the
-// same rows. On the default topology that KV is inside the
-// engine's own process and does not listen on a socket, so a second process
-// cannot write it — the running node is the only thing that can. This is how
-// `crewlet secrets` reaches it.
+// same rows. On the default topology that KV is inside the engine's own
+// process and does not listen on a socket, and while the engine runs a second
+// broker on its store directory is refused — so the running node is the only
+// way in. This is how `crewlet secrets` reaches it.
 //
 // # It is not a fallback, it is the primary path
 //
-// A fleet's engine is running. The local table is what a STOPPED node can
-// write, and the engine migrates those rows onto the fleet at its next start
-// — see [github.com/crewlet/crewlet/internal/fleetsecrets.Migrate].
+// A fleet's engine is running. With this node's engine STOPPED, the command
+// reaches the same store itself instead (fleetstore.go), and a node that
+// holds no data, or a member of a cluster, still goes through a running one.
 
 // apiTimeout bounds one call to the node's API.
 //

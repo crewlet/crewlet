@@ -413,6 +413,26 @@ stops serving for good. So the engine refuses to boot without one, and
 > person and session on its first restart, with nothing having warned. There
 > is no company the rule can correctly let past.
 
+**One broker per `store_dir`.** An embedded member takes a lock file,
+`crewlet-broker.lock`, inside its `store_dir` before its broker is built and
+lets it go once the broker has stopped; a second broker on the same directory
+is refused before it reads anything, naming the holder
+(`pid N on HOST since T`). nats-server takes no lock of its own: it
+**accepts** a second server on one directory, and two brokers writing one
+directory corrupt it, with nothing said until a read meets the damage.
+Whatever starts the broker holds the lock — the engine, or a `crewlet` command that reaches
+the fleet's secrets itself while this node's engine is stopped
+([Secret Store § Which store the CLI writes](../concepts/secret-store.md#which-store-the-cli-writes))
+— so a second engine on the directory is refused, so is an engine started
+while such a command holds it, and so is a command that meets an engine part
+way through starting (once the engine holds its database, a command goes
+through its API instead). Two engines on one host therefore each name their
+own `store_dir`. The file is inside the directory rather than beside it
+because a `store_dir` can be the root of its own volume, whose parent a
+non-root engine on a read-only root filesystem cannot write. The kernel
+releases it when its holder exits, however it exits, so there is no stale
+lock to clear by hand.
+
 **Divide `store_max_bytes` when several engines share a filesystem.** Every
 stream ceiling on the embedded broker is a *reservation*: the broker refuses to
 create a stream whose ceiling it cannot back, and the number it compares
@@ -1049,9 +1069,14 @@ Tier A refuses `coordination.type: local` alongside either of them, by name,
 rather than letting two nodes each claim every seat.
 
 Both nodes can read the same Tier A file: against an external NATS server
-nothing in it is per-node except `node.id`, and `CREWLET_NODE_ID` injects
-that without templating anything. A clustered embedded stream is the one
-exception — each member also names its own route port and its own peers. So
+nothing in it is per-node except `node.id`, which `CREWLET_NODE_ID` injects
+without templating anything, and `store.path`, the node's own database, which
+the engine locks for as long as it runs — so two processes on one host each
+name their own through a `${VAR}` set per process, as the public port below
+is. A clustered embedded stream is the one exception — each member also names
+its own route port, its own peers and, on one host, its own
+`stream.store_dir`, because a second broker on one directory is
+[refused](#every-node-embeds-a-member-of-one-cluster). So
 give each node its roles at the command line, and its own `-api-port`: on one
 host two listeners cannot share a port, and only the ingress node's carries
 the API — the other's carries its [probes](#probes) and nothing else:
@@ -1527,7 +1552,6 @@ The load-bearing tables:
 - **`crewlet_event_parties`** — which agents each event involves, one row per pair. It is an *index* of the table above rather than state of its own: the dashboard's per-seat activity filter matches on it, and it exists because the engine's planner does no OR-optimization, so the same predicate spread across five columns would scan the log instead of seeking. Swept on the same horizon as the events it points at.
 - **`conversation_sessions`** — the [conversation ledger](../concepts/conversation-sessions.md): what this seat already said in one thread, rendered back into that conversation's next turn.
 - **`company_config`** — the revision payloads. Which one is *current* is the fleet's business, and lives in coordination; see the [control plane](../concepts/control-plane.md).
-- **`secret_values`** — the bootstrap half of the [secret store](../concepts/secret-store.md). The company's credentials live on the coordination KV; rows written here while the engine was stopped are migrated there at its next start.
 
 Migrations are **forward-only**: each file in `internal/store/schema/` is applied once and recorded by filename, and there are no downgrade scripts. Downgrading the binary below the schema it already migrated is not supported; restore a [backup](backup.md) instead. There is no migration lock and no advisory-lock protocol, because one process owns the file — the whole idiom disappears.
 

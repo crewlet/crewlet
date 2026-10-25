@@ -7983,12 +7983,16 @@ model.
 can store, rotate and remove one over the same guarded routes the CLI uses.
 Every row is sealed in the fleet's store; **Source is provenance** — which path
 last wrote the row, in that path's own word and never one a request chose
-(`api` for this page, `PUT /secrets` and the CLI against a running node,
-`setup` for an integration's setup, `provision` for what an integration's
-provisioning pass minted, `migrated` for a row moved off a stopped node's own
-table) — and the credential's peek says what its word means rather than
-leaving it to a pointer. Those four are all the listing can carry, so a word
-outside them is said as one this build does not know rather than guessed at.
+(`api` for this page, `PUT /secrets` and the CLI against a running node;
+`setup` for an integration's setup; `provision` for what a provisioning pass
+minted, the engine's own or a provisioner's `-secret-store` run made with its
+node's engine stopped; `cli` for `crewlet secrets set` and `llm-login` for a
+coding CLI's login stored by `crewlet llm`, each written to the fleet's store
+directly with its node's engine stopped), drawn in the column as API,
+Integration setup, Provisioning pass, CLI and CLI login — and the credential's
+peek says what its word means rather than leaving it to a pointer. Those five
+are all the listing can carry, so a word outside them is said as one this
+build does not know rather than guessed at.
 Three tiles count the credentials, the names **read by nothing** (no field in
 the active configuration points at them: a forgotten `${VAR}`, or a credential
 nothing needs any more — not known, and never 0, when the reference check did

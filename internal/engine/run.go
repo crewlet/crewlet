@@ -1404,11 +1404,6 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// give the first epoch environment-only resolution and every later one
 	// the store, so a rotated secret would work on the second apply and not
 	// on boot.
-	//
-	// MIGRATED BEFORE THE SNAPSHOT, so a value set on this node while the
-	// engine was stopped is on the fleet before anything resolves it —
-	// and, once it is, so are this node's peers. See [Engine.migrateSecrets].
-	e.migrateSecrets(ctx)
 	e.refreshSecrets(ctx)
 
 	// SERVING BEFORE ANY SEAT, and in every mode: a node restarted into a
