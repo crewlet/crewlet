@@ -1,6 +1,7 @@
 // Package assistantapi is the Dashboard Assistant's HTTP surface: a person's
 // conversations, the turns they ask in them, each turn's live stream, Stop,
-// and the export of a table a turn showed (ADR-0049, ADR-0052).
+// the export of a table a turn showed, and the files a conversation keeps
+// (ADR-0049, ADR-0052).
 //
 // # A PERSON'S, ON A GRANT THEY CARRY
 //
@@ -93,7 +94,11 @@ type Options struct {
 	// on the same authority table. Nil mounts none: a node with no approval
 	// path, whose turns are offered no write.
 	Decisions *Decisions
-	Now       func() time.Time
+	// Files keeps a conversation's files ([assistant.Files]): the upload
+	// and download routes are mounted over it. Nil mounts neither: a node
+	// with no object store keeps no file.
+	Files assistant.Files
+	Now   func() time.Time
 }
 
 // Surface is the assistant's routes.
@@ -104,6 +109,7 @@ type Surface struct {
 	chart     authz.Chart
 	guard     authz.Guard
 	decisions *Decisions
+	files     assistant.Files
 	now       func() time.Time
 	log       *slog.Logger
 }
@@ -127,8 +133,8 @@ func New(opts Options) (*Surface, error) {
 	}
 	return &Surface{svc: opts.Service, grants: opts.Grants,
 		tables: opts.Tables, chart: opts.Chart, guard: authz.ContextGuard(opts.Chart),
-		decisions: opts.Decisions,
-		now:       now, log: logging.Get("assistantapi")}, nil
+		decisions: opts.Decisions, files: opts.Files,
+		now: now, log: logging.Get("assistantapi")}, nil
 }
 
 // Routes mounts every route through the authority table with its verb. A
@@ -151,6 +157,10 @@ func (s *Surface) Routes(mux authz.Mux) error {
 	mount("POST /assistant/turns/{id}/stop", converse, s.stop)
 	mount("GET /assistant/cards/{id}/export.csv", read, s.exportCSV)
 	mount("GET /assistant/cards/{id}/export.xlsx", read, s.exportXLSX)
+	if s.files != nil {
+		mount(UploadPattern, converse, s.upload)
+		mount(DownloadPattern, read, s.download)
+	}
 	if s.decisions != nil {
 		if err := s.decisions.Mount(router); err != nil {
 			failures = append(failures, err)

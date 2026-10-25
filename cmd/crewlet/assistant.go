@@ -75,6 +75,7 @@ func mountAssistant(ctx context.Context, boot *config.Bootstrap, e *engine.Engin
 		Metrics:     e.Recorder(),
 		Remote:      remote,
 		Rate:        engine.AssistantTurnRate(e),
+		Files:       engine.AssistantFiles(e),
 		Deep:        engine.AssistantDeepWork(e, boot, host),
 	})
 	if err != nil {
@@ -107,8 +108,15 @@ func mountAssistant(ctx context.Context, boot *config.Bootstrap, e *engine.Engin
 	if err != nil {
 		return nil, err
 	}
+	// THE FILE ROUTES, owner's and audited, only where this node keeps
+	// files: a nil store is a nil interface here, never a typed nil.
+	var auditFiles assistantapi.AuditFiles
+	if store := engine.AssistantFileStore(e); store != nil {
+		auditFiles = store
+	}
 	decisions, err := assistantapi.NewDecisions(assistantapi.DecisionsDeps{
 		Approver: approver, Audits: audits, Render: svc.Render, Audit: e.Backends().Queue,
+		Files: auditFiles,
 	})
 	if err != nil {
 		return nil, err
@@ -116,6 +124,7 @@ func mountAssistant(ctx context.Context, boot *config.Bootstrap, e *engine.Engin
 	surface, err := assistantapi.New(assistantapi.Options{
 		Service: svc, Grants: grants, Tables: tabular.Tables{},
 		Chart: engine.ChartAuthorityOf(e), Decisions: decisions,
+		Files: engine.AssistantFiles(e),
 	})
 	if err != nil {
 		return nil, err

@@ -118,6 +118,11 @@ func (s *Surface) ask(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body, func() int { return body.ProtocolVersion }) {
 		return
 	}
+	if detail := attachmentsRefusal(body.Attachments); detail != "" {
+		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
+			httpjson.Detail{"detail": detail})
+		return
+	}
 	key, ok := opkey.Require(w, r)
 	if !ok {
 		return
@@ -137,12 +142,34 @@ func (s *Surface) ask(w http.ResponseWriter, r *http.Request) {
 	}
 	accepted, err := s.svc.Start(r.Context(), assistant.TurnStart{Person: p,
 		Conversation: conversation, Key: key, Input: body.Input.Text, Page: body.PageContext,
-		Read: grant})
+		Read: grant, Attachments: body.Attachments})
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
 	httpjson.Write(w, http.StatusAccepted, accepted)
+}
+
+// attachmentsRefusal is why a question's attachments are refused as written,
+// or "": past wire.AttachmentsPerTurn, a nil id, or one file named twice.
+// Whether each is a file of this conversation the person uploaded is the
+// orchestrator's to check, against the store, before the turn starts.
+func attachmentsRefusal(files []uuid.UUID) string {
+	if len(files) > wire.AttachmentsPerTurn {
+		return fmt.Sprintf("a question carries at most %d attachments, and this one "+
+			"names %d", wire.AttachmentsPerTurn, len(files))
+	}
+	seen := make(map[uuid.UUID]bool, len(files))
+	for _, id := range files {
+		switch {
+		case id == uuid.Nil:
+			return "an attachment names no file"
+		case seen[id]:
+			return "file " + id.String() + " is attached twice"
+		}
+		seen[id] = true
+	}
+	return ""
 }
 
 // stop serves POST /assistant/turns/{id}/stop.

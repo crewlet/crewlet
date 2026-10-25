@@ -1018,6 +1018,14 @@ const (
 	// a spent plan whose reset is known: a signed-out model needs somebody
 	// to act, not a wait.
 	CodeAssistantModelNotReady Code = "assistant_model_not_ready"
+	// CodeAssistantFileRefused is a file the assistant does not keep: its
+	// bytes are not one of the image types a person may attach (whatever
+	// its name or declared type says), or it is empty. 415, its `detail`
+	// naming the types that are kept.
+	CodeAssistantFileRefused Code = "assistant_file_refused"
+	// CodeAssistantFileLimit is an attachment uploaded into a conversation
+	// that already keeps as many as one conversation may. 409.
+	CodeAssistantFileLimit Code = "assistant_file_limit"
 	// CodeProposalAlreadyDecided is an approval or a decline of a proposal
 	// somebody, or another tab, already decided; its detail `state` is the
 	// state it is in now. 409.
@@ -1395,6 +1403,10 @@ var codes = map[Code]string{
 		"Retry-After names, then ask again.",
 	CodeAssistantUnavailable:   "The assistant cannot answer right now. Try again in a moment.",
 	CodeAssistantModelNotReady: "The assistant's model cannot answer right now.",
+	CodeAssistantFileRefused: "This file cannot be attached. Attach a PNG, JPEG, WebP " +
+		"or GIF image.",
+	CodeAssistantFileLimit: "This conversation holds as many attachments as it can. " +
+		"Start a new conversation to attach more.",
 	CodeProposalAlreadyDecided: "This change was already decided, so nothing more was done.",
 	CodeProposalExpired: "This proposed change expired before it was approved. Ask the " +
 		"assistant to propose it again.",

@@ -173,7 +173,8 @@ moves those too (see
 store reached directly, with the engine stopped, holds no identity estate, so
 neither is counted or moved there, and the rekey says so. Through a running
 node it counts the Dashboard Assistant's sealed conversations per key as well
-(`assistant_values`), which no rekey moves. A dry run counts whatever it
+(`assistant_values`, each file a conversation keeps counted by the key its
+content is sealed under in the object store), which no rekey moves. A dry run counts whatever it
 reached still under an old key, so an operator is never told "nothing to move"
 while the address index's key, every person's name or somebody's conversation
 is still sealed under the key they are about to retire.

@@ -25,6 +25,17 @@
 // assistant grant: the guard refuses `/assistant/` to one, so the assistant can
 // never approve its own proposal.
 //
+// # A conversation's files
+//
+// A person uploads an image to ask about as the raw body of
+// `POST .../conversations/{id}/files`, typed by its bytes and never by its name
+// or its declared type, and downloads any file their conversation keeps from
+// `GET .../files/{file}`; an administrator downloads one through the audited
+// compliance read, recorded beside the conversation and published as its audit
+// event first. Every download is an attachment of its sniffed type with
+// `nosniff`, a `sandbox` policy and `private, no-store`, so a kept file is never
+// rendered as a page of this origin (files.go).
+//
 // # The stream
 //
 // A turn streams as server-sent events read over fetch, resumable by

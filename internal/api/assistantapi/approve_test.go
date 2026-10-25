@@ -3,6 +3,7 @@ package assistantapi_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -54,7 +55,8 @@ func (a *audits) AuditTranscript(_ context.Context, _ assistantdomain.AuditRecei
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.unopened {
-		return assistantdomain.Transcript{}, assistantdomain.ErrNotFound
+		return assistantdomain.Transcript{}, fmt.Errorf("%w: %w", assistantdomain.ErrAuditPending,
+			assistantdomain.ErrNotFound)
 	}
 	a.steps = append(a.steps, "open")
 	return assistantdomain.Transcript{Conversation: assistantdomain.Conversation{Owner: a.owner}}, nil

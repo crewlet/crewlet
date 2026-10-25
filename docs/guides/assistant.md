@@ -138,6 +138,8 @@ These limits are fixed, not configured:
 | Open streams per person | 4 per node, 60 opens a minute (burst of 10) | A fifth stream, or a loop reopening one, answers `429 assistant_busy`, so one person cannot hold the node's connections or keep it unsealing a transcript |
 | Tool result handed to the model | 16 KiB | Larger answers are cut for the model; the card still shows the snapshot |
 | Card size | 1000 rows, 256 KiB | A larger table is cut with a notice and never presented as whole |
+| Attachments | 4 per question, 40 per conversation, 5 MiB each, PNG, JPEG, WebP or GIF | The type is read from the file's bytes, never its name, so a page dressed as an image is refused (`415 assistant_file_refused`); past 40 a conversation answers `409 assistant_file_limit`, which bounds what one conversation keeps in the object store to 200 MiB for its retention |
+| Files a deep-work run delivers | 10 per run, 100 per conversation, 5 MiB each | The same bound on what runs hand back |
 
 ## Deep work
 
@@ -212,6 +214,18 @@ record. Messages, cards and previews are sealed under the fleet keyring in the
 replicated estate, and nothing a person did not see is stored, apart from the
 bounded context a turn waiting on an approval resumes from.
 
+Files go with their conversation. An image a person attaches and a file a
+deep-work run delivers are kept in the fleet's
+[object store](../concepts/object-store.md) as one object each,
+sealed under the same keyring with the conversation and the file bound in, so
+the bucket holds none of them in the clear; the replicated row naming each
+object is removed with the conversation, and the object store's collector
+deletes the object at its next pass. A node without an object store keeps no
+files: its assistant takes no attachment and offers no deep work.
+Downloading a kept file is always a download, never a page: it is served as an
+attachment of the type its bytes were read as, with `nosniff`, a `sandbox`
+content security policy and `Cache-Control: private, no-store`.
+
 Tier A's `stream.assistant_log_max_bytes` bounds the assistant's state log (512 MiB unless set; see the
 [Tier A reference](../getting-started/configuration.md#tier-a)). How long a
 conversation is kept is the company's `retention_days`, not that bound.
@@ -233,6 +247,10 @@ reason. It is a deliberate, recorded gesture, never a browse:
   conversation's own domain, which the owner's transcript lists (who read it,
   when and why), and an `assistant_conversation_read` runtime audit event
   naming the reader, the owner, the conversation and the reason.
+- One file the conversation keeps is read the same way:
+  `POST /assistant/audit/conversations/{id}/files/{file}/read` with the same
+  body records the read beside the conversation first and answers the file as a
+  download, and its audit event names the file (`file_id`) as well.
 
 The route reference is in [API Endpoints](../reference/api-endpoints.md).
 

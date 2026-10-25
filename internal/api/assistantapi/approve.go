@@ -48,6 +48,10 @@ type DecisionsDeps struct {
 	// Audit is where the runtime audit record of a compliance read goes.
 	// Required.
 	Audit AuditPublisher
+	// Files opens one file of a conversation for a compliance read's
+	// receipt: the audited download is mounted over it. Nil mounts none: a
+	// node with no object store keeps no file.
+	Files AuditFiles
 	// Log is where a route logs; nil is the default logger.
 	Log *slog.Logger
 }
@@ -58,6 +62,7 @@ type Decisions struct {
 	audits   AuditReads
 	render   Render
 	audit    AuditPublisher
+	files    AuditFiles
 	log      *slog.Logger
 }
 
@@ -83,16 +88,17 @@ func NewDecisions(d DecisionsDeps) (*Decisions, error) {
 		log = slog.Default()
 	}
 	return &Decisions{approver: d.Approver, audits: d.Audits, render: d.Render,
-		audit: d.Audit, log: log.With("component", "assistant_decisions")}, nil
+		audit: d.Audit, files: d.Files, log: log.With("component", "assistant_decisions")}, nil
 }
 
 // Mount mounts the decision routes on the authority table.
 func (s *Decisions) Mount(router *authz.Router) error {
-	for _, route := range []struct {
+	type route struct {
 		pattern string
 		action  authz.Action
 		h       http.HandlerFunc
-	}{
+	}
+	routes := []route{
 		{ApprovePattern, authz.ActionAssistantApprove, s.approve},
 		{DeclinePattern, authz.ActionAssistantDecline, s.decline},
 		// A PAGE'S CLAIM AND REPORT CARRY AN APPROVAL OUT, so they are the
@@ -100,7 +106,12 @@ func (s *Decisions) Mount(router *authz.Router) error {
 		// own approval sent it.
 		{ActionPattern, authz.ActionAssistantApprove, s.report},
 		{AuditReadPattern, authz.ActionAssistantAuditRead, s.auditRead},
-	} {
+	}
+	if s.files != nil {
+		routes = append(routes, route{AuditDownloadPattern, authz.ActionAssistantAuditRead,
+			s.auditDownload})
+	}
+	for _, route := range routes {
 		if err := router.Handle(route.pattern, authz.Policy{Action: route.action},
 			route.h); err != nil {
 			return fmt.Errorf("assistantapi: mount %s: %w", route.pattern, err)

@@ -83,30 +83,93 @@ type Render func(ctx context.Context, t assistantdomain.Transcript) (wire.Transc
 // node's own queue, as every runtime audit record's.
 type AuditPublisher = operator.AuditPublisher
 
+// AuditFiles opens one file of a conversation for the receipt of a compliance
+// read recorded beside it: *assistantdomain.FileStore as written.
+type AuditFiles interface {
+	AuditOpen(ctx context.Context, receipt assistantdomain.AuditReceipt, file uuid.UUID) (
+		assistantdomain.File, []byte, error)
+}
+
 // auditRead is `POST /assistant/audit/conversations/{id}/read`.
 func (s *Decisions) auditRead(w http.ResponseWriter, r *http.Request) {
-	reader, ok := auth.Caller(w, r)
+	a, ok := s.recordAudit(w, r)
 	if !ok {
 		return
+	}
+	ctx := r.Context()
+	t, err := s.audits.AuditTranscript(ctx, a.receipt)
+	if !s.audited(w, r, a, err) {
+		return
+	}
+	s.publishAudit(r, a, t.Conversation.Owner, uuid.Nil)
+	rendered, err := s.render(ctx, t)
+	if err != nil {
+		s.log.ErrorContext(ctx, "assistant_audit_read_render_failed", "conversation",
+			a.conversation, "error", err)
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, rendered)
+}
+
+// auditDownload is
+// `POST /assistant/audit/conversations/{id}/files/{file}/read`: one file of
+// somebody else's conversation, recorded, audited and answered exactly as the
+// transcript's compliance read is, and served as every download is.
+func (s *Decisions) auditDownload(w http.ResponseWriter, r *http.Request) {
+	file, ok := pathFile(w, r)
+	if !ok {
+		return
+	}
+	a, ok := s.recordAudit(w, r)
+	if !ok {
+		return
+	}
+	f, content, err := s.files.AuditOpen(r.Context(), a.receipt, file)
+	if !s.audited(w, r, a, err) {
+		return
+	}
+	s.publishAudit(r, a, f.Owner, f.ID)
+	serveFile(w, f.Ref(), content)
+}
+
+// auditCall is one compliance read as it was recorded: who read, which
+// conversation, why, under which operation, and the receipt the record
+// answered.
+type auditCall struct {
+	by           iam.Actor
+	conversation uuid.UUID
+	reason       string
+	key          string
+	receipt      assistantdomain.AuditReceipt
+}
+
+// recordAudit reads a compliance read's request and records it beside the
+// conversation, before anything is opened, answering the refusal itself and
+// false where there is no read to go on with.
+func (s *Decisions) recordAudit(w http.ResponseWriter, r *http.Request) (auditCall, bool) {
+	reader, ok := auth.Caller(w, r)
+	if !ok {
+		return auditCall{}, false
 	}
 	id, ok := pathID(w, r)
 	if !ok {
-		return
+		return auditCall{}, false
 	}
 	var body wire.AuditReadRequest
 	if !readBody(w, r, &body) || !speaks(w, body.ProtocolVersion) {
-		return
+		return auditCall{}, false
 	}
 	reason := strings.TrimSpace(body.Reason)
 	if reason == "" || utf8.RuneCountInString(reason) > wire.AuditReasonMaxRunes {
 		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
 			httpjson.Detail{"detail": "a compliance read needs a reason of at most 500 " +
 				"characters, which the conversation's owner is shown beside your name"})
-		return
+		return auditCall{}, false
 	}
 	key, ok := opkey.Key(w, r, time.Now())
 	if !ok {
-		return
+		return auditCall{}, false
 	}
 	ctx := r.Context()
 	by := iam.ActorFor(reader)
@@ -115,43 +178,56 @@ func (s *Decisions) auditRead(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, assistantdomain.ErrNotFound), errors.Is(err, assistantdomain.ErrPurged):
 		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
-		return
+		return auditCall{}, false
 	case errors.Is(err, assistantdomain.ErrInvalid):
 		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
 			httpjson.Detail{"detail": err.Error()})
-		return
+		return auditCall{}, false
 	case err != nil || receipt.Result().Outcome == "unknown":
 		s.log.WarnContext(ctx, "assistant_audit_read_unconfirmed", "conversation", id,
 			"op_id", key, "error", err)
 		httpjson.UnknownOutcome(w, authz.RetryUndecidedSeconds, key, false,
 			httpjson.Detail{"detail": opkey.UnknownDetail(false)})
-		return
+		return auditCall{}, false
 	}
-	t, err := s.audits.AuditTranscript(ctx, receipt)
+	return auditCall{by: by, conversation: id, reason: reason, key: key, receipt: receipt}, true
+}
+
+// audited answers what opening a recorded read refused, and reports whether
+// the read goes on.
+func (s *Decisions) audited(w http.ResponseWriter, r *http.Request, a auditCall, err error) bool {
 	switch {
-	case errors.Is(err, assistantdomain.ErrNotFound):
+	case err == nil:
+		return true
+	case errors.Is(err, assistantdomain.ErrAuditPending):
 		// RECORDED AND NOT YET APPLIED HERE, so not yet visible to the
 		// owner on this node either: the same request again, under the same
 		// operation, opens it once it is.
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, authz.RetryUndecidedSeconds,
-			httpjson.Detail{"op_id": key, "detail": "the read was recorded and has not " +
+			httpjson.Detail{"op_id": a.key, "detail": "the read was recorded and has not " +
 				"reached this node yet; send the same request again"})
-		return
-	case err != nil:
-		s.log.ErrorContext(ctx, "assistant_audit_read_failed", "conversation", id, "error", err)
+	case errors.Is(err, assistantdomain.ErrNotFound):
+		// RECORDED, AND NO SUCH FILE IN THIS CONVERSATION: the read stays on
+		// the owner's record as the attempt it was.
+		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
+	default:
+		s.log.ErrorContext(r.Context(), "assistant_audit_read_failed", "conversation",
+			a.conversation, "error", err)
 		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
-		return
 	}
-	operator.Audit(ctx, s.audit, types.AssistantConversationRead{
-		ActorName: by.Name, ActorKind: string(by.Kind), OperatorID: by.OperatorID,
-		ConversationID: id.String(), OwnerID: t.Conversation.Owner.String(), Reason: reason,
-	})
-	rendered, err := s.render(ctx, t)
-	if err != nil {
-		s.log.ErrorContext(ctx, "assistant_audit_read_render_failed", "conversation", id,
-			"error", err)
-		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
-		return
+	return false
+}
+
+// publishAudit publishes a compliance read's runtime audit record, once what
+// was read opened and before it is answered: file is uuid.Nil for a read of
+// the transcript.
+func (s *Decisions) publishAudit(r *http.Request, a auditCall, owner, file uuid.UUID) {
+	ev := types.AssistantConversationRead{
+		ActorName: a.by.Name, ActorKind: string(a.by.Kind), OperatorID: a.by.OperatorID,
+		ConversationID: a.conversation.String(), OwnerID: owner.String(), Reason: a.reason,
 	}
-	httpjson.Write(w, http.StatusOK, rendered)
+	if file != uuid.Nil {
+		ev.FileID = file.String()
+	}
+	operator.Audit(r.Context(), s.audit, ev)
 }
