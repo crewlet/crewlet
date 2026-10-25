@@ -647,7 +647,7 @@ func (g *Guard) assist(r *http.Request, candidate string) (*http.Request, *Refus
 			"detail", err.Error())
 		return refused()
 	}
-	p, how := d.lineages.Principal(ctx, claims.Credential)
+	p, how := d.lineages.PrincipalFor(ctx, claims.Credential, needOf(r.Method))
 	switch how {
 	case iam.Unknown:
 		return r.WithContext(iam.WithUnresolved(ctx, errIdentityUnavailable)), nil

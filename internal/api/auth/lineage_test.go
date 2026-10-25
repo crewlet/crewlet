@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/session"
 )
 
 // WHO A CREDENTIAL'S NAME STANDS FOR is what a request through the credential
@@ -252,5 +253,33 @@ func TestACredentialsNameIsTheOneLineagesResolves(t *testing.T) {
 		if _, err := auth.LineageOf(p); !errors.Is(err, auth.ErrNoLineage) {
 			t.Errorf("LineageOf(%+v) = %v, want ErrNoLineage", p, err)
 		}
+	}
+}
+
+// A SESSION'S NAME ON A NODE BEHIND ITS ROWS NEVER SERVES A WRITE: the cookie
+// on that node is served reads and answered 503 for a write (the `behind` row),
+// and a grant, which presents the session's name rather than its bearer, is
+// judged at its own request's need (Lineages.PrincipalFor with needOf) and,
+// holding no start position to wait for, is refused at every need rather than
+// served. So a write through a grant is never admitted where the person's own
+// write would not be. Mutation: let a name with no row read as behind and the
+// write is served.
+func TestASessionsNameOnANodeBehindItNeverServesAWrite(t *testing.T) {
+	t.Parallel()
+	for _, need := range []session.Need{session.NeedRead, session.NeedWrite} {
+		s := newSignedIn(t)
+		name := iam.SessionName(s.lineage.String())
+		s.dir.identity.Applied = sessionStart - 1
+		s.dir.identity.Session.Found = false
+		st := &standings{owner: sessionPerson, live: true}
+		if _, how := lineages(t, s.guard(), st).PrincipalFor(t.Context(), name, need); how == iam.Resolved {
+			t.Errorf("a session's name on a node behind its row resolved at need %v", need)
+		}
+	}
+	s := newSignedIn(t)
+	st := &standings{owner: sessionPerson, live: true}
+	if _, how := lineages(t, s.guard(), st).PrincipalFor(t.Context(),
+		iam.SessionName(s.lineage.String()), session.NeedWrite); how != iam.Resolved {
+		t.Errorf("a live session's name resolved %v for a write, want it served", how)
 	}
 }
