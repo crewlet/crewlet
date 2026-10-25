@@ -149,6 +149,14 @@ func TestPermissionParityAcrossFivePrincipals(t *testing.T) {
 					}
 				case status < 300:
 					answered++
+					// AND THE CURATED CATALOGUE OFFERS IT, so a read the
+					// dashboard answers the person is one the assistant
+					// may make for them.
+					if !slices.ContainsFunc(curated, func(o catalog.Tool) bool {
+						return o.Name == tool.Name
+					}) {
+						t.Errorf("%s answers %s, and is not offered to them", tool.Name, who.name)
+					}
 					if step.State != wire.StepDone {
 						t.Errorf("%s answered the person and the assistant's step reads %s",
 							tool.Name, step.State)

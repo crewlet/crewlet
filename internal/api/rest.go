@@ -3,7 +3,6 @@ package api
 import (
 	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
@@ -300,41 +299,4 @@ func (a *App) answerHTTP(w http.ResponseWriter, r *http.Request, what string, pa
 		return
 	}
 	writeJSON(w, http.StatusOK, data)
-}
-
-// QuestionOf is the registry question a request to path asks: the question a
-// GET to `/query/{what}` names, or the one a named REST route answers. False
-// for a route no question answers. What a caller holding a path learns the
-// question's posture by (queries.Registry.PostureOf), so a reader of a route
-// and the route itself decide admission from the one posture.
-func QuestionOf(method, path string) (string, bool) {
-	if what, ok := strings.CutPrefix(path, "/query/"); ok && method == "GET" {
-		return what, true
-	}
-	for _, r := range namedRoutes {
-		if r.method == method && patternMatches(r.pattern, path) {
-			return r.what, true
-		}
-	}
-	return "", false
-}
-
-// patternMatches reports whether path fills pattern's wildcards.
-func patternMatches(pattern, path string) bool {
-	want, got := strings.Split(pattern, "/"), strings.Split(path, "/")
-	if len(want) != len(got) {
-		return false
-	}
-	for i, segment := range want {
-		if strings.HasPrefix(segment, "{") {
-			if got[i] == "" {
-				return false
-			}
-			continue
-		}
-		if segment != got[i] {
-			return false
-		}
-	}
-	return true
 }

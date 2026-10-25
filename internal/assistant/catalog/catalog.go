@@ -66,6 +66,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/provenance"
 )
@@ -190,6 +191,11 @@ type Tool struct {
 	// Apps are the apps a card built from this tool's answer needs, so a
 	// stored card is withheld from a person who no longer holds one.
 	Apps []iam.Grant
+	// Shows, for a read whose answer is decided by what the authority table
+	// lets the reader see rather than by one app, is the kinds of which the
+	// reader must see at least one (authz.Shows), the same test the route's
+	// answer applies. A read declaring it is offered by it, not by Apps.
+	Shows []authz.ObjectKind
 	// Fence marks an answer that carries text somebody else wrote, fenced
 	// under the turn's boundary before the model reads it (ADR-0040), with
 	// Source and Trust as its label.

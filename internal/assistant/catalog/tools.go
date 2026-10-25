@@ -5,6 +5,7 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/provenance"
 )
@@ -80,7 +81,7 @@ func Offered(p iam.Principal, acts []string) []Tool {
 	for _, t := range Tools() {
 		switch t.Kind {
 		case KindRead:
-			if !slices.ContainsFunc(t.Apps, func(g iam.Grant) bool { return !p.Can(g) }) {
+			if t.offeredTo(p) {
 				out = append(out, t)
 			}
 		case KindWrite:
@@ -140,4 +141,16 @@ func (t Tool) validate() error {
 		}
 	}
 	return nil
+}
+
+// offeredTo reports whether a read is offered to p: where it declares Shows,
+// when p sees at least one of those kinds, as its route's answer decides;
+// otherwise when p holds every app it declares.
+func (t Tool) offeredTo(p iam.Principal) bool {
+	if len(t.Shows) > 0 {
+		return slices.ContainsFunc(t.Shows, func(k authz.ObjectKind) bool {
+			return authz.Shows(p, k)
+		})
+	}
+	return !slices.ContainsFunc(t.Apps, func(g iam.Grant) bool { return !p.Can(g) })
 }

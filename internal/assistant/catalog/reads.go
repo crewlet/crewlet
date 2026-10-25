@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
@@ -567,9 +568,10 @@ func readTools() []Tool {
 			schema: object([]string{"q"}, map[string]*schema{
 				"q": text("What to find, in plain words.", queryBytes),
 			}),
-			// EVERYBODY'S, as the knowledge question is: its answer holds
-			// each person to the pages they may read.
+			// OFFERED AS THE KNOWLEDGE QUESTION ANSWERS: to a reader who
+			// sees pages or tasks (it searches both), not on one app.
 			Routes: []string{"GET /query/{what}"}, Fence: true,
+			Shows: []authz.ObjectKind{authz.KindPage, authz.KindTask},
 			Build: func(a map[string]any) (exec.Request, error) {
 				return get("GET /query/{what}", map[string]string{"what": "knowledge"},
 					query(a).str("q", "q").values())
