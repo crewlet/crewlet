@@ -166,13 +166,27 @@ const ownerItem = "owner:"
 // operation ids, so a retention purge and an erasure are decided by exactly
 // the machinery every other domain's trash is.
 type assistantTrash struct {
-	reader *assistantdomain.Reader
-	writer *assistantdomain.Writer
+	reader assistantRows
+	writer assistantPurges
 	term   func() time.Duration
 
 	// removed answers which of the ids the identity estate holds a removal
 	// tombstone for ([iamdomain.Reader.Removed]).
 	removed func(ctx context.Context, ids []string) ([]string, error)
+}
+
+// assistantRows is the slice of the assistant's reader the reaper's source and
+// the erasure loop read.
+type assistantRows interface {
+	Owners(ctx context.Context) ([]uuid.UUID, error)
+	InactiveBefore(ctx context.Context, cutoff time.Time, limit int) ([]uuid.UUID, error)
+}
+
+// assistantPurges is the slice of the assistant's writer they write through.
+type assistantPurges interface {
+	EraseOwner(ctx context.Context, c assistantdomain.Call) (statelog.Result, error)
+	PurgeInactive(ctx context.Context, by iam.Actor, opID string, id uuid.UUID,
+		cutoff time.Time) (statelog.Result, error)
 }
 
 var _ trashreap.Termed = assistantTrash{}
@@ -236,7 +250,7 @@ func (a assistantTrash) PurgeTrashed(ctx context.Context, id string, cutoff time
 
 // removedOwners is every owner of a conversation here whom the identity estate
 // has removed, by id.
-func removedOwners(ctx context.Context, reader *assistantdomain.Reader,
+func removedOwners(ctx context.Context, reader assistantRows,
 	removed func(context.Context, []string) ([]string, error)) ([]string, error) {
 
 	owners, err := reader.Owners(ctx)
