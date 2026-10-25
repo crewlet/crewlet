@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"net/url"
 	"strconv"
 	"time"
 
@@ -107,26 +106,11 @@ func Digest(f Fields) (string, error) {
 // against, so what the person approved and what the guard admits are compared
 // in the same bytes.
 func RequestDigest(r exec.Request) (string, error) {
-	u, err := requestURL(r)
+	u, err := r.URL()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	return opkey.RequestDigestOf(r.Method, u, r.Body)
-}
-
-// requestURL is r's path and query as one URL.
-func requestURL(r exec.Request) (*url.URL, error) {
-	u, err := url.Parse(r.Path)
-	switch {
-	case err != nil:
-		return nil, fmt.Errorf("%w: the request path %q: %w", ErrInvalid, r.Path, err)
-	case u.IsAbs() || u.Host != "" || u.RawQuery != "" || u.Fragment != "" ||
-		len(u.Path) == 0 || u.Path[0] != '/':
-		return nil, fmt.Errorf("%w: the request path %q is a route's own path, with "+
-			"its query apart", ErrInvalid, r.Path)
-	}
-	u.RawQuery = r.Query.Encode()
-	return u, nil
 }
 
 // FieldsOf are the fields a stored proposal's digest is re-hashed from.

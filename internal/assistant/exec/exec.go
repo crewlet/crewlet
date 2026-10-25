@@ -29,8 +29,11 @@ package exec
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -61,6 +64,36 @@ type Request struct {
 	// IdempotencyKey is the operation an approved write executes under
 	// (internal/api/opkey's header); empty for a read.
 	IdempotencyKey string
+}
+
+// ErrInvalidRequest reports a [Request] that is not a request to one of the
+// engine's own routes: no method, or a path that is anything other than an
+// absolute path with its query apart.
+var ErrInvalidRequest = errors.New("exec: not a request to one of the engine's own routes")
+
+// URL is the URL r is sent to and the one its request digest is computed over.
+//
+// THE ONE BUILDER: the proposal's digest (what the person approved), the exec
+// grant's digest (what the guard admits) and the Dispatcher's request (what is
+// sent) are all built here, so the three can never encode one request two ways.
+// It refuses a method with whitespace in it and a path that carries a scheme,
+// a host, user information, its own query or a fragment, so the request can
+// only ever reach this engine's own handler chain.
+func (r Request) URL() (*url.URL, error) {
+	if r.Method == "" || strings.ContainsAny(r.Method, " \t\r\n") {
+		return nil, fmt.Errorf("%w: the method %q is not one", ErrInvalidRequest, r.Method)
+	}
+	u, err := url.Parse(r.Path)
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("%w: the path %q does not parse: %w", ErrInvalidRequest, r.Path, err)
+	case u.Scheme != "" || u.Host != "" || u.User != nil || u.RawQuery != "" ||
+		u.ForceQuery || u.Fragment != "" || !strings.HasPrefix(u.Path, "/"):
+		return nil, fmt.Errorf("%w: the path %q is not an absolute path alone, with "+
+			"its query apart", ErrInvalidRequest, r.Path)
+	}
+	u.RawQuery = r.Query.Encode()
+	return u, nil
 }
 
 // Response is what the handler chain answered, read to at most

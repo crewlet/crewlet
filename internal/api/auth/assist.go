@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -354,7 +353,7 @@ func (d *Delegations) Derive(ctx context.Context, req AssistRequest) (exec.Grant
 		ReauthCeiling: p.ReauthAt.UTC(), Expires: expires,
 	}
 	if req.Scope == iam.AssistScopeExec {
-		u, err := requestURL(*req.Request)
+		u, err := req.Request.URL()
 		if err != nil {
 			return refuse(err.Error())
 		}
@@ -401,7 +400,7 @@ func (r AssistRequest) check() error {
 		return fmt.Errorf("the request's body is %d bytes, over the %d an approved "+
 			"write may carry", len(r.Request.Body), AssistMaxBody)
 	}
-	u, err := requestURL(*r.Request)
+	u, err := r.Request.URL()
 	if err != nil {
 		return err
 	}
@@ -533,25 +532,6 @@ func earliest(first time.Time, rest ...time.Time) time.Time {
 		}
 	}
 	return out
-}
-
-// requestURL is the URL a tool call's request is sent to, and the one its
-// digest is computed over: the minter and the dispatcher build it here, so the
-// two can never build it two ways.
-func requestURL(r exec.Request) (*url.URL, error) {
-	if r.Method == "" || strings.ContainsAny(r.Method, " \t\r\n") {
-		return nil, fmt.Errorf("method %q is not one", r.Method)
-	}
-	u, err := url.Parse(r.Path)
-	switch {
-	case err != nil:
-		return nil, fmt.Errorf("path %q does not parse: %w", r.Path, err)
-	case u.Scheme != "" || u.Host != "" || u.User != nil || u.RawQuery != "" ||
-		u.Fragment != "" || !strings.HasPrefix(u.Path, "/"):
-		return nil, fmt.Errorf("path %q is not an absolute path alone", r.Path)
-	}
-	u.RawQuery = r.Query.Encode()
-	return u, nil
 }
 
 // grant is the one [exec.Grant] implementation: the token stays here, and the

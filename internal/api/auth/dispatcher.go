@@ -104,7 +104,7 @@ func (d *Dispatcher) Do(ctx context.Context, g exec.Grant, r exec.Request) (exec
 	if err := ctx.Err(); err != nil {
 		return exec.Response{}, err
 	}
-	u, err := requestURL(r)
+	u, err := r.URL()
 	if err != nil {
 		return exec.Response{}, fmt.Errorf("auth: an assistant call: %w", err)
 	}
