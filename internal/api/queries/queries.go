@@ -608,7 +608,7 @@ func (r *Registry) AnswerWith(ctx context.Context, what string, p Params) (any, 
 	// catalogue reads as a tool, whatever the question's posture: an
 	// Everybody or a Requires question never reaches the authority table,
 	// whose assistant column is how every other surface keeps a verb from
-	// the assistant (ADR-0048). Checked before the grant, so a question
+	// the assistant (ADR-0051). Checked before the grant, so a question
 	// the catalogue does not read is refused the same way to everybody.
 	case assisted(principal) && (reads == nil || !reads(what)):
 		return nil, &Refusal{What: what, Reason: authz.ReasonAssistRefused}
