@@ -1207,6 +1207,11 @@ type Profile struct {
 	// doctor beside the probe result.
 	LocalToolsNote string `yaml:"local_tools_note,omitempty"`
 
+	// ToolsOff is how this CLI's run is left with NO tool of its own at
+	// all, by construction in the argv it runs, or nil where no measured
+	// way exists. See [ToolsOff].
+	ToolsOff *ToolsOff `yaml:"tools_off,omitempty"`
+
 	// SeedFiles are the settings files written for the CLI before a call
 	// — the vendors that take their tool policy from a file rather than a
 	// flag. See [SeedFile].
@@ -1261,6 +1266,93 @@ type Stream struct {
 	TextEvents    []string `yaml:"text_events,omitempty"`
 	DeltaPaths    []Path   `yaml:"delta_paths,omitempty"`
 	DeltaEvents   []string `yaml:"delta_events,omitempty"`
+}
+
+// ToolsOff is the proof, IN THE ARGV, that a CLI's run offers its model no
+// tool of its own: no shell, no file reader or writer, no tool server, nothing
+// that reaches the engine host. [LocalToolsDenied] is a claim about a
+// profile; this is what a caller that must not be reached around (the
+// Dashboard Assistant, whose every read goes through the person's own
+// requests) checks instead, against the exact argv each of its calls runs.
+//
+// A DENY LIST IS NOT THIS. Measured on Claude Code 2.1.310 with no login (no
+// model reached): the profile's --disallowedTools list still left thirteen
+// tools on offer (Workflow, SendMessage, EnterWorktree and the cron tools
+// among them), where `--tools ""` left none. A vendor adds tools in every
+// release, and a list of the ones to refuse is always a release behind; an
+// empty allow list is not.
+type ToolsOff struct {
+	// Args are the argument runs that leave the CLI with no tool. Each
+	// must appear in the argv, its elements adjacent and in order, and a
+	// run's flag exactly once, since a CLI takes the last value of a
+	// repeated flag and a second `--tools default` would undo the first.
+	Args [][]string `yaml:"args,omitempty"`
+	// Refuses are flags whose presence anywhere in the argv brings a tool
+	// back (a tool server's config, an allow list), so an argv carrying
+	// one is not off whatever else it says.
+	Refuses []string `yaml:"refuses,omitempty"`
+	// Note says how the construction was measured.
+	Note string `yaml:"note,omitempty"`
+}
+
+// ToolsOffProblem says why the argv this profile runs is NOT left with no
+// tool of its own, or "" when it is: every run of [ToolsOff.Args] present
+// exactly once and no flag of [ToolsOff.Refuses] anywhere, in the argv as
+// written and in its streamed variant ([Profile.Streamed]) alike, since a
+// caller runs both.
+func (p *Profile) ToolsOffProblem() string {
+	if p.ToolsOff == nil {
+		return "the profile has no measured way to run the CLI with no tool of its own"
+	}
+	streamed := p.Streamed()
+	for _, argv := range [][]string{p.CompleteArgs, streamed.CompleteArgs} {
+		if problem := p.ToolsOff.problemIn(argv); problem != "" {
+			return problem
+		}
+	}
+	return ""
+}
+
+// problemIn judges one argv.
+func (t *ToolsOff) problemIn(argv []string) string {
+	for _, run := range t.Args {
+		if len(run) == 0 {
+			return "tools_off.args holds an empty run"
+		}
+		if !containsRun(argv, run) {
+			return fmt.Sprintf("the argv does not carry %q", strings.Join(run, " "))
+		}
+		if n := countOf(argv, run[0]); n != 1 {
+			return fmt.Sprintf("the argv carries %s %d times, and the CLI takes the last", run[0], n)
+		}
+	}
+	for _, flag := range t.Refuses {
+		if slices.Contains(argv, flag) {
+			return fmt.Sprintf("the argv carries %s, which brings a tool back", flag)
+		}
+	}
+	return ""
+}
+
+// containsRun reports whether run appears in argv, adjacent and in order.
+func containsRun(argv, run []string) bool {
+	for i := 0; i+len(run) <= len(argv); i++ {
+		if slices.Equal(argv[i:i+len(run)], run) {
+			return true
+		}
+	}
+	return false
+}
+
+// countOf counts the arguments equal to arg.
+func countOf(argv []string, arg string) int {
+	n := 0
+	for _, a := range argv {
+		if a == arg {
+			n++
+		}
+	}
+	return n
 }
 
 // CanStream reports whether the profile has a streamed variant.
@@ -1815,6 +1907,7 @@ func (p *Profile) problems() []string {
 	}
 	p.validateWebStance(add)
 	p.validateDeltas(add)
+	p.validateToolsOff(add)
 	p.validateStream(add)
 	for i, f := range p.SeedFiles {
 		if strings.TrimSpace(f.Path) == "" {
@@ -1909,6 +2002,30 @@ func (p *Profile) validateWebStance(add func(string, ...any)) {
 		for _, problem := range denied.problems() {
 			add("with web_tools denied, %s", problem)
 		}
+	}
+}
+
+// validateToolsOff holds a tools_off block to its shape. Whether the argv
+// carries it is [Profile.ToolsOffProblem]'s question, asked by the one caller
+// that requires it, since a seat's argv deliberately keeps the web.
+func (p *Profile) validateToolsOff(add func(string, ...any)) {
+	t := p.ToolsOff
+	if t == nil {
+		return
+	}
+	if len(t.Args) == 0 {
+		add("tools_off.args is empty: name the arguments that leave the CLI with no tool")
+	}
+	for i, run := range t.Args {
+		if len(run) == 0 {
+			add("tools_off.args[%d] is empty", i)
+		}
+	}
+	if p.LocalTools != LocalToolsDenied {
+		add("tools_off is set but local_tools is %q: a CLI run with no tool denies its local tools", p.LocalTools)
+	}
+	if strings.TrimSpace(t.Note) == "" {
+		add("tools_off.note is empty: say how the construction was measured")
 	}
 }
 

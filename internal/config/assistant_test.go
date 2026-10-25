@@ -56,7 +56,7 @@ func TestTheAssistantIsOffUntilTurnedOn(t *testing.T) {
 // A CHAIN THAT KEEPS EVERY RULE IS HANDED OUT, in order.
 func TestASafeAssistantChainIsHandedOut(t *testing.T) {
 	t.Parallel()
-	second := "    backup:\n      agent: codex\n      model: gpt-5\n      overrides: {web_tools: denied}\n"
+	second := "    backup:\n      agent: pi\n      model: sonnet\n      overrides: {web_tools: denied}\n"
 	cfg := mustCompany(t, assistantCompany(assistantEntry+second, "  enabled: true\n  llm: [assistant, backup]\n"))
 	chain, err := cfg.AssistantChain()
 	if err != nil {

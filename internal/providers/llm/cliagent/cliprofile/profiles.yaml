@@ -99,6 +99,15 @@ claude-code:
   # reopen the web without a word. MEASURED against 2.1.310 with the
   # doctor's own web probe: the deny list answered NO-WEB while the seats'
   # args fetched the endpoint's clock to the second.
+  #
+  # NO TOOL AT ALL, because this argv is the Dashboard Assistant's: the empty
+  # allow list is what takes every tool away, not the deny list. MEASURED
+  # against 2.1.310 with no login, which reaches no model, off the stream's
+  # init event: the deny list alone left thirteen tools on offer (Workflow,
+  # SendMessage, EnterWorktree, the cron tools and more), and `--tools ""`
+  # left none, with no MCP server under --strict-mcp-config. The deny list
+  # stays beside it, so a release that stopped honouring the empty list still
+  # refuses the tools that matter most.
   web_tools_note: "an empty --tools allow list, and WebFetch and WebSearch on --disallowedTools; measured refused on Claude Code 2.1.310"
   web_denial:
     complete_args:
@@ -120,6 +129,10 @@ claude-code:
       - "Agent"
       - "WebFetch"
       - "WebSearch"
+  tools_off:
+    args: [["--tools", ""], ["--strict-mcp-config"]]
+    refuses: ["--mcp-config", "--allowedTools", "--allowed-tools", "--plugin-dir"]
+    note: "--tools \"\" left the init event's tool list empty and no MCP server loaded; measured on Claude Code 2.1.310"
   model_args: ["--model", "{model}"]
   # BOTH SYSTEM-PROMPT CHANNELS, each a FILE: a seat's system prompt carries
   # the org chart, its policies, its roster and its own memory, and argv is
@@ -426,6 +439,11 @@ codex:
     - "tools.experimental_request_user_input.enabled=false"
     - "-"
   # Denied: no shell, and apply_patch writes nothing (above).
+  #
+  # NO tools_off, so the Dashboard Assistant refuses this CLI: apply_patch has
+  # no switch, so the model keeps a tool of its own, and its patch check
+  # answers whether a file outside the call exists and holds given lines,
+  # which is a read of the engine host no request of the person's made.
   local_tools: denied
   # WEB OFF is the same override with the search mode `disabled`, one of the
   # four the config accepts (disabled, cached, indexed, live). The read-only
@@ -1039,6 +1057,13 @@ opencode:
   # new release; `share: disabled` keeps it from publishing a transcript;
   # `snapshots: false` stops it keeping a git snapshot of a working
   # directory that is empty by construction.
+  #
+  # NO tools_off, so the Dashboard Assistant refuses this CLI. A deny-all
+  # policy refuses a call when it is made; it does not take the tool off the
+  # model's list, so a rule the policy format reads differently in a release
+  # (as v1's did under 2.0) runs the tool. Leaving the model with no tool by
+  # construction has not been measured: the 2.1.4 binary could not run on the
+  # host where this was last checked.
   local_tools: denied
   work_config_env:
     OPENCODE_CONFIG_DIR: .crewlet-config
@@ -2666,6 +2691,9 @@ pi:
     - "--no-approve"
     - "--no-session"
   local_tools: denied
+  tools_off:
+    args: [["--no-tools"], ["--no-extensions"]]
+    note: "--no-tools sent the request's tool array empty and --no-extensions loads no extension, which could register tools; measured on 0.85.1 by the profile's author"
   # WEB OFF CHANGES NOTHING HERE, because there is no web tool to turn off:
   # `--no-tools` already sends the tool array empty (measured above). The
   # denial therefore names the same argv, by reference so the two cannot
