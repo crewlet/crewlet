@@ -706,9 +706,10 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 # SHA-256 floor under every verified byte, and what one throttle costs a burst
 # of requests to an S3 bucket), an arbitrated write end to end
 # and the applier's drain (internal/statelog), the store's own drain
-# (internal/store), the company's token counter charged by many nodes at
-# once, each a leaf of its own, and a gated lease claim (internal/coord/kv),
-# a git process through the pool end to end,
+# (internal/store), what a stream's leader takes to list the subjects it
+# holds, a page at a time (internal/jsapi), the company's token counter
+# charged by many nodes at once, each a leaf of its own, and a gated lease
+# claim (internal/coord/kv), a git process through the pool end to end,
 # receive-pack's index-pack at one thread, and a person's clone on a transfer
 # lane one CI token has filled, with the fair share and without it, and one
 # grant of a lane ten thousand waiters deep (internal/code/gitproc), the git
