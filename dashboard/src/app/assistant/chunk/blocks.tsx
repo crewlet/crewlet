@@ -667,7 +667,7 @@ export function CardBlock({
       const items =
         entity.items && entity.items.length > 0
           ? entity.items.map((item) => ({
-              id: `${item.kind}:${item.id}`,
+              id: `${item.kind ?? ""}:${item.id}`,
               name: item.label,
               ...(item.fact === undefined ? {} : { fact: item.fact }),
               ...(item.open ? { action: <EngineLink link={item.open} on={on} /> } : {}),

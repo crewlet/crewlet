@@ -80,7 +80,9 @@ type Link struct {
 // EntityCard is one record, or a list of records (an org chart, the people
 // in a unit).
 type EntityCard struct {
-	Kind     ResourceKind `json:"kind"`
+	// Kind is the dashboard object the record is, absent for a record that
+	// is none of them: a generic read's answer, which is the API's.
+	Kind     ResourceKind `json:"kind,omitempty"`
 	ID       string       `json:"id"`
 	Title    string       `json:"title"`
 	Subtitle string       `json:"subtitle,omitempty"`
@@ -120,7 +122,8 @@ type Fact struct {
 
 // EntityItem is one row of an entity card's list. Depth indents a tree.
 type EntityItem struct {
-	Kind  ResourceKind `json:"kind"`
+	// Kind is the dashboard object the item is, absent for none.
+	Kind  ResourceKind `json:"kind,omitempty"`
 	ID    string       `json:"id"`
 	Label string       `json:"label"`
 	Fact  string       `json:"fact,omitempty"`
@@ -276,7 +279,7 @@ func (c Card) Validate() error {
 	case CardTable:
 		return c.Table.validate()
 	case CardEntity:
-		if !c.Entity.Kind.Valid() {
+		if c.Entity.Kind != "" && !c.Entity.Kind.Valid() {
 			return fmt.Errorf("%w: entity kind %q is not one of %v", ErrInvalid,
 				c.Entity.Kind, ResourceKinds)
 		}
@@ -290,7 +293,7 @@ func (c Card) Validate() error {
 			return fmt.Errorf("%w: an entity's items noun names both one and many", ErrInvalid)
 		}
 		for _, item := range c.Entity.Items {
-			if !item.Kind.Valid() {
+			if item.Kind != "" && !item.Kind.Valid() {
 				return fmt.Errorf("%w: entity item kind %q is not one of %v", ErrInvalid,
 					item.Kind, ResourceKinds)
 			}

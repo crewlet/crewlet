@@ -65,6 +65,12 @@ request the assistant made as you (for example "Read token spend by agent").
 Tables can be downloaded as CSV or XLSX from the card, from the snapshot you
 were shown.
 
+A read of a part of the engine that has no card of its own is drawn from the
+answer's own shape and named for what it read, never for the request: a list
+is a table ("Agents"), and one record is a card of its values and the lists it
+holds ("Role · engineer", or the company's configuration with its roles and
+units).
+
 ## What it can do
 
 **Answer questions** across the apps you hold:

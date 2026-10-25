@@ -64,7 +64,7 @@ func tableSummary(t *wire.TableCard, budget int) ([]byte, error) {
 }
 
 type entityDigest struct {
-	Kind         wire.ResourceKind `json:"kind"`
+	Kind         wire.ResourceKind `json:"kind,omitempty"`
 	ID           string            `json:"id,omitempty"`
 	Title        string            `json:"title"`
 	Subtitle     string            `json:"subtitle,omitempty"`

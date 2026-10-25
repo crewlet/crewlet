@@ -341,14 +341,17 @@ func (g generic) change() Tool {
 	}
 }
 
-// genericLabel is a generic call's step sentence: what it does, and the route.
+// genericLabel is a generic call's step sentence: what it does, and what it
+// does it to, titled by the one rule its card is ([RequestTitle]): "Reading
+// role · engineer", never "Reading GET /config/roles/{id}". The request
+// itself is on the step beside it, in mono.
 func genericLabel(doing string) func(map[string]any) string {
 	return func(a map[string]any) string {
 		route := Args(a).String("route")
 		if route == "" || len(route) > 160 {
 			return doing + " an API route"
 		}
-		return doing + " " + route
+		return doing + " " + lowerFirst(callTitle(Args(a)))
 	}
 }
 

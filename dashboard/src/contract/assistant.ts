@@ -334,7 +334,8 @@ interface AssistantLink {
 
 /** One record, or a list of records. */
 export interface AssistantEntityCard {
-  kind: AssistantResourceKind;
+  /** The dashboard object the record is; absent for a generic read's record, which is the API's. */
+  kind?: AssistantResourceKind;
   id: string;
   title: string;
   subtitle?: string;
@@ -366,7 +367,8 @@ interface AssistantFact {
 
 /** One row of an entity card's list. */
 interface AssistantEntityItem {
-  kind: AssistantResourceKind;
+  /** The dashboard object the item is; absent for none. */
+  kind?: AssistantResourceKind;
   id: string;
   label: string;
   fact?: string;

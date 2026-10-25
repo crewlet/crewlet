@@ -184,7 +184,7 @@ func shapeAnswer(t Tool, args Args, resp exec.Response, b provenance.Boundary,
 		return Result{}, err
 	}
 	out := Result{Model: model, Trust: trust}
-	if spec, rows, ok := cards.Infer(doc, args.String("route")); ok {
+	if spec, rows, ok := cards.Infer(doc, callTitle(args)); ok {
 		encoded, err := json.Marshal(rows)
 		if err != nil {
 			return Result{}, fmt.Errorf("catalog: encode %s's rows: %w", t.Name, err)
@@ -193,7 +193,11 @@ func shapeAnswer(t Tool, args Args, resp exec.Response, b provenance.Boundary,
 		if err != nil {
 			return Result{}, fmt.Errorf("catalog: card %s's answer: %w", t.Name, err)
 		}
-		if !built.Empty {
+		// AN ANSWER THAT HOLDS NOTHING DRAWS NO CARD, the rule every read
+		// takes (step 4 of [Shape]), and its step says so.
+		if built.Empty {
+			out.Empty = true
+		} else {
 			out.Cards = built.Cards()
 		}
 	}

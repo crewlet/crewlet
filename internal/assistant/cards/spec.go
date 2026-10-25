@@ -67,6 +67,8 @@ const MaxBrief = 4
 
 // Entity is one record, or the record and a list beneath it.
 type Entity struct {
+	// Kind is the dashboard object the record is, or empty for a record that
+	// is none of them (a generic read's answer, [Infer]).
 	Kind wire.ResourceKind
 	// Root is the path to the record, "" for the answer itself.
 	Root string
@@ -102,6 +104,7 @@ type Fact struct {
 type Items struct {
 	// Path is the list's path within the answer (not the record).
 	Path string
+	// Kind is the dashboard object each item is, or empty for none.
 	Kind wire.ResourceKind
 	// ID, Label, Fact and Depth are paths within one item; Depth, when
 	// named, indents a tree.
@@ -229,9 +232,9 @@ func (s Spec) Validate() error {
 		links = append(links, t.Open)
 	}
 	if e := s.Entity; e != nil {
-		if !e.Kind.Valid() || (e.Title == "") == (e.Name == "") {
-			return fmt.Errorf("cards: an entity spec needs a kind of %v and exactly one of "+
-				"a title path and a name", wire.ResourceKinds)
+		if (e.Kind != "" && !e.Kind.Valid()) || (e.Title == "") == (e.Name == "") {
+			return fmt.Errorf("cards: an entity spec needs a kind of %v or none, and "+
+				"exactly one of a title path and a name", wire.ResourceKinds)
 		}
 		for _, f := range e.Facts {
 			if f.Label == "" || f.Path == "" || !f.Type.Valid() {
@@ -240,9 +243,9 @@ func (s Spec) Validate() error {
 		}
 		links = append(links, e.Open)
 		if it := e.Items; it != nil {
-			if it.Path == "" || (it.Label == "") != it.Plain || !it.Kind.Valid() {
-				return errors.New("cards: an entity's items need a path, a kind and a label " +
-					"path, or are plain values with none")
+			if it.Path == "" || (it.Label == "") != it.Plain || (it.Kind != "" && !it.Kind.Valid()) {
+				return errors.New("cards: an entity's items need a path, a kind or none, and " +
+					"a label path, or are plain values with none")
 			}
 			if it.Noun.One == "" || it.Noun.Many == "" {
 				return fmt.Errorf("cards: the items at %q need a noun for one and for many",
