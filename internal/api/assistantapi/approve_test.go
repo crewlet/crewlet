@@ -231,7 +231,8 @@ func TestEveryDecisionRefusesInTheEnvelope(t *testing.T) {
 			ada := approvaltest.Person(fresh)
 			p := s.fleet.Propose(t, ada, pageAction)
 			s.send(t, ada, http.MethodPost, approvePath(p), decide(p.Digest), nil)
-			claim := wire.ActionReport{ProtocolVersion: wire.ProtocolVersion, State: wire.ActionApplying}
+			claim := wire.ActionReport{ProtocolVersion: wire.ProtocolVersion,
+				State: wire.ActionApplying, Revision: "r1"}
 			s.send(t, ada, http.MethodPut, "/assistant/actions/"+p.ID.String(), claim, nil)
 			return s.send(t, ada, http.MethodPut, "/assistant/actions/"+p.ID.String(), claim, nil)
 		},
@@ -292,7 +293,7 @@ func TestEveryDecisionRefusesInTheEnvelope(t *testing.T) {
 // pageAction makes a draft a page action.
 func pageAction(d *proposal.Draft) {
 	d.Tool, d.Act, d.Scope = "propose_page_change", "", wire.ScopePage
-	d.Preview.SourceRevision = "r1"
+	d.Preview.SourceRevision, d.PageRevision = "", "r1"
 	d.Preview.Request.Method = proposal.PageMethod
 	d.Preview.Request.Path = proposal.PageActionPath + "work.filters"
 	d.Preview.Request.Body = []byte(`{"status":"open"}`)

@@ -55,6 +55,9 @@ func (a *Approver) Report(ctx context.Context, r Report) (wire.ActionAnswer, err
 		return wire.ActionAnswer{}, ErrNotFound
 	}
 	if r.Report.State == wire.ActionApplying {
+		if r.Report.Revision != p.SourceRevision {
+			return a.pageMoved(ctx, d, p, r.Report.Revision)
+		}
 		return a.claim(ctx, d, p)
 	}
 	return a.reported(ctx, d, p, r.Report)
@@ -71,6 +74,38 @@ func (a *Approver) claim(ctx context.Context, d decider, p assistantdomain.Propo
 		return wire.ActionAnswer{}, err
 	}
 	return wire.ActionAnswer{ActionID: p.ID, State: wire.ActionApplying}, nil
+}
+
+// pageMoved records a page action whose screen moved since the action was
+// prepared, refuses the claim, and tells the turn, so the model may prepare it
+// again against the screen as it is now. Decided by the SERVER from the
+// revision the claim names, so a page that would have applied a stale action
+// cannot.
+func (a *Approver) pageMoved(ctx context.Context, d decider, p assistantdomain.Proposal,
+	revision string) (wire.ActionAnswer, error) {
+
+	to, err := proposal.Next(wire.ProposalApproved, proposal.EventPageStale)
+	if err != nil {
+		return wire.ActionAnswer{}, err
+	}
+	if _, err := a.move(ctx, d.call("claim"), p.ID, assistantdomain.ProposalMove{
+		From: wire.ProposalApproved, To: to, RefusalCode: CodeStale}); err != nil {
+		if errors.Is(err, ErrAlreadyDecided) {
+			return wire.ActionAnswer{}, ErrActionClaimed
+		}
+		return wire.ActionAnswer{}, err
+	}
+	failure := &wire.Failure{Refusal: wire.Refusal{Code: CodeStale,
+		Message: "The page changed after this was prepared, so nothing was applied."}}
+	if read, err := a.d.Grants.Read(ctx, p.Conversation, p.Turn); err == nil {
+		a.resume(ctx, Resumption{Owner: d.person.ID, Conversation: p.Conversation,
+			Turn: p.Turn, Proposal: p.ID, Read: read, State: to, Failure: failure,
+			ClientReported: true, Card: proposal.CardAt(p, to, nil, failure)})
+	} else {
+		log.InfoContext(ctx, "assistant_page_stale_not_resumed", "proposal", p.ID,
+			"revision", revision, "error", err)
+	}
+	return wire.ActionAnswer{}, ErrStale
 }
 
 // pageEnd is where a page's report takes a claimed action.
