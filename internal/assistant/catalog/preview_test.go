@@ -216,3 +216,25 @@ func TestATaskCardShowsWhatTheWriteCarries(t *testing.T) {
 		t.Errorf("a due date that is no date previewed: %v", err)
 	}
 }
+
+// A PAGE CHANGE'S ROWS READ AS WORDS once the screen is gone: a payload key is
+// a label ("Due before") and a seat's handle its name, so a stored card does
+// not say "assignee: engineer". Mutation: show the payload as it is and the
+// rows read raw.
+func TestAPageChangeReadsAsWords(t *testing.T) {
+	t.Parallel()
+	change, _ := catalog.Lookup("propose_page_change")
+	p, err := change.Preview(t.Context(), reader(assistanttest.World()), wednesday,
+		map[string]any{"action": "work.filter.apply",
+			"args": map[string]any{"assignee": "engineer", "due_before": "2031-04-30"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := map[string]string{}
+	for _, c := range p.Changes {
+		rows[c.Label] = c.To
+	}
+	if rows["Assignee"] != "Backend engineer (engineer)" || rows["Due before"] != "2031-04-30" {
+		t.Errorf("the page change reads %v", rows)
+	}
+}

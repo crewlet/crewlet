@@ -308,6 +308,26 @@ func (c company) resolveDue(args map[string]any, now time.Time) (map[string]any,
 	return out, c.dueText(anchor.At, anchor.AllDay), nil
 }
 
+// valueShown is a page action's value as a person reads it: a seat's handle
+// by the seat's name, and any other value as it is.
+func (c company) valueShown(v string) string {
+	if _, held := c.seats[v]; held {
+		return c.seatName(v)
+	}
+	return v
+}
+
+// fieldLabel is a payload key as a row's label: "due_before" reads "Due
+// before". The engine names no screen's fields; the screen's own labels are
+// the card's while it is open, and this is what a stored card says after.
+func fieldLabel(key string) string {
+	words := strings.TrimSpace(strings.ReplaceAll(key, "_", " "))
+	if words == "" {
+		return key
+	}
+	return strings.ToUpper(words[:1]) + words[1:]
+}
+
 // dueOf shows a task's stored due date, an RFC 3339 instant, or "" for none.
 func (c company) dueOf(stored string, allDay bool) string {
 	at, err := time.Parse(time.RFC3339, stored)
@@ -733,7 +753,7 @@ func audienceLabel(s string) string {
 }
 
 func pageActionPreview(t Tool) proposal.Previewer {
-	return func(_ context.Context, _ proposal.Read, _ time.Time, args map[string]any) (proposal.Preview, error) {
+	return func(ctx context.Context, read proposal.Read, _ time.Time, args map[string]any) (proposal.Preview, error) {
 		req, err := built(t, args)
 		if err != nil {
 			return proposal.Preview{}, err
@@ -742,11 +762,15 @@ func pageActionPreview(t Tool) proposal.Previewer {
 		if !ok {
 			return proposal.Preview{}, fmt.Errorf("%w: no such page action", ErrInvalidArguments)
 		}
+		company, err := companyOf(ctx, read)
+		if err != nil {
+			return proposal.Preview{}, err
+		}
 		var c changes
 		c.fact("scope", "This screen", action.Scope)
 		payload, _ := args["args"].(map[string]any)
 		for _, k := range sortedKeys(payload) {
-			c.fact(k, k, cards.Text(payload[k]))
+			c.fact(k, fieldLabel(k), company.valueShown(cards.Text(payload[k])))
 		}
 		label := "Apply"
 		if action.Confirm == wire.ConfirmApprove {
