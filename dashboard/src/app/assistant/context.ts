@@ -207,6 +207,9 @@ const MAP_MAX_KEYS = 32;
 const ACTION_MAX_BYTES = 64;
 
 let frame: FramePage | null = null;
+/** Every mounted component's registration, oldest first. */
+let registrations: AssistantPageRegistration[] = [];
+/** What they say together, rebuilt whenever one comes or goes ([merged]). */
 let registration: AssistantPageRegistration | null = null;
 let snapshot: PageSnapshot | null = null;
 const listeners = new Set<() => void>();
@@ -352,19 +355,58 @@ export function setFramePage(page: FramePage | null): void {
 }
 
 /**
- * A screen registers what it knows; the function it is handed back withdraws
- * it. The screen registered last wins, so a page's own registration replaces
- * the one the screen it replaced made.
+ * What every mounted registration says together.
+ *
+ * A PAGE IS SEVERAL COMPONENTS: a project's screen offers its lenses and the
+ * task list inside it offers the list's filters, each registering what it
+ * knows. So the registry merges them rather than keeping the last: the
+ * resources of all of them (each record once), the actions of all of them
+ * (the newest wins where two declare one id), the newest selection anyone
+ * declared, and every data version, so a move in any of them is a move of
+ * the page.
+ */
+function merged(all: readonly AssistantPageRegistration[]): AssistantPageRegistration | null {
+  if (all.length === 0) return null;
+  const resources: PageResource[] = [];
+  const seen = new Set<string>();
+  const actions: Record<string, PageActionSpec<unknown>> = {};
+  let selection: AssistantPageRegistration["selection"];
+  const versions: string[] = [];
+  for (const reg of all) {
+    for (const r of reg.resources ?? []) {
+      const id = `${r.kind}:${r.id}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      resources.push(r);
+    }
+    Object.assign(actions, reg.actions ?? {});
+    if (reg.selection !== undefined) selection = reg.selection;
+    if (reg.dataVersion) versions.push(reg.dataVersion);
+  }
+  return {
+    resources,
+    actions,
+    ...(selection === undefined ? {} : { selection }),
+    ...(versions.length === 0 ? {} : { dataVersion: versions.join("|") }),
+  };
+}
+
+/**
+ * A component registers what it knows; the function it is handed back
+ * withdraws it. Every mounted registration counts ([merged]), so the screen
+ * and the components inside it each say their own part.
  */
 export function registerPage(next: AssistantPageRegistration): () => void {
   const before = registration;
-  registration = next;
+  registrations = [...registrations, next];
+  registration = merged(registrations);
   const reason: AssistantInvalidateReason =
-    before?.dataVersion !== next.dataVersion ? "data" : "selection";
+    before?.dataVersion !== registration?.dataVersion ? "data" : "selection";
   publish(reason);
   return () => {
-    if (registration !== next) return;
-    registration = null;
+    if (!registrations.includes(next)) return;
+    registrations = registrations.filter((r) => r !== next);
+    registration = merged(registrations);
     publish(null);
   };
 }
@@ -449,6 +491,7 @@ on("assistant.action.apply", (request) => {
 export function resetPageContextForTest(): void {
   undos.clear();
   frame = null;
+  registrations = [];
   registration = null;
   snapshot = null;
 }
