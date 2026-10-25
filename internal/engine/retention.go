@@ -494,15 +494,33 @@ type fleetInputs struct {
 func (r *retention) read(ctx context.Context) (fleetInputs, error) {
 	in := fleetInputs{at: time.Now().UTC(), previous: map[string]coord.TrimFloor{}}
 
+	// THE HOLDS ARE READ FIRST, BEFORE WHAT EACH ONE IS HANDED OVER TO, and
+	// the order is the only thing keeping a handover from falling between
+	// two reads. Every pin in the register is released only after its owner
+	// has written what takes its place: a join's once its node's positions
+	// row counts the tail ([stateLog.releaseCountedTail]), a backup's once
+	// it has announced the point its copy covers ([backup.Service]; one it
+	// could not announce leaves the older point standing, which keeps more).
+	// So a hold this read does not see was released before it began, the
+	// write that replaced it landed before that, and the reads below — which
+	// begin later — see that write.
+	//
+	// Read the other way round, a joiner that wrote its row and released its
+	// pin between the two reads was in neither: no row yet in the positions
+	// read, no pin any more in the holds read, and at boot no presence lease
+	// either, so the tick counted nothing below the tail that node had just
+	// installed itself in front of, and could purge it.
+	var err error
+	if in.holds, err = r.fleet.Holds(ctx); err != nil {
+		return in, fmt.Errorf("read the trim holds: %w", err)
+	}
+
 	positions, err := r.fleet.Positions(ctx)
 	if err != nil {
 		return in, fmt.Errorf("read the positions register: %w", err)
 	}
 	in.positions, in.readable = positions, true
 
-	if in.holds, err = r.fleet.Holds(ctx); err != nil {
-		return in, fmt.Errorf("read the trim holds: %w", err)
-	}
 	if in.backups, err = r.fleet.BackupPoints(ctx); err != nil {
 		return in, fmt.Errorf("read the backup points: %w", err)
 	}
@@ -513,12 +531,16 @@ func (r *retention) read(ctx context.Context) (fleetInputs, error) {
 	for _, f := range floors {
 		in.previous[f.Domain] = f
 	}
-	// THE LIVE DATA NODES ARE WHAT CATCH A NODE BETWEEN BOOT AND ITS FIRST
-	// HEARTBEAT — which is exactly a node adopting a snapshot. It counts at
-	// position zero and blocks, which is correct: trimming past a node that
-	// is joining is deleting what it is about to replay. The listing is the
-	// gate's own ([livePresences]), so an eviction and the trim judge
-	// presence from one answer.
+	// THE LIVE DATA NODES ARE WHAT CATCH A NODE WHOSE ROW HAS NOT LANDED —
+	// one holding a presence lease whose heartbeat has not yet published. It
+	// counts at position zero and blocks, which is correct: it applies every
+	// log, and trimming past it would delete what it has still to apply. A
+	// node ADOPTING A SNAPSHOT AT BOOT is caught by neither this nor the
+	// register: its join runs before its presence and before its heartbeat,
+	// and what keeps its tail is its own hold, renewed until its first row
+	// counts it ([stateLog.holdUntilCounted]). The listing is the gate's own
+	// ([livePresences]), so an eviction and the trim judge presence from one
+	// answer.
 	//
 	// UNKNOWN IS NOT FATAL TO THE TICK, unlike the register: the logs are
 	// still evaluated, each reading its counted set as UNKNOWN, so every

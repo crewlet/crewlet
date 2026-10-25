@@ -2,6 +2,7 @@ package cliagent
 
 import (
 	"bytes"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -175,6 +176,122 @@ func TestTheDoctorsRoutesFollowTheEntrysAuthMode(t *testing.T) {
 				if strings.Contains(problem, bad) {
 					t.Errorf("the problem names %q, which this mode does not sign in with:\n%s", bad, problem)
 				}
+			}
+		})
+	}
+}
+
+// THE DOCTOR OFFERS NO ROUTE THROUGH A VARIABLE NO STORE CAN HOLD. overrides
+// can set token_env or api_key_env to a name outside the reference grammar —
+// MY-TOKEN, MY=KEY — which every write of the company document refuses, and
+// which an entry loaded to run still carries. Nothing that keeps a credential
+// can hold such a name, yet the doctor told a subscription entry on a machine
+// with a personal login to mint a headless MY-TOKEN with `-capture-token`
+// (preferred, even), a token that could be neither stored nor referenced, and
+// which `crewlet llm login` refuses before it mints; and an api-key entry to
+// store or export a key handed over under MY=KEY. Each is now a problem naming
+// the field, and the routes leave the variable out: an inherit-env entry is
+// told to export only the variable a shell can.
+//
+// The control is the same subscription entry with its token variable in the
+// grammar, told to mint, so the missing advice is missing by the name.
+// Not parallel: HOME is the fake human's, and inherit-env reads the process
+// environment, emptied here of the variable it can forward.
+//
+// Mutation: let MintsHeadlessToken ignore the grammar, and the subscription
+// case offers `-capture-token` again; give ModeSignIn's api-key branch no
+// misnamed case, and that case is told `crewlet secrets set`; drop the field's
+// problem, and every case misses the path.
+func TestTheDoctorOffersNoRouteThroughAVariableNoStoreCanHold(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	path := filepath.Join(home, ".claude", ".credentials.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"token":"personal"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name      string
+		mode      AuthMode
+		overrides map[string]any
+		field     string
+		// want and notWant are judged on the "no sign-in" problem.
+		want, notWant []string
+	}{
+		{
+			name: "control: a token variable in the grammar", mode: AuthSubscription,
+			overrides: map[string]any{"token_env": "MY_TOKEN"},
+			want:      []string{"`crewlet llm login sub -from-host`", "MY_TOKEN with `-capture-token`"},
+		},
+		{
+			name: "subscription", mode: AuthSubscription,
+			overrides: map[string]any{"token_env": "MY-TOKEN"},
+			field:     `providers.llm.sub.overrides.token_env is "MY-TOKEN"`,
+			want:      []string{"`crewlet llm login sub -from-host`"},
+			notWant:   []string{"capture-token", "MY-TOKEN"},
+		},
+		{
+			name: "api-key", mode: AuthAPIKey,
+			overrides: map[string]any{"api_key_env": "MY=KEY"},
+			field:     `providers.llm.sub.overrides.api_key_env is "MY=KEY"`,
+			want: []string{"auth.mode is api-key",
+				"name the variable your build of the CLI reads in providers.llm.sub.overrides.api_key_env"},
+			notWant: []string{"crewlet secrets set", "export it", "capture-token"},
+		},
+		{
+			name: "inherit-env", mode: AuthInheritEnv,
+			overrides: map[string]any{"token_env": "MY-TOKEN"},
+			field:     `providers.llm.sub.overrides.token_env is "MY-TOKEN"`,
+			want: []string{"auth.mode is inherit-env",
+				`export ANTHROPIC_API_KEY in the engine's environment, since no shell can export "MY-TOKEN"`},
+			notWant: []string{"capture-token", "export one in"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Cleanup(func() { forgetWorkspace(dir) })
+			overrides := map[string]any{"binary": "crewlet-no-such-cli-binary"}
+			maps.Copy(overrides, tc.overrides)
+			p, err := New(Config{
+				Key: "sub", Agent: "claude-code", StateDir: dir, Timeout: time.Second, MaxConcurrent: 1,
+				Overrides: overrides, Auth: Auth{Mode: tc.mode},
+			})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			d := p.Diagnose(t.Context(), DiagnoseOptions{})
+			if len(d.HostLogin) == 0 {
+				t.Fatal("the premise: the host login was not found")
+			}
+			var problem string
+			for _, line := range d.Problems {
+				if strings.HasPrefix(line, "no sign-in") {
+					problem = line
+				}
+			}
+			if problem == "" {
+				t.Fatalf("an entry nothing signs in raised no problem: %v", d.Problems)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(problem, want) {
+					t.Errorf("the problem does not name %q:\n%s", want, problem)
+				}
+			}
+			for _, bad := range tc.notWant {
+				if strings.Contains(problem, bad) {
+					t.Errorf("the problem names %q, a route through a variable no store can hold:\n%s",
+						bad, problem)
+				}
+			}
+			joined := strings.Join(d.Problems, "\n")
+			switch {
+			case tc.field == "" && strings.Contains(joined, "not an environment variable name"):
+				t.Errorf("a variable in the grammar was reported as outside it:\n%s", joined)
+			case tc.field != "" && !strings.Contains(joined, tc.field):
+				t.Errorf("no problem names %q:\n%s", tc.field, joined)
 			}
 		})
 	}

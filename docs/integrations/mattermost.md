@@ -392,8 +392,28 @@ means "this server did not say", not "it is off".
 
 ```
 export MATTERMOST_ADMIN_TOKEN="..."      # a system-admin personal access token
-crewlet mattermost provision company.yaml
+export CREWLET_API_TOKEN="..."           # one of the running node's Tier A tokens carrying admin
+crewlet mattermost provision company.yaml -secret-store
 ```
+
+`-secret-store` records each bot's token where every node reads it; one of
+`-secret-store`, `-env-file PATH` and `-print` is required, so a run never
+mints a credential it has nowhere to put. With the engine running, the run
+reads what it needs of the company's values — the instance's `url`, and with
+`-secret-store` (no `-rotate`) each planned bot's token, which decides whether
+that bot keeps it — through the engine, as `CREWLET_API_TOKEN`: one of its
+Tier A tokens carrying `admin`, since that read is the node's break-glass
+reveal and refuses a machine token. With the engine stopped, the run reads the
+fleet's store itself, through this node's own broker or the external one; on a
+member of a cluster whose engine is stopped it is refused before it changes
+anything, naming `-api URL`. See
+[where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values).
+A running engine reads the tokens at its next apply and not before, so a run
+that minted one says what is left on its `Next:` line: for `-secret-store`,
+re-activating the current revision (`POST /config/reload` to a node that is
+up). Where the block itself is new to the running company, the
+`crewlet config import` that applies it is that apply. A re-run that kept
+every token prints no `Next:` line.
 
 For every Mattermost-enabled agent seat the command:
 
@@ -539,14 +559,20 @@ tokens are what this run *mints*, so it cannot bootstrap itself from them.
 | Flag | Description |
 |------|-------------|
 | `-admin-token TOKEN` | System-admin PAT (default: `$MATTERMOST_ADMIN_TOKEN`). |
-| `-secret-store` / `-env-file PATH` / `-print` | Where minted credentials go — exactly one, and there is no default: a run with nowhere to put what it mints creates live credentials on the server and prints none of them. `-print` writes `export VAR=…` lines and, when a run rolls back, `unset VAR` for each — the stream is meant to be sourced, and a comment is a no-op to a shell, so an operator who piped it into `source` would otherwise keep a revoked token exported. |
+| `-secret-store` / `-env-file PATH` / `-print` | Where minted credentials go — exactly one, and there is no default: a run with nowhere to put what it mints creates live credentials on the server and prints none of them. `-print` writes `export VAR=…` lines and, when a run rolls back, `unset VAR` for each — the stream is meant to be sourced, and a comment is a no-op to a shell, so an operator who piped it into `source` would otherwise keep a revoked token exported. With `-env-file` or `-print` a real run is refused before it touches the server where the company's store holds a planned bot's token variable: the engine reads the store's value over anything recorded there, so a minted token would never be read. Record with `-secret-store`, or remove the stored value first ([a sink the store outranks](../reference/cli.md#a-sink-the-store-outranks)). |
 | `-rotate` | Mint a fresh token for every bot, including bots whose current one still works. |
 | `-handles a,b` | Provision only these seat handles. It narrows the provisioning loop **only** — a `-handles` run with `-decommission` does not read the seats it skipped as departed. |
 | `-decommission` | Revoke the tokens of, and then disable, managed bot accounts whose seats have left the config. Disable, never delete: a deleted bot takes its posts with it, silently rewriting the history of every channel it spoke in. The token goes because the account does not: a departed colleague whose credential outlived them starts working again the moment the bot is re-enabled. |
-| `-dry-run` | Print the plan; create and modify nothing. |
+| `-dry-run` | Print the plan; create and modify nothing. It reads no stored value, so it runs on any node, a stopped one included — and so does a run with nothing to provision. |
+| `-config PATH` / `-api URL` | Where a real run reads the company's values (the instance URL, and with `-secret-store` each bot's token it reads back) and where `-secret-store` records: through the running engine holding the store `-config` names (default `./crewlet.yaml`), with one of its Tier A tokens in `CREWLET_API_TOKEN`, or through the node `-api` names; with this node's engine stopped, from the fleet's store itself; with neither a file nor `-api`, from the environment alone. On a member of a cluster whose engine is stopped a real run is refused before it touches the server, `-rotate` included — see [where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values). |
 
-Afterwards, (re)start `crewlet run` so the engine reads the new credentials
-and opens each seat's websocket.
+Afterwards, do what the run's `Next:` line says. With `-secret-store` that is
+`POST /config/reload` to a node that is up — or the `crewlet config import`
+that adds the block, where it is new to the running company — and each seat's
+websocket is rebuilt from its new token at that apply, while a node that has
+not started yet reads the tokens as it starts. With `-env-file` or `-print` it
+is the values into the engine's environment and a restart. A re-run that kept
+every token prints no `Next:` line.
 
 ### Why a re-run does not rotate
 
@@ -1153,7 +1179,11 @@ crewlet mattermost doctor examples/nimbus-claude-cli.company.yaml
 # 4. Authenticate the model — once, on this machine. `-from-host` copies
 #    the login `claude` already has here into Crewlet's own directory; plain
 #    `crewlet llm login default` brokers `claude auth login` instead if this
-#    machine has none.
+#    machine has none. Both load the Tier A file, so export what it reads
+#    first: the keyring (`crewlet secrets keygen -key-id 2026-01` prints
+#    the line) and this node's own API token.
+export CREWLET_SECRET_KEY_2026_01="<the base64 key it printed>"
+export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
 crewlet llm login default -from-host \
     -company examples/nimbus-claude-cli.company.yaml -config examples/nimbus-claude-cli.config.yaml
 crewlet llm doctor default \
@@ -1162,7 +1192,6 @@ crewlet llm doctor default \
 # 5. Boot — one websocket per agent seat. CREWLET_MCP_BRIDGE_URL is what
 #    the engineering seats' agent-mode runs dial back on for their tools;
 #    it has to match api.port in the Tier A file.
-export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
 export CREWLET_MCP_BRIDGE_URL="http://127.0.0.1:8000"
 crewlet run -config examples/nimbus-claude-cli.config.yaml \
             -company examples/nimbus-claude-cli.company.yaml
@@ -1171,8 +1200,22 @@ crewlet run -config examples/nimbus-claude-cli.config.yaml \
 Step 3's `--dry-run --print` prints one line per seat — handle, bot
 username, and the variables it would mint. Step 2 already wrote
 `MATTERMOST_TOKEN_CEO`, `…_CTO`, `…_PM`, `…_DEVREL`, `…_SWE`, `…_FE` and
-`…_AI` into `.env`, which the engine reads on boot; nothing has to be
-re-sourced. Every step is idempotent, so re-run any of them freely.
+`…_AI` into `.env`, and step 3 sourced that file into this shell, so the
+engine step 5 starts from it inherits them: nothing has to be re-sourced as
+long as step 5 runs in the same shell. A new shell sources `.env` again
+first — the engine reads no `.env` file itself, only its own environment
+([Environment variables](../reference/environment-variables.md)). Every step
+is idempotent, so re-run any of them freely.
+
+Step 4 runs before step 5's first boot, so `-config` reaches the fleet's
+store itself: the doctor starts the node's own broker under
+`nimbus-data/stream`, creates the store there as the engine's first boot
+would, reads it and stops the broker again. Once step 5 has started the
+engine, run `crewlet llm doctor` beside it with `CREWLET_API_TOKEN` set to
+`$CREWLET_API_TOKEN_FOUNDER`, since the store is read through the running
+engine then; with that engine stopped again, the doctor reaches the store
+itself as it did the first time ([where a command reads the company's
+values](../reference/cli.md#where-a-command-reads-the-companys-values)).
 
 Step 4 is the one a company's first model always needs, and
 `crewlet llm doctor` is the half that matters: a `providers.llm` entry can be
@@ -1230,7 +1273,9 @@ If a bot stays silent, check in this order:
    is the one failure mode where the agent reasons about a reply and then has
    no tool to send it with, so the logs show a complete turn and the channel
    stays quiet.
-4. `crewlet llm doctor default -company examples/nimbus-claude-cli.company.yaml` — on a
+4. `crewlet llm doctor default -company examples/nimbus-claude-cli.company.yaml -config examples/nimbus-claude-cli.config.yaml`,
+   with `CREWLET_API_TOKEN` set to `$CREWLET_API_TOKEN_FOUNDER` — the engine is
+   running, so the doctor reads the company's values through it — on a
    coding-CLI entry this is the other half of the same symptom: a turn
    that never reached a model, or one whose model answered prose instead of
    the tool-call envelope, ends with nothing posted.

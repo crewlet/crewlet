@@ -646,8 +646,10 @@ Two properties differ from the vendor path and both are visible:
   [Worklet](../guides/worklet.md#projects-and-keys)). A later
   activation over unchanged settings is still written — a **re-stamp** —
   because a row left at the older stamp is open to any activation between the
-  two. A node with no activation instant — one booting on a revision it has
-  never seen activated — stamps nothing.
+  two. A configuration no activation has named stamps nothing, and a node
+  never runs one: it starts on the revision its store activated, with that
+  activation's instant, or with no company, and a company file reaches it
+  through an activation and its apply.
 
   A page merely **names** its container, so a page can exist in a container
   with no document — it is reachable by address and by search, and it is

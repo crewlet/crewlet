@@ -399,11 +399,11 @@ before you need them:
   that did start: a node applying half the logs serves rows derived from
   one while another's records pile up unapplied, and nothing above it can
   tell that apart from a node that is merely behind.
-- **Every live data node counts for every log's trim.** A data node that
-  has published no position for a log yet is between boot and its first
-  heartbeat, so it is counted at position zero and holds that log's floor
-  for that one heartbeat. A stateless satellite is never counted. (See the
-  counted set in [Retention](retention.md#the-six-terms).)
+- **Every live data node counts for every log's trim.** A live data node
+  that has published no position for a log yet is counted at position zero,
+  and holds that log's floor until its row lands. A stateless satellite is
+  never counted. (See the counted set in
+  [Retention](retention.md#the-six-terms).)
 
 At boot every data node logs the logs it started, whether or not it serves
 HTTP — which on a `roles: [data, seats]` satellite is the one place to look,

@@ -306,10 +306,18 @@ type backgroundCloser interface {
 // because the model is, and the store wants it at open time — it is the only
 // thing that knows how wide the packed BLOBs in its vector columns are.
 //
-// A NIL COMPANY IS A REAL CASE, not a caller's mistake: a node with no active
-// revision has no company to be asked for. It opens at width 0 holding no
-// rows, and learns its width from the first epoch that arrives — see
-// [store.DB.LearnEmbeddingDim].
+// A NIL COMPANY IS A REAL CASE, not a caller's mistake, and it is two. A node
+// whose store activated no revision has no company to be asked for, and holds
+// no rows. A node started with `-import-company` reads none, so that a stored
+// revision this build cannot run does not refuse the boot that replaces it —
+// and it may hold that revision's rows. Both open at width 0 and learn their
+// width from the first epoch that arrives ([store.DB.LearnEmbeddingDim]); for
+// the import that epoch is the imported file's, so the store ends at the width
+// a boot on the file opened it at, over rows of the width it replaced — where
+// a restart onto a new width, which is how the width is changed, has always
+// left a store. Opened at the stored revision's width instead, a file that
+// changes it would be refused by its first apply ([Engine.buildEmbedder]) with
+// the fleet already pointed at it, and need a second restart to take.
 //
 // This does NOT make the width mutable, and it was refused here while it was
 // immutable for a reason that still holds: a store left at a wrong non-zero
@@ -318,8 +326,9 @@ type backgroundCloser interface {
 // non-zero, [Engine.buildEmbedder] refuses a revision that would change it,
 // and only the never-told case is learnable.
 //
-// A node that HAS a revision does not arrive here nil: the caller reads the
-// active revision first and passes it, so the store opens at the right width.
+// A node that boots ON a revision does not arrive here nil: the caller reads
+// the active revision first and passes it, so the store opens at its width.
+// The one node holding a revision that arrives nil is the import above.
 func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company) (*Backends, error) {
 	if b == nil {
 		return nil, fmt.Errorf("engine: no bootstrap config")
@@ -413,9 +422,10 @@ func storeOptions(b *config.Bootstrap, c *config.Company) store.Options {
 	// distinct from a configured width the store was never told about.
 	//
 	// A NIL COMPANY reads as the same 0, and is a real case rather than a
-	// caller's mistake: a node with no active revision has no company to be
-	// asked for. Such a store holds no rows and learns its width from the
-	// first epoch that arrives — see [store.DB.LearnEmbeddingDim].
+	// caller's mistake: a node that boots on no revision has no company to be
+	// asked for. It learns its width from the first epoch that arrives — see
+	// [store.DB.LearnEmbeddingDim], and [OpenBackends] for the node started
+	// with -import-company, which may hold rows already.
 	if c != nil && c.Providers.Embeddings != nil {
 		opts.EmbeddingDim = c.Providers.Embeddings.Width()
 	}

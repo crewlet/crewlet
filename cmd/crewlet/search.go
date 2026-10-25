@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -114,7 +115,12 @@ func runSearchEval(args []string, stdout, stderr io.Writer) error {
 			"pass the bound the embedding duty runs at, or 0 for the default", *window)
 	}
 
-	path := strings.TrimSpace(*storePath)
+	// holder is what a refusal names as the engine holding the file: the
+	// node the Tier A describes, or the file itself where -store named one.
+	path, holder := strings.TrimSpace(*storePath), *configPath
+	if path != "" {
+		holder = path
+	}
 	if path == "" {
 		boot, err := config.LoadBootstrap(*configPath, config.EnvOnly())
 		if err != nil {
@@ -128,13 +134,33 @@ func runSearchEval(args []string, stdout, stderr io.Writer) error {
 		path = store.ReplicatedPath(boot.Store.Path, boot.Store.ReplicatedPath)
 	}
 
+	// A MEASUREMENT NEVER CREATES WHAT IT MEASURES. Opening a path that
+	// holds nothing makes an empty estate there and migrates it, and the
+	// report then measures a corpus of nothing — which for a mistyped
+	// -store reads as a company with no vectors rather than as a typo, and
+	// leaves a database behind that nothing reads.
+	switch _, err := os.Stat(path); {
+	case errors.Is(err, os.ErrNotExist):
+		return fmt.Errorf("crewlet search eval: there is no replicated store at %s: "+
+			"pass -store naming one — a node's own, or the copy a backup took — "+
+			"or -config naming the Tier A of a node that holds data", path)
+	case err != nil:
+		return fmt.Errorf("crewlet search eval: %w", err)
+	}
+
 	ctx := context.Background()
 	// ONE FILE, opened as one. This is the replicated estate — the node's
 	// own or a backup's copy of it — and opening it as a node would apply
 	// the node estate's whole migration sequence into it.
 	db, err := store.OpenEstate(ctx, store.EstateReplicated, path, store.Options{})
 	if err != nil {
-		return fmt.Errorf("open %s: %w", path, err)
+		// A RUNNING ENGINE HOLDS ITS ESTATE, and the way around it is the
+		// one this command already has: a backup's copy, which nothing
+		// holds and which a measurement reads exactly as it reads a node's.
+		return engineHoldsTheStore(fmt.Errorf("open %s: %w", path, err), holder,
+			"Measure a copy instead: pass -store naming the replicated estate a "+
+				"backup took (`crewlet backup`), which no engine holds — or stop "+
+				"`crewlet run` on this node and re-run.")
 	}
 	defer func() { _ = db.Close() }()
 

@@ -678,10 +678,15 @@ func TestAFleetsMostCaughtUpNodeCanReanchorALogEveryNodeLost(t *testing.T) {
 			t.Fatalf("publish %s's row: %v", node, err)
 		}
 	}
-	forget := func(node string) {
+	// moveOn leaves a peer's row naming nothing of this log, as a node that
+	// has since gone its own way does: no row ever leaves the register, and
+	// a row replaced whole is how one stops speaking for a log.
+	moveOn := func(node string) {
 		t.Helper()
-		if err := e.backends.Fleet.ForgetPositions(t.Context(), node); err != nil {
-			t.Fatalf("forget %s's row: %v", node, err)
+		if err := e.backends.Fleet.PutPositions(t.Context(), coord.NodePositions{
+			NodeID: node, At: time.Now().UTC(), Domains: map[string]coord.DomainPosition{},
+		}); err != nil {
+			t.Fatalf("move %s on: %v", node, err)
 		}
 	}
 	reanchor := func() (statelog.ReanchorPlan, error) {
@@ -699,7 +704,7 @@ func TestAFleetsMostCaughtUpNodeCanReanchorALogEveryNodeLost(t *testing.T) {
 		t.Fatalf("a reanchor with a peer at a later generation = %v, want a refusal "+
 			"naming it", err)
 	}
-	forget("reanchored")
+	moveOn("reanchored")
 
 	// A PEER FURTHER ALONG THE LOST STREAM refuses: it holds what this
 	// node's reanchor would discard.
@@ -712,7 +717,7 @@ func TestAFleetsMostCaughtUpNodeCanReanchorALogEveryNodeLost(t *testing.T) {
 		t.Fatalf("a reanchor behind a peer on the lost stream = %v, want the "+
 			"most-caught-up refusal", err)
 	}
-	forget("ahead-on-the-lost-stream")
+	moveOn("ahead-on-the-lost-stream")
 
 	// AND THE FLEET AS A REBUILD REALLY LEAVES IT: a peer behind this node on
 	// the lost stream, and one that came up after the rebuild with no rows,

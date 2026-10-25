@@ -5,19 +5,34 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
+
+// secretsList is the run most of these cases stand for: `crewlet secrets list`,
+// which reveals nothing, so the bearer it sends is the invocation's own.
+var secretsList = storeRun{command: "crewlet secrets list"}
 
 // bootWithAPI builds a Tier A carrying an HTTP surface and one token.
 func bootWithAPI(t *testing.T, host string, port int, token string) *config.Bootstrap {
@@ -40,7 +55,7 @@ func bootWithAPI(t *testing.T, host string, port int, token string) *config.Boot
 func TestAWildcardBindResolvesToLoopback(t *testing.T) {
 	t.Parallel()
 	for _, host := range []string{"", "0.0.0.0", "::", "[::]"} {
-		client, err := newSecretsClient(tokenEnviron(cliFixtureToken), bootWithAPI(t, host, 9090, "t"), "")
+		client, err := newSecretsClient(tokenEnviron(cliFixtureToken), bootWithAPI(t, host, 9090, "t"), "", secretsList)
 		if err != nil {
 			t.Fatalf("host %q: %v", host, err)
 		}
@@ -55,7 +70,7 @@ func TestAWildcardBindResolvesToLoopback(t *testing.T) {
 // neither.
 func TestAnIPv6HostIsBracketed(t *testing.T) {
 	t.Parallel()
-	client, err := newSecretsClient(tokenEnviron(cliFixtureToken), bootWithAPI(t, "fd00::1", 9090, "t"), "")
+	client, err := newSecretsClient(tokenEnviron(cliFixtureToken), bootWithAPI(t, "fd00::1", 9090, "t"), "", secretsList)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +87,7 @@ func TestAnIPv6HostIsBracketed(t *testing.T) {
 // for a network fault.
 func TestANodeWithNoHTTPSurfaceIsRefusedByName(t *testing.T) {
 	t.Parallel()
-	_, err := newSecretsClient(tokenEnviron(cliFixtureToken), bootWithAPI(t, "127.0.0.1", 0, "t"), "")
+	_, err := newSecretsClient(tokenEnviron(cliFixtureToken), bootWithAPI(t, "127.0.0.1", 0, "t"), "", secretsList)
 	if err == nil {
 		t.Fatal("a node with api.port 0 was accepted as a write target")
 	}
@@ -87,7 +102,7 @@ func TestANodeWithNoHTTPSurfaceIsRefusedByName(t *testing.T) {
 // be able to supply their own credential.
 func TestTheEnvironmentTokenWinsOverTierA(t *testing.T) {
 	t.Parallel()
-	client, err := newSecretsClient(tokenEnviron("mine"), bootWithAPI(t, "127.0.0.1", 8080, "shared"), "")
+	client, err := newSecretsClient(tokenEnviron("mine"), bootWithAPI(t, "127.0.0.1", 8080, "shared"), "", secretsList)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,6 +119,9 @@ type fakeSecretsNode struct {
 	last   secretsRequest
 	status int
 	body   string
+
+	// requests counts every request the node was sent.
+	requests int
 }
 
 type secretsRequest struct {
@@ -119,6 +137,7 @@ func newFakeSecretsNode(t *testing.T) *fakeSecretsNode {
 	n := &fakeSecretsNode{t: t}
 	n.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
+		n.requests++
 		n.last = secretsRequest{
 			method: r.Method, path: r.URL.Path, query: r.URL.RawQuery,
 			auth: r.Header.Get("Authorization"), body: string(raw),
@@ -141,7 +160,7 @@ func newFakeSecretsNode(t *testing.T) *fakeSecretsNode {
 func (n *fakeSecretsNode) client(t *testing.T) *secretsClient {
 	t.Helper()
 	c, err := newSecretsClient(tokenEnviron("ops-token"),
-		bootWithAPI(t, "127.0.0.1", 1, "ops-token"), n.server.URL)
+		bootWithAPI(t, "127.0.0.1", 1, "ops-token"), n.server.URL, secretsList)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +247,7 @@ func TestTheCredentialIsTheEnvironmentsAndNotTheConfigs(t *testing.T) {
 	// A node listing a perfectly good token is STILL refused, because the
 	// command has none of its own.
 	if _, err := newSecretsClient(noEnviron, bootWithAPI(t, "127.0.0.1", 8080, "ops-token"),
-		""); err == nil {
+		"", secretsList); err == nil {
 
 		t.Fatal("a command with no credential was accepted, so it will send " +
 			"nothing and read a 401 from the far end")
@@ -238,7 +257,7 @@ func TestTheCredentialIsTheEnvironmentsAndNotTheConfigs(t *testing.T) {
 	// AND THE ENVIRONMENT IS ENOUGH ON ITS OWN, which is the control: a
 	// node whose Tier A lists nothing is still reachable by somebody
 	// holding a machine token.
-	client, err := newSecretsClient(tokenEnviron("a-minted-token"), bootWithAPI(t, "127.0.0.1", 8080, ""), "")
+	client, err := newSecretsClient(tokenEnviron("a-minted-token"), bootWithAPI(t, "127.0.0.1", 8080, ""), "", secretsList)
 	if err != nil {
 		t.Fatalf("an exported credential was refused: %v", err)
 	}
@@ -311,7 +330,7 @@ func TestTheRoutersOwn404IsAMissingSurfaceNotAMissingSecret(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(httpjson.Mux(http.NewServeMux()))
 	t.Cleanup(server.Close)
-	c, err := newSecretsClient(tokenEnviron(cliFixtureToken), bootWithAPI(t, "127.0.0.1", 1, "ops-token"), server.URL)
+	c, err := newSecretsClient(tokenEnviron(cliFixtureToken), bootWithAPI(t, "127.0.0.1", 1, "ops-token"), server.URL, secretsList)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -506,7 +525,7 @@ func TestTheCommandWritesThroughTheNamedNode(t *testing.T) {
 	cfg := bootstrapWithKeyring(t, "k1")
 
 	var out, errs bytes.Buffer
-	err := runIn(tokenEnviron("ops-token"), []string{"secrets", "set", "GL_TOKEN", "-value", "glpat-x",
+	err := runIn(invocation{environ: tokenEnviron("ops-token")}, []string{"secrets", "set", "GL_TOKEN", "-value", "glpat-x",
 		"-config", cfg, "-api", node.server.URL}, &out, &errs)
 	if err != nil {
 		t.Fatalf("set: %v\n%s", err, errs.String())
@@ -545,6 +564,102 @@ func TestTheCommandWritesThroughTheNamedNode(t *testing.T) {
 	}
 }
 
+// A MACHINE THAT IS NOT A NODE RUNS `crewlet secrets` THROUGH -api WITH NO TIER
+// A FILE, and creates nothing there.
+//
+// Through a named node this command seals and opens nothing — the node does
+// both, under its own keyring — so the Tier A file it reads for a keyring has
+// nothing to give it, and requiring one sent an operator on a laptop to put a
+// Tier A file carrying a keyring on it (in practice a copy of a node's) to
+// take a listing. With no file, nothing names a store on this machine, so
+// nothing is opened or created on it either.
+//
+// rekey is the one subcommand still refused without the file, and before it
+// asks the node anything: it judges the rows against the key it expects to
+// re-seal under, which is Tier A's, and its real pass sends that key so that a
+// node sealing under another refuses it. And with no -api either there is no
+// store to reach at all, so the run is refused naming both ways to one —
+// except a rekey's, which names only -config, since -api would not spare it
+// the file — rather than going on with none.
+func TestTheSecretsCommandReachesANamedNodeWithNoTierAHere(t *testing.T) {
+	t.Parallel()
+	node := newFakeSecretsNode(t)
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "crewlet.yaml")
+	secretsVia := func(answer string, args ...string) (string, error) {
+		t.Helper()
+		node.body = answer
+		var out, errs bytes.Buffer
+		full := append(append([]string{"secrets"}, args...), "-config", missing)
+		err := runIn(invocation{environ: tokenEnviron("ops-token")}, full, &out, &errs)
+		return out.String(), err
+	}
+
+	for _, step := range []struct {
+		args                []string
+		answer              string
+		method, path, query string
+		says                string
+	}{
+		{[]string{"list"}, `{"secrets":[{"name":"GL_TOKEN","key_id":"k1"}]}`,
+			http.MethodGet, "/secrets", "", "GL_TOKEN"},
+		{[]string{"set", "GL_TOKEN", "-value", "glpat-new"},
+			`{"updated_by":"token:ops","updated_by_kind":"operator"}`,
+			http.MethodPut, "/secrets/GL_TOKEN", "", "stored GL_TOKEN"},
+		{[]string{"get", "GL_TOKEN", "-reveal"}, `{"name":"GL_TOKEN","value":"glpat-new"}`,
+			http.MethodGet, "/secrets/GL_TOKEN", "reveal=true", "glpat-new"},
+		{[]string{"unset", "GL_TOKEN"}, `{"removed":true}`,
+			http.MethodDelete, "/secrets/GL_TOKEN", "", "removed GL_TOKEN"},
+	} {
+		out, err := secretsVia(step.answer, append(step.args, "-api", node.server.URL)...)
+		if err != nil {
+			t.Fatalf("secrets %s through -api with no Tier A here: %v", step.args[0], err)
+		}
+		if !strings.Contains(out, step.says) {
+			t.Errorf("secrets %s said %q, want %q", step.args[0], out, step.says)
+		}
+		if got := node.last; got.method != step.method || got.path != step.path ||
+			got.query != step.query || got.auth != "Bearer ops-token" {
+			t.Errorf("secrets %s sent %s %s?%s (%s), want %s %s?%s with the "+
+				"environment's token", step.args[0], got.method, got.path, got.query,
+				got.auth, step.method, step.path, step.query)
+		}
+	}
+
+	asked := node.requests
+	_, err := secretsVia(`{}`, "rekey", "-api", node.server.URL)
+	if err == nil || !strings.Contains(err.Error(), "-config") ||
+		!strings.Contains(err.Error(), "secrets.active_key_id") {
+		t.Errorf("a rekey with no Tier A to name its key was not refused naming "+
+			"-config and the key it reads there: %v", err)
+	}
+	_, err = secretsVia(`{}`, "list")
+	if !errors.Is(err, os.ErrNotExist) || !strings.Contains(err.Error(), "-config") ||
+		!strings.Contains(err.Error(), "-api URL") {
+		t.Errorf("a run with neither a Tier A file nor -api was not refused naming "+
+			"both: %v", err)
+	}
+	_, err = secretsVia(`{}`, "rekey", "-dry-run")
+	if !errors.Is(err, os.ErrNotExist) || !strings.Contains(err.Error(), "-config") ||
+		!strings.Contains(err.Error(), "secrets.active_key_id") ||
+		strings.Contains(err.Error(), "-api URL naming") {
+		t.Errorf("a rekey with neither a Tier A file nor -api was not refused naming "+
+			"-config alone, and the key it reads there: %v", err)
+	}
+	if node.requests != asked {
+		t.Errorf("the node was sent %d requests by runs refused before they reach "+
+			"a store", node.requests-asked)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		t.Errorf("a run with no Tier A here created %s", filepath.Join(dir, entry.Name()))
+	}
+}
+
 // A WRITE WITH THE ENGINE STOPPED SAYS WHERE IT WENT AND WHO READS IT WHEN.
 //
 // It went to the fleet's store, through this node's own broker, and a node
@@ -580,7 +695,7 @@ func TestAWriteWithTheEngineStoppedSaysWhereItWentAndWhoReadsIt(t *testing.T) {
 // See internal/httpx's package doc.
 func TestCLIClientsRideTheSharedTransport(t *testing.T) {
 	t.Parallel()
-	sc, err := newSecretsClient(tokenEnviron(cliFixtureToken), bootWithAPI(t, "127.0.0.1", 8080, "ops-token"), "")
+	sc, err := newSecretsClient(tokenEnviron(cliFixtureToken), bootWithAPI(t, "127.0.0.1", 8080, "ops-token"), "", secretsList)
 	if err != nil {
 		t.Fatalf("newSecretsClient: %v", err)
 	}
@@ -602,8 +717,11 @@ func TestCLIClientsRideTheSharedTransport(t *testing.T) {
 // every stored secret and holds no value, and it used to share the bound of
 // one credential's answer: about 300 rows passed it, and every command that
 // resolves a company through a running node — they all start with the
-// listing — failed before reading one, blaming a credential. A credential's
-// answer keeps its own bound, since a clipped one would be worse than none.
+// listing — failed before reading one, blaming a credential. `crewlet secrets
+// rekey` counts the engine's keys from the same listing, and was refused with
+// it. A credential's answer keeps its own bound
+// ([secretsapi.RevealAnswerBytes]), since a clipped one would be worse than
+// none.
 func TestAListingOfHundredsOfSecretsIsReadWhole(t *testing.T) {
 	t.Parallel()
 	node := newFakeSecretsNode(t)
@@ -614,8 +732,8 @@ func TestAListingOfHundredsOfSecretsIsReadWhole(t *testing.T) {
 			`"updated_by_kind":"operator","source":"api"}`, i))
 	}
 	node.body = `{"secrets":[` + strings.Join(rows, ",") + `]}`
-	if len(node.body) <= maxSecretResponseBytes {
-		t.Fatalf("the premise: a listing of %d bytes is within one credential's bound", len(node.body))
+	if len(node.body) <= maxRowAnswerBytes {
+		t.Fatalf("the premise: a listing of %d bytes is within a row answer's bound", len(node.body))
 	}
 	listed, err := node.client(t).List(t.Context())
 	if err != nil {
@@ -624,10 +742,265 @@ func TestAListingOfHundredsOfSecretsIsReadWhole(t *testing.T) {
 	if len(listed) != len(rows) || listed[len(listed)-1].Name != "SEAT_TOKEN_1999" {
 		t.Errorf("listed %d rows, want all %d", len(listed), len(rows))
 	}
+	if _, err := node.client(t).EngineKeys(t.Context()); err != nil {
+		t.Errorf("the count a rekey reads was refused: %v", err)
+	}
 
-	node.body = `{"value":"` + strings.Repeat("x", maxSecretResponseBytes) + `"}`
+	node.body = `{"value":"` + strings.Repeat("x", secretsapi.RevealAnswerBytes("TOO_LONG")) + `"}`
 	if _, err := node.client(t).Get(t.Context(), "TOO_LONG"); err == nil ||
 		!strings.Contains(err.Error(), "a credential this long") {
 		t.Errorf("a reveal past one credential's bound = %v, want it refused as one", err)
+	}
+}
+
+// A REKEY OF THOUSANDS OF SECRETS IS READ WHOLE. Its answer names every row it
+// moved, so it grows with the company as the listing does, and it was held to
+// the bound every one-value answer shared (68 KiB): a rotation the node had
+// finished came back to `crewlet secrets rekey` as a failure.
+//
+// Mutation: read the rekey to the row bound, and its answer is refused.
+func TestARekeyOfThousandsOfSecretsIsReadWhole(t *testing.T) {
+	t.Parallel()
+	node := newFakeSecretsNode(t)
+	var names []string
+	for i := range 5000 {
+		names = append(names, fmt.Sprintf(`"SEAT_TOKEN_%04d"`, i))
+	}
+	node.body = `{"moved":[` + strings.Join(names, ",") +
+		`],"engine_keys_moved":0,"identity":null}`
+	if len(node.body) <= maxRowAnswerBytes {
+		t.Fatalf("the premise: a rekey answer of %d bytes is within a row answer's bound",
+			len(node.body))
+	}
+	moved, err := node.client(t).Rekey(t.Context(), "k2")
+	if err != nil {
+		t.Fatalf("a rekey that moved %d rows was refused: %v", len(names), err)
+	}
+	if len(moved.Moved) != len(names) || moved.Moved[len(moved.Moved)-1] != "SEAT_TOKEN_4999" {
+		t.Errorf("the rekey reported %d moved, want all %d", len(moved.Moved), len(names))
+	}
+}
+
+// A SET OF VALUES IS READ IN REQUESTS OF THE NODE'S SIZE: a run reading the
+// variables a command resolves asks for them together, in requests of at most
+// secretsapi.MaxRevealNames — never one request per name, and never one the
+// node refuses for its length — each name once, as JSON, and only the names
+// the node holds come back.
+//
+// Mutation: send the whole set in one request, and the node's limit is broken;
+// send one name a request, and the count is 130.
+func TestASetOfValuesIsReadInRequestsOfTheNodesSize(t *testing.T) {
+	t.Parallel()
+	held := map[string]string{}
+	var names []string
+	for i := range 130 {
+		name := fmt.Sprintf("VALUE_%03d", i)
+		names = append(names, name)
+		if i%2 == 0 {
+			held[name] = "v-" + name
+		}
+	}
+	node := newRevealNode(t, held)
+	client, err := newSecretsClient(tokenEnviron("ops-token"), bootWithAPI(t, "127.0.0.1", 1, ""),
+		node.server.URL, storeRun{command: "crewlet gitlab provision", reveals: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := client.Values(t.Context(), names)
+	if err != nil {
+		t.Fatalf("Values: %v", err)
+	}
+	asked, gets := node.batches()
+	if len(asked) != 3 || len(gets) != 0 {
+		t.Fatalf("read 130 names in %d batches and %d GETs, want 3 batches", len(asked), len(gets))
+	}
+	var sent []string
+	for _, batch := range asked {
+		if len(batch) > secretsapi.MaxRevealNames {
+			t.Errorf("a batch asked for %d names, past the node's %d", len(batch),
+				secretsapi.MaxRevealNames)
+		}
+		sent = append(sent, batch...)
+	}
+	if !slices.Equal(sent, names) {
+		t.Errorf("the batches asked %v, want each name once, in order", sent)
+	}
+	if !maps.Equal(values, held) {
+		t.Errorf("read %d values, want exactly the %d the node holds", len(values), len(held))
+	}
+	for _, contentType := range node.contentTypes {
+		if contentType != "application/json" {
+			t.Errorf("a batch was sent as %q, not JSON", contentType)
+		}
+	}
+}
+
+// A REFUSED BATCH FAILS THE WHOLE READ: a value missing because the node would
+// not answer is not one the fleet does not hold, so no partial answer comes
+// back for a caller to resolve the rest from the environment — and the
+// refusal is the node's, so a refused token is told from a failing node.
+func TestARefusedBatchFailsTheWholeRead(t *testing.T) {
+	t.Parallel()
+	node := newRevealNode(t, map[string]string{"A": "a"})
+	node.refuse = http.StatusForbidden
+	client, err := newSecretsClient(tokenEnviron("ops-token"), bootWithAPI(t, "127.0.0.1", 1, ""),
+		node.server.URL, storeRun{command: "crewlet gitlab provision", reveals: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := client.Values(t.Context(), []string{"A", "B"})
+	if err == nil || values != nil {
+		t.Fatalf("a refused batch answered %v, %v", values, err)
+	}
+	if !refusedTheToken(err) {
+		t.Errorf("the node's refusal of the token was lost: %v", err)
+	}
+}
+
+// secretsNode is a real /secrets surface over a memory fleet, served the way a
+// node serves it to a Tier A token holding admin — so a case about what the
+// client reads back reads exactly what the node writes, escaping included.
+func secretsNode(t *testing.T) *secretsClient {
+	t.Helper()
+	sum := make([]byte, 32)
+	sum[0] = 1
+	cipher, err := secrets.NewCipher(secrets.Keyring{ActiveID: "k1",
+		Keys: map[string][]byte{"k1": sum}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return secretsNodeOver(t, coordmem.NewFleet(), cipher)
+}
+
+// secretsNodeOver is [secretsNode] over a fleet and a keyring the case holds,
+// so it can put rows on the fleet the way a node's start does before the
+// client reads them. The keyring's active key is k1.
+func secretsNodeOver(t *testing.T, fleet coord.Fleet, cipher secrets.Cipher) *secretsClient {
+	t.Helper()
+	svc, err := secretsapi.New(secretsapi.Options{Fleet: fleet,
+		Cipher: cipher, ActiveKeyID: "k1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	if err := svc.Routes(mux); err != nil {
+		t.Fatal(err)
+	}
+	caller := iam.Principal{
+		ID:    uuid.NewSHA1(auth.TokenNamespace, []byte("ops")),
+		Login: iam.TokenLogin("ops"), Kind: iam.KindMachine,
+		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantAdmin},
+		ReauthAt: time.Now().Add(time.Hour),
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mux.ServeHTTP(w, r.WithContext(iam.WithPrincipal(r.Context(), caller)))
+	}))
+	t.Cleanup(server.Close)
+	client, err := newSecretsClient(tokenEnviron("ops-token"),
+		bootWithAPI(t, "127.0.0.1", 1, "ops-token"), server.URL, secretsList)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
+}
+
+// A VALUE THE STORE TOOK COMES BACK, HOWEVER JSON SPELLS IT.
+//
+// Both reveals answer a value as a JSON string, which spells `&`, `<`, `>` and
+// every control byte as a six-byte escape — so the largest value the write
+// admits can come back six times as long. The single reveal was read to the
+// write's limit plus room for the JSON around it (68 KiB) and refused that
+// value as "a credential this long is not one this build stores":
+// `crewlet secrets get -reveal`, the break-glass read, could not hand back a
+// credential the store had taken.
+func TestTheLargestValueTheStoreTakesIsRevealedBothWays(t *testing.T) {
+	t.Parallel()
+	client := secretsNode(t)
+	for _, tc := range []struct{ name, value string }{
+		{"AMPERSANDS", strings.Repeat("&", secrets.MaxValueBytes)},
+		{"CONTROL_BYTES", strings.Repeat("\x01", secrets.MaxValueBytes)},
+	} {
+		if _, err := client.Set(t.Context(), tc.name, tc.value, secrets.Author{},
+			"", time.Time{}); err != nil {
+			t.Fatalf("set %s: %v", tc.name, err)
+		}
+		got, err := client.Get(t.Context(), tc.name)
+		if err != nil || got != tc.value {
+			t.Errorf("GET reveal of %s: %d bytes, %v; want the %d stored",
+				tc.name, len(got), err, len(tc.value))
+		}
+		values, err := client.Values(t.Context(), []string{tc.name})
+		if err != nil || values[tc.name] != tc.value {
+			t.Errorf("POST reveal of %s: %d bytes, %v; want the %d stored",
+				tc.name, len(values[tc.name]), err, len(tc.value))
+		}
+	}
+}
+
+// A VALUE SET WITH THE ENGINE STOPPED IS READ BACK WHOLE THROUGH A NODE.
+//
+// The direct write is the one path no node's route stands in front of: the
+// command writes the fleet's store itself, and a node reads the row back later
+// through its reveals. Nothing held that write to the size the reveals are read
+// to, so a value the store took could be one no read through a node would give
+// back. The largest value every store takes, in the character JSON spells
+// longest, goes the whole way here: set with the engine stopped, then read back
+// from the same store through a node by both reveals.
+func TestAValueSetWithTheEngineStoppedAtTheLimitIsReadBackThroughANode(t *testing.T) {
+	t.Parallel()
+	cfg := bootstrapWithKeyring(t, "k1")
+	value := strings.Repeat("&", secrets.MaxValueBytes)
+	if _, errs, err := secretsCmd(t, cfg, "set", "BIG", "-value", value); err != nil {
+		t.Fatalf("a set of a value at the limit with the engine stopped: %v (%s)", err, errs)
+	}
+
+	boot, err := loadBootstrapForStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cipher, err := boot.Secrets.Cipher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs, err := engine.OpenFleetStore(t.Context(), boot)
+	if err != nil {
+		t.Fatalf("open the fleet's store as the engine does: %v", err)
+	}
+	defer fs.Close()
+
+	client := secretsNodeOver(t, fs.Fleet, cipher)
+	if got, err := client.Get(t.Context(), "BIG"); err != nil || got != value {
+		t.Errorf("GET reveal: %d bytes, %v; want the %d set", len(got), err, len(value))
+	}
+	values, err := client.Values(t.Context(), []string{"BIG"})
+	if err != nil || values["BIG"] != value {
+		t.Errorf("POST reveal: %d bytes, %v; want the %d set",
+			len(values["BIG"]), err, len(value))
+	}
+}
+
+// A WRITE THROUGH A NODE PAST THE SIZE EVERY STORE KEEPS IS REFUSED BEFORE IT
+// IS SENT, in the store's own words: the node would refuse it too, with a 413
+// naming a request body, after the whole of it had crossed the network.
+func TestAWritePastTheSizeEveryStoreKeepsIsNotSentToTheNode(t *testing.T) {
+	t.Parallel()
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		httpjson.Fail(w, http.StatusRequestEntityTooLarge, httpjson.CodeBodyTooLarge)
+	}))
+	t.Cleanup(server.Close)
+	client, err := newSecretsClient(tokenEnviron("ops-token"),
+		bootWithAPI(t, "127.0.0.1", 1, "ops-token"), server.URL, secretsList)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Set(t.Context(), "BIG", strings.Repeat("x", secrets.MaxValueBytes+1),
+		secrets.Author{}, "", time.Time{})
+	if !errors.Is(err, secrets.ErrValueTooLarge) {
+		t.Errorf("a write past the limit answered %v, want ErrValueTooLarge", err)
+	}
+	if n := requests.Load(); n != 0 {
+		t.Errorf("the client sent %d request(s) carrying a value no store keeps", n)
 	}
 }

@@ -189,7 +189,7 @@ func unclaimedDetail(ctx context.Context, anybody func(context.Context) (bool, e
 	case !running:
 		return nobody + ", and this node has no company yet. Import one " +
 			"with a `kind: human` seat for the first person (`crewlet config " +
-			"import FILE`, or Agents › Edit org). Then invite them with " +
+			"import FILE`, or Org chart › Edit org). Then invite them with " +
 			invite, true
 	case len(human) == 0:
 		return nobody + ", and the company has no human seats. Add a " +
@@ -203,7 +203,7 @@ func unclaimedDetail(ctx context.Context, anybody func(context.Context) (bool, e
 	}
 	if err != nil {
 		return nobody + ". Invite the first person to a vacant human seat " +
-			"(`crewlet iam seats -unheld`) from Agents › Org chart, or with " +
+			"(`crewlet iam seats -unheld`) from Company › Org chart, or with " +
 			invite, true
 	}
 	var vacant, invited, bound []string
@@ -241,7 +241,7 @@ func unclaimedDetail(ctx context.Context, anybody func(context.Context) (bool, e
 		}
 	case len(vacant) > 0:
 		detail = nobody + ". Invite the first person to a vacant human " +
-			"seat (" + strings.Join(vacant, ", ") + ") from Agents › Org " +
+			"seat (" + strings.Join(vacant, ", ") + ") from Company › Org " +
 			"chart › the seat › Invite, or with " + invite
 	default:
 		detail = nobody + ", and every human seat is taken (" +

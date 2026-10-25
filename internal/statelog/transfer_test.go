@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -61,7 +62,7 @@ func newTransferHarnessWith(t *testing.T, bytes, maxTransfers int) *transferHarn
 	if err := os.WriteFile(artefact, body, 0o600); err != nil {
 		t.Fatalf("write an artefact: %v", err)
 	}
-	digest, err := store.FileDigest(artefact)
+	digest, err := store.FileDigest(t.Context(), artefact)
 	if err != nil {
 		t.Fatalf("digest the artefact: %v", err)
 	}
@@ -634,14 +635,14 @@ func TestAnArtefactArrivesByteForByte(t *testing.T) {
 	}
 
 	dest := filepath.Join(t.TempDir(), "adopt.part")
-	n, err := statelog.FetchArtefact(t.Context(), h.nc, offers[0], dest)
+	fetched, err := statelog.FetchArtefact(t.Context(), h.nc, offers[0], dest, nil)
 	if err != nil {
 		t.Fatalf("FetchArtefact: %v", err)
 	}
-	if n != h.manifest.Bytes {
-		t.Fatalf("received %d bytes, want %d", n, h.manifest.Bytes)
+	if fetched.Bytes != h.manifest.Bytes {
+		t.Fatalf("received %d bytes, want %d", fetched.Bytes, h.manifest.Bytes)
 	}
-	got, err := store.FileDigest(dest)
+	got, err := store.FileDigest(t.Context(), dest)
 	if err != nil {
 		t.Fatalf("digest what arrived: %v", err)
 	}
@@ -649,6 +650,72 @@ func TestAnArtefactArrivesByteForByte(t *testing.T) {
 		t.Fatalf("the artefact's checksum is %s and the manifest says %s — a "+
 			"transfer that reorders or drops a chunk arrives looking exactly "+
 			"like one that did not", got, h.manifest.SHA256)
+	}
+	// AND THE CHECKSUM THE TRANSFER TOOK AS IT WROTE IS THE FILE'S, which is
+	// what lets a joiner compare it with the manifest without reading the
+	// whole artefact back.
+	if fetched.SHA256 != got {
+		t.Fatalf("the transfer hashed what it wrote to %s and the file hashes to "+
+			"%s — a joiner would accept or refuse an artefact for bytes it does "+
+			"not hold", fetched.SHA256, got)
+	}
+}
+
+// A TRANSFER SAYS HOW FAR IT HAS GOT, AS IT GOES.
+//
+// At boot a join is inside the node's recovery, which a deployment bounds with
+// a startup probe sized partly by how long a join takes. A transfer that said
+// nothing between its start and the adoption gave that sizing nothing to
+// measure, and an operator watching a node that would not come up nothing to
+// tell a slow transfer from a stuck one by. So it names the donor, the size
+// and the projection when it starts, and every report interval after that the
+// bytes received, the total, the elapsed time and the rate — with the bytes
+// only ever growing.
+func TestATransferSaysHowFarItHasGot(t *testing.T) {
+	t.Parallel()
+	h := newTransferHarness(t, statelog.SnapshotChunkBytes*statelog.SnapshotTransferWindow*4)
+	offers, err := statelog.CollectOffers(t.Context(), h.nc, statelog.OfferRequest{
+		NodeID: "joiner",
+	}, statelog.OfferWindow, harnessDonor)
+	if err != nil || len(offers) != 1 {
+		t.Fatalf("CollectOffers = (%d, %v)", len(offers), err)
+	}
+	logs := &lockedBuffer{}
+	logger := slog.New(slog.NewJSONHandler(logs, nil))
+	if _, err := statelog.FetchArtefactReporting(t.Context(), h.nc, offers[0],
+		filepath.Join(t.TempDir(), "adopt.part"), logger, time.Nanosecond); err != nil {
+		t.Fatalf("FetchArtefact: %v", err)
+	}
+
+	fetching := logRecords(t, logs.Bytes(), "statelog_join_fetching")
+	if len(fetching) != 1 || fetching[0]["donor"] != h.manifest.NodeID ||
+		fetching[0]["total_bytes"] != float64(h.manifest.Bytes) ||
+		fetching[0]["projected_join_seconds"] == nil {
+		t.Fatalf("statelog_join_fetching = %v, want one line naming the donor, "+
+			"the artefact's %d bytes and the projected join", fetching, h.manifest.Bytes)
+	}
+	progress := logRecords(t, logs.Bytes(), "statelog_join_progress")
+	if len(progress) < 2 {
+		t.Fatalf("%d statelog_join_progress line(s) over a transfer of %d chunks, "+
+			"want one per report interval", len(progress),
+			h.manifest.Bytes/statelog.SnapshotChunkBytes)
+	}
+	var previous float64
+	for _, line := range progress {
+		for _, key := range []string{"bytes", "total_bytes", "elapsed_seconds", "bytes_per_second"} {
+			if _, ok := line[key].(float64); !ok {
+				t.Fatalf("a progress line has no %s: %v", key, line)
+			}
+		}
+		if line["donor"] != h.manifest.NodeID {
+			t.Fatalf("a progress line names the donor %v, want %q", line["donor"], h.manifest.NodeID)
+		}
+		got := line["bytes"].(float64)
+		if got <= previous || got > float64(h.manifest.Bytes) {
+			t.Fatalf("a progress line says %v bytes after %v, of %d — the count "+
+				"only grows, and never past the artefact", got, previous, h.manifest.Bytes)
+		}
+		previous = got
 	}
 }
 
@@ -701,7 +768,7 @@ func TestAnAbandonedTransferIsNeverReportedAsASnapshot(t *testing.T) {
 	}
 
 	dest := filepath.Join(t.TempDir(), "adopt.part")
-	if _, err := statelog.FetchArtefact(t.Context(), h.nc, offers[0], dest); err == nil {
+	if _, err := statelog.FetchArtefact(t.Context(), h.nc, offers[0], dest, nil); err == nil {
 		t.Fatal("a transfer with no artefact behind it reported success")
 	}
 	if _, err := os.Stat(dest); err == nil {
@@ -912,7 +979,7 @@ func TestADonorAdmitsAtMostNTransfers(t *testing.T) {
 		go func() {
 			start.Wait()
 			_, err := statelog.FetchArtefact(t.Context(), h.nc, offers[0],
-				filepath.Join(t.TempDir(), fmt.Sprintf("joiner-%d.db", i)))
+				filepath.Join(t.TempDir(), fmt.Sprintf("joiner-%d.db", i)), nil)
 			results <- err
 		}()
 	}
@@ -1172,7 +1239,7 @@ func TestACallersDeadlineIsNotBlamedOnTheDonor(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
 	dest := filepath.Join(t.TempDir(), "adopt.part")
-	_, err = statelog.FetchArtefact(ctx, q.Conn(), statelog.Offer{Fetch: fetch}, dest)
+	_, err = statelog.FetchArtefact(ctx, q.Conn(), statelog.Offer{Fetch: fetch}, dest, nil)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("a fetch whose caller's deadline passed returned %v, want that "+
 			"deadline — anything else blames the donor for the caller's own end", err)
@@ -1220,7 +1287,7 @@ func TestAFetchWhoseCallerHasGivenUpAsksNobody(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	dest := filepath.Join(t.TempDir(), "adopt.part")
-	if _, err := statelog.FetchArtefact(ctx, q.Conn(), statelog.Offer{Fetch: fetch}, dest); !errors.Is(err, context.Canceled) {
+	if _, err := statelog.FetchArtefact(ctx, q.Conn(), statelog.Offer{Fetch: fetch}, dest, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("FetchArtefact under a cancelled context = %v, want the cancellation", err)
 	}
 	if _, err := os.Stat(dest); err == nil {
@@ -1407,7 +1474,7 @@ func TestAFetchThatNamesNoArtefactIsRefused(t *testing.T) {
 	}
 	chosen := offers[0]
 	chosen.Manifest.Artifact = ""
-	_, err = statelog.FetchArtefact(t.Context(), h.nc, chosen, filepath.Join(t.TempDir(), "adopt.part"))
+	_, err = statelog.FetchArtefact(t.Context(), h.nc, chosen, filepath.Join(t.TempDir(), "adopt.part"), nil)
 	if err == nil || !strings.Contains(err.Error(), "400") {
 		t.Fatalf("a fetch naming no artefact answered %v, want its refusal", err)
 	}
@@ -1430,7 +1497,7 @@ func TestAFetchOfAReplacedArtefactIsRefusedBeforeItStreams(t *testing.T) {
 	}
 	chosen := offers[0]
 	chosen.Manifest.Artifact = "snapshot-1-1.db"
-	_, err = statelog.FetchArtefact(t.Context(), h.nc, chosen, filepath.Join(t.TempDir(), "adopt.part"))
+	_, err = statelog.FetchArtefact(t.Context(), h.nc, chosen, filepath.Join(t.TempDir(), "adopt.part"), nil)
 	if err == nil || !strings.Contains(err.Error(), "410") {
 		t.Fatalf("a fetch of an artefact the donor no longer holds answered %v, "+
 			"want its refusal", err)

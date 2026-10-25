@@ -305,8 +305,9 @@ bound — and `200` from then on, while what the company configures comes up;
 `Retry-After`
 ([While a node is starting](../reference/api-endpoints.md#while-a-node-is-starting)).
 The line between the two halves is the engine's own: `engine.Options.Recovered`
-is called once, at the boundary, and a startup probe sized for the store is
-never held by a tool server the company declared.
+is called once, at the boundary, and a startup probe sized for the store (and,
+on a data node of a fleet, for its join) is never held by a tool server the
+company declared.
 
 Then the node's surface takes the socket over, and only after that does the
 engine start claiming seats. A seat is not claimed until its per-role MCP
@@ -585,7 +586,7 @@ What each of the four holds, in full:
 | Tables | What they hold |
 |---|---|
 | **`crewlet_events`** · `crewlet_event_parties` | The audit log and its party index — this node's own events, and on a data node the batches of a stateless node's events it **keeps** ([custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data)) |
-| `custody_unsettled` · `custody_unsettled_rows` | The custody batches this node has written and not yet learned whether it keeps, and the identity of every row of each: the fleet decides which data node keeps each batch, create-only in coordination, and a node that crashed between writing a batch and claiming it asks at its next pass and deletes the rows if another node keeps them. The rows are keyed on the event log's own (time, id), so every count that leaves a batch in flight out seeks them from the row it counts — its cost the same beside a few identities as beside the tens of thousands a coordination outage leaves. Normally empty but for the batches of the last few moments; a coordination outage can leave tens of thousands |
+| `custody_unsettled` · `custody_unsettled_rows` | The custody batches this node has written and not yet learned whether it keeps, and the identity of every row of each: the fleet decides which data node keeps each batch, create-only in coordination, and a node that crashed between writing a batch and claiming it asks at its next pass and deletes the rows if another node keeps them. The rows are keyed on the event log's own (time, id), so every count that leaves a batch in flight out seeks them from the row it counts — its cost the same beside a few identities as beside the tens of thousands a coordination outage leaves. Normally empty but for the batches of the last few moments; a coordination outage can leave tens of thousands, and a batch whose keeper record [nothing can read](../guides/deployment.md#custody-the-rows-of-a-node-without-data) stays until it ages past the event log's retention |
 | `custody_settled` | The custody batches this node has **settled**, kept or not, so a batch the fleet redelivers — an acknowledgement lost — is written nothing: its kept rows stay counted, and a copy another node keeps is not written back. Swept with the event log |
 | `usage_rederive` | The days a custody batch settled as **kept** has changed since this node's usage publisher last derived them. Every usage count leaves a batch in flight out, so a kept settle makes its rows count on whatever day they fall — possibly a week back — and the publisher, which fingerprints only today and yesterday, derives every day from the oldest of these through the day before yesterday again (none older than the event log's thirty-day read floor). Written in the settle's own transaction, one row per UTC day the settles' oldest rows fall on, and cleared up to the newest the publisher read once those days are published |
 | `usage_day_windows` | The instants each of this node's company days was first cut on, by label. A day the usage publisher derives again — an older one a kept settle or the watermark names, or today and yesterday at the tick the company's `timezone` moves — keeps the cut its first derivation had, so a moved clock never shifts rows between days already published; a day cut for the first time abuts the cuts either side of it, and is clamped by any farther cut it would reach into after a move of more than a day, so the day the clock moved on is longer or shorter and no instant falls in two days or none. Swept with the event log |
@@ -853,9 +854,10 @@ every write is refused with `503` from the drain's first moment. See
 **A starting node answers both before it serves.** Its listener is bound before
 the boot, `/health` answers `503` while it recovers what it holds and `200`
 once it has, and `/ready` answers `503 starting` until the node serves — so the
-startup probe bounds exactly the part only the deployment can size, the
-recovery of the node's own store, and nothing the company configures can hold
-it. See [While a node is starting](../reference/api-endpoints.md#while-a-node-is-starting).
+startup probe bounds exactly the part only the deployment can size — the
+recovery of the node's own store and, on a data node of a fleet, the snapshot
+it may have to fetch when the logs can no longer bring its rows level, which
+`rejoin_window` budgets — and nothing the company configures can hold it. See [While a node is starting](../reference/api-endpoints.md#while-a-node-is-starting).
 
 **One config, agreed by pointer.** An activation is a compare-and-set on an
 append-only pointer whose own revision *is* the epoch, so two operators

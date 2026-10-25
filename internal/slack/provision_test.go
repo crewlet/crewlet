@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -172,14 +173,103 @@ func TestARerunSkipsAnUnchangedManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Kept) != 1 {
-		t.Fatalf("a re-run reported %+v rather than keeping the app", res)
+	if len(res.Created) != 0 || len(res.Updated) != 0 {
+		t.Fatalf("a re-run reported %+v rather than leaving the app's manifest alone", res)
 	}
 	if ws.called("apps.manifest.update") != before {
 		t.Error("an unchanged manifest was pushed anyway")
 	}
 	if ws.called("apps.manifest.create") != 1 {
 		t.Error("a re-run created a second app for the same seat")
+	}
+}
+
+// A SEAT IS KEPT ONLY WHEN THE RUN LEFT BOTH ITS APP AND ITS TOKEN.
+//
+// Kept is what the report says was left alone, with a credential that still
+// works and that minting afresh would revoke. A seat whose manifest Slack
+// already held but whose app this run installed — a -reinstall re-run, or the
+// run after a -no-install one — or left waiting for its click was reported
+// kept as well, so a -reinstall run said it had left alone the token it had
+// just minted. It is reported Installed or Pending alone.
+func TestASeatIsKeptOnlyWhenTheRunLeftItsAppAndItsToken(t *testing.T) {
+	t.Parallel()
+	install := func(context.Context, string, string) (string, error) {
+		return "the-temporary-code", nil
+	}
+	cases := []struct {
+		name string
+		// first is the run before the one under test, which is then.
+		first, then func(*slack.Options)
+
+		kept, installed, pending bool
+	}{
+		{
+			name:  "a plain re-run of an installed app",
+			first: func(o *slack.Options) { o.Install = install },
+			then:  func(o *slack.Options) { o.Install = install },
+			kept:  true,
+		},
+		{
+			name:      "a -reinstall re-run of an installed app",
+			first:     func(o *slack.Options) { o.Install = install },
+			then:      func(o *slack.Options) { o.Install, o.Reinstall = install, true },
+			installed: true,
+		},
+		{
+			name:      "the install run after a -no-install run",
+			first:     func(o *slack.Options) { o.Install = nil },
+			then:      func(o *slack.Options) { o.Install = install },
+			installed: true,
+		},
+		{
+			name:    "a -no-install re-run of an app nobody installed",
+			first:   func(o *slack.Options) { o.Install = nil },
+			then:    func(o *slack.Options) { o.Install = nil },
+			pending: true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			ws := newWorkspace(t)
+			withCreate(ws)
+			ws.replies["oauth.v2.access"] = `{"ok":true,"access_token":"xoxb-minted",
+				"bot_user_id":"U0BOTSWE","app_id":"A0SWE","team":{"id":"T0ACME"}}`
+			recorder := newSink()
+
+			_, ledger, path, err := run(t, ws, func(o *slack.Options) {
+				o.Sink = recorder
+				c.first(o)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			opts := slack.Options{
+				Admin: slack.NewAdmin(rewriting(t, ws)), Seats: plans(),
+				Ledger: ledger, LedgerPath: path, Sink: recorder,
+				BaseURL: "https://engine.example.com",
+			}
+			c.then(&opts)
+			res, err := slack.Reconcile(context.Background(), opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(res.Created) != 0 || len(res.Updated) != 0 {
+				t.Fatalf("the run under test changed the app's manifest (%+v), "+
+					"so this case proves nothing", res)
+			}
+			if got := slices.Contains(res.Kept, "swe"); got != c.kept {
+				t.Errorf("kept = %v, want %v (kept %v, installed %v)",
+					got, c.kept, res.Kept, res.Installed)
+			}
+			if got := slices.Contains(res.Installed, "swe"); got != c.installed {
+				t.Errorf("installed = %v, want %v", got, c.installed)
+			}
+			if _, got := res.Pending["swe"]; got != c.pending {
+				t.Errorf("pending = %v, want %v", got, c.pending)
+			}
+		})
 	}
 }
 
@@ -383,18 +473,72 @@ func TestAnUnreadableSinkDoesNotTriggerAnInstall(t *testing.T) {
 	t.Parallel()
 	ws := newWorkspace(t)
 	withCreate(ws)
+	ws.replies["oauth.v2.access"] = `{"ok":true,"access_token":"xoxb-minted",
+		"bot_user_id":"U0BOTSWE","team":{"id":"T0ACME"}}`
 	recorder := newSink()
 
-	_, _, _, err := run(t, ws, func(o *slack.Options) {
+	// AN INSTALLED APP, whose working token is the thing an install
+	// would revoke.
+	_, ledger, path, err := run(t, ws, func(o *slack.Options) {
 		o.Sink = recorder
 		o.Install = func(context.Context, string, string) (string, error) {
+			return "the-temporary-code", nil
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ledger.Apps["swe"].Installed() {
+		t.Fatal("the first run installed nothing, so this case proves nothing")
+	}
+
+	recorder.err = errUnreadable
+	_, err = slack.Reconcile(context.Background(), slack.Options{
+		Admin: slack.NewAdmin(rewriting(t, ws)), Seats: plans(),
+		Ledger: ledger, LedgerPath: path, Sink: recorder,
+		BaseURL: "https://engine.example.com",
+		Install: func(context.Context, string, string) (string, error) {
 			t.Error("an install was attempted against an unreadable sink")
 			return "", nil
-		}
-		recorder.err = errUnreadable
+		},
 	})
 	if err == nil {
 		t.Fatal("an unreadable sink was treated as an empty one")
+	}
+}
+
+// AN APP NOBODY HAS INSTALLED ASKS NO SINK. It has no token anywhere for an
+// install to revoke, so a sink that cannot say what it holds — a
+// -secret-store sink whose node refuses the reveal, say, or whose row the
+// keyring cannot open — refuses nothing: the app this run created is
+// installed and its first token recorded.
+//
+// Mutation: ask the sink before checking that the app is installed, and the
+// first install is refused.
+func TestAnAppNobodyInstalledIsInstalledWhateverItsSinkCanSay(t *testing.T) {
+	t.Parallel()
+	ws := newWorkspace(t)
+	withCreate(ws)
+	ws.replies["oauth.v2.access"] = `{"ok":true,"access_token":"xoxb-minted",
+		"bot_user_id":"U0BOTSWE","team":{"id":"T0ACME"}}`
+	recorder := newSink()
+	recorder.err = errUnreadable
+
+	res, _, _, err := run(t, ws, func(o *slack.Options) {
+		o.Sink = recorder
+		o.Install = func(context.Context, string, string) (string, error) {
+			return "the-temporary-code", nil
+		}
+	})
+	if err != nil {
+		t.Fatalf("the first install of an app this run created was refused: %v", err)
+	}
+	if !slices.Equal(res.Created, []string{"swe"}) || !slices.Equal(res.Installed, []string{"swe"}) {
+		t.Fatalf("created %v, installed %v — want the app created and installed",
+			res.Created, res.Installed)
+	}
+	if got := recorder.value("SWE_SLACK_TOKEN"); got != "xoxb-minted" {
+		t.Errorf("recorded %q as the bot token, want the install's", got)
 	}
 }
 
@@ -1031,4 +1175,48 @@ func anySlackNote(notes []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// A RUN COUNTS WHAT IT OBTAINED FROM SLACK, AND NOTHING A RE-RUN HAD ALREADY.
+//
+// The count is what decides whether the command tells the operator what has
+// to happen before a running engine reads the values — the signing secret of
+// an app it created, the bot token of an app it installed. A re-run that kept
+// the app records the ledger's signing secret again, which the sink has held
+// since the app was created, so it counts nothing and the report asks for no
+// reload it does not need.
+func TestARunCountsTheValuesItObtainedFromSlack(t *testing.T) {
+	t.Parallel()
+	ws := newWorkspace(t)
+	withCreate(ws)
+	ws.replies["oauth.v2.access"] = `{"ok":true,"access_token":"xoxb-minted",
+		"bot_user_id":"U0BOTSWE","app_id":"A0SWE","team":{"id":"T0ACME"}}`
+	recorder := newSink()
+	install := func(context.Context, string, string) (string, error) {
+		return "the-temporary-code", nil
+	}
+
+	res, ledger, path, err := run(t, ws, func(o *slack.Options) {
+		o.Sink, o.Install = recorder, install
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Recorded != 2 {
+		t.Errorf("a run that created and installed an app counted %d value(s), "+
+			"want its signing secret and its bot token", res.Recorded)
+	}
+
+	again, err := slack.Reconcile(context.Background(), slack.Options{
+		Admin: slack.NewAdmin(rewriting(t, ws)), Seats: plans(),
+		Ledger: ledger, LedgerPath: path, Sink: recorder,
+		BaseURL: "https://engine.example.com", Install: install,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again.Kept) != 1 || again.Recorded != 0 {
+		t.Errorf("a re-run that kept the app counted %d value(s) (kept %v), want none",
+			again.Recorded, again.Kept)
+	}
 }

@@ -92,8 +92,8 @@ type EvictionRow struct {
 //
 // A LIVE DATA NODE COUNTS FOR EVERY LOG. Every data node runs every domain,
 // the identity estate included, whatever its other roles, so a live data node
-// that has published no position for a log is one between boot and its first
-// heartbeat — never one that declined the log and will never report.
+// that has published no position for a log is one whose heartbeat has not yet
+// written its row — never one that declined the log and will never report.
 type Presence struct {
 	NodeID string
 }
@@ -108,14 +108,24 @@ type Presence struct {
 // is deliberate, and is why an offline node pins the floor rather than
 // vanishing from it.
 //
-// The live data nodes are what catch a node between boot and its first
-// heartbeat — which is exactly a node adopting a snapshot. It counts at
-// position ZERO and blocks every term derived from the set, for at most one
-// heartbeat, and the operator surface renders it as counted with no position
-// yet so the block has a visible cause. DATA nodes, because they are the nodes
-// that apply the log — every one of them applies every log from boot — and a
-// node without `data` applies none: counted at zero, it would pin every log
-// for as long as it ran.
+// The live data nodes are what catch a node that holds a presence lease and
+// whose row has not landed — its heartbeat's first write refused, or not yet
+// made. It counts at position ZERO and blocks every term derived from the set
+// until the row lands, and the operator surface renders it as counted with no
+// position yet so the block has a visible cause. DATA nodes, because they are
+// the nodes that apply the log — every one of them applies every log from boot
+// — and a node without `data` applies none: counted at zero, it would pin
+// every log for as long as it ran.
+//
+// A BOOTING NODE IS NOT ONE OF THEM until after its first row: its heartbeat
+// publishes that row as its state log starts, and it claims its presence lease
+// only later. Between its boot and that row it is counted by the row an
+// earlier run of it left, or by nothing if it never ran — the interval the
+// package doc's write premise states. A node ADOPTING A SNAPSHOT is in that
+// interval for the whole transfer, since its join runs before its heartbeat
+// starts, and what keeps the tail it is about to replay is its own hold,
+// renewed for the whole transfer and kept until a row of its own counts the
+// tail ([AdoptDeps.Hold]).
 //
 // The tombstones are what let an operator advance a floor an absent node is
 // pinning, and they take effect only after the window — because a node that
@@ -130,10 +140,12 @@ func CountedSet(now time.Time, reported []NodePosition,
 	for _, p := range live {
 		if _, known := byID[p.NodeID]; !known {
 			// A LIVE DATA NODE WITH NO POSITION YET COUNTS AT ZERO and
-			// blocks. It is a node between boot and its first report —
-			// which is a node adopting a snapshot — and treating it as
-			// absent would let the trim advance past the tail it is
-			// about to replay.
+			// blocks: it applies every log, and nothing says where it
+			// stands until its row lands, so treating it as absent
+			// would let the trim advance past what it has still to
+			// apply. (A booting node is not live until after its first
+			// row; one adopting a snapshot is kept by its own hold — see
+			// the doc above.)
 			byID[p.NodeID] = NodePosition{NodeID: p.NodeID}
 		}
 	}
@@ -155,8 +167,8 @@ func CountedSet(now time.Time, reported []NodePosition,
 // record an older build cannot even defer.
 //
 // THE TRIM'S COUNTED SET, and deliberately the same one. It is every node that
-// applies the log — a node between boot and its first report counts, at zero,
-// because it is about to replay — and a node on an old build that is offline
+// applies the log — a live node whose row has not landed counts, at zero,
+// because it applies the log all the same — and a node on an old build that is offline
 // but not evicted applies the log the moment it returns: a record it cannot
 // read would stop it then, so it holds such a writer back exactly as it holds
 // back the trim, and an operator's eviction releases both.

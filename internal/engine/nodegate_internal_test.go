@@ -58,6 +58,12 @@ func TestAnEvictionStopsEveryIdentityLogCountingTheNode(t *testing.T) {
 		return rows
 	}
 
+	// ITS ROW IS IN THE REGISTER, as a node that applied the first records
+	// and went away leaves it.
+	if err := back.Fleet.PutPositions(t.Context(), positions()[1]); err != nil {
+		t.Fatalf("publish %s's row: %v", away, err)
+	}
+
 	res, err := e.core.Load().gate.Evict(t.Context(), GateRequest{
 		Node: away, OpID: statelog.NewOpID(time.Now(), "evict"), By: gateOperator})
 	if err != nil || !res.Complete() {
@@ -66,6 +72,31 @@ func TestAnEvictionStopsEveryIdentityLogCountingTheNode(t *testing.T) {
 	if len(res.Domains) != len(identity) {
 		t.Fatalf("the gesture answered for %d log(s), want every identity-claiming "+
 			"one (%d)", len(res.Domains), len(identity))
+	}
+	// AND STAYS THERE: the eviction takes the node out of the trim through
+	// its tombstone, never by removing its row, which is what a readmission
+	// of that node is judged by. Mutation: purge the row in the eviction,
+	// and this is red.
+	rows, err := back.Fleet.Positions(t.Context())
+	if err != nil {
+		t.Fatalf("read the register: %v", err)
+	}
+	kept := false
+	for _, row := range rows {
+		if row.NodeID != away {
+			continue
+		}
+		kept = true
+		for _, running := range identity {
+			if at := row.Domains[running.domain.Name()]; at.Seq != 1 {
+				t.Errorf("the evicted node's row says %s at %d after the eviction, want the 1 "+
+					"it last published: a readmission is judged by it", running.domain.Name(), at.Seq)
+			}
+		}
+	}
+	if !kept {
+		t.Fatalf("the eviction removed %s's row from the register, so a readmission of it "+
+			"would be judged as a node that never reported anything", away)
 	}
 	targets := map[string]uint64{}
 	for _, running := range identity {
