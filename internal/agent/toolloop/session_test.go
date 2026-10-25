@@ -54,6 +54,8 @@ type surface struct {
 	origin, server string
 	// hook, when set, is called as each call begins, outside the lock.
 	hook func(ctx context.Context, call llm.ToolCall)
+	// readOnly names tools annotated read-only.
+	readOnly map[string]bool
 }
 
 // remove takes a tool off what the surface offers, as a surface whose active
@@ -84,7 +86,14 @@ func (s *surface) Revision() uint64 {
 	defer s.mu.Unlock()
 	return s.revision
 }
-func (s *surface) AnnotationsOf(string) mcp.Annotations { return mcp.Annotations{} }
+func (s *surface) AnnotationsOf(name string) mcp.Annotations {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.readOnly[name] {
+		return mcp.Annotations{ReadOnly: mcp.Yes}
+	}
+	return mcp.Annotations{}
+}
 func (s *surface) Detached(name string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -647,6 +656,74 @@ func TestASubmissionBesideADeliveryRunsAfterIt(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A CALL THAT MUST RUN ALONE WAITS ONLY FOR CALLS THE CLI COULD BE MAKING
+// BESIDE IT. A CLI that makes one call at a time — or, beside anything but a
+// read-only tool, one at a time — sends the response's next call only once this
+// one is answered, so holding a submission for a sibling listed after it holds
+// it for the whole of the join wait and gains nothing; while a read-only
+// submission beside a read-only call sent at once still waits for that call to
+// run first.
+func TestACallThatRunsAloneWaitsOnlyForCallsThatCanArriveBesideIt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name        string
+		concurrency llm.CallConcurrency
+		parallel    bool
+		readOnly    []string
+		ran         []string
+		waits       bool
+	}{
+		{"one at a time", llm.CallsInTurn, false, nil, []string{"submit_work", "post"}, false},
+		{"read-only side by side, neither read-only", llm.CallsReadOnlyAtOnce, false, nil,
+			[]string{"submit_work", "post"}, false},
+		{"read-only side by side, both read-only, sent at once", llm.CallsReadOnlyAtOnce, true,
+			[]string{"submit_work", "post"}, []string{"post", "submit_work"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			attempts := 1
+			if tc.parallel {
+				attempts = 20
+			}
+			for i := range attempts {
+				surf := newSurface("post", "submit_work")
+				surf.readOnly = map[string]bool{}
+				for _, n := range tc.readOnly {
+					surf.readOnly[n] = true
+				}
+				prov := &llmtest.Script{Concurrency: tc.concurrency, Runs: []llmtest.Run{{Responses: []llmtest.Response{
+					{Parallel: tc.parallel, Calls: []llmtest.Call{{Name: "submit_work"}, {Name: "post"}}},
+					{Text: "a request made after the phase was decided"},
+				}}}}
+				began := time.Now()
+				if _, err := run(t, toolloop.Config{Provider: prov, Surface: surf,
+					TerminateAfter: []string{"submit_work"}}); err != nil {
+					t.Fatalf("attempt %d: Run: %v", i, err)
+				}
+				took := time.Since(began)
+				if got := surf.calls(); !slices.Equal(got, tc.ran) {
+					t.Fatalf("attempt %d: the surface ran %v, want %v", i, got, tc.ran)
+				}
+				if !tc.waits && took >= toolloop.JoinWait {
+					t.Errorf("attempt %d: the run took %s — the submission was held for a call the "+
+						"CLI makes only once it is answered", i, took)
+				}
+			}
+		})
+	}
+}
+
+// A CONCURRENCY NOTHING CAN WAIT ON IS REFUSED, rather than read as one of the
+// three: a profile the backend should have refused reaches no session.
+func TestAnUnknownCallConcurrencyIsRefused(t *testing.T) {
+	t.Parallel()
+	prov := &llmtest.Script{Concurrency: "sometimes"}
+	_, err := run(t, toolloop.Config{Provider: prov, Surface: newSurface("post")})
+	if err == nil || !strings.Contains(err.Error(), "sometimes") {
+		t.Fatalf("Run returned %v, want the unknown concurrency named", err)
 	}
 }
 

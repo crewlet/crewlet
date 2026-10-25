@@ -80,11 +80,47 @@ type ServeOptions struct {
 	// counts the whole run as one request.
 	ObservesRequests bool
 
+	// Concurrency is which of one response's calls the CLI makes without
+	// waiting for the one before it to be answered. The host holds a call
+	// that must run alone — one that ends or parks the phase — until the
+	// response's other calls have run, and it waits only for calls the CLI
+	// could be making beside it: a CLI that makes the next call once this
+	// one is answered sends none while it is held.
+	Concurrency CallConcurrency
+
 	// OnCall is told when the first call of a stretch starts and when the
 	// last one in flight ends — busy true, then false — so a backend can
 	// stop the clock that bounds the model's own working time while the
 	// engine's tools run, and look at the CLI's login while it waits.
 	OnCall func(busy bool)
+}
+
+// CallConcurrency is which of one model response's calls a CLI makes without
+// waiting for the one before it to be answered — a fact about the CLI's own
+// loop, measured per CLI and declared by its profile.
+type CallConcurrency string
+
+const (
+	// CallsAtOnce is a CLI that may make any of a response's calls beside
+	// another. The zero value, because it is the safe assumption about a
+	// CLI that does not say: a host that waits for a call that never comes
+	// waits a moment, and one that runs a call that must run alone before a
+	// call beside it arrives runs the two in the wrong order.
+	CallsAtOnce CallConcurrency = ""
+
+	// CallsReadOnlyAtOnce is a CLI that makes calls to tools annotated
+	// read-only beside each other and makes any other call alone, once the
+	// call before it is answered.
+	CallsReadOnlyAtOnce CallConcurrency = "read_only"
+
+	// CallsInTurn is a CLI that makes one call at a time, each once the last
+	// is answered.
+	CallsInTurn CallConcurrency = "in_turn"
+)
+
+// Valid reports whether c is one of the three.
+func (c CallConcurrency) Valid() bool {
+	return c == CallsAtOnce || c == CallsReadOnlyAtOnce || c == CallsInTurn
 }
 
 // Served is one CLI run's connection to the host.

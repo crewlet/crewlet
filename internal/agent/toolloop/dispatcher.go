@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/toolsession"
 )
@@ -329,6 +330,12 @@ func (d *dispatcher) Serve(ctx context.Context, opts llm.ServeOptions) (llm.Serv
 	if d.cfg.Host == nil {
 		return llm.Served{}, fmt.Errorf("toolloop: %s offers tools but has no session host",
 			d.cfg.Surface.Phase())
+	}
+	if !opts.Concurrency.Valid() {
+		// A value nothing here knows how to wait on: a profile the backend
+		// should have refused when it loaded.
+		return llm.Served{}, fmt.Errorf("toolloop: unknown call concurrency %q (want %q, %q or %q)",
+			opts.Concurrency, llm.CallsAtOnce, llm.CallsReadOnlyAtOnce, llm.CallsInTurn)
 	}
 	title := d.cfg.ServerTitle
 	if title == "" {
@@ -895,7 +902,8 @@ func (d *dispatcher) awaitSiblings(c *callRec) {
 				break
 			}
 		}
-		arriving := c.turn != nil && time.Now().Before(deadline) && c.turn.awaiting(c.slot, d.exclusive)
+		arriving := c.turn != nil && time.Now().Before(deadline) &&
+			c.turn.awaiting(c.slot, func(name string) bool { return !d.mayArriveBeside(c, name) })
 		switch {
 		case running:
 			d.cond.Wait()
@@ -904,6 +912,32 @@ func (d *dispatcher) awaitSiblings(c *callRec) {
 		default:
 			return
 		}
+	}
+}
+
+// mayArriveBeside reports whether the CLI could make a call of name while the
+// exclusive call c is still unanswered — the only calls the barrier waits to
+// arrive. Another call that ends or parks the phase never is: it waits its own
+// turn at the gate. On a CLI that makes calls one at a time none is, and on one
+// that runs only read-only tools side by side, only a read-only call beside a
+// read-only c is; any other sibling the CLI makes once c is answered, so
+// waiting for it would hold c for [joinWait] and gain nothing.
+func (d *dispatcher) mayArriveBeside(c *callRec, name string) bool {
+	if d.exclusive(name) {
+		return false
+	}
+	var concurrency llm.CallConcurrency
+	if c.run != nil {
+		concurrency = c.run.opts.Concurrency
+	}
+	switch concurrency {
+	case llm.CallsInTurn:
+		return false
+	case llm.CallsReadOnlyAtOnce:
+		readOnly := func(n string) bool { return d.cfg.Surface.AnnotationsOf(n).ReadOnly == mcp.Yes }
+		return readOnly(c.name) && readOnly(name)
+	default:
+		return true
 	}
 }
 

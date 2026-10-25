@@ -117,6 +117,11 @@ type Script struct {
 	// ToolTimeout is the CLI's own per-call timeout, told to the host.
 	ToolTimeout time.Duration
 
+	// Concurrency is which calls the CLI says it makes side by side, told
+	// to the host. What the script actually does is each response's
+	// Parallel; a case sets both to say one thing.
+	Concurrency llm.CallConcurrency
+
 	// Before, when set, is called before each call with its name — a call
 	// to one of the CLI's own tools included, which then takes as long as
 	// Before does; a case uses it to act between a response and its calls.
@@ -234,6 +239,7 @@ func (s *Script) play(ctx context.Context, req llm.Request, run Run, n int) (*ll
 	host := req.Tools
 	served, err := host.Serve(ctx, llm.ServeOptions{
 		Relists: !s.NoRelist, ToolTimeout: s.ToolTimeout, ObservesRequests: !s.Unobserved,
+		Concurrency: s.Concurrency,
 	})
 	if err != nil {
 		return nil, err
