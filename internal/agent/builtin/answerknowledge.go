@@ -481,10 +481,10 @@ func answerReachOf(p iam.Principal) answerReach {
 func (r answerReach) key() string {
 	var apps []string
 	if r.tasks {
-		apps = append(apps, string(iam.GrantTracker))
+		apps = append(apps, string(iam.GrantWorklet))
 	}
 	if r.pages {
-		apps = append(apps, string(iam.GrantKnowledge))
+		apps = append(apps, string(iam.GrantDoclet))
 	}
 	slices.Sort(apps)
 	return strings.Join(apps, ",")

@@ -95,7 +95,7 @@ func TestAMachineActorCannotSatisfyAnOwnRecordCheck(t *testing.T) {
 	for _, id := range []string{"ops", "ci", "release-bot"} {
 		// HOLDING THE TRACKER, which the own-record verbs ask beside the
 		// relation — so what refuses the token below is its NAME.
-		token := machine(id, iam.GrantTracker)
+		token := machine(id, iam.GrantWorklet)
 		actor := builtin.ActorOf(token)
 		if org.ValidHandle(actor.Handle) {
 			t.Errorf("a token acts as %q, which a seat could also be called",

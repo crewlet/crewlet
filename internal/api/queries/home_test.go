@@ -108,7 +108,7 @@ func TestDecisionsNeedsARecord(t *testing.T) {
 	r := queries.NewRegistry()
 	queries.Register(r, viewerSources(t, work))
 	nobody := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson,
-		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantTracker}}
+		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantWorklet}}
 	_, err := r.Answer(iam.WithPrincipal(t.Context(), nobody), "decisions", nil)
 	if !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("a caller with no record naming nobody = %v, want bad params", err)
@@ -125,7 +125,7 @@ func TestSomebodyElsesDecisionsTakeTheLeadRelation(t *testing.T) {
 	t.Parallel()
 	work := &stubWork{}
 	if _, err := askHolding(t, viewerSources(t, work), "ana", "decisions",
-		map[string]any{"handle": "bo"}, iam.GrantTracker); !errors.Is(err,
+		map[string]any{"handle": "bo"}, iam.GrantWorklet); !errors.Is(err,
 		queries.ErrUnauthorized) {
 		t.Errorf("a colleague read bo's decisions = %v, want unauthorized", err)
 	}
@@ -136,7 +136,7 @@ func TestSomebodyElsesDecisionsTakeTheLeadRelation(t *testing.T) {
 	s := viewerSources(t, work)
 	s.Chart = leadsChart{lead: "ana", report: "bo"}
 	if _, err := askHolding(t, s, "ana", "decisions",
-		map[string]any{"handle": "bo"}, iam.GrantTracker); err != nil {
+		map[string]any{"handle": "bo"}, iam.GrantWorklet); err != nil {
 		t.Fatalf("bo's lead was refused his decisions: %v", err)
 	}
 	if work.decisionsQuery.Handle != "bo" {
@@ -314,12 +314,12 @@ func TestTheFeedShowsOnlyTheAppsTheCallerHolds(t *testing.T) {
 		// before it, the page save an hour before.
 		{"an admin", []iam.Grant{iam.GrantAdmin}, nil,
 			[]queries.FeedKind{queries.FeedCompleted, queries.FeedSchedule, queries.FeedPage}},
-		{"the tracker", []iam.Grant{iam.GrantTracker}, nil,
+		{"the tracker", []iam.Grant{iam.GrantWorklet}, nil,
 			[]queries.FeedKind{queries.FeedCompleted, queries.FeedSchedule}},
-		{"the knowledge base", []iam.Grant{iam.GrantKnowledge}, nil,
+		{"the knowledge base", []iam.Grant{iam.GrantDoclet}, nil,
 			[]queries.FeedKind{queries.FeedSchedule, queries.FeedPage}},
 		{"nothing", nil, nil, []queries.FeedKind{queries.FeedSchedule}},
-		{"the tracker, naming the pages", []iam.Grant{iam.GrantTracker},
+		{"the tracker, naming the pages", []iam.Grant{iam.GrantWorklet},
 			map[string]any{"kinds": "page"}, nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -410,8 +410,8 @@ func TestYourOwnAsksNeedNoTracker(t *testing.T) {
 	lead.Chart = leadsChart{lead: "ana", report: "bo"}
 	_, err = askHolding(t, lead, "ana", "decisions", map[string]any{"handle": "bo"})
 	var refusal *queries.Refusal
-	if !errors.As(err, &refusal) || !slices.Equal(refusal.Grants, []iam.Grant{iam.GrantTracker}) {
+	if !errors.As(err, &refusal) || !slices.Equal(refusal.Grants, []iam.Grant{iam.GrantWorklet}) {
 		t.Errorf("a lead without the tracker reading a report's decisions = %v, "+
-			"want a refusal naming [tracker]", err)
+			"want a refusal naming [worklet]", err)
 	}
 }

@@ -10,8 +10,8 @@
 
 There are three permissions. **`admin`** runs the company and the engine: its
 configuration, its credentials, its people, its deployment and its
-company-wide trail. **`tracker`** and **`knowledge`** each use one APP — the
-native work tracker and the native knowledge base, reading and writing.
+company-wide trail. **`worklet`** and **`doclet`** each use one APP, Worklet
+and Doclet, reading and writing.
 `iam.Apps` is the one place an app is declared, and admin includes every app
 through `iam.Expand`, which every comparison of permissions goes through.
 

@@ -281,7 +281,7 @@ func TestReadingAnotherPersonsDayNeedsTheLeadRelation(t *testing.T) {
 	led.Chart = leadsChart{lead: "ana", report: "bo"}
 	if _, err := askHolding(t, led, "ana", "work_my_work",
 		map[string]any{"handle": "bo"},
-		iam.GrantTracker); err != nil {
+		iam.GrantWorklet); err != nil {
 
 		t.Fatalf("ana reading her report's day: %v", err)
 	}
@@ -297,7 +297,7 @@ func TestReadingAnotherPersonsDayNeedsTheLeadRelation(t *testing.T) {
 	blind.Chart = authz.NoChart{}
 	if _, err := askHolding(t, blind, "ana", "work_my_work",
 		map[string]any{"handle": "bo"},
-		iam.GrantTracker); !errors.Is(err, queries.ErrUnavailable) {
+		iam.GrantWorklet); !errors.Is(err, queries.ErrUnavailable) {
 
 		t.Errorf("an unreadable chart answered %v, want unavailable", err)
 	}
@@ -345,7 +345,7 @@ func TestEachPersonalQuestionAsksItsOwnVerb(t *testing.T) {
 		// reporting no relation: admitted to ASK, refused the record —
 		// so the refusal is the verb's rather than the registration's.
 		_, err := askHolding(t, viewerSources(t, &stubWork{}), "ana", what,
-			map[string]any{"handle": "bo"}, iam.GrantTracker)
+			map[string]any{"handle": "bo"}, iam.GrantWorklet)
 		var refusal *queries.Refusal
 		if !errors.As(err, &refusal) {
 			t.Errorf("%s naming bo = %v, want a refusal", what, err)
@@ -407,7 +407,7 @@ func TestACallersOwnRecordIsReadUnderTheNameItIsWrittenUnder(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			c.caller.ID, c.caller.Stage = uuid.New(), iam.StageActive
-			c.caller.Grants = []iam.Grant{iam.GrantTracker}
+			c.caller.Grants = []iam.Grant{iam.GrantWorklet}
 			ctx := iam.WithPrincipal(t.Context(), c.caller)
 			if want := iam.ActorFor(c.caller).Name; want != c.want {
 				t.Fatalf("this caller writes under %q; the case wants %q", want, c.want)
@@ -489,7 +489,7 @@ func TestSomebodyElsesLoginIsReadUnderTheirHoldersRecord(t *testing.T) {
 		Stage:  iam.StageActive,
 		Grants: []iam.Grant{iam.GrantAdmin}}
 	lead := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson, Login: "lead.person",
-		Seat: "lead", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantTracker}}
+		Seat: "lead", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantWorklet}}
 	for _, c := range []struct {
 		name   string
 		caller iam.Principal
@@ -540,7 +540,7 @@ func TestALoginThatNamesNobodyIsNotARosterForAQuestion(t *testing.T) {
 		Stage:  iam.StageActive,
 		Grants: []iam.Grant{iam.GrantAdmin}}
 	lead := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson, Login: "lead.person",
-		Seat: "lead", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantTracker}}
+		Seat: "lead", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantWorklet}}
 	for _, c := range []struct {
 		name   string
 		caller iam.Principal
@@ -614,7 +614,7 @@ func TestTheInboxIsScopedTheSameWay(t *testing.T) {
 	}
 	if _, err := askHolding(t, viewerSources(t, work), "ana", "work_inbox",
 		map[string]any{"handle": "bo"},
-		iam.GrantTracker); !errors.Is(err, queries.ErrUnauthorized) {
+		iam.GrantWorklet); !errors.Is(err, queries.ErrUnauthorized) {
 
 		t.Errorf("a colleague read bo's inbox = %v, want unauthorized", err)
 	}
@@ -788,9 +788,9 @@ func TestACallerWithNoAuthorityLearnsNothingFromTheDirectoryOnAQuestion(t *testi
 	t.Parallel()
 	stranger := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson,
 		Login: "pat.nobody", Seat: "pat", Stage: iam.StageActive,
-		Grants: []iam.Grant{iam.GrantTracker}}
+		Grants: []iam.Grant{iam.GrantWorklet}}
 	lead := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson, Login: "lead.person",
-		Seat: "lead", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantTracker}}
+		Seat: "lead", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantWorklet}}
 	blind := loginDirectory{err: errors.New("engine: ana.diaz is bound to ana " +
 		"and this node cannot say where that seat is now")}
 	for _, question := range []string{"work_my_work", "work_inbox", "work_person"} {

@@ -15,7 +15,7 @@ import (
 // the containers a company has are [chartContainers]'s. Declared from a second
 // walk of the chart, the two lists would drift — a seat's own `space:` left out
 // of one, a key in another spelling — and a page would be refused a space whose
-// container the Knowledge rail lists, or created in one nobody made. So the
+// container the Doclet rail lists, or created in one nobody made. So the
 // declared list IS that walk's keys, every unit's and seat's space and the
 // root and the skills container among them, the reserved two still come from
 // their own accessors, and a node running no company declares nothing — which

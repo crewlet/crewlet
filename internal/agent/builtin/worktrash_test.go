@@ -109,7 +109,7 @@ func TestARowDecidedToolAsksAfterItReads(t *testing.T) {
 	lead := iam.WithPrincipal(context.Background(), iam.Principal{
 		ID: uuid.New(), Kind: iam.KindPerson, Login: "cto.lead", Seat: "cto",
 		Stage:  iam.StageActive,
-		Grants: []iam.Grant{iam.GrantTracker},
+		Grants: []iam.Grant{iam.GrantWorklet},
 	})
 	for _, c := range []struct {
 		name    string

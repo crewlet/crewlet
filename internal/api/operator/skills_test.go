@@ -91,7 +91,7 @@ func TestAToolSkillWriteOverTheOperatorSurfaceNeedsAdmin(t *testing.T) {
 	t.Parallel()
 	kb := &skillPages{}
 	dir := &directory{people: map[string]iam.Principal{
-		"writer": machine("token:writer", iam.GrantKnowledge),
+		"writer": machine("token:writer", iam.GrantDoclet),
 		"admin":  machine("token:admin", iam.GrantAdmin),
 	}}
 	s := newSurface(t, operator.Options{

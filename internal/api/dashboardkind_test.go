@@ -181,7 +181,7 @@ func newBoardRig(t *testing.T) *boardRig {
 	deals := []float64{100, 250}
 	data := boardData{mu: &sync.Mutex{}, deals: &deals}
 	b := config.DefaultBootstrap()
-	worker := []iam.Grant{iam.GrantTracker, iam.GrantArtifacts}
+	worker := []iam.Grant{iam.GrantWorklet, iam.GrantArtifacts}
 	authorize(&b,
 		config.APIToken{ID: "alice", Token: "alice-token-long-enough-to-pass", Grants: worker},
 		config.APIToken{ID: "bob", Token: "bob-token-long-enough-to-pass", Grants: worker},
@@ -256,7 +256,7 @@ func TestTwoViewersOfOneBoardEachSeeOnlyTheirOwnRows(t *testing.T) {
 		t.Fatalf("carol, without the tracker, is answered a refusal of the dataset: %d %s", code, raw)
 	}
 	refusal, _ := carol["refusal"].(map[string]any)
-	if refusal["dataset"] != "work" || !strings.Contains(fmt.Sprint(refusal["grants"]), "tracker") {
+	if refusal["dataset"] != "work" || !strings.Contains(fmt.Sprint(refusal["grants"]), "worklet") {
 		t.Errorf("the refusal names the dataset and the grant that would open it: %v", refusal)
 	}
 	for _, task := range companyTasks {

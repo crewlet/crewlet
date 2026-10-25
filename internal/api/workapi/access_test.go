@@ -24,7 +24,7 @@ func TestTheCommentRouteLetsTheToolDecide(t *testing.T) {
 	t.Parallel()
 	r := newRig(t, chart{})
 	r.reader.asks = map[string]map[string]string{"t-1": {"legal": "c-ask"}}
-	legal := person("legal", iam.GrantKnowledge)
+	legal := person("legal", iam.GrantDoclet)
 
 	got := r.do(as(legal), http.MethodPost, "/work/items/ENG-1/comments",
 		map[string]any{"body": "Yes — the clause stands."})
@@ -41,7 +41,7 @@ func TestTheCommentRouteLetsTheToolDecide(t *testing.T) {
 		map[string]any{"body": "fyi"})
 	grants, _ := got.body["grants"].([]any)
 	if got.status != http.StatusForbidden ||
-		!slices.Equal(grants, []any{string(iam.GrantTracker)}) {
+		!slices.Equal(grants, []any{string(iam.GrantWorklet)}) {
 		t.Errorf("a remark on an item nobody asked them on answered %d %v, want "+
 			"403 naming the tracker", got.status, got.body)
 	}

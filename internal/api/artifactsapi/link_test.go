@@ -29,7 +29,7 @@ const linkENG12 = `{"work_item":"ENG-12"}`
 func TestALinkNeedsAReadOfTheArtifact(t *testing.T) {
 	t.Parallel()
 	g := newRig(t, true)
-	bob := person("bob", iam.GrantTracker)
+	bob := person("bob", iam.GrantWorklet)
 	w := g.do(bob, "POST", at(page, "/work-items"), linkENG12, keyed()...)
 	if w.Code != http.StatusOK {
 		t.Fatalf("a viewer's link: %d %s", w.Code, w.Body)
@@ -47,7 +47,7 @@ func TestALinkNeedsAReadOfTheArtifact(t *testing.T) {
 		t.Errorf("the link was stamped %+v", a)
 	}
 
-	dana := person("dana", iam.GrantTracker)
+	dana := person("dana", iam.GrantWorklet)
 	stranger := g.do(dana, "POST", at(page, "/work-items"), linkENG12, keyed()...)
 	nothing := g.do(dana, "POST", at(unknown, "/work-items"), linkENG12, keyed()...)
 	if stranger.Code != http.StatusNotFound || stranger.Body.String() != nothing.Body.String() {
@@ -98,7 +98,7 @@ func TestALinkNeedsAWriteOfTheWorkItem(t *testing.T) {
 func TestALinkNamesALiveWorkItemByItsKey(t *testing.T) {
 	t.Parallel()
 	g := newRig(t, true)
-	jane := person("jane", iam.GrantTracker)
+	jane := person("jane", iam.GrantWorklet)
 	for _, c := range []struct {
 		name, body string
 		id         artifacts.ID
@@ -180,7 +180,7 @@ func TestALinkAfterItsCreateWaitsForTheTrackerToApplyIt(t *testing.T) {
 	t.Parallel()
 	g := newRig(t, true)
 	applied := g.work.behind(t, trackerAt(8))
-	jane := person("jane", iam.GrantTracker)
+	jane := person("jane", iam.GrantWorklet)
 
 	if w := g.do(jane, "POST", at(page, "/work-items"), linkENG12, keyed()...); w.Code != http.StatusOK {
 		t.Fatalf("a link with no after on a node behind: %d %s", w.Code, w.Body)
@@ -234,7 +234,7 @@ func TestALinkWhoseCreateNeverAppliesIsRefusedBehind(t *testing.T) {
 	t.Parallel()
 	g := newRig(t, true)
 	g.work.behind(t, trackerAt(8))
-	jane := person("jane", iam.GrantTracker)
+	jane := person("jane", iam.GrantWorklet)
 
 	began := time.Now()
 	w := g.do(jane, "POST", at(page, "/work-items"), linkAfter(trackerAt(50).String()), keyed()...)
@@ -268,7 +268,7 @@ func TestALinkRefusesAnAfterThatIsNotATrackerPosition(t *testing.T) {
 	t.Parallel()
 	g := newRig(t, true)
 	g.work.behind(t, trackerAt(8))
-	jane := person("jane", iam.GrantTracker)
+	jane := person("jane", iam.GrantWorklet)
 
 	for _, after := range []string{"nine", "CREWLET_TRACKER_LOG@1", "CREWLET_TRACKER_LOG@x:9", "@1:9"} {
 		w := g.do(jane, "POST", at(page, "/work-items"), linkAfter(after), keyed()...)

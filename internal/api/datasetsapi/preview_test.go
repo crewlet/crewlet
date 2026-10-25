@@ -76,7 +76,7 @@ func TestAPreviewAnswersASourcesRowsAsTheViewer(t *testing.T) {
 		{Key: "ENG-2", Title: "Plan it", Status: "todo", StatusGroup: "not_started"},
 	}}}
 	s := previewService(t, q)
-	ana := iam.Principal{ID: uuid.New(), Login: "ana.lee", Kind: iam.KindPerson, Grants: []iam.Grant{iam.GrantTracker}}
+	ana := iam.Principal{ID: uuid.New(), Login: "ana.lee", Kind: iam.KindPerson, Grants: []iam.Grant{iam.GrantWorklet}}
 
 	w, out := previewOf(t, s, &ana, "/artifacts/sources/preview/tracker.items?scope=blocked")
 	if w.Code != http.StatusOK || out.Status != StatusReady || out.Source != "tracker.items" {
@@ -98,7 +98,7 @@ func TestAPreviewAnswersASourcesRowsAsTheViewer(t *testing.T) {
 // failure: the builder draws the source as closed to this reader.
 func TestAPreviewOfASourceTheViewerMayNotReadIsItsRefusal(t *testing.T) {
 	q := &answeringQuestions{refusal: &queries.Refusal{What: "work_items", Reason: authz.ReasonNoGrant,
-		Grants: []iam.Grant{iam.GrantTracker}}}
+		Grants: []iam.Grant{iam.GrantWorklet}}}
 	s := previewService(t, q)
 	bo := iam.Principal{ID: uuid.New(), Login: "bo.k", Kind: iam.KindPerson}
 
@@ -107,7 +107,7 @@ func TestAPreviewOfASourceTheViewerMayNotReadIsItsRefusal(t *testing.T) {
 		t.Fatalf("preview = %d %s, want 200 refused", w.Code, w.Body.String())
 	}
 	if out.Table != nil || out.Refusal == nil || out.Refusal.Reason != authz.ReasonNoGrant ||
-		len(out.Refusal.Grants) != 1 || out.Refusal.Grants[0] != iam.GrantTracker || out.Detail == "" {
+		len(out.Refusal.Grants) != 1 || out.Refusal.Grants[0] != iam.GrantWorklet || out.Detail == "" {
 		t.Errorf("refused preview = %+v", out)
 	}
 }

@@ -63,7 +63,7 @@ func TestAnEmptyCatalogueAnswersAsTheRoutesAbsence(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, operator.MCPPath, strings.NewReader(`{}`))
-	r = r.WithContext(iam.WithPrincipal(r.Context(), machine("token:ops", iam.GrantTracker)))
+	r = r.WithContext(iam.WithPrincipal(r.Context(), machine("token:ops", iam.GrantWorklet)))
 	s.MCPHandler().ServeHTTP(rec, r)
 	if code := errorCode(t, rec); rec.Code != http.StatusNotFound ||
 		code != string(httpjson.CodeNoRoute) {
@@ -96,7 +96,7 @@ func TestTheCatalogueIsReadForEveryCall(t *testing.T) {
 			}}, true
 		},
 	})
-	founder := machine("token:founder", iam.GrantTracker)
+	founder := machine("token:founder", iam.GrantWorklet)
 	serve := func(h http.Handler, path, body string) *httptest.ResponseRecorder {
 		t.Helper()
 		r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
@@ -193,7 +193,7 @@ func TestAnOperatorWriteIsAttributedToItsPrincipal(t *testing.T) {
 		// kind human — what lets the tracker leave them out of the wake
 		// their own change sends — and the credential beside it.
 		"a bound person": {
-			principal: person("jane.founder", "jane-founder", iam.GrantTracker),
+			principal: person("jane.founder", "jane-founder", iam.GrantWorklet),
 			author:    "jane-founder", kind: worklet.AuthorHuman, operator: "jane.founder",
 		},
 	} {

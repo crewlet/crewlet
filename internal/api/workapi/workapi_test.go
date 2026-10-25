@@ -43,7 +43,7 @@ func TestEachOutcomeIsItsOwnStatus(t *testing.T) {
 		{"the node could not tell who is asking", chart{}, unknown,
 			http.MethodPost, "/work/items", create, nil, http.StatusServiceUnavailable},
 		{"the table refused at the route", chart{},
-			as(person("ana", iam.GrantKnowledge)), http.MethodPost, "/work/items",
+			as(person("ana", iam.GrantDoclet)), http.MethodPost, "/work/items",
 			create, nil, http.StatusForbidden},
 		// A ROW-DECIDED VERB on a chart that could not answer: the route
 		// admitted a reader and the tool's own ask could not decide.
@@ -537,7 +537,7 @@ func TestARankMovePlacesAnItemBesideItsNeighbour(t *testing.T) {
 		map[string]any{"before": "OPS-1"}, "If-Match", "3"); got.status != http.StatusUnprocessableEntity {
 		t.Errorf("a card placed on another project's board answered %d", got.status)
 	}
-	if got := r.do(as(person("ana", iam.GrantKnowledge)), http.MethodPost,
+	if got := r.do(as(person("ana", iam.GrantDoclet)), http.MethodPost,
 		"/work/items/ENG-1/rank", map[string]any{"after": "ENG-2"}, "If-Match", "3"); got.status != http.StatusForbidden {
 		t.Errorf("somebody without the tracker moved a card: %d", got.status)
 	}
@@ -683,7 +683,7 @@ func TestThePageTrashIsTheContainersLeads(t *testing.T) {
 // is refused until they hold admin.
 func TestEveryRouteThatChangesAToolSkillNeedsAdmin(t *testing.T) {
 	t.Parallel()
-	operator := person("root", iam.GrantKnowledge)
+	operator := person("root", iam.GrantDoclet)
 	operator.ReauthAt = time.Now().Add(time.Hour)
 	for _, c := range []struct {
 		method, target string

@@ -664,8 +664,8 @@ func TestAnswerKnowledgeSearchesOnlyTheAppsTheAskerHolds(t *testing.T) {
 	}{
 		{"both apps", slices.Clone(iam.Apps), true, true},
 		{"admin, which includes both", []iam.Grant{iam.GrantAdmin}, true, true},
-		{"the tracker alone", []iam.Grant{iam.GrantTracker}, false, true},
-		{"the knowledge base alone", []iam.Grant{iam.GrantKnowledge}, true, false},
+		{"the tracker alone", []iam.Grant{iam.GrantWorklet}, false, true},
+		{"the knowledge base alone", []iam.Grant{iam.GrantDoclet}, true, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -728,7 +728,7 @@ func TestTheTwoAppSetsCacheApart(t *testing.T) {
 	if both := askAs(iam.Apps...); both.Cached || rig.model.calls != 1 {
 		t.Fatalf("the first answer: cached %v after %d calls", both.Cached, rig.model.calls)
 	}
-	tracker := askAs(iam.GrantTracker)
+	tracker := askAs(iam.GrantWorklet)
 	if tracker.Cached || rig.model.calls != 2 {
 		t.Fatalf("a tracker-only asker was served the answer written for both apps "+
 			"(cached %v after %d model calls)", tracker.Cached, rig.model.calls)

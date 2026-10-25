@@ -1269,9 +1269,9 @@ func TestTheKnowledgeQuestionSearchesPagesOnlyWithKnowledge(t *testing.T) {
 		searched bool
 		refused  bool
 	}{
-		{"the knowledge base", []iam.Grant{iam.GrantKnowledge}, true, false},
+		{"the knowledge base", []iam.Grant{iam.GrantDoclet}, true, false},
 		{"an admin", []iam.Grant{iam.GrantAdmin}, true, false},
-		{"the tracker alone", []iam.Grant{iam.GrantTracker}, false, false},
+		{"the tracker alone", []iam.Grant{iam.GrantWorklet}, false, false},
 		{"neither app", nil, false, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {

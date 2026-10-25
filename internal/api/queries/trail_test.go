@@ -144,7 +144,7 @@ func TestATrailNamesItsWorkItemsOnlyToTheTracker(t *testing.T) {
 		shown   bool
 	}{
 		{"holding no permission", nil, false},
-		{"holding the tracker", []iam.Grant{iam.GrantTracker}, true},
+		{"holding the tracker", []iam.Grant{iam.GrantWorklet}, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -215,12 +215,12 @@ func TestATrailIsNarrowedToAWorkItemOnlyForTheTracker(t *testing.T) {
 	_, err := r.Answer(asSeat(t, "lead"), "turns", params)
 	var refusal *queries.Refusal
 	if !errors.As(err, &refusal) || refusal.Reason != authz.ReasonNoGrant ||
-		!slices.Equal(refusal.Grants, []iam.Grant{iam.GrantTracker}) {
+		!slices.Equal(refusal.Grants, []iam.Grant{iam.GrantWorklet}) {
 		t.Fatalf("a lead without the tracker narrowing to a work item = %v, "+
-			"want a refusal naming [tracker]", err)
+			"want a refusal naming [worklet]", err)
 	}
 
-	got, err := r.Answer(asSeat(t, "lead", iam.GrantTracker), "turns", params)
+	got, err := r.Answer(asSeat(t, "lead", iam.GrantWorklet), "turns", params)
 	if err != nil {
 		t.Fatalf("a lead holding the tracker narrowing to a work item: %v", err)
 	}

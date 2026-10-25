@@ -25,7 +25,7 @@ func TestStrippingAPersonsLastGrantSticks(t *testing.T) {
 		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Dana Okafor", Email: "dana@example.com", Login: "dana.sre",
 		Seat:   rig.vacantSeat("dana-okafor"),
-		Grants: []iam.Grant{iam.GrantTracker}, LinkExpiresAt: firstLinkExpiry,
+		Grants: []iam.Grant{iam.GrantWorklet}, LinkExpiresAt: firstLinkExpiry,
 		OpID: "op-enrol", Reason: "a hire",
 	}); err != nil {
 		t.Fatalf("enrol: %v", err)

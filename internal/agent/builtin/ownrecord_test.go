@@ -101,7 +101,7 @@ func TestYourOwnQueueIsNeverLookedUp(t *testing.T) {
 	t.Parallel()
 	for _, c := range ownRecordCallers {
 		for _, grants := range [][]iam.Grant{
-			{iam.GrantTracker},
+			{iam.GrantWorklet},
 			{iam.GrantAdmin},
 		} {
 			for _, named := range []string{"", c.caller.Login, c.owner} {
@@ -153,7 +153,7 @@ func TestAMissedNameListsTheRosterToWhoeverMayReadIt(t *testing.T) {
 		authorize builtin.Authorizer
 		lists     bool
 	}{
-		{"a tracker holder", []iam.Grant{iam.GrantTracker}, nil, true},
+		{"a tracker holder", []iam.Grant{iam.GrantWorklet}, nil, true},
 		{"an admin", []iam.Grant{iam.GrantAdmin}, nil, true},
 		{"a caller the roster question is refused", []iam.Grant{iam.GrantAdmin},
 			refuseRoster(builtin.Decide(handleChart{})), false},
@@ -191,7 +191,7 @@ func TestAPersonalViewIsTheCallersOwnRecord(t *testing.T) {
 		views := &viewStore{stored: map[string]worklet.View{}}
 		surface := ownRecordTools(t, &personSpy{}, views)
 		got, err := surface[worklet.SaveWorkViewTool].Call(
-			as(c.caller, iam.GrantTracker),
+			as(c.caller, iam.GrantWorklet),
 			map[string]any{
 				"container": "workspace", "name": "Mine", "type": "list",
 				"personal": true, "protected": true,
@@ -369,8 +369,8 @@ func TestSomebodyElsesLoginNamesTheirHoldersRecord(t *testing.T) {
 		}{
 			{"an admin naming an unbound login", as(admin, iam.GrantAdmin), "jane.doe", "jane.doe", false},
 			{"an admin naming a bound person's login", as(admin, iam.GrantAdmin), "j.bound", "jane", false},
-			{"a lead naming their report's login", as(lead, iam.GrantTracker), "dev.person", "dev", true},
-			{"a lead naming somebody they do not lead", as(lead, iam.GrantTracker), "j.bound", "", false},
+			{"a lead naming their report's login", as(lead, iam.GrantWorklet), "dev.person", "dev", true},
+			{"a lead naming somebody they do not lead", as(lead, iam.GrantWorklet), "j.bound", "", false},
 		} {
 			t.Run(verb.name+"/"+c.name, func(t *testing.T) {
 				t.Parallel()
@@ -403,7 +403,7 @@ func TestYourOwnLoginIsYourOwnRecordOnEveryVerb(t *testing.T) {
 			t.Run(verb.name+"/"+typed, func(t *testing.T) {
 				t.Parallel()
 				person, dir := &personSpy{}, &directory{}
-				got := verb.call(as(me, iam.GrantTracker),
+				got := verb.call(as(me, iam.GrantWorklet),
 					personDeps(person, dir), typed)
 				if reached := whose(t, verb, person, got); reached != "jane" {
 					t.Errorf("%s naming %q reached %q, want the caller's own "+
@@ -431,7 +431,7 @@ func TestALoginThatNamesNobodyIsNotARoster(t *testing.T) {
 	admin := as(iam.Principal{Kind: iam.KindMachine, Login: "token:admin"},
 		iam.GrantAdmin)
 	colleague := as(iam.Principal{Kind: iam.KindPerson, Login: "lead.person",
-		Seat: "lead"}, iam.GrantTracker)
+		Seat: "lead"}, iam.GrantWorklet)
 	for _, verb := range personVerbs() {
 		for _, c := range []struct {
 			name   string
@@ -532,9 +532,9 @@ func TestACallerWithNoAuthorityLearnsNothingFromTheDirectory(t *testing.T) {
 	t.Parallel()
 	// `dev` leads nobody in [handleChart]; `lead` leads `dev`.
 	stranger := as(iam.Principal{Kind: iam.KindPerson, Login: "dev.person",
-		Seat: "dev"}, iam.GrantTracker)
+		Seat: "dev"}, iam.GrantWorklet)
 	lead := as(iam.Principal{Kind: iam.KindPerson, Login: "lead.person",
-		Seat: "lead"}, iam.GrantTracker)
+		Seat: "lead"}, iam.GrantWorklet)
 	admin := as(iam.Principal{Kind: iam.KindMachine, Login: "token:admin"},
 		iam.GrantAdmin)
 	blind := func() *directory {

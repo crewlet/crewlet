@@ -108,7 +108,7 @@ func asJane(t *testing.T, reg *tools.Registry, name string,
 	jane := iam.Principal{
 		ID: uuid.New(), Login: "jane.founder", Kind: iam.KindPerson,
 		Seat: "jane-founder", Stage: iam.StageActive,
-		Grants: []iam.Grant{iam.GrantTracker},
+		Grants: []iam.Grant{iam.GrantWorklet},
 	}
 	entry, ok := reg.Lookup(name)
 	if !ok {

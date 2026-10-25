@@ -264,7 +264,7 @@ func TestAnEditStopsAtAStepNobodyCanConfirm(t *testing.T) {
 	stage := iam.StageSuspended
 	got := r.as(administrator(), http.MethodPatch, "/iam/people/"+bob.String(),
 		map[string]any{"seat": "platform", "stage": stage,
-			"grants": []iam.Grant{iam.GrantTracker}})
+			"grants": []iam.Grant{iam.GrantWorklet}})
 	if got.status != http.StatusServiceUnavailable {
 		t.Fatalf("answered %d (%v), want 503", got.status, got.body)
 	}

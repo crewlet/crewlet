@@ -132,7 +132,7 @@
 // # Admin, and one permission per app (ADR-0033)
 //
 // The vocabulary is admin and the apps ([iam.Grant]): `admin`, which runs the
-// company and the engine, and one permission per APP (`tracker`, `knowledge`
+// company and the engine, and one permission per APP (`worklet`, `doclet`
 // and `artifacts`), which uses it. Every row names at most one app
 // ([rule.app]), and that decides three things at once: a [ClassApp] row admits whoever holds the app;
 // a RELATION row — a person's own record, a container's lead, a comment's

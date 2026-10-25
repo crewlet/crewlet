@@ -69,7 +69,7 @@ func TestALeadNamesAReportTheWayAModelTypesThem(t *testing.T) {
 	company := &org.Organization{Name: "Nimbus", Roles: []*org.Role{dev, lead, ops}}
 	caller := iam.WithPrincipal(context.Background(), iam.Principal{
 		ID: uuid.New(), Kind: iam.KindPerson, Login: "lead.person", Seat: "lead",
-		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantTracker},
+		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantWorklet},
 	})
 
 	for _, c := range []struct {

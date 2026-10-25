@@ -247,12 +247,12 @@ api:
         # 26 characters at minimum, checked on what the ${VAR} resolves to.
         # Generate one with `crewlet secrets keygen`.
         token: "${CREWLET_API_TOKEN_FOUNDER}"
-        # What this credential may do: `admin`, `tracker`, `knowledge`,
+        # What this credential may do: `admin`, `worklet`, `doclet`,
         # `artifacts`.
         # Required and non-empty: a credential's blast radius is stated
         # where it is pinned, never inferred.  This one is the founder's,
         # so it is admin, which includes every app.  A pipeline that only
-        # files work would be `[tracker]`.
+        # files work would be `[worklet]`.
         grants: [admin]
 
 # ── The keyring (REQUIRED) ────────────────────────────────────────────

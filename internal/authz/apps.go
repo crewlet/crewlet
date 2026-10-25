@@ -26,9 +26,9 @@ import (
 func AppFor(k ObjectKind) iam.Grant {
 	switch k {
 	case KindTask, KindProject, KindView:
-		return iam.GrantTracker
+		return iam.GrantWorklet
 	case KindPage, KindContainer:
-		return iam.GrantKnowledge
+		return iam.GrantDoclet
 	}
 	return ""
 }

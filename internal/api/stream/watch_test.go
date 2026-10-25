@@ -280,7 +280,7 @@ func newWatchSocketOver(t *testing.T, chart authz.Chart, holders iam.Holders,
 		id := strings.TrimPrefix(login, "token:")
 		b.API.Auth.Tokens = append(b.API.Auth.Tokens, config.APIToken{
 			ID: id, Token: id + "-token-long-enough-to-pass",
-			Grants: []iam.Grant{iam.GrantTracker},
+			Grants: []iam.Grant{iam.GrantWorklet},
 		})
 	}
 	b.API.Auth.Tokens = append(b.API.Auth.Tokens, extra...)

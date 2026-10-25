@@ -833,7 +833,7 @@ func TestAReadThisNodeCannotServeYetIsUnavailableRatherThanFailed(t *testing.T) 
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Work: work})
 
-	_, err := r.Answer(asGrants(t, "", iam.GrantTracker), "work_items", map[string]any{})
+	_, err := r.Answer(asGrants(t, "", iam.GrantWorklet), "work_items", map[string]any{})
 	if !errors.Is(err, queries.ErrUnavailable) {
 		t.Fatalf("a node that is behind answered %v — a read refusal that "+
 			"reaches a client as a plain failure is rendered as a broken "+
@@ -878,7 +878,7 @@ func TestAFloorOnAnotherLogIsBadParamsAndARebuiltStreamIsNot(t *testing.T) {
 			t.Parallel()
 			r := queries.NewRegistry()
 			queries.Register(r, queries.Sources{Work: &stubWork{err: tc.err}})
-			_, err := r.Answer(asGrants(t, "", iam.GrantTracker), "work_items",
+			_, err := r.Answer(asGrants(t, "", iam.GrantWorklet), "work_items",
 				map[string]any{})
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("answered %v, want %v", err, tc.want)
@@ -964,7 +964,7 @@ func TestARefusalWaitingCannotClearIsUnavailableWithNoHint(t *testing.T) {
 			r := queries.NewRegistry()
 			queries.Register(r, queries.Sources{Work: &stubWork{err: refused}})
 
-			_, err := r.Answer(asGrants(t, "", iam.GrantTracker), "work_items",
+			_, err := r.Answer(asGrants(t, "", iam.GrantWorklet), "work_items",
 				map[string]any{})
 			if !errors.Is(err, queries.ErrUnavailable) {
 				t.Fatalf("a read refused %s answered %v, want %v — it is this "+
@@ -989,7 +989,7 @@ func TestARefusalAboutTheRequestIsNeverReclassifiedAsUnavailable(t *testing.T) {
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Work: work})
 
-	_, err := r.Answer(asGrants(t, "", iam.GrantTracker), "work_items", map[string]any{})
+	_, err := r.Answer(asGrants(t, "", iam.GrantWorklet), "work_items", map[string]any{})
 	if !errors.Is(err, queries.ErrBadParams) {
 		t.Fatalf("err = %v, want ErrBadParams", err)
 	}
@@ -1286,7 +1286,7 @@ func TestPinnedCountsReachTheReaderOnlyForARecord(t *testing.T) {
 
 	w = &stubWork{}
 	nobody := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson,
-		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantTracker}}
+		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantWorklet}}
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Work: w})
 	if _, err := r.Answer(iam.WithPrincipal(t.Context(), nobody), "work_views",
@@ -1914,7 +1914,7 @@ func TestEverySavedViewIsTheCallersAndCountedOnlyForARecord(t *testing.T) {
 
 	w = &stubWork{}
 	nobody := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson,
-		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantTracker}}
+		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantWorklet}}
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Work: w})
 	if _, err := r.Answer(iam.WithPrincipal(t.Context(), nobody), "work_saved_views",
@@ -1963,7 +1963,7 @@ func TestAnAskedPersonReadsTheItemWithoutTheTracker(t *testing.T) {
 
 	// A TRACKER HOLDER, decided before the item is read.
 	holder := &stubWork{detail: item, asks: map[string]string{}}
-	if _, err := ask(holder, asSeat(t, "bo", iam.GrantTracker)); err != nil {
+	if _, err := ask(holder, asSeat(t, "bo", iam.GrantWorklet)); err != nil {
 		t.Fatalf("a tracker holder was refused: %v", err)
 	}
 	if len(holder.threadAsked) != 0 {
@@ -1994,15 +1994,15 @@ func TestAnAskedPersonReadsTheItemWithoutTheTracker(t *testing.T) {
 		_, err := ask(&stubWork{err: worklet.ErrNoTask}, asSeat(t, "bo"))
 		return err
 	}())
-	if !slices.Equal(notAsked.Grants, []iam.Grant{iam.GrantTracker}) {
-		t.Errorf("a person not asked was refused naming %v, want [tracker]", notAsked.Grants)
+	if !slices.Equal(notAsked.Grants, []iam.Grant{iam.GrantWorklet}) {
+		t.Errorf("a person not asked was refused naming %v, want [worklet]", notAsked.Grants)
 	}
 	if missing.What != notAsked.What || missing.Reason != notAsked.Reason ||
 		!slices.Equal(missing.Grants, notAsked.Grants) {
 		t.Errorf("a missing item was refused %+v and an item not asked on %+v — "+
 			"the difference says which keys exist", missing, notAsked)
 	}
-	if _, err := ask(&stubWork{err: worklet.ErrNoTask}, asSeat(t, "bo", iam.GrantTracker)); !errors.Is(
+	if _, err := ask(&stubWork{err: worklet.ErrNoTask}, asSeat(t, "bo", iam.GrantWorklet)); !errors.Is(
 		err, queries.ErrNotFound) {
 		t.Errorf("a missing item asked by a tracker holder = %v, want not found", err)
 	}

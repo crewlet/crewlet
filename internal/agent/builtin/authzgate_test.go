@@ -148,8 +148,8 @@ func TestNoSeatOnlyVerbIsOfferedToAPerson(t *testing.T) {
 func TestEveryAppRowHasItsKindsApp(t *testing.T) {
 	t.Parallel()
 	for app, names := range map[iam.Grant][]string{
-		iam.GrantTracker:   append(builtin.WorkTools(), worklet.OperatorOnlyTools()...),
-		iam.GrantKnowledge: append(builtin.PageTools(), builtin.SearchKnowledgeTool),
+		iam.GrantWorklet: append(builtin.WorkTools(), worklet.OperatorOnlyTools()...),
+		iam.GrantDoclet:  append(builtin.PageTools(), builtin.SearchKnowledgeTool),
 	} {
 		for _, name := range names {
 			got, known := authz.AppOf(authz.Action(name))

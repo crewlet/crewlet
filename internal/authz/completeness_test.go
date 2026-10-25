@@ -295,7 +295,7 @@ func TestAnUndecidableRequestIsNotAForbiddenOne(t *testing.T) {
 // undecidable arm.
 func TestTheRoutersOwnRefusalIsTheEnvelope(t *testing.T) {
 	t.Parallel()
-	refused := authz.Decide(t.Context(), grantedOnly(iam.GrantTracker),
+	refused := authz.Decide(t.Context(), grantedOnly(iam.GrantWorklet),
 		authz.ActionConfigWrite, authz.Object{Kind: authz.KindCompany}, authz.NoChart{}, decidedAt)
 	if refused.Allowed || refused.Unknown() {
 		t.Fatalf("the fixture decision was %+v, want a plain refusal", refused)
@@ -482,7 +482,7 @@ func TestTheContextGuardDecidesAnUnresolvedCallerAsUnknown(t *testing.T) {
 
 	self := guard(request(func(r *http.Request) *http.Request {
 		return r.WithContext(iam.WithPrincipal(r.Context(),
-			person("jane.doe", iam.GrantTracker)))
+			person("jane.doe", iam.GrantWorklet)))
 	}), policy)
 	if !self.Allowed || self.Reason != authz.ReasonSelf {
 		t.Errorf("the owner of the record decided %+v, want admitted as self", self)

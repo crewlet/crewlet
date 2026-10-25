@@ -121,7 +121,7 @@ func TestABindingToAPerRecordQuestionIsRefused(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "work_items") {
 		t.Fatalf("a per-record question was bound: %v", err)
 	}
-	q.postures["work_items"] = queries.Requires(iam.GrantTracker)
+	q.postures["work_items"] = queries.Requires(iam.GrantWorklet)
 	if _, err := New(Options{Boards: nopBoards{}, Chart: authz.NoChart{}, Questions: q, Data: nopData{}}); err != nil {
 		t.Fatalf("a grant-decided question is bound: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestMineIsTheViewersOwnRecord(t *testing.T) {
 // so a grant revoked, a seat rebound or a stage suspended is a new key at once.
 func TestThePrincipalKeyChangesWithEveryAuthorityFact(t *testing.T) {
 	base := iam.Principal{ID: uuid.New(), Login: "ana.lee", Kind: iam.KindPerson, Seat: "ana",
-		Grants: []iam.Grant{iam.GrantTracker}, Position: "eng", Stage: iam.StageActive}
+		Grants: []iam.Grant{iam.GrantWorklet}, Position: "eng", Stage: iam.StageActive}
 	k := principalKey(base)
 	for name, change := range map[string]func(p *iam.Principal){
 		"id":       func(p *iam.Principal) { p.ID = uuid.New() },
@@ -163,7 +163,7 @@ func TestThePrincipalKeyChangesWithEveryAuthorityFact(t *testing.T) {
 		}
 	}
 	reordered := base
-	reordered.Grants = []iam.Grant{iam.GrantTracker, iam.GrantTracker}
+	reordered.Grants = []iam.Grant{iam.GrantWorklet, iam.GrantWorklet}
 	if principalKey(reordered) != k {
 		t.Error("the same effective grants made a second key")
 	}

@@ -91,7 +91,7 @@ func auditedApp(t *testing.T, taker *fakeBackup) (*api.App, *recordedAudit) {
 	b := config.DefaultBootstrap()
 	authorize(&b, config.APIToken{ID: "founder", Token: "founder-secret"},
 		config.APIToken{ID: "ci", Token: "ci-secret",
-			Grants: []iam.Grant{iam.GrantKnowledge}})
+			Grants: []iam.Grant{iam.GrantDoclet}})
 	operators, err := operator.New(operator.Options{
 		Halves: func() (operator.Halves, bool) {
 			return operator.Halves{Work: builtin.WorkDeps{

@@ -44,9 +44,9 @@ func TestALeadReadsAReportsInboxThroughTheApp(t *testing.T) {
 	// have and the tracker is what they lack.
 	authorize(&b,
 		config.APIToken{ID: "lead", Token: token,
-			Grants: []iam.Grant{iam.GrantTracker}},
+			Grants: []iam.Grant{iam.GrantWorklet}},
 		config.APIToken{ID: "lead-without-tracker", Token: noTracker,
-			Grants: []iam.Grant{iam.GrantKnowledge}})
+			Grants: []iam.Grant{iam.GrantDoclet}})
 	// Both leads' tokens are bound to seat ana, the way `crewlet iam bind`
 	// binds them — the fakes are the inbox test's.
 	seats := map[string]string{
@@ -106,7 +106,7 @@ func TestARefusedPersonalQuestionNamesItsReasonAndItsGrants(t *testing.T) {
 	const token = "a-colleague-holding-the-tracker-and-nothing-else"
 	b := config.DefaultBootstrap()
 	authorize(&b, config.APIToken{ID: "colleague", Token: token,
-		Grants: []iam.Grant{iam.GrantTracker}})
+		Grants: []iam.Grant{iam.GrantWorklet}})
 	a := newApp(t, api.Options{
 		Bootstrap: &b,
 		SeatBindings: auth.SeatBindings{

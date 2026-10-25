@@ -40,8 +40,8 @@ import (
 var (
 	founder   = person("jane.founder", "jane-founder", iam.Apps...)
 	cofounder = person("kim.cofounder", "kim-cofounder", iam.Apps...)
-	pipeline  = machine("token:ci", iam.GrantTracker)
-	reader    = machine("token:reader", iam.GrantKnowledge)
+	pipeline  = machine("token:ci", iam.GrantWorklet)
+	reader    = machine("token:reader", iam.GrantDoclet)
 )
 
 // company is the chart the cases run in: the two people's seats, and an agent.
@@ -239,7 +239,7 @@ func TestAnActTheTableRefusesIsAnsweredInTheEnvelope(t *testing.T) {
 		t.Fatalf("a reader's create answered %d %v, want 403 unauthorized", status, answer)
 	}
 	grants, _ := answer["grants"].([]any)
-	if answer["reason"] == nil || !slices.Contains(grants, any(string(iam.GrantTracker))) {
+	if answer["reason"] == nil || !slices.Contains(grants, any(string(iam.GrantWorklet))) {
 		t.Errorf("the refusal %v does not name its reason and the grant that "+
 			"would have admitted the caller", answer)
 	}

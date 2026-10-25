@@ -101,7 +101,7 @@ func callAs(t *testing.T, tool tools.Callable, p iam.Principal,
 func refusedForTracker(got tools.Result) bool {
 	var refused *builtin.DecisionRefused
 	return got.Failed && errors.As(got.Cause, &refused) &&
-		slices.Equal(refused.Decision.Grants, []iam.Grant{iam.GrantTracker})
+		slices.Equal(refused.Decision.Grants, []iam.Grant{iam.GrantWorklet})
 }
 
 // SOMEBODY WITHOUT THE TRACKER READS THE ITEM THEY WERE ASKED ON, AND ANSWERS.
@@ -189,7 +189,7 @@ func TestAnAskedPersonMayOnlyAnswer(t *testing.T) {
 
 	// THE CONTROL: a tracker holder asks a question on the same item.
 	surface, trk := askedRig(t)
-	if got := callAs(t, surface[worklet.CommentOnWorkTool], boundTo("pm", iam.GrantTracker),
+	if got := callAs(t, surface[worklet.CommentOnWorkTool], boundTo("pm", iam.GrantWorklet),
 		map[string]any{"item": "ENG-1", "body": "Who signs off?", "ask": "agent-cto"}); got.Failed {
 		t.Fatalf("a tracker holder was refused a question: %s", got.Output)
 	}
@@ -234,7 +234,7 @@ func TestAMissingItemAndAnItemYouWereNotAskedOnAreOneRefusal(t *testing.T) {
 	if len(trk.patched) != 0 {
 		t.Errorf("a refused caller wrote %d patches", len(trk.patched))
 	}
-	holder := callAs(t, surface[worklet.GetWorkItemTool], boundTo("pm", iam.GrantTracker),
+	holder := callAs(t, surface[worklet.GetWorkItemTool], boundTo("pm", iam.GrantWorklet),
 		map[string]any{"item": "ENG-404"})
 	if !holder.Failed || tools.RefusalOf(holder) != tools.RefusalNotFound {
 		t.Errorf("a tracker holder asking for a missing item = %+v, want not found", holder)
@@ -270,7 +270,7 @@ func TestAProbeThatCannotReadHasFoundNothingEitherWay(t *testing.T) {
 	if len(trk.patched) != 0 {
 		t.Errorf("a call whose probe could not read wrote %d patches", len(trk.patched))
 	}
-	if got := callAs(t, surface[worklet.GetWorkItemTool], boundTo("pm", iam.GrantTracker),
+	if got := callAs(t, surface[worklet.GetWorkItemTool], boundTo("pm", iam.GrantWorklet),
 		map[string]any{"item": "ENG-1"}); got.Failed {
 		t.Errorf("a tracker holder, who needs no probe, was stopped by one: %s", got.Output)
 	}
@@ -311,7 +311,7 @@ func tidyRig(t *testing.T, chart authz.Chart) (map[string]tools.Callable, *trash
 func TestAReporterRemovesAndRestoresTheirOwnItem(t *testing.T) {
 	t.Parallel()
 	surface, spy := tidyRig(t, chartRefuses)
-	ana := boundTo("ana", iam.GrantTracker)
+	ana := boundTo("ana", iam.GrantWorklet)
 	for _, tool := range []string{worklet.RemoveWorkItemTool, worklet.RestoreWorkItemTool} {
 		if got := callAs(t, surface[tool], ana, map[string]any{"item": "ENG-1"}); got.Failed {
 			t.Fatalf("the reporter was refused %s: %s", tool, got.Output)
@@ -327,8 +327,8 @@ func TestAReporterRemovesAndRestoresTheirOwnItem(t *testing.T) {
 	}
 
 	for name, caller := range map[string]iam.Principal{
-		"a colleague who did not file it":  boundTo("sam", iam.GrantTracker),
-		"the reporter without the tracker": boundTo("ana", iam.GrantKnowledge),
+		"a colleague who did not file it":  boundTo("sam", iam.GrantWorklet),
+		"the reporter without the tracker": boundTo("ana", iam.GrantDoclet),
 	} {
 		for _, tool := range []string{worklet.RemoveWorkItemTool, worklet.RestoreWorkItemTool} {
 			got := callAs(t, surface[tool], caller, map[string]any{"item": "ENG-1"})
@@ -340,7 +340,7 @@ func TestAReporterRemovesAndRestoresTheirOwnItem(t *testing.T) {
 
 	// A LEAD RESTORES THE WHOLE GESTURE, as ever.
 	leads, spy := tidyRig(t, chartLeads)
-	if got := callAs(t, leads[worklet.RestoreWorkItemTool], boundTo("sam", iam.GrantTracker),
+	if got := callAs(t, leads[worklet.RestoreWorkItemTool], boundTo("sam", iam.GrantWorklet),
 		map[string]any{"item": "ENG-1"}); got.Failed || spy.alone {
 		t.Errorf("a project lead's restore = %+v, alone %v — want the whole gesture",
 			got, spy.alone)
@@ -358,7 +358,7 @@ func TestAReporterRemovesAndRestoresTheirOwnItem(t *testing.T) {
 func TestAnAuthorMayNotRemoveASubtree(t *testing.T) {
 	t.Parallel()
 	surface, spy := tidyRig(t, chartRefuses)
-	ana := boundTo("ana", iam.GrantTracker)
+	ana := boundTo("ana", iam.GrantWorklet)
 	got := callAs(t, surface[worklet.RemoveWorkItemTool], ana,
 		map[string]any{"item": "ENG-1", "subtree": true})
 	var refused *builtin.DecisionRefused
@@ -387,7 +387,7 @@ func TestAnAuthorMayNotRemoveASubtree(t *testing.T) {
 	}
 
 	leads, spy := tidyRig(t, chartLeads)
-	if got := callAs(t, leads[worklet.RemoveWorkItemTool], boundTo("sam", iam.GrantTracker),
+	if got := callAs(t, leads[worklet.RemoveWorkItemTool], boundTo("sam", iam.GrantWorklet),
 		map[string]any{"item": "ENG-1", "subtree": true}); got.Failed || !spy.subtree {
 		t.Errorf("the project's lead could not remove the subtree: %+v", got)
 	}
@@ -456,9 +456,9 @@ func TestAPageCreatorRenamesTrashesAndRestoresIt(t *testing.T) {
 			caller iam.Principal
 			want   bool
 		}{
-			"the creator":                            {boundTo("ana", iam.GrantKnowledge), true},
-			"somebody else":                          {boundTo("sam", iam.GrantKnowledge), false},
-			"the creator without the knowledge base": {boundTo("ana", iam.GrantTracker), false},
+			"the creator":                            {boundTo("ana", iam.GrantDoclet), true},
+			"somebody else":                          {boundTo("sam", iam.GrantDoclet), false},
+			"the creator without the knowledge base": {boundTo("ana", iam.GrantWorklet), false},
 		} {
 			d := authz.Decide(t.Context(), c.caller, action, builtin.PageObject(page),
 				chartRefuses, time.Now())

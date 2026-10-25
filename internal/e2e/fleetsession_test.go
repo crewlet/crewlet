@@ -139,7 +139,7 @@ const (
 // janeGrants are what the invitation confers: the tracker, to file work, and
 // nothing else — the socket is the overview, which is everybody's — so no
 // phase passes on a permission it did not ask for.
-var janeGrants = []iam.Grant{iam.GrantTracker}
+var janeGrants = []iam.Grant{iam.GrantWorklet}
 
 // signIn invites Jane under the deployment's Tier A token, redeems the link
 // and signs her in with her password, all on one member — which leaves her

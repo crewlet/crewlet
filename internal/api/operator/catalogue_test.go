@@ -125,7 +125,7 @@ func TestARetriedPageCommentCarriesItsOperation(t *testing.T) {
 		Pages: builtin.PageDeps{Reader: kb, Writer: kb},
 	})})
 	ctx := iam.WithPrincipal(t.Context(),
-		person("jane.founder", "jane-founder", iam.GrantKnowledge))
+		person("jane.founder", "jane-founder", iam.GrantDoclet))
 	args := map[string]any{"page": "Runbook", "body": "the step is wrong"}
 	key := statelog.NewOpID(time.Now(), "")
 	comment := func(key string) {
@@ -165,7 +165,7 @@ func TestARetriedPageCommentCarriesItsOperation(t *testing.T) {
 // after a ledger loss decides a second time.
 func TestTheWorkActorCarriesTheOperation(t *testing.T) {
 	t.Parallel()
-	ctx := iam.WithPrincipal(t.Context(), machine("token:founder", iam.GrantTracker))
+	ctx := iam.WithPrincipal(t.Context(), machine("token:founder", iam.GrantWorklet))
 	key := statelog.NewOpID(time.Now().Add(-time.Hour), "")
 	named, err := operator.WorkActor(operator.WithKey(ctx, key), nil)
 	if err != nil {

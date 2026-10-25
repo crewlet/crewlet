@@ -323,7 +323,7 @@ func TestLinkedFromTasksNeedTracker(t *testing.T) {
 		holding []iam.Grant
 		tasks   bool
 	}{
-		{"the knowledge base alone", []iam.Grant{iam.GrantKnowledge}, false},
+		{"the knowledge base alone", []iam.Grant{iam.GrantDoclet}, false},
 		{"both apps", iam.Apps, true},
 		{"an admin", []iam.Grant{iam.GrantAdmin}, true},
 	} {

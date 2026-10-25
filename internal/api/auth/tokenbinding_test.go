@@ -55,7 +55,7 @@ func tokenGuard(t *testing.T, bindings auth.SeatBindings) *auth.Guard {
 	t.Helper()
 	b := config.DefaultBootstrap()
 	b.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: opsToken,
-		Grants: []iam.Grant{iam.GrantTracker, iam.GrantKnowledge}}}
+		Grants: []iam.Grant{iam.GrantWorklet, iam.GrantDoclet}}}
 	b.API.Auth.Admin = iam.AdminServe
 	return auth.New(&b).BindSeats(bindings)
 }

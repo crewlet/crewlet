@@ -43,7 +43,7 @@ import (
 // comparison above is one that can fail.
 func TestOneRefusalWordingOnAllThreeSurfaces(t *testing.T) {
 	t.Parallel()
-	grants := []iam.Grant{iam.GrantKnowledge}
+	grants := []iam.Grant{iam.GrantDoclet}
 	r := newRig(t, chart{})
 	deps := r.halves().Work
 	args := map[string]any{"title": "rotate the key", "project": "ENG"}

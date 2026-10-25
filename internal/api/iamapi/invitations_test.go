@@ -47,7 +47,7 @@ func TestTheInvitationListingIsOpenUnlessAllIsAsked(t *testing.T) {
 	verifier := iamdomain.InvitationVerifier("the-link-secret")
 	r.directory.invitations = []iamdomain.InvitationRow{
 		{ID: "inv-open", Sealed: "sealed", Seat: "founder",
-			Grants: []iam.Grant{iam.GrantTracker}, InvitedBy: "alice.admin",
+			Grants: []iam.Grant{iam.GrantWorklet}, InvitedBy: "alice.admin",
 			ExpiresAt: at.Add(time.Hour), Verifier: verifier},
 		{ID: "inv-foreign", Sealed: "foreign", Seat: "sre",
 			ExpiresAt: at.Add(time.Hour)},

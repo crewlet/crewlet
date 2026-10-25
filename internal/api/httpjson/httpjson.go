@@ -1030,11 +1030,11 @@ var codes = map[Code]string{
 	// token", which was true while an operator token was the only credential
 	// and authority a single yes-or-no; a person signed in with a session
 	// and refused one permission was told to go and find a token. It NAMES
-	// THE THREE PERMISSIONS there are (ADR-0033), because a person reading it
-	// on a screen has to know what to ask an admin for, and the refusal's
+	// THE PERMISSIONS there are (ADR-0033), because a person reading it on a
+	// screen has to know what to ask an admin for, and the refusal's
 	// `grants` beside it says which one.
-	CodeUnauthorized: "You don't have the access this needs (Admin, Tracker, " +
-		"Knowledge or Artifacts). Ask an admin for it.",
+	CodeUnauthorized: "You don't have the access this needs (Admin, Worklet, " +
+		"Doclet or Artifacts). Ask an admin for it.",
 	CodeQueryFailed: "That query could not be answered. The reason is in " +
 		"this node's log.",
 	CodeNotFound:  "There is no such record here.",

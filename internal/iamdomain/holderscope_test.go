@@ -257,7 +257,7 @@ func TestARedemptionAndARemovalAreFiledUnderTheAddressTheyWrite(t *testing.T) {
 		_, err := nodeWriter(rig).Redeem(t.Context(), iamdomain.Redemption{
 			PersonID: person, Stage: iam.StageActive,
 			Name: "Sarah", Email: address, Login: iam.LoginFromAddress(address),
-			Password: aPassword(), Grants: []iam.Grant{iam.GrantTracker},
+			Password: aPassword(), Grants: []iam.Grant{iam.GrantWorklet},
 			Seat: seat, Invitation: issued.ID, InvitationSecret: issued.Secret,
 			OpID: "invite:" + issued.ID, Reason: "redeemed an invitation",
 		})

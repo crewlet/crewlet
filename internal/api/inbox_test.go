@@ -88,7 +88,7 @@ func TestInboxChangedReachesOnlyTheSocketsHoldingThatSeat(t *testing.T) {
 	// The tracker ALONE, the app the inbox question takes: a holder of
 	// admin may watch any seat, so a case about the routing would pass
 	// through a hole in the authority instead.
-	reader := []iam.Grant{iam.GrantTracker}
+	reader := []iam.Grant{iam.GrantWorklet}
 	authorize(&b,
 		config.APIToken{ID: "alice", Token: "alice-token-long-enough-to-pass", Grants: reader},
 		config.APIToken{ID: "bob", Token: "bob-token-long-enough-to-pass", Grants: reader},
@@ -169,7 +169,7 @@ func TestAGapInTheInboxFeedTellsEveryWatchedInboxToReadAgain(t *testing.T) {
 	t.Parallel()
 	feed := &fakeInbox{}
 	b := config.DefaultBootstrap()
-	reader := []iam.Grant{iam.GrantTracker}
+	reader := []iam.Grant{iam.GrantWorklet}
 	authorize(&b,
 		config.APIToken{ID: "alice", Token: "alice-token-long-enough-to-pass", Grants: reader},
 		config.APIToken{ID: "bob", Token: "bob-token-long-enough-to-pass", Grants: reader},

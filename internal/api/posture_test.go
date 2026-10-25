@@ -88,8 +88,8 @@ func TestThePostureMatrix(t *testing.T) {
 	b.API.Auth.Tokens = []config.APIToken{
 		{ID: "ops", Token: admin, Grants: []iam.Grant{iam.GrantAdmin}},
 		{ID: "colleague", Token: apps, Grants: slices.Clone(iam.Apps)},
-		{ID: "tracker", Token: tracks, Grants: []iam.Grant{iam.GrantTracker}},
-		{ID: "writer", Token: knows, Grants: []iam.Grant{iam.GrantKnowledge}},
+		{ID: "tracker", Token: tracks, Grants: []iam.Grant{iam.GrantWorklet}},
+		{ID: "writer", Token: knows, Grants: []iam.Grant{iam.GrantDoclet}},
 	}
 	// THE SAME TIER A ON A NODE THAT REFUSES ADMIN — the node mid-rollout
 	// whose posture is not the one the document was validated against, so
@@ -435,7 +435,7 @@ func postureTokens(t *testing.T) postureMachine {
 		Stage: iam.StageActive, Login: "svc:deploy", Grants: admin,
 	}
 	out := postureMachine{
-		pat:     mint(person, []iam.Grant{iam.GrantTracker}, time.Time{}),
+		pat:     mint(person, []iam.Grant{iam.GrantWorklet}, time.Time{}),
 		service: mint(service, admin, time.Time{}),
 		revoked: mint(person, admin, now.Add(-time.Minute)),
 	}

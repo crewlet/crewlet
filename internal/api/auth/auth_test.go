@@ -726,8 +726,8 @@ func TestATierATokenCarriesWhatTheNodesAdminPostureAllows(t *testing.T) {
 	}{
 		{iam.AdminServe, []iam.Grant{iam.GrantAdmin}, every},
 		{iam.AdminRefuse, []iam.Grant{iam.GrantAdmin}, apps},
-		{iam.AdminServe, []iam.Grant{iam.GrantTracker}, []iam.Grant{iam.GrantTracker}},
-		{iam.AdminRefuse, []iam.Grant{iam.GrantTracker}, []iam.Grant{iam.GrantTracker}},
+		{iam.AdminServe, []iam.Grant{iam.GrantWorklet}, []iam.Grant{iam.GrantWorklet}},
+		{iam.AdminRefuse, []iam.Grant{iam.GrantWorklet}, []iam.Grant{iam.GrantWorklet}},
 		{"sometimes", []iam.Grant{iam.GrantAdmin}, []iam.Grant{}},
 	} {
 		g := guard(t, func(a *config.APIAuth) {

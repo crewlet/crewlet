@@ -142,7 +142,7 @@ func list(t *testing.T, sess *mcp.ClientSession) (bool, string) {
 func TestAGrantWithdrawnMidSessionStopsTheNextCall(t *testing.T) {
 	t.Parallel()
 	dir := &directory{people: map[string]iam.Principal{
-		"ops": machine("token:ops", iam.GrantTracker),
+		"ops": machine("token:ops", iam.GrantWorklet),
 	}}
 	server := operatorServer(t, dir)
 	sess := connectAs(t, server.URL+operator.MCPPath, "ops")
@@ -150,7 +150,7 @@ func TestAGrantWithdrawnMidSessionStopsTheNextCall(t *testing.T) {
 	if refused, out := list(t, sess); refused {
 		t.Fatalf("a credential holding the tracker was refused the board: %s", out)
 	}
-	dir.set("ops", machine("token:ops", iam.GrantKnowledge))
+	dir.set("ops", machine("token:ops", iam.GrantDoclet))
 	refused, out := list(t, sess)
 	if !refused {
 		t.Fatalf("the board was served after the tracker was withdrawn, on the "+
@@ -164,7 +164,7 @@ func TestAGrantWithdrawnMidSessionStopsTheNextCall(t *testing.T) {
 
 	// AND RESTORED, so the refusal above is the grant and not a session
 	// that simply stopped working.
-	dir.set("ops", machine("token:ops", iam.GrantTracker))
+	dir.set("ops", machine("token:ops", iam.GrantWorklet))
 	if refused, out := list(t, sess); refused {
 		t.Fatalf("the board was refused after the tracker came back: %s", out)
 	}
@@ -180,7 +180,7 @@ func TestAGrantWithdrawnMidSessionStopsTheNextCall(t *testing.T) {
 func TestAnotherCredentialCannotRideTheOpenersSession(t *testing.T) {
 	t.Parallel()
 	dir := &directory{people: map[string]iam.Principal{
-		"founder":  machine("token:founder", iam.GrantTracker),
+		"founder":  machine("token:founder", iam.GrantWorklet),
 		"stranger": machine("token:stranger"),
 	}}
 	server := operatorServer(t, dir)
@@ -240,7 +240,7 @@ func TestAnotherCredentialCannotRideTheOpenersSession(t *testing.T) {
 func TestTheOperatorSurfaceServesOnlyPOST(t *testing.T) {
 	t.Parallel()
 	dir := &directory{people: map[string]iam.Principal{}}
-	dir.set("ops", machine("token:ops", iam.GrantTracker))
+	dir.set("ops", machine("token:ops", iam.GrantWorklet))
 	server := operatorServer(t, dir)
 	for _, method := range []string{http.MethodGet, http.MethodDelete} {
 		req, err := http.NewRequestWithContext(t.Context(), method, server.URL, nil)
@@ -274,7 +274,7 @@ func TestTheOperatorSurfaceServesOnlyPOST(t *testing.T) {
 func TestAnArgumentTheToolDoesNotReadIsRefusedOverMCP(t *testing.T) {
 	t.Parallel()
 	dir := &directory{people: map[string]iam.Principal{
-		"ops": machine("token:ops", iam.GrantTracker),
+		"ops": machine("token:ops", iam.GrantWorklet),
 	}}
 	server := operatorServer(t, dir)
 	sess := connectAs(t, server.URL+operator.MCPPath, "ops")

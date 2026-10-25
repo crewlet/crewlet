@@ -271,8 +271,8 @@ func TestSummaries(t *testing.T) {
 		want:    "jane.doe set their first password",
 	}, {
 		name:    "a grant change lists both directions",
-		payload: IAMGrantsChanged{Person: "p-1", Added: []string{"admin"}, Removed: []string{"tracker", "knowledge"}},
-		want:    "Access for p-1 changed: +admin; -tracker, -knowledge",
+		payload: IAMGrantsChanged{Person: "p-1", Added: []string{"admin"}, Removed: []string{"worklet", "doclet"}},
+		want:    "Access for p-1 changed: +admin; -worklet, -doclet",
 	}, {
 		name:    "a skip names the seat and the reason",
 		payload: NotificationSkipped{Handle: "swe", Reason: "human seat", NotificationSource: "jira"},
