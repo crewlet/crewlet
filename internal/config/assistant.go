@@ -22,6 +22,11 @@ import (
 //	  proposal_ttl_seconds: 900     # 60..3600
 //	  retention_days: 30            # 1..365
 //	  token_budget: { day: 200000 } # per person, optional
+//	  deep_work:                    # optional; absent means quick mode only
+//	    llm: assistant-deep         # an agent-mode providers.llm key
+//	    timeout_seconds: 1200       # 60..1200
+//	    max_steps: 150              # 10..400
+//	    max_tokens: 3000000         # 10000..20000000
 //
 // # Off unless a person turns it on
 //
@@ -65,6 +70,35 @@ type Assistant struct {
 	// TokenBudget is each PERSON's ceiling per calendar window, in the shape
 	// a seat's budget takes, charged on top of the company's own.
 	TokenBudget TokenBudget `yaml:"token_budget,omitempty" json:"token_budget,omitzero" desc:"Each person's assistant token ceilings per calendar window on the company clock: day, week and month, each optional. Absent = no per-person ceiling; the company's own budget still applies."`
+
+	// DeepWork is the assistant's escalation into a coding CLI's own
+	// harness for a task that needs research, scripts, files or many steps
+	// (ADR-0053). Absent: the assistant answers in quick mode only.
+	DeepWork *AssistantDeepWork `yaml:"deep_work,omitempty" json:"deep_work,omitempty" desc:"Deep work: the assistant hands a large task to a coding CLI running its own tools in a sandbox, reaching Crewlet only through the person's own assistant tools. Absent: quick mode only."`
+}
+
+// AssistantDeepWork is the `assistant.deep_work` block.
+//
+// # A coding CLI with its own tools, never on the engine unconfined
+//
+// The entry it names runs in AGENT MODE: the CLI's shell, files, web search
+// and image reading are the point. Its one way into Crewlet is the person's
+// own assistant tools, bridged, so every read is still the person's request
+// and every write still a proposal they approve. Where it runs is the entry's
+// own `run_in`, else the first of e2b and container this company configures,
+// else the engine host under OS confinement, which a host that cannot enforce
+// one refuses rather than run open (internal/sandbox's confinement).
+//
+// # Every numeric zero is its default
+//
+// As in the block around it: zero lies outside every range, so it reads as
+// the default without a pointer, and a stored value out of range is clamped
+// by its accessor.
+type AssistantDeepWork struct {
+	LLM            string `yaml:"llm,omitempty" json:"llm,omitempty" desc:"providers.llm key deep work runs on: an agent-mode entry driving claude-code or opencode. Required."`
+	TimeoutSeconds int    `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty" js:"min=0;max=1200" desc:"Longest one deep-work run may take, 60..1200 seconds. Absent: 1200."`
+	MaxSteps       int    `yaml:"max_steps,omitempty" json:"max_steps,omitempty" js:"min=0;max=400" desc:"Most agentic rounds and Crewlet tool calls one deep-work run may make, 10..400. Absent: 150."`
+	MaxTokens      int    `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty" js:"min=0;max=20000000" desc:"Most tokens one deep-work run may spend before it is stopped, 10000..20000000. Absent: 3000000. The person's and the company's budgets still apply."`
 }
 
 // assistantBound is one numeric field's range and the default its zero reads as.
@@ -95,6 +129,27 @@ type assistantBound struct {
 //     enough that what was previewed is still what the write meets.
 //   - retention_days: a month of history by default, a year at most, because
 //     a transcript holds whatever the person's reads returned.
+//
+// And deep work's three, anchored the same way:
+//
+//   - timeout_seconds: a run lives inside one turn segment, whose read grant
+//     lives at most [AssistantTurnTimeoutCeiling], so twenty minutes is both
+//     the default and the ceiling: a run past it would call out on a grant
+//     that has ended. A run that needs longer parks on a proposal and is
+//     continued on the fresh grant its approval derives. One minute is a run
+//     that installs the CLI and reads one page.
+//   - max_steps: a redesign that reads a brand, writes assets, renders and
+//     checks them takes a hundred-odd agentic rounds; four hundred is the
+//     most a twenty-minute run can make at the CLI's three-second round.
+//   - max_tokens: a hundred and fifty rounds re-reading a growing context
+//     are about three million tokens, most of them cache reads; twenty
+//     million bounds a run nobody meant.
+var (
+	deepTimeout = assistantBound{key: "timeout_seconds", min: 60, max: AssistantTurnTimeoutCeiling, def: AssistantTurnTimeoutCeiling, unit: "seconds"}
+	deepSteps   = assistantBound{key: "max_steps", min: 10, max: 400, def: 150, unit: "steps"}
+	deepTokens  = assistantBound{key: "max_tokens", min: 10_000, max: 20_000_000, def: 3_000_000, unit: "tokens"}
+)
+
 var (
 	assistantSteps     = assistantBound{key: "max_steps", min: 1, max: 40, def: 30, unit: "steps"}
 	assistantTimeout   = assistantBound{key: "turn_timeout_seconds", min: 30, max: AssistantTurnTimeoutCeiling, def: 900, unit: "seconds"}
@@ -154,7 +209,92 @@ func (a Assistant) Retention() time.Duration {
 // IsZero lets an unset block drop out of a JSON round trip.
 func (a Assistant) IsZero() bool {
 	return a.Enabled == nil && len(a.LLM) == 0 && a.MaxSteps == 0 && a.TurnTimeoutSeconds == 0 &&
-		a.ProposalTTLSeconds == 0 && a.RetentionDays == 0 && a.TokenBudget == (TokenBudget{})
+		a.ProposalTTLSeconds == 0 && a.RetentionDays == 0 && a.TokenBudget == (TokenBudget{}) &&
+		a.DeepWork == nil
+}
+
+// Timeout is the longest one deep-work run may take.
+func (d AssistantDeepWork) Timeout() time.Duration {
+	return time.Duration(deepTimeout.value(d.TimeoutSeconds)) * time.Second
+}
+
+// Steps is the most agentic rounds and bridged calls one run may make.
+func (d AssistantDeepWork) Steps() int { return deepSteps.value(d.MaxSteps) }
+
+// Tokens is the most tokens one run may spend.
+func (d AssistantDeepWork) Tokens() int { return deepTokens.value(d.MaxTokens) }
+
+// ErrDeepWorkOff is what [Company.AssistantDeepWork] answers for a company
+// whose assistant has no deep work.
+var ErrDeepWorkOff = errors.New("the assistant has no deep work: set assistant.deep_work.llm " +
+	"to an agent-mode providers.llm entry")
+
+// AssistantDeepWork is the providers.llm entry deep work runs on and its key,
+// or why there is none: [ErrAssistantOff], [ErrDeepWorkOff], or the problems
+// admission reports for the block. THE ONE PLACE IT IS HANDED OUT, for the
+// reason [Company.AssistantChain] is.
+func (c *Company) AssistantDeepWork() (string, LLMProvider, error) {
+	if !c.Assistant.On() {
+		return "", LLMProvider{}, ErrAssistantOff
+	}
+	d := c.Assistant.DeepWork
+	if d == nil || d.LLM == "" {
+		return "", LLMProvider{}, ErrDeepWorkOff
+	}
+	if err := c.deepWorkProblems(at(field("assistant"), "deep_work")); err != nil {
+		return "", LLMProvider{}, err
+	}
+	return d.LLM, c.Providers.LLM[d.LLM], nil
+}
+
+// deepWorkProblems reports every way `assistant.deep_work` cannot run: no
+// entry, an unknown one, one not in agent mode, a CLI no sandbox runner
+// drives, or a run_in this company configures no backend for.
+func (c *Company) deepWorkProblems(path Path) error {
+	var p problems
+	d := c.Assistant.DeepWork
+	if d == nil {
+		return nil
+	}
+	for _, b := range []struct {
+		bound assistantBound
+		value int
+	}{
+		{deepTimeout, d.TimeoutSeconds},
+		{deepSteps, d.MaxSteps},
+		{deepTokens, d.MaxTokens},
+	} {
+		b.bound.check(path, b.value, &p)
+	}
+	llmPath := at(path, "llm")
+	if d.LLM == "" {
+		p.add(llmPath, ErrMissing, "deep work names no model: set it to a providers.llm "+
+			"key whose entry has mode: agent and agent: claude-code")
+		return p.err()
+	}
+	entry, ok := c.Providers.LLM[d.LLM]
+	if !ok {
+		p.add(llmPath, ErrUnknownValue, "%q is not a configured provider: providers.llm has %s",
+			d.LLM, strings.Join(slices.Sorted(maps.Keys(c.Providers.LLM)), ", "))
+		return p.err()
+	}
+	entryField := func(f string) Path { return at(entryPath(d.LLM), f) }
+	if !entry.AgentMode() {
+		p.add(llmPath, ErrConflict, "providers.llm.%s is in text mode, where the CLI has "+
+			"no tool of its own and deep work would be quick mode again: set %s: agent",
+			d.LLM, entryField("mode"))
+	}
+	if !slices.Contains(CodingAgents, CodingAgent(entry.AgentName())) {
+		p.add(llmPath, ErrConflict, "providers.llm.%s drives %s, which no sandbox runner "+
+			"drives: deep work runs %s", d.LLM, entry.AgentName(), names(CodingAgents))
+	}
+	if entry.RunIn != "" && entry.RunIn != PlacementDirect && !c.Providers.Sandbox.Configured(entry.RunIn) {
+		p.add(entryField("run_in"), ErrConflict, "deep work on providers.llm.%s runs in %s, "+
+			"which providers.sandbox configures no backend for: configure it, or remove "+
+			"run_in to take the first of e2b and container the company configures, else "+
+			"the engine host under confinement", d.LLM, entry.RunIn)
+	}
+	return p.err()
 }
 
 // ErrAssistantOff is what [Company.AssistantChain] answers for a company that
@@ -207,6 +347,7 @@ func (c *Company) validateAssistant() error {
 	if a.On() || len(a.LLM) > 0 {
 		p.wrap(c.assistantChainProblems(path))
 	}
+	p.wrap(c.deepWorkProblems(at(path, "deep_work")))
 	return p.err()
 }
 

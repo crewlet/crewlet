@@ -533,6 +533,8 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 		"TokenBudget": true, "MinTokensPerTask": true, "SandboxMinBudgetTokens": true,
 		// An embedding model's limits, counted in tokens.
 		"MaxInputTokens": true, "MaxBatchTokens": true,
+		// A deep-work run's cap on what it may spend, counted in tokens.
+		"MaxTokens": true,
 		// Scope NAMES minted onto a token, not the token.
 		"TokenScopes": true,
 	}
