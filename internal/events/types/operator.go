@@ -98,7 +98,28 @@ const (
 	// resource REST a CLI or a script writes through, which calls the
 	// same dispatch rather than the tools directly.
 	TransportWork = "work"
+	// TransportAssistant is the Dashboard Assistant carrying out a write the
+	// person approved: the act route reached in process under an exec grant
+	// derived from the approving request (ADR-0047). The record names the
+	// person, as every record the write left does; its [AssistantRef] says
+	// which conversation, turn, grant, session and proposal carried it.
+	TransportAssistant = "assistant"
 )
+
+// AssistantRef is what a write the Dashboard Assistant carried out was carried
+// by: the conversation and turn that proposed it, the grant it was sent under,
+// the browser session that grant was derived from, and the proposal the person
+// approved. Identifiers only; the conversation itself is sealed in its own
+// domain and never copied into the event log.
+type AssistantRef struct {
+	ConversationID string `json:"conversation_id"`
+	TurnID         string `json:"turn_id"`
+	GrantID        string `json:"grant_id"`
+	// Session is the credential the grant was derived from,
+	// `session:<lineage>`.
+	Session    string `json:"session"`
+	ProposalID string `json:"proposal_id,omitempty"`
+}
 
 // OperatorActed is one operator tool call that is not a proven read, on any
 // of the three transports: the dashboard's act route, an operator's assistant
@@ -143,6 +164,13 @@ type OperatorActed struct {
 	// Failed is stamped for `refused` and `failed`, so the event store
 	// tags the row and the log's failure filter finds it.
 	Failed bool `json:"failed,omitempty"`
+
+	// Assistant is set exactly when the call came through an assistant
+	// grant, and ConversationID beside it is its conversation at the top
+	// level, where the event store promotes it to a listing tag so the
+	// Audit log lists every write one conversation made.
+	Assistant      *AssistantRef `json:"assistant,omitempty"`
+	ConversationID string        `json:"conversation_id,omitempty"`
 }
 
 // EventType is the "operator_acted" wire type.
@@ -160,6 +188,10 @@ func (e OperatorActed) SummaryFor(actor string) string {
 // derived from the outcome rather than set beside it.
 func NewOperatorActed(e OperatorActed) OperatorActed {
 	e.Failed = e.Outcome.failed()
+	e.ConversationID = ""
+	if e.Assistant != nil {
+		e.ConversationID = e.Assistant.ConversationID
+	}
 	return e
 }
 
