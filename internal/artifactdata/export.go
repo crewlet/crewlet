@@ -2,7 +2,6 @@ package artifactdata
 
 import (
 	"context"
-	"encoding/csv"
 	"fmt"
 	"io"
 	"slices"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifactdata/canon"
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/tabular"
 )
 
 // THE CSV EXPORT of one collection: a header row naming the document id, every
@@ -25,6 +25,9 @@ import (
 // A CELL A SPREADSHEET WOULD RUN AS A FORMULA is written with a leading
 // apostrophe: a value somebody typed as `=HYPERLINK(...)` into a shared sheet
 // must not execute on the machine of whoever opens the export (CSV injection).
+// That rule is internal/tabular's, which every download the engine writes
+// goes through, so this export and the Dashboard Assistant's table downloads
+// cannot disagree about it.
 //
 // The export is read a page at a time, each page at the reading's level, so a
 // store being written while it is exported is exported as each page found it;
@@ -69,13 +72,13 @@ func Export(ctx context.Context, r ExportSource, id artifacts.ID, rd Reading, co
 	if names == nil {
 		names = func(handle string) string { return handle }
 	}
-	out := csv.NewWriter(w)
+	out := tabular.NewCSV(w)
 	header := []string{"ID"}
 	for _, k := range keys {
-		header = append(header, cell(columnTitle(coll, k)))
+		header = append(header, columnTitle(coll, k))
 	}
 	header = append(header, "Created by", "Created at", "Updated by", "Updated at", "Version")
-	if err := out.Write(header); err != nil {
+	if err := out.Write(tabular.Texts(header...)); err != nil {
 		return fmt.Errorf("artifactdata: write the export of %s: %w", collection, err)
 	}
 	cursor := ""
@@ -93,11 +96,10 @@ func Export(ctx context.Context, r ExportSource, id artifacts.ID, rd Reading, co
 				return fmt.Errorf("artifactdata: write the export of %s: %w", collection, err)
 			}
 		}
-		out.Flush()
-		if err := out.Error(); err != nil {
-			return fmt.Errorf("artifactdata: write the export of %s: %w", collection, err)
-		}
 		if page.After == "" {
+			if err := out.Close(); err != nil {
+				return fmt.Errorf("artifactdata: write the export of %s: %w", collection, err)
+			}
 			return nil
 		}
 		cursor = page.After
@@ -154,7 +156,7 @@ func columnTitle(c *collState, key string) string {
 }
 
 // exportRow is one document's CSV row.
-func exportRow(c *collState, keys []string, names Names, d Doc) ([]string, error) {
+func exportRow(c *collState, keys []string, names Names, d Doc) ([]tabular.Cell, error) {
 	v, err := canon.Parse(d.Fields, canon.MaxDepth)
 	if err != nil {
 		return nil, fmt.Errorf("artifactdata: decode %s/%s: %w", c.spec.Name, d.ID, err)
@@ -163,18 +165,19 @@ func exportRow(c *collState, keys []string, names Names, d Doc) ([]string, error
 	for _, m := range v.Members {
 		fields[m.Key] = m.Value
 	}
-	row := []string{cell(d.ID)}
+	row := []tabular.Cell{tabular.Text(d.ID)}
 	for _, k := range keys {
 		val, held := fields[k]
 		if !held {
-			row = append(row, "")
+			row = append(row, tabular.Text(""))
 			continue
 		}
-		row = append(row, cell(render(c.columns[k], names, val)))
+		row = append(row, tabular.Text(render(c.columns[k], names, val)))
 	}
-	return append(row, cell(d.CreatedBy.Name), d.CreatedAt.UTC().Format(time.RFC3339),
-		cell(d.UpdatedBy.Name), d.UpdatedAt.UTC().Format(time.RFC3339),
-		strconv.FormatInt(d.Version, 10)), nil
+	return append(row, tabular.Text(d.CreatedBy.Name),
+		tabular.Text(d.CreatedAt.UTC().Format(time.RFC3339)), tabular.Text(d.UpdatedBy.Name),
+		tabular.Text(d.UpdatedAt.UTC().Format(time.RFC3339)),
+		tabular.Number(strconv.FormatInt(d.Version, 10))), nil
 }
 
 // render is one value as a spreadsheet cell reads it.
@@ -217,16 +220,4 @@ func render(col artifacts.Column, names Names, v canon.Value) string {
 		}
 	}
 	return string(canon.Encode(v))
-}
-
-// cell neutralises a value a spreadsheet would run as a formula. A plain
-// number is left as it is, so a negative one stays a number.
-func cell(s string) string {
-	if s == "" || !strings.ContainsRune("=+-@\t\r", rune(s[0])) {
-		return s
-	}
-	if _, err := strconv.ParseFloat(s, 64); err == nil {
-		return s
-	}
-	return "'" + s
 }
