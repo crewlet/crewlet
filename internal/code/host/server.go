@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -17,7 +16,6 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
-	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -31,11 +29,6 @@ type Estate interface {
 	RepoState(ctx context.Context, q code.StateQuery) (code.RepoSnapshot, error)
 	Propose(ctx context.Context, p code.Proposal) (code.ProposeResult, error)
 	PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.PushOutcome, error)
-}
-
-// Uploader stores a push's pack bundle; *objstore.Store satisfies it.
-type Uploader interface {
-	Put(ctx context.Context, r io.Reader, limit int64, m objstore.PutMeta) (objstore.Object, error)
 }
 
 // Timing is every duration the host waits on that a test must be able to
@@ -116,8 +109,10 @@ type Options struct {
 	Git *gitproc.Pool
 	// Estate is the code domain's rows and its committer.
 	Estate Estate
-	// Objects stores a push's pack bundle.
-	Objects Uploader
+	// Objects stores a push's pack bundle — *objstore.Store in the engine —
+	// held as code.Putter because code.StoreBundle, the one store of a bundle
+	// and its seal every writer of a stored pack takes, is what calls it.
+	Objects code.Putter
 	// Audit records one push — published by the engine through the operator
 	// surface's audit, which outlives the request.
 	Audit func(ctx context.Context, e types.OperatorActed)

@@ -6,7 +6,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
-	"github.com/crewlet/crewlet/internal/objstore"
 )
 
 // EVERY CONSTANT THE HOST WAITS ON OR BOUNDS BY, each with its reason.
@@ -211,19 +210,21 @@ func SpoolWaitersPerCredential(transfers int) int {
 // its landing (land) — as gitproc.ReceivePackDeadline's hook term: the three
 // scans over the stored pack (force, blobs, introduced — each
 // gitproc.PackWorkDeadline of the largest pack one push may store,
-// code.MaxPackBytes), the bundle's put at
-// the pace floor every leg is held to (objstore.ReadBase +
-// objstore.PaceFor(code.MaxPackBytes)), ProposeBudget, and the pending wait —
-// summed, though the introduced listing runs beside the put, because a bound
-// on the two together is no less than the longer of them.
+// code.MaxPackBytes), the bundle's put under its own bound at that size
+// (code.UploadDeadline: objstore.ReadBase and the pace floor every leg is
+// held to), ProposeBudget, and the pending wait — summed, though the
+// introduced listing runs beside the put, because a bound on the two together
+// is no less than the longer of them. The put's term IS the bound the put is
+// given (code.StoreBundle), read from the one function, so the hook never
+// kills a receive-pack whose upload is still inside its own deadline.
 // Over code.MaxPackBytes rather than the epoch's push limit, because what the
 // landing scans and stores is the client's input COMPLETED against the
 // repository plus its indexes, which a thin push can grow past
 // max_push_bytes. A BOUND on a trickling client, never a schedule: a push that
 // stops moving is ended by its Timing.Stall long before it.
 func HookBudget(t Timing) time.Duration {
-	return 3*gitproc.PackWorkDeadline(code.MaxPackBytes) + objstore.ReadBase +
-		objstore.PaceFor(code.MaxPackBytes) + ProposeBudget + t.PendingGrace
+	return 3*gitproc.PackWorkDeadline(code.MaxPackBytes) + code.UploadDeadline(code.MaxPackBytes) +
+		ProposeBudget + t.PendingGrace
 }
 
 // receivePackDeadline bounds one push's receive-pack (gitproc.ReceivePackDeadline)
@@ -258,6 +259,3 @@ func hookWalks(cmds []parsedCommand, objects int64) time.Duration {
 	}
 	return time.Duration(walks) * gitproc.HistoryWalk(objects)
 }
-
-// uploadDeadline is the bundle put's own bound: the pace floor over its bytes.
-func uploadDeadline(size int64) time.Duration { return objstore.ReadBase + objstore.PaceFor(size) }

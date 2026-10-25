@@ -2,49 +2,31 @@ package host
 
 import (
 	"bufio"
-	"bytes"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/crewlet/crewlet/internal/code"
 )
 
 // A PACK INDEX, READ FOR ITS OBJECTS: the ids of the push's own pack, which the
 // blob scan asks git about — so the scratch's alternate, the whole repository,
 // is never listed.
 
-// idxMagic is a version-2 index's first four bytes; idxV2 its version.
-var idxMagic = []byte{0xff, 't', 'O', 'c'}
-
-const idxV2 = 2
-
 // idxOIDs streams the object ids of a version-2 pack index — the only version
 // git writes by default since 1.5.2, and the one the receive configuration
 // pins — as `<hex>\n` lines, and reports the object count, read from the
-// fan-out table's last entry. A version-1 index, a bad magic or a count above
-// 1<<31 is refused naming the file. Nothing is held whole: the ids are read
-// through a 64 KiB buffer as the caller reads them.
+// fan-out table's last entry. The header is code.OpenIdx's to read, the one
+// reading of an index's header, which refuses a version-1 index, a bad magic
+// or a count above 1<<31 naming the file; the ids follow it. Nothing is held
+// whole: the ids are read through a 64 KiB buffer as the caller reads them.
 func idxOIDs(path string) (count int64, ids io.ReadCloser, err error) {
-	f, err := os.Open(path)
+	count, f, err := code.OpenIdx(path)
 	if err != nil {
-		return 0, nil, fmt.Errorf("host: open the pack index %s: %w", path, err)
+		return 0, nil, err
 	}
-	head := make([]byte, 8+256*4)
-	if _, err := io.ReadFull(f, head); err != nil {
-		_ = f.Close()
-		return 0, nil, fmt.Errorf("host: read the pack index %s's header: %w", path, err)
-	}
-	if !bytes.Equal(head[:4], idxMagic) || binary.BigEndian.Uint32(head[4:8]) != idxV2 {
-		_ = f.Close()
-		return 0, nil, fmt.Errorf("host: %s is not a version-2 pack index", path)
-	}
-	n := binary.BigEndian.Uint32(head[8+255*4:])
-	if n > 1<<31 {
-		_ = f.Close()
-		return 0, nil, fmt.Errorf("host: the pack index %s counts %d objects, past 1<<31", path, n)
-	}
-	return int64(n), &idxReader{f: f, r: bufio.NewReaderSize(f, 64<<10), left: int64(n)}, nil
+	return count, &idxReader{f: f, r: bufio.NewReaderSize(f, 64<<10), left: count}, nil
 }
 
 // idxReader hands out an index's ids as hex lines, an id at a time.

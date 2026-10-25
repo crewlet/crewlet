@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go/ast"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -19,36 +20,43 @@ import (
 //
 // A push's facts are formed by its landing: Command.Forced only by its force
 // check, which protected_force turns on; the blob scan, --atomic, the size,
-// the seal, the wait for an applied row. A second path to Estate.Propose,
-// Uploader.Put or Cache.Adopt is a second implementation of what a push is
-// (ADR-0008) — the first engine-built write that proposed by itself would
-// skip whichever check its author forgot, and pass every test written for it.
-// So each of the three is SELECTED EXACTLY ONCE in the package's non-test
-// files, and that selection is written in land or in a function only land
-// reaches: a function every reference to which — a call, a method value, a
-// closure handed on — is written in land or in another such function.
+// the seal, the wait for an applied row. A second path to Estate.Propose, to
+// the bundle's store (code.StoreBundle) or to Cache.Adopt is a second
+// implementation of what a push is (ADR-0008) — the first engine-built write
+// that proposed by itself would skip whichever check its author forgot, and
+// pass every test written for it. So each of the three is SELECTED EXACTLY
+// ONCE in the package's non-test files, and that selection is written in land
+// or in a function only land reaches: a function every reference to which — a
+// call, a method value, a closure handed on — is written in land or in
+// another such function.
 //
 // # By declaration, never by name
 //
 // Each selector is typed through internal/sourcetree/decltype, so what is
-// judged is the method a selector RESOLVES to: Estate.Propose and
-// Uploader.Put are the methods this package's own interfaces declare, and
-// Cache.Adopt the method internal/code/cache declares, through whatever field,
-// variable, parameter or embedding the value is held in — a field renamed, or
-// a second field of the same type, is the same door. A method of that name
-// selected through ANY interface is counted as the door too, since an
-// interface value of another type may hold the same implementation. A
-// selector of one of the three names the walk cannot type is reported rather
-// than passed, and so is a reference it cannot place to a method this package
-// declares: a gate asserting where something is NOT that skipped what it
-// could not read would certify nothing about exactly what it skipped.
+// judged is the method a selector RESOLVES to: Estate.Propose is the method
+// this package's own interface declares, Cache.Adopt the method
+// internal/code/cache declares, and the bundle's store code.Putter's Put,
+// through whatever field, variable, parameter or embedding the value is held
+// in — a field renamed, or a second field of the same type, is the same door.
+// A method of that name selected through ANY interface is counted as the door
+// too, since an interface value of another type may hold the same
+// implementation. The store has a second spelling, and both are the one door:
+// code.StoreBundle, the step's one implementation, which makes the Put and
+// seals what it stores — a reference to it, a call or a function value, is a
+// selection of the store as much as a Put the host made itself, which would be
+// the same step with no seal. A selector of one of the three method names the
+// walk cannot type is reported rather than passed, and so is a reference it
+// cannot place to a method this package declares: a gate asserting where
+// something is NOT that skipped what it could not read would certify nothing
+// about exactly what it skipped.
 //
 // # Coverage boundary
 //
 // A concrete implementation's own method selected directly — an
-// *objstore.Store held as one rather than as an Uploader — is not seen: the
+// *objstore.Store held as one rather than as a code.Putter — is not seen: the
 // host is handed its store, its estate and its cache only through the three
-// declared types. A value reached through reflection is not seen either.
+// declared types. A value reached through reflection is not seen either, nor
+// is code.StoreBundle reached through a dot import.
 func TestEveryPushTakesTheOneLanding(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)
@@ -69,20 +77,33 @@ const modulePath = "github.com/crewlet/crewlet"
 const hostDir = "internal/code/host"
 
 // landingDoor is one step only the landing takes: a method of a declared
-// type.
+// type, and — where the step has one — the function of the same package that
+// takes it whole by calling that method.
 type landingDoor struct {
 	owner  decltype.TypeName
 	method string
+	// fn is the function of owner's package that IS the step — the
+	// bundle's store, code.StoreBundle, whose Put on the code.Putter it is
+	// handed is the upload — or "" where the method is its one spelling. A
+	// reference to fn and a selection of the method are the same door.
+	fn string
 }
 
-func (d landingDoor) String() string { return d.owner.Name + "." + d.method }
+// String is what a finding calls the door: its function where it has one,
+// as a file importing the package names it, else its method.
+func (d landingDoor) String() string {
+	if d.fn != "" {
+		return path.Base(d.owner.Package) + "." + d.fn
+	}
+	return d.owner.Name + "." + d.method
+}
 
 // doorsOf are the three doors under module.
 func doorsOf(module string) []landingDoor {
-	host, cache := module+"/"+hostDir, module+"/internal/code/cache"
+	host, domain, cache := module+"/"+hostDir, module+"/internal/code", module+"/internal/code/cache"
 	return []landingDoor{
 		{owner: decltype.TypeName{Package: host, Name: "Estate"}, method: "Propose"},
-		{owner: decltype.TypeName{Package: host, Name: "Uploader"}, method: "Put"},
+		{owner: decltype.TypeName{Package: domain, Name: "Putter"}, method: "Put", fn: "StoreBundle"},
 		{owner: decltype.TypeName{Package: cache, Name: "Cache"}, method: "Adopt"},
 	}
 }
@@ -170,7 +191,14 @@ func walkForLandings(root, module string) landingWalk {
 				switch n := n.(type) {
 				case *ast.SelectorExpr:
 					ast.Inspect(n.X, v)
-					if _, isPkg := w.PackageNamed(n.X, f); isPkg {
+					if imported, isPkg := w.PackageNamed(n.X, f); isPkg {
+						// A package's function: a door where it is the
+						// function that takes a step whole.
+						for _, d := range doors {
+							if d.fn != "" && d.fn == n.Sel.Name && d.owner.Package == imported {
+								sites[d] = append(sites[d], doorSite{fn: fn, pos: pos(n)})
+							}
+						}
 						return false
 					}
 					name := n.Sel.Name
@@ -304,12 +332,15 @@ func exprString(e ast.Expr) string {
 }
 
 // THE WALK, ON A TREE WHOSE VERDICT IS KNOWN. A fixture host whose landing
-// takes each step once — through a helper, a closure — passes; and each way a
-// second path to a step can be written must be reported: the adoption taken
-// again in the relay, a proposal through a second field of the estate's type,
-// a method value taken outside the landing, an upload through an interface of
-// its own, a helper of the landing's that something else reaches too, a step
-// at package level, a step gone, the landing gone, and a selector of a door's
+// takes each step once — through a helper, a closure, the store's one
+// function — passes; and each way a second path to a step can be written must
+// be reported: the adoption taken again in the relay, a proposal through a
+// second field of the estate's type, a method value taken outside the
+// landing, an upload through an interface of its own or a Put on the store
+// itself beside the store's function, that function called again or held as
+// a value outside the landing, or reached through an import of another name,
+// a helper of the landing's that something else reaches too, a step at
+// package level, a step gone, the landing gone, and a selector of a door's
 // name the walk cannot type. A test file is never read.
 func TestTheLandingWalkFindsEverySecondPath(t *testing.T) {
 	t.Parallel()
@@ -319,17 +350,16 @@ func TestTheLandingWalkFindsEverySecondPath(t *testing.T) {
 import (
 	"context"
 
+	"example.com/m/internal/code"
 	"example.com/m/internal/code/cache"
 )
 
 type Estate interface{ Propose(ctx context.Context, n int) (int, error) }
 
-type Uploader interface{ Put(ctx context.Context) error }
-
 type Options struct {
 	Estate  Estate
 	Spare   Estate
-	Objects Uploader
+	Objects code.Putter
 	Cache   *cache.Cache
 }
 
@@ -342,7 +372,7 @@ func (s *Server) land(ctx context.Context) {
 	adopt()
 }
 
-func (s *Server) store(ctx context.Context) { _ = s.o.Objects.Put(ctx) }
+func (s *Server) store(ctx context.Context) { _ = code.StoreBundle(ctx, s.o.Objects) }
 
 func (s *Server) serveSession(ctx context.Context) { s.land(ctx) }
 `
@@ -371,7 +401,28 @@ func (s *Server) sideways(ctx context.Context) {
 	var p putter = s.o.Objects
 	_ = p.Put(ctx)
 }
-`, want: []string{"Uploader.Put is selected 2 times", "selected in Server.sideways"}},
+`, want: []string{"code.StoreBundle is selected 2 times", "selected in Server.sideways"}},
+		{name: "a put on the store beside its function", extra: `
+func (s *Server) direct(ctx context.Context) { _ = s.o.Objects.Put(ctx) }
+`, want: []string{"code.StoreBundle is selected 2 times", "selected in Server.direct"}},
+		{name: "the store's function called outside the landing", extra: `
+import "example.com/m/internal/code"
+
+func (s *Server) again(ctx context.Context) { _ = code.StoreBundle(ctx, s.o.Objects) }
+`, want: []string{"code.StoreBundle is selected 2 times", "selected in Server.again"}},
+		{name: "the store's function as a value at package level", extra: `
+import "example.com/m/internal/code"
+
+var later = code.StoreBundle
+`, want: []string{"code.StoreBundle is selected 2 times", "selected in a package-level declaration"}},
+		{name: "the store's function under another name", extra: `
+import bundles "example.com/m/internal/code"
+
+func (s *Server) renamed(ctx context.Context) { _ = bundles.StoreBundle(ctx, s.o.Objects) }
+`, want: []string{"code.StoreBundle is selected 2 times", "selected in Server.renamed"}},
+		{name: "no store anywhere", edit: func(s string) string {
+			return strings.Replace(s, "_ = code.StoreBundle(ctx, s.o.Objects)", "", 1)
+		}, want: []string{"selects code.StoreBundle nowhere"}},
 		{name: "a helper something else reaches", extra: `
 func (s *Server) other(ctx context.Context) { s.store(ctx) }
 `, want: []string{"selected in Server.store, which Server.land does not reach alone"}},
@@ -401,11 +452,11 @@ func (s *Server) opaque(ctx context.Context) { _ = mystery().Adopt(ctx) }
 				src = tc.edit(src)
 			}
 			write := func(rel, body string) {
-				path := filepath.Join(root, filepath.FromSlash(rel))
-				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				file := filepath.Join(root, filepath.FromSlash(rel))
+				if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+				if err := os.WriteFile(file, []byte(body), 0o644); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -417,6 +468,11 @@ func (s *Server) opaque(ctx context.Context) { _ = mystery().Adopt(ctx) }
 				"func (s *Server) tested(ctx context.Context) { _ = s.o.Cache.Adopt(ctx) }\n")
 			write("internal/code/cache/cache.go", "package cache\n\nimport \"context\"\n\n"+
 				"type Cache struct{}\n\nfunc (c *Cache) Adopt(ctx context.Context) error { return nil }\n")
+			// The store's one function, whose Put is the upload — in a package
+			// the walk reads for the Putter's type, never judges.
+			write("internal/code/code.go", "package code\n\nimport \"context\"\n\n"+
+				"type Putter interface{ Put(ctx context.Context) error }\n\n"+
+				"func StoreBundle(ctx context.Context, p Putter) error { return p.Put(ctx) }\n")
 			found := walkForLandings(root, module)
 			if found.files != 1+min(1, len(tc.extra)) {
 				t.Errorf("the walk read %d files, want the package's non-test ones", found.files)

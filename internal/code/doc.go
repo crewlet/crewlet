@@ -323,10 +323,14 @@
 //
 // # What this package does not do
 //
-// It runs no git, moves no object bytes and serves no HTTP. It decides and
-// applies records, commits pushes a receiving node proposes, answers reads of
-// the rows, and holds a bundle's bytes to the row that names them when a
-// caller tees them through a [SealWriter].
+// It runs no git and serves no HTTP. It decides and applies records, commits
+// pushes a receiving node proposes, answers reads of the rows, and holds a
+// bundle's bytes to the row that names them when a caller tees them through a
+// [SealWriter]. It moves object bytes in ONE place: [StoreBundle], the upload
+// of a pack bundle [LayBundle] laid out from the files a git wrote, sealed on
+// its way — the one store every writer of a stored pack takes, through the
+// [Putter] it is handed, so none lays a bundle out or seals it by a copy of
+// its own.
 //
 // # Three horizons, each a function of the record that applies it
 //

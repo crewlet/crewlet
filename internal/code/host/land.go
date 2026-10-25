@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -212,7 +210,10 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 	}
 	var ref *code.PackRef
 	if hasPack {
-		if ref, err = bundleRef(l.PushID, packPath, checksum); err != nil {
+		// The push's ONE stored object, laid out from its scratch's three
+		// files. A missing .rev fails the landing: a landing's scratch holds
+		// one, and for a push git received the receive configuration pins it.
+		if ref, err = code.LayBundle(l.PushID, packPath, checksum); err != nil {
 			return landed{}, unchecked(err)
 		}
 		if s.o.Metrics != nil {
@@ -323,10 +324,10 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 		result.outcome, result.refusal = types.AuditRefused, AuditRefusal(code.RefusalStoreFull)
 		return landed{Commands: cmds, Result: result}, nil
 	case stored != nil:
-		var bad *badBundle
+		var bad *code.BadBundle
 		detail := "object store unavailable: " + sentence(stored.Error())
 		if errors.As(stored, &bad) {
-			detail = "this node stored a pack the code host cannot serve: " + sentence(bad.err.Error())
+			detail = "this node stored a pack the code host cannot serve: " + sentence(bad.Err.Error())
 		}
 		cmds = refuseRest(cmds, code.RefusalUnavailable, detail)
 		result.outcome = types.AuditFailed
@@ -456,7 +457,18 @@ func (s *Server) introduceAndStore(ctx context.Context, l *landing, news []strin
 	}
 	if ref != nil {
 		l.Progress("storing the pack")
-		if stored = s.storeBundle(ctx, l, packPath, ref); stored != nil {
+		stored = code.StoreBundle(ctx, s.o.Objects, packPath, ref, func(ctx context.Context, at int64) error {
+			return s.fault(ctx, codefault.HostUpload, at)
+		})
+		var bad *code.BadBundle
+		if errors.As(stored, &bad) {
+			// A bundle its own seal refused is logged HERE, by the landing,
+			// rather than by code.StoreBundle, because the line names the
+			// push whose bytes were stored and never named.
+			s.log.Error("code_pack_rejected", "repo", l.Synced.Repo.Name, "push_id", l.PushID,
+				"object", bad.Object.String(), "error", bad.Err)
+		}
+		if stored != nil {
 			cancel(errUploadFailed)
 		}
 	}
@@ -496,90 +508,6 @@ func undecided(cmds []code.Command) bool {
 		}
 	}
 	return false
-}
-
-// bundleRef is the push's ONE stored object, laid out from its scratch's
-// three files: the pack, its .idx (version 2) and its .rev (version 1),
-// back to back. A missing .rev fails the landing: a landing's scratch holds
-// one, and for a push git received the receive configuration pins it.
-func bundleRef(pushID, packPath, checksum string) (*code.PackRef, error) {
-	base := strings.TrimSuffix(packPath, ".pack")
-	sizes := make([]int64, 3)
-	for i, ext := range []string{".pack", ".idx", ".rev"} {
-		info, err := os.Stat(base + ext)
-		if err != nil {
-			return nil, fmt.Errorf("host: the push's %s: %w", ext, err)
-		}
-		sizes[i] = info.Size()
-	}
-	count, ids, err := idxOIDs(base + ".idx")
-	if err != nil {
-		return nil, err
-	}
-	_ = ids.Close()
-	return &code.PackRef{PackID: pushID, Size: sizes[0] + sizes[1] + sizes[2], IndexBytes: sizes[1],
-		ReverseBytes: sizes[2], GitChecksum: checksum, Objects: count}, nil
-}
-
-// badBundle is a stored bundle its own seal refuses.
-type badBundle struct{ err error }
-
-func (b *badBundle) Error() string { return b.err.Error() }
-
-// storeBundle uploads the push's bundle — the three files back to back,
-// exactly ref.Size bytes, limited at that size — sealing it on the way, and
-// holds the seal to ref (code.CheckBundle), the one rule every installing
-// cache holds it to. On success ref names the stored object. Nothing is read
-// twice: the seal is gathered from the bytes on their way to the store.
-func (s *Server) storeBundle(ctx context.Context, l *landing, packPath string, ref *code.PackRef) error {
-	base := strings.TrimSuffix(packPath, ".pack")
-	var files []io.Reader
-	for _, ext := range []string{".pack", ".idx", ".rev"} {
-		f, err := os.Open(base + ext)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = f.Close() }()
-		files = append(files, f)
-	}
-	ctx, cancel := context.WithTimeout(ctx, uploadDeadline(ref.Size))
-	defer cancel()
-	sw := code.NewSealWriter(*ref)
-	in := &faultReader{ctx: ctx, s: s, r: io.MultiReader(files...)}
-	obj, err := s.o.Objects.Put(ctx, io.TeeReader(in, sw), ref.Size,
-		objstore.PutMeta{ContentType: code.BundleContentType})
-	if err != nil {
-		return err
-	}
-	ref.Object, ref.Hash = obj.Key, obj.Hash
-	seal, err := sw.Seal()
-	if err == nil {
-		err = code.CheckBundle(*ref, seal)
-	}
-	if err != nil {
-		s.log.Error("code_pack_rejected", "repo", l.Synced.Repo.Name, "push_id", l.PushID,
-			"object", obj.Key.String(), "error", err)
-		return &badBundle{err: err}
-	}
-	return nil
-}
-
-// faultReader hits HostUpload before each read the object store makes of the
-// bundle, at the offset of the bytes handed over so far.
-type faultReader struct {
-	ctx context.Context
-	s   *Server
-	r   io.Reader
-	at  int64
-}
-
-func (f *faultReader) Read(p []byte) (int, error) {
-	if err := f.s.fault(f.ctx, codefault.HostUpload, f.at); err != nil {
-		return 0, err
-	}
-	n, err := f.r.Read(p)
-	f.at += int64(n)
-	return n, err
 }
 
 // statusRefusal is the refusal a repository's row gives every push, with its

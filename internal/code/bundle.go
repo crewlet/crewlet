@@ -30,11 +30,13 @@ import (
 // [CheckBundle] compares sizes exactly rather than parsing an index to find
 // out how large it is.
 //
-// PURE OVER BYTES IT IS HANDED: no I/O and no git. The receiver tees its
-// upload through a [SealWriter] and checks the seal before it proposes the
-// push; the cache tees its download and checks before it installs. SHA-256
-// says the bytes are the bytes the receiver stored; this says they are the
-// bytes the ROW describes — a disagreement no retry fixes.
+// PURE OVER BYTES IT IS HANDED: no I/O and no git. The files a git wrote are
+// laid out and stored by bundlestore.go, which tees the upload through a
+// [SealWriter] and checks the seal before its caller may name the object
+// ([StoreBundle]) — so the receiver checks before it proposes the push; the
+// cache tees its download and checks before it installs. SHA-256 says the
+// bytes are the bytes the receiver stored; this says they are the bytes the
+// ROW describes — a disagreement no retry fixes.
 
 // BundleContentType is the content type a pack bundle is stored under: not a
 // packfile — a console that hands the object back hands back three sections.

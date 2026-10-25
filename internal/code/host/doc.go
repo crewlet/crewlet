@@ -235,7 +235,9 @@
 // resolved through the identity directory and the running org, so this
 // package looks nobody up a second time. It imports nothing from the API but
 // its auth and paced leaves, and nothing from the engine or the estate: its
-// seams (Estate, Uploader, Audit) are declared here and filled by the engine.
+// seams (Estate, Audit) are declared here and filled by the engine, and its
+// object store is the code.Putter that code.StoreBundle — the one store of a
+// pack bundle, sealed on its way — is handed.
 //
 // What the admitted request may do is its GRANT (code.GrantOf, ADR-0058),
 // built from ONE principal — the admission's principal(), the credential and

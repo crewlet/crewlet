@@ -3,6 +3,7 @@ package code_test
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -11,9 +12,12 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
-// realBundle is a pack the client's git wrote — three commits' objects — read
-// back as the one object a push stores, with the row that names it.
-func realBundle(t *testing.T) (gittest.Bundled, code.PackRef) {
+// written is a pack the client's git wrote into a bare repository — three
+// commits' objects, with the .idx (version 2) and the .rev a bundle carries,
+// as a push's scratch holds them — answering its .pack's path and the bundle
+// read back by gittest, which counts the objects from the PACK's header and
+// never from the index.
+func written(t *testing.T) (packPath string, b gittest.Bundled) {
 	t.Helper()
 	c := gittest.NewClient(t)
 	work := c.Init(t)
@@ -22,7 +26,15 @@ func realBundle(t *testing.T) (gittest.Bundled, code.PackRef) {
 		head = c.Commit(t, work, map[string]string{"file.txt": body}, "commit "+string(rune('a'+i)))
 	}
 	bare := gittest.Empty(t)
-	b := gittest.Bundle(t, bare, gittest.Pack(t, c, bare, work, head))
+	sum := gittest.Pack(t, c, bare, work, head)
+	return filepath.Join(bare, "objects", "pack", "pack-"+sum+".pack"), gittest.Bundle(t, bare, sum)
+}
+
+// realBundle is the bundle of the pack written lays out — the one object a
+// push stores — with the row that names it.
+func realBundle(t *testing.T) (gittest.Bundled, code.PackRef) {
+	t.Helper()
+	_, b := written(t)
 	ref := code.PackRef{
 		PackID: "p1", Object: keyOf("p1"), Hash: objstore.HashOf(b.Bytes),
 		Size: int64(len(b.Bytes)), IndexBytes: b.IndexBytes, ReverseBytes: b.ReverseBytes,

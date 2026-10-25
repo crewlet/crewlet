@@ -614,15 +614,16 @@ const (
 	// room for both on any push a person makes, and a bundle past it is
 	// refused pack_too_large by the receiver before anything is uploaded.
 	//
-	// Bounded above by the object store's write bound —
-	// objstore.PaceFor(1.25 GiB) is 10 h 40 min, under objstore.RecordWithin
-	// (12 h), which internal/objstore/references pins — and BELOW 2 GiB,
-	// which is a RULE rather than an accident: an index grows a 64-bit offset
-	// table only for a pack past 2 GiB, and no writer of a stored pack may
-	// ever produce one — a push is held here, and a later compaction caps
-	// what it writes with pack-objects --max-pack-size — so CheckBundle's
-	// section sizes are exact functions of the object count for every bundle
-	// the store will ever hold. TestTheBoundsFitTheReadAndPurgeBudgets holds
-	// both inequalities.
+	// Bounded above by the object store's write bound — the put of a
+	// 1.25 GiB bundle is given UploadDeadline's 10 h 41 min (a minute of
+	// objstore.ReadBase and objstore.PaceFor's 10 h 40 min), under
+	// objstore.RecordWithin (12 h), which internal/objstore/references pins —
+	// and BELOW 2 GiB, which is a RULE rather than an accident: an index
+	// grows a 64-bit offset table only for a pack past 2 GiB, and no writer of
+	// a stored pack may ever produce one — a push is held here, and a later
+	// compaction caps what it writes with pack-objects --max-pack-size — so
+	// CheckBundle's section sizes are exact functions of the object count for
+	// every bundle the store will ever hold.
+	// TestTheBoundsFitTheReadAndPurgeBudgets holds both inequalities.
 	MaxPackBytes = config.CodeMaxPushBytesCeiling + config.CodeMaxPushBytesCeiling/4
 )

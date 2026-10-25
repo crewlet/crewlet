@@ -47,10 +47,12 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 			config.CodeMaxPushBytesCeiling)
 	}
 	// AND THE OBJECT STORE CAN RECORD IT: the largest bundle uploaded at the
-	// pacing floor lands inside the write bound the collector deletes by.
-	if pace := objstore.PaceFor(code.MaxPackBytes); pace >= objstore.RecordWithin {
-		t.Errorf("a %d-byte bundle at the pacing floor takes %s, past RecordWithin (%s)",
-			code.MaxPackBytes, pace, objstore.RecordWithin)
+	// pacing floor, under the whole bound its put is given, lands inside the
+	// write bound the collector deletes by — its key is minted as the upload
+	// begins, and a row names it only once the upload ends.
+	if bound := code.UploadDeadline(code.MaxPackBytes); bound >= objstore.RecordWithin {
+		t.Errorf("a %d-byte bundle's put is given %s, past RecordWithin (%s)",
+			code.MaxPackBytes, bound, objstore.RecordWithin)
 	}
 
 	// A PURGE PART AND ITS BOOKKEEPING FIT ONE RECORD'S ROW BUDGET.
