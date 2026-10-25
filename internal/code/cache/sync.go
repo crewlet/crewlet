@@ -890,11 +890,15 @@ func (c *Cache) converging(e *entry, r *round) (*incarnation, SyncKind, error) {
 //     below the incarnation is a copy behind it, and changes nothing — the
 //     cache never moves backwards for a stale copy.
 //  4. install every pack the directory does not hold (install.go); a pack
-//     the store does not have reads the snapshot again ONCE at linearizable,
+//     the store does not have reads the snapshot again at linearizable —
 //     whatever level the round read at, and in full whenever the answer that
-//     named the pack was: the round's read came before the store answered,
-//     and the row it named may have left the log since (a purge's, or a
-//     retirement whose grace the round outlived).
+//     named the pack was — and that read decides it: the round's read came
+//     before the store answered, and the row it named may have left the log
+//     since (a purge's, or a retirement whose grace the round outlived). A
+//     read that still names the pack makes it missing, final, with nothing
+//     installed again; one that does not is applied in turn, and a pack the
+//     store does not have from it is asked the same way, each not-found by
+//     the read after its own.
 //  5. on a full answer, the round's index (maintain.go), before the refs'
 //     peel reads the packs.
 //  6. the refs (refs.go): packed-refs and HEAD, after every pack they need.
@@ -954,7 +958,8 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 	// whether it will: an answer only a copy behind the log can have given
 	// is asked of the log's head before anything is concluded from it. The
 	// store's not-found is no such answer — a read at the head can predate
-	// it too — and is asked of the head once whatever the level (askedHead).
+	// it too — and is decided by the head's read made after it, whatever the
+	// level (gone).
 	escalate := func() bool {
 		if fresh.Level == statelog.ReadLinearizable {
 			return false
@@ -963,8 +968,12 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 		return true
 	}
 	var (
-		askedFull, askedHead, rewound bool
-		res                           applied
+		askedFull, rewound bool
+		// gone is the store's not-found for a pack the round's last read
+		// named, met by the apply after that read: the round's next read, at
+		// the log's head, decides it (THE READ AFTER A NOT-FOUND DECIDES IT).
+		gone *ErrPackMissing
+		res  applied
 	)
 	for {
 		var at statelog.Position
@@ -1037,6 +1046,32 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 			}
 			e.mu.Unlock()
 		}
+		if gone != nil {
+			// THE READ AFTER A NOT-FOUND DECIDES IT, and nothing is installed
+			// again to decide it. This read was made at the log's head after
+			// the store said the pack's object is not there. Still naming the
+			// pack at the same object, it names an object the store lost
+			// while a live row named it — the loss itself — and the round
+			// fails here. Applied again instead, it staged and fetched again
+			// every pack the not-found had cancelled in flight, asked the
+			// store once more for the pack it had just been told was not
+			// there and, on a forced round, held every index file to its
+			// checksum again — all to fail the same way, since no read makes
+			// the store hold an object. This read names the pack whenever its
+			// row is live: a full answer names every live pack, and this read
+			// is asked in full whenever the answer that named the pack was
+			// (below), while a delta from the incarnation's own position names
+			// every pack added above it, as one a delta named was. So a read
+			// that does not name it is the row gone from the log since —
+			// purged or retired, its object collected meanwhile — and the
+			// round goes on to what this read holds.
+			if p, ok := snap.packs[packKey{gone.Pack.PackID, gone.Pack.Part}]; ok && p.Object == gone.Pack.Object {
+				c.log.Warn("code_pack_missing", "repo", e.id, "pack_id", gone.Pack.PackID,
+					"object", gone.Pack.Object.String(), "damaged", false)
+				return nil, "", gone
+			}
+			gone = nil
+		}
 		if reader.inc != inc {
 			// The round's own git runs in inc from here (the peel): what they
 			// report is held for the round (roundReader).
@@ -1052,8 +1087,8 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 		case errors.Is(err, errRefsNotOurs) && !snap.full && !askedFull:
 			askedFull, full = true, true
 			continue
-		case errors.As(err, &missing) && !missing.Damaged && !askedHead:
-			// THE STORE'S NOT-FOUND IS ASKED OF THE LOG'S HEAD, ONCE,
+		case errors.As(err, &missing) && !missing.Damaged:
+			// THE STORE'S NOT-FOUND IS ASKED OF THE LOG'S HEAD, AFTER IT,
 			// WHATEVER LEVEL THE ROUND READ AT. Asking only a round below
 			// linearizable took a linearizable read for the head's answer,
 			// but its barrier came before the store answered, and the row
@@ -1064,30 +1099,40 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 			// outlives. The collector deletes an object once nothing names
 			// it, so such a round failed every caller for a pack no row
 			// names, and logged code_pack_missing for it. Only a read made
-			// after the store's answer can say: one that no longer names
-			// the pack converges the round to what the log holds, and one
-			// that still does is final, below. A DAMAGED answer is final at
-			// once: a purge or a retirement removes an object and never
-			// alters one, so bytes that are not the row's are the store's
-			// fault whatever the log holds now.
-			askedHead = true
-			fresh = statelog.Freshness{Level: statelog.ReadLinearizable}
-			// A PACK A FULL ANSWER NAMED IS ASKED ABOUT IN FULL. The log may
-			// answer a delta in full (page 1 decides: where the delta would
-			// outweigh it, or its floor is below the swept tombstones or on
-			// another generation), and a full answer names packs at or below
-			// the incarnation's position — one whose files the copy lost is
-			// installed again from it — which no delta from that position
-			// reaches: read again as one, the head's answer left such a pack
-			// out whether or not its row is live, and the round converged the
-			// copy without a pack its rows name when the store had lost it
-			// too.
+			// after the store's answer can say, and the next read decides
+			// it (THE READ AFTER A NOT-FOUND DECIDES IT, above).
+			//
+			// EVERY NOT-FOUND IS ASKED SO, each by the read after its own.
+			// Asked once a round, a second pack the store failed — one the
+			// first not-found had cancelled or the round had not reached, met
+			// from the head's answer — was final on a read made BEFORE its
+			// not-found: a pack whose row left the log after that read, its
+			// object collected meanwhile, failed the round as missing though
+			// no row names it, the very failure the asking is for. Asked so,
+			// the round still ends: a read that names the pack ends it there,
+			// and one that does not goes on without it — and a row gone from a
+			// log that does not go back never returns, so every read more
+			// follows another pack's row leaving the log under the round (a
+			// log gone back is read whole, rewound, and asked the same way).
+			//
+			// A PACK A FULL ANSWER NAMED IS DECIDED BY A FULL READ. The log
+			// may answer a delta in full (page 1 decides: where the delta
+			// would outweigh it, or its floor is below the swept tombstones or
+			// on another generation), and a full answer names packs at or
+			// below the incarnation's position — one whose files the copy lost
+			// is installed again from it — which no delta from that position
+			// reaches: asked as one, the decision would take a lost pack for a
+			// row gone, and converge the copy without a pack its rows name.
+			//
+			// A DAMAGED answer is final at once, below: a purge or a
+			// retirement removes an object and never alters one, so bytes
+			// that are not the row's are the store's fault whatever the log
+			// holds now.
+			gone, fresh = missing, statelog.Freshness{Level: statelog.ReadLinearizable}
 			full = full || snap.full
 			continue
 		case errors.As(err, &missing):
-			// Final: the log's head, read after the store's answer, still
-			// names it — or the bytes the store holds under it are not the
-			// row's.
+			// Final: the bytes the store holds under it are not the row's.
 			c.log.Warn("code_pack_missing", "repo", e.id, "pack_id", missing.Pack.PackID,
 				"object", missing.Pack.Object.String(), "damaged", missing.Damaged)
 			return nil, "", err

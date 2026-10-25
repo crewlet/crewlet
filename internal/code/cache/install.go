@@ -919,9 +919,10 @@ func (f failingWriter) Write(p []byte) (int, error) {
 
 // storeFailure is what the object store's failure to hand p over means:
 // absent and damaged are DEFINITE (an *ErrPackMissing — logged by the round
-// once it is final, since an absent pack is asked about again at the log's
-// head first, whatever level the round read at), anything else the store
-// failing, wrapped as ErrStoreRead.
+// once it is final: a damaged pack at once, and an absent one only once a
+// read at the log's head made after this answer, whatever level the round
+// read at, still names it), anything else the store failing, wrapped as
+// ErrStoreRead.
 func (c *Cache) storeFailure(id string, p code.PackRow, err error) error {
 	var damaged bool
 	switch {

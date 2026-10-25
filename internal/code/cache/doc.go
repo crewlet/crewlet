@@ -127,16 +127,20 @@
 // are held to the row by code.CheckBundle; a bundle that is not its row's is
 // refused and never retried, because the row and the bytes disagree and
 // neither is fixed by asking again. A pack the store does not have is asked
-// about again at linearizable, once, before it is called missing — whatever
-// level the round read at, since that read came before the store answered. A
-// copy behind the log may name a pack a purge has since removed, and even a
-// read at the log's head may name a row that has left the log since —
-// removed by a purge's part, or retired, its object kept only for its grace
-// (ADR-0051) — whose object the collector has deleted meanwhile. A head that
-// no longer names the pack converges the round to what the log holds; one
-// that still does makes it missing, final. That read is full whenever the
-// answer that named the pack was, since a full answer names packs at or below
-// the copy's position, which no delta from it reaches.
+// about again at linearizable before it is called missing — whatever level
+// the round read at, since that read came before the store answered — and
+// the read made after the not-found decides it. A copy behind the log may
+// name a pack a purge has since removed, and even a read at the log's head
+// may name a row that has left the log since — removed by a purge's part, or
+// retired, its object kept only for its grace (ADR-0051) — whose object the
+// collector has deleted meanwhile. A head that still names the pack makes it
+// missing, final, at once: nothing is installed again, since no read makes
+// the store hold the object. One that no longer names it converges the round
+// to what the log holds, and a pack the store does not have from that answer
+// is asked about the same way — each not-found by the read after its own,
+// never by one made before it. That read is full whenever the answer that
+// named the pack was, since a full answer names packs at or below the copy's
+// position, which no delta from it reaches.
 //
 // A full round that leaves [MidxRoundPacks] or more packs and no
 // multi-pack-index writes one over exactly those packs — without a bitmap, a

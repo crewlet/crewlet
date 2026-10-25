@@ -883,6 +883,259 @@ func TestAPackRetiredUnderARoundIsAskedAboutAgain(t *testing.T) {
 	}
 }
 
+// A LOST PACK ENDS ITS ROUND AT THE HEAD'S ANSWER. The read made after the
+// store's not-found decides the pack: one that still names it names an object
+// the store lost while a live row named it, and the round fails there, having
+// fetched nothing twice. Applied again instead, it staged and fetched again
+// every pack the not-found had cancelled in flight — up to a share of partial
+// downloads, the largest first — and asked the store once more for the pack it
+// had just been told was not there, on every round of a repository with a
+// lost pack, holding its write lock.
+//
+// Two packs: the larger's GET held in flight, the smaller's object deleted
+// while its row is live. A third read is failed, so a round that kept asking
+// fails the case rather than hangs it.
+//
+// Mutation: apply the head's answer whatever it names (each object is opened
+// twice).
+func TestALostPackEndsItsRoundAtTheHeadsAnswer(t *testing.T) {
+	t.Parallel()
+	thirdRead := errors.New("a round read its snapshot a third time")
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	_, large := w.push(t, repo, "refs/heads/main", map[string]string{"big.bin": noise(1, 256<<10)})
+	_, lost := w.push(t, repo, "refs/heads/main", nil)
+	if lost.Size >= large.Size {
+		t.Fatalf("the lost pack is %d bytes and the held one %d: the held one must be fetched first", lost.Size,
+			large.Size)
+	}
+	if err := w.store.Delete(t.Context(), lost.Object); err != nil {
+		t.Fatal(err)
+	}
+	var reads atomic.Int32
+	w.log.set(func(f *fakeLog) {
+		f.hook = func(fakeCall) error {
+			if reads.Add(1) == 3 {
+				return thirdRead
+			}
+			return nil
+		}
+	})
+	c := w.open(t)
+	// Held until the round's own failure cancels it: the larger is fetched
+	// first, so it is in flight when the smaller's not-found arrives.
+	held := make(chan struct{})
+	t.Cleanup(func() { close(held) }) // before the cache's Stop, which waits for the round
+	w.objects.hold = func(k objstore.Key) <-chan struct{} {
+		if k == large.Object {
+			return held
+		}
+		return nil
+	}
+	_, err := c.Sync(t.Context(), repo, linearizable)
+	var missing *cache.ErrPackMissing
+	if !errors.As(err, &missing) || missing.Pack.PackID != lost.PackID || missing.Damaged ||
+		!errors.Is(err, objstore.ErrNotFound) {
+		t.Fatalf("Sync: %v, want *ErrPackMissing naming %s", err, lost.PackID)
+	}
+	var levels []string
+	for _, call := range w.log.callsOf(repo) {
+		levels = append(levels, string(call.Level))
+	}
+	if fmt.Sprint(levels) != "[linearizable linearizable]" {
+		t.Errorf("the round read at %v, want its own read, then the log's head once", levels)
+	}
+	opens, _, _ := w.objects.counts()
+	if opens[lost.Object] != 1 {
+		t.Errorf("the store was asked for the lost pack %d times, want once: the head's answer decides it",
+			opens[lost.Object])
+	}
+	if opens[large.Object] != 1 {
+		t.Errorf("the pack in flight at the not-found was fetched %d times, want once: nothing is installed past "+
+			"the answer that makes the round fail", opens[large.Object])
+	}
+	if got := w.logs.lines(t, "code_pack_missing"); len(got) != 1 {
+		t.Errorf("logged %d code_pack_missing lines, want the one the head's answer made final", len(got))
+	}
+	w.tmpEmpty(t)
+}
+
+// EVERY PACK THE STORE LACKS IS ASKED OF THE HEAD AFTER ITS OWN NOT-FOUND.
+// The head's answer after one pack's not-found says nothing of a pack the
+// store fails afterwards: that pack's row may leave the log after the answer
+// and its object go with it — a compaction retiring it, the collector deleting
+// it — exactly as the first one's did. So each not-found is decided by a read
+// made after it. Decided by the first one's read, the second failed the round
+// naming a pack no row names, and logged code_pack_missing for it: what asking
+// the head again is there to stop.
+//
+// The retirements come one after the other: the round's first answer names
+// three pushes, two of which are merged and collected once that answer is
+// made; the head's answer after their not-found names that merge and the
+// third push, which are merged in turn and collected once THAT answer is made.
+// The third push's GET is held while the round installs from its first answer,
+// so the round meets it from its second however its downloads interleave. The
+// round converges on the second merge to a fresh cache's image, cold (a full
+// read) and warm (a delta).
+//
+// Mutation: decide every not-found after the first by the first one's read
+// (the round fails ErrPackMissing naming the first merge or the third push).
+func TestEveryPackTheStoreLacksIsAskedOfTheHeadAfterItsOwnNotFound(t *testing.T) {
+	t.Parallel()
+	for _, warm := range []bool{false, true} {
+		t.Run(fmt.Sprintf("warm=%t", warm), func(t *testing.T) {
+			t.Parallel()
+			w := newSyncWorld(t, onMemory)
+			repo := w.repo(t, 1)
+			kept, _ := w.push(t, repo, "refs/heads/main", nil)
+			c := w.open(t)
+			if warm {
+				w.sync(t, c, repo).Release()
+			}
+			_, first := w.push(t, repo, "refs/heads/main", nil)
+			two, second := w.push(t, repo, "refs/heads/main", nil)
+			tip, third := w.push(t, repo, "refs/heads/main", nil)
+			// Each merge stored before its record, as every pack is: one pack
+			// of every object the packs it replaces hold.
+			merged := func(to string) code.PackRow {
+				bare := gittest.Empty(t)
+				return w.storeBundle(t, gittest.Bundle(t, bare,
+					gittest.Pack(t, w.client, bare, w.repos[repo].work, to, "^"+kept)), "")
+			}
+			early, late := merged(two), merged(tip)
+			// retire applies a compaction of gone into into, and collects gone's
+			// objects as the collector does once their grace has passed.
+			retire := func(into code.PackRow, gone ...code.PackRow) {
+				w.log.set(func(f *fakeLog) {
+					r := f.repos[repo]
+					r.packs = slices.DeleteFunc(r.packs, func(p code.PackRow) bool {
+						return slices.ContainsFunc(gone, func(g code.PackRow) bool { return g.PackID == p.PackID })
+					})
+					f.seq++
+					row := into
+					row.Added = f.at()
+					r.packs = append(r.packs, row)
+				})
+				for _, g := range gone {
+					if err := w.store.Delete(t.Context(), g.Object); err != nil {
+						t.Errorf("collecting the retired pack %s: %v", g.PackID, err)
+					}
+				}
+			}
+			var answers atomic.Int32
+			w.log.set(func(f *fakeLog) {
+				f.after = func(fakeCall, *code.RepoSnapshot) {
+					switch answers.Add(1) {
+					case 1:
+						retire(early, first, second)
+					case 2:
+						retire(late, early, third)
+					}
+				}
+			})
+			held := make(chan struct{})
+			t.Cleanup(func() { close(held) }) // before the cache's Stop, which waits for the round
+			w.objects.hold = func(k objstore.Key) <-chan struct{} {
+				if k == third.Object && answers.Load() == 1 {
+					return held
+				}
+				return nil
+			}
+			pages := len(w.log.firstPages(repo))
+			s, err := c.Sync(t.Context(), repo, linearizable)
+			if err != nil {
+				t.Fatalf("a linearizable round whose packs were retired and collected under each of its reads = "+
+					"%v, want it converged on the last merge", err)
+			}
+			defer s.Release()
+			var levels []string
+			for _, call := range w.log.firstPages(repo)[pages:] {
+				levels = append(levels, string(call.Level))
+			}
+			if fmt.Sprint(levels) != "[linearizable linearizable linearizable]" {
+				t.Errorf("the round read its snapshot at %v, want at the log's head, and there once more after each "+
+					"answer's not-found", levels)
+			}
+			if want := map[bool]cache.SyncKind{false: cache.SyncFull, true: cache.SyncDelta}[warm]; s.Kind != want {
+				t.Errorf("Kind = %s, want %s", s.Kind, want)
+			}
+			if got, want := w.image(t, c, repo), w.rebuilt(t, repo); got != want {
+				t.Errorf("the converged image:\n%s\nwant a fresh cache's of the rows the log holds now:\n%s", got, want)
+			}
+			if _, err := runGit(t, w.pool, s.Dir, "", "cat-file", "-e", tip); err != nil {
+				t.Errorf("the converged copy does not hold the tip the retired packs carried: %v", err)
+			}
+			if got := w.logs.lines(t, "code_pack_missing"); len(got) != 0 {
+				t.Errorf("logged %d code_pack_missing lines for packs the log's head no longer names", len(got))
+			}
+			w.tmpEmpty(t)
+		})
+	}
+}
+
+// A FORCED ROUND THAT MEETS A LOST PACK HASHES ITS INDEX FILES ONCE. A
+// request's repair in place reads the copy whole at the log's head and holds
+// every index file to its checksum, vouched or not — about a quarter of the
+// copy's pack bytes, holding every reader of the repository. A pack the rows
+// name that the store has lost is decided by the head's answer after its
+// not-found, and the round ends there; applied again, it hashed every file a
+// second time for the same not-found.
+//
+// A third read is failed, so a round that kept asking fails the case rather
+// than hangs it.
+//
+// Mutation: apply the head's answer whatever it names (every index file is
+// hashed twice).
+func TestAForcedRoundThatMeetsALostPackHashesOnce(t *testing.T) {
+	t.Parallel()
+	thirdRead := errors.New("a round read its snapshot a third time")
+	w := newSyncWorld(t, onMemory)
+	h := w.measured(t)
+	var (
+		mu     sync.Mutex
+		hashed = map[string]int{}
+	)
+	c := w.open(t, func(o *cache.Options) {
+		cache.WhileHashing(o, func(path string) {
+			mu.Lock()
+			defer mu.Unlock()
+			hashed[filepath.Base(path)]++
+		})
+	})
+	s := w.sync(t, c, h.repo)
+	_, lost := w.push(t, h.repo, "refs/heads/main", nil)
+	if err := w.store.Delete(t.Context(), lost.Object); err != nil {
+		t.Fatal(err)
+	}
+	var reads atomic.Int32
+	w.log.set(func(f *fakeLog) {
+		f.hook = func(call fakeCall) error {
+			if call.Page == 1 && reads.Add(1) == 3 {
+				return thirdRead
+			}
+			return nil
+		}
+	})
+	mu.Lock()
+	clear(hashed)
+	mu.Unlock()
+	_, err := c.Rebuild(t.Context(), s, cache.Failure{Reason: cache.RebuildMissing, Began: time.Now()})
+	var missing *cache.ErrPackMissing
+	if !errors.As(err, &missing) || missing.Pack.PackID != lost.PackID || missing.Damaged {
+		t.Fatalf("Rebuild: %v, want the forced round's *ErrPackMissing naming %s", err, lost.PackID)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(hashed) == 0 {
+		t.Fatal("the forced round hashed no file: the case tests nothing")
+	}
+	for name, n := range hashed {
+		if n != 1 {
+			t.Errorf("the forced round hashed %s %d times, want once", name, n)
+		}
+	}
+}
+
 // A PACK A FULL ANSWER NAMED IS DECIDED BY A FULL READ. The log may answer a
 // delta in full — page 1 decides, where the delta would outweigh its full
 // answer or reach below its swept tombstones — and a full answer names packs
