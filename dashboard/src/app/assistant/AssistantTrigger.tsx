@@ -25,7 +25,7 @@ import {
   VisuallyHidden,
   useMediaMatch,
 } from "@crewlethq/ui";
-import { ProductMark } from "@crewlethq/icons";
+import { ProductMark } from "@crewlethq/icons/product-mark";
 import { PHONE_BREAKPOINT, useKeyHints } from "../layout.ts";
 import { capsOf, keyRow } from "../keymap.ts";
 import { ASSISTANT_TRIGGER_ID, useAssistantControl } from "./control.ts";
