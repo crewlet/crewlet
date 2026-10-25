@@ -96,13 +96,16 @@ type OperatorDeps struct {
 // two boots of one config advertise the same list.
 func OperatorTools(deps OperatorDeps) []tools.Callable {
 	deps.Work.Authorize, deps.Pages.Authorize = deps.Authorize, deps.Authorize
-	work, pages := deps.Work, deps.Pages
 	// A CALL HERE IS AN OPERATION ITS CALLER HOLDS, because there is no
 	// turn to derive one from: every write answers with its `op_id`, and
-	// the call brought back with it is that operation again. See
-	// [WorkDeps.bindOperation] — and this is the only place that says so,
-	// because it is a fact about this surface rather than a setting.
-	work.callerOperations = true
+	// the call brought back with it is that operation again ([operations]).
+	// This is the only place that says so, for every family of write tools
+	// built below — the tracker's here, the artifacts' and the datastore's
+	// from deps.Artifacts — because it is a fact about this surface rather
+	// than a setting. The artifacts mint on their own clock.
+	deps.Work.ops = operations{callerOperations: true}
+	deps.Artifacts.ops = operations{callerOperations: true, now: deps.Artifacts.Now}
+	work, pages := deps.Work, deps.Pages
 	candidates := []candidate{
 		{&listWorkItems{deps: work}, work.Reader != nil},
 		{&getWorkItem{deps: work}, work.Reader != nil},

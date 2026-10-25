@@ -67,7 +67,7 @@ func (t *moveWorkItem) Description() string {
 }
 
 func (t *moveWorkItem) Parameters() map[string]any {
-	return t.deps.operationParam(map[string]any{
+	return t.deps.ops.param(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"item": map[string]any{

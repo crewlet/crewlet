@@ -177,7 +177,7 @@ func (t *createArtifact) Description() string {
 }
 
 func (t *createArtifact) Parameters() map[string]any {
-	return t.deps.writeParams(map[string]any{
+	return t.deps.ops.param(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"kind": map[string]any{
@@ -677,7 +677,7 @@ func (t *publishArtifact) Description() string {
 }
 
 func (t *publishArtifact) Parameters() map[string]any {
-	return t.deps.writeParams(map[string]any{
+	return t.deps.ops.param(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"artifact": artifactParam(),
@@ -1051,7 +1051,7 @@ func (t *updateArtifact) Description() string {
 }
 
 func (t *updateArtifact) Parameters() map[string]any {
-	return t.deps.writeParams(map[string]any{
+	return t.deps.ops.param(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"artifact":    artifactParam(),

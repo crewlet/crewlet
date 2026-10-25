@@ -135,7 +135,7 @@ func (t *setPriorities) Description() string {
 }
 
 func (t *setPriorities) Parameters() map[string]any {
-	return t.deps.operationParam(map[string]any{
+	return t.deps.ops.param(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"handle": map[string]any{
@@ -290,7 +290,7 @@ func (t *setPins) Parameters() map[string]any {
 		},
 		"required": []string{"kind", "id"},
 	}
-	return t.deps.operationParam(map[string]any{
+	return t.deps.ops.param(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"views": setChangeSchema(map[string]any{"type": "string"},
@@ -390,7 +390,7 @@ func (t *markInbox) Parameters() map[string]any {
 			"description": description,
 		}
 	}
-	return t.deps.operationParam(map[string]any{
+	return t.deps.ops.param(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"read":     ids("Record ids to mark read — done."),

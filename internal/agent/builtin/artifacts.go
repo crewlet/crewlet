@@ -238,11 +238,13 @@ type ArtifactDeps struct {
 	// looping turn bury the company's tree.
 	FolderTurns *FolderTurns
 
-	// Set by [Register] and [OperatorTools] from the deps around them.
-	work             WorkDeps
-	compact          *compact.Compactor
-	authorize        Authorizer
-	callerOperations bool
+	// Set by [Register] and [OperatorTools] from the deps around them; ops,
+	// the one operation rule every family of write tools takes
+	// ([operations]), by [OperatorTools] alone.
+	work      WorkDeps
+	compact   *compact.Compactor
+	authorize Authorizer
+	ops       operations
 }
 
 // serves reports whether every half the tools act through is wired. They are
@@ -309,10 +311,6 @@ func artifactCandidates(deps Deps) []candidate {
 func artifactOperatorCandidates(deps OperatorDeps) []candidate {
 	a := deps.Artifacts
 	a.work, a.authorize = deps.Work, deps.Authorize
-	// A CALL HERE HOLDS ITS OWN OPERATION, as the tracker's do: there is no
-	// turn to derive one from, so a write answers with its `op_id` and a
-	// call bringing it back is that operation again.
-	a.callerOperations = true
 	if a.Org == nil {
 		a.Org = deps.Org
 	}
@@ -473,7 +471,9 @@ func (d ArtifactDeps) ceilingFor(ctx context.Context, turn *turnctx.Turn,
 }
 
 // operation settles the operation key a write's records derive from, the
-// `op_id` its answer carries, or the refusal of one brought back.
+// `op_id` its answer carries, or the refusal of one brought back — by the one
+// rule every family of write tools takes ([operations.bind]), seeded where the
+// call already carries its key ([ArtifactDeps.carriedKey]):
 //
 //   - IN A TURN, a key derived from the turn's seed, the tool and this call's
 //     repeat count in the run ([pageOpKey]'s rule), so a re-run turn's publish
@@ -484,69 +484,37 @@ func (d ArtifactDeps) ceilingFor(ctx context.Context, turn *turnctx.Turn,
 func (d ArtifactDeps) operation(ctx context.Context, turn *turnctx.Turn, tool string,
 	args map[string]any) (key, opID, refusal string) {
 
-	raw, brought := args[opIDArg]
-	if text, ok := raw.(string); ok && text == "" {
-		brought = false
-	}
-	if seed := turnKey(turn); seed != "" {
-		if brought {
-			return "", "", fmt.Sprintf("%s takes no `op_id` in a turn: the turn "+
-				"names the operation, so the same call made again is already the "+
-				"same publish. Leave it out.", tool)
-		}
-		identity := []string{artifactCallNamespace, seed, tool}
-		if n := turn.CallLog().Ordinal(tool, args); n > 0 {
-			identity = append(identity, "repeat:"+strconv.Itoa(n))
-		}
-		return statelog.DeriveOpID(turnSince(turn), "", identity...), "", ""
-	}
-	if d.CallerKey != nil {
-		if k := d.CallerKey(ctx); k != "" {
-			if brought {
-				return "", "", fmt.Sprintf("%s takes no `op_id` beside the request's "+
-					"own operation key: send the same request again to repeat it.", tool)
-			}
-			return k, "", ""
-		}
-	}
-	if !d.callerOperations {
-		if brought {
-			return "", "", fmt.Sprintf("%s takes no `op_id` here. Leave it out.", tool)
-		}
-		return "", "", ""
-	}
-	call := callName(tool, args)
-	if !brought {
-		op := statelog.NewOpID(d.now(), call)
-		return op, op, ""
-	}
-	op, _ := raw.(string)
-	if err := statelog.CheckCallerOpID(op); err != nil {
-		return "", "", fmt.Sprintf("%s refused that `op_id`: %v", tool, err)
-	}
-	if !answeredFor(op, call) {
-		return "", "", fmt.Sprintf("%s refused that `op_id`, and nothing was written: "+
-			"it was answered for another call, another tool or this one with other "+
-			"arguments. To finish that call, send its arguments unchanged with it; to "+
-			"make this one, leave `op_id` out.", tool)
+	key = d.carriedKey(ctx, turn, tool, args)
+	op, refusal := d.ops.bind(tool, args, key != "")
+	switch {
+	case refusal != "":
+		return "", "", refusal
+	case key != "":
+		return key, "", ""
 	}
 	return op, op, ""
 }
 
-// writeParams adds the operator surface's `op_id` to a write tool's schema,
-// on the surface whose callers bring one back and nowhere else.
-func (d ArtifactDeps) writeParams(schema map[string]any) map[string]any {
-	if !d.callerOperations {
-		return schema
+// carriedKey is the operation key a call derives from what it carries — its
+// turn, or its transport's key — or "" where it carries neither.
+//
+// THE ARTIFACTS' OWN DERIVATION, beside the rule they share: a turn's key is
+// named under [artifactCallNamespace], whose value is fixed for the life of
+// the format.
+func (d ArtifactDeps) carriedKey(ctx context.Context, turn *turnctx.Turn, tool string,
+	args map[string]any) string {
+
+	if seed := turnKey(turn); seed != "" {
+		identity := []string{artifactCallNamespace, seed, tool}
+		if n := turn.CallLog().Ordinal(tool, args); n > 0 {
+			identity = append(identity, "repeat:"+strconv.Itoa(n))
+		}
+		return statelog.DeriveOpID(turnSince(turn), "", identity...)
 	}
-	props, _ := schema["properties"].(map[string]any)
-	props[opIDArg] = map[string]any{
-		"type": "string",
-		"description": "Leave it out for a new write. To finish one an earlier " +
-			"answer from this tool left `unknown`, send back the `op_id` that " +
-			"answer carried, unchanged, with exactly the same arguments.",
+	if d.CallerKey != nil {
+		return d.CallerKey(ctx)
 	}
-	return schema
+	return ""
 }
 
 // objectOf is a stored artifact as the authority table decides it.

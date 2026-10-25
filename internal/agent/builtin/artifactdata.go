@@ -128,8 +128,6 @@ func artifactDataCandidates(deps Deps) []candidate {
 func artifactDataOperatorCandidates(deps OperatorDeps) []candidate {
 	a := deps.Artifacts
 	a.work, a.authorize = deps.Work, deps.Authorize
-	// A CALL HERE HOLDS ITS OWN OPERATION, as the artifacts tools' do.
-	a.callerOperations = true
 	if a.Org == nil {
 		a.Org = deps.Org
 	}

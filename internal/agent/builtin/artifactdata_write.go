@@ -34,7 +34,7 @@ func (t *writeArtifactData) Description() string {
 }
 
 func (t *writeArtifactData) Parameters() map[string]any {
-	return t.d.art.writeParams(map[string]any{
+	return t.d.art.ops.param(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"artifact": artifactParam(),
@@ -239,7 +239,7 @@ func (t *setArtifactSchema) Description() string {
 }
 
 func (t *setArtifactSchema) Parameters() map[string]any {
-	return t.d.art.writeParams(map[string]any{
+	return t.d.art.ops.param(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"artifact": artifactParam(),

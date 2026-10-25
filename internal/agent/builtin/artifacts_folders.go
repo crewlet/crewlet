@@ -377,7 +377,7 @@ func (t *createArtifactFolder) Description() string {
 }
 
 func (t *createArtifactFolder) Parameters() map[string]any {
-	return t.deps.writeParams(map[string]any{
+	return t.deps.ops.param(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"parent": map[string]any{
@@ -531,7 +531,7 @@ func (t *moveArtifact) Description() string {
 }
 
 func (t *moveArtifact) Parameters() map[string]any {
-	return t.deps.writeParams(map[string]any{
+	return t.deps.ops.param(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"artifacts": map[string]any{

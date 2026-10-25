@@ -419,7 +419,7 @@ func (t *writeProjectFile) Description() string {
 }
 
 func (t *writeProjectFile) Parameters() map[string]any {
-	return t.deps.operationParam(map[string]any{
+	return t.deps.ops.param(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"project": projectParameter(),
@@ -617,7 +617,7 @@ func (t *removeProjectFile) Description() string {
 }
 
 func (t *removeProjectFile) Parameters() map[string]any {
-	return t.deps.operationParam(map[string]any{
+	return t.deps.ops.param(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"project": projectParameter(),
