@@ -23,6 +23,7 @@ func TestTheSmokeTestCertifiesEveryShippedToolRoute(t *testing.T) {
 		"copilot":    "joined to its record by name and arguments",
 		"grok":       "joined to its record by name and arguments",
 		"pi":         "joined to its record by name and arguments",
+		"kimi-code":  "joined to its record by name and arguments",
 	} {
 		t.Run(agent, func(t *testing.T) {
 			t.Parallel()

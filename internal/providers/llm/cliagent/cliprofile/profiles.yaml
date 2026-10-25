@@ -2713,8 +2713,9 @@ kimi-code:
   # the one tool offered, and the engine read each answer. Both builds read
   # every variable below. The retry cap and the failure classifications are
   # off real 401 and 429 responses to 0.42.0. What is NOT measured is a spent
-  # Kimi subscription, which no profile here can produce on demand.
-  written_for: "Kimi Code CLI 2.3.x, measured on 0.42.0 and 2.3.1 (`kimi --version`) — MoonshotAI's OWN, from @moonshot-ai/kimi-code"
+  # Kimi subscription, which no profile here can produce on demand. The tool
+  # route (mcp, requests) is measured on 2.3.2 — see there.
+  written_for: "Kimi Code CLI 2.3.x, measured on 0.42.0, 2.3.1 and 2.3.2 (`kimi --version`) — MoonshotAI's OWN, from @moonshot-ai/kimi-code"
   version_args: ["--version"]
   # `--output-format stream-json` IS NOT OPTIONAL, and the reason is the
   # ANSWER rather than the failure classification (the opposite of muse-code's
@@ -2746,7 +2747,10 @@ kimi-code:
   #
   # MEASURED on both builds, by reading the tool array the CLI actually put on
   # the wire: TWENTY-FIVE tools by default, ONE with this agent file, on either
-  # channel. What goes is `Bash`, `Read`, `Write`, `Edit`, `Grep`, `Glob`, the
+  # channel — and on the tool route that one and the crewlet server's, which
+  # the CLI offers as `mcp__crewlet__<name>` only where the allowlist names
+  # them (`mcp__crewlet__*`; with no such server, as on a text function, the
+  # entry matches nothing). What goes is `Bash`, `Read`, `Write`, `Edit`, `Grep`, `Glob`, the
   # plan-mode pair, `TodoList`, `Skill`, `AskUserQuestion`, `WaitFor`, the
   # `Task*` background family, the `Cron*` family, an undocumented GOAL family
   # (`CreateGoal`, `GetGoal`, `UpdateGoal`, `SetGoalBudget`) — and
@@ -2870,6 +2874,7 @@ kimi-code:
         tools:
           - WebSearch
           - FetchURL
+          - mcp__crewlet__*
         ---
         {system}
   append_system_prompt:
@@ -2883,6 +2888,7 @@ kimi-code:
         tools:
           - WebSearch
           - FetchURL
+          - mcp__crewlet__*
         ---
         {system}
 
@@ -2900,9 +2906,11 @@ kimi-code:
   # not written to the stream at all, and the "resuming session" notices and
   # tool progress go to stderr.
   #
-  # With the agent file's allowlist in force there is no tool call and
-  # therefore exactly one assistant message, which matters because this
-  # package joins a stream's text hits with a newline.
+  # A text function's allowlist leaves it no tool to call, so its stream holds
+  # exactly one assistant message, which matters because this package joins a
+  # stream's text hits with a newline. A run with tools prints one per step
+  # and is answered from its record instead — the last step's prose (see
+  # requests).
   #
   # The second path is the array form, for the same reason cursor-agent
   # declares two: `content` is a string on this build, and a chat message's
@@ -2961,6 +2969,105 @@ kimi-code:
     KIMI_DISABLE_TELEMETRY: "1"
   config_env:
     KIMI_CODE_HOME: ".kimi-code"
+  # THE HOME STARTS NO MCP SERVER OF ITS OWN. The CLI starts every server its
+  # home's mcp.json names, and every server an installed plugin's manifest
+  # names — on every call, a text function's included, whatever the agent
+  # file allows the model — so both are rewritten every generation: the
+  # mcp.json naming none, and the plugin list empty, which also keeps a
+  # plugin's hooks, skills and prompt additions out. Measured on 2.3.2: a
+  # server planted in each started on a run with tools and on a text function
+  # without these seeds, and neither with them.
+  seed_files:
+    - path: .kimi-code/mcp.json
+      content: '{"mcpServers":{}}'
+    - path: .kimi-code/plugins/installed.json
+      content: '{"version":1,"plugins":[]}'
+  # THE SEAT'S TOOLS: one stdio server, in the call's own .kimi-code/mcp.json
+  # — the project file of the directory the CLI runs in — which the CLI reads
+  # only in a TRUSTED workspace; KIMI_CODE_TRUST_WORKSPACE trusts this one
+  # call's directory, and trust gates nothing on this build but a project's MCP
+  # files. The CLI takes no MCP file by flag and an agent file declares no
+  # server. Trust also reads the `.mcp.json` at the project root, which is the
+  # call's directory itself: the engine's .git file ends the walk there, as it
+  # does the AGENTS.md chain. Measured on 2.3.2 through the engine's own code
+  # path against a local stand-in, with a checkout above the state directory
+  # holding an .mcp.json and a .kimi-code/mcp.json at every level: none
+  # started; a control run from the state directory, with no .git file in
+  # between, started the checkout's root .mcp.json.
+  #
+  # `deferred: false`, so the tools are offered to the model by name rather
+  # than behind the CLI's tool search, whatever a login's config.toml
+  # defaults to. `toolTimeoutMs` is the CLI's per-call timeout (60 s when
+  # unset; 4 s gave a 10 s call up at 4.0 s). The CLI makes a response's
+  # calls one after another and does not re-read the list when told it
+  # changed (a tool activated mid-run was never offered). A call it cannot
+  # parse the arguments of reaches the server with {} — a tool validates its
+  # own — and one whose arguments are not an object, or whose name lacks the
+  # server's prefix, it refuses itself. It has no turn cap of its own unless
+  # KIMI_LOOP_MAX_STEPS_PER_TURN is set: a run's rounds are bounded by the
+  # phase's.
+  mcp:
+    seed:
+      - path: .kimi-code/mcp.json
+        in: work
+        content: '{"mcpServers":{"crewlet":{"command":{relay_command_json},"args":{relay_args_json},"toolTimeoutMs":{tool_timeout_ms},"deferred":false}}}'
+    env:
+      KIMI_CODE_TRUST_WORKSPACE: "1"
+    tool_timeout_seconds: 600
+    relists: false
+    concurrency: in_turn
+  # EACH REQUEST, FROM THE WIRE LOG the CLI keeps for the run in the seat's
+  # home — sessions/wd_<directory>_<digest>/session_<id>/agents/main/wire.jsonl,
+  # named after the call's working directory and a session id it mints, so the
+  # run's own is told from every other call's of the seat by its profile.bind
+  # event, which names the directory a few lines in, after the tools the run
+  # was offered. A step is a request: step.begin opens it, the llm.request
+  # names the model, usage.record gives its counts as soon as the response is
+  # in — `inputOther` WITHOUT the cached part and `output` with the reasoning
+  # in it (measured with a stand-in reporting 40 cached and 7 reasoning tokens
+  # of a 101-token prompt: 61 + 40, 12 out) — its prose and calls follow under
+  # its id, the calls' results, and step.end with why it stopped and the same
+  # counts again. The CLI sends no id with a call, so a call is joined by name
+  # and arguments; each was in the log within 0.15 s of reaching the server.
+  # Its stdout is the assistant's messages, and a failure is on stderr alone.
+  requests:
+    source: file
+    in: home
+    file: ".kimi-code/sessions/*/session_*/agents/main/wire.jsonl"
+    owner:
+      match: [{path: ["type"], equals: "profile.bind"}]
+      path: ["environmentDisclosure", "cwd"]
+      equals: "{work}"
+    host_prefix: "mcp__crewlet__"
+    stops: {tool_use: tool_use, end_turn: end}
+    events:
+      - match: [{path: ["type"], equals: "llm.tools_snapshot"}]
+        tools: ["tools"]
+      - match: [{path: ["type"], equals: "context.append_loop_event"}, {path: ["event", "type"], equals: "step.begin"}]
+        opens: true
+        id: ["event", "uuid"]
+      - match: [{path: ["type"], equals: "llm.request"}, {path: ["kind"], equals: "loop"}]
+        model: ["model"]
+      - match: [{path: ["type"], equals: "usage.record"}, {path: ["usageScope"], equals: "turn"}]
+        usage:
+          input: [["usage", "inputOther"]]
+          output: [["usage", "output"]]
+          cache_read: [["usage", "inputCacheRead"]]
+          cache_write: [["usage", "inputCacheCreation"]]
+      - match: [{path: ["type"], equals: "context.append_loop_event"}, {path: ["event", "type"], equals: "content.part"}, {path: ["event", "part", "type"], equals: "text"}]
+        id: ["event", "stepUuid"]
+        text: ["event", "part", "text"]
+      - match: [{path: ["type"], equals: "context.append_loop_event"}, {path: ["event", "type"], equals: "tool.call"}]
+        id: ["event", "stepUuid"]
+        call: {id: ["event", "toolCallId"], name: ["event", "name"], args: ["event", "args"]}
+      - match: [{path: ["type"], equals: "context.append_loop_event"}, {path: ["event", "type"], equals: "step.end"}]
+        id: ["event", "uuid"]
+        stop: ["event", "finishReason"]
+        usage:
+          input: [["event", "usage", "inputOther"]]
+          output: [["event", "usage", "output"]]
+          cache_read: [["event", "usage", "inputCacheRead"]]
+          cache_write: [["event", "usage", "inputCacheCreation"]]
   # TWO FILES, because this CLI splits its login across them: `kimi login`
   # writes the OAuth token to credentials/oauth/kimi-code.json AND injects the
   # provider's `[providers.<name>.oauth]` reference into config.toml, which
