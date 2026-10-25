@@ -163,10 +163,28 @@ func (b Budget) Meter(context.Context, iam.Principal) (toolloop.BudgetMeter, err
 type Audit struct {
 	mu     sync.Mutex
 	events []*events.Event
+	hold   chan struct{}
+}
+
+// Hold makes every publish wait until release closes (or its context ends),
+// so a suite can act while a runner is still tearing down.
+func (a *Audit) Hold(release chan struct{}) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.hold = release
 }
 
 // Publish implements [assistant.AuditPublisher].
-func (a *Audit) Publish(_ context.Context, _ string, ev *events.Event) error {
+func (a *Audit) Publish(ctx context.Context, _ string, ev *events.Event) error {
+	a.mu.Lock()
+	hold := a.hold
+	a.mu.Unlock()
+	if hold != nil {
+		select {
+		case <-hold:
+		case <-ctx.Done():
+		}
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.events = append(a.events, ev)

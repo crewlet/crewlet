@@ -645,13 +645,11 @@ func (s *Service) track(t *turn) {
 // release forgets a runner that ended and gives its person their turn back.
 func (s *Service) release(t *turn) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.turns[t.id] == t {
 		delete(s.turns, t.id)
 	}
-	if s.running[t.person.ID]--; s.running[t.person.ID] <= 0 {
-		delete(s.running, t.person.ID)
-	}
+	s.mu.Unlock()
+	t.freeSlot()
 	t.cancel(nil)
 }
 

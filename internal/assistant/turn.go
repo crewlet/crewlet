@@ -78,6 +78,8 @@ type turn struct {
 	// apps are the apps the turn has read through, across its segments
 	// ([turn.used]).
 	apps map[string]struct{}
+	// freed says the person's running turn was given back ([turn.freeSlot]).
+	freed bool
 	// ended is the state the segment ended in, set once its end is told:
 	// what a Stop that waited for it answers ([Service.stopRunner]).
 	ended wire.TurnState
@@ -394,6 +396,17 @@ func (t *turn) fence() error {
 	return nil
 }
 
+// freeSlot gives the person's running turn back, once.
+func (t *turn) freeSlot() {
+	t.mu.Lock()
+	freed := t.freed
+	t.freed = true
+	t.mu.Unlock()
+	if !freed {
+		t.svc.unadmit(t.person.ID)
+	}
+}
+
 // stop ends the turn as the person asked.
 func (t *turn) stop() { t.cancel(errStopped) }
 
@@ -499,6 +512,11 @@ func (t *turn) conclude(ctx context.Context, res *toolloop.Result, err error) as
 	if failure != nil {
 		t.emit(wire.Frame{Kind: wire.EventError, Error: failure})
 	}
+	// THE PERSON'S RUNNING TURN IS GIVEN BACK BEFORE THE STREAM HEARS THE
+	// END: a client that reads done and asks at once is never refused
+	// assistant_busy by a runner still tearing down (its audit record, a
+	// close it retries).
+	t.freeSlot()
 	duration := t.svc.now().Sub(t.started)
 	t.emit(wire.Frame{Kind: wire.EventDone, Done: &wire.DoneEvent{State: state,
 		DurationMS: duration.Milliseconds(), Steps: end.Steps, MessageID: answer,

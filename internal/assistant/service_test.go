@@ -397,3 +397,28 @@ func TestAStopAnswersTheStateTheTurnTrulyReached(t *testing.T) {
 		t.Errorf("the Stop answered %s while the record says %s", answer.State, row.State)
 	}
 }
+
+// A TURN THAT HAS TOLD ITS END HOLDS NO RUNNING SLOT: a person who reads done
+// and asks again at once is answered, even while the runners before are still
+// tearing down (their audit records unwritten).
+//
+// Mutation: give the slot back only when the runner returns (as before) and
+// the third question is refused assistant_busy behind two finished turns.
+func TestAFinishedTurnHoldsNoRunningSlot(t *testing.T) {
+	t.Parallel()
+	f := assistanttest.NewRig(t, evals.RigOptions{Rounds: []evals.Round{
+		evals.Say("One."), evals.Say("Two."), evals.Say("Three.")}})
+	f.Store.Seed(f.Person.ID, f.Conversation, "Titled")
+	release := make(chan struct{})
+	defer close(release)
+	f.Audit.Hold(release)
+	for i, key := range []string{"first", "second", "third"} {
+		accepted, err := f.Ask(key, "Question "+key, nil)
+		if err != nil {
+			t.Fatalf("question %d after %d finished turns: %v", i+1, i, err)
+		}
+		if done := evals.Last(f.Follow(accepted.TurnID, 0), wire.EventDone); done == nil {
+			t.Fatalf("question %d never ended", i+1)
+		}
+	}
+}
