@@ -89,13 +89,8 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	// for the segment that resumes from the run to pay — bound to the run's
 	// job by the launch below, before the box that makes them exists.
 	ledger := newBridgeLedger(pending, req.Spend)
-	endpoint := e.bridge.Open(&mcpbridge.Session{
-		RunID:   l.turn.RunID,
-		Handle:  l.turn.Handle(),
-		Role:    l.seat.Name,
-		Surface: req.Surface,
-		Ledger:  ledger,
-	})
+	endpoint := e.bridge.Open(mcpbridge.SeatSession(l.turn.RunID, l.turn.Handle(), l.seat.Name,
+		req.Surface, ledger))
 	if endpoint == "" {
 		// NO ENDPOINT IS A REFUSAL, not a degraded run. A coding agent
 		// with none of the seat's tools cannot answer anybody, cannot

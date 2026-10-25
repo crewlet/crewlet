@@ -173,15 +173,15 @@ func newFixture(t *testing.T, offer ...string) *fixture {
 	if err := reg.Register(widen, tools.OriginBuiltin); err != nil {
 		t.Fatalf("Register(activate): %v", err)
 	}
+	if err := reg.Register(whoami{}, tools.OriginBuiltin); err != nil {
+		t.Fatalf("Register(whoami): %v", err)
+	}
 	if len(offer) == 0 {
 		offer = []string{"read_page", "post_message"}
 	}
 	f.surface = tools.NewSurface("execute", reg.Snapshot(), offer).ForTurn(seatTurn())
 	f.bridge = bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "test-key")})
-	f.session = &mcpbridge.Session{
-		RunID: "run-1", Handle: "dev", Role: "Engineer",
-		Surface: f.surface, Ledger: f.ledger,
-	}
+	f.session = mcpbridge.SeatSession("run-1", "dev", "Engineer", f.surface, f.ledger)
 
 	mux := http.NewServeMux()
 	mux.Handle(mcpbridge.PathPrefix+"{token}", f.bridge.Handler())
@@ -390,9 +390,7 @@ func TestNoBaseURLMintsNoEndpointAndHoldsNoSession(t *testing.T) {
 	b := bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "k")})
 	// Mounted, so the missing base URL is the only reason to refuse.
 	_ = b.Handler()
-	if url := b.Open(&mcpbridge.Session{
-		RunID: "run-1", Surface: emptySurface(),
-	}); url != "" {
+	if url := b.Open(mcpbridge.SeatSession("run-1", "", "", emptySurface(), nil)); url != "" {
 		t.Errorf("endpoint = %q, want empty", url)
 	}
 	if b.Live() != 0 {
@@ -693,10 +691,7 @@ func TestReopeningARunReplacesItsEarlierSession(t *testing.T) {
 		t.Fatal("no MCP session on the first run")
 	}
 
-	second := &mcpbridge.Session{
-		RunID: "run-1", Handle: "dev", Role: "Engineer",
-		Surface: f.surface, Ledger: f.ledger,
-	}
+	second := mcpbridge.SeatSession("run-1", "dev", "Engineer", f.surface, f.ledger)
 	url := f.bridge.Open(second)
 	if n := first.Connections(); n != 0 {
 		t.Errorf("the relaunched run's earlier session keeps %d box connections", n)
@@ -723,10 +718,7 @@ func TestASupersededBoxsTokenNoLongerResolves(t *testing.T) {
 		t.Fatalf("the first run could not dispatch: %s", text(res))
 	}
 
-	fresh := f.bridge.Open(&mcpbridge.Session{
-		RunID: "run-1", Handle: "dev", Role: "Engineer",
-		Surface: f.surface, Ledger: f.ledger,
-	})
+	fresh := f.bridge.Open(mcpbridge.SeatSession("run-1", "dev", "Engineer", f.surface, f.ledger))
 	if fresh == stale {
 		t.Fatal("the relaunched run was handed the superseded box's own URL")
 	}
@@ -822,13 +814,13 @@ func TestAnIncompleteSessionIsRefusedRatherThanRegistered(t *testing.T) {
 		name    string
 		session *mcpbridge.Session
 	}{
-		{"no run id", &mcpbridge.Session{Handle: "dev", Surface: emptySurface()}},
-		{"no surface", &mcpbridge.Session{RunID: "run-1", Handle: "dev"}},
+		{"no run id", mcpbridge.SeatSession("", "dev", "", emptySurface(), nil)},
+		{"no surface", mcpbridge.SeatSession("run-1", "dev", "", nil, nil)},
 		// A SURFACE NO TURN WAS BOUND TO names no seat, and every bridged
 		// call acts as the run's seat — so it would answer the handshake
 		// and then decide nothing it was asked.
-		{"no seat", &mcpbridge.Session{RunID: "run-1", Handle: "dev",
-			Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil)}},
+		{"no seat", mcpbridge.SeatSession("run-1", "dev", "",
+			tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil), nil)},
 		{"nothing at all", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -850,7 +842,7 @@ func TestAnIncompleteSessionIsRefusedRatherThanRegistered(t *testing.T) {
 func TestABridgeNoListenerMountedOpensNoSession(t *testing.T) {
 	t.Parallel()
 	b := bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "k"), BaseURL: "http://x"})
-	session := &mcpbridge.Session{RunID: "run-1", Handle: "dev", Surface: emptySurface()}
+	session := mcpbridge.SeatSession("run-1", "dev", "", emptySurface(), nil)
 	if b.Mounted() {
 		t.Fatal("a bridge nothing mounted reports itself mounted")
 	}
@@ -930,9 +922,7 @@ func TestAnUnresolvedTokenSaysWhyInTheLogNotTheResponse(t *testing.T) {
 // for, so a case can hand the transport exactly what a box would.
 func (f *fixture) token(t *testing.T, runID string) string {
 	t.Helper()
-	url := f.bridge.Open(&mcpbridge.Session{
-		RunID: runID, Handle: "dev", Role: "Engineer", Surface: f.surface,
-	})
+	url := f.bridge.Open(mcpbridge.SeatSession(runID, "dev", "Engineer", f.surface, nil))
 	if url == "" {
 		t.Fatal("no endpoint")
 	}
