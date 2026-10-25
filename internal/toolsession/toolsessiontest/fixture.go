@@ -247,12 +247,18 @@ func (f *fixture) send(cs *mcp.ClientSession, name string, args any) *pending {
 // dispatcher held has gone.
 func (p *pending) answer(t *testing.T) (*mcp.CallToolResult, error) {
 	t.Helper()
+	p.over(t)
+	return p.res, p.err
+}
+
+// over waits until p's call has come back, whatever reached the client: once
+// its run has ended, no dispatcher still holds its answer.
+func (p *pending) over(t *testing.T) {
+	t.Helper()
 	select {
 	case <-p.done:
-		return p.res, p.err
 	case <-time.After(answerWait):
 		t.Fatal("a call was never answered, though its run has ended")
-		return nil, nil
 	}
 }
 

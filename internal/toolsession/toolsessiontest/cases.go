@@ -33,8 +33,8 @@ func testAClosedFenceRefusesTheCallAndEveryOneAfter(t *testing.T, factory Factor
 	after := f.send(cs, readTool, nil)
 	rec := f.recorded(3)
 	f.served.End(t)
-	fenced.answer(t)
-	after.answer(t)
+	fenced.over(t)
+	after.over(t)
 
 	if n := f.reads.Load(); n != 1 {
 		t.Errorf("the tool ran %d times, want only the call before the fence closed", n)
@@ -67,8 +67,8 @@ func testAFenceThatClosesDuringACallRefusesEveryCallAfterIt(t *testing.T, factor
 	after := f.send(cs, readTool, nil)
 	rec := f.recorded(2)
 	f.served.End(t)
-	running.answer(t)
-	after.answer(t)
+	running.over(t)
+	after.over(t)
 
 	if n := f.reads.Load(); n != 0 {
 		t.Errorf("a call ran %d times after the fence closed under the run", n)
@@ -100,7 +100,7 @@ func testAToolThatPanicsFailsAndEndsTheRun(t *testing.T, factory Factory) {
 	if res, err := broke.answer(t); err == nil && strings.Contains(text(res), panicValue) {
 		t.Errorf("the panic reached the client: %q", text(res))
 	}
-	after.answer(t)
+	after.over(t)
 
 	if n := f.breaks.Load(); n != 1 {
 		t.Errorf("the broken tool ran %d times", n)
