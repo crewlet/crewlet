@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/runner"
@@ -21,23 +22,31 @@ import (
 // it a restart mid-run leaves the reviewer judging a turn whose entire tool log
 // is gone, which the delivery check reads as a turn that acted on nothing.
 
-// bridgedCalls turns a run's durable bridged-call log into the ledger shape
-// the resumed phase reads.
+// bridgedCalls turns a run's durable bridged-call log into the shape the
+// resumed phase reads.
 //
 // THE ONLY RECORD A BOX-MODE RESUME HAS. The process collecting a run may
 // not be the one that launched it, so its tool surface is fresh and has
 // executed nothing: the delivery check, the submission's citations and the
-// iteration ledger all read this list. A call whose arguments cannot be
-// decoded keeps its name and loses its arguments, which renders one ledger
-// line worse — failing the resume over it would lose the whole turn.
-func bridgedCalls(logged []sandbox.BridgeCall) []ledger.Call {
-	out := make([]ledger.Call, 0, len(logged))
+// iteration ledger all read this list, and the phase record states each call
+// with when it ran, for how long and who answered. A call whose arguments
+// cannot be decoded keeps its name and loses its arguments, which renders one
+// ledger line worse — failing the resume over it would lose the whole turn.
+func bridgedCalls(logged []sandbox.BridgeCall) []runner.BridgedCall {
+	out := make([]runner.BridgedCall, 0, len(logged))
 	for _, call := range logged {
-		out = append(out, ledger.Call{
-			Name:   call.Name,
-			Args:   decodeBridgeArgs(call.Args),
-			Result: call.Output,
-			Failed: call.Failed,
+		out = append(out, runner.BridgedCall{
+			Call: ledger.Call{
+				Name:   call.Name,
+				Args:   decodeBridgeArgs(call.Args),
+				Result: call.Output,
+				Failed: call.Failed,
+			},
+			Seq:       call.Seq,
+			StartedAt: call.StartedAt,
+			Duration:  time.Duration(call.DurationMS) * time.Millisecond,
+			Origin:    call.Origin,
+			Server:    call.Server,
 		})
 	}
 	return out

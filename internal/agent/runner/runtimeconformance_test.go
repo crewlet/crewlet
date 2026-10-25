@@ -213,7 +213,7 @@ func runBox(t *testing.T, tc scenario) turn.Work {
 	resumed, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
 		buildOpts{
 			agentRun: &recordingLauncher{},
-			resume:   &runner.Resume{State: state, Answer: tc.text, Bridged: tc.bridged},
+			resume:   &runner.Resume{State: state, Answer: tc.text, Bridged: bridgedRun(tc.bridged)},
 		})
 	w, _, err := resumed.Resume(context.Background(), nil)
 	if err != nil {

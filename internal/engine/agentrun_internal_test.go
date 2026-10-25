@@ -168,12 +168,16 @@ func TestTheBridgeEntryDoesNotFollowTheSeatToItsNextRun(t *testing.T) {
 }
 
 // THE DURABLE LOG IS THE RESUME'S WHOLE RECORD, so the conversion has to keep
-// every field the delivery check, the citations and the ledger read.
+// every field the delivery check, the citations and the ledger read — and
+// what the phase record states each call with: its place in the order the run
+// made its calls, when it ran, for how long and who answered.
 func TestABridgedCallSurvivesTheRoundTripToTheLedger(t *testing.T) {
 	t.Parallel()
+	started := time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC)
 	got := bridgedCalls([]sandbox.BridgeCall{
-		{Name: "slack_post", Args: `{"channel":"C1"}`, Output: "posted"},
-		{Name: "jira_create", Args: "not json", Failed: true},
+		{Name: "slack_post", Args: `{"channel":"C1"}`, Output: "posted", Seq: 2,
+			StartedAt: started, DurationMS: 1500, Origin: "mcp:slack", Server: "slack"},
+		{Name: "jira_create", Args: "not json", Failed: true, Seq: 1},
 	})
 	if len(got) != 2 {
 		t.Fatalf("converted %d calls, want 2", len(got))
@@ -183,6 +187,11 @@ func TestABridgedCallSurvivesTheRoundTripToTheLedger(t *testing.T) {
 	}
 	if got[0].Args["channel"] != "C1" {
 		t.Errorf("arguments were lost: %v", got[0].Args)
+	}
+	if got[0].Seq != 2 || !got[0].StartedAt.Equal(started) ||
+		got[0].Duration != 1500*time.Millisecond ||
+		got[0].Origin != "mcp:slack" || got[0].Server != "slack" {
+		t.Errorf("the call's place, timing or origin was lost: %+v", got[0])
 	}
 	// UNDECODABLE ARGUMENTS KEEP THE CALL. One ledger line renders worse;
 	// failing the resume over it would lose the whole turn.

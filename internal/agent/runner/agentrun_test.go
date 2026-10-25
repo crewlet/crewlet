@@ -3,9 +3,11 @@ package runner_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
@@ -34,6 +36,16 @@ func (l *recordingLauncher) LaunchExecutor(_ context.Context, req runner.AgentRu
 	l.runs++
 	l.req = req
 	return l.err
+}
+
+// bridgedRun is a box-mode run's bridged calls as its row hands them to a
+// resume, each admitted in the order given.
+func bridgedRun(calls []ledger.Call) []runner.BridgedCall {
+	out := make([]runner.BridgedCall, 0, len(calls))
+	for i, call := range calls {
+		out = append(out, runner.BridgedCall{Call: call, Seq: i + 1})
+	}
+	return out
 }
 
 // boxFixture is the shared runner with a box-mode executor.
@@ -229,7 +241,7 @@ func TestAResumedExecutorReachesOnlyWhatAFreshOneDoes(t *testing.T) {
 				opts.resume = &runner.Resume{
 					State:   execstate.State{Version: execstate.Version, AgentRun: true, Round: 1},
 					Answer:  "done",
-					Bridged: []ledger.Call{{Name: "slack_post", Result: "posted"}},
+					Bridged: bridgedRun([]ledger.Call{{Name: "slack_post", Result: "posted"}}),
 				}
 			} else {
 				prov.execute = []llmtest.Response{
@@ -415,14 +427,14 @@ func TestAResumedBoxRunReportsWhatTheRunSubmitted(t *testing.T) {
 	r := boxFixture(t, &recordingLauncher{}, &runner.Resume{
 		State:  execstate.State{Version: execstate.Version, AgentRun: true, Round: 1},
 		Answer: "cloned the repo, fixed the failing test, opened the merge request",
-		Bridged: []ledger.Call{
+		Bridged: bridgedRun([]ledger.Call{
 			{Name: "slack_post", Result: "posted"},
 			{Name: runner.SubmitWorkTool, Args: map[string]any{
 				"outcome":    "delivered",
 				"summary":    "fixed the failing test and opened the MR",
 				"deliveries": []any{"slack_post"},
 			}},
-		},
+		}),
 	})
 
 	w, _, err := r.Resume(context.Background(), nil)
@@ -456,7 +468,7 @@ func TestABoxRunThatNeverSubmittedIsRescued(t *testing.T) {
 	r := boxFixture(t, &recordingLauncher{}, &runner.Resume{
 		State:   execstate.State{Version: execstate.Version, AgentRun: true, Round: 1},
 		Answer:  "I had a look around and then ran out of turns",
-		Bridged: []ledger.Call{{Name: "slack_history", Result: "read"}},
+		Bridged: bridgedRun([]ledger.Call{{Name: "slack_history", Result: "read"}}),
 	})
 
 	w, _, err := r.Resume(context.Background(), nil)
@@ -485,7 +497,7 @@ func TestTheLastSubmissionAnAgentRunMadeWins(t *testing.T) {
 	r := boxFixture(t, &recordingLauncher{}, &runner.Resume{
 		State:  execstate.State{Version: execstate.Version, AgentRun: true, Round: 1},
 		Answer: "done",
-		Bridged: []ledger.Call{
+		Bridged: bridgedRun([]ledger.Call{
 			{Name: "slack_post", Result: "posted"},
 			{Name: runner.SubmitWorkTool, Args: map[string]any{
 				"outcome": "blocked", "summary": "could not reach the repo",
@@ -494,7 +506,7 @@ func TestTheLastSubmissionAnAgentRunMadeWins(t *testing.T) {
 				"outcome": "delivered", "summary": "posted after all",
 				"deliveries": []any{"slack_post"},
 			}},
-		},
+		}),
 	})
 
 	w, _, err := r.Resume(context.Background(), nil)
@@ -503,6 +515,76 @@ func TestTheLastSubmissionAnAgentRunMadeWins(t *testing.T) {
 	}
 	if w.Outcome != turn.OutcomeDelivered || w.Summary != "posted after all" {
 		t.Errorf("outcome = %q, summary = %q — the correction did not win", w.Outcome, w.Summary)
+	}
+}
+
+// THE CORRECTION IS THE CALL MADE LAST, NOT THE ONE THAT FINISHED LAST. The
+// row holds a run's calls in the order they finished — each is appended once
+// it returns — and a CLI that makes calls at once finishes them in whatever
+// order their tools take. So the resume reads them in the order the bridge
+// admitted them, and states each with when it ran, for how long and who
+// answered, as the phase record of any other phase does.
+//
+// Mutation: replay and record the row's own order, and the draft the model
+// replaced is the turn's answer; drop the timing from the executions, and the
+// phase card cannot place the run's calls on a timeline.
+func TestABoxRunIsRecordedInTheOrderItMadeItsCalls(t *testing.T) {
+	t.Parallel()
+	pub := newCapture()
+	started := time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC)
+	draft := map[string]any{"outcome": "delivered", "summary": "posted the first draft",
+		"deliveries": []any{"slack_post"}}
+	correction := map[string]any{"outcome": "delivered", "summary": "posted after all",
+		"deliveries": []any{"slack_post"}}
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}, buildOpts{
+		agentRun: &recordingLauncher{},
+		pub:      pub,
+		resume: &runner.Resume{
+			State:  execstate.State{Version: execstate.Version, AgentRun: true, Round: 1},
+			Answer: "done",
+			// AS THE ROW HOLDS THEM: the correction returned first.
+			Bridged: []runner.BridgedCall{
+				{Call: ledger.Call{Name: "slack_post", Result: "posted"}, Seq: 1,
+					StartedAt: started, Duration: 1500 * time.Millisecond,
+					Origin: tools.OriginMCPPrefix + "slack", Server: "slack"},
+				{Call: ledger.Call{Name: runner.SubmitWorkTool, Args: correction, Result: "submitted"},
+					Seq: 3, StartedAt: started.Add(3 * time.Second), Duration: 10 * time.Millisecond,
+					Origin: tools.OriginBuiltin},
+				{Call: ledger.Call{Name: runner.SubmitWorkTool, Args: draft, Result: "submitted"},
+					Seq: 2, StartedAt: started.Add(2 * time.Second), Duration: 2 * time.Second,
+					Origin: tools.OriginBuiltin},
+			},
+		},
+	})
+
+	w, _, err := r.Resume(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if w.Outcome != turn.OutcomeDelivered || w.Summary != "posted after all" {
+		t.Errorf("outcome = %q, summary = %q: the draft made before the correction won "+
+			"because it finished after it", w.Outcome, w.Summary)
+	}
+	if len(w.Calls) != 3 || w.Calls[2].Args["summary"] != "posted after all" {
+		t.Errorf("calls = %+v, want the run's calls in the order it made them", w.Calls)
+	}
+
+	done := completedPhase(t, pub, "execute")
+	if len(done.ToolExecutions) != 3 {
+		t.Fatalf("tool_executions = %+v, want the run's three calls", done.ToolExecutions)
+	}
+	post, draftRow := done.ToolExecutions[0], done.ToolExecutions[1]
+	if post["name"] != "slack_post" || post["server"] != "slack" ||
+		post["origin"] != tools.OriginMCPPrefix+"slack" {
+		t.Errorf("the first execution is %v, want slack_post answered by the slack server", post)
+	}
+	if post["started_at"] != started.Format(time.RFC3339Nano) || post["duration_ms"] != 1500 {
+		t.Errorf("the first execution is timed %v for %v, want %s for 1500ms",
+			post["started_at"], post["duration_ms"], started.Format(time.RFC3339Nano))
+	}
+	if !strings.Contains(fmt.Sprint(draftRow["arguments"]), "first draft") ||
+		draftRow["duration_ms"] != 2000 {
+		t.Errorf("the second execution is %v, want the draft the run made second", draftRow)
 	}
 }
 
@@ -515,10 +597,10 @@ func TestAMalformedSubmissionRescuesRatherThanFailing(t *testing.T) {
 	r := boxFixture(t, &recordingLauncher{}, &runner.Resume{
 		State:  execstate.State{Version: execstate.Version, AgentRun: true, Round: 1},
 		Answer: "did some things",
-		Bridged: []ledger.Call{
+		Bridged: bridgedRun([]ledger.Call{
 			{Name: "slack_post", Result: "posted"},
 			{Name: runner.SubmitWorkTool, Args: map[string]any{"outcome": "teleported"}},
-		},
+		}),
 	})
 
 	w, _, err := r.Resume(context.Background(), nil)
@@ -674,14 +756,14 @@ func TestAResumedBoxRunPublishesWhatTheRunDid(t *testing.T) {
 		resume: &runner.Resume{
 			State:  execstate.State{Version: execstate.Version, AgentRun: true, Round: 1},
 			Answer: "cloned the repo, fixed the failing test, opened the merge request",
-			Bridged: []ledger.Call{
+			Bridged: bridgedRun([]ledger.Call{
 				{Name: "slack_post", Result: "posted"},
 				{Name: runner.SubmitWorkTool, Args: map[string]any{
 					"outcome":    "delivered",
 					"summary":    "fixed the failing test and opened the MR",
 					"deliveries": []any{"slack_post"},
 				}},
-			},
+			}),
 			Run: runner.RunRecord{
 				CodingAgent: "claude-code", SandboxID: "box-7",
 				DeliveredRefs: []string{"https://example.com/pr/9"},
