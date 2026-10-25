@@ -31,11 +31,14 @@
  * (`routes/artifacts/new/`) is a chunk of its own too, and neither is it
  * prefetched: a reader who opens Artifacts to look never needs an editor.
  *
- * The command palette (`palette/Palette.tsx`) is the one chunk of the frame's
- * own. It is a layer mounted only while open, as the New task sheet is, and
- * the largest single piece of the frame, so the first paint does not carry it.
- * Every screen opens it with a key, so it is the FIRST chunk the idle prefetch
- * fetches, and by the time a reader presses ⌘K it is usually in memory.
+ * The command palette (`palette/Palette.tsx`) and the assistant's panel
+ * (`assistant/chunk/`) are the frame's own chunks. Each is mounted only while
+ * open, as the New task sheet is, and each is a large piece of the frame, so
+ * the first paint carries neither: the entry keeps only the Ask button, the
+ * page context registry, the bus and the one-word status the button reads.
+ * Every screen opens them with a key, so they are the FIRST chunks the idle
+ * prefetch fetches, and by the time a reader presses ⌘K or ⌘. they are
+ * usually in memory.
  *
  * # A failed load is a ChunkLoadError, and it can be retried
  *
@@ -85,8 +88,9 @@ const LOADERS = {
   "new-dashboard": () => import("~/routes/artifacts/new/DashboardCreate.tsx"),
   "new-html": () => import("~/routes/artifacts/new/HtmlCreate.tsx"),
   palette: () => import("./palette/Palette.tsx"),
+  assistant: () => import("./assistant/chunk/index.ts"),
 } satisfies Record<
-  ScreenDir | "org" | "signin" | NewArtifactChunk | "palette",
+  ScreenDir | "org" | "signin" | NewArtifactChunk | "palette" | "assistant",
   () => Promise<unknown>
 >;
 
@@ -112,7 +116,7 @@ type ScreenDir =
  */
 type NewArtifactChunk = `new-${MakeKind}`;
 
-/** A chunk: a workspace, the org editor, the sign-in screens, a create page or the palette. */
+/** A chunk: a workspace, the org editor, the sign-in screens, a create page, the palette or the assistant. */
 export type Chunk = keyof typeof LOADERS;
 
 /** What a chunk's `index.ts` exports. */
@@ -186,11 +190,12 @@ const SCREEN_CHUNKS: Readonly<Record<FramedScreen["screen"], Chunk>> = {
 
 /**
  * Every chunk the idle prefetch fetches, in the order it fetches them: the
- * palette, then the sidebar's from the top. NOT `signin` or a create page;
+ * palette, the assistant, then the sidebar's from the top. NOT `signin` or a create page;
  * see the note above.
  */
 export const CHUNKS: readonly Chunk[] = [
   "palette",
+  "assistant",
   "home",
   "inbox",
   "me",
@@ -210,7 +215,9 @@ export const CHUNKS: readonly Chunk[] = [
  * What a chunk is called in a sentence a reader sees: the places it draws,
  * since a directory's name is nobody's word for anything.
  */
-const CHUNK_LABELS: Readonly<Record<ScreenDir | "org" | "signin" | "palette", string>> = {
+const CHUNK_LABELS: Readonly<
+  Record<ScreenDir | "org" | "signin" | "palette" | "assistant", string>
+> = {
   home: "Home",
   inbox: "Inbox",
   me: "My work",
@@ -226,6 +233,7 @@ const CHUNK_LABELS: Readonly<Record<ScreenDir | "org" | "signin" | "palette", st
   org: "Edit org",
   signin: "sign-in",
   palette: "Search",
+  assistant: "The assistant",
 };
 
 /** What a chunk is called in a sentence a reader sees. */
@@ -258,7 +266,7 @@ export class ChunkLoadError extends Error {
   readonly advice: string;
   constructor(chunk: Chunk, cause: unknown) {
     const title =
-      chunk === "palette"
+      chunk === "palette" || chunk === "assistant"
         ? `${chunkLabel(chunk)} could not be loaded`
         : chunk.startsWith("new-")
           ? `The ${chunkLabel(chunk)} page could not be loaded`

@@ -1261,9 +1261,12 @@ test("the page header's controls slot spaces a screen's controls at the kit's co
   const slot = document.getElementById(PAGE_ACTIONS_SLOT);
   expect(slot?.classList.contains("gap-2")).toBe(true);
   expect(slot?.classList.contains("gap-1")).toBe(false);
-  // AND THEY END THE BAR: a screen's primary action is the last control, after
-  // the frame's star and link, as the approved designs order it.
-  expect(slot?.parentElement?.lastElementChild).toBe(slot);
+  // AND THEY END THE SCREEN'S PART OF THE BAR: a screen's primary action is
+  // its last control, after the frame's star and link, and the only thing
+  // after it is the Ask button that opens the assistant above its panel (D1).
+  const trigger = document.getElementById("assistant-trigger");
+  expect(trigger).not.toBeNull();
+  expect(slot?.nextElementSibling?.contains(trigger)).toBe(true);
 });
 
 // WHERE THE PEEK IS A COLUMN IS A WIDTH PER FRAME, not one per window.
@@ -1486,5 +1489,106 @@ describe("the frame's keys", () => {
     key("g");
     key("w");
     expect(location.hash).toBe("#/work");
+  });
+});
+
+// THE ASSISTANT IS A PANEL OF THE FRAME: ⌘. opens it on any page, the frame's
+// arithmetic decides its shape, and Escape inside it closes the assistant and
+// never the peek beside it, which a reader opened to talk about.
+describe("the assistant", () => {
+  afterEach(() => {
+    sessionStorage.clear();
+  });
+
+  async function open(width: number, hash: string, viewer?: Record<string, unknown>) {
+    const win = installWindow(width);
+    location.hash = hash;
+    const { store, socket } = answering(
+      viewer ? { viewer, fleet: { nodes: [] } } : { fleet: { nodes: [] } },
+    );
+    mountShell(store, socket);
+    await settle();
+    await loadChunk("assistant");
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: ".", ctrlKey: true }));
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Crewlet Assistant" })).toBeDefined(),
+    );
+    const app = document.querySelector<HTMLElement>(".app")!;
+    return { win, app };
+  }
+
+  test("⌘. opens it as a column where the frame holds it, and the peek beside it becomes a drawer", async () => {
+    const { win, app } = await open(1440, "#/work?peek=seat:ceo");
+    try {
+      expect(app.getAttribute("data-aside")).toBe("column");
+      expect(app.getAttribute("data-peek")).toBe("drawer");
+      // THE TAB REMEMBERS IT, for a reload, and never in the browser's
+      // shared storage.
+      expect(JSON.parse(sessionStorage.getItem("crewlet_assistant_tab") ?? "{}").open).toBe(true);
+    } finally {
+      win.restore();
+    }
+  });
+
+  test("over the page below the column's width, and the whole window on a phone", async () => {
+    const narrow = await open(1100, "#/work");
+    try {
+      expect(narrow.app.getAttribute("data-aside")).toBe("overlay");
+      narrow.win.set(600);
+      expect(narrow.app.getAttribute("data-aside")).toBe("sheet");
+    } finally {
+      narrow.win.restore();
+    }
+  });
+
+  test("Escape inside it closes the assistant and leaves an open peek open", async () => {
+    const { win, app } = await open(1600, "#/work?peek=seat:ceo");
+    try {
+      expect(app.getAttribute("data-peek")).toBe("column");
+      const heading = screen.getByRole("heading", { name: "Crewlet Assistant" });
+      act(() => heading.focus());
+      fireEvent.keyDown(heading, { key: "Escape" });
+      await waitFor(() => expect(app.hasAttribute("data-aside")).toBe(false));
+      expect(location.hash).toContain("peek=");
+      expect(document.querySelector(".crewlet-peek-rail")).not.toBeNull();
+    } finally {
+      win.restore();
+    }
+  });
+
+  test("an assistant the company left off is drawn disabled with its reason, and the panel says why", async () => {
+    const { win } = await open(1440, "#/work");
+    try {
+      // THE DEFAULT VIEWER ANSWER CARRIES NO `assistant` MEMBER: an engine
+      // that does not serve it, read as off.
+      expect(screen.getByText("The assistant is off for this company")).toBeDefined();
+      expect(screen.queryByRole("textbox", { name: "Ask the assistant" })).toBeNull();
+    } finally {
+      win.restore();
+    }
+  });
+
+  test("a reader the engine allows gets the composer, with the page attached", async () => {
+    const { win } = await open(1440, "#/work", {
+      login: "U0FOUNDER",
+      grants: ["admin", "tracker", "knowledge"],
+      handle: "ada",
+      owner: "ada",
+      name: "Ada Lovelace",
+      kind: "human",
+      assistant: { available: true },
+    });
+    try {
+      await waitFor(() =>
+        expect(screen.getByRole("textbox", { name: "Ask the assistant" })).toBeDefined(),
+      );
+      expect(
+        screen.getByRole("group", { name: "Attached to this question" }).textContent,
+      ).toContain("Work");
+    } finally {
+      win.restore();
+    }
   });
 });

@@ -72,6 +72,7 @@ describe("which chunk draws a screen", () => {
         "account",
         "agents",
         "artifacts",
+        "assistant",
         "brand",
         "home",
         "inbox",
@@ -458,7 +459,18 @@ describe("the split", () => {
   // while open and loads as a chunk of its own: the command palette, the
   // largest single piece of the frame, which one static import of it would
   // put back into the first paint.
-  const SCREEN_ONLY = ["lib/artifacts/api.ts", "app/palette/Palette.tsx"];
+  // AND THE ASSISTANT'S PANEL, a layer of the same kind: its store, its
+  // reducer, its cards and its stream client stay out of the first paint,
+  // where the entry keeps only the Ask button, the page context registry,
+  // the bus and the one-word status the button reads.
+  const SCREEN_ONLY = [
+    "lib/artifacts/api.ts",
+    "app/palette/Palette.tsx",
+    "app/assistant/chunk/index.ts",
+    "app/assistant/chunk/Drawer.tsx",
+    "app/assistant/chunk/session.ts",
+    "protocol/assistant.ts",
+  ];
 
   test("the entry's static graph reaches no module only a screen needs", () => {
     const byPath = new Map(modules().map((m) => [m.path, m]));

@@ -2064,7 +2064,7 @@ for the keys is the reader who does not know `?` yet.
 
 | Where it is live | Keys |
 |---|---|
-| Anywhere | `Mod+K` search (the same chord closes it), `/` search this screen, `?` the legend, `g` then a letter a workspace, `g r` the running turn (Now running when several run), `g p` switch project (under Work's trail on its scope pages, centred everywhere else), `Mod+\` the navigation drawer on a narrow window |
+| Anywhere | `Mod+K` search (the same chord closes it), `Mod+.` the assistant (pressed inside it, it closes it), `/` search this screen, `?` the legend, `g` then a letter a workspace, `g r` the running turn (Now running when several run), `g p` switch project (under Work's trail on its scope pages, centred everywhere else), `Mod+\` the navigation drawer on a narrow window |
 | In a list | `j` and `k` walk the rows — on a task opened from a list, they open the next and the previous task — `Enter` opens one |
 | With a peek open | `[` and `]` step through the list it was opened from, `Esc` closes it |
 | On a page with tabs | `1`–`9` go to that tab |
@@ -2075,7 +2075,8 @@ for the keys is the reader who does not know `?` yet.
 | Writing a reply | `Mod+Enter` sends it (the Inbox's composer; `Enter` alone is a new line) |
 | Writing the company's principles | `Mod+Enter` saves the part being written and `Esc` stops writing it, asking first when it has changes (bound by the design system's `InlineEditor`); in the standing policies `Enter` adds the policy typed, and `Alt+Up` and `Alt+Down` move the one you are in |
 | In search | `Tab` and `Shift+Tab` walk the scopes (bound by the design system's palette), `Mod+Enter` asks an agent, `Alt+A` assigns the task at hand, `Alt+C` creates a task, `Backspace` in an empty picker goes back |
-| In a dialog, a menu or the drawer | `Esc` closes whatever is on top (bound by the design system's layer stack) |
+| In the assistant | `Enter` sends the question and `Shift+Enter` adds a line (bound by the design system's `Composer`); `Esc` stops a running answer first, then closes the assistant and never a peek beside it; `Up` in an empty box brings back the last question |
+| In a dialog, a menu, the drawer or the assistant | `Esc` closes whatever is on top (bound by the design system's layer stack) |
 
 `Mod` is Command on a Mac and Control elsewhere, and every hint is drawn in
 the platform's own notation with the kit's `Kbd`.
@@ -3976,6 +3977,75 @@ the route can move while it is open — Back, Forward, a phone's back gesture, a
 restored history entry. `Mod+K` closes it from its own field. The step-up
 confirmation is deliberately not in that rule: it is holding a refused request
 open until the reader answers it, and a navigation answers nothing.
+
+## The assistant: a panel of the frame
+
+The Dashboard Assistant answers questions about the company and prepares
+changes for the person to approve, acting strictly as the signed-in person:
+it reads only what they can open, and nothing changes until they approve it.
+The engine's half is its own section of the docs; what the dashboard owns is
+where the panel stands, what it is told about the page, and how a turn is
+drawn.
+
+**It is a panel of the frame, never of a screen.** The **Ask** button ends
+the page bar (above the panel it opens), carries the assistant's Orbit mark
+and the `Mod+.` hint, and stays inline at a phone's width as an icon button.
+It is never hidden: where the reader may not ask it is drawn disabled with the
+engine's reason (`viewer.assistant`: turned off, no model, a session that is
+not a person's, or access that does not include it). While the panel is
+closed, a dot on the button says an answer is on its way or a change waits on
+the reader.
+
+**The frame decides its shape by arithmetic, as it decides the peek's**
+(`app/layout.ts`): a third track of the frame, mirroring the rail, where the
+window holds the page's sheet beside it with the list at its floor (1168 px
+on a screen and 1404 beside Settings' column, at the normal density); over
+the page's end edge, modal, below that; and the whole window on a phone. Its
+track is one more term of every other width, so a peek beside it becomes a
+drawer first (both are columns only from 1588 px) and Settings' column folds
+sooner. It rests at 420 px and is dragged between 360 and 640, from the
+pointer or the keyboard, capped where the page keeps its floor, and kept per
+browser (`crewlet.assistant.width`). It stays open across a navigation, and a
+reload brings back what the tab had (`crewlet_assistant_tab`, in the tab's
+own storage, which the hand-over to another person empties).
+
+**What a page tells it is identifiers, never content**
+(`app/assistant/context.ts`): the screen, its parameters and query, the
+records in view by kind and id, what is selected, and a revision. A screen
+that knows more registers it with `useAssistantContext`, along with the page
+actions it takes from the assistant (each parsed, gated and applied by the
+screen's own code). The page goes with a question as a chip in the composer,
+named by the last two crumbs; removing it sends the question with no page
+until the reader adds it back or opens another page. The drawer and a screen
+talk over a typed module-scoped bus (`app/assistant/bus.ts`), never
+`postMessage` or a DOM event, which an artifact's frame or any script could
+reach.
+
+**A turn is the engine's frames, reduced** (`app/assistant/chunk/turn.ts`):
+one pure reducer over every gesture and every frame, a frame at or below the
+sequence a turn holds dropped, so a resumed stream never draws a delta twice.
+The stream is server-sent events over `fetch` (`protocol/assistant.ts`):
+`Last-Event-ID` on every resume, a stall after two missed keepalives dialled
+again, a refusal or another protocol version stopping it for good.
+
+**What it draws is the design system's** (`app/assistant/chunk/blocks.tsx`
+maps every wire state to exactly one component state): the question in a
+`MessageBubble` with the page it carried, a `RunChip` that opens on the
+`StepList` of the ordinary requests it made, the answer as prose with no
+container, and the engine's cards (`ResultTableCard` with its CSV and XLSX
+downloads from the stored snapshot, `EntityList`, `OpenInAppCard`,
+`RefusalCard`, `ProposalCard` with the before and after of every change).
+**A model's words are drawn inert**: a link is its label and the host it
+names, never an anchor; a picture is its alt text, never fetched
+(`ASSISTANT_WORDS` in `lib/markdown.ts`). The assistant moves the page only
+through an engine-built Open in app card, whose address the drawer checks is
+one of this dashboard's own framed routes before it follows it. There is no
+answer rating, and the one toast is "Conversation cleared".
+
+**The panel is a chunk of its own**: the first paint carries the Ask button,
+the page context registry, the bus and the one-word status the button reads,
+and the drawer, its store, its reducer, its cards and its stream client load
+the first time it opens, second in the idle prefetch after the palette.
 
 ---
 

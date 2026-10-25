@@ -48,7 +48,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { AppShell, SectionFrame, useMediaMatch } from "@crewlethq/ui";
+import { AppShell, SectionFrame, useMediaMatch, useStoredWidth } from "@crewlethq/ui";
 import {
   DESTINATIONS,
   WORKSPACES,
@@ -58,11 +58,11 @@ import {
   workspaceRow,
 } from "./nav.ts";
 import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
-import { samePath, useNavigator, useRoute } from "./router.tsx";
+import { href, samePath, useNavigator, useRoute } from "./router.tsx";
 import { crumbsFor, titleOf, type Labels } from "./crumbs.ts";
 import { remember } from "~/lib/recents.ts";
 import { SCREEN_SCROLL_ID } from "~/lib/scroller.ts";
-import { LayerBoundary } from "./boundaries.tsx";
+import { AsideBoundary, LayerBoundary } from "./boundaries.tsx";
 import { NewTaskOpener, type NewTaskPreset } from "./newTask.ts";
 import { lazyScreen } from "./lazyScreen.ts";
 import { Sidebar } from "./sidebar/Sidebar.tsx";
@@ -81,13 +81,35 @@ import { InboxCountsProvider } from "~/lib/useInboxCounts.ts";
 import { QueueCountProvider } from "~/lib/useQueueCount.ts";
 import { useViewerPrefs } from "~/lib/prefs.ts";
 import {
+  ASSISTANT_MAX,
+  ASSISTANT_MIN,
+  ASSISTANT_WIDTH,
   PEEK_WIDTH,
-  SECTION_COLUMN_MIN,
+  PHONE_BREAKPOINT,
+  assistantColumnMin,
+  assistantMaxWidth,
+  assistantTrack,
   columnWidth,
   densityScale,
   listReserve,
   peekColumnMin,
+  sectionColumnMin,
+  sheetFloor,
+  useViewportWidth,
 } from "./layout.ts";
+import { STORAGE_KEYS } from "~/lib/storage.ts";
+import { useOrg } from "~/lib/store-hooks.ts";
+import { ownName } from "~/lib/viewer.ts";
+import { assistantUnavailableFor } from "./assistant/availability.ts";
+import {
+  ASSISTANT_COMPOSER_ID,
+  AssistantControlContext,
+  type AssistantFocus,
+} from "./assistant/control.ts";
+import { framePageOf, setFramePage } from "./assistant/context.ts";
+import { on as onAssistantBus } from "./assistant/bus.ts";
+import { readTab, writeTab } from "./assistant/tab.ts";
+import { resolves } from "./routes.ts";
 import { goSignIn } from "~/lib/session.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
 import type { FleetAnswer } from "~/protocol/index.ts";
@@ -438,6 +460,19 @@ function Frame({ children }: { children: ReactNode }) {
   // while filing).
   const [newTask, setNewTask] = useState<NewTaskPreset | null>(null);
   const openNewTask = useCallback((preset: NewTaskPreset = {}) => setNewTask(preset), []);
+  // THE ASSISTANT, OPEN OR NOT, and where focus goes as it opens. It follows
+  // the New task sheet's rule rather than the palette's: a route change does
+  // not close it, because a reader who followed a link to check something
+  // keeps the conversation beside it. A reload brings back what this tab had
+  // (`assistant/tab.ts`), and the hand-over that empties a tab's storage when
+  // somebody else signs in takes that too.
+  const [assistantOpen, setAssistantOpen] = useState(() => readTab().open);
+  const [assistantFocus, setAssistantFocus] = useState<AssistantFocus>("heading");
+  const showAssistant = useCallback((open: boolean, focus: AssistantFocus = "composer") => {
+    setAssistantFocus(focus);
+    setAssistantOpen(open);
+    writeTab({ open });
+  }, []);
 
   const [labels, setLabels] = useState<Labels>({});
   const [coverage, setCoverage] = useState<CoverageFacts | null>(null);
@@ -501,6 +536,14 @@ function Frame({ children }: { children: ReactNode }) {
       const target = runningTarget(store.state.agents);
       nav.to(target.path, target.query);
     },
+    // ⌘. OPENS THE ASSISTANT AND PUTS FOCUS IN ITS COMPOSER; pressed with
+    // focus inside the panel it closes it, and the panel hands focus back.
+    "assistant.open": () => {
+      const panel = document.querySelector(".crewlet-app-shell__aside");
+      if (!assistantOpen) showAssistant(true, "composer");
+      else if (panel?.contains(document.activeElement)) showAssistant(false);
+      else document.getElementById(ASSISTANT_COMPOSER_ID)?.focus();
+    },
   });
 
   // THE PALETTE CLOSES whenever the route moves: picking a row closes it on
@@ -521,13 +564,72 @@ function Frame({ children }: { children: ReactNode }) {
   // THE COLUMN STANDS BESIDE THE SECTION only where the window holds both
   // ([SECTION_COLUMN_MIN]); below that it folds to its one-row picker over
   // the section, and the peek arithmetic counts no column.
+  //
+  // THE ASSISTANT TAKES ITS TRACK FIRST, because the reader opened it to talk
+  // about the page: a column where the window holds it beside the page's
+  // sheet with the list at its floor, over the page's end edge below that,
+  // and the whole window on a phone (`app/layout.ts`). Its track is then one
+  // more term of every other width: Settings' column folds sooner, and a
+  // peek beside it becomes a drawer first.
+  const scale = densityScale(prefs.density);
+  const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
+  const assistantFits = useMediaMatch(`(width >= ${assistantColumnMin({ column: 0, scale })}px)`);
+  const assistantShape = phone ? "sheet" : assistantFits ? "column" : "overlay";
+  const assistantColumn = assistantOpen && assistantShape === "column";
+  const track = assistantColumn ? assistantTrack(ASSISTANT_WIDTH, scale) : 0;
   const sectionColumn = columnWidth(row?.renderer);
-  const sideBySide = useMediaMatch(`(width >= ${SECTION_COLUMN_MIN}px)`);
+  const sideBySide = useMediaMatch(`(width >= ${sectionColumnMin(track)}px)`);
   const column = sideBySide ? sectionColumn : 0;
-  const frame = { column, scale: densityScale(prefs.density) };
+  const frame = { column, scale, assistant: track };
   const roomy = useMediaMatch(`(width >= ${peekColumnMin(frame)}px)`);
   const peekShape = peekable(peek) ? (roomy ? "column" : "drawer") : undefined;
+  // THE READER'S WIDTH, kept per browser, capped where the page's sheet keeps
+  // its floor: a width dragged on a wide window never takes a narrower one's
+  // list away.
+  const viewport = useViewportWidth();
+  const assistantWidth = useStoredWidth({
+    key: STORAGE_KEYS.assistantWidth,
+    min: ASSISTANT_MIN,
+    max: ASSISTANT_MAX,
+  });
+  const assistantMax = assistantMaxWidth(viewport, frame, peekShape === "column");
   const crumbs = useMemo(() => crumbsFor(route.path, labels), [route.path, labels]);
+
+  // WHAT THE ASSISTANT IS TOLD ABOUT THE PAGE: the screen, its parameters,
+  // the address's query and the crumbs it is called by. A screen that knows
+  // more registers it itself (`assistant/useAssistantContext.ts`).
+  const routeQuery = route.query.toString();
+  useEffect(() => {
+    setFramePage(framePageOf(route.path, new URLSearchParams(routeQuery), crumbs));
+  }, [route.path, routeQuery, crumbs]);
+
+  // THE ASSISTANT MOVES THE PAGE ONLY THROUGH AN ADDRESS THE ENGINE BUILT,
+  // checked again here before the router follows it. Over the page or as the
+  // whole window, it closes so the reader sees where they went; as a column
+  // it stays beside it.
+  useEffect(
+    () =>
+      onAssistantBus("assistant.navigation.open", ({ path: to, query, mode }) => {
+        if (!resolves(to)) return;
+        if (mode === "new_tab") {
+          window.open(href(to, query), "_blank", "noopener");
+          return;
+        }
+        nav.to(to, query);
+        if (assistantShape !== "column") showAssistant(false);
+      }),
+    [nav, assistantShape, showAssistant],
+  );
+  const org = useOrg();
+  const assistantUnavailable = assistantUnavailableFor(viewer, org?.name ?? "");
+  const assistantControl = useMemo(
+    () => ({
+      open: assistantOpen,
+      unavailable: assistantUnavailable,
+      toggle: (focus: AssistantFocus = "composer") => showAssistant(!assistantOpen, focus),
+    }),
+    [assistantOpen, assistantUnavailable, showAssistant],
+  );
 
   // THE TAB SAYS WHERE YOU ARE, so a reader with four tabs open can tell
   // them apart: on Work's scope pages, the lens and then the scope.
@@ -595,71 +697,103 @@ function Frame({ children }: { children: ReactNode }) {
     // `[` and `]` walk the rows they are actually looking at. See `PeekHost`.
     <NewTaskOpener.Provider value={openNewTask}>
       <PeekNeighbours>
-        <AppShell
-          className="app"
-          // THE SHEET GAINS ITS PEEK COLUMN ONLY WHILE A PEEK IS OPEN (an
-          // empty column would take its width from every screen that never
-          // opens one), and only where the frame has room for it. The kit
-          // publishes the shape as `data-peek`; the reserve is what the
-          // column leaves the list, so a dragged width cannot take it back.
-          peek={
-            peekShape && (
-              <PeekRestingWidth.Provider value={restingPeek ?? PEEK_WIDTH}>
-                <PeekHost reserve={peekShape === "column" ? listReserve(frame) : undefined} />
-              </PeekRestingWidth.Provider>
-            )
-          }
-          peekShape={peekShape}
-          mainId={SCREEN_SCROLL_ID}
-          fill={filling}
-          navigationKey={route.hash}
-          toggleLabel="Navigation"
-          sidebar={<Sidebar onSearch={() => setPaletteOpen(true)} />}
-          topbar={
-            ownHeader ? (
-              <div className="page-head">
-                <div ref={setHeaderSlot} />
-                <StateBar degraded={degraded} coverage={coverage} />
-              </div>
+        <AssistantControlContext.Provider value={assistantControl}>
+          <AppShell
+            className="app"
+            // THE SHEET GAINS ITS PEEK COLUMN ONLY WHILE A PEEK IS OPEN (an
+            // empty column would take its width from every screen that never
+            // opens one), and only where the frame has room for it. The kit
+            // publishes the shape as `data-peek`; the reserve is what the
+            // column leaves the list, so a dragged width cannot take it back.
+            peek={
+              peekShape && (
+                <PeekRestingWidth.Provider value={restingPeek ?? PEEK_WIDTH}>
+                  <PeekHost reserve={peekShape === "column" ? listReserve(frame) : undefined} />
+                </PeekRestingWidth.Provider>
+              )
+            }
+            peekShape={peekShape}
+            // THE ASSISTANT, a third track of the frame mirroring the rail, or
+            // a modal over the page and the whole window on a phone; see the
+            // arithmetic above. Mounted only while open, and its code is a
+            // chunk of its own that first paint never carries.
+            aside={
+              assistantOpen ? (
+                <AsideBoundary onClose={() => showAssistant(false)}>
+                  <AssistantDrawer
+                    unavailable={assistantUnavailable}
+                    onClose={() => showAssistant(false)}
+                    initialFocus={assistantFocus}
+                    modal={assistantShape !== "column"}
+                    name={ownName(session.answer)}
+                  />
+                </AsideBoundary>
+              ) : null
+            }
+            asideShape={assistantShape}
+            asideWidth={Math.min(assistantWidth.width ?? ASSISTANT_WIDTH, assistantMax)}
+            asideReserve={sheetFloor(frame, peekShape === "column")}
+            asideLabel="Crewlet Assistant"
+            onAsideClose={() => showAssistant(false)}
+            asideResize={{
+              min: ASSISTANT_MIN,
+              max: assistantMax,
+              defaultValue: ASSISTANT_WIDTH,
+              onChange: assistantWidth.setWidth,
+              onCommit: assistantWidth.commitWidth,
+              label: "Resize the assistant panel",
+            }}
+            mainId={SCREEN_SCROLL_ID}
+            fill={filling}
+            navigationKey={route.hash}
+            toggleLabel="Navigation"
+            sidebar={<Sidebar onSearch={() => setPaletteOpen(true)} />}
+            topbar={
+              ownHeader ? (
+                <div className="page-head">
+                  <div ref={setHeaderSlot} />
+                  <StateBar degraded={degraded} coverage={coverage} />
+                </div>
+              ) : (
+                <PageHeader
+                  crumbs={crumbs}
+                  row={row}
+                  counts={counts}
+                  title={where}
+                  workspace={workspace}
+                  working={showWorking}
+                  menu={menu}
+                  star={!ownStar}
+                  runs={runs}
+                  grants={held}
+                >
+                  <StateBar degraded={degraded} coverage={coverage} />
+                </PageHeader>
+              )
+            }
+          >
+            {row && sectionColumn > 0 ? (
+              // THE COLUMN'S WIDTH IS THE ONE THE PEEK ARITHMETIC COUNTED
+              // ([columnWidth]), and the fold is the same answer the peek's
+              // width reads ([SECTION_COLUMN_MIN]), both handed to the kit's
+              // frame rather than written again in a stylesheet, so the column
+              // drawn and the column counted cannot drift.
+              <SectionFrame columnWidth={`${sectionColumn}px`} folded={!sideBySide}>
+                <SectionColumn
+                  row={row}
+                  path={route.path}
+                  query={route.query}
+                  grants={held}
+                  figures={figures}
+                  runs={runs}
+                />
+                <SectionFrame.Body>{screen}</SectionFrame.Body>
+              </SectionFrame>
             ) : (
-              <PageHeader
-                crumbs={crumbs}
-                row={row}
-                counts={counts}
-                title={where}
-                workspace={workspace}
-                working={showWorking}
-                menu={menu}
-                star={!ownStar}
-                runs={runs}
-                grants={held}
-              >
-                <StateBar degraded={degraded} coverage={coverage} />
-              </PageHeader>
-            )
-          }
-        >
-          {row && sectionColumn > 0 ? (
-            // THE COLUMN'S WIDTH IS THE ONE THE PEEK ARITHMETIC COUNTED
-            // ([columnWidth]), and the fold is the same answer the peek's
-            // width reads ([SECTION_COLUMN_MIN]), both handed to the kit's
-            // frame rather than written again in a stylesheet, so the column
-            // drawn and the column counted cannot drift.
-            <SectionFrame columnWidth={`${sectionColumn}px`} folded={!sideBySide}>
-              <SectionColumn
-                row={row}
-                path={route.path}
-                query={route.query}
-                grants={held}
-                figures={figures}
-                runs={runs}
-              />
-              <SectionFrame.Body>{screen}</SectionFrame.Body>
-            </SectionFrame>
-          ) : (
-            screen
-          )}
-        </AppShell>
+              screen
+            )}
+          </AppShell>
+        </AssistantControlContext.Provider>
 
         {/* THE PALETTE HAS A BOUNDARY OF ITS OWN, and it is mounted only while
           open, so a palette that threw is a dialog saying so — closed the
@@ -689,6 +823,9 @@ function Frame({ children }: { children: ReactNode }) {
 
 /** The New task sheet, out of the Work chunk. See [LayerBoundary]. */
 const NewTaskSheet = lazyScreen("work", (module) => module.NewTaskSheet);
+
+/** The assistant's panel, out of a chunk of its own (`lazyScreen.ts`). See [AsideBoundary]. */
+const AssistantDrawer = lazyScreen("assistant", (module) => module.Drawer);
 
 /** The command palette, out of a chunk of its own (`lazyScreen.ts`). See [LayerBoundary]. */
 const CommandPalette = lazyScreen("palette", (module) => module.CommandPalette);
