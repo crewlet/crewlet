@@ -57,6 +57,7 @@ import { youNeedWords } from "~/lib/access.ts";
 import { crumbsFor } from "../../crumbs.ts";
 import { href as hrefOf } from "../../router.tsx";
 import { openInApp, type InAppTarget } from "./openInApp.ts";
+import { pageActionPreview, usePageSnapshot, type PageActionPreview } from "../context.ts";
 import { changedNothing, type ActionLocal, type ActionLocalState } from "./pageActions.ts";
 import type { ProposalLocal, TurnPhase, TurnView } from "./turn.ts";
 
@@ -310,6 +311,25 @@ export function ActionReceipt({
   );
 }
 
+/** A screen's preview row in `ChangeList`'s grammar: what it sets, from what. */
+function previewRow(row: PageActionPreview["rows"][number]): ChangeListRow {
+  if (row.current === null) return { kind: "added", label: row.field, to: row.next, isNew: false };
+  if (row.current === row.next) return { kind: "fact", label: row.field, value: row.next };
+  return { kind: "changed", label: row.field, from: row.current, to: row.next };
+}
+
+/**
+ * The screen's own account of a page proposal still waiting on the person,
+ * or null where the card keeps the engine's rows: an action no screen here
+ * declares, a payload its parser refuses, or a card already decided.
+ */
+export function screenPreviewOf(proposal: AssistantProposalCard): PageActionPreview | null {
+  if (proposal.scope !== "page" || proposal.state !== "proposed" || !proposal.page_action) {
+    return null;
+  }
+  return pageActionPreview(proposal.page_action.name, proposal.page_action.payload);
+}
+
 /** A proposal card, at its state now. */
 function Proposal({
   proposal,
@@ -320,13 +340,19 @@ function Proposal({
   local: ProposalLocal | undefined;
   on: ProposalHandlers;
 }) {
+  // THE PAGE UNDER THE DRAWER IS READ AGAIN AS IT MOVES, so the card's rows
+  // and its gate are the screen's as it is now.
+  usePageSnapshot();
+  const screen = screenPreviewOf(proposal);
   const unknown = proposal.state === "unknown";
   const stale = local?.pageMoved === true && proposal.state === "proposed";
   const state: ProposalState = stale ? "stale" : PROPOSAL_STATE[proposal.state];
   const failure =
     local?.failure ??
     (proposal.failure
-      ? proposal.failure.refusal.message
+      ? // THE ROUTE'S NEXT STEP after its sentence, until the card has a slot
+        // of its own for it.
+        [proposal.failure.refusal.message, proposal.failure.refusal.hint].filter(Boolean).join(" ")
       : unknown
         ? "Could not confirm. It may have landed."
         : undefined);
@@ -336,8 +362,8 @@ function Proposal({
       subtitle={proposal.scope === "page" ? "This page only" : "Saved for the company"}
       scope={proposal.scope}
       state={state}
-      changes={changeRowsOf(proposal)}
-      note={proposal.note}
+      changes={screen ? screen.rows.map(previewRow) : changeRowsOf(proposal)}
+      note={screen?.blocked ?? proposal.note}
       approveLabel={proposal.approve_label}
       onApprove={() => on.approve(proposal)}
       onDecline={() => on.decline(proposal)}
@@ -508,7 +534,9 @@ export function CardBlock({
       );
     }
     case "error": {
-      const { refusal, phrase, hint } = card.error;
+      const { refusal, phrase } = card.error;
+      // THE CARD'S OWN NEXT STEP, or else the route's (the envelope's `hint`).
+      const hint = card.error.hint ?? refusal.hint;
       return (
         <RefusalCard
           // THE HEAD NAMES WHAT WAS ASKED FOR ("Read the fleet"), and the
