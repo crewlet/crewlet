@@ -134,9 +134,27 @@ func ReadBounded[T any](ctx context.Context, bound time.Duration, one func(conte
 // the late reply is taken when it comes, and a dropped one still costs only a
 // term and a [ReAsk] before its replacement is on its way.
 //
-// IT ASKS THE SERVER NOTHING MORE THAN ABANDONING DID: one request every
-// t.ReadTerm + t.ReAsk, and an abandoned request was processed all the same.
-// What it keeps beside each is a reply this side still listens for.
+// # What it asks of the server
+//
+// One request every t.ReadTerm + t.ReAsk for as long as nobody answers, each
+// processed when a worker takes it from the queue. For a read that was asked
+// this way from the start — the domain logs' leader reads and the
+// provisioning reads, which abandoned a request at its term and sent the next
+// — that is nothing more than abandoning asked: an abandoned request was
+// processed all the same, and what the hedge keeps beside each is a reply
+// this side still listens for. For a read that was ONE request until it was
+// hedged ([ReadBoundedWith]: coordination's, the object store's, a listing's
+// pages, the backup's) it is more: three requests inside a deadline-less
+// read's five seconds where it sent one, and up to fifteen under the ceiling
+// for a caller that waits that long. So while a leader's API queue answers
+// slower than t.ReadTerm + t.ReAsk — an election's aftermath, a stall — every
+// read waiting on it adds a request at that cadence, and the queue's offered
+// load grows with its own latency, bounded by each read's bound and the
+// ceiling rather than by the hedge. The first re-ask is what recovers a
+// request a member dropped across an election — answered by the new leader at
+// two seconds, measured on a fleet of three — and each later one recovers a
+// drop only across an election that much longer; to a leader that is merely
+// slow, every one of them is more work queued behind the first.
 //
 // Every request runs on one context, derived from ctx and cancelled as hedge
 // returns, which waits for each request to end and hears every reply: no
