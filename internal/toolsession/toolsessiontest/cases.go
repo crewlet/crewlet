@@ -226,8 +226,9 @@ func testACallAfterTheRunEndedIsRefused(t *testing.T, factory Factory) {
 // calls together, and they return in whatever order their tools take; the
 // repeat count an operation id carries is read against the calls ADMITTED
 // before, so the second call counts the first though the first is still
-// running, the first counts nothing after it, and the record places each where
-// it arrived — so a re-run, making the same calls, derives the same ids.
+// running, the first counts nothing after it, the record places each where
+// it arrived, and a call after them counts both — so a re-run, making the same
+// calls, derives the same ids.
 func testCallsCountInTheOrderTheyArrived(t *testing.T, factory Factory) {
 	f := newFixture(t, factory)
 	cs := f.dial(0)
@@ -245,6 +246,11 @@ func testCallsCountInTheOrderTheyArrived(t *testing.T, factory Factory) {
 	rec := f.recorded(2)
 	if rec[0].Output != "0" || rec[1].Output != "1" {
 		t.Errorf("the record places the calls %s, want each where it arrived", describe(rec))
+	}
+	// AND BOTH STAY IN THE RUN'S LOG once they have returned, so a call
+	// after them counts both.
+	if third := f.call(cs, writeTool, map[string]any{"value": "third"}); text(third) != "2" {
+		t.Errorf("a later call counts %q calls before it, want both of the earlier two", text(third))
 	}
 }
 
