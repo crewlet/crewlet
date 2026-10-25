@@ -218,6 +218,81 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 	r.suspension = &Suspension{State: state}
 }
 
+// ReopenAgentRun rebuilds the tool surface a box-mode run's box is still
+// calling, for a node that has taken the run over while it works — this
+// process after a restart, or the seat's next holder — so the run's bridge
+// session can be opened again (internal/api/mcpbridge). It returns the
+// surface, and the meter the session's calls are counted on.
+//
+// FROM THE RUN'S OWN STATE, as [Runner.Resume] rebuilds a parked executor:
+// the surface its launch recorded — its active tools and the skills it had
+// loaded — and then what the run did to it since, read off the calls it made
+// over the bridge, every tool it activated and every skill it loaded. Rebuilt
+// from the launch's record alone, the box would find tools it had activated
+// gone and the tools a loaded skill unlocked refused again.
+//
+// AND ITS PLACE IN THE RUN. The turn's call log is seeded with its closed
+// rounds and every call the run has made over the bridge, so a call made from
+// here counts its repeats from the whole run and derives the operation id the
+// run's own process would have; a submission cites those calls as well as the
+// ones made from here; and the meter starts from what the row says the run's
+// bridged calls have cost so far ([NewBridgedSpendFrom]). spent is that total
+// and bridged the row's calls, in any order.
+//
+// It launches nothing and suspends nothing: the run is going already, and its
+// collection resumes the turn as it would have. A state that is not a box-mode
+// run's is refused — a host-mode executor parked on a detached run has no box
+// calling it.
+func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
+	bridged []BridgedCall, spent Bridged,
+) (*tools.Surface, *BridgedSpend, error) {
+	if !state.AgentRun {
+		return nil, nil, fmt.Errorf("runner: reopening a box-mode run: the parked " +
+			"state is a host-mode executor's conversation, which no box is calling")
+	}
+	history := state.Iterations
+	called := bridgedLedger(inAdmissionOrder(bridged))
+	seedCalls(r.cfg.Turn.Context.CallLog(), history, called)
+
+	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot(), true)
+	var surface *tools.Surface
+	submit := structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
+		decodeWork(r.cfg.Reply,
+			func() []ledger.Call {
+				return turn.Record(history, append(slices.Clone(called), calls(surface)...))
+			},
+			func() turn.Surface { return describe(surface) }))
+
+	active := slices.Clone(state.ActiveTools)
+	for _, call := range called {
+		if call.Name == ActivateTool && !call.Failed {
+			active = append(active, activationTarget(call.Args))
+		}
+	}
+	meter := NewBridgedSpendFrom(spent)
+	built, err := r.surfaceWith(ctx, r.meterFor(meter), phase.Execute, state.Round, snapshot, submit,
+		active, state.LoadedSkills...)
+	if err != nil {
+		return nil, nil, err
+	}
+	surface = built
+
+	// THE SKILLS IT LOADED, told to the guard the surface was just armed
+	// with, by the guard's own reading of a call — the one rule for which
+	// call unlocks what. After the surface is built, because whether a guard
+	// is armed at all depends on the loader being active, which an
+	// activation over the bridge may be what made it.
+	r.mu.Lock()
+	guard := r.guard
+	r.mu.Unlock()
+	for _, call := range called {
+		if !call.Failed {
+			guard.Observe(call.Name, call.Args)
+		}
+	}
+	return surface, meter, nil
+}
+
 // resumeAgentRun turns a finished box run into the turn's Work.
 //
 // THE RUN'S OWN TOOL CALLS ARE THE RECORD, replayed from the durable log the

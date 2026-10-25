@@ -145,8 +145,17 @@ func (t *activateTool) Parameters() map[string]any {
 	}
 }
 
-func (t *activateTool) Call(_ context.Context, args map[string]any) (tools.Result, error) {
+// activationTarget is the tool an activate_tool call names. ONE READING, for
+// the tool itself and for a box-mode run taken over while it works, whose
+// surface is rebuilt with every tool its successful activations named
+// ([Runner.ReopenAgentRun]).
+func activationTarget(args map[string]any) string {
 	name, _ := args["name"].(string)
+	return name
+}
+
+func (t *activateTool) Call(_ context.Context, args map[string]any) (tools.Result, error) {
+	name := activationTarget(args)
 	if strings.TrimSpace(name) == "" {
 		return tools.Result{
 			Output: "Name a tool to activate.", Failed: true,
