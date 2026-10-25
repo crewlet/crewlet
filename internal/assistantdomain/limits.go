@@ -1,5 +1,7 @@
 package assistantdomain
 
+import "github.com/crewlet/crewlet/internal/assistant/wire"
+
 // THE BOUNDS ON WHAT IS STORED. They are this package's because the writer is
 // where a value is refused before it is sealed and published, and the
 // orchestrator (internal/assistant) reads them from here rather than stating
@@ -38,8 +40,44 @@ const (
 	// MaxApps bounds the apps a card names.
 	MaxApps = 8
 
+	// FileNameMaxBytes bounds a kept file's name, as internal/assistant's
+	// SniffFile keeps it (a test holds the two to one value).
+	FileNameMaxBytes = 120
+
+	// AttachmentsPerConversation bounds the images one conversation keeps
+	// from its owner: ten questions' worth of wire.AttachmentsPerTurn, so a
+	// conversation's attachments are at most 200 MiB of the object store
+	// for the thirty days it is kept, whoever scripts the upload route.
+	AttachmentsPerConversation = 10 * wire.AttachmentsPerTurn
+
+	// DeliveredPerConversation bounds the files deep-work runs deliver into
+	// one conversation: ten runs' worth of wire.DeliveredFilesPerRun, so
+	// what runs hand back is bounded the same way.
+	DeliveredPerConversation = 10 * wire.DeliveredFilesPerRun
+
 	// MaxListLimit is the most conversations one listing returns, and
 	// DefaultListLimit what a listing that names none takes.
 	MaxListLimit     = 50
 	DefaultListLimit = 20
 )
+
+// FilesPerConversation is how many files of origin one conversation keeps at
+// most, and zero for an origin this build does not know.
+func FilesPerConversation(origin wire.FileOrigin) int {
+	switch origin {
+	case wire.FileAttached:
+		return AttachmentsPerConversation
+	case wire.FileDelivered:
+		return DeliveredPerConversation
+	}
+	return 0
+}
+
+// fileMediaTypes is what a file of origin may be: what the person may attach,
+// or what a run may deliver.
+func fileMediaTypes(origin wire.FileOrigin) []string {
+	if origin == wire.FileAttached {
+		return wire.AttachmentMediaTypes
+	}
+	return wire.FileMediaTypes
+}

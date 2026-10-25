@@ -80,6 +80,31 @@ type AuditReadRecorded struct {
 	ReasonSealed string `json:"reason_sealed"`
 }
 
+// FileRecorded is one file kept for the conversation whose subject it is on:
+// its name sealed, the type sniffed from its bytes, and the object its SEALED
+// content was uploaded into before this record was published.
+type FileRecorded struct {
+	V int `json:"v"`
+
+	File string `json:"file"`
+	// Turn is empty for an attachment uploaded before its question.
+	Turn   string          `json:"turn,omitempty"`
+	Owner  string          `json:"owner"`
+	Origin wire.FileOrigin `json:"origin"`
+
+	NameSealed string `json:"name_sealed"`
+	MediaType  string `json:"media_type"`
+	// Size is the file's own size; ObjectSize and Hash are the sealed
+	// bytes' the object holds, which every read is checked against.
+	Size       int64  `json:"size"`
+	Object     string `json:"object"`
+	Hash       string `json:"hash"`
+	ObjectSize int64  `json:"object_size"`
+	// ContentKey is the keyring key the content is sealed under, read off
+	// its envelope by the writer: what a rotation counts.
+	ContentKey string `json:"content_key"`
+}
+
 // TurnOpened opens a turn in the conversation whose subject it is on.
 type TurnOpened struct {
 	V int `json:"v"`
@@ -134,6 +159,9 @@ type MessageRecorded struct {
 	// Apps are the apps the turn had read through when the message was
 	// written, as a card's are.
 	Apps []string `json:"apps,omitempty"`
+	// AttachmentsSealed is the files a user message was sent with: a JSON
+	// array of wire FileRefs, sealed.
+	AttachmentsSealed string `json:"attachments_sealed,omitempty"`
 }
 
 // StepRecorded is one tool step at its latest state: its place, its tool, its
@@ -253,6 +281,8 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[ConversationPurged](rec)
 	case k == KindConversation && op == OpConversationAuditRead:
 		return decodePayload[AuditReadRecorded](rec)
+	case k == KindConversation && op == OpFileStored:
+		return decodePayload[FileRecorded](rec)
 	case k == KindConversation && op == OpTurnOpened:
 		return decodePayload[TurnOpened](rec)
 	case k == KindTurn && op == OpTurnParked:

@@ -55,6 +55,19 @@ var (
 	// something kept changing the object.
 	ErrConflict = errors.New("assistantdomain: the object kept changing under this write")
 
+	// ErrAuditPending reports a compliance read recorded and not yet
+	// applied on the node asked to open what it read: its owner could not
+	// see it there yet, so nothing is opened. It is also [ErrNotFound], since
+	// nothing is found until it applies; a surface tells the two apart to
+	// answer "send it again" rather than "there is no such thing".
+	ErrAuditPending = errors.New("assistantdomain: the compliance read has not " +
+		"applied on this node")
+
+	// ErrTooManyFiles reports a file a conversation may not keep: it
+	// already holds [FilesPerConversation] of the file's origin.
+	ErrTooManyFiles = errors.New("assistantdomain: the conversation keeps no more " +
+		"files of this kind")
+
 	// ErrInvalid reports a write whose input the domain refuses, naming the
 	// field and what to change.
 	ErrInvalid = errors.New("assistantdomain: invalid")

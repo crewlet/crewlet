@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/assistantdomain`
-- **Enforced-by:** `internal/assistantdomain.TestAnotherPersonsConversationIsNotFound`, `internal/assistantdomain.TestEverySealedValueOpensOnlyUnderItsOwnRecord`, `internal/assistantdomain.TestTheApplierNeverOpensASealedValue`, `internal/assistantdomain.TestAPurgedConversationIsNeverRecreated`, `internal/assistantdomain.TestAConversationPastItsRetentionIsReaped`, `internal/assistantdomain.TestAnErasedPersonsConversationsGoInOnePass`, `internal/assistantdomain.TestAComplianceReadIsRecordedBeforeItOpens`, `internal/assistantdomain.TestTheAssistantDomainReadsNoOtherDomain`, `internal/assistant/live.TestAFrameTheFleetDidNotSealIsDropped`, `internal/assistant/live.TestAFrameOnTheQueueCarriesNoneOfTheTurnsProse`, `internal/assistant/live.TestAFrameReplayedOntoAnotherTurnIsDropped`, `internal/assistant/live.TestTheRunnerRefusesAnotherPersonsTurn`, `internal/assistant.TestStopReachesTheRunningNode`, `internal/api/queries.TestEveryQuestionDeclaresAPosture`, `internal/api/stream.TestAnEventReachesOnlyAnAdmin`
+- **Enforced-by:** `internal/assistantdomain.TestAnotherPersonsConversationIsNotFound`, `internal/assistantdomain.TestAnotherPersonsFileIsNotFound`, `internal/assistantdomain.TestAFilesBytesAreSealedInTheObjectStore`, `internal/assistantdomain.TestAPurgedConversationsFilesAreCollected`, `internal/assistantdomain.TestEverySealedValueOpensOnlyUnderItsOwnRecord`, `internal/assistantdomain.TestTheApplierNeverOpensASealedValue`, `internal/assistantdomain.TestAPurgedConversationIsNeverRecreated`, `internal/assistantdomain.TestAConversationPastItsRetentionIsReaped`, `internal/assistantdomain.TestAnErasedPersonsConversationsGoInOnePass`, `internal/assistantdomain.TestAComplianceReadIsRecordedBeforeItOpens`, `internal/assistantdomain.TestTheAssistantDomainReadsNoOtherDomain`, `internal/assistant/live.TestAFrameTheFleetDidNotSealIsDropped`, `internal/assistant/live.TestAFrameOnTheQueueCarriesNoneOfTheTurnsProse`, `internal/assistant/live.TestAFrameReplayedOntoAnotherTurnIsDropped`, `internal/assistant/live.TestTheRunnerRefusesAnotherPersonsTurn`, `internal/assistant.TestStopReachesTheRunningNode`, `internal/api/queries.TestEveryQuestionDeclaresAPosture`, `internal/api/stream.TestAnEventReachesOnlyAnAdmin`
 - **Tag-status:** unreleased
 
 ## The decision
@@ -22,7 +22,7 @@ gone thirty days after it was last used.**
   the person was told; the node a replay or a Stop reaches checks the person
   the request names before it answers.
 - **Its owner's.** Every read is keyed on the owner, and another person's
-  conversation, card, export or proposal is not found, never forbidden. The one
+  conversation, card, export, file or proposal is not found, never forbidden. The one
   exception is decision D06: an administrator may read a conversation for
   compliance through a verb of its own (`assistant.conversation.audit_read`:
   admin, a recent proof, a person present, never through the assistant) with a
@@ -37,7 +37,10 @@ gone thirty days after it was last used.**
   socket's event frames reach only an administrator).
 - **Sealed.** Every message, card, preview and parked turn is sealed under the
   fleet keyring with associated data naming the conversation and the record,
-  because the estate is not encrypted at rest; the applier never opens a value,
+  because the estate is not encrypted at rest; a file the conversation keeps
+  (an image the person attached, a file a deep-work run delivered) is sealed
+  the same way into one object of the fleet's object store, which a row names
+  and the collector deletes once the conversation's purge removes the row; the applier never opens a value,
   so every node writes identical rows. What is stored is what the person saw:
   never a raw tool result outside the bounded parked turn, a grant, a request
   header or a rendered prompt.

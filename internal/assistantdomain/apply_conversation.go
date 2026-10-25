@@ -32,6 +32,8 @@ func applyConversation(ctx context.Context, tx *sql.Tx, c applyContext, payload 
 		return applyPurged(ctx, tx, c, id, p)
 	case AuditReadRecorded:
 		return applyAuditRead(ctx, tx, c, id, p)
+	case FileRecorded:
+		return applyFile(ctx, tx, c, id, p)
 	case TurnOpened:
 		return applyTurnOpened(ctx, tx, c, id, p)
 	}

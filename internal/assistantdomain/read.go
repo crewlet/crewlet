@@ -178,12 +178,14 @@ type Message struct {
 	// Apps are the apps a reader must hold to be shown the message rather
 	// than a notice.
 	Apps []string
+	// Attachments are the files a user message was sent with.
+	Attachments []wire.FileRef
 }
 
 // Wire is the message as a transcript carries it.
 func (m Message) Wire() wire.Message {
 	return wire.Message{ID: m.ID, TurnID: m.Turn, Role: m.Role, Text: m.Text,
-		CreatedAt: m.CreatedAt, Page: m.Page}
+		CreatedAt: m.CreatedAt, Page: m.Page, Attachments: m.Attachments}
 }
 
 // Card is one card, opened, with the apps a reader must hold for it to be
@@ -451,23 +453,33 @@ func (r *Reader) AuditTranscript(ctx context.Context, receipt AuditReceipt) (Tra
 	var t Transcript
 	err := r.read(ctx, ConversationScope(receipt.conversation.String()), false,
 		func(tx *sql.Tx) error {
-			var recorded int
-			if err := tx.QueryRowContext(ctx, `
-				SELECT COUNT(*) FROM assistant_audit_reads
-				WHERE conversation_id = ? AND record_id = ?`,
-				receipt.conversation.String(), receipt.opID).Scan(&recorded); err != nil {
+			if err := auditRecorded(ctx, tx, receipt); err != nil {
 				return err
-			}
-			if recorded == 0 {
-				return fmt.Errorf("%w: the compliance read of %s has not applied on "+
-					"this node, so its owner could not yet see it", ErrNotFound,
-					receipt.conversation)
 			}
 			var err error
 			t, err = r.transcriptIn(ctx, tx, receipt.conversation, nil)
 			return err
 		})
 	return t, err
+}
+
+// auditRecorded refuses a receipt whose compliance read has not applied on
+// this node as [ErrAuditPending]: what every audited read checks, in the same
+// transaction it then reads in.
+func auditRecorded(ctx context.Context, tx *sql.Tx, receipt AuditReceipt) error {
+	var recorded int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM assistant_audit_reads
+		WHERE conversation_id = ? AND record_id = ?`,
+		receipt.conversation.String(), receipt.opID).Scan(&recorded); err != nil {
+		return err
+	}
+	if recorded == 0 {
+		return fmt.Errorf("%w: %w: the compliance read of %s has not applied on "+
+			"this node, so its owner could not yet see it", ErrAuditPending, ErrNotFound,
+			receipt.conversation)
+	}
+	return nil
 }
 
 // transcriptIn reads a whole conversation in tx.
@@ -491,7 +503,7 @@ func (r *Reader) transcriptIn(ctx context.Context, tx *sql.Tx, id uuid.UUID,
 		return Transcript{}, err
 	}
 	if err := eachRow(ctx, tx, `SELECT id, turn_id, role, text_sealed, created_at,
-		page_title_sealed, page_screen, apps FROM assistant_messages
+		page_title_sealed, page_screen, apps, attachments_sealed FROM assistant_messages
 		WHERE conversation_id = ? ORDER BY version, id`, []any{conversation},
 		func(row rowScanner) error {
 			m, err := r.scanMessage(row, id)
@@ -757,10 +769,10 @@ func (r *Reader) scanMessage(row rowScanner, conversation uuid.UUID) (Message, e
 		id, turn, role, text  string
 		created               int64
 		pageTitle, pageScreen string
-		apps                  string
+		apps, attachments     string
 	)
 	if err := row.Scan(&id, &turn, &role, &text, &created, &pageTitle, &pageScreen,
-		&apps); err != nil {
+		&apps, &attachments); err != nil {
 		return Message{}, err
 	}
 	if err := json.Unmarshal([]byte(apps), &m.Apps); err != nil {
@@ -777,8 +789,20 @@ func (r *Reader) scanMessage(row rowScanner, conversation uuid.UUID) (Message, e
 	if m.Text, err = r.sealer.openString(text, AAD(conversation, RecordMessage, m.ID, ColumnText)); err != nil {
 		return Message{}, fmt.Errorf("message %s: %w", id, err)
 	}
-	m.Page, err = r.openPage(pageTitle, pageScreen, AAD(conversation, RecordMessage, m.ID, ColumnPageTitle))
-	return m, err
+	if m.Page, err = r.openPage(pageTitle, pageScreen,
+		AAD(conversation, RecordMessage, m.ID, ColumnPageTitle)); err != nil {
+		return Message{}, err
+	}
+	refs, err := r.sealer.Open(attachments, AAD(conversation, RecordMessage, m.ID, ColumnAttachments))
+	if err != nil {
+		return Message{}, fmt.Errorf("message %s's attachments: %w", id, err)
+	}
+	if len(refs) > 0 {
+		if err := json.Unmarshal(refs, &m.Attachments); err != nil {
+			return Message{}, fmt.Errorf("assistantdomain: message %s's attachments: %w", id, err)
+		}
+	}
+	return m, nil
 }
 
 // scanStep reads one step of conversation, its whole wire event opened.

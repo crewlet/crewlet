@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/assistantdomain"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
@@ -30,7 +31,7 @@ import (
 func TestTheCollectorReadsEveryDeclaredTable(t *testing.T) {
 	t.Parallel()
 	n := &native{trackerReader: &worklet.Reader{}}
-	estates := objectEstatesFor(n, &artifactsdomain.Reader{})
+	estates := objectEstatesFor(n, &artifactsdomain.Reader{}, &assistantdomain.Reader{})
 	if _, err := collect.Sources(references.All, estates...); err != nil {
 		t.Fatalf("the collector cannot be built from the declared tables: %v", err)
 	}

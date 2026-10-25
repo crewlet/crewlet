@@ -67,6 +67,13 @@ const (
 	// Additive: two reads never contend.
 	OpConversationAuditRead OpKind = "conversation_audit_read"
 
+	// OpFileStored records a file kept for a conversation (an image its
+	// owner attached, or a file a deep-work run delivered), ON THE
+	// CONVERSATION'S SUBJECT, because an attachment exists before the turn
+	// it is sent with. Additive under an id the caller mints: a duplicate
+	// publish writes one row, and two uploads never contend.
+	OpFileStored OpKind = "file_stored"
+
 	// OpTurnOpened opens a turn, ON THE CONVERSATION'S SUBJECT, so two
 	// openings in one conversation contend and one wins: one running or
 	// parked turn per conversation.
@@ -121,7 +128,7 @@ const (
 // OpKinds are every op, in the order they are documented.
 var OpKinds = []OpKind{
 	OpConversationCreated, OpConversationTitled, OpConversationPurged,
-	OpConversationAuditRead, OpTurnOpened, OpTurnParked, OpTurnResumed, OpTurnClosed,
+	OpConversationAuditRead, OpFileStored, OpTurnOpened, OpTurnParked, OpTurnResumed, OpTurnClosed,
 	OpMessageRecorded, OpStepRecorded, OpCardRecorded, OpProposalCreated,
 	OpProposalApproved, OpProposalExecuting, OpProposalDeclined, OpProposalExpired,
 	OpProposalStale, OpProposalApplying, OpProposalSettled, OpProposalUnknown,

@@ -15,7 +15,7 @@ var ReproducibleTables = []string{
 	// The conversation and everything in it.
 	"assistant_conversations", "assistant_turns", "assistant_messages",
 	"assistant_steps", "assistant_cards", "assistant_proposals",
-	"assistant_parked", "assistant_audit_reads",
+	"assistant_parked", "assistant_audit_reads", "assistant_files",
 
 	// The gate tables, which outlive the records that wrote them, and the
 	// reanchor's audit row.
@@ -30,6 +30,7 @@ var ReproducibleTables = []string{
 var conversationTables = []string{
 	"assistant_turns", "assistant_messages", "assistant_steps", "assistant_cards",
 	"assistant_proposals", "assistant_parked", "assistant_audit_reads",
+	"assistant_files",
 }
 
 // MachineryTables are the log's own: the operation ledger, which TRAVELS in a

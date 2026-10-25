@@ -63,6 +63,7 @@ const (
 	RecordProposal     RecordKind = "proposal"
 	RecordParked       RecordKind = "parked"
 	RecordAuditRead    RecordKind = "audit_read"
+	RecordFile         RecordKind = "file"
 )
 
 // The columns a value is sealed for.
@@ -76,6 +77,11 @@ const (
 	ColumnReceipt   = "receipt"
 	ColumnMessages  = "messages"
 	ColumnReason    = "reason"
+	ColumnName      = "name"
+	// ColumnAttachments is a message's attachments, and ColumnContent a
+	// file's bytes, which are sealed into the OBJECT rather than a row.
+	ColumnAttachments = "attachments"
+	ColumnContent     = "content"
 )
 
 // AAD is the associated data one value is sealed under: the conversation, the

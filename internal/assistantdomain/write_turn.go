@@ -79,6 +79,12 @@ type NewMessage struct {
 	// Apps are the apps the turn had read through when it was written: a
 	// reader who no longer holds one is shown a notice in its place.
 	Apps []string
+	// Attachments are the files a user message was sent with, at most
+	// wire.AttachmentsPerTurn, each one of the conversation's own files
+	// (the orchestrator checks them against the store before the turn).
+	// Sealed with the message; each one's download route is the
+	// conversation's own, whatever the caller handed in.
+	Attachments []wire.FileRef
 }
 
 // sealPage seals a page chip's title for one record, or answers empties for
@@ -231,10 +237,17 @@ func (w *Writer) RecordMessage(ctx context.Context, c Call, turn uuid.UUID,
 	if err := checkApps("the message", m.Apps); err != nil {
 		return statelog.Result{}, err
 	}
+	if err := checkAttachments(m.Role, m.Attachments); err != nil {
+		return statelog.Result{}, err
+	}
 	return w.onTurn(ctx, c, turn, OpMessageRecorded, statelog.PatternAdditive, nil,
 		func(conversation uuid.UUID) (any, error) {
 			text, err := w.sealer.sealString(m.Text,
 				AAD(conversation, RecordMessage, m.ID, ColumnText))
+			if err != nil {
+				return nil, err
+			}
+			attachments, err := w.sealAttachments(conversation, m.ID, m.Attachments)
 			if err != nil {
 				return nil, err
 			}
@@ -245,7 +258,8 @@ func (w *Writer) RecordMessage(ctx context.Context, c Call, turn uuid.UUID,
 			}
 			return MessageRecorded{V: baseRecordVersion, Message: m.ID.String(),
 				Role: m.Role, TextSealed: text, PageTitleSealed: pageTitle,
-				PageScreen: pageScreen, Apps: canonicalApps(m.Apps)}, nil
+				PageScreen: pageScreen, Apps: canonicalApps(m.Apps),
+				AttachmentsSealed: attachments}, nil
 		})
 }
 
@@ -312,6 +326,62 @@ func (w *Writer) RecordCard(ctx context.Context, c Call, turn uuid.UUID, card wi
 				Message: card.MessageID.String(), Type: card.Card.Type,
 				Apps: canonicalApps(apps), BodySealed: sealed}, nil
 		})
+}
+
+// checkAttachments refuses a message's attachments past
+// wire.AttachmentsPerTurn, on a message that is not the person's own, or naming
+// a file no attachment could be: no id, the same file twice, a type nobody may
+// attach, a size past wire.FileMaxBytes, or a name a download cannot carry.
+func checkAttachments(role wire.MessageRole, files []wire.FileRef) error {
+	if len(files) == 0 {
+		return nil
+	}
+	if role != wire.RoleUser {
+		return invalid("a %s message carries %d attachments: only the person's own "+
+			"question is sent with files", role, len(files))
+	}
+	if len(files) > wire.AttachmentsPerTurn {
+		return invalid("the message carries %d attachments and the maximum is %d",
+			len(files), wire.AttachmentsPerTurn)
+	}
+	seen := make(map[uuid.UUID]bool, len(files))
+	for _, f := range files {
+		switch {
+		case f.FileID == uuid.Nil:
+			return invalid("an attachment names no file")
+		case seen[f.FileID]:
+			return invalid("file %s is attached twice", f.FileID)
+		case !slices.Contains(wire.AttachmentMediaTypes, f.MediaType):
+			return invalid("attachment %s is %q, and only %v are attached", f.FileID,
+				f.MediaType, wire.AttachmentMediaTypes)
+		case f.Size <= 0 || f.Size > wire.FileMaxBytes:
+			return invalid("attachment %s is %d bytes, want 1..%d", f.FileID, f.Size,
+				wire.FileMaxBytes)
+		}
+		if err := checkFileName(f.Name); err != nil {
+			return err
+		}
+		seen[f.FileID] = true
+	}
+	return nil
+}
+
+// sealAttachments seals a message's attachments, each one's download route
+// the conversation's own, or answers empty for none.
+func (w *Writer) sealAttachments(conversation, message uuid.UUID, files []wire.FileRef) (string, error) {
+	if len(files) == 0 {
+		return "", nil
+	}
+	refs := make([]wire.FileRef, len(files))
+	for i, f := range files {
+		f.Download = wire.FilePath(conversation, f.FileID)
+		refs[i] = f
+	}
+	body, err := json.Marshal(refs)
+	if err != nil {
+		return "", fmt.Errorf("assistantdomain: encode message %s's attachments: %w", message, err)
+	}
+	return w.sealer.Seal(body, AAD(conversation, RecordMessage, message, ColumnAttachments))
 }
 
 // checkApps refuses a record's apps past [MaxApps] or one that is no app name.

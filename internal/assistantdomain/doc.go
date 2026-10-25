@@ -1,6 +1,7 @@
 // Package assistantdomain is the Dashboard Assistant's state-log domain: a
 // person's conversations, their turns, the messages, steps and cards the
-// person saw, and the proposals they decided, on the `CREWLET_ASSISTANT_LOG`
+// person saw, the files they attached or were delivered, and the proposals
+// they decided, on the `CREWLET_ASSISTANT_LOG`
 // stream and applied into every data node's replicated estate (ADR-0052).
 //
 // # Who has to agree on it
@@ -51,7 +52,22 @@
 // later recreates it; and a person's erasure is ONE record that takes every
 // conversation they own, published by the engine when the identity applier
 // reports the removal and by the reaper's next pass as the backstop
-// ([Writer.EraseOwner]). Every bound on what is stored is this package's
+// ([Writer.EraseOwner]).
+//
+// # Files
+//
+// The images a person attaches and the files a deep-work run delivers are
+// kept beside the conversation ([FileStore]): each file's bytes are sealed
+// under the same keyring, with associated data naming the conversation and the
+// file, and uploaded as one object of the fleet's object store BEFORE the
+// record naming it is published on the conversation's subject (an attachment
+// exists before the turn it is sent with); the row is declared in
+// internal/objstore/references, so the collector deletes the object once a
+// purge or an erasure has removed the row. A conversation keeps at most
+// [AttachmentsPerConversation] attachments and [DeliveredPerConversation]
+// delivered files, decided in the writer's snapshot and again at the apply.
+//
+// Every bound on what is stored is this package's
 // ([CardMaxBytes], [ParkedMaxBytes] and the rest), and the largest record they
 // admit is held under the domain's declaration (spike S4).
 package assistantdomain

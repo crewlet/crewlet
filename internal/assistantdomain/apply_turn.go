@@ -166,11 +166,11 @@ func applyMessage(ctx context.Context, tx *sql.Tx, c applyContext, conversation,
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO assistant_messages
 			(id, conversation_id, turn_id, role, text_sealed, created_at,
-			 page_title_sealed, page_screen, apps, version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 page_title_sealed, page_screen, apps, attachments_sealed, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO NOTHING`,
 		p.Message, conversation, turn, string(p.Role), p.TextSealed, c.at(),
-		p.PageTitleSealed, p.PageScreen, string(apps), c.packed)
+		p.PageTitleSealed, p.PageScreen, string(apps), p.AttachmentsSealed, c.packed)
 	if err != nil {
 		return 0, fmt.Errorf("assistantdomain: record message %s at %s: %w",
 			p.Message, c.position, err)
