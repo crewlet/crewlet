@@ -87,6 +87,31 @@ func (m assistantModels) Chain(_ context.Context, person iam.Principal,
 	return built, keys[0], nil
 }
 
+// Unready is the failure the assistant's chain would meet as far as its
+// members know without a call ([chain.Unready] over the entries
+// `assistant.llm` names, as this node built them), or nil when any may answer
+// or the chain does not resolve: a chain that does not resolve is the turn's
+// own refusal ([assistantModels.Chain]), not a model's state.
+func (m assistantModels) Unready(context.Context) error {
+	c := m.e.Company()
+	if c == nil || c.Config == nil || c.Models == nil {
+		return nil
+	}
+	keys, err := c.Config.AssistantChain()
+	if err != nil {
+		return nil
+	}
+	members := make([]llm.Provider, 0, len(keys))
+	for _, key := range keys {
+		provider, ok := c.Models.Provider(key)
+		if !ok {
+			return nil
+		}
+		members = append(members, provider)
+	}
+	return chain.Unready(members)
+}
+
 // AssistantBudget is the meter an assistant turn charges its rounds through.
 func AssistantBudget(e *Engine) assistant.Budget { return assistantBudget{e: e} }
 

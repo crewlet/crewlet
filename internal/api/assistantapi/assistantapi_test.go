@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/assistantapi"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/evals"
@@ -25,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/tabular"
 )
 
@@ -321,6 +323,50 @@ func TestTheViewerSaysWhyTheAssistantIsUnavailable(t *testing.T) {
 				t.Errorf("viewer = %+v, want reason %q", got, c.reason)
 			}
 		})
+	}
+}
+
+// THE VIEWER SAYS A MODEL IS NOT READY BEFORE THE PERSON ASKS, with what a
+// failed round would have said, and only to a person the assistant answers: a
+// caller refused on an earlier reason learns nothing of its model. Asking
+// anyway is refused before any round, 503 with the same words and, for a spent
+// plan, the wait until its reset.
+//
+// Mutation: check the model before the earlier reasons, and the machine token
+// is told about it; drop the model check from Viewer, and the person is told
+// the assistant is available.
+func TestTheViewerSaysAModelIsNotReadyBeforeAnyoneAsks(t *testing.T) {
+	t.Parallel()
+	s := newSite(t, evals.RigOptions{})
+	reset := s.rig.Clock.Now().Add(90 * time.Second)
+	s.rig.Model.SetUnready(&llm.Error{Kind: llm.KindRateLimit, Key: "assistant", RetryAt: reset,
+		Err: errors.New("Usage limit reached")})
+
+	got := s.surface.Viewer(t.Context(), s.rig.Person)
+	if got.Available || got.Reason != wire.ViewerModelNotReady || got.Model == nil ||
+		got.Model.Code != wire.ErrorModelBusy || got.Model.RetryAt == nil || !got.Model.RetryAt.Equal(reset) {
+		t.Fatalf("viewer = %+v (model %+v), want model_not_ready naming model_busy until %v",
+			got, got.Model, reset)
+	}
+	token := s.rig.Person
+	token.Via = "pat:" + uuid.NewSHA1(uuid.NameSpaceOID, []byte("token")).String()
+	if other := s.surface.Viewer(t.Context(), token); other.Reason != wire.ViewerNotAPerson ||
+		other.Model != nil {
+		t.Errorf("a machine token's viewer = %+v, want not_a_person and nothing of the model", other)
+	}
+
+	rec := s.do(s.rig.Person, http.MethodPost, "/assistant/conversations/"+
+		s.rig.Conversation.String()+"/turns", wire.TurnRequest{ProtocolVersion: wire.ProtocolVersion,
+		Input: wire.TurnInput{Text: "Hi"}}, map[string]string{"Idempotency-Key": opKey})
+	var body map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "90" ||
+		body["error"] != string(httpjson.CodeAssistantModelNotReady) ||
+		body["reason"] != string(wire.ErrorModelBusy) || body["detail"] != got.Model.Message {
+		t.Fatalf("asking anyway = %d %q %s", rec.Code, rec.Header().Get("Retry-After"), rec.Body)
+	}
+	if n := len(s.rig.Model.Requests()); n != 0 {
+		t.Errorf("the model was asked %d rounds", n)
 	}
 }
 

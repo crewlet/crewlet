@@ -170,4 +170,18 @@ type AuditRead struct {
 type ViewerAssistant struct {
 	Available bool         `json:"available"`
 	Reason    ViewerReason `json:"reason,omitempty"`
+	// Model is what a [ViewerModelNotReady] reason means for this person,
+	// absent for every other reason.
+	Model *ModelNotice `json:"model,omitempty"`
+}
+
+// ModelNotice is the model problem a person is told before they ask: the
+// error code a turn would fail with, and the same sentence and hint.
+type ModelNotice struct {
+	Code    ErrorCode `json:"code"`
+	Message string    `json:"message"`
+	Hint    string    `json:"hint,omitempty"`
+	// RetryAt is when the model is tried again, for a spent plan whose
+	// reset is known.
+	RetryAt *time.Time `json:"retry_at,omitempty"`
 }

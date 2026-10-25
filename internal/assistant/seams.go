@@ -31,8 +31,15 @@ import (
 // charged nowhere: the turn's own [Budget] meter charges, so a round is
 // counted once. An error names why there is no chain (the assistant off, a
 // chain the rules refuse, no model configured).
+//
+// Unready is the failure a turn's first round would meet as far as the node
+// knows WITHOUT CALLING A MODEL, or nil when any member may answer: every
+// member's plan spent, its CLI signed out or unable to start
+// (chain.Unready over the members). It is what `/viewer` tells a person
+// before they ask and what refuses a question before any round.
 type Models interface {
 	Chain(ctx context.Context, person iam.Principal, use auxspend.Use) (llm.Provider, string, error)
+	Unready(ctx context.Context) error
 }
 
 // Budget is the meter a turn charges its rounds through: the company's

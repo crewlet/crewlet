@@ -397,8 +397,19 @@ type ErrorCode string
 
 const (
 	// ErrorModelUnavailable is every model in the assistant's chain
-	// failing or sitting out.
+	// failing for a reason none of the codes below names, or its CLI
+	// missing or unable to start on the node.
 	ErrorModelUnavailable ErrorCode = "model_unavailable"
+	// ErrorModelSignedOut is the chain's CLI signed out: its login expired
+	// or missing, or its token invalid. Asking again does not help until
+	// somebody signs it in.
+	ErrorModelSignedOut ErrorCode = "model_signed_out"
+	// ErrorModelBusy is the chain's usage plan spent or rate limited, with
+	// the reset where the CLI named one.
+	ErrorModelBusy ErrorCode = "model_busy"
+	// ErrorModelTimeout is the chain's CLI running out of its own time
+	// before it answered.
+	ErrorModelTimeout ErrorCode = "model_timeout"
 	// ErrorTurnTimeout is the turn's wall clock running out.
 	ErrorTurnTimeout ErrorCode = "turn_timeout"
 	// ErrorStepLimit is the turn using every step without an answer.
@@ -418,10 +429,11 @@ const (
 	ErrorAccessWithdrawn ErrorCode = "access_withdrawn"
 )
 
-// ErrorCodes are the eight, in declaration order.
+// ErrorCodes are the eleven, in declaration order.
 var ErrorCodes = []ErrorCode{
-	ErrorModelUnavailable, ErrorTurnTimeout, ErrorStepLimit, ErrorBudgetExhausted,
-	ErrorTurnInterrupted, ErrorGrantEnded, ErrorInternal, ErrorAccessWithdrawn,
+	ErrorModelUnavailable, ErrorModelSignedOut, ErrorModelBusy, ErrorModelTimeout,
+	ErrorTurnTimeout, ErrorStepLimit, ErrorBudgetExhausted, ErrorTurnInterrupted,
+	ErrorGrantEnded, ErrorInternal, ErrorAccessWithdrawn,
 }
 
 // Valid reports whether c is a code this build knows.
@@ -474,11 +486,18 @@ const (
 	// ViewerNoPermission is a person the authority table refuses the
 	// assistant.
 	ViewerNoPermission ViewerReason = "no_permission"
+	// ViewerModelNotReady is a person who may ask, on a chain every model
+	// of which is known unusable right now (signed out, its plan spent, its
+	// CLI unable to start), known without a call; the answer's
+	// [ViewerAssistant.Model] says which and what to do. Checked after
+	// every other reason, so only a person the assistant answers learns
+	// the state of its model.
+	ViewerModelNotReady ViewerReason = "model_not_ready"
 )
 
-// ViewerReasons are the four, in declaration order.
+// ViewerReasons are the five, in declaration order.
 var ViewerReasons = []ViewerReason{
-	ViewerDisabled, ViewerNoModel, ViewerNotAPerson, ViewerNoPermission,
+	ViewerDisabled, ViewerNoModel, ViewerNotAPerson, ViewerNoPermission, ViewerModelNotReady,
 }
 
 // Valid reports whether r is a reason this build knows.

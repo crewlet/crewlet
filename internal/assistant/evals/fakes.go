@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -149,6 +150,15 @@ func (m Models) Chain(context.Context, iam.Principal, auxspend.Use) (llm.Provide
 		return nil, "", m.Err
 	}
 	return m.Model, m.Key, nil
+}
+
+// Unready implements [assistant.Models] the engine's way: the chain's verdict
+// over its one member, so a model that knows it would fail says so.
+func (m Models) Unready(context.Context) error {
+	if m.Model == nil {
+		return nil
+	}
+	return chain.Unready([]llm.Provider{m.Model})
 }
 
 // Budget hands every turn one meter, or none.

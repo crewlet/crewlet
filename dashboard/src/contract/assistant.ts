@@ -108,8 +108,11 @@ type AssistantAlign = "start" | "end";
 type AssistantNoticeTone = "info" | "warning";
 
 /** A turn-level failure on an error frame. */
-type AssistantErrorCode =
+export type AssistantErrorCode =
   | "model_unavailable"
+  | "model_signed_out"
+  | "model_busy"
+  | "model_timeout"
   | "turn_timeout"
   | "step_limit"
   | "budget_exhausted"
@@ -133,7 +136,12 @@ type AssistantResourceKind =
   | "view";
 
 /** Why the assistant is not available to the viewer. */
-export type AssistantViewerReason = "disabled" | "no_model" | "not_a_person" | "no_permission";
+export type AssistantViewerReason =
+  | "disabled"
+  | "no_model"
+  | "not_a_person"
+  | "no_permission"
+  | "model_not_ready";
 
 /** Whether a page action asks for the person's approval. */
 type AssistantActionConfirm = "approve" | "none";
@@ -601,6 +609,20 @@ interface AssistantAuditRead {
 export interface AssistantViewerAssistant {
   available: boolean;
   reason?: AssistantViewerReason;
+  /** What a `model_not_ready` reason means for this person; absent for every other reason. */
+  model?: AssistantModelNotice;
+}
+
+/**
+ * The model problem a person is told before they ask: the error code a turn
+ * would fail with, and the same sentence and hint.
+ */
+export interface AssistantModelNotice {
+  code: AssistantErrorCode;
+  message: string;
+  hint?: string;
+  /** When a spent plan is tried again, where its reset is known. */
+  retry_at?: string;
 }
 
 // --- page actions (WP12) ---

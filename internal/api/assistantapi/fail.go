@@ -19,6 +19,7 @@ func (s *Surface) fail(w http.ResponseWriter, r *http.Request, err error) {
 		unavailable *assistant.Unavailable
 		refused     *assistant.NotAvailable
 		budget      *assistant.BudgetRefused
+		notReady    *assistant.ModelNotReady
 	)
 	switch {
 	case errors.Is(err, assistant.ErrNotFound):
@@ -39,6 +40,19 @@ func (s *Surface) fail(w http.ResponseWriter, r *http.Request, err error) {
 			wait = budget.ResetsAt.Sub(s.now())
 		}
 		httpjson.ThrottledWith(w, httpjson.CodeBudgetExhausted, wait, detail)
+	case errors.As(err, &notReady):
+		s.log.InfoContext(r.Context(), "assistant_model_not_ready", "path", r.URL.Path,
+			"code", string(notReady.Notice.Code), "error", notReady.Cause)
+		detail := httpjson.Detail{"reason": string(notReady.Notice.Code),
+			"detail": notReady.Notice.Message}
+		if notReady.Notice.Hint != "" {
+			detail["hint"] = notReady.Notice.Hint
+		}
+		if notReady.Notice.RetryAt != nil {
+			detail["retry_at"] = notReady.Notice.RetryAt.UTC().Format(time.RFC3339)
+		}
+		httpjson.UnavailableWith(w, httpjson.CodeAssistantModelNotReady,
+			httpjson.RetrySeconds(notReady.RetryAfter), detail)
 	case errors.As(err, &unavailable):
 		s.log.WarnContext(r.Context(), "assistant_unavailable", "path", r.URL.Path,
 			"error", unavailable.Cause)
