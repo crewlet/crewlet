@@ -71,6 +71,58 @@ func TestInputTokensCarryTheWholePromptIncludingCache(t *testing.T) {
 	}
 }
 
+// AN INPUT COUNT THAT ALREADY HOLDS THE CACHE IS CHARGED ONCE. Anthropic's
+// input_tokens leaves the cached tokens out and OpenAI's counts them in, and
+// the two name their fields alike: read the second way round, every cached
+// token was charged twice. The profile says which arithmetic its vendor uses,
+// and the default is the first.
+func TestAnInputCountThatHoldsTheCacheIsChargedOnce(t *testing.T) {
+	t.Parallel()
+	const answer = `{"result":"ok","usage":{"input":1000,"cached":600,"written":40,"output":50}}`
+	for _, tc := range []struct {
+		includes bool
+		want     int
+	}{
+		{includes: false, want: 1000 + 600 + 40},
+		{includes: true, want: 1000},
+	} {
+		p := cliprofile.Profile{
+			Output: cliprofile.OutputJSON, TextPaths: []cliprofile.Path{{"result"}},
+			Usage: cliprofile.UsagePaths{
+				Input:              []cliprofile.Path{{"usage", "input"}},
+				Output:             []cliprofile.Path{{"usage", "output"}},
+				CacheRead:          []cliprofile.Path{{"usage", "cached"}},
+				CacheWrite:         []cliprofile.Path{{"usage", "written"}},
+				InputIncludesCache: tc.includes,
+			},
+		}
+		prov := &Provider{profile: p, model: "m", now: time.Now}
+		comp, err := prov.completion(t.Context(), "prompt", false, &rawResult{stdout: answer}, "")
+		if err != nil {
+			t.Fatalf("completion: %v", err)
+		}
+		if comp.InputTokens != tc.want || comp.TotalTokens() != tc.want+50 {
+			t.Errorf("input_includes_cache %v: InputTokens = %d, total %d, want %d and %d",
+				tc.includes, comp.InputTokens, comp.TotalTokens(), tc.want, tc.want+50)
+		}
+		// The breakdown is the vendor's either way: what the cache served and
+		// wrote is reported as it said.
+		if comp.CacheRead != 600 || comp.CacheWrite != 40 {
+			t.Errorf("input_includes_cache %v: cache read %d write %d, want 600 and 40",
+				tc.includes, comp.CacheRead, comp.CacheWrite)
+		}
+	}
+	// An operator declares it in overrides like any usage field, and the
+	// paths it sits beside stay as the profile had them.
+	p, err := cliprofile.Load("claude-code", map[string]any{"usage": map[string]any{"input_includes_cache": true}})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !p.Usage.InputIncludesCache || len(p.Usage.Input) == 0 || len(p.Usage.CacheRead) == 0 {
+		t.Errorf("usage after the override = %+v, want the declaration beside the built-in paths", p.Usage)
+	}
+}
+
 // A JSONL stream spells one answer across several events, and reports a
 // RUNNING total: text concatenates, usage takes the last value.
 func TestAStreamConcatenatesTextAndTakesTheFinalUsage(t *testing.T) {

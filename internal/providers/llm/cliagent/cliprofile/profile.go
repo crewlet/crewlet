@@ -112,6 +112,30 @@ type UsagePaths struct {
 	CacheRead  []Path `yaml:"cache_read,omitempty"`
 	CacheWrite []Path `yaml:"cache_write,omitempty"`
 	Reasoning  []Path `yaml:"reasoning,omitempty"`
+
+	// InputIncludesCache declares that the input count is ALREADY the whole
+	// prompt, the cached tokens inside it, so the cache figures only break it
+	// down. False, the default, reads it as the uncached part alone, which is
+	// how Anthropic's usage — and every CLI passing that through — reports
+	// it, and adds the cache figures to it ([UsagePaths.PromptTokens]).
+	//
+	// A DECLARATION OF THE VENDOR'S ARITHMETIC, because the two shapes name
+	// their fields alike and differ only in what the first one counts:
+	// OpenAI's `input_tokens` holds its `cached_tokens`, and codex's
+	// turn.completed passes that through (its own `non_cached_input` is the
+	// difference). Read the other way, every cached token was charged twice.
+	InputIncludesCache bool `yaml:"input_includes_cache,omitempty"`
+}
+
+// PromptTokens is the whole prompt's token count out of the three input
+// figures a CLI reported, by the arithmetic [UsagePaths.InputIncludesCache]
+// declares: the budget figure a completion's InputTokens carries, which counts
+// every cached token once.
+func (u UsagePaths) PromptTokens(input, cacheRead, cacheWrite int) int {
+	if u.InputIncludesCache {
+		return input
+	}
+	return input + cacheRead + cacheWrite
 }
 
 // CredentialStore is a login a CLI keeps in a DATABASE OF ITS OWN rather than

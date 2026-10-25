@@ -83,6 +83,8 @@ func (p Profile) Clone() Profile {
 		CacheRead:  clonePaths(p.Usage.CacheRead),
 		CacheWrite: clonePaths(p.Usage.CacheWrite),
 		Reasoning:  clonePaths(p.Usage.Reasoning),
+
+		InputIncludesCache: p.Usage.InputIncludesCache,
 	}
 	out.EventTypePath = append(Path(nil), p.EventTypePath...)
 	out.TextEvents = append([]string(nil), p.TextEvents...)
