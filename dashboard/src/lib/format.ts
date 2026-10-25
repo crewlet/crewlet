@@ -890,3 +890,19 @@ export function firstLine(body: string): string {
       ?.trim() ?? ""
   );
 }
+
+/**
+ * "Good morning, Jane", in the READER's clock, which is whose morning it is,
+ * and with the first word of their name. A reader nobody named is greeted
+ * without one rather than as "there" or as a token id.
+ *
+ * THE READER'S CLOCK IS THE BROWSER'S ZONE (`toWall`), the same one every
+ * timestamp on the page is drawn in. Home greets with it, and so does the
+ * assistant's home.
+ */
+export function greeting(now: number, name: string): string {
+  const hour = Number(toWall(now).slice(11, 13));
+  const part = hour < 5 ? "evening" : hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
+  const first = name.trim().split(/\s+/)[0] ?? "";
+  return first ? `Good ${part}, ${first}` : `Good ${part}`;
+}

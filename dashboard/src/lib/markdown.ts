@@ -352,8 +352,16 @@ export interface RenderOptions {
    * unreachable as itself, and whose click a link would steal to navigate
    * instead of choosing the row. Inside a link it is also invalid HTML: an
    * `<a>` may not hold another.
+   *
+   * `inert`: a MODEL'S link is never live. The Dashboard Assistant's prose is
+   * written by a model that may have read anything, so a link in it is drawn
+   * as its label followed by the host it names (`docs.example.com/pricing`),
+   * in the quiet link ink, not underlined and not focusable; an autolink is
+   * its host and path; and an image is its alt text, never fetched and never
+   * a link. Navigation from the assistant is only ever an engine-built Open in
+   * app card, which the drawer checks itself.
    */
-  links?: "anchor" | "text";
+  links?: "anchor" | "text" | "inert";
 }
 
 /** What the inline walk needs of [RenderOptions]. */
@@ -390,6 +398,9 @@ export function renderInline(
       // longer one (a URL, a whole config line) still wraps, since holding it
       // whole would overflow a phone's column.
       out.push(createElement(InlineCode, { key, whole: code.length <= UnbrokenCode }, code));
+    } else if (g.src !== undefined && options.links === "inert") {
+      // A MODEL'S PICTURE IS ITS ALT TEXT: nothing it names is fetched.
+      out.push(createElement("span", { key }, g.alt ?? ""));
     } else if (g.src !== undefined) {
       const alt = g.alt ?? "";
       const src = options.image ? options.image(g.src) : shownImage(g.src);
@@ -409,6 +420,10 @@ export function renderInline(
             ? anchor(key, elsewhere, [alt || elsewhere])
             : createElement("span", { key }, alt),
       );
+    } else if (g.href !== undefined && options.links === "inert") {
+      out.push(inertLink(key, renderInline(g.label ?? "", key, options), g.href));
+    } else if (g.auto !== undefined && options.links === "inert") {
+      out.push(inertLink(key, [], g.auto));
     } else if (g.href !== undefined) {
       const href = options.links === "text" ? null : safeHref(g.href);
       const label = g.label ?? "";
@@ -471,6 +486,45 @@ function anchor(key: string, href: string, children: ReactNode[]): ReactNode {
     "a",
     internal ? { key, href } : { key, href, target: "_blank", rel: "noopener noreferrer" },
     children,
+  );
+}
+
+/**
+ * Where a link points, as a reader checks it: the host and the path of a web
+ * address with no scheme (`docs.example.com/pricing`), the address of a
+ * `mailto:`, and nothing for anything else (an app route, a scheme this
+ * product does not follow), which is drawn as its label alone.
+ */
+export function linkTarget(raw: string): string | null {
+  const href = safeHref(raw);
+  if (!href || href.startsWith("#")) return null;
+  if (href.startsWith("mailto:")) return href.slice("mailto:".length);
+  try {
+    const url = new URL(href);
+    const path = url.pathname === "/" ? "" : url.pathname;
+    return `${url.host}${path}`;
+  } catch {
+    return null;
+  }
+}
+
+/** A model's link, drawn inert: its label, then the place it names. See [RenderOptions.links]. */
+function inertLink(key: string, label: ReactNode[], raw: string): ReactNode {
+  const target = linkTarget(raw);
+  const named = label.length > 0;
+  return createElement(
+    "span",
+    { key },
+    ...(named ? label : []),
+    target === null
+      ? named
+        ? null
+        : raw
+      : createElement(
+          "span",
+          { key: `${key}-host`, className: "md-link-inert-host" },
+          named ? ` (${target})` : target,
+        ),
   );
 }
 
@@ -701,6 +755,12 @@ export function renderMarkdown(source: string, options: RenderOptions = {}): Rea
  * model's prose reads by one rule.
  */
 export const MODEL_WORDS: RenderOptions = { breaks: "hard", headings: "text" };
+
+/**
+ * How the Dashboard Assistant's prose is read: a model's words, whose every
+ * link is inert and whose pictures are their alt text (`links: "inert"`).
+ */
+export const ASSISTANT_WORDS: RenderOptions = { ...MODEL_WORDS, links: "inert" };
 
 /** One heading of a document, as an "On this page" entry points at it. */
 export interface Heading {
