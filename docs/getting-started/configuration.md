@@ -352,6 +352,11 @@ assistant:
   proposal_ttl_seconds: 900             # how long a proposal waits, 60..3600
   retention_days: 30                    # conversation history, 1..365
   token_budget: { day: 200000 }         # per person, optional
+  deep_work:                            # optional: absent is quick mode only
+    llm: assistant-deep                 # an agent-mode Claude Code entry
+    timeout_seconds: 1200               # one run's wall clock, 60..1200
+    max_steps: 150                      # rounds and Crewlet calls a task makes, 10..400
+    max_tokens: 3000000                 # tokens a task may spend, 10000..20000000
 ```
 
 | Field | Default | Meaning |
@@ -363,6 +368,10 @@ assistant:
 | `proposal_ttl_seconds` | 900 | How long a proposed change waits for its owner's approval before it expires. |
 | `retention_days` | 30 | How long a person's conversations are kept. |
 | `token_budget` | none | Each person's ceiling per calendar window, the shape of [a token budget](#token-budgets), charged on top of the company's own. |
+| `deep_work.llm` | none | The entry deep work runs on: Claude Code in `mode: agent`, whose own shell, files and web tools a deep-work run uses. Placed in its own `run_in`, else the first configured `e2b` or image-backed `container` cell, else the engine host under OS confinement ([Running the Dashboard Assistant](../guides/assistant.md#deep-work)). |
+| `deep_work.timeout_seconds` | 1200 | The longest one deep-work run takes. Never past the turn's read grant, which is why it is also the ceiling. |
+| `deep_work.max_steps` | 150 | The most agentic rounds and Crewlet calls one deep-work task makes, across the runs an approval continues. |
+| `deep_work.max_tokens` | 3000000 | The most tokens one deep-work task spends before it is stopped; the person's and the company's budgets still apply. |
 
 A numeric field left out, or `0`, takes its default; a value outside its range
 is refused naming the field.

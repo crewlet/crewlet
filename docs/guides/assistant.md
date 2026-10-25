@@ -139,6 +139,70 @@ These limits are fixed, not configured:
 | Tool result handed to the model | 16 KiB | Larger answers are cut for the model; the card still shows the snapshot |
 | Card size | 1000 rows, 256 KiB | A larger table is cut with a notice and never presented as whole |
 
+## Deep work
+
+Deep work lets the assistant hand a large task to a coding agent with its own
+tools (shell, files, web search and fetch, image reading) for up to twenty
+minutes at a time (ADR-0053). It is off unless `assistant.deep_work` names an
+entry:
+
+```yaml
+providers:
+  llm:
+    assistant-deep:
+      agent: claude-code
+      model: sonnet
+      mode: agent            # the CLI runs its own loop and tools
+      # run_in: e2b          # optional; see "Where a run happens"
+assistant:
+  enabled: true
+  llm: [assistant]
+  deep_work:
+    llm: assistant-deep
+    timeout_seconds: 1200    # 60..1200, the longest one run takes
+    max_steps: 150           # 10..400 agentic rounds and Crewlet calls a task makes
+    max_tokens: 3000000      # 10000..20000000 tokens a task may spend
+```
+
+The entry must be Claude Code in agent mode, because a run parked on a
+proposal is continued in that CLI's own session after the approval. A run's
+wall clock never passes the read grant of the turn it belongs to, which is why
+twenty minutes is the ceiling; a longer task proposes, waits and continues on
+the fresh grant the approval brings. Its tokens are charged to the person's and
+the company's budgets like any turn's, and appear on the spend history as
+`assistant_deep_work`.
+
+### What a run can reach
+
+Its only way into Crewlet is the person's own assistant tools, served to it
+over the engine's tool bridge, so every read is the person's request and every
+change a proposal they approve. No API token, grant or engine credential is
+placed in its box; it holds a bridge token valid for that run alone, which
+stops working when the run ends. It does reach the web, always: a page can try
+to steer it, and it could carry what it read out in an address it fetches.
+
+### Where a run happens
+
+A run goes to the first of these the company configures:
+
+1. The deep-work entry's own `run_in`.
+2. An `e2b` cell under `providers.sandbox`.
+3. A `container` cell with `providers.sandbox.local.image`.
+4. The engine host, **confined**. Every command the run starts runs inside the
+   strongest boundary the host enforces: `sandbox-exec` on macOS, bubblewrap
+   over namespaces on Linux, or Landlock applied by the `crewlet` binary
+   itself. It cannot read or write the node's store and estate, the stream
+   store, the log file, the config files the node was started from, any
+   providers.llm login, any seat's box, or the operator's home directory, and
+   it writes only in its own box. A host that can enforce none of these runs
+   no deep work, and the assistant reports why. Install bubblewrap
+   (`apt install bubblewrap`) or run on a kernel with Landlock, or configure a
+   cell above.
+
+On the engine host, point `CREWLET_MCP_BRIDGE_URL` at the node's loopback
+address (`http://127.0.0.1:<api.port>`): the run's bridge token is then
+admitted from loopback only.
+
 ## Retention and erasure
 
 A conversation untouched for `assistant.retention_days` (30 by default, 1 to
