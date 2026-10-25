@@ -94,6 +94,18 @@ func vocabularyFrames() []wire.Frame {
 				Digest:    wire.DigestPrefix + "9f2c0d6e5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a39281706f5e4d3c2b1a0",
 				ExpiresAt: at.Add(15 * time.Minute), State: wire.ProposalProposed,
 				SourceRevision: "url:3f9c1a0e", ApproveLabel: "Approve and save"}})),
+		read.Frame(cardFrame(answer, "card:page", wire.Card{Type: wire.CardProposal,
+			Proposal: &wire.ProposalCard{ProposalID: id("proposal:page"), Scope: wire.ScopePage,
+				Tool: "propose_page_change", Title: "Filter the list", Target: "Work › Tasks",
+				Changes: []wire.Change{
+					{Kind: wire.ChangeChanged, Field: "blocked", Label: "Blocked", From: "Any", To: "Blocked only"},
+				},
+				Digest:    wire.DigestPrefix + "0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9",
+				ExpiresAt: at.Add(15 * time.Minute), State: wire.ProposalProposed,
+				SourceRevision: "url:3f9c1a0e",
+				PageAction: &wire.PageActionRef{Name: "work.filter.apply",
+					Payload: json.RawMessage(`{"blocked":"true"}`)},
+				ApproveLabel: "Apply to this list"}})),
 		read.Frame(wire.Frame{Kind: wire.EventAction, Action: &wire.ActionEvent{
 			ActionID: id("action:filter"), Name: "work.filter.apply", ProposalID: &proposal,
 			SourceRevision: "url:3f9c1a0e", Payload: json.RawMessage(`{"blocked":"true"}`),
