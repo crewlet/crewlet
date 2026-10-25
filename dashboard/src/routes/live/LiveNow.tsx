@@ -192,7 +192,6 @@ export function LiveNow() {
         failed: choiceKey("Failures", [{ value: "true", label: "Failed phases" }], "filter"),
       },
       nav,
-      confirm: "none",
     }),
   });
   // --- end assistant page actions (WP12) ---

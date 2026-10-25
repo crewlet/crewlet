@@ -127,7 +127,6 @@ export function Project({ projectKey }: { projectKey: string }) {
       scope: "Which lens of this project is shown",
       keys: { lens: tabKey("Lens", PROJECT_LENSES, LENS_LABELS) },
       nav,
-      confirm: "none",
     }),
   });
   // --- end assistant page actions (WP12) ---

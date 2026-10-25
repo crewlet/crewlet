@@ -41,7 +41,7 @@
 
 import { useSyncExternalStore } from "react";
 import {
-  ASSISTANT_ACTION_CONTEXT_INVALIDATE,
+  ASSISTANT_PAGE_ACTIONS,
   ASSISTANT_PAGE_CONTEXT_MAX_ACCEPTS,
   ASSISTANT_PAGE_CONTEXT_MAX_RESOURCES,
   type AssistantPageContext,
@@ -123,8 +123,18 @@ export interface PageActionSpec<P> {
    * offers it, so its receipt can say Undo (D11).
    */
   undo?(value: P): () => boolean;
-  /** Whether the person approves it first (D11): a pure view change may say `none`. */
-  confirm?: "approve" | "none";
+}
+
+/**
+ * A page action's id: one of the contract's (`ASSISTANT_PAGE_ACTIONS`), which
+ * also says whether it asks the person's approval first, so no screen states
+ * that a second time.
+ */
+export type PageActionId = keyof typeof ASSISTANT_PAGE_ACTIONS;
+
+/** Whether an id off the wire, or off a registration, is one of the contract's page actions. */
+export function isPageActionId(id: string): id is PageActionId {
+  return Object.hasOwn(ASSISTANT_PAGE_ACTIONS, id);
 }
 
 /** What a screen registers beyond what the frame knows. */
@@ -138,8 +148,8 @@ export interface AssistantPageRegistration {
   selection?: { kind: ResourceKind; id: string } | null;
   /** The version of the data the screen drew, so a change prepared against it can be judged stale. */
   dataVersion?: string;
-  /** The actions this screen takes, by id (`work.filters.apply`). */
-  actions?: Readonly<Record<string, PageActionSpec<unknown>>>;
+  /** The actions this screen takes, by their contract id (`work.filter.apply`). */
+  actions?: Readonly<Partial<Record<PageActionId, PageActionSpec<unknown>>>>;
 }
 
 /** What the frame publishes about every page. */
@@ -199,12 +209,10 @@ export interface PageSnapshot {
 
 const SCREEN = /^[a-z][a-z0-9-]{0,63}$/;
 const KEY = /^[a-z][a-z0-9_.]{0,63}$/;
-const ACTION = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/;
 const TITLE_MAX_RUNES = 120;
 const VALUE_MAX_BYTES = 512;
 const ID_MAX_BYTES = 200;
 const MAP_MAX_KEYS = 32;
-const ACTION_MAX_BYTES = 64;
 
 let frame: FramePage | null = null;
 /** Every mounted component's registration, oldest first. */
@@ -293,15 +301,11 @@ export function buildPageContext(
     chosen && chosen.id !== "" && plain(chosen.id, ID_MAX_BYTES)
       ? { kind: chosen.kind, id: chosen.id }
       : null;
-  // AN ACTION ID IS DOTTED LOWERCASE SEGMENTS, and never the one the engine
-  // reserves for itself (`context.invalidate`), as `wire.ValidActionID` holds.
+  // ONLY THE CONTRACT'S IDS, which the engine's catalogue holds too (its
+  // client gate keeps the two equal): an id the engine does not know is one
+  // every proposal for would be refused, so it is never offered.
   const accepts = Object.keys(reg?.actions ?? {})
-    .filter(
-      (id) =>
-        bytes(id) <= ACTION_MAX_BYTES &&
-        ACTION.test(id) &&
-        id !== ASSISTANT_ACTION_CONTEXT_INVALIDATE,
-    )
+    .filter(isPageActionId)
     .slice(0, ASSISTANT_PAGE_CONTEXT_MAX_ACCEPTS);
   const context: AssistantPageContext = {
     screen: SCREEN.test(page.screen) ? page.screen : "unknown",
@@ -447,7 +451,7 @@ export function applyPageAction(
     revision: snapshot?.context.source_revision ?? "",
     ...extra,
   });
-  const spec = registration?.actions?.[request.action];
+  const spec = isPageActionId(request.action) ? registration?.actions?.[request.action] : undefined;
   if (!spec) return result("no_handler", { reason: "This page does not take that change." });
   // A FRESH REVISION, read at the moment of applying: what the page shows
   // now, never what it showed when the change was prepared or approved.
