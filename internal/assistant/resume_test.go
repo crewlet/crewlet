@@ -193,3 +193,27 @@ func TestALoopParkedAtAnotherVersionIsRefusedByName(t *testing.T) {
 		t.Errorf("the refused resume asked the model %d rounds in all, want the proposing 1", rounds)
 	}
 }
+
+// A RESUME THAT CANNOT START LEAVES THE TURN PARKED: everything that can fail
+// is read before the resume record, so a failure answers the approval and
+// leaves the turn waiting on it, never running with no runner.
+//
+// Mutation: read the conversation after the resume record (where it was) and
+// the turn is left running.
+func TestAResumeThatCannotStartLeavesTheTurnParked(t *testing.T) {
+	t.Parallel()
+	f, accepted, p := parkedRig(t)
+	f.Store.FailConversations(1)
+	ctx := iam.WithPrincipal(context.Background(), f.Person)
+	if _, err := f.Svc.Resume(ctx, approval.Resumption{Owner: f.Person.ID,
+		Conversation: f.Conversation, Turn: accepted.TurnID, Proposal: p.ID,
+		Read: f.Grant("approve"), State: wire.ProposalApplied,
+		Card: cardAt(p, wire.ProposalApplied)}); err == nil {
+		t.Fatal("a resume whose conversation could not be read started")
+	}
+	row, _ := f.Store.Turn(t.Context(), f.Person.ID, accepted.TurnID)
+	if row.State != wire.TurnWaitingForApproval {
+		t.Fatalf("the turn is %s after a resume that could not start, want still parked",
+			row.State)
+	}
+}

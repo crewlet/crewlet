@@ -142,6 +142,9 @@ func TestTheRosterNeverReadsAnUnreachableStoreAsGone(t *testing.T) {
 	if ok, err := roster.Present(ctx, "node-b"); err != nil || ok {
 		t.Fatalf("a node holding no lease reads %v, %v; want absent", ok, err)
 	}
+	if nodes, err := roster.Nodes(ctx); err != nil || len(nodes) != 1 || nodes[0] != "node-a" {
+		t.Fatalf("the roster lists %v, %v; want node-a, the one node holding its lease", nodes, err)
+	}
 	down := nodeRoster{coord: unreachable{backend}}
 	if ok, err := down.Present(ctx, "node-b"); err == nil {
 		t.Fatalf("an unreachable store reads %v with no error; want the error", ok)

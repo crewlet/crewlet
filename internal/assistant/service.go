@@ -339,7 +339,7 @@ func (s *Service) Start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 			in.Name = seat.Name
 		}
 	}
-	s.openStream(t, history.Conversation, false)
+	s.openStream(t, history.Conversation, false, 0)
 
 	assistantCfg := config.Assistant{}
 	if c != nil {
@@ -366,8 +366,9 @@ func (s *Service) newTurn(p iam.Principal, conversation, id uuid.UUID, key strin
 
 // openStream opens the segment's frame log and writes its opening frames,
 // answering the seq a client that drew everything before it reads after.
-func (s *Service) openStream(t *turn, c assistantdomain.Conversation, resumed bool) uint64 {
-	t.log = s.hub.Open(t.person.ID, t.conversation, t.id)
+func (s *Service) openStream(t *turn, c assistantdomain.Conversation, resumed bool,
+	floor uint64) uint64 {
+	t.log = s.hub.Open(t.person.ID, t.conversation, t.id, floor)
 	after := t.log.Last()
 	t.emit(wire.Frame{Kind: wire.EventConversation, Conversation: &wire.ConversationEvent{
 		Title: c.Title, CreatedAt: c.CreatedAt, Resumed: resumed}})
@@ -566,7 +567,10 @@ func (s *Service) Stop(ctx context.Context, owner, turnID uuid.UUID, key string)
 			// THE RUNNER DIED WITH THE TURN: there is nothing to stop,
 			// and the turn is closed interrupted, once, as a stream of
 			// it would close it.
-			state, _ := s.closeInterrupted(ctx, owner, row)
+			state, _, err := s.closeInterrupted(ctx, owner, row)
+			if err != nil {
+				return wire.StopAnswer{}, err
+			}
 			return wire.StopAnswer{State: state}, nil
 		}
 	}
@@ -631,16 +635,18 @@ func (s *Service) Stream(ctx context.Context, owner, conversation, turnID uuid.U
 	}
 	s.streamOpened()
 	defer s.streamClosed()
-	if l, ok := s.hub.Get(turnID); ok {
+	l, node := s.streamSource(ctx, owner, row, after)
+	if l != nil {
 		return s.follow(ctx, owner, row, l, after, w)
 	}
 	gone := false
-	if !row.State.Ended() && row.Node != s.node && s.remote != nil {
-		reach, err := s.remote.Follow(ctx, owner, turnID, row.Node, after, w)
+	if node != "" {
+		reach, err := s.remote.Follow(ctx, owner, turnID, node, after, w)
 		if err != nil || reach == live.ReachServed {
 			return err
 		}
-		gone = reach == live.ReachGone
+		// Only the record's own runner gone ends the turn with it.
+		gone = reach == live.ReachGone && node == row.Node
 	}
 	return s.answerFromTranscript(ctx, owner, row, after, w, gone)
 }
@@ -716,7 +722,10 @@ func (s *Service) answerFromTranscript(ctx context.Context, owner uuid.UUID,
 	var failure *wire.ErrorEvent
 	switch {
 	case state == wire.TurnRunning && (row.Node == s.node || gone):
-		state, failure = s.closeInterrupted(ctx, owner, row)
+		state, failure, err = s.closeInterrupted(ctx, owner, row)
+		if err != nil {
+			return err
+		}
 	case state == wire.TurnRunning:
 		// Running on another node this one cannot follow: the snapshot is
 		// what it can say, and the client asks again.
@@ -736,14 +745,17 @@ func (s *Service) answerFromTranscript(ctx context.Context, owner uuid.UUID,
 }
 
 // closeInterrupted closes a running turn whose runner died with it, and answers
-// the state it is in now and the error a stream shows for it.
+// the state it is in now and the error a stream shows for it. A close that
+// did not land is the caller's error to surface ([Service.writeFailure]),
+// never an "interrupted" the record does not say: the client asks again, and
+// the next attempt closes it.
 //
 // EXACTLY ONCE across the fleet: the close is published under an operation
 // every node derives alike from the turn ([Derivation]), and the state log
 // arbitrates the turn's end, so of two nodes noticing at once one records it
 // and the other reads the state it landed in ([assistantdomain.TurnMoved]).
 func (s *Service) closeInterrupted(ctx context.Context, owner uuid.UUID,
-	row assistantdomain.Turn) (wire.TurnState, *wire.ErrorEvent) {
+	row assistantdomain.Turn) (wire.TurnState, *wire.ErrorEvent, error) {
 
 	err := s.records.CloseTurn(ctx, Write{Owner: owner,
 		By: iam.Actor{Name: "engine", Kind: iam.ActorSystem},
@@ -756,14 +768,13 @@ func (s *Service) closeInterrupted(ctx context.Context, owner uuid.UUID,
 	case errors.As(err, &moved):
 		state = moved.State
 	case err != nil:
-		s.log.WarnContext(ctx, "assistant_interrupt_unrecorded", "turn", row.ID,
-			"error", redact.Secrets(err.Error()))
+		return "", nil, s.writeFailure(err)
 	}
 	if state != wire.TurnInterrupted {
-		return state, nil
+		return state, nil, nil
 	}
 	return state, &wire.ErrorEvent{Code: wire.ErrorTurnInterrupted, Retryable: true,
-		Message: "The node running this turn restarted before the turn finished."}
+		Message: "The node running this turn restarted before the turn finished."}, nil
 }
 
 // snapshot is the turn as the transcript holds it, numbered after seq after.

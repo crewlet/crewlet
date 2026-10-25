@@ -29,12 +29,32 @@
 // # Across a fleet
 //
 // Every frame is also broadcast on the queue's ephemeral verbs under a subject
-// of the turn's own, sealed under the fleet keyring in a key domain of its own,
-// and a frame the fleet did not seal is dropped. A node asked to stream a turn
-// it is not running listens there and asks the running node for the frames it
-// missed, and a Stop pressed on another node reaches the running one, each over
-// a signed instruction channel (internal/signedask's `assistant.replay` and
-// `assistant.stop`), whose server checks the turn's owner before it answers.
-// A runner that died is answered by the persisted transcript as a snapshot,
-// and the turn is closed interrupted by exactly one node.
+// of the turn's own, encrypted under the fleet keyring's AEAD with the turn in
+// its associated data and sealed one way in a key domain of its own
+// (`assistant.frame`), so reaching the broker reads no conversation, and a
+// frame the fleet did not seal, or captured off another turn, is dropped
+// (broadcast.go). A node asked to stream a turn it is not running listens
+// there and asks the running node for the frames it missed, and a Stop pressed
+// on another node reaches the running one, each over a signed instruction
+// channel (internal/signedask's `assistant.replay` and `assistant.stop`, the
+// replayed pages encrypted the same way), whose server checks the turn's owner
+// before it answers (channels.go). A runner that died is answered by the
+// persisted transcript as a snapshot, and the turn is closed interrupted by
+// exactly one node.
+//
+// # One numbering across the fleet
+//
+// A turn's seq only grows, across its segments AND across the nodes that
+// tell them: an approval may resume a parked turn, or emit its page action, on
+// a node that never numbered it, and a client that drew frames from one node
+// drops any frame numbered at or below the last it saw. So a node opening a
+// segment of a turn asks the fleet the newest seq any node numbered for it (a
+// probe on `assistant.replay` every node answers from its [Hub]) and numbers
+// after it, never below the last seq the turn's parked record says it told.
+// The same probe names the node holding a turn's newest frames, which is
+// where a stream of a turn no running segment answers is followed.
+//
+// All of this is the assistant's [Fleet] half, which a node without a broker
+// does not build: there, a stream of a turn running elsewhere is answered from
+// the transcript and a Stop of one is unavailable.
 package live
