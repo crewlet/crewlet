@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/assistantdomain`
-- **Enforced-by:** `internal/assistantdomain.TestAnotherPersonsConversationIsNotFound`, `internal/assistantdomain.TestEverySealedValueOpensOnlyUnderItsOwnRecord`, `internal/assistantdomain.TestTheApplierNeverOpensASealedValue`, `internal/assistantdomain.TestAPurgedConversationIsNeverRecreated`, `internal/assistantdomain.TestAConversationPastItsRetentionIsReaped`, `internal/assistantdomain.TestAnErasedPersonsConversationsGoInOnePass`, `internal/assistantdomain.TestAComplianceReadIsRecordedBeforeItOpens`, `internal/assistantdomain.TestTheAssistantDomainReadsNoOtherDomain`, `internal/assistant/live.TestAFrameTheFleetDidNotSealIsDropped`, `internal/assistant/live.TestAFrameOnTheQueueCarriesNoneOfTheTurnsProse`, `internal/assistant/live.TestAFrameReplayedOntoAnotherTurnIsDropped`, `internal/assistant/live.TestTheRunnerRefusesAnotherPersonsTurn`, `internal/assistant.TestStopReachesTheRunningNode`
+- **Enforced-by:** `internal/assistantdomain.TestAnotherPersonsConversationIsNotFound`, `internal/assistantdomain.TestEverySealedValueOpensOnlyUnderItsOwnRecord`, `internal/assistantdomain.TestTheApplierNeverOpensASealedValue`, `internal/assistantdomain.TestAPurgedConversationIsNeverRecreated`, `internal/assistantdomain.TestAConversationPastItsRetentionIsReaped`, `internal/assistantdomain.TestAnErasedPersonsConversationsGoInOnePass`, `internal/assistantdomain.TestAComplianceReadIsRecordedBeforeItOpens`, `internal/assistantdomain.TestTheAssistantDomainReadsNoOtherDomain`, `internal/assistant/live.TestAFrameTheFleetDidNotSealIsDropped`, `internal/assistant/live.TestAFrameOnTheQueueCarriesNoneOfTheTurnsProse`, `internal/assistant/live.TestAFrameReplayedOntoAnotherTurnIsDropped`, `internal/assistant/live.TestTheRunnerRefusesAnotherPersonsTurn`, `internal/assistant.TestStopReachesTheRunningNode`, `internal/api/queries.TestEveryQuestionDeclaresAPosture`, `internal/api/stream.TestAnEventReachesOnlyAnAdmin`
 - **Tag-status:** unreleased
 
 ## The decision
@@ -28,7 +28,13 @@ gone thirty days after it was last used.**
   admin, a recent proof, a person present, never through the assistant) with a
   reason they must give. Each such read is recorded as its own audit event
   naming the administrator and the reason, and beside the conversation so its
-  owner sees who read it and why.
+  owner sees who read it and why. The reason is therefore readable by
+  administrators and by the owner, and by nobody else: it is sealed at rest in
+  the conversation's own record, and carried in clear in the runtime audit
+  event (`assistant_conversation_read`), because a compliance read is
+  accountable to the administrators who read the audit log, and every path to
+  an event is theirs alone (the event questions require `admin`, and the live
+  socket's event frames reach only an administrator).
 - **Sealed.** Every message, card, preview and parked turn is sealed under the
   fleet keyring with associated data naming the conversation and the record,
   because the estate is not encrypted at rest; the applier never opens a value,
