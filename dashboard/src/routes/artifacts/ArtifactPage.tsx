@@ -391,8 +391,10 @@ function Loaded({
   const panelBox = useRef<HTMLDivElement>(null);
   /** Whether the open panel is drawn over the artifact rather than beside it. */
   const covering = () => {
-    const aside = panelBox.current?.closest("aside");
-    return expanded || (aside ? getComputedStyle(aside).position === "absolute" : false);
+    // THE PANEL'S ROOT BY ITS ROLE, never its element: the kit draws it as a
+    // complementary region, and an element name is its business to change.
+    const panel = panelBox.current?.closest('[role="complementary"]');
+    return expanded || (panel ? getComputedStyle(panel).position === "absolute" : false);
   };
 
   // ---- who is here, and following them --------------------------------------
