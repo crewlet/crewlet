@@ -95,6 +95,7 @@ import {
   useConversation,
   conversation,
 } from "./session.ts";
+import { prepareAgainQuestion } from "./blocks.tsx";
 import { Home } from "./Home.tsx";
 import { Thread } from "./Thread.tsx";
 import { openTurn } from "./turn.ts";
@@ -454,6 +455,7 @@ export function Drawer({ unavailable, onClose, initialFocus, name, shape }: Draw
                 on={{
                   approve: (proposal) => void approve(proposal),
                   decline: (proposal) => void decline(proposal),
+                  prepareAgain: (proposal) => ask(prepareAgainQuestion(proposal)),
                   openHere: (target) => openHere(target),
                   undo: undoAction,
                 }}

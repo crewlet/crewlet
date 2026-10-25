@@ -298,6 +298,17 @@ export function changeRowsOf(proposal: AssistantProposalCard): ChangeListRow[] {
 export interface ProposalHandlers {
   approve: (proposal: AssistantProposalCard) => void;
   decline: (proposal: AssistantProposalCard) => void;
+  /**
+   * Ask for an expired or stale change again: a question in the same
+   * conversation, so a fresh proposal comes through the normal flow against
+   * what is there now, never a replay of the old request.
+   */
+  prepareAgain: (proposal: AssistantProposalCard) => void;
+}
+
+/** The question "Prepare it again" asks, naming the change it was. */
+export function prepareAgainQuestion(proposal: AssistantProposalCard): string {
+  return `Please prepare that change again (${proposal.title}), from how things stand now.`;
 }
 
 /** What the person does with a card that leads somewhere. */
@@ -409,6 +420,9 @@ function Proposal({
       approveLabel={proposal.approve_label}
       onApprove={() => on.approve(proposal)}
       onDecline={() => on.decline(proposal)}
+      onPrepareAgain={
+        state === "expired" || state === "stale" ? () => on.prepareAgain(proposal) : undefined
+      }
       onRetry={unknown || proposal.failure?.retryable ? () => on.approve(proposal) : undefined}
       receipt={proposal.receipt?.summary}
       failure={failure}

@@ -17,6 +17,7 @@ afterEach(cleanup);
 const on: CardHandlers = {
   approve: () => {},
   decline: () => {},
+  prepareAgain: () => {},
   openHere: () => {},
   undo: () => {},
 };

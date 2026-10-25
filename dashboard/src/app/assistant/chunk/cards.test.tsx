@@ -1,14 +1,21 @@
 /**
  * What the drawer draws of the engine's cards: the columns the engine chose for
  * its width, values worded by their type as the screens word them, the facts
- * kept for the model left out, and a failed step's reason.
+ * kept for the model left out, a failed step's reason, and "Prepare it again"
+ * on a card that moved.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
-import type { AssistantCardEvent } from "~/contract/assistant.ts";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, expect, test, vi } from "vitest";
+import type { AssistantCardEvent, AssistantProposalCard } from "~/contract/assistant.ts";
 import { Router } from "~/app/router.tsx";
-import { CardBlock, factText, stepsOf, type CardHandlers } from "./blocks.tsx";
+import {
+  CardBlock,
+  factText,
+  prepareAgainQuestion,
+  stepsOf,
+  type CardHandlers,
+} from "./blocks.tsx";
 import type { TurnView } from "./turn.ts";
 
 afterEach(cleanup);
@@ -16,6 +23,7 @@ afterEach(cleanup);
 const on: CardHandlers = {
   approve: () => {},
   decline: () => {},
+  prepareAgain: () => {},
   openHere: () => {},
   undo: () => {},
 };
@@ -73,6 +81,31 @@ test("a fact is worded by its type, and one kept for the model is not drawn", ()
   });
   expect(screen.getByText("To do")).toBeTruthy();
   expect(screen.queryByText("Version")).toBeNull();
+});
+
+const proposal = {
+  proposal_id: "p",
+  scope: "server",
+  tool: "update_task",
+  title: "Update task",
+  changes: [],
+  digest: `sha256:${"a".repeat(64)}`,
+  expires_at: "2026-10-24T10:41:00Z",
+  state: "stale",
+  approve_label: "Approve and update",
+} as AssistantProposalCard;
+
+test("a card that moved offers Prepare it again, which asks for the change afresh", () => {
+  const prepareAgain = vi.fn();
+  draw({ type: "proposal", proposal }, { ...on, prepareAgain });
+  fireEvent.click(screen.getByRole("button", { name: /Prepare it again/ }));
+  expect(prepareAgain).toHaveBeenCalledWith(proposal);
+  expect(prepareAgainQuestion(proposal)).toContain("Update task");
+});
+
+test("a pending card does not offer Prepare it again", () => {
+  draw({ type: "proposal", proposal: { ...proposal, state: "proposed" } });
+  expect(screen.queryByRole("button", { name: /Prepare it again/ })).toBeNull();
 });
 
 const base: TurnView = {
