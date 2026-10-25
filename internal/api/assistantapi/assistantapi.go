@@ -1,6 +1,6 @@
 // Package assistantapi is the Dashboard Assistant's HTTP surface: a person's
 // conversations, the turns they ask in them, each turn's live stream, Stop,
-// and the export of a table a turn showed (ADR-0046, ADR-0049).
+// and the export of a table a turn showed (ADR-0049, ADR-0052).
 //
 // # A PERSON'S, ON A GRANT THEY CARRY
 //
@@ -17,7 +17,7 @@
 //
 // Ownership is not a class: every read and write is keyed on the caller, and a
 // conversation, a turn or a card that is somebody else's is `404 not_found`,
-// exactly as one that never existed (ADR-0049). No route takes an owner.
+// exactly as one that never existed (ADR-0052). No route takes an owner.
 //
 // # THE TURN'S GRANT IS DERIVED FROM THE REQUEST THAT ASKED IT
 //
