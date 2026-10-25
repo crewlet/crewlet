@@ -19,6 +19,7 @@ import { readSlidesStarters } from "~/lib/artifacts/api.ts";
 import type { SlidesStartersAnswer } from "~/protocol/index.ts";
 import { previewImages, SlidesCreate } from "./SlidesCreate.tsx";
 import { NO_BRAND_ASSETS } from "~/lib/brand/useBrand.ts";
+import { context, draftField, openFrame, setDraft } from "../draftTesting.ts";
 
 const starters = JSON.parse(
   readFileSync(
@@ -328,4 +329,40 @@ test("the brand theme's preview draws its cover logo from the adopted brand", ()
   expect(image("brand/logo-on-dark.svg")).toBe("blob:logo-on-dark");
   expect(image("images/team.png")).toBeNull();
   expect(previewImages(starters.themes[0]!, assets)("brand/logo-on-dark.svg")).toBeNull();
+});
+
+// WHAT IS LAID OUT IS THE ASSISTANT'S TO READ, and a change it proposes sets
+// the theme and the slides' titles through the composer's own setters; the
+// slides themselves stay the reader's to add, move and remove.
+test("the deck being composed is the assistant's to read, and a draft.set sets its theme and titles", async () => {
+  openFrame("artifacts-new");
+  mount();
+  await title();
+  expect(context().draft).toMatchObject({ kind: "client", step: "compose" });
+  expect(draftField("theme")).toMatchObject({ value: "nightshade", editable: true });
+  expect(draftField("slides.2.title")).toMatchObject({
+    value: "",
+    hint: expect.stringMatching(/layout/),
+  });
+  expect(
+    setDraft({ title: "Board review", theme: "grove", "slides.2.title": "Where we stand" }),
+  ).toMatchObject({ outcome: "applied" });
+  await waitFor(() =>
+    expect(screen.getByRole("radio", { name: /^Grove,/ }).getAttribute("aria-checked")).toBe(
+      "true",
+    ),
+  );
+  expect(setDraft({ theme: "neon" })).toMatchObject({ outcome: "invalid" });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Create deck" }));
+  });
+  await waitFor(() => expect(location.hash).toBe("#/artifacts/a-1"));
+  const sent = (
+    request.mock.calls[0]![2] as {
+      body: { title: string; deck: { theme: string; slides: { title?: string }[] } };
+    }
+  ).body;
+  expect(sent.title).toBe("Board review");
+  expect(sent.deck.theme).toBe("grove");
+  expect(sent.deck.slides[1]).toMatchObject({ title: "Where we stand" });
 });

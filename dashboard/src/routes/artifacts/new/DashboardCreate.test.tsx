@@ -21,6 +21,7 @@ import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import catalogue from "./dashboard/testdata/catalogue.json";
 import { DashboardCreate } from "./DashboardCreate.tsx";
+import { draftField, openFrame, setDraft } from "../draftTesting.ts";
 import { ROWS_UNREAD } from "~/lib/artifacts/dashboard.ts";
 
 const MADE = "0192f2c4-3333-7000-8000-000000000003";
@@ -378,4 +379,22 @@ test("a catalogue that cannot be read is said on the board, and the Data panel i
   const panel = await screen.findByRole("complementary", { name: "Data" });
   await within(panel).findByText("The sources appear here once they can be read.");
   expect(within(panel).queryByRole("list", { name: "Data you can use" })).toBeNull();
+});
+
+// WHAT IS ON THE BOARD IS THE ASSISTANT'S TO READ, and a change it proposes
+// starts an empty board from a ready-made one, as a press of its card would;
+// figures stay the person's to add from Data, which reads as them.
+test("the board being composed is the assistant's to read, and a draft.set starts it from a ready-made board", async () => {
+  openFrame("artifacts-new");
+  mount();
+  await waitFor(() => expect(within(data()).getByText("Work items")).toBeTruthy());
+  expect(draftField("figures")).toMatchObject({ value: "", kind: "list" });
+  expect(setDraft({ title: "Load", starter: "workload" })).toMatchObject({ outcome: "applied" });
+  expect(
+    await within(screen.getByRole("region", { name: "Board" })).findByText("Open work"),
+  ).toBeTruthy();
+  await waitFor(() => expect(draftField("figures")?.value).toMatch(/Open work/));
+  expect(screen.getByRole("textbox", { name: "Title" })).toHaveProperty("value", "Load");
+  // A BOARD WITH FIGURES IS NOT STARTED OVER.
+  expect(setDraft({ starter: "workload" })).toMatchObject({ outcome: "invalid" });
 });
