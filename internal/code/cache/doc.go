@@ -134,7 +134,9 @@
 // removed by a purge's part, or retired, its object kept only for its grace
 // (ADR-0051) — whose object the collector has deleted meanwhile. A head that
 // no longer names the pack converges the round to what the log holds; one
-// that still does makes it missing, final.
+// that still does makes it missing, final. That read is full whenever the
+// answer that named the pack was, since a full answer names packs at or below
+// the copy's position, which no delta from it reaches.
 //
 // A full round that leaves [MidxRoundPacks] or more packs and no
 // multi-pack-index writes one over exactly those packs — without a bitmap, a

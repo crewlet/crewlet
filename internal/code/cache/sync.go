@@ -891,9 +891,10 @@ func (c *Cache) converging(e *entry, r *round) (*incarnation, SyncKind, error) {
 //     cache never moves backwards for a stale copy.
 //  4. install every pack the directory does not hold (install.go); a pack
 //     the store does not have reads the snapshot again ONCE at linearizable,
-//     whatever level the round read at: the round's read came before the
-//     store answered, and the row it named may have left the log since (a
-//     purge's, or a retirement whose grace the round outlived).
+//     whatever level the round read at, and in full whenever the answer that
+//     named the pack was: the round's read came before the store answered,
+//     and the row it named may have left the log since (a purge's, or a
+//     retirement whose grace the round outlived).
 //  5. on a full answer, the round's index (maintain.go), before the refs'
 //     peel reads the packs.
 //  6. the refs (refs.go): packed-refs and HEAD, after every pack they need.
@@ -1071,6 +1072,17 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 			// fault whatever the log holds now.
 			askedHead = true
 			fresh = statelog.Freshness{Level: statelog.ReadLinearizable}
+			// A PACK A FULL ANSWER NAMED IS ASKED ABOUT IN FULL. The log may
+			// answer a delta in full (page 1 decides: where the delta would
+			// outweigh it, or its floor is below the swept tombstones or on
+			// another generation), and a full answer names packs at or below
+			// the incarnation's position — one whose files the copy lost is
+			// installed again from it — which no delta from that position
+			// reaches: read again as one, the head's answer left such a pack
+			// out whether or not its row is live, and the round converged the
+			// copy without a pack its rows name when the store had lost it
+			// too.
+			full = full || snap.full
 			continue
 		case errors.As(err, &missing):
 			// Final: the log's head, read after the store's answer, still

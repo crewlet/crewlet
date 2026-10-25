@@ -883,6 +883,79 @@ func TestAPackRetiredUnderARoundIsAskedAboutAgain(t *testing.T) {
 	}
 }
 
+// A PACK A FULL ANSWER NAMED IS DECIDED BY A FULL READ. The log may answer a
+// delta in full — page 1 decides, where the delta would outweigh its full
+// answer or reach below its swept tombstones — and a full answer names packs
+// at or below the incarnation's position: one whose files the copy lost is
+// installed again from it. No delta from that position names such a pack, so
+// the read that decides its not-found is full. Asked as a delta, a pack the
+// store had lost as well was taken for a row gone from the log, and the round
+// converged the copy at the log's position without a pack its rows name:
+// every request over that pack's objects then failing on a copy that says it
+// is whole.
+//
+// The copy holds both pushes; the older one's files are removed from it and
+// its object from the store, and the log answers the round's delta in full,
+// and the read after it as the delta it asks. A third read is failed, so a
+// round that kept asking fails the case rather than hangs it.
+//
+// Mutation: ask the deciding read as the round asked its own (the round
+// converges, its copy lacking the lost pack).
+func TestAPackAFullAnswerNamedIsDecidedByAFullRead(t *testing.T) {
+	t.Parallel()
+	thirdRead := errors.New("a round read its snapshot a third time")
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	_, lost := w.push(t, repo, "refs/heads/main", nil)
+	w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t)
+	dir := w.sync(t, c, repo).Dir
+	for _, ext := range []string{".pack", ".idx", ".rev"} {
+		if err := os.Remove(filepath.Join(dir, "objects", "pack", "pack-"+lost.GitChecksum+ext)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.store.Delete(t.Context(), lost.Object); err != nil {
+		t.Fatal(err)
+	}
+	var reads, answers atomic.Int32
+	w.log.set(func(f *fakeLog) {
+		f.hook = func(fakeCall) error {
+			if reads.Add(1) == 3 {
+				return thirdRead
+			}
+			return nil
+		}
+		f.after = func(_ fakeCall, snap *code.RepoSnapshot) {
+			if answers.Add(1) != 1 {
+				return
+			}
+			if snap.Full {
+				t.Error("the round's own read was answered in full as asked: the case tests nothing")
+				return
+			}
+			whole, err := silent{f}.RepoState(context.Background(), code.StateQuery{RepoID: repo, Fresh: linearizable})
+			if err != nil {
+				t.Errorf("answering the round's delta in full: %v", err)
+				return
+			}
+			*snap = whole
+		}
+	})
+	pages := len(w.log.firstPages(repo))
+	_, err := c.Sync(t.Context(), repo, linearizable)
+	var missing *cache.ErrPackMissing
+	if !errors.As(err, &missing) || missing.Pack.PackID != lost.PackID || missing.Damaged {
+		t.Fatalf("Sync: %v, want *ErrPackMissing naming the pack the copy and the store both lost", err)
+	}
+	if calls := w.log.firstPages(repo)[pages:]; len(calls) != 2 || calls[0].Since.IsZero() || !calls[1].Since.IsZero() {
+		t.Errorf("the round read %+v, want its own delta, then the log's head in full", calls)
+	}
+	if got := w.logs.lines(t, "code_pack_missing"); len(got) != 1 {
+		t.Errorf("logged %d code_pack_missing lines, want the one the full read made final", len(got))
+	}
+}
+
 // A DAMAGED PACK IS NAMED: bytes the store holds under the row's object that
 // are not the row's are a definite answer, and nothing of them is installed.
 func TestADamagedPackIsNamed(t *testing.T) {
