@@ -21,6 +21,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { LayerHost } from "@crewlethq/ui";
 import { TimeRangePicker } from "./TimeRange.tsx";
 import type { TimeRange, Window } from "~/lib/range.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 afterEach(cleanup);
 
@@ -112,9 +113,7 @@ test("a dismissed custom window leaves the reader on a tab stop", async () => {
   fireEvent.click(custom);
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   // INSIDE `act`, so the close's render is flushed rather than left to race the tick.
-  await act(async () => {
-    await new Promise((r) => setTimeout(r, 0));
-  });
+  await afterMicrotasks();
   expect(document.activeElement).toBe(custom);
   expect(custom.getAttribute("tabindex")).toBe("0");
   const stops = screen.getAllByRole("radio").filter((r) => r.getAttribute("tabindex") === "0");

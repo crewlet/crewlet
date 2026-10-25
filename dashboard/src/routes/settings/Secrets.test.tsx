@@ -22,6 +22,7 @@ import type { ReactElement } from "react";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 /**
  * A screen renders inside the Router.
@@ -417,11 +418,12 @@ test("a read that answers after a newer one began does not overwrite it", async 
   // fetch COUNT is exactly that mistake — it counts requests STARTED, so it
   // was already 2 before the held answer had been handled at all, and this
   // case passed with every guard deleted. Releasing and then letting React
-  // process the resolution is what makes the absence mean something.
-  await act(async () => {
-    releaseFirst?.();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  });
+  // process the resolution is what makes the absence mean something: the held
+  // answer, its body read and the screen's handling of it are all microtasks,
+  // so the task boundary after the release is reached only once all of them
+  // have run, however long a loaded machine takes over them.
+  releaseFirst?.();
+  await afterMicrotasks();
   expect(reads).toBe(2);
   expect(screen.queryByText("STALE_ANSWER")).toBeNull();
   expect(screen.getByText("GITHUB_TOKEN")).toBeTruthy();

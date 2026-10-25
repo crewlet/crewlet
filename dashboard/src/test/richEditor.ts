@@ -79,10 +79,10 @@ function textNode(box: HTMLElement, text: string): Text {
 /** Replace the first run of `from` with `to`, as a writer retyping it would. */
 export async function retype(box: HTMLElement, from: string, to: string): Promise<void> {
   const node = textNode(box, from);
+  // The editor reads a change off its mutation observer, a microtask later,
+  // which runs before an awaited act returns (see `test/settle.ts`).
   await act(async () => {
     node.data = node.data.replace(from, to);
-    // The editor reads a change off its mutation observer, a microtask later.
-    await Promise.resolve();
   });
 }
 
@@ -92,7 +92,6 @@ export async function append(box: HTMLElement, text: string): Promise<void> {
   p.textContent = text;
   await act(async () => {
     box.appendChild(p);
-    await Promise.resolve();
   });
 }
 
@@ -122,6 +121,5 @@ export async function fill(box: HTMLElement, blocks: Written[]): Promise<void> {
   });
   await act(async () => {
     box.replaceChildren(...elements);
-    await Promise.resolve();
   });
 }

@@ -13,7 +13,7 @@
  * whether it asks at all.
  */
 
-import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { SeatScreen } from "./Seat.tsx";
@@ -23,6 +23,7 @@ import { ViewerProvider } from "~/lib/viewer.ts";
 import { InboxCountsProvider } from "~/lib/useInboxCounts.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { emptyDay } from "~/test/myWork.ts";
+import { settled } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -129,7 +130,9 @@ async function askedAs(grants: string[], anaLeads = false): Promise<string[]> {
   if (grants.includes("tracker") || grants.includes("admin")) {
     await waitFor(() => expect(asked).toContain("work_items"));
   }
-  for (let i = 0; i < 4; i++) await act(async () => Promise.resolve());
+  // WHAT IT DID NOT ASK is read once it asks nothing more: every answer is a
+  // stub, so a pass that asked again would move the count across a boundary.
+  await settled(() => asked.length);
   return asked;
 }
 

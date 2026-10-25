@@ -7,7 +7,7 @@
  * chain is absent.
  */
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { TraceScreen } from "./Trace.tsx";
@@ -15,6 +15,7 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -58,12 +59,7 @@ async function mount(answer: Record<string, unknown>, viewer: unknown = ADMIN) {
       </ViewerProvider>
     </ClientContext.Provider>,
   );
-  await act(async () => {
-    await Promise.resolve();
-  });
-  await act(async () => {
-    await Promise.resolve();
-  });
+  await afterMicrotasks();
   return { asked };
 }
 

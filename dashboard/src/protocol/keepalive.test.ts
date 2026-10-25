@@ -38,7 +38,11 @@ afterEach(() => {
   Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
 });
 
-/** Every request in flight lands. */
+/**
+ * Every request in flight lands. A TASK BOUNDARY, NOT A WAIT FOR TIME: a
+ * stubbed request and what this module does with its answer are all
+ * microtasks, and every one of them has run once a zero-delay timer fires.
+ */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 /** An instant a whole interval past anything this module has heard answered. */

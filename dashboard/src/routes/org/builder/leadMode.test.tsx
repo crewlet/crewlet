@@ -19,6 +19,7 @@ import type { CompanyDocument, OrgProjection } from "~/protocol/index.ts";
 import { Engine, json, mountBuilder, type SentRequest } from "./testkit.tsx";
 import { DRAFT_STORAGE_KEY } from "./model/persistence.ts";
 import { fixtureDerived } from "./model/testkit.ts";
+import { settled } from "~/test/settle.ts";
 
 beforeEach(() => {
   localStorage.clear();
@@ -394,8 +395,11 @@ describe("a lead's draft", () => {
 
     // The socket is open and its snapshot has not arrived.
     engine.script = (r) => (r.path === "/config" ? json({ error: "unauthorized" }, 403) : null);
-    const { store } = mountBuilder({ engine, org: null, viewer: () => LEAD });
-    await new Promise((r) => setTimeout(r, 50));
+    const { store, clock } = mountBuilder({ engine, org: null, viewer: () => LEAD });
+    // Everything the builder asked has landed, and no check waits on its
+    // clock: a read it was going to make before the snapshot has been made.
+    await settled(() => engine.requests.length);
+    expect(clock.pending).toBe(0);
     expect(engine.sent("GET", "/config")).toHaveLength(0);
     expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toContain('"scope":"engineering"');
 

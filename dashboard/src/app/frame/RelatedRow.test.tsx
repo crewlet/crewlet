@@ -12,6 +12,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { RelatedRow } from "./RelatedRow.tsx";
+import { settled } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -78,7 +79,10 @@ test("the row is one link, named by its place and its sentence, in a Related lan
 test("a reader the page would refuse is offered no row", async () => {
   mount(["tracker"]);
   await screen.findByText("loaded");
-  await new Promise((r) => setTimeout(r, 20));
+  // THE READER IS KNOWN: the viewer answered and the session read was
+  // refused, and what either caused has drawn — so a row that was coming
+  // would be here.
+  await settled(() => vi.mocked(fetch).mock.calls.length);
   expect(screen.queryByRole("navigation", { name: "Related" })).toBeNull();
   expect(screen.queryByRole("link")).toBeNull();
 });

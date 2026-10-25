@@ -769,6 +769,9 @@ describe("a live_call answer the socket delivers late", () => {
     await vi.waitFor(() =>
       expect(store.state.agents[0]?.live_call?.round_narration).toHaveLength(6),
     );
+    // A TASK BOUNDARY, NOT A WAIT FOR TIME: whether to ask again is decided in
+    // the answer's own promise chain, which is all microtasks, and every one of
+    // them has run once a zero-delay timer fires.
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(ask).toHaveBeenCalledTimes(3);
   });

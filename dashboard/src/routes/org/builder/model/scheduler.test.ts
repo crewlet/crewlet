@@ -479,6 +479,12 @@ class ScriptedTransport implements ConfigTransport {
   }
 }
 
+/**
+ * A TASK BOUNDARY, NOT A WAIT FOR TIME: the scripted transport answers with
+ * resolved promises and the runner's handling of an answer is microtasks, all
+ * of which have run once a zero-delay timer fires; the runner's own timers are
+ * on the harness's ManualClock.
+ */
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 function harness() {

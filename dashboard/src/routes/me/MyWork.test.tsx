@@ -39,6 +39,7 @@ import { QueueCountProvider, queueCountParams } from "~/lib/useQueueCount.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
 import { withDerived } from "~/test/org.ts";
+import { settled } from "~/test/settle.ts";
 
 // THE FRAME'S ONE COVERAGE SLOT, stood in for so a case can say WHAT was
 // published rather than only that something was drawn: the state bar renders
@@ -825,7 +826,7 @@ test("an ask on somebody else's day is written about them and cannot be answered
   expect(accept.getAttribute("title")).toContain("Viewing Rui Santos’s day. Read-only.");
   expect(screen.getByRole("button", { name: "Change" }).getAttribute("aria-disabled")).toBe("true");
   fireEvent.click(accept);
-  await new Promise((r) => setTimeout(r, 20));
+  await settled(() => posted.length);
   expect(posted).toEqual([]);
 });
 
@@ -1475,7 +1476,7 @@ describe("somebody else's day", () => {
     );
     expect(rowOf("ENG-5").getAttribute("draggable")).toBeNull();
     fireEvent.keyDown(rowOf("ENG-5"), { key: "ArrowDown", altKey: true });
-    await new Promise((r) => setTimeout(r, 20));
+    await settled(() => posted.length);
     expect(posted).toEqual([]);
   });
 });

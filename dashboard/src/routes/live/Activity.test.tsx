@@ -24,6 +24,7 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -315,9 +316,7 @@ test("a seat's log asks for that seat and shows only its live rows", async () =>
       </Router>
     </ClientContext.Provider>,
   );
-  await act(async () => {
-    await Promise.resolve();
-  });
+  await afterMicrotasks();
   expect(asked.find((a) => a.what === "events")?.params.seat).toBe("swe");
   expect(asked.find((a) => a.what === "event_series")?.params.seat).toBe("swe");
   // AND THE FEED'S ROWS ALONE, on every page and the axis: the head of this
@@ -367,9 +366,7 @@ async function mountAt(
       </Router>
     </ClientContext.Provider>,
   );
-  await act(async () => {
-    await Promise.resolve();
-  });
+  await afterMicrotasks();
   return asked;
 }
 
@@ -445,9 +442,7 @@ test("failures only is a filter the engine applies", async () => {
   // THE END OF A FILTERED ANSWER IS THE FILTER'S, not the store's retention.
   //
   // Mutation: word the exhausted footer for the store again.
-  await act(async () => {
-    for (let i = 0; i < 4; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
   expect(screen.getByText("No older event in this window matches these filters.")).toBeTruthy();
   expect(screen.queryByText(/retained history/)).toBeNull();
   location.hash = "#/";

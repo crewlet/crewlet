@@ -43,6 +43,7 @@ import { withDerived } from "~/test/org.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 import { DUPLICATE, DUPLICATE_TITLE, SHARED_KEY, collidingHits } from "~/test/keyCollision.ts";
 import { pick } from "~/testing.tsx";
+import { settled } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -190,6 +191,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   localStorage.clear();
@@ -240,10 +242,16 @@ function mount(
   return { ...view, store };
 }
 
+/**
+ * Lets everything the screen asked land: every read the socket was asked and
+ * every write the act route took, and what their answers drew, including the
+ * reads those renders asked in turn (see `settled`).
+ */
 async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 10; i++) await Promise.resolve();
-  });
+  await settled(
+    () => asked.length,
+    () => posted.length,
+  );
 }
 
 /** The reason a write control is disabled with, off the kit's described-by. */
@@ -1696,15 +1704,18 @@ test("moving the rail to another task mounts a new body", async () => {
 // THE DESCRIPTION IS NOT REBUILT ON EVERY TICK OF THE PAGE'S CLOCK: a reader
 // selecting a sentence to copy would lose it within a second.
 test("the description keeps its own DOM across a clock tick", async () => {
+  // The page's clock ticks on the case's own interval, so the tick is made
+  // rather than waited for: one second, exactly once.
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   const { container } = mount(<WorkItemPage id="ENG-42" />, {
     answers: { work_item: detail({ task: task({ body: "the runbook is **here**" }) }) },
   });
   await settle();
   const before = container.querySelector(".task-prose");
   expect(before).toBeTruthy();
-  await act(async () => {
+  act(() => {
     vi.mocked(Date.now).mockReturnValue(NOW + 1000);
-    await new Promise((r) => setTimeout(r, 1100));
+    vi.advanceTimersByTime(1000);
   });
   expect(container.querySelector(".task-prose")).toBe(before);
 });

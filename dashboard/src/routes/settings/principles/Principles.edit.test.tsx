@@ -28,6 +28,7 @@ import { InertWebSocket } from "~/test/client.tsx";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import { Principles } from "./Principles.tsx";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 const ACME = {
   name: "Acme",
@@ -243,7 +244,7 @@ test("a mission is held to the engine's bound in characters before anything is s
   fireEvent.change(mission, { target: { value: "😀".repeat(MISSION_MAX_CHARS + 1) } });
   expect(mission.getAttribute("aria-invalid")).toBe("true");
   saveKey(mission);
-  await act(async () => {});
+  await afterMicrotasks();
   expect(engine.puts).toEqual([]);
   expect(document.activeElement).toBe(mission);
   fireEvent.change(mission, { target: { value: "😀".repeat(MISSION_MAX_CHARS) } });

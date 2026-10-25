@@ -30,6 +30,7 @@ import { BridgeLog, RunScreen } from "./Runs.tsx";
 import type { SandboxRun } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 afterEach(() => {
   cleanup();
@@ -313,9 +314,7 @@ function mountPage(answers: Record<string, unknown>, outcome = "pending") {
 }
 
 async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 8; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
 }
 
 // A PARKED RUN IS ANSWERED ON ITS PAGE, BY ITS TURN.

@@ -25,6 +25,7 @@ import { InertWebSocket } from "~/test/client.tsx";
 import { fakeCharterEngine, type CharterEngine } from "~/test/charterEngine.ts";
 import type { CharterPart, PrincipleCardEdit } from "../PrincipleCard.tsx";
 import { usePrinciplesEdit } from "./usePrinciplesEdit.tsx";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 const ACME = {
   name: "Acme",
@@ -389,7 +390,7 @@ test("moving between the Company landing and Principles keeps the writing withou
     act(() => {
       location.hash = hash;
     });
-    await act(async () => {});
+    await afterMicrotasks();
     expect(screen.queryByRole("alertdialog"), hash).toBeNull();
     expect(missionBox()).toHaveProperty("value", "Half a thought");
   }

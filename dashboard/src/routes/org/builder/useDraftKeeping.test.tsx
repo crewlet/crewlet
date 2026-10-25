@@ -15,6 +15,7 @@ import { templateIntent } from "./model/templates.ts";
 import { countingKeys } from "./model/testkit.ts";
 import { company, EDITOR, Engine, json, mountBuilder } from "./testkit.tsx";
 import { withDerived } from "~/test/org.ts";
+import { settled } from "~/test/settle.ts";
 
 /** Somebody else signs in, and the socket comes back — when the frame asks who. */
 function signInAs(store: { setConnected: (up: boolean) => void }, set: () => void) {
@@ -121,8 +122,9 @@ test("a kept draft offered as a colleague saves is kept, then offered as an upda
   expect(await screen.findByText("The configuration changed")).toBeDefined();
   // The base under the offer is not read again: a Keep pressed while a newer
   // base waited for its first check would be refused, and the kept draft
-  // cleared with the refusal.
-  await new Promise((r) => setTimeout(r, 100));
+  // cleared with the refusal. Asserted once everything the push caused has
+  // landed and nothing more was asked.
+  await settled(() => engine.requests.length);
   expect(engine.sent("GET")).toHaveLength(reads);
 
   fireEvent.click(screen.getByRole("button", { name: "Keep the draft" }));

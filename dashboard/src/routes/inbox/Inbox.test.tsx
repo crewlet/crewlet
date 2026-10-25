@@ -25,6 +25,7 @@ import { LiveSocket, Store } from "~/protocol/index.ts";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
+import { settled } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -146,8 +147,8 @@ let posted: { tool: string; args: Record<string, unknown> }[];
  *
  * Every fixture notice is stamped a minute (an ask twelve) before
  * `Date.now()`, so the time a row draws and the day a snooze preset lands on
- * are the same on every run. Only `Date` is faked: the suite's own waits, and
- * the moment before the next item opens, keep real timers.
+ * are the same on every run. Only `Date` is faked here; the one case about
+ * the moment before the next item opens fakes its timer as well.
  */
 const PINNED_NOW = "2026-09-30T12:00:00Z";
 
@@ -229,10 +230,16 @@ function mount({
   return { store, socket };
 }
 
+/**
+ * Lets everything the screen asked land: every read the socket was asked and
+ * every write the act route took, and what their answers drew, including the
+ * reads those renders asked in turn (see `settled`).
+ */
 async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 8; i++) await Promise.resolve();
-  });
+  await settled(
+    () => asked.length,
+    () => posted.length,
+  );
 }
 
 /** The reason a write control is disabled with, off the kit's described-by. */
@@ -273,12 +280,6 @@ function decisionsOf(...items: unknown[]) {
 /** The open item's one-sentence byline, as it reads. */
 function byline(): string {
   return document.querySelector(".crewlet-reading-pane__byline")?.textContent ?? "";
-}
-
-async function wait(ms: number) {
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, ms));
-  });
 }
 
 describe("the list", () => {
@@ -541,6 +542,9 @@ describe("the pane", () => {
       at: new Date(Date.now() - 60 * 60_000).toISOString(),
       ask: { ...askItem().ask, comment: "c-13", question: undefined },
     };
+    // The moment before the next item opens runs on the case's clock, so
+    // "a moment later" is held exactly: not before ADVANCE_MS, and then.
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"], now: new Date(PINNED_NOW) });
     location.hash = "#/inbox?row=ask%3Ac-12";
     mount({ answers: { decisions: decisionsOf(askItem(), second) } });
     await settle();
@@ -551,7 +555,13 @@ describe("the pane", () => {
     expect(location.hash).toContain("row=ask%3Ac-12");
     const needs = within(screen.getByRole("region", { name: "Needs you" }));
     expect(needs.getAllByRole("button", { name: /Answered$/ })).toHaveLength(1);
-    await wait(ADVANCE_MS + 50);
+    act(() => {
+      vi.advanceTimersByTime(ADVANCE_MS - 1);
+    });
+    expect(location.hash).toContain("row=ask%3Ac-12");
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
     expect(location.hash).toContain("row=ask%3Ac-13");
   });
 

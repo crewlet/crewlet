@@ -28,6 +28,7 @@ import {
 } from "./testkit.tsx";
 import { withDerived } from "~/test/org.ts";
 import { CHECK_BACKOFF_BASE_MS, CHECK_DEBOUNCE_MS } from "./model/scheduler.ts";
+import { settled } from "~/test/settle.ts";
 
 /** Nobody signed in, as the `viewer` question answers it. */
 const NOBODY = { login: "", owner: "", grants: [] };
@@ -118,11 +119,13 @@ describe("the posture table", () => {
 
   test("no active revision while the org names a company is a node that has not caught up", async () => {
     const engine = new Engine(null);
-    mountBuilder({ engine, org: named });
+    const { clock } = mountBuilder({ engine, org: named });
     expect(await screen.findByText("This node is still catching up")).toBeDefined();
     expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
-    // Never create mode: nothing is checked, let alone written.
-    await new Promise((r) => setTimeout(r, 50));
+    // Never create mode: nothing is checked, let alone written — nothing the
+    // builder asked is still out, and no check is armed on its clock.
+    await settled(() => engine.requests.length);
+    expect(clock.pending).toBe(0);
     expect(engine.checks()).toHaveLength(0);
   });
 
@@ -130,8 +133,9 @@ describe("the posture table", () => {
   // offer create mode on a node the fleet runs a company without.
   test("create mode waits for the org snapshot, not the socket opening, before deciding", async () => {
     const engine = new Engine(null);
-    const { store } = mountBuilder({ engine, org: null });
-    await new Promise((r) => setTimeout(r, 50));
+    const { store, clock } = mountBuilder({ engine, org: null });
+    await settled(() => engine.requests.length);
+    expect(clock.pending).toBe(0);
     expect(engine.checks()).toHaveLength(0);
     act(() => store.applyOrg(named));
     expect(await screen.findByText("This node is still catching up")).toBeDefined();
@@ -508,11 +512,12 @@ describe("checking the draft", () => {
 describe("what an org push re-checks", () => {
   test("the snapshot's first org is not an apply, and the draft is checked once", async () => {
     const engine = new Engine(company());
-    const { store } = mountBuilder({ engine, org: null });
+    const { store, clock } = mountBuilder({ engine, org: null });
     await screen.findByText("No problems");
     expect(engine.checks()).toHaveLength(1);
     act(() => store.applySnapshot({ org: named }));
-    await new Promise((r) => setTimeout(r, 50));
+    await settled(() => engine.requests.length);
+    expect(clock.pending).toBe(0);
     expect(engine.checks()).toHaveLength(1);
 
     act(() => store.applyOrg({ ...named }));

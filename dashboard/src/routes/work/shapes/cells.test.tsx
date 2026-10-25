@@ -9,7 +9,7 @@
  * each refuse, or none and no word about why.
  */
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
@@ -20,6 +20,7 @@ import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { WorkSummary } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -129,9 +130,7 @@ function mount(
 }
 
 async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 8; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
 }
 
 /** Open one cell's picker and choose an option by its label. */

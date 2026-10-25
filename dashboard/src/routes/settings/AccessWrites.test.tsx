@@ -33,6 +33,7 @@ import { healthFrame } from "~/test/health.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { pick } from "~/testing.tsx";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -286,9 +287,9 @@ async function more(name: string) {
   fireEvent.click(await screen.findByRole("menuitem", { name }));
 }
 
+/** Every answer in flight lands, and what it draws. */
 async function settle() {
-  await act(async () => {});
-  await act(async () => {});
+  await afterMicrotasks();
 }
 
 /**

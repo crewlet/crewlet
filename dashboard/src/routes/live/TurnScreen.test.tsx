@@ -23,6 +23,7 @@ import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { EventRecord, TurnAnswer } from "~/protocol/index.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { afterMicrotasks, settled } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -875,9 +876,8 @@ test("this turn's reflection sentinel refetches the turn, another turn's does no
     failed: false,
   });
   act(() => store.applyEvent(sentinel("t-elsewhere", "2026-09-13T10:02:00Z")));
-  await act(async () => {
-    await new Promise((r) => setTimeout(r, 20));
-  });
+  // A refetch is asked as the sentinel lands; every answer since has landed.
+  await settled(() => asked);
   expect(asked, "another turn's sentinel refetched this one").toBe(1);
 
   act(() => store.applyEvent(sentinel(TURN, "2026-09-13T10:02:05Z")));
@@ -945,10 +945,8 @@ test("a turn nobody is running and nothing closed says it has not settled", asyn
   frame(store, socket);
   // THE ANSWER IS IN — the Timeline's rows are drawn from it — and still no
   // claim is made about who is running the turn.
-  await act(async () => {
-    await new Promise((r) => setTimeout(r, 50));
-  });
-  expect(screen.queryByLabelText("Loading the turn")).toBeNull();
+  await waitFor(() => expect(screen.queryByLabelText("Loading the turn")).toBeNull());
+  await afterMicrotasks();
   expect(screen.queryByText("not settled"), "a disconnected view guessed").toBeNull();
   act(() => store.setConnected(true));
   expect(await screen.findByText("not settled")).toBeTruthy();
@@ -1334,6 +1332,16 @@ function oneRoundIn() {
   };
 }
 
+/**
+ * Runs the frames the page has asked for, for a case asserting that one of
+ * them moved NOTHING.
+ *
+ * A frame runs its callbacks in the order they were asked (jsdom does, as a
+ * browser does), so a frame this asks for after the page's runs after the
+ * page's: the first covers the reveal the answer's render asked for, and the
+ * second a callback one of those asks for in turn — the router's scroll
+ * restoration asks itself again until the scroll holds.
+ */
 const frameDone = () =>
   act(async () => {
     await new Promise((r) => requestAnimationFrame(() => r(null)));
@@ -1351,8 +1359,7 @@ test("a watch link brings the live ledger's newest round into view once, as it l
   ]);
   await waitFor(() => expect(cards()).toHaveLength(2));
   expect(document.querySelector(".phase-card.live .tail-scroll.tailing")).not.toBeNull();
-  await frameDone();
-  expect(el.scrollTop, "the ledger's bottom is at the view's").toBe(362);
+  await waitFor(() => expect(el.scrollTop, "the ledger's bottom is at the view's").toBe(362));
   // ONCE: back at the top, a later push moves nothing.
   el.scrollTop = 0;
   const next = oneRoundIn();

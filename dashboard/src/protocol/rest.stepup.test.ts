@@ -177,6 +177,9 @@ describe("a refused gesture, not confirmed", () => {
     expect(((await pending) as Error).name).toBe("AbortError");
     // THE PERSON ANSWERS LATER, and the request that gave up is not replayed.
     release(true);
+    // A TASK BOUNDARY, NOT A WAIT FOR TIME: whether to replay is decided in
+    // the confirmation's own promise chain, which is all microtasks, and
+    // every one of them has run once a zero-delay timer fires.
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
   });

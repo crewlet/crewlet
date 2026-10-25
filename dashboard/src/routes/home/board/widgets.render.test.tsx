@@ -10,7 +10,7 @@
  * sees.
  */
 
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { useEffect, useState, type ReactNode } from "react";
@@ -26,6 +26,7 @@ import { WIDGETS, canUse } from "./registry.tsx";
 import { destinationOf, type WidgetDef } from "./kit.tsx";
 import { LeafView } from "./widgets.tsx";
 import type { ContribWidget } from "./model.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -181,9 +182,7 @@ function mount(
 }
 
 async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 8; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
 }
 
 const leaf = (def: WidgetDef, params: Record<string, string>): ContribWidget => ({

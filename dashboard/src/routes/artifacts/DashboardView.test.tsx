@@ -10,7 +10,7 @@
  */
 
 import type { ReactNode } from "react";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ToastProvider } from "@crewlethq/ui";
 
@@ -23,6 +23,7 @@ import type {
   DashboardDatasetAnswer,
   LiveSocket,
 } from "~/protocol/index.ts";
+import { settled } from "~/test/settle.ts";
 
 // THE BOARD'S BRAND REGION reads the company's brand over the socket, which
 // these tests, mounted with no client, do not serve: the board is drawn bare.
@@ -215,6 +216,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -280,12 +282,17 @@ test("a push naming another collection reads nothing again", async () => {
   const store = dataStore();
   mount(store);
   await waitFor(() => expect(reads.total).toBe(1));
+  // THE GATHER IS ON THE CASE'S CLOCK: a push naming a live dataset's
+  // collection is read again once the gather window closes, so the window is
+  // run out, and every read it caused has landed, before nothing is counted.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   store.applyPush({
     artifact: ID,
     keys: [{ collection: "notes", doc: "n1", version: 2 }],
     reread: true,
   });
-  await new Promise((r) => setTimeout(r, 50));
+  await act(() => vi.runOnlyPendingTimersAsync());
+  await settled(() => reads.total ?? 0);
   expect(reads.deals).toBe(1);
   expect(reads.total).toBe(1);
 });

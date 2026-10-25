@@ -13,7 +13,7 @@
  *  - NOTHING TYPED IS LOST TO A PRESS: Discard asks first.
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { AppAnnouncer } from "~/app/announcer.tsx";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider, parseMarkdown } from "@crewlethq/ui";
@@ -27,6 +27,7 @@ import { LiveSocket, Store } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { fill, loadRichEditor } from "~/test/richEditor.ts";
 import { withDerived } from "~/test/org.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -187,9 +188,7 @@ function mount() {
 }
 
 async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 12; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
 }
 
 const title = () => screen.getByRole("textbox", { name: "Title" });

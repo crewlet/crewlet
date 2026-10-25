@@ -30,6 +30,7 @@ import { CHART_ORG } from "~/test/orgchart.ts";
 import type { WorkProjectDetail, WorkProjectRow } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -166,9 +167,7 @@ function mount(
 }
 
 async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 10; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
 }
 
 // AN UNSET FIELD IS THE ENGINE'S DEFAULT, never the sheet's guess of it: no

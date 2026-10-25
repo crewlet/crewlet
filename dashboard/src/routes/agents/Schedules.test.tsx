@@ -24,7 +24,6 @@ import {
   Wakes,
   scheduleFacts,
 } from "./Schedules.tsx";
-import { act } from "@testing-library/react";
 import { PeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
@@ -34,6 +33,7 @@ import { Router } from "~/app/router.tsx";
 import { pinZoneForTest } from "~/lib/prefs.ts";
 import type { ScheduleRow } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 beforeEach(() => {
   // The READER's zone, which is what each instant is rendered in and is a
@@ -264,9 +264,7 @@ async function mountScreen(
       </ViewerProvider>
     </ClientContext.Provider>,
   );
-  await act(async () => {
-    for (let i = 0; i < 5; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
   return view;
 }
 

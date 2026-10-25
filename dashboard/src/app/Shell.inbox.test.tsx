@@ -14,6 +14,7 @@ import { Shell } from "./Shell.tsx";
 import { Router } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -89,7 +90,7 @@ function shellAs(grants: string[]) {
 
 test("the shell watches the viewer's seat and asks for their inbox again when it moves", async () => {
   const { store, view, watched, asks } = shellAs(["tracker"]);
-  await act(async () => {});
+  await afterMicrotasks();
   expect(watched).toEqual(["ana"]);
   const before = asks.inbox;
   expect(before).toBeGreaterThan(0);
@@ -115,7 +116,7 @@ test("the shell watches the viewer's seat and asks for their inbox again when it
 // the viewer holds and the seat is watched.
 test("a reader without Tracker is watched for nothing and asked no inbox", async () => {
   const { watched, asks } = shellAs(["knowledge"]);
-  await act(async () => {});
+  await afterMicrotasks();
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0);
   });

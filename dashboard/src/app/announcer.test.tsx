@@ -18,6 +18,7 @@ import { ANNOUNCER_LABEL } from "./announcer.tsx";
 import { Router } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 // EVERY SCREEN'S CODE IS IN BEFORE A CASE STARTS — the sign-in screens' chunk
 // and every workspace's (`app/lazyScreen.ts`) — because this suite asserts
@@ -62,9 +63,7 @@ function region(): HTMLElement {
  * would be left unrendered.
  */
 async function settle(): Promise<void> {
-  await act(async () => {
-    for (let i = 0; i < 20; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
 }
 
 /** Moves the router the way the navigator does: `pushState` fires no `hashchange`. */

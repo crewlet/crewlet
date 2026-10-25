@@ -15,7 +15,7 @@ import { noteReader } from "~/lib/reader.ts";
 import { useRef, type ReactNode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useSearchTarget } from "./searchTarget.ts";
-import { afterEach, beforeAll, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { Shell, usePageCoverage, usePublishFleet, useSectionCounts } from "./Shell.tsx";
 import { CHUNKS, loadChunk } from "./lazyScreen.ts";
 import { Router, buildHash } from "./router.tsx";
@@ -32,6 +32,7 @@ import { healthFrame } from "~/test/health.ts";
 import { emptyDay } from "~/test/myWork.ts";
 import { withDerived } from "~/test/org.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { settled } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -97,6 +98,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   location.hash = "#/";
 });
 
@@ -182,6 +184,8 @@ describe("the state bar's coverage", () => {
   // the route: React flushes a child's effects before its parent's, so a
   // Shell-level reset would run after the new screen had already published.
   test("a screen that publishes its own replaces it rather than losing it", async () => {
+    // ON A FAKED CLOCK, so a reset deferred by any timer at all can be run.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     const { show } = frame(<Covered coverage={INCOMPLETE} />);
     show(
       <AlsoCovered
@@ -191,8 +195,10 @@ describe("the state bar's coverage", () => {
     // FLUSHED, because a reset that lands LATE is the failure being excluded:
     // a deferred one — a microtask, a timeout, a parent effect — runs after
     // the incoming screen has already published and blanks it, and a
-    // synchronous assertion cannot see that happen.
-    await act(async () => {});
+    // synchronous assertion cannot see that happen. Every timer the swap
+    // armed runs here, and every microtask around them, so whatever the
+    // outgoing screen left to happen later has happened.
+    await act(() => vi.runOnlyPendingTimersAsync());
     expect(screen.getByText(/applied through 4 of 9/)).toBeDefined();
     expect(screen.queryByText(/applied through 41 of 88/)).toBeNull();
     expect(
@@ -219,6 +225,9 @@ const EMPTY: Record<string, unknown> = {
   integrations: { integrations: [], tools: [], traffic_known: true, traffic_since: null },
 };
 
+/** How many reads every [answering] socket of the file has been asked. */
+let queried = 0;
+
 /** A socket answering a bound viewer and whatever else a case supplies. */
 function answering(
   answers: Record<string, unknown>,
@@ -236,6 +245,7 @@ function answering(
     }
   ).query = (what: string, params?: Record<string, unknown>) => {
     asked.push({ what, params });
+    queried += 1;
     if (what === "viewer") {
       return Promise.resolve(
         answers.viewer ?? {
@@ -263,11 +273,12 @@ function mountShell(store: Store, socket: LiveSocket, child: ReactNode = <Bare /
   );
 }
 
-/** Let the queries the first render made answer, and the renders they cause land. */
+/**
+ * Let the queries the first render made answer, and the renders they cause
+ * land, including the reads those renders asked in turn (see `settled`).
+ */
 async function settle(): Promise<void> {
-  await act(async () => {
-    for (let i = 0; i < 5; i++) await Promise.resolve();
-  });
+  await settled(() => queried);
 }
 
 function notice(reason: string, n: number) {

@@ -30,6 +30,7 @@ import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -76,11 +77,9 @@ function mount(org?: OrgProjection, agents?: unknown[]) {
   );
 }
 
+/** Lets the stubbed reads answer, and what they draw land. */
 async function settle() {
-  await act(async () => {
-    await Promise.resolve();
-    await Promise.resolve();
-  });
+  await afterMicrotasks();
 }
 
 /** What the URL says the two parameters are, defaults included. */

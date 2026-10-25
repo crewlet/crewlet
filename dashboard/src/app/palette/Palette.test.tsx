@@ -210,6 +210,11 @@ function mount({
     closed,
     keys,
     input,
+    // EVERY GESTURE IS AN AWAITED ACT, and React's act returns only once a
+    // check of its queue at a task boundary finds it empty: whatever the
+    // gesture's microtasks did (the stubbed act route answering, the palette
+    // drawing the answer) has been drawn, so a case reads the page straight
+    // after one. A case that clicks wraps the click in one the same way.
     type: async (value: string) => {
       await act(async () => {
         fireEvent.change(input, { target: { value } });
@@ -580,7 +585,6 @@ describe("the knowledge answer", () => {
     await act(async () => {
       vi.advanceTimersByTime(ms);
     });
-    await act(async () => {});
   };
 
   test("is asked once per settled question, and drawn with its sources and tokens", async () => {
@@ -821,7 +825,6 @@ describe("the actions, made as the person", () => {
     await act(async () => {
       fireEvent.click(p.row(/Create task/));
     });
-    await act(async () => {});
     expect(posted.map((x) => [x.tool, x.body.args])).toEqual([
       ["create_work_item", { title: "rotate the join timeout", project: "ENG" }],
     ]);
@@ -852,7 +855,6 @@ describe("the actions, made as the person", () => {
     await act(async () => {
       fireEvent.click(ask);
     });
-    await act(async () => {});
     expect(posted.map((x) => [x.tool, x.body.args])).toEqual([
       [
         "create_work_item",
@@ -880,7 +882,6 @@ describe("the actions, made as the person", () => {
     await act(async () => {
       fireEvent.click(p.row("SWE"));
     });
-    await act(async () => {});
     expect(posted[0]!.body.args).toMatchObject({ title: "cluster join", ask: "swe" });
   });
 
@@ -895,12 +896,10 @@ describe("the actions, made as the person", () => {
     await act(async () => {
       fireEvent.click(assign);
     });
-    await act(async () => {});
     expect(screen.getByText("Suggested")).toBeDefined();
     await act(async () => {
       fireEvent.click(within(screen.getByRole("group", { name: "Suggested" })).getByText("SWE"));
     });
-    await act(async () => {});
     expect(posted.map((x) => [x.tool, x.body.args])).toEqual([
       ["update_work_item", { item: "ENG-420", assignee: "swe", if_match: 7 }],
     ]);
@@ -924,7 +923,6 @@ describe("the actions, made as the person", () => {
     await act(async () => {
       fireEvent.click(p.row(/Create task/));
     });
-    await act(async () => {});
     expect(p.closed).not.toHaveBeenCalled();
     expect(document.querySelector(".is-refused")).not.toBeNull();
   });
@@ -1008,7 +1006,6 @@ describe("the actions, made as the person", () => {
         within(screen.getByRole("group", { name: "Projects" })).getByText("Operations"),
       );
     });
-    await act(async () => {});
     expect(posted.map((x) => [x.tool, x.body.args])).toEqual([
       ["create_work_item", { title: "cluster join", project: "OPS" }],
     ]);
@@ -1033,7 +1030,6 @@ describe("the actions, made as the person", () => {
         within(screen.getByRole("group", { name: "Suggested" })).getByText("Core platform"),
       );
     });
-    await act(async () => {});
     expect(posted.map((x) => x.body.args)).toEqual([
       { title: "cluster join", assignee: "swe", ask: "swe", project: "ENG" },
     ]);
@@ -1061,7 +1057,6 @@ describe("the actions, made as the person", () => {
     });
     await p.type("cluster join");
     await p.press("a", { code: "KeyA", altKey: true });
-    await act(async () => {});
     expect(p.row("SWE").textContent).toContain("holds it");
     expect(p.row("SRE").textContent).not.toContain("holds it");
   });
@@ -1092,7 +1087,6 @@ describe("a notice beside the answer", () => {
     await act(async () => {
       vi.advanceTimersByTime(ANSWER_IDLE_MS);
     });
-    await act(async () => {});
     await p.press("Enter", { ctrlKey: true });
     expect(screen.getByText("It flakes under packet loss.")).toBeDefined();
     expect(screen.getByText(WRITE_REASONS.not_served, { selector: "p" })).toBeDefined();
@@ -1131,7 +1125,6 @@ describe("the search bound", () => {
     await act(async () => {
       vi.advanceTimersByTime(ANSWER_IDLE_MS * 2);
     });
-    await act(async () => {});
     expect(searches()).toEqual([]);
     expect(posted).toEqual([]);
     expect(
@@ -1291,7 +1284,6 @@ describe("projects, the switcher and the full search", () => {
 
   test("a term ranks the projects as the switcher does, each going to its page", async () => {
     const p = mount({ answers: { work_projects: listing } });
-    await act(async () => Promise.resolve());
     await p.type("o");
     const group = screen.getByRole("group", { name: "Projects" });
     const rows = within(group).getAllByRole("option");

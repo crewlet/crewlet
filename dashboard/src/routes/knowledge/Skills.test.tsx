@@ -3,7 +3,7 @@
  * ways a skill reaches a seat.
  */
 
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
@@ -16,6 +16,7 @@ import { reloadForTest } from "~/lib/prefs.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -87,9 +88,7 @@ function mount(answers: Record<string, unknown>) {
 }
 
 async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 10; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
 }
 
 test("the tool skills count is the listing's total, and loaded-by reads both ways", async () => {

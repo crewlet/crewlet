@@ -15,6 +15,7 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, needSession, Store, sessionRestored } from "~/protocol/index.ts";
 import { parseLink } from "./link.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -426,9 +427,7 @@ describe("redeeming it", () => {
     await waitFor(() => expect(location.hash).toBe(enrol));
     // AND IT STAYS THERE once the frame has followed the need.
     await screen.findByText("Set up two-step verification");
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
+    await afterMicrotasks();
     expect(location.hash).toBe(enrol);
     expect(dial).not.toHaveBeenCalled();
     expect(reconnect).not.toHaveBeenCalled();

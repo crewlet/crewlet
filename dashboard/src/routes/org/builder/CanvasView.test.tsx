@@ -50,6 +50,7 @@ import {
 import { CANVAS_FIT_PADDING, focusables } from "@crewlethq/ui";
 import { menuEntryLabel } from "~/testing.tsx";
 import { LEGIBLE_ZOOM } from "~/ui/canvasView.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 let restore: () => void;
 beforeEach(() => {
@@ -849,9 +850,7 @@ describe("the first view", () => {
       isCanvasViewport(el) ? { width, height: VIEWPORT.height } : plain(el);
   };
   const settled = async () => {
-    await act(async () => {
-      for (let i = 0; i < 5; i++) await Promise.resolve();
-    });
+    await afterMicrotasks();
     act(() => LayoutObserver.settle());
   };
 

@@ -20,6 +20,7 @@ import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -72,7 +73,7 @@ function mount(grants: string[] = ["admin"]) {
 
 /** Until the viewer's answer has landed, so what the page offers is decided by it. */
 async function viewerAnswered() {
-  await act(async () => {});
+  await afterMicrotasks();
 }
 
 const ACME = {

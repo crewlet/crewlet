@@ -16,6 +16,7 @@ import { SEARCH_QUERY_MAX } from "~/contract/wire.ts";
 import { useSearchQuery } from "./useSearchQuery.ts";
 import { useClient, useConnection } from "./store-hooks.ts";
 import { useViewer } from "./viewer.ts";
+import { settled } from "~/test/settle.ts";
 
 vi.mock("./store-hooks.ts", () => ({
   useClient: vi.fn(),
@@ -54,7 +55,7 @@ test("a phrase past the bound is never sent, and says why", async () => {
   const { result } = renderHook(() =>
     useSearchQuery("knowledge", { q: "x".repeat(SEARCH_QUERY_MAX + 1) }),
   );
-  await new Promise((r) => setTimeout(r, 10));
+  await settled(() => query.mock.calls.length);
   expect(query).not.toHaveBeenCalled();
   expect(result.current.tooLong).toMatch(`at most ${SEARCH_QUERY_MAX}`);
   expect(result.current.data).toBeNull();
@@ -95,6 +96,6 @@ test("a search in an app the reader lacks is never sent, and says which app", as
 test("enabled keeps its meaning on top of the bound", async () => {
   const query = answering({ hits: [] });
   renderHook(() => useSearchQuery("work_search", { q: "auth" }, { enabled: false }));
-  await new Promise((r) => setTimeout(r, 10));
+  await settled(() => query.mock.calls.length);
   expect(query).not.toHaveBeenCalled();
 });

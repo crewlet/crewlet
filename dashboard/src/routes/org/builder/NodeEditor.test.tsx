@@ -34,6 +34,7 @@ import {
 import { Callout } from "@crewlethq/ui";
 import { AVATAR_CHARACTERS } from "~/contract/avatar.ts";
 import { drawnClasses, isDrawnAs } from "~/testing.tsx";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 afterEach(cleanup);
 
@@ -1049,7 +1050,7 @@ describe("who holds a person's seat", () => {
   test("a browser nobody signed in on is shown nothing, and nothing is asked", async () => {
     vi.stubGlobal("fetch", seats);
     edit(keyedState(humanDev()), "seat:dev", { viewer: reader([], "") });
-    await act(async () => {});
+    await afterMicrotasks();
     expect(screen.queryByRole("region", { name: "Person" })).toBeNull();
     expect(seats).not.toHaveBeenCalled();
   });

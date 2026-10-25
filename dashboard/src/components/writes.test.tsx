@@ -24,6 +24,7 @@ import { useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { pick } from "~/testing.tsx";
 import { withDerived } from "~/test/org.ts";
+import { settled } from "~/test/settle.ts";
 
 vi.mock("~/lib/store-hooks.ts", () => ({
   useConnection: vi.fn(),
@@ -132,9 +133,15 @@ test("assigning to whoever holds it already is declined, and says so", async () 
   const confirm = within(dialog).getByRole("button", { name: "Assign" });
   expect(confirm.getAttribute("aria-disabled")).toBe("true");
   fireEvent.click(confirm);
-  await new Promise((r) => setTimeout(r, 10));
-  expect(sent).toHaveLength(0);
   expect(dialog.textContent).toContain("Choose somebody other than who holds it now.");
+  // THE DECLINED PRESS IS HELD TO HAVING SENT NOTHING BY THE SEND AFTER IT: a
+  // valid assignment made next is the first request and the only one, which
+  // a press that went out anyway — at once or a moment later — would not be.
+  pick(within(dialog).getByLabelText("Assignee"), /Jane Founder/);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Assign" }));
+  await waitFor(() => expect(sent.length).toBeGreaterThan(0));
+  await settled(() => sent.length);
+  expect(sent.map((s) => s.body.args.assignee)).toEqual(["jane"]);
 });
 
 // A GRID DRAWS ONE PER ROW: each is named for its task, so a screen reader's

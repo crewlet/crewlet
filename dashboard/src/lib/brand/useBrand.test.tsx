@@ -8,6 +8,7 @@ import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import type { BrandDocument } from "~/protocol/index.ts";
 import { useBrandAssets, type BrandSource } from "./useBrand.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 const { createObjectURL, revokeObjectURL } = URL;
 
@@ -67,7 +68,8 @@ test("a logo read that settles after the screen has gone makes no URL", async ()
   const { unmount } = renderHook(() => useBrandAssets(source));
   unmount();
   source.settle();
-  // Let the settled read's continuations run.
-  await new Promise((r) => setTimeout(r, 0));
+  // AN ABSENCE, read once the settled read's continuations have run: they
+  // are all microtasks, and every one has run by the next task.
+  await afterMicrotasks();
   expect(made).not.toHaveBeenCalled();
 });

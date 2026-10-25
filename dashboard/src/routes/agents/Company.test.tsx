@@ -12,7 +12,7 @@
  * defect was never the arithmetic — each surface counted something true.
  */
 
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 
 import { Teams, UnitBlock, UnitPeek, UnitScreen } from "./Company.tsx";
@@ -22,6 +22,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 /** A socket that never connects: these cases render, they do not fetch. */
 class InertWebSocket {
@@ -142,9 +143,7 @@ async function teams(org: OrgProjection) {
       </ViewerProvider>
     </ClientContext.Provider>,
   );
-  await act(async () => {
-    for (let i = 0; i < 5; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
 }
 
 // A LEAD IS THE ENGINE'S, and an inherited one says so: hiding the difference
@@ -206,9 +205,7 @@ async function unitAt(Unit: typeof UnitScreen | typeof UnitPeek, id: string) {
       </ViewerProvider>
     </ClientContext.Provider>,
   );
-  await act(async () => {
-    for (let i = 0; i < 5; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
 }
 
 // A UNIT IS FOUND BY ITS KEY, which is what every link to it writes

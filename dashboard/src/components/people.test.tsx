@@ -15,7 +15,7 @@
  * picked as Admin — one switch that includes every app — and one box per app.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { useState } from "react";
@@ -38,6 +38,7 @@ import type { HumanSeat } from "~/contract/identity.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -153,10 +154,9 @@ function Holding({ seat, grants }: { seat: { handle: string; name: string }; gra
   );
 }
 
-/** Every answer in flight lands. */
+/** Every answer in flight lands, and what it draws. */
 async function settle() {
-  await act(async () => {});
-  await act(async () => {});
+  await afterMicrotasks();
 }
 
 beforeEach(() => {

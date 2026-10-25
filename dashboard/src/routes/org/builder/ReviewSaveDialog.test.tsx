@@ -15,6 +15,8 @@ import { fixtureCompany, fixtureDerived } from "./model/testkit.ts";
 import { changeSentences } from "./ReviewSaveDialog.tsx";
 import { company, Engine, json, mountBuilder, refusal, type SentRequest } from "./testkit.tsx";
 import { toastHost, toastText } from "~/testing.tsx";
+import { ANNOUNCE_DELAY_MS } from "./Builder.tsx";
+import { settled } from "~/test/settle.ts";
 
 beforeEach(() => {
   localStorage.clear();
@@ -68,8 +70,12 @@ describe("the save", () => {
 
     await waitFor(() => expect(toastText()).toContain("Saved. The engine is applying it."));
     // Said once: the toast's host is a live region of its own, and the
-    // Builder's region repeating it had a screen reader read it twice.
-    await new Promise((r) => setTimeout(r, 150));
+    // Builder's region repeating it had a screen reader read it twice. The
+    // region writes a sentence ANNOUNCE_DELAY_MS after it is asked to, and
+    // timers of one delay run in the order they were armed, so one armed now
+    // fires after any the save's answer armed: by then the region has said
+    // whatever it was going to.
+    await act(() => new Promise((r) => setTimeout(r, ANNOUNCE_DELAY_MS)));
     // INSIDE THE BUILDER'S OWN LAYER HOST, not at the document root: a
     // fullscreen canvas renders only its own subtree, so a toast portalled
     // past it is a Save that reports nothing.
@@ -107,7 +113,8 @@ describe("the save", () => {
 
     engine.script = () => null;
     act(() => readBack());
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // The read-back has landed, and every request it caused with it.
+    await settled(() => engine.requests.length);
     // Still in the draft, kept, and checked against the saved revision.
     expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toContain("Design and more");
     await waitFor(() => {
@@ -259,7 +266,8 @@ describe("a save whose answer never arrives", () => {
       lose();
       // Settling from the unmounted builder could not reach the engine either.
       await waitFor(() => expect(engine.sent("GET").length).toBeGreaterThan(asked));
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      // Every one of them refused, and what each refusal caused has run.
+      await settled(() => engine.requests.length);
       expect(JSON.parse(sessionStorage.getItem(DRAFT_STORAGE_KEY)!).write).toMatch(/^[0-9a-f]+$/);
       engine.script = () => null;
     }
@@ -269,7 +277,7 @@ describe("a save whose answer never arrives", () => {
       await loseTheAnswer(engine, { lands: true });
       expect(engine.revision).toBe("r-saved");
 
-      mountBuilder({ engine });
+      const { clock } = mountBuilder({ engine });
       expect(
         await screen.findByText("Your last save was stored and is being applied."),
       ).toBeDefined();
@@ -277,8 +285,10 @@ describe("a save whose answer never arrives", () => {
       await waitFor(() => expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull());
       expect(engine.sent("GET", "/config/revisions/r-saved").length).toBeGreaterThan(0);
       // The builder read the saved revision when it opened, so it stands on it
-      // already and nothing is read or checked over again.
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // already and nothing is read or checked over again: nothing it asked
+      // is still out, and no check is armed on the clock.
+      await settled(() => engine.requests.length);
+      expect(clock.pending).toBe(0);
       expect(engine.checks()).toHaveLength(checked);
       // Neither offered back nor replayed: nothing more was written.
       expect(screen.queryByRole("button", { name: "Keep the draft" })).toBeNull();
@@ -306,7 +316,7 @@ describe("a save whose answer never arrives", () => {
 
       mountBuilder({ engine });
       await screen.findByText("No problems");
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await settled(() => engine.requests.length);
       // Nothing restored or offered, and nothing asked of the history yet.
       expect(screen.getByText("read only")).toBeDefined();
       expect(screen.queryByRole("button", { name: "Keep the draft" })).toBeNull();
@@ -347,7 +357,7 @@ describe("a save whose answer never arrives", () => {
         await screen.findByText("Your last save was stored and is being applied."),
       ).toBeDefined();
       await screen.findByText("No problems");
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await settled(() => engine.requests.length);
       expect(engine.checks().map((c) => c.headers["If-Match"])).not.toContain('"r-saved"');
       expect(engine.checks().at(-1)!.headers["If-Match"]).toBe('"r-saved-2"');
       expect(screen.queryByText("The configuration changed")).toBeNull();
@@ -410,7 +420,7 @@ describe("a save whose answer never arrives", () => {
       expect(engine.requests.filter(isWrite)).toHaveLength(1);
       // Nothing of this visit was being saved, so nothing goes on to a review
       // or to a second update of a draft it never had on screen.
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await settled(() => engine.requests.length);
       expect(screen.queryByRole("dialog")).toBeNull();
     });
 

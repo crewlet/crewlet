@@ -15,7 +15,7 @@
  * value.
  */
 
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 
 import { ConfigScreen } from "./Config.tsx";
@@ -25,6 +25,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { noteReader } from "~/lib/reader.ts";
 import { recentsKey, resetForTest } from "~/lib/recents.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -78,11 +79,7 @@ afterEach(() => {
 });
 
 async function settle() {
-  await act(async () => {
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-  });
+  await afterMicrotasks();
 }
 
 let asked: string[] = [];

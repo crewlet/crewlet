@@ -9,7 +9,7 @@
  * only undone, so these drive the real history the way a browser does.
  */
 
-import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { useEffect } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
@@ -58,27 +58,41 @@ function mount(guard: LeaveGuard | null, unload = false) {
 }
 
 /**
- * Waits until the page shows `hash` and the history agrees, however many
- * traversals the browser queued to get there (a held move is two: the move
- * and its undo), then a little longer, so an undo that was still to come
- * would have arrived and failed the assertion that follows.
+ * Runs every history traversal the page has queued, and every one those
+ * queue in turn: a held move is two (the move, then the undo its guard asks
+ * for from inside the move's own `popstate`), and agreeing to it is one more.
+ * jsdom queues each traversal, and the events it fires, as a task on
+ * `setImmediate`, which these cases fake: so when this returns, every move
+ * still to come has arrived, which no wait on the real clock can promise of a
+ * machine under load. React's scheduler is untouched (it kept the runtime's
+ * `setImmediate` when it loaded), and the renders the events cause land
+ * inside the `act`.
  */
-async function settleOn(hash: string) {
-  await waitFor(() => {
-    expect(location.hash).toBe(hash);
-    expect(shown).toBe(hash);
+function traverse() {
+  act(() => {
+    vi.runAllTimers();
   });
-  await act(() => new Promise<void>((resolve) => setTimeout(resolve, 30)));
+}
+
+/**
+ * Asserts that the page shows `hash` and the history agrees, once every
+ * traversal queued so far has run (see [traverse]): an undo that was still
+ * to come would have moved the page off it.
+ */
+function settleOn(hash: string) {
+  traverse();
   expect(location.hash).toBe(hash);
   expect(shown).toBe(hash);
 }
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["setImmediate", "clearImmediate"] });
   history.replaceState(null, "", "#/company/org");
 });
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   nav = null;
   history.replaceState(null, "", "#/");
 });
@@ -107,7 +121,7 @@ test("a replace stays on the entry, so no guard is asked", () => {
   expect(location.hash).toBe("#/company/org?unit=Sales");
 });
 
-test("Back and Forward are undone while held, and leave makes each", async () => {
+test("Back and Forward are undone while held, and leave makes each", () => {
   const view = mount(null);
   act(() => nav!.to(["company", "org", "roster"]));
   act(() => nav!.to(["live", "runs"]));
@@ -115,23 +129,25 @@ test("Back and Forward are undone while held, and leave makes each", async () =>
   view.rerender(probe.guard);
 
   act(() => history.back());
-  await waitFor(() => expect(probe.asked).toEqual(["#/company/org/roster"]));
+  traverse();
+  expect(probe.asked).toEqual(["#/company/org/roster"]);
   // Undone: the page never showed the entry it was asked about.
-  await settleOn("#/live/runs");
+  settleOn("#/live/runs");
 
   act(() => probe.leave());
-  await settleOn("#/company/org/roster");
+  settleOn("#/company/org/roster");
 
   act(() => history.forward());
-  await waitFor(() => expect(probe.asked).toEqual(["#/company/org/roster", "#/live/runs"]));
-  await settleOn("#/company/org/roster");
+  traverse();
+  expect(probe.asked).toEqual(["#/company/org/roster", "#/live/runs"]);
+  settleOn("#/company/org/roster");
   act(() => probe.leave());
-  await settleOn("#/live/runs");
+  settleOn("#/live/runs");
 });
 
 // A link is an entry the browser makes itself, with no place stamped on it:
 // it is the one after the entry the reader was on, and undone like Back.
-test("a link is held and undone, and leave follows it", async () => {
+test("a link is held and undone, and leave follows it", () => {
   const probe = holdAll();
   mount(probe.guard);
   const link = document.createElement("a");
@@ -139,16 +155,17 @@ test("a link is held and undone, and leave follows it", async () => {
   document.body.appendChild(link);
   try {
     fireEvent.click(link);
-    await waitFor(() => expect(probe.asked).toEqual(["#/company/integrations"]));
-    await settleOn("#/company/org");
+    traverse();
+    expect(probe.asked).toEqual(["#/company/integrations"]);
+    settleOn("#/company/org");
     act(() => probe.leave());
-    await settleOn("#/company/integrations");
+    settleOn("#/company/integrations");
   } finally {
     link.remove();
   }
 });
 
-test("a guard that lets a move go is not in its way, and no guard holds nothing", async () => {
+test("a guard that lets a move go is not in its way, and no guard holds nothing", () => {
   const asked: string[] = [];
   const view = mount((to) => {
     asked.push(to.hash);
@@ -159,7 +176,7 @@ test("a guard that lets a move go is not in its way, and no guard holds nothing"
   expect(shown).toBe("#/company/org/roster");
   view.rerender(null);
   act(() => history.back());
-  await settleOn("#/company/org");
+  settleOn("#/company/org");
   expect(asked).toEqual(["#/company/org/roster"]);
 });
 

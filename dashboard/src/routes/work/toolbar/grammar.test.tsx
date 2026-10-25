@@ -340,25 +340,31 @@ const ARRANGEMENT: Record<
   },
 };
 
-test("every arrangement key is one an arrangement control writes", async () => {
-  const homed = Object.entries(URL_HOMES)
-    .filter(([, home]) => home === "arrangement")
-    .map(([key]) => key);
-  expect(Object.keys(ARRANGEMENT).sort()).toEqual(homed.sort());
+const arrangementKeys = Object.entries(URL_HOMES)
+  .filter(([, home]) => home === "arrangement")
+  .map(([key]) => key);
 
-  for (const key of homed) {
-    const entry = ARRANGEMENT[key] as (typeof ARRANGEMENT)[string];
-    await listAt(entry.at, entry.answers);
-    await entry.press();
-    await waitFor(() =>
-      expect(location.hash, `${key} was not written by its control`).toContain(entry.writes),
-    );
-    // AND NO CHIP SAYS SO, because an arrangement narrows nothing: a chip for
-    // one would offer to remove a drawing.
-    const chips = document.querySelector(".work-chips")?.textContent ?? "";
-    expect(chips, `${key} drew a chip`).not.toContain(key);
-    cleanup();
-  }
+test("every arrangement key has a control to press, and every control an arrangement key", () => {
+  expect(Object.keys(ARRANGEMENT).sort()).toEqual([...arrangementKeys].sort());
+});
+
+// ONE CASE AN ARRANGEMENT, each on a screen of its own: a key whose press
+// fails is named by the case that failed, and no case pays for — or inherits
+// a screen from — the arrangements before it. One loop of them unmounted the
+// next arrangement's screen with `cleanup()` and did every arrangement's work
+// inside one case's bound.
+test.each(arrangementKeys)("%s is written by its arrangement control", async (key) => {
+  const entry = ARRANGEMENT[key];
+  if (!entry) throw new Error(`${key} has an arrangement home and no control to press here`);
+  await listAt(entry.at, entry.answers);
+  await entry.press();
+  await waitFor(() =>
+    expect(location.hash, `${key} was not written by its control`).toContain(entry.writes),
+  );
+  // AND NO CHIP SAYS SO, because an arrangement narrows nothing: a chip for
+  // one would offer to remove a drawing.
+  const chips = document.querySelector(".work-chips")?.textContent ?? "";
+  expect(chips, `${key} drew a chip`).not.toContain(key);
 });
 
 // AND THE COLUMN FAMILY IS ONE KEY PER GRID SHAPE, so a third grid shape

@@ -16,7 +16,7 @@
  *    listing ordered by title.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
@@ -29,6 +29,7 @@ import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -187,9 +188,7 @@ function mount(viewer: unknown = JANE) {
 }
 
 async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 12; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
 }
 
 const outline = () => screen.getByRole("treegrid", { name: "Pages in Engineering" });

@@ -8,7 +8,7 @@
  * that a person's note is drawn as what became of it.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { Router } from "~/app/router.tsx";
@@ -22,6 +22,7 @@ import { phaseRecord } from "~/test/phaseRecord.ts";
 import { SANDBOX_TAIL_POLL_MS } from "~/contract/sandbox.ts";
 import { Waterfall, liveState, steerMarks } from "./Waterfall.tsx";
 import { withDerived } from "~/test/org.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -131,9 +132,7 @@ function mount(
 }
 
 async function flush() {
-  await act(async () => {
-    for (let i = 0; i < 6; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
 }
 
 const RUNNING: SandboxTailAnswer = {
@@ -426,11 +425,9 @@ describe("the waterfall from a keyboard", () => {
     await flush();
     expect(view.selected()).toBe("run:L1");
     fireEvent.keyDown(screen.getByRole("button", { name: "Close the span" }), { key: "Escape" });
-    await act(async () => {
-      await new Promise((r) => requestAnimationFrame(() => r(null)));
-    });
     expect(view.selected()).toBe("");
-    expect(document.activeElement?.getAttribute("data-span")).toBe("run:L1");
+    // The row takes focus a frame after the close, once it is drawn again.
+    await waitFor(() => expect(document.activeElement?.getAttribute("data-span")).toBe("run:L1"));
   });
 });
 

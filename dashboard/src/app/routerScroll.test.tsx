@@ -10,7 +10,7 @@
 
 import { act, cleanup, render } from "@testing-library/react";
 import { useLayoutEffect } from "react";
-import { afterEach, beforeEach, expect, test } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { SCREEN_SCROLL_ID } from "~/lib/scroller.ts";
 import { Router, useNavigator, useParam } from "./router.tsx";
@@ -53,37 +53,65 @@ function mount() {
   return { view, el };
 }
 
-async function frames(n = 20) {
-  for (let i = 0; i < n; i++) {
-    await act(async () => {
-      await new Promise((r) => requestAnimationFrame(() => r(null)));
-    });
+/** The browser's own frame scheduler, taken before a case counts the page's. */
+const nextFrame = window.requestAnimationFrame.bind(window);
+
+/** The frames the page has asked for that the browser has not run yet. */
+const waiting = new Set<number>();
+
+/**
+ * Runs every frame the page has asked for, and every frame those ask for in
+ * turn, until it asks for no more. THE ROUTER'S SCROLL WORK IS FRAMES — a
+ * restore tries again a frame later until the position holds or it gives up
+ * — so once none is waiting, nothing the router will ever do to the scroll is
+ * still to come, however many frames it took. Frames run in the order they
+ * were asked for, so the one this asks for runs after every frame the page
+ * had asked for first.
+ */
+async function settleFrames() {
+  while (waiting.size > 0) {
+    await act(() => new Promise<void>((resolve) => nextFrame(() => resolve())));
   }
 }
 
 beforeEach(() => {
   history.replaceState(null, "", "#/live/turns/t1");
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+    const id = nextFrame((time) => {
+      waiting.delete(id);
+      callback(time);
+    });
+    waiting.add(id);
+    return id;
+  });
+  const cancel = window.cancelAnimationFrame.bind(window);
+  vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
+    waiting.delete(id);
+    cancel(id);
+  });
 });
 afterEach(() => {
   cleanup();
   nav = null;
+  vi.restoreAllMocks();
+  waiting.clear();
 });
 
 test("a filter's own scroll survives the replace that opened it", async () => {
   const { el } = mount();
-  await frames(2);
+  await settleFrames();
   el.scrollTop = 100;
   act(() => setSpan("t1|execute|1.r1"));
-  await frames();
+  await settleFrames();
   expect(location.hash).toContain("span=");
   expect(el.scrollTop, "the router scrolled the screen back to where it was").toBe(900);
 });
 
 test("a move to a new entry still starts at the top", async () => {
   const { el } = mount();
-  await frames(2);
+  await settleFrames();
   el.scrollTop = 400;
   act(() => nav!.to(["live", "turns", "t2"]));
-  await frames();
+  await settleFrames();
   expect(el.scrollTop).toBe(0);
 });

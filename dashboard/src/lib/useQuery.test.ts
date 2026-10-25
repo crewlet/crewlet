@@ -7,24 +7,32 @@
  * back — and coming back is a stronger signal than any cadence can be.
  */
 
-import { cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { useQuery } from "./useQuery.ts";
 import { useClient, useConnection } from "./store-hooks.ts";
+import { settled } from "~/test/settle.ts";
 
 vi.mock("./store-hooks.ts", () => ({
   useClient: vi.fn(),
   useConnection: vi.fn(),
 }));
 
-/** visible drives the tab between hidden and visible, as a browser does. */
+/**
+ * visible drives the tab between hidden and visible, as a browser does —
+ * INSIDE `act`, so everything the event causes (a refetch, the render it
+ * schedules, the effect that asks) has happened when it returns, and a case
+ * that asserts nothing was asked asserts it of a hook that has finished.
+ */
 function visible(is: boolean) {
   Object.defineProperty(document, "visibilityState", {
     configurable: true,
     get: () => (is ? "visible" : "hidden"),
   });
-  document.dispatchEvent(new Event("visibilitychange"));
+  act(() => {
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
 }
 
 /** asked counts the queries one render made, and answers them all. */
@@ -70,7 +78,7 @@ test("going away does not ask", async () => {
   await vi.waitFor(() => expect(query).toHaveBeenCalledTimes(1));
 
   visible(false);
-  await new Promise((r) => setTimeout(r, 10));
+  await settled(() => query.mock.calls.length);
   expect(query).toHaveBeenCalledTimes(1);
 });
 
@@ -85,7 +93,7 @@ test("focus is opt-in", async () => {
 
   visible(false);
   visible(true);
-  await new Promise((r) => setTimeout(r, 10));
+  await settled(() => query.mock.calls.length);
   expect(query).toHaveBeenCalledTimes(1);
 });
 
@@ -118,9 +126,8 @@ test("a write from this tab asks the questions it moved again, and no others", a
   renderHook(() => useQuery("work_items", {}));
   renderHook(() => useQuery("pages", {}));
   await vi.waitFor(() => expect(query).toHaveBeenCalledTimes(2));
-  session.written("tracker", "CREWLET_TRACKER_LOG@1:5", []);
-  await vi.waitFor(() => expect(query).toHaveBeenCalledTimes(3));
-  await new Promise((r) => setTimeout(r, 10));
+  act(() => session.written("tracker", "CREWLET_TRACKER_LOG@1:5", []));
+  await settled(() => query.mock.calls.length);
   expect(query).toHaveBeenCalledTimes(3);
   expect(query.mock.calls[2]).toEqual([
     "work_items",

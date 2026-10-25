@@ -47,6 +47,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { LiveSocket, Store, sessionRestored, type SessionAnswer } from "~/protocol/index.ts";
 import type { ReactNode } from "react";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -820,8 +821,11 @@ describe("the preferences popover, laid out", () => {
     const trigger = screen.getByRole("button", { name: "Preferences" });
     fireEvent.click(trigger);
     const dialog = await screen.findByRole("dialog", { name: "Preferences" });
-    // Still there once placement has run, and the trigger says so.
-    await new Promise((r) => setTimeout(r, 20));
+    // Still there once placement has run, and the trigger says so: the kit
+    // places the panel in a layout effect, and closes it there if the anchor
+    // measures as gone; the passive effects after it (the focus moved in) have
+    // run too once every queued microtask has.
+    await afterMicrotasks();
     expect(dialog.isConnected).toBe(true);
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
     // Placed, not hidden: above the trigger, starting at its edge, inside the window.

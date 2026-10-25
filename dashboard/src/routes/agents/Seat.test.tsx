@@ -30,6 +30,7 @@ import type {
 } from "~/protocol/index.ts";
 import { emptyDay } from "~/test/myWork.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { settled } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -329,9 +330,14 @@ function mount(
   return { store };
 }
 
-/** Let every settled promise land, and the renders they cause. */
+/**
+ * Lets every read the screen asked land, and the renders they cause, until a
+ * pass asks nothing more: every answer is a stub, so a read asked again would
+ * move the count across a boundary. What a case says was NOT asked is read
+ * here.
+ */
 async function settle() {
-  for (let i = 0; i < 6; i++) await act(async () => Promise.resolve());
+  await settled(() => asked.length);
 }
 
 const tabNames = () => screen.getAllByRole("tab").map((t) => t.textContent);

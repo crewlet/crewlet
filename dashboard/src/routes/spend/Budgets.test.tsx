@@ -27,6 +27,7 @@ import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { BudgetWindow, BudgetsAnswer } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -137,9 +138,7 @@ function mount(budgets: BudgetsAnswer, viewer: Record<string, unknown> = OPERATO
 }
 
 async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 12; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
 }
 
 const json = (payload: unknown, status: number, headers: Record<string, string> = {}) =>

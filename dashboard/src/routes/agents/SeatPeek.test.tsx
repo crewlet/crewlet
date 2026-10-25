@@ -4,7 +4,7 @@
  * the identity directory for a human seat and a reader it answers.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { SeatPeek, budgetLine, turnOrdinal } from "./SeatPeek.tsx";
@@ -19,6 +19,7 @@ import type { BudgetWindow } from "~/protocol/types.ts";
 import type { EngineHealth } from "~/contract/health.ts";
 import { healthFrame } from "~/test/health.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -183,9 +184,7 @@ async function mount(
       </ViewerProvider>
     </ClientContext.Provider>,
   );
-  await act(async () => {
-    for (let i = 0; i < 8; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
   return { asked: asked.filter((w) => w !== "viewer"), params };
 }
 
@@ -259,7 +258,6 @@ test.each([
 ])("a %s human seat's peek says what holds it, in one directory read", async (_, jane, line) => {
   const paths = directory(jane);
   const { asked } = await mount(OPERATOR, { handle: "jane" });
-  await act(async () => {});
   expect(screen.getByText("Held by").nextElementSibling?.textContent).toBe(line);
   expect(paths.filter((p) => p === "/iam/seats")).toHaveLength(1);
   expect(new Set(asked).size).toBeLessThanOrEqual(3);
@@ -278,7 +276,6 @@ test("an agent's seat and an anonymous reader ask it nothing, and every signed-i
   cleanup();
   const tracker = directory(VACANT);
   await mount({ ...OPERATOR, grants: ["tracker"] }, { handle: "jane" });
-  await act(async () => {});
   expect(tracker.filter((p) => p === "/iam/seats")).toHaveLength(1);
   expect(screen.getByText("Held by").nextElementSibling?.textContent).toBe("Nobody yet");
 });
@@ -291,7 +288,6 @@ test("an agent's seat and an anonymous reader ask it nothing, and every signed-i
 test("a vacant human seat's peek offers Invite and Create to an administrator alone", async () => {
   directory(VACANT);
   await mount(OPERATOR, { handle: "jane" });
-  await act(async () => {});
   const foot = screen.getByRole("button", { name: "Invite" }).closest("footer") as HTMLElement;
   expect(within(foot).getByRole("button", { name: "Add person" })).toBeTruthy();
   fireEvent.click(within(foot).getByRole("button", { name: "Add person" }));
@@ -300,7 +296,6 @@ test("a vacant human seat's peek offers Invite and Create to an administrator al
 
   directory(VACANT);
   await mount({ ...OPERATOR, grants: ["tracker", "knowledge"] }, { handle: "jane" });
-  await act(async () => {});
   expect(screen.getByText("Held by").nextElementSibling?.textContent).toBe("Nobody yet");
   expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Add person" })).toBeNull();
@@ -308,14 +303,12 @@ test("a vacant human seat's peek offers Invite and Create to an administrator al
 
   directory(INVITED);
   await mount(OPERATOR, { handle: "jane" });
-  await act(async () => {});
   expect(screen.getByRole("button", { name: "Cancel invitation" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
   cleanup();
 
   directory(HELD);
   await mount(OPERATOR, { handle: "jane" });
-  await act(async () => {});
   for (const name of ["Invite", "Add person", "Cancel invitation"]) {
     expect(screen.queryByRole("button", { name })).toBeNull();
   }

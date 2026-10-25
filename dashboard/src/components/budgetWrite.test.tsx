@@ -16,6 +16,7 @@ import type { BudgetWindow, BudgetsAnswer, OrgProjection } from "~/protocol/inde
 import { managedSentence } from "~/protocol/configAnswer.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
 import { healthFrame } from "~/test/health.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -104,10 +105,9 @@ function mount(
   );
 }
 
+/** Lets the stubbed reads answer, and what they draw land. */
 async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 12; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
 }
 
 async function open() {

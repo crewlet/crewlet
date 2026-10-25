@@ -31,6 +31,7 @@ import { LiveSocket, QueryError, Store } from "~/protocol/index.ts";
 import type { ToolAnnotations, ToolRow } from "~/protocol/index.ts";
 import type { McpServersStatusAnswer } from "~/contract/mcp.ts";
 import { withDerived } from "~/test/org.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 // What the registry advertises for a tool whose server sent no hints: four
 // `unknown`s, which is what the engine writes rather than leaving the object
@@ -298,9 +299,7 @@ function mount(
 }
 
 async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 12; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
 }
 
 /**

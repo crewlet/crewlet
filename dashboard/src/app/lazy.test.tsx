@@ -33,6 +33,7 @@ import { Router } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { modules, parse, stringValue, walk, type Module } from "~/test/source.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 let undo: (() => void)[] = [];
 
@@ -568,7 +569,8 @@ describe("preload", () => {
     preload(["company", "org", "edit"]);
     preload(["settings", "secrets"]);
     preload(["nowhere", "at", "all"]);
-    await Promise.resolve();
+    // Whatever the preloads began has asked by the boundary.
+    await afterMicrotasks();
     expect(asked).toEqual(["org", "settings"]);
   });
 
@@ -577,7 +579,10 @@ describe("preload", () => {
     const unhandled = vi.fn();
     process.on("unhandledRejection", unhandled);
     preload(["settings", "spend"]);
-    await new Promise((r) => setTimeout(r, 0));
+    // Node reports a rejection nobody handled once the microtasks around it
+    // have drained and before the next task runs, so by this boundary an
+    // unhandled one has been reported: an ordering, not a sleep.
+    await afterMicrotasks();
     process.off("unhandledRejection", unhandled);
     expect(unhandled).not.toHaveBeenCalled();
   });

@@ -20,6 +20,7 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, QueryError, Store, type CompanyDocument } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
+import { settled } from "~/test/settle.ts";
 
 /**
  * Three models, declared in the order a seat that names none falls back
@@ -105,13 +106,19 @@ function mount(id?: string, { refuse = false, answer = company() } = {}) {
       </ToastProvider>
     </ClientContext.Provider>,
   );
+  socketQuery = query;
   return { view, query, store };
 }
 
+/** The socket stub of the last [mount]. */
+let socketQuery: { mock: { calls: unknown[] } } | null = null;
+
+/**
+ * Lets everything the screen asked of the socket land, and what each answer
+ * drew, including the reads those renders asked in turn (see `settled`).
+ */
 async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 12; i++) await Promise.resolve();
-  });
+  await settled(() => socketQuery?.mock.calls.length ?? 0);
 }
 
 beforeEach(() => {
@@ -120,6 +127,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
+  socketQuery = null;
   vi.unstubAllGlobals();
   location.hash = "#/";
 });
@@ -303,13 +312,17 @@ test("a refused reader sees the refusal alone — no tiles, no empty list", asyn
 // projection on every one it publishes: that is when the screen asks again,
 // and it asks on no clock. The CONTROL is the same mount with no publish.
 test("the document is re-read when the engine publishes a company, and not otherwise", async () => {
+  // The screen's timers run on the case's clock, so "on no clock" is held of
+  // a whole day rather than of however long a sleep happened to last.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
   const { query, store } = mount();
   await settle();
   const asked = () => query.mock.calls.filter(([what]) => what === "config").length;
   expect(asked()).toBe(1);
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 50));
+  act(() => {
+    vi.advanceTimersByTime(24 * 60 * 60_000);
   });
+  await settle();
   expect(asked()).toBe(1);
   await act(async () => {
     store.applyOrg(withDerived(org) as never);

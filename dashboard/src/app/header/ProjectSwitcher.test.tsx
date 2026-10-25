@@ -18,6 +18,7 @@ import type { Recent } from "~/lib/recents.ts";
 import type { ScopeAt } from "../scope.ts";
 import { figuresOf, panelOf, type PanelActions } from "./ProjectSwitcher.tsx";
 import { CONFIG_WRITE_REASONS, type ConfigWriteAccess } from "~/lib/useWriteAccess.ts";
+import { settled } from "~/test/settle.ts";
 
 // THE FRAME DIALS ITS SOCKET as soon as the viewer answers (`Shell.tsx`), and
 // jsdom's own WebSocket really dials: refused, it schedules a reconnect that
@@ -294,6 +295,7 @@ function mount(answers: Record<string, unknown>, services?: OrgServices, asked: 
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
     asked.push(what);
+    queried += 1;
     if (what === "viewer") {
       return Promise.resolve({
         login: "ada",
@@ -320,11 +322,16 @@ function mount(answers: Record<string, unknown>, services?: OrgServices, asked: 
   );
 }
 
+/**
+ * Lets everything the frame asked land, and what it drew, including the reads
+ * those renders asked in turn (see `settled`).
+ */
 async function settle(): Promise<void> {
-  await act(async () => {
-    for (let i = 0; i < 6; i++) await Promise.resolve();
-  });
+  await settled(() => queried);
 }
+
+/** How many reads every [mount]ed socket of the file has been asked. */
+let queried = 0;
 
 function key(k: string): void {
   act(() => {

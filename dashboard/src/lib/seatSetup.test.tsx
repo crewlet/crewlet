@@ -9,7 +9,7 @@
  * said as what it is — `withheld` — never as a document that came back empty.
  */
 
-import { act, cleanup, render } from "@testing-library/react";
+import { cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { useSeatSetup } from "./seats.ts";
@@ -17,6 +17,7 @@ import { ClientContext } from "./store-hooks.ts";
 import { useViewer, type ViewerState } from "./viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 
 vi.mock("./viewer.ts", () => ({ useViewer: vi.fn() }));
 
@@ -85,10 +86,9 @@ function probe() {
   return { asked, reading: () => seen!.reading, setup: () => seen! };
 }
 
+/** Lets the stubbed reads answer, and what they cause land. */
 async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 4; i++) await Promise.resolve();
-  });
+  await afterMicrotasks();
 }
 
 // NOT ASKED IS ITS OWN ANSWER, and never a company with no configuration: the

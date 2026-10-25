@@ -40,6 +40,7 @@ import { company, EDITOR, Engine, InertWebSocket } from "./testkit.tsx";
 import { clearSavedRevision, recordSavedRevision } from "./savedRevision.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
+import { settled } from "~/test/settle.ts";
 
 // The two chunks these addresses draw, in before a case starts, so a case
 // times what a section draws rather than a cold `import()`.
@@ -70,7 +71,8 @@ afterEach(() => {
 function mount(hash: string) {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   location.hash = hash;
-  new Engine(company()).install();
+  engine = new Engine(company());
+  engine.install();
   const store = new Store();
   store.applyHealth(healthFrame());
   store.applyOrg(withDerived({ name: "Acme", roles: [{ name: "CEO", handle: "ceo" }], units: [] }));
@@ -91,6 +93,18 @@ function mount(hash: string) {
     </ClientContext.Provider>,
   );
 }
+
+/** The configuration surface the last [mount] scripted. */
+let engine: Engine;
+
+/**
+ * Lets everything the screen asked land, and what each answer caused, with
+ * nothing asked since: the point at which a dialog or a toolbar that was
+ * coming would be drawn, so its absence then means something. The address
+ * changes a press makes reach the router as a `hashchange`, a task of its
+ * own, which the first boundary runs.
+ */
+const quiet = () => settled(() => engine.requests.length);
 
 /** Every address in Agents that reads the org rather than editing it. */
 const READS = ["#/company/org", "#/company/org/roster", "#/company/org/teams"];
@@ -116,7 +130,7 @@ test("the builder's address mounts the builder, and the read sections do not", a
     // an answer, so a check that ran before one could not tell a section that
     // does not draw it from one that has not drawn it yet.
     await waitFor(() => expect(document.body.textContent).not.toBe(""));
-    await new Promise((r) => setTimeout(r, 20));
+    await quiet();
     expect(screen.queryByRole("toolbar", { name: "Organization builder" }), hash).toBeNull();
     cleanup();
   }
@@ -181,7 +195,7 @@ test("the editor a link opened does not come back, and a press on a row opens no
   await waitFor(() =>
     expect(new URLSearchParams(location.hash.split("?")[1]).get("seat")).toBe("designer"),
   );
-  await new Promise((r) => setTimeout(r, 20));
+  await quiet();
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
@@ -200,7 +214,7 @@ test("a link that asks for an add opens it once, on that kind, and leaves the ad
   expect(new URLSearchParams(location.hash.split("?")[1]).has("add")).toBe(false);
   fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-  await new Promise((r) => setTimeout(r, 20));
+  await quiet();
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
@@ -217,7 +231,7 @@ test("the company's row has no Edit, and the toolbar opens Company › Principle
   expect(within(acme).queryByRole("button", { name: /^Edit|principles/ })).toBeNull();
   fireEvent.click(acme);
   fireEvent.keyDown(acme, { key: "Enter" });
-  await new Promise((r) => setTimeout(r, 20));
+  await quiet();
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(location.hash.startsWith("#/company/org/edit")).toBe(true);
 
@@ -235,7 +249,7 @@ test("the company's row has no Edit, and the toolbar opens Company › Principle
 test("an old link asking the builder for the principles opens nothing", async () => {
   mount("#/company/org/edit?view=table&edit=policies");
   await screen.findAllByRole("row");
-  await new Promise((r) => setTimeout(r, 20));
+  await quiet();
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 

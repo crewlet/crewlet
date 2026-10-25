@@ -337,9 +337,14 @@ describe("a body that never arrives whole", () => {
   /**
    * A fetch that answers `status` at once and then streams a body that
    * `stall` decides the fate of. The stream errors when the request's own
-   * signal aborts, as a browser's does.
+   * signal aborts, as a browser's does, and `reading` is told when the caller
+   * has the headers and has begun reading the body.
    */
-  function headersThen(status: number, stall: (body: ReadableStreamDefaultController) => void) {
+  function headersThen(
+    status: number,
+    stall: (body: ReadableStreamDefaultController) => void,
+    reading: () => void = () => {},
+  ) {
     vi.stubGlobal(
       "fetch",
       vi.fn(
@@ -352,6 +357,11 @@ describe("a body that never arrives whole", () => {
                   body.error(new DOMException("aborted", "AbortError")),
                 );
                 stall(body);
+              },
+              // ASKED FOR MORE ONCE THE FIRST CHUNK IS TAKEN, which only a
+              // caller already reading the body does.
+              pull() {
+                reading();
               },
             }),
             { status },
@@ -373,13 +383,16 @@ describe("a body that never arrives whole", () => {
   });
 
   test("the caller's abort still ends a request whose body is slow", async () => {
-    headersThen(200, () => {});
+    let read: () => void = () => {};
+    const reading = new Promise<void>((resolve) => (read = resolve));
+    headersThen(200, () => {}, read);
     const controller = new AbortController();
     const pending = rest
       .request("GET", "/config", { signal: controller.signal })
       .catch((e: unknown) => e);
-    // Let the headers land, so the abort arrives while the body is read.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    // The headers have landed and the body is being read, so the abort
+    // arrives while it is.
+    await reading;
     controller.abort();
     expect(isAbort(await pending)).toBe(true);
   });

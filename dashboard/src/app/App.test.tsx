@@ -26,6 +26,7 @@ import { TOUCH_MEDIA } from "./layout.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { afterMicrotasks, settled } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -314,7 +315,7 @@ describe("routing", () => {
       const { view } = mount();
       // AWAITED, for the reason the working chip's case gives: what a screen
       // renders after its first pass is flushed only by an awaited act.
-      await act(async () => {});
+      await afterMicrotasks();
       expect(
         view.container.querySelector(".crewlet-app-shell__content")?.children.length,
         hash,
@@ -563,7 +564,9 @@ describe("a section, for a reader holding none of its grants", () => {
         </Router>
       </ClientContext.Provider>,
     );
-    for (let i = 0; i < 6; i++) await Promise.resolve();
+    // Everything the frame asked has been answered (the viewer read never
+    // is), and nothing more was asked: a section that was going to ask has.
+    await settled(() => asked.length);
     expect(screen.getByText("Checking your access to Nodes")).toBeDefined();
     expect(asked).not.toContain("fleet");
   });
@@ -672,8 +675,9 @@ describe("a section, for a reader holding none of its grants", () => {
   test("the company's Overview is open to anybody, and MCP Tools is Admin's", async () => {
     location.hash = buildHash(["company"]);
     const overview = mountAs(Promise.resolve({ login: "", owner: "", grants: [] }));
-    await Promise.resolve();
-    await Promise.resolve();
+    // The viewer's answer and the frame's decision on it are microtasks and
+    // the renders they cause, all run by the boundary.
+    await afterMicrotasks();
     expect(overview.view.container.textContent).not.toMatch(/Company needs /);
     overview.view.unmount();
     cleanup();
@@ -1001,9 +1005,10 @@ test("a node named `backups` keeps its page, and a domain keeps its own", async 
         grants: ["admin", "tracker", "knowledge"],
       }),
     );
-  const settle = async () => {
-    for (let i = 0; i < 6; i++) await act(async () => Promise.resolve());
-  };
+  // Every read is a settled stub, so the viewer's answer, the frame's
+  // decision on it and the screen's refused reads have all landed, and drawn,
+  // by the next task: what a screen does NOT say is read there.
+  const settle = afterMicrotasks;
   location.hash = "#/settings/nodes/backups";
   const one = operator();
   await settle();
@@ -1080,7 +1085,9 @@ test("the page bar's More holds the star and what the screen folded, and no Copy
       </Router>
     </ClientContext.Provider>,
   );
-  for (let i = 0; i < 8; i++) await act(async () => Promise.resolve());
+  // THE MENU HOLDS EXACTLY WHAT THE PAGE FOLDED, so it is opened once the
+  // viewer and the project have answered (both settled stubs) and drawn.
+  await afterMicrotasks();
   fireEvent.click(screen.getByRole("button", { name: "More on this page" }));
   const names = screen.getAllByRole("menuitem").map((el) => el.textContent);
   expect(names).toEqual(["Edit project"]);
@@ -1114,7 +1121,7 @@ test("the page bar's More holds the star and what the screen folded, and no Copy
       </Router>
     </ClientContext.Provider>,
   );
-  for (let i = 0; i < 8; i++) await act(async () => Promise.resolve());
+  await afterMicrotasks();
   fireEvent.click(screen.getByRole("button", { name: "More on this page" }));
   expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual([
     "Open on the board",

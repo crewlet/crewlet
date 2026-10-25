@@ -22,6 +22,7 @@ import {
   needSession,
   sessionRestored,
 } from "~/protocol/index.ts";
+import { settled } from "~/test/settle.ts";
 
 // EVERY SCREEN'S CODE IS IN BEFORE A CASE STARTS — the sign-in screens' chunk
 // and every workspace's (`app/lazyScreen.ts`) — because this suite asserts
@@ -131,12 +132,10 @@ describe("the socket", () => {
       }),
     );
     await mount(hash);
-    if (dials > 0) await waitFor(() => expect(dialled).toHaveLength(dials));
-    else {
-      await act(async () => {
-        for (let i = 0; i < 20; i++) await Promise.resolve();
-      });
-    }
+    // EVERY REQUEST THE FRAME ASKED HAS LANDED, and what each caused: a dial
+    // follows the session's answer, so a frame that dialled for nobody does
+    // it then, and a count taken before could not see it.
+    await settled(() => vi.mocked(fetch).mock.calls.length);
     expect(dialled).toHaveLength(dials);
     const asked = vi.mocked(fetch).mock.calls.map(([url]) => String(url));
     expect(asked.filter((url) => /\/(ws|stream)\//.test(url))).toHaveLength(0);
@@ -182,9 +181,8 @@ describe("the socket", () => {
       await mount(hash);
       await waitFor(() => expect(location.hash.startsWith("#/login")).toBe(true));
       await screen.findByRole("heading", { name: "Sign in to Crewlet" });
-      await act(async () => {
-        for (let i = 0; i < 20; i++) await Promise.resolve();
-      });
+      // Every request asked has landed, so a second ask would be counted.
+      await settled(() => answered.length);
       expect(answered.filter((a) => a.status !== 200).map((a) => a.path)).toEqual([
         "/auth/session",
       ]);
@@ -311,9 +309,9 @@ describe("a sign-in answered with a session that may only enrol", () => {
 
     const enrol = `#/enrol?next=${encodeURIComponent("#/work/ENG-42")}`;
     await screen.findByText("Set up two-step verification");
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
+    // EVERY REQUEST THE ENROLMENT ASKED HAS LANDED: a refusal recording
+    // `sign_in` is what routed it back to the form.
+    await settled(() => vi.mocked(fetch).mock.calls.length);
     expect(location.hash).toBe(enrol);
     expect(currentSessionNeed()).toBe("second_factor");
   });
