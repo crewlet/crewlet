@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/assistantdomain"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -118,9 +119,12 @@ func reapSource(t *testing.T, e *Engine, fleet trashreap.Reports, at time.Time,
 	for _, src := range sources {
 		names = append(names, src.Name())
 	}
-	if !slices.Equal(names, []string{"pages", artifactsdomain.Domain{}.Name()}) {
-		t.Fatalf("the node arms the sources %v, want the knowledge base's and the "+
-			"artifacts'", names)
+	// THE ASSISTANT'S TOO: a conversation untouched for its retention is
+	// purged through the same reaper, a Termed source of its own.
+	if !slices.Equal(names, []string{"pages", artifactsdomain.Domain{}.Name(),
+		assistantdomain.Domain{}.Name()}) {
+		t.Fatalf("the node arms the sources %v, want the knowledge base's, the "+
+			"artifacts' and the assistant's", names)
 	}
 	for _, got := range report.Sources {
 		if got.Source == source {
