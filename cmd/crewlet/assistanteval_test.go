@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -155,7 +154,14 @@ func TestAPaidModelIsAskedOnlyWithItsFlag(t *testing.T) {
 // names it.
 func TestTheBinaryLinksNoTestScaffolding(t *testing.T) {
 	t.Parallel()
-	list := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), "list", "-deps", ".")
+	// The go command that runs this test puts its own GOROOT/bin first on the
+	// PATH it hands a test, so the go found there is the toolchain building
+	// this binary.
+	gotool, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatalf("the go tool is not on PATH: %v", err)
+	}
+	list := exec.Command(gotool, "list", "-deps", ".")
 	list.Dir = filepath.Join(sourcetree.Root(t), "cmd", "crewlet")
 	out, err := list.Output()
 	if err != nil {
