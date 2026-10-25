@@ -32,7 +32,7 @@ func readTask() assistanttest.Round {
 // A READ IS ONE REQUEST, THROUGH THE DISPATCHER, ON THE TURN'S GRANT.
 //
 // The assistant's every reach into the company is an ordinary request the
-// API's handler chain decides as the person (ADR-0046). So a scripted turn
+// API's handler chain decides as the person (ADR-0049). So a scripted turn
 // that reads once sends exactly the one request its tool builds, carrying the
 // grant the question derived, and the model reads the answer only as the
 // engine shaped it.

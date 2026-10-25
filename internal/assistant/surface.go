@@ -24,7 +24,7 @@ import (
 // THE ASSISTANT'S OWN SURFACE: the tools one turn offers its model, and what a
 // call to one does. Never the agent runtime's tools.Surface, which acts as a
 // seat: every call here is the person's own request through the API's one
-// handler chain, decided by the route it asks (ADR-0046).
+// handler chain, decided by the route it asks (ADR-0049).
 //
 // # What a call can do
 //
@@ -38,7 +38,7 @@ import (
 //   - A WRITE or PAGE ACTION is never sent: its tool's own preview reads the
 //     object as the person, [proposal.New] binds the change to its digest and
 //     revision, the proposal is recorded and carded, and the loop suspends with
-//     the call unanswered until the person decides (ADR-0047).
+//     the call unanswered until the person decides (ADR-0050).
 //   - A NAVIGATION builds an open in app link, whose `permitted` is asked by
 //     sending the record's own read through the grant, or by the person's
 //     grants for a screen that names no record.
