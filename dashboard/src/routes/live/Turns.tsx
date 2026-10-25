@@ -51,7 +51,9 @@
  */
 
 import { useCallback, useMemo, useState } from "react";
-import { useParam } from "~/app/router.tsx";
+import { useNavigator, useParam } from "~/app/router.tsx";
+import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
+import { choiceKey, urlAction, windowKey } from "~/app/assistant/urlAction.ts";
 import { QueryState } from "~/components/common.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import {
@@ -117,6 +119,18 @@ export const TURN_PAGE = 100;
 
 /** The two orders the engine's turn list answers in (`store.TurnQuery.Sort`). */
 export const TURN_SORTS = ["-started", "-tokens"] as const;
+
+/** The orders as the Order control words them, one per [TURN_SORTS]. */
+const TURN_ORDERS: { value: (typeof TURN_SORTS)[number]; label: string }[] = [
+  { value: "-started", label: "Newest" },
+  { value: "-tokens", label: "Most tokens" },
+];
+
+/** Which turns the list holds, as the control words them; every turn is the key's absence. */
+const WHICH_TURNS = [
+  { value: "true", label: "Carried a failure" },
+  { value: "false", label: "Clean" },
+];
 
 /**
  * What the axis says while the list is narrowed by failure.
@@ -265,6 +279,30 @@ export function Turns() {
     [index.seats],
   );
 
+  // --- assistant page actions (WP12) ---
+  // A VIEW OF WHAT THE READER CAN ALREADY READ, written as the controls below
+  // write it: a seat from the menu's own agent seats, the two switches, and
+  // the window from this screen's offer.
+  const nav = useNavigator();
+  useAssistantContext({
+    actions: urlAction("turns.filter.apply", {
+      scope: "Turns list filters and window (view only)",
+      keys: {
+        window: windowKey(TURN_OFFER, () => now),
+        seat: choiceKey(
+          "Seat",
+          seats.map((s) => ({ value: s.handle, label: s.name })),
+          "filter",
+        ),
+        failed: choiceKey("Which turns", WHICH_TURNS, "filter"),
+        sort: choiceKey("Order", TURN_ORDERS, "filter", "-started"),
+      },
+      nav,
+      confirm: "none",
+    }),
+  });
+  // --- end assistant page actions (WP12) ---
+
   const total = series.data?.total ?? 0;
   const failedTotal = series.data?.failed ?? 0;
 
@@ -337,11 +375,7 @@ export function Turns() {
           label="Which turns"
           value={failed || "all"}
           onValueChange={(v) => setFailed(v === "all" ? "" : v)}
-          options={[
-            { value: "all", label: "All" },
-            { value: "true", label: "Carried a failure" },
-            { value: "false", label: "Clean" },
-          ]}
+          options={[{ value: "all", label: "All" }, ...WHICH_TURNS]}
         />
         <span className="spacer" />
         <SegmentedControl
@@ -350,10 +384,7 @@ export function Turns() {
           label="Order"
           value={sort}
           onValueChange={setSort}
-          options={[
-            { value: "-started", label: "Newest" },
-            { value: "-tokens", label: "Most tokens" },
-          ]}
+          options={TURN_ORDERS}
         />
       </div>
 

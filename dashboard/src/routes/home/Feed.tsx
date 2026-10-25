@@ -27,7 +27,9 @@ import {
   PlusGlyph,
   UserGlyph,
 } from "@crewlethq/icons/glyphs";
-import { href, useParam } from "~/app/router.tsx";
+import { href, useNavigator, useParam } from "~/app/router.tsx";
+import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
+import { choiceKey, urlAction } from "~/app/assistant/urlAction.ts";
 import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
@@ -53,6 +55,18 @@ export function Feed({ now }: { now: number }) {
   const [filterValue, setFilter] = useParam("feed", "all");
   const runs = useServicesRun();
   const filter = feedFilterOf(filterValue, runs);
+  // --- assistant page actions (WP12) ---
+  // ONLY THE FILTERS THIS COMPANY IS OFFERED, as the control offers them.
+  const nav = useNavigator();
+  useAssistantContext({
+    actions: urlAction("home.feed.set", {
+      scope: "What Home's feed shows (view only)",
+      keys: { feed: choiceKey("Feed", feedFilters(runs), "filter", "all") },
+      nav,
+      confirm: "none",
+    }),
+  });
+  // --- end assistant page actions (WP12) ---
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   const { socket } = useClient();
