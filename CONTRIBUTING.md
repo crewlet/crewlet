@@ -688,8 +688,9 @@ measured rather than derived: the object store on every backend
 (`objstoretest.Bench` — the broker's bucket at three replicas, and an S3 fake
 a provider's round trip away, among them — and the SHA-256 rate under every
 verified byte), one arbitrated write end to end and the applier's drain
-(`internal/statelog`), the store's own drain (`internal/store`), the
-company's token counter charged by many nodes at once, each a leaf of its own,
+(`internal/statelog`), the store's own drain (`internal/store`), what a
+stream's leader takes to list the subjects it holds, a page at a time
+(`internal/jsapi`), the company's token counter charged by many nodes at once, each a leaf of its own,
 and a gated lease claim (`internal/coord/kv`), a git
 process through the pool and the index-pack a push runs
 (`internal/code/gitproc`), the git cache's cold and delta syncs and a
@@ -712,7 +713,7 @@ each, on one idle machine, and read the two outputs with
 
 | Variable | Default | What it sets |
 |---|---|---|
-| `BENCH_PKGS` | `internal/objstore`, its three backends, `internal/objstore/natsobj/replicated`, `internal/statelog`, `internal/store`, `internal/coord/kv`, `internal/code/gitproc`, `internal/code/cache`, `internal/code`, `internal/code/codecluster`, `internal/code/host`, `internal/api/paced`, `cmd/crewlet` | which packages are measured |
+| `BENCH_PKGS` | `internal/objstore`, its three backends, `internal/objstore/natsobj/replicated`, `internal/statelog`, `internal/store`, `internal/jsapi`, `internal/coord/kv`, `internal/code/gitproc`, `internal/code/cache`, `internal/code`, `internal/code/codecluster`, `internal/code/host`, `internal/api/paced`, `cmd/crewlet` | which packages are measured |
 | `BENCH_PATTERN` | `.` | `-bench`, e.g. `Backend/via=member` |
 | `BENCH_TIME` | `3s` | `-benchtime` |
 | `BENCH_COUNT` | `1` | `-count` |
@@ -726,8 +727,8 @@ output is verbose (`-v`), because a skipped benchmark prints nothing otherwise
 whose fixture takes minutes and gigabytes — in `internal/code/cache` a cold
 sync of 2 000 pushes, repositories of 10 000 packs, a 5 GB index, a gigabyte
 split into hundreds of packs; in `internal/code/host` a gigabyte history, a
-hundred thousand refs and a 100 000-file tree — skip unless
-`CREWLET_BENCH_LARGE=1`.
+hundred thousand refs and a 100 000-file tree; in `internal/jsapi` a stream of
+a million subjects — skip unless `CREWLET_BENCH_LARGE=1`.
 
 A code host figure is the pool's git's as much as the engine's, so `make bench`
 runs the node pin — the git the engine image builds — first on `PATH`, as every

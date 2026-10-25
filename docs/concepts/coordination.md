@@ -37,9 +37,9 @@ So every call returns `(value, error)`, never a bare bool — and **each contrac
 Reading a whole bucket — the fleet's node statuses, the open channels, every
 node's log position — either answers every key that was live throughout the
 read or answers `unknown`, never a shorter list, on one broker or a cluster of
-them alike; its one bound is a size, the 100,000 keys under one filter spelled
-out below. The alternative is not
-hypothetical: a listing that reports what it managed to read, with no error,
+them alike, and at any size — past the 100,000 keys one answer of the index
+holds, the index is read a page at a time, the pages overlapping (below). The
+alternative is not hypothetical: a listing that reports what it managed to read, with no error,
 hands every caller "there are no more records" when the truth is "the store
 stopped answering". For the trim's published floor that reads as a fleet
 needing nothing, which deletes records a node is still replaying.
@@ -119,6 +119,46 @@ writes nothing. Closing it would take a read that proves a quorum — a barrier
 append per read, as the state log's linearizable read is — which would turn
 every lease heartbeat's read into a write.
 
+A leader read **nobody answers is asked again**, never waited out. Only the
+leader answers one — a key's last message, the key index, a lease bucket's
+last write and clock — and a member that still believes in a leader its group
+has just lost takes the request and returns without a word, so for the seconds
+before it notices, every read sent through it is dropped rather than refused.
+Sent as one request, such a read waited for its caller's whole budget — the
+client's five seconds where the caller set none — for a reply nobody would
+send; the object collector's first pass on a loaded fleet of three failed on
+its read of the files bucket exactly so. So each read is asked as the engine
+asks a metadata read, the state log's own leader reads among them: presumed
+lost after a second, and **one more request every two seconds for as long as
+none is answered**, every earlier one still outstanding and the first answer
+from any of them taken — a leader behind a backlog answers late rather than
+never, and the late answer is kept. That is so whether a read was dropped or
+is only slow, and the broker processes every request it is sent, so a read
+answered later than two seconds costs it a second request. Measured by
+stepping down and by killing a three-member fleet's leader under a read loop
+on every member: the first read on each other member was never answered at
+all, and the one asked again two seconds later was answered by the new leader,
+at 2.0 to 2.2 seconds — the common case, rather than the bound. An election
+the broker *answers* — a group it already knows has no leader replies
+"temporarily unavailable" at once — is an answer, and the caller treats it as
+a store that did not answer, as it always has. "No responders" is not one:
+a node whose link to the broker is down hears it at once, and its read is
+asked again every second, so a link that comes back inside the read's bound
+is answered rather than failed.
+
+How long a read is asked is the **bound it had as one request**: its
+caller's own deadline, or, where the caller set none, the client's five
+seconds, in which a read nobody answers is asked three times — at none, two
+and four seconds — since every caller of it, a boot's steps and a duty's tick
+among them, was sized against that. And no read is asked for longer than
+**thirty seconds**, whatever its caller set — at most fifteen requests nobody
+answers: past the longest silence the broker keeps — up to nine seconds of
+election, and a leader cut off from its quorum stepping down ten seconds after
+it lost it, at a check made every ten — a group in any state answers, so a
+read still unanswered is asking a broker the node cannot reach. A read of a
+domain log, which a caller with no deadline used to ask for ever, is held to
+those thirty seconds.
+
 A **tombstone** the pass delivered is not taken as the key's answer either.
 The pass is served by whichever replica the broker placed its consumer on, so
 on a clustered bucket a key that was deleted and re-created before the listing
@@ -166,9 +206,10 @@ half it read, and each key is handed over once, at the newest revision the
 listing read. What a listing may do is **lag** — a key claimed or deleted while
 it ran can be seen late, which is a placement that converges one tick later.
 
-The certification costs one index read — two API requests, run beside the
-pass rather than after it so their round trips overlap — and one leader read
-for each key the pass lost or delivered as a marker. The lost keys are zero
+The certification costs one index read — one API request for each hundred
+thousand keys of the class, run beside the pass rather than after it so their
+round trips overlap — and one leader read for each key the pass lost or
+delivered as a marker. The lost keys are zero
 without concurrent writes and bounded by the keys written while the listing
 ran. The markers are bounded by the [marker sweep](#removal-markers-are-swept):
 a bucket with no age would otherwise keep the marker of every record it ever
@@ -177,11 +218,17 @@ the sweep a listing's cost grew with every record the company had ever
 removed. It is never a read per key, unless the broker stopped delivering a
 pass for a whole five seconds and the rest of it had to be read key by key.
 
-Its one bound is the broker's page size for that index: **100,000 keys under
-one filter**. Past it the client reads the index in pages by offset into a list
-the server re-sorts for every page, so a key removed before a page boundary
-between two page reads shifts a later key across that boundary and leaves it
-uncertified — which loses the key only if the pass lost it too.
+Past the broker's page size for that index, **100,000 keys under one
+filter**, the index is read a page at a time, each page its own leader read,
+asked again on its own while nobody answers it. The leader cuts every page out
+of a list it sorts for that request alone, so a key removed before a page
+boundary between two page reads shifts the next one back across it, into the
+page already read; each later page is therefore asked from one key before
+where the last ended, and must begin at or before the key the last ended on,
+or it is asked again from further back. A key live throughout the read is
+named by some page, so none is left uncertified at any size. What a page
+costs grows with the class, since every page sorts all of it, which is the
+measured figure in `internal/jsapi` (`BenchmarkASubjectListing`).
 
 The batched direct get that would remove even the consumer is deliberately not
 used here: it is served by any replica, so a follower behind an acknowledged
@@ -256,8 +303,10 @@ written read back as absent — and the trim floor, a *minimum* over the positio
 it could not see and delete records a node still needed. So:
 
 - **A key is read with `STREAM.MSG.GET`**, which only the stream leader answers.
-  A member that cannot see a leader answers an error or nothing, which is the
-  third value rather than a stale one.
+  A member that cannot see a leader answers an error, which is the third value
+  rather than a stale one; one that has not yet noticed its leader is gone
+  answers nothing, and the read is asked again until its bound
+  ([above](#the-three-valued-answer)).
 - **A listing is certified against the leader's key index.** The stream's
   per-subject index is read from the leader beside the pass, and every key it
   names that the pass did not deliver live — never delivered, or delivered as

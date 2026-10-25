@@ -679,8 +679,8 @@ first write among them, reads its own domain's floor by its key, one
 `$JS.API.STREAM.MSG.GET` to the `positions` stream's leader, and creates no
 consumer. Each listing is one pass over a temporary
 consumer, which on a replicated bucket is two metadata-raft proposals, and
-beside it one stream-info request narrowed to the listing's keys, which names
-every key that has a message. A pass alone cannot tell that it is complete — a
+beside it the stream's info narrowed to the listing's keys — one request for
+each hundred thousand keys — which names every key that has a message. A pass alone cannot tell that it is complete — a
 key rewritten under it can land behind the marker that ends it, and every renew
 is such a rewrite — so a key the index names that the pass missed, or delivered
 only as a delete marker, is read by itself from the **stream leader**
@@ -701,10 +701,21 @@ key written again since is untouched (see
 bucket's stream is **electing a leader**, a listing of it answers unavailable
 rather than a short list, since every member answers the index from its own
 store until one leads — the answer every caller already treats as a store
-that did not answer, never as "no records". A listing's one bound is
-the broker's page size for that index, **100,000 keys under one filter**; see
-[Coordination](../concepts/coordination.md#the-three-valued-answer) for what
-happens past it.
+that did not answer, never as "no records". A read only a leader answers — a
+stream's info, one of its messages, a consumer's info, a page of a listing — is
+asked again while nobody answers it: one more request every two seconds,
+whether a member that has not yet noticed its leader is gone dropped the first
+or the leader is only slow, and the broker processes each one. It is asked for
+as long as its caller waits — the caller's own deadline, or the client's five
+seconds where it set none, as it was when it was one request — and never past
+thirty seconds, fifteen requests nobody answers at most (see
+[Coordination](../concepts/coordination.md#the-three-valued-answer)). An
+election measured on a fleet of three cost a read about two seconds and one
+more request, not its caller's whole budget. Past the broker's page size for
+the key index, **100,000 keys under one filter**, the index is read a page at a
+time, each page its own read and the pages overlapping, so a key removed while
+it is read cannot hide another; see
+[Coordination](../concepts/coordination.md#the-three-valued-answer).
 The engine deliberately does **not** use the batched direct get that would
 avoid the consumer: it is served by any replica, and this estate has reads
 whose answer is acted on with nothing to arbitrate them. So a credential

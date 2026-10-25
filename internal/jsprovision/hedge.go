@@ -3,6 +3,7 @@ package jsprovision
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -40,21 +41,74 @@ import (
 //
 // The ceiling ending is SILENCE, never the caller's ending: [Unanswered] on
 // the caller's own context reads it as a read nobody answered.
+//
+// It is the bound of every read that was asked this way from the start. A
+// read that was ONE request until it was hedged keeps the bound that request
+// had instead ([ReadBoundedWith]).
 func ReadWith[T any](ctx context.Context, t Timing, one func(context.Context) (T, error),
 	again func(asks int)) (T, error) {
+
+	return ReadBoundedWith(ctx, t, t.Lookup, one, again)
+}
+
+// Read is [ReadWith] at the production cadences, which no topology changes.
+func Read[T any](ctx context.Context, one func(context.Context) (T, error), again func(asks int)) (T, error) {
+	return ReadWith(ctx, Clustered(false).Timing(), one, again)
+}
+
+// ReadBoundedWith is [ReadWith] for a read that was ONE request until it was
+// hedged: a caller that set no deadline of its own is held to bound — the
+// bound that one request had, its client's own DefaultTimeout
+// (jetstream.JetStreamOptions) — BEFORE the read begins, so the read is asked
+// again inside it rather than for the whole t.Lookup ceiling. A caller's own
+// deadline is kept, under the ceiling every read is held to.
+//
+// # Why such a read keeps its bound
+//
+// Because the bound is what every caller of it was sized against, and hedging
+// a read changes how it is asked, not how long its caller waits for a broker
+// that never answers. A deadline-less caller of one is a duty's tick, a boot
+// step or a heartbeat whose cost was counted at the client's five seconds — a
+// pod's startup window counts each such read at it — and held to the ceiling
+// instead, each would wait six times as long for nothing. Inside five seconds
+// a read is asked at none, two and four, so the request a member dropped
+// across an election is asked again at two seconds, where the new leader
+// answers it (measured on a fleet of three at 2.0 to 2.2 s): a dropped
+// request costs two seconds, not the bound. What the bound does not ride out
+// is an election longer than about four seconds, which failed such a read
+// before it was hedged as well.
+//
+// The bound ending is SILENCE, as the ceiling's is ([Unanswered]). A bound of
+// zero or less is refused by name, as a [Timing] field left unset is: it is a
+// deadline already past, which no caller chose.
+func ReadBoundedWith[T any](ctx context.Context, t Timing, bound time.Duration,
+	one func(context.Context) (T, error), again func(asks int)) (T, error) {
 
 	if err := t.unset(); err != nil {
 		var zero T
 		return zero, err
+	}
+	if bound <= 0 {
+		var zero T
+		return zero, fmt.Errorf("jsprovision: a read's bound is %v — it is its client's "+
+			"DefaultTimeout, which every JetStream client holds", bound)
+	}
+	if _, set := ctx.Deadline(); !set {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, bound)
+		defer cancel()
 	}
 	ctx, cancel := context.WithTimeout(ctx, t.Lookup)
 	defer cancel()
 	return hedge(ctx, t, one, again)
 }
 
-// Read is [ReadWith] at the production cadences, which no topology changes.
-func Read[T any](ctx context.Context, one func(context.Context) (T, error), again func(asks int)) (T, error) {
-	return ReadWith(ctx, Clustered(false).Timing(), one, again)
+// ReadBounded is [ReadBoundedWith] at the production cadences, which no
+// topology changes.
+func ReadBounded[T any](ctx context.Context, bound time.Duration, one func(context.Context) (T, error),
+	again func(asks int)) (T, error) {
+
+	return ReadBoundedWith(ctx, Clustered(false).Timing(), bound, one, again)
 }
 
 // hedge asks one metadata read until something answers it, keeping every

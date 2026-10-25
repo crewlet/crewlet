@@ -13,6 +13,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/jsapi"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -411,12 +412,27 @@ func (p *objectPass) readLog(ctx context.Context, js jetstream.JetStream, l decl
 	// THE COPY'S POSITION IS A POSITION ON ONE INSTANCE OF THE LOG. Read
 	// against a stream recreated since, its sequence numbers name other
 	// records, and the window would be somebody else's.
-	stream, err := js.Stream(ctx, l.stream)
+	//
+	// THE LOOKUP IS ASKED AS A METADATA READ IS ([jsprovision.ReadBounded]):
+	// it is the stream's info, which only the stream's leader answers, and a
+	// member that still believes in a leader its group has just lost drops
+	// the request without a word — sent once, it waited out the backup's
+	// deadline, or the client's five-second default for a backup with none,
+	// and refused the backup over a reply nobody would send. A backup with
+	// no deadline keeps those five seconds, asked again inside them.
+	info, err := jsprovision.ReadBounded(ctx, js.Options().DefaultTimeout,
+		func(ctx context.Context) (*jetstream.StreamInfo, error) {
+			stream, lookErr := js.Stream(ctx, l.stream)
+			if lookErr != nil {
+				return nil, lookErr
+			}
+			return stream.CachedInfo(), nil
+		}, nil)
 	if err != nil {
 		return fmt.Errorf("backup: look up %s to read past the copy: %w", l.stream, err)
 	}
 	cursor, keyed := cursors[l.stream]
-	created, err := statelog.StreamCreatedAt(stream.CachedInfo())
+	created, err := statelog.StreamCreatedAt(info)
 	if err != nil {
 		return fmt.Errorf("backup: identify %s to read past the copy: %w", l.stream, err)
 	}

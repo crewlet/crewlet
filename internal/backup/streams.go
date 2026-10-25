@@ -166,19 +166,27 @@ func snapshotStreams(ctx context.Context, nc *nats.Conn, api jsapi.API, root, la
 // streamNames lists every stream, sorted.
 //
 // Sorted so a manifest diffs cleanly between two backups of the same
-// deployment: the listing's own order is not stable, and an operator
-// comparing yesterday's manifest with today's should see what changed rather
-// than a reshuffle.
+// deployment, whatever order a listing comes back in: an operator comparing
+// yesterday's manifest with today's should see what changed rather than a
+// reshuffle.
+//
+// FROM THE METADATA LEADER, each page asked again while nobody answers it
+// ([jsapi.Meta.StreamNames]): only it answers, so a member that still
+// believes in a leader the group has just lost drops the request without a
+// word, and the client's lister held its one request for five seconds and
+// failed the backup over a reply nobody would send. And every stream that
+// exists throughout the listing is in it, so no stream is left out of a
+// backup because another was deleted while the listing ran.
 func streamNames(ctx context.Context, js jetstream.JetStream) ([]string, error) {
-	lister := js.StreamNames(ctx)
-	// A plain range over the lister's CHANNEL — it is not a map, and it
-	// closes when the listing is complete or has failed, which is why the
-	// error is read after the loop rather than inside it.
-	var names []string
-	for name := range lister.Name() {
-		names = append(names, name)
+	meta, err := jsapi.NewMeta(js)
+	if err != nil {
+		return nil, fmt.Errorf("backup: list streams: %w", err)
 	}
-	if err := lister.Err(); err != nil {
+	var names []string
+	if err := meta.StreamNames(ctx, func(name string) error {
+		names = append(names, name)
+		return nil
+	}); err != nil {
 		return nil, fmt.Errorf("backup: list streams: %w", err)
 	}
 	slices.Sort(names)

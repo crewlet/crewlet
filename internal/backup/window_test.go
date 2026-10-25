@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -21,6 +22,8 @@ import (
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/jsapi"
+	"github.com/crewlet/crewlet/internal/jsapi/jsapitest"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -142,10 +145,18 @@ func appendFile(t *testing.T, nc *nats.Conn, project, path string, o *stored) ui
 // windowService is a backup over db and nc whose objects are objs.
 func windowService(t *testing.T, db *store.DB, nc *nats.Conn, objs *backup.Objects) *backup.Service {
 	t.Helper()
+	return windowServiceIn(t, jsapi.Embedded(), db, nc, objs)
+}
+
+// windowServiceIn is [windowService] asking its broker in api.
+func windowServiceIn(t *testing.T, api jsapi.API, db *store.DB, nc *nats.Conn,
+	objs *backup.Objects) *backup.Service {
+
+	t.Helper()
 	fleet := memory.NewFleet()
 	return build(t, backup.Options{
 		Store: db, Estate: backup.HoldsReplicated, NodeID: "n", Holds: fleet, Backups: fleet,
-		Conn: nc, API: jsapi.Embedded(), Now: func() time.Time { return clock }, Objects: objs,
+		Conn: nc, API: api, Now: func() time.Time { return clock }, Objects: objs,
 	})
 }
 
@@ -587,6 +598,86 @@ func TestABackupRefusesAWindowWithAHole(t *testing.T) {
 	noManifest(t, dir)
 }
 
+// A LOG LOOKUP A MEMBER DROPS IS ASKED AGAIN. Reading past the copy begins by
+// reading the log's info — its identity, held against the copy's — which only
+// the stream's leader answers, and a member that still believes in a leader
+// its group has just lost drops the request without a word. Sent once on a
+// backup with no deadline, it waited out the client's five seconds and refused
+// the backup; asked again, the backup carries the file written after the copy.
+func TestALogLookupAMemberDropsIsAskedAgain(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	ns, nc := natsBroker(t, "")
+	trackerLog(t, nc)
+	appendBarriers(t, nc, 3)
+	seedCursor(t, db, trackerLogStream, 1, 3)
+	files, _ := filesStore(t)
+	held := upload(t, files, "written after the copy")
+	appendFile(t, nc, "ENG", "after.md", &held[0])
+	dropped := jsapitest.DropFirst(t, ns, jsapitest.StreamInfo(trackerLogStream), 1)
+	dir := filepath.Join(t.TempDir(), "lookup")
+	manifest, err := windowServiceIn(t, jsapi.Account(), db, nc,
+		&backup.Objects{Open: files.Open}).Take(t.Context(), dir)
+	if err != nil {
+		t.Fatalf("Take behind one dropped read of the log: %v", err)
+	}
+	if o := manifest.Objects; o == nil || o.Replayed != 1 || len(o.Lost) != 0 {
+		t.Fatalf("manifest objects = %+v, want the file written after the copy carried", o)
+	}
+	if got := dropped.Count(); got != 1 {
+		t.Errorf("the broker dropped %d reads of the log, want the 1 it was told to", got)
+	}
+	restoresWhole(t, filepath.Join(dir, "objects"), held)
+}
+
+// A LOG LOOKUP NOBODY ANSWERS, ON A BACKUP WITH NO DEADLINE, ENDS AT THE
+// CLIENT'S OWN DEFAULT — asked again inside it, at none, two and four seconds,
+// and never stretched to the lookup ceiling: it was one request the client
+// held for its five seconds, and the backup's own cost was sized against that.
+func TestALogLookupNobodyAnswersEndsAtTheClientsDefault(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	ns, nc := natsBroker(t, "")
+	trackerLog(t, nc)
+	appendBarriers(t, nc, 3)
+	seedCursor(t, db, trackerLogStream, 1, 3)
+	files, _ := filesStore(t)
+	held := upload(t, files, "written after the copy")
+	appendFile(t, nc, "ENG", "after.md", &held[0])
+	lookups := jsapitest.Hold(t, ns, jsapitest.StreamInfo(trackerLogStream))
+	js, err := jsapi.Account().Client(nc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound := js.Options().DefaultTimeout
+	service := windowServiceIn(t, jsapi.Account(), db, nc, &backup.Objects{Open: files.Open})
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() {
+		_, err := service.Take(context.Background(), filepath.Join(t.TempDir(), "unanswered"))
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a backup whose log lookup nobody answered was taken")
+		}
+		if took := time.Since(start); took < bound {
+			t.Errorf("the lookup gave up after %v, inside its client's %v", took, bound)
+		}
+	case <-time.After(jsprovision.LookupBudget / 2):
+		t.Fatalf("a log lookup nobody answers was still being asked %v later, past its "+
+			"client's %v default (%d requests)", jsprovision.LookupBudget/2, bound, lookups.Count())
+	}
+	// AT NONE, TWO AND FOUR SECONDS: the third a second inside the bound,
+	// which a timer the load delays may miss, so it is the two the bound must
+	// hold that are asked for.
+	if n := lookups.Count(); n < 2 || n > 3 {
+		t.Errorf("the lookup was asked %d times inside its client's %v, want it asked "+
+			"again inside it — at none, two and four seconds", n, bound)
+	}
+}
+
 // A RECORD AT THE TRANSPORT'S CEILING IS READ PAST. The broker admits a record
 // whose payload reaches queue.MaxPayloadBytes, and counts the subject and the
 // acknowledgement subject against a pull's byte bound besides — so a window
@@ -719,4 +810,35 @@ func TestABackupRefusesAKeyTheLogNamesAsAnotherObject(t *testing.T) {
 		t.Fatalf("Take = %v; want it refused naming the record's row", err)
 	}
 	noManifest(t, dir)
+}
+
+// A STREAM LISTING A MEMBER DROPS IS ASKED AGAIN. The backup snapshots every
+// stream the broker holds, and only the metadata leader names them: a member
+// that still believes in a leader the group has just lost drops the page
+// without a word, and the client's lister held it for five seconds and
+// refused the backup. Asked again, the backup carries every stream.
+func TestAStreamListingAMemberDropsIsAskedAgain(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	ns, nc := natsBroker(t, "")
+	trackerLog(t, nc)
+	appendBarriers(t, nc, 3)
+	seedCursor(t, db, trackerLogStream, 1, 3)
+	files, _ := filesStore(t)
+	dropped := jsapitest.DropFirst(t, ns, jsapitest.StreamNames(), 1)
+	manifest, err := windowServiceIn(t, jsapi.Account(), db, nc,
+		&backup.Objects{Open: files.Open}).Take(t.Context(), filepath.Join(t.TempDir(), "names"))
+	if err != nil {
+		t.Fatalf("Take behind one dropped page of the stream names: %v", err)
+	}
+	var carried []string
+	for _, s := range manifest.Streams {
+		carried = append(carried, s.Name)
+	}
+	if !slices.Contains(carried, trackerLogStream) {
+		t.Errorf("the backup carried %v, want %s among them", carried, trackerLogStream)
+	}
+	if got := dropped.Count(); got != 1 {
+		t.Errorf("the broker dropped %d pages of the stream names, want the 1 it was told to", got)
+	}
 }

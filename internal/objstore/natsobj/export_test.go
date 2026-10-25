@@ -56,3 +56,11 @@ func SetWindow(b *Backend, n int) { b.window = newWindow(n) }
 // SetStall shortens how long b's puts wait for an acknowledgement before they
 // end as stalled, so a case sees a stall without waiting [objstore.Stall].
 func SetStall(b *Backend, d time.Duration) { b.stall = d }
+
+// LeaderTerm is how long one of b's leader message reads of what filter names
+// is given before it is asked again ([Backend.leaderFor]).
+func LeaderTerm(b *Backend, filter string) time.Duration { return b.leaderFor(filter).Term() }
+
+// MetaSubject and PieceSubject are [metaSubject] and [pieceSubject].
+func MetaSubject(name string) string  { return metaSubject(name) }
+func PieceSubject(nuid string) string { return pieceSubject(nuid) }

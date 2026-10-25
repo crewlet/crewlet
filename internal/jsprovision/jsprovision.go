@@ -55,11 +55,11 @@
 // # Every duration in one value, so the mechanism can be run at any scale
 //
 // [Timing] carries every duration this package decides, and [Clustered.Timing]
-// is the one place a topology is turned into them. [Settle], [Ask], [Read] and
-// [Place] are [SettleWith], [Timing.Ask], [ReadWith] and [Timing.Place] at the
-// production numbers; a caller that
-// holds a [Timing] of its own — a test, through the one seam its package keeps
-// for it — runs the same branches in milliseconds.
+// is the one place a topology is turned into them. [Settle], [Ask], [Read],
+// [ReadBounded] and [Place] are [SettleWith], [Timing.Ask], [ReadWith],
+// [ReadBoundedWith] and [Timing.Place] at the production numbers; a caller
+// that holds a [Timing] of its own — a test, through the one seam its package
+// keeps for it — runs the same branches in milliseconds.
 //
 // It exists because the branches that matter most are the ones only an
 // EXHAUSTED budget reaches — a read-back after a create the server held, a
@@ -151,9 +151,9 @@ func SequenceBudget(clustered bool) time.Duration {
 
 // LookupBudget is the CEILING over one existence probe — the "does this object
 // already exist" read that decides create-versus-observe, including however
-// many times [Read] has to re-issue it — and over every other read [ReadWith]
-// asks, for the reason below: it is the longest silence the server keeps,
-// whoever is asking.
+// many times [Read] has to re-issue it — and over every other read this
+// package hedges ([ReadWith], [ReadBoundedWith]), for the reason below: it is
+// the longest silence the server keeps, whoever is asking.
 //
 // # Why a read is not sized like a create
 //

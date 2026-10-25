@@ -90,7 +90,22 @@
 //     an upload yet answers it "not found": a file uploaded on one node
 //     would read as missing on the next, an audit would count a healthy
 //     object lost, and a delete would be told the object was already gone
-//     and leave it there.
+//     and leave it there. Only the leader answers it, so it is ASKED AGAIN
+//     while nobody does, as a metadata read is ([jsprovision.ReadBounded])
+//     — a member that still believes in a leader its group has just lost
+//     drops the request without a word, and one request waited out to the
+//     client's five-second default failed the collector's first pass on a
+//     loaded fleet — and so is every page of the sweep's piece listing,
+//     the stream info [Backend.Pending] begins with, and the stream's own
+//     info a usage reading and a seal begin with. A read whose caller set
+//     no deadline keeps those five seconds, asked again inside them. A
+//     read whose answer is a whole piece — the leader's next message for a
+//     get or a ranged walk, the oldest piece of an unfinished upload — on a
+//     node that reaches the bucket across a leaf link is presumed lost only
+//     once a piece has had time to cross that link at the floor
+//     ([jsapi.Leader.Carrying]), or each request asked again puts another
+//     piece on a link the reply is still crossing; a member's reply crosses
+//     a route, and keeps the read term.
 //   - A GET IS AN ORDERED CONSUMER OF THE OBJECT'S OWN MESSAGES, read one
 //     message at a time under [objstore.Stall] and ended by its
 //     context. The library's own reader cannot be stopped once a read
@@ -303,8 +318,12 @@ type Backend struct {
 	// stream is the stream behind the bucket, which a get and a listing
 	// consume and a delete and a failed put purge.
 	stream jetstream.Stream
-	// leader reads one object's metadata from the stream's leader.
-	leader *jsapi.Leader
+	// leader reads the bucket's metadata from the stream's leader, and
+	// pieces its pieces: the same reads, given — on a node that reaches the
+	// bucket across a link — the time a whole piece takes to cross it at
+	// the floor ([jsapi.Leader.Carrying]). Read through
+	// [Backend.leaderFor], never by name.
+	leader, pieces *jsapi.Leader
 	// stall is [objstore.Stall], the longest a put waits for the broker to
 	// acknowledge any of its messages out — a field so a test can watch a
 	// stall end a put without waiting a minute for it.
@@ -438,11 +457,17 @@ func open(ctx context.Context, js jetstream.JetStream, cfg Config, timing jsprov
 	if err != nil {
 		return nil, fmt.Errorf("natsobj: address the %s stream's leader: %w", Stream, err)
 	}
-	size := memberWindow
+	// A PIECE'S REPLY IS GIVEN ITS CROSSING ONLY WHERE THERE IS A LINK TO
+	// CROSS: a member's reads reach the leader over a cluster route, which
+	// carries a piece in milliseconds, and a term sized for a leaf link at
+	// the floor would hold a member's dropped piece read seven seconds
+	// before it is asked again, where the read term asks it at two.
+	size, pieces := memberWindow, leader
 	if cfg.AcrossLink {
-		size = linkWindow(cfg.LeaseHeartbeat)
+		size, pieces = linkWindow(cfg.LeaseHeartbeat), leader.Carrying(MessageBytes, objstore.MiBPace)
 	}
-	return &Backend{js: js, stream: stream, leader: leader, stall: objstore.Stall, window: newWindow(size)}, nil
+	return &Backend{js: js, stream: stream, leader: leader, pieces: pieces,
+		stall: objstore.Stall, window: newWindow(size)}, nil
 }
 
 // checkCeiling judges the ceiling the bucket holds against the one this node
@@ -628,7 +653,7 @@ const FullRemedy = "an operator makes room — moves the files to a bucket " +
 // pieces of an upload in flight) because that is what the broker holds
 // against MaxBytes and what a put is refused on.
 func (b *Backend) Usage(ctx context.Context) (objstore.Usage, error) {
-	info, err := b.stream.Info(ctx)
+	info, err := b.info(ctx)
 	if err != nil {
 		return objstore.Usage{}, fmt.Errorf("natsobj: read the %s stream's usage: %w", Stream, err)
 	}
@@ -647,7 +672,7 @@ func (b *Backend) Usage(ctx context.Context) (objstore.Usage, error) {
 // for an operator to read and delete, never to write again. Sealing a sealed
 // bucket is not an error.
 func (b *Backend) Seal(ctx context.Context) error {
-	info, err := b.stream.Info(ctx)
+	info, err := b.info(ctx)
 	if err != nil {
 		return fmt.Errorf("natsobj: read the %s stream before sealing it: %w", Stream, err)
 	}
@@ -662,6 +687,33 @@ func (b *Backend) Seal(ctx context.Context) error {
 	return nil
 }
 
+// info is the bucket's stream info as the stream's LEADER answered it — its
+// state and its configuration — asked as a metadata read is
+// ([jsprovision.ReadBounded]).
+//
+// ASKED AGAIN WHILE NOBODY ANSWERS, because nobody but the leader does: a
+// member that still believes in a leader its group has just lost takes the
+// request and returns without a word (server/jetstream_api.go,
+// jsStreamInfoRequest: "only the stream leader should answer"). Sent as one
+// request it waited for its caller's deadline, or for the client's five
+// seconds where there was none — the object gauge's reading on every turn of
+// the collector's duty, which has none — for a reply nobody would send. A
+// caller with no deadline keeps those five seconds, asked again inside them.
+// THROUGH A HANDLE OF EACH REQUEST'S OWN, never [Backend]'s stream: the
+// client caches an info reply on the handle that fetched it with no lock, the
+// hedge can have two requests out, and the bucket's handle is the one every
+// get and listing reads beside it.
+func (b *Backend) info(ctx context.Context) (*jetstream.StreamInfo, error) {
+	return jsprovision.ReadBounded(ctx, b.js.Options().DefaultTimeout,
+		func(ctx context.Context) (*jetstream.StreamInfo, error) {
+			stream, err := b.js.Stream(ctx, Stream)
+			if err != nil {
+				return nil, err
+			}
+			return stream.CachedInfo(), nil
+		}, nil)
+}
+
 // metaSubject is the subject the bucket keeps name's metadata on, and
 // pieceSubject the subject an object's pieces are on — the object store's own
 // documented layout, the name in base64url exactly as the library encodes it.
@@ -670,6 +722,20 @@ func metaSubject(name string) string {
 }
 
 func pieceSubject(nuid string) string { return "$O." + Bucket + ".C." + nuid }
+
+// leaderFor is the leader reads of what filter names: b's pieces for an
+// object's pieces, every message of which may be a whole piece, and its
+// leader for the metadata, whose messages are a few hundred bytes. Every
+// leader MESSAGE read here takes its reader from this, so a read of a piece
+// is never asked again while the piece is still crossing a link
+// ([jsapi.Leader.Carrying]); a subject listing answers names and counts, and
+// is the metadata leader's.
+func (b *Backend) leaderFor(filter string) *jsapi.Leader {
+	if strings.HasPrefix(filter, metaSubject("")) {
+		return b.leader
+	}
+	return b.pieces
+}
 
 // nameOfMeta is the name a metadata subject spells, and whether it spells one
 // — [metaSubject] read back.
@@ -692,7 +758,7 @@ func nameOfMeta(subject string) (string, bool) {
 // ModTime is the instant the leader stored the message — the object became
 // whole then — rather than whatever the library wrote into it.
 func (b *Backend) meta(ctx context.Context, name string) (jetstream.ObjectInfo, error) {
-	msg, err := b.leader.Last(ctx, metaSubject(name))
+	msg, err := b.leaderFor(metaSubject(name)).Last(ctx, metaSubject(name))
 	switch {
 	case errors.Is(err, jsapi.ErrNoMessage):
 		return jetstream.ObjectInfo{}, objstore.ErrNotFound
@@ -909,6 +975,9 @@ type reading struct {
 	// filter is the subject the read is over, and cfg how its consumer is
 	// made — the filter included — so a consumer made again is made alike.
 	filter string
+	// leader asks the stream's leader what follows on filter
+	// ([Backend.leaderFor]).
+	leader *jsapi.Leader
 	cfg    jetstream.OrderedConsumerConfig
 	batch  int
 	stall  time.Duration
@@ -929,7 +998,8 @@ func (b *Backend) consume(ctx context.Context, filter string, cfg jetstream.Orde
 	batch int, stall time.Duration, through uint64) (*reading, jetstream.Msg, error) {
 
 	cfg.FilterSubjects = []string{filter}
-	r := &reading{b: b, filter: filter, cfg: cfg, batch: batch, stall: stall, through: through}
+	r := &reading{b: b, filter: filter, leader: b.leaderFor(filter), cfg: cfg, batch: batch,
+		stall: stall, through: through}
 	msg, err := r.open(ctx)
 	if err != nil || msg == nil {
 		return nil, nil, err
@@ -1037,7 +1107,7 @@ func (r *reading) caughtUp(ctx context.Context, after uint64) (bool, error) {
 	if after >= r.through {
 		return true, nil
 	}
-	msg, err := r.b.leader.Next(ctx, r.filter, after+1)
+	msg, err := r.leader.Next(ctx, r.filter, after+1)
 	switch {
 	case errors.Is(err, jsapi.ErrNoMessage):
 		return true, nil
@@ -1222,6 +1292,8 @@ func (b *Backend) gone(ctx context.Context, name string) (io.ReadCloser, error) 
 // off, ends the walk only where the stream's leader holds nothing after it
 // either ([reading]); otherwise the walk goes on from a consumer made again.
 func (b *Backend) seek(ctx context.Context, subject string, off int64) (uint64, int64, bool, error) {
+	// The leader's answer to what follows is the WHOLE message: a message
+	// read has no headers-only form, so asking it costs a piece.
 	r, msg, err := b.consume(ctx, subject, jetstream.OrderedConsumerConfig{
 		HeadersOnly:      true,
 		MaxResetAttempts: listResets,
@@ -1498,7 +1570,7 @@ func (b *Backend) List(ctx context.Context, visit func(objstore.Info) error) err
 // consumer of its own.
 func (b *Backend) eachMeta(ctx context.Context, visit func(*jetstream.ObjectInfo) error) error {
 	var through uint64
-	switch newest, err := b.leader.Last(ctx, metaSubjects); {
+	switch newest, err := b.leaderFor(metaSubjects).Last(ctx, metaSubjects); {
 	case errors.Is(err, jsapi.ErrNoMessage):
 	case err != nil:
 		return fmt.Errorf("natsobj: list the bucket: read its newest metadata from the stream's leader: %w", err)
@@ -1590,15 +1662,44 @@ const pieceSubjects = "$O." + Bucket + ".C.>"
 // would answer a subject as holding nothing it in fact holds. A subject the
 // leader holds nothing on by then was finished or purged in between, and is
 // stepped over.
+//
+// THE SUBJECT LISTING IS ASKED A PAGE AT A TIME, each page asked again while
+// nobody answers it ([jsapi.Leader.Subjects]): only the leader answers it, so
+// a member that still believes in a leader its group has just lost drops it
+// without a word, and one request held for the sweep's deadline failed the
+// sweep over a reply nobody would send. A page holds a hundred thousand
+// subjects — an object each — and every page costs the leader a sort of
+// every piece subject the bucket holds, so a listing asked again whole would
+// have asked that of it again for every page before the one that was slow.
+// And the oldest piece is read as a piece is ([Backend]'s pieces): the
+// leader's answer is the whole message.
+//
+// # What a sweep costs as the bucket grows
+//
+// The sort makes a listing grow faster than the bucket: measured on one solo
+// member (internal/jsapi's BenchmarkASubjectListing), a page takes 0.11 s at
+// a hundred thousand objects and 1.1 to 1.35 s at a million, a whole listing
+// 12.1 s — once an hour, holding one of the leader's API workers a page at a
+// time. The sweep runs on its duty's lifetime with no deadline, so each page
+// is held to the client's five seconds on its own, which by that growth a
+// page outgrows at a few million objects; a bucket that size is a fleet's,
+// and a fleet's files belong on S3 (`crewlet validate` warns of the nats
+// bucket on one). A walk of the piece subjects — an ordered consumer
+// delivering each one's last piece, headers only, as the metadata walk does
+// — would be linear, and is not taken because a consumer is served by any
+// replica and this listing is the leader's.
 func (b *Backend) Pending(ctx context.Context, visit func(objstore.Pending) error) error {
-	held, err := b.stream.Info(ctx, jetstream.WithSubjectFilter(pieceSubjects))
+	// THE CANDIDATES ARE THE SUBJECT LISTING ITSELF, whittled down by the
+	// metadata walk, so the pass holds no more than the broker's answers
+	// already did — never a second copy of the bucket's inventory.
+	orphans := make(map[string]uint64)
+	err := b.leader.Subjects(ctx, pieceSubjects, func(page map[string]uint64) error {
+		maps.Copy(orphans, page)
+		return nil
+	})
 	if err != nil {
 		return fmt.Errorf("natsobj: list the bucket's pieces: %w", err)
 	}
-	// THE CANDIDATES ARE THE SUBJECT LISTING ITSELF, whittled down by the
-	// metadata walk, so the pass holds no more than the broker's answer
-	// already did — never a second copy of the bucket's inventory.
-	orphans := held.State.Subjects
 	if len(orphans) == 0 {
 		return nil
 	}
@@ -1619,7 +1720,7 @@ func (b *Backend) Pending(ctx context.Context, visit func(objstore.Pending) erro
 		if !ok {
 			continue
 		}
-		first, err := b.leader.First(ctx, subject)
+		first, err := b.leaderFor(subject).First(ctx, subject)
 		switch {
 		case errors.Is(err, jsapi.ErrNoMessage):
 			continue

@@ -11,6 +11,8 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/jsapi"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -57,6 +59,9 @@ type Syncer struct {
 	db      *store.DB
 	js      jetstream.JetStream
 	agentID AgentIDFor
+	// leader reads the changelog's newest rows from its leader
+	// ([Syncer.leaderEnd]).
+	leader *jsapi.Leader
 
 	// marks is the per-seat, per-table watermark: the highest value of
 	// the table's watermark column already published (table.watermark —
@@ -90,7 +95,11 @@ func New(db *store.DB, js jetstream.JetStream, agentID AgentIDFor) (*Syncer, err
 	if db == nil || js == nil || agentID == nil {
 		return nil, nil
 	}
-	return &Syncer{db: db, js: js, agentID: agentID, marks: map[string]int64{}}, nil
+	leader, err := jsapi.NewLeader(js, topics.MemoryStream)
+	if err != nil {
+		return nil, fmt.Errorf("memsync: address the memory changelog's leader: %w", err)
+	}
+	return &Syncer{db: db, js: js, agentID: agentID, leader: leader, marks: map[string]int64{}}, nil
 }
 
 // seat resolves a handle into both spellings the schema uses.
@@ -164,8 +173,7 @@ func (s *Syncer) Hydrate(ctx context.Context, handle string) (int, error) {
 	// degraded hydration — it is every seat on this node silently losing
 	// its diary and its episodes, with a `memory_hydrated` line saying
 	// zero rows and nothing anywhere saying why.
-	stream, err := s.checkIdentity(ctx)
-	if err != nil {
+	if err := s.checkIdentity(ctx); err != nil {
 		return 0, err
 	}
 	filter := topics.MemoryPrefix + ref.AgentID + ".>"
@@ -175,7 +183,7 @@ func (s *Syncer) Hydrate(ctx context.Context, handle string) (int, error) {
 	// have reached it. Nothing there is the leader's answer that the seat
 	// has no memory, which is every seat on a fresh company, and it costs
 	// one round trip rather than a consumer.
-	end, err := s.leaderEnd(ctx, stream, filter)
+	end, err := s.leaderEnd(ctx, filter)
 	if err != nil {
 		return 0, fmt.Errorf("memsync: find where %s's memory ends: %w", handle, err)
 	}
@@ -389,13 +397,25 @@ func (s *Syncer) ReplayProtocol() statelog.ReplayProtocol { return statelog.Repl
 // know" resumes against a stream this node cannot identify, which is the whole
 // failure this guard is about. It costs a delayed seat on a broker having a
 // bad minute, which the caller retries.
-//
-// It hands back the stream it identified, which is the handle the hydration
-// then asks the leader through ([Syncer.leaderEnd]).
-func (s *Syncer) checkIdentity(ctx context.Context) (jetstream.Stream, error) {
-	stream, err := s.js.Stream(ctx, topics.MemoryStream)
+func (s *Syncer) checkIdentity(ctx context.Context) error {
+	// ASKED AS A METADATA READ IS ([jsprovision.ReadBounded]): only the
+	// stream's leader answers its info, and a member that still believes in
+	// a leader its group has just lost drops the request without a word, so
+	// one request waited out the hydration's whole bound and refused the
+	// seat over a reply nobody would send — where asked again, the new
+	// leader answers. A handle of each request's own, because the requests
+	// can be out together and the client caches each reply on its handle
+	// with no lock.
+	info, err := jsprovision.ReadBounded(ctx, s.js.Options().DefaultTimeout,
+		func(ctx context.Context) (*jetstream.StreamInfo, error) {
+			stream, err := s.js.Stream(ctx, topics.MemoryStream)
+			if err != nil {
+				return nil, err
+			}
+			return stream.CachedInfo(), nil
+		}, nil)
 	if err != nil {
-		return nil, fmt.Errorf("memsync: read the memory changelog's identity: %w — "+
+		return fmt.Errorf("memsync: read the memory changelog's identity: %w — "+
 			"a seat is not admitted from a stream this node cannot identify, "+
 			"because a recreated one is EMPTY and would hydrate every seat to "+
 			"nothing while reporting success", err)
@@ -403,29 +423,29 @@ func (s *Syncer) checkIdentity(ctx context.Context) (jetstream.Stream, error) {
 	// THE ONE READING of a stream's identity: the instant stamped at its
 	// creation, which a restored changelog keeps and the broker's own
 	// instant does not ([statelog.CreatedAtKey]).
-	created, err := statelog.StreamCreatedAt(stream.CachedInfo())
+	created, err := statelog.StreamCreatedAt(info)
 	if err != nil {
-		return nil, fmt.Errorf("memsync: read the memory changelog's identity: %w", err)
+		return fmt.Errorf("memsync: read the memory changelog's identity: %w", err)
 	}
 
 	recorded, known, err := statelog.RecordedIdentity(ctx, s.db, topics.MemoryStream)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	switch state := statelog.IdentityOf(recorded, created, known); state {
 	case statelog.StreamSame:
-		return stream, nil
+		return nil
 	case statelog.StreamFirstSight:
 		// A FRESH NODE, a fresh company, or the first boot after this
 		// guard shipped. Recorded rather than refused: refusing here
 		// would make every first boot an outage.
 		if err := statelog.RecordIdentity(ctx, s.db, topics.MemoryStream,
 			created, time.Now().UTC()); err != nil {
-			return nil, err
+			return err
 		}
-		return stream, nil
+		return nil
 	case statelog.StreamUnknown:
-		return nil, fmt.Errorf("memsync: the memory changelog reports no creation "+
+		return fmt.Errorf("memsync: the memory changelog reports no creation "+
 			"instant, so this node cannot tell it from a recreated one: %w",
 			statelog.ErrStreamRecreated)
 	default:
@@ -438,7 +458,7 @@ func (s *Syncer) checkIdentity(ctx context.Context) (jetstream.Stream, error) {
 				"node a blank diary. Nothing here can recover what was on the "+
 				"old stream; an operator who intends the new one clears this "+
 				"node's stream_identity row")
-		return nil, fmt.Errorf("memsync: the memory changelog was created at %s and "+
+		return fmt.Errorf("memsync: the memory changelog was created at %s and "+
 			"this node last saw one created at %s: %w",
 			created.Format(time.RFC3339), recorded.Format(time.RFC3339),
 			statelog.ErrStreamRecreated)
@@ -467,27 +487,26 @@ func (s *Syncer) checkIdentity(ctx context.Context) (jetstream.Stream, error) {
 //
 // # Why this read is the leader's
 //
-// The changelog is provisioned with direct gets OFF (internal/queue/jetstream's
-// stream specs), so the client answers a last-message read with
-// `$JS.API.STREAM.MSG.GET`, which only the stream leader answers — the same
-// `MSG.GET` coord/kv's leaderReader asks for on the wire through
-// internal/jsapi's Leader, because its buckets were created with direct gets
-// on and the client would answer them from any replica. It is the client's own
-// call here, and not jsapi's, for a reason of the filter's: it is a WILDCARD
-// over the seat's subjects, and jsapi's Leader.Last refuses an answer on any
-// subject other than the one it asked about. A member that sees no leader
-// answers an error, which fails the hydration rather than reading as a seat
-// with nothing to carry.
-func (s *Syncer) leaderEnd(ctx context.Context, stream jetstream.Stream, filter string) (uint64, error) {
-	if stream.CachedInfo().Config.AllowDirect {
-		// THE PREMISE ABOVE, checked rather than assumed: with direct gets
-		// on, the read below is answered by any replica and proves nothing.
-		return 0, fmt.Errorf("memsync: the memory changelog %s allows direct gets, so "+
-			"its newest row cannot be read from its leader", topics.MemoryStream)
-	}
-	msg, err := stream.GetLastMsgForSubject(ctx, filter)
+// It is a `$JS.API.STREAM.MSG.GET` through internal/jsapi's [jsapi.Leader],
+// which only the stream's leader answers WHATEVER the stream's allow_direct
+// says — the read coord/kv's certified listings and the object store's
+// metadata take, for the same reason. The client's own last-message read
+// picks its API from that flag alone, so the day the changelog allowed direct
+// gets it would be answered by any replica and prove nothing. Its filter is a
+// WILDCARD over the seat's subjects, which [jsapi.Leader.Last] takes, the
+// answer then the newest message on any subject it matches; and
+// [jsapi.ErrNoMessage] is the leader's own word that the seat holds no row.
+//
+// It is ASKED AGAIN while nobody answers it, as every leader read is: a member
+// that still believes in a leader its group has just lost drops the request
+// without a word, and one request held for the hydration's bound refused the
+// seat over a reply nobody would send, where asked again the new leader
+// answers. A member that sees no leader answers an error, which fails the
+// hydration rather than reading as a seat with nothing to carry.
+func (s *Syncer) leaderEnd(ctx context.Context, filter string) (uint64, error) {
+	msg, err := s.leader.Last(ctx, filter)
 	switch {
-	case errors.Is(err, jetstream.ErrMsgNotFound):
+	case errors.Is(err, jsapi.ErrNoMessage):
 		return 0, nil
 	case err != nil:
 		return 0, err

@@ -1602,9 +1602,21 @@ func carriesSubscriptions(stream string) bool {
 //
 // An ephemeral consumer (a stream subscription, a peek, a memory replay) is not
 // a subscription and is skipped. A durable consumer is listed under the pair
-// its metadata records when that pair derives its name; one whose metadata
-// carries no such pair (something other than this backend made or rewrote it)
-// is logged and left out rather than listed under a guessed pair (see pairOf).
+// its metadata records when that pair derives its name (see pairOf); one whose
+// metadata carries no such pair (something other than this backend made or
+// rewrote it), or that the broker holds offline and so answers with no
+// configuration at all, is logged and left out rather than listed under a
+// guessed pair.
+//
+// EVERY PAGE OF BOTH LISTINGS IS ITS OWN READ, asked again while nobody
+// answers it ([jsapi.Meta]): only the metadata leader answers either, so a
+// member that still believes in a leader the group has just lost drops the
+// request without a word — and the client's listers asked each page once and
+// held it for the client's five-second default, which failed the mailbox
+// sweep for the tick over a reply nobody would send. And a consumer the
+// metadata leader could not get an answer about fails the listing rather than
+// being left out of it, so a mailbox is never judged absent because its
+// leader was slow ([jsapi.UnreadError]).
 func (q *Queue) ListSubscriptions(ctx context.Context, topicPattern string) ([]queue.Subscription, error) {
 	if q.isClosed() {
 		return nil, ErrClosed
@@ -1613,39 +1625,43 @@ func (q *Queue) ListSubscriptions(ctx context.Context, topicPattern string) ([]q
 		return nil, fmt.Errorf("%w: a subscription listing needs a topic pattern; pass \">\" for "+
 			"every subscription", ErrSubject)
 	}
-
-	// Collected before any consumer is listed, and each lister drained to
-	// its end: the client's listers publish on unbuffered channels from a
-	// goroutine of their own, so abandoning one part-way leaks it.
-	names := q.js.StreamNames(ctx)
+	meta, err := jsapi.NewMeta(q.js)
+	if err != nil {
+		return nil, err
+	}
 	var streams []string
-	for name := range names.Name() {
+	if err := meta.StreamNames(ctx, func(name string) error {
 		if carriesSubscriptions(name) {
 			streams = append(streams, name)
 		}
-	}
-	if err := names.Err(); err != nil {
+		return nil
+	}); err != nil {
 		return nil, fmt.Errorf("list streams: %w", q.brokerFailed(ctx, err))
 	}
 
 	var out []queue.Subscription
 	for _, name := range streams {
-		stream, err := q.js.Stream(ctx, name)
-		if errors.Is(err, jetstream.ErrStreamNotFound) {
-			// Deleted between the two reads; it holds nothing now.
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("open stream %s: %w", name, q.brokerFailed(ctx, err))
-		}
-		consumers := stream.ListConsumers(ctx)
-		for info := range consumers.Info() {
-			sub, ok := q.subscriptionOf(ctx, name, info)
+		err := meta.Consumers(ctx, name, func(c jsapi.Consumer) error {
+			if c.Info == nil {
+				q.log.WarnContext(ctx, "jetstream_subscription_offline", "stream", name,
+					"consumer", c.Name, "reason", c.Offline,
+					"detail", "the broker holds this consumer offline and answers it with no "+
+						"configuration, so it names no subscription pair and is left out of the "+
+						"subscription listing; a server that supports what it was made with "+
+						"runs it again")
+				return nil
+			}
+			sub, ok := q.subscriptionOf(ctx, name, c.Info)
 			if ok && topics.Match(topicPattern, sub.Topic) {
 				out = append(out, sub)
 			}
+			return nil
+		})
+		if errors.Is(err, jsapi.ErrNoStream) {
+			// Deleted between the two listings; it holds nothing now.
+			continue
 		}
-		if err := consumers.Err(); err != nil {
+		if err != nil {
 			return nil, fmt.Errorf("list consumers of stream %s: %w", name,
 				q.brokerFailed(ctx, err))
 		}

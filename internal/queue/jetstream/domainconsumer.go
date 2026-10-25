@@ -1342,16 +1342,28 @@ func (l *DomainLog) GroupAckFloor(ctx context.Context, group string) (uint64, bo
 	// an unreadable term looks the consumer up on the broker, where the
 	// group's own spelling finds nothing.
 	durable := domainGroupName(l.name, group)
-	cons, err := l.stream.Consumer(ctx, durable)
+	// ASKED AS A READ ([jsprovision.ReadBoundedWith]), and ONCE: the lookup
+	// is the consumer's info request itself, so a second request on the
+	// handle it returns asked the same question twice. Only the consumer's
+	// leader answers it, and a member that still believes in a leader the
+	// group has just lost drops it without a word — on the trim tick's
+	// lifetime, which carries no deadline, one dropped request waited out
+	// the client's five-second default and left the term unreadable, which
+	// blocks that log's trim for the tick. The tick keeps those five
+	// seconds, asked again inside them, so a dropped request costs it two. A
+	// handle of each request's own, since requests can be out together.
+	info, err := jsprovision.ReadBoundedWith(ctx, l.q.provisioning(), l.js.Options().DefaultTimeout,
+		func(ctx context.Context) (*jetstream.ConsumerInfo, error) {
+			cons, err := l.js.Consumer(ctx, l.name, durable)
+			if err != nil {
+				return nil, err
+			}
+			return cons.CachedInfo(), nil
+		}, nil)
 	switch {
 	case errors.Is(err, jetstream.ErrConsumerNotFound):
 		return 0, false, nil
 	case err != nil:
-		return 0, false, fmt.Errorf("jetstream: read the group %q (consumer %s) on %s: %w",
-			group, durable, l.name, err)
-	}
-	info, err := cons.Info(ctx)
-	if err != nil {
 		return 0, false, fmt.Errorf("jetstream: read the group %q (consumer %s) on %s: %w",
 			group, durable, l.name, err)
 	}

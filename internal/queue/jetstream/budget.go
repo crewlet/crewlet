@@ -7,6 +7,8 @@ import (
 	"slices"
 
 	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/crewlet/crewlet/internal/jsprovision"
 )
 
 // A stream's byte ceiling is a RESERVATION, and this file is what the broker
@@ -254,7 +256,19 @@ func (q *Queue) budget(ctx context.Context, withServer bool) (StorageBudget, err
 			return StorageBudget{}, err
 		}
 	}
-	info, err := q.js.AccountInfo(ctx)
+	// ASKED AS A METADATA READ ([jsprovision.ReadBoundedWith]): only the
+	// metadata leader answers an account's info, so a member that still
+	// believes in a leader the group has just lost drops it without a word,
+	// and one request held for the client's five-second default read an
+	// account limit that was there all along as one nobody could read. A
+	// boot with no deadline keeps those five seconds, asked again inside
+	// them — the bound a data pod's startup window counts this read at —
+	// rather than [askRead]'s lookup ceiling, which bounds the reads that
+	// were asked again from the start.
+	info, err := jsprovision.ReadBoundedWith(ctx, q.provisioning(), q.js.Options().DefaultTimeout,
+		func(ctx context.Context) (*jetstream.AccountInfo, error) {
+			return q.js.AccountInfo(ctx)
+		}, nil)
 	switch {
 	case err != nil && !withServer:
 		return StorageBudget{}, fmt.Errorf("jetstream: read the account's storage limits: %w", err)

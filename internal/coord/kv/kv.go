@@ -1863,14 +1863,13 @@ func (c *clock) now(ctx context.Context, l *lane) (time.Time, error) {
 }
 
 func (s *Store) storeNow(ctx context.Context, l *lane) (time.Time, error) {
-	// js.Stream is one API request that returns a FRESH handle carrying the
-	// info it just fetched, including the server's own timestamp for the
-	// reply. See lane.stream for why this is not KeyValue.Status.
-	stream, err := s.js.Stream(ctx, l.stream)
+	// The stream's info as its leader answered it, the server's own timestamp
+	// for the reply among it ([leaderInfo]). See lane.stream for why this is
+	// not KeyValue.Status.
+	info, err := leaderInfo(ctx, s.js, l.stream)
 	if err != nil {
 		return time.Time{}, unavailable("read the store clock", err)
 	}
-	info := stream.CachedInfo()
 	if info == nil || info.TimeStamp.IsZero() {
 		return time.Time{}, fmt.Errorf("%w: the broker did not report a stream timestamp",
 			coord.ErrUnavailable)

@@ -28,15 +28,25 @@ var clock = time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 // embeddedNATS starts a broker inside the test process with NO LISTENER —
 // the same topology a solo node boots, and the whole reason the snapshot has
 // to happen in-process. Nothing outside this process can reach it.
+//
+// THE FLEET'S DOMAIN, as every embedded member serves it, so the snapshot's
+// raw request is asked in the API a real node speaks rather than one no node
+// answers any more.
 func embeddedNATS(t *testing.T) *nats.Conn {
 	t.Helper()
+	_, nc := natsBroker(t, jsapi.Domain)
+	return nc
+}
+
+// natsBroker is [embeddedNATS] serving domain — none at all for an external
+// cluster's account API, which is the one [jsapitest] can stand in front of —
+// and the server itself beside the connection.
+func natsBroker(t *testing.T, domain string) (*server.Server, *nats.Conn) {
+	t.Helper()
 	ns, err := server.NewServer(&server.Options{
-		ServerName: "backup-test",
-		JetStream:  true,
-		// THE FLEET'S DOMAIN, as every embedded member serves it, so the
-		// snapshot's raw request is asked in the API a real node speaks
-		// rather than one no node answers any more.
-		JetStreamDomain: jsapi.Domain,
+		ServerName:      "backup-test",
+		JetStream:       true,
+		JetStreamDomain: domain,
 		Port:            -1,
 		DontListen:      true,
 		StoreDir:        t.TempDir(),
@@ -61,7 +71,7 @@ func embeddedNATS(t *testing.T) *nats.Conn {
 		t.Fatalf("connect to embedded server: %v", err)
 	}
 	t.Cleanup(nc.Close)
-	return nc
+	return ns, nc
 }
 
 // seedStream creates a stream and publishes messages into it.

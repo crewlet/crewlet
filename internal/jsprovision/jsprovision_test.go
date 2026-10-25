@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -1088,6 +1089,88 @@ func TestAReadNobodyAnswersEndsAtTheLookupCeiling(t *testing.T) {
 					"asked again while nobody answered", n)
 			}
 		})
+	}
+}
+
+// A READ THAT WAS ONE REQUEST KEEPS THAT REQUEST'S BOUND for a caller with no
+// deadline — asked again inside it — and nothing else: a caller's own
+// deadline is its bound, and the lookup ceiling ends every read whichever is
+// longer.
+//
+// A caller with no deadline of a read that was one request was sized against
+// the client's own default for it — a pod's startup window counts each such
+// read at five seconds — so hedging the read must not stretch it to the
+// ceiling. IN A SYNCTEST BUBBLE, so each end and each request is exact: the
+// cadence is a request every term and re-ask (240 ms at the cases' timing),
+// and a read held to the ceiling instead ends twenty times later.
+func TestAReadThatWasOneRequestKeepsItsBound(t *testing.T) {
+	t.Parallel()
+	const bound = 500 * time.Millisecond
+	wide := fast
+	wide.Lookup = 20 * bound
+	for _, c := range []struct {
+		name string
+		tm   Timing
+		// deadline is the caller's own, none where zero.
+		deadline, bound time.Duration
+		// ends is when the read ends, asks how many requests it sent by
+		// then, and silent whether its ending is silence to its caller
+		// rather than the caller's own deadline.
+		ends   time.Duration
+		asks   int64
+		silent bool
+	}{
+		{"with no deadline, at the bound", wide, 0, bound, bound, 3, true},
+		{"with a deadline past the bound, at the deadline", wide, 3 * bound, bound, 3 * bound, 7, false},
+		{"with a bound past the ceiling, at the ceiling", fast, 0, 20 * fast.Lookup, fast.Lookup, 5, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				ctx := t.Context()
+				if c.deadline > 0 {
+					var cancel context.CancelFunc
+					ctx, cancel = context.WithTimeout(ctx, c.deadline)
+					defer cancel()
+				}
+				var asks atomic.Int64
+				start := time.Now()
+				_, err := ReadBoundedWith(ctx, c.tm, c.bound, func(ctx context.Context) (struct{}, error) {
+					asks.Add(1)
+					<-ctx.Done() // nobody answers, ever
+					return struct{}{}, ctx.Err()
+				}, nil)
+				if took := time.Since(start); took != c.ends {
+					t.Errorf("the read ended after %v, want %v", took, c.ends)
+				}
+				if got := Unanswered(ctx, err); got != c.silent {
+					t.Errorf("the read ended with %v, which its caller reads as silence: %v, "+
+						"want %v", err, got, c.silent)
+				}
+				if n := asks.Load(); n != c.asks {
+					t.Errorf("the read was asked %d time(s), want %d: one every %v until it "+
+						"ended", n, c.asks, c.tm.ReadTerm+c.tm.ReAsk)
+				}
+			})
+		})
+	}
+}
+
+// A BOUND OF ZERO IS REFUSED, NAMED, before anything is asked: it is a deadline
+// already past, which no caller chose — a read handed it would report the
+// broker's silence for a question it never sent.
+func TestAReadBoundOfZeroIsRefused(t *testing.T) {
+	t.Parallel()
+	asked := false
+	_, err := ReadBoundedWith(t.Context(), fast, 0, func(context.Context) (struct{}, error) {
+		asked = true
+		return struct{}{}, nil
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "DefaultTimeout") {
+		t.Errorf("a bound of zero returned %v, want a refusal naming the client's DefaultTimeout", err)
+	}
+	if asked {
+		t.Error("a read with a bound of zero was asked")
 	}
 }
 

@@ -444,11 +444,10 @@ func (v *gateView) halt() {
 // barrier short of the quorum's last write would let a gate pass a record the
 // quorum holds. An empty bucket has nothing to wait for.
 func (s *Store) streamPoint(ctx context.Context, l *lane) (uint64, time.Time, error) {
-	stream, err := s.js.Stream(ctx, l.stream)
+	info, err := leaderInfo(ctx, s.js, l.stream)
 	if err != nil {
 		return 0, time.Time{}, unavailable("read "+l.kv.Bucket()+"'s last write", err)
 	}
-	info := stream.CachedInfo()
 	switch {
 	case info == nil || info.TimeStamp.IsZero():
 		return 0, time.Time{}, fmt.Errorf("%w: the broker did not report %s's stream state",
