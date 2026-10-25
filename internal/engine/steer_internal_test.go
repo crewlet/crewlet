@@ -168,20 +168,20 @@ type launcherStub struct{}
 
 func (launcherStub) LaunchExecutor(context.Context, runner.AgentRunRequest) error { return nil }
 
-// AN AGENT RUNTIME TURN REFUSES STEER. Its executor is a coding CLI's own loop,
-// whose rounds the engine does not drive, so no round boundary exists to hand
-// a note to — and a person is told so rather than promised a delivery. The box
-// is filed all the same, so the refusal is an answer and not silence.
-func TestAnAgentRuntimeTurnRefusesSteer(t *testing.T) {
+// A BOX-MODE TURN REFUSES STEER. Its executor is a coding CLI detached in a
+// sandbox, which the turn cannot end at a request and reopen with the note —
+// so a person is told so rather than promised a delivery. The box is filed all
+// the same, so the refusal is an answer and not silence.
+func TestABoxModeTurnRefusesSteer(t *testing.T) {
 	t.Parallel()
 	if steerBox(nil).Supported() != true {
-		t.Fatal("a native turn's box refuses notes")
+		t.Fatal("a host-mode turn's box refuses notes")
 	}
 	d := mustSteerDesk(t, steerRing)
 	d.register("run-1", steerSeat{handle: "swe"}, steerBox(launcherStub{}))
 	status, _, err := d.offer("run-1", steer.Note{ID: "n", Text: "x"})
 	if err != nil || status != steer.StatusUnsupported {
-		t.Errorf("an agent-runtime turn answered (%s, %v), want unsupported", status, err)
+		t.Errorf("a box-mode turn answered (%s, %v), want unsupported", status, err)
 	}
 }
 

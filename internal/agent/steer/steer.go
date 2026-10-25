@@ -5,21 +5,26 @@
 // already has, missing the one constraint they forgot to write down. Stopping
 // it throws away everything it has done; waiting for it to finish and filing a
 // correction costs a whole second turn. A STEER is the third answer: a short
-// note that enters the running conversation at its NEXT ROUND BOUNDARY, as a
-// message the model reads before it decides what to do next.
+// note that enters the running conversation at the OPENING OF ITS NEXT RUN, as
+// a message the model reads before it decides what to do next.
 //
 // # Where it lands, and why there
 //
-// At the top of a round, immediately after the seat fence, and nowhere else.
-// That is the one point in a round where the conversation is COMPLETE: every
-// tool call the previous round made has its answer, so a note appended there
-// can never sit between a call and its result — which a provider rejects
-// outright, and which would make a model read the note as the tool's output.
-// After the fence, because a turn this node no longer holds, or one a person
-// stopped, must not be told anything more: the note would be read by a turn
-// that is about to end without acting on it. And it is a USER message, never
-// a system message: the system prompt is the frozen prefix a provider caches
-// on, and moving it mid-turn re-bills the whole prompt on every later round.
+// A phase is one or more runs of its CLI, each of which drives its own rounds;
+// the engine opens and ends runs and never writes inside one. A note lands at a
+// run's opening, immediately after the seat fence, and nowhere else. One that
+// arrives while a run is going ends that run as soon as the calls of the
+// response it arrived during have their answers ([Box.Waiting] is how the tool
+// loop asks), and the next run opens with the note. That is the one point where
+// the conversation is COMPLETE: every call has its answer, so the note can
+// never sit between a call and its result — which a provider rejects outright,
+// and which would make a model read the note as the tool's output. Never inside
+// a tool's result either, which any tool's output could imitate. After the
+// fence, because a turn this node no longer holds, or one a person stopped,
+// must not be told anything more: the note would be read by a turn that is
+// about to end without acting on it. And it is a USER message, never a system
+// message: the system prompt is the frozen prefix a provider caches on, and
+// moving it mid-turn re-bills the whole prompt on every later request.
 //
 // # What this package is
 //
@@ -35,8 +40,8 @@
 // a person acts on differently: taken ([StatusAccepted]), the turn has too
 // many unread notes already ([StatusFull]), the turn has ended
 // ([StatusClosed]), and the turn's runtime cannot read a note at all
-// ([StatusUnsupported] — an executor running as a coding CLI's own loop,
-// which has no round boundary the engine can reach). A retry of a note the box
+// ([StatusUnsupported] — a box-mode executor, detached in a sandbox, which
+// has no run the engine can end and reopen with the note). A retry of a note the box
 // already took is answered [StatusAccepted] and adds nothing: the note's id is
 // the person's request id, so a retry after an answer that was lost in transit
 // is the same note, and a turn that read the same instruction twice would act
@@ -89,8 +94,8 @@ const (
 	// read anything.
 	StatusClosed Status = "closed"
 
-	// StatusUnsupported — the turn runs where no round boundary is the
-	// engine's: an executor running as a coding CLI's own agentic loop.
+	// StatusUnsupported — the turn runs where no run boundary is the
+	// engine's: a box-mode executor, detached in a sandbox.
 	StatusUnsupported Status = "unsupported"
 )
 

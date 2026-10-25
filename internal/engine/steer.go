@@ -293,9 +293,11 @@ func (e *Engine) stopSteer(ctx context.Context) {
 }
 
 // steerBox opens the box a turn on handle runs with: one that takes notes when
-// the executor is the engine's own loop, and one that answers every note
-// `unsupported` when the executor runs as a coding CLI's own agentic loop —
-// its rounds are the CLI's, and no round boundary is the engine's to reach.
+// the executor runs on this host, and one that answers every note
+// `unsupported` when it runs in a box. A host-mode run is the engine's to end
+// at a request and reopen with the note as its next message; a box-mode run is
+// detached in a sandbox, outlives the turn that launched it, and has no such
+// boundary the engine can reach.
 func steerBox(agentRun runner.AgentLauncher) *steer.Box {
 	if agentRun != nil {
 		return steer.Unsupported()

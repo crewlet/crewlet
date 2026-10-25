@@ -721,7 +721,9 @@ constraint nobody wrote down. Stopping it (a [pause with
 `stop_running`](agent-runtime.md#pausing-a-seat)) throws away what it has done;
 waiting for it to finish costs a second turn. A **steer** is the third answer:
 a short note, sent with [`steer_turn`](../reference/api-endpoints.md#steering-a-running-turn),
-that enters the running conversation at its **next round boundary**.
+that enters the running conversation as soon as the tool calls in flight have
+their answers: the CLI's run ends there, and the next run **opens with the
+note**.
 
 ```mermaid
 sequenceDiagram
@@ -732,17 +734,21 @@ sequenceDiagram
     P->>F: steer_turn{turn_id, note} — scattered on crewlet.steer.note
     F-->>P: nothing (not their turn)
     N-->>P: accepted → outcome "pending"
-    Note over L: the round's tool calls finish
+    Note over L: the response's tool calls finish, and the CLI's run ends
     L->>L: fence, then drain the box
-    L->>L: the note is a user message before the next provider call
+    L->>L: the note is a user message opening the next run
     N->>N: agent_turn_steered{delivered, phase, round}
 ```
 
-- **Where it lands, and nowhere else.** At the top of a round, immediately
-  after the seat fence. That is the one point where the conversation is
-  complete — every tool call the previous round made has its answer — so a note
-  can never sit between a call and its result, which a provider rejects and a
-  model would read as the tool's output. After the fence, so a turn whose seat
+- **Where it lands, and nowhere else.** At the opening of a CLI run,
+  immediately after the seat fence. The CLI drives its own requests and the
+  engine never writes inside a run, so a note that arrives while one is going
+  ends it once every call of the response it arrived during has its answer, and
+  the next run — handed the conversation so far — opens with the note. That is
+  the one point where the conversation is complete, so a note can never sit
+  between a call and its result, which a provider rejects and a model would
+  read as the tool's output; and it is never folded into a tool's result,
+  which any tool's output could imitate. After the fence, so a turn whose seat
   moved or that a person stopped is not handed an instruction it will never act
   on. And as a **user** message, never a system message: the system prompt is
   the frozen prefix a provider caches on.
@@ -758,9 +764,9 @@ sequenceDiagram
 - **Not every loop reads it.** A [worker](#workers) is a leaf its parent
   directs, so a note offered while a worker runs waits for the executor's next
   round. The onboarding pass and the extension judge do not read notes either.
-  A turn whose executor runs as a [coding CLI's own agentic
-  loop](llm-backends.md) cannot take a note at all — its rounds are
-  the CLI's — and says so: `steer_unsupported`.
+  A turn whose executor runs in [box mode](llm-backends.md#box-mode) cannot
+  take a note at all — its CLI runs detached in a sandbox, with no run the
+  engine can end and reopen — and says so: `steer_unsupported`.
 - **Whose turn it is to steer.** The seat's holder, whoever leads the seat,
   or an administrator (`admin`) — never a seat, and never any reader,
   since everybody signed in holds a credential. The seat is the one thing the

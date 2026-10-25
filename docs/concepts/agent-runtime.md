@@ -454,10 +454,10 @@ stateDiagram-v2
   node that has not yet read the pauses at all (the seconds after a boot) defers
   its deliveries rather than guessing. A store that cannot be reached is not a
   resume: a node keeps the pauses it last read, and a paused seat stays paused.
-- **Stop now.** The per-round fence every turn runs under — the same one that
-  stops a turn whose seat moved to another node — also closes on a pause that
-  asked to stop, so the turn ends at a round boundary, never between a tool call
-  and its result. What it had not yet done is lost. The trigger is recorded as
+- **Stop now.** The fence every tool call passes, before it runs and after —
+  the same one that stops a turn whose seat moved to another node — also closes
+  on a pause that asked to stop, so the turn ends at its next call, never
+  between a tool call and its result. What it had not yet done is lost. The trigger is recorded as
   worked and acked, not retried: a person who stopped a turn did not ask for it
   to run again the moment they resume the seat. The turn's completion reads
   `stopped` rather than `failed`, and `agent_turn_stopped` names who stopped it.
@@ -476,7 +476,8 @@ stateDiagram-v2
 ### Steering a running turn
 
 Short of stopping a turn, a person can **steer** it: send a note that the turn
-reads at its next round boundary and keeps to for the rest of the turn — from
+reads as soon as its tool calls in flight have their answers, and keeps to for
+the rest of the turn — from
 the live view, or from their own assistant with `steer_turn`. It is the
 seat's holder's, its lead's or an administrator's to send, as a pause
 is — decided on the turn's seat, which only the node running the turn can
