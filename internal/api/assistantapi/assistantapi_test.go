@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/assistantapi"
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
+	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal/approval"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
@@ -33,7 +34,7 @@ type grants struct{ now func() time.Time }
 var _ approval.Grants = grants{}
 
 func (g grants) Read(_ context.Context, _, turn uuid.UUID) (exec.Grant, error) {
-	return assistanttest.Grant{GrantID: assistanttest.ID("grant/" + turn.String()),
+	return evals.Grant{GrantID: evals.ID("grant/" + turn.String()),
 		ExpiresAt: g.now().Add(5 * time.Minute)}, nil
 }
 
@@ -50,7 +51,7 @@ type site struct {
 	mux     *http.ServeMux
 }
 
-func newSite(t *testing.T, o assistanttest.RigOptions) *site {
+func newSite(t *testing.T, o evals.RigOptions) *site {
 	t.Helper()
 	rig := assistanttest.NewRig(t, o)
 	surface, err := assistantapi.New(assistantapi.Options{Service: rig.Svc,
@@ -129,7 +130,7 @@ func fixture(t *testing.T, body []byte) []byte {
 
 // The constants a golden writes a fresh proposal's id and digest as.
 var (
-	fixedProposal = assistanttest.ID("proposal")
+	fixedProposal = evals.ID("proposal")
 	fixedDigest   = "sha256:" + strings.Repeat("0f", 32)
 )
 
@@ -163,7 +164,7 @@ func frames(t *testing.T, body []byte) []wire.Frame {
 		}
 		if f.Action != nil && f.Action.Name == wire.ActionContextInvalidate {
 			// Derived from the proposal's id, so it moves with it.
-			f.Action.ActionID = assistanttest.ID("invalidate")
+			f.Action.ActionID = evals.ID("invalidate")
 		}
 		out = append(out, f)
 	}
@@ -171,15 +172,15 @@ func frames(t *testing.T, body []byte) []wire.Frame {
 }
 
 // readTurn is a turn that reads ENG-7 through the catalogue's own get_task.
-func readTurn(t *testing.T) assistanttest.RigOptions {
-	return assistanttest.RigOptions{Tools: []catalog.Tool{assistanttest.Tool(t, "get_task")},
+func readTurn(t *testing.T) evals.RigOptions {
+	return evals.RigOptions{Tools: []catalog.Tool{assistanttest.Tool(t, "get_task")},
 		Handler: assistanttest.Routes(map[string]exec.Response{
 			"GET /work/ENG-7": assistanttest.Task("ENG-7", "Rotate keys",
 				"Rotate the signing keys before Friday."),
 		}),
-		Rounds: []assistanttest.Round{
-			assistanttest.Call("c1", "get_task", map[string]any{"item": "ENG-7"}),
-			assistanttest.Say("ENG-7 is to rotate the signing keys before Friday.")}}
+		Rounds: []evals.Round{
+			evals.Call("c1", "get_task", map[string]any{"item": "ENG-7"}),
+			evals.Say("ENG-7 is to rotate the signing keys before Friday.")}}
 }
 
 // THE READ TURN FIXTURE IS THE ROUTES' OWN: a question asked over the route
@@ -223,7 +224,7 @@ func TestEveryAssistantRouteAnswersNotFoundForAnotherPersonsConversation(t *test
 		t.Fatalf("grace's transcript = %+v, %v", transcript, err)
 	}
 	card := transcript.Cards[0].CardID
-	ada := assistanttest.Person("ada", "ada", iam.GrantTracker)
+	ada := evals.Person("ada", "ada", iam.GrantTracker)
 	conv := "/assistant/conversations/" + s.rig.Conversation.String()
 	versioned := wire.Versioned{ProtocolVersion: wire.ProtocolVersion}
 	for _, c := range []struct {
@@ -272,8 +273,8 @@ func TestAnotherProtocolVersionIsRefused(t *testing.T) {
 func TestABudgetRefusalIsATooManyRequestsWithItsReset(t *testing.T) {
 	t.Parallel()
 	o := readTurn(t)
-	o.Budget = assistanttest.Budget{M: assistanttest.FullMeter{
-		ResetsAt: assistanttest.Epoch.Add(2 * time.Hour)}}
+	o.Budget = evals.Budget{M: assistanttest.FullMeter{
+		ResetsAt: evals.Epoch.Add(2 * time.Hour)}}
 	s := newSite(t, o)
 	rec := s.do(s.rig.Person, http.MethodPost, "/assistant/conversations/"+
 		s.rig.Conversation.String()+"/turns", wire.TurnRequest{ProtocolVersion: wire.ProtocolVersion,
@@ -293,21 +294,21 @@ func TestTheViewerSaysWhyTheAssistantIsUnavailable(t *testing.T) {
 	on := true
 	unusable := &config.Company{Name: "Nimbus", Assistant: config.Assistant{Enabled: &on,
 		LLM: config.ProviderKeys{"missing"}}}
-	token := assistanttest.Person("ci", "grace", iam.GrantTracker)
+	token := evals.Person("ci", "grace", iam.GrantTracker)
 	token.Via = "pat:" + uuid.NewSHA1(uuid.NameSpaceOID, []byte("token")).String()
 	for _, c := range []struct {
 		name   string
-		o      assistanttest.RigOptions
+		o      evals.RigOptions
 		who    iam.Principal
 		reason wire.ViewerReason
 	}{
-		{"off", assistanttest.RigOptions{Off: true}, assistanttest.Person("grace", "grace"),
+		{"off", evals.RigOptions{Off: true}, evals.Person("grace", "grace"),
 			wire.ViewerDisabled},
-		{"no usable chain", assistanttest.RigOptions{Company: func() (*config.Company, *org.Organization) {
+		{"no usable chain", evals.RigOptions{Company: func() (*config.Company, *org.Organization) {
 			return unusable, nil
-		}}, assistanttest.Person("grace", "grace"), wire.ViewerNoModel},
-		{"a machine token", assistanttest.RigOptions{}, token, wire.ViewerNotAPerson},
-		{"available", assistanttest.RigOptions{}, assistanttest.Person("grace", "grace"), ""},
+		}}, evals.Person("grace", "grace"), wire.ViewerNoModel},
+		{"a machine token", evals.RigOptions{}, token, wire.ViewerNotAPerson},
+		{"available", evals.RigOptions{}, evals.Person("grace", "grace"), ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -340,12 +341,12 @@ func TestAMachineTokenIsRefusedEveryRoute(t *testing.T) {
 // context.invalidate the approval landed, resumes and answers.
 func TestTheWriteTurnFixtureIsTheRoutesOwn(t *testing.T) {
 	t.Parallel()
-	s := newSite(t, assistanttest.RigOptions{
+	s := newSite(t, evals.RigOptions{
 		Tools: []catalog.Tool{assistanttest.Tool(t, "create_task")},
 		Acts:  []string{"create_work_item"},
-		Rounds: []assistanttest.Round{
-			assistanttest.Call("c1", "create_task", map[string]any{"title": "Rotate keys"}),
-			assistanttest.Say("I filed ENG-8 to rotate the keys.")}})
+		Rounds: []evals.Round{
+			evals.Call("c1", "create_task", map[string]any{"title": "Rotate keys"}),
+			evals.Say("I filed ENG-8 to rotate the keys.")}})
 	accepted := s.ask(t, "File a task to rotate the keys")
 	parked := s.stream(t, accepted, "")
 	proposals := s.rig.Store.Proposals()
@@ -381,12 +382,12 @@ func TestTheWriteTurnFixtureIsTheRoutesOwn(t *testing.T) {
 // revision, and parks waiting for the person.
 func TestThePageActionTurnFixtureIsTheRoutesOwn(t *testing.T) {
 	t.Parallel()
-	s := newSite(t, assistanttest.RigOptions{
+	s := newSite(t, evals.RigOptions{
 		Tools: []catalog.Tool{assistanttest.Tool(t, "propose_page_change")},
-		Rounds: []assistanttest.Round{
-			assistanttest.Call("c1", "propose_page_change", map[string]any{
+		Rounds: []evals.Round{
+			evals.Call("c1", "propose_page_change", map[string]any{
 				"action": "work.filter.apply", "args": map[string]any{"status": "todo"}}),
-			assistanttest.Say("never")}})
+			evals.Say("never")}})
 	page := &wire.PageContext{Screen: "work", Title: "Work \u203a Tasks",
 		Params: map[string]string{}, Query: map[string]string{}, Resources: []wire.Resource{},
 		SourceRevision: "work@3", Accepts: []string{"work.filter.apply"}}
@@ -402,7 +403,7 @@ func TestThePageActionTurnFixtureIsTheRoutesOwn(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := s.stream(t, accepted, "")
-	card := assistanttest.Last(frames(t, body), wire.EventCard)
+	card := evals.Last(frames(t, body), wire.EventCard)
 	if card == nil || card.Card.Card.Proposal == nil ||
 		card.Card.Card.Proposal.SourceRevision != "work@3" ||
 		card.Card.Card.Proposal.Scope != wire.ScopePage {

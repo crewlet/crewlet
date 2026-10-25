@@ -16,7 +16,7 @@ var goPackages = map[string]bool{
 	"artifactsapi": true, "artifactsdomain": true, "artifactserve": true,
 	"artifactspike": true, "artifactupload": true,
 	"approval": true, "approvaltest": true, "assistant": true, "assistantapi": true, "assistantdomain": true,
-	"assistanttest": true, "cards": true, "catalog": true, "exec": true,
+	"assistanttest": true, "cards": true, "catalog": true, "evals": true, "exec": true,
 	"live": true, "proposal": true, "tabular": true, "wire": true,
 	"atlassian": true, "atlassianhost": true, "auth": true, "authapi": true,
 	"authevents": true, "authz": true, "auxspend": true, "backoff": true,

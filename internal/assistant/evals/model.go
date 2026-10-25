@@ -1,4 +1,4 @@
-package assistanttest
+package evals
 
 import (
 	"context"
@@ -54,7 +54,7 @@ func Call(id, name string, args map[string]any) Round {
 func NewModel(rounds ...Round) *Model { return &Model{Name: "scripted", script: rounds} }
 
 // ErrScriptEnded is a round asked for past the script.
-var ErrScriptEnded = errors.New("assistanttest: the model's script has ended")
+var ErrScriptEnded = errors.New("evals: the model's script has ended")
 
 // Model reports the scripted model's name.
 func (m *Model) Model() string { return m.Name }

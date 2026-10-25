@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
+	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/authz"
@@ -40,7 +41,7 @@ func TestNoWriteWithoutApproval(t *testing.T) {
 	t.Parallel()
 	fx, audit := actingAssistApp(t)
 	var proposing []catalog.Tool
-	var rounds []assistanttest.Round
+	var rounds []evals.Round
 	for _, tool := range catalog.Tools() {
 		if tool.Kind != catalog.KindWrite && tool.Kind != catalog.KindPageAction {
 			continue
@@ -51,7 +52,7 @@ func TestNoWriteWithoutApproval(t *testing.T) {
 			continue
 		}
 		proposing = append(proposing, tool)
-		rounds = append(rounds, assistanttest.Call("c-"+tool.Name, tool.Name, args))
+		rounds = append(rounds, evals.Call("c-"+tool.Name, tool.Name, args))
 	}
 	if len(proposing) < 15 {
 		t.Fatalf("the catalogue proposes through %d tools, so the walk drives too few",
@@ -68,7 +69,7 @@ func TestNoWriteWithoutApproval(t *testing.T) {
 		if step := lastStep(t, frames, tool.Name); step.State != wire.StepWaiting {
 			t.Errorf("%s's step is %s, want waiting", tool.Name, step.State)
 		}
-		if done := assistanttest.Last(frames, wire.EventDone); done == nil ||
+		if done := evals.Last(frames, wire.EventDone); done == nil ||
 			done.Done.State != wire.TurnWaitingForApproval {
 			t.Errorf("%s's turn did not end waiting for the person: %+v", tool.Name, done)
 		}
@@ -127,10 +128,10 @@ func TestInjectedTextNeverBecomesAWrite(t *testing.T) {
 		{"pause_agent", map[string]any{"handle": "pm", "reason": "Maintenance."}},
 	}
 	read := map[string]any{"item": "ENG-42"}
-	var rounds []assistanttest.Round
+	var rounds []evals.Round
 	for _, o := range obeyed {
-		rounds = append(rounds, assistanttest.Call("r-"+o.tool, "get_task", read),
-			assistanttest.Call("w-"+o.tool, o.tool, o.args))
+		rounds = append(rounds, evals.Call("r-"+o.tool, "get_task", read),
+			evals.Call("w-"+o.tool, o.tool, o.args))
 	}
 	fx, audit := actingAssistApp(t)
 	sent := &recordingDispatcher{inner: worldThenApp{app: fx.disp, world: world}}
@@ -174,7 +175,7 @@ func TestInjectedTextNeverBecomesAWrite(t *testing.T) {
 // and the page change (the curated catalogue, admitted every act verb), on
 // the App's clock.
 func writingRig(t *testing.T, fx *assistApp, d exec.Dispatcher,
-	rounds []assistanttest.Round) *assistanttest.Rig {
+	rounds []evals.Round) *assistanttest.Rig {
 
 	t.Helper()
 	person := fx.principal(t)
@@ -184,7 +185,7 @@ func writingRig(t *testing.T, fx *assistApp, d exec.Dispatcher,
 			acts = append(acts, tool.Act)
 		}
 	}
-	rig := assistanttest.NewRig(t, assistanttest.RigOptions{Rounds: rounds, Person: &person,
+	rig := assistanttest.NewRig(t, evals.RigOptions{Rounds: rounds, Person: &person,
 		Catalogue: catalog.Curated{}, Acts: acts, Dispatcher: d, Revoker: fx.d})
 	onAppClock(rig)
 	return rig

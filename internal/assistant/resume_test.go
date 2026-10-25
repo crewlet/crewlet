@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant"
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
+	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/assistant/proposal/approval"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
@@ -43,17 +44,17 @@ func (d *decliner) DeclineTurn(_ context.Context, s approval.Stop) error {
 // create_task, and parked on the proposal, which it answers.
 func parkedRig(t *testing.T) (*assistanttest.Rig, wire.TurnAccepted, assistantdomain.Proposal) {
 	t.Helper()
-	f := assistanttest.NewRig(t, assistanttest.RigOptions{
+	f := assistanttest.NewRig(t, evals.RigOptions{
 		Tools: []catalog.Tool{assistanttest.Tool(t, "create_task")},
 		Acts:  []string{"create_work_item"},
-		Rounds: []assistanttest.Round{
-			assistanttest.Call("c1", "create_task", map[string]any{"title": "Rotate keys"}),
-			assistanttest.Say("Created it.")}})
+		Rounds: []evals.Round{
+			evals.Call("c1", "create_task", map[string]any{"title": "Rotate keys"}),
+			evals.Say("Created it.")}})
 	accepted, err := f.Ask("propose", "File a task to rotate keys", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	done := assistanttest.Last(f.Follow(accepted.TurnID, 0), wire.EventDone)
+	done := evals.Last(f.Follow(accepted.TurnID, 0), wire.EventDone)
 	if done == nil || done.Done.State != wire.TurnWaitingForApproval {
 		t.Fatalf("the proposing turn ended %+v, want waiting_for_approval", done)
 	}
@@ -86,11 +87,11 @@ func TestAnApprovalResumesTheParkedTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	frames := f.Follow(accepted.TurnID, resumed.AfterSeq)
-	done := assistanttest.Last(frames, wire.EventDone)
+	done := evals.Last(frames, wire.EventDone)
 	if done == nil || done.Done.State != wire.TurnCompleted {
 		t.Fatalf("the resumed turn ended %+v", done)
 	}
-	card := assistanttest.Last(frames, wire.EventCard)
+	card := evals.Last(frames, wire.EventCard)
 	transcript, _ := f.Store.Transcript(t.Context(), f.Person.ID, f.Conversation)
 	if card == nil || len(transcript.Cards) != 1 || card.Card.CardID != transcript.Cards[0].ID ||
 		card.Card.Card.Proposal.State != wire.ProposalApplied {
@@ -115,7 +116,7 @@ func TestAnApprovalResumesTheParkedTurn(t *testing.T) {
 func TestAnotherPersonCannotResumeATurn(t *testing.T) {
 	t.Parallel()
 	f, accepted, p := parkedRig(t)
-	ada := assistanttest.Person("ada", "ada", iam.GrantTracker)
+	ada := evals.Person("ada", "ada", iam.GrantTracker)
 	_, err := f.Svc.Resume(iam.WithPrincipal(context.Background(), ada), approval.Resumption{
 		Owner: f.Person.ID, Conversation: f.Conversation, Turn: accepted.TurnID,
 		Proposal: p.ID, Read: f.Grant("ada"), State: wire.ProposalApplied,
@@ -138,12 +139,12 @@ func TestStoppingAParkedTurnDeclinesItsProposals(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := iam.WithPrincipal(context.Background(), f.Person)
-	answer, err := f.Svc.Stop(ctx, f.Person.ID, accepted.TurnID, assistanttest.Key("stop"))
+	answer, err := f.Svc.Stop(ctx, f.Person.ID, accepted.TurnID, evals.Key("stop"))
 	if err != nil || answer.State != wire.TurnStopped {
 		t.Fatalf("stop = %+v, %v", answer, err)
 	}
 	if len(d.stops) != 1 || d.stops[0].Turn != accepted.TurnID ||
-		d.stops[0].Key != assistanttest.Key("stop") {
+		d.stops[0].Key != evals.Key("stop") {
 		t.Errorf("declined %+v, want the stopped turn under the Stop's key", d.stops)
 	}
 	row, _ := f.Store.Turn(t.Context(), f.Person.ID, accepted.TurnID)

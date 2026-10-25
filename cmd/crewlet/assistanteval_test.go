@@ -3,7 +3,10 @@ package main
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -86,7 +89,7 @@ expect:
 		"a misspelt member": {`question: q
 script: [{say: x}]
 expect: {state: completed, sayz: [x]}
-`, `unknown field "sayz"`},
+`, "expect.sayz: unknown field"},
 		"a tool the catalogue lacks": {`question: q
 script: [{call: delete_everything}]
 expect: {state: completed}
@@ -115,5 +118,58 @@ func writeCase(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A PAID MODEL IS NEVER CALLED WITHOUT ITS FLAG: -model alone is refused
+// before any configuration is read, naming -paid, and -paid alone is refused
+// as confirming nothing. No case here reaches a model. Mutation: drop the
+// -paid check and the first run goes on to read a company file.
+func TestAPaidModelIsAskedOnlyWithItsFlag(t *testing.T) {
+	t.Parallel()
+	suite := filepath.Join(sourcetree.Root(t), "examples", "assistant-evals")
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"-suite", suite, "-model", "assistant"}, "pass -paid to confirm"},
+		{[]string{"-suite", suite, "-paid"}, "no -model is named"},
+	} {
+		var out bytes.Buffer
+		err := run(append([]string{"assistant", "eval"}, tc.args...), &out, &out)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("assistant eval %v answered %v, want %q", tc.args, err, tc.want)
+		}
+	}
+}
+
+// THE BINARY LINKS NO TEST SCAFFOLDING: the crewlet binary's dependency graph,
+// as the toolchain that builds it reads it (`go list -deps`), holds neither
+// the `testing` package nor internal/assistant/assistanttest (nor
+// net/http/httptest, which imports `testing`). Shipping code and test
+// scaffolding answer to different review bars, and a helper added to a test
+// package must never ship by being reachable from a production one: the
+// assistant's evaluation harness is internal/assistant/evals, which the binary
+// links, and assistanttest only wraps it for the suites. Mutation: import
+// assistanttest (or net/http/httptest) from internal/assistant/evals and this
+// names it.
+func TestTheBinaryLinksNoTestScaffolding(t *testing.T) {
+	t.Parallel()
+	list := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), "list", "-deps", ".")
+	list.Dir = filepath.Join(sourcetree.Root(t), "cmd", "crewlet")
+	out, err := list.Output()
+	if err != nil {
+		t.Fatalf("go list -deps: %v", err)
+	}
+	deps := strings.Fields(string(out))
+	if !slices.Contains(deps, "github.com/crewlet/crewlet/internal/assistant/evals") {
+		t.Fatalf("the binary does not link internal/assistant/evals, so this walk is not "+
+			"reading the graph it guards (%d packages)", len(deps))
+	}
+	for _, banned := range []string{"testing", "net/http/httptest",
+		"github.com/crewlet/crewlet/internal/assistant/assistanttest"} {
+		if slices.Contains(deps, banned) {
+			t.Errorf("the crewlet binary links %s, which is test scaffolding", banned)
+		}
 	}
 }

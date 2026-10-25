@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
 	"github.com/crewlet/crewlet/internal/assistant/cards"
+	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/iam"
 )
@@ -32,7 +33,7 @@ func TestARevokedAppHidesAStoredCard(t *testing.T) {
 	t.Parallel()
 	table := wire.Card{Type: wire.CardTable, Table: &wire.TableCard{Title: "Tasks",
 		Columns: []wire.Column{{Key: "key", Label: "Key", Type: wire.ColumnText}},
-		Rows:    [][]any{{"ENG-1"}}, RowCount: 1, AsOf: assistanttest.Epoch}}
+		Rows:    [][]any{{"ENG-1"}}, RowCount: 1, AsOf: evals.Epoch}}
 	for name, c := range map[string]struct {
 		apps  []string
 		p     iam.Principal
@@ -87,7 +88,7 @@ func taskAnswer(rows int, title string) []byte {
 // and this fails.
 func TestATableIsTheAnswersOwnFieldsCutWholeRows(t *testing.T) {
 	t.Parallel()
-	built, err := cards.Build(taskSpec, taskAnswer(3, "Ship the release"), assistanttest.Epoch)
+	built, err := cards.Build(taskSpec, taskAnswer(3, "Ship the release"), evals.Epoch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +104,7 @@ func TestATableIsTheAnswersOwnFieldsCutWholeRows(t *testing.T) {
 		t.Errorf("the card opens %+v, want the tasks list", tbl.Open)
 	}
 
-	built, err = cards.Build(taskSpec, taskAnswer(cards.MaxRows+50, "x"), assistanttest.Epoch)
+	built, err = cards.Build(taskSpec, taskAnswer(cards.MaxRows+50, "x"), evals.Epoch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +115,7 @@ func TestATableIsTheAnswersOwnFieldsCutWholeRows(t *testing.T) {
 	}
 
 	long := strings.Repeat("a long title ", 100)
-	built, err = cards.Build(taskSpec, taskAnswer(900, long), assistanttest.Epoch)
+	built, err = cards.Build(taskSpec, taskAnswer(900, long), evals.Epoch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +130,7 @@ func TestATableIsTheAnswersOwnFieldsCutWholeRows(t *testing.T) {
 		}
 	}
 
-	if _, err := cards.Build(taskSpec, []byte("<html>"), assistanttest.Epoch); !errors.Is(err, cards.ErrNotJSON) {
+	if _, err := cards.Build(taskSpec, []byte("<html>"), evals.Epoch); !errors.Is(err, cards.ErrNotJSON) {
 		t.Errorf("an answer that is not JSON = %v, want ErrNotJSON", err)
 	}
 }
@@ -150,7 +151,7 @@ func TestAnEntityIsOneRecordFromItsAnswer(t *testing.T) {
 		"page": map[string]any{"id": id, "title": "Runbook", "body": "Step one.",
 			"version": 4, "took_ms": 61000},
 		"comments": []any{map[string]any{"id": "c1", "body": "Looks right"}}})
-	built, err := cards.Build(spec, answer, assistanttest.Epoch)
+	built, err := cards.Build(spec, answer, evals.Epoch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +234,7 @@ func TestTheLinkTableFixtureIsTheEnginesOwn(t *testing.T) {
 // there. Mutation: drop the access note, or cut a row, and this fails.
 func TestASummaryFitsItsBudgetWholeRows(t *testing.T) {
 	t.Parallel()
-	built, err := cards.Build(taskSpec, taskAnswer(400, "Ship the release"), assistanttest.Epoch)
+	built, err := cards.Build(taskSpec, taskAnswer(400, "Ship the release"), evals.Epoch)
 	if err != nil {
 		t.Fatal(err)
 	}
