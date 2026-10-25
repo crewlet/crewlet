@@ -92,8 +92,12 @@ function Turn({
   const open = isOpen(turn.phase);
   const chip = runChipOf(turn, now);
   const steps = stepsOf(turn);
+  // THE SHIMMER STANDS IN FOR AN ANSWER NOT YET DRAWN, so it goes as soon as
+  // anything of the answer is on screen: a reply, or a card a read built.
   const thinking =
-    (turn.phase === "sending" || turn.phase === "thinking") && turn.replies.length === 0;
+    (turn.phase === "sending" || turn.phase === "thinking") &&
+    turn.replies.length === 0 &&
+    turn.cards.length === 0;
   const placed = new Set(turn.replies.map((r) => r.id));
   const cardsOf = (messageId: string) => turn.cards.filter((c) => c.message_id === messageId);
   const loose = turn.cards.filter((c) => !placed.has(c.message_id));
