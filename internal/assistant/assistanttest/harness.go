@@ -3,7 +3,6 @@ package assistanttest
 import (
 	"fmt"
 	"sync"
-	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/assistant"
@@ -61,19 +60,28 @@ roles:
 
 // Company is the company a suite's people work for: the assistant on when on
 // is set, and each of seats a human seat of that handle.
-func Company(t testing.TB, on bool, seats ...string) assistant.Company {
+func Company(t TB, on bool, seats ...string) assistant.Company {
 	t.Helper()
+	c, err := company(on, seats...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// company is [Company], answering an error.
+func company(on bool, seats ...string) (assistant.Company, error) {
 	var roles string
 	for _, seat := range seats {
 		roles += fmt.Sprintf("  - name: %s\n    handle: %s\n    kind: human\n", seat, seat)
 	}
 	c, err := config.ParseCompany(fmt.Appendf(nil, companyDoc, on, roles))
 	if err != nil {
-		t.Fatalf("assistanttest: the suite's company does not parse: %v", err)
+		return nil, fmt.Errorf("assistanttest: the company does not parse: %w", err)
 	}
 	o, err := c.Organization()
 	if err != nil {
-		t.Fatalf("assistanttest: the suite's org does not build: %v", err)
+		return nil, fmt.Errorf("assistanttest: the org does not build: %w", err)
 	}
-	return func() (*config.Company, *org.Organization) { return c, o }
+	return func() (*config.Company, *org.Organization) { return c, o }, nil
 }

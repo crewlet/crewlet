@@ -21,13 +21,24 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
-	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 )
+
+// TB is the part of testing.TB this package's helpers call, declared here so
+// the package links no `testing`: `crewlet assistant eval` runs its cases
+// through this same harness from the binary ([RunSuite]), and a suite passes
+// its *testing.T unchanged.
+type TB interface {
+	Helper()
+	Fatal(args ...any)
+	Fatalf(format string, args ...any)
+	Errorf(format string, args ...any)
+	Cleanup(f func())
+}
 
 // RegenerateEnv is the variable that rewrites every golden file a suite
 // compares, instead of comparing it.
@@ -38,7 +49,7 @@ const RegenerateEnv = "CREWLET_REGENERATE_ASSISTANT_FIXTURES"
 //
 // A MISMATCH NAMES THE TARGET THAT REWRITES IT and prints what was rendered, so
 // the diff a reviewer reads is the one the regeneration will commit.
-func Golden(t testing.TB, path string, got []byte) {
+func Golden(t TB, path string, got []byte) {
 	t.Helper()
 	if os.Getenv(RegenerateEnv) == "1" {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -96,7 +107,7 @@ func (tr *Turn) Frame(f wire.Frame) wire.Frame {
 }
 
 // Stream is frames encoded as one SSE body, as a stream route writes them.
-func Stream(t testing.TB, frames ...wire.Frame) []byte {
+func Stream(t TB, frames ...wire.Frame) []byte {
 	t.Helper()
 	var b bytes.Buffer
 	for _, f := range frames {

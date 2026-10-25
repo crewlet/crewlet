@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"slices"
 	"sync"
-	"testing"
 	"time"
 
 	"github.com/google/uuid"
@@ -124,7 +123,7 @@ func (c Catalogue) Offered(iam.Principal, []string) []catalog.Tool { return slic
 // Tool is the catalogue's own tool of that name, the one a suite drives a
 // turn through: its schema, its routes, its card and its preview are the ones
 // a running node uses, so a suite cannot pass on a tool of its own invention.
-func Tool(t testing.TB, name string) catalog.Tool {
+func Tool(t TB, name string) catalog.Tool {
 	t.Helper()
 	tool, ok := catalog.Lookup(name)
 	if !ok {
@@ -133,9 +132,11 @@ func Tool(t testing.TB, name string) catalog.Tool {
 	return tool
 }
 
-// Models answers every chain with one model.
+// Models answers every chain with one model: a scripted [Model] in a suite,
+// or a real providers.llm entry when `crewlet assistant eval -model` measures
+// one.
 type Models struct {
-	Model *Model
+	Model llm.Provider
 	Key   string
 	Err   error
 }
