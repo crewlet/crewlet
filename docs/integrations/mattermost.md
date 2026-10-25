@@ -1178,11 +1178,12 @@ Step 4 is the one a company's first model always needs, and
 `crewlet llm doctor` is the half that matters: a `providers.llm` entry can be
 configured perfectly and still not work — a missing binary, a profile whose
 flags drifted from the installed CLI, an expired login, or the one nothing
-else catches, a model that answers prose instead of the tool-call envelope.
-Only a real completion with a real tool proves the last one, so `doctor`
-runs one, and running it before the first turn is the difference between one
-error now and every phase spending corrective rounds — and ending without its
-submission whenever the model never manages the envelope.
+else catches, a CLI that never reaches the seat's tools — its MCP server
+configuration ignored, its tools left unallowed, a model that answers prose
+instead of calling one. Only a real run with a real tool proves the last one,
+so `doctor` runs one, and running it before the first turn is the difference
+between one error now and every phase spending corrective runs — and ending
+without its submission whenever the model never makes the call.
 
 `-capture-token` — which mints a headless `CLAUDE_CODE_OAUTH_TOKEN` and
 avoids the shared refresh token `-from-host` leaves you with — writes into
@@ -1213,7 +1214,7 @@ should follow, in order:
    called.
 
 Expect a subscription CLI to be **slower to first token** than an API call:
-each round launches a process, so the indicator sits there for a few seconds
+each phase launches a process, so the indicator sits there for a few seconds
 before anything happens. That is what it is for.
 
 If a bot stays silent, check in this order:
@@ -1232,8 +1233,8 @@ If a bot stays silent, check in this order:
    stays quiet.
 4. `crewlet llm doctor default -company examples/nimbus-claude-cli.company.yaml` — on a
    coding-CLI entry this is the other half of the same symptom: a turn
-   that never reached a model, or one whose model answered prose instead of
-   the tool-call envelope, ends with nothing posted.
+   that never reached a model, or one whose CLI never called the seat's
+   tools, ends with nothing posted.
 
 Two settings the compose service sets are load-bearing rather than
 convenience. Both default to `false` in the server's own config defaults,

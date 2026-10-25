@@ -124,7 +124,7 @@ In both, the flat question is the answer — so the check is strictly stricter t
 
 **The per-phase headers say only what the model cannot learn elsewhere, each rule once.** A seat's phase runs inside a vendor's coding CLI whose model and harness already know how to be an agent, so the engine states what nothing else can: the seat's identity and chart, the company's own words, what it prefetched, and the phase's contract. A rule about a tool or a submission field lives in that tool's description or that field's schema, which reach the model beside the tool on every round; a rule about the turn — act with tool calls, finish the arc and discover what is missing, stay reachable, how to judge a blocked round — lives in the header. Each rule left traces to an observed turn-ending failure, and it is written once: the review contract was once three copies that drifted until the submission schema asked the reviewer about delivery in words its prompt had retired. `internal/agent/prompts/budget_test.go` holds the prompts under explicit token budgets — executor < 870, review < 590, the whole turn < 2,430 — each measured with every section a tool on the seat's surface turns on (the escalation guidance the default work tracker brings, the workers list, the sandbox rules, the MCP servers left to discover) rather than against a synthetic catalogue, so the prose cannot grow unchecked.
 
-**Prompt caching does not make repetition free.** Every round of a host-mode phase is a fresh CLI process handed one prompt: the system prompt on the CLI's system channel where it has one, then the flattened transcript, the tool catalogue and the response contract as one user text (see [how the prompt itself travels](llm-backends.md#how-the-prompt-itself-travels)). What can be reused across rounds is the system prompt alone, and only if its bytes do not move — which is why every builder is a pure function of turn-start inputs and per-round growth rides the user message. Across turns even that does not hold: the prefetch blocks (the thread, memory, knowledge, similar prior work, the counterparty) are resolved per turn and sit inside the system prompt. And a seat's budget charges cached input in full, so every byte of a header is paid on every round whether a cache served it or not.
+**Prompt caching does not make repetition free.** A host-mode phase is a run of its CLI's own loop, handed one prompt: the system prompt on the CLI's system channel where it has one, then the conversation so far as one user text, the seat's tools reaching it as an MCP server rather than in any prompt (see [how the prompt itself travels](llm-backends.md#how-the-prompt-itself-travels)). Within a run the CLI re-sends that prefix on every request; a phase that needs another run — after a person's note, a corrective, a call too long to hold the CLI for — starts a fresh process handed the whole conversation again. What can be reused across requests and runs is the system prompt above all, and only if its bytes do not move — which is why every builder is a pure function of turn-start inputs and what grows during a phase rides the conversation. Across turns even that does not hold: the prefetch blocks (the thread, memory, knowledge, similar prior work, the counterparty) are resolved per turn and sit inside the system prompt. And a seat's budget charges cached input in full, so every byte of a header is paid on every round whether a cache served it or not.
 
 ---
 
@@ -515,8 +515,9 @@ holding `submit_work`'s *arguments*: the phase ended on it, the engine
 rescued it as `incomplete`, and the reviewer then read the fenced JSON
 as "what the agent produced".
 
-The loop re-prompts that round with a **finishing corrective** naming
-the tool, verbatim (one tool shown; several are offered as "one of …"):
+The loop follows a run that ended that way with another, opened by a
+**finishing corrective** naming the tool, verbatim (one tool shown; several are
+offered as "one of …"):
 
 > Your last reply ended without calling `submit_work`, so this phase has
 > not finished. Nothing written in a reply is read or delivered — a report
@@ -541,9 +542,9 @@ the rescue below takes over.
 
 **No request forces a call, the corrective included.** A request offers
 tools and never names a tool choice — the provider contract has no field
-for one, and no CLI takes one: in host mode the tools ride the prompt as a
-catalogue whose response contract never demands a call, and in box mode
-the CLI's own loop decides — so the executor, the reviewer, onboarding and
+for one, and no CLI takes one: in either mode the tools reach the CLI as
+an MCP server and its own loop decides whether to call one — so the
+executor, the reviewer, onboarding and
 every worker get the model deciding, on their corrective rounds too. The
 loop is what enforces the call. The forced choice was retired from the
 contract while the engine still called vendors' APIs itself, because
@@ -592,10 +593,10 @@ declining by turns cannot extend a phase round by round on nobody's
 decision. With extensions off, or a ceiling equal to the budget, the cap
 stays hard: the phase ends on the declined round, and is rescued.
 
-**The box-mode executor is not covered.** An executor that runs as a
-[coding CLI's own agentic loop](llm-backends.md#box-mode)
-makes its rounds inside the CLI, so the engine's loop never sees a round
-end in prose and cannot ask again. Its submission arrives over the
+**The box-mode executor is not covered.** An executor that runs
+[detached in a box](llm-backends.md#box-mode) makes its rounds inside a
+CLI the turn does not drive — the turn is parked until the run reports — so
+the engine's loop never sees a run end in prose and cannot start another. Its submission arrives over the
 bridge or not at all; a run that ends without one is rescued exactly as
 a native phase whose correctives ran out.
 
@@ -683,11 +684,11 @@ unset, the judge runs on whatever the role's primary model is.
 
 ### How a round ends
 
-Every completion carries a **stop reason** (`llm.StopReason`): `end` — the model answered — or `tool_use` — it asked for calls to run. Those are the two a CLI can honestly report: in host mode it is asked for an envelope that is either an answer or a set of calls, and the backend names whichever it got. A missing reason reads as an ordinary end, because a backend that names none has not said the response was cut short. Every round records its reason (`rounds[].stop_reason` on the phase record).
+A round is one model request, as the CLI's own record shows it, and it carries a **stop reason** (`llm.StopReason`) where the record names one: `end` — the model answered — `tool_use` — it asked for calls to run — or `cap` — the CLI's own turn cap ended its run at that request with the model still working. Those are what a CLI can honestly report; the profile maps its record's own words onto them (`requests.stops`), and recognises its cap by its exit status and what it printed (`cap`). A run its cap ended is the phase out of rounds by another name, never a failure. A missing reason reads as an ordinary end, because a record that names none has not said the response was cut short. Every round records its reason (`rounds[].stop_reason` on the phase record), and a CLI whose record shows no requests has its whole run recorded as one round ([Rounds, runs and the CLI's record](llm-backends.md#rounds-runs-and-the-clis-record)).
 
 There is no reason for a response cut short. A CLI whose model hit its output ceiling, filled its context window or declined the request says so its own way — as prose, which the loop reads like any other answer (and a phase that has to end in a call meets the [finishing corrective](#round-cap-extension-judge) over it), or as a failed run, which the backend reports as `server` — unless the CLI's words match one of its profile's limit or login markers — so the seat's chain hands the call to its next model. What each model does at those edges is its vendor's harness to keep current, which is the reason the CLI is the backend.
 
-**A call whose arguments did not parse is answered, not run.** A tool call whose arguments are not one JSON object carries the parse error (`llm.ToolCall.ArgumentsError`), and the loop answers it with a **failed** tool result saying why instead of running the tool with `{}` — a write the model never asked for. The model reads it and calls again. The text backend marks such a call from the reply's envelope, where an `arguments` value that is a number, a list or a string holding no single JSON object is the same unreadable request. Every failed tool result is marked as failed on the conversation (`llm.Message.Failed`), not only this one.
+**A call whose arguments did not parse is answered, not run.** A tool call whose arguments are not one JSON object carries the parse error (`llm.ToolCall.ArgumentsError`), and the loop answers it with a **failed** tool result saying why instead of running the tool with `{}` — a write the model never asked for. The model reads it and calls again. The tool session marks such a call as the CLI's `tools/call` request arrives, and a box's bridge answers it in the same words. Some CLIs never send one — Qwen Code repairs the arguments first and Kimi Code sends `{}` in their place — so a tool validates its own arguments as well ([per CLI](llm-backends.md#what-each-cli-does-with-the-seats-tools)). Every failed tool result is marked as failed on the conversation (`llm.Message.Failed`), not only this one.
 
 ---
 
@@ -1102,15 +1103,16 @@ The extension judge additionally emits an `AgentPhaseCompleted` event with `phas
 
 ### What streams during a turn
 
-A phase is not one LLM call — it is a loop of them, and an operator
-watching the dashboard is watching that loop. Two events carry it:
+A phase is not one LLM call — it is a loop of them, run by the seat's CLI in
+one or more CLI runs, and an operator watching the dashboard is watching that
+loop. Two events carry it:
 
 | Event | When | Persisted |
 |---|---|---|
-| `AgentTurnProgress` | Once before the first call, then twice per tool-call round and once before each tool call | No — stream only |
+| `AgentTurnProgress` | Once before the first request; as each CLI run opens; as each model request is read; before and after each tool call; and as each run ends | No — stream only |
 | `AgentPhaseCompleted` | Once, when the phase ends | Yes |
 
-**Before the first call**, because the phase's prompt exists before its
+**Before the first request**, because the phase's prompt exists before its
 answer does. `AgentPhaseStarted` cannot carry it — every phase runner
 publishes that event and only then builds its prompt — so the projection
 seeds a placeholder call with no messages, and a live row showed "No
@@ -1119,25 +1121,30 @@ The opening update carries `prompt_messages` and nothing else, tagged
 `round_num = -1` (consumers read `round_num + 1` as "rounds so far", so
 the sentinel keeps it at zero rather than claiming a round).
 
-**Twice per round, and once per call**, because a round has more than
-one moment worth showing. The first fires the instant the model has
-answered, before any of that round's tools run: the model's prose is what
-explains the tool call that is about to happen, and holding it back until the round's slowest tool returns is holding it back
-for exactly as long as it is most useful. Then one frame
-**before each call**, naming it as `running_call` — `{round, name,
-arguments, started_at}` — because a round's calls are serial and an
-execution is recorded only once its call has answered: a sandbox launch
-or a slow MCP server takes minutes, and a live view that learned of a
-call only when the whole round returned showed a seat doing nothing for
-exactly the stretch somebody was watching it. A round that reads a
-person's [note](#steering-a-running-turn) publishes once more, the moment
-it takes the note and before its provider call, with the note's
-`{round, note_id}` in `steers`. The last fires once the
-round's tool results are in, and names no running call, which is what
-clears it. A round of three calls therefore costs five frames. The final
-round — the one that ends the phase by making no tool call — publishes at
-the first moment and then ends the loop, which is how a phase's closing
-answer streams at all.
+**As each run opens, and as each request is read**, because a round has more
+than one moment worth showing. A run's opening frame carries
+`run_started_at`, its launch, which a reader draws the run in flight from — the
+CLI's own requests are timed only once its record shows them, and a run's
+first moments are a process starting. A request's frame fires the instant the
+CLI's record shows the model has answered, before any of the calls it asked for
+run: the model's prose is what explains the tool call that is about to happen,
+and holding it back until the round's slowest tool returns is holding it back
+for exactly as long as it is most useful. Then one frame **before each call**,
+listing it in `running_calls` — each `{id, round, name, arguments,
+started_at}` — because an execution is recorded only once its call has
+answered: a sandbox launch or a slow MCP server takes minutes, and a live view
+that learned of a call only when it returned showed a seat doing nothing for
+exactly the stretch somebody was watching it. A **list**, because a CLI may make
+a response's calls at once, and `id` — the call's id, the CLI's own where it
+named one — is what tells two calls of one response apart and what the call's
+`tool_executions[]` row carries once it has answered. A frame after each call
+drops it from the list. A run that reads a person's
+[note](#steering-a-running-turn) publishes once more as it opens, the moment it
+takes the note, with the note's `{round, note_id}` in `steers`. And a frame
+fires as each run ends, adding it to `invocations` — the runs that have ended,
+each with its first and last round — and clearing `run_started_at`. The final
+request — the one that ends the phase by making no tool call — publishes when
+it is read, which is how a phase's closing answer streams at all.
 
 **The same text either way.** Both events build their `response` with
 `internal/agent/toolloop` over the same
@@ -1154,12 +1161,11 @@ instant the round commits, because from then on its narration is
 authoritative. Watching is opt-in per CALL: only the tool loop sets `OnDelta`,
 because every other provider call in the engine (reflection, summaries, the
 extension judge) wants an answer rather than a running commentary. And a
-round streams only where its CLI can: the text backend forwards fragments
-for a profile that reads the CLI's output as JSON lines, each event's text a
-piece of the answer, while a CLI whose answer is extracted from the whole of
-what it printed — a fenced block, one JSON document — delivers it in one
-piece at the end. Nothing above the backend reads the absence of fragments
-as a failure.
+round streams only as finely as its CLI's record does: a record that carries
+the model's text as it is written (Claude Code's `text_delta` events) streams
+it in fragments, and one that writes a response's prose only once it is
+finished delivers it in one piece ([what streams](llm-backends.md#finding-the-answer-in-the-clis-output)).
+Nothing above the backend reads the absence of fragments as a failure.
 
 **A tab is sent what moved.** Five frames a second would otherwise mean the
 whole call five times a second to every open dashboard — the prompt, every
@@ -1306,7 +1312,7 @@ wall-clock correction mid-call cannot report a negative or inflated one.
 |---|---|---|
 | `agent_phase_completed` | `started_at` | When **this segment** of the phase began. A resumed executor is one phase in two segments and its `duration_ms` covers both, so `started_at` is deliberately not "published minus duration" — that instant is when the first segment began, possibly a day earlier on another node, and the gap between the segments was the coding run rather than this phase |
 | | `duration_ms` | The phase's own wall clock, extensions and a suspend's pre-resume half included |
-| | `rounds[]` | One entry per provider call: `{round, started_at, duration_ms, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, tool_calls}`. The **model's half** of the round only — its tool calls are timed on their own rows — so a slow model and a slow tool are never one number. `round` is the scale `tool_executions[].round` and `round_narration[].round` share, across an extension and a resume |
+| | `rounds[]` | One entry per model request, as the CLI's record showed it: `{round, started_at, duration_ms, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, tool_calls, stop_reason}` — `stop_reason` is `end`, `tool_use` or `cap`, absent where the record named none. A run whose record shows no requests is one entry, untimed. The **model's half** of the round only — its tool calls are timed on their own rows — so a slow model and a slow tool are never one number. `round` is the scale `tool_executions[].round` and `round_narration[].round` share, across an extension and a resume |
 | | `max_rounds` / `round_ceiling` | The round cap the phase **ended** under (its base budget plus every extension the judge granted) and the most it could ever have been raised to. Never a ceiling below the cap: with extensions off, or a resumed executor whose fresh budget sits on top of its parked rounds, the ceiling is the cap |
 | | `cache_read_tokens` / `cache_write_tokens` | The provider's prompt cache's share of `input_tokens`, summed over the rounds. A **breakdown** of the input, never an addition to it: `total_tokens` is still input plus output, and the cache's share is `cache_read_tokens / input_tokens` |
 | | `provider_key` | The `providers.llm` entry that **served** the phase — the operator's name beside the vendor's `model`. The chain reports the member that answered, so after a hand-off it is the entry that took over rather than the head that failed; latched with `model` by the same rule (the first completion that names one), and stated by the head until then. Empty on a phase no entry answered, exactly as its `model` is. A judge names its entry, and a worker the member of its own chain that answered |
@@ -1314,12 +1320,16 @@ wall-clock correction mid-call cannot report a negative or inflated one.
 | | `launch_id` | On a resumed executor that collected a detached coding run: which launch it collected, since one turn can launch more than once. On a `phase: sandbox` record — the run itself, published when it is collected — it is part of the record's identity, `(turn_id, phase, iteration, launch_id)` |
 | | `activity_transcript` | On a `phase: sandbox` record only: the run's own account of what it did, redacted; a long one keeps its first 64 KiB and its last 192 KiB in whole lines, with a note line where its middle was. `activity_transcript_elided_lines` and `activity_transcript_elided_bytes` count what that left out (absent on a transcript kept whole). See [each run is published as a phase](code-sandbox.md#runs-are-uncapped-each-run-is-published-as-a-phase) |
 | | `work_item` | The item the turn is charged to, as the turn knew it when the record was published — absent while nothing named one |
-| `tool_executions[]` | `started_at` / `duration_ms` | When the call was handed to the surface and how long the surface took to answer. **Absent** on a row nothing timed — a call whose arguments did not parse, a box-mode run's bridged call — because absent means "not recorded" and a zero would mean "instant" |
+| | `invocations[]` | One entry per CLI run of the phase, in order: `{started_at, duration_ms, provider_key, model, outcome, first_round, last_round, requests_observed, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, tool_calls}`. `outcome` is `end` (its model stopped), `cap` (its CLI's own turn cap), `stopped` (the engine ended it: the phase finished, parked, paused for a note, handed a call to the next run, needed a re-list, ran out of rounds or was stopped) or `failed`. `first_round` and `last_round` name the run's rounds on the `rounds[].round` scale, both 0 on a run that made no request; `requests_observed` is false where the CLI's record showed none and the run is one round. `tool_calls` counts the seat's tools it called. The dashboard groups a phase's rounds under "CLI run N" by it |
+| `tool_executions[]` | `call_id` | The call's id — the CLI's own where it named one (and the id its record joined the call by), the loop's otherwise — what pairs the call with its result in the conversation |
+| | `started_at` / `duration_ms` | When the call was handed to the surface and how long the surface took to answer — a box-mode run's bridged call as its bridge timed it. **Absent** on a row nothing timed — a call whose arguments did not parse, one refused before any tool ran, one its run ended before — because absent means "not recorded" and a zero would mean "instant" |
 | | `origin` / `server` | Who **answered**: `builtin` or `mcp:<server>`, and the bare server name for the second. Absent on a call no tool answered — an unknown name, one not offered to the surface, one the skill guard refused — since the surface refused it before any server saw it |
 | `agent_turn_progress` | `rounds[]`, the cache tokens | As on the record, so far |
 | | `max_rounds` / `round_ceiling` | The cap the phase is running under **now** — an extension raises it mid-phase — and on the opening frame, before the model has answered once |
 | | `round_started_at` | When the latest round's provider call was made: the round being written while the model answers, the round whose tools are running after it has. Every round publishes a frame the moment its call is made, so a start later than every entry in `rounds[]` is a model call in flight and one equal to the last is that round's tools; the frame names the new round (`round_num`) and nothing from the one before it. Without it a unary round said nothing until it answered, and for the whole of a slow call a reader saw the previous round as the one in flight |
-| | `running_call` | The call in flight, published immediately before it runs and cleared by the next frame |
+| | `run_started_at` | When the CLI run in flight was launched — the run whose rounds are past every entry in `invocations[]`, which lists only the runs that have ended. Absent between runs |
+| | `running_calls` | The calls in flight, in the order they arrived, each `{id, round, name, arguments, started_at}`: listed by the frame published immediately before a call runs and gone from the frame after it returns. Absent whenever no call is running |
+| | `invocations[]` | As on the record: the runs that have ended so far |
 | `agent_phase_started` | `work_item` | As on the record |
 | `subagent_batched` | `started_at` / `round` | When the delegate call began and the executor round that made it, so a fan-out is placed under its call; each worker's `host_round` matches it |
 | `prefetch_summary` | `started_at` / `duration_ms` | The context assembly — the stretch between `agent_turn_started` and the first phase opening, which reads a diary, a thread and a knowledge base and calls an auxiliary model for two of them |

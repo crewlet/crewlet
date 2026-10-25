@@ -1008,7 +1008,7 @@ Keys accept snake_case (`read_only`) or the MCP camelCase (`readOnlyHint`); over
 
 ## How Tool Calls Work
 
-From the LLM's perspective, builtin tools and MCP tools are identical — both appear as JSON schema tool definitions. The model does not know whether a tool is a function inside the engine or an MCP server talking to a tracker.
+From the LLM's perspective, builtin tools and MCP tools are identical — both appear as JSON schema tool definitions, served together to the seat's coding CLI as the tools of one MCP server, `crewlet`, which the CLI calls in its own loop and the engine answers through the dispatch below ([Tool calls in host mode](../concepts/llm-backends.md#tool-calls-in-host-mode)). The model does not know whether a tool is a function inside the engine or an MCP server talking to a tracker. The name `crewlet` is therefore reserved: no `mcp_servers` entry may take it.
 
 **Tool resolution order:**
 

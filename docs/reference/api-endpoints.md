@@ -682,7 +682,7 @@ half — on the `agent` and `live_call` questions, the `agents`, `snapshot` and
 that seat (`audit.seat.read`), and, for a coding run's parked question, to the
 person it is put to. The body is a call's `trigger`, `prompt`,
 `prompt_messages`, `response`, `tool_executions`, `round_narration`,
-`partial_round` and `running_call.arguments`, an `llm_history` entry's
+`partial_round` and the `arguments` of each `running_calls` entry, an `llm_history` entry's
 `payload`, and a coding run's `task_description`, `question`, `reply` and
 `bridge_calls`. A status reader receives the rest with **`body_withheld:
 true`** and the body's version counters at zero, so a client never marks the
@@ -3174,15 +3174,21 @@ reader of the record — `phases`, `turn`, `trace` and `event` answer the stored
 payload verbatim: `started_at` (when this segment began — not published minus
 `duration_ms`, which on a resumed phase spans a coding run), `rounds[]` (one
 `{round, started_at, duration_ms, model, input_tokens, output_tokens,
-cache_read_tokens, cache_write_tokens, tool_calls}` per provider call, the
-model's half of the round only), each `tool_executions[]` row's `started_at`,
+cache_read_tokens, cache_write_tokens, tool_calls, stop_reason}` per model
+request the CLI's record showed, the model's half of the round only;
+`stop_reason` is `end`, `tool_use` or `cap`), `invocations[]` (one
+`{started_at, duration_ms, provider_key, model, outcome, first_round,
+last_round, requests_observed, input_tokens, output_tokens, cache_read_tokens,
+cache_write_tokens, tool_calls}` per CLI run, `outcome` one of `end`, `cap`,
+`stopped` and `failed`), each `tool_executions[]` row's `call_id`, `started_at`,
 `duration_ms`, `origin` (`builtin` or `mcp:<server>`) and `server`, the
 phase's `cache_read_tokens` / `cache_write_tokens` (a breakdown of
 `input_tokens`, never an addition to it), `max_rounds` / `round_ceiling`, a
 worker's or a judge's `host_round`, a resumed executor's `launch_id` and the
 turn's `work_item`, and `steers[]` — `{round, note_id}` for each person's note
 the phase read. The live frame carries the same so far plus
-`round_started_at` and the `running_call` in flight. Each is **absent** where
+`round_started_at`, the `run_started_at` of the CLI run in flight and the
+`running_calls` in flight. Each is **absent** where
 nothing measured it — a tool call nobody timed has no `duration_ms`, never a
 zero — so a reader treats absent as *not recorded*. The whole field list, and
 why each is measured where it is, is in [what a turn records about its time](../concepts/turn-engine.md#what-a-turn-records-about-its-time).
@@ -4034,7 +4040,8 @@ counter has since left behind as the current ones.
 Each agent's `live_call` is `null` between turns, or
 `{ turn_id, phase, iteration, model, prompt, prompt_messages, response,
 tool_executions, round_narration, partial_round, round_num, rounds_used, rounds,
-max_rounds, round_ceiling, round_started_at, running_call, steers,
+invocations, max_rounds, round_ceiling, round_started_at, run_started_at,
+running_calls, steers,
 cache_read_tokens, cache_write_tokens, work_item, node, in_progress, versions }`
 while an LLM call is under
 way. The fields are these:
@@ -4042,11 +4049,13 @@ way. The fields are these:
 - `prompt_messages` is `[{role, content, sections}]`, the conversation the phase opened with. `sections` is that message's outline as the prompt's builder recorded it — `[{key, title, bytes, headed?}]`, tiling `content` exactly, with `headed: true` on a part that opens on its own heading line whose text is `title` (absent on a part the builder named, which may still open on a heading of its content's) — and is absent on a message no builder outlined or whose text is not valid UTF-8; a finished phase record carries the same maps as `system_sections` and `user_sections`. See [a prompt carries its outline](../concepts/turn-engine.md#what-streams-during-a-turn) for the keys and the rules a reader checks before slicing by one.
 - `round_narration` is `[{round, content, declined}]`, what the model said in each round so far; `declined: true` marks a round that answered in prose where the phase had to end in a call, and is absent otherwise.
 - `rounds_used` is the round the phase is on, counted from one: the rounds that have come back, and the one in flight from the frame the engine publishes as that round's provider call is made. A finished phase record carries the same count under the same name.
-- `rounds` is each round's own timing and tokens, `{round, started_at, duration_ms, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, tool_calls}`. This used to be the count, under the name the phase record uses for the list.
+- `rounds` is each round's own timing and tokens — a round is one model request, as the CLI's record shows it — `{round, started_at, duration_ms, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, tool_calls, stop_reason}`. This used to be the count, under the name the phase record uses for the list.
+- `invocations` is the phase's CLI runs that have **ended**, each `{started_at, duration_ms, provider_key, model, outcome, first_round, last_round, requests_observed, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, tool_calls}`, as on the [phase record](../concepts/turn-engine.md#what-a-turn-records-about-its-time). The run in flight is not on it until it ends: its rounds are the ones past every entry's `last_round`. Empty until the first run ends.
 - `max_rounds` is the round cap currently granted, which an extension can raise mid-phase.
 - `round_ceiling` is the highest value any extension may raise `max_rounds` to.
 - `round_started_at` is when the latest round made its provider call. It is later than every entry in `rounds` while that call is out, and equal to the last entry's start while the round's tools run — only the first is a model call in flight.
-- `running_call` is `{round, name, arguments, started_at}`, the tool call running right now. It is absent between calls, and it is never carried forward from an earlier frame. A frame that stops naming a call means the call returned.
+- `run_started_at` is when the CLI run in flight was launched — the run whose rounds are past every entry in `invocations`. Absent between runs, so a reader draws the run in flight from its launch rather than from the first round it happens to have timed.
+- `running_calls` is every tool call running right now, in the order the calls arrived, each `{id, round, name, arguments, started_at}` — a **list**, because a coding CLI may make a response's calls at once. `id` is the call's id, which its `tool_executions` row carries as `call_id` once it has answered. It is absent while no call runs, and never carried forward from an earlier frame: a frame that stops listing a call means the call returned.
 - `steers` is every person's note the phase has read so far, `{round, note_id}` — the round whose provider call first saw it. What the note said and who sent it are on the turn's `agent_turn_steered` rows. See [steering a running turn](#steering-a-running-turn).
 - `node` is the node running the call.
 - `versions` is `{prompt, response, narration, executions, rounds}`: the version of the copy the call holds of each of its heavy fields — `prompt` numbers `prompt` and `prompt_messages`, `response` the `response`, `narration` the `round_narration`, `executions` the `tool_executions` and `rounds` the `rounds` — a number the node's projection never hands out twice, taken whenever the field is written: every field of a call when the call begins, and after that each field a frame changes. So on the node a tab's socket reads, a version only grows, for every call under every key — and a call built again under its own key (`turn_id`, `phase`, `iteration`), as a suspended Execute phase is when its resumed rounds stream after the checkpoint cleared it, is newer in every field than the copy a tab held from before. A tab that reconnects is sent a snapshot, which replaces every copy it holds. Every surface that carries a call carries it.
@@ -5166,9 +5175,9 @@ again is safe for that reason.
 
 It refuses `not_running` for a turn that has ended or parked, `conflict` for one
 already holding five notes it has not read yet (once it reads them, the note may
-be sent again), `steer_unsupported` for a turn whose executor runs as a coding
-CLI's own agentic loop — its rounds are the CLI's, and the engine has no round
-boundary to hand a note to — and `invalid` for an empty or oversized note.
+be sent again), `steer_unsupported` for a turn whose executor runs detached in a box
+([box mode](../concepts/llm-backends.md#box-mode)) — its rounds are its CLI's, the turn is
+parked while it runs, and the engine has no run boundary to hand a note to — and `invalid` for an empty or oversized note.
 
 The note is **signed**: the node running the turn offers it as the person it
 names, on this node's decision that they may, so the request it is scattered in

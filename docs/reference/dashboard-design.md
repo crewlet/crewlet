@@ -4847,9 +4847,19 @@ rules fix it, and each one names a specific mechanism:
    closed folds, so what the order costs a reader who only wants the
    transcript is two header rows; what it buys is a card that can be read top
    to bottom as the story of one phase. Their own order is the request's: the
-   prompt is what was sent, and the tool surface is the schema array that went
-   *with* it — one payload described in two folds, so they belong beside each
-   other rather than either side of the transcript.
+   prompt is what was sent, and the tool surface is the tools that went *with*
+   it — served to the CLI as its MCP server's for the length of each run — one
+   call described in two folds, so they belong beside each other rather than
+   either side of the transcript.
+
+   **What it did is grouped by CLI run.** Most phases are one run of their
+   CLI's loop; one that was steered, delegated or corrected is several, each a
+   process handed the conversation so far. So the rounds sit under a head per
+   run (`RunHead`): *CLI run N*, the entry that served it, how many rounds it
+   made, how long it lived, what it spent and how it ended — or, for the run
+   still in flight, that it is running. A run whose CLI's record showed no
+   requests is one round, and its head says so, since that round's timing is
+   the run's.
 
    The error callout is the one thing that does not wait its turn. It is a
    banner rather than a section — the reason the reader opened the card at all
@@ -6549,7 +6559,12 @@ that can.
 - **Timeline is a waterfall on the engine's own clock** (`lib/waterfall.ts`).
   Every instant is one the engine measured — each round's model call, each
   tool call, a phase, the prefetch, a coding run — and the model only arranges
-  them: rounds under their phase, a round's tool calls after its model call (a
+  them: a phase's CLI runs under it, each a **CLI run N** span from its launch
+  to its exit (`invocations[]`) and its rounds under it — the entry that served
+  it, the rounds it made, whether its CLI's record showed them, how it ended and
+  what it spent in its detail, and the run still going drawn open from its
+  launch (`run_started_at`), saying what it made lands when its CLI exits —
+  a round's tool calls after its model call (a
   call the engine timed but did not stamp is run serially from the model's
   answer and says it was *placed*), a delegate's workers and the round-cap
   judge under the round that spawned them (`host_round`), each coding run as
@@ -6558,10 +6573,12 @@ that can.
   `auxiliary_spend` record of the `reflection` stage from its first call to
   its last, marked where a call failed — and *review pending* while an executor has finished and no
   reviewer has started. The ROUND IN FLIGHT is drawn only from a start the
-  engine announced for it: every round publishes a frame as its provider call
-  is made, and `round_started_at` stays the previous round's while that
-  round's tools run — so a start no later than the last recorded round's is
-  that round's tools, never "the next round" drawn minutes early. The Turn row
+  engine announced for it: a request is in flight from the frame published as
+  its run opens or as the last call of the response before it is answered, and
+  `round_started_at` stays the previous round's while that round's tools run —
+  so a start no later than the last recorded round's is that round's tools,
+  never "the next round" drawn minutes early. Several calls of one response
+  running side by side are each drawn as running (`running_calls`). The Turn row
   ends at the turn's own measurement; the reflection pass, which runs after
   it, trails the bar. A turn that parked is one turn: its executor's record
   carries every round from both sides of the park, so the phase spans the run
@@ -7966,8 +7983,8 @@ sign-in reads (a secret field — `$` offers the sealed entries, and one the
 document holds inline is a locked row that can be kept or replaced, never shown
 — and none at all under `inherit-env`, since the engine refuses a credential
 under a mode that does not read it) and, under a **Limits** fold, its two caps,
-the wall clock on one CLI invocation and how many run at once, empty meaning
-the default. It checks the whole company twice with `dry_run` — as stored and
+the wall clock on one stretch of a CLI's own work and how many of its CLIs live
+at once, empty meaning the default. It checks the whole company twice with `dry_run` — as stored and
 with the edit — so only a warning the edit introduces is said, places a problem
 the engine names at one of those fields beside it and any other above the form,
 then stores it with `PUT /config/llm-providers/{id}` and `If-Match`, sending

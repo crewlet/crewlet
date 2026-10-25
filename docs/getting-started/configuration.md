@@ -368,12 +368,16 @@ providers:
                                         #   live and starts that CLI signed out. Its bundle
                                         #   (auth.credential_bundle) stays the old CLI's and is
                                         #   refused until re-exported from the new one
-      timeout_seconds: 600              # optional — one CLI invocation, wall clock (default 600):
-                                        #   the process launch, the model's whole answer and the
-                                        #   CLI's own retries. A breach is a retryable `timeout`
-      max_concurrent: 4                 # optional — CLI processes at once (default 4). Each is a
-                                        #   200-400 MB runtime, and subscription plans throttle
-                                        #   concurrency hard
+      timeout_seconds: 600              # optional — one stretch of the CLI's own work, wall clock
+                                        #   (default 600): from its launch, or the end of the tool
+                                        #   call it last waited on, to its next call or its exit —
+                                        #   the seat's tools are never on it. A breach is a
+                                        #   retryable `timeout`
+      max_concurrent: 4                 # optional — live CLI processes at once (default 4). Each
+                                        #   is a 200-400 MB runtime that holds its slot for its
+                                        #   whole run, and subscription plans throttle concurrency
+                                        #   hard; a model call made inside one of a run's tool
+                                        #   calls on the same entry borrows the run's slot
       env: {}                           # optional — extra child env, ${ENV_VAR}-resolved. The
                                         #   child gets an ALLOWLISTED environment, never the
                                         #   engine's, so declare anything else the CLI needs here —
