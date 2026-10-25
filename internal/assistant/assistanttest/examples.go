@@ -5,10 +5,10 @@ package assistanttest
 // one the route would parse.
 var exampleValues = map[string]any{
 	"item":         "ENG-42",
-	"page":         "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
-	"artifact":     "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
-	"turn_id":      "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
-	"id":           "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+	"page":         RecordID,
+	"artifact":     RecordID,
+	"turn_id":      RecordID,
+	"id":           RecordID,
 	"handle":       "pm",
 	"key":          "ENG",
 	"q":            "deploy runbook",
