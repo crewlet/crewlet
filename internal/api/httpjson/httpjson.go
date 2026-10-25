@@ -657,6 +657,12 @@ const (
 	// build cannot read. 409: the node and the command are sound, and a node
 	// running that build, or this one once upgraded, takes the backup.
 	CodeRecordUnreadable Code = "record_unreadable"
+	// CodeRecordUnverified is a backup refused because a log it replays
+	// holds a record signed under a key this node does not hold, which may
+	// name a file the backup would not know to carry. 409: the node and the
+	// command are sound, and this node once its keyring holds the key, or a
+	// node that holds it, takes the backup.
+	CodeRecordUnverified Code = "record_unverified"
 	// CodeLogRecreated is a backup refused because this node's copy is
 	// keyed to an earlier instance of a log that has since been recreated.
 	// 409: this node once it has re-keyed to the live log, or a node that
@@ -1155,6 +1161,10 @@ var codes = map[Code]string{
 		"holds a record a newer build wrote, which this node's build cannot " +
 		"read. Take the backup from a node running that build, or from this " +
 		"one once it is upgraded.",
+	CodeRecordUnverified: "The backup was refused because a log it replays " +
+		"holds a record signed under a key this node does not hold. Add the " +
+		"key to this node's secrets.keys and restart it, or take the backup " +
+		"from a node that holds it.",
 	CodeLogRecreated: "The backup was refused because this node's copy is " +
 		"keyed to an earlier instance of a log that has since been recreated. " +
 		"Take it once this node has re-keyed to the live log, or from a node " +

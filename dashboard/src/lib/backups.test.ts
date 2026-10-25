@@ -118,12 +118,14 @@ describe("why a backup was not taken", () => {
   });
 
   // A REFUSAL THE FLEET'S OWN STATE CAUSES — an object store that did not
-  // answer, a newer build's record on a log the backup replays, a copy keyed to
-  // a recreated log, a log missing records — is said in the engine's hint, as a
+  // answer, a newer build's record on a log the backup replays, a record signed
+  // under a key this node does not hold, a copy keyed to a recreated log, a log
+  // missing records — is said in the engine's hint, as a
   // sentence of its own, never as a copy that failed on this node.
   test.each([
     [503, "objects_unreachable", /did not answer/],
     [409, "record_unreadable", /newer build/],
+    [409, "record_unverified", /does not hold/],
     [409, "log_recreated", /recreated/],
     [503, "log_gap", /take the backup again/],
   ])("a %i %s is said in the engine's hint, or its own sentence", (status, code, own) => {

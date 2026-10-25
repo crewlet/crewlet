@@ -202,10 +202,11 @@ What is worth knowing about it:
   nothing. Every record is read as the appliers read it, its signature
   checked under this node's `secrets.keys` first
   ([ADR-0031](../../adr/0031-every-state-log-record-is-signed.md)): one signed
-  under a key this node does not hold refuses the backup — add the key and
-  restart the node, or take the backup from a node that holds it — and one
-  whose signature does not verify refuses it as bytes no node of the fleet
-  signed. Both answer `500 backup_failed`, the reason in this node's log.
+  under a key this node does not hold refuses the backup (`409
+  record_unverified`) — add the key and restart the node, or take the backup
+  from a node that holds it — and one whose signature does not verify refuses
+  it as bytes no node of the fleet signed (`500 backup_failed`, the reason in
+  this node's log).
 - **A backup takes what its previous one holds** (`s3`). A key is minted for
   one upload and never names other bytes, so an object this node's previous
   backup already holds is the same object: when that backup's directory is

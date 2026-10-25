@@ -151,6 +151,10 @@ const FLEET_REFUSALS = new Map<string, string>([
     "A log this backup replays holds a record a newer build wrote; take the backup from a node running that build.",
   ],
   [
+    "record_unverified",
+    "A log this backup replays holds a record signed under a key this node does not hold; add the key to its secrets.keys and restart it, or take the backup from a node that holds it.",
+  ],
+  [
     "log_recreated",
     "This node's copy is keyed to a log that has since been recreated; take the backup once the node has re-keyed to it, or from a node that has.",
   ],
@@ -196,8 +200,9 @@ export function backupRefusal(err: unknown): { field: boolean; message: string }
     };
   }
   // THE FLEET'S STATE RATHER THAN THIS NODE'S: the object store did not
-  // answer, a log the backup replays holds a newer build's record, the copy is
-  // keyed to a log since recreated, or a log is missing records the copy needs.
+  // answer, a log the backup replays holds a newer build's record or one signed
+  // under a key this node does not hold, the copy is keyed to a log since
+  // recreated, or a log is missing records the copy needs.
   // The engine says what to do in its hint; the copy-failed sentence below
   // would send the reader to a node with nothing wrong on it. The hint is a
   // CLAUSE — lower-case and unstopped — so it is made a sentence before the

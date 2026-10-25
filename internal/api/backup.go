@@ -161,12 +161,14 @@ const logGapRetry = time.Second
 //
 // A backup asked for while another runs on this node is a 409: the node is
 // busy with exactly what was asked for, and the request can be made again once
-// that one finishes. So are the two refusals A ROLLING UPGRADE or a rebuilt
-// log makes — a record on a log the backup replays that this build cannot
-// read, and a copy keyed to an earlier instance of a log — because this node
-// is sound and so is the command: what it holds conflicts with the fleet's
-// newer state, and another node, or this one once it has caught up, takes the
-// backup.
+// that one finishes. So are the refusals A ROLLING UPGRADE, a keyring
+// rotation or a rebuilt log makes — a record on a log the backup replays that
+// this build cannot read, one signed under a key this node does not hold, and
+// a copy keyed to an earlier instance of a log — because this node is sound
+// and so is the command: what it holds conflicts with the fleet's newer state,
+// and another node, or this one once it has caught up, takes the backup. A
+// record whose signature no key opens is not among them: it is bytes no node
+// of the fleet wrote, and a 500 like every failure of the engine's own.
 //
 // A copy naming objects the object store did not answer for is a 503, and so
 // is a log a restore could not replay to the snapshot: what failed is the
@@ -187,6 +189,12 @@ func backupRefusal(err error) refusal {
 			hint: "a log this backup replays holds a record a newer build wrote, which may " +
 				"name a file this node's build cannot read; take the backup from a node " +
 				"running that build, or from this one once it is upgraded"}
+	case errors.Is(err, statelog.ErrRecordUnverified):
+		return refusal{status: http.StatusConflict, code: httpjson.CodeRecordUnverified,
+			hint: "a log this backup replays holds a record signed under a key this " +
+				"node does not hold, which may name a file the backup would not carry; " +
+				"add the key to this node's secrets.keys and restart it, or take the " +
+				"backup from a node that holds it"}
 	case errors.Is(err, statelog.ErrStreamRecreated):
 		return refusal{status: http.StatusConflict, code: httpjson.CodeLogRecreated,
 			hint: "this node's copy is keyed to an earlier instance of a log that has " +

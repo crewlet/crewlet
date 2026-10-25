@@ -7874,6 +7874,12 @@ Eight refusals, each pointing somewhere different:
   carry, so the backup is refused rather than guessed: take it from a node
   running the build that wrote the record, or from this one once it is
   upgraded. The `hint` says so.
+- **409 `record_unverified`** — a record the backup reads past its store copy
+  is signed under a key this node's `secrets.keys` does not hold, so the node
+  cannot vouch for what it names: add the key and restart the node, or take
+  the backup from a node that holds it. The `hint` says so. A record no key
+  of the fleet opens is not this — it is bytes no node of the fleet signed,
+  and refuses the backup as `500 backup_failed`, the reason in the node's log.
 - **409 `log_recreated`** — this node's store copy is keyed to an earlier
   instance of a log that has since been recreated, so its position names
   records on a log that no longer exists. Take the backup once this node has
@@ -7897,7 +7903,7 @@ caller, the node, the directory and whether it finished — a failed one
 included, since it may have left files there. A destination refused with a
 `400`, and a backup refused with `409 backup_running` while another runs,
 wrote nothing and leave no event — each is only ever answered before a byte is
-copied; every other refusal — `record_unreadable`, `log_recreated`, `log_gap`
+copied; every other refusal — `record_unreadable`, `record_unverified`, `log_recreated`, `log_gap`
 and `objects_unreachable` among them — arrives with part of the copy already
 in the directory, and is a failed backup recorded as one: see
 [the runtime audit](#the-runtime-audit-sourceoperator).
