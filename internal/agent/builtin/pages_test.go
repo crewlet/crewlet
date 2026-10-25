@@ -337,7 +337,7 @@ func (l *listRecorder) Get(context.Context, string,
 	return doclet.Detail{}, doclet.ErrNotFound
 }
 
-// A COMPANY RUNNING CONFLUENCE GETS NO NATIVE PAGE TOOLS.
+// A COMPANY RUNNING CONFLUENCE GETS NO DOCLET PAGE TOOLS.
 func TestNoKnowledgeBaseMeansNoTools(t *testing.T) {
 	t.Parallel()
 	reg := kbRegistry(t, builtin.PageDeps{})

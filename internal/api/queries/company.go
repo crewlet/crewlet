@@ -744,7 +744,7 @@ func seatsFor(roster *org.Organization, kind string) []string {
 			carries = r.Project != ""
 		case "confluence":
 			// The seat's own SPACE, vendor-neutral for the same reason
-			// the project is: one key names a native container and a
+			// the project is: one key names a Doclet container and a
 			// Confluence one.
 			carries = r.Space != ""
 		case "github":

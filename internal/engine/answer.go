@@ -102,7 +102,7 @@ func (b answerBudget) Refusing(ctx context.Context) (builtin.BudgetRefusal, bool
 // write to any of them can change what an answer would say, and moves the
 // position, which is what retires every answer cached at the old one.
 //
-// FALSE FOR A COMPANY WHOSE KNOWLEDGE BASE IS NOT NATIVE: an external wiki
+// FALSE FOR A COMPANY WHOSE KNOWLEDGE BASE IS NOT DOCLET: an external wiki
 // changes without this node hearing, so a position that covered only the
 // tracker would keep serving an answer whose pages had moved.
 //

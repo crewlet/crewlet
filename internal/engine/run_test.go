@@ -478,8 +478,8 @@ func (c *countingWithdrawals) ForgetAdmission(ctx context.Context, nodeID, incar
 
 // A PARTIAL SET IS REFUSED, NAMING WHAT IS MISSING. It used to be run: the
 // engine skipped whatever needed the absent piece, so an engine lent a queue
-// and no store served a company with no conversation ledger and no native
-// tracker, and nothing said so. Every node `crewlet run` builds holds all four.
+// and no store served a company with no conversation ledger and no Worklet,
+// and nothing said so. Every node `crewlet run` builds holds all four.
 func TestBackendsSuppliedWithoutEveryEstateAreRefused(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {

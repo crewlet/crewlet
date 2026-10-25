@@ -319,8 +319,8 @@ func (f *fakeTracker) Project(_ context.Context, q worklet.ProjectDetailQuery) (
 }
 
 // The FEED seam — what happened, and what is waiting on somebody. A reader
-// that answers the task questions and not these is a build with no native
-// tracker, and the registration turns on exactly that.
+// that answers the task questions and not these is a build with no
+// Worklet, and the registration turns on exactly that.
 func (f *fakeTracker) Activity(_ context.Context, q worklet.ActivityQuery,
 	_ time.Time) (worklet.ActivityAnswer, error) {
 
@@ -822,7 +822,7 @@ func TestTheTrackerToolsRefuseOutsideATurn(t *testing.T) {
 	}
 }
 
-// A COMPANY RUNNING JIRA GETS NO NATIVE TOOLS AT ALL. A seat offered a tool
+// A COMPANY RUNNING JIRA GETS NO WORKLET TOOLS AT ALL. A seat offered a tool
 // against a tracker its company does not run would reach for it and fail at
 // the call, and learn to distrust the whole catalogue.
 func TestNoTrackerMeansNoTools(t *testing.T) {

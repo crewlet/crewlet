@@ -278,8 +278,8 @@ func TestASuspendedTurnIsCountedOnceAndPaidInFull(t *testing.T) {
 
 // AN UNATTRIBUTED TURN CHARGES NOTHING.
 //
-// A turn on nothing, or on another tracker's item, has no native row to add
-// to — and a charge that guessed an item would put one turn's cost on work it
+// A turn on nothing, or on another tracker's item, has no Worklet row to add
+// to, and a charge that guessed an item would put one turn's cost on work it
 // was not doing.
 func TestAnUnattributedTurnChargesNothing(t *testing.T) {
 	t.Parallel()

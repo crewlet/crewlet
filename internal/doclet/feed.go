@@ -107,9 +107,9 @@ func (t *Translator) Translate(ctx context.Context, rec changefeed.Record) (chan
 	}
 	if skills := t.skillsContainer(); skills != "" &&
 		strings.EqualFold(record.Notify.Container, skills) {
-		// A TOOL SKILL. The applier picks it up on its own — natively
+		// A TOOL SKILL. The applier picks it up on its own (on Doclet
 		// there is no page webhook and this feed deliberately drops
-		// these changes — and waking a team about one would put a
+		// these changes), and waking a team about one would put a
 		// procedure written for one phase of one turn in front of
 		// somebody as knowledge.
 		log.DebugContext(ctx, "pages_change_in_skills_container",

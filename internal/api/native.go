@@ -384,7 +384,7 @@ func (l liveBacklinks) LinkedFrom(ctx context.Context, pageID string) (
 // liveWorkSearch is ranked item search, resolved per question.
 //
 // ITS OWN SOURCE, as [queries.Sources.WorkSearch] is, and present exactly
-// where the tracker is: the index is built for either native backend, but the
+// where the tracker is: the index is built for Worklet or Doclet, but the
 // search reads the tracker's corpus alone, so the engine serves it only for a
 // company that keeps its tracker here ([engine.WorkSearcher]) — through the
 // router, where a node holding no index of its own is answered by one that
@@ -422,8 +422,8 @@ func (l liveFiles) Files(ctx context.Context, q worklet.FileQuery) (worklet.File
 // so a half read as absent after it said "started" is one this company does
 // not run rather than one not published yet — see the file comment.
 //
-// THE KNOWLEDGE SEARCH IS WHATEVER BACKEND THE COMPANY RUNS NOW, native or not:
-// ranked search over Doclet is exactly as useful to an
+// THE KNOWLEDGE SEARCH IS WHATEVER BACKEND THE COMPANY RUNS NOW, Doclet or not:
+// ranked search over the company's own wiki is exactly as useful to an
 // operator's assistant on Confluence, and an apply can add one — so it is read
 // per call too, and present exactly where the engine has a searcher.
 func NativeOperatorHalves(e *engine.Engine) func() (operator.Halves, bool) {

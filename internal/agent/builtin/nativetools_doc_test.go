@@ -221,7 +221,7 @@ func TestThePagesCountTheNativeToolsTheRegistryHolds(t *testing.T) {
 	start := strings.Index(guide, "### Worklet and Doclet")
 	end := strings.Index(guide, "The writes on each side count as a **delivery**")
 	if start < 0 || end < start {
-		t.Fatal("the tools guide has no native-tools section to read")
+		t.Fatal("the tools guide has no Worklet and Doclet section to read")
 	}
 	var rows []string
 	for _, m := range regexp.MustCompile("\\| `([a-z_]+)` \\|").

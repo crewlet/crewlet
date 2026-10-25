@@ -1593,8 +1593,8 @@ type Stream struct {
 	// refusals the mutation log's field describes apply here unchanged.
 	TrackerVectorsMaxBytes int64 `yaml:"tracker_vectors_max_bytes,omitempty" json:"tracker_vectors_max_bytes,omitempty" js:"min=1073741824;max=2199023255552" desc:"Byte ceiling on the vector changelog, sized for a model change rather than the steady state; unset derives what the mutation log derives from the volume, a quarter of its free space clamped to 4 GiB..64 GiB, whatever tracker_log_max_bytes is set to."`
 
-	// PagesLogMaxBytes is the byte ceiling on the knowledge base's log, the
-	// ordered stream every native page write goes through.
+	// PagesLogMaxBytes is the byte ceiling on Doclet's log, the ordered
+	// stream every page write goes through.
 	//
 	// UNSET DERIVES IT beside the mutation log's, at a quarter of that
 	// log's ceiling as set or derived (1 GiB..16 GiB from a volume alone,

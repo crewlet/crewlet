@@ -75,7 +75,7 @@ func TestTheSkillSourceFollowsTheAppliedCompanyAndTheWiring(t *testing.T) {
 		container:  config.DefaultSkillsContainer,
 		unreadable: true,
 	}, {
-		name: "a company on the native backend without one running cannot be read",
+		name: "a company on Doclet without it running cannot be read",
 		company: &config.Company{
 			Knowledge: config.Knowledge{Backend: config.KnowledgeDoclet},
 		},

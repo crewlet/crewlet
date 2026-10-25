@@ -552,9 +552,9 @@ knowledge:
 // and then answers as though a search had run and found nothing — which
 // hides the fact that nothing is configured.
 //
-// It takes SAYING SO now. A company that declares nothing runs the native
-// knowledge base, so `backend: none` is the gesture that means none — and
-// this test is the one place that distinguishes "off" from "not mentioned".
+// It takes SAYING SO now. A company that declares nothing runs Doclet, so
+// `backend: none` is the gesture that means none, and this test is the one
+// place that distinguishes "off" from "not mentioned".
 func TestNoKnowledgeBackendIsANilInterface(t *testing.T) {
 	t.Parallel()
 	doc := companyDoc + `

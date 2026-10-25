@@ -1170,7 +1170,7 @@ func claimTheFleetAnswersOneSearchBetweenItsMembers(t *testing.T, c *cluster) {
 		}
 		searcher := n.engine.DocletSearcher()
 		if searcher == nil {
-			t.Fatalf("member %d runs no native searcher", i)
+			t.Fatalf("member %d runs no Doclet searcher", i)
 		}
 		waitFor(t, fmt.Sprintf("member %d's first index build", i), func() bool {
 			return !searcher.Building(t.Context())

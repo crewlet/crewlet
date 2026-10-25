@@ -284,8 +284,8 @@ func knowledgeSearch(e *Engine, c *Company) builtin.KnowledgeSearcher {
 		// THE BACKEND, not the presence of an `integrations.confluence`
 		// block: a company on Doclet configures no
 		// vendor at all, and gating on the vendor block would have left
-		// every native company's seats without search_knowledge while
-		// the pages they were meant to find were sitting in the index.
+		// the seats of every company on Doclet without search_knowledge
+		// while the pages they were meant to find were sitting in the index.
 		return nil
 	}
 	return liveKnowledge{engine: e}

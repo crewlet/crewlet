@@ -458,7 +458,7 @@ integrations:
 		}
 	})
 
-	// A NARROWING ON THE NATIVE BACKEND IS ORDINARY, and this is the case
+	// A NARROWING ON DOCLET IS ORDINARY, and this is the case
 	// the rule it replaces got wrong: a scope used to require
 	// integrations.confluence, because presence was the only signal there
 	// was. With a backend named explicitly, a curated floor over the

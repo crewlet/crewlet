@@ -190,9 +190,9 @@ func linkFreshness(w http.ResponseWriter, after string) (statelog.Freshness, boo
 	return fresh, true
 }
 
-// liveWorkItem is the work item ref names, read from the company's own
-// tracker at fresh, refusing an item nobody filed and a removed one. It
-// renders every refusal itself and reports whether the link goes on.
+// liveWorkItem is the work item ref names, read from Worklet at fresh,
+// refusing an item nobody filed and a removed one. It renders every refusal
+// itself and reports whether the link goes on.
 //
 // A READ THE TRACKER REFUSED (a floor this node did not reach within the read
 // budget, or any other state-log refusal) is answered as the tracker's own

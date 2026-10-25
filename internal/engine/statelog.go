@@ -326,7 +326,7 @@ type stateLog struct {
 
 	// skills is this build's tool-skill parser, threaded down because the
 	// PAGES APPLIER is what notices a skill page arriving or leaving:
-	// natively there is no page webhook and the change feed deliberately
+	// on Doclet there is no page webhook and the change feed deliberately
 	// drops those changes, so the apply is the only thing that sees both
 	// halves. Nil answers "not a skill", which is a build with no skill
 	// parser wired.

@@ -213,7 +213,7 @@ func TestOperatorVariablesAreSubstitutedIntoASkill(t *testing.T) {
 // A SKILL PAGE PUBLISHED TO DOCLET REACHES THE
 // REGISTRY, and one edited into an ordinary page leaves it.
 //
-// The native backend has no page webhook, so what notices is the page
+// Doclet has no page webhook, so what notices is the page
 // projection's own apply: it derives the skill flag on every page it writes,
 // which is the one thing that sees both a page becoming a skill and a page
 // ceasing to be one. It asks the node's skill sync to walk the container

@@ -797,7 +797,7 @@ func (a *Applier) writeSkillRow(ctx context.Context, tx *sql.Tx,
 	}
 	if was == 1 || skill == 1 {
 		// A PAGE THAT WAS A SKILL OR HAS BECOME ONE, which is both
-		// halves of what the registry has to notice: natively there is
+		// halves of what the registry has to notice: on Doclet there is
 		// no page webhook and the change feed drops these changes, so
 		// the apply is the only thing that sees both an arrival and a
 		// departure.

@@ -8,7 +8,7 @@ import (
 )
 
 // The applier's post-commit hook is the ONLY way the tool-skill registry hears
-// about a native page: there is no webhook, and the change feed drops a skill
+// about a Doclet page: there is no webhook, and the change feed drops a skill
 // page's changes on purpose. So every write that can change what the skills
 // container holds must fire it, and a write that cannot must not, or every
 // edit in the wiki would cost a walk of the skills container.

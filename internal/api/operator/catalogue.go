@@ -126,14 +126,14 @@ var log = logging.Get("api.operator")
 // set and are overwritten: the actor is the request's principal carrying the
 // call's operation, and the decision is [Options.Authorize].
 type Halves struct {
-	// Work and Pages are the native backends. A zero half serves none of
+	// Work and Pages are Worklet and Doclet. A zero half serves none of
 	// its tools — the honest shape for a company on Jira or Confluence.
 	Work  builtin.WorkDeps
 	Pages builtin.PageDeps
 
 	// Knowledge is the company's ranked search, or nil. It is offered
-	// whatever backend the company runs, native or not: ranked search over
-	// Doclet is exactly as useful on Confluence.
+	// whatever backend the company runs, Doclet or not: ranked search over
+	// the company's own wiki is exactly as useful on Confluence.
 	Knowledge builtin.KnowledgeSearcher
 
 	// Artifacts are the artifacts tools' halves, or the zero value on a node

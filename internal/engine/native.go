@@ -91,7 +91,7 @@ type native struct {
 	trackerReader *worklet.Reader
 	pageReader    *doclet.Reader
 
-	// searcher answers the knowledge seam natively.
+	// searcher is Doclet's answer to the knowledge seam.
 	searcher *doclet.Searcher
 
 	// itemSearch is the tracker's own ranked search, over the SAME index

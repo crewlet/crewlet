@@ -68,12 +68,12 @@ func TestADefaultCompanyHasATrackerAndAWiki(t *testing.T) {
 	waitFor(t, "the native backends to hydrate", hydrated(t, n.engine))
 
 	if n.engine.TrackerWriter() == nil || n.engine.Tracker() == nil {
-		t.Fatal("a company that declares no tracker got no native one")
+		t.Fatal("a company that declares no tracker got no Worklet")
 	}
 	if n.engine.PagesStore() == nil || n.engine.Pages() == nil {
-		t.Fatal("a company that declares no knowledge base got no native one")
+		t.Fatal("a company that declares no knowledge base got no Doclet")
 	}
-	// AND THE SEARCHER IS THE NATIVE ONE, which is what the turn-start
+	// AND THE SEARCHER IS DOCLET'S, which is what the turn-start
 	// prefetch and every seat's search_knowledge read through.
 	searcher := n.engine.Knowledge()
 	if searcher == nil {
@@ -182,7 +182,7 @@ func TestAPageBecomesSearchable(t *testing.T) {
 
 	searcher := n.engine.DocletSearcher()
 	if searcher == nil {
-		t.Fatal("no native searcher")
+		t.Fatal("no Doclet searcher")
 	}
 	// THE INDEX CATCHES UP ON ITS OWN, and what has to end is the wait for
 	// the PAGE rather than the wait for the gate. The gate reports this

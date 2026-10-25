@@ -176,9 +176,9 @@ func TestTheOperatorsSurfacesAreAnsweredThroughTheRouter(t *testing.T) {
 	vendors := &Engine{router: router}
 	vendors.remote.Store(&remoteNative{})
 	if _, ok := OperatorWork(vendors); ok {
-		t.Error("a company on a vendor tracker was handed the native one")
+		t.Error("a company on a vendor tracker was handed Worklet")
 	}
 	if _, ok := OperatorPages(vendors); ok {
-		t.Error("a company on a vendor knowledge base was handed the native one")
+		t.Error("a company on a vendor knowledge base was handed Doclet")
 	}
 }

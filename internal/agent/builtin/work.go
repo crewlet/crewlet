@@ -38,7 +38,7 @@ const (
 	SearchWorkItemsTool = worklet.SearchWorkItemsTool
 )
 
-// WorkTools are the whole native catalogue, so a caller registering them names
+// WorkTools are Worklet's whole catalogue, so a caller registering them names
 // one thing.
 func WorkTools() []string { return worklet.Tools() }
 

@@ -14,7 +14,7 @@ import (
 
 // Searcher answers the company's knowledge search over its own pages.
 //
-// It implements [knowledge.Searcher], which is what makes the native backend
+// It implements [knowledge.Searcher], which is what makes Doclet
 // a drop-in for Confluence: the turn-start prefetch and the `search_knowledge`
 // builtin both read through that seam, so neither knows which answered.
 //
@@ -25,7 +25,7 @@ import (
 // unscoped query on the shared org token is how one seat reads a page its own
 // account never could.
 //
-// Natively there is no second account. Every reader is a seat of one company,
+// On Doclet there is no second account. Every reader is a seat of one company,
 // the engine IS the boundary, and there is nothing to launder a read through.
 // So an empty scope means the whole company, and [knowledge.Permitted] is not
 // consulted: its selfAuth question has no meaning on a backend where identity

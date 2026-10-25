@@ -371,13 +371,14 @@ func (r *Registry) MCPNames() []string {
 // delivers to its own SERVER, which is the name an inbound notification from
 // that vendor reports itself under. A first-party tool delivers only when it
 // was registered with [DeliversTo], because the engine ships its own tools and
-// knows which of them reach anybody and where: a native work-item comment
+// knows which of them reach anybody and where: a Worklet work-item comment
 // reaches the tracker, a diary write reaches nobody.
 //
 // This replaced an origin test. The rule "a delivery only ever comes from an
 // MCP server" was true of a company whose every shared surface was a vendor's,
-// and false the moment the tracker moved in-process — a seat that answered its
-// assignment natively was judged to have reached nobody and looped to failure.
+// and false the moment the tracker moved in-process: a seat that answered
+// its assignment in Worklet was judged to have reached nobody and looped to
+// failure.
 // Widening it to a flat set of NAMES then bought the opposite error: every
 // deliverable satisfied every obligation, so the tracker write that fixed the
 // first incident discharged a Mattermost DM in the second. A name and a

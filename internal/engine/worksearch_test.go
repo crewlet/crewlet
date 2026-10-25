@@ -8,7 +8,7 @@ import (
 
 // A COMPANY THAT DOES NOT RUN WORKLET HAS NO WORK SEARCH, NOT AN EMPTY ONE.
 //
-// The lexical index is built under either native backend, because it covers
+// The lexical index is built under Worklet or Doclet, because it covers
 // both corpora, and the tracker's ranked search was built over it whenever the
 // index was — so a company whose tracker is a vendor's, or none, still had a
 // work search, over a tracker corpus that is empty by construction. Every

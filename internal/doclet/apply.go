@@ -59,7 +59,7 @@ type Applier struct {
 	//
 	// A tool skill reaches the registry by being READ OUT of its
 	// container, and something has to say when to read again. On the
-	// vendor backend that is a page webhook; natively the change feed
+	// vendor backend that is a page webhook; on Doclet the change feed
 	// deliberately drops these changes — a skill is machinery, and waking
 	// a team about an edit to a procedure written for one phase of one
 	// turn is exactly what the quiet rule exists to prevent — so there is
