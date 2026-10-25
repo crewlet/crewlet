@@ -382,8 +382,10 @@ agent_phase_completed      # one phase's durable record: prompts, response,
                            # tool_use; absent where the backend reported
                            # none). A failed phase carries `error_kind` — a
                            # provider kind (rate_limit, auth, timeout,
-                           # server, fatal), budget_exhausted, stopped for a
-                           # phase a person ended, canceled, or error
+                           # server, fatal, canceled), budget_exhausted,
+                           # model_protocol for a model whose tool calls
+                           # could not be read after a corrective, stopped
+                           # for a phase a person ended, canceled, or error
 auxiliary_spend            # what the seat's auxiliary model cost for one key —
                            # stage (turn, reflection, background, operator),
                            # purpose, seat or person, turn, model, provider

@@ -70,6 +70,7 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/toolmarkup"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
@@ -124,6 +125,24 @@ const MaxFinishingCorrectives = 2
 // nineteen rounds unspent — one round before the message it had just said it
 // was about to send.
 const maxEmptyAnswerRetries = 1
+
+// maxProtocolCorrectives bounds the re-prompts issued when a round's reply
+// asked for tool calls in a form the backend could not read
+// ([llm.Completion.ProtocolError]), or carried tool-call markup in its prose.
+//
+// One. Such a round is a model that tried to call a tool and wrote the call
+// in its vendor's own channel instead of the contract: a single corrective
+// naming the fault reliably brings the contract back, and a model that
+// repeats the fault after being told is not converging, so a second round
+// would be priced for nothing. PER RUN, like the allowances above: a round
+// that emitted a call clears it.
+//
+// What it guards is stronger than a retry count: such a round is NEVER shown.
+// Its prose is not narrated and its text is not appended to the
+// conversation, so a person never reads `<invoke name=...>` as an answer and
+// a phase's text never carries it; when the allowance is spent the loop
+// fails with [ErrModelProtocol] rather than end on it.
+const maxProtocolCorrectives = 1
 
 // Surface is the set of tools a phase runs against.
 //
@@ -578,6 +597,54 @@ func (e *BudgetError) Error() string {
 // the class without naming which ceiling was hit.
 func (e *BudgetError) Is(target error) bool { return target == ErrBudgetExhausted }
 
+// ErrModelProtocol is a loop that ended because the model kept answering in a
+// form the engine could not read: tool calls written outside the contract,
+// after the corrective that asked for the contract
+// ([maxProtocolCorrectives]). The answer was never shown, so a caller tells
+// the person the model's answer could not be read, never what it said.
+var ErrModelProtocol = errors.New("toolloop: the model's answer did not follow the response contract")
+
+// ProtocolError is an [ErrModelProtocol] with where and why.
+type ProtocolError struct {
+	Phase  string
+	Round  int
+	Reason string
+}
+
+func (e *ProtocolError) Error() string {
+	return fmt.Sprintf("%s (%s round %d: %s)", ErrModelProtocol, e.Phase, e.Round, e.Reason)
+}
+
+// Is makes every protocol failure match [ErrModelProtocol].
+func (e *ProtocolError) Is(target error) bool { return target == ErrModelProtocol }
+
+// protocolFault is why a round's answer cannot be read or shown, or "": the
+// backend's own reading ([llm.Completion.ProtocolError]) where it has one, and
+// otherwise tool-call markup in the prose ([toolmarkup.Index]), which no
+// backend may hand a reader. The second is the guard every backend is under,
+// whatever it parses: a model's vendor format typed out as text is never an
+// answer.
+func protocolFault(c *llm.Completion) string {
+	if c.ProtocolError != "" {
+		return c.ProtocolError
+	}
+	if toolmarkup.Index(c.Content) >= 0 {
+		return "it wrote tool-call markup in its reply"
+	}
+	return ""
+}
+
+// protocolCorrective is the re-prompt for a round whose calls could not be
+// read. It says nothing ran, so the model does not believe its call landed,
+// and names the contract's shape, since the fault is the shape.
+func protocolCorrective(reason string) string {
+	return "Your last reply could not be read, so nothing ran and nothing was shown: " +
+		reason + ". Tool calls are made only through the response contract in your " +
+		"instructions: one fenced json block, {\"message\": \"...\", \"tool_calls\": " +
+		"[{\"name\": \"tool_name\", \"arguments\": {...}}]}. Reply again in that form, " +
+		"naming only tools you were offered."
+}
+
 // Progress is the in-flight view of a running loop.
 //
 // Its whole reason to exist is the FAILURE path. When the loop returns an
@@ -804,12 +871,21 @@ type Partial struct {
 	Abandoned []Narration
 }
 
+// clone is the partial as the live view is handed it: a copy, its text cut
+// short of any tool-call markup or the start of a tag ([toolmarkup.Visible]),
+// so a round that is writing a call as markup is drawn no further than its
+// prose while it streams, as its committed answer never shows it at all.
 func (p *Partial) clone() *Partial {
 	if p == nil {
 		return nil
 	}
 	dup := *p
-	dup.Abandoned = append([]Narration(nil), p.Abandoned...)
+	dup.Content = toolmarkup.Visible(dup.Content)
+	dup.Abandoned = nil
+	for _, n := range p.Abandoned {
+		n.Content = toolmarkup.Visible(n.Content)
+		dup.Abandoned = append(dup.Abandoned, n)
+	}
 	return &dup
 }
 
@@ -996,6 +1072,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	}
 	finishingRetries := cfg.CorrectivesSpent
 	emptyRetries := 0
+	protocolRetries := 0
 	emptyAnswers := 0
 	// What ended the loop, where it was not the budget: a terminator that
 	// ran, or a corrective withheld for want of a round. See
@@ -1302,6 +1379,24 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			return nil, err
 		}
 
+		// AN ANSWER THAT CANNOT BE READ IS NEVER SHOWN, and never joins the
+		// conversation: its prose is not narrated, its calls (a backend that
+		// returned some beside the markup) do not run, and the model is told
+		// once what was wrong. Its text is left out of the messages so no
+		// later reader of them (the phase's text, a parked turn, the next
+		// prompt) carries it either; the corrective names the fault, which
+		// is all the model needs of it. See [maxProtocolCorrectives].
+		if fault := protocolFault(completion); fault != "" {
+			partial = nil
+			publish(roundsUsed, nil)
+			if protocolRetries >= maxProtocolCorrectives || roundsUsed == cfg.MaxRounds {
+				return nil, &ProtocolError{Phase: cfg.Surface.Phase(), Round: roundsUsed, Reason: fault}
+			}
+			protocolRetries++
+			msgs = append(msgs, llm.Message{Role: llm.RoleUser, Content: protocolCorrective(fault)})
+			continue
+		}
+
 		// The turn as the backend recorded it. Built by the completion,
 		// never field by field here, so nothing it carries can miss the
 		// conversation.
@@ -1432,7 +1527,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		// which is the opposite of a model that has stopped responding.
 		// Gating this on a successful result would withdraw the nudge
 		// exactly where the next round matters most.
-		finishingRetries, emptyRetries = 0, 0
+		finishingRetries, emptyRetries, protocolRetries = 0, 0, 0
 
 		suspended, pendingID, pendingName, payload, err := runCalls(
 			ctx, cfg, completion.ToolCalls, roundsUsed, &msgs, &execs,

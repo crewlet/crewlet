@@ -1222,6 +1222,11 @@ func ErrorKind(err error) string {
 		return provider.Kind.String()
 	case errors.Is(err, toolloop.ErrBudgetExhausted):
 		return "budget_exhausted"
+	case errors.Is(err, toolloop.ErrModelProtocol):
+		// The model's answer could not be read, after a corrective: a
+		// model fault an operator answers by moving the seat to another
+		// model, not a provider outage.
+		return "model_protocol"
 	case turn.Stopped(err):
 		// Not a failure at all, and named so: a person paused the seat
 		// and asked for its running turn to stop.
