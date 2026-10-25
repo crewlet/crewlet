@@ -162,6 +162,7 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		System:     req.System,
 		Brief:      req.Brief,
 		Task:       l.turn.Task,
+		Label:      l.turn.Task,
 		Opened:     ledger.bind,
 	})
 	if err != nil {

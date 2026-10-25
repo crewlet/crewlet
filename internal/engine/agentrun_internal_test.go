@@ -644,8 +644,11 @@ func TestAnAgentModeRunCarriesTheSeatsSystemPromptApartFromItsAsk(t *testing.T) 
 	if len(started) != 1 {
 		t.Fatalf("%d jobs started, want the executor's", len(started))
 	}
-	if !strings.HasPrefix(started[0].System, system+"\n\n## Your environment") {
-		t.Errorf("the run's standing instructions do not open with the seat's system prompt:\n%s",
+	// After the one note that says this is the role and the coding tool's own
+	// prompt is not, and ahead of what the box provides.
+	if !strings.Contains(started[0].System, "\n\n"+system+"\n\n## Your environment") ||
+		strings.Index(started[0].System, system) > strings.Index(started[0].System, "## Your environment") {
+		t.Errorf("the run's standing instructions do not lead with the seat's system prompt:\n%s",
 			started[0].System)
 	}
 	if !strings.HasPrefix(started[0].Brief, "## Task\nfix the failing test") ||

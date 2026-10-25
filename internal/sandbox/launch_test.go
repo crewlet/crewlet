@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"slices"
@@ -277,24 +278,32 @@ func TestTheCodingAgentIsToldTheGoalAndItsEnvironment(t *testing.T) {
 // its brief.
 //
 // An agent-mode executor launches with the seat's system prompt: it reaches
-// the runner ahead of the environment and the ask, whole, and none of it in
-// the brief — whose first line, the task's, is still what labels the run. A
-// run with no system text of its own (a run_sandbox job) gets the standing
-// instructions alone, opening on the first of them rather than on an empty
-// section.
+// the runner ahead of the environment and the ask, whole, opened by the note
+// that says it is the role rather than the coding tool's own prompt, and none
+// of it in the brief. A run with no system text of its own (a run_sandbox job)
+// gets the standing instructions alone, opening on the first of them rather
+// than on an empty section or a note introducing nothing.
+//
+// AND THE RUN IS NAMED THE SAME WAY LIVE AND FROM ITS RECORD: by its caller's
+// label where it gave one (an agent-mode executor names its turn's task, since
+// its brief opens with a heading), else by the brief's first line.
 func TestARunsOwnSystemTextLeadsItsStandingInstructions(t *testing.T) {
 	t.Parallel()
 	const seat = "You are Agent SWE at Acme.\nSEAT-IDENTITY-MARKER"
 	const ask = "## If you get blocked on a human decision\nRun crewlet-ask --to founder"
-	for name, tc := range map[string]struct{ system, opens string }{
-		"agent mode":  {system: seat, opens: seat + "\n\n## Your environment\n"},
+	for name, tc := range map[string]struct{ system, label, opens, named string }{
+		"agent mode": {
+			system: seat, label: "Ship the login fix\nand tell Ana",
+			opens: agentRunNote + "\n\n" + seat + "\n\n## Your environment\n", named: "Ship the login fix",
+		},
 		"run_sandbox": {system: "", opens: "## Your environment\n"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			rig := newWaiterRig(t)
 			req := launchReq("t1")
-			req.System, req.Ask = tc.system, ask
+			req.System, req.Ask, req.Label = tc.system, ask, tc.label
+			named := cmp.Or(tc.named, req.Brief)
 			if _, err := rig.launchVia(t.Context(), rig.manager, req); err != nil {
 				t.Fatalf("Launch: %v", err)
 			}
@@ -317,8 +326,11 @@ func TestARunsOwnSystemTextLeadsItsStandingInstructions(t *testing.T) {
 			}
 			rig.queue.mu.Lock()
 			defer rig.queue.mu.Unlock()
-			if label := rig.queue.published[0].event.Data.(*types.SandboxRunStarted).Task; label != req.Brief {
-				t.Errorf("the run is labelled %q, want the task's first line", label)
+			if label := rig.queue.published[0].event.Data.(*types.SandboxRunStarted).Task; label != named {
+				t.Errorf("the run is announced as %q, want %q", label, named)
+			}
+			if label := rig.get("t1").Label; label != named {
+				t.Errorf("the run's record names it %q, want %q, the name it was announced by", label, named)
 			}
 		})
 	}

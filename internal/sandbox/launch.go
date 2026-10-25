@@ -145,6 +145,14 @@ type LaunchRequest struct {
 	// row so a resume has the brief when the trigger is long gone.
 	Task string
 
+	// Label is what a person sees the run named by — on the running-runs
+	// panel, live and after a restart alike ([LaunchRequest.label]). Empty
+	// takes the brief's first line, which for a run_sandbox job is the
+	// concrete code task its executor wrote. An agent-mode executor names
+	// its turn's task: its brief is the turn's whole message, which opens
+	// with a heading rather than with what the run is doing.
+	Label string
+
 	// Ask is the addendum telling the coding agent how to stop and ask a
 	// person — the ask shim's usage, with the names it may address. The
 	// ENGINE composes it, because the names are the chart's and this
@@ -261,6 +269,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		Placement:       string(req.Spec.Placement),
 		CodingAgent:     req.Spec.CodingAgent,
 		TaskDescription: req.Task,
+		Label:           req.label(),
 		PartitionKey:    req.Turn.PartitionKey,
 		// The conversation an answer is matched on and the resume
 		// reports back to, because a resume days later has neither the
@@ -356,7 +365,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// trigger arrived in.
 		ConversationKey: req.Turn.ConversationKey,
 		WorkItem:        req.Turn.WorkItem,
-		Task:            Summarise(req.Brief),
+		Task:            req.label(),
 	}
 	ev := events.New(started, events.TraceContext{
 		TraceID: req.Turn.TraceID, ParentSpanID: req.Turn.SpanID,
@@ -480,6 +489,17 @@ func (c *Coordinator) abandon(ctx context.Context, m *Manager, req LaunchRequest
 	c.uncountRun(req.Turn.AgentHandle, StatusLaunching)
 }
 
+// label is what the run is named by, cut by [Summarise]: the caller's own
+// label where it gave one, else the brief's first line. ONE ANSWER for the
+// announcement and the record, so a run a process learns of from the record
+// after a restart is named exactly as the one it saw announced.
+func (r LaunchRequest) label() string {
+	if strings.TrimSpace(r.Label) != "" {
+		return Summarise(r.Label)
+	}
+	return Summarise(r.Brief)
+}
+
 // Summarise is a brief's first line, WHOLE: the label a running-runs panel
 // draws for a run. Exported because the live projection labels a run it
 // learned of from the durable record — a process that came up mid-run never
@@ -537,13 +557,35 @@ func buildBrief(req LaunchRequest) string {
 // ask shim are details of where it is working.
 func buildSystem(req LaunchRequest) string {
 	names := slices.Collect(maps.Keys(req.MCPServers))
+	own := strings.TrimSpace(req.System)
+	if own != "" {
+		own = agentRunNote + "\n\n" + own
+	}
 	parts := []string{
-		strings.TrimSpace(req.System),
+		own,
 		strings.TrimSpace(EnvironmentBrief(req.Setup, names)),
 		strings.TrimSpace(req.Ask),
 	}
 	return strings.Join(slices.DeleteFunc(parts, func(p string) bool { return p == "" }), "\n\n")
 }
+
+// agentRunNote opens a run's own instructions — an agent-mode executor's seat
+// prompt — where they follow the coding CLI's system prompt.
+//
+// The vendor's prompt says what the model is, and says it first: Claude Code
+// opens with "You are Claude Code, Anthropic's official CLI for Claude", and
+// no flag removes it. A seat prompt that only implies who it is loses to that,
+// so this says outright which of the two prompts is the role. The text-mode
+// backend opens its calls with the same note
+// (internal/providers/llm/cliagent harnessNote), less the sentence about
+// Crewlet's JSON envelope: here the run's tools are its own and the seat's,
+// called the way its CLI calls any tool. Constant, so it stays part of the
+// prefix a vendor caches.
+const agentRunNote = "You are running inside a command-line coding tool as one seat of a " +
+	"Crewlet company, and Crewlet — not a person at a terminal — reads what you " +
+	"report. The tool's own instructions describe the program you run in, not your " +
+	"role: who you are and what you do are the instructions that follow, and they " +
+	"win wherever the two disagree."
 
 // withTelemetry adds the run's OTel environment to the spec's.
 //

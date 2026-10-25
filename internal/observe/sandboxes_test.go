@@ -110,6 +110,36 @@ func TestARecordRendersAsTheEntryItsRunWouldHaveAnnounced(t *testing.T) {
 	}
 }
 
+// A RUN IS NAMED FROM ITS RECORD AS IT WAS ANNOUNCED: by the label its launch
+// stored, which for an agent-mode executor is its turn's task rather than the
+// heading its brief opens with. A row an older build wrote carries no label and
+// keeps being named by its task, as such rows always were.
+func TestARecordIsNamedByTheLabelItsLaunchAnnounced(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		run  sandbox.PendingRun
+		want string
+	}{
+		"labelled": {
+			run:  sandbox.PendingRun{Label: "Ship the login fix", TaskDescription: "the turn's task\nand more"},
+			want: "Ship the login fix",
+		},
+		"written before labels": {
+			run:  sandbox.PendingRun{TaskDescription: "the turn's task\nand more"},
+			want: "the turn's task",
+		},
+	} {
+		tc.run.TurnID, tc.run.Status = "tn-1", sandbox.StatusRunning
+		records := observe.SandboxRecords([]sandbox.PendingRun{tc.run})
+		if len(records) != 1 {
+			t.Fatalf("%s: records = %+v, want the run in flight", name, records)
+		}
+		if got := records[0].Entry.Task; got != tc.want {
+			t.Errorf("%s: the run is named %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
 func TestAReconcileLandsTheRecordAndAFailedReadLandsNothing(t *testing.T) {
 	t.Parallel()
 	sink := &recordingSink{}
