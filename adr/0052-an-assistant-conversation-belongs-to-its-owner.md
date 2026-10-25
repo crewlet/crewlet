@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/assistantdomain`
-- **Enforced-by:** `internal/assistantdomain.TestAnotherPersonsConversationIsNotFound`, `internal/assistantdomain.TestEverySealedValueOpensOnlyUnderItsOwnRecord`, `internal/assistantdomain.TestTheApplierNeverOpensASealedValue`, `internal/assistantdomain.TestAPurgedConversationIsNeverRecreated`, `internal/assistantdomain.TestAConversationPastItsRetentionIsReaped`, `internal/assistantdomain.TestAnErasedPersonsConversationsGoInOnePass`, `internal/assistantdomain.TestAComplianceReadIsRecordedBeforeItOpens`, `internal/assistantdomain.TestTheAssistantDomainReadsNoOtherDomain`
+- **Enforced-by:** `internal/assistantdomain.TestAnotherPersonsConversationIsNotFound`, `internal/assistantdomain.TestEverySealedValueOpensOnlyUnderItsOwnRecord`, `internal/assistantdomain.TestTheApplierNeverOpensASealedValue`, `internal/assistantdomain.TestAPurgedConversationIsNeverRecreated`, `internal/assistantdomain.TestAConversationPastItsRetentionIsReaped`, `internal/assistantdomain.TestAnErasedPersonsConversationsGoInOnePass`, `internal/assistantdomain.TestAComplianceReadIsRecordedBeforeItOpens`, `internal/assistantdomain.TestTheAssistantDomainReadsNoOtherDomain`, `internal/assistant/live.TestAFrameTheFleetDidNotSealIsDropped`, `internal/assistant/live.TestAFrameOnTheQueueCarriesNoneOfTheTurnsProse`, `internal/assistant/live.TestAFrameReplayedOntoAnotherTurnIsDropped`, `internal/assistant/live.TestTheRunnerRefusesAnotherPersonsTurn`, `internal/assistant.TestStopReachesTheRunningNode`
 - **Tag-status:** unreleased
 
 ## The decision
@@ -16,7 +16,11 @@ gone thirty days after it was last used.**
   because a person opens the drawer on any node and a reconnect may land on
   another. A proposal's decision is arbitrated on its own subject (ADR-0050).
   A turn's live frames are not stored at all: they are told, as presence is
-  (ADR-0038).
+  (ADR-0038), and every frame and every replayed page crosses the broker
+  encrypted under the fleet keyring with the turn in its associated data,
+  because the broker authenticates nothing (ADR-0031) and a frame carries what
+  the person was told; the node a replay or a Stop reaches checks the person
+  the request names before it answers.
 - **Its owner's.** Every read is keyed on the owner, and another person's
   conversation, card, export or proposal is not found, never forbidden. The one
   exception is decision D06: an administrator may read a conversation for

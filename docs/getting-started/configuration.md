@@ -367,6 +367,14 @@ assistant:
 A numeric field left out, or `0`, takes its default; a value outside its range
 is refused naming the field.
 
+**What one person may spend.** Every round of a person's turn is charged to the
+company's budget and, where `token_budget` is set, to that person's own, across
+every node of the fleet. A person whose own window is spent, or whose company's
+is, is refused before the next model round with `budget_exhausted` naming which
+(`person` or `org`), and starts again when the window turns over. Beside the
+tokens, a person may have two turns running on a node and start twenty a minute
+across the whole fleet.
+
 **Every model in the chain must reach nothing the person's requests did not
 return.** Each `llm` key must name a `providers.llm` entry that is:
 
