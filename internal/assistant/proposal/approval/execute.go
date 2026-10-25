@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
-	"net/http"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/assistant/exec"
@@ -136,7 +134,7 @@ func outcomeOf(resp exec.Response, err error) outcome {
 	case err != nil, resp.Truncated, resp.Status >= 500, resp.Status == 0:
 		return outcome{state: wire.ProposalUnknown}
 	case resp.Status >= 400:
-		return refused(RefusalOf(resp))
+		return refused(exec.RefusalOf(resp))
 	}
 	out := outcome{state: wire.ProposalApplied, outcome: "applied"}
 	if json.Valid(resp.Body) && len(bytes.TrimSpace(resp.Body)) > 0 {
@@ -160,25 +158,4 @@ func outcomeOf(resp exec.Response, err error) outcome {
 		out.invalidate = &wire.Invalidate{Domain: stream, Position: out.position}
 	}
 	return out
-}
-
-// RefusalOf is a refused request's refusal in the API's own envelope: its
-// code, the sentence it says, and the grants that would have admitted the
-// caller. An answer that is not the envelope is a refusal by its status alone.
-func RefusalOf(resp exec.Response) wire.Refusal {
-	var env struct {
-		Error   string   `json:"error"`
-		Message string   `json:"message"`
-		Detail  string   `json:"detail"`
-		Grants  []string `json:"grants"`
-	}
-	if err := json.Unmarshal(resp.Body, &env); err != nil || env.Error == "" {
-		return wire.Refusal{Code: fmt.Sprintf("http_%d", resp.Status),
-			Message: http.StatusText(resp.Status)}
-	}
-	message := env.Message
-	if env.Detail != "" {
-		message = env.Detail
-	}
-	return wire.Refusal{Code: env.Error, Message: message, Grants: env.Grants}
 }
