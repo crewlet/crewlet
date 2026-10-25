@@ -122,12 +122,15 @@ type StepRequest struct {
 }
 
 // Refusal is a refusal in the engine's own words: the API's code, its
-// sentence, and the grants that would have admitted the caller where the
-// authority table names them.
+// sentence, what to do about it where the route said, and the grants that
+// would have admitted the caller where the authority table names them.
 type Refusal struct {
-	Code    string   `json:"code"`
-	Message string   `json:"message"`
-	Grants  []string `json:"grants,omitempty"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	// Hint is the route's own next step (the envelope's `hint`), shown on
+	// its own line.
+	Hint   string   `json:"hint,omitempty"`
+	Grants []string `json:"grants,omitempty"`
 }
 
 // CardEvent carries one card, attached to the assistant message it belongs
