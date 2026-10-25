@@ -368,7 +368,7 @@ const (
 	// ActionAssistantConverse is using the assistant at all: starting a
 	// conversation, asking in it, stopping a turn, clearing one. Whose
 	// conversation it is is never this verb's question: the store answers
-	// 404 for anybody but its owner (ADR-0049).
+	// 404 for anybody but its owner (ADR-0052).
 	ActionAssistantConverse Action = "assistant.converse"
 	// ActionAssistantConversationRead is reading one's own conversations:
 	// the list, a transcript, a turn's live stream and a card's export.

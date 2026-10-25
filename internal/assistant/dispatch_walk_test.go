@@ -12,7 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
-// THE ASSISTANT SENDS THROUGH THE DISPATCHER AND NOTHING ELSE (ADR-0046).
+// THE ASSISTANT SENDS THROUGH THE DISPATCHER AND NOTHING ELSE (ADR-0049).
 //
 // The import walk keeps every other way into the company out of reach; this
 // keeps the assistant from growing a transport of its own beside the one it is
