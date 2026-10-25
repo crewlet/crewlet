@@ -220,6 +220,9 @@ internal/
 │                         #   deadlines — and gitproc/gittest/ the client git
 │                         #   every test drives. cache/ is the node's
 │                         #   disposable bare repositories, derived from rows.
+│                         #   query/ answers a repository's content by object
+│                         #   id — trees, files' lines, diffs, comparisons —
+│                         #   over that cache, in half its read lane.
 │                         #   codefault/ names the fault points of the push
 │                         #   and sync paths, in the order a push reaches them.
 │                         #   host/ is smart HTTP for persons: the receive

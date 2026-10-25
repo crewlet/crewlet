@@ -1,12 +1,19 @@
 package host_test
 
 import (
+	"context"
+	"errors"
+	"io"
 	"slices"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/host"
+	"github.com/crewlet/crewlet/internal/code/query"
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
@@ -108,4 +115,117 @@ func transferring(sub string) func(gitproc.Cmd) bool {
 		return c.Class == gitproc.ClassTransfer && len(c.Args) > 0 && c.Args[0] == sub &&
 			!slices.Contains(c.Args, "--advertise-refs")
 	}
+}
+
+// A PUSH IS SERVED BESIDE A FULL READ SHARE. A git node's read lane is also
+// where a person's push scans and its sync round's peel wait, FIFO, for at
+// most gitproc.SlotWait — so the seats' reads of the node hold at most half
+// of it (code.ShareOf). On a node of four read slots, two seat reads hold the
+// share, each holding a REAL read-lane process open (the query server's pool
+// is wrapped to run one before each listing, held on a standard input the
+// case releases), sixty-four more wait on the share, and a person's push lands
+// meanwhile — its scans and the round's peel admitted to the lane's free half,
+// never waiting out SlotWait. The share is never past its two units, and
+// every read is served once released or answered unready, the share full,
+// never failed.
+//
+// Mutation: ShareOf answering the whole read lane — four reads hold every
+// slot, and the push is refused busy, red.
+func TestAPushIsServedBesideAFullReadShare(t *testing.T) {
+	t.Parallel()
+	hold := &holdingPool{release: make(chan struct{}), held: make(chan struct{}, 66)}
+	c := newCase(t, codetest.SoloOptions{MaxProcesses: 4, QueryPool: hold.wrap}, codetest.Settings())
+	p := codetest.NewPerson(t, c.Fleet, "ceo")
+	work := p.Init()
+	head := p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+	c.MustPush(p, work, "main")
+	node := c.Fleet.Nodes()[0]
+	if got := node.Share().Units(); got != 2 {
+		t.Fatalf("a four-slot read lane's share holds %d units, want 2", got)
+	}
+	q := code.GitQuery{Kind: code.GitTree, RepoID: c.Rows().Repo.ID,
+		Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "token:ceo", Seat: "ceo"},
+		Tree:  &code.TreeQuery{Rev: head}}
+
+	results := make(chan error, 66)
+	read := func() {
+		_, err := node.GitRead(c.Ctx, q)
+		results <- err
+	}
+	for range 2 {
+		go read()
+	}
+	for range 2 {
+		select {
+		case <-hold.held:
+		case <-time.After(30 * time.Second):
+			t.Fatal("no read reached its listing within 30 s")
+		}
+	}
+	for range 64 {
+		go read()
+	}
+
+	p.Commit(work, map[string]string{"README.md": "two\n"}, "two")
+	start := time.Now()
+	pushed := p.Push(c.Ctx, work, c.URL(0), "main")
+	took := time.Since(start)
+	held := node.Share().Held()
+	close(hold.release)
+	if pushed.Err != nil || !pushed.OK("refs/heads/main") {
+		t.Errorf("a person's push beside a full read share: %s, want it landed", pushed)
+	}
+	if took >= gitproc.SlotWait {
+		t.Errorf("the push took %s, as long as the read lane's wait (%s): it queued behind the seats' reads",
+			took, gitproc.SlotWait)
+	}
+	if held > 2 {
+		t.Errorf("%d units of the share held during the push, past its 2", held)
+	}
+	for range 66 {
+		var unready *code.ErrGitUnready
+		if err := <-results; err != nil && (!errors.As(err, &unready) || unready.Reason != code.UnreadyShare) {
+			t.Errorf("a seat read beside the push = %v, want it served, or unready with the share full", err)
+		}
+	}
+}
+
+// holdingPool runs, before every listing a read runs, a read-lane process
+// held open on a standard input the case releases, so the read holds a real
+// slot of the lane for as long as the case wants.
+type holdingPool struct {
+	inner   query.Pool
+	release chan struct{}
+	held    chan struct{}
+}
+
+// wrap is a codetest QueryPool.
+func (h *holdingPool) wrap(p query.Pool) query.Pool {
+	h.inner = p
+	return h
+}
+
+func (h *holdingPool) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error) {
+	if len(c.Args) > 0 && c.Args[0] == "ls-tree" {
+		if res, err := h.inner.Run(ctx, gitproc.Cmd{Dir: c.Dir, Args: []string{"cat-file", "--batch-check"},
+			Config: c.Config, Class: gitproc.ClassRead, Deadline: time.Minute,
+			Stdin: &gate{release: h.release, held: h.held}}); err != nil {
+			return res, err
+		}
+	}
+	return h.inner.Run(ctx, c)
+}
+
+// gate is a standard input that says it is being read, then reads nothing
+// until released.
+type gate struct {
+	release <-chan struct{}
+	held    chan<- struct{}
+	once    sync.Once
+}
+
+func (g *gate) Read([]byte) (int, error) {
+	g.once.Do(func() { g.held <- struct{}{} })
+	<-g.release
+	return 0, io.EOF
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/code/host"
+	"github.com/crewlet/crewlet/internal/code/query"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
@@ -49,6 +50,12 @@ type Node interface {
 	CacheDir() string
 	// Read is a read of the code host's rows, as the API's code reads ask.
 	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
+	// GitRead is a read of a repository by object id, answered by THIS
+	// node's own query server over its cache.
+	GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error)
+	// Share is the node's seat git-work share, which its query server's
+	// reads take their units of.
+	Share() *code.GitShare
 }
 
 // Fleet is a topology under test.
@@ -150,6 +157,11 @@ type SoloOptions struct {
 	// case leaves it off — it judges what is written, never when it reaches
 	// the disk, and an fsync a record only slows the suite.
 	SyncAlways bool
+	// Roster, Current and QueryPool are every git node's query server's
+	// (GitOptions).
+	Roster    func() code.Roster
+	Current   func() bool
+	QueryPool func(query.Pool) query.Pool
 }
 
 // Solo is a NewFleet of SoloNodes over o, each case's shape laid over it — a
@@ -229,7 +241,7 @@ func SoloNode(t testing.TB, o SoloOptions) *SoloFleet {
 			Objects: func() objstore.Backend { return o.Objects }, Limits: o.Limits, Timing: o.Timing,
 			Faults: o.Faults, Credentials: f.creds, Audit: f.record,
 			MaxTransfers: o.MaxTransfers, MaxProcesses: o.MaxProcesses, CacheMaxBytes: o.CacheMaxBytes,
-			GitPath: o.GitPath, Logger: o.Logger,
+			GitPath: o.GitPath, Logger: o.Logger, Roster: o.Roster, Current: o.Current, QueryPool: o.QueryPool,
 		}))
 	}
 	return f

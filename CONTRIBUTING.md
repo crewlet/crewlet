@@ -714,9 +714,10 @@ snapshot reads and what one push's history costs every data node's disk
 (`internal/code`), the code host's commit chain on one and three members
 (`internal/code/codecluster`), a person's push, a warm fetch, and cold and
 warm clones of every shape end to end through the code host
-(`internal/code/host`), the pace a client's connection is held to, on a
-real connection (`internal/api/paced`), and what every push pays to start its
-`proc-receive` hook, which is this binary (`cmd/crewlet`).
+(`internal/code/host`), a seat's reads of a repository by object id on a git
+node, warm and cold (`internal/code/query`), the pace a client's connection
+is held to, on a real connection (`internal/api/paced`), and what every push
+pays to start its `proc-receive` hook, which is this binary (`cmd/crewlet`).
 
 It is **not a gate, and no CI job runs it**. A benchmark on a shared runner
 measures the runner's neighbours, and a gate on figures that noisy is one
@@ -726,7 +727,7 @@ each, on one idle machine, and read the two outputs with
 
 | Variable | Default | What it sets |
 |---|---|---|
-| `BENCH_PKGS` | `internal/objstore`, its three backends, `internal/objstore/natsobj/replicated`, `internal/statelog`, `internal/store`, `internal/jsapi`, `internal/coord/kv`, `internal/code/gitproc`, `internal/code/cache`, `internal/code`, `internal/code/codecluster`, `internal/code/host`, `internal/api/paced`, `cmd/crewlet` | which packages are measured |
+| `BENCH_PKGS` | `internal/objstore`, its three backends, `internal/objstore/natsobj/replicated`, `internal/statelog`, `internal/store`, `internal/jsapi`, `internal/coord/kv`, `internal/code/gitproc`, `internal/code/cache`, `internal/code`, `internal/code/codecluster`, `internal/code/host`, `internal/code/query`, `internal/api/paced`, `cmd/crewlet` | which packages are measured |
 | `BENCH_PATTERN` | `.` | `-bench`, e.g. `Backend/via=member` |
 | `BENCH_TIME` | `3s` | `-benchtime` |
 | `BENCH_COUNT` | `1` | `-count` |
@@ -740,8 +741,9 @@ output is verbose (`-v`), because a skipped benchmark prints nothing otherwise
 whose fixture takes minutes and gigabytes — in `internal/code/cache` a cold
 sync of 2 000 pushes, repositories of 10 000 packs, a 5 GB index, a gigabyte
 split into hundreds of packs; in `internal/code/host` a gigabyte history, a
-hundred thousand refs and a 100 000-file tree; in `internal/jsapi` a stream of
-a million subjects — skip unless `CREWLET_BENCH_LARGE=1`.
+hundred thousand refs and a 100 000-file tree; in `internal/code/query` a
+gigabyte history read by object id; in `internal/jsapi` a stream of a million
+subjects — skip unless `CREWLET_BENCH_LARGE=1`.
 
 A code host figure is the pool's git's as much as the engine's, so `make bench`
 runs the node pin — the git the engine image builds — first on `PATH`, as every

@@ -1,0 +1,611 @@
+package query_test
+
+import (
+	"context"
+	"crypto/sha1"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"slices"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/cache"
+	"github.com/crewlet/crewlet/internal/code/codetest"
+	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
+	"github.com/crewlet/crewlet/internal/code/query"
+	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/objstore/memobj"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
+)
+
+// A PATH REACHES GIT ONLY ON STANDARD INPUT. Every kind is read over paths
+// built to be read as options — a directory `--output=x`, files `-r` and
+// `a:b`, a name with a newline — by abbreviated ids, and every argument list
+// a read ran is held to its template: the kind's fixed options, whole ids at
+// their places, and `--disambiguate=` validated hex, the one option argument a
+// read builds. Each path was fed to cat-file's batch, `<id>:<path>`, where it
+// is a name like any other. This is what keeps diff-tree's, diff's and
+// rev-list's `--output` out — the writers gate argues their run-time
+// arguments in its allowance — so an argument a read adds is red here.
+func TestAPathReachesGitOnlyOnStandardInput(t *testing.T) {
+	t.Parallel()
+	rec := &recording{}
+	x := newFixture(t, codetest.SoloOptions{}, codetest.Settings())
+	paths := []string{"--output=x/f", "-r", "a:b", "nl\nname"}
+	files := map[string]string{}
+	for _, p := range paths {
+		files[p] = "one\n"
+	}
+	base := x.commit(files, "base")
+	for _, p := range paths {
+		files[p] = "two\n"
+	}
+	files["-M"] = "added\n"
+	head := x.commit(files, "head")
+	repo := x.repo(codetest.RepoName)
+	s := x.server(0, query.Options{Git: rec.on(x, 0)})
+
+	mustRead(t, s, treeQ(repo, code.TreeQuery{Rev: head[:7], Path: "--output=x"}))
+	mustRead(t, s, treeQ(repo, code.TreeQuery{Rev: head, Recursive: true}))
+	for _, p := range paths {
+		mustRead(t, s, blobQ(repo, code.BlobQuery{Rev: head[:9], Path: p}))
+	}
+	mustRead(t, s, diffQ(repo, code.DiffQuery{Base: base[:7], Head: head[:7], Paths: []string{"--output=x", "-r"}}))
+	mustRead(t, s, diffQ(repo, code.DiffQuery{Base: base, Head: head, Renames: true}))
+	for _, p := range []string{"--output=x/f", "-M", "-r"} {
+		mustRead(t, s, diffQ(repo, code.DiffQuery{Base: base, Head: head, File: p}))
+	}
+	mustRead(t, s, compareQ(repo, base[:8], head))
+
+	ran := rec.ran()
+	if len(ran) < 20 {
+		t.Fatalf("the reads ran %d processes; the case reads nothing", len(ran))
+	}
+	for _, c := range ran {
+		if !fitsTemplate(c.Args) {
+			t.Errorf("a read ran git %q, which no template of a read admits", c.Args)
+		}
+	}
+	fed := strings.Join(rec.fed(), "\x00")
+	for _, p := range paths {
+		if !strings.Contains(fed, head+":"+p+"\x00") {
+			t.Errorf("no batch was fed %q as <id>:<path>", p)
+		}
+	}
+}
+
+// templates are the argument lists a read runs: "<oid>" a whole id, "<range>"
+// two joined by "...", and "<abbrevs>" one or more `--disambiguate=` of
+// validated hex, ending the list.
+var templates = [][]string{
+	{"cat-file", "--batch-check", "-Z"},
+	{"cat-file", "blob", "<oid>"},
+	{"rev-parse", "<abbrevs>"},
+	{"ls-tree", "-z", "-l", "<oid>"},
+	{"ls-tree", "-z", "-l", "-r", "<oid>"},
+	{"diff-tree", "-z", "-r", "--raw", "--numstat", "--no-ext-diff", "--no-textconv", "<oid>", "<oid>"},
+	{"diff-tree", "-z", "-r", "--raw", "--numstat", "--no-ext-diff", "--no-textconv", "-M", "<oid>", "<oid>"},
+	{"diff-tree", "-z", "-r", "--raw", "--no-ext-diff", "--no-textconv", "<oid>", "<oid>"},
+	{"diff-tree", "-z", "-r", "--raw", "--no-ext-diff", "--no-textconv", "-M", "<oid>", "<oid>"},
+	{"diff", "--no-color", "--no-ext-diff", "--no-textconv", "-U3", "<oid>", "<oid>"},
+	{"merge-base", "<oid>", "<oid>"},
+	{"rev-list", "--left-right", "--count", "<range>"},
+}
+
+// fitsTemplate reports whether args is one of templates.
+func fitsTemplate(args []string) bool {
+	for _, tmpl := range templates {
+		if fits(args, tmpl) {
+			return true
+		}
+	}
+	return false
+}
+
+func fits(args, tmpl []string) bool {
+	if len(tmpl) > 0 && tmpl[len(tmpl)-1] == "<abbrevs>" {
+		head := tmpl[:len(tmpl)-1]
+		if len(args) <= len(head) || !slices.Equal(args[:len(head)], head) {
+			return false
+		}
+		for _, a := range args[len(head):] {
+			hex, ok := strings.CutPrefix(a, "--disambiguate=")
+			if !ok || !code.ValidRev(hex) || gitref.ValidOID(hex) {
+				return false
+			}
+		}
+		return true
+	}
+	if len(args) != len(tmpl) {
+		return false
+	}
+	for i, want := range tmpl {
+		switch want {
+		case "<oid>":
+			if !gitref.ValidOID(args[i]) {
+				return false
+			}
+		case "<range>":
+			a, b, ok := strings.Cut(args[i], "...")
+			if !ok || !gitref.ValidOID(a) || !gitref.ValidOID(b) {
+				return false
+			}
+		default:
+			if args[i] != want {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// AN ABBREVIATION IS NEVER A REF. A tag and a branch named by commit A's
+// seven-digit abbreviation, both pointing at B: a listing at that abbreviation
+// is A's — cat-file's own reading of the name would have answered B's, a ref
+// before an object — and an abbreviation two objects share is refused asking
+// for more of its digits, never answered for either.
+//
+// Mutation: expand an abbreviation by cat-file — the listing is B's, red.
+func TestAnAbbreviationIsNeverARef(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, codetest.SoloOptions{}, codetest.Settings())
+	a := x.commit(map[string]string{"a.txt": "A\n"}, "A")
+	b := x.commit(map[string]string{"b.txt": "B\n"}, "B")
+	short := a[:7]
+	x.git("tag", short, b)
+	x.git("branch", short, b)
+	x.push(codetest.RepoName, "refs/tags/"+short, "refs/heads/"+short)
+
+	// Two files whose blobs' ids share seven digits.
+	one, two := collidingBlobs(t)
+	x.commit(map[string]string{"one.txt": one, "two.txt": two}, "C")
+	repo := x.repo(codetest.RepoName)
+	s := x.server(0, query.Options{})
+
+	got := mustRead(t, s, treeQ(repo, code.TreeQuery{Rev: short}))
+	var names []string
+	for _, e := range got.Tree.Entries {
+		names = append(names, e.Path)
+	}
+	if got.Rev != a || !slices.Equal(names, []string{"a.txt"}) {
+		t.Errorf("the listing at %s is %s's %v, want commit %s's [a.txt]", short, got.Rev, names, a)
+	}
+
+	shared := blobID(one)[:7]
+	_, err := s.Read(t.Context(), blobQ(repo, code.BlobQuery{Rev: shared}))
+	if !errors.Is(err, code.ErrInvalid) || !strings.Contains(err.Error(), "more than one object") {
+		t.Errorf("a read at %s, which two blobs begin with = %v, want ErrInvalid asking for more digits",
+			shared, err)
+	}
+}
+
+// collidingBlobs is two file contents whose blob ids share their first seven
+// hex digits: drawn until two do — about twenty thousand draws at 28 bits,
+// the birthday bound.
+func collidingBlobs(t *testing.T) (string, string) {
+	t.Helper()
+	seen := map[string]string{}
+	for i := range 10_000_000 {
+		content := fmt.Sprintf("draw %d\n", i)
+		prefix := blobID(content)[:7]
+		if other, ok := seen[prefix]; ok {
+			return other, content
+		}
+		seen[prefix] = content
+	}
+	t.Fatal("no two of ten million drawn blobs share seven digits")
+	return "", ""
+}
+
+// blobID is git's id of a blob holding content.
+func blobID(content string) string {
+	h := sha1.New()
+	fmt.Fprintf(h, "blob %d\x00%s", len(content), content)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// holdingCache holds the first sync of one repository until released, as a
+// cold copy's fill holds a read.
+type holdingCache struct {
+	query.Cache
+	repo     string
+	once     sync.Once
+	entered  chan struct{}
+	released chan struct{}
+}
+
+func (h *holdingCache) Sync(ctx context.Context, repoID string, fresh statelog.Freshness) (cache.Synced, error) {
+	if repoID == h.repo {
+		h.once.Do(func() { close(h.entered) })
+		select {
+		case <-h.released:
+		case <-ctx.Done():
+			return cache.Synced{}, ctx.Err()
+		}
+	}
+	return h.Cache.Sync(ctx, repoID, fresh)
+}
+
+// A READ WAITING ON ITS SYNC HOLDS NO SHARE. On a node whose share is ONE
+// unit, a read of a repository whose copy is filling waits on its sync while
+// a read of a warm repository is served — in less time than the share's wait,
+// so it never waited for the unit — because a unit is held around a read's
+// own git and nothing else: held across a fill, one read would refuse every
+// other seat read on such a node. The filling read is served once its copy is.
+//
+// Mutation: take the unit before the sync — the warm read waits for the unit
+// past its second and fails, red.
+func TestAReadWaitingOnItsSyncHoldsNoShare(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, codetest.SoloOptions{}, codetest.Settings())
+	x.f.Declare(t, code.Declared{Name: "beta", Settings: codetest.Settings()})
+	head := x.commit(map[string]string{"f": "1\n"}, "one")
+	x.push("beta", "main")
+	warm, cold := x.repo(codetest.RepoName), x.repo("beta")
+	node := x.f.Nodes()[0]
+	held := &holdingCache{Cache: node.Cache(), repo: cold, entered: make(chan struct{}), released: make(chan struct{})}
+	share := code.NewGitShare(node.ID(), 2, nil)
+	if share.Units() != 1 {
+		t.Fatalf("the share holds %d units, want 1", share.Units())
+	}
+	s := x.server(0, query.Options{Cache: held, Share: share})
+	query.SetSyncWait(s, time.Minute)
+	mustRead(t, s, treeQ(warm, code.TreeQuery{Rev: head}))
+
+	filled := make(chan error, 1)
+	go func() {
+		_, err := s.Read(t.Context(), treeQ(cold, code.TreeQuery{Rev: head}))
+		filled <- err
+	}()
+	<-held.entered
+	// SHORTER THAN THE SHARE'S WAIT, beyond the reply's margin a read
+	// leaves its asker: a read that waited for the unit would not be
+	// answered in it.
+	ctx, cancel := context.WithTimeout(t.Context(), code.ReplyMargin+code.GitShareWait/2)
+	defer cancel()
+	if _, err := s.Read(ctx, treeQ(warm, code.TreeQuery{Rev: head})); err != nil {
+		t.Errorf("a warm read beside one waiting on its fill = %v, want it served at once", err)
+	}
+	close(held.released)
+	if err := <-filled; err != nil {
+		t.Errorf("the read that waited on its fill = %v, want it served once filled", err)
+	}
+}
+
+// countingCache records the level of every sync asked of it.
+type countingCache struct {
+	query.Cache
+	mu     sync.Mutex
+	levels []statelog.ReadLevel
+}
+
+func (c *countingCache) Sync(ctx context.Context, repoID string, fresh statelog.Freshness) (cache.Synced, error) {
+	c.mu.Lock()
+	c.levels = append(c.levels, fresh.Level)
+	c.mu.Unlock()
+	return c.Cache.Sync(ctx, repoID, fresh)
+}
+
+// take is every level asked since the last take.
+func (c *countingCache) take() []statelog.ReadLevel {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := c.levels
+	c.levels = nil
+	return out
+}
+
+// AN ID THE COPY LACKS IS LOOKED FOR ONCE AT THE LOG'S HEAD. A git node whose
+// copy predates a push is asked, at the asker's floor (which it has reached),
+// for the push's commit: it syncs ONCE at the log's head — the asker may know
+// of a push this node has not synced — and answers. An id nobody pushed, whole
+// or abbreviated, is looked for the same once and then answered
+// ErrObjectNotFound naming it, never synced for again.
+func TestAnOidTheCacheLacksIsLookedForOnceAtTheHead(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, codetest.SoloOptions{Shape: codetest.Shape{GitNodes: 2}}, codetest.Settings())
+	first := x.commit(map[string]string{"f": "1\n"}, "one")
+	repo := x.repo(codetest.RepoName)
+	counting := &countingCache{Cache: x.f.Nodes()[1].Cache()}
+	s := x.server(1, query.Options{Cache: counting})
+	floor := mustRead(t, s, treeQ(repo, code.TreeQuery{Rev: first})).Position
+	counting.take()
+
+	second := x.commit(map[string]string{"f": "2\n"}, "two")
+	q := treeQ(repo, code.TreeQuery{Rev: second})
+	q.Fresh = statelog.Freshness{Level: statelog.ReadSession, MinPosition: floor}
+	if a := mustRead(t, s, q); a.Rev != second {
+		t.Errorf("the read of %s answered %s", second, a.Rev)
+	}
+	if got := counting.take(); !slices.Equal(got, []statelog.ReadLevel{statelog.ReadSession,
+		statelog.ReadLinearizable}) {
+		t.Errorf("syncs %v, want the floor's and one at the log's head", got)
+	}
+
+	for _, rev := range []string{strings.Repeat("ab", 20), "0000000"} {
+		_, err := s.Read(t.Context(), treeQ(repo, code.TreeQuery{Rev: rev}))
+		if !errors.Is(err, code.ErrObjectNotFound) || !strings.Contains(err.Error(), rev) {
+			t.Errorf("a read of %s, which nobody pushed = %v, want ErrObjectNotFound naming it", rev, err)
+		}
+		if got := counting.take(); !slices.Equal(got, []statelog.ReadLevel{statelog.ReadStale,
+			statelog.ReadLinearizable}) {
+			t.Errorf("syncs for %s: %v, want the copy as it stands and one at the log's head", rev, got)
+		}
+	}
+}
+
+// gatedObjects is an object store whose reads wait while its gate is shut,
+// counting every read.
+type gatedObjects struct {
+	*memobj.Backend
+	mu   sync.Mutex
+	gate chan struct{}
+	gets atomic.Int64
+}
+
+func (g *gatedObjects) Get(ctx context.Context, name string, off, n int64) (io.ReadCloser, error) {
+	g.gets.Add(1)
+	g.mu.Lock()
+	gate := g.gate
+	g.mu.Unlock()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return g.Backend.Get(ctx, name, off, n)
+}
+
+// shut shuts the gate, counting reads from here.
+func (g *gatedObjects) shut() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.gate = make(chan struct{})
+	g.gets.Store(0)
+}
+
+// open opens it.
+func (g *gatedObjects) open() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	close(g.gate)
+	g.gate = nil
+}
+
+// A COLD REPOSITORY ANSWERS UNREADY AND KEEPS SYNCING. A git node that has
+// never held a repository is asked for it while its download waits on the
+// object store: past the read's sync wait (50 ms here) it answers
+// ErrGitUnready{syncing} — about itself, so the asker may ask another node —
+// and the round it began goes on under the cache's own lifetime: once the store
+// answers, the next read is served from that round's download, the repository
+// downloaded once.
+func TestAColdRepositoryAnswersUnreadyAndKeepsSyncing(t *testing.T) {
+	t.Parallel()
+	objects := &gatedObjects{Backend: memobj.New()}
+	x := newFixture(t, codetest.SoloOptions{Shape: codetest.Shape{GitNodes: 2}, Objects: objects},
+		codetest.Settings())
+	head := x.commit(map[string]string{"f": "1\n"}, "one")
+	repo := x.repo(codetest.RepoName)
+	rows, err := x.f.Rows(t.Context(), codetest.RepoName, codetest.Linearizable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	packs := len(rows.Packs)
+	s := x.server(1, query.Options{})
+	query.SetSyncWait(s, 50*time.Millisecond)
+
+	objects.shut()
+	_, err = s.Read(t.Context(), treeQ(repo, code.TreeQuery{Rev: head}))
+	if !unready(err, code.UnreadySyncing) {
+		t.Fatalf("a read of a repository whose download waits = %v, want ErrGitUnready{syncing}", err)
+	}
+	objects.open()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		_, err = s.Read(t.Context(), treeQ(repo, code.TreeQuery{Rev: head}))
+		if err == nil || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("a read once the store answers = %v, want it served", err)
+	}
+	if got := objects.gets.Load(); got != int64(packs) {
+		t.Errorf("the repository's %d packs were read %d times, want once each: the round the first read "+
+			"began went on", packs, got)
+	}
+}
+
+// A UNIT REPOSITORY REFUSES A SEAT OUTSIDE IT, on the chart of the node that
+// answers (ADR-0058): a seat of another unit is refused naming the
+// visibility, and nothing of the repository is read for it; a seat of the
+// owning unit, its lead and a person are served; a handle the chart holds no
+// seat for stands nowhere.
+func TestAUnitRepositoryRefusesASeatOutsideIt(t *testing.T) {
+	t.Parallel()
+	settings := codetest.Settings()
+	settings.Visibility = code.VisibilityUnit
+	rec := &recording{}
+	x := newFixture(t, codetest.SoloOptions{}, settings)
+	head := x.commit(map[string]string{"f": "1\n"}, "one")
+	repo := x.repo(codetest.RepoName)
+	s := x.server(0, query.Options{Git: rec.on(x, 0), Roster: company})
+
+	for _, who := range []code.Principal{seat("eng-dev"), seat("eng-lead"), person} {
+		q := treeQ(repo, code.TreeQuery{Rev: head})
+		q.Asker = who
+		if _, err := s.Read(t.Context(), q); err != nil {
+			t.Errorf("%+v's read = %v, want it served", who, err)
+		}
+	}
+	before := len(rec.ran())
+	for who, why := range map[string]string{"sales-rep": "visibility: unit", "ghost": "no seat of the chart"} {
+		q := treeQ(repo, code.TreeQuery{Rev: head})
+		q.Asker = seat(who)
+		_, err := s.Read(t.Context(), q)
+		if !errors.Is(err, code.ErrNotPermitted) || !strings.Contains(err.Error(), why) {
+			t.Errorf("%s's read = %v, want ErrNotPermitted saying %q", who, err, why)
+		}
+	}
+	if ran := rec.ran()[before:]; len(ran) != 0 {
+		t.Errorf("refused reads ran git %v, want nothing read for them", ran)
+	}
+}
+
+// A REFUSAL IS JUDGED AT THE LOG'S HEAD. A git node whose copy of a
+// repository predates the activation that made it `visibility: company` would
+// refuse a seat outside the owning unit from the row it holds; it syncs once at
+// the log's head instead — the code host never refuses on a stale read — and
+// serves the seat from the row that says company. A read the head refuses too
+// is refused after that one look, never a second.
+//
+// Mutation: refuse from the copy as it stands — the seat is refused, red.
+func TestARefusalIsJudgedAtTheLogsHead(t *testing.T) {
+	t.Parallel()
+	settings := codetest.Settings()
+	settings.Visibility = code.VisibilityUnit
+	x := newFixture(t, codetest.SoloOptions{Shape: codetest.Shape{GitNodes: 2}}, settings)
+	head := x.commit(map[string]string{"f": "1\n"}, "one")
+	repo := x.repo(codetest.RepoName)
+	counting := &countingCache{Cache: x.f.Nodes()[1].Cache()}
+	s := x.server(1, query.Options{Cache: counting, Roster: company})
+	mustRead(t, s, treeQ(repo, code.TreeQuery{Rev: head}))
+	outside := treeQ(repo, code.TreeQuery{Rev: head})
+	outside.Asker = seat("sales-rep")
+	if _, err := s.Read(t.Context(), outside); !errors.Is(err, code.ErrNotPermitted) {
+		t.Fatalf("a seat outside the unit = %v, want ErrNotPermitted", err)
+	}
+	if got := counting.take(); !slices.Equal(got, []statelog.ReadLevel{statelog.ReadStale, statelog.ReadStale,
+		statelog.ReadLinearizable}) {
+		t.Errorf("syncs %v, want the person's and the seat's as the copy stood, then the seat's at the log's "+
+			"head once", got)
+	}
+
+	settings.Visibility = code.VisibilityCompany
+	x.f.Declare(t, code.Declared{Name: codetest.RepoName, Settings: settings})
+	if _, err := s.Read(t.Context(), outside); err != nil {
+		t.Errorf("the same seat once the repository is company-wide = %v, want it served from the log's head", err)
+	}
+	if got := counting.take(); !slices.Equal(got, []statelog.ReadLevel{statelog.ReadStale,
+		statelog.ReadLinearizable}) {
+		t.Errorf("syncs %v, want the copy as it stood, then one at the log's head", got)
+	}
+}
+
+// A READ WITH NO CHART IS UNREADY HERE, NEVER REFUSED. A git node holding no
+// chart yet — no epoch installed, at boot or before a first apply — cannot
+// judge a seat, which is not "this seat may not read it": the seat's read is
+// ErrGitUnready{no_chart}, about this node, so the asker asks another, and no
+// sync is started for it. A person's read reads no chart and is served.
+//
+// Mutation: judge the seat with no chart — GrantOf's none — ErrNotPermitted,
+// red.
+func TestAReadWithNoChartIsUnreadyHere(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, codetest.SoloOptions{}, codetest.Settings())
+	head := x.commit(map[string]string{"f": "1\n"}, "one")
+	repo := x.repo(codetest.RepoName)
+	counting := &countingCache{Cache: x.f.Nodes()[0].Cache()}
+	s := x.server(0, query.Options{Cache: counting, Roster: func() code.Roster { return nil }})
+
+	q := treeQ(repo, code.TreeQuery{Rev: head})
+	q.Asker = seat("eng-dev")
+	if _, err := s.Read(t.Context(), q); !unready(err, code.UnreadyNoChart) {
+		t.Errorf("a seat's read on a node with no chart = %v, want ErrGitUnready{no_chart}", err)
+	}
+	if got := counting.take(); len(got) != 0 {
+		t.Errorf("a read this node cannot judge synced %v, want nothing started", got)
+	}
+	if _, err := s.Read(t.Context(), treeQ(repo, code.TreeQuery{Rev: head})); err != nil {
+		t.Errorf("a person's read on a node with no chart = %v, want it served", err)
+	}
+}
+
+// A GIT NODE BEHIND ITS CONFIGURATION SERVES NO SEAT. Confirmed behind the
+// company's configuration (shed or stuck), a node judges no seat's grant from
+// the chart the fleet replaced — the revision it failed may be the one that
+// revoked it — so a seat's read is ErrGitUnready{behind_config} and starts no
+// sync, while a person's, which reads no chart, is served.
+//
+// Mutation: drop the arm — the seat is served, red.
+func TestAGitNodeBehindItsConfigurationServesNoSeat(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, codetest.SoloOptions{}, codetest.Settings())
+	head := x.commit(map[string]string{"f": "1\n"}, "one")
+	repo := x.repo(codetest.RepoName)
+	counting := &countingCache{Cache: x.f.Nodes()[0].Cache()}
+	s := x.server(0, query.Options{Cache: counting, Roster: company, Current: func() bool { return false }})
+
+	q := treeQ(repo, code.TreeQuery{Rev: head})
+	q.Asker = seat("eng-lead")
+	if _, err := s.Read(t.Context(), q); !unready(err, code.UnreadyBehindConfig) {
+		t.Errorf("a seat's read on a node behind its configuration = %v, want ErrGitUnready{behind_config}", err)
+	}
+	if got := counting.take(); len(got) != 0 {
+		t.Errorf("a read this node may not judge synced %v, want nothing started", got)
+	}
+	if _, err := s.Read(t.Context(), treeQ(repo, code.TreeQuery{Rev: head})); err != nil {
+		t.Errorf("a person's read on a node behind its configuration = %v, want it served", err)
+	}
+}
+
+// A DAMAGED RUN GIVES NO ANSWER. Over a copy whose multi-pack-index is
+// truncated, git reads around the damage, answers from the packs' own indexes
+// and exits 0 — and says what it read around in its trace. Such a run is no
+// answer: the read is ErrGitUnready{syncing}, about this node, while the
+// cache repairs. No process a read runs names a Repairer, so what it reported
+// went to the cache's observer at once, which counted it and queued the
+// repair; once that round has dropped the index, the next read is served.
+//
+// Mutation: answer from the damaged run — served while damaged, red.
+func TestADamagedRunGivesNoAnswer(t *testing.T) {
+	t.Parallel()
+	rec := &recording{}
+	x := newFixture(t, codetest.SoloOptions{}, codetest.Settings())
+	head := x.commit(map[string]string{"f": "1\n"}, "one")
+	x.commit(map[string]string{"g": "2\n"}, "two")
+	repo := x.repo(codetest.RepoName)
+	node := x.f.Nodes()[0]
+	synced, err := node.Cache().Sync(t.Context(), repo, codetest.Linearizable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := synced.Dir
+	synced.Release()
+	gittest.WriteServed(t, x.p.Git(), dir)
+	gittest.Damage(t, dir, gittest.MidxTruncated)
+	s := x.server(0, query.Options{Git: rec.on(x, 0)})
+
+	_, err = s.Read(t.Context(), treeQ(repo, code.TreeQuery{Rev: head}))
+	if !unready(err, code.UnreadySyncing) || !strings.Contains(err.Error(), "damage") {
+		t.Fatalf("a read over a damaged index = %v, want ErrGitUnready{syncing} naming the damage", err)
+	}
+	for _, c := range rec.ran() {
+		if c.Repairer != 0 {
+			t.Errorf("git %q named a repairer: a read holds no report for a repair of its own", c.Args)
+		}
+	}
+	if got := counter(node.Metrics(), metrics.CodeCacheReports, map[string]string{"part": "multi-pack-index"}); got == 0 {
+		t.Error("the cache's observer counted no report of the multi-pack-index: the run's report reached nobody")
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if _, err = s.Read(t.Context(), treeQ(repo, code.TreeQuery{Rev: head})); err == nil || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if err != nil {
+		t.Errorf("a read once the cache repaired its copy = %v, want it served", err)
+	}
+}

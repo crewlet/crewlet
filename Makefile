@@ -745,8 +745,9 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 # internal/code/cache's 2 000-push cold sync, its 10 000-pack repositories,
 # its 5 GB index and its gigabyte split into hundreds of packs,
 # internal/code/host's gigabyte history, hundred thousand refs and
-# 100 000-file tree, and internal/jsapi's stream of a million subjects (two
-# minutes a count) — unless CREWLET_BENCH_LARGE=1; an arm that silently did
+# 100 000-file tree, internal/code/query's gigabyte history read by object
+# id, and internal/jsapi's stream of a million subjects (two minutes a count)
+# — unless CREWLET_BENCH_LARGE=1; an arm that silently did
 # not run reads as one that measured nothing worth showing. Not through
 # skipgate, for the same reason: an allowance there would make that skip
 # silent again. The code host's pools and every client run the node pin, which
@@ -780,14 +781,14 @@ BENCH_PKGS    ?= ./internal/objstore ./internal/objstore/memobj \
                  ./internal/objstore/s3obj ./internal/statelog ./internal/store \
                  ./internal/jsapi ./internal/coord/kv ./internal/code/gitproc \
                  ./internal/code/cache ./internal/code \
-                 ./internal/code/codecluster ./internal/code/host ./internal/api/paced \
-                 ./cmd/crewlet
+                 ./internal/code/codecluster ./internal/code/host ./internal/code/query \
+                 ./internal/api/paced ./cmd/crewlet
 BENCH_PATTERN ?= .
 BENCH_TIME    ?= 3s
 BENCH_COUNT   ?= 1
 BENCH_TIMEOUT ?= 8h
 
-bench: git ## measure the object store, the state log's write path, a stream leader's subject listing, the fleet's token counter, git, its cache, the code host's pushes and clones, a client's pace and the push hook's start (not a gate)
+bench: git ## measure the object store, the state log's write path, a stream leader's subject listing, the fleet's token counter, git, its cache, the code host's pushes and clones, a seat's reads by object id, a client's pace and the push hook's start (not a gate)
 	$(call PREBUILD,,$(BENCH_PKGS))
 	$(GIT_ENV) $(GO) test -run '^$$' -bench '$(BENCH_PATTERN)' -benchmem \
 	  -benchtime $(BENCH_TIME) -count $(BENCH_COUNT) -timeout $(BENCH_TIMEOUT) \

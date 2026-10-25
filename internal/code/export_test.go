@@ -8,6 +8,10 @@ import (
 // Quiet is quiet, for this package's external benchmarks.
 var Quiet = quiet
 
+// SetShareWait scales how long s's takers wait for a unit — production's
+// GitShareWait — so a case waits it out in milliseconds.
+func SetShareWait(s *GitShare, d time.Duration) { s.wait = d }
+
 // SetPageLimits has r end every page at rows rows or bytes of encoded rows —
 // the cases that read a snapshot across several pages without seeding tens of
 // thousands of rows. The shipped limits are MaxSnapshotItems and MaxPageBytes.

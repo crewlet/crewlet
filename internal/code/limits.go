@@ -633,6 +633,29 @@ const (
 	// and costs a routed push one second of the twenty-odd it may queue.
 	ReplyMargin = time.Second
 
+	// GitShareWait is the longest a seat's git work waits for a unit of its
+	// node's share ([GitShare]) before the node answers it
+	// [ErrGitUnready]{[UnreadyShare]} and the asker's walk moves to another
+	// git node — a node whose seats' git work already holds half its read
+	// lane sends its askers on rather than queueing them behind work that
+	// may take a whole read deadline.
+	//
+	// TWO SECONDS, PROVISIONAL, by its rule: max(2 s, the slowest warm read
+	// kind's p95 rounded up to a second), held under gitproc.ReadDeadline/4
+	// (2.5 s), so a read waiting behind one other read of the slowest kind
+	// still gets its unit while a saturated node gives its askers up well
+	// inside what one read may take. MEASURED by internal/code/query's
+	// BenchmarkCodeRead over its 32 MB history (five reads of each kind,
+	// -benchtime 5x, one count, git 2.56.0 on four cores of a Core Ultra 7
+	// 265U): every warm kind answered in 5–10 ms but the comparison of the
+	// history's middle with its tip, 75 ms — so the slowest p95 rounds up to
+	// one second and the floor holds. Its 1 GB arm (CREWLET_BENCH_LARGE, a
+	// hundred times the commits a comparison walks) is the one that can move
+	// it. Declared here, beside the share that waits it ([GitShare.Take]),
+	// because everything that bounds a git read's whole attempt reads it from
+	// the package every party to a read imports.
+	GitShareWait = 2 * time.Second
+
 	// MaxPackBytes is the largest OBJECT one push stores — its pack bundle
 	// (bundle.go): the pack receive-pack stored, then its index and its
 	// reverse index.

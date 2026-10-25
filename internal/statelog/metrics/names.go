@@ -46,6 +46,8 @@ const (
 	CodeHostSpoolWaits               = "crewlet.code.host.spool.waits"
 	CodePushBytes                    = "crewlet.code.push.bytes"
 	CodePushDuration                 = "crewlet.code.push.duration"
+	CodeSeatworkHeld                 = "crewlet.code.seatwork.held"
+	CodeSeatworkWaits                = "crewlet.code.seatwork.waits"
 	HistoryAnswers                   = "crewlet.history.answers"
 	ObjectsS3Attempts                = "crewlet.objects.s3.attempts"
 	ObjectsS3GateLimit               = "crewlet.objects.s3.gate.limit"

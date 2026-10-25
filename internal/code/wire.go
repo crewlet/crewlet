@@ -1,9 +1,17 @@
 package code
 
 import (
+	"encoding/base64"
+	"fmt"
+	"path"
 	"slices"
+	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -384,4 +392,512 @@ type RepoDetail struct {
 	CreatedAt  time.Time `json:"created_at"`
 	// Limits are the SERVING node's epoch's: what an import chunks to.
 	Limits Limits `json:"limits"`
+}
+
+// THE READS BY OBJECT ID: what a git node answers about a repository's content
+// — a tree, a file's lines, a diff, a comparison — over its own cache
+// (internal/code/query), never over the rows. They cross the estate wire like
+// every read here, so each is plain JSON and every field is the asker's or the
+// answer's.
+//
+// EVERY REVISION IS AN OBJECT ID, whole or abbreviated ([ValidRev]), and never
+// a ref, a `^`, a `~` or a `:`: an id names the same object on every node at
+// every position, so a read by one needs no level — what a ref points at is a
+// row, which ResolveQuery and its kin answer — and none of git's revision
+// grammar reaches the git node, whose argument lists carry validated ids and
+// fixed options alone. A PATH is data, never an argument: it reaches git only
+// on a batch command's standard input (internal/code/query's rule).
+//
+// EVERY ANSWER IS ONE PAGE, at most [MaxGitAnswerBytes] of JSON, with a cursor
+// (GitAnswer.Next) where the next page starts; one item that cannot fit a page
+// is refused [ErrSliceTooLarge] naming the narrowing, never cut.
+
+// MaxGitAnswerBytes is the most one GitAnswer's JSON carries: the 64 KiB a
+// seat's tool answers in (internal/agent/builtin's ToolAnswerBytes) less 8
+// KiB for what a tool wraps around a page — the ids it resolved, the position,
+// the cursor, at their longest — so a page is always one tool answer. Spelled
+// here rather than read from builtin, which imports this package.
+const MaxGitAnswerBytes = 56 << 10
+
+// MaxGitPathBytes is the longest path a read by oid names: 4 KiB, PATH_MAX on
+// Linux and far past any path a source tree holds — a bound on what the asker
+// can make a git node look up, not a rule about the repository.
+const MaxGitPathBytes = 4 << 10
+
+// MaxDiffPaths is the most paths one diff's stat is filtered by: a person's or
+// a model's list of the files and directories it cares about, never a
+// repository's listing.
+const MaxDiffPaths = 64
+
+// MinAbbrevDigits is the fewest hex digits an abbreviated object id may have:
+// git's own default abbreviation (core.abbrev), the length of every id a
+// person or a model copies out of a log or a message.
+const MinAbbrevDigits = 7
+
+// maxGitCursorBytes bounds a cursor the asker hands back: every cursor a git
+// node issues is a kind's letter and up to two decimal numbers.
+const maxGitCursorBytes = 64
+
+// GitReadKind is what a [GitQuery] asks. A closed set ([GitReadKinds]).
+type GitReadKind string
+
+const (
+	// GitTree lists a tree: a commit's root or one of its directories, or a
+	// tree named by its own id; recursively when asked.
+	GitTree GitReadKind = "tree"
+	// GitBlob reads a file's lines, by a commit and a path or by the blob's
+	// own id; a path naming a directory answers its listing (Kind tree), so
+	// one read serves both.
+	GitBlob GitReadKind = "blob"
+	// GitDiff is the per-file stat of the difference between two commits
+	// or trees, or one file's patch.
+	GitDiff GitReadKind = "diff"
+	// GitCompare is how two commits relate: their merge base, which
+	// contains which, the commits each has that the other lacks, and the
+	// first page of what head changed since the merge base.
+	GitCompare GitReadKind = "compare"
+)
+
+// GitReadKinds is the closed set.
+func GitReadKinds() []GitReadKind { return []GitReadKind{GitTree, GitBlob, GitDiff, GitCompare} }
+
+// Valid reports a kind this build answers.
+func (k GitReadKind) Valid() bool { return slices.Contains(GitReadKinds(), k) }
+
+// GitQuery is one read of a repository by object id: exactly the sub-query of
+// its Kind is set.
+type GitQuery struct {
+	Kind GitReadKind `json:"kind"`
+	// RepoID is the repository's canonical id.
+	RepoID string `json:"repo_id"`
+	// Asker is who reads, REQUIRED — a zero or invalid one is [ErrInvalid] —
+	// and held to the repository's read grant by the git node that answers,
+	// from its own epoch's chart ([GrantOf]): a seat by its relation to the
+	// repository, a person or a token by ADR-0055's rules, which read no
+	// chart. Never trusted for anything but the grant.
+	Asker Principal `json:"asker"`
+	// Fresh is the asker's floor on the code log, where it holds one: the
+	// answering node's copy is brought to at least it before anything is
+	// read. With no floor the copy is read as it stands — an object id
+	// names the same object at every position — and an id the copy lacks
+	// is looked for once more at the log's head before it is answered
+	// [ErrObjectNotFound].
+	Fresh statelog.Freshness `json:"fresh"`
+	// Cursor is a page's Next, handed back whole; empty for the first page.
+	// Opaque to the asker, and refused [ErrBadCursor] where it is not one the
+	// kind issues.
+	Cursor string `json:"cursor,omitempty"`
+
+	Tree    *TreeQuery    `json:"tree,omitempty"`
+	Blob    *BlobQuery    `json:"blob,omitempty"`
+	Diff    *DiffQuery    `json:"diff,omitempty"`
+	Compare *CompareQuery `json:"compare,omitempty"`
+}
+
+// TreeQuery lists one tree.
+type TreeQuery struct {
+	// Rev is a commit's id, a tag's or a tree's, whole or abbreviated.
+	Rev string `json:"rev"`
+	// Path is the directory under Rev's root tree to list; empty lists the
+	// root. PathB64 is the same path as its exact bytes in standard base64,
+	// for a path that is not valid UTF-8, which JSON cannot carry: at most
+	// one of the two is set.
+	Path    string `json:"path,omitempty"`
+	PathB64 string `json:"path_b64,omitempty"`
+	// Recursive lists every file below the directory rather than its
+	// entries.
+	Recursive bool `json:"recursive,omitempty"`
+}
+
+// BlobQuery reads one file's lines.
+type BlobQuery struct {
+	// Rev is a commit's id (or a tag's) with Path naming the file in it, or
+	// a blob's own id with no Path; whole or abbreviated. A commit with no
+	// Path reads its root, as a listing.
+	Rev     string `json:"rev"`
+	Path    string `json:"path,omitempty"`
+	PathB64 string `json:"path_b64,omitempty"`
+	// StartLine and EndLine are the lines to read, 1-based and inclusive;
+	// zero is the file's first line and its last. A page ends where the
+	// answer is full, and its Next resumes inside the range.
+	StartLine int `json:"start_line,omitempty"`
+	EndLine   int `json:"end_line,omitempty"`
+}
+
+// DiffQuery is the difference between two commits or trees.
+type DiffQuery struct {
+	// Base and Head are commit, tag or tree ids, whole or abbreviated.
+	Base string `json:"base"`
+	Head string `json:"head"`
+	// Paths filters the stat to files equal to one of them or under one as
+	// a directory, judged by the git node over git's whole answer — never
+	// handed to git — at most MaxDiffPaths.
+	Paths []string `json:"paths,omitempty"`
+	// File asks for one file's patch instead of the stat: its path at Head,
+	// or at Base for a file Head deleted. FileB64 is the same path as exact
+	// bytes; at most one of the two is set, and neither beside Paths.
+	File    string `json:"file,omitempty"`
+	FileB64 string `json:"file_b64,omitempty"`
+	// Renames detects a file moved between Base and Head as one renamed
+	// file rather than one deleted and one added.
+	Renames bool `json:"renames,omitempty"`
+}
+
+// CompareQuery is how two commits relate.
+type CompareQuery struct {
+	// Base and Head are commit or tag ids, whole or abbreviated.
+	Base string `json:"base"`
+	Head string `json:"head"`
+}
+
+// ValidRev reports whether rev names an object as a read by oid takes it: a
+// whole object id (40 lowercase hex digits, not the zero id), or an
+// ABBREVIATION of one, MinAbbrevDigits to 39 lowercase hex digits. Never a ref,
+// a `^`, a `~` or a `:` — no revision grammar reaches the git node — and never
+// an abbreviation shorter than git's own default, which would name dozens of
+// objects of any large repository.
+func ValidRev(rev string) bool {
+	if gitref.ValidOID(rev) {
+		return rev != ZeroOID
+	}
+	if len(rev) < MinAbbrevDigits || len(rev) >= gitref.OIDHexLen {
+		return false
+	}
+	for i := range len(rev) {
+		if c := rev[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// GitPath is the path a read names, from its Path and its PathB64 — the exact
+// bytes, decoded — or [ErrInvalid] naming field: both set, base64 that does
+// not decode, or a path no tree entry can be named by ([validGitPath]). root
+// admits the empty path, a tree's root.
+func GitPath(field, p, b64 string, root bool) (string, error) {
+	if b64 != "" {
+		if p != "" {
+			return "", fmt.Errorf("%w: %s: give the path as %s or as %s_b64, not both", ErrInvalid, field,
+				field, field)
+		}
+		raw, err := base64.StdEncoding.DecodeString(b64)
+		if err != nil {
+			return "", fmt.Errorf("%w: %s_b64: not standard base64: %v", ErrInvalid, field, err)
+		}
+		if len(raw) == 0 {
+			return "", fmt.Errorf("%w: %s_b64: an empty path is given by leaving the path out", ErrInvalid, field)
+		}
+		p = string(raw)
+	}
+	if why := validGitPath(p, root); why != "" {
+		return "", fmt.Errorf("%w: %s: %s", ErrInvalid, field, why)
+	}
+	return p, nil
+}
+
+// validGitPath is why p is no path a read by oid may name, or "": relative and
+// clean — path.Clean's own form, so no leading slash, no trailing one, no
+// empty, `.` or `..` component — at most MaxGitPathBytes, and no NUL, which
+// would end the record git reads it in. The clean form is also what keeps
+// git's object-name grammar out of a path: `<commit>:<path>` reads a path that
+// begins `./` or `../` as one relative to a work tree, which a bare repository
+// has none of, and git then dies over the whole batch.
+func validGitPath(p string, root bool) string {
+	switch {
+	case p == "":
+		if root {
+			return ""
+		}
+		return "a path is required"
+	case len(p) > MaxGitPathBytes:
+		return fmt.Sprintf("%d bytes, past the %d a path may have", len(p), MaxGitPathBytes)
+	case strings.IndexByte(p, 0) >= 0:
+		return "a path holds no NUL"
+	case path.Clean(p) != p || p == "." || p == ".." || strings.HasPrefix(p, "/") ||
+		strings.HasPrefix(p, "../"):
+		return fmt.Sprintf("%q is not a clean relative path: no leading or trailing slash, and no empty, "+
+			"\".\" or \"..\" component", p)
+	}
+	return ""
+}
+
+// WirePath is p as an answer carries it: itself where it is valid UTF-8, and
+// otherwise as much of it as JSON can carry — every invalid byte U+FFFD —
+// beside the exact bytes in standard base64, the form a later read names it
+// back by (a PathB64).
+func WirePath(p string) (text, b64 string) {
+	if utf8.ValidString(p) {
+		return p, ""
+	}
+	return strings.ToValidUTF8(p, string(utf8.RuneError)), base64.StdEncoding.EncodeToString([]byte(p))
+}
+
+// Validate refuses a read the git node cannot answer as asked ([ErrInvalid],
+// naming the field): a kind this build does not know, a repository id that is
+// not canonical, an asker no principal is, a sub-query other than its kind's
+// or none, a revision [ValidRev] refuses, a path [GitPath] refuses, a line
+// range that runs backwards, and a diff naming both a file and paths. A
+// cursor longer than any a git node issues is [ErrBadCursor]; whether a
+// shorter one is the kind's own is the git node's to judge.
+func (q GitQuery) Validate() error {
+	if !q.Kind.Valid() {
+		return fmt.Errorf("%w: kind: %q is not one of %v", ErrInvalid, q.Kind, GitReadKinds())
+	}
+	if id, err := uuid.Parse(q.RepoID); err != nil || id.String() != q.RepoID {
+		return fmt.Errorf("%w: repo_id: %q is not a repository's id", ErrInvalid, q.RepoID)
+	}
+	// WHO ASKS IS NAMED, or nothing is read: the answer is held to the
+	// asker's grant, and an absent asker would be judged as somebody nobody
+	// named.
+	if why := q.Asker.invalid(); why != "" {
+		return fmt.Errorf("%w: asker: %s", ErrInvalid, why)
+	}
+	if len(q.Cursor) > maxGitCursorBytes {
+		return fmt.Errorf("%w: cursor: %d bytes is no cursor a git read issues", ErrBadCursor, len(q.Cursor))
+	}
+	for _, s := range []struct {
+		kind    GitReadKind
+		present bool
+	}{{GitTree, q.Tree != nil}, {GitBlob, q.Blob != nil}, {GitDiff, q.Diff != nil},
+		{GitCompare, q.Compare != nil}} {
+		switch {
+		case s.kind == q.Kind && !s.present:
+			return fmt.Errorf("%w: %s: a %s read names what it reads", ErrInvalid, s.kind, s.kind)
+		case s.kind != q.Kind && s.present:
+			return fmt.Errorf("%w: %s: a %s read carries no %s query", ErrInvalid, s.kind, q.Kind, s.kind)
+		}
+	}
+	switch q.Kind {
+	case GitTree:
+		return q.Tree.validate()
+	case GitBlob:
+		return q.Blob.validate()
+	case GitDiff:
+		return q.Diff.validate()
+	}
+	return q.Compare.validate()
+}
+
+// validRev is ValidRev as a refusal naming field.
+func validRev(field, rev string) error {
+	if !ValidRev(rev) {
+		return fmt.Errorf("%w: %s: %q is not an object id — %d to 40 lowercase hex digits, never a ref "+
+			"or a revision expression; a ref is resolved to its id first", ErrInvalid, field, rev,
+			MinAbbrevDigits)
+	}
+	return nil
+}
+
+func (q TreeQuery) validate() error {
+	if err := validRev("tree.rev", q.Rev); err != nil {
+		return err
+	}
+	_, err := GitPath("tree.path", q.Path, q.PathB64, true)
+	return err
+}
+
+func (q BlobQuery) validate() error {
+	if err := validRev("blob.rev", q.Rev); err != nil {
+		return err
+	}
+	if _, err := GitPath("blob.path", q.Path, q.PathB64, true); err != nil {
+		return err
+	}
+	switch {
+	case q.StartLine < 0:
+		return fmt.Errorf("%w: blob.start_line: %d; lines count from 1", ErrInvalid, q.StartLine)
+	case q.EndLine < 0:
+		return fmt.Errorf("%w: blob.end_line: %d; lines count from 1", ErrInvalid, q.EndLine)
+	case q.EndLine > 0 && q.EndLine < max(q.StartLine, 1):
+		return fmt.Errorf("%w: blob.end_line: %d is before start_line %d", ErrInvalid, q.EndLine,
+			max(q.StartLine, 1))
+	}
+	return nil
+}
+
+func (q DiffQuery) validate() error {
+	if err := validRev("diff.base", q.Base); err != nil {
+		return err
+	}
+	if err := validRev("diff.head", q.Head); err != nil {
+		return err
+	}
+	if len(q.Paths) > MaxDiffPaths {
+		return fmt.Errorf("%w: diff.paths: %d paths, past the %d one diff is filtered by", ErrInvalid,
+			len(q.Paths), MaxDiffPaths)
+	}
+	for i, p := range q.Paths {
+		if why := validGitPath(p, false); why != "" {
+			return fmt.Errorf("%w: diff.paths[%d]: %s", ErrInvalid, i, why)
+		}
+	}
+	if q.File == "" && q.FileB64 == "" {
+		return nil
+	}
+	if len(q.Paths) > 0 {
+		return fmt.Errorf("%w: diff.file: a patch names its one file and paths filter a stat — give one "+
+			"or the other", ErrInvalid)
+	}
+	_, err := GitPath("diff.file", q.File, q.FileB64, false)
+	return err
+}
+
+func (q CompareQuery) validate() error {
+	if err := validRev("compare.base", q.Base); err != nil {
+		return err
+	}
+	return validRev("compare.head", q.Head)
+}
+
+// GitAnswer answers a [GitQuery]: exactly the field of its Kind is set — a
+// file read whose path names a directory answers Kind tree. Its JSON is at
+// most MaxGitAnswerBytes.
+type GitAnswer struct {
+	Kind   GitReadKind `json:"kind"`
+	RepoID string      `json:"repo_id"`
+	// Rev is the object a tree or a file read was asked of, as its whole id
+	// — a tag's is the commit or tree it names. A diff and a comparison name
+	// both of theirs in their own answer.
+	Rev string `json:"rev,omitempty"`
+	// Position is the answering node's copy's: every row up to it is in what
+	// it read, so an asker holding a later floor knows the answer may
+	// predate a push it made — never that an object it names is wrong.
+	Position statelog.Position `json:"position"`
+	// Next is where the next page starts, handed back as the query's Cursor
+	// with the query otherwise unchanged; empty on the last page.
+	Next string `json:"next,omitempty"`
+
+	Tree    *TreeAnswer    `json:"tree,omitempty"`
+	Blob    *BlobAnswer    `json:"blob,omitempty"`
+	Diff    *DiffAnswer    `json:"diff,omitempty"`
+	Compare *CompareAnswer `json:"compare,omitempty"`
+}
+
+// TreeAnswer is one page of a tree's listing, in git's own order.
+type TreeAnswer struct {
+	// Tree is the id of the tree listed.
+	Tree string `json:"tree"`
+	// Path is the directory listed, from the repository's root; empty for
+	// the root (PathB64 per [WirePath]).
+	Path    string      `json:"path,omitempty"`
+	PathB64 string      `json:"path_b64,omitempty"`
+	Entries []TreeEntry `json:"entries"`
+	// Total is how many entries the whole listing holds, every page.
+	Total int `json:"total"`
+}
+
+// TreeEntry is one entry of a listing.
+type TreeEntry struct {
+	// Mode is git's: 040000 a directory, 100644 a file, 100755 an
+	// executable, 120000 a symbolic link, 160000 a submodule.
+	Mode string `json:"mode"`
+	// Type is tree, blob or commit (a submodule's).
+	Type string `json:"type"`
+	OID  string `json:"oid"`
+	// Path is the entry's, from the repository's root (PathB64 per
+	// [WirePath]).
+	Path    string `json:"path"`
+	PathB64 string `json:"path_b64,omitempty"`
+	// Size is a blob's bytes; a directory and a submodule carry none, and an
+	// empty file reads as none too.
+	Size int64 `json:"size,omitempty"`
+}
+
+// BlobAnswer is one page of a file's lines.
+type BlobAnswer struct {
+	// Path is the file's, from the repository's root, where the read named
+	// one (PathB64 per [WirePath]).
+	Path    string `json:"path,omitempty"`
+	PathB64 string `json:"path_b64,omitempty"`
+	OID     string `json:"oid"`
+	Size    int64  `json:"size"`
+	// Binary is a file git calls binary — a NUL in its first 8 000 bytes,
+	// git's own test — answered by its size, with no text.
+	Binary bool `json:"binary,omitempty"`
+	// Lines is how many lines the whole file has.
+	Lines int `json:"lines"`
+	// StartLine and EndLine are the lines Text holds, whole but where a page
+	// begins or ends inside a line longer than a page: Text then begins
+	// StartByte bytes into StartLine, and Continues says it ends inside
+	// EndLine.
+	StartLine int    `json:"start_line,omitempty"`
+	EndLine   int    `json:"end_line,omitempty"`
+	StartByte int    `json:"start_byte,omitempty"`
+	Text      string `json:"text,omitempty"`
+	// Continues is set when Text ends inside line EndLine — a line longer
+	// than a page, served in pieces at rune boundaries — and Next resumes
+	// it. Never a cut: the rest is the next page's.
+	Continues bool `json:"continues,omitempty"`
+}
+
+// DiffFile is one file of a diff's stat.
+type DiffFile struct {
+	// Path is the file's at head, or at base for a deleted file (PathB64
+	// per [WirePath]); OldPath is where a renamed file was.
+	Path       string `json:"path"`
+	PathB64    string `json:"path_b64,omitempty"`
+	OldPath    string `json:"old_path,omitempty"`
+	OldPathB64 string `json:"old_path_b64,omitempty"`
+	// Status is git's own letter: A added, D deleted, M modified, R
+	// renamed, T its type changed (a file made a link, say).
+	Status string `json:"status"`
+	// Similarity is a rename's, in percent.
+	Similarity int `json:"similarity,omitempty"`
+	// OldMode and NewMode are git's modes on each side, empty on the side a
+	// file is absent from: a mode alone changing — a script made executable
+	// — is a file modified with no line touched, which only they tell.
+	OldMode string `json:"old_mode,omitempty"`
+	NewMode string `json:"new_mode,omitempty"`
+	Added   int    `json:"added"`
+	Deleted int    `json:"deleted"`
+	// Binary is a file git calls binary: no line counts, and no patch.
+	Binary bool `json:"binary,omitempty"`
+	// OldOID and NewOID are the blobs on each side, the side a file is
+	// absent from carrying none.
+	OldOID string `json:"old_oid,omitempty"`
+	NewOID string `json:"new_oid,omitempty"`
+}
+
+// DiffAnswer is one page of a diff's stat, or of one file's patch.
+type DiffAnswer struct {
+	// Base and Head are the commits (or trees) compared, as whole ids.
+	Base string `json:"base"`
+	Head string `json:"head"`
+	// Files is a page of the files changed, in git's order (by path); a
+	// patch's answer holds its one file on every page.
+	Files []DiffFile `json:"files"`
+	// Total, Added and Deleted are over the whole diff the query names —
+	// every file Paths admits, on every page.
+	Total   int `json:"total"`
+	Added   int `json:"added"`
+	Deleted int `json:"deleted"`
+	// Patch is a page of one file's patch (DiffQuery.File), cut at line
+	// boundaries; its header lines name the paths, as git's own do.
+	Patch string `json:"patch,omitempty"`
+}
+
+// CompareAnswer is how two commits relate.
+type CompareAnswer struct {
+	// Base and Head are the commits compared, as whole ids; MergeBase is
+	// their best common ancestor, empty for histories that share none.
+	Base      string `json:"base"`
+	Head      string `json:"head"`
+	MergeBase string `json:"merge_base,omitempty"`
+	// BaseIsAncestor is head containing base — a fast-forward from base to
+	// head — and HeadIsAncestor the reverse.
+	BaseIsAncestor bool `json:"base_is_ancestor"`
+	HeadIsAncestor bool `json:"head_is_ancestor"`
+	// Ahead is the commits head has that base lacks, Behind the reverse.
+	Ahead  int `json:"ahead"`
+	Behind int `json:"behind"`
+	// Files is the FIRST page of what head changed since the merge base —
+	// the three-dot reading every code host shows; a diff of the merge base
+	// and head reads the rest, and Total, Added and Deleted are over all of
+	// it. Histories that share no commit have no such change, and none is
+	// listed.
+	Files   []DiffFile `json:"files"`
+	Total   int        `json:"total"`
+	Added   int        `json:"added"`
+	Deleted int        `json:"deleted"`
 }

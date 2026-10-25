@@ -1,0 +1,161 @@
+package code
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"sync"
+	"time"
+
+	"golang.org/x/sync/semaphore"
+
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
+)
+
+// THE NODE'S SEAT GIT-WORK SHARE: how much of a git node's READ LANE the
+// seats' git work may hold at once — half of it.
+//
+// The read lane (internal/code/gitproc, ClassRead: a core a slot) is where
+// every short git process of a node waits, FIFO, for at most gitproc.SlotWait
+// before it is refused busy: a person's push's scans and its force checks, a
+// sync round's peel of the refs, a fetch's check of the objects it wants — and
+// the git a seat's read of a repository by object id runs
+// (internal/code/query). A seat's read is git work of up to a whole read
+// deadline; sized past the lane, a burst of them would hold every slot, and the
+// person whose push queued behind them would be answered busy after ten seconds
+// of nothing. So the node's seat git work holds at most [ShareOf] the lane's
+// slots — ONE share a node, which every kind of seat git work takes its unit
+// of ([SeatWorks]), so no two kinds can between them take the whole lane — and
+// the other half stays the persons' and the node's own.
+//
+// A UNIT IS HELD AROUND THE WORK'S LONG GIT AND NOTHING ELSE: a read waiting
+// on its sync, on a re-sync at the log's head or on a barrier holds no
+// read-lane slot and so holds no unit — held across a cold download, one read
+// would refuse every other seat's read on a node whose share is one — and a
+// read's short check of the objects it names waits in the read lane's own
+// queue like any short read. What the share bounds is the long processes,
+// which are what a person's push waits behind.
+//
+// PAST [GitShareWait] the work is answered [ErrGitUnready]{[UnreadyShare]} —
+// never queued for longer, and never refused as the asker's fault — so the
+// walk that asked it moves to another git node, which answers as well as a
+// saturated node would have.
+
+// SeatWork is which seat git work takes a unit of the share: the `work`
+// attribute of crewlet.code.seatwork.waits. A closed set ([SeatWorks]).
+type SeatWork string
+
+const (
+	// SeatWorkRead is a server-side read of a repository by object id: the
+	// git a read's kind runs (internal/code/query).
+	SeatWorkRead SeatWork = "read"
+)
+
+// SeatWorks is the closed set.
+func SeatWorks() []SeatWork { return []SeatWork{SeatWorkRead} }
+
+// Valid reports a kind of seat git work this build knows.
+func (w SeatWork) Valid() bool { return slices.Contains(SeatWorks(), w) }
+
+// ShareOf is how many units a node whose read lane is slots wide holds: HALF
+// of it, at least one — the other half is what a person's push's scans, a sync
+// round's peel and a fetch's check of its wants wait in.
+func ShareOf(slots int) int { return max(1, slots/2) }
+
+// The outcomes of a take: crewlet.code.seatwork.waits' `outcome`.
+const (
+	shareGranted = "granted"
+	shareUnready = "unready"
+)
+
+// GitShare is the node's bound on SEAT GIT WORK running at once: a weighted
+// semaphore of [ShareOf] its read lane's slots, every unit taken through
+// [GitShare.Take]. One a node, built beside its git pool and handed to every
+// kind of seat git work on it.
+type GitShare struct {
+	node      string
+	readSlots int
+	units     int64
+	sem       *semaphore.Weighted
+	metrics   *metrics.Recorder
+
+	// wait is GitShareWait; a field so this package's tests can scale it
+	// (export_test.go).
+	wait time.Duration
+
+	// mu orders every change to held with the gauge that reports it, so a
+	// later Set never carries an older count.
+	mu   sync.Mutex
+	held int
+}
+
+// NewGitShare is node's share of a read lane readSlots wide: [ShareOf]
+// readSlots units. It records crewlet.code.seatwork.held and .waits to m, nil
+// recording nothing; the gauge starts at zero, so a git node whose seats run
+// no git yet shows a share held by nobody rather than no share at all.
+func NewGitShare(node string, readSlots int, m *metrics.Recorder) *GitShare {
+	units := int64(ShareOf(readSlots))
+	s := &GitShare{node: node, readSlots: readSlots, units: units, sem: semaphore.NewWeighted(units),
+		metrics: m, wait: GitShareWait}
+	s.moved(0)
+	return s
+}
+
+// errShareWait is the cause of a take's own wait ending.
+var errShareWait = errors.New("code: the seat git-work share's wait ended")
+
+// Take holds one unit for work, waiting at most [GitShareWait] for one to come
+// free: past it, [ErrGitUnready]{[UnreadyShare]} naming the node. ctx ending
+// first is ctx's own error, and is not counted: nobody waits for that answer.
+// release gives the unit back, and is idempotent — every holder defers it,
+// and the one that releases early calls it again harmlessly.
+func (s *GitShare) Take(ctx context.Context, work SeatWork) (release func(), err error) {
+	if !work.Valid() {
+		return nil, fmt.Errorf("%w: seat git work %q is not one of %v", ErrInvalid, work, SeatWorks())
+	}
+	wait, cancel := context.WithTimeoutCause(ctx, s.wait, errShareWait)
+	defer cancel()
+	if err := s.sem.Acquire(wait, 1); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		s.count(work, shareUnready)
+		return nil, &ErrGitUnready{Reason: UnreadyShare, Detail: fmt.Sprintf(
+			"%s's seat git work holds its whole share — %d of its read lane's %d slots — and none came free "+
+				"within %s; another git node answers meanwhile", s.node, s.units, s.readSlots, s.wait)}
+	}
+	s.count(work, shareGranted)
+	s.moved(+1)
+	return sync.OnceFunc(func() {
+		s.sem.Release(1)
+		s.moved(-1)
+	}), nil
+}
+
+// Held is how many units are held now.
+func (s *GitShare) Held() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.held
+}
+
+// Units is how many units the share holds in all: [ShareOf] its read lane.
+func (s *GitShare) Units() int { return int(s.units) }
+
+// moved changes held by delta and reports it.
+func (s *GitShare) moved(delta int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.held += delta
+	if s.metrics != nil {
+		s.metrics.Set(metrics.CodeSeatworkHeld, float64(s.held), nil)
+	}
+}
+
+// count records one take's outcome.
+func (s *GitShare) count(work SeatWork, outcome string) {
+	if s.metrics != nil {
+		s.metrics.Add(metrics.CodeSeatworkWaits, 1, metrics.Attrs{"outcome": outcome, "work": string(work)})
+	}
+}

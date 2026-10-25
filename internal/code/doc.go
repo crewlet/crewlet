@@ -321,6 +321,17 @@
 // index's first shape — the listing, the history horizon, a purge part and
 // its count — reads the reordered one, so it is one index, not two.
 //
+// A read of a repository's CONTENT is a git node's (internal/code/query), and
+// this package holds only what both ends of one import: its wire — [GitQuery]
+// and its answers, every revision an object id ([ValidRev]) and every path one
+// no git grammar reads ([GitPath]) — and the node's [GitShare], half a git
+// node's read lane, which every kind of seat git work takes its unit of, so a
+// burst of seat reads never takes the half a person's push scans wait in. A
+// git node judges the asker's grant from its own chart as a reader of the rows
+// does, and one that cannot answer for a reason about ITSELF — a copy still
+// syncing, its share full, no chart yet, its configuration behind — says
+// [ErrGitUnready], which another git node may answer.
+//
 // # What this package does not do
 //
 // It runs no git and serves no HTTP. It decides and applies records, commits

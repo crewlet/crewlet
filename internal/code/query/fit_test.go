@@ -1,0 +1,139 @@
+package query_test
+
+import (
+	"encoding/json"
+	"fmt"
+	"math/rand/v2"
+	"strings"
+	"testing"
+	"unicode/utf8"
+
+	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/codetest"
+	"github.com/crewlet/crewlet/internal/code/query"
+)
+
+// EVERY ANSWER FITS A PAGE. Over the widest tree the fixture holds — two
+// thousand files with names of two hundred bytes — its longest line of text
+// that costs six JSON bytes a character, and its largest diff, every kind read
+// page by page at the shipped bound encodes within code.MaxGitAnswerBytes, so
+// a page is always one tool answer, and the pages hold the whole: every entry,
+// every changed file, every byte of the file.
+func TestEveryAnswerFitsAPage(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, codetest.SoloOptions{}, codetest.Settings())
+	const files = 2000
+	name := func(i int) string { return fmt.Sprintf("wide/%04d-%s", i, strings.Repeat("n", 195)) }
+	tree := map[string]string{}
+	for i := range files {
+		tree[name(i)] = "v1\n"
+	}
+	var huge strings.Builder
+	for i := range 2000 {
+		fmt.Fprintf(&huge, "%d %s\n", i, strings.Repeat("<\"\\\x01é", 60))
+	}
+	huge.WriteString(strings.Repeat("<&>", 40_000) + "\n")
+	tree["huge.txt"] = huge.String()
+	base := x.commit(tree, "base")
+	for i := range files {
+		tree[name(i)] = "v2\n"
+	}
+	tree["huge.txt"] = strings.Replace(huge.String(), "\n1000 ", "\nchanged 1000 ", 1)
+	head := x.commit(tree, "head")
+	repo := x.repo(codetest.RepoName)
+	s := x.server(0, query.Options{})
+	limit := code.MaxGitAnswerBytes
+
+	listing := pages(t, s, treeQ(repo, code.TreeQuery{Rev: head, Recursive: true}), limit)
+	entries := 0
+	for _, p := range listing {
+		entries += len(p.Tree.Entries)
+	}
+	if entries != files+1 || len(listing) < 5 {
+		t.Errorf("the recursive listing gave %d entries in %d pages, want %d in several", entries, len(listing),
+			files+1)
+	}
+	pages(t, s, treeQ(repo, code.TreeQuery{Rev: head, Path: "wide"}), limit)
+
+	text := pages(t, s, blobQ(repo, code.BlobQuery{Rev: head, Path: "huge.txt"}), limit)
+	if joined(text) != tree["huge.txt"] {
+		t.Errorf("huge.txt's %d pages concatenate to %d bytes, want its %d", len(text), len(joined(text)),
+			len(tree["huge.txt"]))
+	}
+
+	stat := pages(t, s, diffQ(repo, code.DiffQuery{Base: base, Head: head}), limit)
+	changed := 0
+	for _, p := range stat {
+		changed += len(p.Diff.Files)
+	}
+	if changed != files+1 {
+		t.Errorf("the stat's pages hold %d files, want %d", changed, files+1)
+	}
+	pages(t, s, diffQ(repo, code.DiffQuery{Base: base, Head: head, File: name(7)}), limit)
+	if a := mustRead(t, s, compareQ(repo, base, head)); encoded(t, a) > limit {
+		t.Errorf("the comparison encodes to %d bytes, past %d", encoded(t, a), limit)
+	}
+}
+
+// A PAGE IS CUT AGAINST THE WHOLE ANSWER. Every field an answer carries is in
+// the envelope a page is measured against — the repository and the position
+// Read stamps on it after the kind has answered included — so swept across
+// bounds a byte apart in effect (a prime step over a range of several items'
+// worth), where some page somewhere lands within a few bytes of its bound,
+// every page of every kind still encodes within it.
+func TestAPageIsCutAgainstTheWholeAnswer(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, codetest.SoloOptions{}, codetest.Settings())
+	tree := map[string]string{}
+	var lines strings.Builder
+	for i := range 300 {
+		fmt.Fprintf(&lines, "line %d %s\n", i, strings.Repeat("<x", i%17))
+	}
+	for i := range 60 {
+		tree[fmt.Sprintf("dir/%02d-%s", i, strings.Repeat("p", 60+i))] = "v1\n"
+	}
+	tree["lines.txt"] = lines.String()
+	base := x.commit(tree, "base")
+	for i := range 60 {
+		tree[fmt.Sprintf("dir/%02d-%s", i, strings.Repeat("p", 60+i))] = "v2\n"
+	}
+	tree["lines.txt"] = strings.ReplaceAll(lines.String(), "<x", "<y")
+	head := x.commit(tree, "head")
+	repo := x.repo(codetest.RepoName)
+	for limit := 900; limit <= 1600; limit += 41 {
+		s := x.server(0, query.Options{})
+		query.SetPageBytes(s, limit)
+		pages(t, s, treeQ(repo, code.TreeQuery{Rev: head, Recursive: true}), limit)
+		pages(t, s, blobQ(repo, code.BlobQuery{Rev: head, Path: "lines.txt"}), limit)
+		pages(t, s, diffQ(repo, code.DiffQuery{Base: base, Head: head}), limit)
+		pages(t, s, diffQ(repo, code.DiffQuery{Base: base, Head: head, File: "lines.txt"}), limit)
+	}
+}
+
+// A PAGE IS COSTED IN THE ENCODER'S OWN TERMS: what the page cutter counts
+// for any text — every ASCII byte, the escaped ones among them, runes of two,
+// three and four bytes, U+2028 and U+2029, and bytes that are not UTF-8, alone,
+// at the text's end or cutting a rune short — is exactly what encoding/json
+// writes for it.
+func TestTheTextCostIsJSONs(t *testing.T) {
+	t.Parallel()
+	alphabet := []string{"a", "<", ">", "&", "\"", "\\", "\n", "\t", "\b", "\f", "\x00", "\x01", "\x1f",
+		"\x7f", "é", "€", "😀", " ", " ", "\xff", "\xe9", "\xe2\x82"}
+	for b := range utf8.RuneSelf {
+		alphabet = append(alphabet, string([]byte{byte(b)}))
+	}
+	rng := rand.New(rand.NewPCG(1, 2))
+	for range 2000 {
+		var s strings.Builder
+		for range rng.IntN(40) {
+			s.WriteString(alphabet[rng.IntN(len(alphabet))])
+		}
+		out, err := json.Marshal(s.String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := query.TextCost([]byte(s.String())), len(out)-2; got != want {
+			t.Fatalf("the page costs %q at %d bytes; encoding/json writes %d", s.String(), got, want)
+		}
+	}
+}

@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/code/host"
+	"github.com/crewlet/crewlet/internal/code/query"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -161,12 +162,24 @@ type GitOptions struct {
 	GitPath string
 	// Logger is the host's; nil is the package's own.
 	Logger *slog.Logger
+	// Roster is the chart the node's query server judges a seat's read by;
+	// nil is a node holding no chart, which answers a seat's read unready
+	// (no_chart) and every person's as the grant rules do with no chart.
+	Roster func() code.Roster
+	// Current is whether the node serves the company's configuration, as
+	// the query server reads it; nil is current.
+	Current func() bool
+	// QueryPool stands between the query server and the node's pool — a
+	// case that holds a read's processes, or records them; nil is the pool
+	// itself.
+	QueryPool func(query.Pool) query.Pool
 }
 
 // GitNode is one git node: its pool, its cache over its own directory, its
 // host and its HTTP server mounting the host's three routes behind the API's
 // own guard, so a person's git meets the 401 challenge and Basic credential it
-// meets in production.
+// meets in production — and its query server, over the same cache and pool,
+// under the node's own seat git-work share, as the engine builds one.
 //
 // Like a DataNode, ITS LIFETIME IS THE TEST THAT STARTED IT, and a Restart's t
 // only reports.
@@ -187,6 +200,8 @@ type gitIncarnation struct {
 	pool    *gitproc.Pool
 	metrics *metrics.Recorder
 	host    *host.Server
+	share   *code.GitShare
+	query   *query.Server
 	srv     *httptest.Server
 	reads   func(context.Context, code.ReadQuery) (code.ReadAnswer, error)
 }
@@ -199,8 +214,12 @@ func (n *gitIncarnation) Cache() *cache.Cache        { return n.cache }
 func (n *gitIncarnation) Pool() *gitproc.Pool        { return n.pool }
 func (n *gitIncarnation) Metrics() *metrics.Recorder { return n.metrics }
 func (n *gitIncarnation) CacheDir() string           { return n.dir }
+func (n *gitIncarnation) Share() *code.GitShare      { return n.share }
 func (n *gitIncarnation) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
 	return n.reads(ctx, q)
+}
+func (n *gitIncarnation) GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
+	return n.query.Read(ctx, q)
 }
 
 // StartGitNode starts a git node. It stops with t.
@@ -282,6 +301,21 @@ func (g *GitNode) start(t testing.TB) *gitIncarnation {
 	}
 	if err := n.host.Start(ctx); err != nil {
 		t.Fatalf("codetest: start %s's host: %v", n.id, err)
+	}
+	// THE QUERY SERVER, as the engine builds it: over the node's cache and
+	// pool, with ONE share of the pool's read lane.
+	n.share = code.NewGitShare(n.id, n.pool.Slots(gitproc.ClassRead), n.metrics)
+	var reads query.Pool = n.pool
+	if g.o.QueryPool != nil {
+		reads = g.o.QueryPool(reads)
+	}
+	roster := g.o.Roster
+	if roster == nil {
+		roster = func() code.Roster { return nil }
+	}
+	if n.query, err = query.New(query.Options{NodeID: n.id, Cache: n.cache, Git: reads, Share: n.share,
+		Roster: roster, Current: g.o.Current}); err != nil {
+		t.Fatalf("codetest: build %s's query server: %v", n.id, err)
 	}
 	mux := http.NewServeMux()
 	mux.Handle(host.PatternInfoRefs, n.host.InfoRefs())

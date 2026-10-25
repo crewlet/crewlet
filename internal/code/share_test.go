@@ -1,0 +1,155 @@
+package code_test
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
+)
+
+// SEAT GIT WORK IS HALF THE READ LANE. A node's seats together hold at most
+// ShareOf its read lane's slots — half, at least one — because the other half
+// is what a person's push scans, a sync round's peel and a fetch's want check
+// wait in, FIFO, for at most gitproc.SlotWait: sized to the lane, a burst of
+// seat reads would refuse a person's push busy. Over four read slots two units
+// are held, a third taker waits, and past GitShareWait (scaled here) it is
+// answered unready — about the node, so the asker's walk moves on — rather
+// than queued longer; a unit given back is taken by the waiter; and however
+// many takers race, never more than two run at once. Every take is counted by
+// its outcome, and the gauge follows what is held.
+//
+// Mutation: ShareOf answering the whole lane — four in flight, red.
+func TestSeatGitWorkIsHalfTheReadLane(t *testing.T) {
+	t.Parallel()
+	for slots, want := range map[int]int{0: 1, 1: 1, 2: 1, 3: 1, 4: 2, 5: 2, 64: 32} {
+		if got := code.ShareOf(slots); got != want {
+			t.Errorf("ShareOf(%d) = %d, want %d: half the read lane, at least one", slots, got, want)
+		}
+	}
+
+	rec, err := metrics.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := code.NewGitShare("git-a", 4, rec)
+	code.SetShareWait(s, 50*time.Millisecond)
+	if s.Units() != 2 {
+		t.Fatalf("a share of a four-slot read lane holds %d units, want 2", s.Units())
+	}
+	if got := gauge(rec, metrics.CodeSeatworkHeld); got != 0 {
+		t.Errorf("a share nobody holds reads %v held, want 0 — present, and zero", got)
+	}
+	ctx := t.Context()
+	one, err := s.Take(ctx, code.SeatWorkRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := s.Take(ctx, code.SeatWorkRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Held() != 2 || gauge(rec, metrics.CodeSeatworkHeld) != 2 {
+		t.Errorf("held %d (gauge %v), want 2", s.Held(), gauge(rec, metrics.CodeSeatworkHeld))
+	}
+
+	// THE THIRD WAITS ITS WHILE, THEN IS UNREADY — about the node.
+	_, err = s.Take(ctx, code.SeatWorkRead)
+	var unready *code.ErrGitUnready
+	if !errors.As(err, &unready) || unready.Reason != code.UnreadyShare {
+		t.Fatalf("a third take over a full share = %v, want ErrGitUnready{share}", err)
+	}
+
+	// A UNIT GIVEN BACK IS THE WAITER'S, and a release twice is one.
+	got := make(chan error, 1)
+	go func() {
+		release, err := s.Take(ctx, code.SeatWorkRead)
+		if err == nil {
+			release()
+		}
+		got <- err
+	}()
+	one()
+	one()
+	if err := <-got; err != nil {
+		t.Errorf("a waiter after a release: %v, want the released unit", err)
+	}
+	two()
+	if s.Held() != 0 {
+		t.Errorf("held %d after every release, want 0", s.Held())
+	}
+
+	// A CALLER THAT LEAVES is its own answer, and no count.
+	full1, _ := s.Take(ctx, code.SeatWorkRead)
+	full2, _ := s.Take(ctx, code.SeatWorkRead)
+	gone, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := s.Take(gone, code.SeatWorkRead); !errors.Is(err, context.Canceled) {
+		t.Errorf("a take whose caller left = %v, want context.Canceled", err)
+	}
+	full1()
+	full2()
+	if got := waits(rec, "granted"); got != 5 {
+		t.Errorf("waits{outcome=granted} = %d, want 5", got)
+	}
+	if got := waits(rec, "unready"); got != 1 {
+		t.Errorf("waits{outcome=unready} = %d, want 1 — the one that waited its while", got)
+	}
+
+	// NEVER MORE THAN THE SHARE AT ONCE, however many race.
+	code.SetShareWait(s, time.Minute)
+	var running, most atomic.Int32
+	var wg sync.WaitGroup
+	for range 32 {
+		wg.Go(func() {
+			release, err := s.Take(ctx, code.SeatWorkRead)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			defer release()
+			n := running.Add(1)
+			for {
+				m := most.Load()
+				if n <= m || most.CompareAndSwap(m, n) {
+					break
+				}
+			}
+			time.Sleep(time.Millisecond)
+			running.Add(-1)
+		})
+	}
+	wg.Wait()
+	if most.Load() > 2 {
+		t.Errorf("%d takers ran at once, past the share's 2", most.Load())
+	}
+
+	// A kind of work this build does not know is refused by name.
+	if _, err := s.Take(ctx, "write"); !errors.Is(err, code.ErrInvalid) {
+		t.Errorf("an unknown kind of seat work = %v, want ErrInvalid", err)
+	}
+}
+
+// gauge is the gauge name's reading.
+func gauge(rec *metrics.Recorder, name string) float64 {
+	for _, s := range rec.Read() {
+		if s.Name == name {
+			return s.Value
+		}
+	}
+	return -1
+}
+
+// waits is crewlet.code.seatwork.waits{outcome, work=read}.
+func waits(rec *metrics.Recorder, outcome string) uint64 {
+	for _, s := range rec.Read() {
+		if s.Name == metrics.CodeSeatworkWaits && s.Attrs["outcome"] == outcome && s.Attrs["work"] == "read" {
+			return s.Total
+		}
+	}
+	return 0
+}

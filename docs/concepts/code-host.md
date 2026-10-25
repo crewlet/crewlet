@@ -1083,6 +1083,86 @@ person's.
 
 ---
 
+## Server-side reads
+
+A git node also answers questions about a repository's content without a
+clone: a tree's listing, a file's lines, a diff — its per-file stat, or one
+file's patch — and how two commits compare (their merge base, which contains
+which, the commits each has that the other lacks, and what one changed since
+the merge base). It answers each with real git over its own
+[cache](#the-cache-on-a-git-node), in the cache's read lane, from the copy it
+holds.
+
+**By object id, never by ref.** Every revision a read names is an object id,
+whole or abbreviated to 7 or more hex digits. What a branch or a tag points at
+is a row, read at whatever level its reader asks; an object id names the same
+object on every node at every position, so a read by one needs no level. An
+abbreviation is expanded from the repository's objects alone, never as a ref
+name — git's own reading of a short name tries it as a ref first, so a branch
+or a tag named like an abbreviation would answer for another commit — and one
+that two objects begin with is refused, asking for more of its digits.
+
+**A path is data.** A path a read names reaches git only on a batch command's
+standard input, where it resolves to the id of the tree or file it names, and
+every git process the read runs is handed ids and fixed options alone: no path
+is ever an argument, so none can be read as an option. A diff's stat is
+filtered by the paths a read names after git has answered, never by a
+pathspec.
+
+**One page at a time, never cut.** Every answer is at most 56 KiB of JSON and
+says where the next page starts: a listing's entries, a stat's files, a file's
+lines and a patch's lines are each whole on the page that holds them, and a
+listing's total, a file's line count and a diff's totals are the whole answer's
+on every page. A line of a file longer than a page is served in pieces at
+character boundaries that concatenate to the line; a line of a patch longer
+than a page is refused, naming the file's lines to read instead. A binary file
+is answered by its size, as git calls one binary: a NUL in its first 8 000
+bytes.
+
+**Who may read** is judged by the git node that answers, from its own chart,
+by the rules of [Who may read and push](#who-may-read-and-push): a person reads
+every repository, and a seat what its tier and its relation allow, so a
+`visibility: unit` repository is refused to a seat outside the unit,
+`not_permitted`, naming the visibility. A deleted or purging repository is
+answered not found, with what became of it.
+
+**A git node that cannot answer says so about itself**, and another git node
+may answer the same read — nothing about the repository's content is concluded
+from such an answer:
+
+| Unready | What it means |
+|---|---|
+| `syncing` | the node's copy could not be brought to what the read needs within two seconds — a copy downloading the repository, whose download goes on after the read stops waiting — or a sync failed there, or a git process over the copy reported damage, which the cache is repairing |
+| `share` | the node's seats' git work holds its whole share of the read lane (below), and none came free within two seconds |
+| `no_chart` | a seat's read on a node holding no chart yet — at boot, before its first apply — which cannot judge a seat, as opposed to judging it has no access |
+| `behind_config` | a seat's read on a node confirmed behind the company's configuration (shed or stuck), which judges no seat's grant from the chart the fleet replaced |
+
+A person's read reads no chart, so neither of the last two applies to one.
+
+**Fresh enough by construction.** A read is answered from the copy as it
+stands, or brought to the reader's floor where it holds one; an object the copy
+lacks is looked for once more after a sync at the log's head — the reader may
+know of a push this node has not synced yet — and only then answered as no
+such object.
+
+**Seats' reads hold at most half the read lane.** The read lane — one core a
+slot, `git.max_processes` of them — is also where a person's push scans its
+objects, where a sync reads the refs it installed, and where a fetch checks
+the objects it wants, each waiting in turn for at most ten seconds before it is
+refused busy. So the git a seat's read runs takes a unit of the node's **seat
+git-work share** — half the lane, at least one — and gives it back the moment
+that git ends: a read waiting on its sync holds none, and the other half of the
+lane stays the persons' and the node's own. `crewlet.code.seatwork.held` is
+the share held now and `crewlet.code.seatwork.waits` every unit asked for, by
+whether it came free in time ([Metrics](../reference/metrics.md)).
+
+A read's git process that reports damage to the copy is never answered from,
+even where git answered anyway — it reads around a damaged index from the
+packs and exits as if it had not — and the cache repairs what it reported
+while other nodes answer.
+
+---
+
 ## A push, end to end
 
 A person pushes with git's own smart HTTP protocol, presenting their own API

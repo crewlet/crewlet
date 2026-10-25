@@ -3,6 +3,7 @@ package code
 import (
 	"errors"
 	"fmt"
+	"slices"
 )
 
 // The sentinels. Each is a fact a caller acts on differently, which is why
@@ -98,7 +99,91 @@ var (
 	// value the applier sees, because a push whose bundle failed it is never
 	// published.
 	ErrBadBundle = errors.New("code: a pack bundle is not the one its row describes")
+
+	// ErrObjectNotFound is an object id a read by oid ([GitQuery]) named —
+	// whole, or an abbreviation no object begins with — that the repository
+	// does not hold. Concluded only at the log's head: the git node that
+	// answers looks again after one linearizable sync, since the asker may
+	// have learned of a push this node had not synced yet, and only then
+	// answers this, naming the id.
+	ErrObjectNotFound = errors.New("code: no such object in the repository")
+
+	// ErrNotATree is a directory listing ([GitTree]) whose path names a file,
+	// or nothing at all, in the commit or tree it was asked of — wrapped
+	// naming the path and that object.
+	ErrNotATree = errors.New("code: the path names no directory")
+
+	// ErrNotABlob is a file read ([GitBlob]) whose path names nothing in the
+	// commit it was asked of — a submodule included, whose commit is another
+	// repository's object — wrapped naming the path and that object. A path
+	// naming a directory is not this: the read answers the directory's
+	// listing.
+	ErrNotABlob = errors.New("code: the path names no file")
+
+	// ErrSliceTooLarge is a read by oid too large to answer: one item of its
+	// answer — a line of a patch — longer than a page, or git work past the
+	// read's deadline (gitproc.ReadDeadline, or the walk's bound by the
+	// repository's objects), which another git node would take as long
+	// over. Wrapped naming the narrowing that would answer it — a line
+	// range, the paths a diff names, a narrower range — and never cut: a
+	// page that ended inside an item would be read as the whole of it.
+	ErrSliceTooLarge = errors.New("code: the read is too large to answer whole; narrow it")
 )
+
+// ErrGitUnready is a read by oid ([GitQuery]) that THIS git node could not
+// answer inside its budget, for a reason about the node rather than about the
+// repository's content — so another git node may answer it, and a walk asking
+// git nodes in turn moves on from this one without holding it against the
+// node: a node that is syncing, at its share or holding no chart now is the
+// right node a moment later. Every other refusal of a read is about the
+// request or the repository (ErrNotPermitted, ErrObjectNotFound, …) and is the
+// answer wherever it is asked.
+type ErrGitUnready struct {
+	// Reason is which of [UnreadyReasons] holds.
+	Reason UnreadyReason
+	// Detail is the sentence that names this node and what it is doing.
+	Detail string
+}
+
+func (e *ErrGitUnready) Error() string {
+	return fmt.Sprintf("code: this git node cannot answer the read now (%s): %s", e.Reason, e.Detail)
+}
+
+// UnreadyReason is why a git node answered a read [ErrGitUnready]: a closed
+// set ([UnreadyReasons]), each a fact about the node that answered.
+type UnreadyReason string
+
+const (
+	// UnreadySyncing: the node's copy of the repository could not be
+	// brought to what the read needs inside its budget — a cold copy
+	// downloading the repository, which goes on under the cache's lifetime
+	// after the read stops waiting, or a sync that failed here — or a git
+	// process over the copy reported damage, which the cache repairs while
+	// another node answers.
+	UnreadySyncing UnreadyReason = "syncing"
+	// UnreadyShare: the node's git capacity for seats' reads is spent — its
+	// seat git-work share ([GitShare]) held past [GitShareWait], or its read
+	// lane busy past gitproc.SlotWait.
+	UnreadyShare UnreadyReason = "share"
+	// UnreadyNoChart: the read is a seat's, and the node holds no chart to
+	// judge a seat's grant by (no epoch installed yet: at boot, or before a
+	// first apply). Not "this seat may not read it", which a node holding a
+	// chart answers.
+	UnreadyNoChart UnreadyReason = "no_chart"
+	// UnreadyBehindConfig: the read is a seat's, and the node is confirmed
+	// behind the company's configuration (shed or stuck): it judges no seat's
+	// grant from the chart the fleet replaced, which may be the revision that
+	// revoked it.
+	UnreadyBehindConfig UnreadyReason = "behind_config"
+)
+
+// UnreadyReasons is the closed set.
+func UnreadyReasons() []UnreadyReason {
+	return []UnreadyReason{UnreadySyncing, UnreadyShare, UnreadyNoChart, UnreadyBehindConfig}
+}
+
+// Valid reports a reason this build knows.
+func (r UnreadyReason) Valid() bool { return slices.Contains(UnreadyReasons(), r) }
 
 // TooWideError is a push whose entry can reach Bytes in its record, past the
 // Room one push's entry may take ([EntryRoom]) — [ErrInvalidProposal] by

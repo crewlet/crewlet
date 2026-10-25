@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/query"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -27,15 +28,17 @@ const (
 	// one sound: told to answer anyway, a node behind would judge it by the
 	// chart the fleet replaced, which may be the revision that revoked it.
 	// So a grant field is judged only where a node behind the
-	// configuration REFUSES it rather than answers it last. ONE exists:
-	// code.ReaderOptions.Roster, the chart a SEAT's read of a repository is
-	// judged by on the serving node. Nothing in this build asks a code read
-	// as a seat — every principal a REST route or the code host's git
-	// carries is a person, whom no chart judges ([code.GrantOf]) — so no
-	// node behind the configuration judges one from the chart it replaced
-	// yet; the refusal it owes such a read is the first seat reader's to
-	// bring (M3-O8). The tracker's own permission checks read an authority
-	// the ASKING node forms from its own.
+	// configuration REFUSES it rather than answers it last. TWO exist, the
+	// chart a SEAT's read of a repository is judged by on the serving node:
+	// code.ReaderOptions.Roster, a read of the rows, and query.Options.Roster,
+	// a read by object id on a git node. The git node's own gate,
+	// query.Options.Current, refuses a seat's read there itself (unready,
+	// behind_config) rather than judging it; nothing in this build asks a
+	// read of the rows as a seat yet — every principal a REST route or the
+	// code host's git carries is a person, whom no chart judges
+	// ([code.GrantOf]) — so the refusal a data node owes such a read is the
+	// first seat reader's to bring (M3-O8). The tracker's own permission
+	// checks read an authority the ASKING node forms from its own.
 	seamGrant seamClass = "grant"
 
 	// seamValue is a value or a routing read from the serving node's
@@ -77,6 +80,9 @@ func (c seamClass) valid() bool {
 // their Backend rows name.) A Backend row that only named its half would see
 // nothing added to the options behind it: the knowledge searcher read the
 // epoch's skills container and embedding model through options no row covered.
+// And a GIT node's query server's options: it serves a seat's read of a
+// repository by object id from its own epoch's chart, which is the same
+// question a serving decide's grant is.
 var servingSeams = []reflect.Type{
 	reflect.TypeFor[tracker.WriterDeps](),
 	reflect.TypeFor[estate.Backend](),
@@ -84,6 +90,7 @@ var servingSeams = []reflect.Type{
 	reflect.TypeFor[code.CommitterOptions](),
 	reflect.TypeFor[code.StoreOptions](),
 	reflect.TypeFor[code.ReaderOptions](),
+	reflect.TypeFor[query.Options](),
 	reflect.TypeFor[pages.SearcherOptions](),
 	reflect.TypeFor[pages.ReaderOptions](),
 	reflect.TypeFor[pages.Options](),
@@ -169,6 +176,16 @@ var classified = map[string]struct {
 	"code.ReaderOptions.Limits": {seamValue, "the limits a repository's detail reports"},
 	"code.ReaderOptions.Roster": {seamGrant, "the chart a seat's read of a repository is " +
 		"judged by: which repositories it lists, and whether it reads one"},
+
+	"query.Options.NodeID": {seamNone, "this node's name, which a refusal about the node names"},
+	"query.Options.Cache": {seamNone, "the node's git cache, synced from the code log's rows like " +
+		"any reader's"},
+	"query.Options.Git":   {seamNone, "the node's git pool"},
+	"query.Options.Share": {seamNone, "the node's seat git-work share of its read lane"},
+	"query.Options.Roster": {seamGrant, "the chart a seat's read of a repository by object id is " +
+		"judged by on the git node that answers it"},
+	"query.Options.Current": {seamGate, "whether this node serves the company's configuration: a " +
+		"seat's read behind it is answered unready, behind_config, and judged nowhere here"},
 
 	"pages.SearcherOptions.Index":  {seamNone, "the node's lexical index"},
 	"pages.SearcherOptions.Node":   {seamNone, "this node's name in the fan-out's assignment table"},

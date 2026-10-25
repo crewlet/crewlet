@@ -104,15 +104,19 @@ var sentinels = []sentinel{
 	{"code.ErrInvalid", code.ErrInvalid},
 	{"code.ErrInvalidProposal", code.ErrInvalidProposal},
 	{"code.ErrNoActivation", code.ErrNoActivation},
+	{"code.ErrNotABlob", code.ErrNotABlob},
+	{"code.ErrNotATree", code.ErrNotATree},
 	{"code.ErrNotConfigManaged", code.ErrNotConfigManaged},
 	{"code.ErrNotDeleted", code.ErrNotDeleted},
 	{"code.ErrNotPermitted", code.ErrNotPermitted},
 	{"code.ErrNotServing", code.ErrNotServing},
 	{"code.ErrNotYet", code.ErrNotYet},
+	{"code.ErrObjectNotFound", code.ErrObjectNotFound},
 	{"code.ErrPurging", code.ErrPurging},
 	{"code.ErrRecordCap", code.ErrRecordCap},
 	{"code.ErrRefNotFound", code.ErrRefNotFound},
 	{"code.ErrRepoNotFound", code.ErrRepoNotFound},
+	{"code.ErrSliceTooLarge", code.ErrSliceTooLarge},
 	{"code.ErrSnapshotMoved", code.ErrSnapshotMoved},
 	{"code.ErrSuperseded", code.ErrSuperseded},
 
@@ -254,6 +258,7 @@ var typedKinds = []typedKind{
 	// the list is complete at all.
 	{"code.BadBundle", reflect.TypeFor[*code.BadBundle]()},
 	{"code.ErrFutureVersion", reflect.TypeFor[*code.ErrFutureVersion]()},
+	{"code.ErrGitUnready", reflect.TypeFor[*code.ErrGitUnready]()},
 	{"code.TooWideError", reflect.TypeFor[*code.TooWideError]()},
 
 	{"statelog.CallerOpIDError", reflect.TypeFor[*statelog.CallerOpIDError]()},
