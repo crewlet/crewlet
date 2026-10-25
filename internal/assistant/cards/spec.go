@@ -23,6 +23,10 @@ import (
 type Spec struct {
 	Table  *Table
 	Entity *Entity
+	// Note, where named, is the path to the answer's own sentence on why it
+	// holds nothing (a search that could not run, and why), which an empty
+	// answer hands the model in place of a card ([Built.Empty]).
+	Note string
 }
 
 // Table is a table card over a list in the answer.
@@ -68,7 +72,11 @@ type Entity struct {
 	Root string
 	// ID, Title and Subtitle are paths within the record.
 	ID, Title, Subtitle string
-	Facts               []Fact
+	// Name is the card's heading where the record names none of its own
+	// (Title is empty): the company's principles are three values, not a
+	// record with a name.
+	Name  string
+	Facts []Fact
 	// Text is the path to a body the record carries, which is always
 	// somebody's prose.
 	Text  string
@@ -98,6 +106,9 @@ type Items struct {
 	// ID, Label, Fact and Depth are paths within one item; Depth, when
 	// named, indents a tree.
 	ID, Label, Fact, Depth string
+	// Plain marks a list of plain values, each item its own label (the
+	// standing policies, a list of sentences), so Label names no path.
+	Plain bool
 	// Prose marks an item list a person or an agent wrote.
 	Prose bool
 	Open  *Open
@@ -148,6 +159,7 @@ func (s Spec) Paths() []Path {
 			add(from, o.LabelFrom)
 		}
 	}
+	add("", s.Note)
 	if t := s.Table; t != nil {
 		add("", t.Rows)
 		add("row", t.Expand)
@@ -213,9 +225,9 @@ func (s Spec) Validate() error {
 		links = append(links, t.Open)
 	}
 	if e := s.Entity; e != nil {
-		if !e.Kind.Valid() || e.Title == "" {
-			return fmt.Errorf("cards: an entity spec needs a kind of %v and a title",
-				wire.ResourceKinds)
+		if !e.Kind.Valid() || (e.Title == "") == (e.Name == "") {
+			return fmt.Errorf("cards: an entity spec needs a kind of %v and exactly one of "+
+				"a title path and a name", wire.ResourceKinds)
 		}
 		for _, f := range e.Facts {
 			if f.Label == "" || f.Path == "" || !f.Type.Valid() {
@@ -224,8 +236,9 @@ func (s Spec) Validate() error {
 		}
 		links = append(links, e.Open)
 		if it := e.Items; it != nil {
-			if it.Path == "" || it.Label == "" || !it.Kind.Valid() {
-				return errors.New("cards: an entity's items need a path, a label and a kind")
+			if it.Path == "" || (it.Label == "") != it.Plain || !it.Kind.Valid() {
+				return errors.New("cards: an entity's items need a path, a kind and a label " +
+					"path, or are plain values with none")
 			}
 			links = append(links, it.Open)
 		}
@@ -246,6 +259,15 @@ func (s Spec) Validate() error {
 type Built struct {
 	Card   wire.Card
 	Notice *wire.Card
+	// Empty is an answer that holds nothing to show: a table no row reached,
+	// or an entity whose record carries no value at all. NO CARD IS DRAWN
+	// FROM ONE (the catalogue's Shape): an empty table under every search
+	// that found nothing is noise the step already says, and the model is
+	// told in words instead.
+	Empty bool
+	// Note is the answer's own sentence on why it holds nothing, read at
+	// the spec's Note path; empty where it says none.
+	Note string
 }
 
 // Cards are the card and its notice, in the order they are shown.
@@ -274,10 +296,19 @@ func Build(spec Spec, answer []byte, now time.Time) (Built, error) {
 	if err != nil {
 		return Built{}, err
 	}
+	var built Built
 	if spec.Table != nil {
-		return buildTable(spec.Table, doc, now)
+		built, err = buildTable(spec.Table, doc, now)
+	} else {
+		built, err = buildEntity(spec.Entity, doc)
 	}
-	return buildEntity(spec.Entity, doc)
+	if err != nil {
+		return Built{}, err
+	}
+	if spec.Note != "" {
+		built.Note = text(lookup(doc, spec.Note))
+	}
+	return built, nil
 }
 
 // decode reads one JSON value, numbers kept as written.
@@ -336,7 +367,7 @@ func buildTable(t *Table, doc any, now time.Time) (Built, error) {
 		card.Rows = card.Rows[:len(card.Rows)/2]
 	}
 	card.Truncated = len(card.Rows) < card.RowCount
-	built := Built{Card: out}
+	built := Built{Card: out, Empty: card.RowCount == 0}
 	if card.Truncated {
 		notice := Notice(wire.NoticeInfo, fmt.Sprintf("Showing the first %d of %d rows. "+
 			"Open it in the app to see the rest.", len(card.Rows), card.RowCount))
@@ -351,6 +382,12 @@ func buildEntity(e *Entity, doc any) (Built, error) {
 		Title: text(lookup(record, e.Title)), Subtitle: text(lookup(record, e.Subtitle))}
 	if card.Title == "" {
 		card.Title = card.ID
+	}
+	// NOTHING THE RECORD HOLDS, asked before the heading a spec names is
+	// put in: a fixed name over no value is still an empty answer.
+	recordless := card.Title == "" && card.Subtitle == ""
+	if card.Title == "" {
+		card.Title = e.Name
 	}
 	for _, f := range e.Facts {
 		if v := factValue(f.Type, lookup(record, f.Path)); v != "" {
@@ -374,6 +411,9 @@ func buildEntity(e *Entity, doc any) (Built, error) {
 		for _, raw := range list {
 			item := wire.EntityItem{Kind: it.Kind, ID: text(lookup(raw, it.ID)),
 				Label: text(lookup(raw, it.Label)), Fact: text(lookup(raw, it.Fact))}
+			if it.Plain {
+				item.Label = text(raw)
+			}
 			if it.Depth != "" {
 				if n, err := strconv.Atoi(text(lookup(raw, it.Depth))); err == nil && n > 0 {
 					item.Depth = n
@@ -405,7 +445,8 @@ func buildEntity(e *Entity, doc any) (Built, error) {
 		return Built{}, fmt.Errorf("cards: the %s record is %d bytes as a card, past the "+
 			"%d one card holds", e.Kind, size, MaxBytes)
 	}
-	built := Built{Card: out}
+	built := Built{Card: out, Empty: recordless && card.Text == "" &&
+		len(card.Facts) == 0 && total == 0}
 	if len(card.Items) < total {
 		notice := Notice(wire.NoticeInfo, fmt.Sprintf("Showing the first %d of %d entries. "+
 			"Open it in the app to see the rest.", len(card.Items), total))

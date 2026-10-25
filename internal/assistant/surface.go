@@ -145,8 +145,11 @@ func (s *surface) read(ctx context.Context, tool catalog.Tool, args map[string]a
 		refusal := *shaped.Refusal
 		s.t.stepEnd(ctx, step, state, refusalSummary(resp.Status), &refusal, resp.Status, len(resp.Body))
 	} else {
-		s.t.stepEnd(ctx, step, wire.StepDone, answerSummary(shaped.Cards), nil, resp.Status,
-			len(resp.Body))
+		summary := answerSummary(shaped.Cards)
+		if shaped.Empty {
+			summary = noMatches
+		}
+		s.t.stepEnd(ctx, step, wire.StepDone, summary, nil, resp.Status, len(resp.Body))
 		s.t.tainted(tool, shaped.Trust)
 		s.t.used(appNames(tool.Apps))
 	}
@@ -415,6 +418,10 @@ func answerSummary(shown []wire.Card) string {
 	}
 	return "Done"
 }
+
+// noMatches is the step's summary of a read whose answer held nothing, which
+// draws no card (catalog.Shape): the run chip is where the person sees it.
+const noMatches = "No matches"
 
 // stepClock is when a step started, for its duration.
 type stepClock struct {

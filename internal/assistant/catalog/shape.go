@@ -27,6 +27,9 @@ type Result struct {
 	// Trust is the label the model's text was fenced under: the tool's,
 	// or what its TrustOf made of this answer. A refusal carries none.
 	Trust provenance.Trust
+	// Empty is an answer that held nothing: no card is drawn, and the
+	// model is told what was asked and that nothing matched.
+	Empty bool
 }
 
 // Failed reports a read the route refused or could not answer.
@@ -42,6 +45,12 @@ func (r Result) Failed() bool { return r.Refusal != nil }
 //  3. Every string in the answer passes redact.Secrets, so no credential the
 //     answer carried reaches a card, the log or the model.
 //  4. The card is built by the tool's spec, capped with a notice when cut.
+//     AN ANSWER THAT HOLDS NOTHING DRAWS NO CARD (cards.Built.Empty): the
+//     step already records the read, so an empty table under every search
+//     that found nothing is noise and two download buttons over no rows.
+//     The model is handed the call's own arguments, that nothing matched
+//     and the answer's own reason where it gave one ([cards.EmptySummary]).
+//     THE ONE PLACE this is decided, for every read the catalogue holds.
 //  5. The model's summary is the card's, every row or item whole, and is
 //     fenced under the turn's boundary when the tool reads text a person or
 //     an agent wrote (ADR-0040), or has every fence marker in it defused
@@ -80,6 +89,13 @@ func Shape(t Tool, args Args, resp exec.Response, b provenance.Boundary, now tim
 			return Result{}, fmt.Errorf("catalog: read %s's answer: %w", t.Name, decodeErr)
 		}
 		trust = t.TrustOf(answer)
+	}
+	if built.Empty {
+		model, emptyErr := emptyModel(t, trust, args, built.Note, b)
+		if emptyErr != nil {
+			return Result{}, emptyErr
+		}
+		return Result{Model: model, Trust: trust, Empty: true}, nil
 	}
 	model, err := fitModel(t, trust, built.Card, b)
 	if err != nil {
@@ -151,6 +167,41 @@ func fitModel(t Tool, trust provenance.Trust, card wire.Card, b provenance.Bound
 	}
 	return "", fmt.Errorf("catalog: %s's answer does not fit the %d bytes a model is handed",
 		t.Name, cards.ModelBytes)
+}
+
+// emptyModel is an empty answer as the model reads it: [cards.EmptySummary] of
+// the call's arguments (each string through redact.Secrets, as an answer's
+// are) and the answer's note, fenced or defused as any summary of the tool
+// is, within [cards.ModelBytes].
+func emptyModel(t Tool, trust provenance.Trust, args Args, note string,
+	b provenance.Boundary) (string, error) {
+
+	var asked map[string]any
+	if len(args) > 0 {
+		encoded, err := json.Marshal(map[string]any(args))
+		if err != nil {
+			return "", fmt.Errorf("catalog: encode %s's arguments: %w", t.Name, err)
+		}
+		if encoded, err = redacted(encoded); err != nil {
+			return "", err
+		}
+		if err = json.Unmarshal(encoded, &asked); err != nil {
+			return "", fmt.Errorf("catalog: read %s's arguments back: %w", t.Name, err)
+		}
+	}
+	summary, err := cards.EmptySummary(t.Phrase, asked, note, cards.ModelBytes-fenceBytes)
+	if err != nil {
+		return "", fmt.Errorf("catalog: summarise %s's empty answer: %w", t.Name, err)
+	}
+	model, err := modelText(t, trust, b, summary)
+	if err != nil {
+		return "", err
+	}
+	if len(model) > cards.ModelBytes {
+		return "", fmt.Errorf("catalog: %s's empty answer does not fit the %d bytes a "+
+			"model is handed", t.Name, cards.ModelBytes)
+	}
+	return model, nil
 }
 
 // redacted is body with redact.Secrets applied to every string it holds, keys

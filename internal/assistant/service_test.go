@@ -422,3 +422,45 @@ func TestAFinishedTurnHoldsNoRunningSlot(t *testing.T) {
 		}
 	}
 }
+
+// A SEARCH THAT FINDS NOTHING DRAWS NO CARD: its step ends "No matches" and
+// shows the request it made (`GET /query/knowledge`, never the pattern
+// `/query/{what}`), no card frame is sent, and the model reads that the
+// search came back empty with the phrase it asked. Mutation: card the empty
+// answer again, or show the route's pattern, and this fails.
+func TestASearchThatFindsNothingDrawsNoCard(t *testing.T) {
+	t.Parallel()
+	empty := assistanttest.Routes(map[string]exec.Response{
+		"GET /query/knowledge": {Status: http.StatusOK, Body: []byte(
+			`{"available":true,"backend":"native","hits":[],"query":"mission"}`)},
+	})
+	f := assistanttest.NewRig(t, evals.RigOptions{
+		Tools:   []catalog.Tool{assistanttest.Tool(t, "search_knowledge")},
+		Handler: empty, Rounds: []evals.Round{
+			evals.Call("c1", "search_knowledge", map[string]any{"q": "mission"}),
+			evals.Say("Nothing in the knowledge base mentions the mission.")}})
+	accepted, err := f.Ask("empty", "Find the mission", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames := f.Follow(accepted.TurnID, 0)
+	step := evals.Last(frames, wire.EventStep)
+	if step == nil || step.Step.State != wire.StepDone || step.Step.Summary != "No matches" ||
+		step.Step.Request == nil || step.Step.Request.Route != "/query/knowledge" {
+		t.Errorf("step = %+v, want done, No matches, on /query/knowledge", step)
+	}
+	if card := evals.Last(frames, wire.EventCard); card != nil {
+		t.Errorf("an empty search drew a card: %+v", card.Card)
+	}
+	var tool llm.Message
+	for _, req := range f.Model.Requests() {
+		for _, msg := range req.Messages {
+			if msg.Role == llm.RoleTool {
+				tool = msg
+			}
+		}
+	}
+	if !strings.Contains(tool.Content, `\"empty\":true`) || !strings.Contains(tool.Content, "mission") {
+		t.Errorf("the model read the empty search as %q", tool.Content)
+	}
+}

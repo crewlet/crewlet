@@ -588,7 +588,10 @@ func readTools() []Tool {
 				return get("GET /query/{what}", map[string]string{"what": "knowledge"},
 					query(a).str("q", "q").values())
 			},
-			Cards: one(cards.Spec{Table: &cards.Table{Title: "Pages", Rows: "hits",
+			// A SEARCH THAT COULD NOT RUN SAYS WHY in its own `note` (no
+			// access to the pages, no backend, an index still building), which
+			// an empty answer hands the model rather than "no rows".
+			Cards: one(cards.Spec{Note: "note", Table: &cards.Table{Title: "Pages", Rows: "hits",
 				Brief: []string{"title", "container"},
 				Columns: []cards.Column{prose("title", "Title", "title"),
 					col("container", "Space", "container", tText),

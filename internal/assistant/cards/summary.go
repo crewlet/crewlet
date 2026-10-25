@@ -142,3 +142,48 @@ func fit(current func() (any, int), set func(int), budget int) ([]byte, error) {
 		set(n)
 	}
 }
+
+// emptyDigest is what a model is handed of an answer that held nothing: what
+// was read, with the arguments the call asked it with, and the answer's own
+// reason where it gave one.
+type emptyDigest struct {
+	Empty bool   `json:"empty"`
+	Read  string `json:"read"`
+	// Asked are the call's own arguments, so the model can say what it
+	// looked for without restating it from memory.
+	Asked map[string]any `json:"asked,omitempty"`
+	// Note is the answer's own sentence on why it holds nothing.
+	Note   string `json:"note,omitempty"`
+	Shown  string `json:"shown"`
+	Access string `json:"access"`
+}
+
+// EmptyShown is what every empty summary tells the model about the person's
+// view of it.
+const EmptyShown = "Nothing matched, so the person was shown no table or card. Say in " +
+	"a sentence that nothing was found, naming what you looked for."
+
+// EmptySummary is what a model is handed of a read whose answer held nothing
+// ([Built.Empty]): the read in the tool's own words, the arguments it was
+// asked with and the answer's note, within budget bytes. Arguments that do not
+// fit are left out whole rather than cut.
+func EmptySummary(read string, asked map[string]any, note string, budget int) ([]byte, error) {
+	d := emptyDigest{Empty: true, Read: read, Asked: asked, Note: note, Shown: EmptyShown,
+		Access: AccessNote}
+	out, err := json.Marshal(d)
+	if err != nil {
+		return nil, fmt.Errorf("cards: encode a summary: %w", err)
+	}
+	if len(out) <= budget {
+		return out, nil
+	}
+	d.Asked = nil
+	if out, err = json.Marshal(d); err != nil {
+		return nil, fmt.Errorf("cards: encode a summary: %w", err)
+	}
+	if len(out) > budget {
+		return nil, fmt.Errorf("cards: an empty answer's summary is %d bytes, past the %d "+
+			"a model is handed", len(out), budget)
+	}
+	return out, nil
+}

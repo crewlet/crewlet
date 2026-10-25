@@ -99,11 +99,15 @@ func hostileAnswer(spec cards.Spec, b provenance.Boundary, rows int) []byte {
 		doc = record
 	}
 	if it := e.Items; it != nil {
-		item := map[string]any{}
-		for _, p := range []string{it.ID, it.Label, it.Fact} {
-			if p != "" {
-				put(item, p, attack(b))
+		var item any = attack(b)
+		if !it.Plain {
+			fields := map[string]any{}
+			for _, p := range []string{it.ID, it.Label, it.Fact} {
+				if p != "" {
+					put(fields, p, attack(b))
+				}
 			}
+			item = fields
 		}
 		put(doc, it.Path, []any{item})
 	}
@@ -287,4 +291,108 @@ func TestAnAnswerIsFencedAtTheTrustItsTextEarns(t *testing.T) {
 			t.Errorf("%s answering %s is fenced at %q, want %q", tc.tool, tc.body, res.Trust, tc.want)
 		}
 	}
+}
+
+// NO READ EVER DRAWS AN EMPTY CARD, across the whole catalogue.
+//
+// Every read tool's every card variant is handed the answer of a read that
+// found nothing (`{}`, and the shape of a search with no hits): no card is
+// shown, no download is offered under no rows, and the model is told that the
+// read came back empty, what it asked, and that the person saw nothing. The
+// same tools handed one row still card it, which is the control. Mutation: drop
+// the empty branch in catalog.Shape, or stop marking an empty table in
+// cards.Build, and every variant fails.
+func TestNoReadEverDrawsAnEmptyCard(t *testing.T) {
+	t.Parallel()
+	b := provenance.NewBoundary()
+	variants := 0
+	for _, tool := range catalog.Tools() {
+		if tool.Kind != catalog.KindRead {
+			continue
+		}
+		for variant, spec := range tool.Cards {
+			variants++
+			name := tool.Name + "/" + variant
+			args := argsFor(t, tool, variant)
+			for _, body := range []string{`{}`, `{"hits":[],"items":[],"rows":[]}`} {
+				res, err := catalog.Shape(tool, args, exec.Response{Status: 200,
+					Body: []byte(body)}, b, evals.Epoch)
+				if err != nil {
+					t.Errorf("%s: %v", name, err)
+					continue
+				}
+				if !res.Empty || len(res.Cards) != 0 || res.Failed() {
+					t.Errorf("%s: an empty answer shaped as %d cards (empty %v)", name,
+						len(res.Cards), res.Empty)
+				}
+				if !strings.Contains(res.Model, `\"empty\":true`) &&
+					!strings.Contains(res.Model, `"empty":true`) {
+					t.Errorf("%s: the model is not told the read was empty: %.300s", name,
+						res.Model)
+				}
+				if !strings.Contains(res.Model, cards.EmptyShown) &&
+					!strings.Contains(res.Model, jsonText(cards.EmptyShown)) {
+					t.Errorf("%s: the model is not told the person saw nothing", name)
+				}
+			}
+			res, err := catalog.Shape(tool, args, exec.Response{Status: 200,
+				Body: hostileAnswer(spec, b, 1)}, b, evals.Epoch)
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			if res.Empty || len(res.Cards) == 0 {
+				t.Errorf("%s: an answer with a row was carded as empty", name)
+			}
+			for _, c := range res.Cards {
+				if c.Type == wire.CardTable && c.Table.RowCount == 0 {
+					t.Errorf("%s: drew a table of no rows", name)
+				}
+			}
+		}
+	}
+	if variants < 30 {
+		t.Fatalf("walked %d card variants", variants)
+	}
+}
+
+// AN EMPTY SEARCH TELLS THE MODEL WHAT IT ASKED AND WHY IT FOUND NOTHING: the
+// search phrase the call sent, and the answer's own note where the search
+// could not run (here, a knowledge base still indexing), so the model can say
+// "nothing matched 'mission'" or why the search could not answer. A search
+// with hits draws its table, with its rows. Mutation: leave the arguments or
+// the note out of the empty summary and this fails.
+func TestAnEmptySearchSaysWhatItAskedAndWhy(t *testing.T) {
+	t.Parallel()
+	b := provenance.NewBoundary()
+	tool, _ := catalog.Lookup("search_knowledge")
+	const note = "this node is still indexing what it has projected"
+	args := catalog.Args{"q": "company mission"}
+	res, err := catalog.Shape(tool, args, exec.Response{Status: 200, Body: []byte(
+		`{"available":false,"reason":"building","note":"` + note + `","hits":[]}`)},
+		b, evals.Epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Empty || len(res.Cards) != 0 || !strings.Contains(res.Model, "company mission") ||
+		!strings.Contains(res.Model, note) {
+		t.Errorf("an empty knowledge search shaped as %d cards, model %.400s", len(res.Cards),
+			res.Model)
+	}
+	res, err = catalog.Shape(tool, args, exec.Response{Status: 200, Body: []byte(
+		`{"available":true,"hits":[{"id":"p1","title":"Our mission","container":"FAIR",` +
+			`"snippet":"share costs fairly"}]}`)}, b, evals.Epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Empty || len(res.Cards) != 1 || res.Cards[0].Type != wire.CardTable ||
+		res.Cards[0].Table.RowCount != 1 || !strings.Contains(res.Model, "Our mission") {
+		t.Errorf("a knowledge search with a hit shaped as %+v", res)
+	}
+}
+
+// jsonText is s as it reads inside a JSON string: a fenced summary is itself
+// a JSON string in its envelope.
+func jsonText(s string) string {
+	out, _ := json.Marshal(s)
+	return strings.Trim(string(out), `"`)
 }
