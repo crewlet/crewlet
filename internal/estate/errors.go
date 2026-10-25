@@ -173,8 +173,15 @@ var sentinels = []sentinel{
 	{"artifactsdomain.ErrAboveOwnRole", artifactsdomain.ErrAboveOwnRole},
 	{"artifactsdomain.ErrAgentCompanyShare", artifactsdomain.ErrAgentCompanyShare},
 	{"artifactsdomain.ErrBadCursor", artifactsdomain.ErrBadCursor},
+	{"artifactsdomain.ErrBrandContrast", artifactsdomain.ErrBrandContrast},
+	{"artifactsdomain.ErrBrandIncomplete", artifactsdomain.ErrBrandIncomplete},
 	{"artifactsdomain.ErrConflict", artifactsdomain.ErrConflict},
 	{"artifactsdomain.ErrInvalid", artifactsdomain.ErrInvalid},
+	{"artifactsdomain.ErrFolderCycle", artifactsdomain.ErrFolderCycle},
+	{"artifactsdomain.ErrFolderDepth", artifactsdomain.ErrFolderDepth},
+	{"artifactsdomain.ErrFolderLimit", artifactsdomain.ErrFolderLimit},
+	{"artifactsdomain.ErrFolderNameTaken", artifactsdomain.ErrFolderNameTaken},
+	{"artifactsdomain.ErrFolderNotFound", artifactsdomain.ErrFolderNotFound},
 	{"artifactsdomain.ErrLabelTaken", artifactsdomain.ErrLabelTaken},
 	{"artifactsdomain.ErrNotFound", artifactsdomain.ErrNotFound},
 	{"artifactsdomain.ErrNotInTrash", artifactsdomain.ErrNotInTrash},
@@ -257,8 +264,11 @@ var typedKinds = []typedKind{
 
 	{"iam.LookRefused", reflect.TypeFor[*iam.LookRefused]()},
 
+	{"artifactsdomain.BrandContrast", reflect.TypeFor[*artifactsdomain.BrandContrast]()},
+	{"artifactsdomain.BrandIncomplete", reflect.TypeFor[*artifactsdomain.BrandIncomplete]()},
 	{"artifactsdomain.CarriedObjectGone", reflect.TypeFor[*artifactsdomain.CarriedObjectGone]()},
 	{"artifactsdomain.ErrFutureVersion", reflect.TypeFor[*artifactsdomain.ErrFutureVersion]()},
+	{"artifactsdomain.FolderAmbiguous", reflect.TypeFor[*artifactsdomain.FolderAmbiguous]()},
 	{"artifactsdomain.QuotaExceeded", reflect.TypeFor[*artifactsdomain.QuotaExceeded]()},
 	{"artifactsdomain.VersionMoved", reflect.TypeFor[*artifactsdomain.VersionMoved]()},
 

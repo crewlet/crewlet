@@ -27,7 +27,8 @@ var log = logging.Get("artifactserve")
 
 // Routes are every route the artifact listener serves, exactly: one file of a
 // ticket's version (the entry at the bare ticket path), one asset of a ticket's
-// artifact, the embedded runtime and the embedded kit. GET answers HEAD too.
+// artifact, the embedded runtime, the embedded kit and the files of the
+// company's adopted brand by their hash. GET answers HEAD too.
 // Everything else is an empty 404: no API route, no probe, no redirect, no
 // listing.
 var Routes = []string{
@@ -35,6 +36,7 @@ var Routes = []string{
 	"GET /t/{ticket}/_assets/{asset}",
 	"GET /_crewlet/runtime/{contract}/{file...}",
 	"GET " + artifacts.KitPrefix + "{version}/{file...}",
+	"GET " + brandPrefix + "{file}",
 }
 
 // Artifacts is the artifacts estate as the origin reads it: through the estate
@@ -46,6 +48,7 @@ type Artifacts interface {
 		artifactsdomain.Head, statelog.Position, error)
 	Version(ctx context.Context, id artifacts.ID, number int) (artifactsdomain.Version, error)
 	Assets(ctx context.Context, id artifacts.ID) ([]artifactsdomain.Asset, error)
+	BrandFile(ctx context.Context, hash objstore.Hash) (artifactsdomain.BrandFile, error)
 }
 
 // Objects is the fleet's object store as the origin reads it: every read
@@ -195,6 +198,7 @@ const (
 	destSubresource = "subresource"
 	destRuntime     = "runtime"
 	destKit         = "kit"
+	destBrand       = "brand"
 )
 
 // ServeHTTP answers one request on the artifact listener.
@@ -243,12 +247,18 @@ func (h *Handler) route(w http.ResponseWriter, r *http.Request) string {
 		dest, public = destRuntime, strings.TrimPrefix(p, runtimePrefix)
 	case strings.HasPrefix(p, kitPrefix):
 		dest, public = destKit, strings.TrimPrefix(p, kitPrefix)
+	case strings.HasPrefix(p, brandPrefix):
+		dest, public = destBrand, strings.TrimPrefix(p, brandPrefix)
 	case fetchDest(r) == "iframe" || fetchDest(r) == "document":
 		dest = destDocument
 	}
 	if !servedMethod(r) {
 		w.Header().Set("Allow", "GET, HEAD")
 		h.refuse(w, http.StatusMethodNotAllowed, 0)
+		return dest
+	}
+	if dest == destBrand {
+		h.brandFile(w, r, public)
 		return dest
 	}
 	if dest == destRuntime || dest == destKit {

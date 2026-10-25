@@ -145,7 +145,7 @@ func (f File) Content() (objstore.Object, bool) {
 // replays the tracker's log from the copy's position — and a build that can
 // read a record this node deferred applies it — so every file a record of
 // either writes is a file the restored rows name, and its object is one the
-// backup owes (ADR-0049).
+// backup owes (ADR-0052).
 var FileObjectReferences = objstore.ReferenceTable{
 	Domain: Domain{}.Name(), Table: "tracker_files",
 	Key: "object", Hash: "hash", Size: "size",

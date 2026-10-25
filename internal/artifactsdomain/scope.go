@@ -26,6 +26,17 @@ import (
 //	a/x/<artifact>/s/<asset>  one asset of it
 //	a/s/<owner>.<token>       one owner's hold on one republish-in-place address
 //	a/r/<record>              one person's pins and opened marks
+//	a/x                       every artifact: a folder's removal re-files them all
+//	a/f                       the folder tree: every folder, its shares and history
+//	a/f/<folder>              one folder, as a placement reads it
+//	a/b                       the company's adopted brand and the files it serves
+//
+// THE TREE NESTS EVERY FOLDER, so a record on the tree subject (a create, a
+// rename, a move, a share, a removal) orders against every artifact record
+// that read a folder (a create into it, a move into or out of it), and a
+// deferred tree record blocks them all. A folder's removal also names `a/x`,
+// because it re-files every artifact in the folder, which nests every
+// artifact.
 //
 // The domain letter is `a`, distinct from every other domain's (`t`, `p`,
 // `i`): a path is what an operator reads out of a deferral row when a fleet is
@@ -38,6 +49,8 @@ const (
 	pathAsset    = "s"
 	pathSource   = "s"
 	pathReader   = "r"
+	pathFolder   = "f"
+	pathBrand    = "b"
 )
 
 // TermKind is what a scope term names.
@@ -60,10 +73,28 @@ const (
 	// TermDomain is everything on this log: what a gate names and what an
 	// unreadable scope reads as.
 	TermDomain TermKind = "domain"
+
+	// TermArtifacts is every artifact (`a/x`): what a folder's removal names,
+	// since it re-files every artifact the folder held.
+	TermArtifacts TermKind = "artifacts"
+
+	// TermTree is the whole folder tree (`a/f`): the folder subject's own
+	// path, which nests every folder.
+	TermTree TermKind = "tree"
+
+	// TermFolder is one folder by id (`a/f/<folder>`): what an artifact
+	// record that reads a folder (a create into it, a move into or out of
+	// it) names.
+	TermFolder TermKind = "folder"
+
+	// TermBrand is the company's adopted brand (`a/b`): the brand subject's
+	// own path.
+	TermBrand TermKind = "brand"
 )
 
-// TermKinds are the five.
-var TermKinds = []TermKind{TermArtifact, TermAsset, TermSource, TermReader, TermDomain}
+// TermKinds are the nine.
+var TermKinds = []TermKind{TermArtifact, TermAsset, TermSource, TermReader, TermDomain,
+	TermArtifacts, TermTree, TermFolder, TermBrand}
 
 // Valid reports whether a term kind off the wire is one this build knows.
 func (t TermKind) Valid() bool { return slices.Contains(TermKinds, t) }
@@ -72,8 +103,9 @@ func (t TermKind) Valid() bool { return slices.Contains(TermKinds, t) }
 //
 // FOUR: the widest record here names an artifact and its source address (a
 // source create, a transfer or a purge of a sourced artifact) or a reader and
-// the artifact it pins. Nothing names more, so the cap is a writer's mistake
-// caught rather than a bound a writer has to handle.
+// the artifact it pins, beside one folder (a sourced create into a folder) or
+// two (a move from one folder into another). Nothing names more, so the cap is
+// a writer's mistake caught rather than a bound a writer has to handle.
 const MaxScopeTerms = 4
 
 // ScopeTerm is one element of a record's blast radius.
@@ -105,6 +137,14 @@ func (t ScopeTerm) Path() string {
 		return join(pathDomain, pathReader, t.ID)
 	case TermDomain:
 		return pathDomain
+	case TermArtifacts:
+		return join(pathDomain, pathArtifact)
+	case TermTree:
+		return join(pathDomain, pathFolder)
+	case TermFolder:
+		return join(pathDomain, pathFolder, t.ID)
+	case TermBrand:
+		return join(pathDomain, pathBrand)
 	}
 	// AN UNKNOWN TERM KIND IS THE DOMAIN, NOT A SKIPPED TERM: a term this
 	// build cannot interpret is a claim about a blast radius it cannot
@@ -212,9 +252,14 @@ func (s ScopeSet) Validate() error {
 	}
 	for _, t := range s.Terms {
 		switch t.Kind {
-		case TermArtifact, TermSource, TermReader:
+		case TermArtifact, TermSource, TermReader, TermFolder:
 			if t.ID == "" {
 				return fmt.Errorf("artifactsdomain: a %s term names nothing", t.Kind)
+			}
+		case TermArtifacts, TermTree, TermBrand:
+			if t.ID != "" || t.Artifact != "" {
+				return fmt.Errorf("artifactsdomain: a %s term names a whole set and "+
+					"carries no id", t.Kind)
 			}
 		case TermAsset:
 			if t.ID == "" || t.Artifact == "" {
@@ -253,6 +298,10 @@ func subjectPath(s Subject) string {
 		// row of this domain's either — never intersects any
 		// read's closure.
 		return statelog.FrameworkScope
+	case KindFolder:
+		return ScopeTerm{Kind: TermTree}.Path()
+	case KindBrand:
+		return ScopeTerm{Kind: TermBrand}.Path()
 	}
 	// A GATE IS ABOUT THE WHOLE DOMAIN, and so is a kind this build does
 	// not know: anything narrower would be a claim the record never made.
@@ -261,6 +310,20 @@ func subjectPath(s Subject) string {
 
 // artifactTerm is one artifact's term.
 func artifactTerm(id string) ScopeTerm { return ScopeTerm{Kind: TermArtifact, ID: id} }
+
+// FolderTerm is one folder's term, what an artifact record that reads the
+// folder names. The top level (”) is no folder and has no term: a record
+// filing an artifact at the top level reads no folder row.
+func FolderTerm(id string) ScopeTerm { return ScopeTerm{Kind: TermFolder, ID: id} }
+
+// TreeTerm is the whole folder tree's term.
+func TreeTerm() ScopeTerm { return ScopeTerm{Kind: TermTree} }
+
+// ArtifactsTerm is every artifact's term.
+func ArtifactsTerm() ScopeTerm { return ScopeTerm{Kind: TermArtifacts} }
+
+// BrandTerm is the adopted brand's term.
+func BrandTerm() ScopeTerm { return ScopeTerm{Kind: TermBrand} }
 
 // DomainScope is the closure of a read about every artifact: a listing, the
 // usage counters, the trash reaper's question and the collector's pass.
@@ -272,4 +335,17 @@ func DomainScope() statelog.ScopeSet {
 // holds: its head, versions, objects, assets, shares, reads and history.
 func ArtifactScope(id string) statelog.ScopeSet {
 	return statelog.ScopeSet{Paths: []string{artifactTerm(id).Path()}}
+}
+
+// TreeScope is the closure of a read about the folder tree alone: its folders,
+// their shares and history. A read that also counts the artifacts in each
+// folder reads artifact rows too, and is closed over [DomainScope].
+func TreeScope() statelog.ScopeSet {
+	return statelog.ScopeSet{Paths: []string{TreeTerm().Path()}}
+}
+
+// BrandScope is the closure of a read about the adopted brand: its snapshot
+// and the files it serves.
+func BrandScope() statelog.ScopeSet {
+	return statelog.ScopeSet{Paths: []string{BrandTerm().Path()}}
 }

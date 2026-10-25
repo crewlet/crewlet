@@ -83,5 +83,6 @@ func Visible(ctx context.Context, p iam.Principal, o Object, chart Chart,
 	return d.Allowed && !d.Elevated, nil
 }
 
-// perObject reports a kind decided per object rather than per app.
-func perObject(k ObjectKind) bool { return k == KindArtifact }
+// perObject reports a kind decided per object rather than per app: an
+// artifact, and a folder of the artifact tree.
+func perObject(k ObjectKind) bool { return k == KindArtifact || k == KindArtifactFolder }

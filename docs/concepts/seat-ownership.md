@@ -120,7 +120,7 @@ seats use. The identity estate is applied the same way and is deliberately not
 among them: no turn reads it, so a node that cannot serve sign-ins is not a
 node that cannot run its agents. Each log's copy can be in two quite different
 bad states, and the engine treats them as opposites, one log at a time
-([ADR-0046](https://github.com/crewlet/crewlet/blob/main/adr/0046-a-domains-fault-takes-only-its-own-copy-out-of-service.md)).
+([ADR-0049](https://github.com/crewlet/crewlet/blob/main/adr/0049-a-domains-fault-takes-only-its-own-copy-out-of-service.md)).
 
 | | What it means | What the node does |
 |---|---|---|
@@ -589,7 +589,7 @@ say which repositories are due a purge) — is declined by a node whose copy of
 any of them is out of service: it does not claim it, it gives the duty's lease back if it
 holds it, and a node whose copies serve takes the duty at its own next tick
 rather than once the lease lapses
-([ADR-0046](https://github.com/crewlet/crewlet/blob/main/adr/0046-a-domains-fault-takes-only-its-own-copy-out-of-service.md)).
+([ADR-0049](https://github.com/crewlet/crewlet/blob/main/adr/0049-a-domains-fault-takes-only-its-own-copy-out-of-service.md)).
 Deciding from a wrong copy would act for the whole fleet on rows the node has
 stopped serving: withdraw the vectors of tasks its copy never applied, purge
 past a node its copy still counts as evicted, or hold the collector while every

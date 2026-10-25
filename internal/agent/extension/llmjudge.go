@@ -231,17 +231,18 @@ func (j *LLMJudge) Decide(ctx context.Context, req Request) (Decision, error) {
 // judgeSystemPrompt is the whole of the judge's instructions.
 //
 // It states the answer format first and the question second, because the
-// format is the part a smaller model drops. The examples are two lines rather
-// than prose for the same reason.
-const judgeSystemPrompt = `You judge whether an AI agent's tool-calling phase should be given more rounds.
-
-You are shown the task, the plan, and the phase's tool-call log. Decide ONE thing:
-is the phase making PROGRESS, or is it REPEATING itself?
-
-Progress looks like: each call advances on the last, arguments change meaningfully,
-the log is converging on the task. Repetition looks like: the same tool called with
-the same or near-identical arguments, alternating between two calls, or retrying
-something that has already failed the same way more than twice.
+// format is the part a smaller model drops; the user message ends on a
+// `Verdict:` cue that prompts the answer in it. The examples are two lines
+// rather than prose for the same reason.
+//
+// Repetition keeps its threshold: one unchanged retry of a failure is how a
+// transient one (a timeout, a 503) is ridden out, and a phase otherwise
+// converging must not be rescued for it — only a failure met the same way
+// more than twice reads as a loop.
+//
+// It does not repeat the most the judge may grant: the user message states
+// that number, and [Policy.Grant] clamps whatever comes back to it.
+const judgeSystemPrompt = `You judge whether an AI agent's tool-calling phase, which has used up its rounds, should be given more.
 
 Answer in exactly this shape and nothing else:
 
@@ -253,14 +254,14 @@ or
   RESCUE
   <one short sentence of evidence>
 
-<rounds> is how many additional tool-call rounds you believe finishes the work.
-Never exceed the maximum you are told. When in doubt, answer RESCUE: more rounds
-cost real money and a phase that is looping will loop in them too.`
+<rounds> is how many more tool-call rounds you believe finish the work.
+
+You are shown the phase's task, its tool-call log and what it last said. Answer EXTEND only when the phase is making PROGRESS: each call builds on the last, converging on the task. Answer RESCUE when it is REPEATING itself (the same call again with the same or near-identical arguments, two calls alternating, retrying what has already failed the same way more than twice), and when in doubt: more rounds cost real money, and a phase that is looping will loop in them too.`
 
 // render turns the evidence into the user message.
 //
-// NOTHING IN IT IS CUT. The plan and the counters are small by construction;
-// the task, the phase's last words, a call's argument values and a failed
+// NOTHING IN IT IS CUT. The counters are small by construction; the task,
+// the phase's last words, a call's argument values and a failed
 // call's error are rewritten past their budgets by the seat's auxiliary model
 // (or, with none, shown whole — and an argument by its size and digest). The
 // calls render exactly as the prior-work ledger renders them, so a payload
@@ -275,11 +276,6 @@ func (j *LLMJudge) render(ctx context.Context, req Request) string {
 	if task := strings.TrimSpace(req.Task); task != "" {
 		b.WriteString("\n## Task\n")
 		b.WriteString(j.fitted(ctx, compact.KindTask, task, JudgeTaskBudget))
-		b.WriteString("\n")
-	}
-	if plan := strings.TrimSpace(req.PlanSummary); plan != "" {
-		b.WriteString("\n## Plan\n")
-		b.WriteString(plan)
 		b.WriteString("\n")
 	}
 

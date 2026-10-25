@@ -169,6 +169,10 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/artifacts/{id}/assets", what: "artifact_assets", path: map[string]string{"id": "id"}},
 	{method: "GET", pattern: "/artifacts/{id}/seen-by", what: "artifact_seen_by", path: map[string]string{"id": "id"}},
 	{method: "GET", pattern: "/artifacts/{id}/access", what: "artifact_access", path: map[string]string{"id": "id"}},
+	// THE FOLDER TREE, under a root of its own: `/artifacts/folders` would
+	// meet `/artifacts/{id}/pin`'s wildcard at `/artifacts/folders/pin`,
+	// which the mux refuses to register.
+	{method: "GET", pattern: "/artifact-folders", what: "artifact_folders"},
 	// AN ARTIFACT'S DATA. The literal segments beat the collection
 	// wildcard, so none is read as a collection of that name: each is a
 	// name the datastore reserves (internal/artifactdata). The company's

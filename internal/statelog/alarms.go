@@ -91,7 +91,7 @@ const (
 	// DeferralGrace is how long a node may hold records it could not
 	// apply before its copy of that log goes out of service — its seats
 	// stay, and that log's operations go to the other data nodes
-	// (ADR-0046). The alarm and
+	// (ADR-0049). The alarm and
 	// that step share the number deliberately: an operator who sees this
 	// alarm has thirty minutes, and one who sees a different number has no
 	// idea how long they have.
@@ -412,7 +412,7 @@ type Reading struct {
 	// than by a node-wide caller.
 	//
 	// A LOG'S, never the node's oldest, because EVERY LOG'S COPY IS JUDGED
-	// on its own (ADR-0046): past the grace a held record takes this node's
+	// on its own (ADR-0049): past the grace a held record takes this node's
 	// copy of THAT log out of service and no other's, so two logs holding
 	// records at once are two different answers, and one alarm naming the
 	// node's oldest hid every other log held beside it.
@@ -873,7 +873,7 @@ var table = []rule{
 		// PER LOG, like the headroom, the ceiling and the blocked trim: the
 		// report evaluates it once for each log this node holds a record on,
 		// because what the grace does is the log's: every log's copy is
-		// judged on its own (ADR-0046), see [Reading.DeferredAge].
+		// judged on its own (ADR-0049), see [Reading.DeferredAge].
 		kind:   KindDeferredOld,
 		perLog: true,
 		fires: func(r Reading) (string, bool) {

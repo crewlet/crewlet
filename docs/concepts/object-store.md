@@ -35,7 +35,8 @@ flowchart LR
 Today the store holds [a project's files](../guides/work-tracker.md#a-projects-files)
 and the pack bytes of the company's [git repositories](code-host.md) — one
 object per push, named by its `code_packs` row, a required reference like a
-file's — and every file of every [artifact](artifacts.md) version and asset.
+file's — every file of every [artifact](artifacts.md) version and asset, and
+every file of the company's adopted brand.
 It is built for more than that (chat attachments and anything else a row can
 name by key) and every consumer follows the same rule: the estate names the
 object, and the store keeps its bytes.
@@ -908,7 +909,7 @@ A project's files are live rows, and a file never retires one: a replaced
 file's bytes go at the first hourly pass once nothing names them and they were
 uploaded more than a day ago (see
 [One object per upload](#one-object-per-upload)). The decision is
-[ADR-0048](https://github.com/crewlet/crewlet/blob/main/adr/0048-a-retired-reference-keeps-its-object-for-a-grace.md).
+[ADR-0051](https://github.com/crewlet/crewlet/blob/main/adr/0051-a-retired-reference-keeps-its-object-for-a-grace.md).
 
 ### Unfinished uploads
 

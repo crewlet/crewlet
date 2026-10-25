@@ -127,7 +127,7 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// floor each node read for itself would be a second writer of
 		// rows every copy must hold alike (ADR-0002). The trim removes
 		// them with a trimmed record every applier takes at one
-		// position (ADR-0047), and a `<domain>_anchors` job here would
+		// position (ADR-0050), and a `<domain>_anchors` job here would
 		// be that second writer back.
 		"pages_ops",
 		// NEITHER NATIVE BACKEND SWEEPS ANY MORE, and the absence of

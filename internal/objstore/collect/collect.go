@@ -19,7 +19,7 @@
 // would be a second answer to which objects exist, and the two would drift
 // the first time a write landed in one and not the other.
 //
-// Every declared table is REQUIRED or RETIRED (ADR-0048). Both keep the
+// Every declared table is REQUIRED or RETIRED (ADR-0051). Both keep the
 // objects their rows name from collection; only a required table's are the
 // company's to account for, so only those are audited, and only those a backup
 // copies, counts or asks after (on `nats` a retired object's bytes still ride

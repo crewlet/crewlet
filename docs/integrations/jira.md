@@ -208,15 +208,20 @@ The lead-fallback exists because a tracker's worst failure is not a misroute —
 
 ### Lead-fallback prompt hint
 
-When a lead receives an event via `project_lead_fallback`, the Jira notification prompt adds a `## Why You Received This` section that names the project, warns the lead that no one else is watching the issue, and lays out three explicit decisions:
+When a lead receives an event via `project_lead_fallback`, the Jira notification prompt adds a `## Why you received this` section that names the project, tells the lead it owns the issue by fallback and that no one else is following it, and lays out three explicit decisions:
 
-- **Delegate** — look the right teammate up on the team and resolve their Jira account ID, then set the assignee (future updates route to them, not back to the lead).
-- **Take it yourself** — assign the issue to yourself so the routing reflects reality.
-- **Escalate** — if the issue is out of scope or the lead can't identify the right owner, hand it off to their own manager (named in the identity prompt) by commenting on the issue with an @mention or reassigning the issue to them. Lead-fallback fires only when nobody else is involved, so silently walking away would leave the issue unwatched and unhandled.
+- **Delegate** — look the right teammate up on the team for their Jira account ID, then set the assignee (later updates route to them, not back to the lead).
+- **Take it yourself** — only if the work clearly falls to the lead: assign the issue to yourself.
+- **Escalate** — if the issue is out of scope or the lead can't tell whose it is, hand it to their own manager by mentioning them in a comment on the issue or reassigning it to them.
 
 The hint is suppressed for `watcher` / `assignee` / `mention` routings — those carry their own signal of personal involvement and don't need the extra framing. The block deliberately describes the CAPABILITY ("set the assignee") rather than naming a tool, because the deployed MCP server's tool names are not knowable by the engine — see [Tool capabilities](../concepts/tool-capabilities.md).
 
-The "if you have decided not to act, do not go quiet" rule is rendered only for `assignee` and `mention` routings. A watcher is not being asked for anything — watchers receive events because they once interacted — and telling one they owe an answer is precisely how a tracker fills up with "noted, thanks".
+The `## How to handle this` section follows the routing too, in the same two rules as the [native tracker's](../guides/work-tracker.md#what-wakes-a-seat):
+
+- **Staying out is for a routing nobody is waiting on.** "If its assignee is neither you nor on your team, stay silent" is rendered for a `watcher` (or a routing with no reason), never for `assignee` or `mention`, the two the prompt reads as addressed: the turn engine holds those to an answer, and a mentioned seat is ordinarily asked about somebody else's issue.
+- **Reassigning is for the issue's holder.** Only an `assignee` routing is told how an issue is declined here — reassigned to the right teammate, looked up for their Jira account id, or to the seat's manager if it cannot tell. A mentioned seat is asked about an issue that is not its to move, and a watcher is not asked at all.
+
+That an addressed wake may not end in silence, and that a decline names the right owner on the surface the ask came from, are not in the Jira prompt at all: the executor's contract states both, and the turn engine [enforces the first](../concepts/turn-engine.md#who-is-waiting-and-how-they-get-an-answer).
 
 ---
 

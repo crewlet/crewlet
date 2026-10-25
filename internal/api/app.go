@@ -598,7 +598,7 @@ type Options struct {
 	// Code is the engine's own git host — smart HTTP under /git/ on a node
 	// whose roles name git — and the code domain's reads under /code/ on
 	// every node, asked of the engine on every request: see [CodeSurface].
-	// Never on api.public (ADR-0052). REQUIRED, for [Options]' reason.
+	// Never on api.public (ADR-0055). REQUIRED, for [Options]' reason.
 	Code CodeSurface
 
 	// Capacity drives a stream's byte ceiling.

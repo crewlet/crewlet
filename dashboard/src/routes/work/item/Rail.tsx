@@ -970,14 +970,14 @@ const RAIL_ARTIFACTS = 20;
 function ArtifactLinks({ item }: { item: string }) {
   const listed = useQuery(
     "artifacts",
-    { work_item: item, limit: RAIL_ARTIFACTS },
+    { work_item: item, "max-keys": RAIL_ARTIFACTS },
     { pollMs: 300_000, enabled: item !== "" },
   );
   const people = useArtifactPeople();
   const now = useNow();
   const { grants } = useViewer();
   const canStart = item !== "" && holds(grants, "artifacts");
-  const rows = listed.data?.items ?? [];
+  const rows = listed.data?.contents ?? [];
   if (rows.length === 0 && !canStart) return null;
   return (
     <section className="task-rail-section" aria-label="Artifacts">

@@ -78,7 +78,7 @@ func schema(t *testing.T) (columns map[string][]string, leading map[string][]str
 
 // faults is everything the gate finds wrong with one declaration against the
 // schema, as messages naming it: one that does not validate — a missing or
-// unknown standing among the reasons (ADR-0048) — a table the schema lacks, a
+// unknown standing among the reasons (ADR-0051) — a table the schema lacks, a
 // key column not called [references.ObjectColumn], a declared column the table
 // does not have, and no index leading with the key.
 //
@@ -111,7 +111,7 @@ func faults(ref objstore.ReferenceTable, columns, leading map[string][]string) [
 }
 
 // EVERY TABLE THAT NAMES AN OBJECT IS DECLARED, AND EVERY DECLARATION IS A
-// TABLE THAT DOES — ADR-0026's enforcement, and ADR-0048's: every declaration
+// TABLE THAT DOES — ADR-0026's enforcement, and ADR-0051's: every declaration
 // states its standing.
 //
 // The failure it exists for is silent and destroys data: a table naming
@@ -173,7 +173,7 @@ func TestEveryTableThatNamesAnObjectIsDeclared(t *testing.T) {
 	}
 }
 
-// EVERY REQUIRED TABLE SAYS HOW ITS LOG NAMES OBJECTS (ADR-0049). A backup
+// EVERY REQUIRED TABLE SAYS HOW ITS LOG NAMES OBJECTS (ADR-0052). A backup
 // restores its store copy and replays the declaring domain's log from the
 // copy's position — and a newer build applies what the copy's applier deferred
 // — so it owes every object a record of either names, and it learns how a
@@ -271,7 +271,7 @@ func TestTheGraceOutlastsTheLongestUnrecordedUpload(t *testing.T) {
 	}
 }
 
-// retirement is what a RETIRED declaration owes (ADR-0048), reviewed here,
+// retirement is what a RETIRED declaration owes (ADR-0051), reviewed here,
 // beside the gate that holds it: a retired table nobody sweeps keeps its
 // objects for ever, and one whose grace is shorter than the longest read of
 // what its rows name deletes the object under that read. Each field is the
@@ -318,7 +318,7 @@ func retirementFaults(declared []objstore.ReferenceTable, reviewed map[string]re
 		r, ok := reviewed[ref.Table]
 		if !ok {
 			out = append(out, fmt.Sprintf("%s is declared objstore.Retired and has no entry in "+
-				"retirements (internal/objstore/references/references_test.go) — ADR-0048 holds "+
+				"retirements (internal/objstore/references/references_test.go) — ADR-0051 holds "+
 				"a retired table to a sweep that deletes its rows and a grace that outlasts the "+
 				"longest read of what they name: add its domain's grace, the largest object a "+
 				"row names and the job that sweeps the rows, and list that job in "+
@@ -327,18 +327,18 @@ func retirementFaults(declared []objstore.ReferenceTable, reviewed map[string]re
 		}
 		if strings.TrimSpace(r.sweep) == "" {
 			out = append(out, fmt.Sprintf("%s is retired and names no job that sweeps its rows — "+
-				"a retired row nobody deletes keeps its object for ever (ADR-0048)", ref.Table))
+				"a retired row nobody deletes keeps its object for ever (ADR-0051)", ref.Table))
 		}
 		if r.largest <= 0 {
 			out = append(out, fmt.Sprintf("%s is retired and states no largest object (%d bytes), "+
-				"so nothing bounds the read its grace must outlast (ADR-0048)", ref.Table, r.largest))
+				"so nothing bounds the read its grace must outlast (ADR-0051)", ref.Table, r.largest))
 			continue
 		}
 		if longest := objstore.ReadBudget(r.largest); r.grace <= longest+assumedClockSkew {
 			out = append(out, fmt.Sprintf("%s keeps a retired row for %v, and a read of its "+
 				"largest object (%d bytes) may take objstore.ReadBudget = %v, plus an assumed "+
 				"clock skew of %v between the node stamping the row and the node sweeping it — "+
-				"the object can be deleted under a read still fetching it (ADR-0048)",
+				"the object can be deleted under a read still fetching it (ADR-0051)",
 				ref.Table, r.grace, r.largest, longest, assumedClockSkew))
 		}
 	}
@@ -353,7 +353,7 @@ func retirementFaults(declared []objstore.ReferenceTable, reviewed map[string]re
 }
 
 // A RETIRED TABLE IS SWEPT, AND OUTLIVES ITS LONGEST READ — the two
-// obligations ADR-0048 places on a retired declaration, which no other gate
+// obligations ADR-0051 places on a retired declaration, which no other gate
 // can see: the collector deletes an object the moment nothing names it, so a
 // retired row nobody deletes keeps its object for ever, and one deleted before
 // the longest read of its object ends deletes the object under that read.

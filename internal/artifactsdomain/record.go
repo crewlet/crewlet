@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/jsoncarry"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -23,8 +24,12 @@ import (
 //
 // # What each version added
 //
-//   - 1: every shape this domain has.
-const RecordVersion = 1
+//   - 1: every shape the base format has.
+//   - 2: the folder tree and the adopted brand: the `folder` and `brand`
+//     subject kinds and every op on them, an artifact's `move`, the `folder`
+//     a create files into, a create of the `brand` artifact kind (a brand
+//     kit), and the `brand` stylesheet a version pins.
+const RecordVersion = 2
 
 // baseRecordVersion is version 1, the base format. The barrier, the trim's
 // trimmed record, a reanchor's generation and every gate are pinned at it for
@@ -39,10 +44,31 @@ const GateRecordVersion = 1
 
 // versionedFields is every field an artifacts record has gained since the base
 // format, and the version a reader must be at to apply a record carrying it.
-// EMPTY: every field this build writes is in the base format. Adding one is a
-// row here, [RecordVersion] moved to its version, and a conformance candidate
-// that carries it.
-var versionedFields = statelog.RecordFields{}
+// Adding one is a row here, [RecordVersion] moved to its version, and a
+// conformance candidate that carries it (statelog_test.go's carrying).
+//
+// A NEW KIND OR A NEW OP IS A VALUE, not a key: every record has carried
+// `subject.k` and `op` since the base format, so its row names the key AND the
+// value, and an older build retains the kind's records instead of faulting at
+// the end of its dispatch. An op a new kind carries (a folder's `rename`, the
+// brand's `adopt`) needs no row of its own: the kind's row already stamps
+// every record on that subject.
+//
+// A NEW ARTIFACT KIND IS A VALUE TOO, at a create's `mutation.kind`: an older
+// build's create apply refuses a kind it does not serve, so a node at the old
+// version would refuse the very create a newer one applies, and the fleet
+// would diverge. Its row stamps the create, which the older build then
+// retains. Later records on that artifact carry no kind, so the create's row
+// is the one row the kind needs.
+var versionedFields = statelog.RecordFields{
+	{Name: "Subject.Kind folder", Since: 2, Path: []string{"subject", "k"}, Equals: string(KindFolder)},
+	{Name: "Subject.Kind brand", Since: 2, Path: []string{"subject", "k"}, Equals: string(KindBrand)},
+	{Name: "RecordEnvelope.Op move", Since: 2, Path: []string{"op"}, Equals: string(OpMove)},
+	{Name: "CreatePayload.Folder", Since: 2, Op: string(OpCreate), Path: []string{"mutation", "folder"}},
+	{Name: "CreatePayload.Kind brand", Since: 2, Op: string(OpCreate), Path: []string{"mutation", "kind"},
+		Equals: string(artifacts.KindBrand)},
+	{Name: "VersionPayload.Brand", Since: 2, Path: []string{"mutation", "version", "brand"}},
+}
 
 // VersionedFields is the table, for the conformance suite.
 func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFields) }
@@ -129,15 +155,34 @@ const (
 	OpBarrier OpKind = "barrier"
 
 	// OpTrimmed is the trim's payload-free record that removes the anchors
-	// below a floor (ADR-0047).
+	// below a floor (ADR-0050).
 	OpTrimmed OpKind = "trimmed"
+
+	// OpMove files an artifact in another folder (on the artifact's
+	// subject), or moves a folder under another parent (on the tree
+	// subject). An artifact's move is not an edit: it leaves `updated_at`
+	// alone and grants and withdraws nothing.
+	OpMove OpKind = "move"
+
+	// OpRename renames a folder, on the tree subject.
+	OpRename OpKind = "rename"
+
+	// OpAdopt adopts one version of a brand kit as the company's brand, on
+	// the brand subject, and OpClear withdraws the adoption.
+	OpAdopt OpKind = "adopt"
+	OpClear OpKind = "clear"
 )
 
 // OpKinds are every op, in the order they are documented.
+//
+// A FOLDER'S OPS REUSE THE ARTIFACT'S NAMES where the gesture is the same
+// (create, remove, move): the op is dispatched on the subject
+// kind beside it, never alone.
 var OpKinds = []OpKind{
 	OpCreate, OpPublish, OpRestoreVersion, OpPatch, OpShare, OpUnshare, OpTransfer,
 	OpTrash, OpRestore, OpPurgeBegin, OpPurge, OpRemove, OpPin, OpUnpin, OpOpened, OpLinkWorkItem,
-	OpReadElevated, OpEviction, OpGeneration, OpBarrier, OpTrimmed,
+	OpReadElevated, OpEviction, OpGeneration, OpBarrier, OpTrimmed, OpMove, OpRename,
+	OpAdopt, OpClear,
 }
 
 // HistoryOps are every op an artifact's history row is filed under, in the
@@ -149,12 +194,23 @@ var OpKinds = []OpKind{
 // browsing rather than something that happened to the artifact; the log's own
 // records are about no artifact; and an asset's records are filed under the
 // asset's own name ([historyOp]), so the history tells an asset's create from
-// the artifact's.
+// the artifact's. A folder's records and the brand's are filed in their own
+// histories ([FolderHistoryOps], [BrandHistoryOps]). An artifact's move is
+// filed here, naming folder ids only, never a folder's name, so the row tells
+// a reader of the artifact nothing about a folder they cannot see.
 var HistoryOps = []OpKind{
 	OpCreate, OpPublish, OpRestoreVersion, OpPatch, OpShare, OpUnshare, OpTransfer,
 	OpTrash, OpRestore, OpPurgeBegin, historyOp(KindAsset, OpCreate), historyOp(KindAsset, OpRemove),
-	OpLinkWorkItem, OpReadElevated,
+	OpLinkWorkItem, OpReadElevated, OpMove,
 }
+
+// FolderHistoryOps are every op a folder history row is filed under
+// (`artifact_folder_history`).
+var FolderHistoryOps = []OpKind{OpCreate, OpRename, OpMove, OpRemove}
+
+// BrandHistoryOps are every op a brand history row is filed under
+// (`artifact_brand_history`).
+var BrandHistoryOps = []OpKind{OpAdopt, OpClear}
 
 // Valid reports whether an op off the wire is one this build knows.
 func (o OpKind) Valid() bool { return slices.Contains(OpKinds, o) }

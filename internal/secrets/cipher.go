@@ -277,6 +277,12 @@ func DecodeKey(material string) ([]byte, error) {
 
 // AADForVar is the associated data binding a secret-store value to its
 // variable name, so a ciphertext moved between rows fails to authenticate.
+//
+// The prefix names the node table the store began in. A binding only has to
+// be distinct from every other one — [AADForCredential]'s, a config payload's
+// — which this is, and it is part of what every sealed row authenticates
+// against, so respelling it would leave every stored value unopenable for the
+// sake of a word.
 func AADForVar(name string) string { return "secret_values/" + name }
 
 // AADForCredential binds a sealed credential value to the CREDENTIAL it

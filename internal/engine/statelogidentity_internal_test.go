@@ -27,7 +27,7 @@ import (
 // The identity is the instant [statelog.StreamCreatedAt] reads: the one the
 // create that made the stream stamped into its configuration
 // ([statelog.CreatedAtKey]), which a snapshot restore hands back with the
-// configuration — never the broker's own, which a restore moves (ADR-0050).
+// configuration — never the broker's own, which a restore moves (ADR-0053).
 //
 // # Why this is an engine test and not only a framework one
 //

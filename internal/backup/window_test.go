@@ -157,7 +157,7 @@ func noManifest(t *testing.T, dir string) {
 	}
 }
 
-// A BACKUP CARRIES AN OBJECT NAMED AFTER ITS COPY (ADR-0049). A restore brings
+// A BACKUP CARRIES AN OBJECT NAMED AFTER ITS COPY (ADR-0052). A restore brings
 // the store copy back at its position and replays the tracker's log from there
 // to the last record the snapshot captured — so a file written while the
 // backup ran, uploaded and named after the copy was taken, is a row the

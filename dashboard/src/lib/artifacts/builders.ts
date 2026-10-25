@@ -11,7 +11,7 @@
  * own suggestion, which outranks the words.
  */
 
-import type { ArtifactKind } from "~/protocol/index.ts";
+import type { MakeKind } from "./words.ts";
 import type { OrgIndex, Seat } from "~/lib/seats.ts";
 
 /**
@@ -20,7 +20,7 @@ import type { OrgIndex, Seat } from "~/lib/seats.ts";
  * phrases, one word stem after another, since they are read as a reader would
  * write them about a seat.
  */
-const KIND_WORK: Readonly<Record<ArtifactKind, readonly string[]>> = {
+const KIND_WORK: Readonly<Record<MakeKind, readonly string[]>> = {
   doc: words("writ doc content editor product pm research"),
   slides: words("present deck slide marketing pitch strategy product"),
   sheet: words("analy data finance operations ops spreadsheet report"),
@@ -34,7 +34,7 @@ function words(phrase: string): readonly string[] {
 }
 
 /** How strongly a seat speaks a kind's work: one point per word it uses, its name counting double. */
-export function builderScore(seat: Seat, kind: ArtifactKind): number {
+export function builderScore(seat: Seat, kind: MakeKind): number {
   const words = KIND_WORK[kind];
   const said = (text: string) =>
     words.filter((w) => new RegExp(`(^|[^a-z])${w}`, "i").test(text)).length;
@@ -52,11 +52,7 @@ export interface Builder {
  * it names an agent on the chart, else the seat that speaks the kind's work
  * best, else the chart's first agent.
  */
-export function artifactBuilders(
-  index: OrgIndex,
-  kind: ArtifactKind,
-  suggested?: string,
-): Builder[] {
+export function artifactBuilders(index: OrgIndex, kind: MakeKind, suggested?: string): Builder[] {
   const agents = index.seats.filter((s) => s.kind === "agent");
   const scored = agents
     .map((seat, at) => ({ seat, at, score: builderScore(seat, kind) }))

@@ -15,7 +15,7 @@ import (
 //
 // role.code.access is the one per-seat code tier every code host reads: the
 // GitHub App's permission set is the tier's, and the native code host caps a
-// seat's grant by it (internal/code's Tier, ADR-0055). config is the leaf
+// seat's grant by it (internal/code's Tier, ADR-0058). config is the leaf
 // every integration package depends on, so it restates the vocabulary rather
 // than importing internal/github and inverting that; internal/code spells its
 // tiers as config's own constants, and is held here all the same, element by

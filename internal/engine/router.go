@@ -43,7 +43,7 @@ import (
 // does not has run nothing, by this node's router and by every other node's
 // alike: a worse node to ask, never no node (estate's [estate.Router] doc). A
 // domain's copy that is WRONG is out of service for that domain's operations
-// alone ([localEstate.For], ADR-0046), and the node keeps its seats.
+// alone ([localEstate.For], ADR-0049), and the node keeps its seats.
 
 // The placement the router is handed.
 var _ estate.Placement = wholeEstate{}
@@ -206,7 +206,7 @@ type heldVerdict struct {
 // copy is out of service.
 //
 // A DOMAIN'S COPY THAT IS WRONG IS NOT SERVED — for that domain's operations
-// alone (ADR-0046). An applier halted at a record it cannot decode or held one
+// alone (ADR-0049). An applier halted at a record it cannot decode or held one
 // past the deferral grace, an eviction, rows below the log's first record, a
 // checkpoint on another stream, a stalled prefix: a domain's copy in any of
 // those states goes OUT OF SERVICE — this node's router sends its own seats'
@@ -257,7 +257,7 @@ func (l *localEstate) serves(ctx context.Context, domain string) bool {
 }
 
 // copyOutOfService is the first of domains, in the order given, whose copy on
-// this node is out of service ([localEstate.serves], ADR-0046) — or false
+// this node is out of service ([localEstate.serves], ADR-0049) — or false
 // where every one serves, or where this node holds no estate to judge. A
 // fleet duty that decides from those domains' rows asks it before it claims
 // ([dutyDecline]).
@@ -344,7 +344,7 @@ func (l *localEstate) peek(ctx context.Context, c *core) (v copyVerdict, known b
 // as far as it can tell WITHOUT WAITING: it runs its core, and the last
 // verdict read of the copy — where one has been — found every domain a seat
 // depends on in service ([estate.SeatCopy]). A wrong copy of any other domain
-// costs that domain's calls a peer and never the seats (ADR-0046).
+// costs that domain's calls a peer and never the seats (ADR-0049).
 //
 // For serviceability, which asks it on every sweep and may not wait on the
 // broker. A copy nobody has judged yet is not read as a wrong one — its first

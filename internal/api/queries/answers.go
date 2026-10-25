@@ -78,7 +78,7 @@ type Sources struct {
 	// Usage is the replicated estate's usage domain: every node's company
 	// days, for every NAMED spend window and its series (ADR-0020), read
 	// through the estate's router ([UsageReads]) so a node whose own copy
-	// is out of service answers from a peer's (ADR-0046). Not this node's
+	// is out of service answers from a peer's (ADR-0049). Not this node's
 	// event log, which answered for this node alone and only thirty days
 	// back. Nil leaves `token_series` unregistered and a named `tokens`
 	// window empty.
@@ -349,7 +349,7 @@ type Sources struct {
 	// lexical index, which derives the links from the bodies it reads
 	// ([search.Backlinks]), asked through the estate router of a data node
 	// whose copies of both the knowledge base and the tracker serve, since
-	// the links are named from both (ADR-0046). Nil leaves the `page`
+	// the links are named from both (ADR-0049). Nil leaves the `page`
 	// answer without `linked_from`, which is absent rather than empty:
 	// "nothing links here" is a claim only a data node holding the index,
 	// and serving the copies it is named from, can make.

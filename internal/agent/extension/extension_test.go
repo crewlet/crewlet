@@ -189,10 +189,9 @@ func TestTheFinishHintMatchesHowThePhaseEnds(t *testing.T) {
 	t.Parallel()
 	// Each phase leaves by a different door: the executor through
 	// `submit_work`, the reviewer through `submit_review`, onboarding
-	// through `mark_onboarded`, and only a sub-agent by returning text with
-	// no tool call. A phase told the wrong way to finish spends its granted
-	// rounds trying to leave through a door it does not have — the exact
-	// failure the extension was granted to avoid.
+	// through `mark_onboarded`. A phase told the wrong way to finish spends
+	// its granted rounds trying to leave through a door it does not have —
+	// the exact failure the extension was granted to avoid.
 	//
 	// ONBOARDING IS THE CASE THAT WAS MISSING, and the one that was silent:
 	// told to stop calling tools, an extended onboarding pass never reaches
@@ -205,7 +204,6 @@ func TestTheFinishHintMatchesHowThePhaseEnds(t *testing.T) {
 		{phase.Execute, "submit_work", "submit_review"},
 		{phase.Review, "submit_review", "submit_work"},
 		{phase.Onboarding, "mark_onboarded", "submit_work"},
-		{phase.Subagent, "stop calling tools", "submit_work"},
 	} {
 		hint := extension.FinishHint(tc.ph)
 		if !strings.Contains(hint, tc.want) {
@@ -214,6 +212,15 @@ func TestTheFinishHintMatchesHowThePhaseEnds(t *testing.T) {
 		if strings.Contains(hint, tc.not) {
 			t.Errorf("the %s hint names another phase's exit: %q", tc.ph, hint)
 		}
+	}
+	// A WORKER IS NEVER EXTENDED, so it is told nothing. The hint it was
+	// once given — stop calling tools, return a plain-text summary — is the
+	// opposite of its contract, which ends in a `submit_result` call.
+	if hint := extension.FinishHint(phase.Subagent); hint != "" {
+		t.Errorf("a phase the extension never reaches was given a way out: %q", hint)
+	}
+	if nudge := extension.Nudge(phase.Subagent, 2, "x"); strings.HasSuffix(nudge, "\n") {
+		t.Errorf("a nudge with no hint ends on a dangling line:\n%q", nudge)
 	}
 }
 

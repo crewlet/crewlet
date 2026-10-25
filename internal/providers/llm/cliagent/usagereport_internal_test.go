@@ -128,6 +128,43 @@ func TestAnUnreadableUsageReportIsSaidOutLoud(t *testing.T) {
 	}
 }
 
+// A FAILED RUN'S REPORT IS NOT DRIFT. A call the CLI said failed is refused and
+// charged nothing, so a report holding no counts is no fallback to warn of —
+// and Hermes writes its counts as null for exactly the calls an operator reads
+// the log about, a refused key and a spent plan (measured on 0.21.5). The same
+// report on a run that exited 0 still warns, which is what keeps this from
+// being a rule about nulls.
+//
+// NOT PARALLEL: it reads the process's log, as the case above does.
+//
+// Mutation: drop the failed-run condition from completion()'s warning and the
+// first case is red.
+func TestAFailedRunsEmptyUsageReportIsNotCalledDrift(t *testing.T) {
+	logs := captureLogs(t)
+	const nulls = `{"input_tokens":null,"output_tokens":null,"completed":false,"failed":true}`
+	for _, tc := range []struct {
+		name, exit string
+		failed     bool
+	}{
+		{name: "a run that exited 2", exit: "2", failed: true},
+		{name: "a run that exited 0", exit: "0", failed: false},
+	} {
+		logs.Reset()
+		p := fakeProvider(t, map[string]string{
+			"FAKE_STDOUT": "the answer", "FAKE_USAGE_FILE": nulls, "FAKE_EXIT": tc.exit,
+		}, usageProfile())
+		_, err := ask(t, p, llm.Request{})
+		if (err != nil) != tc.failed {
+			t.Fatalf("%s: err = %v, want a failed call = %v", tc.name, err, tc.failed)
+		}
+		warned := strings.Contains(logs.String(), "cli_agent_usage_report_unreadable")
+		if warned == tc.failed {
+			t.Errorf("%s: cli_agent_usage_report_unreadable logged = %v, want %v:\n%s",
+				tc.name, warned, !tc.failed, logs.String())
+		}
+	}
+}
+
 // WHAT A REPORT WAS MADE OF IS THREE WAYS OF TAKING NOTHING, and only the two
 // that mean the CLI's report arrived count as unreadable: nothing obtained is
 // already reported where it was obtained, or is a profile that reads none.

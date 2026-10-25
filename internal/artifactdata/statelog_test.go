@@ -35,7 +35,7 @@ func TestTheDatastoreDomainIsACertifiedDomain(t *testing.T) {
 			Rows:       artifactdata.NewRows,
 			Write:      suiteWrite,
 			EncodeGate: encodeSuiteGate,
-			// THE PRODUCTION ENCODER the engine hands the trim (ADR-0047).
+			// THE PRODUCTION ENCODER the engine hands the trim (ADR-0050).
 			EncodeTrimmed: artifactdata.EncodeTrimmed,
 		}
 	})

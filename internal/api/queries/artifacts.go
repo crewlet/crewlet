@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/artifactsapi"
@@ -28,7 +29,8 @@ import (
 type ArtifactsReader interface {
 	artifactsapi.Lister
 	artifactsapi.SeenByReads
-	Version(ctx context.Context, id artifacts.ID, number int) (artifactsdomain.Version, error)
+	artifactsapi.FolderReads
+	artifactsapi.BrandReads
 	Versions(ctx context.Context, id artifacts.ID, cursor string, limit int) (
 		artifactsdomain.VersionPage, error)
 	History(ctx context.Context, id artifacts.ID, cursor string, limit int) (
@@ -57,6 +59,9 @@ func registerArtifacts(r *Registry, src ArtifactsSource, now func() time.Time) {
 	src.Gate.Now = now
 	s := artifactsAnswers{ArtifactsSource: src, now: now}
 	r.Register("artifacts", Everybody(), s.list)
+	// THE FOLDER TREE A READER SEES: everybody's question, filtered folder
+	// by folder as the listing is row by row.
+	r.Register("artifact_folders", Everybody(), s.folders)
 	r.Register("artifact", DecidedBy(authz.ActionArtifactRead), s.artifact)
 	r.Register("artifact_versions", DecidedBy(authz.ActionArtifactRead), s.versions)
 	r.Register("artifact_version", DecidedBy(authz.ActionArtifactRead), s.version)
@@ -71,12 +76,33 @@ func registerArtifacts(r *Registry, src ArtifactsSource, now func() time.Time) {
 	// administrators' record of what happened to all of them, the elevated
 	// reads above all (D09), decided by the company-wide trail's verb.
 	r.Register("artifact_trail", DecidedBy(authz.ActionAuditRead), s.trail)
+	// THE COMPANY'S ADOPTED BRAND, its public face: everybody's.
+	r.Register("brand", DecidedBy(authz.ActionBrandRead), s.brand)
+}
+
+// brand answers the company's adopted brand, `{"brand": null}` when none is
+// adopted, through the one answer the brand route gives
+// ([artifactsapi.Gate.Brand]).
+func (s artifactsAnswers) brand(ctx context.Context, p Params) (any, error) {
+	fresh, err := Freshness(p)
+	if err != nil {
+		return nil, err
+	}
+	asking, err := caller(ctx, "brand")
+	if err != nil {
+		return nil, err
+	}
+	answer, err := s.Gate.Brand(ctx, s.Reads, asking, fresh)
+	return answer, artifactFailure("brand", err)
 }
 
 // artifactFailure is an admission's or an artifacts read's failure in this
 // surface's vocabulary.
 func artifactFailure(what string, err error) error {
-	var refusal *artifactsapi.Refused
+	var (
+		refusal   *artifactsapi.Refused
+		ambiguous *artifactsdomain.FolderAmbiguous
+	)
 	switch {
 	case err == nil:
 		return nil
@@ -92,6 +118,17 @@ func artifactFailure(what string, err error) error {
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	case errors.Is(err, artifactsdomain.ErrNotFound), errors.Is(err, artifactsdomain.ErrPurged):
 		return fmt.Errorf("%w: %w", ErrNotFound, err)
+	case errors.Is(err, artifactsdomain.ErrFolderNotFound):
+		// AN UNKNOWN OR INVISIBLE FOLDER IS ABSENT, never an empty page: one
+		// answer for both, so a prefix discloses nothing.
+		return fmt.Errorf("%w: no such folder", ErrNotFound)
+	case errors.As(err, &ambiguous):
+		ids := make([]string, len(ambiguous.Candidates))
+		for i, c := range ambiguous.Candidates {
+			ids[i] = c.ID
+		}
+		return fmt.Errorf("%w: %q names %d folders you can see; list one of them by folder id "+
+			"(%s)", ErrBadParams, ambiguous.Path, len(ids), strings.Join(ids, ", "))
 	case errors.Is(err, artifactsdomain.ErrInvalid), errors.Is(err, artifactsdomain.ErrBadCursor):
 		return fmt.Errorf("%w: %w", ErrBadParams, err)
 	}
@@ -134,12 +171,16 @@ func (s artifactsAnswers) read(ctx context.Context, what string, p Params, versi
 	return a, artifactFailure(what, err)
 }
 
-// list answers one page of the artifacts the caller can see: `scope=` mine,
-// shared, company, agents or all (the default), `kind=`, `q=` (the title, the
-// description and the head's text), `sort=` updated (the default), created,
-// title or opened, `status=` live (the default) or trashed, `pinned=true`,
-// `work_item=` (the artifacts made for that tracker item), `cursor=` and
-// `limit=`.
+// list answers one page of the artifacts the caller can see, in S3's
+// ListObjectsV2 terms: `prefix=` (a folder path with a trailing "/", empty for
+// the top level) or `folder=` (the folder's id, in place of the prefix),
+// `delimiter=/` (one level, its child folders answered as common prefixes;
+// absent, recursive), `max-keys=` and `continuation-token=`;
+// beside them `scope=` mine, shared, company, agents or all (the default),
+// `kind=`, `q=` (the title, the description and the head's text), `sort=`
+// updated (the default), created, title or opened, `status=` live (the
+// default) or trashed, `pinned=true` and `work_item=` (the artifacts made for
+// that tracker item).
 func (s artifactsAnswers) list(ctx context.Context, p Params) (any, error) {
 	fresh, err := Freshness(p)
 	if err != nil {
@@ -149,9 +190,17 @@ func (s artifactsAnswers) list(ctx context.Context, p Params) (any, error) {
 		Scope: artifactsdomain.ListScope(p.String("scope")), Kind: artifacts.Kind(p.String("kind")),
 		Status: artifactsdomain.Status(p.String("status")), Q: p.String("q"),
 		Pinned: p.Bool("pinned", false), WorkItem: p.String("work_item"),
-		Sort: artifactsdomain.ListSort(p.String("sort")), Cursor: p.String("cursor"),
-		Limit: Clamp(p.Int("limit", 0), artifactsdomain.DefaultListLimit, artifactsdomain.MaxListLimit),
+		Sort:              artifactsdomain.ListSort(p.String("sort")),
+		Prefix:            p.String("prefix"),
+		Folder:            p.String("folder"),
+		Delimiter:         p.String("delimiter"),
+		ContinuationToken: p.String("continuation-token"),
+		MaxKeys: Clamp(p.Int("max-keys", 0), artifactsdomain.DefaultListLimit,
+			artifactsdomain.MaxListLimit),
 		Fresh: fresh,
+	}
+	if q.Delimiter != "" && q.Delimiter != artifactsdomain.ListDelimiter {
+		return nil, badParams("delimiter", q.Delimiter, []string{artifactsdomain.ListDelimiter})
 	}
 	asking, err := caller(ctx, "artifacts")
 	if err != nil {
@@ -159,6 +208,23 @@ func (s artifactsAnswers) list(ctx context.Context, p Params) (any, error) {
 	}
 	page, err := s.Gate.List(ctx, s.Reads, asking, q)
 	return page, artifactFailure("artifacts", err)
+}
+
+// folders answers the folder tree the caller sees: every folder, parents
+// before children and siblings A to Z, each with what sits directly in it that
+// they can see and their role on it, and how many artifacts they can see sit
+// in no folder they see.
+func (s artifactsAnswers) folders(ctx context.Context, p Params) (any, error) {
+	fresh, err := Freshness(p)
+	if err != nil {
+		return nil, err
+	}
+	asking, err := caller(ctx, "artifact_folders")
+	if err != nil {
+		return nil, err
+	}
+	tree, err := s.Gate.Folders(ctx, s.Reads, asking, fresh)
+	return tree, artifactFailure("artifact_folders", err)
 }
 
 // artifact answers one artifact's head, its shares (to the owner and editors),
@@ -172,7 +238,7 @@ func (s artifactsAnswers) artifact(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	detail, err := s.Gate.Detail(ctx, asking, id)
+	detail, err := s.Gate.Detail(ctx, s.Reads, asking, id)
 	return detail, artifactFailure("artifact", err)
 }
 
@@ -211,7 +277,8 @@ func (s artifactsAnswers) history(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, artifactFailure("artifact_history", err)
 	}
-	return a.History(page), nil
+	shown, err := s.Gate.History(ctx, s.Reads, a, page)
+	return shown, artifactFailure("artifact_history", err)
 }
 
 // assets answers an artifact's live assets.

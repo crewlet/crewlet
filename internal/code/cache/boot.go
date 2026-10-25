@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/filelock"
+	"github.com/crewlet/crewlet/internal/flock"
 )
 
 // THE BOOT'S READING of repos/: done once, by Prepare, under the claim Open
@@ -27,7 +27,7 @@ type boot struct {
 	// dir is the root Prepare resolved and claimed.
 	dir string
 	// claim is this process's hold on dir, from Prepare to Stop.
-	claim *filelock.Claim
+	claim *flock.Lock
 	// taken is set by whichever of Open and Layout.Release takes the claim
 	// first: a Layout opens once.
 	taken atomic.Bool

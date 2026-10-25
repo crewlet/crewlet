@@ -377,14 +377,19 @@ func TestTheOnboardingSurfaceCannotSubmitWork(t *testing.T) {
 	}
 }
 
-// ONBOARDING DISCOVERS. Its prompt carries the slim catalogue and tells the
-// seat to find its knowledge-base server's page tools, which it can reach only
-// through the discovery pair. The gate that keeps the pair off the reviewer
-// must not take it off this pass.
+// ONBOARDING DISCOVERS. Its knowledge-base tools are not on its surface from
+// the first round — on the native backend first-party ones, on Confluence an
+// MCP server's — so its prompt lists them under the tools to discover, and it
+// reaches them only through the discovery pair. The gate that keeps the pair
+// off the reviewer must not take it off this pass.
+//
+// AND IT LISTS ONLY WHAT IT DOES NOT HOLD: the two tools active from its first
+// round reach the model as definitions with every request, and listed again
+// they are their descriptions paid for twice.
 func TestTheOnboardingSurfaceCanDiscoverTools(t *testing.T) {
 	t.Parallel()
 	prov := marking()
-	r := onboardingRunner(t, &markers{claimHeld: true}, runner.NewLatch(), prov)
+	r := onboardingRunner(t, &markers{claimHeld: true}, runner.NewLatch(), prov, "search_knowledge")
 	if _, err := r.Onboard(context.Background()); err != nil {
 		t.Fatalf("Onboard: %v", err)
 	}
@@ -397,6 +402,15 @@ func TestTheOnboardingSurfaceCanDiscoverTools(t *testing.T) {
 		if !slices.Contains(offered, want) {
 			t.Errorf("the onboarding surface offers %v, without %s: the pass "+
 				"cannot reach the knowledge-base tools its prompt sends it to", offered, want)
+		}
+	}
+	system := reqs[0].Messages[0].Content
+	if !strings.Contains(system, "\n## Tools to discover\n- search_knowledge") {
+		t.Errorf("the knowledge-base tool the pass must activate is not listed:\n%s", system)
+	}
+	for _, held := range []string{runner.ReflectAndPersistTool, runner.MarkOnboardedTool} {
+		if strings.Contains(system, "- "+held) {
+			t.Errorf("the pass's prompt lists %s, which its surface already offers", held)
 		}
 	}
 }

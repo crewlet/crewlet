@@ -726,11 +726,13 @@ prompt renders differently.
 
 ### The one event addressed to its own actor
 
-A seat is never told about its own actions — with one exception in the whole
-engine. A **failed workflow run** names the person whose push triggered it,
-and when it goes red they are the only one who can fix it. A build runs
-asynchronously, minutes after the push, and reports a result nobody could
-have predicted, so suppressing it means the person who can act never learns.
+A seat is never told about its own actions — with one exception on GitHub (the
+self-hosted host's failed pipeline and the tracker's notice that a task the
+actor unblocked is now workable are the engine's others). A **failed workflow
+run** names the person whose push triggered it, and when it goes red they are
+the only one who can fix it. A build runs asynchronously, minutes after the
+push, and reports a result nobody could have predicted, so suppressing it
+means the person who can act never learns.
 
 The prompt says so out loud: a seat that has learned "I am not told about my
 own actions" reads its own name as a routing mistake otherwise.

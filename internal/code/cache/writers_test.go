@@ -191,7 +191,7 @@ func TestNothingButSyncWritesACache(t *testing.T) {
 //     sweep.go, entry.go and open.go decide, and layout.go's toTrash is every
 //     rename into trash/ — so which code calls a helper is the interleavings
 //     half's to judge, by what the directory ends up holding;
-//   - a path laundered through another package (filelock's claim file,
+//   - a path laundered through another package (flock's lock file,
 //     hostbox) or reached by reflection, unsafe or cgo;
 //   - a Cmd that comes back from a function of a package the walk does not
 //     read — one of the standard library's generic functions, cmp.Or among

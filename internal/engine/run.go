@@ -799,6 +799,11 @@ type Engine struct {
 	// shared by every registry it builds ([builtin.DataTurns]).
 	dataTurns *builtin.DataTurns
 
+	// folderTurns is this node's tally of the folder records each agent
+	// turn segment writes, shared by every registry it builds
+	// ([builtin.FolderTurns]).
+	folderTurns *builtin.FolderTurns
+
 	// onArtifactsServing is told whenever this node's artifact copies leave
 	// or return to service, and stopArtifactWatchFn ends the watcher that
 	// tells it. See presence.go.
@@ -1258,6 +1263,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		steers:              steers,
 		presenceWire:        presenceWire,
 		dataTurns:           builtin.NewDataTurns(nil),
+		folderTurns:         builtin.NewFolderTurns(nil),
 		mcpRetryBase:        opts.mcpRetryBase,
 		sandboxOtel:         otel,
 		sandboxPollInterval: opts.SandboxPollInterval,
@@ -1469,11 +1475,6 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// give the first epoch environment-only resolution and every later one
 	// the store, so a rotated secret would work on the second apply and not
 	// on boot.
-	//
-	// MIGRATED BEFORE THE SNAPSHOT, so a value set on this node while the
-	// engine was stopped is on the fleet before anything resolves it —
-	// and, once it is, so are this node's peers. See [Engine.migrateSecrets].
-	e.migrateSecrets(ctx)
 	e.refreshSecrets(ctx)
 
 	// SERVING BEFORE ANY SEAT, and in every mode: a node restarted into a

@@ -18,7 +18,7 @@ import (
 // openEnv, set to a cache directory, makes this test binary a SECOND PROCESS
 // opening that cache instead of a test run — the only way a case can stand a
 // real process boundary between two openers of one directory, which is what
-// the claim is for (the internal/filelock ext idiom).
+// the claim is for (internal/flock's process-test idiom).
 const openEnv = "CREWLET_CACHE_TEST_OPEN"
 
 // What the second process prints: its own markers rather than the errors'

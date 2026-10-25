@@ -162,6 +162,7 @@ describe("navigation identity", () => {
       inbox: "i",
       me: "m",
       company: "c",
+      brand: "e",
       org: "a",
       schedules: "d",
       integrations: "n",
@@ -214,16 +215,23 @@ describe("am I already here", () => {
 });
 
 describe("the navigation grammar", () => {
-  // THIRTEEN WORKSPACES ARE SIDEBAR ROWS, in four runs, and the sidebar draws
+  // FOURTEEN WORKSPACES ARE SIDEBAR ROWS, in four runs, and the sidebar draws
   // them and nothing else from the table: a section that became a sidebar row
-  // is a second column of navigation arriving one row at a time. The FOURTEENTH
+  // is a second column of navigation arriving one row at a time. The FIFTEENTH
   // is the reader's own Account, which has no row (the user block at the
   // sidebar's foot is the reader, and its menu links it) and is a workspace
   // all the same, so the palette and its chord reach it.
-  test("the sidebar's rows are thirteen workspaces, in the story's order, and the menu holds the fourteenth", () => {
+  test("the sidebar's rows are fourteen workspaces, in the story's order, and the menu holds the fifteenth", () => {
     const run = (place: string) => WORKSPACES.filter((w) => w.place === place).map((w) => w.key);
     expect(run("you")).toEqual(["home", "inbox", "me"]);
-    expect(run("company")).toEqual(["company", "org", "schedules", "integrations", "budgets"]);
+    expect(run("company")).toEqual([
+      "company",
+      "brand",
+      "org",
+      "schedules",
+      "integrations",
+      "budgets",
+    ]);
     expect(run("workspace")).toEqual(["work", "knowledge", "artifacts", "live"]);
     expect(run("foot")).toEqual(["settings"]);
     expect(run("menu")).toEqual(["account"]);
@@ -514,6 +522,24 @@ describe("the resolver", () => {
     expect(resolve(["artifacts", "new", "doc", "x"]).resolved).toBe(false);
   });
 
+  // A FOLDER BY THE ID THE ENGINE MINTED, never by its path or a word, so a
+  // rename or a move breaks no link; and its page is in the Folders section.
+  test("the Folders section and a folder's page, by id", () => {
+    expect(resolve(["artifacts", "folders"])).toMatchObject({ screen: "artifact-folders" });
+    expect(resolve(["artifacts", "folders", uuid])).toMatchObject({
+      screen: "artifact-folder",
+      id: uuid,
+    });
+    expect(resolve(["artifacts", "folders", "Marketing"]).resolved).toBe(false);
+    expect(resolve(["artifacts", "folders", uuid, "x"]).resolved).toBe(false);
+    expect(RESERVED_SEGMENTS).toContain("folders");
+    expect(sectionOf(["artifacts", "folders", uuid])?.key).toBe("folders");
+    expect(crumbsFor(["artifacts", "folders"]).map((c) => c.label)).toEqual([
+      "Artifacts",
+      "Folders",
+    ]);
+  });
+
   test("a key is a project, a key with a number or a uuid an item, and nothing else is", () => {
     expect(resolve(["work", "ENG"])).toMatchObject({ screen: "project", key: "ENG" });
     expect(resolve(["work", "ENG-42"])).toMatchObject({ screen: "item", id: "ENG-42" });
@@ -751,6 +777,13 @@ describe("the breadcrumb", () => {
       expect(titleOf(crumbsFor(path))).toBe("Principles");
     }
     expect(crumbsFor(["company", "integrations"]).map((c) => c.label)).toEqual(["Integrations"]);
+    // THE BRAND READS AS ITS SIBLING DOES: the group under the landing's
+    // glyph, not a link, then the page.
+    const brand = crumbsFor(["company", "brand"]);
+    expect(brand.map((c) => c.label)).toEqual(["Company", "Brand"]);
+    expect(brand[0]?.path).toBeUndefined();
+    expect(brand[0]?.icon).toBe(crumbsFor(["company"])[0]?.icon);
+    expect(titleOf(brand)).toBe("Brand");
     expect(crumbsFor(["settings", "mcp-tools"]).map((c) => c.label)).toEqual([
       "Settings",
       "MCP Tools",

@@ -98,7 +98,7 @@ them:
 | Anthropic's (Claude) | `claude-code` — the default | a Claude Pro / Max login, a headless `CLAUDE_CODE_OAUTH_TOKEN` minted from it, or an Anthropic API key (`auth.mode: api-key`) | yes |
 | OpenAI's (GPT) | `codex` | a ChatGPT Plus / Pro login, or an OpenAI API key (`auth.mode: api-key`) | no — text mode only |
 | Open models: OpenRouter, a hosted provider, a local server | `opencode` | the model provider's key in `env`, under that provider's own variable, or a login of OpenCode's own | yes |
-| Gemini, Qwen, Cursor, Copilot, Grok, Muse, Kimi, Hermes, Pi | see [Supported CLIs](#supported-clis) | the vendor's own login, or a key | no — text mode only |
+| Gemini, Qwen, Cursor, Copilot, Grok, Muse, Kimi, Hermes, Pi | see [Supported CLIs](#supported-clis) | the vendor's own login, or a key (Qwen Code: a key only) | no — text mode only |
 
 The last column is about two things a seat can ask of its CLI beyond answering:
 running the executor itself ([agent mode](#agent-mode)), and authoring code in a
@@ -161,21 +161,25 @@ providers:
     gpt-key:                      # on an OpenAI API key
       agent: codex
       model: gpt-5
-      auth: { mode: api-key }     # reads OPENAI_API_KEY
+      auth: { mode: api-key }     # reads CODEX_API_KEY
 ```
 
 The ChatGPT login is `codex login`, which `crewlet llm login` brokers, or the
 `~/.codex/auth.json` your own Codex already holds, which `-from-host` adopts.
 Codex mints no headless token, so a container that is rebuilt on every deploy
 carries its login as a [credential bundle](#4-move-a-login-onto-another-host).
-On an API key, `auth.mode: api-key` reads `OPENAI_API_KEY` exactly as the Claude
-Code entry reads Anthropic's.
+On an API key, `auth.mode: api-key` reads `CODEX_API_KEY` exactly as the Claude
+Code entry reads Anthropic's — `CODEX_API_KEY` and not `OPENAI_API_KEY`, because
+it is the variable `codex exec` signs its requests with: with only
+`OPENAI_API_KEY` set it sent no `Authorization` header at all (measured on
+0.153.4 and 0.164.0). An OpenAI key you already keep under `OPENAI_API_KEY` is
+named as `auth.api_key: "${OPENAI_API_KEY}"`.
 
-Codex runs with its own `--sandbox read-only`, which contains its shell rather
-than removing it — see [Tool calls in text mode](#tool-calls-in-text-mode) — and
-it has no coding-agent runner, so a Codex entry is a text model: a seat on it
-that writes code points `role.llm_sandbox` at a `claude-code` or `opencode`
-entry.
+Codex runs with its shell switched off and its own `--sandbox read-only`, so the
+one local tool it keeps, `apply_patch`, writes nothing — see [Tool calls in text
+mode](#tool-calls-in-text-mode) — and it has no coding-agent runner, so a Codex
+entry is a text model: a seat on it that writes code points `role.llm_sandbox`
+at a `claude-code` or `opencode` entry.
 
 ### Open models, OpenRouter and local servers: OpenCode
 
@@ -221,7 +225,7 @@ providers:
         seed_files:
           - path: .crewlet-config/opencode.json
             in: work
-            content: '{"$schema":"https://opencode.ai/config.json","update":"disable","share":"disabled","snapshots":false,"permissions":[{"action":"*","resource":"*","effect":"deny"},{"action":"webfetch","resource":"*","effect":"allow"},{"action":"websearch","resource":"*","effect":"allow"}],"providers":{"local":{"package":"@opencode/ai/providers/openai-compatible","name":"Local server","settings":{"baseURL":"http://127.0.0.1:8000/v1"},"models":{"qwen3-coder":{}}}}}'
+            content: '{"$schema":"https://opencode.ai/config.json","update":"disable","share":"disabled","snapshots":false,"plugins":["-opencode.tools"],"permissions":[{"action":"*","resource":"*","effect":"deny"},{"action":"webfetch","resource":"*","effect":"allow"},{"action":"websearch","resource":"*","effect":"allow"}],"providers":{"local":{"package":"@opencode/ai/providers/openai-compatible","name":"Local server","settings":{"baseURL":"http://127.0.0.1:8000/v1"},"models":{"qwen3-coder":{}}}}}'
 ```
 
 The `providers` block is OpenCode 2's format: the package for the server's wire
@@ -242,6 +246,31 @@ Pi each have a built-in profile, and each is a text model here: its own login
 or its own key, and its own model grammar. [Supported CLIs](#supported-clis)
 says how each one signs in and what is particular about it, and `custom` is a
 profile you write entirely yourself.
+
+**Qwen Code signs in with a key and nothing else.** Both measured builds
+(0.23.4 and 0.26.1) refuse the Qwen OAuth login, so the profile keeps no login
+and runs the CLI's OpenAI-compatible sign-in (`--auth-type openai`): the key in
+`OPENAI_API_KEY`, the endpoint in `OPENAI_BASE_URL`. `OPENAI_API_KEY` is a name
+other vendors' keys are kept under too, so a `qwen-code` entry is
+`auth.mode: api-key` and names its key — the engine never fills that variable
+from its own secret store or environment in the entry's place, and a write that
+leaves either out is refused:
+
+```yaml
+providers:
+  llm:
+    qwen:
+      agent: qwen-code
+      model: "${QWEN_MODEL}"                       # a model the endpoint serves, as it names it
+      auth:
+        mode: api-key
+        api_key: "${DASHSCOPE_API_KEY}"            # put in the CLI's OPENAI_API_KEY
+      env:
+        OPENAI_BASE_URL: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+```
+
+`OPENAI_BASE_URL` names DashScope's endpoint, a Coding Plan's or any other
+OpenAI-compatible one; left unset, the CLI falls back to an endpoint of its own.
 
 ---
 
@@ -336,8 +365,8 @@ flat-rate plan. The three modes:
 | `auth.mode` | What reaches the CLI |
 |---|---|
 | `subscription` (default) | its login — credential files in the entry's directory, or a database export — and a headless token in its `token_env` where `auth.token` or that variable resolves. Its `api_key_env` is removed. |
-| `api-key` | one key in its `api_key_env`: `auth.api_key`, or that variable itself looked up through the secret store and then the environment. Its `token_env` is removed. |
-| `inherit-env` | whichever of the two variables the **engine's own** environment holds — the deliberate escape hatch for an unusual CLI, and the only mode in which a host credential reaches the child. |
+| `api-key` | one key in its `api_key_env`: `auth.api_key`, or that variable itself looked up through the secret store and then the environment (never for a [shared](#profile-fields) variable). Its `token_env` is removed, and no login is seeded: the call runs in the seat's [key home](#isolation-the-part-that-actually-matters). |
+| `inherit-env` | whichever of the two variables the **engine's own** environment holds — the deliberate escape hatch for an unusual CLI, and the only mode in which a host credential reaches the child. Where that is the key, the call runs in the key home, as under `api-key`; otherwise beside the login, as under `subscription`. |
 
 **One key, never a list.** A CLI holds one sign-in and rotates nothing, so an
 entry has at most one token or one key; a second key is a second entry, placed
@@ -355,6 +384,9 @@ token — so each of these would run with the credential unused:
 | `auth.token` on a CLI whose profile names no `token_env` (every built-in profile but `claude-code`) | the CLI mints no headless token | remove it |
 | `auth.token` under `api-key` or `inherit-env` | `api-key` removes the token variable and `inherit-env` forwards the engine's own | `auth.mode: subscription` |
 | `auth.mode: inherit-env` on a CLI that names neither variable | nothing would be forwarded | `subscription`, with the key in `env` or a login |
+| `auth.mode: subscription` — the default — on a CLI that keeps no login and mints no token but reads a key (`qwen-code`) | `subscription` removes the key variable, so the entry would sign in to nothing | `auth.mode: api-key`, with the key as `auth.api_key` |
+| `auth.mode: api-key` with no `auth.api_key` on a CLI whose key variable is [shared](#profile-fields) (`qwen-code`'s `OPENAI_API_KEY`) | that variable holds other vendors' keys too, so the engine never reads it in the entry's place | name the key: `auth.api_key: "${DASHSCOPE_API_KEY}"` |
+| `auth.mode: inherit-env` on a CLI whose key variable is [shared](#profile-fields) | it would forward whichever vendor's key the engine's process holds under that name | `auth.mode: api-key`, naming the key as `auth.api_key` |
 | the profile's `token_env` or `api_key_env` in `env` | `auth` owns those: whether a value there reaches the CLI depends on `auth.mode` and on whether a credential resolves from the secret store or the engine's environment, which the document cannot show | `auth.token`, or `auth.api_key` with `auth.mode: api-key` |
 | a variable the engine sets to isolate the call in `env` (`HOME`, an XDG home, `TMPDIR`, the profile's relocation and isolation variables) | it would replace that isolation for every seat on the entry | drop it; the refusal names the profile field that moves it, where one does |
 
@@ -520,8 +552,7 @@ was exported from, and names it, but it is keyed by the entry —
 references — so after the move it still holds the old CLI's login and names
 the old CLI. A restore reads that name rather than the files' names, which
 cannot tell two CLIs apart: Codex, Cursor Agent, Grok, Hermes, Muse Code and Pi
-each keep a login in an `auth.json`, and Gemini CLI and Qwen Code in an
-`oauth_creds.json`. Wherever the new CLI's credential directory is empty —
+each keep a login in an `auth.json`. Wherever the new CLI's credential directory is empty —
 every node you have not signed it in on, and every container on a fresh
 volume — each boot and apply refuses the bundle and writes nothing, logged as
 `cli_agent_bundle_restore_failed` with the CLI the bundle names, and `crewlet
@@ -657,9 +688,10 @@ So what the CLI said on stdout is read on terms:
   limit, or a tool call carrying one in its arguments, is the answer it is.
 
 Stderr is matched anywhere: the answer does not reach it. The anchoring is what
-makes the built-in profiles' generic sentinels safe to ship — Copilot's and
-Grok's `rate limit`, Cursor's `quota` are not measured vendor sentences, and
-on a clean run they count only as the opening of a report. Under
+makes the built-in profiles' generic sentinels safe to ship — Copilot's
+`rate limit` and `usage limit`, Cursor's `usage limit` and `quota` are not
+measured vendor sentences, and on a clean run they count only as the opening of
+a report. Under
 `marker_scope: events` a sentinel is instead the failure *class*, compared whole
 with the CLI's own failure event and nothing else
 (see [CLI flags drift](#cli-flags-drift--and-thats-a-config-edit-not-a-release)).
@@ -695,13 +727,16 @@ its own place to run:
 <state_dir>/
 └── <agent>/                          # one per CLI: claude-code/, codex/, …
     ├── credentials/                  # the login — ONE per state_dir and CLI
-    └── seats/
-        ├── sarah-chen/
-        │   ├── cache/                # XDG_CACHE_HOME — warm, holds no conversation
-        │   ├── home/                 # HOME + XDG config/data/state + vendor dirs
-        │   └── work/<call-id>/       # cwd for one call, then deleted
-        └── marcus-rivera/
-            └── …
+    ├── seats/                        # where a call signed in with the login runs
+    │   ├── sarah-chen/
+    │   │   ├── cache/                # XDG_CACHE_HOME — warm, holds no conversation
+    │   │   ├── home/                 # HOME + XDG config/data/state + vendor dirs
+    │   │   └── work/<call-id>/       # cwd for one call, then deleted
+    │   └── marcus-rivera/
+    │       └── …
+    └── key-seats/                    # where a call signed in with a key runs
+        └── sarah-chen/
+            └── …                     # the same layout, never holding the login
 ```
 
 **Between seats.** Every seat gets its own `home`. `HOME`,
@@ -717,12 +752,36 @@ it: a profile's `env` or `passthrough_env`, or an entry's `env`, naming
 one of those variables is refused, because each is layered over the
 isolation and would replace it without a word.
 
+**Between a login and a key.** A call that hands its CLI a key — every call
+under `auth.mode: api-key`, and one under `inherit-env` whose engine
+environment holds the profile's `api_key_env` — runs in the seat's
+`key-seats/` home, which is never seeded with the login and from which nothing
+is carried back to `credentials/`. A CLI may keep what a key signed it in to in
+the very file its login lives in: `cursor-agent` writes the session
+`CURSOR_API_KEY` bought, and the key itself, into its `auth.json`, and prefers
+that file to the variable on its next start. In a login's home that file would
+be carried back as the login of record and sign every subscription seat on the
+directory in with the key; so a key home's credential files are removed as
+each of its generations opens and closes, and the key stays no longer than the
+calls it was handed to.
+
 **Between turns.** Each profile declares its `volatile_paths` —
-sessions, transcripts, history, todo state. They are deleted before and
-after every call. Crewlet's memory model is the [agent
-diary](agent-learning.md) and the episode store; a second, invisible
-memory inside the CLI would make turns non-reproducible and would carry
-one task's context into the next.
+sessions, transcripts, history, todo state. They are deleted whenever none of
+the seat's calls is in flight: as its first call opens a generation and as its
+last one closes it ([Concurrency within a seat](#concurrency-within-a-seat)).
+Crewlet's memory model is the [agent diary](agent-learning.md) and the episode
+store; a second, invisible memory inside the CLI would make turns
+non-reproducible and would carry one task's context into the next.
+
+**The temporary directory is the engine's.** `TMPDIR` names `tmp` inside the
+seat's home, so what a CLI unpacks or spools there stays with the seat it ran
+for rather than in the engine's own temporary directory — and every CLI leaves
+something there: Claude Code a probe directory on almost every call, Qwen Code a
+compile cache, OpenCode its scratch. So `tmp` is pruned with the volatile paths
+whatever the profile lists, and made again, empty and `0700`, for the
+generation that follows: a program finds its temporary directory rather than
+making it, and a `TMPDIR` that names nothing fails the first temporary file a
+CLI opens (every codex call from 0.164 did, before the directory was made).
 
 **Between the seat and the host.** The child process gets an
 **allowlisted** environment — `PATH`, locale, `TERM`, TLS trust, proxy
@@ -737,27 +796,67 @@ org's `SLACK_BOT_TOKEN` and the collector credential in
 `ANTHROPIC_API_KEY` that happened to be exported to an entry signed in on a
 plan.
 
-**Working directory.** Each call runs in an empty, per-call scratch
-directory that is removed afterwards — so a CLI that reads `AGENTS.md` /
-`CLAUDE.md` from `cwd`, or writes scratch files, finds nothing from
-anyone else.
+**Working directory.** Each call runs in a per-call scratch directory,
+created empty and removed afterwards, which holds only what the engine writes
+there for that call — the `.git` marker below, the profile's `in: work` seed
+files, the system prompt file — so a CLI that reads `AGENTS.md` / `CLAUDE.md`
+from `cwd`, or writes scratch files, finds nothing from anyone else.
 
 **An empty directory is not enough for a CLI that also walks *up* from
 it.** The per-call directory is `<state_dir>/<agent>/seats/<seat>/work/<call>`, and
 `state_dir` defaults to a directory under the engine user's home, so whatever
 sits above it — that home, or a repository you pointed `state_dir` into —
-is an ancestor of every call. OpenCode reads project configuration from every
-ancestor (`opencode.json`, and `.opencode/` agents, skills and plugins), and a
-project's permissions beat the seat's: measured on 2.0.32, an allow-all
-`opencode.json` anywhere above the state directory handed every seat a shell,
-file writes and code execution, and a plugin there ran its code in every call.
-So the `opencode` profile switches that walk off and reads its configuration
-from the call's own directory — see
-[Tool calls in text mode](#tool-calls-in-text-mode). Whether another CLI
-reads an ancestor's configuration is that vendor's behaviour, and the one way
-to know on your host is `crewlet llm doctor`'s shell probe, which asks the CLI
-to run a command and believes only an answer it could not have guessed — run
-it from the state directory you deploy with.
+is an ancestor of every call. Vendor CLIs look for project files — `AGENTS.md`,
+`CLAUDE.md`, their own rules, skills, hooks, a project configuration — from
+their working directory up to the nearest repository root, and some run git
+there, so a `state_dir` inside a checkout handed every seat the instructions of
+a repository the engine does not control.
+
+**So each call's directory is a project root of its own.** Before the CLI
+starts, the engine writes a `.git` *file* into the call's directory:
+
+```
+gitdir: .crewlet-not-a-repository
+```
+
+It names a git directory inside the call's own `0700` directory that never
+exists, so git reports "not a git repository" there, and a walk that stops at a
+repository root stops where the call begins. A file, and one naming a gitdir,
+because those are the shapes every CLI measured stops at: an empty `.git`
+*directory* is ignored by git and by the CLIs that ask git where the root is
+(OpenCode, Qwen Code, Copilot), and Kimi Code accepts a `.git` file only when
+its first line is `gitdir:`. Measured against the installed CLIs, the file keeps
+the project files above the call out of codex, OpenCode, Kimi Code, Qwen Code,
+Hermes, Copilot's instruction files and Gemini CLI's `GEMINI.md`, and changes
+nothing else they send. The path is the engine's: a `seed_files` entry may not
+claim it.
+
+**Not every walk ends there, so each profile closes the rest itself.** Every
+built-in profile was measured through the engine's own code path with the state
+directory inside a git checkout whose levels above the call held the project
+files that CLI reads — instruction files, rules, skills and a `.env`, and for
+most also hooks and MCP configurations — and none of them reached a request.
+What does that, CLI by CLI, and what each call is offered (each profile's
+comments in the shipped table record the versions and the measurement):
+
+| `agent` | Tools offered | What keeps the call to its directory |
+|---|---|---|
+| `claude-code` | `WebFetch`, `WebSearch` (`--tools` names the tools that exist; `--allowedTools` lets them run) | `--safe-mode`, which keeps the project files out — the `.git` file does not end this CLI's walk for them — plus `--strict-mcp-config`, `--disable-slash-commands` and `--no-session-persistence`. `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` stops every connection that is not the call's own, and `CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS` drops the repository status the CLI would attach to a seat's call. A machine-wide managed settings file, which only an administrator of the host can write, still applies |
+| `codex` | web search, and `apply_patch`, which `--sandbox read-only` keeps from writing anything | `project_root_markers=[]` beside the `.git` file; skills, rules, hooks, connectors, plugins and memories off; the shell, `view_image`, the goal, multi-agent and `request_user_input` tools off; `--ephemeral`, and `CODEX_SQLITE_HOME` in the call's own directory, so nothing is left in the seat's home for the next call |
+| `gemini-cli` | `web_fetch`, `google_web_search` | A policy file in the seat's home denies every tool and allows the two web tools above the denial (a machine-wide policy under `/etc/gemini-cli/policies`, which only an administrator can write, outranks it). The CLI loads the first `.gemini/.env` or `.env` it finds walking up to `/`, which the `.git` file does not stop, so the call's directory holds one of each, holding only a comment. `GEMINI_CLI_TRUST_WORKSPACE=true` trusts the call's own directory, which a headless run requires (untrusted, every call exited 55); usage statistics off |
+| `qwen-code` | `web_fetch` (`web_search` only where a DashScope search backend is configured) | `tools.core` allows the web tools and `permissions.deny` names every other tool either build registers; memory extraction, chat recording, usage statistics, skills, hooks and the CLI's own retry rounds off. Its `.env` walk is not stopped by the `.git` file, so the call's directory holds its own `.qwen/.env` |
+| `opencode` | `webfetch`, `websearch` | `OPENCODE_CONFIG_PROJECT_DISABLE` (`isolation_env`) switches off the walk for project configuration, and `OPENCODE_CONFIG_DIR` points into the call's own directory, where the policy is seeded — see [Tool calls in text mode](#tool-calls-in-text-mode). The machine's managed configuration (`/etc/opencode` on Linux), which only an administrator can write, still applies |
+| `cursor-agent` | `WebFetch` (a `.cursor/cli.json` in the call's directory denies shell, write and read) | `--trust`, without which print mode refuses the call's new directory ("Workspace Trust Required"), and `--exclude-workspace-context`. With the `.git` file no hook, `cli.json` or `mcp.json` above the call is read. **Its rule loader does walk to `/`**: both measured builds open every `AGENTS.md`, `CLAUDE.md` and `.cursor/rules` file from the call's directory up, with or without the flag. None was in the run request, which carries the user message alone; what the service asks the CLI for after that could not be measured. Put `state_dir` outside any directory tree holding such files, and they are not there to open |
+| `copilot` | `web_fetch` (`--available-tools`; the 1.0.103 bundle lists a `web_search` among the tools of its GitHub server on a GitHub sign-in, which was not measured) | The `.git` file ends the walk for instruction files, hooks and repository settings. Its custom-agent discovery walks past it to the enclosing repository's root and opens the agent files on the way; none reaches a request, since the task tool that lists them is not available. `--disable-client-telemetry`, and `COPILOT_AUTO_UPDATE=false` |
+| `grok` | `web_search`, `web_fetch` (`--tools`, with every other built-in in `--disallowed-tools`; `GROK_WEB_FETCH=1`, since the fetch ships off) | No `--trust`, so a headless run loads no project rules. It reads the enclosing repository's `.git/config` and `HEAD` past the `.git` file; nothing of them reached the request. Background workflows, the turn-summary request and cross-session memory off |
+| `muse-code` | `web_search`, `web_fetch` (`run.toolset` in the seeded settings) | Untrusted, the CLI admits no project rules, skills or hooks, and the `.git` file ends its walk besides. `--no-foreign-personal-context` keeps other CLIs' personal rules and skills (a `CLAUDE.md` under the home's `.claude`) out, and `--disable-reminders` turns off the reminder requests that each re-sent the call's prompt |
+| `kimi-code` | `FetchURL`, and `WebSearch` where a Moonshot search service is configured (the agent file's allowlist) | The `.git` file ends the `AGENTS.md` chain the vendor's prompt reads; project skills need a `Skill` tool the allowlist leaves out. Telemetry off |
+| `hermes` | `web_search`, `web_extract` (`--toolsets web`) | The `.git` file ends its walk for `.hermes.md` and the `AGENTS.md` chain, and it reads `CLAUDE.md` and `.cursorrules` from the call's directory alone. A seeded `config.yaml` turns off the coding brief a project marker within six levels above would switch on, the title request and memory |
+| `pi` | none — its built-in set has no web tool (`--no-tools`) | `--no-context-files`, because its `AGENTS.md` / `CLAUDE.md` walk goes up to `/` and ignores `.git`; `--no-approve` pins project trust to none; `--no-extensions`, `--no-skills` and the other discovery switches |
+
+`crewlet llm doctor`'s shell probe is the measurement on your host: it asks the
+CLI to run a command and believes only an answer it could not have guessed —
+run it from the state directory you deploy with.
 
 ### Concurrency within a seat
 
@@ -893,6 +992,29 @@ it, and the *same turn* resumes — possibly in another process on another
 node, days later. Nothing about that is new for agent mode; see
 [Code Sandbox](code-sandbox.md#how-a-coding-task-runs).
 
+**The run is prompted in the two halves a native pass sends.** The seat's
+system prompt — its identity, policies, roster and memory — goes on the
+in-box CLI's **append channel**, after the CLI's own system prompt, which
+stays whole: that prompt is the harness agent mode exists to use, its shell,
+its editor and how it works through a task. The brief — the prompt the CLI
+runs — carries the turn's task and nothing else. The seat's prompt opens with
+one constant note, the [harness note](#the-harness-note) a text-mode call
+sends where the CLI's own prompt stays in force, less its sentence about
+Crewlet's JSON reply — a run calls its tools the way its CLI calls any tool:
+
+> You are running inside a command-line coding tool as one seat of a Crewlet
+> company, and Crewlet — not a person at a terminal — reads what you report.
+> The tool's own instructions describe the program you run in, not your role:
+> who you are and what you do are the instructions that follow, and they win
+> wherever the two disagree.
+
+The run's other standing instructions — what the box provides, how to ask a
+person, and the report it writes before it stops — follow the seat's prompt
+on the same channel. Claude Code takes the text with
+`--append-system-prompt-file` and OpenCode as an `instructions` entry in the
+configuration the run writes, each from a private file in the box, never from
+argv: see [What a coding agent is told](code-sandbox.md#what-a-coding-agent-is-told).
+
 **The engine's correctives do not reach an agent-mode run.** The rounds
 are the CLI's own, so the engine's tool loop never sees one end in prose
 and cannot ask the model again: a run whose model writes its report as
@@ -900,8 +1022,8 @@ text instead of calling `submit_work` over the bridge comes back with no
 submission, and the phase is rescued as `incomplete` straight away. In
 text mode the same reply is a round the engine's loop re-prompts, naming
 `submit_work`, up to twice (see [Turn Engine](turn-engine.md#round-cap-extension-judge)).
-What an agent-mode run has instead is its brief, which tells it the run
-ends with that call.
+What an agent-mode run has instead is the seat's system prompt, which tells
+it the run ends with that call.
 
 #### The tool bridge
 
@@ -1002,215 +1124,360 @@ section that does **not** belong there.
 
 Folded into that text, a system prompt arrives as **user content** — the
 model is asked to treat an ordinary message as its standing instructions,
-underneath a vendor default that keeps saying what it is. So where a CLI
-has a channel of its own for it, the profile names it in
-`system_prompt_args` and the text travels there instead. Claude Code's is
-declared as:
+underneath a vendor prompt that keeps saying what it is. So where a CLI has a
+channel of its own for a system prompt, the profile names it and the text
+travels there instead. Vendors offer two kinds, and a profile declares each one
+its CLI has:
 
-```yaml
-system_prompt_args: ["--system-prompt-file", "{file}"]
-```
+| Field | The CLI's own system prompt | The engine's text |
+|---|---|---|
+| `system_prompt` | **replaced** | is the system prompt; whatever the vendor still adds around it (an identity line, the working directory) is the vendor's |
+| `append_system_prompt` | **kept in force** | is added to it — after it, in place of its identity sentence, or in an addendum block, wherever the vendor puts it |
 
-Two decisions in that one line, both measured against Claude Code 2.1.263
-rather than assumed:
+### Which channel a call takes
 
-- **Replace, not append.** Asked "who are you?" as a PM seat, the same
-  model answers *"I'm Agent PM at Nimbus, an AI assistant helping with
-  software engineering tasks and project work through Claude Code"* with
-  the default prompt in force, and *"I'm Agent PM at Nimbus, your AI
-  assistant for project management and technical collaboration"* with it
-  replaced. A coding-agent identity over the top of whatever seat is
-  actually being served is not a cosmetic problem: it is the seat's
-  standing instructions arguing with themselves. The default prose also
-  costs ~3.5k input tokens on every round of every phase, describing
-  tools this backend denies. Replacing it leaves the web tools working —
-  a `WebFetch` probe still fetches, which is what `crewlet llm doctor`
-  measures on every run.
-- **The file variant, not the inline one.** A seat's system prompt
-  carries the org chart, the company's policies, that seat's backstory
-  and roster, and its `## Personal memory` and `## Relevant knowledge`
-  prefetches. On argv all of that is readable by every account on the
-  machine through `/proc/<pid>/cmdline`, and bounded by `ARG_MAX`
-  (256 KB on macOS — the limit the `copilot` profile's argv prompt
-  already lives under). The text is written `0600` into the per-call
-  working directory, which is created empty for one call and removed on
-  release, so it cannot outlive the call or reach the next one.
+Each call takes the channel its kind of work wants:
 
-`{file}` substitutes that path; `{system}` substitutes the text straight
-into argv, for a CLI that offers no file variant. A profile that declares
-neither leaves the system prompt in the transcript, which is what a CLI
-with no such flag can take.
+| Call | First | Then | Then |
+|---|---|---|---|
+| A seat's round — every round of a phase's tool loop (an `llm.Request` with `Agent` set) | `append_system_prompt` | `system_prompt` | the transcript |
+| Every other call: a side pass the engine runs on the seat's behalf — the turn-start prefetch, condensing a tool result, the reflection and learning passes, episode compaction, the round-cap judge | `system_prompt` | `append_system_prompt` | the transcript |
 
-The system prompt on its own channel is also what makes it cacheable: it is
-the large, byte-stable prefix of every round, and the vendor's harness caches
-it the way it caches any session's system prompt. The engine sets no cache
-breakpoint of its own and reads back what the CLI reports it read from the cache
-and wrote to it.
+**A seat keeps the vendor's prompt.** The vendor's harness prompt is written for
+an agent and moves with every model the vendor ships, and the seat's prompt
+follows it. **A side pass replaces it.** Its system prompt is the whole
+instruction and its answer is parsed, and a coding agent's guidance in front of
+it would cost a few thousand tokens on every call and push it toward prose.
+
+Each falls back to the other where its own is not declared. A seat on a CLI
+that can only replace takes the replacement rather than the transcript: the
+vendor prompt it would keep is written for a coding agent at a terminal, and
+the seat's own instructions would arrive as a user message under it. Only a CLI
+with neither channel leaves the text in the transcript. A call that carries no
+system prompt at all takes a seat's route whatever its kind, because a channel
+whose file carries policy is passed on every call ([below](#a-channel-with-a-shape))
+and its replacing form with no text in it is a system prompt of nothing — on
+Kimi Code an agent file with no body, which the CLI refuses ("Missing prompt
+body", exit 1).
+
+`crewlet llm doctor` prints where each kind of call's prompt goes, as its
+`system prompt` lines ([Operating it](#operating-it)), and sends its probes as
+a seat's call, so they run under the prompt a seat does.
+
+### The harness note
+
+Where the CLI's own prompt stays in force — the append channel, or no channel
+at all, where the engine's text rides the transcript under the vendor's prompt
+— the engine opens its system prompt with one constant note:
+
+> You are running inside a command-line coding tool as one seat of a Crewlet
+> company, and Crewlet — not a person at a terminal — reads everything you
+> write. The tool's own instructions describe the program you run in, not your
+> role: who you are and what you do are the instructions that follow, and they
+> win wherever the two disagree.
+
+and, on a call that offers tools, one sentence more:
+
+> Act through Crewlet's tools, called with the JSON reply the message
+> describes — never through the coding tool's own file, shell or task tools.
+
+The vendor's prompt says what the model is, and says it first. Claude Code
+2.1.310 opens every request that appends with "You are Claude Code, Anthropic's
+official CLI for Claude", which no flag removes, and its default goes on to
+describe a user at a terminal, a software-engineering task and its own file and
+shell tools. A seat whose prompt only implies its identity loses to that:
+measured on 2.1.263, a PM seat asked who it was answered that it was helping
+"through Claude Code". And a model told to prefer its editor and its shell
+reaches for tools this backend denies instead of the envelope. So the engine
+says outright which of the two prompts is the role.
+
+The note is the same bytes on every call, so it is part of the prefix a vendor
+caches, and it belongs to the provider rather than to the seat's prompt
+builders: a seat's fallback chain can move a call from a CLI that keeps its
+prompt to one that replaces it, and every side pass shares the provider. A
+replaced prompt gets no note — nothing is left for it to disagree with — and a
+request with no system prompt gets none, since there are no instructions to
+introduce.
 
 ### Which CLIs actually have one
 
-Checked by running each CLI's own `--help`, at the version named — not
-from vendor documentation, which lags. That distinction is not academic:
-every one of the three most recent rows was drafted from a vendor's published
-reference and then **corrected** by the installed binary. `hermes`'s docs
-list `--toolsets` under a subcommand it also accepts at the top level;
-`pi`'s README lists eight built-in tools where the Linux build registers
-four; `kimi-code`'s tool table lists a `WebSearch` its binary only registers
-once a search service is configured, and omits a whole `Goal` family it
-ships. `crewlet llm doctor` prints `written for` beside the version you
-actually have, and every field is a
+Checked against each CLI as installed, at the versions named — its `--help`,
+its bundle, and the request it actually sent through the engine's own code
+path — not from vendor documentation, which lags. That distinction is not
+academic: several rows were drafted from a vendor's published reference and
+then **corrected** by the installed binary. `hermes`'s docs list `--toolsets`
+under a subcommand it also accepts at the top level; `pi`'s README lists eight
+built-in tools where the Linux build registers four; `kimi-code`'s tool table
+lists a `WebSearch` its binary only registers once a search service is
+configured, and omits a whole `Goal` family it ships; and Gemini CLI and Qwen
+Code, which read their prompt from a file a *variable* names — the channel
+`--help` never shows — were once both recorded here as having no channel at
+all, on the strength of reading `--help`. `crewlet llm doctor` prints `written for` beside the version
+you actually have, and every field is a
 [config edit away](#cli-flags-drift--and-thats-a-config-edit-not-a-release):
 
-| `agent` | version checked | flag | in the profile |
-|---|---|---|---|
-| `claude-code` | 2.1.263 | flag, file: `--system-prompt-file` (`--append-…-file` appends) | `system_prompt_args: ["--system-prompt-file", "{file}"]` |
-| `gemini-cli` | 0.58.0 | **env var, file**: `GEMINI_SYSTEM_MD` — no flag exists | `system_prompt_env: GEMINI_SYSTEM_MD` |
-| `qwen-code` | 0.23.0 | **both**: `QWEN_SYSTEM_MD` (file) *and* `--system-prompt` (string) | `system_prompt_env: QWEN_SYSTEM_MD` |
-| `grok` | 1.0.13 | flag, string: `--system-prompt-override` (`--rules` appends) | `system_prompt_args: ["--system-prompt-override", "{system}"]` |
-| `codex` | 0.153.4 | none, on `codex` or `codex exec` alike | — |
-| `opencode` | 2.0.32 | **discovered file**: no flag and no variable, but an agent it discovers — `agents/<name>.md` in its configuration directory, which the profile points inside the per-call directory, its body replacing OpenCode's own prompt — which `--agent` selects | `system_prompt_args: ["--agent", "crewlet-seat"]` + `system_prompt_file` with `discovered: true` |
-| `copilot` | 1.0.83 | none (`--no-custom-instructions` only disables its own) | — |
-| `cursor-agent` | 2026.09.02 | none | — |
-| `muse-code` | 1.0.3 | none (`AGENTS.md` / `CLAUDE.md` only, and only in a **trusted** workspace) | — |
-| `kimi-code` | 0.42.x | flag, file: `--agent-file` — but an **agent definition**, not a bare prompt | `system_prompt_args: ["--agent-file", "{file}"]` + `system_prompt_file` |
-| `hermes` | 0.21.2 | none (`SOUL.md` in its own home, which `--ignore-rules` switches off) | — |
-| `pi` | 0.85.x | flag, string: `--system-prompt` (`--append-system-prompt` appends) | `system_prompt_args: ["--system-prompt", "{system}"]` |
+| `agent` | Measured on | `system_prompt` — replaces | `append_system_prompt` — keeps the CLI's own | Per-call text ahead of the engine's |
+|---|---|---|---|---|
+| `claude-code` | 2.1.303, 2.1.310 | flag, file: `--system-prompt-file` | flag, file: `--append-system-prompt-file`, with `--exclude-dynamic-system-prompt-sections` | none, on either channel |
+| `codex` | 0.153.4, 0.164.0 | config key, file: `-c model_instructions_file={file}`, with the permissions and environment blocks switched off | discovered file, read always: `AGENTS.md` in the call's directory, after codex's own prompt | replace: none — the engine's text is the first prompt byte; append: codex's heading naming the call's directory |
+| `gemini-cli` | 0.58.0, 0.65.0 | variable, file: `GEMINI_SYSTEM_MD` | — none, in either release | none |
+| `qwen-code` | 0.23.4, 0.26.1 | variable, file: `QWEN_SYSTEM_MD` | variable, file: `QWEN_SYSTEM_IDENTITY_MD` — the engine's text in place of the vendor's opening identity sentence, the rest kept byte for byte | none |
+| `opencode` | 2.0.32, 2.1.4 | discovered file, selected: `.crewlet-config/agents/crewlet-seat.md`, run with `--agent crewlet-seat` | discovered file, read always: `.crewlet-config/AGENTS.md` | replace: none; append: an `Instructions from: <path>` line naming a file in the call's directory |
+| `cursor-agent` | 2026.09.10, 2026.10.22 | — | — (Cursor's service assembles the system prompt, and the run request carries none) | — |
+| `copilot` | 1.0.103 | — none in prompt mode | discovered file, read always: `AGENTS.md` in the call's directory | its environment block, naming the call's directory |
+| `grok` | 1.0.70 | flag, text on argv: `--system-prompt-override` | flag, text on argv: `--rules`, at the very end of the vendor's prompt | none |
+| `muse-code` | 1.0.3, 1.4.13 | — none per call | variable, file: `TBH_EVAL_APPEND_SYSTEM_PROMPT_FILE`, undocumented | none |
+| `kimi-code` | 0.42.0, 2.3.1 | flag, agent file: `--agent-file`, body `{system}` | flag, agent file: `--agent-file`, body `{system}` then `${base_prompt}` | none — the vendor's per-call text follows the engine's |
+| `hermes` | 0.21.5 | — | — | — |
+| `pi` | 0.85.1, 1.4.0 | flag, file: `--system-prompt` | flag, file: `--append-system-prompt` | none; the working directory follows the engine's text, in the same block |
 
-**There are two channels, and `--help` only shows one of them.** A CLI may
-take the prompt as an *argument* (`system_prompt_args`, with `{file}`
-substituting a path and `{system}` the text itself) or from a *file named by
-an environment variable* (`system_prompt_env`). Gemini CLI and its Qwen fork
-have no flag at all and are configured entirely through the second — which is
-why both were once recorded here as having no system-prompt channel, on the
-strength of reading `--help`. A profile declares one or the other; naming
-both is refused at load, because which copy a CLI honours when handed the
-same prompt twice is the vendor's business.
+So where a CLI has one channel, both kinds of call take it: `gemini-cli`
+replaces its prompt for a seat as well as for a side pass, `copilot` and
+`muse-code` keep theirs for a side pass as well as for a seat, and
+`cursor-agent` and `hermes` carry the engine's text in the transcript, under the
+vendor's prompt, for both.
 
-**That exclusivity runs one level down as well.** A single
-`system_prompt_args` naming *both* `{file}` and `{system}` is refused for a
+**What a row says, where it is not obvious:**
+
+- `codex` cuts `AGENTS.md` at 32 KiB by default, without a word, so the profile
+  sets `project_doc_max_bytes` to its largest value: a 240 KB seat prompt
+  reached the model whole with it. Not `developer_instructions`, the
+  developer-role setting, although it would sit higher: it is a string, so it
+  reaches codex on argv, or in a `--profile` file a seat's concurrent calls
+  share.
+- `gemini-cli` has no channel that keeps its prompt: no flag, setting or
+  variable adds to it, and a `GEMINI.md` arrives as user content.
+- `copilot` has no flag, variable or file that replaces its prompt in prompt
+  mode. Its `AGENTS.md` text lands inside the system prompt as a custom
+  instruction block, after the vendor's identity, its tool guidance and its
+  environment block; `--no-custom-instructions` would switch that file off, so
+  the profile does not pass it.
+- `muse-code`'s variable names a file whose text the CLI appends, after a blank
+  line, at the very end of its own instructions. It is in the binary's own list
+  of what it reads at startup on both builds and in none of the vendor's
+  documentation, so a release may drop it without notice — and the seat's text
+  would then reach the model nowhere, with no error. `overrides:
+  {append_system_prompt: {env: ""}}` returns the text to the transcript under
+  the vendor's prompt; a build other than 1.4.x is the moment to check. There is
+  no replacing channel per call: `run.system_prompt` lives in the seat's
+  settings file, which every call it runs at once shares.
+- `kimi-code`'s two channels write the same agent file under one name and one
+  frontmatter, and only the body differs: on the appending one, the engine's
+  text first and Kimi's default after it, because Kimi's default carries the
+  call's working directory, a listing of it and the `AGENTS.md` chain — placed
+  first, every call's copy of a seat's prompt would follow bytes no other call
+  sends.
+- `hermes` has two candidates and takes neither. Its identity slot, `SOUL.md`,
+  lives in the CLI's home, which every call a seat runs at once shares. A
+  `.hermes.md` in the call's directory lands in the system message, but the CLI
+  scans it as project content and **replaces all of it** with a `[BLOCKED: …]`
+  line when anything in it matches one of its patterns — silently, exiting 0 —
+  and ordinary company prose matches: "You must report weekly progress to the
+  CEO" and "Check in with your manager before shipping" each blocked the file
+  when run through 0.21.5's own scanner. So the seat's text rides the
+  transcript.
+- `grok`'s two flags take the text itself, and a path in their place is sent as
+  the text, so `grok` is the one profile whose channels put the system prompt on
+  argv. (`hermes`, which has none, carries it in the transcript, and its
+  transcript is on argv too — see [How the prompt itself
+  travels](#how-the-prompt-itself-travels).)
+
+**Some CLIs edit the text.** `gemini-cli` writes in its tool list, its bundled
+skills, its sub-agents or a tool's name wherever the text says
+`${AvailableTools}`, `${AgentSkills}`, `${SubAgents}` or `${<tool>_ToolName}`,
+and collapses three or more newlines to two. `kimi-code` substitutes its
+template variables across the whole body, the engine's text included, so a
+`${cwd}` in a seat's prompt reaches the model as the call's directory. Neither
+has an escape. OpenCode interpolates nothing: `{env:…}`, `{file:…}` and `@path`
+in a seat's prompt reach the model as written.
+
+**The last column is what keeping a vendor's prompt can cost.** The system
+prompt on its own channel is what makes it cacheable: it is the large,
+byte-stable prefix of every round, and the vendor's harness caches it the way
+it caches any session's system prompt. The engine sets no cache breakpoint of
+its own and reads back what the CLI reports it read from the cache and wrote to
+it. Where per-call text comes ahead of the engine's, though, every call's copy
+of a seat's prompt follows bytes no other call sends and is never a cached
+prefix: OpenCode's `Instructions from:` line, Copilot's environment block,
+codex's `AGENTS.md` heading. Codex, Kimi Code and Muse Code key their prompt
+cache per session besides, and every call here is a session of its own. The
+`opencode` profile keeps its append channel anyway, because OpenCode's prompt is
+written for the loop it runs; an operator who would rather have a seat's text
+cached drops it — `overrides: {append_system_prompt: null}` — and seats then
+take the agent file a side pass takes. Claude Code is the other way round:
+`--exclude-dynamic-system-prompt-sections` rides its append channel so that the
+working directory, the environment and git status stay out of the system
+prompt by the vendor's own switch rather than by today's placement.
+
+### What a channel is
+
+A channel is `{args, env, file}`, and a profile declares each of its two the
+same way — Claude Code's:
+
+```yaml
+system_prompt:
+  args: ["--system-prompt-file", "{file}"]
+append_system_prompt:
+  args: ["--exclude-dynamic-system-prompt-sections", "--append-system-prompt-file", "{file}"]
+```
+
+**`args`** adds flags to the argv, with one of two placeholders, and the
+difference is not cosmetic. `{file}` writes the text `0600` into the per-call
+working directory and substitutes its path — prefer it always. `{system}`
+substitutes the text itself into argv, for a CLI that offers no file variant. A
+seat's system prompt carries the org chart, the company's policies, that seat's
+backstory and roster, and its `## Personal memory` and `## Relevant knowledge`
+prefetches; on argv all of that is readable by every account on the machine
+through `/proc/<pid>/cmdline`, and bounded by `ARG_MAX` (256 KB on macOS — the
+limit `grok`'s channels live under). The per-call directory is created empty
+for one call and removed on release, so the file cannot outlive the call or
+reach the next one.
+
+**`env`** names an environment variable the CLI reads a file's path from —
+`GEMINI_SYSTEM_MD`, `QWEN_SYSTEM_MD`, `QWEN_SYSTEM_IDENTITY_MD`,
+`TBH_EVAL_APPEND_SYSTEM_PROMPT_FILE`. It is a file by construction, so the text
+never reaches argv, and it is the channel `--help` never shows.
+
+**One carrier per channel.** A channel declares `args` or `env`, never both:
+which copy a CLI honours when handed the same prompt twice is the vendor's
+business. And one `args` naming *both* `{file}` and `{system}` is refused for a
 sharper reason than ambiguity: the renderer writes the private file and
 substitutes the text into argv on the same pass, so
 `["--agent-file", "{file}", "--system-prompt", "{system}"]` produced a `0600`
 file *and* put every byte of the seat's identity in `/proc/<pid>/cmdline`.
-Overrides are where a hand-written argv actually appears, so that is where
-the check matters.
+Overrides are where a hand-written argv actually appears, so that is where the
+check matters.
 
-**Prefer the file wherever both exist.** `{system}` puts the seat's system
-prompt — the org chart, the policies, that seat's own memory — into argv,
-where `/proc/<pid>/cmdline` makes it readable by every account on the
-machine. `qwen-code` is the one CLI offering both, and this profile takes the
-variable for exactly that reason. `grok` has only the string form, but its
-*prompt* already travels on argv (`prompt_mode: argv`) so nothing changes
-there; on a shared host, `overrides.system_prompt_args: []` puts the
-prompt back in the transcript.
+#### A channel with a shape
 
-**A vendor's project file is not a system-prompt channel.** `muse-code`
-reads `AGENTS.md` and `CLAUDE.md`, but only once a workspace has been
-*trusted* — and Crewlet runs it in a per-call directory created empty and
-never trusted, precisely so that no rule, skill or hook from a checkout the
-engine does not control is admitted. Writing the seat's identity there
-would mean trusting that directory, which trades the whole guard for a
-channel the transcript already provides.
+**`file`** shapes the file a `{file}`, `env` or discovered channel writes —
+`{name, template, discovered}`. Without it the file is the system prompt and
+nothing else, under a name no CLI reads on its own.
 
-**Some channels take a FILE WITH A SHAPE, not a bare prompt.** Kimi Code's
-only per-call prompt channel is `--agent-file`, which takes an *agent
+Kimi Code's only per-call channel is `--agent-file`, which takes an *agent
 definition*: YAML frontmatter naming the agent, describing it (required) and
-listing its tools, with the **body** as the system prompt. Handed a bare
-prompt it does not degrade — a file passed explicitly "must be valid,
-otherwise the CLI reports the error and exits" — so the profile declares the
-envelope alongside the channel:
+listing its tools, with the **body** as the system prompt. Handed a bare prompt
+it does not degrade — a file passed explicitly "must be valid, otherwise the CLI
+reports the error and exits" — so the profile declares the envelope beside each
+channel, and the appending one ends with the vendor's own default:
 
 ```yaml
-system_prompt_args: ["--agent-file", "{file}"]
-system_prompt_file:
-  name: crewlet-seat.md        # the file to write; some vendors key on the extension
-  template: |                  # {system} is the seat's own prompt
-    ---
-    name: crewlet-seat
-    description: The Crewlet seat this run serves.
-    tools:
-      - WebSearch
-      - FetchURL
-    ---
-    {system}
+system_prompt:
+  args: ["--agent-file", "{file}"]
+  file:
+    name: crewlet-seat.md          # the file to write; some vendors key on the extension
+    template: |                    # {system} is the engine's text
+      ---
+      name: crewlet-seat
+      description: The Crewlet seat this run serves. Crewlet drives the model and executes its tools; this CLI is a text model behind that loop.
+      tools:
+        - WebSearch
+        - FetchURL
+      ---
+      {system}
+append_system_prompt:
+  args: ["--agent-file", "{file}"]
+  file:
+    name: crewlet-seat.md
+    template: |                    # the same frontmatter, then Kimi's default after the text
+      ---
+      name: crewlet-seat
+      description: The Crewlet seat this run serves. Crewlet drives the model and executes its tools; this CLI is a text model behind that loop.
+      tools:
+        - WebSearch
+        - FetchURL
+      ---
+      {system}
+
+      ${base_prompt}
 ```
 
-**A channel can be found rather than handed.** OpenCode 2 takes no path at
-all: it *discovers* the agents in its configuration directory, at
-`agents/<name>.md`, and `--agent <name>` selects one. The profile points that
-directory — `OPENCODE_CONFIG_DIR` — at `.crewlet-config` inside the per-call
-working directory (`work_config_env`), so the file is the call's own, and its
-argv only names the agent:
+**A channel whose file carries policy is passed on *every* call**, including a
+request that carries no system prompt at all. That is not a detail: on Kimi
+Code the same frontmatter is also the only per-call place its tools can be
+denied — so skipping it when there is nothing to put in it would hand the
+vendor's default agent, and every tool it has, to exactly the calls that would
+never notice. A file that would hold the prompt alone is written only when
+there is a prompt, because written empty it still says something: OpenCode puts
+an `Instructions from:` line in front of an empty `AGENTS.md`.
+
+`file` only means something on a channel that writes a file (`{file}`, `env`,
+or a discovered file); on a `{system}` channel it is refused, because the text
+would go to argv bare and the envelope would configure nothing. A template with
+no `{system}` is refused for the same kind of reason: every call would hand the
+CLI the same fixed file and no seat's identity. Both channels may name one
+file, as Kimi Code's do, since a call takes one of them; a `seed_files` entry
+at that path is still refused.
+
+#### A channel the CLI finds
+
+`discovered` says the CLI **finds** the file by its location in the working
+directory rather than being handed its path:
+
+- **`selected`** — the CLI finds it, and the channel's `args` then select it by
+  name. OpenCode 2 discovers the agents in its configuration directory, at
+  `agents/<name>.md`, and `--agent <name>` selects one.
+- **`always`** — the CLI reads it on every run it makes in that directory, with
+  nothing on argv asking for it, so the file alone declares the channel:
+  codex's and Copilot's `AGENTS.md` in the call's directory, and OpenCode's in
+  its configuration directory.
+
+The `opencode` profile points that configuration directory —
+`OPENCODE_CONFIG_DIR` — at `.crewlet-config` inside the per-call working
+directory (`work_config_env`), so both of its files are the call's own:
 
 ```yaml
 work_config_env:
   OPENCODE_CONFIG_DIR: .crewlet-config         # relative to the per-call directory
-system_prompt_args: ["--agent", "crewlet-seat"]
-system_prompt_file:
-  name: .crewlet-config/agents/crewlet-seat.md # where OpenCode looks, inside the per-call directory
-  discovered: true                             # found by its location: the argv carries no {file}
-  template: |
-    ---
-    description: The Crewlet seat this run serves.
-    mode: primary
-    ---
-    {system}
+system_prompt:                                 # a side pass: the body replaces OpenCode's prompt
+  args: ["--agent", "crewlet-seat"]
+  file:
+    name: .crewlet-config/agents/crewlet-seat.md
+    discovered: selected                       # found by its location: the argv carries no {file}
+    template: |
+      ---
+      description: The Crewlet seat this run serves. Crewlet drives the model and executes its tools; this CLI is a text model behind that loop.
+      mode: primary
+      ---
+      {system}
+append_system_prompt:                          # a seat: OpenCode's default agent reads it every run
+  file:
+    name: .crewlet-config/AGENTS.md
+    discovered: always
 ```
 
-Per call rather than in the seat's home, because a seat runs calls
-concurrently in one home and each call's system prompt is its own. It used
-to be `.opencode/agents/` in the working directory, OpenCode's *project*
-location — and reading project configuration is what let every ancestor of
-that directory configure the call (see
-[Tool calls in text mode](#tool-calls-in-text-mode)).
+Never both files on one call: an `AGENTS.md` beside the selected agent is
+appended to that agent's prompt as well, so each call writes only its own
+channel's file. Per call rather than in the seat's home, because a seat runs
+calls concurrently in one home and each call's system prompt is its own. It
+used to be `.opencode/agents/` in the working directory, OpenCode's *project*
+location — and reading project configuration is what let every ancestor of that
+directory configure the call (see [Tool calls in text mode](#tool-calls-in-text-mode)).
 
-A `discovered` file's `name` is the one that may carry a directory; it must
-stay inside the per-call directory and name a *file* there — not the
-directory itself (`.`, `x/..`), and not a path ending in a separator, which
-would write a file where the CLI looks for a directory of agents and fail
-every call. It needs `system_prompt_args` to select what was found, and
-refuses `{file}` and `{system}` in them, since handing over the path or the
-text as well would be two channels for one prompt — and `{system}` would put
-the seat's whole system prompt on argv. Measured on 2.0.32, the agent's body
-replaces OpenCode's own coding-agent prompt (OpenCode appends a short block
-naming the model and the date) and is not interpolated: `{env:…}` and
-`{file:…}` in a seat's prompt reach the model as written.
+A discovered file's `name` is the one that may carry a directory; it must stay
+inside the per-call directory and name a *file* there — not the directory
+itself (`.`, `x/..`), and not a path ending in a separator, which would write a
+file where the CLI looks for a directory of agents and fail every call. A
+`selected` file needs `args` to select what was found, and neither kind takes
+`{file}` or `{system}` in its `args`, or an `env`: handing over the path or the
+text as well would be two channels for one prompt — and `{system}` would put the
+seat's whole system prompt on argv.
 
-`system_prompt_file` only means something on a channel that writes a file
-(`{file}`, a discovered file, or `system_prompt_env`); on a `{system}` channel it is refused,
-because the text would go to argv bare and the envelope would configure
-nothing. A template with no `{system}` is refused for the same kind of
-reason: every call would hand the CLI the same fixed file and no seat's
-identity.
+### Check the CLI you actually have
 
-**A profile with a template passes the channel on *every* call**, including a
-request that carries no system prompt at all. That is not a detail: on the one
-CLI that needs the envelope, the same frontmatter is also the only per-call
-place its tools can be denied — so skipping it when there is nothing to put in
-it would hand the vendor's default agent, and every tool it has, to exactly
-the calls that exist to prove the tools are off (`crewlet llm doctor`'s two
-isolation probes send no system prompt).
+`grok` is the trap: xAI's own CLI (`x.ai/cli`,
+[xai-org/grok-build](https://github.com/xai-org/grok-build)) and a same-named
+community package on npm both put a `grok` on PATH, and they are different
+programs — the official one has the flags above, the npm one has none of this
+profile's flags at all. If `grok --version` prints a `0.0.x`, you have the
+other one. `kimi-code` is the same trap: the unscoped `kimi-code` package on
+npm is a Claude Code wrapper that installs its own `kimi`, and MoonshotAI's is
+`@moonshot-ai/kimi-code`. A `kimi --version` printing a `1.0.x` is the other
+one.
 
-**Check the CLI you actually have.** `grok` is the trap: xAI's own CLI
-(`x.ai/cli`, [xai-org/grok-build](https://github.com/xai-org/grok-build))
-and a same-named community package on npm both put a `grok` on PATH, and
-they are different programs — the official one has the flag, the npm one
-has none of this profile's flags at all. If `grok --version` prints a
-`0.0.x`, you have the other one.
-
-**Qwen Code is where the Gemini fork has diverged.** It renamed its parent's
-variable (`QWEN_SYSTEM_MD`, and this build reads neither the other's) and
-added two flags its parent does not have, so "same shape as `gemini-cli`" no
-longer holds here.
-
-`kimi-code` is not the only trap of its kind either: the unscoped `kimi-code`
-package on npm is a Claude Code wrapper that installs its own `kimi`, and
-MoonshotAI's is `@moonshot-ai/kimi-code`. A `kimi --version` printing a
-`1.0.x` is the other one.
-
-For the six with no channel at all, `overrides.system_prompt_args` and
-`overrides.system_prompt_env` are how you adopt one the day its vendor
-ships it — no engine release needed.
+For a CLI with no channel, or the day a vendor ships a new one,
+`overrides.system_prompt` and `overrides.append_system_prompt` are how you adopt
+it — no engine release needed — and setting either to `null` drops it.
 
 ---
 
@@ -1227,34 +1494,40 @@ says which channel carries it, and the three are not equivalent:
 | `file` | written `0600` into the per-call working directory; `prompt_args` carries the **path** through `{file}` | none | no — only the path |
 | `argv` | appended as the last argument (or as `prompt_args`' value) | `ARG_MAX` — ~2 MB on Linux, 256 KB on macOS | **yes, in full** |
 
-`argv` is a last resort, taken only where a vendor offers nothing else —
-`copilot`, `grok`, `kimi-code`, `hermes` and `pi` today. It has both failure
-modes: a long transcript fails at `exec` rather than at the model, and every
-account on the machine can read the conversation out of the process table
-while the call runs. On `pi` the *system* prompt is on argv too, since its
-only file channel is a static per-home `SYSTEM.md`; that is the one entry
-where both halves of a turn are visible in the process table, and
-`overrides.system_prompt_args: []` puts the identity back in the
-transcript if that matters on your host.
+Every built-in profile takes stdin but four: `grok` and `muse-code` take a
+file, and `kimi-code` and `hermes` take argv.
 
-**Three of those five take the prompt as a FLAG'S VALUE rather than as a
-positional argument**, so the flag sits in `prompt_args` and stays adjacent to
-the prompt: `-p` on `grok`, `--prompt` on `kimi-code`, `-z` on `hermes`. Put
-one in `complete_args` instead and the next flag becomes the prompt. `pi`
-takes it positionally and uses `prompt_args: ["--"]` for a different reason —
-it is the one vendor here that offers an end-of-options separator, so a
-transcript beginning with a dash is a prompt rather than an unknown flag.
+`argv` is a last resort, taken only where a vendor offers nothing else —
+`kimi-code` and `hermes` today. It has both failure modes: a long transcript
+fails at `exec` rather than at the model, and every account on the machine can
+read the conversation out of the process table while the call runs. On
+`hermes`, which has no system-prompt channel, the seat's system prompt rides
+that transcript, so both halves of a turn are visible in the process table.
+`copilot`, `grok` and `pi` used to be on the list and are not: each also reads
+its prompt from stdin or a file, and their profiles now take that route —
+`copilot` and `pi` read stdin to its end when no prompt is on argv, and `grok`
+takes `--prompt-file`. Measured, `grok`'s request is the same either way, and
+`pi`'s is the same less the transcript's trailing newline, which it trims.
+
+**Both take the prompt as a FLAG'S VALUE rather than as a positional
+argument**, so the flag sits in `prompt_args` and stays adjacent to the prompt:
+`--prompt` on `kimi-code`, `-z` on `hermes`. Put one in `complete_args` instead
+and the next flag becomes the prompt — which is how `copilot` and `grok` each
+once failed every call that named a model: `-p` takes the prompt as its value on
+both, and sitting in `complete_args` it read the model flag as the prompt.
 
 **`-p` does not mean the same thing on every CLI.** It is print mode on
-`claude-code`, `cursor-agent`, `copilot` and `pi`, the prompt's value on
-`grok` and `kimi-code`, and on `hermes` it selects a **profile** — a different
-Hermes instance entirely. Borrowing the reflex from one profile to another is
-how a seat ends up running against a profile named after its own transcript.
+`claude-code`, `cursor-agent` and `pi`, the prompt's value on `copilot` and
+`grok` (neither profile passes it), and on `hermes` it selects a **profile** — a
+different Hermes instance entirely. Borrowing the reflex from one profile to
+another is how a seat ends up running against a profile named after its own
+transcript.
 
 `file` is the same trade this backend already makes for the system prompt,
-in the same directory, at the same mode, and for the same reasons. It needs
-a vendor flag that takes a path; `muse-code` is the first built-in profile
-whose CLI has one (`muse exec --prompt-file`), and its profile is
+in the same directory, at the same mode, and for the same reasons. It needs a
+vendor flag that takes a path; `muse-code` (`muse exec --prompt-file`) and
+`grok` (`--prompt-file`, a headless single turn like `-p`) have one, and both
+profiles read
 
 ```yaml
 prompt_mode: file
@@ -1278,27 +1551,47 @@ work through them would fork the engine's tool surface in two.
 
 So every profile **denies the CLI's shell and file tools** wherever the
 vendor offers a way to, and each says how: a flag on the command line
-(Claude Code's `--disallowedTools`, Copilot's `--deny-tool`, grok's
-`--disallowed-tools`, Codex's read-only sandbox) or a settings file the
-engine writes into the seat's own home or the per-call working directory
-before every call (Gemini's `settings.json`, OpenCode's `opencode.json`,
-Cursor's `.cursor/cli.json`, Muse Code's `run.toolset`). The shell is the one that matters: the
-seat's home and environment are isolated, but the filesystem is not, and
-a CLI with a shell on the engine host reads whatever the engine user can
-read. A vendor with no such switch is declared as
-`local_tools: vendor-default` with a note saying which switch is missing
-— and `crewlet llm doctor` **measures** the stance rather than trusting
+(Claude Code's `--tools` and `--disallowedTools`, Copilot's
+`--available-tools` and `--deny-tool`, grok's `--tools` and
+`--disallowed-tools`, Hermes's `--toolsets`, Pi's `--no-tools`, Codex's
+feature switches and read-only sandbox), a settings file the engine writes
+into the seat's own home or the per-call working directory before every call
+(Gemini CLI's policy file, Qwen Code's `settings.json`, OpenCode's
+`opencode.json`, Cursor's `.cursor/cli.json`, Muse Code's `run.toolset`), or
+Kimi Code's agent file. The shell is the one that matters: the seat's home and
+environment are isolated, but the filesystem is not, and a CLI with a shell on
+the engine host reads whatever the engine user can read. Every built-in profile
+ends with the web tools and nothing else ([which ones, per
+CLI](#isolation-the-part-that-actually-matters)). A vendor with no such switch
+is declared as `local_tools: vendor-default` with a note saying which switch is
+missing — and `crewlet llm doctor` **measures** the stance rather than trusting
 it (see [Operating it](#operating-it)).
 
-**A deny list, not an allow list, where a vendor offers both.** grok has
-both and the profile takes `--disallowed-tools`, which reads backwards
-until you look at how each is applied. Its allowlist is honoured only if
-*every* entry resolves: one name the build does not recognise and the whole
-filter is skipped with a warning, leaving every tool enabled. The deny list
-always applies and only warns about the entry that matched nothing. So a
-name this profile gets wrong costs one tool on a deny list and costs
-everything on an allow list — and a vendor renaming a tool is exactly the
-drift these profiles are built to expect.
+**Name the tools that exist, not only the ones to deny.** A deny list leaves on
+offer whatever it does not name, and every vendor ships more than its file and
+shell tools: with the file and shell tools denied, Claude Code 2.1.303 still
+offered fourteen tools — scheduling, worktrees, agent messaging, workflows —
+and ran a `CronCreate` the model asked for; Copilot 1.0.103 offered 21, refused
+only once called; grok 1.0.70 twelve, among them `write` and the image and video
+tools; Gemini CLI its sub-agents, plan mode and skills; Qwen Code its worktree,
+agent and skill tools, and an `enter_worktree` the model asked for ran without a
+prompt. So each of those profiles names the tools a call *has* — `--tools
+WebFetch,WebSearch`, `--available-tools`, grok's `--tools`, a Gemini policy that
+denies every tool and allows the two web tools above the denial, Qwen Code's
+`tools.core` — and a call the model makes to anything else is refused and runs
+nothing.
+
+**And read how each vendor applies its allowlist.** grok's fails *open*: a name
+the build does not know makes the CLI warn that "other tools stay available"
+and apply none of the list. So the profile names only the two web tools 1.0.70
+knows, and passes a deny list naming every other built-in beside it — a
+denial wins over the allowlist, and a name the deny list does not know is only
+skipped — so the two fail closed in either direction: a renamed web tool leaves
+the deny list in force, and a new tool is outside the allowlist. Copilot's
+`--available-tools` fails closed on its own: a name that matches no tool adds
+nothing. Qwen Code's `tools.core` covers only the tools the vendor calls core,
+so its profile's `permissions.deny` names every other tool either build
+registers.
 
 **Unless the vendor allows whatever a list does not name.** OpenCode 2 takes
 an ordered rule list in which the *last* match wins, and allows any tool no
@@ -1315,6 +1608,12 @@ tools:
   {"action": "websearch", "resource": "*", "effect": "allow"}
 ]}
 ```
+
+Beside it, `"plugins": ["-opencode.tools"]` turns off the built-in plugin that
+adds OpenCode's own session tools — which the policy withholds anyway — and a
+sentence at the end of the system prompt telling the model to call one of them
+through `execute`, a tool no call is offered. Measured on 2.0.32 and 2.1.4,
+that sentence leaves both channels' requests and nothing else in them changes.
 
 **And only if nothing else configures the call.** OpenCode also reads
 *project* configuration — `opencode.json`, and `.opencode/` agents, skills and
@@ -1380,18 +1679,28 @@ sees. What actually removes them is `run.toolset` in the seeded
 CLI's own registry at startup, which replaces the surface outright. The
 profile ships both — the allowlist because it is the denial, the flags
 because a settings file that failed to apply should still refuse the call.
-`codex` sits at the other end of the same distinction: its `--sandbox
-read-only` contains the shell rather than removing it, and reads stay.
-That residual is why `local_tools: denied` is a claim `crewlet llm doctor`
-**measures** rather than one you take on trust.
+`codex` shows the residual a removal can leave. Its profile switches the shell
+off (`features.shell_tool` and `features.unified_exec`) with `view_image`, the
+goal, multi-agent and `request_user_input` tools and image generation, so a
+shell call the model makes is answered "unsupported call" and runs nothing. That
+leaves web search and `apply_patch`, which has no switch: codex offers it
+whenever the model's catalogue entry names a patch format. `--sandbox read-only`
+makes it write nothing, inside the call's directory or out of it — but it still
+reads a file to check a patch against it, so a patch naming a file outside the
+call is answered with whether that file exists and holds the patch's lines,
+never with its content. A filesystem permission profile reading only the call's
+directory would close that too, and was measured and not adopted: codex then
+reads even the call's `AGENTS.md` through its bubblewrap helper, and on a host
+where no user namespace can be created every call failed. That residual is why
+`local_tools: denied` is a claim `crewlet llm doctor` **measures** rather than
+one you take on trust.
 
-**But an allow list is right where a stale name costs one tool.** grok's
-rule is about grok's *implementation*, not about allow lists — and
-`kimi-code` inverts it. There, an entry the CLI does not recognise "is
-reported with a warning" and simply matches nothing, so a name that went
-stale costs that one tool rather than lifting the restriction. Read how each
-vendor applies the list before choosing the shape; the flag's name says
-nothing about which way it fails.
+**An allowlist is safe on its own where a stale name costs one tool.**
+`kimi-code` is that case: an entry the CLI does not recognise "is reported with
+a warning" and simply matches nothing, so a name that went stale costs that one
+tool rather than lifting the restriction. Read how each vendor applies the list
+before choosing the shape; the flag's name says nothing about which way it
+fails.
 
 **The denial does not always live in a flag.** `kimi-code`'s tool policy is
 `[tools]` and `[[permission.rules]]` in `config.toml` — and `config.toml` is
@@ -1399,8 +1708,8 @@ where `kimi login` writes the OAuth reference and the model catalogue, so it
 is a *credential* here and seeding a policy into it would destroy the login
 it carries. What is left is the **agent file**, the same `--agent-file` that
 carries the system prompt: its frontmatter allowlist is the denial. That is
-the concrete reason a profile with a `system_prompt_file` passes its channel
-on every call — see [Which CLIs actually have one](#which-clis-actually-have-one).
+the concrete reason a channel whose file carries policy is passed on every
+call — see [A channel with a shape](#a-channel-with-a-shape).
 
 **An approval prompt is a wedge in a headless run.** A CLI that stops to
 ask sits on the seat's concurrency slot until `timeout_seconds` fires,
@@ -1427,8 +1736,12 @@ than the same CLI at a terminal, and a fetch is a read — it never gates a
 delivery. Where a vendor gates its web tools
 behind an approval a headless run cannot answer, the profile allows them
 explicitly (`--allowedTools WebFetch WebSearch`, Copilot's
-`--allow-tool`); where its default web search answers from an offline
-index, the profile switches it live (Codex's `web_search="live"`). What
+`--allow-tool`, the `allow` rule in Gemini CLI's policy — a headless Gemini run
+registers no tool whose default is to ask, so without it there was no
+`web_fetch` at all); where a vendor ships its fetch switched off, the profile
+switches it on (grok's `GROK_WEB_FETCH=1`); where its default web search answers
+from an offline index, the profile switches it live (Codex's
+`web_search="live"`). What
 the CLI reads on the web is not in the engine's event stream — the cost
 of an unrecorded read, accepted. A seat on a CLI with no web tool of its own
 reaches the web the way it reaches everything external, through the MCP servers
@@ -1501,8 +1814,8 @@ non-empty string wins, and an empty one falls through to the next.
 
 **Only a `jsonl` profile streams.** A caller that asks to watch an answer being
 written — the dashboard's live view of a round — gets each event's text as it
-arrives from a CLI that prints JSON lines (Codex, OpenCode, Kimi Code, Muse
-Code). A `json` or `text` profile is read from the whole of what the CLI printed
+arrives from a CLI that prints JSON lines (Codex, OpenCode, Qwen Code, Kimi
+Code, Muse Code). A `json` or `text` profile is read from the whole of what the CLI printed
 — one document, a fenced block — so there is no faithful view of it in
 progress, and its answer arrives at the end in one piece. Claude Code's is
 `json`.
@@ -1633,17 +1946,63 @@ ended the same way. A CLI that exits 0 when its deadline's signal arrives is a
 
 ### Token accounting
 
-`Completion.InputTokens` / `output_tokens` come from the CLI's own
-usage report where the profile can find one (Claude Code and Codex
-report it; Gemini CLI's shape varies by version). Where it can't, the
-counts are estimated at four characters per token — an approximation, but
-[budgets](../getting-started/quickstart.md#token-budgets-optional) must
-keep moving or a seat on this backend would run with no ceiling.
-`crewlet llm doctor` tells you which of the two you are getting.
-`InputTokens` is always the full prompt — the CLI's raw input plus the cache
-reads and writes it reports beside it — so a budget is charged correctly
-whatever the cache did, and the two cache figures break that total down for cost
-reporting only.
+`Completion.InputTokens` / `OutputTokens` come from the CLI's own usage
+report where the profile can find one: on stdout (Claude Code, Codex, Gemini
+CLI, Qwen Code, Cursor Agent), in a usage file the CLI writes (Copilot,
+Hermes), or from a command run after the call (OpenCode). Where it can't —
+Grok, Muse Code, Kimi Code and Pi report no counts the profile can read — the
+counts are estimated at four characters per token over everything the engine
+handed the CLI: the transcript **and** the system prompt on its channel, since a
+budget charged for the transcript alone would undercount every call by the
+largest stable thing in it. What no estimate holds is a vendor's own system
+prompt kept beside the engine's, which the engine never sees. An estimate is an
+approximation, but [budgets](../getting-started/quickstart.md#token-budgets-optional)
+must keep moving or a seat on this backend would run with no ceiling. `crewlet
+llm doctor` tells you which of the two you are getting.
+
+**`InputTokens` is always the full prompt**, so a budget is charged correctly
+whatever the cache did, and the two cache figures break that total down for
+cost reporting only. Vendors report it two ways, and the profile says which:
+
+- **Apart from the cache** — Anthropic's arithmetic, and every CLI that passes
+  it through: `input_tokens` is the uncached remainder, so the engine adds the
+  cache reads and writes reported beside it. The default.
+- **With the cache inside it** — OpenAI's: `input_tokens` already holds the
+  cached tokens. `usage.input_includes_cache: true` declares it, and the cache
+  figures are then not added again; `codex`, whose `turn.completed` passes
+  OpenAI's usage through, declares it, and so does `copilot`, whose usage
+  report counts the cached reads inside its input (measured: 1,000 input
+  tokens, 600 of them cached). Read the other way, every cached token was
+  charged twice. Qwen Code reports an input count that holds the cached part
+  too, and its profile reads no cache figure at all.
+
+Two figures are **added** rather than reported as themselves, each because a
+vendor reports it apart from the count it belongs to and bills it with that
+count: `usage.reasoning` is added to the output (below), and `usage.tool_prompt`
+to the input — the prompt a model-side tool built, the page a URL-context fetch
+read or the results a search grounding returned, which Gemini reports as
+`toolUsePromptTokenCount` apart from the prompt and bills as input. A fetching
+seat is charged for what it read, not only for its question.
+
+**A usage path may sum over every member.** A step spelled `*` stands for every
+member of the object or array at that point, and the count is the sum over the
+members that carry it. Gemini CLI reports its counts per model —
+`stats.models.<model>.tokens`, one entry for each model a call used, and its
+web tools ask a second model on the side — so no fixed path could read them:
+
+```yaml
+usage:
+  input:       [["stats", "models", "*", "tokens", "input"]]
+  output:      [["stats", "models", "*", "tokens", "candidates"]]
+  cache_read:  [["stats", "models", "*", "tokens", "cached"]]
+  reasoning:   [["stats", "models", "*", "tokens", "thoughts"]]
+  tool_prompt: [["stats", "models", "*", "tokens", "tool"]]
+```
+
+A member without the count adds nothing, and a path no member resolves is
+unread usage, estimated as any other. Only a usage path may take the step: an
+answer, a failure flag, an event's kind and a failure class are each one value,
+and which member's would be a guess.
 
 **A CLI can report its tokens honestly and still not put them in the
 answer.** Hermes's one-shot entry point is `hermes -z`, whose whole contract
@@ -1660,6 +2019,12 @@ usage:
   output: [["output_tokens"]]
 ```
 
+Copilot's is the same shape: its answer is plain text, and
+`--usage-output-file` writes the counts of the model that served the call
+(`providerModelMetrics.0.metrics.usage.inputTokens` and `outputTokens`), so a
+Copilot seat is charged real figures rather than an estimate. Its input count
+already holds the cached tokens, so the profile reads no cache figure.
+
 Three rules travel with it. A report that never arrived is not a call that
 cost nothing — the counts fall back to what stdout reported, which for
 `hermes -z` is nothing, so the estimate — because the vendor writes the file
@@ -1671,7 +2036,11 @@ A report whose keys this profile cannot read is **drift**, not a zero-token
 turn: it falls back the same way rather than charging zero, and logs
 `cli_agent_usage_report_unreadable` with the reason (`the report is not one
 JSON object`, or `usage.input and usage.output do not both resolve in it`),
-the paths it looked in and what the counts came from instead. And both prompt counts come from the file or neither does: a
+the paths it looked in and what the counts came from instead — on a run the
+CLI did not report failed. A failed call is charged nothing, and a vendor's
+report of one may hold no counts by design: Hermes 0.21.5 writes
+`input_tokens` and `output_tokens` as `null` for a refused key or a spent plan,
+and exits 2. And both prompt counts come from the file or neither does: a
 partial overlay would pair one source's input count with another's output
 count, and the sum is what a budget is charged. (The two cache figures are
 not part of that test — a provider that caches nothing reports neither, and
@@ -2037,10 +2406,12 @@ about the login the engine would run with; `login`, `logout` and `import` do
 not, since each replaces or removes that login. `crewlet validate` never does:
 checking a document writes nothing onto the host.
 The [secret store](secret-store.md) is the fleet's, so every node of the company
-reads the same bundle (one written while the engine is stopped lands in that
-node's own table and reaches the fleet at its next start), and each restores it
-into its own empty directory: `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` by convention,
-or whatever variable the entry's `auth.credential_bundle` names. Each node then
+reads the same bundle (one exported while this node's engine is stopped goes
+to that same store, which the command reaches itself through the node's own
+broker or the external one — a cluster member's goes through a running member
+named with `-api`), and each restores it into its own empty directory:
+`CREWLET_LLM_CLI_<KEY>_CREDENTIALS` by convention, or whatever variable the
+entry's `auth.credential_bundle` names. Each node then
 holds its own copy of one refresh token, so where the vendor rotates refresh
 tokens two nodes fork it exactly as `-from-host` forks yours — a headless token
 (option 2) or a key (option 5) is the better answer for a fleet. The blob is
@@ -2085,12 +2456,13 @@ providers:
 `auth.mode: api-key` puts one key into the variable the profile names for it
 (`api_key_env`) and removes the profile's token variable, so the CLI bills the
 metered account and cannot fall back onto a plan: `ANTHROPIC_API_KEY` for
-Claude Code, `OPENAI_API_KEY` for Codex, `CURSOR_API_KEY`, `GITHUB_TOKEN`,
-`XAI_API_KEY`, `META_API_KEY`, `GEMINI_API_KEY` and `DASHSCOPE_API_KEY` for the
-CLIs that read one ([Supported CLIs](#supported-clis)). `auth.api_key` is a
-`${VAR}` naming the key; left out, the entry looks up the profile's own variable
-— the secret store first, then the environment — so nothing in the document has
-to change for a key you exported or stored:
+Claude Code, `CODEX_API_KEY` for Codex, and `CURSOR_API_KEY`,
+`COPILOT_GITHUB_TOKEN`, `XAI_API_KEY`, `META_API_KEY`, `GEMINI_API_KEY` and
+`OPENAI_API_KEY` for Cursor Agent, Copilot, Grok, Muse Code, Gemini CLI and
+Qwen Code ([Supported CLIs](#supported-clis)). `auth.api_key` is a `${VAR}`
+naming the key; left out, the entry looks up the profile's own variable — the
+secret store first, then the environment — so nothing in the document has to
+change for a key you exported or stored:
 
 ```bash
 crewlet secrets set ANTHROPIC_API_KEY      # reads the value from stdin
@@ -2104,8 +2476,19 @@ say so — and `crewlet llm doctor` reports the entry as having no sign-in, nami
 the variable. A key travels into a [coding box](code-sandbox.md) in any cell, a
 remote one included, the way a headless token does.
 
+**A shared variable is never read in an entry's place.** Qwen Code reads its key
+from `OPENAI_API_KEY`, the name other vendors' keys — an OpenAI key kept on the
+host for embeddings, or for OpenAI itself — are kept under too, and sends it to
+whatever endpoint `OPENAI_BASE_URL` names. Its profile declares the variable
+`api_key_env_shared`, so the fallback above does not apply: a `qwen-code` entry
+names its key as `auth.api_key`, a write that leaves it out is refused, and
+`doctor`'s remedy names `auth.api_key` rather than the variable. `inherit-env`,
+which would forward whatever the engine's process holds under that name, is
+refused on such a CLI for the same reason.
+
 The key-holding entry is otherwise an ordinary entry: the same CLI, the same
-isolation, the same model grammar. One key per entry; to fall back from a plan
+isolation — in the seat's [key home](#isolation-the-part-that-actually-matters),
+which never holds the login — and the same model grammar. One key per entry; to fall back from a plan
 onto a key, or from one key onto another, list the entries in order in the
 seat's `llm` ([Falling back between entries](#falling-back-between-entries)).
 
@@ -2244,18 +2627,18 @@ no refresh file and sidesteps all of this.
 
 | `agent` | Binary | Signs in with | Notes |
 |---|---|---|---|
-| `claude-code` | `claude` | Claude Pro / Max, or an Anthropic API key (`ANTHROPIC_API_KEY`, its `api_key_env`) | The default. `claude auth login` (and `auth status` / `auth logout`). `claude setup-token` gives a headless `CLAUDE_CODE_OAUTH_TOKEN`. Reports full usage incl. cache tokens. Agent mode and code work. |
-| `codex` | `codex` | ChatGPT Plus / Pro, or an OpenAI API key (`OPENAI_API_KEY`) | `codex login`; no headless token. Streams JSONL events; runs `--sandbox read-only`. Text mode only. |
-| `gemini-cli` | `gemini` | Google AI Pro / free tier, or `GEMINI_API_KEY` | First run starts the auth picker. `GOOGLE_CLOUD_PROJECT` passes through. |
-| `qwen-code` | `qwen` | Qwen OAuth, or `DASHSCOPE_API_KEY` | Gemini CLI fork; same shape. |
-| `opencode` | `opencode` | a provider key in `env`, or a login of OpenCode's own | **OpenCode 2 only** — `@opencode/cli` (`opencode --version` prints `opencode v2.…`); 1.x (`opencode-ai`) runs neither the profile nor a coding box. Every command runs `--standalone`, because without it OpenCode drives a background service on a port shared by every home on the machine, which keeps the credentials of whichever call started it. `opencode auth login` (no status beyond `auth list`, no logout — see [the login it keeps in its own database](#1-broker-the-vendors-own-login-any-cli)). A provider key goes in `env` under that provider's own variable, and `doctor` counts it — see [A provider key in `env`](#6-a-provider-key-in-env-opencode-hermes-pi). `model` is `<provider>/<model>` (`anthropic/claude-sonnet-5`, `openrouter/anthropic/claude-sonnet-5`); a bare id is refused on a write. Prompt on stdin; no project configuration from the working directory or any ancestor of it, only the call's own (see [Tool calls in text mode](#tool-calls-in-text-mode)); the system prompt as an agent in that configuration; failures read from the class in its own JSON `error` events and nowhere else; tokens from the call's session. Agent mode and code work. |
-| `cursor-agent` | `cursor-agent` | Cursor seat, or `CURSOR_API_KEY` | `cursor-agent login`. The key is the headless alternative, reached through `auth.mode: api-key`. |
-| `copilot` | `copilot` | GitHub Copilot seat | Prompt goes on argv, so very long transcripts are bounded by `ARG_MAX`. Authenticates with a GitHub token, so `GITHUB_TOKEN` is its `api_key_env` — reached via `auth.mode: api-key` or `inherit-env`, never forwarded silently. |
-| `grok` | `grok` | xAI, or `XAI_API_KEY` | **xAI's own CLI** from [x.ai/cli](https://x.ai/cli), not the same-named npm package. Accepts `XAI_API_KEY` (the variable its own signed-out message names) through `auth.mode: api-key`. |
-| `muse-code` | `muse` | Muse Code subscription (Everyday / High / Power Usage), or pay-as-you-go | `muse login` / `muse logout`; the browser sign-in stores `~/.config/muse/auth.json`, which `-from-host` adopts. **No status command** — this CLI has none. Mints no headless token: `META_API_KEY` is a *metered* Model API key, reached through `auth.mode: api-key`. Runs `muse exec --json`, denies its tools through a seeded `run.toolset`, and puts the prompt in a **file** rather than on argv. Reports no token counts anywhere on its stream, so they are estimated. |
-| `kimi-code` | `kimi` | Kimi Code OAuth (Moonshot) | **MoonshotAI's own CLI**, `@moonshot-ai/kimi-code` — not the unscoped `kimi-code` package on npm, which wraps Claude Code behind a proxy and installs its own `kimi` (a `1.0.x` version is the other one). `kimi login` runs a device-code flow; there is no logout or status subcommand. Runs `--output-format stream-json`, because the default `text` output prefixes every line with `• ` and re-wraps it, which destroys the tool envelope. Its tools are denied in the **agent file** that also carries the system prompt — measured, that is 25 tools down to 1, and an 8.8 KB vendor system prompt replaced by the seat's own. Reports no token counts on its stream, so they are estimated. |
-| `hermes` | `hermes` | Nous Portal, or any of 30+ providers it fronts | `hermes auth` for the credential wizard, `hermes status` for state; `hermes auth logout` needs a provider name, so no logout is declared. Runs `hermes -z`, whose contract is the final response text and nothing else — so the tokens come from `--usage-file` instead. Tools are denied with `--toolsets web` on argv, which replaces the run's enabled set; **`-p` selects a profile on this CLI**, not a prompt. A provider key (`OPENROUTER_API_KEY`, …) goes in `env`, and `doctor` counts it — see [A provider key in `env`](#6-a-provider-key-in-env-opencode-hermes-pi). |
-| `pi` | `pi` | Claude Pro/Max, ChatGPT Plus/Pro, GitHub Copilot — whichever it is logged into | `@earendil-works/pi-coding-agent`. **No headless login**: `/login` is a slash command, so `crewlet llm login` starts its TUI in the credential directory and you type it there. Denies every tool with `--no-tools`, which is honest here because its built-in set ships no web tool at all. Prompt *and* system prompt both on argv. Tokens estimated — see [Token accounting](#token-accounting). A provider key goes in `env` under that provider's own variable, and `doctor` counts it. |
+| `claude-code` | `claude` | Claude Pro / Max, or an Anthropic API key (`ANTHROPIC_API_KEY`, its `api_key_env`) | The default. `claude auth login` (and `auth status` / `auth logout`). `claude setup-token` gives a headless `CLAUDE_CODE_OAUTH_TOKEN`. A seat keeps Claude Code's own system prompt (`--append-system-prompt-file`), a side pass replaces it (`--system-prompt-file`). Web tools only (`--tools WebFetch,WebSearch`), and `--safe-mode` keeps the project files above the call out. Reports full usage incl. cache tokens. Agent mode and code work. |
+| `codex` | `codex` | ChatGPT Plus / Pro, or an OpenAI API key (`CODEX_API_KEY`) | `codex login`; no headless token. The key goes in `CODEX_API_KEY`, the variable `codex exec` signs its requests with — with `OPENAI_API_KEY` alone it sent no `Authorization` header. A seat keeps codex's own prompt and adds its text in an `AGENTS.md` in the call's directory; a side pass replaces it (`-c model_instructions_file`). Streams JSONL events; its shell is off and it runs `--sandbox read-only`, so its tools are web search and an `apply_patch` that writes nothing. Text mode only. |
+| `gemini-cli` | `gemini` | Google AI Pro / free tier, or `GEMINI_API_KEY` | No login subcommand: sign in with `gemini` yourself and adopt that login with `-from-host`. Under `subscription` the profile sets `GOOGLE_GENAI_USE_GCA=true` (`subscription_env`), which is what makes the CLI use the copied login — without it every call exited 41, "Please set an Auth method". One system-prompt channel, `GEMINI_SYSTEM_MD`, which replaces the CLI's prompt for a seat and a side pass alike. Web tools only, by a policy file; usage read per model and summed. `GOOGLE_CLOUD_PROJECT` passes through. |
+| `qwen-code` | `qwen` | an OpenAI-compatible key (`OPENAI_API_KEY`), under `auth.mode: api-key` | **No login**: both measured builds refuse the Qwen OAuth login, so the entry is `auth.mode: api-key` and names its key as `auth.api_key` — `OPENAI_API_KEY` is [shared](#5-a-metered-api-key), so the engine never reads it in the entry's place. Signs in with `--auth-type openai`, the endpoint in `OPENAI_BASE_URL` in the entry's `env` ([example](#the-other-clis)). A seat's system prompt takes the place of the CLI's opening identity sentence and keeps the rest (`QWEN_SYSTEM_IDENTITY_MD`); a side pass's replaces it whole (`QWEN_SYSTEM_MD`). Answer and usage from `--output-format stream-json`'s result event. Web tools only. |
+| `opencode` | `opencode` | a provider key in `env`, or a login of OpenCode's own | **OpenCode 2 only** — `@opencode/cli` (`opencode --version` prints `opencode v2.…`); 1.x (`opencode-ai`) runs neither the profile nor a coding box. Every command runs `--standalone`, because without it OpenCode drives a background service on a port shared by every home on the machine, which keeps the credentials of whichever call started it. `opencode auth login` (no status beyond `auth list`, no logout — see [the login it keeps in its own database](#1-broker-the-vendors-own-login-any-cli)). A provider key goes in `env` under that provider's own variable, and `doctor` counts it — see [A provider key in `env`](#6-a-provider-key-in-env-opencode-hermes-pi). `model` is `<provider>/<model>` (`anthropic/claude-sonnet-5`, `openrouter/anthropic/claude-sonnet-5`); a bare id is refused on a write. Prompt on stdin; no project configuration from the working directory or any ancestor of it, only the call's own (see [Tool calls in text mode](#tool-calls-in-text-mode)); a seat's system prompt in that configuration's `AGENTS.md`, after OpenCode's own, and a side pass's as an agent there, replacing it; failures read from the class in its own JSON `error` events and nowhere else; tokens from the call's session. Agent mode and code work. |
+| `cursor-agent` | `cursor-agent` | Cursor seat, or `CURSOR_API_KEY` | `cursor-agent login`. The key is the headless alternative, reached through `auth.mode: api-key`. Runs `--trust` — print mode refuses the call's new directory without it ("Workspace Trust Required") — and `--exclude-workspace-context`. Its login is kept per platform: `~/.cursor/auth.json` on macOS, `$XDG_CONFIG_HOME/cursor/auth.json` on Linux (the profile's `platforms` section). No system-prompt channel: Cursor's service assembles the prompt, so the seat's text rides the transcript. Its rule loader still opens every `AGENTS.md`, `CLAUDE.md` and `.cursor/rules` file from the call's directory up to `/`, so put `state_dir` outside any directory tree holding such files ([Isolation](#isolation-the-part-that-actually-matters)). |
+| `copilot` | `copilot` | GitHub Copilot seat, or a GitHub token (`COPILOT_GITHUB_TOKEN`) | Prompt on stdin. Authenticates with a GitHub token, so `COPILOT_GITHUB_TOKEN` — the first of the three variables it reads, ahead of `GH_TOKEN` and `GITHUB_TOKEN` — is its `api_key_env`, reached via `auth.mode: api-key` or `inherit-env`, never forwarded silently. Its login is the system keychain's, or, where none answers and you agree at `crewlet llm login`, `copilotTokens` in `.copilot/config.json`; one in a keychain does not reach a seat. No channel replaces its prompt, so every call keeps it, and the engine's text goes in an `AGENTS.md` in the call's directory. Web tools only (`--available-tools`); real token counts from `--usage-output-file`. |
+| `grok` | `grok` | xAI, or `XAI_API_KEY` | **xAI's own CLI** from [x.ai/cli](https://x.ai/cli), not the same-named npm package. Accepts `XAI_API_KEY` (the variable its own signed-out message names) through `auth.mode: api-key`. Prompt in a file (`--prompt-file`); the system prompt on argv on both channels — `--rules` for a seat, which keeps the CLI's prompt, `--system-prompt-override` for a side pass — since neither flag takes a path. Web tools only: `--tools web_search,web_fetch` with every other built-in denied, and `GROK_WEB_FETCH=1`. Tokens estimated. |
+| `muse-code` | `muse` | Muse Code subscription (Everyday / High / Power Usage), or pay-as-you-go | `muse login` / `muse logout`; the browser sign-in stores `~/.config/muse/auth.json`, which `-from-host` adopts. **No status command** — this CLI has none. Mints no headless token: `META_API_KEY` is a *metered* Model API key, reached through `auth.mode: api-key`. Runs `muse exec --json`, denies its tools through a seeded `run.toolset`, and puts the prompt in a **file** rather than on argv. Reports no token counts anywhere on its stream, so they are estimated. A seat's and a side pass's system prompt alike follow the CLI's own instructions, through `TBH_EVAL_APPEND_SYSTEM_PROMPT_FILE`, an undocumented variable ([Which CLIs actually have one](#which-clis-actually-have-one)). Written for 1.4.x: 1.0.x refuses `--disable-reminders`, which an operator there drops from `overrides.complete_args`. |
+| `kimi-code` | `kimi` | Kimi Code OAuth (Moonshot) | **MoonshotAI's own CLI**, `@moonshot-ai/kimi-code` — not the unscoped `kimi-code` package on npm, which wraps Claude Code behind a proxy and installs its own `kimi` (a `1.0.x` version is the other one). `kimi login` runs a device-code flow; there is no logout or status subcommand. Runs `--output-format stream-json`, because the default `text` output prefixes every line with `• ` and re-wraps it, which destroys the tool envelope. Its tools are denied in the **agent file** that also carries the system prompt — measured, that is 25 tools down to `FetchURL` (and `WebSearch` where a Moonshot search service is configured). A seat's agent file puts its text ahead of Kimi's own prompt (`${base_prompt}`); a side pass's replaces it. Reports no token counts on its stream, so they are estimated. |
+| `hermes` | `hermes` | Nous Portal, or any of 30+ providers it fronts | `hermes auth` for the credential wizard, `hermes status` for state; `hermes auth logout` needs a provider name, so no logout is declared. Runs `hermes -z`, whose contract is the final response text and nothing else — so the tokens come from `--usage-file` instead. Tools are denied with `--toolsets web` on argv, which replaces the run's enabled set; **`-p` selects a profile on this CLI**, not a prompt. No system-prompt channel: the seat's text rides the transcript, under the vendor's own prompt. A provider key (`OPENROUTER_API_KEY`, …) goes in `env`, and `doctor` counts it — see [A provider key in `env`](#6-a-provider-key-in-env-opencode-hermes-pi). |
+| `pi` | `pi` | Claude Pro/Max, ChatGPT Plus/Pro, GitHub Copilot — whichever it is logged into | `@earendil-works/pi-coding-agent`. **No headless login**: `/login` is a slash command, so `crewlet llm login` starts its TUI in the credential directory and you type it there. Denies every tool with `--no-tools`, which is honest here because its built-in set ships no web tool at all. Prompt on stdin; the system prompt in a file on both channels — `--append-system-prompt` for a seat, which keeps pi's prompt, `--system-prompt` for a side pass. `--no-context-files`, because its `AGENTS.md` walk goes up to `/` past the `.git` marker. Tokens estimated — see [Token accounting](#token-accounting). A provider key goes in `env` under that provider's own variable, and `doctor` counts it. |
 | `custom` | — | — | Ships nothing; declare everything under `overrides`. |
 
 **The binary has to be on the engine host.** A CLI is a process the engine
@@ -2339,15 +2722,17 @@ then nothing the model writes classifies anything, in a failed run or not:
 marker_scope: stderr        # or answer-and-stderr (the default), or events
 ```
 
-Three profiles narrow it, each on a measurement rather than an assumption:
+Two profiles narrow it, each on a measurement rather than an assumption:
 `kimi-code` puts its classification on stderr with the answer stream carrying
-only `role: meta` lines, `pi` leaves stdout **empty** and writes
-`<status>: <the provider's JSON>` to stderr, and `hermes` writes
-`hermes -z: agent failed: …` there while `-z` guarantees stdout is the reply
-and nothing else. Narrow it only where the vendor's behaviour makes the
-answer an impossible place for the report — a profile that narrows it
-wrongly stops recognising spent plans, which is silent until somebody hits
-their cap.
+only `role: meta` lines, and `pi` leaves stdout **empty** and writes
+`<status>: <the provider's JSON>` to stderr. Narrow it only where the vendor's
+behaviour makes the answer an impossible place for the report — a profile that
+narrows it wrongly stops recognising spent plans, which is silent until
+somebody hits their cap. `hermes` is the case in point: its profile once
+narrowed to stderr, and measured on 0.21.5 a refused key and a spent plan are
+printed on **stdout**, where the answer would be, with exit 2 — only a run that
+never reaches a model writes to stderr — so the narrowed scope matched none of
+them. It is back on the default.
 
 **The third scope matches structure instead of text, for a failure that is
 an event of its own.** OpenCode 2's `--format json` prints a refused key or a
@@ -2409,8 +2794,19 @@ nothing but `run ended with Failed`.
 Every field a profile has, and therefore every key `overrides` accepts.
 A key not in this table is refused by name. Every mapping field
 (`config_env`, `work_config_env`, `isolation_env`, `env`, `usage`,
-`stdin_login`, `system_prompt_file`, `credential_store`) merges key by key;
-lists and single values replace wholesale.
+`stdin_login`, `system_prompt`, `append_system_prompt` and their `file`,
+`credential_store`) merges key by key; lists and single values replace
+wholesale.
+
+A built-in profile may differ by platform. Its entry in the shipped table can
+carry a `platforms` section, keyed `darwin` or `linux`, of fields merged over
+it on that platform the same way, before your `overrides` are merged in — so
+an override of a field the section sets wins on both. `cursor-agent` is the
+one that needs it: its login is `~/.cursor/auth.json` on macOS and
+`$XDG_CONFIG_HOME/cursor/auth.json` on Linux, where the engine points
+`XDG_CONFIG_HOME` at the seat home's `.config`. `platforms` is not a key
+`overrides` takes, since an entry's overrides already apply only to the host
+it runs on.
 
 | Field | What it is |
 |---|---|
@@ -2420,16 +2816,15 @@ lists and single values replace wholesale.
 | `complete_args` | The argv of one completion, before the model and the prompt. |
 | `model_args` | The model flag, with `{model}` substituted. Required in effect: every entry names a `model`, so a merged profile with no element carrying `{model}` — none at all, or a flag with a fixed value — is refused. |
 | `prompt_mode` | How the prompt travels: `stdin` (default), `argv` or `file`. |
-| `system_prompt_args` | The flag carrying the system prompt, with `{file}` (preferred) or `{system}`. Empty leaves it in the transcript. |
-| `system_prompt_env` | A variable naming a file the CLI reads its system prompt from; exclusive with `system_prompt_args`. |
-| `system_prompt_file` | `{name, template, discovered}`: the file a `{file}` channel writes, and the text around `{system}`. `discovered: true` is a file the CLI finds by its location in the per-call directory (`name` may then carry a directory, and must name a file inside it), selected by `system_prompt_args` without `{file}` or `{system}`. |
+| `system_prompt` | `{args, env, file}`: the channel on which the engine's system prompt **replaces** the CLI's own — taken by the auxiliary passes, and by a seat when the CLI has no `append_system_prompt`. `args` carries `{file}` (preferred) or `{system}`; `env` names a variable the CLI reads a file path from, exclusive with `args`; `file` is `{name, template, discovered}`: the file the channel writes and the text around `{system}`. `discovered: selected` is a file the CLI finds by its location in the per-call directory (`name` may then carry a directory, and must name a file inside it) and `args` selects without `{file}` or `{system}`; `discovered: always` is one the CLI reads on every run, which declares the channel by itself. See [The system prompt](#the-system-prompt-in-text-mode). |
+| `append_system_prompt` | The same shape, for the channel on which the CLI's own system prompt stays in force and the engine's is **added** — taken by a seat's phases, and by an auxiliary pass when the CLI has no `system_prompt`. With neither, the system prompt rides the transcript. |
 | `prompt_args` | The flag introducing the prompt in `argv` mode, or carrying `{file}` in `file` mode. |
 | `output` | How stdout is encoded: `json` (default), `jsonl` or `text`. Only `jsonl` streams. |
 | `text_paths` | Where the answer is in a `json`/`jsonl` document. |
 | `event_type_path` | Where a `jsonl` line names its event kind. |
 | `text_events` | The event kinds whose text is the answer. |
 | `error_paths` | A boolean the CLI sets when it failed despite exiting zero. |
-| `usage` | `{input, output, cache_read, cache_write, reasoning}`: where the token counts are. `reasoning` is added to output, for a CLI that reports it apart. |
+| `usage` | `{input, output, cache_read, cache_write, reasoning, tool_prompt, input_includes_cache}`: where the token counts are, each a list of paths tried in order. `reasoning` is added to output and `tool_prompt` to input, for a CLI that reports them apart. `input_includes_cache: true` says the input count already holds the cache reads and writes, which are then not added to it. A step spelled `*` sums over every member of the object or array there — usage paths only ([Token accounting](#token-accounting)). |
 | `usage_file_args` | The flag asking the CLI to write its counts to a file, with `{usage_file}`. |
 | `session_args` | The flag naming the call's session, with `{session}` — 32 hex characters minted per call. |
 | `usage_args` | A command run after the call that prints its counts, with the same `{session}`; read through `usage`. Exclusive with `usage_file_args`. One that fails, or prints nothing, logs `cli_agent_usage_report_failed`; one this profile cannot read logs `cli_agent_usage_report_unreadable`; either way the counts are what stdout reported. |
@@ -2438,12 +2833,14 @@ lists and single values replace wholesale.
 | `isolation_env` | A vendor's own switch that keeps the CLI from reading configuration outside its seat's home and its call's directory, with the value that turns that reading off — set on every command the profile runs, and refused in `env`, `passthrough_env` and the entry's `env`, each of which is layered over it. The name the CLI reads first, never a fallback spelling of it. Never empty (a CLI that reads `1` as on reads an empty value as off), never a credential, `HOME`, an XDG home, `TMPDIR` or a relocated variable. |
 | `env` | Fixed child environment. Never a credential, never `token_env` or `api_key_env`, and never a variable the engine sets to isolate the call (`HOME`, the XDG homes, `TMPDIR`, a `config_env`, `work_config_env` or `isolation_env` variable). |
 | `passthrough_env` | Engine variables forwarded to the child. Never a credential, and never an isolation variable. |
+| `subscription_env` | Child environment set under `auth.mode: subscription` alone, over the entry's `env`: what tells a CLI that picks its sign-in from its environment to use the login the seat's home holds (`gemini-cli`'s `GOOGLE_GENAI_USE_GCA`, which under `api-key` would overrule the key). Never a credential, `token_env`, `api_key_env`, an isolation variable or a variable `env` sets, and never empty; an entry under `subscription` whose `env` names one is refused. |
 | `token_env` | The variable a headless subscription token goes in (`auth.token`, or this variable itself, under `auth.mode: subscription`). |
 | `api_key_env` | The variable a metered key goes in (`auth.api_key`, or this variable itself, under `auth.mode: api-key`). |
+| `api_key_env_shared` | `api_key_env` is a generic name other vendors' keys are kept under too (`qwen-code`'s `OPENAI_API_KEY`): an `api-key` entry must name its key as `auth.api_key`, the variable is never read in its place from the secret store or the engine's environment, and `inherit-env`, which forwards the engine's own, is refused. |
 | `model_names_provider` | The CLI reads its model as `<provider>/<model>`, split at the first slash, so a `model` with nothing before or after that slash (as the CLI is handed it, through `model_args`) is refused on a write. Declared by `opencode` only — measured from its source; `hermes` and `pi` document a `provider/id` model but are not known to refuse a bare one. |
 | `env_sign_in` | The CLI reads its model provider's key from its own environment, so a [credential-named](#6-a-provider-key-in-env-opencode-hermes-pi) variable in the entry's `env` signs it in. |
 | `credential_paths` | The login files, relative to the seat home: each must name a file inside it (not the home itself, not a path ending in a separator), no two may share a file name, and none may be named `crewlet-bundle.json` (a bundle's manifest, naming the CLI it was exported from) or, beside a `credential_store`, `exported-credentials` (the store's document): the shared directory and a bundle keep each file under its name. |
-| `volatile_paths` | Sessions, transcripts and history, deleted before and after every call. Each must stay inside the seat home; a directory is fine. |
+| `volatile_paths` | Sessions, transcripts and history, deleted whenever none of the seat's calls is in flight — as its generation opens and as it closes. Each must stay inside the seat home; a directory is fine. The home's `tmp`, where `TMPDIR` points, is pruned with them whatever the list says. |
 | `login_args` | The vendor's own interactive login, for `crewlet llm login`. |
 | `capture_token_args` | The command that mints a headless token on stdout (`-capture-token`). |
 | `status_args` | The command reporting who the CLI is logged in as. |
@@ -2455,10 +2852,11 @@ lists and single values replace wholesale.
 | `marker_scope` | Where markers match: `answer-and-stderr` (default), `stderr`, or `events` (the class in the CLI's own failure events, compared by equality; `jsonl` only, and stderr is not searched). |
 | `marker_events` | Under `marker_scope: events`, the event kinds (read through `event_type_path`) the CLI reports a failure in. Refused beside any other scope. |
 | `marker_path` | Under `marker_scope: events`, where in such an event the failure class is; a sentinel must equal it. Refused beside any other scope. |
+| `login_keys` | By a credential file's name, the top-level key that file holds only once the CLI has signed in — for a file the CLI also keeps its own state in (`copilot`'s `config.json` and `copilotTokens`, `cursor-agent`'s `cli-config.json` and `authInfo`). Without its key such a file is not a login: `doctor` does not report it, a bundle does not carry it, a logout leaves it, and it does not keep a configured bundle from being restored. Read as JSON once lines opening with `//` are set aside; a file that does not read that way counts as a login. Each name must be a `credential_paths` file name. |
 | `host_credential_paths` | Where the CLI keeps its login in a person's own home, for `-from-host`: each names a file, under a file name `credential_paths` also has, because an adopted file is kept under its name and a seat is seeded only with those names. |
 | `local_tools` | The profile's stance on the CLI's own tools: `denied` or `vendor-default`. |
 | `local_tools_note` | Why a `vendor-default` stance is one. |
-| `seed_files` | `{path, in, content}` (`in` is `home` or `work`): settings files written before a call. `path` must name a file inside its scope, and never one another field needs: a login file, the system prompt file, a `config_env` or `work_config_env` directory, or a directory above any of them. |
+| `seed_files` | `{path, in, content}` (`in` is `home` or `work`): settings files written before a call. `path` must name a file inside its scope, and never one another field needs: a login file, a system prompt file, a `config_env` or `work_config_env` directory, the call's `.git` project-root marker, or a directory above any of them. |
 
 ---
 
@@ -2479,7 +2877,8 @@ does not build at all is reported beside the others rather than aborting the
 run, and `doctor` exits non-zero when any entry has a problem, so a deploy
 script can gate a node on it. For each entry it checks the binary is on `PATH`,
 runs its version probe, reports how it is signed in, says whether
-token counts will be real or estimated — and then runs **three real
+token counts will be real or estimated and where a seat's and a side pass's
+system prompt go — and then runs **three real
 completions**: a smoke test with a real tool, because a profile can look
 perfect and still not produce a parseable tool call; a **shell probe**,
 which asks the CLI to run `date +%s` with its own shell and believes it
@@ -2494,13 +2893,15 @@ cli agent     : claude-code
 mode          : text (a model behind the engine's tool loop)
 model         : sonnet
 binary        : /usr/local/bin/claude
-version       : 2.1.263 (Claude Code)
-written for   : Claude Code CLI 2.1.x (`claude --version`)
+version       : 2.1.310 (Claude Code)
+written for   : Claude Code CLI 2.1.x, measured on 2.1.303 and 2.1.310 (`claude --version`)
 state dir     : /var/lib/crewlet/llm-cli/default
 credentials   : present
 token env     : set
 sign-in       : credential files in /var/lib/crewlet/llm-cli/default/claude-code/credentials; headless token in CLAUDE_CODE_OAUTH_TOKEN
 token usage   : reported by CLI
+system prompt : seats: added to the CLI's own (append_system_prompt)
+              : side passes: replaces the CLI's own (system_prompt)
 smoke test    : ok — 812 in / 34 out
 local tools   : denied by profile — probe: refused
 web           : ok — fetched https://www.cloudflare.com/cdn-cgi/trace
@@ -2510,6 +2911,16 @@ problems      : none
 On an `api-key` entry the `sign-in` line names the key instead —
 `API key in ANTHROPIC_API_KEY (auth.mode api-key)` — and on a Codex entry,
 whose CLI mints no headless token, `token env` says so.
+
+The two **`system prompt`** lines say where each kind of call's system prompt
+goes ([Which channel a call takes](#which-channel-a-call-takes)), naming the
+profile field an operator would override: `added to the CLI's own
+(append_system_prompt)`, `replaces the CLI's own (system_prompt)`, or `in the
+transcript, under the CLI's own (the profile declares no channel)`. So you can
+see which vendor prompt your seats run under without reading the profile. The
+three probes are sent as a seat's call, with a system prompt, so they run
+on the channel a seat's prompt takes — a probe with none ran under the vendor's
+default on most profiles, and reported on a configuration no seat ever had.
 
 On an **agent-mode** entry the report carries two more lines, and both
 check something that fails at a seat's *first turn* and nowhere earlier:
@@ -2570,20 +2981,32 @@ are resolved in the process running `crewlet llm` — the secret store first,
 then *that shell's* environment — and the variables `inherit-env` forwards
 come from that shell's environment alone, as the engine forwards its own and
 never the store's; so run it with the engine's environment to get the
-engine's answer. Beside a
-running engine the store is the fleet's and is read through the engine's API,
-so every `crewlet llm` command runs while the seats do. It reveals only what
-the entries it works on read — `login`, `status`, `logout`, `export`,
-`import` and a `doctor` that names a key resolve and build that one entry,
-and `list` and a bare `doctor` every entry — so signing in `plan` reveals
-`plan`'s token, key or bundle and the `${VAR}`s its model and `env` name,
-and no other entry's credentials, not even an entry keyed `plan.fast`, nor
-any vendor's. Each reveal is logged by
+engine's answer. The store is the fleet's whether or not this node's engine
+runs; the engine decides only the way in. Beside a running engine it is read
+through the engine's API, so every `crewlet llm` command runs while the seats
+do. It reveals only what the entries it works on read — `login`, `status`,
+`logout`, `export`, `import` and a `doctor` that names a key resolve and build
+that one entry, and `list` and a bare `doctor` every entry — so signing in
+`plan` reveals `plan`'s token, key or bundle and the `${VAR}`s its model and
+`env` name, and no other entry's credentials, not even an entry keyed
+`plan.fast`, nor any vendor's. Each reveal is logged by
 name on the node and takes `admin` and a person present, so
 `CREWLET_API_TOKEN` holds one of Tier A's tokens for it
-([CLI reference](../reference/cli.md#commands)). A `seats` node holds no
-data, so there `-api URL` names a node that does, which the values are read
-through and a captured token is stored in.
+([CLI reference](../reference/cli.md#commands)). With the engine stopped the
+command reaches the store itself — through a solo node's own broker on
+`stream.store_dir`, or the external broker a `stream.type: nats` node dials —
+and reads the same values, and only those, with nothing logged on any node:
+it holds the node's Tier A, whose keyring and the broker's own files or
+credentials open every value without any API, so a line it wrote about itself
+would record nothing its holder could not do unrecorded. It keeps the engine
+from starting until it is done, an interactive sign-in included. A token it
+captures, or a bundle `export -secret-store` writes, is stored there under the
+`llm-login` source with the shell's user as its author; through a running node
+the row records the route's `api` and the credential the call authenticated
+with. A member of a cluster cannot reach the store alone with its engine
+stopped, and a `seats` node holds no data, so on either `-api URL` names a
+running node that does, which the values are read through and a captured
+token is stored in.
 
 When none of those authenticates the CLI, `doctor` reports "no sign-in" as a
 problem, naming first a route you configured whose `${VAR}` resolved to
@@ -2593,9 +3016,9 @@ one `crewlet llm login` names when it refuses a token the mode never reads:
 
 | `auth.mode` | Routes `doctor` names |
 |---|---|
-| `subscription` | a login: adopt this machine's with `-from-host` where it has one — or, preferred where the CLI mints one, a headless token with `-capture-token` — else the CLI's own `crewlet llm login <key>`, or, for a CLI with no login command (`gemini-cli`, `qwen-code`, `grok`), a login made with the CLI by hand and adopted |
-| `api-key` | the key alone: `auth.api_key`, else the CLI's key variable, stored with `crewlet secrets set` or exported in the engine's environment. Never a login, which would sit in every seat's home beside the key and leave which of the two the CLI bills to the vendor's precedence, and never a token, which the mode removes |
-| `inherit-env` | the variables it forwards, exported in the engine's own environment — never the secret store, which it does not read — and a login, as under `subscription` but without `-capture-token`, whose token lands in the secret store |
+| `subscription` | a login: adopt this machine's with `-from-host` where it has one — or, preferred where the CLI mints one, a headless token with `-capture-token` — else the CLI's own `crewlet llm login <key>`, or, for a CLI with no login command (`gemini-cli`, `grok`), a login made with the CLI by hand and adopted. A CLI that keeps no login at all (`qwen-code`) is named its key instead: `auth.mode: api-key`, with the key as `auth.api_key` |
+| `api-key` | the key alone: `auth.api_key`, else — unless the variable is [shared](#5-a-metered-api-key) — the CLI's key variable, stored with `crewlet secrets set` or exported in the engine's environment. Never a login, which would sit in every seat's home beside the key and leave which of the two the CLI bills to the vendor's precedence, and never a token, which the mode removes |
+| `inherit-env` | the variables it forwards, exported in the engine's own environment — never the secret store, which it does not read — and, where the engine's environment holds no key, a login, as under `subscription` but without `-capture-token`, whose token lands in the secret store |
 
 One case is not a fault: a CLI pointed at an
 endpoint that takes no key (an `opencode` entry declaring a local server, or a

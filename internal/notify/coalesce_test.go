@@ -18,10 +18,11 @@ type tracker struct{}
 
 func (tracker) Source() string { return "tracker" }
 
-// Build front-loads triage boilerplate the way a real prompt does — around
-// 1.5k characters of it on a chat backend. The scaffolding is the whole
-// reason the salient body is carried separately: a worker filtering on a
-// prefix of the rendered trigger sees only text identical on every turn.
+// Build front-loads boilerplate the way a real prompt does — a chat backend's
+// unaddressed message carries its seat's handle and the triage section on
+// every turn. The scaffolding is the whole reason the salient body is carried
+// separately: a worker filtering on a prefix of the rendered trigger sees only
+// text identical on every turn.
 func (tracker) Build(n notify.Inbound, _ notify.Parties) string {
 	return "## How to triage this\n\n" + n.Body
 }

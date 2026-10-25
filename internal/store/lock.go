@@ -3,12 +3,10 @@ package store
 import (
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 
-	"github.com/crewlet/crewlet/internal/filelock"
+	"github.com/crewlet/crewlet/internal/flock"
 )
 
 // Enforcing "one file, one process".
@@ -32,23 +30,24 @@ import (
 // collision. That is what the measurement above was originally a comparison
 // against, and it is why the answer is a lock rather than a better error.)
 //
-// That is not a theoretical shape. `crewlet secrets`, `crewlet llm export
-// -secret-store` and every provisioner's secret-store sink all open the
-// database the engine is running on, from a second OS process, as their
-// documented gesture. Before this lock the only defence was a printed
-// warning, which is a defence against an operator who reads it.
+// That is not a theoretical shape. `crewlet config`, `crewlet migrate` and
+// `crewlet search eval` open a node's database from a second OS process as
+// their documented gesture, and every command that reaches the company's
+// secrets asks this lock ([Probe]) whether the engine runs. Before this lock
+// the only defence was a printed warning, which is a defence against an
+// operator who reads it.
 //
-// # The mechanism is internal/filelock
+// # An OS lock, on a sidecar
 //
-// The claim itself — an advisory flock on a SIDECAR beside the database,
-// non-blocking, stamped with its holder, released by the kernel however the
-// holder exits — is internal/filelock's, and its package doc carries why an
-// OS lock rather than a pid file, why flock rather than fcntl, why the
-// sidecar is never removed and why a lock that is only advisory is still the
-// right one. The sidecar rather than the database file, because the driver
-// opens and closes the database on its own schedule and a lock on a
-// descriptor it owns is a lock we cannot reason about. What this file adds on
-// top is what only the store needs: the refcount below, and the discard.
+// The lock itself is [flock.Try]'s — an advisory lock the KERNEL releases when
+// its holder exits, however it exits, so a crashed engine leaves nothing to
+// reap; that package says why that beats a pid file, why flock rather than
+// fcntl, why the sidecar is never removed and why a lock that is only advisory
+// is still the right one. It is taken on a SIDECAR file rather than the
+// database itself, because the driver opens and closes the database on its own
+// schedule and a lock on a descriptor it owns is a lock we cannot reason
+// about. What this file adds on top is what only the store needs: the
+// refcount below, and the discard.
 //
 // # Cross-PROCESS, not cross-handle
 //
@@ -57,7 +56,9 @@ import (
 // the driver serialises its own connections, and two pools on one file are
 // the same as one pool with more of them. So the lock is REFCOUNTED per
 // process — a second Open here shares the claim rather than being refused —
-// and only the last Close releases it. Refusing in-process would break the
+// and only the last Close releases it. That sharing is this file's, on top of
+// one [flock.Lock]: the OS lock itself excludes a second taker in this process
+// as firmly as one in another. Refusing in-process would break the
 // legitimate case (a test proving that mutual exclusion lives in a SQL
 // statement rather than in a pool) while catching nothing the real bug does.
 
@@ -81,7 +82,7 @@ type fileLock struct {
 	// dbPath is the key this claim is filed under in locksHeld, so the
 	// last release finds its entry without walking the map.
 	dbPath string
-	claim  *filelock.Claim
+	held   *flock.Lock
 
 	// holds is how many live handles share this claim. Guarded by
 	// locksHeld's mutex, never by a field of its own: the count and the
@@ -150,8 +151,8 @@ func lockStore(dbPath string) (*fileLock, error) {
 // holds the path, and any handle asking while it holds the path is refused in
 // turn.
 //
-// A peer process holding the path is [ErrLocked], naming the holder
-// [filelock] read from the sidecar.
+// Who holds it is [flock.Try]'s to stamp into the sidecar, and what a refused
+// opener's error names.
 func claimStore(dbPath string, discarding bool) (*fileLock, error) {
 	if dbPath == "" || strings.HasPrefix(dbPath, ":memory:") {
 		// An in-memory database is per-connection by construction: there
@@ -176,32 +177,54 @@ func claimStore(dbPath string, discarding bool) (*fileLock, error) {
 	}
 
 	path := dbPath + lockSuffix
-	if dir := filepath.Dir(path); dir != "" {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return nil, fmt.Errorf("store: preparing %s: %w", dir, err)
-		}
-	}
-	claim, err := filelock.Take(path)
-	var peer *filelock.HeldError
+	held, err := flock.Try(path)
+	var other *flock.HeldError
 	switch {
-	case errors.As(err, &peer):
+	case errors.As(err, &other):
 		return nil, fmt.Errorf("%w: %s is held by %s. Stop it before running "+
 			"this — the driver does not support two processes on one file, "+
 			"and does not reliably refuse the second one either",
-			ErrLocked, dbPath, peer.Holder)
+			ErrLocked, dbPath, other.Holder)
 	case err != nil:
 		return nil, fmt.Errorf("store: locking %s: %w", dbPath, err)
 	}
-	lock := &fileLock{dbPath: dbPath, claim: claim, holds: 1, discarding: discarding}
+	lock := &fileLock{dbPath: dbPath, held: held, holds: 1, discarding: discarding}
 	locksHeld.by[dbPath] = lock
 	return lock, nil
+}
+
+// Probe reports whether another process holds the node database at dbPath —
+// its running engine, or an offline command working on it — as [ErrLocked]
+// naming the holder, WITHOUT OPENING THE FILE AND WITHOUT KEEPING THE CLAIM.
+// A claim this process holds already is shared for the moment, as a second
+// open's is, and answers nil.
+//
+// For a process that does not use the database and needs to know whether the
+// engine runs: a `crewlet` command deciding how to reach the fleet's store.
+// Opening the file to learn it would migrate a database the command never
+// reads, and on a node that has never booted create one. And KEEPING the
+// claim would lock a file the command does not use: a second command would
+// then read the first as a running engine, and the engine would be refused
+// over a database nobody had open. What a command does use — a broker on the
+// stream's store directory — has a lock of its own, which is what keeps an
+// engine from starting under it.
+//
+// Not for a scratch store, which the engine deletes before it opens: a node
+// that holds no data has nothing here to ask about.
+func Probe(dbPath string) error {
+	lock, err := lockStore(dbPath)
+	if err != nil {
+		return err
+	}
+	lock.release()
+	return nil
 }
 
 // release drops this handle's share of the claim, freeing the lock when it
 // was the last. Safe on a nil lock, which is what an in-memory database gets,
 // so every caller can defer it unconditionally.
 func (l *fileLock) release() {
-	if l == nil || l.claim == nil {
+	if l == nil || l.held == nil {
 		return
 	}
 	locksHeld.mu.Lock()
@@ -215,9 +238,8 @@ func (l *fileLock) release() {
 	if locksHeld.by[l.dbPath] == l {
 		delete(locksHeld.by, l.dbPath)
 	}
-	// Unlock before close, and the sidecar left in place: both are
-	// filelock's rules, and its package doc says what each prevents.
-	l.claim.Release()
+	// The sidecar stays where it is — see [flock]'s package doc.
+	l.held.Release()
 }
 
 // discard deletes a database and every sidecar beside it, holding the store's

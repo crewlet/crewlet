@@ -428,8 +428,13 @@ The engine boots in this order:
    the stream or opens a store of its own, because it is the one thing that
    runs Tier A: a bootstrap a tool built in code reaches it having passed no
    rule
-8. Start or dial the stream — the embedded broker recovers its file store
-   here, as long as the store is large — then open the store file: a node
+8. Start or dial the stream, then open the store file. An embedded member
+   first takes `stream.store_dir`'s lock (`crewlet-broker.lock`, inside the
+   directory), because nats-server takes none and would accept a second
+   broker writing the same store: a directory another broker holds — another
+   engine's, or a `crewlet` command's reaching the fleet's store while this
+   engine was stopped — refuses the start, naming its holder. The broker then
+   recovers its file store, which takes as long as the store is large. A node
    without `data` opens a scratch store, deleted at every boot, and joins the
    members' broker as a leaf
 9. Run migrations — every file, in one pass. There is no lock and no phase ordering to serialize: this process owns its file, so nothing can be racing it, and no DDL depends on a value only the config knows. Embedding columns are declared as plain blobs and the vector width is validated in Go against the active revision at write time, so a schema step never has to read the config first (see [`crewlet migrate`](../reference/cli.md#crewlet-migrate)).
@@ -1418,13 +1423,13 @@ Because the key gates every read, keep it as available as the database itself: t
 crewlet secrets keygen -key-id 2026-07      # mint the new key
 # 1. add it to secrets.keys on every node, leaving active_key_id alone; restart
 # 2. set active_key_id: 2026-07 on every node; restart again
-crewlet secrets rekey                         # 3. the secret store and every person's sealed values
+crewlet secrets rekey                         # 3. the secret store and every person's sealed values, through the running node
 curl -X POST "$CREWLET_URL/config/reload" \
   -H "Authorization: Bearer $CREWLET_API_TOKEN"   #    and the company document
 # 4. drop the old key only once the runbook's conditions hold
 ```
 
-**Both re-seals are required.** The company document, the secret store (the engine's own blind-index key included, once anybody has been added) and every person's name, address and second factor in the identity estate are all sealed under this keyring, so a key dropped while any of them is still under it leaves that thing unreadable. A reload stores the active document again under the node's active key; on a stopped node, `crewlet config rekey` does the same offline, and `crewlet config rekey -dry-run` reports whether it would re-encrypt without writing. The document's envelope carries the id of the key that sealed it, so either way it is decrypted under whichever key sealed it and re-encrypted under the active key.
+**Both re-seals are required.** The company document, the secret store (the engine's own blind-index key included, once anybody has been added) and every person's name, address and second factor in the identity estate are all sealed under this keyring, so a key dropped while any of them is still under it leaves that thing unreadable. A reload stores the active document again under the node's active key; on a stopped node, `crewlet config rekey` does the same offline, and `crewlet config rekey -dry-run` reports whether it would re-encrypt without writing. The document's envelope carries the id of the key that sealed it, so either way it is decrypted under whichever key sealed it and re-encrypted under the active key. `crewlet secrets rekey` moves every person's sealed values only through a running node, whose engine holds the identity estate: run with the node's engine stopped, it reaches the fleet's store itself and re-seals that store's rows — the engine's own keys among them — and says to run it again through a running node for the rest.
 
 On a single node, steps 1 and 2 can be one restart. On a fleet they cannot: a node that flips first signs records, cookies and requests under a key its peers do not hold yet.
 

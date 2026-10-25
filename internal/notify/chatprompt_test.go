@@ -95,8 +95,58 @@ func TestTheChatPromptCarriesTheTriageRules(t *testing.T) {
 	}
 }
 
-// A thread reply gets the self-check block, because the triggering message
-// is usually thin and the thread is the context.
+// THE PROMPT NEVER OFFERS SILENCE ON A MESSAGE THE ENGINE HOLDS TO AN ANSWER.
+//
+// An addressed message — a direct one, a mention, a reply in a followed thread
+// — owes a reply, and the delivery check refuses a silent end to it. The
+// triage tells an unaddressed seat that silence beats noise, so rendering it
+// on an addressed message told a seat it might stay silent exactly where the
+// engine would send the turn back for doing so. The prompt states the engine's
+// verdict instead, read through the SAME rule [notify.ChatPrompt.Addressed]
+// answers with, so the two cannot disagree about any message.
+func TestAnAddressedMessageCarriesTheVerdictInsteadOfTheTriage(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		mutate  func(map[string]string)
+		verdict string
+	}{
+		{"an open channel", nil, ""},
+		{"a direct message", func(m map[string]string) { m["channel_type"] = "D" },
+			"**Addressed to you:** this is a direct message."},
+		{"a mention", func(m map[string]string) {
+			m["thread_follow_reason"] = string(notify.FollowMention)
+		}, "**Addressed to you:** the message names you."},
+		{"a followed thread", func(m map[string]string) {
+			m["thread_ts"], m["thread_following"] = "root-1", "true"
+		}, "**Addressed to you:** you follow this thread."},
+		{"a collective address", func(m map[string]string) {
+			m["thread_follow_reason"] = string(notify.FollowCollective)
+		}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n := chatNote(tc.mutate)
+			got := chatPrompt.Build(n, nil)
+			addressed := chatPrompt.Addressed(n)
+			if addressed != (tc.verdict != "") {
+				t.Fatalf("Addressed = %v, and the case expects verdict %q", addressed, tc.verdict)
+			}
+			if tc.verdict != "" && !strings.Contains(got, tc.verdict) {
+				t.Errorf("the prompt does not state the verdict %q:\n%s", tc.verdict, got)
+			}
+			if strings.Contains(got, "Addressed to you") != addressed {
+				t.Errorf("the verdict line disagrees with Addressed = %v:\n%s", addressed, got)
+			}
+			if strings.Contains(got, "## Triage") == addressed {
+				t.Errorf("the triage is rendered = %v on a message Addressed = %v:\n%s",
+					!addressed, addressed, got)
+			}
+		})
+	}
+}
+
+// A thread reply is told which of the thread's messages are its own, because
+// the triggering message is usually thin and the thread is the context — and
+// a seat that cannot tell its own replies apart answers itself.
 func TestAThreadReplyGetsTheThreadBlock(t *testing.T) {
 	reply := chatNote(func(m map[string]string) { m["thread_ts"] = "root-1" })
 

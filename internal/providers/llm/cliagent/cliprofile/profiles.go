@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -16,23 +17,73 @@ import (
 //go:embed profiles.yaml
 var profilesYAML []byte
 
-// builtins is the parsed profile table, decoded once.
+// builtins is the parsed profile table for the platform this build runs on,
+// decoded once.
 //
 // sync.OnceValue rather than an init() so a malformed table fails at the
 // first Load with a message naming the file, instead of during package
 // initialisation where the panic has no caller to blame.
 var builtins = sync.OnceValue(func() map[string]Profile {
-	var table map[string]Profile
-	dec := yaml.NewDecoder(bytes.NewReader(profilesYAML))
-	dec.KnownFields(true)
-	if err := dec.Decode(&table); err != nil {
+	table, err := decodeTable(profilesYAML, runtime.GOOS)
+	if err != nil {
 		// The file is embedded from this repository, so a decode failure
 		// is a build that shipped a broken table — there is no operator
 		// input to blame and no correct behaviour to fall back to.
-		panic(fmt.Sprintf("cliprofile: profiles.yaml does not decode: %v", err))
+		panic(fmt.Sprintf("cliprofile: profiles.yaml: %v", err))
 	}
 	return table
 })
+
+// Platforms are the operating systems a profile's `platforms` section may
+// name: the ones a release is built for, which the store's database engine
+// bounds (internal/store/platform.go).
+var Platforms = []string{"darwin", "linux"}
+
+// builtinEntry is one profile as profiles.yaml writes it: the profile, and
+// the fields that differ on one platform.
+//
+// A SECTION OF THE TABLE, NOT A PROFILE FIELD, because it is resolved before
+// anything else reads the profile: an operator's `overrides` are merged into
+// the profile of the platform the engine runs on, and an override of a field a
+// platform section also set would otherwise be undone by the section.
+type builtinEntry struct {
+	Profile `yaml:",inline"`
+	// Platforms holds, by GOOS, the fields that differ there, merged over
+	// the profile the way an override is ([applyOverrides]): maps key by
+	// key, everything else wholesale. Cursor Agent keeps its login at
+	// ~/.cursor/auth.json on macOS and at $XDG_CONFIG_HOME/cursor/auth.json
+	// on Linux (read from its bundle, and measured on Linux).
+	Platforms map[string]map[string]any `yaml:"platforms,omitempty"`
+}
+
+// decodeTable decodes a profile table as it reads on goos.
+func decodeTable(raw []byte, goos string) (map[string]Profile, error) {
+	var entries map[string]builtinEntry
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+	if err := dec.Decode(&entries); err != nil {
+		return nil, fmt.Errorf("does not decode: %w", err)
+	}
+	table := make(map[string]Profile, len(entries))
+	for name, entry := range entries {
+		for platform := range entry.Platforms {
+			if !slices.Contains(Platforms, platform) {
+				return nil, fmt.Errorf("%s: platforms names %q, which no release is built "+
+					"for (want one of %s)", name, platform, strings.Join(Platforms, ", "))
+			}
+		}
+		profile := entry.Profile
+		if section := entry.Platforms[goos]; len(section) > 0 {
+			merged, err := applyOverrides(profile, section)
+			if err != nil {
+				return nil, fmt.Errorf("%s: platforms.%s: %w", name, goos, err)
+			}
+			profile = merged
+		}
+		table[name] = profile
+	}
+	return table, nil
+}
 
 // BuiltinNames lists the profiles this build ships, sorted.
 func BuiltinNames() []string {
@@ -61,7 +112,8 @@ func (p Profile) Clone() Profile {
 	out.VersionArgs = append([]string(nil), p.VersionArgs...)
 	out.CompleteArgs = append([]string(nil), p.CompleteArgs...)
 	out.ModelArgs = append([]string(nil), p.ModelArgs...)
-	out.SystemPromptArgs = append([]string(nil), p.SystemPromptArgs...)
+	out.SystemPrompt = p.SystemPrompt.clone()
+	out.AppendSystemPrompt = p.AppendSystemPrompt.clone()
 	out.PromptArgs = append([]string(nil), p.PromptArgs...)
 	out.UsageFileArgs = append([]string(nil), p.UsageFileArgs...)
 	out.SessionArgs = append([]string(nil), p.SessionArgs...)
@@ -82,6 +134,9 @@ func (p Profile) Clone() Profile {
 		CacheRead:  clonePaths(p.Usage.CacheRead),
 		CacheWrite: clonePaths(p.Usage.CacheWrite),
 		Reasoning:  clonePaths(p.Usage.Reasoning),
+		ToolPrompt: clonePaths(p.Usage.ToolPrompt),
+
+		InputIncludesCache: p.Usage.InputIncludesCache,
 	}
 	out.EventTypePath = append(Path(nil), p.EventTypePath...)
 	out.TextEvents = append([]string(nil), p.TextEvents...)
@@ -94,10 +149,8 @@ func (p Profile) Clone() Profile {
 	out.WorkConfigEnv = cloneMap(p.WorkConfigEnv)
 	out.IsolationEnv = cloneMap(p.IsolationEnv)
 	out.Env = cloneMap(p.Env)
-	if p.SystemPromptFile != nil {
-		spec := *p.SystemPromptFile
-		out.SystemPromptFile = &spec
-	}
+	out.SubscriptionEnv = cloneMap(p.SubscriptionEnv)
+	out.LoginKeys = cloneMap(p.LoginKeys)
 	if p.StdinLogin != nil {
 		login := *p.StdinLogin
 		login.Args = append([]string(nil), p.StdinLogin.Args...)

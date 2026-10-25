@@ -21,7 +21,7 @@ are stated first.
 
 | Number | Where it lives | What it is for |
 |---|---|---|
-| **the arbitration anchor** | `statelog_anchor` | The position of the last record this node consumed on a subject, *whatever that record then did*. It is what the broker arbitrates a new write against. Once the trim has removed a subject's last record from the log, the anchor is removed too, by a `trimmed` record every node applies ([ADR-0047](https://github.com/crewlet/crewlet/blob/main/adr/0047-an-anchor-below-the-trim-floor-is-removed-by-a-record.md)); a write to that subject then asks the log what it holds and passes the same zero fence one whose anchor named a trimmed record does ([Anchors below the log are removed by a record](retention.md#anchors-below-the-log-are-removed-by-a-record)). |
+| **the arbitration anchor** | `statelog_anchor` | The position of the last record this node consumed on a subject, *whatever that record then did*. It is what the broker arbitrates a new write against. Once the trim has removed a subject's last record from the log, the anchor is removed too, by a `trimmed` record every node applies ([ADR-0050](https://github.com/crewlet/crewlet/blob/main/adr/0050-an-anchor-below-the-trim-floor-is-removed-by-a-record.md)); a write to that subject then asks the log what it holds and passes the same zero fence one whose anchor named a trimmed record does ([Anchors below the log are removed by a record](retention.md#anchors-below-the-log-are-removed-by-a-record)). |
 | **`version`** | a column on every object row | The object's accepted state. It is what a caller's `if_match` compares against. |
 | **the barrier comparison** | computed | `MAX(version, scoped_through)` — what a read barrier compares, because a record can change an object without being *about* it. |
 
@@ -544,7 +544,7 @@ every seat it holds and claims no new ones until it is level — see [a copy
 that is behind, and a copy that is wrong](../concepts/seat-ownership.md#a-copy-that-is-behind-and-a-copy-that-is-wrong)
 for the six states that take a log's copy out of service — one log at a time,
 every log judged
-([ADR-0046](https://github.com/crewlet/crewlet/blob/main/adr/0046-a-domains-fault-takes-only-its-own-copy-out-of-service.md))
+([ADR-0049](https://github.com/crewlet/crewlet/blob/main/adr/0049-a-domains-fault-takes-only-its-own-copy-out-of-service.md))
 — none of which is a distance, and none of which moves a seat either: that
 log's operations go to the other data nodes, and the node's other logs keep
 answering from its own copies. What lag does bound is how fresh an answer a
@@ -642,7 +642,7 @@ written at against the one this build reads. The node takes its copy of that
 log out of service at the same moment, because both are measured from one
 instant — the position heartbeat's first sighting of the record. Every log's
 copy is judged on its own
-([ADR-0046](../../adr/0046-a-domains-fault-takes-only-its-own-copy-out-of-service.md)),
+([ADR-0049](../../adr/0049-a-domains-fault-takes-only-its-own-copy-out-of-service.md)),
 so only that log's copy goes: what the estate routes to it is answered by the
 other data nodes, the node's copies of every other log keep serving, and its
 seats stay. The identity log is the one whose requests are not all routed:

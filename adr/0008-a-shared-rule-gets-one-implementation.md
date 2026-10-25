@@ -17,7 +17,7 @@ pointing at the other.
 Eighteen packages in this tree exist for exactly this reason and nothing
 else: `textcut`, `whsec`, `jsprovision`, `httpx`, `api/httpjson`, `tokens`,
 `procgroup`, `clientsource`, `runtoken`, `hostbox`, `solo`, `backoff`,
-`filelock`, `rendezvous`, `gitref`, `jsapi`, `sourcetree/decltype` and
+`flock`, `rendezvous`, `gitref`, `jsapi`, `sourcetree/decltype` and
 `api/paced`. Each of their doc comments names the duplication as its reason
 for existing, and several name what the divergence cost.
 

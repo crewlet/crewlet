@@ -34,7 +34,7 @@ import (
 //   - the `page` answer's `linked_from` — the pages and tasks whose bodies
 //     carry this page's address, from a data node's own index
 //     ([search.Backlinks]) — the one the estate's router picks, whose copies
-//     of both the knowledge base and the tracker serve (ADR-0046).
+//     of both the knowledge base and the tracker serve (ADR-0049).
 //
 // ALL THREE ARE THE KNOWLEDGE BASE'S, and two of them carry the TRACKER'S rows
 // beside its own: the tasks that link a page, and the task each read happened

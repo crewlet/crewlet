@@ -108,7 +108,7 @@ import {
   type StarterLayout,
 } from "~/lib/artifacts/designLayout.ts";
 import { CreateShell, useLeaveCreate } from "./CreateShell.tsx";
-import { titleProblem, useWorkItem } from "./create.ts";
+import { titleProblem, useSaveIn, useWorkItem } from "./create.ts";
 import { artifactTaskBody, useFileArtifactTask } from "./fileTask.ts";
 import { useWhoBuildsIt } from "./WhoBuildsIt.tsx";
 import { AskAgentPanel, askTool, chosenAgent, useAskPanel } from "./AskAgent.tsx";
@@ -155,6 +155,7 @@ export function DesignCreate() {
   const toast = useToast();
   const leave = useLeaveCreate();
   const workItem = useWorkItem();
+  const { folder } = useSaveIn();
   const access = useArtifactAccess({ app: true });
   const create = useKeyedGesture();
   const who = useWhoBuildsIt("design");
@@ -228,6 +229,7 @@ export function DesignCreate() {
           // placeholder, which takes the editor's role on the design.
           shares: [{ audience: { kind: "seat", id: builder.seat.handle }, role: "editor" }],
           ...(workItem ? { workItem } : {}),
+          ...(folder ? { folder } : {}),
         }),
       );
       if (answer?.kind !== "done" || typeof answer.body.artifact !== "string") return;
@@ -263,6 +265,7 @@ export function DesignCreate() {
     made,
     create,
     workItem,
+    folder,
     ask,
     brief,
     links,

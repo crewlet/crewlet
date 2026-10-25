@@ -286,13 +286,6 @@ var nodeEstatePlacements = []placement{
 			"migration 0010 precisely because each node was reading its own " +
 			"row and drawing a fleet of one. The local write is best effort.",
 	},
-	{
-		Table: "secret_values",
-		Why: "The BOOTSTRAP half of the secret store only: values written " +
-			"while the engine was stopped, which internal/fleetsecrets " +
-			"migrates onto the coordination store at the next start. The " +
-			"company's live credentials are not here.",
-	},
 
 	// -----------------------------------------------------------------
 	// A per-node OBSERVATION about shared infrastructure. Two nodes

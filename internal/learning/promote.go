@@ -411,13 +411,11 @@ const PromotionSystemPrompt = `Several agents on one team independently wrote
 down nearly the same procedure. Write the version the team should share, as a
 page a person will review before it is published.
 
-Answer with a JSON object and nothing else:
-{"name":"kebab-case-name","description":"one line on when to use it",
- "content":"the procedure, as numbered steps"}
+` + skillDraftAnswer + `
 
 Write what the agents AGREE on. Where they differ, say what the difference
-depends on rather than picking one — a reviewer needs to see the choice. Keep
-it general: no ticket numbers, no names, no dates, nothing about one agent.
+depends on rather than picking one — a reviewer needs to see the choice.
+` + skillGenerality + `
 
 Answer exactly {} if they do not actually share a procedure — similar tools do
 not always mean the same work.`

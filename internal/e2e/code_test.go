@@ -43,7 +43,7 @@ const (
 // withDevCredential adds the developer's token to boot, beside the fixture's
 // ([withCredential]). It carries the tracker's grant only because Tier A
 // refuses a token that states none: nothing a push does reads it, since what a
-// person may do to a repository is their standing on it (ADR-0055), never a
+// person may do to a repository is their standing on it (ADR-0058), never a
 // grant a token carries.
 func withDevCredential(boot *config.Bootstrap) {
 	boot.API.Auth.Tokens = append(boot.API.Auth.Tokens,

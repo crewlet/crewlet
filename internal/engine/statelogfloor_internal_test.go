@@ -251,7 +251,7 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	// an estate nobody serves — and moving them would hand them to a peer
 	// asking the same data nodes. ONLY THE TRACKER'S: the knowledge base's
 	// copy has no hole and keeps serving, while the seat copy — which the
-	// tracker is part of — goes with it (ADR-0046).
+	// tracker is part of — goes with it (ADR-0049).
 	waitUntil(t, 5*time.Second, "the copy below the log to go out of service",
 		func() bool {
 			_, serves := e.local.For(t.Context(), tracker.Domain{}.Name())

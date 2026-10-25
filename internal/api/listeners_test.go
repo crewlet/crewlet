@@ -429,7 +429,7 @@ func TestEveryPublicRouteIsUnguarded(t *testing.T) {
 }
 
 // GIT AND THE CODE READS ARE NEVER PUBLISHED. A person reaches a repository
-// with their own bound token (ADR-0052), and api.public is the socket whose
+// with their own bound token (ADR-0055), and api.public is the socket whose
 // premise is that it serves only outside parties and asks no operator token —
 // so /git/ and /code/ answer the mux's own 404 there, before any credential is
 // read, whether it arrives as git's Basic password or as a bearer, and reach

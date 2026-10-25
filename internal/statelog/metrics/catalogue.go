@@ -461,7 +461,7 @@ func Catalogue() []Instrument {
 			Name: StatelogAnchorsSwept, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"domain"},
 			Shows: "Arbitration anchors this node's applier removed under the " +
-				"trim's `trimmed` records (ADR-0047), counted once the " +
+				"trim's `trimmed` records (ADR-0050), counted once the " +
 				"transaction that removed them commits. Every node applies " +
 				"every record, so every data node counts the same removals. " +
 				"Flat is the normal reading of a log whose purged objects all " +
@@ -1323,7 +1323,8 @@ func Catalogue() []Instrument {
 				"listener) answered, by what it was (`dest`: `document`, a " +
 				"page decided again on every request; `subresource`, a file " +
 				"a page loads; `runtime` and `kit`, the embedded public " +
-				"files) and by status class (`status`: `2xx` to `5xx`). A " +
+				"files; `brand`, the company's adopted brand's files) and by " +
+				"status class (`status`: `2xx` to `5xx`). A " +
 				"rise in `document` `5xx` is viewers whose frames this node " +
 				"would not serve: a copy of the artifacts or identity log it " +
 				"could not vouch for, or an object store that did not answer. " +

@@ -113,7 +113,7 @@ func richSkills() *fakeCatalogue {
 // heading of its own the way real retrieved content does.
 func richExecutorInput() ExecutorInput {
 	return ExecutorInput{
-		ToolCatalogue: "- `read_file` — read a file\n- MCP servers: atlassian, github",
+		Discoverable: "- MCP server `atlassian`\n- MCP server `github`",
 		AvailableTools: []string{
 			"read_file", "delegate", "comment_on_work_item",
 		},
@@ -138,6 +138,8 @@ func richReviewInput() ReviewInput {
 		Produced:          producedReport,
 		ToolLog:           "- `slack_post` → success",
 		EarlierIterations: iterationLedger,
+		OffersSandbox:     true,
+		OffersA2A:         true,
 		Skills:            richSkills(),
 	}
 }
@@ -146,7 +148,7 @@ func richSubagentInput() SubagentInput {
 	return SubagentInput{
 		ParentSystemPrompt: "You research incidents.\n\n## Steps\n1. read the timeline — all of it\n",
 		AvailableTools:     []string{"read_file"},
-		ToolCatalogue:      "- `read_file` — read a file",
+		Discoverable:       "- `read_file` — read a file",
 		Submits:            true,
 		Skills:             richSkills(),
 	}

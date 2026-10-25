@@ -132,10 +132,17 @@ const (
 	// the notes beside them, refused at publish when outside its schema or
 	// out of step with the version's pages.
 	FormatDesign Format = "design"
+
+	// FormatBrand is a brand kit (internal/artifacts/brandformat): the
+	// closed `brand.json` and the logo and font files it names, each held to
+	// that package's asset rules (a sanitised SVG subset, bounded PNG and
+	// WebP, WOFF2 only), refused at publish with every finding.
+	FormatBrand Format = "brand"
 )
 
 // Formats are every format this build validates.
-var Formats = []Format{FormatNone, FormatSlides, FormatDoc, FormatDashboard, FormatDesign}
+var Formats = []Format{FormatNone, FormatSlides, FormatDoc, FormatDashboard, FormatDesign,
+	FormatBrand}
 
 // Valid reports whether f is a format this build validates.
 func (f Format) Valid() bool { return slices.Contains(Formats, f) }
@@ -351,6 +358,18 @@ var kindSpecs = []KindSpec{
 		Search: SearchFormat,
 
 		Documents: DocumentsEach,
+	},
+	{
+		Kind:    KindBrand,
+		Summary: "is a brand kit: the company's logos, colours, type and voice, which an administrator adopts",
+		Render:  RenderNative,
+		Entry: EntryRule{Indexes: []EntryIndex{{Path: "brand.json", Essence: "application/json"}},
+			Defaults: []string{"brand.json"}},
+		Store:  StoreNone,
+		Format: FormatBrand,
+		Search: SearchFormat,
+
+		Documents: DocumentsNone,
 	},
 }
 

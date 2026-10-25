@@ -15,7 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/filelock"
+	"github.com/crewlet/crewlet/internal/flock"
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/logging"
 )
@@ -34,7 +34,7 @@ const (
 	// tools copy it like any other directory; the engine's own backup never
 	// reads it at all.
 	tagName = "CACHEDIR.TAG"
-	// lockName is the process claim's sidecar (internal/filelock).
+	// lockName is the process claim's sidecar (internal/flock).
 	lockName = "lock"
 	// reposDir holds one incarnation per repository.
 	reposDir = "repos"
@@ -174,7 +174,7 @@ func (l Layout) Release() {
 //     it.
 //  3. The tag is written when absent — first, before anything else, so a
 //     crash part way through leaves a directory the next Prepare recognises.
-//  4. The directory is CLAIMED for this process (internal/filelock); one
+//  4. The directory is CLAIMED for this process (internal/flock); one
 //     another process holds is refused ([ErrCacheInUse]) before anything
 //     else changes in it, because the next step moves a live HOME. The claim
 //     is held from here to [Cache.Stop] — Open takes it over rather than
@@ -361,9 +361,9 @@ func writeTag(root string) error {
 
 // claimDir takes this process's claim on the cache at root, answering a
 // claim held elsewhere as [ErrCacheInUse] naming the holder.
-func claimDir(root string) (*filelock.Claim, error) {
-	claim, err := filelock.Take(filepath.Join(root, lockName))
-	var held *filelock.HeldError
+func claimDir(root string) (*flock.Lock, error) {
+	claim, err := flock.Try(filepath.Join(root, lockName))
+	var held *flock.HeldError
 	switch {
 	case errors.As(err, &held):
 		return nil, fmt.Errorf("%w: %s is in use by %s — two nodes are pointed at one "+

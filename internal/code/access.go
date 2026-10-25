@@ -10,7 +10,7 @@ import (
 )
 
 // WHO MAY DO WHAT TO A REPOSITORY — a grant DERIVED from the chart, never
-// stored (ADR-0055). A list of who may push to a repository would be a second
+// stored (ADR-0058). A list of who may push to a repository would be a second
 // chart, and it would drift from the first the day a seat moved units; so a
 // principal's standing on a repository is computed, every time it is asked,
 // from the repository's row and the epoch's chart, through ONE function
@@ -18,7 +18,7 @@ import (
 // later parts the push decide, the read tools and a box's admission.
 //
 // A PERSON — an operator credential bound to a human seat — maintains every
-// repository, and a token bound to nobody reads every one: ADR-0052's rules,
+// repository, and a token bound to nobody reads every one: ADR-0055's rules,
 // which need no chart, so [GrantOf] never consults the roster for an operator.
 // A SEAT holds the minimum of two levels: what its tier lets it do anywhere
 // (role.code.access, [Tier.Cap]) and what the chart relates it to this
@@ -161,7 +161,7 @@ type Roster interface {
 type RosterSeat struct {
 	Handle string
 	// Human is a person's seat: a person acts through their own bound token
-	// (ADR-0052), never as a seat, so a grant asked for a human seat as an
+	// (ADR-0055), never as a seat, so a grant asked for a human seat as an
 	// agent is none.
 	Human bool
 	// Tier is the seat's role.code.access as written, "" where the document
@@ -206,7 +206,7 @@ type Grant struct {
 // GrantOf is p's standing on repo, read from r.
 //
 // It NEVER CONSULTS r FOR AN OPERATOR — a person or a token, whose rules need
-// no chart (ADR-0052) — so a nil roster answers every operator, and gives
+// no chart (ADR-0055) — so a nil roster answers every operator, and gives
 // every agent none. An agent naming no seat the roster holds, or a HUMAN seat,
 // stands nowhere: a person acts through their own token, never as a seat.
 func GrantOf(p Principal, repo RepoRef, r Roster) Grant {

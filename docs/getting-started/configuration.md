@@ -384,18 +384,22 @@ providers:
         mode: subscription              # subscription (default) | api-key | inherit-env.
                                         #   subscription: the CLI's own login, or a headless token.
                                         #   api-key: ONE key in the CLI's key variable
-                                        #   (ANTHROPIC_API_KEY for claude-code, OPENAI_API_KEY for
+                                        #   (ANTHROPIC_API_KEY for claude-code, CODEX_API_KEY for
                                         #   codex); refused for a CLI with none (hermes, pi,
-                                        #   opencode, kimi-code). inherit-env: forward the engine's
-                                        #   own value of either variable
+                                        #   opencode, kimi-code). qwen-code keeps no login, so it
+                                        #   is api-key only, with api_key named (its OPENAI_API_KEY
+                                        #   is shared with other vendors). inherit-env: forward
+                                        #   the engine's own value of either variable
         token: ""                       # optional — ${VAR} holding a headless subscription token;
                                         #   empty falls back to the profile's own variable
                                         #   (CLAUDE_CODE_OAUTH_TOKEN). subscription mode only, and
                                         #   only on a CLI that mints one (claude-code)
         api_key: ""                     # optional — ${VAR} holding the API key; empty falls back
                                         #   to the profile's own key variable, from the secret
-                                        #   store, then the environment. api-key mode only — a
-                                        #   write is refused elsewhere, where it would reach nothing
+                                        #   store, then the environment — except a shared one
+                                        #   (qwen-code's OPENAI_API_KEY), where it is required.
+                                        #   api-key mode only — a write is refused elsewhere,
+                                        #   where it would reach nothing
         credential_bundle: ""           # optional — ${VAR} holding a `crewlet llm export` blob;
                                         #   empty falls back to CREWLET_LLM_CLI_<KEY>_CREDENTIALS
       overrides: {}                     # optional — replace any profile field when a vendor
@@ -415,7 +419,7 @@ providers:
       agent: codex
       model: gpt-5
       auth:
-        mode: api-key                   # reads OPENAI_API_KEY; leave it out to run on a
+        mode: api-key                   # reads CODEX_API_KEY; leave it out to run on a
                                         #   ChatGPT login (`crewlet llm login gpt`)
 
     open:                               # open models through OpenCode
@@ -662,7 +666,17 @@ stream:
                                     #   the fleet's streams for every node
                                     #   that reaches it. A leaf (a node
                                     #   without `data`) is refused one: it
-                                    #   keeps no stream of its own
+                                    #   keeps no stream of its own. ONE
+                                    #   broker per directory: a member holds
+                                    #   `crewlet-broker.lock` inside it while
+                                    #   its broker runs, and a second — an
+                                    #   engine, or a `crewlet` command
+                                    #   reaching the fleet's store with the
+                                    #   engine stopped — is refused, naming
+                                    #   the holder's pid, host and start.
+                                    #   NATS itself takes no lock and would
+                                    #   accept it, and two writers corrupt
+                                    #   the store
   # store_max_bytes: 68719476736    # how much of that directory's volume the
                                     #   EMBEDDED broker may hold — the ONE number
                                     #   every stream ceiling on it is compared
@@ -1079,7 +1093,12 @@ stream:
 
 store:
   path: "./crewlet-data/company.db"   # the NODE estate — the audit log, memory,
-                                    #   config revisions, the secret bootstrap.
+                                    #   config revisions. Never a secret: the
+                                    #   company's live in the fleet's store,
+                                    #   and a `crewlet` command run with the
+                                    #   engine stopped writes them there,
+                                    #   asking this file's lock whether the
+                                    #   engine runs, without opening it.
                                     #   Owned exclusively by this process. Not a
                                     #   shared database, and no DSN: two engines
                                     #   on one file corrupt it
@@ -1117,10 +1136,16 @@ store:
                                     #   Explicit rather than derived from the
                                     #   roles because it is the one setting here
                                     #   that deletes something. The offline
-                                    #   `migrate`, `config`, `secrets` and
-                                    #   `search eval` commands refuse a scratch
-                                    #   store: what they wrote would be gone at
-                                    #   the next boot
+                                    #   `migrate`, `config` and `search eval`
+                                    #   commands refuse a scratch store: what
+                                    #   they wrote would be gone at the next
+                                    #   boot. `secrets`, `llm`, the
+                                    #   provisioners and every other command
+                                    #   resolving the company's ${VAR}s refuse
+                                    #   it unless -api names a running node
+                                    #   that holds data: the company's secrets
+                                    #   are the fleet's, and a node that holds
+                                    #   none has no store of them to reach
   # max_open_conns: 0               #   the ORDINARY READERS of this node's
                                     #   own database and of the replicated
                                     #   estate's (that one never fewer than

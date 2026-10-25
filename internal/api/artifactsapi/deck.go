@@ -2,14 +2,16 @@ package artifactsapi
 
 import (
 	"net/http"
-	"sync"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/brandformat"
 	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
 	"github.com/crewlet/crewlet/internal/artifacts/dashspec"
 	"github.com/crewlet/crewlet/internal/artifacts/docindex"
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/artifactupload"
 	"github.com/crewlet/crewlet/internal/authz"
 )
 
@@ -48,6 +50,18 @@ type OutlineAnswer struct {
 
 	// Doc is a doc's tabs and the opening of its first, drawn at card size.
 	Doc *docindex.Outline `json:"doc,omitempty"`
+
+	// Brand is a brand kit's index, which its card draws: the name, the
+	// colours and the faces, and the logos by path (each read through the
+	// version's file route).
+	Brand *BrandOutline `json:"brand,omitempty"`
+}
+
+// BrandOutline is a brand kit's outline: its whole `brand.json` as the brand
+// format reads it, which is small (at most brandformat.MaxIndexBytes) and holds
+// nothing a reader of the kit may not see.
+type BrandOutline struct {
+	Document brandformat.Brand `json:"document"`
 }
 
 // DocAnswer is a version's whole doc (`GET /artifacts/{id}/versions/{n}/doc`):
@@ -140,6 +154,12 @@ func (s *Service) outline(w http.ResponseWriter, r *http.Request) {
 		}
 		o := canvas.Outline()
 		out.Design = &o
+	case artifacts.FormatBrand:
+		kit, ok := s.brands.read(w, r, a, v)
+		if !ok {
+			return
+		}
+		out.Brand = &BrandOutline{Document: kit}
 	case artifacts.FormatNone:
 	}
 	httpjson.Write(w, http.StatusOK, out)
@@ -151,6 +171,11 @@ func (s *Service) outline(w http.ResponseWriter, r *http.Request) {
 // the plan a starter opens with when it names none. The create page draws its
 // theme picker and its preview from it, and the deck editor adds a slide from
 // the sample of the theme its deck names, so neither parses a slide's markup.
+//
+// THE COMPANY'S BRAND COMES FIRST whenever one is adopted: its theme,
+// [slideformat.BrandTheme], resolved from the adopted brand and sampled like
+// the engine's own. With none adopted the brand is absent, never a theme a
+// create would refuse.
 type SlidesStartersAnswer struct {
 	Themes  []SlidesStarterTheme `json:"themes"`
 	Layouts []slideformat.Layout `json:"layouts"`
@@ -161,37 +186,94 @@ type SlidesStartersAnswer struct {
 type SlidesStarterTheme struct {
 	slideformat.Theme
 	Sample slideformat.Deck `json:"sample"`
+
+	// Logo is the brand theme's cover logo: the path its sample names and the
+	// adopted brand's file slot it is drawn from (the sample holds no bytes,
+	// being no version's). Absent for every other theme.
+	Logo *SampleLogo `json:"logo,omitempty"`
 }
 
-// slidesStarters is the answer, composed once: the themes and layouts are the
-// engine's own, fixed for the life of the process.
-var slidesStarters = sync.OnceValues(func() (SlidesStartersAnswer, error) {
-	themes := slideformat.Themes()
-	out := SlidesStartersAnswer{Themes: make([]SlidesStarterTheme, len(themes)),
-		Layouts: slideformat.Layouts(), Default: slideformat.DefaultPlan()}
-	for i, t := range themes {
-		sample, err := slideformat.Sample(t)
-		if err != nil {
-			return SlidesStartersAnswer{}, err
-		}
-		out.Themes[i] = SlidesStarterTheme{Theme: t, Sample: sample}
-	}
-	return out, nil
-})
+// SampleLogo is the logo a sample's cover names, by its path and the adopted
+// brand's slot.
+type SampleLogo struct {
+	Path string `json:"path"`
+	Slot string `json:"slot"`
+}
 
 // slidesStarters answers what a deck can begin from, to anyone who may list
-// artifacts: it is the engine's own content, the same for every caller.
+// artifacts: the engine's own themes, the same for every caller, after the
+// company's adopted brand.
+//
+// COMPOSED PER REQUEST, because the brand theme is the company's and moves
+// with every adoption: an answer kept for the life of the process would offer
+// a brand the company has since cleared, or miss the one it adopted.
 func (s *Service) slidesStarters(w http.ResponseWriter, r *http.Request) {
 	if _, ok := caller(w, r, authz.ActionArtifactList); !ok {
 		return
 	}
-	answer, err := slidesStarters()
+	themes := slideformat.Themes()
+	adoption, adopted, err := s.reads.Brand(r.Context(), decisionRead)
 	if err != nil {
-		// THE TESTS HOLD EVERY THEME TO THE FORMAT; a failure here is a
-		// broken build, answered as the engine's fault rather than hidden.
-		log.ErrorContext(r.Context(), "artifacts_slides_starters_unreadable", "error", err.Error())
-		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+		readFailed(w, r, err, "the adopted brand")
 		return
 	}
-	httpjson.Write(w, http.StatusOK, answer)
+	var branded *SlidesStarterTheme
+	if adopted {
+		b, err := brandformat.DecodeAdopted(adoption.BrandJSON) //nolint:govet // shadow: scoped to this block; see .golangci.yml
+		if err != nil {
+			// THE SNAPSHOT WAS CANONICAL WHEN IT WAS ADOPTED; one that no
+			// longer reads is the engine's fault, answered as such rather
+			// than dropped from the picker.
+			log.ErrorContext(r.Context(), "artifacts_adopted_brand_unreadable", "error", err.Error())
+			httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+			return
+		}
+		if branded, err = brandStarter(b, adoption); err != nil {
+			log.ErrorContext(r.Context(), "artifacts_brand_starter_unreadable", "error", err.Error())
+			httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+			return
+		}
+	}
+	out := SlidesStartersAnswer{Themes: make([]SlidesStarterTheme, 0, len(themes)+1),
+		Layouts: slideformat.Layouts(), Default: slideformat.DefaultPlan()}
+	if branded != nil {
+		out.Themes = append(out.Themes, *branded)
+	}
+	for _, t := range themes {
+		sample, err := slideformat.Sample(t)
+		if err != nil {
+			// THE TESTS HOLD EVERY THEME, THE BRAND'S INCLUDED, TO THE
+			// FORMAT; a failure here is a broken build, answered as the
+			// engine's fault rather than hidden.
+			log.ErrorContext(r.Context(), "artifacts_slides_starters_unreadable", "theme", t.ID,
+				"error", err.Error())
+			httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+			return
+		}
+		out.Themes = append(out.Themes, SlidesStarterTheme{Theme: t, Sample: sample})
+	}
+	httpjson.Write(w, http.StatusOK, out)
+}
+
+// brandStarter is the adopted brand's theme as the picker offers it, its
+// sample's cover drawing the logo a deck begun in it shows
+// ([artifactupload.CoverLogo], the starter's own rule), at the path the
+// starter copies it to.
+func brandStarter(b brandformat.Adoptable, adoption artifactsdomain.Adoption) (*SlidesStarterTheme, error) {
+	theme := brandformat.SlideTheme(b)
+	logo, err := artifactupload.CoverLogo(theme, adoption.Files)
+	if err != nil {
+		return nil, err
+	}
+	path, err := artifactupload.BrandPath(brandformat.Slot(logo.Slot), logo.ContentType)
+	if err != nil {
+		return nil, err
+	}
+	sample, err := slideformat.SampleBranded(slideformat.Look{Theme: theme, Logo: path, LogoAlt: b.Brand().Name},
+		logo.ContentType)
+	if err != nil {
+		return nil, err
+	}
+	return &SlidesStarterTheme{Theme: theme, Sample: sample,
+		Logo: &SampleLogo{Path: path, Slot: logo.Slot}}, nil
 }

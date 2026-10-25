@@ -18,8 +18,9 @@ acts with a session cookie, and any page rendered on the dashboard's origin
 could act as whoever opened it, so the engine never serves an artifact there.
 It serves them from a **separate listener**, `api.artifacts`, which:
 
-- serves the files of artifact versions, their assets, and the embedded page
-  runtime and kit, and **nothing else**: no API route, no probe;
+- serves the files of artifact versions, their assets, the embedded page
+  runtime and kit, and the files of the company's adopted brand, and **nothing
+  else**: no API route, no probe;
 - holds **no credential**: it never reads a cookie and never sets one;
 - opens a version only for a **view ticket** in the URL, minted by the
   dashboard for the signed-in viewer, re-checked on every document request.
@@ -229,10 +230,15 @@ Whatever the proxy, it must:
 - **never cache `/t/` paths in a shared cache.** Documents are `private,
   no-store` and subresources `private`; a cache keyed without the ticket would
   serve a revoked viewer, and one keyed with it caches nothing useful. Only
-  `/_crewlet/runtime/` and `/_crewlet/kit/` are public, and those are safe to
-  cache anywhere: a kit release and a runtime named by its bytes
-  (`runtime.<digest>.js`) are immutable, and a runtime at its contract's name
-  (`runtime.js`) is revalidated on every use, so honour its `no-cache`;
+  `/_crewlet/runtime/`, `/_crewlet/kit/` and `/_crewlet/brand/` are public. The
+  first two are safe to cache anywhere, even keyed without the host: a kit
+  release and a runtime named by its bytes (`runtime.<digest>.js`) are
+  immutable and the same on every host, and a runtime at its contract's name
+  (`runtime.js`) is revalidated on every use, so honour its `no-cache`.
+  `/_crewlet/brand/<sha256>.<ext>` serves the company's adopted brand (its
+  stylesheet, logos and faces), immutable for a year, and **keyed with the
+  host**: it is one company's, so a cache rule that drops the host from the key
+  for the kit must not drop it here;
 - **never inject anything**: no analytics or rewriting of HTML, no challenge
   or captcha page (a challenge inside a frame cannot be solved), no added
   cookies.

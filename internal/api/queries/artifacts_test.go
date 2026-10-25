@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -56,7 +57,7 @@ func (e *artifactsEstate) Artifact(_ context.Context, id artifacts.ID, _ statelo
 func (e *artifactsEstate) List(context.Context, artifactsdomain.Viewer, artifactsdomain.ListQuery) (
 	artifactsdomain.ListPage, error) {
 	h := e.heads()
-	return artifactsdomain.ListPage{Items: []artifactsdomain.ListItem{{Head: h[qaPage]}, {Head: h[qaPrivate]}},
+	return artifactsdomain.ListPage{Contents: []artifactsdomain.ListItem{{Head: h[qaPage]}, {Head: h[qaPrivate]}},
 		Total: 2}, nil
 }
 
@@ -84,6 +85,14 @@ func (e *artifactsEstate) Assets(context.Context, artifacts.ID) ([]artifactsdoma
 	return nil, nil
 }
 
+func (e *artifactsEstate) Brand(context.Context, statelog.Freshness) (artifactsdomain.Adoption, bool, error) {
+	return artifactsdomain.Adoption{}, false, nil
+}
+
+func (e *artifactsEstate) BrandFile(context.Context, objstore.Hash) (artifactsdomain.BrandFile, error) {
+	return artifactsdomain.BrandFile{}, artifactsdomain.ErrNotFound
+}
+
 func (e *artifactsEstate) Usage(context.Context) (artifactsdomain.Usage, error) {
 	return artifactsdomain.Usage{Artifacts: 2}, nil
 }
@@ -109,6 +118,35 @@ func (e *artifactsEstate) ReadElevated(_ context.Context, _ artifactsdomain.Call
 
 func (e *artifactsEstate) Opened(context.Context, artifactsdomain.Call, artifacts.ID) (artifactsdomain.Written, error) {
 	return artifactsdomain.Written{}, nil
+}
+
+// qaShared is the company's folder, and qaKims kim's own.
+var (
+	qaShared = artifactsdomain.Folder{ID: artifactsdomain.FolderIDOf("qa", 0).String(), Name: "Shared",
+		Owner: "jane", OwnerKind: iam.ActorHuman, RootOwner: "jane", RootOwnerKind: iam.ActorHuman,
+		Status: artifactsdomain.FolderLive, Shares: []artifacts.Share{{
+			Audience: artifacts.Audience{Kind: artifacts.AudienceCompany}, Role: artifacts.RoleContributor}}}
+	qaKims = artifactsdomain.Folder{ID: artifactsdomain.FolderIDOf("qa", 1).String(), Name: "Kim's",
+		Owner: "kim", OwnerKind: iam.ActorHuman, RootOwner: "kim", RootOwnerKind: iam.ActorHuman,
+		Status: artifactsdomain.FolderLive}
+)
+
+// Folders answers every folder whoever asks, so the question's own filter is
+// what a case sees.
+func (e *artifactsEstate) Folders(context.Context, artifactsdomain.Viewer, statelog.Freshness) (
+	artifactsdomain.FolderTree, error) {
+	return artifactsdomain.FolderTree{Folders: []artifactsdomain.FolderItem{
+		{Folder: qaShared, Artifacts: 2}, {Folder: qaKims, Artifacts: 1}}}, nil
+}
+
+func (e *artifactsEstate) Folder(_ context.Context, id string, _ statelog.Freshness) (
+	artifactsdomain.Folder, statelog.Position, error) {
+	for _, f := range []artifactsdomain.Folder{qaShared, qaKims} {
+		if f.ID == id {
+			return f, statelog.Position{}, nil
+		}
+	}
+	return artifactsdomain.Folder{}, statelog.Position{}, artifactsdomain.ErrFolderNotFound
 }
 
 // noUnits is a company with no units and no agents.
@@ -145,6 +183,7 @@ func TestEveryArtifactsQuestionDeclaresWhoAsksIt(t *testing.T) {
 	t.Parallel()
 	want := map[string]string{
 		"artifacts":         "everybody",
+		"artifact_folders":  "everybody",
 		"artifact":          "decided_by:" + string(authz.ActionArtifactRead),
 		"artifact_versions": "decided_by:" + string(authz.ActionArtifactRead),
 		"artifact_version":  "decided_by:" + string(authz.ActionArtifactRead),
@@ -154,6 +193,7 @@ func TestEveryArtifactsQuestionDeclaresWhoAsksIt(t *testing.T) {
 		"artifact_access":   "decided_by:" + string(authz.ActionArtifactRead),
 		"artifact_usage":    "decided_by:" + string(authz.ActionArtifactUsage),
 		"artifact_trail":    "decided_by:" + string(authz.ActionAuditRead),
+		"brand":             "decided_by:" + string(authz.ActionBrandRead),
 	}
 	bare, r := queries.NewRegistry(), queries.NewRegistry()
 	queries.Register(bare, queries.Sources{})
@@ -211,8 +251,20 @@ func TestTheArtifactsQuestionsAnswerThroughTheOneAdmission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if items := list.(artifactsapi.ListPage).Items; len(items) != 1 || items[0].ID != qaPage {
+	if items := list.(artifactsapi.ListPage).Contents; len(items) != 1 || items[0].ID != qaPage {
 		t.Errorf("bob's listing: %+v", items)
+	}
+
+	// THE FOLDER TREE IS EVERYBODY'S, FILTERED: kim's own folder is left
+	// out, and so is it from an administrator who relates to nothing in it.
+	for _, who := range []context.Context{seated(t, "bob"), seated(t, "ada", iam.GrantAdmin)} {
+		tree, err := r.Answer(who, "artifact_folders", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := tree.(artifactsapi.FoldersAnswer).Folders; len(got) != 1 || got[0].ID != qaShared.ID {
+			t.Errorf("the folder tree answered %+v", got)
+		}
 	}
 
 	// AN ADMINISTRATOR'S READ IS RECORDED, OF THE VERSION IT READS.

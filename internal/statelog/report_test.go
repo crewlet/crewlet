@@ -648,7 +648,7 @@ func TestABlockedTrimsAlarmReadsWhatTheLogHoldsPastTheWindow(t *testing.T) {
 // each says what is true of that log.
 //
 // What the deferral grace does is a log's: every log's copy is judged on its
-// own (ADR-0046), so past it a record held on one log has taken this node's
+// own (ADR-0049), so past it a record held on one log has taken this node's
 // copy of THAT log out of service and no other's. The form this replaced
 // reduced the node to its OLDEST held record, so a node holding an identity
 // record for two hours and a tracker record for forty minutes raised one alarm

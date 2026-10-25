@@ -82,6 +82,11 @@ type run struct {
 	// nothing, so a CDN file is named where its copy would be served and
 	// never fetched.
 	dry bool
+
+	// brand is the adopted brand the run's copies come from, read at the
+	// first one ([run.adoption]) so every copy of one version is of one
+	// adoption.
+	brand *artifactsdomain.Adoption
 }
 
 // pending is one file of the new version, as the run assembles it.
@@ -128,28 +133,40 @@ func (s *Service) newRun(ctx context.Context, c artifactsdomain.Call, kind artif
 	if c.OpKey == "" {
 		return r, nil
 	}
-	// A RETRY'S OWN RESERVATION is found by the operation it retries.
-	stage := uuid.NewSHA1(StageNamespace, []byte(principal+"\n"+c.OpKey+"\n"+id.String())).String()
-	existing, _, err := s.readRecord(ctx, stage)
+	r.stage, r.stageNew, err = s.stageFor(ctx, c, principal, id.String(), id)
 	if err != nil {
 		return nil, err
 	}
+	return r, nil
+}
+
+// stageFor is the reservation a keyed operation keeps for the objects it stores
+// itself, found again by the operation it retries: the one a first attempt
+// made (claimed for this attempt, or closed with its outcome), else a new one,
+// not yet written, which [run.stageProduced] writes before its first byte.
+// what names the operation's object in the derivation, so two operations under
+// one key never share a reservation.
+func (s *Service) stageFor(ctx context.Context, c artifactsdomain.Call, principal, what string,
+	id artifacts.ID) (*record, bool, error) {
+
+	stage := uuid.NewSHA1(StageNamespace, []byte(principal+"\n"+c.OpKey+"\n"+what)).String()
+	existing, _, err := s.readRecord(ctx, stage)
+	if err != nil {
+		return nil, false, err
+	}
 	switch {
 	case existing == nil || existing.Principal != principal:
-		r.stage = &record{ID: stage, Principal: principal, Purpose: purposeStage,
+		return &record{ID: stage, Principal: principal, Purpose: purposeStage,
 			Artifact: artifactString(id), TurnID: c.TurnID, Created: s.now(),
-			Expires: s.now(), State: stateFinalizing, FinalizeKey: c.OpKey, Claimed: s.now()}
-		r.stageNew = true
+			Expires: s.now(), State: stateFinalizing, FinalizeKey: c.OpKey, Claimed: s.now()}, true, nil
 	case existing.State == stateClosed:
-		r.stage = existing
-	default:
-		taken, err := s.updateRecord(ctx, stage, func(rec *record) error { return s.takeClaim(rec) })
-		if err != nil {
-			return nil, err
-		}
-		r.stage = taken
+		return existing, false, nil
 	}
-	return r, nil
+	taken, err := s.updateRecord(ctx, stage, func(rec *record) error { return s.takeClaim(rec) })
+	if err != nil {
+		return nil, false, err
+	}
+	return taken, false, nil
 }
 
 // claimLease is how long one finalize holds its upload against a second run of
@@ -248,6 +265,11 @@ func (r *run) compose(ctx context.Context, mode manifest.Mode, specs []FileSpec,
 	if err := r.checkNewText(); err != nil {
 		return artifactsdomain.PublishInput{}, err
 	}
+	if r.kind == artifacts.KindBrand {
+		if err := r.sanitizeBrandAssets(ctx); err != nil {
+			return artifactsdomain.PublishInput{}, err
+		}
+	}
 	// ONLY A FRAMED KIND'S FILES ARE PAGES: a native kind serves no document
 	// on the artifact origin, so its HTML (a deck's slides) is its format's
 	// to judge, never linted, nonce-marked or given CDN copies as a page.
@@ -278,6 +300,10 @@ func (r *run) compose(ctx context.Context, mode manifest.Mode, specs []FileSpec,
 		return artifactsdomain.PublishInput{}, err
 	}
 	r.themeWarnings(m)
+	brandOff, err := r.brandOff(ctx, m)
+	if err != nil {
+		return artifactsdomain.PublishInput{}, err
+	}
 	r.counts = &FileCounts{}
 	for _, e := range m.Files {
 		if e.Carried {
@@ -288,6 +314,7 @@ func (r *run) compose(ctx context.Context, mode manifest.Mode, specs []FileSpec,
 	}
 	return artifactsdomain.PublishInput{
 		Contract: resolved, Capabilities: caps, Manifest: m, Uploaded: uploaded, SearchText: search,
+		BrandOff: brandOff,
 	}, nil
 }
 
@@ -313,7 +340,7 @@ func (r *run) nameFiles(ctx context.Context, mode manifest.Mode, specs []FileSpe
 		}
 		if spec.sources() != 1 {
 			return fmt.Errorf("%w: %q names %d sources for its bytes and a file names exactly one "+
-				"(upload, carry, from, remove or inline)", ErrInvalid, p, spec.sources())
+				"(upload, carry, from, remove, inline or brand)", ErrInvalid, p, spec.sources())
 		}
 		if r.files[p] != nil || r.removes[p] {
 			return fmt.Errorf("%w: %q is named twice in one publish", ErrInvalid, p)
@@ -389,6 +416,10 @@ func (r *run) nameFiles(ctx context.Context, mode manifest.Mode, specs []FileSpe
 			}
 			e.Carried = true
 			f.entry, f.hasObj, f.carried, f.script = e, true, true, e.Script
+		case spec.Brand != "":
+			if err := r.brandFile(ctx, f, spec.Brand); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
+				return err
+			}
 		default:
 			inline += int64(len(spec.Inline))
 			if inline > artifacts.MaxInlineBytes {

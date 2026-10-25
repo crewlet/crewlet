@@ -205,8 +205,8 @@ func writeWhyYou(b *strings.Builder, via, tags string) {
 		b.WriteString("## Why you\n\n")
 		b.WriteString("No monitor tag named an owner for this alert, so it came to " +
 			"you as this company's fallback for Datadog. Establish whether it " +
-			"belongs to you before you work it: if it belongs to a colleague, " +
-			"hand it to them and say why.\n")
+			"belongs to you before you work it, and hand it to the colleague it " +
+			"belongs to if it does not.\n")
 	default:
 		b.WriteString("## Why you\n\n")
 		b.WriteString("This monitor is tagged as yours")
@@ -220,35 +220,31 @@ func writeWhyYou(b *strings.Builder, via, tags string) {
 }
 
 // writeAlertAsk is the ask for a monitor that is firing.
+//
+// IT NAMES THE ANSWERS, not the investigation. How to look at an alert is the
+// model's own; what the company counts as answering one is not — the impact
+// said where the team will see it, or the threshold named as the thing to fix,
+// either of which ends an owner's turn ([Prompt.Addressed]).
 func writeAlertAsk(b *strings.Builder) {
 	b.WriteString("## What to do\n\n")
-	b.WriteString("1. Look at the alert before concluding anything. Read the " +
-		"monitor's query and its recent history, and check whether anything " +
-		"else is firing at the same time.\n")
-	b.WriteString("2. Decide whether this is real. A monitor that fires on a " +
-		"threshold nobody has revisited is a monitor to fix, not an incident " +
-		"to work, and saying so is a complete answer.\n")
-	b.WriteString("3. If it is real, say what is affected and what you are doing " +
-		"about it, in the channel your team reads. Do not sit on it while you " +
-		"investigate.\n")
-	b.WriteString("4. Escalate to your manager if it is beyond what you can " +
-		"safely act on, and say what you have already ruled out.\n")
+	b.WriteString("Decide whether this is real. If it is, say what is affected " +
+		"and what you are doing about it in the channel your team reads, and " +
+		"escalate to your manager if it is beyond what you can safely act on. " +
+		"A monitor firing on a threshold nobody has revisited is a monitor to " +
+		"fix, not an incident, and saying so is a complete answer.\n")
 }
 
 // writeRecoveryAsk is the ask for a monitor that has cleared.
 //
 // A recovery is not a no-op and it is not an incident either. What it needs
 // is a decision about whether the thing that broke is actually fixed, and a
-// closing note to whoever was told it was broken.
+// closing note to whoever was told it was broken. The one Datadog fact a
+// model would not assume is said: a monitor that stops receiving data
+// recovers exactly like one whose problem was fixed.
 func writeRecoveryAsk(b *strings.Builder) {
 	b.WriteString("## What to do\n\n")
-	b.WriteString("1. Confirm this is a real recovery rather than the signal " +
-		"going away. A monitor with no data recovers exactly like one whose " +
-		"problem was fixed.\n")
-	b.WriteString("2. If you or a colleague reported this incident, close it out " +
-		"where you reported it, and say what the cause turned out to be if you " +
-		"know it.\n")
-	b.WriteString("3. If it recovered on its own and you do not know why, say " +
-		"that plainly rather than closing it silently. A monitor that " +
-		"self-resolves is usually about to fire again.\n")
+	b.WriteString("Confirm the recovery is real — a monitor with no data " +
+		"recovers exactly like one whose problem was fixed — then close out " +
+		"anything you or a colleague reported about it, where it was reported, " +
+		"with the cause if you know it.\n")
 }

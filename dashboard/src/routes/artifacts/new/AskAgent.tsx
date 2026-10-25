@@ -48,6 +48,7 @@ import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { Builder } from "~/lib/artifacts/builders.ts";
 import type { Refusal } from "~/lib/useAct.ts";
 import { youNeedWords } from "~/lib/access.ts";
+import { BrandAgentNote } from "~/components/brand.tsx";
 import { titleProblem } from "./create.ts";
 import { WhoBuildsIt, type WhoBuildsItState } from "./WhoBuildsIt.tsx";
 
@@ -258,6 +259,7 @@ export function AskAgentPanel({
         disabledReason: hold,
       }}
     >
+      <BrandAgentNote />
       {children}
     </AgentHandoffPanel>
   );

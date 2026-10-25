@@ -106,40 +106,45 @@ func TestThePiProfileAdmitsNothingFromTheHost(t *testing.T) {
 	for flag, why := range map[string]string{
 		"-p":                    "print mode: answer and exit rather than opening the TUI",
 		"--no-tools":            "the tool denial itself",
-		"--no-context-files":    "AGENTS.md / CLAUDE.md discovery",
-		"--no-extensions":       "extension discovery — an extension executes",
+		"--no-context-files":    "the AGENTS.md / CLAUDE.md walk up to /, which the engine's .git file does not end",
+		"--no-extensions":       "extension discovery — an extension executes, and on 1.4.0 so would an mcp.json server",
 		"--no-skills":           "skill discovery",
 		"--no-prompt-templates": "prompt-template discovery",
 		"--no-themes":           "theme discovery",
-		"--no-approve":          "project-local trust, which otherwise falls back to the operator's defaultProjectTrust",
+		"--no-approve":          "project trust, which otherwise falls back to defaultProjectTrust in the seat's settings",
 		"--no-session":          "the session store: nothing of one turn reaches the next",
 	} {
 		if !slices.Contains(p.CompleteArgs, flag) {
 			t.Errorf("complete_args = %v, want %s (%s)", p.CompleteArgs, flag, why)
 		}
 	}
-	// --system-prompt REPLACES; --append-system-prompt is the other half of
-	// the pair and would leave the harness's own prompt in front of the
-	// seat's.
-	if joined := strings.Join(p.SystemPromptArgs, " "); strings.Contains(joined, "--append") {
-		t.Errorf("system_prompt_args = %v appends rather than replaces, so the "+
-			"harness's identity sits over the top of the seat's", p.SystemPromptArgs)
+	// --system-prompt REPLACES and --append-system-prompt keeps pi's own
+	// prompt in front of the seat's: each channel takes its own flag.
+	for field, tc := range map[string]struct {
+		args []string
+		flag string
+	}{
+		"system_prompt":        {p.SystemPrompt.Args, "--system-prompt"},
+		"append_system_prompt": {p.AppendSystemPrompt.Args, "--append-system-prompt"},
+	} {
+		if len(tc.args) == 0 || tc.args[0] != tc.flag {
+			t.Errorf("%s.args = %v, want %s", field, tc.args, tc.flag)
+		}
 	}
-	// `--` before the prompt: this is the only built-in whose vendor offers
-	// the separator, and without it a transcript that happens to begin with
-	// a dash is parsed as an unknown flag.
-	if got := strings.Join(p.PromptArgs, " "); got != "--" {
-		t.Errorf("prompt_args = %v, want [--] so a prompt beginning with a dash is "+
-			"a prompt", p.PromptArgs)
+	// THE TRANSCRIPT ON STDIN, never on argv, where every account on the
+	// machine reads it through /proc/<pid>/cmdline and ARG_MAX bounds it.
+	if p.EffectivePromptMode() != cliprofile.PromptStdin || len(p.PromptArgs) > 0 {
+		t.Errorf("prompt_mode = %q, prompt_args = %v, want the transcript on stdin "+
+			"and nothing on argv to introduce it", p.EffectivePromptMode(), p.PromptArgs)
 	}
 }
 
 // THE PI PROFILE'S ARGV MUST PARSE, and only the real binary can say so.
 //
-// Nine flags of a vendor's own spelling, and a `--` whose meaning differs
-// between parsers. Skipped unless a `pi` is on PATH; it stops at the CLI's
-// own missing-credential failure, which is far enough to prove the flags were
-// understood.
+// Nine flags of a vendor's own spelling, on each system-prompt channel, with
+// the transcript on stdin as a call hands it over. Skipped unless a `pi` is on
+// PATH; it stops at the CLI's own missing-credential failure, which is far
+// enough to prove the flags were understood.
 func TestThePiProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 	t.Parallel()
 	binary, err := exec.LookPath("pi")
@@ -147,24 +152,32 @@ func TestThePiProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 		t.Skip("no pi on PATH")
 	}
 	p, _ := cliprofile.Builtin("pi")
-	dir := t.TempDir()
-	args := append([]string(nil), p.CompleteArgs...)
-	for _, a := range p.ModelArgs {
-		args = append(args, strings.ReplaceAll(a, "{model}", "anthropic/claude-sonnet-4.6"))
-	}
-	for _, a := range p.SystemPromptArgs {
-		args = append(args, strings.ReplaceAll(a, "{system}", "You are Agent CTO."))
-	}
-	args = append(args, p.PromptArgs...)
-	args = append(args, "say hello")
+	for field, ch := range map[string]cliprofile.Channel{
+		"system_prompt":        p.SystemPrompt,
+		"append_system_prompt": p.AppendSystemPrompt,
+	} {
+		dir := t.TempDir()
+		system := filepath.Join(dir, cliprofile.DefaultSystemPromptFile)
+		if err := os.WriteFile(system, []byte("You are Agent CTO."), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		args := append([]string(nil), p.CompleteArgs...)
+		for _, a := range p.ModelArgs {
+			args = append(args, strings.ReplaceAll(a, "{model}", "anthropic/claude-sonnet-4.6"))
+		}
+		for _, a := range ch.Args {
+			args = append(args, strings.ReplaceAll(a, "{file}", system))
+		}
 
-	cmd := exec.Command(binary, args...)
-	cmd.Dir = dir
-	// PI_CODING_AGENT_DIR and PI_OFFLINE are both the profile's own; see
-	// vendorCLIEnv.
-	cmd.Env = vendorCLIEnv(p, dir, nil)
-	combined, _ := cmd.CombinedOutput()
-	assertArgvReachedAuth(t, args, string(combined))
+		cmd := exec.Command(binary, args...)
+		cmd.Dir = dir
+		cmd.Stdin = strings.NewReader("say hello")
+		// PI_CODING_AGENT_DIR and PI_OFFLINE are both the profile's own; see
+		// vendorCLIEnv.
+		cmd.Env = vendorCLIEnv(p, dir, nil)
+		combined, _ := cmd.CombinedOutput()
+		t.Run(field, func(t *testing.T) { assertArgvReachedAuth(t, args, string(combined)) })
+	}
 }
 
 // allowsAfterFlag reports whether every want follows flag before the next
@@ -229,10 +242,17 @@ func TestSeededSettingsFilesAreValidJSONThatKeepsTheWebOn(t *testing.T) {
 		must  []string
 		never []string
 	}{
-		"gemini-cli": {".gemini/settings.json", cliprofile.SeedHome,
-			[]string{"run_shell_command", "write_file", `"web_fetch"`}, nil},
+		// gemini-cli's tool policy is a policy file, not JSON: see
+		// TestGeminiOffersTheWebToolsAndNothingElse.
+		// An allowlist of the web tools, every other tool denied by name, and
+		// the web tools allowed to run unprompted.
 		"qwen-code": {".qwen/settings.json", cliprofile.SeedHome,
-			[]string{"run_shell_command", `"web_fetch"`}, nil},
+			[]string{
+				`"core":["web_fetch","web_search"]`,
+				`"allow":["web_fetch","web_search"]`,
+				`"run_shell_command"`, `"enter_worktree"`, `"agent"`,
+			},
+			[]string{`"ask"`}},
 		// 2.0's own permissions format, deny-all first: the LAST matching
 		// rule wins, and 2.0 allows whatever is not denied, so a list of
 		// local tools to deny let its new ones through. In the call's own

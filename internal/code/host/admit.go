@@ -105,7 +105,7 @@ func (a admission) principal() code.Principal {
 	return code.Principal{Kind: code.PrincipalOperator, OperatorID: a.operatorID, Seat: a.seat}
 }
 
-// grant is the admitted principal's standing on repo (ADR-0055): a PERSON'S,
+// grant is the admitted principal's standing on repo (ADR-0058): a PERSON'S,
 // so it reads no chart — code.GrantOf consults the roster only for a seat — and
 // a credential bound to a human seat maintains every repository while one
 // bound to nobody reads it.

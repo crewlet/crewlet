@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// THE TRIMMED RECORD — ADR-0047.
+// THE TRIMMED RECORD — ADR-0050.
 //
 // Every arbitrated record a node consumes raises its subject's anchor
 // ([tables.advanceAnchor]), and the anchor is what a write's expectation is

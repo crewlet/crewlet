@@ -86,6 +86,11 @@ type CreateInput struct {
 	// Shares are granted with the create, such as the requester as editor
 	// when an agent creates.
 	Shares []artifacts.Share
+
+	// Folder is the folder the artifact is created in, empty for the top
+	// level: a live folder the caller's decision already admitted filing
+	// into (contributor on it).
+	Folder string
 }
 
 // PublishInput is one new version of an artifact.
@@ -115,6 +120,12 @@ type PublishInput struct {
 
 	// SearchText is at most artifacts.MaxSearchTextBytes.
 	SearchText string
+
+	// BrandOff is a version whose page opts out of the company's adopted
+	// brand (`<html data-crewlet-brand="off">`, found by the linter): a
+	// framed version so marked pins no stylesheet. Every other framed
+	// version pins the one adopted when it is published.
+	BrandOff bool
 }
 
 // Published is a version a write landed.
@@ -407,6 +418,16 @@ func (w *Writer) refusal(ctx context.Context, id string, reason Refusal, s Histo
 		return fmt.Errorf("%w: artifact %s is not in the trash", ErrInvalid, id)
 	case RefusedPurging:
 		return fmt.Errorf("%w: %s", ErrPurging, id)
+	case RefusedFolderGone:
+		return fmt.Errorf("%w: it was removed while this write was decided", ErrFolderNotFound)
+	case RefusedFolderCycle:
+		return ErrFolderCycle
+	case RefusedFolderDepth:
+		return ErrFolderDepth
+	case RefusedFolderNameTaken:
+		return ErrFolderNameTaken
+	case RefusedFolderLimit:
+		return ErrFolderLimit
 	}
 	return fmt.Errorf("%w: the log refused this write as %s", ErrInvalid, reason)
 }
@@ -593,6 +614,42 @@ func labelled(ctx context.Context, tx *sql.Tx, id string) (int, error) {
 		return 0, fmt.Errorf("artifactsdomain: count %s's labels: %w", id, err)
 	}
 	return n, nil
+}
+
+// pinsBrand reports whether a version of kind pins the adopted brand's
+// stylesheet: a framed kind (a page the artifact origin serves, where the
+// stylesheet's link is placed) whose page does not opt out. A native kind is
+// drawn by the dashboard, which follows the adopted brand live, and a deck is
+// branded by the copy its starter made.
+func pinsBrand(kind artifacts.Kind, in PublishInput) bool {
+	return kind.Framed() && !in.BrandOff
+}
+
+// namesBrand reports whether a write that publishes, retires or purges
+// versions of an artifact of kind names the adopted brand in its scope: a
+// framed kind's version may pin an adoption's stylesheet, so such a record's
+// apply reads the brand's rows ([pinnedBrand]) or prunes them once the last
+// version naming a superseded stylesheet is gone ([deleteVersions]). A
+// version that opts out of the brand still retires older ones that may pin.
+func namesBrand(kind artifacts.Kind) bool { return kind.Framed() }
+
+// kindOf is an artifact's kind as this node's rows hold it, read before a
+// publish so its scope names the brand exactly when its apply reads the
+// brand's rows. A kind is fixed at create, so a stale row answers it; an
+// artifact this node does not hold answers none, and the decide refuses it.
+func (w *Writer) kindOf(ctx context.Context, id artifacts.ID) (artifacts.Kind, error) {
+	var kind artifacts.Kind
+	err := w.db.Read(ctx, func(tx *sql.Tx) error {
+		head, found, err := readHeadTx(ctx, tx, id.String())
+		if found {
+			kind = head.Kind
+		}
+		return err
+	})
+	if err != nil {
+		return "", fmt.Errorf("artifactsdomain: read artifact %s's kind: %w", id, err)
+	}
+	return kind, nil
 }
 
 // sourceIDOf is the source subject id an artifact's head holds, empty for none.

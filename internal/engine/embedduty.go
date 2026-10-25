@@ -66,7 +66,7 @@ import (
 // lease is sure to last; a renewal the store refuses, or holds on to while its
 // leader moves, costs it nothing, and a step cut off publishes nothing, so the
 // singleton never has two writers. Each renewal first asks whether a copy the
-// duty decides from has gone out of service since the tick began (ADR-0046):
+// duty decides from has gone out of service since the tick began (ADR-0049):
 // if one has, the tick is cut off unrenewed, and gives the duty back once it
 // has returned ([embedDuty.declinedMidTick]).
 //

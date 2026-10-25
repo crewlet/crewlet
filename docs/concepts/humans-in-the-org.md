@@ -305,7 +305,7 @@ What the binding buys:
   keep one team's seats out of another's
   ([Visibility](code-host.md#visibility)). The [Code guide](../guides/code.md)
   is how to set it up, and
-  [ADR-0052](https://github.com/crewlet/crewlet/blob/main/adr/0052-a-person-reaches-git-with-their-own-bound-token.md)
+  [ADR-0055](https://github.com/crewlet/crewlet/blob/main/adr/0055-a-person-reaches-git-with-their-own-bound-token.md)
   why there is no second credential for git.
 
 **A credential bound to no seat is ordinary.** A pipeline, an automation, the
@@ -359,14 +359,20 @@ since acting as the bare credential is the narrower surface.
   reports carry the same marker.
 - **Lead roster**: a human member renders with its handle and a
   **human teammate** marker, its background, goal and responsibilities,
-  its resolved contact IDs, its availability, and hand-off guidance
-  (assign in the PM tool and mention; no engine turn expected). On a
-  large team that full block may not fit — see
+  its resolved contact IDs and its availability. A person no message can
+  reach says so in one line instead — no chat or code-host account, so
+  their work is assigned in the PM tool; or, for a seat whose holder the
+  directory withholds, nobody reachable right now — because that is how
+  they differ from what the note below says of everyone. On a large team
+  that full block may not fit — see
   [a capped roster](#a-capped-roster-still-names-the-people-on-it) below.
 - **`## Human colleagues` contract block**: appears in the executor prompt
-  *only when the org contains human seats*. Reach humans on external
-  surfaces, never through `a2a_ask`; they reply asynchronously, so leave
-  full context and end the turn; their reply re-triggers you.
+  *only when the org contains human seats*, and is the one place the
+  prompt says how any person is worked with: seats marked (human) or
+  **human teammate** are people, reached with a mention on the team's
+  chat or a comment where the work lives and never through `a2a_ask`,
+  handed work by assignment in the PM tool; they reply asynchronously, so
+  leave full context and end the turn; their reply re-triggers you.
 - **`lookup_colleague`**: resolves agents *and* humans, by handle, role
   name or a human's contact ID. A match renders the seat's name, handle,
   `kind` and its resolved contact IDs; a human match adds that a person is
@@ -387,9 +393,9 @@ since acting as the bare credential is the narrower surface.
 A lead's roster and its `Direct reports:` line share one **1,000-token
 allowance** — see [the roster allowance](turn-engine.md#the-roster-allowance)
 for why, and for the full ladder. A human seat is the most expensive thing a
-roster renders (~193 tokens against an agent's ~119, because a person also
-carries contact IDs, availability and hand-off guidance), so on a team of any
-size some of them will be past the first rung. What a lead sees then:
+roster renders (~148 tokens against an agent's ~119, because a person also
+carries contact IDs and availability), so on a team of any size some of them
+will be past the first rung. What a lead sees then:
 
 | Where the seat falls | What the lead is told about them |
 |---|---|

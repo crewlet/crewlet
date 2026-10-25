@@ -77,6 +77,22 @@ func executorPrompt(t *testing.T, n *node) string {
 	return ""
 }
 
+// executorOffered is the tools the call that did the work was offered: the
+// catalogue its request carried, which is where a tool the seat holds is
+// defined, rather than any list in its system prompt.
+func executorOffered(t *testing.T, n *node) []string {
+	t.Helper()
+	n.model.mu.Lock()
+	defer n.model.mu.Unlock()
+	for i, phase := range n.model.calls {
+		if phase == "execute" && i < len(n.model.offered) {
+			return strings.Split(n.model.offered[i], "+")
+		}
+	}
+	t.Fatalf("no executor call was made; phases = %v", n.model.calls)
+	return nil
+}
+
 func TestASeatsOwnMemoryReachesTheExecutorsPrompt(t *testing.T) {
 	t.Parallel()
 	n := start(t)
@@ -226,10 +242,12 @@ func TestAPointerTriggerDefersTheKnowledgeSearchToTheExecutor(t *testing.T) {
 	if !strings.Contains(system, "no team documents surfaced at turn start") {
 		t.Fatalf("the gated prompt does not say to search later:\n%s", tail(system))
 	}
-	// And it names the tool that does the looking, or the instruction
-	// points at nothing.
-	if !strings.Contains(system, "search_knowledge") {
-		t.Fatalf("the prompt does not offer the search tool:\n%s", tail(system))
+	// And the executor holds the tool that does the looking, or the
+	// instruction points at nothing. OFFERED, not named in the system prompt:
+	// a held tool's whole definition reaches the model with every request,
+	// and the system prompt lists only the tools a seat could still discover.
+	if offered := executorOffered(t, n); !slices.Contains(offered, "search_knowledge") {
+		t.Fatalf("the executor was not offered the search tool; it was offered %v", offered)
 	}
 
 	// THE TOOL RESULT carries what the search found, spliced back into the

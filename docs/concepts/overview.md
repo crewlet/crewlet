@@ -134,9 +134,9 @@ A provider does not retry and does not decide what a failure means beyond a coar
 
 A seat's entries can be different CLIs, so different roles can use different vendors and models (for example, executives on Claude and junior agents on a smaller, cheaper model), and an entry can run in one of two modes: `text`, a model behind the engine's own tool loop, where the tools ride the prompt as a catalogue and a response contract and the engine runs every call, or `agent`, where the CLI runs the seat's executor itself and the seat's tools reach it over the MCP bridge. Driving a local process brings what an HTTP client never needed — per-seat filesystem isolation (a coding CLI keeps sessions, history and project memory under one home, and one entry serves every seat), an in-prompt envelope in place of a native tool-call channel, and its own sign-in story — all covered in [LLM Backends](llm-backends.md).
 
-**Prompt caching is the CLI's.** Each call's large static prefix, the per-phase system prompt plus the tool catalogue, is the dominant repeated content of an agent turn: it is re-sent on every round of the [tool loop](agent-runtime.md#the-llm--tool-proxy) and is byte-stable across successive turns for the same agent within an epoch, which is what lets the vendor's harness cache it — the system prompt goes on the CLI's own system channel wherever its profile has one. The engine sets no breakpoint of its own; it reads back what the CLI reports it read from the cache and wrote to it. This is why the per-phase prompts can carry their full incident-hardened guidance (see [Turn Engine](turn-engine.md)) without the repetition dominating cost.
+**Prompt caching is the CLI's, and it does not make a long prompt free.** The system prompt goes on the CLI's own system channel wherever its profile has one — beside the CLI's own prompt for a seat's rounds, in place of it for a side pass ([which channel a call takes](llm-backends.md#which-channel-a-call-takes)) — the vendor's harness caches it the way it caches any session's, and the engine sets no breakpoint of its own: it reads back what the CLI reports it read from the cache and wrote to it. What a cache can reuse is the system prompt alone, and only while its bytes hold — and not even that on a CLI that puts per-call text ahead of the engine's ([which CLIs do](llm-backends.md#which-clis-actually-have-one)). A text-mode round is a fresh CLI process handed that system prompt and then one user text — the transcript, the tool catalogue and the response contract ([how the prompt itself travels](llm-backends.md#how-the-prompt-itself-travels)) — so the catalogue is never part of a cached prefix. Within a turn the system prompt holds on every round of the [tool loop](agent-runtime.md#the-llm--tool-proxy), because every prompt builder is a pure function of turn-start inputs and what a round adds rides the user message; across turns even that breaks, because the prefetch blocks (the thread, memory, knowledge, similar prior work, the counterparty) are resolved per turn inside the system prompt. And the token budget charges cached input in full (below), so every byte of a prompt is paid on every round, which is why the per-phase prompts state only what the model and its harness cannot know, each rule once (see [Turn Engine](turn-engine.md)).
 
-`Completion.InputTokens` always reports the **full** prompt-token count regardless of cache state, so the token budget stays correct: the backend sums the CLI's raw input tokens with the cache reads and writes it reports beside them. `Completion.CacheRead` and `Completion.CacheWrite` break that total down for cost reporting only, and each tool-loop round records the model, the input and output tokens and the cache reads on its trace span. A CLI that reports no usage at all is charged an estimate, four characters a token, which `crewlet llm doctor` says of it.
+`Completion.InputTokens` always reports the **full** prompt-token count regardless of cache state, so the token budget stays correct: the backend sums the CLI's raw input tokens with the cache reads and writes it reports beside them — or, where the profile declares that the CLI's input count already holds them (`usage.input_includes_cache`, as OpenAI's usage does), takes that count as it is — and adds the prompt a model-side tool built, which a CLI may report apart from its input. `Completion.CacheRead` and `Completion.CacheWrite` break that total down for cost reporting only, and each tool-loop round records the model, the input and output tokens and the cache reads on its trace span. A CLI that reports no usage at all is charged an estimate, four characters a token over everything the engine handed it, its system prompt included, which `crewlet llm doctor` says of it ([token accounting](llm-backends.md#token-accounting)).
 
 ### Embedding Provider
 
@@ -152,11 +152,10 @@ A seat's entries can be different CLIs, so different roles can use different ven
 - **`counterparty_profiles`** — per-(observer, subject) profiles built up from observed interactions.
 - **`agent_onboarding_markers`** — `mark_onboarded` bookkeeping (one row per agent, UPSERT-keyed).
 - **`conversation_sessions`** — the [conversation ledger](conversation-sessions.md): one row per completed turn, keyed on the seat and the conversation it served, rendered back into that conversation's next turn. Deduped on the work key, trimmed on write, swept on a retention horizon.
-- **`secret_values`** — the local half of the [secret store](secret-store.md), and now only its bootstrap path: the company's credentials live on the coordination KV where every node reads them, and rows written here while the engine was stopped are migrated there at its next start. Sealed with the Tier A keyring either way; no plaintext mode.
 
 Alongside them sit the durable runtime tables a turn leaves behind — `crewlet_events`, `scheduled_runs` — and the config plane's `company_config` payloads. The full migration list is in `internal/store/schema/`.
 
-What is *not* here is as deliberate: the completion ledger, the delivery dedupe, the notification valve, the token counter, the activation pointer and each node's apply status all answer a question the whole **company** has to agree on, so they live in the fleet's [coordination store](coordination.md) rather than in any one node's file.
+What is *not* here is as deliberate: the completion ledger, the delivery dedupe, the notification valve, the token counter, the activation pointer, each node's apply status and the company's [secrets](secret-store.md) all answer a question the whole **company** has to agree on, so they live in the fleet's [coordination store](coordination.md) rather than in any one node's file.
 
 Everything else is YAML config, in-memory state, or an external tool.
 
@@ -242,10 +241,12 @@ internal/
 ├── seat/                 # Which seats this node runs, and the watchdog
 ├── store/                # The two local files: this node's own estate, and
 │                         #   the replicated one a state log's applier writes
-├── filelock/             # One process's exclusive claim on a path, released
-│                         #   by the kernel however its holder exits — what
-│                         #   keeps a second process off the store's file
-│                         #   and off a git node's cache directory
+├── flock/                # The one exclusive cross-process lock on a file,
+│                         #   released by the kernel however its holder
+│                         #   exits — what keeps a second process off the
+│                         #   store's file, the broker's stream directory, a
+│                         #   coding CLI's shared login and a git node's
+│                         #   cache directory
 ├── estate/               # The replicated estate ROUTED: one router on every
 │                         #   node, answering in-process where this node's
 │                         #   copy of the operation's domain serves and

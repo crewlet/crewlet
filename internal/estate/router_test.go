@@ -2235,7 +2235,7 @@ func TestTheRouterAsksInTheRendezvousOrderOfItsOwnID(t *testing.T) {
 	}
 }
 
-// A NODE OUT OF SERVICE FOR ONE DOMAIN IS NO REASON TO CHASE ANOTHER — ADR-0046.
+// A NODE OUT OF SERVICE FOR ONE DOMAIN IS NO REASON TO CHASE ANOTHER — ADR-0049.
 //
 // A router on a node without data, between a peer whose tracker copy is out
 // of service and one whose knowledge base is, alternates tracker and
@@ -2388,7 +2388,7 @@ func TestACopyOutOfServiceRunsNothing(t *testing.T) {
 	}
 }
 
-// A FAULT IN ONE DOMAIN'S COPY ROUTES ONLY THAT DOMAIN'S OPERATIONS — ADR-0046.
+// A FAULT IN ONE DOMAIN'S COPY ROUTES ONLY THAT DOMAIN'S OPERATIONS — ADR-0049.
 //
 // A node whose tracker copy is wrong sends its seats' tracker calls to a peer
 // and still answers their knowledge-base calls from its own pages, and a peer
@@ -2462,7 +2462,7 @@ func TestAFaultInOneDomainRoutesOnlyThatDomainsOperations(t *testing.T) {
 	}
 }
 
-// A PAGE'S BACKLINKS RUN ONLY WHERE BOTH COPIES THEY READ SERVE — ADR-0046.
+// A PAGE'S BACKLINKS RUN ONLY WHERE BOTH COPIES THEY READ SERVE — ADR-0049.
 // The links are derived from the pages' AND the tasks' bodies and named from
 // both domains' rows, so a node whose tracker copy is out of service runs none
 // of them though its knowledge base serves: its own router asks a peer, and a
@@ -2505,7 +2505,7 @@ func TestAPagesBacklinksRunOnlyWhereBothCopiesServe(t *testing.T) {
 	}
 }
 
-// A WRONG USAGE COPY ANSWERS NO SPEND SCREEN — ADR-0046. The usage domain's
+// A WRONG USAGE COPY ANSWERS NO SPEND SCREEN — ADR-0049. The usage domain's
 // reads cross like every other domain's: a node whose usage copy is out of
 // service answers its operator's spend and activity screens from a peer's
 // copy, while its tracker reads are still its own; and every one of the
@@ -2817,7 +2817,7 @@ func TestAdmissionAsksTheCopyThatWillServeTheSeat(t *testing.T) {
 	}
 
 	// A WRONG COPY OF A DOMAIN NO SEAT DEPENDS ON IS NOT THE SEAT'S COPY:
-	// admission stays here, and a peer is not asked (ADR-0046).
+	// admission stays here, and a peer is not asked (ADR-0049).
 	local.set(func(n *fakeNode) { n.outOfServiceOn = map[string]bool{"vectors": true} })
 	if trackerServed, _, err = r.Serves(t.Context()); err != nil || trackerServed {
 		t.Fatalf("a node whose own seat copy admits no seat was admitted on a peer's "+
@@ -3266,7 +3266,7 @@ func TestAKeyedOpWithNoKeyIsRefused(t *testing.T) {
 
 // THE CODE HOST'S OPERATIONS CARRY THE CODE LOG'S FLOOR — and only it: each
 // names the code domain, so the code copy's own verdict decides whether a
-// node answers it (ADR-0046), and a request carries this node's floor on the
+// node answers it (ADR-0049), and a request carries this node's floor on the
 // code log and never its floor on another domain's.
 func TestTheCodeOpsCarryTheCodeFloor(t *testing.T) {
 	t.Parallel()

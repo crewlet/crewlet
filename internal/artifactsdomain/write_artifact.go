@@ -43,12 +43,10 @@ func (w *Writer) Create(ctx context.Context, c Call, in CreateInput) (Published,
 	}
 	id := artifacts.IDFor(opID)
 	versionID := versionIDOf(opID)
-	subject, scope := ArtifactSubject(id), ScopeSet{Subject: true}
-	if in.SourceKey != "" {
-		subject = SourceSubject(in.Owner, in.SourceKey)
-		scope = ScopeSet{Terms: []ScopeTerm{
-			{Kind: TermSource, ID: subject.ID}, artifactTerm(id.String()),
-		}}
+	subject, scope := createScope(id, in)
+	pins := pinsBrand(in.Kind, in.First)
+	if pins {
+		scope = withBrand(ArtifactSubject(id), scope)
 	}
 	shares := make([]artifacts.Share, len(in.Shares))
 	for i, s := range in.Shares {
@@ -59,7 +57,7 @@ func (w *Writer) Create(ctx context.Context, c Call, in CreateInput) (Published,
 	payload := CreatePayload{
 		V: baseRecordVersion, Artifact: id.String(), Kind: in.Kind, Title: in.Title,
 		Description: in.Description, Icon: in.Icon, Owner: in.Owner,
-		OwnerKind: in.OwnerKind, SourceKey: in.SourceKey,
+		OwnerKind: in.OwnerKind, SourceKey: in.SourceKey, Folder: in.Folder,
 		Version: VersionPayload{
 			Number: 1, VersionID: versionID.String(), Label: first.Label,
 			Contract: first.Contract, Capabilities: canonicalCapabilities(first.Capabilities),
@@ -83,6 +81,15 @@ func (w *Writer) Create(ctx context.Context, c Call, in CreateInput) (Published,
 			} else if marked {
 				return statelog.Decision{}, fmt.Errorf("%w: %s", ErrPurged, id)
 			}
+			if in.Folder != "" {
+				live, liveErr := folderLive(ctx, tx, in.Folder)
+				switch {
+				case liveErr != nil:
+					return statelog.Decision{}, liveErr
+				case !live:
+					return statelog.Decision{}, fmt.Errorf("%w: %s", ErrFolderNotFound, in.Folder)
+				}
+			}
 			plan, refusal, err := planObjects(ctx, tx, id.String(), payload.Version.Manifest.Files, nil) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			if err != nil {
 				return statelog.Decision{}, err
@@ -92,6 +99,13 @@ func (w *Writer) Create(ctx context.Context, c Call, in CreateInput) (Published,
 			}
 			if err := checkQuota(ctx, tx, c.Authority.Limits, 1, plan.added); err != nil {
 				return statelog.Decision{}, err
+			}
+			if pins {
+				brand, read := currentCSSSha(ctx, tx)
+				if read != nil {
+					return statelog.Decision{}, read
+				}
+				payload.Version.Brand = brand
 			}
 			return w.decision(stamp, c, subject, OpCreate, scope, opID, payload, at)
 		}))
@@ -109,8 +123,31 @@ func (w *Writer) Create(ctx context.Context, c Call, in CreateInput) (Published,
 	return out, w.refused(ctx, id.String(), e)
 }
 
+// createScope is a create's subject and scope: the artifact's own subject, or
+// its source address's where it has one (both named), beside the folder it is
+// created in, which the create reads and so orders behind any record about.
+func createScope(id artifacts.ID, in CreateInput) (Subject, ScopeSet) {
+	subject := ArtifactSubject(id)
+	var terms []ScopeTerm
+	if in.SourceKey != "" {
+		subject = SourceSubject(in.Owner, in.SourceKey)
+		terms = append(terms, ScopeTerm{Kind: TermSource, ID: subject.ID})
+	}
+	if in.SourceKey == "" && in.Folder == "" {
+		return subject, ScopeSet{Subject: true}
+	}
+	terms = append(terms, artifactTerm(id.String()))
+	if in.Folder != "" {
+		terms = append(terms, FolderTerm(in.Folder))
+	}
+	return subject, ScopeSet{Terms: terms}
+}
+
 // checkCreate refuses a create the domain would never write.
 func checkCreate(c Call, in CreateInput, at time.Time) error {
+	if in.Folder != "" && !validFolderID(in.Folder) {
+		return fmt.Errorf("%w: %q", ErrFolderNotFound, in.Folder)
+	}
 	if !in.Kind.Valid() {
 		return fmt.Errorf("%w: kind %q is not one of %v", ErrInvalid, in.Kind, artifacts.Kinds)
 	}
@@ -262,6 +299,14 @@ func (w *Writer) Publish(ctx context.Context, c Call, in PublishInput) (Publishe
 	id := in.Artifact.String()
 	versionID := versionIDOf(opID)
 	subject, scope := ArtifactSubject(in.Artifact), ScopeSet{Subject: true}
+	kind, err := w.kindOf(ctx, in.Artifact)
+	if err != nil {
+		return Published{}, err
+	}
+	pins := pinsBrand(kind, in)
+	if namesBrand(kind) {
+		scope = withBrand(subject, scope)
+	}
 	var number int
 	res, err := w.publish(ctx, request(subject, scope, opID, statelog.PatternArbitrated,
 		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
@@ -275,7 +320,7 @@ func (w *Writer) Publish(ctx context.Context, c Call, in PublishInput) (Publishe
 			if !in.Force && in.Base != head.HeadNumber {
 				return statelog.Decision{}, versionMovedTx(ctx, tx, id)
 			}
-			v, err := versionFor(ctx, tx, head, in, c.Authority.Limits, versionID.String(), at)
+			v, err := versionFor(ctx, tx, head, in, c.Authority.Limits, versionID.String(), at, pins)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -299,10 +344,17 @@ func (w *Writer) Publish(ctx context.Context, c Call, in PublishInput) (Publishe
 // (a rollback's carried from the version it restores), its retention list, and
 // every refusal the applier would make, made here first.
 func versionFor(ctx context.Context, tx *sql.Tx, head Head, in PublishInput,
-	limits artifacts.Limits, versionID string, at time.Time) (VersionPayload, error) {
+	limits artifacts.Limits, versionID string, at time.Time, pins bool) (VersionPayload, error) {
 
 	id := head.ID.String()
 	m, contract, caps := in.Manifest, in.Contract, in.Capabilities
+	brand := ""
+	if pins && in.RestoredFrom == 0 {
+		var err error
+		if brand, err = currentCSSSha(ctx, tx); err != nil {
+			return VersionPayload{}, err
+		}
+	}
 	if in.RestoredFrom != 0 {
 		from, found, err := readVersionTx(ctx, tx, id, in.RestoredFrom)
 		if err != nil {
@@ -321,6 +373,12 @@ func versionFor(ctx context.Context, tx *sql.Tx, head Head, in PublishInput,
 		}
 		if caps == nil {
 			caps = from.Capabilities
+		}
+		// A ROLLBACK RESTORES THE PAGE AS IT WAS SERVED, its stylesheet
+		// included: the version it restores is retained, so the adoption it
+		// pinned is still served.
+		if pins {
+			brand = from.Brand
 		}
 	}
 	m = manifest.Canonical(m)
@@ -374,7 +432,7 @@ func versionFor(ctx context.Context, tx *sql.Tx, head Head, in PublishInput,
 		Number: head.HeadNumber + 1, VersionID: versionID,
 		Base: head.HeadNumber, Forced: in.Force, RestoredFrom: in.RestoredFrom,
 		Label: in.Label, Contract: contract, Capabilities: canonicalCapabilities(caps),
-		Manifest: m, Prune: prune, SearchText: in.SearchText,
+		Manifest: m, Prune: prune, SearchText: in.SearchText, Brand: brand,
 	}, nil
 }
 
@@ -404,6 +462,16 @@ func (w *Writer) Patch(ctx context.Context, c Call, id artifacts.ID, p Patch) (W
 		return Written{}, err
 	}
 	subject, scope := ArtifactSubject(id), ScopeSet{Subject: true}
+	if p.Label != nil {
+		// A LABEL'S REMOVAL can retire versions, which may pin the brand.
+		kind, err := w.kindOf(ctx, id) //nolint:govet // shadow: scoped to this block; see .golangci.yml
+		if err != nil {
+			return Written{}, err
+		}
+		if namesBrand(kind) {
+			scope = withBrand(subject, scope)
+		}
+	}
 	res, err := w.publish(ctx, request(subject, scope, opID, statelog.PatternArbitrated,
 		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			head, err := mustHead(ctx, tx, id.String()) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
@@ -777,7 +845,10 @@ func (w *Writer) purge(ctx context.Context, c Call, id artifacts.ID, guard func(
 		return Written{}, err
 	}
 	step := statelog.StepOpID(opID, "artifact")
-	var gone bool
+	var (
+		gone bool
+		kind artifacts.Kind
+	)
 	if err := w.db.Read(ctx, func(tx *sql.Tx) error { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 		head, found, err := readHeadTx(ctx, tx, id.String()) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		switch {
@@ -786,6 +857,7 @@ func (w *Writer) purge(ctx context.Context, c Call, id artifacts.ID, guard func(
 		case found && head.PurgeBegunAt.IsZero() && guard != nil && !guard(head):
 			return errNotPurgeable
 		case found:
+			kind = head.Kind
 			return nil
 		}
 		author, marked, err := deletionMarker(ctx, tx, id.String())
@@ -823,6 +895,9 @@ func (w *Writer) purge(ctx context.Context, c Call, id artifacts.ID, guard func(
 	subject := ArtifactSubject(id)
 	res, err := w.onSourced(ctx, id, func(sourceID string) statelog.Request {
 		scope := sourcedScope(id, sourceID)
+		if namesBrand(kind) {
+			scope = withBrand(subject, scope)
+		}
 		return request(subject, scope, step, statelog.PatternArbitrated,
 			func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 				head, found, err := readHeadTx(ctx, tx, id.String()) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml

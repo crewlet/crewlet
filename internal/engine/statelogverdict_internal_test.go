@@ -12,7 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/usage"
 )
 
-// EVERY DOMAIN'S COPY IS JUDGED, whatever it declares about seats — ADR-0046.
+// EVERY DOMAIN'S COPY IS JUDGED, whatever it declares about seats — ADR-0049.
 //
 // The verdict the router serves by holds an entry for every registered domain,
 // read from that domain's own health, and carries the domain's own
@@ -178,7 +178,7 @@ func TestOneLogsSilenceLeavesNoOtherDomainUnread(t *testing.T) {
 // of service; the tracker's and the knowledge base's keep answering, the seat
 // copy is still this node's, its seats stay and its claims go on — and a
 // single node's own tracker read is still answered from its own copy. Before
-// ADR-0046 the vectors copy was never judged, so it stayed in service with its
+// ADR-0049 the vectors copy was never judged, so it stayed in service with its
 // hole.
 func TestAWrongCopyOfOneDomainLeavesTheOthersInService(t *testing.T) {
 	t.Parallel()

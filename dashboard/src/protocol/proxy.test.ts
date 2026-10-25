@@ -30,6 +30,13 @@
  *  - the primitives themselves: `fetch(url)`, `new WebSocket(url)`,
  *    `new EventSource(url)` and `navigator.sendBeacon(url)`, which only
  *    `src/protocol/` may read (`transport.test.ts`);
+ *  - a KEYED REQUEST: an object literal naming a write's `method` and its
+ *    `path` (`{ method: "POST", path: "/artifact-folders" }`), the shape
+ *    `lib/artifacts/api.ts` and the identity dialogs build and `keyedWrite`
+ *    sends, read where its path is readable. The send itself is a forward
+ *    (`FORWARDS`), so a prefix only these objects name went unchecked: the
+ *    folder writes' `/artifact-folders` had no entry and would have answered
+ *    Vite's 404 under `npm run dev`;
  *  - MARKUP: a JSX `src`, `href` or `poster` holding a path, and the same
  *    attributes in the shell (`index.html`). The browser fetches those itself,
  *    with no call anywhere to read — which is how the brand mark in the sidebar
@@ -95,7 +102,7 @@ const FORWARDS: readonly { path: string; call: string; why: string }[] = [
   {
     path: "lib/keyedWrite.ts",
     call: "rest.request",
-    why: "the keyed write every REST gesture is answered through: its path is the request's, the identity directory's a literal under `/iam` at the dialog that sends it and an artifact's built in `lib/artifacts/api.ts` under `/artifacts`, each under its own entry",
+    why: "the keyed write every REST gesture is answered through: its path is the request's, the identity directory's a literal under `/iam` at the dialog that sends it and an artifact's and a folder's built in `lib/artifacts/api.ts` under `/artifacts` and `/artifact-folders`, each under its own entry and read there as a keyed request",
   },
   {
     path: "protocol/configWrite.ts",
@@ -113,6 +120,26 @@ interface Reach {
   path: string | null;
   /** Whether it is a socket, which the proxy has to upgrade. */
   socket: boolean;
+}
+
+/** The methods a keyed request names: every write `keyedWrite` sends. */
+const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+/**
+ * The path of a keyed request, `{ method: "PUT", path: … }`, or undefined for
+ * an object that is not one. A path built by a call (`base(id)`) is not read:
+ * its prefix is a literal elsewhere in the same module, which is.
+ */
+function keyedPath(node: Node): Node | undefined {
+  let method: string | null = null;
+  let path: Node | undefined;
+  for (const property of node.properties as Node[]) {
+    if (property.type !== "Property" || (property.key as Node).type !== "Identifier") continue;
+    const key = String((property.key as Node).name);
+    if (key === "method") method = stringValue(property.value as Node);
+    else if (key === "path") path = property.value as Node;
+  }
+  return method !== null && WRITE_METHODS.has(method) ? path : undefined;
 }
 
 /** Whether a node is the page's own origin or host. */
@@ -218,6 +245,14 @@ function reaches(source: string, lang: Lang): Reach[] {
         path,
         socket: false,
       });
+      return;
+    }
+    if (node.type === "ObjectExpression") {
+      const url = keyedPath(node);
+      const path = url ? pathOf(url, constants) : null;
+      if (path !== null) {
+        found.push({ line: line(node.start), call: "keyed request", path, socket: false });
+      }
       return;
     }
     if (node.type !== "CallExpression" && node.type !== "NewExpression") return;
@@ -415,7 +450,13 @@ describe("the dev server proxy", () => {
     expect(entries.length).toBeGreaterThan(3);
     expect(read.length).toBeGreaterThan(15);
     const paths = new Set(read.map((r) => r.path));
-    for (const path of ["/secrets", "/setup/integrations", "/config", "/stream/snapshot"]) {
+    for (const path of [
+      "/secrets",
+      "/setup/integrations",
+      "/config",
+      "/stream/snapshot",
+      "/artifact-folders",
+    ]) {
       expect(paths, `nothing reached ${path}`).toContain(path);
     }
     expect(read.some((r) => r.socket && r.path === "/ws/stream")).toBe(true);

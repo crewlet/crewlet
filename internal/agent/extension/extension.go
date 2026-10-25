@@ -95,8 +95,9 @@ const ReasonBudgetExhausted = "budget_exhausted"
 type Request struct {
 	Phase phase.Phase
 
-	Task        string
-	PlanSummary string
+	// Task is what the turn was asked to do, which the tool log is judged
+	// against.
+	Task string
 
 	// Calls is the phase's tool log — the evidence. A judge shown only the
 	// narration cannot tell progress from a model saying it is making
@@ -202,17 +203,22 @@ func (p Policy) Grant(d Decision, used int) int {
 // because the phases END differently.
 //
 // The executor exits by calling `submit_work`, the reviewer by calling
-// `submit_review`, onboarding by calling `mark_onboarded`. Only a sub-agent
-// exits by returning text with no tool call at all. A phase told the wrong
-// way to finish spends its granted rounds trying to leave through a door it
-// does not have, which is the exact failure the extension was granted to
+// `submit_review`, onboarding by calling `mark_onboarded`. A phase told the
+// wrong way to finish spends its granted rounds trying to leave through a door
+// it does not have, which is the exact failure the extension was granted to
 // avoid.
 //
-// ONBOARDING IS NOT THE DEFAULT, and the difference is not cosmetic. Told to
-// stop calling tools, an extended onboarding pass never reaches
+// ONBOARDING IS NOT A FALLBACK CASE, and the difference is not cosmetic. Told
+// to stop calling tools, an extended onboarding pass never reaches
 // mark_onboarded — so the marker is never stamped, the seat stays
 // un-onboarded, and the pass re-runs on every turn that seat ever takes. A
 // silent, permanent, per-turn cost, caused by one missing case.
+//
+// THOSE THREE ARE EVERY PHASE A NUDGE CAN REACH: the runner's phase loop is
+// the one caller, and it runs nothing else. Any other phase answers "" — a
+// worker in particular runs its own loop with no extension, and the hint this
+// once gave it ("stop calling tools and return a plain-text summary") was the
+// opposite of its contract, which is to finish by calling `submit_result`.
 func FinishHint(ph phase.Phase) string {
 	switch ph {
 	case phase.Execute:
@@ -226,11 +232,8 @@ func FinishHint(ph phase.Phase) string {
 		return "If you cannot finish in this window, call `mark_onboarded` " +
 			"anyway after persisting what you have read — an onboarding pass " +
 			"that never marks itself done runs again on every turn you take."
-	default:
-		return "If you cannot finish in this window, stop calling tools and " +
-			"return a short plain-text summary of what is done and what is " +
-			"outstanding."
 	}
+	return ""
 }
 
 // Nudge is the message handed to a phase that has been granted more rounds.
@@ -242,11 +245,14 @@ func Nudge(ph phase.Phase, granted int, reason string) string {
 	if granted == 1 {
 		plural = ""
 	}
-	return fmt.Sprintf(
+	nudge := fmt.Sprintf(
 		"You have been granted %d additional tool-call round%s because the "+
-			"extension judge sees you making progress.\nJudge's reason: %s\n"+
-			"Use them efficiently to finish the task. %s",
-		granted, plural, reason, FinishHint(ph))
+			"extension judge sees you making progress.\nJudge's reason: %s",
+		granted, plural, reason)
+	if hint := FinishHint(ph); hint != "" {
+		nudge += "\n" + hint
+	}
+	return nudge
 }
 
 // Consider runs one judge call and returns what it is worth.

@@ -63,8 +63,8 @@ type ExternalNotification struct {
 	Sender             string `json:"sender"`
 	Subject            string `json:"subject"`
 	// Body is the ENRICHED trigger prompt: the notification builder front-loads
-	// triage and how-to boilerplate (for Slack, ~1.5k characters) before the
-	// actual message.
+	// its own scaffolding (for chat, the triage guidance and the seat's
+	// identity) before the actual message.
 	Body string `json:"body"`
 	// SalientBody is the raw inbound message, stripped of that scaffolding.
 	//

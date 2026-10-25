@@ -788,7 +788,7 @@ func indexedPacks(b *testing.B, node codetest.Node, repoID string) (indexed, pac
 
 // treeFilesPerPush is how many files each push of a tree fixture adds, and
 // treeFileBytes each one's size: fifty files of 3 000 seeded random bytes,
-// 150 KB — the median push ADR-0051 sizes the host for — spread over fifty
+// 150 KB — the median push ADR-0054 sizes the host for — spread over fifty
 // directories.
 const (
 	treeFilesPerPush = 50

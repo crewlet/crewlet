@@ -946,6 +946,10 @@ const (
 	// CodeLabelTaken is a label another version of the artifact holds, or
 	// one past the labelled versions an artifact keeps. 409.
 	CodeLabelTaken Code = "label_taken"
+	// CodeBrandContrast is an adoption of a brand whose body text does not
+	// contrast enough with its light ground to be read. 422, the detail's
+	// `contrast` naming the pair, its two colours, the ratio and the floor.
+	CodeBrandContrast Code = "brand_contrast"
 	// CodeArtifactOriginUnset is a frame asked of a deployment that serves
 	// no artifact origin (`api.artifacts.external_url` unset). 409: an
 	// operator sets one; no retry here changes it.
@@ -954,6 +958,33 @@ const (
 	// renders itself (a doc, a native sheet), which runs no
 	// author code and so is never opened on the artifact origin. 409.
 	CodeArtifactNotFramed Code = "artifact_not_framed"
+
+	// CodeFolderNotFound is a folder a write names (a parent, a destination,
+	// the folder a create files into) that does not exist, was removed, or
+	// that the caller cannot see: one answer for all three, so a folder's
+	// existence is never disclosed to somebody it is not shown to. 404.
+	CodeFolderNotFound Code = "folder_not_found"
+	// CodeFolderNameTaken is a folder name its place already holds, compared
+	// without regard to case. 409, the detail naming it.
+	CodeFolderNameTaken Code = "folder_name_taken"
+	// CodeFolderCycle is a folder moved into itself or a folder inside it.
+	// 409.
+	CodeFolderCycle Code = "folder_cycle"
+	// CodeFolderDepth is a create or a move that would place a folder deeper
+	// than folders go. 409.
+	CodeFolderDepth Code = "folder_depth"
+	// CodeFolderLimit is a create or a move past the folders the company or
+	// one folder holds. 409.
+	CodeFolderLimit Code = "folder_limit"
+	// CodeFolderWidens is a folder move into a tree whose audience reaches
+	// somebody the folder's present one does not: the folder and every
+	// folder beneath it become visible to them by name, while the artifacts
+	// in them keep their own access. 409 until the request confirms it
+	// (`confirm_widen`).
+	CodeFolderWidens Code = "folder_widens"
+	// CodeFolderAmbiguous is a folder path that names more than one folder
+	// the caller can see. 409, the detail listing each by id.
+	CodeFolderAmbiguous Code = "folder_ambiguous"
 )
 
 // THE ARTIFACT DATASTORE'S OWN (`/artifacts/{id}/data`): the verdicts its
@@ -1027,7 +1058,7 @@ const (
 	// running check instead.
 	CodeVerifyRunning Code = "verify_running"
 	// CodeNotPermitted is a code read the asker's grant on the repository
-	// does not cover (ADR-0055): the same word a refused push prints, so
+	// does not cover (ADR-0058): the same word a refused push prints, so
 	// one refusal has one spelling on every surface that names it. 403,
 	// the detail naming who asked, the repository and what would admit
 	// them.
@@ -1368,6 +1399,9 @@ var codes = map[Code]string{
 		"published. The detail lists every problem to fix.",
 	CodeSourceTaken: "Another of your artifacts already uses that source " +
 		"address. Publish to that artifact, or choose another address.",
+	CodeBrandContrast: "The brand's text colour does not stand out enough from its " +
+		"light background to be read, so it was not adopted. Darken the text or " +
+		"lighten the background, then adopt it again.",
 	CodeLabelTaken: "Another version already has that label, or this " +
 		"artifact keeps no more labels. Choose another label.",
 	CodeArtifactOriginUnset: "This engine has no address to open pages on, so " +
@@ -1375,6 +1409,17 @@ var codes = map[Code]string{
 		"`api.artifacts.external_url`.",
 	CodeArtifactNotFramed: "This artifact is shown here directly rather than " +
 		"opened as a page.",
+	CodeFolderNotFound: "There is no such folder, or it is not one you can see.",
+	CodeFolderNameTaken: "A folder there already has that name. Choose another " +
+		"name, or rename the one the detail names.",
+	CodeFolderCycle: "A folder can't move into itself or a folder inside it.",
+	CodeFolderDepth: "That would place a folder deeper than folders go. Choose a place higher up.",
+	CodeFolderLimit: "There are already as many folders there as there may be. Remove some first.",
+	CodeFolderWidens: "Moving this folder there makes it, and the folders in it, visible by " +
+		"name to more people. The artifacts in them keep their own access. Confirm the move " +
+		"to go ahead.",
+	CodeFolderAmbiguous: "That path names more than one folder you can see. Choose one " +
+		"of the folders the detail lists, by its id.",
 	CodeDataQuota: "This would take the data past its size limit, so nothing " +
 		"was written. Delete rows, or ask an operator to raise the limit the " +
 		"detail names.",

@@ -121,8 +121,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 // logger, which is the process's state rather than the invocation's, so they
 // are read from the process.
 func runIn(environ config.Source, args []string, stdout, stderr io.Writer) (err error) {
-	// A READ THROUGH A NODE THAT FAILED PART WAY THROUGH A COMMAND stops it
-	// with a panic, because the lookup that made it has no error to return
+	// A READ OF A STORED VALUE THAT FAILED PART WAY THROUGH A COMMAND stops
+	// it with a panic, because the lookup that made it has no error to return
 	// and its only other answer, unset, is the one that mints over a working
 	// secret ([readFailed]). It is the command's failure, and answered here
 	// as one; any other panic is a bug, and goes on as it came.
@@ -2277,7 +2277,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// EVERY NODE'S company days, for every named spend window
 			// and its series — the replicated usage domain (ADR-0020),
 			// through the estate's router, so a node whose usage copy is
-			// out of service answers from a peer's (ADR-0046).
+			// out of service answers from a peer's (ADR-0049).
 			Usage: e.UsageReads(),
 			// Read through the ENGINE's epoch rather than a captured
 			// company: an apply replaces it, and a screen bound to the
@@ -2420,7 +2420,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// which derives the links from the bodies it already reads
 			// — asked through the knowledge base's routed reader, so
 			// the node that answers is one whose copies the links are
-			// named from serve (ADR-0046), and resolved per question
+			// named from serve (ADR-0049), and resolved per question
 			// for the same reason, since the index is the native half's.
 			Backlinks: backlinkSource,
 			// RANKED SEARCH, present exactly where the company keeps its

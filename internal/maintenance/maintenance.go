@@ -46,7 +46,7 @@
 // state logs' arbitration anchors are the case that tested it — one row per
 // subject on every node, which a per-node job here once deleted below a
 // floor each node read for itself — and the trim now removes them with a
-// trimmed record every applier takes at one position (ADR-0047). What such a
+// trimmed record every applier takes at one position (ADR-0050). What such a
 // table retains rides a record, never a job of this package's.
 package maintenance
 

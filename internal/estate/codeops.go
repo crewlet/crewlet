@@ -10,7 +10,7 @@ import (
 // The code host's operations: a push's proposal, and the four reads the
 // host's admission, a cache's sync and the REST routes make. Every one names
 // the CODE domain, so the code copy's own verdict — never the tracker's —
-// decides whether a node answers it (ADR-0046), and its floor is on the code
+// decides whether a node answers it (ADR-0049), and its floor is on the code
 // log. A push is the one KEYED operation: see the package doc's "A push is
 // asked of its repository's committer".
 

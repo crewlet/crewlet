@@ -176,23 +176,27 @@ the engine mirrors no state it would have to keep in step. See
 
 ### Artifacts
 
-Twelve more, registered on every node that takes artifact uploads (one with an
-object store, a coordination store and a data node to reach), whatever tracker
-or knowledge base the company runs: nine for the artifact and four for its
-datastore. Each tool is named for its authority row, and the operator catalogue
-serves the same thirteen, so an operator's own assistant publishes and writes
-rows exactly as a seat does.
+Sixteen more, registered on every node that takes artifact uploads (one with
+an object store, a coordination store and a data node to reach), whatever
+tracker or knowledge base the company runs: twelve for artifacts, their folders
+and the company's brand, and four for an artifact's datastore. Each tool is
+named for its authority row, and the operator catalogue serves the same
+sixteen, so an operator's own assistant publishes, files and writes rows exactly
+as a seat does.
 
 | Tool | Description |
 |------|-------------|
-| `list_artifacts` | The artifacts the caller can open, by `scope` (`mine`, `shared`, `company`, `agents`, `all`), `kind` and `query`, a page at a time |
+| `list_artifacts` | The artifacts the caller can open, by `scope` (`mine`, `shared`, `company`, `agents`, `all`), `kind` and `query`, a page at a time (`max_keys`, `continuation_token`). Folders read as S3 prefixes: `prefix` is a folder's path (`Marketing/Q4/`, empty for the top level), and with `delimiter: "/"` the answer is that one level, its artifacts in `contents` and its subfolders in `common_prefixes`. Every row names its `folder` |
 | `get_artifact` | One artifact: its head, its newest versions, its files and a page of one file's source. The answer says the caller's `role` and whether they may publish (`writer`) |
 | `list_dashboard_sources` | The engine sources a dashboard's `engine` datasets may read: each one's parameters, columns, who may read it and how it refreshes. Holds no row; a source is answered as each board's viewer |
-| `create_artifact` | A new artifact of any kind (`html`, `doc`, `slides`, `dashboard`, `sheet`), from inline `content` and `files`, a project file, or a build in the turn's coding run (`source.sandbox`). When a person asked for it, they are made its editor |
-| `publish_artifact` | A new version on a stated `base_version`: `edits` (exact `old_str` and `new_str` pairs), `content`, `files` (null removes one), a build's whole `source`, or `restore_version` |
+| `get_company_brand` | The company's adopted brand: its colours by role (light and dark, each with the kit token that carries it), its typefaces, its logos as the kit's `crewlet-logo` markup and as ready `from_brand` copies, the brand slide theme's colours, the version adopted and by whom, the artifact kit version to link, and its voice, fenced under the `company` trust. `brand` is null when none is adopted. Readable by everybody, under every ceiling |
+| `create_artifact` | A new artifact of any kind (`html`, `doc`, `slides`, `dashboard`, `sheet`), from inline `content` and `files`, a project file, the adopted brand's logos and faces (`from_brand`), a build in the turn's coding run (`source.sandbox`), or for a deck a `starter` plan (a theme, `brand` among them, and the slides it opens with). `folder` files it in a folder that exists, by id or path. When a person asked for it, they are made its editor |
+| `publish_artifact` | A new version on a stated `base_version`: `edits` (exact `old_str` and `new_str` pairs), `content`, `files` (null removes one; `from_brand` copies a logo or a face), a build's whole `source`, or `restore_version` |
 | `update_artifact` | The title, description, icon or one version's label |
 | `share_artifact` / `unshare_artifact` | Grant a seat, a unit (`unit:<key>`) or the company (`company`) one role up to editor, or withdraw it. The owner's |
 | `upload_artifact_asset` | Add an image, data file or font to the asset store of an artifact that declares the `assets` capability; the answer's `reference` is the path the page uses |
+| `create_artifact_folder` | A folder inside a folder that exists (`parent`, by id or path), or a path of them created as needed; a chain that exists already is answered as it is. Only a person creates a top-level folder |
+| `move_artifact` | File up to 25 artifacts in a folder (by id or path), or take them to the top level (`folder: ""`), each decided and written on its own, with a result per artifact |
 | `read_artifact_data` | An artifact's datastore: with no `collection`, its schema (every collection, its columns and who may read and write it); with one, a page of rows (`since` for what changed after an earlier `through`) or one row by `doc` |
 | `query_artifact_data` | Rows of one collection whose indexed fields match every filter in `where`, ordered by `order_by` and paged |
 | `write_artifact_data` | A batch of 1 to 100 ops (`set`, `merge`, `delete`, `increment`, `append`, `add`, `remove`), all or none, each decided by its collection's rules; `if_version` writes a row only if nobody changed it since, and a conflict hands back the rows as they are now |
@@ -209,6 +213,26 @@ company does not know opens no artifact at all. A caller with no relation to an
 artifact is told it does not exist, in exactly the words an id nothing holds is
 answered with. An agent is held to `contributor` on artifacts it does not own
 unless `artifacts.agents_manage_others` lifts it.
+
+**A folder grants nothing, and its name is the ceiling's too.** Filing asks
+editor on the artifact and contributor on the destination, each through the
+requester ceiling, and never changes who may open the artifact. A folder
+reference resolves only among the folders the seat and whoever the turn is
+acting for can both see: a missing one is refused naming the nearest paths they
+both see (never created), an ambiguous one is refused naming each candidate, and
+a turn woken by somebody the company does not know sees no folder and files in
+none. A turn segment makes at most **5** folder records; a chain that already
+exists is answered without counting. Renaming, moving and removing folders are
+a person's gestures in the dashboard.
+
+**The adopted brand is everybody's to read.** It is the face the company shows
+on everything it publishes, so `get_company_brand` answers under every ceiling
+and only the version an administrator adopted, never a kit's newer draft. Its
+voice is the one free text: it arrives fenced as `brand_voice` under the
+`company` trust, which governs tone and wording and never the task, the tools,
+the recipients or access. A `from_brand` copy is made by the publish pipeline
+from the adoption's snapshot as a new object of the version, so a later
+adoption changes no version already published.
 
 **The datastore's rows are the ceiling too.** A row is answered only when the
 person the turn is acting for could read it as well, by the collection's own
@@ -241,7 +265,8 @@ administrator who holds a share reads and writes as that share.
 artifact or its data (`get_artifact`, `read_artifact_data`,
 `query_artifact_data`) appears in the artifact's room as an agent, viewing, and
 one that writes it (`publish_artifact`, `update_artifact`,
-`upload_artifact_asset`, `write_artifact_data`, `set_artifact_schema`) as
+`upload_artifact_asset`, `write_artifact_data`, `set_artifact_schema`,
+`move_artifact`) as
 editing, focused on the version, collection or row the call named, for 45
 seconds after its last call, and only once the call was allowed. The people
 looking at the artifact see which agent is working on which row.

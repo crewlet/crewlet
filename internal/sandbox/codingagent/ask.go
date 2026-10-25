@@ -104,7 +104,8 @@ echo "Question recorded; stop now — a person will answer and your work will re
 `
 }
 
-// AskInstruction is the brief addendum telling the agent how and when to ask.
+// AskInstruction is the standing instruction telling the agent how and when to
+// ask, which rides a run's system text ([sandbox.LaunchRequest.Ask]).
 //
 // The roster and manager give it real names to target, so a --to decision can
 // name a person rather than guess one.
@@ -134,7 +135,8 @@ func AskInstruction(roster []string, manager string) string {
 	return strings.Join(lines, "\n")
 }
 
-// FindingsInstruction is the brief addendum requiring a durable report.
+// FindingsInstruction is the standing instruction requiring a durable report,
+// the last part of a run's system text ([finalSystem]).
 //
 // The coding agent is NOT the last step: its findings go back to the Crewlet
 // agent, which continues the same task. The streamed final message can be lost

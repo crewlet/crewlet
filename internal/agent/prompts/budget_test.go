@@ -1,10 +1,14 @@
 package prompts
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // The measure is part of the contract: someone "simplifying" it to len(s)/4
@@ -35,81 +39,88 @@ func withinBudget(t *testing.T, name, prompt string, budget int) {
 	t.Logf("%s prompt: ~%d tokens (budget %d, headroom %d)", name, got, budget, budget-got)
 }
 
-// Reference role: a lead, with a roster, three MCP servers, and a 100-tool
-// catalogue.
+// Reference role: a lead, with a roster, and the surface a production
+// executor has — see referenceExecutor.
 //
-// The budget covers the identity scaffold, the finish-the-arc rule, the
-// stay-reachable rule, the verbose-decline rule, the submission contract, and
-// the slim-catalogue + list_mcp_server_tools discovery flow. The ~50 tokens
-// of discovery prose replaces the typical 1500-token MCP tool listing in a
-// real workload — a net win as soon as one MCP server with more than five
-// tools is wired.
+// The budget covers the identity scaffold, the turn contract (act with tool
+// calls, finish the arc and discover what is missing, stay reachable) and
+// EVERY section a tool on the surface turns on: the escalation guidance, the
+// sandbox section, the workers list and the tools to discover. Measured with
+// all of them rendered, because that is the seat the budget is for: a lead on
+// the default work tracker holds `comment_on_work_item` and so carries the
+// escalation section on every turn, and a budget measured on a seat without
+// it bounded a prompt no such lead is sent. The review budget below turns
+// every gate on for the same reason.
 //
-// 2400 -> 2200 when the turn collapsed to one loop, which is DOWN: the
-// executor's prompt is the old Plan prompt's identity scaffold plus the act
-// contract Execute carried, minus everything the two-phase split needed — the
-// tools_needed declaration, the phantom-tool warning, and the model-split
-// hint. The frame that DECIDES is now the frame that acts, so nothing has to
-// be described to a second conversation.
+// It used to be measured against a synthetic catalogue of a hundred one-line
+// tools, which measured nothing production sends: the executor holds every
+// first-party tool from its first round, whose definitions reach the model
+// with the request, so what its system prompt lists is its MCP servers and
+// nothing else.
 //
-// Measured at ~2034 with a 100-tool catalogue, so this leaves ~7%: enough
-// that a sentence can be added, tight enough that a section cannot.
+// 2200 -> 870 when the prompt stopped saying what the model gets elsewhere:
+// the first-party tool catalogue (every description a second time), the rules
+// the submission and `decision` schemas state beside their fields, and the
+// meta sentences about what the prompt already holds.
+//
+// Measured at ~807, so this leaves ~8%: enough that a sentence can be added,
+// tight enough that a section cannot. The plain contract alone — no tracker,
+// no workers, no sandbox — measures ~508 of it.
 //
 // IT BOUNDS THE PROSE, NOT THE ROSTER. The reference lead has one direct
-// report, so what this number holds down is the contract text and the
-// catalogue — the part that grows when somebody writes a paragraph. What a
-// roster costs is bounded by rosterAllowanceTokens instead, because it grows
-// with the company rather than with the diff, and the two together are
-// measured by TestTheWholeTurnStaysUnderBudget below.
-func TestTheExecutorPromptStaysUnderBudgetWithABigCatalogue(t *testing.T) {
+// report, so what this number holds down is the contract text — the part that
+// grows when somebody writes a paragraph. What a roster costs is bounded by
+// rosterAllowanceTokens instead, because it grows with the company rather
+// than with the diff, and the two together are measured by
+// TestTheWholeTurnStaysUnderBudget below.
+func TestTheExecutorPromptStaysUnderBudget(t *testing.T) {
 	t.Parallel()
-	p := BuildExecutor(lead(), ExecutorInput{ToolCatalogue: bigCatalogue()}).Text
-	withinBudget(t, "executor", p, 2200)
+	p := BuildExecutor(lead(), referenceExecutor(t)).Text
+	withinBudget(t, "executor", p, 870)
 }
 
-// Review is identity + the decision enum + the settled-delivery note, the
-// incomplete / sandbox / duplicate-delivery / missing-tool / blocked rules and
-// the completed_work instruction.
+// THE REFERENCE RENDERS EVERY GATED SECTION. A budget measured on an input
+// that turns one off is a budget on a prompt smaller than the one production
+// sends, which is how the executor's ceiling was once set ~100 tokens under
+// what every lead on the default tracker was sent: nothing failed, because
+// nothing measured that lead.
+func TestTheBudgetReferenceRendersEveryGatedSection(t *testing.T) {
+	t.Parallel()
+	p := BuildExecutor(lead(), referenceExecutor(t))
+	for _, key := range []string{"escalation", "sandbox", "workers", KeyDiscoverableTools} {
+		if _, ok := slice(p, key); !ok {
+			t.Errorf("the reference executor renders no %q section, so the budgets "+
+				"below are measured on a smaller prompt than production's", key)
+		}
+	}
+}
+
+// Review is identity + the rules that decide its one decision: the evidence
+// pointer, the settled-delivery note, the incomplete, duplicate, missing-tool
+// and blocked rules — measured with BOTH gated rules rendered (the sandbox
+// rule and `a2a_ask`), which is the largest a review prompt gets.
 //
-// The original budget was 300 (identity + a six-line enum). The rules added
-// ~290 tokens to prevent real production failures: the sandbox rule, which
-// stops the reviewer looping a turn forever by misreading a
-// run_sandbox-delegated investigation as fabrication; and the cross-round
-// duplicate rule, which stops a second pass re-firing a side effect that
-// already landed. Each maps to a turn-ending bug that was actually observed.
+// The original budget was 300 (identity + a six-line enum), and it grew to
+// 800 as each rule arrived for a turn-ending failure — the sandbox rule, the
+// cross-round duplicate rule keyed on target and content, the settled
+// delivery and incomplete notes, and the blocked rule's three-way split on
+// whether the person has been told.
 //
-// Raised 560 -> 600 when the duplicate rule had to be keyed on target and
-// content rather than tool name: keyed on the name alone it fired on the
-// in-thread follow-up PriorWorkHeader explicitly asks for, so every corrected
-// turn looped to max_iterations and terminated failed.
-//
-// 600 -> 750 for the two-stage turn: the tool-delivery rule is gone (the
-// engine settles delivery before this prompt is built) and what replaced it
-// is the note saying so plus the incomplete rule, which is what stops a
-// reviewer grading an engine-written outcome as the agent's own verdict.
-//
-// 750 -> 800 when the blocked rule became a three-way split. It had named a
-// single outcome, `self_iterate`, while saying in the same breath that the
-// colleague "reply asynchronously and that re-triggers the agent" — and both
-// halves cannot hold at once. A seat that had correctly put a clarifying
-// question to its founder was sent back by the reviewer, asked again two
-// minutes later, and ended on the max-iterations guard. Telling the three
-// cases apart — not asked yet, already asked, nobody's reply would finish it
-// — measures at 53 tokens over the one-outcome instruction, and buys back the
-// two extra rounds every such turn was burning.
-//
-// The headroom is small on purpose: the next addition should have to justify
-// itself here, not slip in. 800 keeps it at ~30 tokens, which is what 750
-// left before the split — the raise pays for the rule, not for room.
+// 800 -> 590 when each rule was stated once: what a decision means and what
+// `notes` and `completed_work` carry is the submission schema's, beside the
+// fields, and the sandbox rule and `a2a_ask` render only for a seat holding
+// them. Measured at ~545 with both gates on, so ~8% headroom: the next rule
+// should have to justify itself here, not slip in.
 //
 // The roster allowance does not reach this prompt and the number is unmoved
 // by it: review renders [BuildIdentityLine], which names the reviewer's
-// manager and not one of its reports, so a lead of 500 measures the same 772
-// as the reference lead. That is why the whole turn's raise below is the
-// allowance exactly, with nothing added for a second copy of the roster.
+// manager and not one of its reports, so a lead of 500 measures the same as
+// the reference lead. That is why the whole turn's budget below is the
+// allowance plus the two prompts, with nothing added for a second copy of the
+// roster.
 func TestReviewPromptIsSmall(t *testing.T) {
 	t.Parallel()
-	withinBudget(t, "review", BuildReview(lead(), ReviewInput{}).Text, 800)
+	withinBudget(t, "review", BuildReview(lead(), ReviewInput{OffersSandbox: true, OffersA2A: true}).Text, 590)
 }
 
 // sectionText is sections rendered as one prompt renders them: their lines
@@ -124,14 +135,107 @@ func sectionText(sections ...[]string) string {
 	return strings.Join(lines, "\n")
 }
 
-// bigCatalogue is the 100-tool catalogue the budgets are measured against:
-// 100 tools x ~60 chars = ~6k chars = ~1500 tokens.
-func bigCatalogue() string {
-	lines := make([]string, 100)
-	for i := range lines {
-		lines[i] = fmt.Sprintf("- tool_%d: Short description of tool number %d.", i, i)
+// referenceExecutor is the executor input the budgets measure: a lead's
+// surface with every tool that gates a section on it, the workers the
+// shipped example company configures, the sandbox section, and the tools to
+// discover a production snapshot renders.
+//
+// The surface is NAMES, because that is all a gate reads — what each tool
+// says reaches the model with the request, never through this prompt. The
+// names are the ones production's surface carries: `comment_on_work_item`
+// and `create_work_item` from the default work tracker, `delegate` for a
+// seat with workers, `run_sandbox` for one with the sandbox gate on, and the
+// two tools every executor adds (`submit_work` and the discovery pair).
+func referenceExecutor(t *testing.T) ExecutorInput {
+	t.Helper()
+	return ExecutorInput{
+		Discoverable: referenceDiscoverable(t),
+		AvailableTools: []string{
+			"activate_tool", escalationTool, "create_work_item", "delegate",
+			"list_mcp_server_tools", "run_sandbox", "submit_work",
+		},
+		Workers:       referenceWorkers(),
+		OffersSandbox: true,
+	}
+}
+
+// referenceWorkers is the `## Your workers` list of the Nimbus example
+// (examples/nimbus.company.yaml): its two templates, rendered by the function
+// production renders them with and in the order it renders them in.
+func referenceWorkers() string {
+	workers := map[string]config.Worker{
+		"researcher": {
+			Description: "reads the team's own pages and reports what they actually " +
+				"say, with the page titles it read",
+			Tools: []string{"search_knowledge", "get_page"},
+			Output: map[string]any{"type": "object", "properties": map[string]any{
+				"findings": map[string]any{}, "sources": map[string]any{}, "gaps": map[string]any{},
+			}},
+		},
+		"synthesist": {
+			Description: "reconciles several workers' findings into one " +
+				"recommendation with its open questions",
+			Output: map[string]any{"type": "object", "properties": map[string]any{
+				"recommendation": map[string]any{}, "disagreements": map[string]any{},
+				"open_questions": map[string]any{},
+			}},
+		},
+	}
+	lines := make([]string, 0, len(workers))
+	for _, name := range config.WorkerNames(workers) {
+		lines = append(lines, config.DescribeWorker(name, workers[name]))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// referenceDiscoverable is the reference executor's tools to discover,
+// rendered by the renderer production uses over a snapshot shaped like
+// production's: first-party tools with real-length descriptions, every one of
+// them ACTIVE, as the executor holds them from its first round — and the
+// three MCP servers an engineering lead typically carries (a tracker, a code
+// host, a chat), several tools each.
+//
+// What renders is one line per server, and the case checks that it is: a
+// first-party description in this text would mean the prompt is paying for a
+// definition the request already carries, which is the regression this
+// fixture exists to catch.
+func referenceDiscoverable(t *testing.T) string {
+	t.Helper()
+	reg := tools.NewRegistry()
+	var active []string
+	for i := range 45 {
+		name := fmt.Sprintf("first_party_%02d", i)
+		desc := strings.Repeat("What this first-party tool does and when to call it. ", 8)
+		if err := reg.Register(stubTool{name, desc}, tools.OriginBuiltin); err != nil {
+			t.Fatal(err)
+		}
+		active = append(active, name)
+	}
+	for _, server := range []string{"atlassian", "github", "slack"} {
+		for i := range 30 {
+			name := fmt.Sprintf("%s_tool_%02d", server, i)
+			if err := reg.Register(stubTool{name, "A vendor's tool."}, tools.Origin(server)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	out := reg.Snapshot().Discoverable(active)
+	if strings.Contains(out, "first_party_") || strings.Count(out, "\n") != 2 {
+		t.Fatalf("the reference executor's tools to discover are not its three "+
+			"servers alone:\n%s", out)
+	}
+	return out
+}
+
+// stubTool is a name and a description and nothing else: what a budget
+// measures is what a catalogue renders, never what a tool does.
+type stubTool struct{ name, desc string }
+
+func (s stubTool) Name() string               { return s.name }
+func (s stubTool) Description() string        { return s.desc }
+func (s stubTool) Parameters() map[string]any { return map[string]any{"type": "object"} }
+func (s stubTool) Call(context.Context, map[string]any) (tools.Result, error) {
+	return tools.Result{}, nil
 }
 
 // THE WHOLE TURN, which is the number that actually bills.
@@ -146,19 +250,22 @@ func bigCatalogue() string {
 // diff. A budget measured on a one-report seat says nothing about the seat
 // the defect was found on.
 //
-// 3000 -> 4000 for the roster allowance, and the raise IS the allowance: the
-// turn's own prose measures ~2806 with a 100-tool catalogue, the roster
-// allowance is 1000 (see rosterAllowanceTokens), and a mixed company pays
-// another ~152 for the `## Human colleagues` note this fixture triggers.
-// Measured at ~3838, so ~4% headroom — deliberately tighter than the ~7% the
-// prose budgets carry, because the next thing that wants room here should
-// take it out of the allowance rather than out of the budget.
+// 3000 -> 4000 for the roster allowance, and the raise was the allowance.
+// 4000 -> 2430 when the prompts stopped saying what the model gets elsewhere:
+// the turn's own prose measures ~1,258 with every gated section of both
+// prompts rendered (referenceExecutor, and the review's two gated rules), the
+// roster allowance is 1000 (see rosterAllowanceTokens) and spends ~987 of it
+// here, and a mixed company pays another ~93 for the `## Human colleagues`
+// note this fixture triggers. Measured at ~2,338, so ~4% headroom —
+// deliberately tighter than the ~8% the prose budgets carry, because the next
+// thing that wants room here should take it out of the allowance rather than
+// out of the budget.
 func TestTheWholeTurnStaysUnderBudget(t *testing.T) {
 	t.Parallel()
 	seat := bigLead(500)
-	whole := BuildExecutor(seat, ExecutorInput{ToolCatalogue: bigCatalogue()}).Text +
-		BuildReview(seat, ReviewInput{}).Text
-	withinBudget(t, "turn", whole, 4000)
+	whole := BuildExecutor(seat, referenceExecutor(t)).Text +
+		BuildReview(seat, ReviewInput{OffersSandbox: true, OffersA2A: true}).Text
+	withinBudget(t, "turn", whole, wholeTurnBudget)
 
 	// THE CONTROL. The same 500 reports with the allowance taken off: every
 	// one of them rendered in full, which is what this prompt did until now
@@ -166,13 +273,18 @@ func TestTheWholeTurnStaysUnderBudget(t *testing.T) {
 	// a fixture that was never big enough to test anything.
 	uncapped := planRoster(seat, newRosterAllowance(1<<20))
 	control := sectionText(BuildIdentitySection(seat, uncapped), BuildRosterSection(seat, uncapped))
-	if got := approxTokens(control); got < 4000 {
+	if got := approxTokens(control); got < wholeTurnBudget {
 		t.Fatalf("the uncapped roster measures ~%d tokens — under the whole "+
 			"turn's own budget, so this fixture does not exercise the allowance", got)
 	} else {
-		t.Logf("control: the uncapped roster alone is ~%d tokens (budget %d)", got, 4000)
+		t.Logf("control: the uncapped roster alone is ~%d tokens (budget %d)", got, wholeTurnBudget)
 	}
 }
+
+// wholeTurnBudget is the budget TestTheWholeTurnStaysUnderBudget holds the
+// turn to, and the size its control has to exceed: one number, so the control
+// cannot go on proving the allowance against a budget the assertion left.
+const wholeTurnBudget = 2430
 
 // THE LADDER, and it is an order rather than a set: a lead reads profiles,
 // then names, then one line telling it where the rest of its team went.
@@ -363,13 +475,13 @@ func namesUnderTheirOwnCap(seat Seat, tokens int) string {
 // `manages` is the chart's answer to who this seat may direct work to, and it
 // is read from the chart on every lookup — the roster allowance never touches
 // it. Read as an authorization cap it would be the worst possible reading of
-// this change: a lead silently stripped of 461 reports it is still
+// this change: a lead silently stripped of 457 reports it is still
 // accountable for, with the engine agreeing that they are not its people.
 func TestCappingTheRosterDoesNotCapManages(t *testing.T) {
 	t.Parallel()
 	o := profiledReports(500)
 	seat := seatIn(o, "lead")
-	p := BuildExecutor(seat, ExecutorInput{ToolCatalogue: bigCatalogue()}).Text
+	p := BuildExecutor(seat, referenceExecutor(t)).Text
 
 	if got := len(seat.Role.Manages); got != 500 {
 		t.Errorf("the chart says this seat manages %d reports, want 500", got)

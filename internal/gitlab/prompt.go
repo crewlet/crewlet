@@ -14,7 +14,15 @@ import (
 // stamped, because one merge request event reaches a reviewer, an assignee
 // and a watcher and asks each for something different. What is particular to
 // a code host is the FOURTH shape: an event that reports the outcome of the
-// recipient's own action. Nothing else in the company has one.
+// recipient's own action. Only the hosted code host's failed run and the
+// tracker's unblocked notice share it.
+//
+// WHAT IT SAYS IS WHAT ONLY THE ENGINE KNOWS: why the seat is reading this,
+// the item by the reference a person would paste, the product facts a model
+// would not assume (a close that means stop, where an issue's code changes
+// go), and how each ask is declined on this host. How to review a diff or
+// fix a red pipeline is the model's own, and that a direct ask may not end in
+// silence is the executor's contract — neither is restated here.
 //
 // NOTHING HERE NAMES A TOOL — the deployed MCP server's tool names are not
 // knowable by the engine. See docs/concepts/tool-capabilities.md.
@@ -79,12 +87,12 @@ func (Prompt) Addressed(n notify.Inbound) bool {
 
 // WakesActor implements [notify.Prompt]: only a failed pipeline.
 //
-// THE ONE REAL EXCEPTION TO THE SELF-ACTION RULE in the whole engine. A
-// pipeline names the person who pushed as its actor, and when it goes red
-// they are the one who has to fix it — suppressing it means the only person
-// who can act never learns. Every other event here reports what somebody
-// DID, which that somebody already knows: their own comment, their own
-// assignment, their own merge.
+// THIS HOST'S ONE EXCEPTION TO THE SELF-ACTION RULE, shared with the hosted
+// host's failed run and for the same reason. A pipeline names the person who
+// pushed as its actor, and when it goes red they are the one who has to fix
+// it — suppressing it means the only person who can act never learns. Every
+// other event here reports what somebody DID, which that somebody already
+// knows: their own comment, their own assignment, their own merge.
 //
 // The test is "did something happen BECAUSE of me that I do not yet know
 // about". A build is the answer because it runs asynchronously, minutes
@@ -171,18 +179,11 @@ func reviewRequested(b *strings.Builder, n notify.Inbound, parties notify.Partie
 	writeRef(b, "Merge request", n)
 	b.WriteString("**Requested by:** " + senderLabel(n, parties) + "\n\n" +
 		"**Description:**\n" + orElse(n.Body, "(no description)") + "\n")
-	b.WriteString("\n## What you should do" +
-		"\n1. **Read the diff**, not just the description — the changed" +
-		" files are the review. Approve if the change is correct; leave" +
-		" comments on the diff where it is not." +
-		"\n2. **Tell the requester** on the conversation this came from" +
-		" that it is approved or that it needs work. A review that lands" +
-		" only on the merge request is a review they have to go looking for." +
-		"\n3. **If you have decided not to review** — out of scope, wrong" +
-		" reviewer, you wrote the code — do NOT go quiet. A review request" +
-		" is a direct ask: re-request review from the right person, or" +
-		" comment naming who should do it and take yourself off the" +
-		" reviewer list so the requester knows to reassign.\n")
+	// THE DECLINE GESTURE AND NOTHING ELSE — see the hosted host's prompt:
+	// reviewing is the model's own, and only the code host knows that a
+	// review is declined by moving it.
+	b.WriteString("\nIf you are not the right reviewer, request review from" +
+		" whoever is and remove yourself from the reviewers.\n")
 }
 
 // assigned: the work is this seat's.
@@ -195,64 +196,56 @@ func assigned(b *strings.Builder, n notify.Inbound, parties notify.Parties) {
 	b.WriteString("You have been assigned " + article(kind) + " " + kind + ".\n\n")
 	writeRef(b, capitalize(kind), n)
 	b.WriteString("**Assigned by:** " + senderLabel(n, parties) + "\n\n" +
-		"**Description:**\n" + orElse(n.Body, "(no description)") + "\n")
-
-	b.WriteString("\n## What you should do" +
-		"\n1. **Read the " + kind + " in full** — the description and the" +
-		" existing discussion — before starting.")
-	if mr {
-		b.WriteString("\n2. **Do the work it describes**, then push and update" +
-			" the merge request.")
-	} else {
-		b.WriteString("\n2. **Do the work it describes.** Code changes go" +
-			" through your sandboxed coding runtime, which opens a merge" +
-			" request under your own identity on the code host.")
+		"**Description:**\n" + orElse(n.Body, "(no description)") + "\n\n")
+	if !mr {
+		// A FACT ABOUT THIS ENGINE, not advice: where code changes go, and
+		// whose name the merge request they produce carries.
+		b.WriteString("Code changes go through your sandboxed coding runtime," +
+			" which opens a merge request under your own identity on the code" +
+			" host. ")
 	}
-	b.WriteString("\n3. **Report back** to whoever assigned it, on the" +
-		" conversation it came from, when you are done — or say so if you" +
-		" have decided not to act (out of scope, wrong person). An" +
-		" unanswered direct assignment looks exactly like a message that" +
-		" was lost.\n")
+	b.WriteString("If the work is not yours, reassign it to whoever it belongs to.\n")
 }
 
 // pipelineFailed: something the recipient did has broken.
 //
-// The ONE prompt in the engine addressed to the person who caused the event,
-// which is why it says so explicitly: a seat that has learned "I am not told
-// about my own actions" needs to be told why this one is different, or it
-// reads its own name as a routing mistake.
+// One of the few wakes in the engine addressed to the party who caused it
+// (the hosted host's failed run and the tracker's unblocked notice are the
+// others), which is why it says so explicitly: a seat that has learned "I am
+// not told about my own actions" needs to be told why this one is different,
+// or it reads its own name as a routing mistake. How to debug a red pipeline
+// is the model's own, and is not restated.
+//
+// LABELLED "Pipeline", because the reference is the merge request the
+// pipeline ran for or, on a branch push, the bare project — and "Merge
+// request: nimbus/api" named a merge request that does not exist.
 func pipelineFailed(b *strings.Builder, n notify.Inbound, parties notify.Parties) {
 	b.WriteString("A pipeline you triggered has FAILED.\n\n")
-	writeRef(b, "Merge request", n)
+	writeRef(b, "Pipeline", n)
 	b.WriteString("**Triggered by:** " + senderLabel(n, parties) + "\n")
 	b.WriteString("\nYou are being told about your own action deliberately." +
 		" You are not normally notified of what you did — but a build runs" +
 		" minutes after the push and reports something nobody could have" +
 		" predicted, and you are the one who can fix it.\n")
-	b.WriteString("\n## What you should do" +
-		"\n1. **Read the job log** for the failing job. The status alone" +
-		" says nothing about the cause, and guessing at it from the diff" +
-		" is how a red pipeline becomes three red pipelines." +
-		"\n2. **Fix it and push.** A broken pipeline on your own branch is" +
-		" yours to clear; it does not need reassigning or announcing first." +
-		"\n3. **If the failure is not yours** — a flaky job, an outage in a" +
-		" dependency, a failure that reproduces on the target branch too —" +
-		" say so once on the merge request rather than pushing speculative" +
-		" changes to see what happens.\n")
 }
 
 // mentioned: somebody wrote this seat's name.
+//
+// NO EVALUATION BLOCK. A mention is addressed ([Prompt.Addressed]) and the
+// delivery check holds it to an answer, so asking the seat whether it was
+// really asked — and telling it silence is fine when it was not — buys a
+// corrective round and nothing else.
 func mentioned(b *strings.Builder, n notify.Inbound, parties notify.Parties) {
 	note := n.Metadata["event_type"] == NoteMention
 	surface, label := "issue or merge-request description", "Description"
 	if note {
 		surface, label = "comment", "Comment"
 	}
-	b.WriteString("You were mentioned in a " + surface + " on the code host.\n\n")
+	b.WriteString("You were mentioned in " + article(surface) + " " + surface +
+		" on the code host.\n\n")
 	writeRef(b, "On", n)
 	b.WriteString("**By:** " + senderLabel(n, parties) + "\n\n" +
 		"**" + label + ":**\n" + orElse(n.Body, "(no text)") + "\n")
-	b.WriteString(notify.EvaluationBlock())
 }
 
 // issueClosed: somebody closed an issue this seat is working on.
@@ -265,13 +258,7 @@ func issueClosed(b *strings.Builder, n notify.Inbound, parties notify.Parties) {
 	b.WriteString("An issue you are assigned to was CLOSED.\n\n")
 	writeRef(b, "Issue", n)
 	b.WriteString("**Closed by:** " + senderLabel(n, parties) + "\n")
-	b.WriteString("\n## What you should do" +
-		"\nStop any in-flight work on it. If you had progress worth keeping," +
-		" say so on the issue — a close is often somebody deciding the work" +
-		" is unnecessary, and they may not know how far it had got. If you" +
-		" believe the close is a mistake, say that on the issue rather than" +
-		" reopening it: whoever closed it had a reason you may not be able" +
-		" to see.\n")
+	b.WriteString("\nStop any in-flight work on it.\n")
 }
 
 // watching: thread activity on something this seat merely follows.

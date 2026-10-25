@@ -81,7 +81,7 @@ func filesNaming(t *testing.T, db *store.DB, objects ...stored) {
 
 // retiredRefs declares test_retired_objects, the table [retiredNaming] writes:
 // one retired reference per object, which keeps the object from the collector
-// and names nothing the company is owed (ADR-0048). No migration creates it,
+// and names nothing the company is owed (ADR-0051). No migration creates it,
 // so it is never in references.All; a case hands it to the backup through
 // [backup.SetReferenceTables].
 var retiredRefs = objstore.ReferenceTable{Domain: "tracker", Table: "test_retired_objects",
@@ -116,7 +116,7 @@ func retiredNaming(t *testing.T, db *store.DB, objects ...stored) {
 	}
 }
 
-// A BACKUP CARRIES NO RETIRED REFERENCE (ADR-0048). A retired row keeps a
+// A BACKUP CARRIES NO RETIRED REFERENCE (ADR-0051). A retired row keeps a
 // replaced object from the collector for a grace and names nothing the company
 // is owed, so the backup neither copies it nor asks after it nor records it
 // lost — on S3, a GET per retired object per backup for bytes no restore wants;
@@ -211,7 +211,7 @@ func TestABackupCarriesNoRetiredReference(t *testing.T) {
 	})
 }
 
-// A DECLARATION THAT STATES NO STANDING REFUSES THE BACKUP (ADR-0048). Sorted
+// A DECLARATION THAT STATES NO STANDING REFUSES THE BACKUP (ADR-0051). Sorted
 // as though it were retired, a live table's objects would be left out of the
 // backup with nothing failing — the very default a standing has none of — so
 // every declaration the backup is handed is validated before any is left out,

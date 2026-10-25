@@ -52,13 +52,13 @@ func addSinkFlags(fs *flag.FlagSet) sinkFlags {
 			"print minted credentials to stdout and persist nothing"),
 		bootstrap: bootstrapFlag(fs),
 		// THE SAME FLAG `crewlet secrets` takes, and for the same
-		// reason: a running engine holds its database, so -secret-store
-		// writes through its API — which is also what puts a minted
-		// credential on every node rather than on this one.
+		// reason: a running engine holds the fleet's store, so
+		// -secret-store writes through its API.
 		api: fs.String("api", "",
-			"the node to read the company's stored values and record "+
-				"credentials through; default is this node's store, or the "+
-				"running engine at the api.host:port in -config"),
+			"a running node to read the company's stored values and record "+
+				"credentials through; default is this node's engine at the "+
+				"api.host:port in -config when it runs, and the fleet's store "+
+				"itself when it is stopped"),
 	}
 }
 
@@ -71,8 +71,9 @@ func addSinkFlags(fs *flag.FlagSet) sinkFlags {
 // none at all, so the values are a node's that does.
 func readAPIFlag(fs *flag.FlagSet) *string {
 	return fs.String("api", "",
-		"the node to read the company's stored values through; default is "+
-			"this node's store, or the running engine holding it")
+		"a running node to read the company's stored values through; default "+
+			"is this node's engine when it runs, and the fleet's store itself "+
+			"when it is stopped")
 }
 
 // bootstrapFlag adds the -config flag: the Tier A document naming this
@@ -156,34 +157,38 @@ func (s sinkStore) Set(ctx context.Context, name, value string, by secrets.Autho
 // every delivery in flight until the config caught up. The store is where a
 // rotated secret lives; a tool that provisions against it has to read it.
 //
-// # Which store, and the running engine decides it
+// # One store, and the running engine decides the way in
 //
-// The same way [openSecretStore] decides where a write goes. A stopped node's
-// own table is opened directly. A RUNNING engine holds that table under an OS
-// lock ([store.ErrLocked]) for as long as it runs, and the company's values
-// are then the fleet's, on the coordination KV inside the engine's own
-// process, so they are read through its API ([storedThroughTheRunningNode]).
-// Refusing instead made every one of these commands, and `crewlet llm`,
-// unusable beside the node they exist to serve. An explicit apiURL is the
-// command's instruction, and the read follows it rather than the local path,
-// WHETHER OR NOT a Tier A is at this one: a command run against a named node
-// from a machine that is not one would otherwise open, and create, an empty
-// database at the Tier A path — or with no file there, read the environment
+// The same way [openSecretStore] decides where a write goes. The company's
+// values are the fleet's, on the coordination KV, whether or not this node's
+// engine runs. A RUNNING engine holds this node's database under an OS lock
+// ([store.ErrLocked]) for as long as it runs, and the values are read through
+// its API ([storedThroughTheRunningNode]); refusing instead made every one of
+// these commands, and `crewlet llm`, unusable beside the node they exist to
+// serve. A STOPPED one leaves the store to this command, which reaches it
+// itself ([openFleetStore]) — never a table of the node's own, which the
+// fleet never read: a run that resolved from one read every value the fleet
+// held as unset, and minted over a working signing secret. An explicit apiURL
+// is the command's instruction, and the read follows it rather than this
+// node, WHETHER OR NOT a Tier A is at this one: a command run against a named
+// node from a machine that is not one would otherwise reach, or create, a
+// store at the Tier A path — or with no file there, read the environment
 // alone — and resolve every stored value as unset.
 //
-// THROUGH A NODE, ONLY WHAT THIS COMMAND READS is fetched — the variables in
+// ONLY WHAT THIS COMMAND READS is fetched, either way in — the variables in
 // reads, which each command takes from the fields it resolves and the tables
-// its readers loop over — because each value comes back through
+// its readers loop over. Through a node each value comes back through
 // `GET /secrets/{name}?reveal=true`: the one route that hands a credential
 // out, logged by name against the caller and refused to a machine token.
 // Revealing every value the company reads, for a command that reads two of
 // them, put the whole credential set in this process and the node's log for
 // nothing: `crewlet llm login` for one entry revealed every vendor's tokens,
-// and a GitLab provision every model's. Names rather than document paths,
-// because a path prefix cannot tell an entry `gpt-5` from `gpt-5.1`, nor a
-// tool server `github` from `github.internal`. See [nodeValues] for why they
-// are revealed before the command runs rather than one at a time as each is
-// read.
+// and a GitLab provision every model's. Read directly, the same scope keeps a
+// row sealed under a key the ring no longer holds from failing a command
+// that never reads it. Names rather than document paths, because a path
+// prefix cannot tell an entry `gpt-5` from `gpt-5.1`, nor a tool server
+// `github` from `github.internal`. See [storedValues] for why they are read
+// before the command runs rather than one at a time as each is read.
 //
 // A node that holds no data (`store.scratch`) has no store of the company's
 // to open, and is refused unless apiURL names one that does.
@@ -229,18 +234,22 @@ func companyResolver(ctx context.Context, environ config.Source, reads []string,
 			bootstrapPath)
 		return config.EnvOnly(), nil, func() {}, nil
 	}
-	// A NODE THAT HOLDS NO DATA HAS NO STORE TO READ. Its file is scratch —
-	// the previous run's, deleted at every boot — and the company's values
-	// are a data node's, which nothing in its Tier A addresses. So the run
-	// is told to name one, rather than resolve every stored value as unset:
-	// it is a seats node, where the logins `crewlet llm` makes are made.
+	// A NODE THAT HOLDS NO DATA IS SENT TO ONE THAT DOES. Its own file is
+	// scratch — the previous run's, deleted at every boot — and the fleet it
+	// serves runs elsewhere: on the embedded topology it is a leaf of the
+	// members', with no store of its own to start, and on an external broker
+	// the nodes holding the company's data are the ones running it. So the
+	// way to the company's values is a running node that holds data, whose
+	// API authenticates and logs each read, and the run is told to name one
+	// rather than resolve every stored value as unset: it is a seats node,
+	// where the logins `crewlet llm` makes are made.
 	if boot.Store.Scratch {
 		return nil, nil, nil, fmt.Errorf("%s is a node that holds no data "+
 			"(store.scratch), so the company's stored values are read through "+
 			"a node that does: name one with -api, or run this on one",
 			bootstrapPath)
 	}
-	sv, closeStore, err := openSecretValues(ctx, boot)
+	fs, closeFleet, err := openFleetStore(ctx, boot, bootstrapPath)
 	if err != nil {
 		values, rerr := storedThroughTheRunningNode(ctx, environ, boot, bootstrapPath,
 			reads, err, notes)
@@ -249,51 +258,18 @@ func companyResolver(ctx context.Context, environ config.Source, reads []string,
 		}
 		return config.WithStore(values), boot, func() {}, nil
 	}
-	values, err := sv.All(ctx)
-	if err != nil {
-		closeStore()
-		return nil, nil, nil, fmt.Errorf("read the secret store: %w", err)
-	}
-	sayWhatAStoppedNodeCannotRead(notes, reads, values, boot.Store.Path)
-	return config.WithStore(config.MapSource(values)), boot, closeStore, nil
-}
-
-// sayWhatAStoppedNodeCannotRead names each value the command reads that a
-// stopped node's own table and the environment both leave unset.
-//
-// THE TABLE IS NOT THE FLEET'S STORE. It holds what was stored while the
-// engine was stopped, and the engine moves those rows onto the fleet at its
-// next start and deletes them here ([fleetsecrets.Migrate]); the fleet's own
-// rows are on the coordination KV, which a stopped engine is not serving.
-// So a name in neither place may be one the fleet holds, and this run
-// cannot tell — it resolves it as unset, which for a key a provisioner
-// mints when it resolves empty replaces a working one. Said on every run
-// that meets one, naming the ways to the fleet's values, rather than
-// refused: before a node's first start the table is the whole store, and a
-// value nobody has stored yet is exactly what `crewlet llm login` and a
-// first provisioning run are there to write.
-func sayWhatAStoppedNodeCannotRead(notes io.Writer, reads []string,
-	local map[string]string, storePath string) {
-
-	var unread []string
-	for _, name := range reads {
-		if _, stored := local[name]; stored {
-			continue
+	// THE STORE STAYS OPEN UNTIL THE CALLER IS DONE WITH THE RESOLVER: a read
+	// outside the command's scope is still answered from it, as it is made
+	// ([storedValues]).
+	fleet, err := fleetSecrets(fs, boot)
+	if err == nil {
+		var values *storedValues
+		if values, err = storedIn(ctx, fleet, reachedDirectly(fs), false, reads, notes); err == nil {
+			return config.WithStore(values), boot, closeFleet, nil
 		}
-		if _, exported := os.LookupEnv(name); exported {
-			continue
-		}
-		unread = append(unread, "${"+name+"}")
 	}
-	if len(unread) == 0 {
-		return
-	}
-	fmt.Fprintf(notes, "this node's engine is not running, so the fleet's stored "+
-		"values cannot be read: %s — in neither %s, which holds only what was "+
-		"stored while the engine was stopped, nor the environment — resolve as "+
-		"unset here. If the fleet holds any of them, start the engine and re-run, "+
-		"or name a running node with -api.\n",
-		strings.Join(unread, ", "), storePath)
+	closeFleet()
+	return nil, nil, nil, fmt.Errorf("read the company's stored values: %w", err)
 }
 
 // companyBootstrap is the Tier A a command reading the company runs under,
@@ -339,111 +315,134 @@ const revealTakesATierAToken = "\n\nEach value is read with a reveal, which take
 // message an HTTP attempt would replace with a connection refused.
 func storedThroughTheRunningNode(ctx context.Context, environ config.Source,
 	boot *config.Bootstrap, bootstrapPath string, reads []string,
-	err error, notes io.Writer) (*nodeValues, error) {
+	err error, notes io.Writer) (*storedValues, error) {
 
 	if !errors.Is(err, store.ErrLocked) {
 		return nil, err
 	}
 	client, cerr := newSecretsClient(environ, boot, "")
 	if cerr == nil {
-		var values *nodeValues
+		var values *storedValues
 		if values, cerr = storedThrough(ctx, client, reads, notes); cerr == nil {
 			return values, nil
 		}
 	}
 	// BOTH FACTS, as a write's refusal gives them: the lock alone reads as
 	// "blocked, no way forward", and the API's complaint alone as though
-	// this node's own table were an answer. It is not one while the engine
-	// runs — the company's values are the fleet's then — so stopping the
-	// engine is not offered as the way round.
-	return nil, fmt.Errorf("%w\n\nthe engine for %s is running and holds its "+
-		"database, so the company's stored values are read through its API — "+
-		"and they cannot be: %w%s", err, bootstrapPath, cerr, revealRemedy(cerr))
+	// nothing were holding the store. Stopping the engine would let this
+	// command reach the store itself, but it is not offered as the way
+	// round: a node taken down to read a value is an outage to save a token.
+	return nil, fmt.Errorf("%w\n\n%s's database is held by the process named "+
+		"above. While that is its engine, the company's stored values are read "+
+		"through its API — and they cannot be: %w%s%s", err, bootstrapPath, cerr,
+		revealRemedy(cerr), heldByACommand)
 }
 
 // storedThrough reads, through a running node, the stored values a command
 // reads, and says on notes that it did.
+func storedThrough(ctx context.Context, client *secretsClient, reads []string,
+	notes io.Writer) (*storedValues, error) {
+
+	return storedIn(ctx, client, "the running node at "+client.base, true, reads, notes)
+}
+
+// storeReader is what reading a command's values asks of the store, whichever
+// way in: through a running node's API, or directly.
+type storeReader interface {
+	List(ctx context.Context) ([]secrets.Record, error)
+	Get(ctx context.Context, name string) (string, error)
+}
+
+// storedIn reads the stored values a command reads from the store behind
+// reader, reached as where says, and says on notes that it did.
 //
 // THE LISTING FIRST, which reveals nothing: a name the command reads and the
-// fleet does not hold is left to the environment without a request, exactly
-// as the local table's absence leaves it. A name that went between the
-// listing and its read is absent the same way.
-func storedThrough(ctx context.Context, client *secretsClient, reads []string,
-	notes io.Writer) (*nodeValues, error) {
+// fleet does not hold is left to the environment without a request. A name
+// that went between the listing and its read is absent the same way.
+func storedIn(ctx context.Context, reader storeReader, where string, throughNode bool,
+	reads []string, notes io.Writer) (*storedValues, error) {
 
-	rows, err := client.List(ctx)
+	rows, err := reader.List(ctx)
 	if err != nil {
 		return nil, err
 	}
-	values := &nodeValues{
-		values: map[string]string{},
-		held:   make(map[string]bool, len(rows)),
-		reveal: func(name string) (string, error) { return client.Get(ctx, name) },
-		where:  client.base,
-		notes:  notes,
+	values := &storedValues{
+		values:      map[string]string{},
+		held:        make(map[string]bool, len(rows)),
+		read:        func(name string) (string, error) { return reader.Get(ctx, name) },
+		where:       where,
+		throughNode: throughNode,
+		notes:       notes,
 	}
 	for _, row := range rows {
 		values.held[row.Name] = true
 	}
 	for _, name := range unionReads(reads) {
-		if _, _, err := values.revealLocked(name); err != nil {
+		if _, _, err := values.readLocked(name); err != nil {
 			return nil, err
 		}
 	}
 	// SAID EVERY TIME, as the environment-only chain is: which chain ran is
-	// what an operator reads first when a value is not the one they set, and
-	// each read here is a line in the node's log under their token.
-	fmt.Fprintf(notes, "resolving ${VAR} through the running node at %s: %d of "+
-		"the stored values this command reads revealed there, each logged by name.\n",
-		client.base, len(values.values))
+	// what an operator reads first when a value is not the one they set —
+	// and through a node, each read is a line in its log under their token.
+	if throughNode {
+		fmt.Fprintf(notes, "resolving ${VAR} through %s: %d of the stored values "+
+			"this command reads revealed there, each logged by name.\n",
+			where, len(values.values))
+	} else {
+		fmt.Fprintf(notes, "resolving ${VAR} from %s: %d of the stored values "+
+			"this command reads held there.\n", where, len(values.values))
+	}
 	return values, nil
 }
 
-// nodeValues is the stored values one command reads, through the running
-// node that holds them: a [config.Source] over the fleet's rows that reveals
-// only what is read.
+// storedValues is the stored values one command reads: a [config.Source] over
+// the fleet's rows that reads only what is read — through the running node
+// that holds them, or from the store itself while this node's engine is
+// stopped.
 //
-// # The command's scope is revealed before it runs
+// # The command's scope is read before it runs
 //
-// Not one value at a time as the command reads it, which would reveal no
-// more and fail worse. A read is a [config.Source] lookup, which has no
-// error to return: a reveal the node refused — a machine token, which is
-// refused every one — could only come back as "unset", and unset is what
-// tells a provisioning run to MINT, so a GitLab provision would replace the
-// key a working hook signs with because its token could not read the one
-// in the store. Revealed up front, the same refusal stops the command
-// before it has done anything.
+// Not one value at a time as the command reads it, which would read no more
+// and fail worse. A read is a [config.Source] lookup, which has no error to
+// return: a read that failed — a reveal the node refused, which it refuses a
+// machine token every one; a row sealed under a key the ring no longer holds —
+// could only come back as "unset", and unset is what tells a provisioning run
+// to MINT, so a GitLab provision would replace the key a working hook signs
+// with because it could not read the one in the store. Read up front, the
+// same failure stops the command before it has done anything.
 //
 // # A read outside the scope is still answered from the fleet
 //
-// Revealed as it is made, and said on notes. A command whose scope missed a
-// field it reads — a new one, say — then resolves the fleet's value rather
-// than the environment's, which is the engine's answer; resolving it as
-// unset would be the same mint. That reveal has no error to return either,
-// so a refused one PANICS: the run stops where it is, as it would on a
-// vendor's own failure part way through, rather than going on to act on a
-// value it does not have.
-type nodeValues struct {
+// Read as it is made, and said on notes. A command whose scope missed a field
+// it reads — a new one, say — then resolves the fleet's value rather than the
+// environment's, which is the engine's answer; resolving it as unset would be
+// the same mint. That read has no error to return either, so a failed one
+// PANICS: the run stops where it is, as it would on a vendor's own failure
+// part way through, rather than going on to act on a value it does not have.
+type storedValues struct {
 	// mu guards values and held: a provisioner may read from more than one
-	// goroutine, and a reveal is a request the lock holds across.
+	// goroutine, and a read is a request the lock holds across.
 	mu sync.Mutex
 
-	// values is every stored value revealed so far, by name.
+	// values is every stored value read so far, by name.
 	values map[string]string
 
-	// held is every name the node listed, less those found gone since.
+	// held is every name the store listed, less those found gone since.
 	held map[string]bool
 
-	// reveal reads one value through the node.
-	reveal func(name string) (string, error)
+	// read reads one value from the store.
+	read func(name string) (string, error)
 
-	// where is the node's address, for what is said on notes.
-	where string
-	notes io.Writer
+	// where names the way to the store, for what is said on notes, and
+	// throughNode whether it is a node's API, whose reads are reveals.
+	where       string
+	throughNode bool
+	notes       io.Writer
 }
 
 // Lookup implements [config.Source].
-func (n *nodeValues) Lookup(name string) (string, bool) {
+func (n *storedValues) Lookup(name string) (string, bool) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if value, ok := n.values[name]; ok {
@@ -452,36 +451,46 @@ func (n *nodeValues) Lookup(name string) (string, bool) {
 	if !n.held[name] {
 		return "", false
 	}
-	value, ok, err := n.revealLocked(name)
+	value, ok, err := n.readLocked(name)
 	if err != nil {
-		panic(readFailed{fmt.Errorf("read ${%s} through the running node at %s: %w — "+
-			"stopping rather than resolving a stored value as unset%s",
+		panic(readFailed{fmt.Errorf("read ${%s} from %s: %w — stopping rather "+
+			"than resolving a stored value as unset%s",
 			name, n.where, err, revealRemedy(err))})
 	}
 	if ok {
-		fmt.Fprintf(n.notes, "revealed ${%s} through the running node at %s as it "+
-			"was read, beyond the values this command reveals before it runs.\n",
-			name, n.where)
+		// THE SAME WORDS THE COMMAND'S FIRST LINE USED for its way in: a
+		// read through a node is a reveal, logged there by name against
+		// the caller, and the operator is told so for this one as for the
+		// rest.
+		if n.throughNode {
+			fmt.Fprintf(n.notes, "revealed ${%s} through %s as it was read, beyond "+
+				"the values this command reveals before it runs; logged there by "+
+				"name.\n", name, n.where)
+		} else {
+			fmt.Fprintf(n.notes, "read ${%s} from %s as it was read, beyond the "+
+				"values this command reads before it runs.\n", name, n.where)
+		}
 	}
 	return value, ok
 }
 
-// readFailed is a read through a running node that failed part way through a
-// command, carried by a panic out of the [nodeValues.Lookup] that has no error
-// to return, and answered at the command's top as the error it is ([runIn]).
-// A panic, because the alternative answer — unset — is the one that mints.
+// readFailed is a read of a stored value that failed part way through a
+// command, carried by a panic out of the [storedValues.Lookup] that has no
+// error to return, and answered at the command's top as the error it is
+// ([runIn]). A panic, because the alternative answer — unset — is the one that
+// mints.
 type readFailed struct{ err error }
 
 func (r readFailed) Error() string { return r.err.Error() }
 func (r readFailed) Unwrap() error { return r.err }
 
-// revealLocked reveals one held name, reporting whether the node still held
-// it. n.mu is held, or n is not yet shared.
-func (n *nodeValues) revealLocked(name string) (string, bool, error) {
+// readLocked reads one held name, reporting whether the store still held it.
+// n.mu is held, or n is not yet shared.
+func (n *storedValues) readLocked(name string) (string, bool, error) {
 	if !n.held[name] {
 		return "", false, nil
 	}
-	value, err := n.reveal(name)
+	value, err := n.read(name)
 	switch {
 	case errors.Is(err, secrets.ErrNotFound):
 		delete(n.held, name)
@@ -622,9 +631,13 @@ func runGitLabProvision(environ config.Source, args []string, stdout, stderr io.
 
 	// RESOLVED BEFORE THE PLAN IS PRINTED, because the plan's most
 	// consequential line depends on it: whether this run will replace the
-	// key a working hook signs with. Reading the store is not a mutation,
-	// so a -dry-run does it too — a dry run that could not say this would
-	// be silent about the one outcome an operator most needs warning of.
+	// key a working hook signs with. Reading the store is not a mutation of
+	// it, so a -dry-run does it too — a dry run that could not say this
+	// would be silent about the one outcome an operator most needs warning
+	// of. With the engine stopped that read starts this node's broker, which
+	// on a node that has never booted creates the fleet's buckets as the
+	// engine's first boot would (engine.OpenFleetStore): the store is made,
+	// not changed.
 	ctx := context.Background()
 	env, boot, closeEnv, err := companyResolver(ctx, environ,
 		gitlabProvisionReads(cfg), *sinks.bootstrap,

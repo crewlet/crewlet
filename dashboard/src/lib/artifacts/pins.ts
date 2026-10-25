@@ -24,7 +24,7 @@ import { useQuery } from "../useQuery.ts";
 export const PINS_LIMIT = 200;
 
 /** What a pin list is asked as: every artifact the reader can open that they pinned. */
-export const PINS_QUERY = { scope: "all", pinned: true, limit: PINS_LIMIT } as const;
+export const PINS_QUERY = { scope: "all", pinned: true, "max-keys": PINS_LIMIT } as const;
 
 const listeners = new Set<() => void>();
 

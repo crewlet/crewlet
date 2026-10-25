@@ -64,7 +64,7 @@ func indexed(t *testing.T, e *Engine) {
 
 // A WRONG VECTORS COPY GIVES UP THE SEMANTIC HALF OF EVERY SLICE THE NODE
 // SERVES ITS PEERS, and says why, on a real node through the answerer the
-// engine registers (ADR-0046): a range's lexical half is still covered from
+// engine registers (ADR-0049): a range's lexical half is still covered from
 // copies that serve, and its semantic half is never read from vectors the node
 // has stopped serving. Before, the slice a peer asked for read them with no
 // verdict at all.
@@ -90,7 +90,7 @@ func TestAWrongVectorsCopyGivesUpTheSemanticHalfOfEverySlice(t *testing.T) {
 
 // A WRONG KNOWLEDGE-BASE COPY COVERS NONE OF A KNOWLEDGE SEARCH, NOR OF A PEER'S
 // SLICE OVER THE PAGES, on a real node through the searcher and the answerer
-// the engine wires (ADR-0046) — and a slice over the tasks alone, whose copy
+// the engine wires (ADR-0049) — and a slice over the tasks alone, whose copy
 // is sound, is answered. Before, both read the index over rows the node had
 // stopped serving and reported the range covered.
 func TestAWrongPagesCopyCoversNoneOfAKnowledgeSearch(t *testing.T) {
@@ -134,7 +134,7 @@ func TestAWrongPagesCopyCoversNoneOfAKnowledgeSearch(t *testing.T) {
 }
 
 // A NODE WHOSE TRACKER COPY IS WRONG COVERS NONE OF ITS SEARCH RANGE, on a
-// real node, through the scanner the engine wires (ADR-0046).
+// real node, through the scanner the engine wires (ADR-0049).
 //
 // Before, the item search's own scanner — and every slice it served its peers —
 // read the index over rows the node had stopped serving, and the coordinator

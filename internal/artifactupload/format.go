@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/brandformat"
 	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
 	"github.com/crewlet/crewlet/internal/artifacts/dashspec"
 	"github.com/crewlet/crewlet/internal/artifacts/docindex"
@@ -70,6 +71,17 @@ func (r *run) checkFormat(ctx context.Context, m artifacts.Manifest) error {
 		return nil
 	case artifacts.FormatDesign:
 		return r.checkCanvas(versionSource{ctx: ctx, run: r, m: m})
+	case artifacts.FormatBrand:
+		kit, err := brandformat.Read(versionSource{ctx: ctx, run: r, m: m})
+		var refused *brandformat.Refused
+		if errors.As(err, &refused) {
+			return brandRefusal(refused)
+		}
+		if err != nil {
+			return err
+		}
+		r.formatted = kit
+		return nil
 	}
 	return fmt.Errorf("artifactupload: a %s artifact's format %q is not one this pipeline "+
 		"validates", r.kind, spec.Format)
@@ -81,6 +93,25 @@ func slideRefusal(refused *slideformat.Refused) error {
 	out := &lint.Refusal{Findings: make([]lint.Finding, len(refused.Findings))}
 	for i, f := range refused.Findings {
 		out.Findings[i] = lint.Finding{Path: f.Path, Line: f.Line, Code: lint.CodeSlideFormat,
+			Message: string(f.Rule) + ": " + f.Message}
+	}
+	return out
+}
+
+// brandRefusal is a kit's refusal in the linter's shape, for the reason a
+// deck's is: each finding on its own file, at its line where it has one.
+func brandRefusal(refused *brandformat.Refused) error {
+	return &lint.Refusal{Findings: BrandFindings(refused.Findings)}
+}
+
+// BrandFindings are a kit's findings in the linter's shape (code
+// `brand_format`, the rule before the message): what a publish of a kit
+// outside the format and an adoption of a brand that leaves a field out both
+// answer, so a surface shows the two alike.
+func BrandFindings(findings []brandformat.Finding) []lint.Finding {
+	out := make([]lint.Finding, len(findings))
+	for i, f := range findings {
+		out[i] = lint.Finding{Path: f.Path, Line: f.Line, Code: lint.CodeBrandFormat,
 			Message: string(f.Rule) + ": " + f.Message}
 	}
 	return out
@@ -136,6 +167,19 @@ func (v versionSource) Essence(p string) (string, bool) {
 		return "", false
 	}
 	return typ.Essence(), true
+}
+
+// Size is the file at p's size: the bytes the run holds for it, or the size
+// its object records ([brandformat.Sizer]).
+func (v versionSource) Size(p string) (int64, bool) {
+	e, ok := manifest.EntryAt(v.m, p)
+	if !ok {
+		return 0, false
+	}
+	if f := v.run.files[p]; f != nil && f.text != nil && !f.carried {
+		return int64(len(f.text)), true
+	}
+	return e.Object.Size, true
 }
 
 func (v versionSource) Read(p string) ([]byte, error) {

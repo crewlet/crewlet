@@ -189,6 +189,9 @@ providers:
       model: sonnet
 
 # 3. Sign its CLI in to your subscription, and check it end to end
+#    (on a member of a cluster, add -api with a running member's URL
+#    and a Tier A token in CREWLET_API_TOKEN: a member alone cannot
+#    reach the fleet's store)
 crewlet llm login default -capture-token
 crewlet llm doctor default
 
@@ -202,6 +205,13 @@ crewlet run
   process at a time. Run the steps on the host and in the directory of the
   node that holds the store. `crewlet llm` itself would run beside the node,
   reading the stored values through it, but the export it follows would not.
+  With the node stopped, `crewlet llm` reaches the fleet's secret store
+  itself: on a solo node it starts the node's own broker on its
+  `stream.store_dir`, listening on nothing, and stops it when the command
+  ends, and on an external broker it dials it. A member of a cluster
+  cannot — alone it never reaches the quorum the store needs — so there
+  step 3 runs with `-api` naming a member that is running, with one of its
+  Tier A tokens in `CREWLET_API_TOKEN`.
 - **The file comes from `crewlet config export`**, the active revision as it
   is stored, rather than from `GET /config?format=yaml` or **Copy as YAML**:
   those are redacted, and `crewlet llm` refuses a company file that still
@@ -211,8 +221,11 @@ crewlet run
   clear (a company the builder created holds none).
 - **The entry needs only its model.** `default` drives Claude Code, the
   default CLI, on your subscription; `-capture-token` mints a headless token
-  and stores it in the [secret store](../concepts/secret-store.md) under the
-  CLI's own token variable, which an entry that names no `auth.token` reads.
+  and stores it in the fleet's [secret store](../concepts/secret-store.md)
+  under the CLI's own token variable, which an entry that names no
+  `auth.token` reads — written there directly with the node stopped, so the
+  row's source is `llm-login` and its author your shell's user, and the node
+  reads it when it starts.
   `crewlet llm doctor` then makes a real call with a tool to prove the CLI is
   installed, signed in and still matches the profile Crewlet drives it with.
   For another CLI or an API key, write the entry

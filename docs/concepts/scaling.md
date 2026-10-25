@@ -329,7 +329,7 @@ flowchart TD
   (an applier stopped, the node evicted, its rows below the log), in which case
   only that log's calls go to the other data nodes — its other logs' copies
   keep answering here — and it keeps every seat
-  ([ADR-0046](https://github.com/crewlet/crewlet/blob/main/adr/0046-a-domains-fault-takes-only-its-own-copy-out-of-service.md)).
+  ([ADR-0049](https://github.com/crewlet/crewlet/blob/main/adr/0049-a-domains-fault-takes-only-its-own-copy-out-of-service.md)).
 - **Otherwise the data nodes, in order**: the node that last answered an
   operation on that log, then a rendezvous order keyed on the asking node's own
   id — with a node that said in the last thirty seconds that its copy of that

@@ -397,7 +397,7 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 	case KindTrimmed:
 		// THE TRIM'S OWN RECORD. The framework removes this log's anchors
 		// below the floor its subject names, in this same transaction
-		// (ADR-0047); this domain writes nothing for it — no row and no
+		// (ADR-0050); this domain writes nothing for it — no row and no
 		// trail row, which is why it is listed as silent rather than
 		// classified.
 		return 0, nil

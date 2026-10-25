@@ -119,18 +119,23 @@ func TestAPublishNamesTheVersionItWasBasedOn(t *testing.T) {
 
 // A PUBLISH BASED ON A MOVED HEAD CARRIES WHAT A MERGE NEEDS: 412
 // version_moved, the live head and its manifest, and the live entry's text.
+// The head names its folder only where the publisher sees it: sam is told
+// nothing of jane's private Drafts the page is filed in.
 func TestAPublishBasedOnAMovedHeadCarriesTheLiveEntry(t *testing.T) {
 	t.Parallel()
 	g := newRig(t, true)
 	live, _ := g.estate.Version(t.Context(), page, 2)
-	g.pipeline.err = &artifactsdomain.VersionMoved{Head: heads()[page], Live: live}
+	filed := heads()[page]
+	filed.Folder = drafts
+	g.pipeline.err = &artifactsdomain.VersionMoved{Head: filed, Live: live}
 	w := g.do(person("sam"), "POST", at(page, "/versions"), publishV3, append(keyed(), "If-Match", `"1"`)...)
 	if w.Code != http.StatusPreconditionFailed || errorOf(t, w) != "version_moved" {
 		t.Fatalf("a publish on a moved head: %d %s", w.Code, w.Body)
 	}
 	var body struct {
 		Head struct {
-			HeadNumber int `json:"head_number"`
+			HeadNumber int    `json:"head_number"`
+			Folder     string `json:"folder"`
 		} `json:"head"`
 		Live  artifactsdomain.Version `json:"live"`
 		Entry struct {
@@ -145,6 +150,9 @@ func TestAPublishBasedOnAMovedHeadCarriesTheLiveEntry(t *testing.T) {
 		body.Entry.Text != string(indexHTML) {
 		t.Errorf("the 412 carries head %d, live %d, entry %q %q", body.Head.HeadNumber,
 			body.Live.Number, body.Entry.Path, body.Entry.Text)
+	}
+	if body.Head.Folder != "" {
+		t.Errorf("the 412 tells sam the folder %q he cannot see", body.Head.Folder)
 	}
 }
 
@@ -685,14 +693,14 @@ func TestAShareStoredBeforeTheGrantRuleIsListedAndWithdrawn(t *testing.T) {
 func TestAViewerSeesTheOwnerAndACountNotTheAudience(t *testing.T) {
 	t.Parallel()
 	g := newRig(t, true)
-	viewer, err := g.svc.Gate().Detail(t.Context(), person("bob"), page)
+	viewer, err := g.svc.Gate().Detail(t.Context(), g.estate, person("bob"), page)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if viewer.Shares != nil || viewer.ShareCount != 3 || viewer.Role != artifacts.RoleViewer || viewer.Writer {
 		t.Errorf("a viewer is shown %+v", viewer)
 	}
-	editor, err := g.svc.Gate().Detail(t.Context(), person("sam"), page)
+	editor, err := g.svc.Gate().Detail(t.Context(), g.estate, person("sam"), page)
 	if err != nil || len(editor.Shares) != 3 || !editor.Writer {
 		t.Errorf("an editor is shown %d shares, writer %v (%v)", len(editor.Shares), editor.Writer, err)
 	}
@@ -705,7 +713,10 @@ func TestAViewerSeesTheOwnerAndACountNotTheAudience(t *testing.T) {
 		{Op: string(artifactsdomain.OpReadElevated), Number: 2},
 		{Op: string(artifactsdomain.OpShare), Summary: artifactsdomain.HistorySummary{Audience: "seat:bob", Role: "viewer"}},
 	}}
-	shown := a.History(history)
+	shown, err := g.svc.Gate().History(t.Context(), g.estate, a, history)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(shown.Entries) != 2 || shown.Entries[1].Summary.Audience != "" {
 		t.Errorf("a viewer is shown the history %+v", shown.Entries)
 	}
@@ -748,19 +759,19 @@ func TestAListingIsFilteredForTheViewersRelations(t *testing.T) {
 		t.Errorf("the estate was asked for %+v", v)
 	}
 	var ids []artifacts.ID
-	for _, item := range got.Items {
+	for _, item := range got.Contents {
 		ids = append(ids, item.ID)
 	}
 	if !slices.Equal(ids, []artifacts.ID{page, report}) {
 		t.Errorf("lee is listed %v, want the page (ENG) and the report (led), not jane's notes", ids)
 	}
-	if got.Items[0].Shares == nil || got.Items[0].Role != artifacts.RoleEditor {
-		t.Errorf("an editor's row is shaped %+v", got.Items[0].Artifact)
+	if got.Contents[0].Shares == nil || got.Contents[0].Role != artifacts.RoleEditor {
+		t.Errorf("an editor's row is shaped %+v", got.Contents[0].Artifact)
 	}
 
 	admin, err := g.svc.Gate().List(t.Context(), g.estate, person("ada", iam.GrantAdmin), artifactsdomain.ListQuery{})
-	if err != nil || len(admin.Items) != 0 {
-		t.Errorf("an administrator's listing surfaced %d private artifacts (%v)", len(admin.Items), err)
+	if err != nil || len(admin.Contents) != 0 {
+		t.Errorf("an administrator's listing surfaced %d private artifacts (%v)", len(admin.Contents), err)
 	}
 }
 
@@ -943,8 +954,8 @@ func TestEveryRouteIsGuardedAndDocumented(t *testing.T) {
 	if err := g.svc.Routes(rec); err != nil {
 		t.Fatal(err)
 	}
-	if len(rec.patterns) != 29 {
-		t.Fatalf("the surface mounts %d routes, and this case knows 29: %v", len(rec.patterns), rec.patterns)
+	if len(rec.patterns) != 38 {
+		t.Fatalf("the surface mounts %d routes, and this case knows 38: %v", len(rec.patterns), rec.patterns)
 	}
 	doc, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "reference", "api-endpoints.md"))
 	if err != nil {

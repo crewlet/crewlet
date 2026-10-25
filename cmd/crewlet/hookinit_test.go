@@ -37,11 +37,13 @@ import (
 //     about 2 ms of every push — before they were built at their first
 //     request. A package that needs more builds it at first use
 //     (sync.OnceValue), as the password blocklist does (140 KB).
-//   - hookInitBytes, 1.5 MiB, for the module: about 1.42 MB today, 1.44 under
+//   - hookInitBytes, 1.5 MiB, for the module: about 1.47 MB today, 1.50 under
 //     the race detector (it was 1.1 MB before the artifact packages and the
-//     larger redaction tables were linked beside the code host), so a second
-//     webhooks-sized global anywhere fails it, while a toolchain's change to
-//     what a compiled pattern allocates, within the 130 KB left, does not.
+//     larger redaction tables were linked beside the code host, and the brand
+//     and the drawing allowlist came in with their tables built at first use),
+//     so a second webhooks-sized global anywhere fails it, while a toolchain's
+//     change to what a compiled pattern allocates, within the 70 KB left
+//     under the race detector, does not.
 const (
 	hookInitPackageBytes = 256 << 10
 	hookInitBytes        = 3 << 19

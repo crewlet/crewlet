@@ -197,7 +197,7 @@ func (Domain) OpsTable() string { return "artifactdata_ops" }
 // GatesSeatAdmission reports that this domain's health does NOT gate seat
 // admission: a seat reads no datastore on its turn path, so a stalled copy
 // must not stop a node admitting seats. The copy is still judged, as every
-// domain's is (ADR-0046), and goes out of service for its own readers, and the
+// domain's is (ADR-0049), and goes out of service for its own readers, and the
 // estate router decides through a peer that serves.
 func (Domain) GatesSeatAdmission() bool { return false }
 

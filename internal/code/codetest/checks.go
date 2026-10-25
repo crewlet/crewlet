@@ -8,7 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/codefault"
 )
 
-// THE TWO BEHAVIOURS THE RECORD PINS (ADR-0051), as checks a topology that
+// THE TWO BEHAVIOURS THE RECORD PINS (ADR-0054), as checks a topology that
 // lies can be run through: each returns nil when the topology behaves, and the
 // suite's own meta-test holds each able to fail.
 

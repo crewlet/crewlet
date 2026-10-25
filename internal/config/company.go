@@ -546,6 +546,15 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 					"delete this line",
 				ReservedBaseURLVariable)
 		}
+		if key == ReservedKitVersionVariable {
+			p.add(entry(field("skill_variables"), key), ErrConflict,
+				"%s is reserved: the engine sets it to the newest artifact "+
+					"kit this build embeds, which is the only kit release a "+
+					"page linked now is sure to be served. A declared value "+
+					"would keep naming one kit after an upgrade embeds the "+
+					"next. Delete this line",
+				ReservedKitVersionVariable)
+		}
 	}
 
 	p.wrap(c.TokenBudget.validate(field("token_budget")))
@@ -642,6 +651,16 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 // company that declares it: two sources for one address is how a skill comes
 // to link at the deployment the company used to run on.
 const ReservedBaseURLVariable = "crewlet_base_url"
+
+// ReservedKitVersionVariable is the skill variable carrying the newest artifact
+// kit release this build embeds, so the artifacts skill tells a seat the exact
+// `/_crewlet/kit/<version>/` to link.
+//
+// The engine sets it from its own embedded kit tree and this package refuses a
+// company that declares it: a declared version is one an upgrade moves past
+// without anybody editing the company document, and a page linked to a kit
+// older than the brand slots never takes the company's brand.
+const ReservedKitVersionVariable = "crewlet_kit_version"
 
 // validateKnowledgeBackend holds the rule that a read scope needs the
 // backend it narrows.

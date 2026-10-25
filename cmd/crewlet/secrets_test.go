@@ -379,7 +379,8 @@ func TestARekeyDryRunReportsWithoutWriting(t *testing.T) {
 // PROVENANCE IS RECORDED, so "where did this credential come from" has an
 // answer months later — and it is the command's own, never a word its caller
 // picked. `-source` once stamped whatever it was given, so a row could claim
-// any path; the flag is gone, and a stopped node's table records `cli`.
+// any path; the flag is gone, and a write made directly, with the engine
+// stopped, records `cli`.
 // Mutation: stamp another word in setSecret and the row's source fails.
 func TestTheProvenanceOfAWriteIsRecorded(t *testing.T) {
 	cfg := bootstrapWithKeyring(t, "k1")
@@ -431,9 +432,9 @@ func TestALockedStoreIsRoutedThroughTheRunningNode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a locked store was refused instead of routed: %v", err)
 	}
-	if !target.fleet {
-		t.Fatal("the target is not marked fleet-wide, so `secrets set` would " +
-			"tell an operator their rotation reached one node")
+	if !target.throughNode {
+		t.Fatal("the target is not marked as a running node's, so `secrets set` " +
+			"would tell an operator their rotation waits for this engine's start")
 	}
 	if !strings.Contains(target.where, "127.0.0.1:8000") {
 		t.Errorf("where = %q, want the node it writes through", target.where)

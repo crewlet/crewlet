@@ -63,6 +63,14 @@ type VersionPayload struct {
 	// SearchText is what a gallery search matches, at most
 	// [artifacts.MaxSearchTextBytes].
 	SearchText string `json:"search_text,omitempty"`
+
+	// Brand is the adopted brand stylesheet a FRAMED version (html, design)
+	// is published under: the generated CSS's SHA-256 in hex, decided in the
+	// writer's snapshot of the brand subject, empty for none (no brand
+	// adopted, a native kind, or a page that opted out with
+	// `<html data-crewlet-brand="off">`). The complete value rides the
+	// record, so every node stores the same pin. Since record version 2.
+	Brand string `json:"brand,omitempty"`
 }
 
 // CreatePayload makes an artifact and its first version in one record.
@@ -90,6 +98,12 @@ type CreatePayload struct {
 	OwnerKind iam.ActorKind `json:"owner_kind"`
 
 	SourceKey string `json:"source_key,omitempty"`
+
+	// Folder is the folder the artifact is created in, empty for the top
+	// level, checked live in the writer's snapshot and named in the
+	// record's scope ([FolderTerm]) so the apply orders behind any record
+	// about it. Since record version 2.
+	Folder string `json:"folder,omitempty"`
 
 	Version VersionPayload `json:"version"`
 
@@ -192,6 +206,168 @@ type ReaderPayload struct {
 	Version  int    `json:"version,omitempty"`
 }
 
+// MovePayload files one artifact in another folder, on the artifact's own
+// subject. From is the folder the writer's snapshot found it in and To the
+// folder it goes to, either empty for the top level; the scope names each one
+// that is a folder. The apply refuses `folder_gone` for a To that is no longer
+// live, and leaves `updated_at` alone: a move is not an edit.
+type MovePayload struct {
+	V         int                 `json:"v"`
+	From      string              `json:"from,omitempty"`
+	To        string              `json:"to,omitempty"`
+	Authority artifacts.Authority `json:"authority"`
+}
+
+// FolderSpec is one folder a create makes.
+type FolderSpec struct {
+	// ID is a name-based uuid over the record's operation and the folder's
+	// place in the chain ([FolderIDOf]), so a retry names the same folders.
+	ID string `json:"id"`
+
+	// Parent is the folder it sits in, empty for the top level: an existing
+	// live folder, or the folder before it in the same record's chain.
+	Parent string `json:"parent,omitempty"`
+
+	// Name is the canonical name and NameKey its fold
+	// ([foldername.Check]), both computed by the writer.
+	Name    string `json:"name"`
+	NameKey string `json:"name_key"`
+}
+
+// FolderCreatePayload makes one folder, or a chain of them (a path created
+// with its missing parents in one record), on the tree subject.
+type FolderCreatePayload struct {
+	V int `json:"v"`
+
+	// Folders is the chain, parents first. Every folder after the first
+	// sits in the one before it.
+	Folders []FolderSpec `json:"folders"`
+
+	// Owner is the seat handle (or machine login) that owns the folders,
+	// and OwnerKind its actor kind, which opens the lead arm.
+	Owner     string        `json:"owner"`
+	OwnerKind iam.ActorKind `json:"owner_kind"`
+
+	// MaxDepth is the depth bound the writer decided under
+	// ([artifacts.MaxFolderDepth]), stamped on every folder it makes.
+	MaxDepth int `json:"max_depth"`
+
+	// MaxFolders and MaxChildren are the bounds on the company's live
+	// folders and on one folder's live children the writer decided under
+	// ([artifacts.MaxFolders], [artifacts.MaxFolderChildren]), STAMPED so
+	// the apply enforces the bound the record was decided under rather
+	// than its own build's constant, which a later build may change.
+	MaxFolders  int `json:"max_folders"`
+	MaxChildren int `json:"max_children"`
+
+	// Shares are granted on a new TOP-LEVEL folder: its visibility preset
+	// (the company as contributor for "Everyone", none for "Only you").
+	// Empty for a subfolder, which its top-level folder decides. A
+	// top-level folder's shares are set here and only here in this build:
+	// changing them later is a share op a later build adds to the tree.
+	Shares []artifacts.Share `json:"shares,omitempty"`
+
+	Authority artifacts.Authority `json:"authority"`
+}
+
+// FolderRenamePayload renames one folder.
+type FolderRenamePayload struct {
+	V         int                 `json:"v"`
+	Folder    string              `json:"folder"`
+	Name      string              `json:"name"`
+	NameKey   string              `json:"name_key"`
+	Authority artifacts.Authority `json:"authority"`
+}
+
+// FolderMovePayload moves one folder, and everything beneath it, under
+// another parent (empty for the top level). The writer refuses a cycle and a
+// depth past the stamp from its snapshot; the apply checks both again.
+type FolderMovePayload struct {
+	V      int    `json:"v"`
+	Folder string `json:"folder"`
+	Parent string `json:"parent,omitempty"`
+
+	// Root is the top-level folder the moved folder sits under afterwards,
+	// which every folder beneath it is re-rooted to in the same apply.
+	Root string `json:"root"`
+
+	// MaxDepth and MaxChildren are the depth bound and the bound on one
+	// folder's live children the writer decided under, stamped for
+	// [FolderCreatePayload.MaxFolders]' reason.
+	MaxDepth    int `json:"max_depth"`
+	MaxChildren int `json:"max_children"`
+
+	// Shares are the shares a folder moved TO THE TOP LEVEL holds there:
+	// the shares of the top-level folder it was under, so who sees it and
+	// everything beneath it is what it was before the move. Empty for a
+	// move under a folder, which drops a top-level folder's own shares
+	// because its new top-level folder decides it from then on.
+	Shares []artifacts.Share `json:"shares,omitempty"`
+
+	Authority artifacts.Authority `json:"authority"`
+}
+
+// FolderRemovePayload removes one folder: its child folders and every
+// artifact filed in it (live and trashed) move up to Parent in the same apply,
+// and the folder's row becomes a tombstone. Its scope is the tree and every
+// artifact ([TreeTerm], [ArtifactsTerm]).
+type FolderRemovePayload struct {
+	V         int                 `json:"v"`
+	Folder    string              `json:"folder"`
+	Parent    string              `json:"parent,omitempty"`
+	Authority artifacts.Authority `json:"authority"`
+}
+
+// BrandFile is one file an adoption serves, as the record states it.
+type BrandFile struct {
+	// Slot is the file's place in the brand (brandformat.Slot).
+	Slot        string `json:"slot"`
+	ContentType string `json:"content_type"`
+
+	// Object is the stored bytes: a fresh object this adoption uploaded,
+	// for the generated stylesheet and for every logo and face copied out of
+	// the kit's version (never the kit's own object, which its retention may
+	// remove). Its hash (SHA-256 in hex) is the path the artifact listener
+	// serves the file at.
+	Object objstore.Object `json:"object"`
+}
+
+// BrandAdoptPayload adopts one version of a brand kit as the company's brand,
+// on the brand subject. Its scope is the brand and the kit ([BrandTerm], the
+// kit's artifact term), so it orders behind any record about the kit, and the
+// apply refuses `version_not_found` when the version is gone by then.
+type BrandAdoptPayload struct {
+	V int `json:"v"`
+
+	// Kit and KitVersion are the brand artifact and the version adopted.
+	Kit        string `json:"kit"`
+	KitVersion int    `json:"kit_version"`
+
+	// BrandJSON is the version's canonical brand.json, byte for byte.
+	BrandJSON []byte `json:"brand_json"`
+
+	// CSSSha is the generated stylesheet's SHA-256 in hex, which is also
+	// the hash of the `css` file below.
+	CSSSha string `json:"css_sha"`
+
+	// Files are every file the adoption serves, the stylesheet first.
+	Files []BrandFile `json:"files"`
+
+	// Label is the label the apply sets on the adopted version, so it is
+	// exempt from the kit's retention; empty when the version already
+	// carries one.
+	Label string `json:"label,omitempty"`
+
+	Authority artifacts.Authority `json:"authority"`
+}
+
+// BrandClearPayload withdraws the company's adopted brand. Pages pinned to a
+// stylesheet keep it while a retained version names it.
+type BrandClearPayload struct {
+	V         int                 `json:"v"`
+	Authority artifacts.Authority `json:"authority"`
+}
+
 // Eviction is a node's eviction from this log, or its readmission. PINNED AT
 // [GateRecordVersion] FOR EVER and a gate, so its shape may only grow by
 // addition.
@@ -239,6 +415,8 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[TransferPayload](rec)
 	case k == KindArtifact && op == OpLinkWorkItem:
 		return decodePayload[LinkPayload](rec)
+	case k == KindArtifact && op == OpMove:
+		return decodePayload[MovePayload](rec)
 	case k == KindArtifact && (op == OpTrash || op == OpRestore || op == OpPurgeBegin || op == OpPurge):
 		return decodePayload[StatusPayload](rec)
 	case k == KindAsset && op == OpCreate:
@@ -252,6 +430,18 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[Eviction](rec)
 	case k == KindGeneration && op == OpGeneration:
 		return decodePayload[Generation](rec)
+	case k == KindFolder && op == OpCreate:
+		return decodePayload[FolderCreatePayload](rec)
+	case k == KindFolder && op == OpRename:
+		return decodePayload[FolderRenamePayload](rec)
+	case k == KindFolder && op == OpMove:
+		return decodePayload[FolderMovePayload](rec)
+	case k == KindFolder && op == OpRemove:
+		return decodePayload[FolderRemovePayload](rec)
+	case k == KindBrand && op == OpAdopt:
+		return decodePayload[BrandAdoptPayload](rec)
+	case k == KindBrand && op == OpClear:
+		return decodePayload[BrandClearPayload](rec)
 	case k == KindBarrier && op == OpBarrier, k == KindTrimmed && op == OpTrimmed:
 		// THE TWO PAYLOAD-FREE RECORDS, and nil is their value rather than
 		// an absence: the applier has a case for each that writes nothing
@@ -302,7 +492,7 @@ func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 }
 
 // EncodeTrimmed renders the trim's trimmed record ([statelog.TrimmedEnvelope],
-// ADR-0047) as a record this domain's applier decodes: the barrier's split,
+// ADR-0050) as a record this domain's applier decodes: the barrier's split,
 // the framework owning when one is appended, what it removes and the floor its
 // subject names, and the domain owning what a record on its log looks like.
 //

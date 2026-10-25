@@ -248,7 +248,7 @@ type OpsHorizon struct {
 // applier writes (ADR-0002): a job here would delete them on each node's own
 // tick below a floor each node read for itself, so two copies of one log
 // would hold different anchors. The trim removes them instead with a trimmed
-// record every node's applier takes at one position (ADR-0047).
+// record every node's applier takes at one position (ADR-0050).
 func StatelogJobs(domains map[string]OpsHorizon) []Job {
 	// SORTED, so the log's job order is the same on every node and every
 	// tick. A map's iteration order would make one node's sweep line look

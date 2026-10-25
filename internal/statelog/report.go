@@ -688,7 +688,7 @@ type DomainInputs struct {
 	// zero while it holds none.
 	//
 	// HERE RATHER THAN ON THE NODE'S READING, because what the grace does
-	// is the log's: every log's copy is judged on its own (ADR-0046), so a
+	// is the log's: every log's copy is judged on its own (ADR-0049), so a
 	// record held past it takes this node's copy of THAT log out of service
 	// and no other's. Folded into one node-wide alarm naming the oldest, an
 	// identity record two hours old was the only one named while a tracker

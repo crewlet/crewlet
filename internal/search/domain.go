@@ -217,7 +217,7 @@ func (Domain) OpsTable() string { return "" }
 // company's seats for that is the outage the coverage number exists to avoid —
 // and it would be withheld for the one subsystem every design note calls best
 // effort. Its copy is still judged, and a wrong one — not one that is behind —
-// goes out of service on its own, its seats untouched — ADR-0046.
+// goes out of service on its own, its seats untouched — ADR-0049.
 func (Domain) GatesSeatAdmission() bool { return false }
 
 // ClaimsIdentity reports that two nodes at one checkpoint are NOT asserted to

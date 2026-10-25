@@ -432,6 +432,9 @@ type scriptedModel struct {
 	// land. Captured because "the block was rendered" and "the model was
 	// shown it" are different claims and only the second one matters.
 	systems []string
+	// channels is which channel each call's system prompt came on
+	// ([cliCall.Channel]).
+	channels []string
 
 	// engages makes the executor call a tool before answering, which is
 	// what the reflect dispatcher's engagement gate reads. A company with
@@ -569,7 +572,7 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 	// ONE RECORD PER CALL, WRITTEN WHERE THE PHASE IS KNOWN — see
 	// [scriptedModel.sawCall] for what pairing them separately cost.
 	saw := func(phase string) {
-		m.sawCall(phase, strings.Join(names, "+"), call.System, call.Prompt)
+		m.sawCall(phase, strings.Join(names, "+"), call)
 	}
 
 	// Keyed on the tool that DISTINGUISHES each phase, in the order that
@@ -720,13 +723,43 @@ func auxiliaryAnswer(pass string) string {
 // So the phase is what the record is BUILT WITH rather than appended
 // alongside, which is the same rule the engine's own write authority states:
 // take one snapshot and decide inside it.
-func (m *scriptedModel) sawCall(phase, tools, system, prompt string) {
+func (m *scriptedModel) sawCall(phase, tools string, call cliCall) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calls = append(m.calls, phase)
 	m.offered = append(m.offered, tools)
-	m.systems = append(m.systems, system)
-	m.prompts = append(m.prompts, prompt)
+	m.systems = append(m.systems, call.System)
+	m.channels = append(m.channels, call.Channel)
+	m.prompts = append(m.prompts, call.Prompt)
+}
+
+// misrouted names every call whose system prompt came on the wrong channel: a
+// seat's round — one offering a tool only the tool loop offers — anywhere but
+// the append channel, which keeps the CLI's own prompt, and an auxiliary pass
+// anywhere but the replace channel, which has no use for it.
+func (m *scriptedModel) misrouted() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.channels) != len(m.calls) {
+		// [scriptedModel.saw] records a phase alone.
+		return []string{"this model recorded calls without their channels"}
+	}
+	var bad []string
+	for i, phase := range m.calls {
+		want := ""
+		switch {
+		case strings.HasPrefix(phase, "aux:"):
+			want = channelReplace
+		case slices.ContainsFunc(strings.Split(m.offered[i], "+"), func(tool string) bool {
+			return tool == "submit_work" || tool == "submit_review" || tool == "mark_onboarded"
+		}):
+			want = channelAppend
+		}
+		if want != "" && m.channels[i] != want {
+			bad = append(bad, fmt.Sprintf("call %d (%s) on %q, want %q", i, phase, m.channels[i], want))
+		}
+	}
+	return bad
 }
 
 // saw records a phase alone, for a scripted model that keeps no prompts —

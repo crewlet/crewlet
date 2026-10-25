@@ -135,7 +135,7 @@ func adoptSteps(live, prepared string) []adoptStep {
 // # Why the name says COPY
 //
 // The lock sidecar is deliberately never removed from a live database — see
-// internal/filelock's package doc: unlinking it races a peer that has already
+// internal/flock's package doc: unlinking it races a peer that has already
 // opened it and is about to lock, and two processes would then believe they
 // hold it. A copy has no peer: nothing else will ever open it in place,
 // because a restore moves it first. So the constraint is in the name rather

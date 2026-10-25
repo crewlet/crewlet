@@ -63,7 +63,7 @@ import { asSentence, utf8Bytes } from "~/lib/format.ts";
 import { TASK_BODY_MAX_BYTES } from "~/contract/work.ts";
 import type { ArtifactCapability, ArtifactLintFinding } from "~/protocol/index.ts";
 import { CreateShell, useLeaveCreate, type CreateAction } from "../CreateShell.tsx";
-import { titleHold, titleProblem, useWorkItem } from "../create.ts";
+import { titleHold, titleProblem, useSaveIn, useWorkItem } from "../create.ts";
 import { artifactTaskBody, useFileArtifactTask } from "../fileTask.ts";
 import { useWhoBuildsIt } from "../WhoBuildsIt.tsx";
 import { AskAgentPanel, askTool, chosenAgent, taskRefusal, useAskPanel } from "../AskAgent.tsx";
@@ -114,6 +114,7 @@ export function SourceBody() {
   const toast = useToast();
   const leave = useLeaveCreate();
   const workItem = useWorkItem();
+  const { folder } = useSaveIn();
   const access = useArtifactAccess({ app: true });
   const editor = useRef<SourceEditorHandle>(null);
 
@@ -293,6 +294,7 @@ export function SourceBody() {
       capabilities,
       fingerprint: print,
       ...(workItem ? { workItem } : {}),
+      ...(folder ? { folder } : {}),
     });
     // A REFUSAL IS READ IN CHECKS, where its findings are; a preview that
     // landed, or failed for any other reason, is said in Preview.

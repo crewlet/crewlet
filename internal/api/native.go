@@ -78,7 +78,7 @@ var errNoCompanyYet = fmt.Errorf("%w: %w", queries.ErrUnavailable, stream.ErrNoC
 // links between pages too ([estate.Pages.LinkedFrom]): they are a data node's
 // own lexical index, named from its copies of the knowledge base AND the
 // tracker, so they are answered by a data node whose copies of both serve
-// (ADR-0046) — read off this node's index, a node whose pages or tracker copy
+// (ADR-0049) — read off this node's index, a node whose pages or tracker copy
 // had stopped serving listed links derived from rows it no longer answered
 // for, beside a page a peer had answered.
 func NativeSources(e *engine.Engine) (queries.WorkReader, queries.PageReader,

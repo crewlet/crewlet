@@ -11,7 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE TWO TABLES WHOSE ROWS KEEP OBJECTS ALIVE, declared beside the schema that
+// THE THREE TABLES WHOSE ROWS KEEP OBJECTS ALIVE, declared beside the schema that
 // holds them and collected in internal/objstore/references, which the
 // collector, its audit and the backup build their statements from. A table that
 // names objects and is missing from that list is the one mistake that destroys
@@ -21,10 +21,10 @@ import (
 // ObjectReferences is every object a retained version of an artifact names,
 // each distinct object once per artifact with its reference count.
 //
-// REQUIRED (ADR-0048): a retained version is something the company holds, so
+// REQUIRED (ADR-0051): a retained version is something the company holds, so
 // its objects are audited and every backup carries them — and so the
 // declaration names the log a restore replays and how one record of it names
-// the table's rows (ADR-0049).
+// the table's rows (ADR-0052).
 var ObjectReferences = objstore.ReferenceTable{
 	Domain: Domain{}.Name(), Table: "artifact_objects",
 	Key: "object", Hash: "hash", Size: "size",
@@ -182,16 +182,16 @@ func recordForReferences(payload []byte) (MutationRecord, bool, error) {
 }
 
 // mayWriteObjects reports whether a record this build cannot read may write an
-// artifact_objects or artifact_assets row, from what every build reads of it:
-// its kind and the scope its WRITER stated as the complete set of objects its
-// apply may write.
+// artifact_objects, artifact_assets or artifact_brand_files row, from what
+// every build reads of it: its kind and the scope its WRITER stated as the
+// complete set of objects its apply may write.
 //
 // AN UNKNOWN KIND MAY: this build cannot place what a kind it has never heard
-// of names. A KNOWN KIND may when any path of its scope reaches an artifact —
-// the domain, an artifact's path or an asset's beneath it, or a path this
-// build cannot interpret — and may not when every path is a source address's
-// hold, one person's own state or the framework's own: neither table has a row
-// under any of them.
+// of names. A KNOWN KIND may when any path of its scope reaches an artifact or
+// the brand — the domain, an artifact's path or an asset's beneath it, the
+// brand's, or a path this build cannot interpret — and may not when every path
+// is a source address's hold, one person's own state or the framework's own:
+// none of the three tables has a row under any of them.
 func mayWriteObjects(env RecordEnvelope) bool {
 	if !env.Subject.Kind.Valid() {
 		return true
@@ -206,6 +206,61 @@ func mayWriteObjects(env RecordEnvelope) bool {
 		return true
 	}
 	return false
+}
+
+// BrandFileReferences is every file an adoption of the company's brand serves:
+// the generated stylesheet, each logo and each face, copied out of the kit's
+// version at adoption so the adopted brand outlives the kit's retention, trash
+// and purge. A row goes only when its adoption is no longer current and no
+// retained version names its stylesheet.
+//
+// REQUIRED (ADR-0051), for [ObjectReferences]' reason: the adopted brand is
+// the company's public face, and a superseded adoption's files are what a
+// retained version that pinned its stylesheet still serves — files the
+// company holds, so they are audited, every backup carries them, and the
+// declaration names the log a restore replays and how one record of it names
+// the table's rows (ADR-0052).
+var BrandFileReferences = objstore.ReferenceTable{
+	Domain: Domain{}.Name(), Table: "artifact_brand_files",
+	Key: "object", Hash: "hash", Size: "size",
+	Owner:    []string{"css_sha", "slot"},
+	Standing: objstore.Required,
+	Log:      Domain{}.Stream().Name,
+	Deferred: Domain{}.DeferredTable(),
+	Records:  brandFileRecordReferences,
+}
+
+// brandFileRecordReferences answers the artifact_brand_files rows one record of
+// the artifacts log writes — [objstore.ReferenceTable.Records] for
+// [BrandFileReferences]: an adoption writes one row per file it serves, keyed
+// by its stylesheet's hash and the file's slot, each naming the fresh copy the
+// adoption uploaded. Every file is answered whether or not this node's applier
+// would apply the adoption, for [objectRecordReferences]' reason: a backup
+// reads a superset of what a restore's rows name, never a subset. A clear, and
+// the prune every adoption and clear runs, REMOVE rows the record does not
+// list, so they answer none, for the same reason.
+//
+// A RECORD THIS BUILD CANNOT READ is answered as [objectRecordReferences]
+// answers one ([mayWriteObjects]).
+//
+// THE ROW IS SPELLED AS [BrandFileReferences] LISTS ITS OWNER — the
+// stylesheet's hash, then the slot — through [objstore.JoinOwner].
+func brandFileRecordReferences(payload []byte) ([]objstore.RecordReference, error) {
+	rec, readable, err := recordForReferences(payload)
+	if err != nil || !readable || rec.Subject.Kind != KindBrand || rec.Op != OpAdopt {
+		return nil, err
+	}
+	p, err := decodePayload[BrandAdoptPayload](rec)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]objstore.RecordReference, 0, len(p.Files))
+	for _, f := range p.Files {
+		out = append(out, objstore.RecordReference{
+			NamedBy: objstore.JoinOwner(p.CSSSha, f.Slot), Object: f.Object, Names: true,
+		})
+	}
+	return out, nil
 }
 
 // ObjectEstate is this domain as the object store's passes read it: a barrier on

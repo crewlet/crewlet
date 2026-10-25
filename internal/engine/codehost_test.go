@@ -102,7 +102,7 @@ func bindOps(t *testing.T, e *engine.Engine) {
 // token. The token states its grants, as every Tier A token must, and lists
 // the tracker, which decides nothing a case here reads: what a credential may
 // do to a repository is the standing of the seat the directory binds it to
-// (ADR-0055).
+// (ADR-0058).
 func gitNodeBootstrap(t *testing.T, roles []string) *config.Bootstrap {
 	t.Helper()
 	return bootstrap(t, func(b *config.Bootstrap) {

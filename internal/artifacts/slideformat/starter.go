@@ -40,9 +40,23 @@ type Layout struct {
 }
 
 // slideText is what a layout draws a slide from: its id and its title,
-// escaped for markup.
+// escaped for markup, and the logo a cover shows (a path and its alt text,
+// escaped too), empty for none.
 type slideText struct {
-	id, title string
+	id, title     string
+	logo, logoAlt string
+}
+
+// coverLogo is the cover's logo above its rule, or nothing: a fixed height so
+// a wide logo and a square mark sit on the same line, its width following the
+// file's own ratio and held inside the slide's margins.
+func coverLogo(s slideText) string {
+	if s.logo == "" {
+		return ""
+	}
+	return fmt.Sprintf(`<img src="%s" alt="%s" style="height:96px;width:auto;max-width:960px;`+
+		`align-self:flex-start;object-fit:contain">
+`, s.logo, s.logoAlt)
 }
 
 // LayoutCover is the layout whose title is the deck's own.
@@ -53,12 +67,12 @@ var layouts = []Layout{
 	{ID: LayoutCover, Name: "Cover", Description: "The deck's title and who it is for",
 		draw: func(t Theme, s slideText) string {
 			return fmt.Sprintf(`<section id="%s" style="%s">
-<div style="width:96px;height:8px;background:%s;border-radius:4px"></div>
+%s<div style="width:96px;height:8px;background:%s;border-radius:4px"></div>
 <h1 style="%s">%s</h1>
 <p style="font-size:40px;color:%s">A subtitle: who it is for, and when</p>
 <aside>The cover. Say what the deck is for in one sentence before the first slide.</aside>
 </section>
-`, s.id, featureStyle(t), t.Accent, headingStyle(t, 112, "1.05"), s.title, t.FeatureMuted)
+`, s.id, featureStyle(t), coverLogo(s), t.Accent, headingStyle(t, 112, "1.05"), s.title, t.FeatureMuted)
 		}},
 	{ID: "agenda", Name: "Agenda", Description: "A numbered list of the parts to come",
 		Heading: "Agenda",
@@ -223,6 +237,25 @@ func DefaultPlan() Plan {
 	}}
 }
 
+// Look is a deck's look as a caller that knows the company resolves it, for a
+// plan drawn in [BrandTheme]: the theme itself, the logo the cover shows and
+// the typefaces the index declares. The logo and every face's src are paths of
+// files the caller puts in the same version, which the deck's reader holds the
+// version to like any image or face.
+type Look struct {
+	// Theme is the resolved theme. Its ID is [BrandTheme].
+	Theme Theme
+
+	// Logo is the path of the image the cover shows above its title, and
+	// LogoAlt its text (the company's name); empty for none.
+	Logo    string
+	LogoAlt string
+
+	// Faces are the typefaces the index declares, by key, each naming a
+	// font file of the version; at most [MaxFaces].
+	Faces map[string]IndexFace
+}
+
 // Compose is the starter deck's files for a deck titled title, by path, its
 // index first in [IndexPath]: plan's slides in order, drawn in its theme.
 //
@@ -230,13 +263,48 @@ func DefaultPlan() Plan {
 // two (`points`, `points-2`), so an id says what a slide began as. A section
 // slide starts a section of the outline under its title. The titles are
 // written escaped, as JSON in the index and as text on the slides.
+//
+// A plan drawn in [BrandTheme] is the caller's to resolve, and is refused
+// here: [ComposeBranded] takes the look it resolved.
 func Compose(title string, plan Plan) (map[string][]byte, error) {
 	theme, slides, err := plan.resolve()
 	if err != nil {
 		return nil, err
 	}
+	return compose(title, theme, slides, Look{}), nil
+}
+
+// ComposeBranded is [Compose] for a plan drawn in the company's adopted brand:
+// look carries the theme the caller resolved for [BrandTheme], the logo its
+// cover shows and the faces its index declares. A plan naming any other theme
+// is refused, as is a look whose theme is not [BrandTheme]'s or that declares
+// more faces than a deck may.
+func ComposeBranded(title string, plan Plan, look Look) (map[string][]byte, error) {
+	switch {
+	case plan.Theme != "" && plan.Theme != BrandTheme:
+		return nil, fmt.Errorf("%w: theme %q is the engine's own, and a branded deck is drawn in %q",
+			ErrPlan, plan.Theme, BrandTheme)
+	case look.Theme.ID != BrandTheme:
+		return nil, fmt.Errorf("%w: the look resolved for %q names the theme %q", ErrPlan,
+			BrandTheme, look.Theme.ID)
+	case len(look.Faces) > MaxFaces:
+		return nil, fmt.Errorf("%w: the look declares %d typefaces and a deck declares at most %d",
+			ErrPlan, len(look.Faces), MaxFaces)
+	}
+	slides, err := plan.slides()
+	if err != nil {
+		return nil, err
+	}
+	return compose(title, look.Theme, slides, look), nil
+}
+
+// compose draws slides in theme with look's logo and faces: the plan already
+// resolved and held to the format's bounds.
+func compose(title string, theme Theme, slides []PlanSlide, look Look) map[string][]byte {
 	files := make(map[string][]byte, len(slides)+1)
-	idx := Index{V: 4, Title: title, Theme: theme.ID, Order: make([]string, 0, len(slides))}
+	idx := Index{V: 4, Title: title, Theme: theme.ID, Order: make([]string, 0, len(slides)),
+		Faces: look.Faces}
+	logo, logoAlt := html.EscapeString(look.Logo), html.EscapeString(look.LogoAlt)
 	used := map[string]int{}
 	for _, s := range slides {
 		layout, _ := layoutByID(s.Layout)
@@ -263,7 +331,11 @@ func Compose(title string, plan Plan) (map[string][]byte, error) {
 			}
 			idx.Sections["s"+strconv.Itoa(len(idx.Sections)+1)] = IndexSection{Description: text, Start: id}
 		}
-		files[SlidePath(id)] = []byte(layout.draw(theme, slideText{id: id, title: html.EscapeString(text)}))
+		st := slideText{id: id, title: html.EscapeString(text)}
+		if layout.ID == LayoutCover {
+			st.logo, st.logoAlt = logo, logoAlt
+		}
+		files[SlidePath(id)] = []byte(layout.draw(theme, st))
 	}
 	index, err := json.MarshalIndent(idx, "", "  ")
 	if err != nil {
@@ -272,41 +344,54 @@ func Compose(title string, plan Plan) (map[string][]byte, error) {
 		panic("slideformat: encode the starter index: " + err.Error())
 	}
 	files[IndexPath] = append(index, '\n')
-	return files, nil
+	return files
 }
 
 // resolve is the plan's theme and slides with its defaults filled in, or the
 // [ErrPlan] that refuses it.
 func (p Plan) resolve() (Theme, []PlanSlide, error) {
-	def := DefaultPlan()
 	id := p.Theme
 	if id == "" {
-		id = def.Theme
+		id = DefaultPlan().Theme
+	}
+	if id == BrandTheme {
+		return Theme{}, nil, fmt.Errorf("%w: theme %q is drawn from the company's adopted brand, "+
+			"and none was resolved for this deck", ErrPlan, BrandTheme)
 	}
 	theme, ok := ThemeByID(id)
 	if !ok {
 		return Theme{}, nil, fmt.Errorf("%w: theme %q is not one of %s", ErrPlan, id,
 			strings.Join(themeIDs(), ", "))
 	}
+	slides, err := p.slides()
+	if err != nil {
+		return Theme{}, nil, err
+	}
+	return theme, slides, nil
+}
+
+// slides is the plan's slides with the default filled in, or the [ErrPlan]
+// that refuses them.
+func (p Plan) slides() ([]PlanSlide, error) {
 	slides := p.Slides
 	if len(slides) == 0 {
-		slides = def.Slides
+		slides = DefaultPlan().Slides
 	}
 	if len(slides) > MaxPlanSlides {
-		return Theme{}, nil, fmt.Errorf("%w: it names %d slides and a starter opens with at most %d",
+		return nil, fmt.Errorf("%w: it names %d slides and a starter opens with at most %d",
 			ErrPlan, len(slides), MaxPlanSlides)
 	}
 	for i, s := range slides {
 		if _, ok := layoutByID(s.Layout); !ok {
-			return Theme{}, nil, fmt.Errorf("%w: slide %d's layout %q is not one of %s", ErrPlan, i+1,
+			return nil, fmt.Errorf("%w: slide %d's layout %q is not one of %s", ErrPlan, i+1,
 				s.Layout, strings.Join(layoutIDs(), ", "))
 		}
 		if len(s.Title) > MaxSlideTitleBytes || !utf8.ValidString(s.Title) {
-			return Theme{}, nil, fmt.Errorf("%w: slide %d's title is longer than %d bytes", ErrPlan,
+			return nil, fmt.Errorf("%w: slide %d's title is longer than %d bytes", ErrPlan,
 				i+1, MaxSlideTitleBytes)
 		}
 	}
-	return theme, slides, nil
+	return slides, nil
 }
 
 // layoutIDs are the layouts' ids, for a refusal that names them.
@@ -322,17 +407,65 @@ func layoutIDs() []string {
 
 // Sample is a theme drawn as a deck of every layout once, read through this
 // format as any deck is: what a picker shows a theme as, and the slides the
-// deck editor adds a layout from.
+// deck editor adds a layout from. Any theme samples, a caller-resolved
+// [BrandTheme] included; a sample declares no face, since it is no version's
+// and holds no file but its slides. [SampleBranded] draws the brand's logo.
 func Sample(t Theme) (Deck, error) {
-	plan := Plan{Theme: t.ID, Slides: make([]PlanSlide, len(layouts))}
+	return Read(composed(compose(t.Name, t, sampleSlides(), Look{})))
+}
+
+// SampleBranded is [Sample] for the caller-resolved [BrandTheme], drawn with
+// the logo a deck begun in it shows on its cover (look.Logo, whose file is of
+// type logoType), so the picker promises what the deck delivers. The sample
+// holds the logo by its path and type alone, as no version's file; a caller
+// draws it from the adopted brand. Faces are not declared, as in any sample.
+func SampleBranded(look Look, logoType string) (Deck, error) {
+	if look.Theme.ID != BrandTheme {
+		return Deck{}, fmt.Errorf("%w: the look resolved for %q names the theme %q", ErrPlan,
+			BrandTheme, look.Theme.ID)
+	}
+	look.Faces = nil
+	files := composed(compose(look.Theme.Name, look.Theme, sampleSlides(), look))
+	if look.Logo == "" {
+		return Read(files)
+	}
+	return Read(sampleFiles{composed: files, image: look.Logo, essence: logoType})
+}
+
+// sampleSlides are every layout once, in a picker's order.
+func sampleSlides() []PlanSlide {
+	slides := make([]PlanSlide, len(layouts))
 	for i, l := range layouts {
-		plan.Slides[i] = PlanSlide{Layout: l.ID}
+		slides[i] = PlanSlide{Layout: l.ID}
 	}
-	files, err := Compose(t.Name, plan)
-	if err != nil {
-		return Deck{}, err
+	return slides
+}
+
+// sampleFiles are a sample's files and the one image its cover shows, held by
+// path and type only: a sample is no version's, so the image has no bytes.
+type sampleFiles struct {
+	composed
+	image, essence string
+}
+
+func (s sampleFiles) Paths() []string {
+	out := append(s.composed.Paths(), s.image)
+	slices.Sort(out)
+	return out
+}
+
+func (s sampleFiles) Essence(p string) (string, bool) {
+	if p == s.image {
+		return s.essence, true
 	}
-	return Read(composed(files))
+	return s.composed.Essence(p)
+}
+
+func (s sampleFiles) Read(p string) ([]byte, error) {
+	if p == s.image {
+		return nil, nil
+	}
+	return s.composed.Read(p)
 }
 
 // composed is a starter's files as a version to read.

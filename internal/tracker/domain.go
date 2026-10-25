@@ -84,7 +84,7 @@ func (Domain) Stream() statelog.StreamSpec {
 		// read behind every other one and write an anchor row per read
 		// into the transaction holding this store's only writer; and the
 		// trim's trimmed record removes anchors, so arbitrated it would
-		// write one of its own on every apply (ADR-0047).
+		// write one of its own on every apply (ADR-0050).
 		ArbitratedKinds: arbitratedKinds(),
 	}
 }
@@ -215,7 +215,7 @@ func (Domain) OpsTable() string { return "tracker_ops" }
 // mutation log serves rows that are simply wrong, where a node behind on a
 // compacted domain serves an answer that is merely less complete and says so.
 // Its copy is judged like every domain's, and a wrong one goes out of service
-// for the tracker's operations alone — ADR-0046.
+// for the tracker's operations alone — ADR-0049.
 func (Domain) GatesSeatAdmission() bool { return true }
 
 // ClaimsIdentity reports that every node's Replicated tables must be

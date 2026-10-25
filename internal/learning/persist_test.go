@@ -316,7 +316,7 @@ func TestADocIsAnnouncedAndNeverMemorised(t *testing.T) {
 	t.Parallel()
 	store := &fakeDiary{}
 	d := decider(t, says(`{"kind":"DOC","content":"Use semantic commit messages.",
-		"target_hint":"Engineering / commit conventions","rationale":"Imperative for the whole team."}`), store)
+		"target_hint":"Engineering / commit conventions"}`), store)
 
 	dec := mustDecide(t, d, pdTurn())
 	if dec.Tier != types.PersistDoc {
@@ -328,9 +328,8 @@ func TestADocIsAnnouncedAndNeverMemorised(t *testing.T) {
 	if dec.Persisted() {
 		t.Error("DOC reported a persisted row")
 	}
-	if dec.Directive.Content != "Use semantic commit messages." ||
-		dec.Directive.TargetHint != "Engineering / commit conventions" ||
-		!strings.Contains(dec.Directive.Rationale, "Imperative") {
+	if dec.Directive != (learning.Directive{
+		Content: "Use semantic commit messages.", TargetHint: "Engineering / commit conventions"}) {
 		t.Errorf("directive = %+v", dec.Directive)
 	}
 
@@ -657,35 +656,6 @@ func TestAnEmptyTurnStillDescribesItself(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt is missing %q:\n%s", want, prompt)
 		}
-	}
-}
-
-func TestDescribeSenderIsOneRendering(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name string
-		id   types.CanonicalIdentity
-		want string
-	}{
-		{"named on a platform",
-			types.CanonicalIdentity{DisplayName: "Sam", ExternalID: "U1", Platform: "slack"}, "Sam (slack:U1)"},
-		{"named with no platform",
-			types.CanonicalIdentity{DisplayName: "Sam", ExternalID: "U1"}, "Sam (U1)"},
-		{"a seat", types.CanonicalIdentity{Handle: "dev"}, "dev"},
-		{"a handle behind a display name",
-			types.CanonicalIdentity{Handle: "dev", DisplayName: "Dev Bot"}, "Dev Bot"},
-		{"an id on a platform", types.CanonicalIdentity{ExternalID: "U1", Platform: "slack"}, "slack:U1"},
-		{"an id from nowhere", types.CanonicalIdentity{ExternalID: "U1"}, "unknown:U1"},
-		{"nobody", types.CanonicalIdentity{}, ""},
-		{"a name with no identifier at all",
-			types.CanonicalIdentity{DisplayName: "Sam"}, "Sam"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			if got := learning.DescribeSender(tc.id); got != tc.want {
-				t.Errorf("DescribeSender(%+v) = %q, want %q", tc.id, got, tc.want)
-			}
-		})
 	}
 }
 

@@ -282,7 +282,7 @@ const (
 	OpBarrier OpKind = "barrier"
 
 	// OpTrimmed is the trim's payload-free record that removes the
-	// arbitration anchors below a floor (ADR-0047). Its subject is
+	// arbitration anchors below a floor (ADR-0050). Its subject is
 	// [KindTrimmed].
 	OpTrimmed OpKind = "trimmed"
 
@@ -722,7 +722,7 @@ func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 }
 
 // EncodeTrimmed renders the trim's trimmed record ([statelog.TrimmedEnvelope],
-// ADR-0047) as one of this domain's own records — the barrier's split: the
+// ADR-0050) as one of this domain's own records — the barrier's split: the
 // framework owns when one is appended, what it removes and the floor its
 // subject names, and the domain owns what a record on its log looks like.
 //

@@ -583,7 +583,7 @@ func (e *Engine) NodeGate() *NodeGate {
 //     node whose copy of a domain that gates seats is WRONG serves no seat
 //     copy ([estate.SeatCopy], [localEstate.For]), so it is answered on a
 //     sound data node's word, like a node holding no data, while a wrong copy
-//     of any other domain withholds nothing (ADR-0046); both halves the
+//     of any other domain withholds nothing (ADR-0049); both halves the
 //     company runs natively must be served there, since a seat's tools reach
 //     both. And the router's view must have listed the fleet at least once: a
 //     node that must ask a data node is refused by the router itself when its
@@ -639,7 +639,7 @@ func (e *Engine) StateLogHydrated(ctx context.Context) bool {
 // deferral grace — because a seat left running on one answered its own tools
 // out of a copy the fleet had abandoned. The router makes that the copy's
 // problem and not the seats': a domain's wrong copy goes out of service for
-// that domain's operations ([localEstate.For], ADR-0046), so every call this
+// that domain's operations ([localEstate.For], ADR-0049), so every call this
 // node's seats make on that domain is answered by a data node whose copy is
 // sound, exactly as a node holding no data is answered. Moving the seats
 // instead cost each of them its processes and its memory to be served by the

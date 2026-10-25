@@ -193,6 +193,7 @@ func writeFailed(w http.ResponseWriter, r *http.Request, key, verb string, err e
 		detail     = httpjson.Detail{"detail": say(err), "op_id": key}
 		fail       = func(status int, code httpjson.Code) { httpjson.FailWithFields(w, status, code, detail) }
 		moved      *artifactsdomain.VersionMoved
+		ambiguous  *artifactsdomain.FolderAmbiguous
 		failClient = func(code httpjson.Code) { fail(http.StatusUnprocessableEntity, code) }
 	)
 	if key == "" {
@@ -275,6 +276,23 @@ func writeFailed(w http.ResponseWriter, r *http.Request, key, verb string, err e
 		fail(http.StatusConflict, httpjson.CodeArtifactPurging)
 	case errors.Is(err, artifactsdomain.ErrNotFound), errors.Is(err, artifactsdomain.ErrPurged):
 		fail(http.StatusNotFound, httpjson.CodeNotFound)
+	case errors.Is(err, artifactsdomain.ErrFolderNotFound):
+		fail(http.StatusNotFound, httpjson.CodeFolderNotFound)
+	case errors.Is(err, artifactsdomain.ErrFolderNameTaken):
+		fail(http.StatusConflict, httpjson.CodeFolderNameTaken)
+	case errors.Is(err, artifactsdomain.ErrFolderCycle):
+		fail(http.StatusConflict, httpjson.CodeFolderCycle)
+	case errors.Is(err, artifactsdomain.ErrFolderDepth):
+		fail(http.StatusConflict, httpjson.CodeFolderDepth)
+	case errors.Is(err, artifactsdomain.ErrFolderLimit):
+		fail(http.StatusConflict, httpjson.CodeFolderLimit)
+	case errors.As(err, &ambiguous):
+		candidates := make([]string, len(ambiguous.Candidates))
+		for i, c := range ambiguous.Candidates {
+			candidates[i] = c.ID
+		}
+		detail["candidates"] = candidates
+		fail(http.StatusConflict, httpjson.CodeFolderAmbiguous)
 	case errors.Is(err, artifactsdomain.ErrAgentCompanyShare),
 		errors.Is(err, artifactsdomain.ErrAboveOwnRole):
 		fail(http.StatusForbidden, httpjson.CodeForbidden)

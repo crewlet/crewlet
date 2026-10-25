@@ -229,7 +229,7 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 //
 // PER LOG, which is the one arrangement in which the consequence the alarm
 // states is true: a deferral past the grace takes that log's copy out of
-// service and no other's ([stateLog.judgeCopy], ADR-0046), so two logs holding
+// service and no other's ([stateLog.judgeCopy], ADR-0049), so two logs holding
 // records at once are two different answers. And EVERY log's, whatever it
 // declares about seat admission, so nothing here says whether a log's copy is
 // judged: when one declaration answered both questions, the vectors' and the

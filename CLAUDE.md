@@ -26,7 +26,7 @@ Crewlet is a Go engine for orchestrating hierarchically organized AI agent compa
 - **Official vendor SDKs** for integrations where one exists; a thin typed client where one does not (Mattermost, GitLab, Confluence)
 - **`github.com/aws/aws-sdk-go-v2`** — the object store's `s3` backend and only that: request signing, the regional endpoint rules and the credential chain. Its HTTP goes through `httpx`. The default backend, `nats`, needs nothing beyond the broker
 - **YAML** (`gopkg.in/yaml.v3`) — config parsing
-- **git ≥ 2.55 on a git node, ≥ 2.40 for a client** (ADR-0054) — the code host runs real upstream git as a subprocess (`internal/code/gitproc`), never a reimplementation, and the engine image BUILDS the git it runs from the tarball `scripts/git-pin.env` pins by version and SHA-256, through `scripts/git.sh`, the ONE recipe the image, CI and a contributor share (it links no OpenSSL of its own; `RELEASING.md` has the licence reading). The SUITE runs that pin, never the machine's git: every make target that runs Go tests depends on `make git` and puts the node pin first on PATH (`GIT_ENV`); a one-package loop runs it as two statements, `bin=$(scripts/git.sh node) && PATH="$bin:$PATH" go test ./internal/code/…`, never one substitution, which is empty when the recipe fails. A git-driven test on a git below its floor FAILS rather than skips (`gittest.RequireNode`, `gittest.Require`), and `TestTheGitFloorsPassTheSuite` runs the two floors against each other under every make target. A diff to the pin or the recipe changes every git node's git, so it is release surface (`CONTRIBUTING.md`, Development setup)
+- **git ≥ 2.55 on a git node, ≥ 2.40 for a client** (ADR-0057) — the code host runs real upstream git as a subprocess (`internal/code/gitproc`), never a reimplementation, and the engine image BUILDS the git it runs from the tarball `scripts/git-pin.env` pins by version and SHA-256, through `scripts/git.sh`, the ONE recipe the image, CI and a contributor share (it links no OpenSSL of its own; `RELEASING.md` has the licence reading). The SUITE runs that pin, never the machine's git: every make target that runs Go tests depends on `make git` and puts the node pin first on PATH (`GIT_ENV`); a one-package loop runs it as two statements, `bin=$(scripts/git.sh node) && PATH="$bin:$PATH" go test ./internal/code/…`, never one substitution, which is empty when the recipe fails. A git-driven test on a git below its floor FAILS rather than skips (`gittest.RequireNode`, `gittest.Require`), and `TestTheGitFloorsPassTheSuite` runs the two floors against each other under every make target. A diff to the pin or the recipe changes every git node's git, so it is release surface (`CONTRIBUTING.md`, Development setup)
 - **`testing`** — the standard library's, with no assertion framework. Table tests where the cases vary, named tests where the reasoning does
 
 ## This Is a Public Open-Source Repository
@@ -128,14 +128,15 @@ internal/             # Everything else, mapped package by package in
                       #   config format and a wire protocol
 dashboard/            # The dashboard's SOURCE: React 19 + TypeScript, built by Vite.
                       #   src/contract/ is the ONE home of every declaration an engine
-                      #   test reads (clientsource). `make dashboard` builds it into
-                      #   static/dashboard and THAT IS COMMITTED, so `go build ./...`
-                      #   needs no Node; CI rebuilds and diffs it (`make dashboard-check`)
+                      #   test reads (clientsource), and its own suites are Vitest,
+                      #   beside the modules they cover (`make dashboard-test`).
+                      #   `make dashboard` builds it into static/dashboard and THAT IS
+                      #   COMMITTED, so `go build ./...` needs no Node; CI rebuilds and
+                      #   diffs it (`make dashboard-check`)
 static/               # Embedded assets; static/dashboard/ is that build output,
-                      #   compiled in via embed. NEVER hand-edited
-tests/dashboard/js/   # The e2e client replay only: internal/e2e's captured socket
-                      #   frames through static/dashboard/protocol.js under `node`.
-                      #   The dashboard's own suites are Vitest (`make dashboard-test`)
+                      #   compiled in via embed. NEVER hand-edited. Its protocol.js is
+                      #   the wire protocol alone, which internal/e2e/replay.mjs runs
+                      #   under `node`
 examples/             # The Nimbus example company — a working two-tier config
 docs/                 # Product documentation, published to docs.crewlet.ai
 schema/               # GENERATED JSON Schema for both config tiers (`crewlet schema
@@ -207,7 +208,7 @@ A `v*` tag is the only compatibility boundary: a surface no tag has shipped has 
 
 ## Testing
 - Run **`make test`** and **`make test-solo`**, never a bare `go test ./...`, which runs the cluster-forming packages beside everything else and bypasses `internal/skipgate`. One package with `go test ./internal/foo/` is a fine fast loop
-- Test files sit beside what they cover
+- Test files sit beside what they cover, a test file that is not Go included: the dashboard's Vitest suites beside their modules in `dashboard/src`, and `internal/e2e/replay.mjs` beside the `golden_test.go` that runs it. There is no top-level `tests/` tree
 - **A contract with more than one implementation gets ONE suite** (`queuetest`, `coordtest`, `storetest`, `scheduletest`, `sandboxtest`), which every backend runs, the memory twins included
 - **A store on a fresh path starts from the migrated image** — `storetest.OpenNode`, `storetest.OpenEstate`, or `storetest.Seed` before an engine boots on it. Only a test whose subject is migration opens a fresh file with `store.OpenNode`
 - Every subsystem needs tests, and a test names the invariant it protects, not the function it calls
@@ -268,4 +269,4 @@ The implementation follows `docs/concepts/`. Its subsystems:
 19. **State Log** — one ordered stream per domain is the write-ahead log, N identical SQL copies are the state, and the checkpoint commits in the same transaction as the rows; one write authority (take one snapshot, decide inside it, publish, let the broker arbitrate), three write outcomes, four read levels
 20. **Identity Estate** — people, credentials, invitations and sessions as `statelog`'s fourth domain; uniqueness is arbitrated on one directory subject, never indexed, and a person holds one human seat for as long as they exist (ADR-0032)
 21. **Estate Topology** — a node holds the estate (`data`, which `ingress` and `workers` require) or reaches it through one that does, over the estate router, every request signed under the fleet keyring (ADR-0025, ADR-0031); a file is a replicated row naming an object in the fleet's one object store (ADR-0026)
-22. **Code Host** — the company's git repositories as rows on the code log, each push's pack bundle one object in the object store, a disposable cache of each repository on every git node derived from the rows, and persons cloning and pushing over HTTPS with their own token — git, one more way a person acts (ADR-0051, ADR-0052)
+22. **Code Host** — the company's git repositories as rows on the code log, each push's pack bundle one object in the object store, a disposable cache of each repository on every git node derived from the rows, and persons cloning and pushing over HTTPS with their own token — git, one more way a person acts (ADR-0054, ADR-0055)

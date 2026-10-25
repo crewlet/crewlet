@@ -546,7 +546,7 @@ func TestNotPermittedIsTheDomainsOwnWord(t *testing.T) {
 // under the credential it came through, and the human seat it holds — the one
 // the identity directory binds a token to — or none. Never as a seat: a REST
 // caller is a person, so the reader judges what it answers by a person's
-// grant (ADR-0055).
+// grant (ADR-0058).
 //
 // Mutation: the asker's seat left empty → the bound token asks unbound; the
 // credential replaced by the principal's display name → each token asks as

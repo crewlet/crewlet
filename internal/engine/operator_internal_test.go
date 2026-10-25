@@ -77,7 +77,7 @@ func (twoDataNodes) Unanswered(string)          {}
 // shut. Here this node's copies of the tracker and of the knowledge base are
 // both wrong, and every surface is answered by the peer — the operator's own
 // writes included, attributed to the operator. (A wrong copy of one domain
-// sends only that domain's surfaces to a peer — ADR-0046.)
+// sends only that domain's surfaces to a peer — ADR-0049.)
 func TestTheOperatorsSurfacesAreAnsweredThroughTheRouter(t *testing.T) {
 	t.Parallel()
 	broker := memory.NewBroker()

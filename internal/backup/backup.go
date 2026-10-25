@@ -82,7 +82,7 @@
 //
 // # The objects follow the log
 //
-// ADR-0049. A restore brings the copy back at position P on each declaring log
+// ADR-0052. A restore brings the copy back at position P on each declaring log
 // and replays the log to the last sequence L its snapshot captured — the
 // snapshot is point-in-time at the state its answer states, however much is
 // appended while it transfers — and a build that can read a record the copy's

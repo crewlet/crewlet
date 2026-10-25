@@ -34,7 +34,7 @@ import (
 // ([auth.Unguarded]) does not name is, and neither is ever on api.public
 // ([auth.Public] names neither): a repository is the company's
 // source, and a person reaches it with their own bound token — the third person
-// transport beside the act route and the operator's MCP (ADR-0052). On a git
+// transport beside the act route and the operator's MCP (ADR-0055). On a git
 // route, and on no other, that token may arrive as a Basic credential's
 // password, because a git client presents one no other way.
 //
@@ -224,7 +224,7 @@ func servesGit(b *config.Bootstrap) bool {
 //   - THE READS AND THE GIT ROUTES admit everybody the guard resolved
 //     ([authz.ActionCodeRead], [authz.ActionCodeGit]): what each may read,
 //     fetch or push is the per-repository grant the serving node derives from
-//     the chart once the repository is read (code.GrantOf, ADR-0055), which
+//     the chart once the repository is read (code.GrantOf, ADR-0058), which
 //     no route can ask before it.
 //   - A VERIFY AND ITS READ are the deployment's own controls, admin's as a
 //     backup is, decided by [deploymentPolicy] — a check of THIS NODE's copy
@@ -384,7 +384,7 @@ func (a *App) serveCodeRead(kind code.ReadKind, what string) http.Handler {
 // for the request, under the credential it came through ([iam.ActorFor]), and
 // the human seat it holds — a person's own, or the one the identity directory
 // binds a token to — or none. Every principal a person presents reads every
-// repository (ADR-0055), so the answer a person gets is the whole listing; what
+// repository (ADR-0058), so the answer a person gets is the whole listing; what
 // the asker buys here is that the reader judges every read by who asked it, so
 // a seat's read, when one asks, cannot be answered as a person's.
 func codeAsker(p iam.Principal) code.Principal {

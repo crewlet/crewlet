@@ -234,7 +234,7 @@ func TestABlockedTrimIsNamedOnARunningNodeOnlyPastTheWindow(t *testing.T) {
 // fleet's keyring, at a record version this build does not read — so the
 // appliers retain them exactly as a rolling upgrade makes them. And the node
 // holds one on TWO logs at once, which is what a build that moved two record
-// versions leaves behind. Every log's copy is judged on its own (ADR-0046), the
+// versions leaves behind. Every log's copy is judged on its own (ADR-0049), the
 // identity log's included, so the grace takes each log's copy out of service
 // and nothing else — the tracker's operations go to a peer while every other
 // log's copy keeps serving here, and the seats stay where they are for both.

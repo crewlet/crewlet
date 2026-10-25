@@ -1707,7 +1707,7 @@ func TestStopEndsAMaintenanceRun(t *testing.T) {
 	layout.Release()
 }
 
-// THE MAINTAINER'S STEPS ARE THE DECLARED WRITES (ADR-0053). What a pass and
+// THE MAINTAINER'S STEPS ARE THE DECLARED WRITES (ADR-0056). What a pass and
 // a round run, and what a refusal is said and counted as, are read from the
 // declarations (cache.DerivedFiles): every multi-pack-index and commit-graph
 // process the cache starts runs exactly one declared write's argument list —

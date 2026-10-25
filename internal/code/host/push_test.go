@@ -41,7 +41,7 @@ func pendingAt(seq uint64) code.ProposeResult {
 		Position: statelog.Position{Stream: code.Domain{}.Stream().Name, Seq: seq}}
 }
 
-// ADR-0051: git is told ok for a ref ONLY from the push's own applied row — a
+// ADR-0054: git is told ok for a ref ONLY from the push's own applied row — a
 // pending answer is waited on and its row read, and never reported as ok.
 func TestAnOkIsAnsweredOnlyFromAnAppliedRow(t *testing.T) {
 	t.Run("the row is found", func(t *testing.T) {
@@ -170,7 +170,7 @@ func TestAnUnboundTokenCannotPush(t *testing.T) {
 	}
 	// A POST THAT NEVER ASKED FOR THE ADVERTISEMENT: deletions carry no
 	// pack, so the command section is the whole body. Every command is
-	// refused by the token's grant (ADR-0055) — the domain's not_permitted,
+	// refused by the token's grant (ADR-0058) — the domain's not_permitted,
 	// with the sentence the advertisement gives.
 	body := pkt(head+" "+gitrefZero+" refs/heads/main\x00report-status\n") +
 		pkt(head+" "+gitrefZero+" refs/heads/feature\n") + "0000"
@@ -247,7 +247,7 @@ func TestEveryPushIsAuditedAsItsPerson(t *testing.T) {
 	}
 }
 
-// ADR-0051: receive-pack never runs in a cache — every push, its
+// ADR-0054: receive-pack never runs in a cache — every push, its
 // advertisement included, is received in a scratch repository.
 func TestReceivePackNeverRunsInACache(t *testing.T) {
 	path, calls := gittest.Recording(t)

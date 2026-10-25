@@ -781,9 +781,11 @@ type AgentPhaseCompleted struct {
 	// schemas for every server's catalogue is what made a turn expensive; a
 	// tool it activates through discovery joins the list from that round on.
 	ToolsAvailable []string `json:"tools_available,omitempty"`
-	// ToolCatalogue is the tools offered as prose in the executor's prompt,
-	// with no schema — builtin names and MCP server names. Empty for every
-	// phase other than execute.
+	// ToolCatalogue is the rest of what the executor could reach, by
+	// discovery and with no schema: the tools of its universe it did not
+	// hold by the phase's end — an MCP server's tools, by name, which its
+	// prompt names only by server. Disjoint from ToolsAvailable. Empty for
+	// every phase other than execute.
 	ToolCatalogue []string `json:"tool_catalogue,omitempty"`
 	// Backend is BackendSandbox on a PhaseSandbox record and on the resumed
 	// Execute phase that collected one, so the dashboard renders the sandbox
