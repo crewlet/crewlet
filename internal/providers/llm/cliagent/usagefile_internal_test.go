@@ -143,9 +143,13 @@ func TestTheDoctorCallsAUsageFileWhatItIs(t *testing.T) {
 	}
 	// And the rule it is an exception to still holds: a text profile with
 	// no report to read estimates.
-	copilot, _ := cliprofile.Builtin("copilot")
-	if copilot.ReadsUsage() {
-		t.Error("copilot has no usage report of any kind and must report estimated")
+	grok, _ := cliprofile.Builtin("grok")
+	if grok.EffectiveOutput() != cliprofile.OutputText {
+		t.Fatalf("grok's output = %q — this half needs a text profile with no report",
+			grok.EffectiveOutput())
+	}
+	if grok.ReadsUsage() {
+		t.Error("grok has no usage report of any kind and must report estimated")
 	}
 }
 
@@ -177,9 +181,9 @@ func TestAUsageFileWithNothingToSubstituteOrNothingToReadIsRefused(t *testing.T)
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			// copilot, because it declares no usage paths of its own,
-			// so the second case is not fighting a base profile.
-			base := "copilot"
+			// grok, because it declares no usage paths of its own, so
+			// the second case is not fighting a base profile.
+			base := "grok"
 			if name == "no placeholder" {
 				base = "claude-code"
 			}

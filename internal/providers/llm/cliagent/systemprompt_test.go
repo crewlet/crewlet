@@ -169,8 +169,10 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 		// `-c model_instructions_file=<path>`, which replaces the base
 		// instructions outright.
 		"codex": "{file}",
-		// No channel of any kind, on either.
-		"copilot":      "", // 1.0.83
+		// 1.0.103: no replacing channel; it keeps its own prompt and adds
+		// the engine's from an AGENTS.md in the call's directory
+		// (append_system_prompt).
+		"copilot":      "",
 		"cursor-agent": "", // 2026.09.02
 		// 2.0.32 and 2.1.4: no flag and no variable, but a DISCOVERED
 		// AGENT — `agents/<name>.md` in its configuration directory, which

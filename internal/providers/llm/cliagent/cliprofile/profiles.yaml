@@ -1206,32 +1206,139 @@ cursor-agent:
 
 copilot:
   binary: copilot
-  written_for: "GitHub Copilot CLI 1.0.x (`copilot --version`)"
+  written_for: "GitHub Copilot CLI 1.0.x, measured on 1.0.103 (`copilot --version`)"
   version_args: ["--version"]
-  # The tool flags come BEFORE -p, so nothing here can be read as the prompt,
-  # which is appended last. Denies win over allows; the web tools are
-  # allowed explicitly so a non-interactive run does not wait on approval.
+  # EVERY FLAG BELOW KEEPS THE CLI TO ITS CALL. Measured on 1.0.103 through
+  # the engine's own code path, on a custom provider (COPILOT_PROVIDER_BASE_URL
+  # at a local stand-in), with the state directory inside a git checkout and
+  # every level above the call holding an AGENTS.md, CLAUDE.md, GEMINI.md,
+  # .github/copilot-instructions.md, .github/instructions, .claude/rules,
+  # skills, custom agents, hooks, MCP configurations and a .env: none of them
+  # reached a request, no hook or MCP server ran, and web_fetch was the only
+  # tool offered.
+  #
+  #   -s                          stdout is the answer and nothing else.
+  #                               Without it the CLI prints a "Disabled
+  #                               tools" line, a line per tool call and a
+  #                               usage footer around the answer.
+  #   --disable-client-telemetry  no connection but the call's own: without
+  #                               it every call looked up three hosts that
+  #                               are not the provider; with it, none, and
+  #                               the request is unchanged.
+  #   --available-tools           the tools that EXIST for the call: the web
+  #                               tools. The deny list alone does not get
+  #                               there — with shell, write and read denied,
+  #                               21 tools were still offered (view, grep,
+  #                               glob, task, sql among them), refused only
+  #                               once called — and the allowlist also takes
+  #                               the skill and custom-agent listings out of
+  #                               the system prompt (8.4k characters of
+  #                               vendor prompt instead of 22.5k). It fails
+  #                               closed: a name that matches no tool adds
+  #                               nothing. web_fetch is the CLI's own fetch;
+  #                               web_search does not exist on a custom
+  #                               provider, and the 1.0.103 bundle lists it
+  #                               among the tools of the built-in GitHub MCP
+  #                               server on a GitHub sign-in, which is why
+  #                               that server is left on (not measured: no
+  #                               GitHub sign-in).
+  #   --allow-tool                the web tools have to be ALLOWED as well as
+  #                               present: prompt mode never asks.
+  #   --deny-tool                 beside the allowlist, the shell, write and
+  #                               read permission kinds; a denial wins over
+  #                               an allow.
+  #
+  # Every value sits beside its own flag: each of these flags takes a LIST,
+  # so a value standing alone after one would be read into it.
+  #
+  # The `.git` file the engine writes into the call's directory ends the
+  # walk for instruction files, hooks and repository settings there. The
+  # CLI's custom-agent discovery walks past it to the enclosing repository's
+  # root and opens every .github/agents and .claude/agents file on the way;
+  # none reaches a request, because the task tool that lists them is not
+  # among the available tools.
+  #
+  # NOT --no-custom-instructions: it switches off the AGENTS.md this
+  # profile's append channel writes. Memory is off in prompt mode unless
+  # --enable-memory asks for it.
   complete_args:
+    - "-s"
+    - "--disable-client-telemetry"
+    - "--available-tools"
+    - "web_fetch"
+    - "--available-tools"
+    - "web_search"
+    - "--allow-tool"
+    - "web_fetch"
+    - "--allow-tool"
+    - "web_search"
     - "--deny-tool"
     - "shell"
     - "--deny-tool"
     - "write"
     - "--deny-tool"
     - "read"
-    - "--allow-tool"
-    - "web_fetch"
-    - "--allow-tool"
-    - "web_search"
-    - "-p"
   local_tools: denied
   model_args: ["--model", "{model}"]
-  # The prompt goes on argv, so a long transcript is bounded by ARG_MAX
-  # (~2 MB on Linux, 256 KB on macOS) and fails at exec rather than at the
-  # model. Documented in llm-backends.md.
-  prompt_mode: argv
+  # NO REPLACE CHANNEL: the CLI has no flag, variable or file that replaces
+  # its system prompt in prompt mode (its SDK's replace mode is not reachable
+  # from the command line), so every call takes the APPEND channel and keeps
+  # the vendor's prompt — a side pass included.
+  #
+  # The append channel is an AGENTS.md in the call's own directory, which the
+  # CLI reads on every run with nothing on argv asking for it. Measured on
+  # 1.0.103: its text lands inside the system prompt as a
+  # <custom_instruction> block, after the vendor's identity ("You are the
+  # GitHub Copilot CLI, a terminal assistant built by GitHub. You are running
+  # in non-interactive mode…"), its tool guidance and its environment block,
+  # and before a session block; about 8,400 characters of vendor prompt with
+  # the tools above, 6,200 of them before the engine's text. A 128 KB text
+  # arrived whole. The environment block names the call's directory, so
+  # per-call bytes precede the engine's text and nothing about this channel
+  # is a cacheable prefix.
+  append_system_prompt:
+    file:
+      name: "AGENTS.md"
+      discovered: always
+  # THE TRANSCRIPT ON STDIN, which prompt mode reads to its end when no -p
+  # is given: off argv, where ARG_MAX bounds it and /proc/<pid>/cmdline
+  # shows it to every account on the machine. `-p` takes the prompt as its
+  # VALUE, and with it in complete_args the model flag that followed became
+  # the prompt — every call that named a model exited 1 on "a value is
+  # required for '--prompt <text>'".
+  prompt_mode: stdin
   output: text
+  # THE CLI'S OWN USAGE REPORT, written when the run ends: the token counts
+  # of the model that served the call. Its input count already holds the
+  # cached tokens (measured: a reply reporting 1,000 prompt tokens, 600 of
+  # them cached, was recorded as inputTokens 1000 and cacheReadTokens 600),
+  # so the cache figures are not read here — this backend adds them to the
+  # input count, and they would be charged twice. One entry per model the
+  # call used; every measured call used one.
+  usage_file_args: ["--usage-output-file", "{usage_file}"]
+  usage:
+    input: [["providerModelMetrics", "0", "metrics", "usage", "inputTokens"]]
+    output: [["providerModelMetrics", "0", "metrics", "usage", "outputTokens"]]
+  env:
+    # Auto-update is on by default for a standalone install, and it would
+    # download a newer CLI into each seat's own cache and run that instead
+    # of the one installed. Read from `copilot help environment` on 1.0.103;
+    # no measured call attempted an update.
+    COPILOT_AUTO_UPDATE: "false"
   credential_paths: [".copilot/hosts.json"]
-  volatile_paths: [".copilot/history", ".copilot/logs", ".copilot/sessions"]
+  # What a call leaves in the seat's home, measured on 1.0.103: a session
+  # directory holding the call's events, and the session database every
+  # session is indexed in (which the CLI's own session_store_sql tool
+  # queries). The standalone binary also unpacks its 236 MB package under
+  # XDG_CACHE_HOME/copilot/pkg on its first run, once per seat: the cache
+  # is the seat's own, and nothing in a profile can point it elsewhere.
+  volatile_paths:
+    - ".copilot/logs"
+    - ".copilot/session-state"
+    - ".copilot/session-store.db"
+    - ".copilot/session-store.db-journal"
+    - ".copilot/session-store.db-wal"
+    - ".copilot/session-store.db-shm"
   # NOT gh's `.config/gh/hosts.yml`, which this list named beside it.
   # `-from-host` keeps an adopted file under its file name and a seat is
   # seeded only with the names credential_paths gives, so gh's file was
@@ -1248,18 +1355,22 @@ copilot:
   api_key_env: "GITHUB_TOKEN"
   login_args: ["login"]
   logout_args: ["logout"]
-  # NOT MEASURED, the markers below: generic phrases rather than this CLI's
-  # own sentences, safe to keep only because of WHERE they are matched — on
-  # stderr, in a run the CLI reported failed, or where one OPENS a clean
-  # run's answer, never inside it (cliprofile.MarkerScope). A model writing
-  # about a rate limit is answering. If your CLI reports these differently,
-  # override them.
+  # NOT MEASURED, the limit markers below: generic phrases rather than this
+  # CLI's own sentences, safe to keep only because of WHERE they are matched
+  # — on stderr, in a run the CLI reported failed, or where one OPENS a
+  # clean run's answer, never inside it (cliprofile.MarkerScope). A model
+  # writing about a rate limit is answering. If your CLI reports these
+  # differently, override them.
   limit_markers:
     - sentinel: "usage limit"
     - sentinel: "rate limit"
+  # The CLI's own words. Signed out, 1.0.103 exits 1 on "Error: No
+  # authentication information found." (measured); a credential the service
+  # refuses is "Authentication failed due to invalid credentials" (read from
+  # the 1.0.103 bundle).
   auth_markers:
-    - sentinel: "not authenticated"
-    - sentinel: "gh auth login"
+    - sentinel: "No authentication information found"
+    - sentinel: "Authentication failed"
 
 grok:
   binary: grok
