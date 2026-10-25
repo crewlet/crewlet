@@ -3,6 +3,7 @@ package authz
 import (
 	"context"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -242,6 +243,11 @@ var relationClasses = []Class{
 // what it should not: an artifact the caller holds no relation to is answered
 // not found, exactly as the shared class answers them ([concealed]).
 //
+// THEN THE ASSISTANT'S BARS, for the same reason and with the same
+// concealment ([assistBar]): a request made through the Dashboard Assistant
+// is refused a row it never takes, a row that needs a person present, and,
+// under a read grant, a row it only carries as an approved request.
+//
 // THE ADMIN PATH IS CHECKED BEFORE THE CHART, on every class that has one,
 // because the chart can fail and the permission cannot: an administrator must
 // not be told "I cannot tell" by a node that is behind. [ClassShared] asks an
@@ -287,6 +293,9 @@ func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 	if throughToken && r.presence == PresenceRequired {
 		return concealed(ctx, p, r, o, chart, Decision{Reason: ReasonTokenRefused})
 	}
+	if bar, barred := assistBar(p, r); barred {
+		return concealed(ctx, p, r, o, chart, bar)
+	}
 	d := withApp(p, r, decideClass(ctx, p, r, o, chart))
 	// THE PROOF LAST, and only over an ADMISSION: a refusal is already
 	// the answer, and an unknown is already "ask me again". See the
@@ -307,6 +316,48 @@ func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 		return d
 	}
 	return Decision{Reason: ReasonStepUp, Recency: need, Grants: d.Grants}
+}
+
+// assistBar is the bar a request made through the Dashboard Assistant meets
+// on this row, and whether it meets one (ADR-0048).
+//
+// THE CLASS OF THE CREDENTIAL DECIDES, NEVER ITS SPELLING: a principal whose
+// [iam.Principal.Via] names the assistant's class is the assistant's, whether
+// or not what follows parses, exactly as internal/iamdomain reads a machine
+// token's. [iam.Principal.Assisted] answers false for a malformed name, and a
+// bar keyed on it would admit the assistant through any row whose grant id
+// it got wrong.
+//
+// TWO BARS, BOTH FACTS ABOUT THE VERB AND THE GRANT, so both are asked before
+// the class, beside the person-present bar they mirror:
+//
+//   - a row the assistant never takes, or one needing a person at the
+//     keyboard on ANY arm, is [ReasonAssistRefused]. The zero class reads as
+//     never, so a row nobody decided fails closed here as well as failing
+//     the build;
+//   - a read grant on a row the assistant only carries as an approved
+//     request is [ReasonAssistScope]. Any scope but exec reads as read, so a
+//     grant whose scope is missing or unknown reaches reads alone.
+//
+// BEFORE THE CLASS rather than after it admits, unlike the step-up: no answer
+// the chart could give would lift either bar, and asked after the class a
+// node that could not read its chart would answer "ask me again" (503) to a
+// grant that can never take the verb. And an exec grant is not held to the
+// one verb its proposal named, because a write asks dotted verbs from inside
+// its tool; the request guard binds an exec grant to the one request the
+// person approved, which is what limits it to one write.
+func assistBar(p iam.Principal, r rule) (Decision, bool) {
+	if !strings.HasPrefix(p.Via, iam.AssistPrefix) {
+		return Decision{}, false
+	}
+	switch {
+	case r.assist != AssistRead && r.assist != AssistApprove ||
+		r.presence != PresenceOptional:
+		return Decision{Reason: ReasonAssistRefused}, true
+	case p.AssistScope != iam.AssistScopeExec && r.assist != AssistRead:
+		return Decision{Reason: ReasonAssistScope}, true
+	}
+	return Decision{}, false
 }
 
 // concealed is a bar on the VERB (an agent taking a person's verb, a token
