@@ -78,11 +78,12 @@ type bench struct {
 	said string
 }
 
-// bench sits the entry out for retry — the CLI's own reset, or [limitBench]
-// when it named none — capped at [maxLimitBench]. A later bench never SHORTENS
-// an earlier one: two seats' calls that both met the spent plan report the
-// same window, and the one that lands last must not cut it.
-func (p *Provider) bench(retry time.Duration, said string) {
+// bench sits the entry out for retry (the CLI's own reset, or [limitBench]
+// when it named none), capped at [maxLimitBench], and answers when the entry
+// is tried again. A later bench never SHORTENS an earlier one: two seats'
+// calls that both met the spent plan report the same window, and the one that
+// lands last must not cut it.
+func (p *Provider) bench(retry time.Duration, said string) time.Time {
 	if retry <= 0 {
 		retry = limitBench
 	}
@@ -92,6 +93,7 @@ func (p *Provider) bench(retry time.Duration, said string) {
 	if until.After(p.sitOut.until) {
 		p.sitOut.until, p.sitOut.said = until, said
 	}
+	return p.sitOut.until
 }
 
 // benched is the classified refusal of a call made while the entry sits out,
@@ -103,7 +105,15 @@ func (p *Provider) benched() error {
 	if !p.now().Before(until) {
 		return nil
 	}
-	return p.fail(llm.KindRateLimit, fmt.Errorf(
-		"%s — sitting out until %s, when this entry is tried again",
-		said, until.UTC().Format(time.RFC3339)))
+	return p.limited(fmt.Errorf("%s, sitting out until %s, when this entry is tried again",
+		said, until.UTC().Format(time.RFC3339)), until)
+}
+
+// limited is a classified rate limit carrying when the entry is tried again,
+// so a caller telling a person to wait can name the instant without reading
+// it out of the vendor's sentence.
+func (p *Provider) limited(err error, until time.Time) error {
+	failure := p.fail(llm.KindRateLimit, err).(*llm.Error)
+	failure.RetryAt = until
+	return failure
 }

@@ -17,10 +17,13 @@
 package chain
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -227,3 +230,76 @@ func (e *Error) Error() string {
 }
 
 func (e *Error) Unwrap() error { return e.Err }
+
+// unready is a member that can say, without a call, that its next call would
+// fail (cliagent's Provider).
+type unready interface {
+	Unready() error
+}
+
+// Unready is the failure a call through these members would meet as far as
+// they know without a call, or nil when any of them may answer: a member that
+// cannot say (a test double, a backend with no memory) may, so it answers nil.
+//
+// THE CHAIN FAILS ONLY WHEN EVERY MEMBER WOULD, and its failure is the one
+// that clears first: a spent plan, which ends at a known reset (the earliest
+// of them, an unnamed reset after every named one), over a login somebody has
+// to mend, over a CLI that cannot start.
+func Unready(members []llm.Provider) error {
+	if len(members) == 0 {
+		return nil
+	}
+	failures := make([]error, 0, len(members))
+	for _, m := range members {
+		u, ok := m.(unready)
+		if !ok {
+			return nil
+		}
+		err := u.Unready()
+		if err == nil {
+			return nil
+		}
+		failures = append(failures, err)
+	}
+	slices.SortStableFunc(failures, func(a, b error) int {
+		if c := cmp.Compare(clearsAt(a), clearsAt(b)); c != 0 {
+			return c
+		}
+		ra, rb := retryAt(a), retryAt(b)
+		if ra.IsZero() != rb.IsZero() {
+			return cmp.Compare(boolRank(ra.IsZero()), boolRank(rb.IsZero()))
+		}
+		return ra.Compare(rb)
+	})
+	return failures[0]
+}
+
+// clearsAt ranks a failure by how soon it clears without anybody acting: a
+// spent plan first, then a login, then anything else.
+func clearsAt(err error) int {
+	switch llm.KindOf(err) {
+	case llm.KindRateLimit:
+		return 0
+	case llm.KindAuth:
+		return 1
+	default:
+		return 2
+	}
+}
+
+// retryAt is a failure's reset instant, zero where it names none.
+func retryAt(err error) time.Time {
+	var failure *llm.Error
+	if errors.As(err, &failure) {
+		return failure.RetryAt
+	}
+	return time.Time{}
+}
+
+// boolRank orders false before true.
+func boolRank(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
