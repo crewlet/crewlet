@@ -94,18 +94,27 @@ seconds on a solo node, because the two creates are not the same call
 underneath — rather than hanging with nothing to read. See
 [Deployment](deployment.md#a-clustered-node-is-given-longer-to-create-them).
 
-**Credentials go through a node that is running.** The
-[secret store](../concepts/secret-store.md#which-store-the-cli-writes) is on
-the KV like everything else the fleet shares, so `crewlet secrets set` against
-a live node reaches all of them — but it gets there through that node's
-authenticated API, because the coordination broker is inside the engine's own
-process and listens on no socket. Against a **stopped** node the same command
-writes that node's own table instead, which is the bootstrap path: the value
-is on one node until it starts and migrates the row. Fine for a first
-provisioning run, wrong for a rotation on a live fleet. `-secret-store` on a
-provisioner follows the same rule, and both take `-api URL` to name the node
-to write through. The process environment remains the fallback every node
-resolves from, so a platform secret projected as env still works unchanged.
+**Credentials go through a node that is running.** The [secret
+store](../concepts/secret-store.md#which-store-the-cli-writes) is on the KV
+like everything else the fleet shares, so `crewlet secrets set` against a live
+node reaches all of them — but it gets there through that node's authenticated
+API, because the coordination broker is inside the engine's own process and
+listens on no socket. Against a **stopped** member, `crewlet secrets set`
+writes that node's own table instead: the value is on one node until it starts
+and migrates the row, later-wins against the fleet's. But on a member of a
+cluster (`stream.cluster`), on a client of an external one, and on any node
+whose broker has run, those rows are not the company's whole store — the
+fleet's values are on the broker, which only a running engine serves. So `crewlet
+secrets list`, `get`, `unset` and `rekey`, every provisioner that reads the
+company's values (its `-secret-store` sink included), and `crewlet llm list`,
+`status`, `export` and `doctor` are refused on such a stopped node, before they
+read or change anything, naming the running engine and `-api URL`: a fleet
+member never provisions from its own rows. Run them beside a running node, with
+one of its Tier A tokens in `CREWLET_API_TOKEN`, or name one with `-api URL`
+from anywhere else ([CLI
+reference](../reference/cli.md#where-a-command-reads-the-companys-values)). The
+process environment remains the fallback every node resolves from, so a
+platform secret projected as env still works unchanged.
 
 **Every `seats` node runs its seats' models, so every one needs their CLIs.**
 A [`providers.llm` entry](../concepts/llm-backends.md) is a coding CLI that the

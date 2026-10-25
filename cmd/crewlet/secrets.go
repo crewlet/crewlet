@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"text/tabwriter"
 	"time"
 
@@ -54,6 +55,18 @@ import (
 // makes "the engine holds this database" an answer with a pid on it — and
 // the command says which one it used after every write.
 //
+// ONLY `set` RUNS THERE WHEREVER THAT TABLE IS NOT THE WHOLE STORE. Before a
+// sole member's first start its own table is the company's whole store, and
+// every subcommand works on it. Anywhere else — once that member has run, and
+// on a member of a cluster or a client of an external broker from the outset
+// — the company's rows are the fleet's: `list` and `get` would answer for one
+// node's leftovers, an `unset` of a name the fleet holds removes nothing (the
+// migration copies rows and carries no removal), and a `rekey` re-seals rows
+// that are not the ones a rotation is about. So those are refused there,
+// naming the running engine and -api ([stoppedNodeError]), and `set`, whose
+// value the next start carries onto the fleet later-wins, is the one write
+// left.
+//
 // # Every command here needs the keyring, and the keyring is Tier A
 //
 // The store holds only ciphertext. The key material lives in the bootstrap
@@ -79,6 +92,13 @@ authenticated /secrets surface — which is what puts a value on every node.
 Export CREWLET_API_TOKEN to authenticate. It is the only source — the Tier A
 api.auth.tokens list is what the node ACCEPTS, not a wallet this command helps
 itself from.
+
+With the engine stopped they work on this node's own table, which is the
+company's whole store only on a single node before its first start. Anywhere
+else — once the node has run, or on a member of a cluster (stream.cluster) or
+a client of an external broker (stream.type: nats) — only set works there,
+its value reaching the fleet at the next start, and list, get, unset and
+rekey need the running engine or -api.
 `
 
 func runSecrets(environ config.Source, args []string, stdout, stderr io.Writer) error {
@@ -141,27 +161,59 @@ func runSecrets(environ config.Source, args []string, stdout, stderr io.Writer) 
 	}
 
 	ctx := context.Background()
-	sv, closeStore, err := openSecretStore(ctx, environ, *bootstrapPath, *apiURL)
+	commands := map[string]func(sv *secretTarget) error{
+		"list": func(sv *secretTarget) error { return listSecrets(ctx, sv, stdout) },
+		"set": func(sv *secretTarget) error {
+			return setSecret(ctx, sv, name, *value, isFlagSet(fs, "value"), stdout, stderr)
+		},
+		"get":   func(sv *secretTarget) error { return getSecret(ctx, sv, name, stdout) },
+		"unset": func(sv *secretTarget) error { return unsetSecret(ctx, sv, name, stdout) },
+		"rekey": func(sv *secretTarget) error {
+			return rekeySecrets(ctx, sv, *bootstrapPath, *dryRun, stdout)
+		},
+	}
+	// EVERY USAGE ERROR BEFORE A ROUTE IS DECIDED. A route may refuse — on a
+	// stopped node whose own table is not the whole store it refuses every
+	// subcommand but set ([stoppedNodeError]) — and a mistyped subcommand, a
+	// missing name or a `get` without -reveal answered with advice to start
+	// the engine sends an operator to fix what is not broken.
+	command, known := commands[sub]
+	if !known {
+		fmt.Fprintf(stderr, secretsUsage, defaultBootstrapPath)
+		return fmt.Errorf("unknown secrets command %q", sub)
+	}
+	if err := secretsCallError(sub, name, *reveal); err != nil {
+		return err
+	}
+
+	run := storeRun{command: "crewlet secrets " + sub, reveals: sub == "get"}
+	if sub == "set" {
+		run.use, run.offline = actsOnItsOwn, true
+	}
+	sv, closeStore, err := openSecretStore(ctx, environ, *bootstrapPath, *apiURL, run)
 	if err != nil {
 		return err
 	}
 	defer closeStore()
+	return command(sv)
+}
 
-	switch sub {
-	case "list":
-		return listSecrets(ctx, sv, stdout)
-	case "set":
-		return setSecret(ctx, sv, name, *value, isFlagSet(fs, "value"), stdout, stderr)
-	case "get":
-		return getSecret(ctx, sv, name, *reveal, stdout)
-	case "unset":
-		return unsetSecret(ctx, sv, name, stdout)
-	case "rekey":
-		return rekeySecrets(ctx, sv, *bootstrapPath, *dryRun, stdout)
-	default:
-		fmt.Fprintf(stderr, secretsUsage, defaultBootstrapPath)
-		return fmt.Errorf("unknown secrets command %q", sub)
+// secretsCallError is what is wrong with how a known subcommand was called —
+// a name it needs and was not given, a `get` without -reveal — or nil. Each is
+// an answer about the command line alone, so it is given before a store is
+// routed ([runSecrets]).
+func secretsCallError(sub, name string, reveal bool) error {
+	switch {
+	case name == "" && (sub == "set" || sub == "get" || sub == "unset"):
+		return fmt.Errorf("secrets %s needs a name", sub)
+	case sub == "get" && !reveal:
+		// REFUSED WITHOUT AN EXPLICIT FLAG: see [getSecret].
+		return fmt.Errorf(
+			"refusing to print %s: pass -reveal to read a secret back, and "+
+				"note the access is logged. `crewlet secrets list` shows "+
+				"whether it is set without revealing it", name)
 	}
+	return nil
 }
 
 // isFlagSet reports whether a flag was named on the command line.
@@ -200,6 +252,14 @@ type secretBackend interface {
 	Set(ctx context.Context, name, value string, by secrets.Author,
 		source secrets.Source, now time.Time) (secrets.Author, error)
 	Get(ctx context.Context, name string) (string, error)
+
+	// Values reads the values held under the names asked for, and no
+	// other: a name nothing holds is absent from the answer. It is how a
+	// run reads the variables a command resolves ([companyStore]), and
+	// through a node it is a request per batch of names rather than one per
+	// name.
+	Values(ctx context.Context, names []string) (map[string]string, error)
+
 	Unset(ctx context.Context, name string) (bool, error)
 	Rekey(ctx context.Context, activeKeyID string) (rotation, error)
 
@@ -229,28 +289,184 @@ type engineHeld struct {
 	Identity *iamdomain.SealedCount
 }
 
-// localSecrets is this node's own table as a backend.
+// localSecrets is this node's own table as a backend, read while its engine is
+// stopped.
 //
 // IT HOLDS NO ENGINE KEYS, by construction: the engine keeps its key material
 // on the fleet and the node-local table refuses every name outside the
 // reference grammar at the write. So its count is honestly zero and its rekey
 // moves the operator's rows alone.
-type localSecrets struct{ *store.SecretValues }
+//
+// # A read never creates the database
+//
+// The table is OPENED only where the file already exists. A node whose engine
+// has never run here — or a machine that is not the node at all, holding a
+// copy of its Tier A file — has no rows to read, and opening the path to find
+// that out would create an empty database there that nothing ever reads, and
+// a lock file beside it. So every read of an absent file answers what an
+// empty table answers, and only a WRITE opens it, creating it as the bootstrap
+// path does: `crewlet secrets set` on a node that has never started is how a
+// value reaches it before its first boot.
+type localSecrets struct {
+	boot          *config.Bootstrap
+	bootstrapPath string
+
+	// mu guards db and values, which the first write fills where the file
+	// did not exist when the store was routed.
+	mu     sync.Mutex
+	db     *store.DB
+	values *store.SecretValues
+}
+
+// openLocalSecrets is this node's own table as Tier A names it, opened where
+// the file exists — the open's own error, [store.ErrLocked] included, comes
+// back unwrapped for the caller to route — and left closed where it does not.
+func openLocalSecrets(ctx context.Context, boot *config.Bootstrap, bootstrapPath string) (*localSecrets, error) {
+	l := &localSecrets{boot: boot, bootstrapPath: bootstrapPath}
+	switch _, err := os.Stat(boot.Store.Path); {
+	case errors.Is(err, os.ErrNotExist):
+		return l, nil
+	case err != nil:
+		return nil, fmt.Errorf("open store: %w", err)
+	}
+	if err := l.open(ctx); err != nil {
+		return nil, err
+	}
+	return l, nil
+}
+
+// open opens the node's file under its keyring. The caller holds mu, or is the
+// constructor nothing else can reach yet.
+func (l *localSecrets) open(ctx context.Context) error {
+	cipher, err := l.boot.Secrets.Cipher()
+	if err != nil {
+		return fmt.Errorf("secrets keyring: %w", err)
+	}
+	// NO EMBEDDING WIDTH, which is deliberate: opening the store for a
+	// secret read must not depend on the company document, and the vector
+	// columns are only sized when a migration actually runs — which a
+	// running node has already done.
+	// THE NODE'S OWN FILE ALONE: revisions and the bootstrap secret store
+	// are the node's own, and this command reads nothing a state log
+	// applies, so it opens no replicated estate.
+	db, err := store.OpenNode(ctx, l.boot.Store.Path, store.Options{
+		MaxOpenConns: l.boot.Store.MaxOpenConns,
+		BusyTimeout:  l.boot.Store.BusyTimeout(),
+	})
+	if err != nil {
+		return fmt.Errorf("open store: %w", err)
+	}
+	l.db, l.values = db, db.SecretValues(cipher)
+	return nil
+}
+
+// read is the table to read, or nil where the file does not exist.
+func (l *localSecrets) read() *store.SecretValues {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.values
+}
+
+// write is the table to write, opened — and so created — where the file did
+// not exist when this run was routed.
+//
+// A LOCK MET HERE is an engine that started on this node after the run was
+// routed to its stopped table, which is answered rather than routed: the run
+// has already read the table it is writing, and a write sent to the node now
+// would land beside reads it did not make.
+func (l *localSecrets) write(ctx context.Context) (*store.SecretValues, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.values != nil {
+		return l.values, nil
+	}
+	if err := l.open(ctx); err != nil {
+		return nil, engineHoldsTheStore(err, l.bootstrapPath,
+			"It started while this ran: re-run it, and the run goes through "+
+				"its API.")
+	}
+	return l.values, nil
+}
+
+// close releases the file, where a read or a write opened it.
+func (l *localSecrets) close() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.db != nil {
+		_ = l.db.Close()
+		l.db, l.values = nil, nil
+	}
+}
+
+// List implements the listing half of the backend.
+func (l *localSecrets) List(ctx context.Context) ([]secrets.Record, error) {
+	if sv := l.read(); sv != nil {
+		return sv.List(ctx)
+	}
+	return nil, nil
+}
 
 // Set writes the row under the author and source offered, which on this node's
 // own table are what it records.
-func (l localSecrets) Set(ctx context.Context, name, value string, by secrets.Author,
+func (l *localSecrets) Set(ctx context.Context, name, value string, by secrets.Author,
 	source secrets.Source, now time.Time) (secrets.Author, error) {
 
-	return by, l.SecretValues.Set(ctx, name, value, by, source, now)
+	sv, err := l.write(ctx)
+	if err != nil {
+		return secrets.Author{}, err
+	}
+	return by, sv.Set(ctx, name, value, by, source, now)
 }
 
-func (l localSecrets) Rekey(ctx context.Context, activeKeyID string) (rotation, error) {
-	moved, err := l.SecretValues.Rekey(ctx, activeKeyID)
+// Get reads one value back.
+func (l *localSecrets) Get(ctx context.Context, name string) (string, error) {
+	if sv := l.read(); sv != nil {
+		return sv.Get(ctx, name)
+	}
+	return "", fmt.Errorf("%w: %s", secrets.ErrNotFound, name)
+}
+
+// Values reads every name asked from the table, one local read each, and
+// fails on any read that is not a plain miss: an unreadable row is not an
+// absent one.
+func (l *localSecrets) Values(ctx context.Context, names []string) (map[string]string, error) {
+	out := make(map[string]string, len(names))
+	sv := l.read()
+	if sv == nil {
+		return out, nil
+	}
+	for _, name := range names {
+		value, err := sv.Get(ctx, name)
+		switch {
+		case errors.Is(err, secrets.ErrNotFound):
+		case err != nil:
+			return nil, err
+		default:
+			out[name] = value
+		}
+	}
+	return out, nil
+}
+
+// Unset removes one value, reporting whether it was there.
+func (l *localSecrets) Unset(ctx context.Context, name string) (bool, error) {
+	if sv := l.read(); sv != nil {
+		return sv.Unset(ctx, name)
+	}
+	return false, nil
+}
+
+// Rekey re-seals the table's stale rows under activeKeyID.
+func (l *localSecrets) Rekey(ctx context.Context, activeKeyID string) (rotation, error) {
+	sv := l.read()
+	if sv == nil {
+		return rotation{}, nil
+	}
+	moved, err := sv.Rekey(ctx, activeKeyID)
 	return rotation{Rekeyed: fleetsecrets.Rekeyed{Moved: moved}}, err
 }
 
-func (localSecrets) EngineKeys(context.Context) (engineHeld, error) {
+func (*localSecrets) EngineKeys(context.Context) (engineHeld, error) {
 	return engineHeld{}, nil
 }
 
@@ -266,9 +482,161 @@ type secretTarget struct {
 	// operator who cannot tell which of the two a rotation landed in has
 	// to find out by watching a vendor accept or reject a credential.
 	where string
+
+	// node is the address a fleet target reaches the store through, for the
+	// line a run that reads through it prints; empty on this node's own
+	// table.
+	node string
+
+	// locked is the store's own refusal where the run was sent through the
+	// node because the engine holds this node's database — which a failed
+	// read through it names beside its own failure — and nil where -api
+	// named the node, or the target is this node's own table.
+	locked error
+
+	// stopped is why this node's own rows are not the company's whole store,
+	// on a local target a run that acts on its own was let through
+	// ([actsOnItsOwn]); nil where they are — a sole member whose broker has
+	// never started — and on every fleet target.
+	stopped *stoppedNodeError
 }
 
-// openSecretStore picks the store this invocation can actually write.
+// wholeStore reports whether this target is this node's own table and that
+// table is the company's whole secret store: a sole member's, before its
+// broker's first start ([stoppedNode]).
+func (t *secretTarget) wholeStore() bool { return !t.fleet && t.stopped == nil }
+
+// openSecretStore picks the store this `crewlet secrets` invocation reads and
+// writes: the Tier A file at bootstrapPath, routed by [routeSecretStore].
+func openSecretStore(ctx context.Context, environ config.Source, bootstrapPath, apiURL string,
+	run storeRun) (*secretTarget, func(), error) {
+
+	// NO KEYRING CHECK OF ITS OWN: Tier A refuses a file without one, so a
+	// document that loaded carries it, and the refusal an operator sees
+	// names `secrets.keys` in the file's own terms.
+	boot, err := loadBootstrapForStore(bootstrapPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	return routeSecretStore(ctx, environ, boot, bootstrapPath, apiURL, run)
+}
+
+// storeUse is what a run does with the company's stored values, which decides
+// whether a stopped node's own rows can serve it ([stoppedNode]).
+type storeUse int
+
+const (
+	// readsTheCompany is a run whose answer or act depends on the values the
+	// company's store holds: every command that resolves the company — each
+	// vendor command, `crewlet llm list|status|export|doctor` — and `crewlet
+	// secrets list|get|unset|rekey`, which read, remove or re-seal them.
+	//
+	// THE ZERO VALUE, so a run that declares nothing is held to the rule
+	// rather than let through it: on a stopped node whose rows are not the
+	// company's whole store, such a run is refused before it reads anything.
+	readsTheCompany storeUse = iota
+
+	// actsOnItsOwn is a run whose act is right whatever the fleet holds,
+	// because what it acts on is its own: a new value it writes (`crewlet
+	// secrets set`, a token `crewlet llm login` captures), or this host's
+	// login (`crewlet llm logout`, `import`, which write no row). It runs
+	// on any stopped node — a value it writes there reaches the fleet at the
+	// node's next start, the later of it and the fleet's winning
+	// ([fleetsecrets.Migrate]) — and reads the entry it works on from the
+	// rows and the environment there.
+	actsOnItsOwn
+)
+
+// storeRun is one command's use of the company's secret store, which is what a
+// refusal to reach the store has to answer in that command's own terms.
+//
+// THE WAY PAST A REFUSAL DEPENDS ON WHAT THE RUN DOES WITH THE STORE, and one
+// sentence written for `crewlet secrets set` sent every other caller somewhere
+// wrong: a provisioner was told to stop the engine, which on a node that has
+// run leaves it rows the fleet's store outranks; it was offered "an access
+// token", which the node's reveal refuses; and it was told the value could
+// come from the environment, which a routed read never falls back to by
+// design. That last one was wrong for `secrets set` too: the store outranks
+// the environment in the engine's resolver, so an exported value never
+// replaces one the store holds — which a rotation's always does.
+type storeRun struct {
+	// command is the command line that was run, which a refusal names.
+	command string
+
+	// use is what the run does with the stored values, which decides
+	// whether a stopped node's own rows can serve it ([storeUse]).
+	use storeUse
+
+	// reveals reports whether the run reads values back through a node —
+	// the values a command resolves, a seat credential a provisioning sink
+	// reads back, `crewlet secrets get -reveal`. That is the node's
+	// break-glass read, `secrets.reveal`: admin, a recent proof and a person
+	// present, which refuses a machine token from `crewlet iam token` on
+	// every arm — so the bearer such a run needs is one of the node's own
+	// Tier A tokens.
+	reveals bool
+
+	// offline reports whether stopping the engine is a way to do what the
+	// run does: `crewlet secrets set` alone, whose row the next start moves
+	// onto the fleet over an earlier value of the fleet's. Every other run
+	// is either refused on a stopped node whose own table is not the whole
+	// store ([stoppedNode]), or — `crewlet llm login|logout|import` — works
+	// on a login whose entry it would then build from one node's rows, so
+	// stopping the engine is offered to none of them.
+	offline bool
+}
+
+// token is the bearer the run presents to the node, or the refusal naming the
+// one it needs.
+func (r storeRun) token(environ config.Source) (string, error) {
+	if !r.reveals {
+		return nodeAPIToken(environ, "/secrets")
+	}
+	if token := nodeTokenOrEmpty(environ); token != "" {
+		return token, nil
+	}
+	return "", fmt.Errorf("no token to reach this node's /secrets API, which %s "+
+		"reads the company's stored values through.%s", r.command, revealTakesATierAToken)
+}
+
+// unreachable is what the run is told to do where the engine holds this
+// node's store and its API cannot be used.
+//
+// A NODE THAT SERVES ADMIN, WHATEVER THE RUN DOES: every /secrets route — the
+// listing, a write, a reveal — is admin's, and a node whose api.auth.admin is
+// refuse clamps admin away from every token it is shown, so it serves none of
+// them. Which token the run needs there is the token's own refusal to say
+// ([storeRun.token]): a reveal's alone takes one of Tier A's.
+func (r storeRun) unreachable() string {
+	node := "pass -api URL naming a node of this company whose api.auth.admin is serve"
+	switch {
+	case r.offline:
+		return "Either fix that, " + node + ", or stop `crewlet run` on this " +
+			"node and re-run: the value lands in this node's own table, and its " +
+			"next start moves it onto the fleet over the value the fleet holds"
+	case r.use == actsOnItsOwn:
+		return "Fix that, or " + node
+	}
+	return "Fix that, or " + node + ". Stopping `crewlet run` here is no way " +
+		"around it: once this node's engine has run, the company's stored values " +
+		"are the fleet's, which only a running engine serves"
+}
+
+// revealTakesATierAToken is what a read through a node that was refused, or
+// has no token to send, tells the operator to change: reading a value is a
+// reveal, which the authority table gives admin with a person present, so a
+// machine token — which acts for its owner with nobody there — is refused it
+// whatever it carries, and the token that reads is one of Tier A's.
+const revealTakesATierAToken = "\n\nEach value is read with a reveal, which takes admin and " +
+	"a person present: " + apiTokenEnv + " must hold one of Tier A's api.auth " +
+	"tokens, since a machine token is refused a reveal whatever it carries"
+
+// routeSecretStore picks the store a run can actually reach: the running
+// node's API, or this node's own table while its engine is stopped — and on a
+// stopped node, whether that table can serve the run at all. boot may be nil
+// only where apiURL names the node: a machine that is not a node, holding no
+// Tier A file. run names the command and what it does with the store, for a
+// refusal an operator reads.
 //
 // # The running engine decides, and it decides unambiguously
 //
@@ -281,44 +649,73 @@ type secretTarget struct {
 // The STORE LOCK is what tells the two apart, and it is a fact rather than a
 // guess: the engine holds an OS advisory lock on its database file for
 // exactly as long as it is running, so [store.ErrLocked] means "the engine is
-// up" with a pid attached, and a successful open means it is not. Probing the
-// API instead would confuse "the node is stopped" with "the node is up but
-// its HTTP port is bound elsewhere", and those need opposite answers.
-func openSecretStore(ctx context.Context, environ config.Source, bootstrapPath, apiURL string) (*secretTarget, func(), error) {
-	// NO KEYRING CHECK OF ITS OWN: Tier A refuses a file without one, so a
-	// document that loaded carries it, and the refusal an operator sees
-	// names `secrets.keys` in the file's own terms.
-	boot, err := loadBootstrapForStore(bootstrapPath)
-	if err != nil {
-		return nil, nil, err
-	}
+// up" with a pid attached, and a successful open — or a probe of the lock
+// that finds it free, below — means it is not. Probing the API instead would
+// confuse "the node is stopped" with "the node is up but its HTTP port is
+// bound elsewhere", and those need opposite answers. A file that does not
+// exist is held by nothing, and is not created to find that out (see
+// [localSecrets]).
+//
+// # A stopped node's table serves a reader only where it is the whole store
+//
+// Which [stoppedNode] decides from Tier A and the broker's own directory, and
+// a run that reads the company is refused on any other stopped node before it
+// reads anything ([storeRun.use]). Where its file exists, the table stays open
+// for the rest of a run it serves, so `crewlet run` cannot start beneath it
+// and change the answer. Where none exists yet, nothing is open and no lock is
+// held, so an engine can start part way through the run; the run's first
+// write then meets its lock and is refused ([localSecrets.write]).
+//
+// A RUN THAT VERDICT REFUSES NEVER OPENS THE FILE. Whether the engine holds it
+// is asked of the lock alone ([store.ProbeLock]) — held, the run goes through
+// the engine as any other does; free, it is refused — because an open applies
+// any pending schema, and a refusal that says nothing was changed must not
+// have migrated the node's database on its way to saying so.
+func routeSecretStore(ctx context.Context, environ config.Source, boot *config.Bootstrap,
+	bootstrapPath, apiURL string, run storeRun) (*secretTarget, func(), error) {
+
 	// AN EXPLICIT -api SKIPS THE PROBE ENTIRELY. Naming a node is an
-	// instruction to write through it, and it is also how this command
-	// works from a machine that is not the node at all — where the local
-	// database in the Tier A file does not exist and opening it would
-	// create an empty one nothing ever reads.
+	// instruction to go through it, and it is also how a run works from a
+	// machine that is not the node at all — where the local database in
+	// the Tier A file does not exist.
 	if strings.TrimSpace(apiURL) != "" {
-		client, cerr := newSecretsClient(environ, boot, apiURL)
-		if cerr != nil {
-			return nil, nil, cerr
+		client, err := newSecretsClient(environ, boot, apiURL, run)
+		if err != nil {
+			return nil, nil, err
 		}
 		return &secretTarget{secretBackend: client, fleet: true,
-			where: client.Describe()}, func() {}, nil
+			where: client.Describe(), node: client.base}, func() {}, nil
 	}
-
-	sv, closeStore, err := openSecretValues(ctx, boot)
-	if err == nil {
-		return &secretTarget{
-			secretBackend: localSecrets{sv}, fleet: false,
-			where: boot.Store.Path + " — this node's own rows, which no peer " +
-				"can see until the engine migrates them at its next start",
-		}, closeStore, nil
+	if err := refuseScratchStore(boot, run.command,
+		"Pass -api URL naming a node that holds data: its /secrets surface "+
+			"reads and writes the company's credential store, which every "+
+			"node reads."); err != nil {
+		return nil, nil, err
 	}
-	target, rerr := throughTheRunningNode(environ, boot, bootstrapPath, err)
-	if rerr != nil {
-		return nil, nil, rerr
+	stopped := stoppedNode(boot, bootstrapPath, run.command)
+	if stopped != nil && run.use == readsTheCompany {
+		if err := store.ProbeLock(boot.Store.Path); err != nil {
+			target, rerr := throughTheRunningNode(environ, boot, bootstrapPath, run, err)
+			if rerr != nil {
+				return nil, nil, rerr
+			}
+			return target, func() {}, nil
+		}
+		return nil, nil, stopped
 	}
-	return target, func() {}, nil
+	local, err := openLocalSecrets(ctx, boot, bootstrapPath)
+	if err != nil {
+		target, rerr := throughTheRunningNode(environ, boot, bootstrapPath, run, err)
+		if rerr != nil {
+			return nil, nil, rerr
+		}
+		return target, func() {}, nil
+	}
+	return &secretTarget{
+		secretBackend: local, fleet: false, stopped: stopped,
+		where: boot.Store.Path + " — this node's own rows, which no peer " +
+			"can see until the engine migrates them at its next start",
+	}, local.close, nil
 }
 
 // throughTheRunningNode answers a locked store with a client for the node
@@ -330,11 +727,15 @@ func openSecretStore(ctx context.Context, environ config.Source, bootstrapPath, 
 // path, a driver that will not load — is a broken node, and answering one of
 // those by silently trying HTTP would replace an accurate message with a
 // connection refused.
-func throughTheRunningNode(environ config.Source, boot *config.Bootstrap, bootstrapPath string, err error) (*secretTarget, error) {
+//
+// The way past a node the run cannot use is the run's own ([storeRun]).
+func throughTheRunningNode(environ config.Source, boot *config.Bootstrap, bootstrapPath string,
+	run storeRun, err error) (*secretTarget, error) {
+
 	if !errors.Is(err, store.ErrLocked) {
 		return nil, err
 	}
-	client, cerr := newSecretsClient(environ, boot, "")
+	client, cerr := newSecretsClient(environ, boot, "", run)
 	if cerr != nil {
 		// BOTH FACTS, because either alone is misleading. "The engine
 		// holds the database" without "and here is why I could not go
@@ -342,14 +743,11 @@ func throughTheRunningNode(environ config.Source, boot *config.Bootstrap, bootst
 		// the API's own complaint without the lock reads as though the
 		// local store were never an option.
 		return nil, fmt.Errorf("%w\n\nthe engine for %s is running and holds "+
-			"its database, so this has to go through its API — and it cannot: "+
-			"%w\n\nEither stop `crewlet run` on this node and re-run, or "+
-			"supply the value through the process environment instead: the "+
-			"resolver falls back to it, so a rotation needs no downtime that way",
-			err, bootstrapPath, cerr)
+			"its database, so %s has to go through its API — and it cannot: "+
+			"%w\n\n%s", err, bootstrapPath, run.command, cerr, run.unreachable())
 	}
 	return &secretTarget{secretBackend: client, fleet: true,
-		where: client.Describe()}, nil
+		where: client.Describe(), node: client.base, locked: err}, nil
 }
 
 // engineHoldsTheStore turns the store's lock refusal into a remediation.
@@ -379,35 +777,6 @@ func loadBootstrapForStore(bootstrapPath string) (*config.Bootstrap, error) {
 	// keys that open it, so a resolver reaching the store would have Tier A
 	// reading from the thing it describes.
 	return config.LoadBootstrap(bootstrapPath, config.EnvOnly())
-}
-
-// openSecretValues opens the store a loaded bootstrap names, under its
-// keyring — which a Tier A that loaded always carries.
-func openSecretValues(ctx context.Context, boot *config.Bootstrap) (*store.SecretValues, func(), error) {
-	if err := refuseScratchStore(boot, "crewlet secrets",
-		"Use the API of a node that holds data: /secrets writes the company's "+
-			"credential store, which every node reads."); err != nil {
-		return nil, nil, err
-	}
-	cipher, err := boot.Secrets.Cipher()
-	if err != nil {
-		return nil, nil, fmt.Errorf("secrets keyring: %w", err)
-	}
-	// NO EMBEDDING WIDTH, which is deliberate: opening the store for a
-	// secret read must not depend on the company document, and the vector
-	// columns are only sized when a migration actually runs — which a
-	// running node has already done.
-	// THE NODE'S OWN FILE ALONE: revisions and the bootstrap secret store
-	// are the node's own, and this command reads nothing a state log
-	// applies, so it opens no replicated estate.
-	db, err := store.OpenNode(ctx, boot.Store.Path, store.Options{
-		MaxOpenConns: boot.Store.MaxOpenConns,
-		BusyTimeout:  boot.Store.BusyTimeout(),
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("open store: %w", err)
-	}
-	return db.SecretValues(cipher), func() { _ = db.Close() }, nil
 }
 
 func listSecrets(ctx context.Context, sv *secretTarget, stdout io.Writer) error {
@@ -476,9 +845,6 @@ func total(byKey map[string]int) int {
 func setSecret(ctx context.Context, sv *secretTarget, name, value string,
 	valueGiven bool, stdout, stderr io.Writer,
 ) error {
-	if name == "" {
-		return errors.New("secrets set needs a name")
-	}
 	if !valueGiven {
 		// STDIN IS THE DEFAULT, not the fallback: a secret passed as an
 		// argument is in the shell history, in `ps` output, and in any
@@ -507,12 +873,24 @@ func setSecret(ctx context.Context, sv *secretTarget, name, value string,
 	// operator who cannot tell which one they wrote finds out when a vendor
 	// rejects a credential on the one node that never got it.
 	fmt.Fprintf(stdout, "written to %s\n", sv.where)
-	if !sv.fleet {
-		fmt.Fprintln(stdout, secretsLocalNote)
-	} else {
-		fmt.Fprintln(stdout, secretsFleetNote)
-	}
+	fmt.Fprintln(stdout, sv.writtenNote())
 	return nil
+}
+
+// writtenNote is what a write to this store has not done yet, said after every
+// write of a value a running engine reads: [secretsFleetNote] through a node,
+// [secretsLocalNote] on this node's own table.
+//
+// ONE ANSWER FOR EVERY COMMAND THAT WRITES ONE, because each of them leaves
+// the same gap: `crewlet llm login -capture-token` and `-token-stdin`, and
+// `crewlet llm export -secret-store`, once said only where the value went, and
+// a running fleet kept signing in without the new token until something
+// applied the company.
+func (t *secretTarget) writtenNote() string {
+	if t.fleet {
+		return secretsFleetNote
+	}
+	return secretsLocalNote
 }
 
 // secretsFleetNote is what a write to the FLEET's store does not do yet.
@@ -540,10 +918,11 @@ const secretsLocalNote = "This node will put it on the fleet at its next start, 
 
 // getSecret is the ONLY command that prints a value, and it is break-glass.
 //
-// It refuses without an explicit flag because the overwhelmingly common need
-// is "is X set and when did it change", which the listing answers without
-// putting a credential into a terminal, a scrollback buffer and a
-// screen-share. The HTTP route it reads through a node is gated the same way,
+// It is refused without an explicit flag — before any store is routed
+// ([secretsCallError]) — because the overwhelmingly common need is "is X set
+// and when did it change", which the listing answers without putting a
+// credential into a terminal, a scrollback buffer and a screen-share. The HTTP
+// route it reads through a node is gated the same way,
 // by a ?reveal=true a crawl cannot reach by accident; the node's other route
 // that returns values, POST /secrets/reveal, is a POST no crawl can make.
 //
@@ -552,16 +931,7 @@ const secretsLocalNote = "This node will put it on the fleet at its next start, 
 // break-glass read that leaves no trace is indistinguishable from an
 // exfiltration, and the name is the whole of what can be logged: logging the
 // value would be the leak.
-func getSecret(ctx context.Context, sv *secretTarget, name string, reveal bool, stdout io.Writer) error {
-	if name == "" {
-		return errors.New("secrets get needs a name")
-	}
-	if !reveal {
-		return fmt.Errorf(
-			"refusing to print %s: pass -reveal to read a secret back, and "+
-				"note the access is logged. `crewlet secrets list` shows "+
-				"whether it is set without revealing it", name)
-	}
+func getSecret(ctx context.Context, sv *secretTarget, name string, stdout io.Writer) error {
 	value, err := sv.Get(ctx, name)
 	if err != nil {
 		return err
@@ -574,9 +944,6 @@ func getSecret(ctx context.Context, sv *secretTarget, name string, reveal bool, 
 }
 
 func unsetSecret(ctx context.Context, sv *secretTarget, name string, stdout io.Writer) error {
-	if name == "" {
-		return errors.New("secrets unset needs a name")
-	}
 	gone, err := sv.Unset(ctx, name)
 	if err != nil {
 		return err

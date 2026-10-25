@@ -861,9 +861,15 @@ func (p *Provider) retireBundle() string {
 		return fmt.Sprintf("remove providers.llm.%s.auth.credential_bundle from the company "+
 			"document, or the secret it references", p.key)
 	}
+	// THROUGH A RUNNING ENGINE once the node has run, and on any node that
+	// is not the fleet's only member: a stopped node's own rows are not the
+	// fleet's there, and `crewlet secrets unset` refuses rather than remove
+	// a row the fleet never held.
 	name := cliprofile.BundleVarName(p.key)
-	return fmt.Sprintf("remove %s from the secret store (`crewlet secrets unset %s`) and from "+
-		"the engine's environment", name, name)
+	return fmt.Sprintf("remove %s from the secret store (`crewlet secrets unset %s`, with "+
+		"this node's engine running or -api naming a running node, once the node has "+
+		"run or wherever it is not the fleet's only member) and from the engine's "+
+		"environment", name, name)
 }
 
 // ImportBundle is [Provider.RestoreBundle] for an operator who asked for it,

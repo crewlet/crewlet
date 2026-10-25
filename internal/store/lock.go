@@ -215,6 +215,58 @@ func claimStore(dbPath string, discarding bool) (*fileLock, error) {
 	return lock, nil
 }
 
+// ProbeLock is what an open of the database at path would meet at its lock
+// from another process: [ErrLocked] naming the holder where one holds it, nil
+// where none does, and any other error where the lock cannot be looked at. It
+// opens no database, creates no file and keeps no lock.
+//
+// For a caller that decides from whether the engine is running BEFORE it opens
+// the file, and may then decline to open it at all. Finding that out by opening
+// is not free: an open applies any pending schema ([OpenNode]), so a newer
+// binary that opened a file only to learn it would not use it has migrated a
+// file it had no business changing.
+//
+// NOTHING IS CREATED. A database with no sidecar is held by no process: every
+// holder creates the sidecar before it locks it, and a release leaves it in
+// place ([fileLock.release]). Where there is one, the probe takes the lock for
+// the instant it asks — an open in another process landing in that instant is
+// refused, as it would be by any other opener here — and writes no stamp, so
+// the holder the sidecar names is still the last real one.
+//
+// A CLAIM THIS PROCESS HOLDS answers nil: it is not another process's. The
+// look at this process's claims and the probe are one step under their mutex,
+// as they are in [claimStore], so a claim taken here between the two cannot
+// be read as another process's.
+func ProbeLock(path string) error {
+	if path == "" || strings.HasPrefix(path, ":memory:") {
+		return nil
+	}
+	locksHeld.mu.Lock()
+	defer locksHeld.mu.Unlock()
+	if locksHeld.by[path] != nil {
+		return nil
+	}
+	file, err := os.OpenFile(path+lockSuffix, os.O_RDWR, 0)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return nil
+	case err != nil:
+		return fmt.Errorf("store: opening the lock beside %s: %w", path, err)
+	}
+	defer func() { _ = file.Close() }()
+	held, err := tryLock(file)
+	switch {
+	case err != nil:
+		return fmt.Errorf("store: locking %s: %w", path, err)
+	case !held:
+		return fmt.Errorf("%w: %s is held by %s", ErrLocked, path, readHolder(file))
+	}
+	// The close releases it too; unlocking first is for the reason
+	// [fileLock.release] gives.
+	_ = unlock(file)
+	return nil
+}
+
 // release drops this handle's share of the claim, freeing the lock when it
 // was the last. Safe on a nil lock, which is what an in-memory database gets,
 // so every caller can defer it unconditionally.

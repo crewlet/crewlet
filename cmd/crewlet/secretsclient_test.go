@@ -5,19 +5,26 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
+
+// secretsList is the run most of these cases stand for: `crewlet secrets list`,
+// which reveals nothing, so the bearer it sends is the invocation's own.
+var secretsList = storeRun{command: "crewlet secrets list"}
 
 // bootWithAPI builds a Tier A carrying an HTTP surface and one token.
 func bootWithAPI(t *testing.T, host string, port int, token string) *config.Bootstrap {
@@ -40,7 +47,7 @@ func bootWithAPI(t *testing.T, host string, port int, token string) *config.Boot
 func TestAWildcardBindResolvesToLoopback(t *testing.T) {
 	t.Parallel()
 	for _, host := range []string{"", "0.0.0.0", "::", "[::]"} {
-		client, err := newSecretsClient(tokenEnviron(cliFixtureToken), bootWithAPI(t, host, 9090, "t"), "")
+		client, err := newSecretsClient(tokenEnviron(cliFixtureToken), bootWithAPI(t, host, 9090, "t"), "", secretsList)
 		if err != nil {
 			t.Fatalf("host %q: %v", host, err)
 		}
@@ -55,7 +62,7 @@ func TestAWildcardBindResolvesToLoopback(t *testing.T) {
 // neither.
 func TestAnIPv6HostIsBracketed(t *testing.T) {
 	t.Parallel()
-	client, err := newSecretsClient(tokenEnviron(cliFixtureToken), bootWithAPI(t, "fd00::1", 9090, "t"), "")
+	client, err := newSecretsClient(tokenEnviron(cliFixtureToken), bootWithAPI(t, "fd00::1", 9090, "t"), "", secretsList)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +79,7 @@ func TestAnIPv6HostIsBracketed(t *testing.T) {
 // for a network fault.
 func TestANodeWithNoHTTPSurfaceIsRefusedByName(t *testing.T) {
 	t.Parallel()
-	_, err := newSecretsClient(tokenEnviron(cliFixtureToken), bootWithAPI(t, "127.0.0.1", 0, "t"), "")
+	_, err := newSecretsClient(tokenEnviron(cliFixtureToken), bootWithAPI(t, "127.0.0.1", 0, "t"), "", secretsList)
 	if err == nil {
 		t.Fatal("a node with api.port 0 was accepted as a write target")
 	}
@@ -87,7 +94,7 @@ func TestANodeWithNoHTTPSurfaceIsRefusedByName(t *testing.T) {
 // be able to supply their own credential.
 func TestTheEnvironmentTokenWinsOverTierA(t *testing.T) {
 	t.Parallel()
-	client, err := newSecretsClient(tokenEnviron("mine"), bootWithAPI(t, "127.0.0.1", 8080, "shared"), "")
+	client, err := newSecretsClient(tokenEnviron("mine"), bootWithAPI(t, "127.0.0.1", 8080, "shared"), "", secretsList)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +148,7 @@ func newFakeSecretsNode(t *testing.T) *fakeSecretsNode {
 func (n *fakeSecretsNode) client(t *testing.T) *secretsClient {
 	t.Helper()
 	c, err := newSecretsClient(tokenEnviron("ops-token"),
-		bootWithAPI(t, "127.0.0.1", 1, "ops-token"), n.server.URL)
+		bootWithAPI(t, "127.0.0.1", 1, "ops-token"), n.server.URL, secretsList)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +235,7 @@ func TestTheCredentialIsTheEnvironmentsAndNotTheConfigs(t *testing.T) {
 	// A node listing a perfectly good token is STILL refused, because the
 	// command has none of its own.
 	if _, err := newSecretsClient(noEnviron, bootWithAPI(t, "127.0.0.1", 8080, "ops-token"),
-		""); err == nil {
+		"", secretsList); err == nil {
 
 		t.Fatal("a command with no credential was accepted, so it will send " +
 			"nothing and read a 401 from the far end")
@@ -238,7 +245,7 @@ func TestTheCredentialIsTheEnvironmentsAndNotTheConfigs(t *testing.T) {
 	// AND THE ENVIRONMENT IS ENOUGH ON ITS OWN, which is the control: a
 	// node whose Tier A lists nothing is still reachable by somebody
 	// holding a machine token.
-	client, err := newSecretsClient(tokenEnviron("a-minted-token"), bootWithAPI(t, "127.0.0.1", 8080, ""), "")
+	client, err := newSecretsClient(tokenEnviron("a-minted-token"), bootWithAPI(t, "127.0.0.1", 8080, ""), "", secretsList)
 	if err != nil {
 		t.Fatalf("an exported credential was refused: %v", err)
 	}
@@ -311,7 +318,7 @@ func TestTheRoutersOwn404IsAMissingSurfaceNotAMissingSecret(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(httpjson.Mux(http.NewServeMux()))
 	t.Cleanup(server.Close)
-	c, err := newSecretsClient(tokenEnviron(cliFixtureToken), bootWithAPI(t, "127.0.0.1", 1, "ops-token"), server.URL)
+	c, err := newSecretsClient(tokenEnviron(cliFixtureToken), bootWithAPI(t, "127.0.0.1", 1, "ops-token"), server.URL, secretsList)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -570,7 +577,7 @@ func TestANodeLocalWriteSaysWhatHappensNext(t *testing.T) {
 // See internal/httpx's package doc.
 func TestCLIClientsRideTheSharedTransport(t *testing.T) {
 	t.Parallel()
-	sc, err := newSecretsClient(tokenEnviron(cliFixtureToken), bootWithAPI(t, "127.0.0.1", 8080, "ops-token"), "")
+	sc, err := newSecretsClient(tokenEnviron(cliFixtureToken), bootWithAPI(t, "127.0.0.1", 8080, "ops-token"), "", secretsList)
 	if err != nil {
 		t.Fatalf("newSecretsClient: %v", err)
 	}
@@ -619,5 +626,81 @@ func TestAListingOfHundredsOfSecretsIsReadWhole(t *testing.T) {
 	if _, err := node.client(t).Get(t.Context(), "TOO_LONG"); err == nil ||
 		!strings.Contains(err.Error(), "a credential this long") {
 		t.Errorf("a reveal past one credential's bound = %v, want it refused as one", err)
+	}
+}
+
+// A SET OF VALUES IS READ IN REQUESTS OF THE NODE'S SIZE: a run reading the
+// variables a command resolves asks for them together, in requests of at most
+// secretsapi.MaxRevealNames — never one request per name, and never one the
+// node refuses for its length — each name once, as JSON, and only the names
+// the node holds come back.
+//
+// Mutation: send the whole set in one request, and the node's limit is broken;
+// send one name a request, and the count is 130.
+func TestASetOfValuesIsReadInRequestsOfTheNodesSize(t *testing.T) {
+	t.Parallel()
+	held := map[string]string{}
+	var names []string
+	for i := range 130 {
+		name := fmt.Sprintf("VALUE_%03d", i)
+		names = append(names, name)
+		if i%2 == 0 {
+			held[name] = "v-" + name
+		}
+	}
+	node := newRevealNode(t, held)
+	client, err := newSecretsClient(tokenEnviron("ops-token"), bootWithAPI(t, "127.0.0.1", 1, ""),
+		node.server.URL, storeRun{command: "crewlet gitlab provision", reveals: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := client.Values(t.Context(), names)
+	if err != nil {
+		t.Fatalf("Values: %v", err)
+	}
+	asked, gets := node.batches()
+	if len(asked) != 3 || len(gets) != 0 {
+		t.Fatalf("read 130 names in %d batches and %d GETs, want 3 batches", len(asked), len(gets))
+	}
+	var sent []string
+	for _, batch := range asked {
+		if len(batch) > secretsapi.MaxRevealNames {
+			t.Errorf("a batch asked for %d names, past the node's %d", len(batch),
+				secretsapi.MaxRevealNames)
+		}
+		sent = append(sent, batch...)
+	}
+	if !slices.Equal(sent, names) {
+		t.Errorf("the batches asked %v, want each name once, in order", sent)
+	}
+	if !maps.Equal(values, held) {
+		t.Errorf("read %d values, want exactly the %d the node holds", len(values), len(held))
+	}
+	for _, contentType := range node.contentTypes {
+		if contentType != "application/json" {
+			t.Errorf("a batch was sent as %q, not JSON", contentType)
+		}
+	}
+}
+
+// A REFUSED BATCH FAILS THE WHOLE READ: a value missing because the node would
+// not answer is not one the fleet does not hold, so no partial answer comes
+// back for a caller to resolve the rest from the environment — and the
+// refusal is the node's, so a refused token is told from a failing node.
+func TestARefusedBatchFailsTheWholeRead(t *testing.T) {
+	t.Parallel()
+	node := newRevealNode(t, map[string]string{"A": "a"})
+	node.refuse = http.StatusForbidden
+	client, err := newSecretsClient(tokenEnviron("ops-token"), bootWithAPI(t, "127.0.0.1", 1, ""),
+		node.server.URL, storeRun{command: "crewlet gitlab provision", reveals: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := client.Values(t.Context(), []string{"A", "B"})
+	if err == nil || values != nil {
+		t.Fatalf("a refused batch answered %v, %v", values, err)
+	}
+	if !refusedTheToken(err) {
+		t.Errorf("the node's refusal of the token was lost: %v", err)
 	}
 }

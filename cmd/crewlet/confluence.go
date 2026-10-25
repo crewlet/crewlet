@@ -22,7 +22,7 @@ import (
 // confluenceReads is every variable `crewlet confluence import` and `resync`
 // read of the company: the instance's address, and the org account they read
 // and write it with — the names a running node is asked to reveal
-// ([companyResolver]).
+// ([companyStore.resolver]).
 func confluenceReads(cfg *config.Confluence) []string {
 	return fieldReads(cfg.URL, cfg.CloudID, cfg.SiteURL, cfg.Email, cfg.Token)
 }
@@ -33,8 +33,7 @@ func runConfluenceImport(environ config.Source, args []string, stdout, stderr io
 
 	fs := flag.NewFlagSet("confluence import", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	bootstrapPath := bootstrapFlag(fs)
-	apiURL := readAPIFlag(fs)
+	storeAt := addStoreFlags(fs)
 	space := fs.String("space", "",
 		"the space tool-skill pages are published into; empty reads "+
 			"CREWLET_TOOL_SKILLS_SPACE, then knowledge.skills_container")
@@ -67,22 +66,30 @@ func runConfluenceImport(environ config.Source, args []string, stdout, stderr io
 	if err != nil {
 		return err
 	}
-	printConfluencePlan(stdout, plan)
-	if *dryRun {
-		fmt.Fprintln(stdout, "\n-dry-run: nothing was written or deleted.")
-		return nil
-	}
-	if len(plan.Items) == 0 {
+	// A DRY RUN AND AN EMPTY PLAN READ NO STORED VALUE, so they decide no
+	// route and run on any node. A real run — which publishes, and with
+	// -prune deletes — decides its route before it prints anything, so a
+	// run the store refuses prints only the refusal.
+	if *dryRun || len(plan.Items) == 0 {
+		printConfluencePlan(stdout, plan)
+		if *dryRun {
+			fmt.Fprintln(stdout, "\n-dry-run: nothing was written or deleted.")
+		}
 		return nil
 	}
 
 	ctx := context.Background()
-	env, _, closeEnv, err := companyResolver(ctx, environ, confluenceReads(cfg),
-		*bootstrapPath, *apiURL, stdout)
+	companySecrets, err := openCompanyStore(environ, storeAt,
+		"crewlet confluence import", readsTheCompany)
 	if err != nil {
 		return err
 	}
-	defer closeEnv()
+	defer companySecrets.Close()
+	env, err := companySecrets.resolver(ctx, confluenceReads(cfg), stdout)
+	if err != nil {
+		return err
+	}
+	printConfluencePlan(stdout, plan)
 
 	client, err := confluence.NewClient(confluence.ClientOptions{
 		URL: cfg.ResolvedBaseURL(env.Value), Email: env.Value(cfg.Email),
@@ -170,8 +177,7 @@ func runConfluenceResync(environ config.Source, args []string, stdout, stderr io
 	fs.SetOutput(stderr)
 	space := fs.String("space", "",
 		"the skills space key; empty takes knowledge.skills_container")
-	bootstrapPath := bootstrapFlag(fs)
-	apiURL := readAPIFlag(fs)
+	storeAt := addStoreFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -195,12 +201,16 @@ func runConfluenceResync(environ config.Source, args []string, stdout, stderr io
 	}
 
 	ctx := context.Background()
-	env, _, closeEnv, err := companyResolver(ctx, environ, confluenceReads(cfg),
-		*bootstrapPath, *apiURL, stdout)
+	companySecrets, err := openCompanyStore(environ, storeAt,
+		"crewlet confluence resync", readsTheCompany)
 	if err != nil {
 		return err
 	}
-	defer closeEnv()
+	defer companySecrets.Close()
+	env, err := companySecrets.resolver(ctx, confluenceReads(cfg), stdout)
+	if err != nil {
+		return err
+	}
 
 	client, err := confluence.NewClient(confluence.ClientOptions{
 		URL: cfg.ResolvedBaseURL(env.Value), Email: env.Value(cfg.Email),
@@ -254,7 +264,7 @@ func runConfluenceResync(environ config.Source, args []string, stdout, stderr io
 // reads of the company: the instance and its org account, and the two values
 // the hooks it registers authenticate with — each minted when it resolves
 // empty, which is why a value the fleet holds has to reach it
-// ([companyResolver]).
+// ([companyStore.resolver]).
 func confluenceProvisionReads(cfg *config.Confluence) []string {
 	return unionReads(confluenceReads(cfg), fieldReads(cfg.WebhookSecret, cfg.WebhookToken))
 }
@@ -281,7 +291,7 @@ func runConfluenceProvision(environ config.Source, args []string, stdout, stderr
 		fmt.Fprintln(stderr,
 			"usage: crewlet confluence provision <company.yaml> "+
 				"[-secret-store|-env-file PATH|-print] [-public-url URL] "+
-				"[-recreate-webhooks] [-dry-run]")
+				"[-recreate-webhooks] [-dry-run] [-config PATH] [-api URL]")
 		return errors.New("name exactly one company document")
 	}
 
@@ -296,13 +306,27 @@ func runConfluenceProvision(environ config.Source, args []string, stdout, stderr
 				"block, so there is no instance to reconcile")
 	}
 
+	// RESOLVED BEFORE ANYTHING IS PRINTED, a -dry-run's included, for the
+	// reason GitHub's command gives; the hooks' whole ${VAR}s, which a real
+	// run's sink reads back before it mints, are in the reads already. A real
+	// run's sink is chosen before that, for the reason GitLab's command gives.
+	if !*dryRun {
+		if err = sinks.check(); err != nil {
+			return err
+		}
+	}
 	ctx := context.Background()
-	env, boot, closeEnv, err := companyResolver(ctx, environ,
-		confluenceProvisionReads(cfg), *sinks.bootstrap, *sinks.api, stdout)
+	companySecrets, err := openCompanyStore(environ, sinks.store,
+		"crewlet confluence provision", readsTheCompany)
 	if err != nil {
 		return err
 	}
-	defer closeEnv()
+	defer companySecrets.Close()
+	env, err := companySecrets.resolver(ctx, confluenceProvisionReads(cfg), stdout)
+	if err != nil {
+		return err
+	}
+	boot := companySecrets.boot
 
 	base := cfg.ResolvedBaseURL(env.Value)
 	if base == "" {
@@ -335,11 +359,10 @@ func runConfluenceProvision(environ config.Source, args []string, stdout, stderr
 	} else {
 		opts.WebhookBase = webhookBase(*publicURL, boot)
 		opts.WebhookBaseKey = webhookBaseKey(boot)
-		sink, closeSink, openErr := sinks.open(ctx, environ, stdout)
+		sink, openErr := sinks.open(ctx, companySecrets, stdout)
 		if openErr != nil {
 			return openErr
 		}
-		defer closeSink()
 		opts.Sink = sink
 	}
 

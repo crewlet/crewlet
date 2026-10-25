@@ -1012,7 +1012,10 @@ func TestAConfiguredBundleIsRestoredOnlyWhenAsked(t *testing.T) {
 // one `crewlet llm status` makes before it asks, and the engine's at its next
 // boot or apply — put back the very login the operator had just removed, a
 // compromised one typically, and the logout lasted until the next command.
-// Now the restore declines, and says why in words an operator can act on.
+// Now the restore declines, and says why in words an operator can act on —
+// among them how to retire the bundle for good, `crewlet secrets unset`, which
+// a stopped node refuses once it has run and wherever it is not the fleet's
+// only member, so the decline says it takes the running engine or -api there.
 //
 // Mutation: drop the record from Logout, or the check from restoreBundle, and
 // the login comes back here.
@@ -1044,7 +1047,9 @@ func TestALogoutIsNotUndoneByTheConfiguredBundle(t *testing.T) {
 	}
 	for _, want := range []string{"`crewlet llm login sub -from-host`", "`crewlet llm import sub`",
 		"a headless token signs the entry in without ending the logout",
-		"fresh volume", "crewlet secrets unset " + cliprofile.BundleVarName("sub")} {
+		"fresh volume", "crewlet secrets unset " + cliprofile.BundleVarName("sub"),
+		"-api naming a running node, once the node has run or wherever it is not the " +
+			"fleet's only member"} {
 		if err != nil && !strings.Contains(err.Error(), want) {
 			t.Errorf("the decline does not name %q: %v", want, err)
 		}

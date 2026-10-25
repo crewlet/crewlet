@@ -253,11 +253,16 @@ func TestEachRunPrintsToTheWriterItWasGiven(t *testing.T) {
 		if err := fs.Parse([]string{"-print"}); err != nil {
 			t.Fatalf("parse: %v", err)
 		}
-		sink, closeSink, err := sinks.open(t.Context(), noEnviron, w)
+		companySecrets, err := openCompanyStore(noEnviron, sinks.store,
+			"crewlet gitlab provision", readsTheCompany)
+		if err != nil {
+			t.Fatalf("open the run's store: %v", err)
+		}
+		t.Cleanup(companySecrets.Close)
+		sink, err := sinks.open(t.Context(), companySecrets, w)
 		if err != nil {
 			t.Fatalf("open: %v", err)
 		}
-		t.Cleanup(closeSink)
 		return sink
 	}
 

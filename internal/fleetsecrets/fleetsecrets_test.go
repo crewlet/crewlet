@@ -132,10 +132,11 @@ func TestASnapshotRefusesRatherThanSkippingAnUnopenableRow(t *testing.T) {
 // A READ OF SEVERAL NAMES OPENS THOSE AND NO OTHERS.
 //
 // It is how a CLI run resolving one company document through a running node
-// is handed the credentials that document reads, so the answer carries exactly
-// the names asked for that are held — an absent name absent, never empty —
-// and the read fails closed on a named row it cannot open, while a row nobody
-// named that it cannot open does not fail a read that never needed it.
+// reads the variables its command reads that the node lists, so the answer
+// carries exactly the names asked for that are held — an absent name absent,
+// never empty — and the read fails closed on a named row it cannot open, while
+// a row nobody named that it cannot open does not fail a read that never
+// needed it.
 func TestAReadOfSeveralNamesOpensThoseAndNoOthers(t *testing.T) {
 	t.Parallel()
 	s, fleet := fleetStore(t, ring(t, "k1"))

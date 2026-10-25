@@ -192,10 +192,17 @@ live-editable, so the first version does not need to be the last.
 
    Whichever it is, the CLI must be installed on the machine running
    `crewlet run`, and `crewlet llm doctor` is what proves the entry works —
-   tell the founder to run it. If they want a plan with a key behind it, that
-   is two entries on the same CLI and a list: `llm: [plan, key]`. A cheap,
-   fast entry for `llm_auxiliary` is worth suggesting once the company grows:
-   every auxiliary call pays a CLI launch under a fixed deadline. See
+   tell the founder to run it, and where: before a single node's first start
+   it reads that node's own secret rows, which are then the company's whole
+   store; once the engine has run, it reads the company's values through the
+   running engine, so it is run beside it with `CREWLET_API_TOKEN` set to one
+   of the node's Tier A tokens (or with `-api URL` naming a running node). A
+   stopped node that has run refuses it rather than read its own leftover
+   rows, and so does a stopped member of a cluster. If they want a plan with
+   a key behind it, that is two entries on the same CLI and a list:
+   `llm: [plan, key]`. A cheap, fast entry for `llm_auxiliary` is worth
+   suggesting once the company grows: every auxiliary call pays a CLI launch
+   under a fixed deadline. See
    [LLM Backends](https://docs.crewlet.ai/engine/latest/concepts/llm-backends/).
 
    Ask whether they want a cost ceiling, and on which window:

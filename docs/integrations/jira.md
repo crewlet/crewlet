@@ -248,7 +248,9 @@ On **Cloud** the webhook is registered exactly as it is on Data Center, through 
 
 Without `-public-url` nothing is registered and the run says so. A hook pointing at the wrong host is worse than no hook, because the instance then reports a healthy integration that delivers into the void. A hook somebody else registered is reported and never touched.
 
-Flags: `-secret-store` / `-env-file PATH` / `-print` (where a minted secret goes — exactly one is required), `-public-url URL`, `-recreate-webhook`, `-dry-run` (read and report, register nothing).
+Flags: `-secret-store` / `-env-file PATH` / `-print` (where a minted secret goes — exactly one is required), `-public-url URL`, `-recreate-webhook`, `-dry-run` (read and report, register nothing), `-config PATH` and `-api URL` (where the company's values are read and a `-secret-store` sink records).
+
+The run reads the company's `${VAR}`s — the instance, the org account, the webhook secret and each seat's credential — through the running engine, with one of its Tier A tokens in `CREWLET_API_TOKEN`, or through the node `-api` names; on a stopped node it reads that node's own rows only on a single node before its first start, and is refused anywhere else before it reads or registers anything, `-dry-run` and `-recreate-webhook` included ([where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values)).
 
 ---
 

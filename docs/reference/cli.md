@@ -43,11 +43,11 @@ subcommand below is served by it.
 | `crewlet config activate <UUID>` | Mark a revision active in this node's store, published to the fleet at its next start; re-activating the current one mints a new epoch, which is how a rotated secret takes effect. A running fleet does the same through `POST /config/revisions/<UUID>/revert` or `POST /config/reload` |
 | `crewlet config rekey [-dry-run]` | Re-encrypt the active revision's config document under the active key (master-key rotation) |
 | `crewlet secrets keygen [-key-id ID]` | Generate a fresh encryption-keyring key + the `crewlet.yaml` snippet to install it |
-| `crewlet secrets set <NAME>` | Store an encrypted secret in the [secret store](../concepts/secret-store.md); the engine resolves `${NAME}` from it ahead of the environment. Takes `admin` |
-| `crewlet secrets list` | List stored secret names + metadata (never values). Takes `admin` |
-| `crewlet secrets unset <NAME>` | Remove a stored secret. Takes `admin` |
-| `crewlet secrets get <NAME> -reveal` | Print one stored value to stdout — break-glass, audited, CLI-only. Takes `admin`, and a person present: a machine token is refused it whatever it carries, so the token this command reads is a Tier A one |
-| `crewlet secrets rekey [-dry-run]` | Re-encrypt stored secrets under the active keyring key. Takes `admin` |
+| `crewlet secrets set <NAME>` | Store an encrypted secret in the [secret store](../concepts/secret-store.md); the engine resolves `${NAME}` from it ahead of the environment. Takes `admin`. The one subcommand that runs on any stopped node that holds data: its row reaches the fleet at that node's next start, unless the fleet holds a value written after it ([`crewlet secrets`](#crewlet-secrets)) |
+| `crewlet secrets list` | List stored secret names + metadata (never values). Takes `admin`. With the engine stopped it runs only on a single node before its first start, and is refused anywhere else ([`crewlet secrets`](#crewlet-secrets)) |
+| `crewlet secrets unset <NAME>` | Remove a stored secret. Takes `admin`. With the engine stopped it runs only on a single node before its first start, and is refused anywhere else ([`crewlet secrets`](#crewlet-secrets)) |
+| `crewlet secrets get <NAME> -reveal` | Print one stored value to stdout — break-glass, audited, CLI-only. Takes `admin`, and a person present: a machine token is refused it whatever it carries, so the token this command reads is a Tier A one. With the engine stopped it runs only on a single node before its first start, and is refused anywhere else ([`crewlet secrets`](#crewlet-secrets)) |
+| `crewlet secrets rekey [-dry-run]` | Re-encrypt stored secrets under the active keyring key. Takes `admin`. With the engine stopped it runs only on a single node before its first start, and is refused anywhere else ([`crewlet secrets`](#crewlet-secrets)) |
 | `crewlet search eval [-store PATH]` | Measure the two-stage semantic search against the exact scan, on the vectors a store file actually holds. Ground truth is the exact scan's own top-K, so nobody authors a judgement; exits non-zero below the floor for that corpus size |
 | `crewlet llm list` | Every `providers.llm` entry the company declares, with its CLI, model and how it is signed in |
 | `crewlet llm doctor [KEY]` | Verify `providers.llm` entries end to end — the CLI is installed, something signs it in, a real completion returns with a tool call, the CLI's own shell is refused and its web tool reaches the network (`-no-smoke` stops before every real completion). Exits non-zero when any entry has a problem |
@@ -69,9 +69,6 @@ subcommand below is served by it.
 | `crewlet help` | Show the usage message (`--help` and `-h` too) |
 
 ---
-
-> **Every command that reads the Tier B company document takes `-config`** (default `./crewlet.yaml`), and resolves its `${VAR}` references the way the engine does: **the secret store first, the process environment behind it**. A command that read the environment alone would see an empty string for every value already rotated into the store — and for `integrations.gitlab.signing_secret`, empty is the signal to *mint*, so a re-run would replace a working webhook secret at the third-party app. **Which store is read depends on whether the engine is running**, as it does for a write ([`crewlet secrets`](#crewlet-secrets)): a stopped node's own table is opened directly — and it holds only what was written while the engine was stopped, since the engine moves those rows onto the fleet at its next start, so the fleet's values are not read until it runs again: the run names each value it reads that neither that table nor the environment holds, which it resolves as unset and the fleet may hold, and says to start the engine or name a running node with `-api` — while a running engine holds that table and the company's values are the fleet's, so they are read through its API — the node `-api` names, which every one of these commands takes, and otherwise the `api.host:port` in `-config`. A named node is read whether or not a Tier A is at `-config`, so a command run from a machine that is not a node reads the fleet's values rather than the environment alone. A node that holds no data (`store.scratch`) has no table to open, and is refused unless `-api` names one that does. Through a node only the variables **that command** reads are fetched, each with a reveal (`GET /secrets/{name}?reveal=true`), which the node logs by name against the caller and which takes `admin` and a person present: `CREWLET_API_TOKEN` must hold one of Tier A's tokens, since a machine token is refused a reveal. `crewlet llm` reads the entries it works on (`login`, `status`, `logout`, `export`, `import` and `doctor KEY` the one named — and only it, whatever the other keys look like — `list` and a bare `doctor` every one); `gitlab provision` reads `integrations.gitlab.url` and `.signing_secret`; `mattermost provision` `integrations.mattermost.url`, and `mattermost doctor` that, `.team` and each agent seat's `mattermost.bot_token` that is one whole `${VAR}`; `github provision` `integrations.github.url`, `.token` and `.webhook_secret`, and the token spellings its identity scan tries in each agent seat's `mcp_env.github` (its own, or the one its unit gives it); `jira provision` `integrations.jira`'s address, account and `webhook_secret`, and the Jira token spellings and address keys in each agent seat's `mcp_env.jira` and `mcp_env.atlassian` — never a Confluence-only credential beside them; `confluence import` and `resync` `integrations.confluence`'s address and account, and `confluence provision` those, `.webhook_secret` and `.webhook_token`. With `-secret-store`, `gitlab provision` and `mattermost provision` also read back each planned seat's token through the sink, to check the credential the seat holds — a reveal through the node like the others. They are revealed **before the command does anything**, so a refused reveal stops it there: a stored value read as unset is what makes a provisioning run mint over a working secret. A value a command reads beyond that list is still read through the node, as it is read, and the run says so; one the node fails to answer stops the run where it is. The error names the token only when the node refused it (401 or 403): a node that is down or draining answers the same for any token. The run says on its first line which node it read and how many values it revealed. With no bootstrap at that path the run resolves from the environment alone and says so on its first line; a bootstrap that exists and declares no `secrets.keys` is refused, because every node's Tier A carries a keyring and resolving a company's values from whatever the shell holds on the strength of one that does not would hide the misconfiguration. The one exception is the operator's own credential (`-admin-token` / `$GITLAB_ADMIN_TOKEN` and its siblings), which is read from the environment only — see [the secret store](../concepts/secret-store.md#what-still-has-to-be-in-the-environment).
-
 
 > **Every command except `crewlet run` logs at `warn`.** They open a store,
 > which logs a migration line per schema file and an open line per call —
@@ -96,6 +93,98 @@ subcommand below is served by it.
 > all three variables. Colour is
 > `CREWLET_LOG_COLOR` / `NO_COLOR` everywhere — see
 > [Environment Variables](environment-variables.md#logging).
+
+### Where a command reads the company's values
+
+**Every command that reads the Tier B company document** — `crewlet llm`, every
+`crewlet <vendor> provision`, `mattermost doctor`, `confluence import` and
+`confluence resync` — resolves its `${VAR}` references the way the engine does:
+**the secret store first, the process environment behind it**. A command that
+read the environment alone would see an empty string for every value already
+rotated into the store — and for `integrations.gitlab.signing_secret`, empty is
+the signal to *mint*, so a re-run would replace a working webhook secret at the
+third-party app. Each takes `-config PATH` (default `./crewlet.yaml`), the Tier A
+file naming this node's store and keyring, and `-api URL`, a node to read
+through instead — the same two [`crewlet secrets`](#crewlet-secrets) takes.
+
+A run decides **once** which store that is, and everything it does with the
+company's values goes that one way: the values it reads, what a `-secret-store`
+sink records and the seat tokens it reads back, and what `crewlet llm login`
+and `crewlet llm export -secret-store` store. Its first line says which it is.
+
+| Where the run is | What it reads |
+|---|---|
+| **This node's engine is running** (it holds its database's lock), or **`-api URL`** names a node | The fleet's store, through that node's `/secrets` API: the node `-api` names, and otherwise the `api.host:port` in `-config`. The bearer is `CREWLET_API_TOKEN` and nothing else, and it has to be one of Tier A's `api.auth.tokens`: every value read is a reveal, which takes `admin` and a person present, so a machine token is refused it. A run through `-api` needs no Tier A file on this machine and opens nothing on it, which is how one runs from a machine that is not a node |
+| **A stopped single node before its first start** — an embedded broker that names no `stream.cluster`, whose `stream.store_dir` holds no broker state yet | This node's own rows, which are then the company's **whole** secret store: the fleet's store is that broker's own, and it does not exist until the broker first starts. The first line says so, naming the database and the store directory from the root, so a run from the wrong working directory shows. A database file that does not exist yet reads as empty, and only a write creates it |
+| **Any other stopped node** — one whose broker has run, a member of a cluster (`stream.cluster`), a client of an external broker (`stream.type: nats`), or one whose store directory cannot be looked at | **Refused**, before the command reads, plans, prints or changes anything, naming `crewlet run -config …` with `CREWLET_API_TOKEN` set, or `-api URL` — only `-api` where `-config` gives the node no API to read through (`api.port` 0, or `node.roles` without `ingress`). The company's values are on a store only a running engine serves, so this node's rows are no answer about them: a value missing there and read as unset is what makes a provisioner mint over the fleet's, and the engine's next start would then keep the run's write over the fleet's value. That takes in each `-dry-run` that resolves values, and `crewlet llm list`, `status`, `export` and `doctor`, which restore the entry's configured bundle before they answer. No flag for a fresh value (`-rotate`, `-recreate-webhook`, `-recreate-webhooks`, `-reinstall`) is a way past it. A refused run never opens the database: whether the engine holds it is asked of its lock alone, and an engine that does is read through as in the first row |
+| **Still runs on any stopped node that holds data** | `crewlet secrets set` and `crewlet llm login`, `logout` and `import`. Only `secrets set` and a token `llm login` stores (`-capture-token`, `-token-stdin`) write a row — into this node's own table, which its next start moves onto the fleet unless the fleet holds a value written later. `logout` and `import` act on this host's login and write no row. On a node of the row above, `login` reads the entry it signs in from this node's rows and the environment, and says nothing of them. A broker `login` (none of `-from-host`, `-capture-token`, `-token-stdin` and `-username`) and `import` end by naming the `crewlet llm doctor` that checks what they wrote, with the `-company`, `-config` and `-api` the run was given; on a node of the row above that doctor is refused, so there the line names it as it can be run: once the engine runs, with `CREWLET_API_TOKEN` set to a Tier A token, or with `-api` (only `-api` where `-config` gives the node no API) |
+| **No Tier A file at `-config`, and no `-api`** | The environment alone, said on the first line — how these commands run on a machine that is not a node |
+
+A command that reads no stored value decides no route and runs anywhere, a
+stopped node included: `mattermost provision` and `confluence import` with
+`-dry-run` or nothing to do, and `slack provision` with `-dry-run`, with
+nothing to do or without `-secret-store` — Slack's run resolves no `${VAR}` of
+the company's, its address being Tier A's, and reads the store only for the
+seats' tokens a `-secret-store` sink reads back.
+
+**Through a node a run reads its command's values and nothing else.** It lists
+the node's names first (`GET /secrets`, which reveals nothing), then asks
+`POST /secrets/reveal` for the variables the command reads that the node lists,
+at most 64 to a request — so a run is one reveal or a few, never one per name,
+and a name the node does not hold costs no request. A listed name gone by the
+time it is asked falls to the environment as an unheld one does, and that is
+**this shell's** environment, not the engine's. A name no store can hold — an
+`overrides.token_env` outside the reference grammar — is never sent. The node
+logs every name asked against the caller, and the run's first line names the
+node and how many values it revealed there in how many requests. What each
+command reads:
+
+- **`crewlet llm`** the entries it works on: `login`, `status`, `logout`,
+  `export`, `import` and `doctor KEY` the one named — and only it, whatever the
+  other keys look like — and `list` and a bare `doctor` every one.
+- **`gitlab provision`** `integrations.gitlab.url` and `.signing_secret`, and
+  with `-secret-store` each planned seat's token variable, which the sink reads
+  back to decide whether to keep the token the seat holds (`-rotate` and
+  `-dry-run` read none back).
+- **`mattermost provision`** `integrations.mattermost.url`, and with
+  `-secret-store` each planned bot's token variable (`-handles` narrows them,
+  `-rotate` reads none back); **`mattermost doctor`** the URL, `.team` and each
+  agent seat's `mattermost.bot_token` that is one whole `${VAR}`.
+- **`github provision`** `integrations.github.url`, `.token` and
+  `.webhook_secret`, and the token spellings its identity scan tries in each
+  agent seat's `mcp_env.github` (its own, or the one its unit gives it).
+- **`jira provision`** `integrations.jira`'s address, account and
+  `webhook_secret`, and the Jira token spellings and address keys in each
+  agent seat's `mcp_env.jira` and `mcp_env.atlassian` — never a
+  Confluence-only credential beside them.
+- **`confluence import`** and **`resync`** `integrations.confluence`'s address
+  and account, and **`confluence provision`** those, `.webhook_secret` and
+  `.webhook_token`.
+- **`slack provision -secret-store`** each planned seat's bot token variable
+  (`-handles` narrows them, `-reinstall` reads none back).
+
+A signing or webhook secret's whole `${VAR}`, which a provisioner's sink reads
+back before it mints one, is among those names already. They are read **before
+the command does anything**, so a refused reveal stops it there: a stored value
+read as unset is what makes a provisioning run mint over a working secret. A
+held name the command resolves beyond them is still read through the node, one
+name in one request, and the run says so, and a seat token its sink reads back
+beyond them is read the same way; a read the node fails to answer stops the run
+where it is. Nothing is filled in from the environment in place of a value the
+node could not be asked for. The error names the token only when the node
+refused it (401 or 403): a node that is down answers the same for any token,
+and a draining one answers 503 — name another with `-api`.
+
+A Tier A file that exists and does not load — one declaring no `secrets.keys`
+among them — is refused rather than sent to the environment: someone who
+configured a store and did not get it must not have their values resolved from
+a stale export. A node that holds no data (`store.scratch`) has no store of the
+company's, so a command run there without `-api` is refused, naming the flag
+for a node that does. The one exception to all of this is the operator's own
+credential (`-admin-token` / `$GITLAB_ADMIN_TOKEN` and its siblings), which is
+read from the environment only — see [the secret
+store](../concepts/secret-store.md#what-still-has-to-be-in-the-environment).
+
 ## `crewlet run`
 
 ```
@@ -676,7 +765,9 @@ Prints a fresh base64 32-byte encryption key plus a copy-pasteable `crewlet.yaml
 
 The remaining subcommands operate on the [secret store](../concepts/secret-store.md) — the company's encrypted credentials, one sealed value per `${VAR}` name, which the engine consults **ahead of** the process environment. All of them read the Tier A bootstrap (`-config`, default `./crewlet.yaml`) for the keyring, and all of them need one: the store has no plaintext mode, so a config declaring no `secrets.keys` is refused with a pointer at `keygen` rather than silently storing plaintext.
 
-**Which store they reach depends on whether the engine is running**, and the command says which it used. The rows live on the coordination KV so every node reads them, and on the default topology that KV is inside the engine's own process — so a running node is written through its authenticated `/secrets` API, and a stopped one falls back to its own local table, which the engine migrates onto the fleet at its next start — replacing a name the fleet already holds only when the fleet's value was written earlier (see [Secret Store](../concepts/secret-store.md#operational-notes)). The engine's exclusive database lock is what tells the two apart, with a pid attached.
+**Which store they reach depends on whether the engine is running**, and the command says which it used. The rows live on the coordination KV so every node reads them, and on the default topology that KV is inside the engine's own process — so a running node is written through its authenticated `/secrets` API, and a stopped one falls back to its own local table, which the engine migrates onto the fleet at its next start — replacing a name the fleet already holds only when the fleet's value was written earlier (see [Secret Store](../concepts/secret-store.md#operational-notes)). The engine's exclusive database lock is what tells the two apart, with a pid attached. While the engine holds it, a command that cannot go through its API — no `CREWLET_API_TOKEN`, or an `api.port` of 0 — is refused with both facts, the lock and why the API could not be used, and with its own way past: `set` is offered stopping the engine and writing this node's table, and no other subcommand is, since a stopped node's table answers for the company only on a node that has never run.
+
+**Only `set` works on a stopped node whose own table is not the company's whole store.** That table is the whole store only on a single node before its first start (an embedded broker naming no `stream.cluster`, whose `stream.store_dir` holds no broker state yet), and there every subcommand works on it. Anywhere else — once the node has run, and on a member of a cluster or a client of an external broker (`stream.type: nats`) from the outset — the company's rows are the fleet's, and `list`, `get`, `unset` and `rekey` are refused before they open anything, naming `crewlet run` and `-api` ([Where a command reads the company's values](#where-a-command-reads-the-companys-values)): a listing or a `get` would answer for one node's leftovers, an `unset` of a name the fleet holds would remove nothing — the migration copies rows and carries no removal — and a `rekey` would re-seal rows that are not the ones a rotation is about. `set` still writes the table, and its row reaches the fleet at the node's next start, unless the fleet holds a value written after it.
 
 `-api URL` names the node to write through, for running the command from a machine that is not the node. The bearer token comes from `CREWLET_API_TOKEN` and from nowhere else — `api.auth.tokens` is what a node **accepts** rather than a wallet the CLI helps itself from — and the credential's own identity is recorded as the author of the write.
 
@@ -698,7 +789,7 @@ A running engine picks the new value up at its next config activation or restart
 crewlet secrets list [-config PATH] [-api URL]
 ```
 
-Prints one row per stored secret: name, sealing `key_id`, last-updated timestamp, who wrote it — with the credential beside them where one made the write and names something they do not (`jane.doe (through pat:…)`) — and source. It names the store it read first, because a stopped node's own empty table and a fleet with nothing in it look identical otherwise. **Never** prints a value — the listing drops the envelope on the way out and the route behind it has no value field at all. It never opens a value, so a row sealed under a key this keyring no longer holds — one dropped before its rekey finished — still lists, and an operator locked out of that key can still take inventory.
+Prints one row per stored secret: name, sealing `key_id`, last-updated timestamp, who wrote it — with the credential beside them where one made the write and names something they do not (`jane.doe (through pat:…)`) — and source. It names the store it read first, because a stopped node's own empty table and a fleet with nothing in it look identical otherwise — and on a stopped node it lists that table only where it is the company's whole store, a single node before its first start; elsewhere its rows are one node's leftovers, so the listing is refused, naming the running engine and `-api`. **Never** prints a value — the listing drops the envelope on the way out and the route behind it has no value field at all. It never opens a value, so a row sealed under a key this keyring no longer holds — one dropped before its rekey finished — still lists, and an operator locked out of that key can still take inventory.
 
 The engine's own key — the identity directory's blind-index key — shares the store and is **counted, never named**, on a line after the table, and so are the identity estate's sealed personal values (names, addresses, second factors), which the same keyring seals and a rekey moves. No `crewlet secrets` command reads, writes or removes an engine key: `get`, `set` and `unset` refuse a name in the engine's namespace (`iam/…`) before they open anything, and the node refuses it again with `403 reserved_name`. See [the secret store](../concepts/secret-store.md#the-engines-own-keys-share-the-bucket-and-never-the-namespace).
 
@@ -708,7 +799,7 @@ The engine's own key — the identity directory's blind-index key — shares the
 crewlet secrets unset <NAME> [-config PATH] [-api URL]
 ```
 
-Removes the record and says whether one was there — "was not set" is the outcome a cleanup script wanted on its second run, not a failure. Afterwards `${NAME}` falls back to the environment.
+Removes the record and says whether one was there — "was not set" is the outcome a cleanup script wanted on its second run, not a failure. Afterwards `${NAME}` falls back to the environment. On a stopped node it runs only where that node's table is the company's whole store, a single node before its first start: elsewhere a name the fleet holds is not in the table, and removing it there would retire nothing, so it is refused, naming the running engine and `-api`.
 
 ### `crewlet secrets get`
 
@@ -716,7 +807,7 @@ Removes the record and says whether one was there — "was not set" is the outco
 crewlet secrets get <NAME> -reveal [-config PATH] [-api URL]
 ```
 
-Prints one decrypted value to stdout, with no trailing newline so it can be piped. `-reveal` is **required** — without it the command refuses and reads nothing. The route behind it (`GET /secrets/{name}`) is gated the same way, by an explicit `?reveal=true` no crawl reaches by accident, answers `Cache-Control: no-store`, and logs the access against the operator its guard authenticated. Intended as break-glass for recovering a credential the upstream API will never show again, not as a scripting interface.
+Prints one decrypted value to stdout, with no trailing newline so it can be piped. `-reveal` is **required** — without it the command refuses and reads nothing. The route behind it (`GET /secrets/{name}`) is gated the same way, by an explicit `?reveal=true` no crawl reaches by accident, answers `Cache-Control: no-store`, and logs the access against the operator its guard authenticated. Through a node it is a reveal, which takes `admin` and a person present, so `CREWLET_API_TOKEN` must hold one of Tier A's tokens: a machine token is refused it whatever it carries. On a stopped node it reads the table only where that is the company's whole store, and is refused elsewhere. Intended as break-glass for recovering a credential the upstream API will never show again, not as a scripting interface.
 
 ### `crewlet secrets rekey`
 
@@ -724,7 +815,7 @@ Prints one decrypted value to stdout, with no trailing newline so it can be pipe
 crewlet secrets rekey [-dry-run] [-config PATH] [-api URL]
 ```
 
-Re-encrypts every stored secret not already sealed under `secrets.active_key_id`, and prints the names it moved — and the engine's own key with them, which it **counts** rather than names. **Through a running node it also re-seals every person's values in the identity estate** — the rows are derived from the identity log, so the node publishes one record per person still under an old key — and prints how many values of how many people it moved — every running node holds the identity estate from boot, company or none — while a stopped node's own table holds none, so the rekey says to run it again through a running node. The per-record counterpart of [`crewlet config rekey`](#crewlet-config-rekey) — run **both** before dropping a retired key from `secrets.keys`, or records still sealed under it become unreadable; for the engine's key and the identity estate that would be the blind-index key and every person's name and address at once. An **outstanding invitation**'s address is not re-sealed — only a re-issue could carry it again — so the command says how many are still under another key: keep that key on the ring until each is redeemed or expires, at most a week after it was issued. Each envelope names its sealing key, so mixed-key states decrypt correctly throughout. `-dry-run` lists what would re-encrypt without decrypting anything, reading the key id off each envelope instead, and counts the engine's key and the identity estate's values still under another key beside your names.
+Re-encrypts every stored secret not already sealed under `secrets.active_key_id`, and prints the names it moved — and the engine's own key with them, which it **counts** rather than names. **Through a running node it also re-seals every person's values in the identity estate** — the rows are derived from the identity log, so the node publishes one record per person still under an old key — and prints how many values of how many people it moved — every running node holds the identity estate from boot, company or none — while a stopped node's own table — which a rekey reaches only on a single node before its first start, and is refused anywhere else — holds none, so the rekey says to run it again through a running node. The per-record counterpart of [`crewlet config rekey`](#crewlet-config-rekey) — run **both** before dropping a retired key from `secrets.keys`, or records still sealed under it become unreadable; for the engine's key and the identity estate that would be the blind-index key and every person's name and address at once. An **outstanding invitation**'s address is not re-sealed — only a re-issue could carry it again — so the command says how many are still under another key: keep that key on the ring until each is redeemed or expires, at most a week after it was issued. Each envelope names its sealing key, so mixed-key states decrypt correctly throughout. `-dry-run` lists what would re-encrypt without decrypting anything, reading the key id off each envelope instead, and counts the engine's key and the identity estate's values still under another key beside your names.
 
 The store is shared, so this is run **once for the fleet**, not once per node. A run through a node's API sends the key id it expects and is **refused with a 409** if that node seals under a different `active_key_id` — a silent success there would report a rotation the fleet did not make. It aborts rather than half-completing if any record cannot be opened with the keyring in hand, because retiring the old key on the strength of a partial pass is what makes a secret unreadable for ever. And it never undoes a write that lands while it runs: each record is re-sealed only at the version it read, so a record somebody rotated meanwhile is judged again on what it holds now, and a record that was deleted stays deleted rather than coming back as the value the pass read before it went. A person whose re-seal nobody could confirm fails the run with what did move; running it again moves only what is still under an old key.
 
@@ -2128,21 +2219,34 @@ counted. A token or key variable the entry's `overrides` names outside the
 reference grammar (`token_env: MY-TOKEN`) is a problem of its own, naming
 `providers.llm.<key>.overrides.token_env` or `.api_key_env`, and no route
 through it is named: no `-capture-token`, and no key or token to store or
-export under it. `${VAR}` references and the variables `inherit-env` forwards are
-resolved in the process running `crewlet llm` — the secret store first, then
-that shell's environment — so run it with the engine's environment to get the
+export under it. `${VAR}` references, and the conventional variables an entry
+falls back to, are resolved in the process running `crewlet llm` — the secret
+store first, then that shell's environment — while the variables `inherit-env`
+forwards come from that shell's environment alone, as the engine forwards its
+own and never the store's; so run it with the engine's environment to get the
 engine's answer. Beside a running engine the store's values are read through
-it, as every command that reads the company reads them
-([Commands](#commands)), so `crewlet llm` runs while the seats do —
-revealing only what the entries it works on read (the one entry a key names,
-or every entry for `list` and a bare `doctor`) — never a variable no store can
-hold, such as an `overrides.token_env` outside the reference grammar, which a
-stopped node's note does not name either — with one of Tier A's tokens
-in `CREWLET_API_TOKEN` when one of those is stored. **On a `seats` node, which holds no data**, there is no store
-of the company's to read, and the logins of the seats it runs are made there:
-`-api URL` names a node that holds data, which the stored values are read
-through and a captured token or an exported bundle is stored in. Without it
-the command refuses, naming the flag.
+it, as every command that reads the company reads them ([Where a command reads
+the company's values](#where-a-command-reads-the-companys-values)), so `crewlet
+llm` runs while the seats do — revealing, at most 64 to a request, only what
+the entries it works on read that the node holds (the one entry a key names, or every entry for
+`list` and a bare `doctor`), and never a variable no store can hold, such as an
+`overrides.token_env` outside the reference grammar, which the refusal a
+stopped node gives where its own rows are not the company's whole store does
+not name either — with one of Tier A's tokens in `CREWLET_API_TOKEN`. **With the
+engine stopped**, `list`, `status`, `export` and `doctor` read this node's own
+rows only on a single node before its first start, when those are the company's
+whole store; on any other stopped node — once it has run, or on a cluster
+member or an external broker's client — they are refused, naming `crewlet run`
+and `-api`, because each restores the entry's configured bundle before it
+answers, and a bundle read from one node's rows, or from this shell, while the
+fleet holds another would be an act on the fleet's login. `login`, `logout` and
+`import` run on any stopped node that holds data; a token `login` captures there
+is stored in this node's own table, which its next start moves onto the fleet
+unless the fleet holds a value written later. **On a `seats` node, which holds
+no data**, there is no store of the company's to read,
+and the logins of the seats it runs are made there: `-api URL` names a node that
+holds data, which the stored values are read through and a captured token or an
+exported bundle is stored in. Without it the command refuses, naming the flag.
 
 `llm list`'s `SIGN-IN` column is the first route `doctor` would name — both
 restore the entry's configured bundle first, as the engine does:
@@ -2166,7 +2270,7 @@ export` as the fix, since the engine would run that entry signed out.
 |---|---|
 | *(no flag)* | Broker the vendor's own interactive login and keep the result — written **whole** over whatever landed while it ran, so a file the sign-in left as it was goes back as it was and a file it never held is removed rather than kept beside the new token |
 | `-from-host` | Adopt a login this machine already has, e.g. from running the CLI by hand — copied for a login kept in files, exported by the CLI itself (`opencode auth export --standalone`) for one kept in its own database. The adopted login replaces the old one **whole**: a file your home does not hold is removed rather than left beside the adopted ones |
-| `-capture-token` | Mint a **headless token** into the secret store — the only shape a remote [code sandbox](../concepts/code-sandbox.md) can use, because a token is one scoped revocable variable and a login (credential files, an exported login) never leaves the engine host |
+| `-capture-token` | Mint a **headless token** into the secret store — the only shape a remote [code sandbox](../concepts/code-sandbox.md) can use, because a token is one scoped revocable variable and a login (credential files, an exported login) never leaves the engine host. Stored through a running engine, it is read by the fleet at its next configuration apply, and the command says so, naming `POST /config/reload`; stored on a stopped node, it reaches the fleet at that node's next start, unless the fleet holds a value written after it. It is read under the profile's token variable by convention, and the command prints the `auth.token` snippet for naming it in the company document instead |
 | `-capture-token -print-token` | The same mint, written to **stdout** and stored nowhere — for an operator whose secrets live in somebody else's manager. It **refuses to run on a terminal**: this is a credential, and a token in a scrollback outlives the command, while a screen-share or a shell history outlives the scrollback. Pipe it or redirect it. The two-step alternative (`-capture-token`, then `secrets get -reveal`) writes the token into the store on the way past, which is precisely what this avoids. |
 | `-token-stdin` / `-username U -password-stdin` | Store a credential you already hold, where the CLI genuinely has one |
 
@@ -2219,7 +2323,12 @@ document from another build, say), saying so, where `status` keeps refusing it.
 already authenticated: the entry's credential files, read whole so a bundle
 never packs a write that stopped part way, and a manifest naming the CLI they
 were exported from (`crewlet-bundle.json`). `-secret-store` writes it to the
-[secret store](../concepts/secret-store.md) instead of stdout; without it the
+[secret store](../concepts/secret-store.md) instead of stdout, under
+`CREWLET_LLM_CLI_<KEY>_CREDENTIALS` — through the running engine, where every
+node restores it when it next builds the company (at boot and at every apply;
+the command says so) — and, with the engine stopped, into this node's own rows
+only before a single node's first start, since `export` reads the company like
+`list` does. Without it the
 blob goes to stdout in the clear, which is what you want when piping into your
 own secret manager and never what you want in a shell history.
 
@@ -2255,7 +2364,12 @@ engine's environment under `inherit-env`, never under `api-key`, and
 fresh state directory holds no such record and restores the bundle as before,
 so `logout` names the field or secret that retires it when the entry has one —
 even when the CLI's own logout fails, since the login is removed and the logout
-recorded either way.
+recorded either way. For the conventional variable that is `crewlet secrets
+unset CREWLET_LLM_CLI_<KEY>_CREDENTIALS`, which the notice says to run with
+this node's engine up or `-api` naming a running node once the node has run, or
+wherever it is not the fleet's only member: a stopped node's own table there
+does not hold the fleet's bundle, and the unset is refused rather than retire
+nothing ([`crewlet secrets`](#crewlet-secrets)).
 
 The engine also restores a bundle **itself**, at boot and at every apply it
 publishes (never for a revision it refuses), from
@@ -2286,7 +2400,8 @@ moved to another CLI](../concepts/llm-backends.md#an-entry-moved-to-another-cli)
 ```
 crewlet mattermost provision <company.yaml> [-admin-token TOKEN]
                                            [-secret-store | -env-file PATH | -print]
-                                           [-rotate] [-dry-run]
+                                           [-handles a,b] [-rotate] [-decommission]
+                                           [-dry-run] [-config PATH] [-api URL]
 ```
 
 Creates (or updates) **one Mattermost bot account per Mattermost-enabled agent seat** — a role whose `mattermost.bot_token` is a whole-value `${VAR}` reference — adds it to the configured team and channels, and mints its personal access token into the exact `${VAR}` the YAML references.
@@ -2301,8 +2416,10 @@ Unlike the Slack provisioner there is **no app manifest, no local ledger and no 
 |------|-------------|
 | `-admin-token` | System-admin personal access token. Falls back to `$MATTERMOST_ADMIN_TOKEN`. The bots' own tokens are what this run mints, so it cannot bootstrap itself from them. |
 | `-secret-store` / `-env-file PATH` / `-print` | Where minted credentials go — exactly one, and there is no default. See [the secret store](../concepts/secret-store.md). `-print` writes `export VAR=…` lines and, when a run rolls back, `unset VAR` for each — the stream is meant to be sourced, and a comment is a no-op to a shell, so an operator who piped it into `source` would otherwise keep a revoked token exported. |
-| `-rotate` | Mint a fresh token for every bot, including bots whose current one still works. **Restart the engine afterwards.** |
-| `-dry-run` | Print the plan and touch nothing. It is the **same** plan the run uses. |
+| `-rotate` | Mint a fresh token for every bot, including bots whose current one still works. **Restart the engine afterwards.** It reads the company's values as every real run does, so it is refused like one on a stopped node whose own rows are not the company's whole store. |
+| `-dry-run` | Print the plan and touch nothing. It is the **same** plan the run uses. It reads no stored value, so it decides no route and runs on any node, a stopped one that has run included — and so does a run with nothing to do. |
+| `-config PATH` | Tier A config naming this node's store and keyring (default `./crewlet.yaml`): where the run reads the company's values, and where `-secret-store` records ([Where a command reads the company's values](#where-a-command-reads-the-companys-values)). |
+| `-api URL` | The node to read the company's values through and record into — a node that holds data, named from a `seats` node, from a stopped node whose own rows are not the company's whole store, or from a machine that is not a node. Default: the running engine holding this node's store, or this node's own rows on a single node before its first start. |
 
 A bot this run created is rolled back by revoking every token on it — nothing else has ever minted there. On a bot that already existed, only the token this run minted is revoked. See [Mattermost integration](../integrations/mattermost.md#automated-setup-crewlet-mattermost-provision).
 
@@ -2324,7 +2441,7 @@ Checks a Mattermost install by exercising what actually breaks, in the order it 
 | `-browser-url` | The address people type into their browser to reach Mattermost. Falls back to `$MATTERMOST_PUBLIC_URL`; must be an absolute `http` or `https` address. |
 | `-admin-token` | A Mattermost token to run the shared checks as. Falls back to `$MATTERMOST_ADMIN_TOKEN`, and failing that borrows a seat's own. |
 | `-config` | Tier A config naming this node's store and keyring, for resolving the company's `${VAR}`s. |
-| `-api URL` | The node to read the company's stored values through — a node that holds data, from a `seats` node or a machine that is not a node. Default: this node's store, or the running engine holding it ([Commands](#commands)). |
+| `-api URL` | The node to read the company's stored values through — a node that holds data, named from a `seats` node, from a stopped node whose own rows are not the company's whole store, or from a machine that is not a node. Default: the running engine holding this node's store, or this node's own rows on a single node before its first start ([Where a command reads the company's values](#where-a-command-reads-the-companys-values)). |
 
 | Check | What it catches |
 |---|---|
@@ -2348,6 +2465,7 @@ crewlet gitlab provision <company.yaml> [-admin-token TOKEN]
                                         [-public-url URL] [-mode group|instance]
                                         [-rotate] [-decommission]
                                         [-token-expiry-days N] [-dry-run]
+                                        [-config PATH] [-api URL]
 ```
 
 Idempotent reconcile from company config to GitLab state. For each **agent** seat that declares a GitLab credential under `mcp_env.gitlab` as a whole `${VAR}` reference, it ensures a [service account](../integrations/gitlab.md#provisioning) exists (username `<username_prefix><handle>`), adds group and project membership, mints a personal access token into that variable, and — with `-public-url` — registers the group webhook at `<url>/webhooks/gitlab`. The positional argument is the Tier B company YAML; its `integrations.gitlab.provisioning` block supplies the group, access levels, and token scopes. Human seats are resolved, never created.
@@ -2357,7 +2475,9 @@ consequential thing a run can do — replacing the key a working hook signs with
 fails every delivery in flight until the new value reaches the engine — so the
 plan states which of *untouched* / *reused* / *minted* / *rotated* will happen,
 and into which `${VAR}`. That decision is made by the same function the real
-run uses, so the two cannot disagree.
+run uses, so the two cannot disagree — and it is made on the stored value, so
+a dry run reads the company's values as a real run does and is refused like
+one on a stopped node whose own rows are not the company's whole store.
 
 **A run that recorded something says what is left to do.** Where the values
 went and what still has to happen are different questions, and only one of the
@@ -2375,11 +2495,13 @@ read as finished. A run that changed nothing prints no follow-up.
 | `-admin-token` | Operator credential — a top-level group **Owner** PAT with `api` scope on GitLab.com, or an admin PAT self-managed. Falls back to `$GITLAB_ADMIN_TOKEN`. The seats' own tokens are what this run mints, so it cannot bootstrap itself from them. |
 | `-secret-store` / `-env-file PATH` / `-print` | Where minted credentials go — exactly one, and there is no default: a run with nowhere to put what it mints creates live credentials at the third-party app and prints none of them. See [the secret store](../concepts/secret-store.md). |
 | `-public-url` | This deployment's public base URL; the group webhook is registered at `<url>/webhooks/gitlab`. **Overrides the Tier A webhook address (`api.public.external_url` when the file sets a [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api), `api.external_url` otherwise) for this run**, and registration is skipped only when both are empty — a hook pointing at the wrong host is worse than none, because the instance then reports a healthy integration. |
-| `-rotate` | Mint a fresh token for every seat, including seats whose current one still works. **Restart the engine afterwards.** |
+| `-rotate` | Mint a fresh token for every seat, including seats whose current one still works. **Restart the engine afterwards.** It reads no seat's token back, but the URL and the signing secret all the same, so it is refused like any run on a stopped node whose own rows are not the company's whole store. |
 | `-decommission` | Delete service accounts whose seats have left the config. Scoped **twice**: the username must start with `provisioning.username_prefix` (never empty — it defaults to `crewlet-`) *and* the account must be a member of this company's group, because either alone is too broad. That group scan is used in **both** modes and it is deliberate: every seat is made a member of `provisioning.group` whatever created it, so a managed account of this company is always in the group — while the instance's own service-account listing also holds every *other* company's accounts on the box, which a shared prefix would then sweep. Only the DELETE route differs by mode; sending one down the wrong route answers "no such account" for one that is still live. An account the instance refuses to delete because it is not a service account is reported rather than aborting — that refusal is GitLab catching what the scan should not have proposed, so it is a signal about the prefix. |
 | `-mode group\|instance` | Where service accounts are **owned**, for this run only; it defaults to `integrations.gitlab.provisioning.mode`, which is what the engine's own reconcile reads. `group` (the default, and all GitLab.com offers) creates them under `provisioning.group`; `instance` creates them on the instance itself, which needs an **instance-administrator** PAT and buys an account that is a member of nothing until this run adds it — so one company's seats can span several top-level groups, and an account survives its group being deleted. Everything downstream is identical: memberships are added the same way, and the token API is user-scoped on both. An unknown value is refused before the config is loaded. |
 | `-token-expiry-days` | Lifetime minted onto each token. Omitted, no `expires_at` is sent and the instance's own policy applies — GitLab.com caps personal access tokens at a year regardless, which is the instance enforcing its policy rather than this tool choosing one. Nothing in Crewlet renews a credential on a schedule, so a lifetime nobody renews is an outage with a date on it. |
-| `-dry-run` | Print the plan and touch nothing. It is the **same** plan the run uses. |
+| `-dry-run` | Print the plan and touch nothing. It is the **same** plan the run uses. It reads the company's values as a real run does, so on a stopped node whose own rows are not the company's whole store it is refused like one. |
+| `-config PATH` | Tier A config naming this node's store and keyring (default `./crewlet.yaml`): where the run reads the company's values, and where `-secret-store` records ([Where a command reads the company's values](#where-a-command-reads-the-companys-values)). |
+| `-api URL` | The node to read the company's values through and record into — a node that holds data, named from a `seats` node, from a stopped node whose own rows are not the company's whole store, or from a machine that is not a node. Default: the running engine holding this node's store, or this node's own rows on a single node before its first start. |
 
 An account this run created is rolled back by revoking every token on it — nothing else has ever minted there. On an account that already existed, only the token this run minted is revoked: sweeping it would take an administrator's own token with no way to tell that it had. Both go through a detached context, because the failure is often the cancellation itself.
 
@@ -2391,6 +2513,7 @@ See [GitLab Integration — Provisioning](../integrations/gitlab.md#provisioning
 crewlet jira provision <company.yaml> [-secret-store | -env-file PATH | -print]
                                       [-public-url URL]
                                       [-recreate-webhook] [-dry-run]
+                                      [-config PATH] [-api URL]
 ```
 
 The Atlassian tracker's reconcile, and it is a different shape from its peers: **Jira issues no credentials on a provisioner's behalf.** A Cloud API token is created by the person it belongs to at Atlassian's own account site, and a Data Center personal access token can only be minted for the calling user — so a command that offered to provision accounts would be printing instructions dressed as actions. What it does instead is the three things Jira genuinely allows, each answering a question that is otherwise invisible until an issue reaches nobody:
@@ -2405,8 +2528,10 @@ The Atlassian tracker's reconcile, and it is a different shape from its peers: *
 |------|-------------|
 | `-secret-store` / `-env-file PATH` / `-print` | Where a minted webhook secret goes — exactly one, and there is no default. See [the secret store](../concepts/secret-store.md). |
 | `-public-url` | This deployment's public base URL; the webhook is registered at `<url>/webhooks/jira`. **Overrides the Tier A webhook address (`api.public.external_url` when the file sets a [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api), `api.external_url` otherwise) for this run**, and registration is skipped only when both are empty — a hook pointing at the wrong host is worse than none, because the instance then reports a healthy integration that delivers into the void. |
-| `-recreate-webhook` | Delete and remake the hook to mint a fresh secret. The only recovery for a secret that was lost, because the value cannot be read back off the hook — and destructive for every other deployment holding the old one. |
-| `-dry-run` | Read the instance and report; register nothing. The sink is not opened, so it prompts for no passphrase. |
+| `-recreate-webhook` | Delete and remake the hook to mint a fresh secret. The only recovery for a secret that was lost, because the value cannot be read back off the hook — and destructive for every other deployment holding the old one. A run with it reads the company's values like any other, so it is no way past the refusal on a stopped node whose own rows are not the company's whole store. |
+| `-dry-run` | Read the instance and report; register nothing. The sink is not opened, so it prompts for no passphrase. It reads the company's values as a real run does, so on a stopped node whose own rows are not the company's whole store it is refused like one. |
+| `-config PATH` | Tier A config naming this node's store and keyring (default `./crewlet.yaml`): where the run reads the company's values, and where `-secret-store` records ([Where a command reads the company's values](#where-a-command-reads-the-companys-values)). |
+| `-api URL` | The node to read the company's values through and record into — a node that holds data, named from a `seats` node, from a stopped node whose own rows are not the company's whole store, or from a machine that is not a node. Default: the running engine holding this node's store, or this node's own rows on a single node before its first start. |
 
 A hook somebody else registered is reported and never touched: an instance may carry integrations that are none of this run's business, and taking over the first one found by name would break one.
 
@@ -2420,6 +2545,7 @@ See [Jira Integration — Provisioning](../integrations/jira.md#provisioning) fo
 crewlet github provision <company.yaml> [-secret-store | -env-file PATH | -print]
                                         [-public-url URL]
                                         [-recreate-webhooks] [-dry-run]
+                                        [-config PATH] [-api URL]
 ```
 
 The hosted code host's reconcile, and it is the same shape as Jira's for the same reason: **GitHub issues no credentials on a provisioner's behalf.** There is no API that creates a user, and the API that once minted a token for somebody else was withdrawn in 2020 — so a command that offered to provision accounts would be printing instructions dressed as actions. What it does instead is the two things GitHub genuinely allows:
@@ -2435,8 +2561,10 @@ The hosted code host's reconcile, and it is the same shape as Jira's for the sam
 |------|-------------|
 | `-secret-store` / `-env-file PATH` / `-print` | Where a minted webhook secret goes — exactly one, and there is no default. See [the secret store](../concepts/secret-store.md). |
 | `-public-url` | This deployment's public base URL; the hooks are registered at `<url>/webhooks/github`. **Overrides the Tier A webhook address (`api.public.external_url` when the file sets a [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api), `api.external_url` otherwise) for this run**, and registration is skipped only when both are empty — a hook pointing at the wrong host is worse than none, because GitHub then reports a healthy integration that delivers into the void. |
-| `-recreate-webhooks` | Delete and remake every hook to mint a fresh secret. The only recovery for a secret that was lost, because the value cannot be read back off a hook — and destructive for every other deployment holding the old one. |
-| `-dry-run` | Read GitHub and report; register nothing. The sink is not opened, so it prompts for no passphrase. |
+| `-recreate-webhooks` | Delete and remake every hook to mint a fresh secret. The only recovery for a secret that was lost, because the value cannot be read back off a hook — and destructive for every other deployment holding the old one. A run with it reads the company's values like any other, so it is no way past the refusal on a stopped node whose own rows are not the company's whole store. |
+| `-dry-run` | Read GitHub and report; register nothing. The sink is not opened, so it prompts for no passphrase. It reads the company's values as a real run does, so on a stopped node whose own rows are not the company's whole store it is refused like one. |
+| `-config PATH` | Tier A config naming this node's store and keyring (default `./crewlet.yaml`): where the run reads the company's values, and where `-secret-store` records ([Where a command reads the company's values](#where-a-command-reads-the-companys-values)). |
+| `-api URL` | The node to read the company's values through and record into — a node that holds data, named from a `seats` node, from a stopped node whose own rows are not the company's whole store, or from a machine that is not a node. Default: the running engine holding this node's store, or this node's own rows on a single node before its first start. |
 
 A hook somebody else registered is left alone: matching is on the **delivery URL**, never on a name, because GitHub gives a webhook no name at all and an organization carries hooks other integrations put there.
 
@@ -2452,6 +2580,7 @@ crewlet slack provision <company.yaml> [-secret-store | -env-file PATH | -print]
                                        [-config-token TOKEN] [-ledger PATH]
                                        [-handles a,b] [-reinstall]
                                        [-no-install] [-dry-run]
+                                       [-config PATH] [-api URL]
 ```
 
 Every other third-party app's provisioning runs unattended. **Slack cannot**, and that is not an implementation gap: installing an app into a workspace is an OAuth grant, and OAuth exists precisely so that a person decides. So the run creates and updates the apps by itself, then hands the operator one authorize URL per seat and takes the code back — and where there is nobody to ask (`-no-install`, `-dry-run`), it prints the URLs and stops rather than pretending.
@@ -2471,13 +2600,15 @@ For each seat whose `integrations.slack` credentials are whole `${VAR}` referenc
 | Flag | Description |
 |------|-------------|
 | `-public-url` | Public HTTPS base URL of this deployment. **Required unless the Tier A webhook address (`api.public.external_url` when the file sets a [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api), `api.external_url` otherwise) is set**, which it overrides for this run: every app's Events API request URL and OAuth redirect URL are built from it, so an app created without one delivers nowhere and cannot be installed. |
-| `-secret-store` / `-env-file PATH` / `-print` | Where the minted bot token and signing secret go — exactly one, and there is no default. See [the secret store](../concepts/secret-store.md). |
+| `-secret-store` / `-env-file PATH` / `-print` | Where the minted bot token and signing secret go — exactly one, and there is no default. See [the secret store](../concepts/secret-store.md). Only `-secret-store` reads the store: it reads back each planned seat's bot token, in one batch before the run prints its plan, to leave an installed app alone, so it decides the run's route and is refused on a stopped node whose own rows are not the company's whole store ([Where a command reads the company's values](#where-a-command-reads-the-companys-values)). `-env-file` and `-print` read no store at all, and run on any node. |
 | `-config-token` | The operator's app-configuration **refresh** token, from [api.slack.com/apps](https://api.slack.com/apps) → Your App Configuration Tokens. Falls back to `$SLACK_CONFIG_REFRESH_TOKEN`. Read from the environment alone, never from the secret store: it is the operator's credential rather than the company's. |
 | `-ledger` | The app ledger (default `slack-apps.json` beside the company document). It holds the client secrets Slack returns only at creation, so it is written `0600` — gitignore it like `.env`. |
 | `-handles a,b` | Only provision these seats. Worth having against a method that allows about one request a minute. |
-| `-reinstall` | Redo the OAuth install even where a token is already recorded. **Required for a scope change to take effect** — a bot token carries only the scopes it was minted with — and destructive: the new install revokes the token every running node is authenticating with. |
+| `-reinstall` | Redo the OAuth install even where a token is already recorded. **Required for a scope change to take effect** — a bot token carries only the scopes it was minted with — and destructive: the new install revokes the token every running node is authenticating with. With `-secret-store` it reads no seat's token back, but the run still records through the store's route, so it is no way past the refusal on a stopped node whose own rows are not the company's whole store. |
 | `-no-install` | Create and update the apps and record the signing secrets, then print the authorize URLs instead of asking for codes. For a non-interactive run. |
-| `-dry-run` | Print the plan and **check every manifest** through `apps.manifest.validate`, which writes nothing: no app created, no manifest pushed, no install run, and the sink is not opened either, so it prompts for no passphrase. That check is why a dry run touches the network at all — `apps.manifest.create` is Tier 1, roughly one request a minute, so a malformed manifest discovered from the create costs a minute per seat and leaves the seats before the bad one already created. Validating needs a config token, so a dry run that cannot get one prints the plan and says the manifests were not checked; getting that token may rotate it, which is the one write a dry run makes and has to. |
+| `-dry-run` | Print the plan and **check every manifest** through `apps.manifest.validate`, which writes nothing: no app created, no manifest pushed, no install run, and the sink is not opened either, so it prompts for no passphrase. That check is why a dry run touches the network at all — `apps.manifest.create` is Tier 1, roughly one request a minute, so a malformed manifest discovered from the create costs a minute per seat and leaves the seats before the bad one already created. Validating needs a config token, so a dry run that cannot get one prints the plan and says the manifests were not checked; getting that token may rotate it, which is the one write a dry run makes and has to. It reads no stored value, so it decides no route and runs on any node. |
+| `-config PATH` | Tier A config (default `./crewlet.yaml`): the webhook address the apps are built on when `-public-url` is not given, and, with `-secret-store`, this node's store and keyring. |
+| `-api URL` | With `-secret-store`, the node to read the seats' tokens back through and record into — a node that holds data, named from a `seats` node, from a stopped node whose own rows are not the company's whole store, or from a machine that is not a node. |
 
 Run the API server first, publicly reachable at `-public-url`: Slack verifies each app's request URL with a `url_verification` challenge, which the edge answers unconditionally — it has to, because during provisioning the signing secret does not exist yet and a verified handshake would be impossible.
 
@@ -2510,8 +2641,8 @@ The routing is the FILE'S, not the directory's, because a skill is identified by
 | — | Frontmatter on a knowledge doc may declare `parent:` (the title of a page in the same space to nest under) and `labels:` (the author's own, lower-cased and de-duplicated because that is what Confluence stores). See below. |
 | `-prune` | After publishing, delete skill pages in the skills space that carry the `crewlet-skill` label and whose key no local file publishes any more. **Three conditions, all required**: in the skills space, labelled, and parsing as a skill whose key this run's tree does not publish — the label protects a hand-authored page, the parse protects an ordinary page filed in the same space, and the key comparison is what makes a renamed skill a delete-and-create rather than a silent duplicate. The orphan set is derived by subtraction, so **a prune that cannot enumerate the space deletes nothing** and fails the run: a partial read would make the orphan set larger and delete live pages. The set is taken from the *plan*, not from the writes that landed, so a page whose update happened to 403 is never deleted as an orphan of itself. A page that declares a trigger and does not parse has an unknown key and is reported rather than deleted. |
 | `-config` | Tier A config naming this node's store and keyring, for resolving the `${VAR}`s in the company's `confluence:` block. |
-| `-api URL` | The node to read the company's stored values through — a node that holds data, from a `seats` node or a machine that is not a node. Default: this node's store, or the running engine holding it ([Commands](#commands)). |
-| `-dry-run` | Print the plan and write or delete nothing. |
+| `-api URL` | The node to read the company's stored values through — a node that holds data, named from a `seats` node, from a stopped node whose own rows are not the company's whole store, or from a machine that is not a node. Default: the running engine holding this node's store, or this node's own rows on a single node before its first start ([Where a command reads the company's values](#where-a-command-reads-the-companys-values)). |
+| `-dry-run` | Print the plan and write or delete nothing. It reads no stored value, so it decides no route and runs on any node — and so does a tree with nothing to publish. |
 
 A company that has turned tool skills off (`knowledge.skills_container: ""`) has no space for a skill file to go to: a tree containing one **stops the walk** naming both the setting and `-space`, rather than filing an instruction meant for one phase of one turn into a space every seat searches.
 
@@ -2524,6 +2655,7 @@ See [Confluence Integration](../integrations/confluence.md#publishing-local-page
 ```
 crewlet confluence provision <company.yaml> [-secret-store|-env-file PATH|-print]
                              [-public-url URL] [-recreate-webhooks] [-dry-run]
+                             [-config PATH] [-api URL]
 ```
 
 Registers the inbound webhooks that make Confluence push page and comment
@@ -2550,8 +2682,10 @@ is, and one event this instance refuses is reported without stopping the rest.
 |---|---|
 | `-secret-store` / `-env-file PATH` / `-print` | Where a minted token or secret goes. The same three sinks every provisioning command takes; a run with none of them refuses rather than minting a credential it cannot record. |
 | `-public-url URL` | This deployment's public base URL, which the hooks are registered against. **Overrides the Tier A webhook address (`api.public.external_url` when the file sets a [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api), `api.external_url` otherwise) for this run**, and registration is skipped only when both are empty. |
-| `-recreate-webhooks` | Delete and remake every hook with a fresh token or secret. **Destructive across deployments**: the previous value stops working everywhere else this company runs, so it is the recovery for a leaked or lost credential rather than part of an ordinary run. |
-| `-dry-run` | Read and report; register nothing. |
+| `-recreate-webhooks` | Delete and remake every hook with a fresh token or secret. **Destructive across deployments**: the previous value stops working everywhere else this company runs, so it is the recovery for a leaked or lost credential rather than part of an ordinary run. A run with it reads the company's values like any other, so it is no way past the refusal on a stopped node whose own rows are not the company's whole store. |
+| `-dry-run` | Read and report; register nothing. It reads the company's values as a real run does, so on a stopped node whose own rows are not the company's whole store it is refused like one. |
+| `-config PATH` | Tier A config naming this node's store and keyring (default `./crewlet.yaml`): where the run reads the company's values, and where `-secret-store` records ([Where a command reads the company's values](#where-a-command-reads-the-companys-values)). |
+| `-api URL` | The node to read the company's values through and record into — a node that holds data, named from a `seats` node, from a stopped node whose own rows are not the company's whole store, or from a machine that is not a node. Default: the running engine holding this node's store, or this node's own rows on a single node before its first start. |
 
 See [Confluence Integration — Webhooks](../integrations/confluence.md#webhooks-confluence-pushes-to-agents).
 

@@ -19,7 +19,14 @@
 #   scripts/gitlab-dev-bootstrap.sh
 #   # then provision your local-pointed config (see the printed command)
 #
-# Re-runnable: every step is idempotent.
+# Re-runnable: every step is idempotent. Its COMPANY= provision reads the
+# company's stored values through ./crewlet.yaml when one is present, and
+# from the environment alone when none is. With that node's engine stopped it
+# runs only before a single node's first start, when the node's own rows are
+# the company's whole secret store; once the node has run, or on a member of
+# a cluster, run it with the engine up and CREWLET_API_TOKEN set to one of
+# crewlet.yaml's api.auth tokens whose grants include admin, or the provision
+# is refused.
 set -euo pipefail
 
 GITLAB_CONTAINER="${GITLAB_CONTAINER:-$(docker compose ps -q gitlab 2>/dev/null || true)}"

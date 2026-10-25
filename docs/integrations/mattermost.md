@@ -543,7 +543,8 @@ tokens are what this run *mints*, so it cannot bootstrap itself from them.
 | `-rotate` | Mint a fresh token for every bot, including bots whose current one still works. |
 | `-handles a,b` | Provision only these seat handles. It narrows the provisioning loop **only** — a `-handles` run with `-decommission` does not read the seats it skipped as departed. |
 | `-decommission` | Revoke the tokens of, and then disable, managed bot accounts whose seats have left the config. Disable, never delete: a deleted bot takes its posts with it, silently rewriting the history of every channel it spoke in. The token goes because the account does not: a departed colleague whose credential outlived them starts working again the moment the bot is re-enabled. |
-| `-dry-run` | Print the plan; create and modify nothing. |
+| `-dry-run` | Print the plan; create and modify nothing. It reads no stored value, so it runs on any node, a stopped one included — and so does a run with nothing to provision. |
+| `-config PATH` / `-api URL` | Where a real run reads the company's values (the instance URL, and with `-secret-store` each bot's token it reads back) and where `-secret-store` records: through the running engine holding the store `-config` names (default `./crewlet.yaml`), with one of its Tier A tokens in `CREWLET_API_TOKEN`, or through the node `-api` names; on a single node before its first start, from that node's own rows; with neither a file nor `-api`, from the environment alone. On any other stopped node a real run is refused before it touches the server, `-rotate` included — see [where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values). |
 
 Afterwards, (re)start `crewlet run` so the engine reads the new credentials
 and opens each seat's websocket.
@@ -1153,7 +1154,11 @@ crewlet mattermost doctor examples/nimbus-claude-cli.company.yaml
 # 4. Authenticate the model — once, on this machine. `-from-host` copies
 #    the login `claude` already has here into Crewlet's own directory; plain
 #    `crewlet llm login default` brokers `claude auth login` instead if this
-#    machine has none.
+#    machine has none. Both load the Tier A file, so export what it reads
+#    first: the keyring (`crewlet secrets keygen -key-id 2026-01` prints
+#    the line) and this node's own API token.
+export CREWLET_SECRET_KEY_2026_01="<the base64 key it printed>"
+export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
 crewlet llm login default -from-host \
     -company examples/nimbus-claude-cli.company.yaml -config examples/nimbus-claude-cli.config.yaml
 crewlet llm doctor default \
@@ -1162,7 +1167,6 @@ crewlet llm doctor default \
 # 5. Boot — one websocket per agent seat. CREWLET_MCP_BRIDGE_URL is what
 #    the engineering seats' agent-mode runs dial back on for their tools;
 #    it has to match api.port in the Tier A file.
-export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
 export CREWLET_MCP_BRIDGE_URL="http://127.0.0.1:8000"
 crewlet run -config examples/nimbus-claude-cli.config.yaml \
             -company examples/nimbus-claude-cli.company.yaml
@@ -1173,6 +1177,16 @@ username, and the variables it would mint. Step 2 already wrote
 `MATTERMOST_TOKEN_CEO`, `…_CTO`, `…_PM`, `…_DEVREL`, `…_SWE`, `…_FE` and
 `…_AI` into `.env`, which the engine reads on boot; nothing has to be
 re-sourced. Every step is idempotent, so re-run any of them freely.
+
+Step 4 runs before step 5's first boot, when the node's own rows under
+`nimbus-data/` are the company's whole secret store, so `-config` reads them —
+the first time through, that is: both Nimbus examples keep their broker under
+`nimbus-data/stream`, and once either has started there it holds broker state.
+From then on, run `crewlet llm doctor` beside the running engine with
+`CREWLET_API_TOKEN` set to `$CREWLET_API_TOKEN_FOUNDER`: the store is the
+running engine's then, and with that engine stopped again the doctor is
+refused, as every command that reads the company is ([where a command reads
+the company's values](../reference/cli.md#where-a-command-reads-the-companys-values)).
 
 Step 4 is the one a company's first model always needs, and
 `crewlet llm doctor` is the half that matters: a `providers.llm` entry can be
@@ -1230,7 +1244,9 @@ If a bot stays silent, check in this order:
    is the one failure mode where the agent reasons about a reply and then has
    no tool to send it with, so the logs show a complete turn and the channel
    stays quiet.
-4. `crewlet llm doctor default -company examples/nimbus-claude-cli.company.yaml` — on a
+4. `crewlet llm doctor default -company examples/nimbus-claude-cli.company.yaml -config examples/nimbus-claude-cli.config.yaml`,
+   with `CREWLET_API_TOKEN` set to `$CREWLET_API_TOKEN_FOUNDER` — the engine is
+   running, so the doctor reads the company's values through it — on a
    coding-CLI entry this is the other half of the same symptom: a turn
    that never reached a model, or one whose model answered prose instead of
    the tool-call envelope, ends with nothing posted.

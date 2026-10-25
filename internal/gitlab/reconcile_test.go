@@ -1953,6 +1953,32 @@ func TestAnUnreadableSinkStopsTheGitLabRun(t *testing.T) {
 	}
 }
 
+// AN ACCOUNT THIS RUN CREATES ASKS NO SINK. Nothing can hold a token for an
+// account that did not exist a moment ago, so its first token is minted
+// whatever the sink would answer — even a sink that cannot say, as a
+// -secret-store sink whose node refused the reveal cannot.
+//
+// Mutation: ask the sink before minting a created account's first token, and
+// the run fails on the unreadable sink.
+func TestAnAccountThisRunCreatesIsMintedWhateverItsSinkCanSay(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	sink := newRecordingSink()
+	// a -secret-store sink whose node refused the reveal
+	sink.holdsErr = errors.New("the store could not say")
+	res, err := reconcileAgainst(t, f, sink, map[string]string{"swe": "GITLAB_TOKEN_SWE"})
+	if err != nil {
+		t.Fatalf("a seat whose account this run created was refused over its sink: %v", err)
+	}
+	if !slices.Equal(res.Created, []string{"swe"}) || !slices.Equal(res.Rotated, []string{"swe"}) {
+		t.Fatalf("created %v, minted for %v — want the seat created and minted for",
+			res.Created, res.Rotated)
+	}
+	if sink.value("GITLAB_TOKEN_SWE") == "" {
+		t.Error("the created account's first token was not recorded")
+	}
+}
+
 // A ROLLBACK ON A PRE-EXISTING ACCOUNT REVOKES ONLY WHAT IT MINTED.
 // Sweeping the account would take an administrator's own token with no way
 // to tell that it had.

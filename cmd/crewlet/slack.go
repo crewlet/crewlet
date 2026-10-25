@@ -60,7 +60,7 @@ func runSlackProvision(environ config.Source, args []string, stdout, stderr io.W
 			"usage: crewlet slack provision <company.yaml> "+
 				"[-secret-store|-env-file PATH|-print] [-public-url URL] "+
 				"[-config-token TOKEN] [-ledger PATH] [-handles a,b] "+
-				"[-reinstall] [-no-install] [-dry-run]")
+				"[-reinstall] [-no-install] [-dry-run] [-config PATH] [-api URL]")
 		return errors.New("name exactly one company document")
 	}
 
@@ -80,10 +80,14 @@ func runSlackProvision(environ config.Source, args []string, stdout, stderr io.W
 	// address is Tier A's now ([webhookBase]), resolved before the file is
 	// decoded, so resolving the company's values here would open the store,
 	// or reveal credentials through the running node, for nothing read.
-	boot, err := companyBootstrap(*sinks.bootstrap)
+	// Loading it opens nothing: only -secret-store reaches the store.
+	companySecrets, err := openCompanyStore(environ, sinks.store,
+		"crewlet slack provision", readsTheCompany)
 	if err != nil {
 		return err
 	}
+	defer companySecrets.Close()
+	boot := companySecrets.boot
 
 	// READ ONCE. Four places below build a URL from it, and four separate
 	// reads of the flag is how one of them ends up using the flag while
@@ -91,6 +95,14 @@ func runSlackProvision(environ config.Source, args []string, stdout, stderr io.W
 	base := webhookBase(*publicURL, boot)
 
 	plans := slack.PlanFor(organization)
+	// WHETHER THERE IS ANYTHING TO PROVISION: a seat this run carries
+	// through ([slackProvisions]). A seat whose bot_token or signing_secret
+	// is a literal is one an operator manages by hand, which the plan reports
+	// and the run leaves alone, so a run with no other seat reads nothing of
+	// the store, whatever its sink, and decides no route.
+	provisions := slices.ContainsFunc(plans, func(plan slack.SeatPlan) bool {
+		return slackProvisions(plan, splitHandles(*only))
+	})
 	if *ledgerPath == "" {
 		*ledgerPath = slack.LedgerPathFor(companyPath)
 	}
@@ -99,13 +111,14 @@ func runSlackProvision(environ config.Source, args []string, stdout, stderr io.W
 		return err
 	}
 
-	printSlackPlan(stdout, plans, ledger, *ledgerPath, base)
-
 	refresh := strings.TrimSpace(*refreshToken)
 	if refresh == "" {
 		refresh = operatorCredential("SLACK_CONFIG_REFRESH_TOKEN")
 	}
 
+	if *dryRun || !provisions {
+		printSlackPlan(stdout, plans, ledger, *ledgerPath, base)
+	}
 	if *dryRun {
 		// THE MANIFESTS ARE CHECKED, which is the whole reason a dry run
 		// touches the network: apps.manifest.create is rate limited to
@@ -124,9 +137,32 @@ func runSlackProvision(environ config.Source, args []string, stdout, stderr io.W
 		fmt.Fprintln(stdout, "\n-dry-run: no app was created, updated or installed.")
 		return checked
 	}
-	if len(plans) == 0 {
+	if !provisions {
+		if len(plans) > 0 {
+			fmt.Fprintln(stdout, "\nNothing to provision: no seat in this run has a bot_token "+
+				"and a signing_secret that are each a whole ${VAR} reference.")
+		}
 		return nil
 	}
+	ctx := context.Background()
+	if sinks.recordsInStore() {
+		// A RUN THAT RECORDS INTO THE STORE READS IT BACK — each seat's
+		// token, to leave an installed app alone — so it decides its route
+		// before it prints anything, as every reader of the company does,
+		// and reads those tokens in one batch up front. -reinstall reads
+		// none of them back. -print and -env-file read no store at all.
+		if err = sinks.check(); err != nil {
+			return err
+		}
+		var readBack []string
+		if !*reinstall {
+			readBack = slackTokenVars(plans, splitHandles(*only))
+		}
+		if _, err = companySecrets.stored(ctx, readBack, stdout); err != nil {
+			return err
+		}
+	}
+	printSlackPlan(stdout, plans, ledger, *ledgerPath, base)
 	if base == "" {
 		// TWO WAYS TO BE EMPTY, and they need different work: no Tier A
 		// file was read, so only the flag could have supplied one, or the
@@ -137,12 +173,10 @@ func runSlackProvision(environ config.Source, args []string, stdout, stderr io.W
 		return errors.New(noPublicBase(boot))
 	}
 
-	ctx := context.Background()
-	sink, closeSink, err := sinks.open(ctx, environ, stdout)
+	sink, err := sinks.open(ctx, companySecrets, stdout)
 	if err != nil {
 		return err
 	}
-	defer closeSink()
 
 	opts := slack.Options{
 		Admin: slack.NewAdmin(nil), Seats: plans,
@@ -159,6 +193,26 @@ func runSlackProvision(environ config.Source, args []string, stdout, stderr io.W
 		printSlackResult(stdout, res, *ledgerPath, sink)
 	}
 	return err
+}
+
+// slackProvisions reports whether a run provisions this seat: one only names,
+// or any where only names none, whose credentials the run can record at all
+// ([slack.SeatPlan.Provisionable]) — a seat [slack.Reconcile] carries through,
+// and the only kind a run reads the store for.
+func slackProvisions(plan slack.SeatPlan, only []string) bool {
+	return plan.Provisionable() && (len(only) == 0 || slices.Contains(only, plan.Handle))
+}
+
+// slackTokenVars is the variable each seat a run provisions records its bot
+// token under ([slackProvisions]).
+func slackTokenVars(plans []slack.SeatPlan, only []string) []string {
+	var names []string
+	for _, plan := range plans {
+		if slackProvisions(plan, only) {
+			names = append(names, plan.TokenVar)
+		}
+	}
+	return unionReads(names)
 }
 
 // askForInstallCode is the human step: show the URL, take the code back.

@@ -1501,6 +1501,32 @@ func TestAnUnreadableSinkStopsTheChatRun(t *testing.T) {
 	}
 }
 
+// A BOT THIS RUN CREATES ASKS NO SINK. Nothing can hold a token for a bot
+// that did not exist a moment ago, so its first token is minted whatever the
+// sink would answer — even a sink that cannot say, as a -secret-store sink
+// whose node refused the reveal cannot.
+//
+// Mutation: ask the sink before minting a created bot's first token, and the
+// run fails on the unreadable sink.
+func TestABotThisRunCreatesIsMintedWhateverItsSinkCanSay(t *testing.T) {
+	t.Parallel()
+	srv := newChatServer()
+	sink := newChatSink()
+	// a -secret-store sink whose node refused the reveal
+	sink.holdsErr = errors.New("the store could not say")
+	res, err := reconcileChat(t, srv, sink, []*org.Role{chatSeat("SWE", "${MM_TOKEN_SWE}", "eng")})
+	if err != nil {
+		t.Fatalf("a seat whose bot this run created was refused over its sink: %v", err)
+	}
+	if !slices.Equal(res.Created, []string{"swe"}) || !slices.Equal(res.Rotated, []string{"swe"}) {
+		t.Fatalf("created %v, minted for %v — want the bot created and minted for",
+			res.Created, res.Rotated)
+	}
+	if !strings.HasPrefix(sink.value("MM_TOKEN_SWE"), "mmtok-") {
+		t.Errorf("the created bot's first token was not recorded: %q", sink.value("MM_TOKEN_SWE"))
+	}
+}
+
 // A ROLLBACK ON A PRE-EXISTING BOT REVOKES ONLY WHAT IT MINTED. Sweeping
 // the account would take an administrator's own token with no way to tell
 // that it had.

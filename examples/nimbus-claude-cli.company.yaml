@@ -9,18 +9,31 @@
 # for.  Two commands stand the whole thing up:
 #
 #     docker compose --profile mattermost up -d --wait
-#     COMPANY=examples/nimbus.company.yaml scripts/mattermost-dev-bootstrap.sh
+#     COMPANY=examples/nimbus-claude-cli.company.yaml scripts/mattermost-dev-bootstrap.sh
 #
-# and one authenticates the model:
+# and two sign the model in and check it end to end before the first turn
+# (-capture-token in place of -from-host mints a headless token instead).
+# Both read examples/nimbus-claude-cli.config.yaml, so export what it reads
+# first — the keyring and the founder token its header names:
 #
-#     crewlet llm login default -from-host   # or -capture-token
-#     crewlet llm doctor default
-#
-# Then run the pair:
-#
+#     export CREWLET_SECRET_KEY_2026_01="<base64 key from `crewlet secrets keygen`>"
 #     export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
-#     crewlet run -config examples/nimbus.config.yaml \
-#                 -company examples/nimbus.company.yaml
+#     crewlet llm login  default -from-host -company examples/nimbus-claude-cli.company.yaml \
+#                                           -config  examples/nimbus-claude-cli.config.yaml
+#     crewlet llm doctor default            -company examples/nimbus-claude-cli.company.yaml \
+#                                           -config  examples/nimbus-claude-cli.config.yaml
+#
+# Before the node's first start its own rows are the company's whole
+# secret store, so the doctor reads them; once it has run, run the doctor
+# beside the running engine with CREWLET_API_TOKEN set to
+# $CREWLET_API_TOKEN_FOUNDER, or it is refused.  Then run the pair, with
+# the tool bridge the engineers' agent-mode runs dial back on and the .env
+# the bootstrap wrote:
+#
+#     export CREWLET_MCP_BRIDGE_URL="http://127.0.0.1:8000"   # = api.port
+#     set -a; . ./.env; set +a          # MATTERMOST_URL + the bot tokens
+#     crewlet run -config examples/nimbus-claude-cli.config.yaml \
+#                 -company examples/nimbus-claude-cli.company.yaml
 #
 # See docs/integrations/mattermost.md § First run, end to end for the
 # walkthrough, and docs/concepts/llm-backends.md for the login options.
@@ -116,8 +129,8 @@ providers:
     # PREREQUISITE: the `claude` binary on the machine running
     # `crewlet run`, and one of these, once:
     #
-    #   crewlet llm login default -from-host  -company examples/nimbus.company.yaml \
-    #                                         -config  examples/nimbus.config.yaml
+    #   crewlet llm login default -from-host  -company examples/nimbus-claude-cli.company.yaml \
+    #                                         -config  examples/nimbus-claude-cli.config.yaml
     #
     # `-from-host` COPIES the login this machine already has into Crewlet's
     # own directory; your own ~/.claude is never read at runtime, because
@@ -131,14 +144,20 @@ providers:
     # `-capture-token` is the better route where you can take it — it mints
     # a headless CLAUDE_CODE_OAUTH_TOKEN, so there is no credential file to
     # sync and no refresh token shared with your personal login — but it
-    # writes into the ENCRYPTED SECRET STORE, which needs the Tier A
-    # keyring: run `crewlet secrets keygen -key-id 2026-01` and uncomment
-    # the `secrets:` block in examples/nimbus.config.yaml first.
+    # writes into the ENCRYPTED SECRET STORE, sealed under the Tier A
+    # keyring examples/nimbus-claude-cli.config.yaml already declares
+    # (`crewlet secrets keygen -key-id 2026-01` prints the key to export).
     #
     # Then, before the first turn:
     #
-    #   crewlet llm doctor default -company examples/nimbus.company.yaml \
-    #                              -config  examples/nimbus.config.yaml
+    #   crewlet llm doctor default -company examples/nimbus-claude-cli.company.yaml \
+    #                              -config  examples/nimbus-claude-cli.config.yaml
+    #
+    # Before the node's first start its own rows are the company's whole
+    # secret store, and the doctor reads them.  Once the engine has run, the
+    # company's values are on a store only a running engine serves: run the
+    # doctor beside it with CREWLET_API_TOKEN set to one of its Tier A
+    # tokens, or it is refused rather than read the node's leftover rows.
     #
     # `doctor` is the command that matters here.  An entry can be
     # configured perfectly and still not work — a missing binary, a
@@ -616,8 +635,18 @@ scheduling:
 # anywhere:
 #
 #   scripts/mattermost-dev-bootstrap.sh          # server, admin, team
-#   crewlet mattermost provision examples/nimbus.company.yaml
-#   crewlet mattermost doctor examples/nimbus.company.yaml
+#   set -a; . ./.env; set +a                     # the URL + admin token it wrote
+#   crewlet mattermost provision examples/nimbus-claude-cli.company.yaml \
+#       -env-file .env -config examples/nimbus-claude-cli.config.yaml
+#   crewlet mattermost doctor examples/nimbus-claude-cli.company.yaml \
+#       -config examples/nimbus-claude-cli.config.yaml
+#
+# Both load examples/nimbus-claude-cli.config.yaml, so export the keyring
+# and the founder token this file's header names first.  Before the
+# node's first start its own rows are the company's whole secret store,
+# and both read them; once it has run, run them beside the running engine
+# with CREWLET_API_TOKEN set to $CREWLET_API_TOKEN_FOUNDER, or they are
+# refused.
 #
 # See docs/integrations/mattermost.md.
 #

@@ -61,9 +61,10 @@
 // because logging the value would be the leak.
 //
 // The second exists for one reader: a CLI run resolving a company document's
-// `${VAR}` references through a running node, which needs every value the
-// document reads and has one question rather than one per credential. It is
-// handed exactly the names it asks for — never the store.
+// `${VAR}` references through a running node, which reads the variables its
+// command reads that the node lists, and asks for them together rather than
+// one request per credential. It is handed exactly the names it asks for —
+// never the store.
 package secretsapi
 
 import (
@@ -383,21 +384,21 @@ type revealRequest struct {
 //
 // IT IS THE BREAK-GLASS READ, AND NOTHING LESS. A CLI run resolving a company
 // document through a running node (`crewlet gitlab provision` and its
-// siblings, `crewlet llm`) needs every value that document reads, and asking
-// for them through `GET /secrets/{name}?reveal=true` one at a time would make
-// one decision, one log line and one round trip per credential where the run
-// has one question. So it is mounted on `secrets.reveal` itself — admin, a
-// person present, a recent proof — decided before the body is read, and the
-// access is logged by name like the single reveal. It answers exactly the
-// names asked, never the whole store: a run is handed what its document
-// reads and nothing beside it.
+// siblings, `crewlet llm`) reads the variables its command reads that the
+// node lists, and asking for them through `GET /secrets/{name}?reveal=true`
+// one at a time would make one decision, one log line and one round trip per
+// credential where the run has one question. So it is mounted on
+// `secrets.reveal` itself — admin, a person present, a recent proof — decided
+// before the body is read, and the access is logged by name like the single
+// reveal. It answers exactly the names asked, never the whole store: a run is
+// handed the values it asked for and nothing beside them.
 //
 // A NAME OUTSIDE THE REFERENCE GRAMMAR IS REFUSED rather than answered
-// missing, unlike the single read: the one reader of this route asks for names
-// it took out of `${VAR}` references, so a name no reference can hold is a
-// caller asking for something other than a document's values — and keeping
-// every name a plain identifier is what bounds the answer at
-// [MaxRevealAnswerBytes]. A reserved name is refused first, as on every route
+// missing, unlike the single read: the one reader of this route asks only for
+// names the listing gave it, which every store holds to the grammar, so a name
+// no store can hold is a caller asking for something other than a command's
+// values — and keeping every name a plain identifier is what bounds the answer
+// at [MaxRevealAnswerBytes]. A reserved name is refused first, as on every route
 // here.
 func (s *Service) revealMany(w http.ResponseWriter, r *http.Request) {
 	if !noQuery(w, r, "POST /secrets/reveal",

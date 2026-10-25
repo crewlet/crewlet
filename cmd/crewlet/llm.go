@@ -79,7 +79,10 @@ Flags:
   -api URL       The node holding data to read stored values through and store
                  a token or bundle in; default is this node's store, or the
                  running engine holding it. A seats node, which holds no data,
-                 names one
+                 names one; so do list, status, export and doctor on a stopped
+                 node whose own table is not the company's whole store (once
+                 it has run, or on a cluster member or an external broker's
+                 client), where its engine is not started instead
   -home PATH     Read a host login from somewhere other than this user's home
   -no-smoke      Skip doctor's real completions (the tool call and both probes)
   -print-token   Write a captured token to stdout instead of the store (login only)
@@ -100,18 +103,13 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 	fs.SetOutput(stderr)
 	companyPath := fs.String("company", defaultCompanyPath,
 		"Tier B config: the company document naming the providers")
-	bootstrapPath := fs.String("config", defaultBootstrapPath,
-		"Tier A config: this node's store and its secret keyring")
-	// THE SAME FLAG the provisioning commands and `crewlet secrets` take,
-	// and needed here for the node they rarely run on: a seats node holds
-	// no data, its store is scratch, and the logins of the seats it runs
-	// are made on it — so the company's stored values, and the store a
+	// -api IS THE SAME FLAG the provisioning commands and `crewlet secrets`
+	// take, and needed here for the node they rarely run on: a seats node
+	// holds no data, its store is scratch, and the logins of the seats it
+	// runs are made on it — so the company's stored values, and the store a
 	// captured token goes to, are a node that holds data, which nothing in
 	// a seats node's Tier A addresses.
-	apiURL := fs.String("api", "",
-		"the node holding data to read stored values through and store a "+
-			"token or bundle in; default is this node's store, or the "+
-			"running engine holding it")
+	storeAt := addStoreFlags(fs)
 	fromHost := fs.Bool("from-host", false,
 		"adopt the login this machine already has (login only)")
 	captureToken := fs.Bool("capture-token", false,
@@ -143,13 +141,21 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 		return fmt.Errorf("unknown llm command %q", sub)
 	}
 
-	ctx := context.Background()
-	company, keys, resolver, closeResolver, err := loadLLMConfig(ctx, environ, *companyPath,
-		*bootstrapPath, *apiURL, sub, key, stderr)
+	use := readsTheCompany
+	if slices.Contains(llmActsOnItsOwn, sub) {
+		use = actsOnItsOwn
+	}
+	companySecrets, err := openCompanyStore(environ, storeAt, "crewlet llm "+sub, use)
 	if err != nil {
 		return err
 	}
-	defer closeResolver()
+	defer companySecrets.Close()
+
+	ctx := context.Background()
+	company, keys, resolver, err := loadLLMConfig(ctx, *companyPath, companySecrets, sub, key, stderr)
+	if err != nil {
+		return err
+	}
 
 	if sub == "doctor" {
 		return doctorLLM(ctx, doctorEntries(company, keys, resolver), !*noSmoke, stdout)
@@ -163,11 +169,12 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 	case "list":
 		return listLLMProviders(ctx, providers, stdout, stderr)
 	case "login":
-		return loginLLM(ctx, environ, loginRequest{
+		return loginLLM(ctx, loginRequest{
 			providers: providers, key: key, home: *home,
 			fromHost: *fromHost, captureToken: *captureToken,
 			tokenStdin: *tokenStdin, username: *username, passwordStdin: *passwordStdin,
-			bootstrapPath: *bootstrapPath, apiURL: *apiURL, printToken: *printToken, stdin: os.Stdin,
+			companySecrets: companySecrets, companyPath: *companyPath,
+			printToken: *printToken, stdin: os.Stdin,
 		}, stdout, stderr)
 	case "status":
 		p, err := oneProvider(providers, key)
@@ -198,10 +205,9 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 		}
 		return logoutErr
 	case "export":
-		return exportLLM(ctx, environ, providers, key, *secretStore,
-			*bootstrapPath, *apiURL, stdout)
+		return exportLLM(ctx, providers, key, *secretStore, companySecrets, stdout)
 	case "import":
-		return importLLM(ctx, providers, key, os.Stdin, stdout)
+		return importLLM(ctx, providers, key, *companyPath, companySecrets, os.Stdin, stdout)
 	}
 	return nil
 }
@@ -209,6 +215,20 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 // llmCommands is every `crewlet llm` subcommand, checked before anything is
 // read: an unknown one reads nothing of the company, and reveals nothing.
 var llmCommands = []string{"list", "doctor", "login", "status", "logout", "export", "import"}
+
+// llmActsOnItsOwn is the subcommands that act on a login of their own rather
+// than on the one the company's store configures ([actsOnItsOwn]): `login`
+// writes a new one — and only its token capture writes a row — and `logout`
+// and `import` remove or restore one on this host and write no row. So they
+// run on a stopped node whose own rows are not the company's whole store.
+//
+// NOT list, status, export or doctor, which look as if they only read:
+// each restores the entry's configured bundle into an empty credentials
+// directory before it answers, as the engine does before it runs one, and the
+// engine then refuses to overwrite what they restored. Restoring from a
+// bundle one node's rows hold, or this shell exports, while the fleet holds
+// another, is an act on the fleet's login, so they are refused there.
+var llmActsOnItsOwn = []string{"login", "logout", "import"}
 
 // cliAgentProvider pairs a built provider with the key it was configured
 // under, in the order the company document wrote them.
@@ -221,36 +241,37 @@ type cliAgentProvider struct {
 // addresses ([llmEntries]), and the resolver their references go through.
 //
 // The SAME resolver the provisioning CLIs use — store first, then the
-// environment — because a token rotated into the secret store must win over a
-// stale `.env` exported into this shell months ago. A command that resolved
-// from the environment alone would report a provider as having no token while
-// the running engine used one. Beside a running engine it reads the company's
-// stored values through that engine ([companyResolver]), which is where they
-// are while it runs: these commands are made to run beside the seats, under
-// the lock beside the credentials directory that both take.
+// environment, read through the run's own route ([companyStore]) — because a
+// token rotated into the secret store must win over a stale `.env` exported
+// into this shell months ago. A command that resolved from the environment
+// alone would report a provider as having no token while the running engine
+// used one. Beside a running engine it reads the company's stored values
+// through that engine, which is where they are while it runs: these commands
+// are made to run beside the seats, under the lock beside the credentials
+// directory that both take. And the store a login or an export writes into
+// is the one this read went through.
 //
 // THE ADDRESSED ENTRIES ALONE are resolved, because beside a running engine
 // each stored value comes back through a reveal logged by name: `crewlet llm
 // login work` reveals what the `work` entry reads — its token, its key or
 // its bundle, and the ${VAR}s its model and env name — and none of another
 // entry's credentials.
-func loadLLMConfig(ctx context.Context, environ config.Source, companyPath, bootstrapPath,
-	apiURL, sub, key string, notes io.Writer) (*config.Company, []string, *config.Resolver, func(), error) {
+func loadLLMConfig(ctx context.Context, companyPath string, companySecrets *companyStore,
+	sub, key string, notes io.Writer) (*config.Company, []string, *config.Resolver, error) {
 
 	company, err := config.LoadCompanyToRun(companyPath, nil)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, err
 	}
 	keys, err := llmEntries(company, sub, key, companyPath)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, err
 	}
-	resolver, _, closeResolver, err := companyResolver(ctx, environ,
-		llmEntryReads(company, keys), bootstrapPath, apiURL, notes)
+	resolver, err := companySecrets.resolver(ctx, llmEntryReads(company, keys), notes)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, err
 	}
-	return company, keys, resolver, closeResolver, nil
+	return company, keys, resolver, nil
 }
 
 // llmEntries is the providers.llm entries a subcommand works on, in the
@@ -282,18 +303,19 @@ func llmEntries(company *config.Company, sub, key, companyPath string) ([]string
 // llmEntryReads is every stored value these entries read, each once, sorted:
 // building one resolves every ${VAR} it names, and the variables it signs in
 // from without naming them ([config.Company.LLMEntryReads]) — the names a
-// running node is asked to reveal, and a stopped one's note names
-// ([companyResolver]).
+// running node is asked to reveal, where it lists them
+// ([companyStore.resolver]).
 //
 // LESS ANY NAME NO STORE CAN HOLD. An overrides.token_env or api_key_env
 // outside the reference grammar — MY-TOKEN — is a variable the entry signs in
 // from, and one this command, which loads its file only to run, still meets:
 // every write of the document refuses it, but that is an admission rule. No
-// store can hold the name, so it is no stored value: a note naming it among
-// those the fleet may hold sent an operator to start the engine for a value
-// that cannot exist, and asking a node for it is a request the node refuses.
-// The engine reads it, if at all, from its own environment, which the
-// resolver still consults.
+// store can hold the name, so it is no stored value: the run's batch never
+// asks a node for it — the node refuses a whole request over one such name —
+// and the refusal a stopped node gives where its own table is not the whole
+// store names none of the command's values, this one included. The engine
+// reads it, if at all, from its own environment, which the resolver still
+// consults.
 func llmEntryReads(company *config.Company, keys []string) []string {
 	var names []string
 	for _, key := range keys {
@@ -513,15 +535,20 @@ type loginRequest struct {
 	tokenStdin    bool
 	username      string
 	passwordStdin bool
-	bootstrapPath string
-	apiURL        string
 	printToken    bool
+
+	// companySecrets is the run's store, which a captured token is written
+	// into: the one the entry's values were read through.
+	companySecrets *companyStore
+	// companyPath is the company document the entry was read from, which
+	// the doctor a broker login ends by naming reads too ([verifyWithDoctor]).
+	companyPath string
 	// stdin is what a token, a password or the vendor's own login prompts
 	// are read from — os.Stdin, and the suite's own reader in a test.
 	stdin io.Reader
 }
 
-func loginLLM(ctx context.Context, environ config.Source, req loginRequest, stdout, stderr io.Writer) error {
+func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) error {
 	p, err := oneProvider(req.providers, req.key)
 	if err != nil {
 		return err
@@ -634,14 +661,20 @@ func loginLLM(ctx context.Context, environ config.Source, req loginRequest, stdo
 					"Reference it as ${%s}.\n", tokenVar)
 			return nil
 		}
-		where, err := storeLLMSecret(ctx, environ, req.bootstrapPath, req.apiURL, tokenVar, token)
+		target, err := storeLLMSecret(ctx, req.companySecrets, tokenVar, token)
 		if err != nil {
 			return err
 		}
+		// WHEN A RUNNING FLEET READS IT, said with where it went: the
+		// engine resolves the token from the snapshot it builds at each
+		// apply, so a token written through a node signs nothing in until
+		// one ([secretTarget.writtenNote]). And that the name is the one
+		// the entry reads with no reference, since one is not needed.
 		fmt.Fprintf(stdout,
-			"Stored the headless token as %s in %s.\n"+
-				"Reference it from the company document as:\n\n%s",
-			tokenVar, where, authReference(key, "token", tokenVar))
+			"Stored the headless token as %s in %s.\n%s\n"+
+				"It is read under that name by convention; to name it in the "+
+				"company document instead:\n\n%s",
+			tokenVar, target.where, target.writtenNote(), authReference(key, "token", tokenVar))
 		return nil
 
 	case req.username != "":
@@ -668,7 +701,7 @@ func loginLLM(ctx context.Context, environ config.Source, req loginRequest, stdo
 			return err
 		}
 		fmt.Fprintf(stdout, "\nLogin written to %s.\n", p.Workspace().CredentialsDir())
-		fmt.Fprintf(stdout, "Verify it with `crewlet llm doctor %s`.\n", key)
+		fmt.Fprintln(stdout, verifyWithDoctor(req.companySecrets, req.companyPath, key))
 		return nil
 	}
 }
@@ -791,8 +824,8 @@ func refuseAPIKeyToken(p *cliagent.Provider, key string, sign cliagent.ModeSignI
 		key, tokenVar, sign.Reads, sign.Supply)
 }
 
-func exportLLM(ctx context.Context, environ config.Source, providers []cliAgentProvider,
-	key string, toStore bool, bootstrapPath, apiURL string, stdout io.Writer) error {
+func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, toStore bool,
+	companySecrets *companyStore, stdout io.Writer) error {
 	p, err := oneProvider(providers, key)
 	if err != nil {
 		return err
@@ -818,21 +851,25 @@ func exportLLM(ctx context.Context, environ config.Source, providers []cliAgentP
 		return nil
 	}
 	name := cliprofile.BundleVarName(key)
-	where, err := storeLLMSecret(ctx, environ, bootstrapPath, apiURL, name, bundle)
+	target, err := storeLLMSecret(ctx, companySecrets, name, bundle)
 	if err != nil {
 		return err
 	}
-	// EVERY NODE, not this one. The store's rows are the company's, on the
-	// coordination KV every node reads: a write through the running node
-	// reaches them at once, and a stopped node's own rows are migrated
-	// there at its next start — which is what `where` says. Each node
-	// restores the bundle at boot into a credentials directory that is
-	// still empty, so one export signs the whole fleet in.
+	// WHERE IT WENT AND WHEN IT IS READ, said as `crewlet secrets set` says
+	// them. The store is the FLEET's: a bundle written through a running
+	// node is on every node, so this is run once, not once per node — and a
+	// node restores it only when it BUILDS A COMPANY TO RUN, at its boot and
+	// at every apply (the engine's restoreBundles), never by watching its
+	// directory, so a running fleet reads it at its next apply. Written to a
+	// stopped node's own rows it reaches the fleet when that node next
+	// starts.
 	fmt.Fprintf(stdout,
-		"Stored the credential bundle as %s in %s.\n"+
-			"Every node restores it at boot when its own credentials directory\n"+
-			"is empty. Reference it as:\n\n%s",
-		name, where, authReference(key, "credential_bundle", name))
+		"Stored the credential bundle as %s in %s.\n%s\n"+
+			"A node restores it when it builds a company to run, at boot and at every\n"+
+			"apply, if this entry's credentials directory is empty and the entry was\n"+
+			"not logged out there since its last login. It is read under that name by\n"+
+			"convention; to name it in the company document instead:\n\n%s",
+		name, target.where, target.writtenNote(), authReference(key, "credential_bundle", name))
 	return nil
 }
 
@@ -843,25 +880,27 @@ func authReference(key, field, name string) string {
 		"          %s: \"${%s}\"\n", key, field, name)
 }
 
-// storeLLMSecret writes one value into the encrypted secret store, as
-// [secrets.SourceLLMLogin] where the store keeps the word — a stopped node's
-// own table — and as the running node's route records it otherwise. It
-// returns which store took the write, said after every write for the reason
-// [secretTarget.where] gives. An apiURL names the node it goes through, as
-// `crewlet secrets -api` does.
-func storeLLMSecret(ctx context.Context, environ config.Source, bootstrapPath, apiURL,
-	name, value string) (string, error) {
-
-	sv, closeStore, err := openSecretStore(ctx, environ, bootstrapPath, apiURL)
+// storeLLMSecret writes one value into the encrypted secret store the run read
+// its company's values from — the running node's, or a stopped node's own
+// table — as [secrets.SourceLLMLogin] where the store keeps the word, and
+// answers the store it went to, which says where that is, said after every
+// write for the reason [secretTarget.where] gives, and what the write has not
+// done yet ([secretTarget.writtenNote]).
+func storeLLMSecret(ctx context.Context, companySecrets *companyStore, name, value string) (*secretTarget, error) {
+	target, err := companySecrets.route(ctx)
 	if err != nil {
-		return "", fmt.Errorf("cannot reach the secret store to save %s: %w", name, err)
+		return nil, fmt.Errorf("cannot reach the secret store to save %s: %w", name, err)
 	}
-	defer closeStore()
-	if _, err := sv.Set(ctx, name, value, hostAuthor(), secrets.SourceLLMLogin,
+	if target == nil {
+		return nil, fmt.Errorf("cannot save %s: there is no Tier A file at %s naming "+
+			"this node's store and keyring. Point -config at it, or pass -api URL "+
+			"naming a running node", name, companySecrets.bootstrapPath)
+	}
+	if _, err := target.Set(ctx, name, value, hostAuthor(), secrets.SourceLLMLogin,
 		time.Now().UTC()); err != nil {
-		return "", fmt.Errorf("writing %s: %w", name, err)
+		return nil, fmt.Errorf("writing %s: %w", name, err)
 	}
-	return sv.where, nil
+	return target, nil
 }
 
 // importLLM restores an exported credential bundle onto this host.
@@ -886,7 +925,12 @@ func storeLLMSecret(ctx context.Context, environ config.Source, bootstrapPath, a
 // asked before stdin is read, so a refusal costs nothing, and answered again by
 // [cliagent.Provider.ImportBundle] under the lock its write takes, because a
 // login landing between the two was otherwise reported as a bundle restored.
-func importLLM(ctx context.Context, providers []cliAgentProvider, key string, stdin io.Reader, stdout io.Writer) error {
+//
+// companyPath is the company document the entry was read from and
+// companySecrets the run's store, which say how the doctor that checks the
+// restored login can be run ([verifyWithDoctor]).
+func importLLM(ctx context.Context, providers []cliAgentProvider, key, companyPath string,
+	companySecrets *companyStore, stdin io.Reader, stdout io.Writer) error {
 	p, err := oneProvider(providers, key)
 	if err != nil {
 		return err
@@ -936,9 +980,67 @@ func importLLM(ctx context.Context, providers []cliAgentProvider, key string, st
 	} else if err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "Restored %s into %s.\nVerify it with `crewlet llm doctor %s`.\n",
-		key, p.Workspace().CredentialsDir(), key)
+	fmt.Fprintf(stdout, "Restored %s into %s.\n%s\n",
+		key, p.Workspace().CredentialsDir(), verifyWithDoctor(companySecrets, companyPath, key))
 	return nil
+}
+
+// verifyWithDoctor is the line a broker login (one with none of -from-host,
+// -capture-token, -token-stdin and -username) or an import ends on: the doctor
+// that checks the login end to end, as it can be run from where the command
+// ran.
+//
+// WITH THE RUN'S OWN FLAGS ([doctorCommand]). The doctor reads the company
+// document and the store the run did, and a bare one reads the defaults: after
+// a login through -api it would route to this machine's Tier A, which may be a
+// stopped node that has run and refuses it, or another store altogether.
+//
+// NOT ALWAYS THE DOCTOR AS IT STANDS. It reads the company's stored values, so
+// it is refused on a stopped node whose own rows are not the company's whole
+// secret store ([stoppedNode]) — where a login and an import still run
+// ([actsOnItsOwn]), and where the command alone would send an operator
+// straight to that refusal. There the line names the running engine and the
+// token its reveal takes, or -api, as the refusal does, and -api alone where
+// Tier A gives the node no API. companySecrets is the run's store, routed, or
+// nil where there is none to ask, and companyPath the company document the
+// run read.
+func verifyWithDoctor(companySecrets *companyStore, companyPath, key string) string {
+	line := fmt.Sprintf("Verify it with `%s`", doctorCommand(companySecrets, companyPath, key))
+	var stopped *stoppedNodeError
+	if companySecrets != nil && companySecrets.target != nil {
+		stopped = companySecrets.target.stopped
+	}
+	switch {
+	case stopped == nil:
+		return line + "."
+	case stopped.noAPI != "":
+		return fmt.Sprintf("%s and -api URL naming a running node: the doctor reads the "+
+			"company's stored values, this stopped node's own rows are not the whole of "+
+			"them, and Tier A gives it no API to read them through — %s.", line, stopped.noAPI)
+	}
+	return fmt.Sprintf("%s once this node's engine is running (crewlet run -config %s) and "+
+		"%s holds one of %s's api.auth tokens, or with -api URL naming a running node: the "+
+		"doctor reads the company's stored values, and this stopped node's own rows are not "+
+		"the whole of them.", line, stopped.config, apiTokenEnv, stopped.config)
+}
+
+// doctorCommand is `crewlet llm doctor KEY` with each of -company, -config and
+// -api the run was given, where it is not the default: the flags that decide
+// which company document the doctor reads and which store it reads it through.
+func doctorCommand(companySecrets *companyStore, companyPath, key string) string {
+	args := []string{"crewlet", "llm", "doctor", key}
+	if companyPath != defaultCompanyPath {
+		args = append(args, "-company", companyPath)
+	}
+	if companySecrets != nil {
+		if companySecrets.bootstrapPath != defaultBootstrapPath {
+			args = append(args, "-config", companySecrets.bootstrapPath)
+		}
+		if companySecrets.apiURL != "" {
+			args = append(args, "-api", companySecrets.apiURL)
+		}
+	}
+	return strings.Join(args, " ")
 }
 
 // maxBundleBytes bounds what import will read.

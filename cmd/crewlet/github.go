@@ -33,7 +33,7 @@ import (
 // the company: the instance, the org token it registers hooks with and the
 // key they sign with (minted when it resolves empty), and each seat's own
 // credential, whose account it reports ([github.CredentialReads]) — the
-// names a running node is asked to reveal ([companyResolver]).
+// names a running node is asked to reveal ([companyStore.resolver]).
 func githubProvisionReads(cfg *config.GitHub, o *org.Organization) []string {
 	return unionReads(fieldReads(cfg.URL, cfg.Token, cfg.WebhookSecret), github.CredentialReads(o))
 }
@@ -60,7 +60,7 @@ func runGitHubProvision(environ config.Source, args []string, stdout, stderr io.
 		fmt.Fprintln(stderr,
 			"usage: crewlet github provision <company.yaml> "+
 				"[-secret-store|-env-file PATH|-print] [-public-url URL] "+
-				"[-recreate-webhooks] [-dry-run]")
+				"[-recreate-webhooks] [-dry-run] [-config PATH] [-api URL]")
 		return errors.New("name exactly one company document")
 	}
 
@@ -79,14 +79,30 @@ func runGitHubProvision(environ config.Source, args []string, stdout, stderr io.
 		return err
 	}
 
+	// RESOLVED BEFORE ANYTHING IS PRINTED, a -dry-run's included: a dry
+	// run reads the instance with the org token and reports the webhook
+	// secret it would register, so it reads the store as a real run does
+	// and is refused where a real run would be. Its webhook secret's
+	// whole ${VAR}, which a real run's sink reads back before it mints,
+	// is in the reads already. A real run's sink is chosen before that, for
+	// the reason GitLab's command gives.
+	if !*dryRun {
+		if err = sinks.check(); err != nil {
+			return err
+		}
+	}
 	ctx := context.Background()
-	env, boot, closeEnv, err := companyResolver(ctx, environ,
-		githubProvisionReads(cfg, organization), *sinks.bootstrap,
-		*sinks.api, stdout)
+	companySecrets, err := openCompanyStore(environ, sinks.store,
+		"crewlet github provision", readsTheCompany)
 	if err != nil {
 		return err
 	}
-	defer closeEnv()
+	defer companySecrets.Close()
+	env, err := companySecrets.resolver(ctx, githubProvisionReads(cfg, organization), stdout)
+	if err != nil {
+		return err
+	}
+	boot := companySecrets.boot
 
 	resolved := *cfg
 	resolved.URL = strings.TrimSpace(env.Value(cfg.URL))
@@ -126,11 +142,10 @@ func runGitHubProvision(environ config.Source, args []string, stdout, stderr io.
 	} else {
 		opts.WebhookBase = webhookBase(*publicURL, boot)
 		opts.WebhookBaseKey = webhookBaseKey(boot)
-		sink, closeSink, openErr := sinks.open(ctx, environ, stdout)
+		sink, openErr := sinks.open(ctx, companySecrets, stdout)
 		if openErr != nil {
 			return openErr
 		}
-		defer closeSink()
 		opts.Sink = sink
 	}
 

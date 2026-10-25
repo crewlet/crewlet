@@ -3,15 +3,18 @@ package main
 import (
 	"bytes"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 )
 
@@ -56,7 +59,8 @@ func TestALoginBundleRoundTripsThroughTheCLI(t *testing.T) {
 
 	target := bundleProvider(t)
 	var out bytes.Buffer
-	if err := importLLM(t.Context(), target, "sub", strings.NewReader(blob+"\n"), &out); err != nil {
+	if err := importLLM(t.Context(), target, "sub", defaultCompanyPath, nil,
+		strings.NewReader(blob+"\n"), &out); err != nil {
 		t.Fatalf("importLLM: %v", err)
 	}
 	restored, err := os.ReadFile(
@@ -67,8 +71,9 @@ func TestALoginBundleRoundTripsThroughTheCLI(t *testing.T) {
 	if string(restored) != `{"token":"moved"}` {
 		t.Errorf("restored %q", restored)
 	}
-	if !strings.Contains(out.String(), "doctor sub") {
-		t.Errorf("the run does not say how to verify it: %s", out.String())
+	if !strings.Contains(out.String(), "Verify it with `crewlet llm doctor sub`.") {
+		t.Errorf("the run does not say how to verify it, with no flag it was not given: %s",
+			out.String())
 	}
 }
 
@@ -86,7 +91,7 @@ func TestImportingOverAnExistingLoginIsRefusedLoudly(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	err := importLLM(t.Context(), target, "sub", strings.NewReader("anything"), &out)
+	err := importLLM(t.Context(), target, "sub", defaultCompanyPath, nil, strings.NewReader("anything"), &out)
 	if err == nil {
 		t.Fatal("a bundle was restored over a live login")
 	}
@@ -105,7 +110,8 @@ func TestImportingOverAnExistingLoginIsRefusedLoudly(t *testing.T) {
 func TestImportingNothingSaysHowToPipeABundle(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
-	err := importLLM(t.Context(), bundleProvider(t), "sub", strings.NewReader("   \n"), &out)
+	err := importLLM(t.Context(), bundleProvider(t), "sub", defaultCompanyPath, nil,
+		strings.NewReader("   \n"), &out)
 	if err == nil {
 		t.Fatal("an empty stdin imported")
 	}
@@ -364,11 +370,12 @@ func TestATokenIsStoredOnlyWhereTheEntrysAuthModeReadsIt(t *testing.T) {
 			t.Parallel()
 			cfg := bootstrapWithKeyring(t, "k1")
 			req := tc.req
-			req.providers, req.key, req.bootstrapPath = tokenLoginProvider(t, tc.mode), "claude", cfg
+			req.providers, req.key = tokenLoginProvider(t, tc.mode), "claude"
+			req.companySecrets = llmStoreAt(t, noEnviron, "login", "-config", cfg)
 			stdin := strings.NewReader(tc.stdin)
 			req.stdin = stdin
 			var out, errOut bytes.Buffer
-			err := loginLLM(t.Context(), noEnviron, req, &out, &errOut)
+			err := loginLLM(t.Context(), req, &out, &errOut)
 
 			switch {
 			case len(tc.refused) > 0 && err == nil:
@@ -422,13 +429,18 @@ func TestATokenIsStoredOnlyWhereTheEntrysAuthModeReadsIt(t *testing.T) {
 // script leaves a marker and the token's stdin records a read, so either is
 // seen whatever became of the token. -from-host no longer recommends
 // -capture-token for such an entry, since that is the refusal, and `llm
-// doctor` names the field (which routes it then offers is cliagent's suite).
-// And no run names ${MY-TOKEN} among the values a stopped node cannot read: no
-// store can hold it, so there is nothing for the fleet to hold.
+// doctor` names the field (which routes it then offers is cliagent's suite)
+// and exits non-zero. And no store can hold the name, so no run treats it as a
+// stored value: through a running node the run's batch never asks for it — the
+// node refuses a whole request over one such name, which would fail the doctor
+// on a value that cannot exist — and the refusal a stopped node that has run
+// gives never names it.
 //
 // Mutation: move the check after the mint, and the marker appears and stdin
 // is read; drop it, and every case is accepted or fails at the store instead;
-// stop leaving such a name out of the command's reads, and stderr names it.
+// stop leaving such a name out of the command's reads, and they name it; send
+// it to a node that lists it — a stand-in, since no store can hold one — and
+// the node refuses the doctor's read, which fails on it instead of the field.
 func TestATokenVariableNoStoreCanHoldMintsNothing(t *testing.T) {
 	t.Parallel()
 	company := func(t *testing.T, marker string) string {
@@ -471,8 +483,8 @@ roles:
 				t.Errorf("a token was written:\n%s%s", out.String(), errOut.String())
 			}
 		}
-		if strings.Contains(errOut.String(), "${MY-TOKEN}") {
-			t.Errorf("stderr names ${MY-TOKEN} as a value the fleet may hold:\n%s", errOut.String())
+		if strings.Contains(errOut.String(), "MY-TOKEN") {
+			t.Errorf("the run's notes name MY-TOKEN as a stored value:\n%s", errOut.String())
 		}
 	}
 
@@ -503,22 +515,21 @@ roles:
 	for _, printToken := range []bool{false, true} {
 		t.Run(fmt.Sprintf("-token-stdin, -print-token=%v", printToken), func(t *testing.T) {
 			t.Parallel()
-			cfg := bootstrapWithKeyring(t, "k1")
+			store := llmStoreAt(t, noEnviron, "login", "-config", bootstrapWithKeyring(t, "k1"))
 			var out, errOut bytes.Buffer
-			doc, keys, resolver, closeResolver, err := loadLLMConfig(t.Context(), noEnviron,
-				company(t, filepath.Join(t.TempDir(), "minted")), cfg, "", "login", "claude", &errOut)
+			doc, keys, resolver, err := loadLLMConfig(t.Context(),
+				company(t, filepath.Join(t.TempDir(), "minted")), store, "login", "claude", &errOut)
 			if err != nil {
 				t.Fatalf("loadLLMConfig: %v", err)
 			}
-			defer closeResolver()
 			providers, err := cliAgents(doc, keys, resolver)
 			if err != nil {
 				t.Fatalf("cliAgents: %v", err)
 			}
 			stdin := &recordedReader{r: strings.NewReader("sk-ant-oat01-PASTED\n")}
-			err = loginLLM(t.Context(), noEnviron, loginRequest{
+			err = loginLLM(t.Context(), loginRequest{
 				providers: providers, key: "claude", tokenStdin: true, printToken: printToken,
-				bootstrapPath: cfg, stdin: stdin,
+				companySecrets: store, stdin: stdin,
 			}, &out, &errOut)
 			refused(t, err, &out, &errOut)
 			if stdin.read {
@@ -539,8 +550,59 @@ roles:
 		if !strings.Contains(out.String(), `providers.llm.claude.overrides.token_env is "MY-TOKEN"`) {
 			t.Errorf("the report does not name the field:\n%s", out.String())
 		}
-		if strings.Contains(errOut.String(), "${MY-TOKEN}") {
-			t.Errorf("stderr names ${MY-TOKEN} as a value the fleet may hold:\n%s", errOut.String())
+		if strings.Contains(errOut.String(), "MY-TOKEN") {
+			t.Errorf("the run's notes name MY-TOKEN as a stored value:\n%s", errOut.String())
+		}
+	})
+
+	t.Run("the command's reads leave the name out", func(t *testing.T) {
+		t.Parallel()
+		doc, err := config.LoadCompanyToRun(company(t, filepath.Join(t.TempDir(), "minted")), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if reads := llmEntryReads(doc, []string{"claude"}); slices.Contains(reads, "MY-TOKEN") {
+			t.Errorf("llm reads %v, a name no store can hold among them", reads)
+		}
+	})
+
+	t.Run("llm doctor through a running node asks it for no such name", func(t *testing.T) {
+		t.Parallel()
+		// A STAND-IN THAT LISTS THE NAME, which no store can: the node's own
+		// listing filter would otherwise keep it out of the batch, and this
+		// case is about the command's.
+		node := newRevealNode(t, map[string]string{"MY-TOKEN": "sk-ant-oat01-HELD"})
+		var out, errOut bytes.Buffer
+		err := runLLM(tokenEnviron(cliFixtureToken), []string{"doctor", "claude", "-no-smoke",
+			"-company", company(t, filepath.Join(t.TempDir(), "minted")),
+			"-config", filepath.Join(t.TempDir(), "absent.yaml"), "-api", node.server.URL},
+			&out, &errOut)
+		if err == nil || !strings.Contains(err.Error(), "1 of 1 providers have problems") {
+			t.Fatalf("the doctor = %v, want the entry's problem and a non-zero exit\n%s%s",
+				err, out.String(), errOut.String())
+		}
+		if !strings.Contains(out.String(), `providers.llm.claude.overrides.token_env is "MY-TOKEN"`) {
+			t.Errorf("the report does not name the field:\n%s", out.String())
+		}
+		if slices.Contains(node.reveals(), "MY-TOKEN") {
+			t.Errorf("the node was asked for MY-TOKEN: %v", node.reveals())
+		}
+	})
+
+	t.Run("a stopped node that has run refuses the doctor naming no such name", func(t *testing.T) {
+		t.Parallel()
+		cfg := bootstrapWithKeyring(t, "k1")
+		markBrokerRun(t, cfg)
+		var out, errOut bytes.Buffer
+		err := runLLM(noEnviron, []string{"doctor", "claude", "-no-smoke",
+			"-company", company(t, filepath.Join(t.TempDir(), "minted")), "-config", cfg},
+			&out, &errOut)
+		if !errors.Is(err, errStoppedNode) {
+			t.Fatalf("the doctor on a stopped node that has run = %v, want the refusal", err)
+		}
+		if strings.Contains(err.Error()+out.String()+errOut.String(), "MY-TOKEN") {
+			t.Errorf("the refusal names MY-TOKEN as a stored value: %v\n%s%s",
+				err, out.String(), errOut.String())
 		}
 	})
 
@@ -609,11 +671,11 @@ func TestATokenForACLIThatTakesNoneIsNeitherMintedNorRead(t *testing.T) {
 			}
 			req := tc.req
 			req.providers, req.key = []cliAgentProvider{{key: "codex", provider: p}}, "codex"
-			req.bootstrapPath = bootstrapWithKeyring(t, "k1")
+			req.companySecrets = llmStoreAt(t, noEnviron, "login", "-config", bootstrapWithKeyring(t, "k1"))
 			stdin := &recordedReader{r: strings.NewReader("sk-PASTED\n")}
 			req.stdin = stdin
 			var out, errOut bytes.Buffer
-			err = loginLLM(t.Context(), noEnviron, req, &out, &errOut)
+			err = loginLLM(t.Context(), req, &out, &errOut)
 			if err == nil {
 				t.Fatalf("a token for a CLI that takes none was accepted:\n%s%s",
 					out.String(), errOut.String())
@@ -712,11 +774,11 @@ func TestAnAPIKeyEntryIsToldItsKeyBeforeItsTokenVariable(t *testing.T) {
 				}
 				req := flag.req
 				req.providers, req.key = []cliAgentProvider{{key: "sub", provider: p}}, "sub"
-				req.bootstrapPath = bootstrapWithKeyring(t, "k1")
+				req.companySecrets = llmStoreAt(t, noEnviron, "login", "-config", bootstrapWithKeyring(t, "k1"))
 				stdin := &recordedReader{r: strings.NewReader("sk-PASTED\n")}
 				req.stdin = stdin
 				var out, errOut bytes.Buffer
-				err = loginLLM(t.Context(), noEnviron, req, &out, &errOut)
+				err = loginLLM(t.Context(), req, &out, &errOut)
 				if err == nil {
 					t.Fatalf("a token the entry never reads was accepted:\n%s%s", out.String(), errOut.String())
 				}
@@ -802,7 +864,7 @@ func TestAdoptingAHostLoginRecommendsATokenOnlyWhereOneIsRead(t *testing.T) {
 				t.Fatal(err)
 			}
 			var out, errOut bytes.Buffer
-			err := loginLLM(t.Context(), noEnviron, loginRequest{
+			err := loginLLM(t.Context(), loginRequest{
 				providers: providers, key: "claude", home: home,
 				fromHost: true, stdin: strings.NewReader(""),
 			}, &out, &errOut)
@@ -815,6 +877,120 @@ func TestAdoptingAHostLoginRecommendsATokenOnlyWhereOneIsRead(t *testing.T) {
 			if got := strings.Contains(out.String(), "-capture-token"); got != tc.prefer {
 				t.Errorf("recommends -capture-token = %v, want %v:\n%s", got, tc.prefer, out.String())
 			}
+		})
+	}
+}
+
+// llmStoreAt is the store a `crewlet llm SUB` run routes to under the store
+// flags given, as [runLLM] opens it. With no -config among them the run has no
+// Tier A file, and goes through -api alone.
+func llmStoreAt(t *testing.T, environ config.Source, sub string, flags ...string) *companyStore {
+	t.Helper()
+	fs := flag.NewFlagSet("llm "+sub, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	at := addStoreFlags(fs)
+	if err := fs.Parse(flags); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(flags, "-config") {
+		*at.bootstrap = filepath.Join(t.TempDir(), "absent.yaml")
+	}
+	use := readsTheCompany
+	if slices.Contains(llmActsOnItsOwn, sub) {
+		use = actsOnItsOwn
+	}
+	store, err := openCompanyStore(environ, at, "crewlet llm "+sub, use)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	return store
+}
+
+// AN LLM WRITE SAYS WHERE IT WENT AND WHEN A RUNNING ENGINE READS IT, as
+// `crewlet secrets set` says both. The engine resolves a token from the
+// snapshot it builds at each apply, and restores a bundle only when it builds
+// a company to run — at boot and at every apply — so a write through a running
+// node signs nothing in until the next apply, and one to a stopped node's own
+// rows reaches the fleet at that node's next start. A login or an export that
+// said only where the value went read as finished while the fleet went on
+// without it. The token is also said to be read under its conventional name,
+// so the company document needs no reference to it.
+//
+// Mutation: print the old line, and every case misses its note.
+func TestAnLLMWriteSaysWhenARunningEngineReadsIt(t *testing.T) {
+	t.Parallel()
+	for _, route := range []struct {
+		name string
+		// open is the run's store on this route for a subcommand, and held
+		// answers what it then holds under a name.
+		open func(t *testing.T, sub string) (*companyStore, func(name string) bool)
+		note string
+	}{
+		{"through a running node, with no Tier A here", func(t *testing.T, sub string) (*companyStore, func(string) bool) {
+			node := newRevealNode(t, nil)
+			return llmStoreAt(t, tokenEnviron(cliFixtureToken), sub, "-api", node.server.URL),
+				func(name string) bool { _, ok := node.holds(name); return ok }
+		}, secretsFleetNote},
+		{"this node's own rows", func(t *testing.T, sub string) (*companyStore, func(string) bool) {
+			cfg := bootstrapWithKeyring(t, "k1")
+			return llmStoreAt(t, noEnviron, sub, "-config", cfg), func(name string) bool {
+				_, ok := rowsOf(t, cfg)[name]
+				return ok
+			}
+		}, secretsLocalNote},
+	} {
+		t.Run(route.name, func(t *testing.T) {
+			t.Parallel()
+			t.Run("login -capture-token", func(t *testing.T) {
+				t.Parallel()
+				store, held := route.open(t, "login")
+				var stdout, stderr bytes.Buffer
+				err := loginLLM(t.Context(), loginRequest{
+					providers: tokenLoginProvider(t, cliagent.AuthSubscription), key: "claude",
+					captureToken: true, companySecrets: store, stdin: strings.NewReader(""),
+				}, &stdout, &stderr)
+				if err != nil {
+					t.Fatalf("login: %v\n%s", err, stderr.String())
+				}
+				if !held("CLAUDE_CODE_OAUTH_TOKEN") {
+					t.Fatal("the token was not written to the run's store")
+				}
+				for _, want := range []string{route.note, "read under that name by convention",
+					`token: "${CLAUDE_CODE_OAUTH_TOKEN}"`} {
+					if !strings.Contains(stdout.String(), want) {
+						t.Errorf("the write does not say %q:\n%s", want, stdout.String())
+					}
+				}
+			})
+			t.Run("export -secret-store", func(t *testing.T) {
+				t.Parallel()
+				store, held := route.open(t, "export")
+				providers := bundleProvider(t)
+				creds := filepath.Join(providers[0].provider.Workspace().CredentialsDir(),
+					"creds.json")
+				if err := os.MkdirAll(filepath.Dir(creds), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(creds, []byte(`{"token":"t"}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				var stdout bytes.Buffer
+				if err := exportLLM(t.Context(), providers, "sub", true, store, &stdout); err != nil {
+					t.Fatalf("export: %v", err)
+				}
+				if !held("CREWLET_LLM_CLI_SUB_CREDENTIALS") {
+					t.Fatal("the bundle was not written to the run's store")
+				}
+				out := stdout.String()
+				for _, want := range []string{route.note,
+					"A node restores it when it builds a company to run, at boot and at every\napply",
+					"read under that name by\nconvention"} {
+					if !strings.Contains(out, want) {
+						t.Errorf("the export does not say %q:\n%s", want, out)
+					}
+				}
+			})
 		})
 	}
 }

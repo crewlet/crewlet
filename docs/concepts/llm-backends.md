@@ -1940,11 +1940,15 @@ it in place, so a seat starting its generation never reads half of one.
 crewlet llm login default -capture-token
 ```
 
-Runs the vendor's token-minting command (`claude setup-token`) and puts
-the result in the [encrypted secret store](secret-store.md) under the
-profile's token variable — `CLAUDE_CODE_OAUTH_TOKEN` for Claude Code, the
-one built-in profile whose CLI mints one. **Prefer this whenever the CLI offers
-it:** no credential files to sync, no refresh-token rotation, and it survives an
+Runs the vendor's token-minting command (`claude setup-token`) and puts the
+result in the [encrypted secret store](secret-store.md) under the profile's
+token variable — `CLAUDE_CODE_OAUTH_TOKEN` for Claude Code, the one built-in
+profile whose CLI mints one. Beside a running engine it is stored through that
+engine, and a running fleet reads it at its next configuration apply, which the
+command says, naming `POST /config/reload`; on a stopped node it lands in that
+node's own table and reaches the fleet at the node's next start, unless the
+fleet holds a value written later. **Prefer this whenever the CLI offers it:**
+no credential files to sync, no refresh-token rotation, and it survives an
 ephemeral container with no persistent volume.
 
 Minting is *interactive* — the CLI opens the same browser sign-in as
@@ -1989,8 +1993,8 @@ puts its key in no variable, and to set `auth.mode: subscription` and sign the
 CLI in with a login. Nothing offers either command for such an entry — not
 `-from-host`'s closing advice, `doctor`, the `-username` refusal, `logout`'s
 notice or a [remote coding run's refusal](code-sandbox.md#failure-modes) — and
-the variable is never among those a stopped node's note says the fleet may
-hold.
+the variable is never asked of a running node, nor named in the refusal a
+stopped node gives where its own rows are not the company's whole store.
 
 ### 3. Username / password, where the CLI genuinely has one
 
@@ -2069,8 +2073,14 @@ about the login the engine would run with; `login`, `logout` and `import` do
 not, since each replaces or removes that login. `crewlet validate` never does:
 checking a document writes nothing onto the host.
 The [secret store](secret-store.md) is the fleet's, so every node of the company
-reads the same bundle (one written while the engine is stopped lands in that
-node's own table and reaches the fleet at its next start), and each restores it
+reads the same bundle, and a running fleet reads one written through a node at
+its next apply — the command says so. With the engine stopped, `export` runs
+only on a single node before its first start, where it lands in that node's own
+table and reaches the fleet at that start: like `list`, `status` and `doctor`,
+it restores the configured bundle before it reads the login, so on any other
+stopped node it is refused, naming the running engine and `-api` ([CLI
+reference](../reference/cli.md#where-a-command-reads-the-companys-values)).
+Each node restores the bundle
 into its own empty directory: `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` by convention,
 or whatever variable the entry's `auth.credential_bundle` names. Each node then
 holds its own copy of one refresh token, so where the vendor rotates refresh
@@ -2647,25 +2657,33 @@ a headless token, an API key under `api-key`, a token or key forwarded under
 `inherit-env`, and a [credential-named](#6-a-provider-key-in-env-opencode-hermes-pi)
 variable in `env` on a CLI that reads its key from its environment.
 
-`${VAR}` references and the conventional variables an entry falls back to
-are resolved in the process running `crewlet llm` — the secret store first,
-then *that shell's* environment — and the variables `inherit-env` forwards
-come from that shell's environment alone, as the engine forwards its own and
-never the store's; so run it with the engine's environment to get the
-engine's answer. Beside a
-running engine the store is the fleet's and is read through the engine's API,
-so every `crewlet llm` command runs while the seats do. It reveals only what
-the entries it works on read — `login`, `status`, `logout`, `export`,
-`import` and a `doctor` that names a key resolve and build that one entry,
-and `list` and a bare `doctor` every entry — so signing in `plan` reveals
-`plan`'s token, key or bundle and the `${VAR}`s its model and `env` name,
-and no other entry's credentials, not even an entry keyed `plan.fast`, nor
-any vendor's. Each reveal is logged by
-name on the node and takes `admin` and a person present, so
-`CREWLET_API_TOKEN` holds one of Tier A's tokens for it
-([CLI reference](../reference/cli.md#commands)). A `seats` node holds no
-data, so there `-api URL` names a node that does, which the values are read
-through and a captured token is stored in.
+`${VAR}` references and the conventional variables an entry falls back to are
+resolved in the process running `crewlet llm` — the secret store first, then
+*that shell's* environment — and the variables `inherit-env` forwards come from
+that shell's environment alone, as the engine forwards its own and never the
+store's; so run it with the engine's environment to get the engine's answer.
+Beside a running engine the store is the fleet's and is read through the
+engine's API, so every `crewlet llm` command runs while the seats do. It
+reveals only what the entries it works on read — `login`, `status`, `logout`,
+`export`, `import` and a `doctor` that names a key resolve and build that one
+entry, and `list` and a bare `doctor` every entry — so signing in `plan`
+reveals `plan`'s token, key or bundle and the `${VAR}`s its model and `env`
+name, and no other entry's credentials, not even an entry keyed `plan.fast`,
+nor any vendor's: it lists the node's names, then asks for those the node holds,
+at most 64 to a request. Each name asked is logged on the node, and a reveal takes `admin`
+and a person present, so `CREWLET_API_TOKEN` holds one of Tier A's tokens for
+it ([CLI
+reference](../reference/cli.md#where-a-command-reads-the-companys-values)).
+With the engine stopped, `list`, `status`, `export` and `doctor` read this
+node's own rows only on a single node before its first start, when those are
+the company's whole store; on any other stopped node — once it has run, on a
+cluster member, on an external broker's client — they are refused, naming the
+running engine and `-api`, because each restores the configured bundle before
+it answers, and restoring the one a node's leftover rows or this shell hold
+while the fleet holds another is an act on the fleet's login. `login`, `logout`
+and `import` run there. A `seats` node holds no data, so there `-api URL` names
+a node that does, which the values are read through and a captured token is
+stored in.
 
 When none of those authenticates the CLI, `doctor` reports "no sign-in" as a
 problem, naming first a route you configured whose `${VAR}` resolved to

@@ -22,10 +22,11 @@ import (
 // SecretStore is the encrypted store a minted credential is recorded in.
 //
 // AN INTERFACE, because there are two: the fleet's, on the coordination KV,
-// which every node reads; and this node's own table, which is what a
-// provisioning run can reach while the engine is stopped. Naming either
-// concretely here would have made a provisioner that works on a stopped node
-// and a provisioner that works on a running fleet two different sinks.
+// which every node reads; and this node's own table, which a provisioning run
+// reaches while the engine is stopped on a single node that has never started,
+// where those rows are the company's whole store. Naming either concretely
+// here would have made a provisioner that works on a stopped node and a
+// provisioner that works on a running fleet two different sinks.
 type SecretStore interface {
 	Set(ctx context.Context, name, value string, by secrets.Author,
 		source secrets.Source, now time.Time) error

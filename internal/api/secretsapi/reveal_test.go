@@ -25,12 +25,13 @@ func revealBody(t *testing.T, names ...string) string {
 // SEVERAL VALUES ARE REVEALED IN ONE ANSWER, and exactly the ones asked.
 //
 // It is how a CLI run resolving a company document through a running node is
-// handed every value that document reads: `values` for the names held and
-// `missing` for the names nothing holds — a name nothing holds is absent from
-// `values`, never present and empty, because an empty value is a value and a
-// reader that took it for one would stop resolving the name from anywhere
-// else — and a name nobody asked for is not in the answer at all. And the
-// answer is a credential, so it is never cacheable.
+// handed the variables its command reads that the node lists, a batch at a
+// time and exactly those: `values` for the names held and `missing` for the
+// names nothing holds — a name nothing holds is absent from `values`, never
+// present and empty, because an empty value is a value and a reader that took
+// it for one would stop resolving the name from anywhere else — and a name
+// nobody asked for is not in the answer at all. And the answer is a
+// credential, so it is never cacheable.
 func TestSeveralValuesAreRevealedInOneAnswer(t *testing.T) {
 	t.Parallel()
 	h, _ := surface(t, cipherFor(t, "k1"), "k1")

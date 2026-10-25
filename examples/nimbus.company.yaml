@@ -95,9 +95,16 @@ providers:
     #
     # PREREQUISITE: the `opencode` binary (OpenCode 2, the @opencode/cli
     # package) on the machine running `crewlet run`.  Check the whole entry
-    # end to end before the first turn with
+    # end to end before the first turn with the command below, once the
+    # variables examples/nimbus.config.yaml's header exports are set (the
+    # doctor loads that file):
     #   crewlet llm doctor default -company examples/nimbus.company.yaml \
     #                              -config  examples/nimbus.config.yaml
+    # Before the node's first start its own rows are the company's whole
+    # secret store, and the doctor reads them.  Once the engine has run, run
+    # it beside the running engine with CREWLET_API_TOKEN set to
+    # $CREWLET_API_TOKEN_FOUNDER: the company's values are then on a store
+    # only a running engine serves, and a stopped node refuses the doctor.
     # See docs/concepts/llm-backends.md.
     default:
       agent: opencode
@@ -465,7 +472,16 @@ integrations:
   # anywhere:
   #
   #   scripts/mattermost-dev-bootstrap.sh          # server, admin, team
-  #   crewlet mattermost provision examples/nimbus.company.yaml
+  #   set -a; . ./.env; set +a                     # the URL + admin token it wrote
+  #   crewlet mattermost provision examples/nimbus.company.yaml \
+  #       -env-file .env -config examples/nimbus.config.yaml
+  #
+  # The provision loads examples/nimbus.config.yaml, so export the keyring
+  # and the founder token its header names first.  Before the node's first
+  # start its own rows are the company's whole secret store, and the
+  # provision reads them; once the engine has run, run it beside the
+  # running engine with CREWLET_API_TOKEN set to $CREWLET_API_TOKEN_FOUNDER,
+  # or it is refused.
   #
   # See docs/integrations/mattermost.md.
   #

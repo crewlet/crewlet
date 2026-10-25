@@ -33,7 +33,7 @@ import (
 // company: the instance, the org account it reads it with, the key the hook
 // signs with (minted when it resolves empty), and each seat's own Jira
 // credential, whose account it reports ([jira.SeatCredentialReads]) — the
-// names a running node is asked to reveal ([companyResolver]).
+// names a running node is asked to reveal ([companyStore.resolver]).
 func jiraProvisionReads(cfg *config.Jira, o *org.Organization) []string {
 	return unionReads(
 		fieldReads(cfg.URL, cfg.CloudID, cfg.SiteURL, cfg.Email, cfg.Token, cfg.WebhookSecret),
@@ -62,7 +62,7 @@ func runJiraProvision(environ config.Source, args []string, stdout, stderr io.Wr
 		fmt.Fprintln(stderr,
 			"usage: crewlet jira provision <company.yaml> "+
 				"[-secret-store|-env-file PATH|-print] [-public-url URL] "+
-				"[-recreate-webhook] [-dry-run]")
+				"[-recreate-webhook] [-dry-run] [-config PATH] [-api URL]")
 		return errors.New("name exactly one company document")
 	}
 
@@ -81,14 +81,30 @@ func runJiraProvision(environ config.Source, args []string, stdout, stderr io.Wr
 		return err
 	}
 
+	// RESOLVED BEFORE ANYTHING IS PRINTED, a -dry-run's included: a dry
+	// run reads the instance with the org token and reports the webhook
+	// secret it would register, so it reads the store as a real run does
+	// and is refused where a real run would be. Its webhook secret's
+	// whole ${VAR}, which a real run's sink reads back before it mints,
+	// is in the reads already. A real run's sink is chosen before that, for
+	// the reason GitLab's command gives.
+	if !*dryRun {
+		if err = sinks.check(); err != nil {
+			return err
+		}
+	}
 	ctx := context.Background()
-	env, boot, closeEnv, err := companyResolver(ctx, environ,
-		jiraProvisionReads(cfg, organization), *sinks.bootstrap,
-		*sinks.api, stdout)
+	companySecrets, err := openCompanyStore(environ, sinks.store,
+		"crewlet jira provision", readsTheCompany)
 	if err != nil {
 		return err
 	}
-	defer closeEnv()
+	defer companySecrets.Close()
+	env, err := companySecrets.resolver(ctx, jiraProvisionReads(cfg, organization), stdout)
+	if err != nil {
+		return err
+	}
+	boot := companySecrets.boot
 
 	base := cfg.ResolvedBaseURL(env.Value)
 	if base == "" {
@@ -125,11 +141,10 @@ func runJiraProvision(environ config.Source, args []string, stdout, stderr io.Wr
 	} else {
 		opts.WebhookBase = webhookBase(*publicURL, boot)
 		opts.WebhookBaseKey = webhookBaseKey(boot)
-		sink, closeSink, openErr := sinks.open(ctx, environ, stdout)
+		sink, openErr := sinks.open(ctx, companySecrets, stdout)
 		if openErr != nil {
 			return openErr
 		}
-		defer closeSink()
 		opts.Sink = sink
 	}
 
