@@ -97,22 +97,70 @@ type orgCharger interface {
 	PostChargeOrg(ctx context.Context, tokens int, windows coord.Windows) (coord.Usage, error)
 }
 
-// Meter is a meter on the COMPANY's windows, the scope a person's spend is
-// judged by (a person has no seat budget: see [coord.Budgets.PostChargeOrg]),
-// pinned to the company's ceilings and clock as the turn starts, and having
-// read the counter once, so a window already full refuses the turn before its
-// first round is sent. Nil on a node with no coordination store to count on.
+// Meter is a meter on the COMPANY's windows and, where the company caps a
+// person (`assistant.token_budget`), on that PERSON's own
+// ([coord.PersonScope]), pinned to the ceilings and clock as the turn starts,
+// and having read the counter once, so a window already full, the company's
+// or the person's, refuses the turn before its first round is sent. Nil on a
+// node with no coordination store to count on.
 //
-// `assistant.token_budget`, a person's own ceiling, is a scope of the fleet's
-// counter of its own (internal/coord): this meter judges the company's windows
-// alone.
-func (b assistantBudget) Meter(ctx context.Context, _ iam.Principal) (toolloop.BudgetMeter, error) {
+// A CAPPED PERSON IS A SEAT'S METER on the person's scope: every round is
+// charged to the company and the person in one judged charge, the company
+// first, exactly as a seat's round is (one implementation of the gate, not a
+// second one for people). An uncapped person is charged to the company alone
+// ([companyMeter]), so the listing holds no row no ceiling can judge.
+func (b assistantBudget) Meter(ctx context.Context, person iam.Principal) (toolloop.BudgetMeter, error) {
 	if b.e.backends == nil || b.e.backends.Fleet == nil {
 		return nil, nil
 	}
-	m := &meter{budgets: b.e.budgets(), basis: basisOf(b.e.Company(), nil), now: b.e.now}
+	c := b.e.Company()
+	m := &meter{budgets: b.e.budgets(), basis: basisOf(c, nil), now: b.e.now}
+	if caps := personCaps(c); len(caps) > 0 {
+		m.agentScope, m.basis.seat = coord.PersonScope(person.ID), caps
+		m.observe(ctx)
+		return personMeter{meter: m}, nil
+	}
 	m.observe(ctx)
 	return companyMeter{meter: m, org: b.e.backends.Fleet}, nil
+}
+
+// personCaps is the ceilings a company sets each person's assistant spend to,
+// empty where it sets none.
+func personCaps(c *Company) coord.Caps {
+	if c == nil || c.Config == nil {
+		return nil
+	}
+	return coord.Caps(c.Config.Assistant.TokenBudget.Ceilings())
+}
+
+// personMeter is a [meter] whose seat scope is a person's: what it answers
+// names that scope [assistant.PersonBudgetScope], so the person is told it is
+// their own day (or week, or month) that is spent, not a seat's.
+type personMeter struct{ *meter }
+
+var _ toolloop.BudgetMeter = personMeter{}
+
+// Spend is [meter.Spend], with the person's scope named as theirs.
+func (m personMeter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutcome, error) {
+	out, err := m.meter.Spend(ctx, tokens)
+	return asPerson(out), err
+}
+
+// Refused is [meter.Refused], with the person's scope named as theirs.
+func (m personMeter) Refused(ctx context.Context) (toolloop.SpendOutcome, bool) {
+	out, refused := m.meter.Refused(ctx)
+	return asPerson(out), refused
+}
+
+// Held is [meter.Held] on the renamed answer.
+func (m personMeter) Held(ctx context.Context) error { return toolloop.Refusal(ctx, m) }
+
+// asPerson names a seat-scope answer the person's.
+func asPerson(o toolloop.SpendOutcome) toolloop.SpendOutcome {
+	if o.Scope == "agent" {
+		o.Scope = assistant.PersonBudgetScope
+	}
+	return o
 }
 
 // companyMeter is a [meter] with no seat scope: every round and every

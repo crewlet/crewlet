@@ -77,6 +77,12 @@ const (
 
 	// SubscriberFrames is the frame log's: how far a stream may fall behind.
 	SubscriberFrames = live.SubscriberFrames
+
+	// PersonBudgetScope is the scope a refusal of a person's OWN ceiling
+	// (`assistant.token_budget`) names, beside "org" for the company's: the
+	// engine's meter names it, the turn tells the person it is theirs, and
+	// `budget_exhausted`'s detail carries it.
+	PersonBudgetScope = "person"
 )
 
 // assistantHome is the per-person home a CLI-backed model runs each of the
