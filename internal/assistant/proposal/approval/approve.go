@@ -129,9 +129,9 @@ func (a *Approver) Approve(ctx context.Context, ap Approval) (wire.ProposalAnswe
 	if (p.StepUp || a.d.StepUp(p.Act)) && !d.person.Proved(iam.RecencyStepUp, now) {
 		return wire.ProposalAnswer{}, ErrStepUp
 	}
-	switch carries, err := a.d.Turns.Carries(ctx, d.person.ID, p.Conversation, p.Turn); {
-	case err != nil:
-		return wire.ProposalAnswer{}, &Unconfirmed{OpID: ap.Key, Cause: err}
+	switch carries, carriesErr := a.d.Turns.Carries(ctx, d.person.ID, p.Conversation, p.Turn); {
+	case carriesErr != nil:
+		return wire.ProposalAnswer{}, &Unconfirmed{OpID: ap.Key, Cause: carriesErr}
 	case !carries:
 		return a.withdrawn(ctx, d, p)
 	}
