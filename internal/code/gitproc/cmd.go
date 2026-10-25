@@ -91,16 +91,21 @@ var identityVars = []string{
 // any process starts ([ErrInvalid], naming the field). git builds an identity
 // line by cutting every line feed, `<` and `>` out of a name or an address and
 // trimming from either end of it every control byte but DEL, the space and
-// every `,` `:` `;` `"` `\` `'` (ident.c's crud), and it rewrites a commit
-// whose bytes are not UTF-8 as though they were Latin-1 (commit.c's
-// verify_utf8): a part git changes is a name the call never stated, in
-// history for good, and a part made of nothing else git refuses itself, late,
-// after the work that asked for the commit. A NUL is refused, since no
-// environment variable can carry one, and so is an empty part — an empty name
-// git refuses too, but an empty address it writes as `<>`, a commit that
-// names no address. Those two are the pool's own rules; every other is git's,
-// and TestThePoolAdmitsAnIdentityPartExactlyWhereGitWritesItAsGiven holds them
-// both ways against git.
+// every `,` `:` `;` `"` `\` `'` (ident.c's crud), and it rewrites every byte
+// of a commit that is not UTF-8 AS GIT READS IT as though the byte were
+// Latin-1 (commit.c's ensure_utf8): git's UTF-8 is unicode/utf8's less
+// Unicode's 66 noncharacters — U+FDD0 to U+FDEF, and the last two code points
+// of every plane, U+xxFFFE and U+xxFFFF — which Go takes as any other rune.
+// A part git changes is a name the call never stated, in history for good,
+// and a part made of nothing else git refuses itself, late, after the work
+// that asked for the commit. A NUL is refused, since no environment variable
+// can carry one, and so is an empty part — an empty name git refuses too, but
+// an empty address it writes as `<>`, a commit that names no address. Those
+// two are the pool's own rules; every other is git's, and
+// TestThePoolAdmitsAnIdentityPartExactlyWhereGitWritesItAsGiven holds them
+// both ways against git. git holds a commit's message to the same UTF-8 rule,
+// since ensure_utf8 reads the whole commit, and the pool hands Stdin to git
+// unread: a call site that writes a message holds it to that rule itself.
 //
 // THE DATES are written in the one form git reads as seconds whatever their
 // digits, `@<unix seconds> +0000` — without the `@`, git reads a number of
@@ -188,13 +193,13 @@ func checkIdentity(sub string, id *Identity) error {
 // why the pool refuses it of its own (an empty part, a NUL) — and "" when it
 // would. Its rules are [Identity]'s.
 func identityPart(s string) string {
-	switch {
+	switch notUTF8 := commitUTF8(s); {
 	case s == "":
 		return "is empty: a commit names its author and its committer, each by a name and an address"
 	case strings.IndexByte(s, 0) >= 0:
 		return "holds a NUL byte, which no process's environment can carry"
-	case !utf8.ValidString(s):
-		return "is not UTF-8: git would rewrite the commit's bytes as though they were Latin-1"
+	case notUTF8 != "":
+		return notUTF8
 	case strings.ContainsAny(s, "\n<>"):
 		return "holds a line feed, a < or a >: git cuts each out of an identity line"
 	case identityCrud(s[0]) || identityCrud(s[len(s)-1]):
@@ -202,6 +207,37 @@ func identityPart(s string) string {
 			"either end of an identity"
 	}
 	return ""
+}
+
+// commitUTF8 is why s is not UTF-8 as git reads a commit, and "" when it is.
+// git's UTF-8 is not Go's: its has_invalid_utf8 (commit.c) refuses, beside
+// everything unicode/utf8 refuses, Unicode's noncharacters (noncharacter),
+// which unicode/utf8 takes as it takes any other rune, and its ensure_utf8
+// rewrites every byte of a sequence it refused as though the byte were
+// Latin-1 — so a valid Go string ending in U+FFFE goes into history ending in
+// the six bytes of "ï¿¾", while git prints a warning and exits 0. The rule is
+// the whole commit's, not its identity's alone: ensure_utf8 reads every byte
+// commit-tree writes, the message it reads from Stdin among them.
+func commitUTF8(s string) string {
+	if !utf8.ValidString(s) {
+		return "is not UTF-8: git would rewrite the commit's bytes as though they were Latin-1"
+	}
+	for _, r := range s {
+		if noncharacter(r) {
+			return fmt.Sprintf("holds the Unicode noncharacter %U, which git reads as bytes that are not UTF-8 "+
+				"and rewrites as though they were Latin-1", r)
+		}
+	}
+	return ""
+}
+
+// noncharacter reports whether r is one of Unicode's 66 noncharacters, by
+// has_invalid_utf8's own two tests: U+FDD0 to U+FDEF, and the last two code
+// points of every plane, U+xxFFFE and U+xxFFFF, each a code point whose low
+// sixteen bits are FFFE or FFFF. Unicode's stability policy fixes the set for
+// good.
+func noncharacter(r rune) bool {
+	return (0xFDD0 <= r && r <= 0xFDEF) || r&0xFFFE == 0xFFFE
 }
 
 // identityCrud reports whether git trims b from either end of a name or an
