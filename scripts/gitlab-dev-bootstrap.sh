@@ -136,16 +136,32 @@ cat <<EONOTE
 EONOTE
 
 if [ -z "${COMPANY}" ]; then
+  SEED="<your-config>.yaml"
   cat <<EONEXT
    - Provision a local-pointed config (integrations.gitlab.url = ${GITLAB_URL}):
        GITLAB_ADMIN_TOKEN=${ROOT_TOKEN} \\
-         crewlet gitlab provision <your-config>.yaml \\
+         crewlet gitlab provision ${SEED} \\
            -public-url ${ENGINE_URL} -env-file .env.gitlab
-       source .env.gitlab && crewlet run -config crewlet.yaml -company <your-config>.yaml
+       source .env.gitlab && crewlet run -config crewlet.yaml -company ${SEED}
+     The provision reads the company's stored values through ./crewlet.yaml
+     when one is here. With that node's engine stopped it runs only before
+     the node's first start; once the node has run, run it with the engine
+     up and CREWLET_API_TOKEN set to one of crewlet.yaml's api.auth tokens
+     whose grants include admin, or pass -api URL naming a running node,
+     and then restart the engine from the sourced shell.
 EONEXT
 else
+  SEED="${COMPANY}"
   cat <<EONEXT
    - Tokens written: .env.gitlab
-   - Next: source .env.gitlab && crewlet run -config crewlet.yaml -company ${COMPANY}
+   - Next: source .env.gitlab && crewlet run -config crewlet.yaml -company ${SEED}
+     (restarting the engine that way if it is up).
 EONEXT
 fi
+cat <<EONEXT
+   - -company only seeds a node that runs no company yet. A node that already
+     runs one keeps it and logs that the file was ignored: once it is up,
+     hand it the file with crewlet config import ${SEED}
+     (CREWLET_API_TOKEN set to one of crewlet.yaml's api.auth tokens whose
+     grants include admin), which replaces its whole company with the file.
+EONEXT
