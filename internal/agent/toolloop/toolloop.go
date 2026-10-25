@@ -15,7 +15,8 @@
 // person's note, a corrective, a call's result the run ended before. The fold
 // (fold.go) turns each run back into the record the loop kept when it drove
 // each round itself, so nothing downstream can tell the two apart. A round is
-// still one model request.
+// still one model request. That a phase's tools reach its CLI as one MCP
+// server, and every call passes these gates, is ADR-0049.
 //
 // Seven things here are load-bearing and each replaced an incident:
 //
