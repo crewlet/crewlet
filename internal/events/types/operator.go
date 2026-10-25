@@ -50,6 +50,7 @@ var RuntimeAuditTypes = []string{
 	OperatorActed{}.EventType(),
 	BackupRequested{}.EventType(),
 	AssistantConversationRead{}.EventType(),
+	AssistantTurnCompleted{}.EventType(),
 }
 
 // AuditOutcome is what became of an audited call.

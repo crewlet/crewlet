@@ -57,8 +57,10 @@
  * Four subsystems keep a record of the CHANGE a write made. None keeps one of
  * the CALL: a tool call that was refused, one whose answer never came back, and
  * a verb that changes no tracker or wiki record at all — a backup — left
- * nothing anywhere. The runtime audit is that record (`operator_acted` and
- * `backup_requested`, each with the envelope source `operator`), and it is read
+ * nothing anywhere. The runtime audit is that record (`operator_acted`,
+ * `backup_requested`, and the Dashboard Assistant's `assistant_turn_completed`
+ * and `assistant_conversation_read`, each with the envelope source
+ * `operator`), and it is read
  * here as `Runtime`: every call, whatever became of it, under the author and
  * kind the engine recorded (`actor`, and the `actor_kind` and `operator_id`
  * tags) and the node that served it. The arguments are never in it — they are
@@ -247,6 +249,14 @@ const RUNTIME_ROW: Record<
   // row's actor and the reason is its summary, and what was read stays sealed.
   assistant_conversation_read: (row) => ({
     kind: "conversation read",
+    subject: row.tags?.conversation_id ?? "",
+    noSubject: "No conversation recorded",
+  }),
+  // AN ASSISTANT TURN NAMES THE CONVERSATION IT BELONGS TO AND NOTHING IT
+  // READ: the steps' arguments and answers are the company's content and the
+  // question is the person's own, so neither is in the audit.
+  assistant_turn_completed: (row) => ({
+    kind: "assistant turn",
     subject: row.tags?.conversation_id ?? "",
     noSubject: "No conversation recorded",
   }),

@@ -75,8 +75,9 @@ const (
 	AuxStageBackground AuxStage = "background"
 
 	// AuxStageOperator is spent for a PERSON: a question answered from the
-	// knowledge base on the operator surface. A person has no seat budget,
-	// so it is charged to the company's windows alone.
+	// knowledge base on the operator surface, and every round of their
+	// Dashboard Assistant. A person has no seat budget, so it is charged to
+	// the company's windows alone.
 	AuxStageOperator AuxStage = "operator"
 )
 
@@ -122,6 +123,14 @@ const (
 	// AuxAnswerKnowledge answers a person's question from the company's
 	// pages and work items.
 	AuxAnswerKnowledge AuxPurpose = "answer_knowledge"
+
+	// AuxAssistantTurn is a round of a person's Dashboard Assistant turn:
+	// recorded here on the operator stage, and charged to the company's
+	// windows by the turn's own meter (internal/assistant).
+	AuxAssistantTurn AuxPurpose = "assistant_turn"
+	// AuxAssistantTitle names a person's assistant conversation after its
+	// first answer.
+	AuxAssistantTitle AuxPurpose = "assistant_title"
 )
 
 // auxCondensePrefix is what every compaction's purpose begins with.
@@ -149,7 +158,7 @@ var auxPurposes = []AuxPurpose{
 	AuxMemoryFilter, AuxKnowledgeQuery, AuxEpisodeSummary,
 	AuxPersistDecider, AuxCounterpartyProfiler, AuxSkillSynthesizer, AuxSkillRefiner,
 	AuxEpisodeCompaction, AuxSkillClustering, AuxSkillPromotion,
-	AuxAnswerKnowledge,
+	AuxAnswerKnowledge, AuxAssistantTurn, AuxAssistantTitle,
 }
 
 // AuxPurposes is every purpose this build publishes, compactions included.

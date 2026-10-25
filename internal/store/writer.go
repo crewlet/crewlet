@@ -157,6 +157,11 @@ var tagKeys = map[string]string{
 	"operator_id": "operator_id",
 	"tool":        "tool",
 	"dir":         "dir",
+	// The Dashboard Assistant's CONVERSATION a runtime audit row belongs to
+	// (types.AssistantTurnCompleted, and an approved write the act route
+	// records under the assistant transport), so the Audit log lists every
+	// turn and write of one conversation from a listing.
+	"conversation_id": "conversation_id",
 }
 
 // The two events that carry an LLM call's cost: a phase's record, and an
