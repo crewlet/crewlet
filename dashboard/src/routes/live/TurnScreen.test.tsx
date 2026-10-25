@@ -977,7 +977,7 @@ test("the turn as JSON is in the page bar's menu, and only Steer stays on a phon
 
 // A TURN ON THE TASK THAT DID NOT CLAIM ITS KEY opens that task. A turn's work
 // item carries no collision flag, so its key may be one another task claimed
-// first; Open task goes by the native task's id, which opens it whoever holds
+// first; Open task goes by the Worklet task's id, which opens it whoever holds
 // the key, and never by the key, which opened the claimant.
 test("Open task opens the task the turn is charged to by its id", async () => {
   mount({
@@ -996,7 +996,7 @@ test("Open task opens the task the turn is charged to by its id", async () => {
     ],
   });
   fireEvent.click(await screen.findByRole("button", { name: "Open task" }));
-  expect(location.hash).toBe("#/work/t-dup");
+  expect(location.hash).toBe("#/worklet/t-dup");
 });
 
 // ---------------------------------------------------------------------------

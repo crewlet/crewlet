@@ -129,8 +129,8 @@ export function authorLabel(author: string, operatorId: string | undefined): str
  * genuinely holds, and it reads "cleared by". Without this the two are
  * indistinguishable here and the honest rail has to drop both.
  *
- * `tracker.Delta` carries `From` and `To` with no `omitempty`
- * (`internal/tracker/mutation.go`), so every delta this engine has written has
+ * `worklet.Delta` carries `From` and `To` with no `omitempty`
+ * (`internal/worklet/mutation.go`), so every delta this engine has written has
  * both keys and an emptied field is `to: ""`. The defensive arm below is for a
  * payload this build cannot type-check, which is a smaller claim: a delta
  * whose shape is unreadable says nothing about a clearing either way.

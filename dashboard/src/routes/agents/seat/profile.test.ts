@@ -335,13 +335,13 @@ describe("whose record this page asks for", () => {
       seats: [seat("ana", ["ceo"], []), seat("ceo", [], ["ana"]), seat("bo", [], [])],
     },
   } as never);
-  const reader = (handle: string, admin = false, tracker = true) => ({
+  const reader = (handle: string, admin = false, worklet = true) => ({
     handle,
     admin,
-    tracker: tracker || admin,
+    worklet: worklet || admin,
   });
 
-  // THE ENGINE'S RULE, all three arms, each with Tracker: the owner, whoever
+  // THE ENGINE'S RULE, all three arms, each with Worklet: the owner, whoever
   // leads them, and an admin, who holds every app.
   test("is the owner's, a lead's and an admin's", () => {
     expect(mayReadRecord(reader("ceo"), led, "ceo")).toBe(true);
@@ -354,10 +354,10 @@ describe("whose record this page asks for", () => {
     expect(mayReadRecord(reader(""), led, "ceo")).toBe(false);
   });
 
-  // A PERSON'S RECORD IS THE TRACKER'S: without the app nobody's is asked —
-  // their own and their report's included — since the engine refuses every
-  // record question to a reader without Tracker.
-  test("is asked by nobody without Tracker, the owner and the lead included", () => {
+  // A PERSON'S RECORD IS WORKLET'S: without the app nobody's is asked, their
+  // own and their report's included, since the engine refuses every record
+  // question to a reader without Worklet.
+  test("is asked by nobody without Worklet, the owner and the lead included", () => {
     expect(mayReadRecord(reader("ceo", false, false), led, "ceo")).toBe(false);
     expect(mayReadRecord(reader("ana", false, false), led, "ceo")).toBe(false);
   });

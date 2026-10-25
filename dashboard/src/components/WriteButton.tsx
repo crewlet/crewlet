@@ -117,7 +117,7 @@ export function WriteButton<T extends ActionTool>({
  * one, in the refusal's own ink, rather than as punctuation around a word.
  *
  * A REFUSAL ON AUTHORITY SAYS WHAT WOULD CHANGE IT: the access the deciding
- * rule would have admitted this person on ("needs Tracker access"), from the
+ * rule would have admitted this person on ("needs Worklet access"), from the
  * answer itself and never written here — a permission named in this file is
  * a second statement of the rule, and the one that goes stale the day the
  * rule moves.

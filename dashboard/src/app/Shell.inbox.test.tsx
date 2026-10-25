@@ -88,7 +88,7 @@ function shellAs(grants: string[]) {
 }
 
 test("the shell watches the viewer's seat and asks for their inbox again when it moves", async () => {
-  const { store, view, watched, asks } = shellAs(["tracker"]);
+  const { store, view, watched, asks } = shellAs(["worklet"]);
   await act(async () => {});
   expect(watched).toEqual(["ana"]);
   const before = asks.inbox;
@@ -110,11 +110,11 @@ test("the shell watches the viewer's seat and asks for their inbox again when it
   expect(watched).toEqual(["ana", ""]);
 });
 
-// THE INBOX IS THE TRACKER'S: a reader without Tracker is watched for nothing
+// THE INBOX IS WORKLET'S: a reader without Worklet is watched for nothing
 // and asked no inbox — the engine would refuse both. Mutation: watch whatever
 // the viewer holds and the seat is watched.
-test("a reader without Tracker is watched for nothing and asked no inbox", async () => {
-  const { watched, asks } = shellAs(["knowledge"]);
+test("a reader without Worklet is watched for nothing and asked no inbox", async () => {
+  const { watched, asks } = shellAs(["doclet"]);
   await act(async () => {});
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0);

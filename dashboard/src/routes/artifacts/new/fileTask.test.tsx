@@ -59,7 +59,7 @@ class InertWebSocket {
 
 const JANE = {
   login: "U0FOUNDER",
-  grants: ["admin", "tracker", "artifacts"],
+  grants: ["admin", "worklet", "artifacts"],
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",

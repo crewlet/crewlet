@@ -37,7 +37,7 @@ class InertWebSocket {
 
 const JANE = {
   login: "U0FOUNDER",
-  grants: ["admin", "tracker", "knowledge"],
+  grants: ["admin", "worklet", "doclet"],
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -46,7 +46,7 @@ const JANE = {
 };
 
 /** A reader who holds the tracker and the knowledge base but not Admin. */
-const LEE = { ...JANE, login: "U0LEE", grants: ["tracker", "knowledge"], handle: "", owner: "lee" };
+const LEE = { ...JANE, login: "U0LEE", grants: ["worklet", "doclet"], handle: "", owner: "lee" };
 
 const ORG = {
   name: "Nimbus",
@@ -231,11 +231,11 @@ describe("at rest", () => {
 // row it was saved as. While Home is edited the hidden widget keeps its cell
 // and says why, so it can be removed. Mutation: draw the saved widths and a
 // row comes up short.
-describe("where the company runs no Crewlet Works", () => {
+describe("where the company runs no Worklet", () => {
   const span = (el: Element) =>
     Number(/span (\d+)/.exec((el as HTMLElement).style.gridColumn)?.[1] ?? "0");
   test("every row of the board is drawn full, the tracker's widgets left out", async () => {
-    mount({ services: { tracker: "jira", knowledge: "native" } });
+    mount({ services: { tracker: "jira", knowledge: "doclet" } });
     await settle();
     const drawn = blocks();
     const ids = drawn.map((b) => b.getAttribute("data-widget"));
@@ -257,9 +257,9 @@ describe("where the company runs no Crewlet Works", () => {
   });
 
   // THE TRAY DESCRIBES WHAT THE READER WILL GET: no task figures, and no
-  // finished work or hand-offs, where Crewlet Works is not run.
+  // finished work or hand-offs, where Worklet is not run.
   test("the tray's lines say what each widget shows here", async () => {
-    mount({ services: { tracker: "jira", knowledge: "native" } });
+    mount({ services: { tracker: "jira", knowledge: "doclet" } });
     await settle();
     await editHome();
     await openTray();
@@ -269,11 +269,11 @@ describe("where the company runs no Crewlet Works", () => {
   });
 
   test("in Edit Home a hidden widget keeps its cell and says why", async () => {
-    mount({ services: { tracker: "jira", knowledge: "native" } });
+    mount({ services: { tracker: "jira", knowledge: "doclet" } });
     await settle();
     await editHome();
     expect(
-      screen.getAllByText(/^Hidden: the company does not run Crewlet Works\./).length,
+      screen.getAllByText(/^Hidden: the company does not run Worklet\./).length,
     ).toBeGreaterThan(0);
   });
 });
@@ -501,7 +501,7 @@ describe("the tray", () => {
     await openTray();
     const sections = [...tray().querySelectorAll(".home-tray-title")].map((h) => h.textContent);
     expect(sections).toContain("Settings");
-    expect(sections).toContain("Work");
+    expect(sections).toContain("Worklet");
     const names = [...tray().querySelectorAll(".home-tray-tile-name")].map((n) => n.textContent);
     expect(names).toContain("Token spend");
     expect(names).not.toContain("Models & keys");

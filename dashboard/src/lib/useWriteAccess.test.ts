@@ -30,10 +30,10 @@ const EVERY: ServicesRun = { tracker: true, knowledge: true };
 
 const BOUND: ViewerState = {
   login: "jane.founder",
-  grants: ["tracker", "knowledge"],
+  grants: ["worklet", "doclet"],
   admin: false,
-  tracker: true,
-  knowledge: true,
+  worklet: true,
+  doclet: true,
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -80,36 +80,36 @@ test.each([
 });
 
 // THE APP FIRST, WHERE THE READER LACKS IT: a change the engine does not offer
-// a reader who holds no Tracker is said as the access to ask an admin for —
+// a reader who holds no Worklet is said as the access to ask an admin for,
 // while one it does offer them without it (answering an ask they were asked)
 // is never held for it, and a change that is no app's still says it is not
 // served. Mutation: drop the app's arm and the first reads `not_served`.
 test("a change in an app the reader lacks names that app", () => {
-  const noTracker: ViewerState = { ...BOUND, grants: ["knowledge"], tracker: false, acts: [] };
-  expect(writeAccess("update_work_item", noTracker, "open", EVERY)).toEqual({
+  const noWorklet: ViewerState = { ...BOUND, grants: ["doclet"], worklet: false, acts: [] };
+  expect(writeAccess("update_work_item", noWorklet, "open", EVERY)).toEqual({
     can: false,
     block: "no_access",
-    reason: "This change needs Tracker access. An admin can give it to you.",
+    reason: "This change needs Worklet access. An admin can give it to you.",
   });
   expect(
     writeAccess(
       "comment_on_work_item",
-      { ...noTracker, acts: ["comment_on_work_item"] },
+      { ...noWorklet, acts: ["comment_on_work_item"] },
       "open",
       EVERY,
     ),
   ).toMatchObject({ can: true });
-  expect(writeAccess("pause_seat", noTracker, "open", EVERY)).toMatchObject({
+  expect(writeAccess("pause_seat", noWorklet, "open", EVERY)).toMatchObject({
     block: "not_served",
   });
   expect(
     writeAccess(
       "write_page",
-      { ...BOUND, grants: ["tracker"], knowledge: false, acts: [] },
+      { ...BOUND, grants: ["worklet"], doclet: false, acts: [] },
       "open",
       EVERY,
     ),
-  ).toMatchObject({ block: "no_access", reason: expect.stringContaining("Knowledge access") });
+  ).toMatchObject({ block: "no_access", reason: expect.stringContaining("Doclet access") });
 });
 
 // A QUEUED WRITE IS ONE THE PERSON WALKED AWAY FROM believing it happened:
@@ -195,7 +195,7 @@ test("messaging your own seat is held after everything a person can clear", () =
 
 // A CHANGE INTO A SERVICE THE COMPANY DOES NOT RUN IS HELD, with the sentence
 // that says so, ahead of any access the reader could be given: no grant gives
-// a task anywhere to land where the company runs no Crewlet Works. A change
+// a task anywhere to land where the company runs no Worklet. A change
 // that is no service's is not held for it. Mutation: drop the service arm and
 // the first two read `can: true`.
 test("a change into a service the company does not run is held, and says why", () => {
@@ -261,7 +261,7 @@ describe("changing the company's configuration", () => {
     expect(configWriteAccess(viewer({ unbound: true }), "open")).toEqual({ can: true });
     expect(
       configWriteAccess(
-        viewer({ grants: ["tracker", "knowledge"], handle: "jane", owner: "jane", unbound: false }),
+        viewer({ grants: ["worklet", "doclet"], handle: "jane", owner: "jane", unbound: false }),
         "open",
       ),
     ).toEqual({
@@ -302,7 +302,7 @@ describe("changing the company's configuration", () => {
     });
     // The grant ranks first: a reader who could not write anyway is told
     // what they lack, which is the thing they can clear.
-    expect(configWriteAccess({ ...managed, grants: ["tracker"] }, "open")).toMatchObject({
+    expect(configWriteAccess({ ...managed, grants: ["worklet"] }, "open")).toMatchObject({
       block: "no_grant",
     });
     expect(
@@ -317,7 +317,7 @@ describe("changing the company's configuration", () => {
   // and ignores what only this moment decides — the socket, a screen's hold.
   test("whether the reader may change the configuration at all is the grant and the writers", () => {
     expect(mayChangeConfig(viewer({}))).toBe(true);
-    expect(mayChangeConfig(viewer({ grants: ["tracker", "knowledge"] }))).toBe(false);
+    expect(mayChangeConfig(viewer({ grants: ["worklet", "doclet"] }))).toBe(false);
     expect(mayChangeConfig(viewer({ configWriter: false, configManagedBy: ["gitops"] }))).toBe(
       false,
     );
@@ -335,7 +335,7 @@ describe("changing one part of the org chart", () => {
     login: "cto.person",
     handle: "cto",
     owner: "cto",
-    grants: ["tracker"],
+    grants: ["worklet"],
   };
   const scope = leadScope(CHART_ORG, "cto");
 

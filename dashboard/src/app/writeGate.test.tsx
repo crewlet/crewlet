@@ -75,48 +75,48 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "page either can attach",
     suite: "routes/inbox/Inbox.test.tsx",
   },
-  "routes/work/item/edit.tsx": {
+  "routes/worklet/item/edit.tsx": {
     why:
       "the task page's one update_work_item — status, priority, labels, schedule, fields, " +
       "title and description, a checklist tick, following it — for a writer, and the " +
       "reason said once for everybody else",
-    suite: "routes/work/WorkItem.test.tsx",
+    suite: "routes/worklet/WorkItem.test.tsx",
   },
-  "routes/work/item/Body.tsx": {
+  "routes/worklet/item/Body.tsx": {
     why: "a sub-task filed under the task from its + (create_work_item with parent)",
-    suite: "routes/work/WorkItem.test.tsx",
+    suite: "routes/worklet/WorkItem.test.tsx",
   },
-  "routes/work/shapes/Board.tsx": {
+  "routes/worklet/shapes/Board.tsx": {
     why:
       "a board card dragged, or moved with Alt and an arrow, into its new place — a " +
       "gesture with no button, so the reason it cannot act is one line above the lanes",
-    suite: "routes/work/shapes/Board.test.tsx",
+    suite: "routes/worklet/shapes/Board.test.tsx",
   },
-  "routes/knowledge/page/Editor.tsx": {
+  "routes/doclet/page/Editor.tsx": {
     why:
       "a page's Save (save_page against the revision it opened) and its conflict's " +
       "way on top of somebody else's save",
-    suite: "routes/knowledge/page/PageView.test.tsx",
+    suite: "routes/doclet/page/PageView.test.tsx",
   },
-  "routes/knowledge/page/CommentThread.tsx": {
+  "routes/doclet/page/CommentThread.tsx": {
     why: "a page's Comment and Reply (comment_on_page)",
-    suite: "routes/knowledge/page/PageView.test.tsx",
+    suite: "routes/doclet/page/PageView.test.tsx",
   },
-  "routes/knowledge/Composer.tsx": {
+  "routes/doclet/Composer.tsx": {
     why:
       "the composer's Publish and Save as draft, one write_page with its status, filed " +
       "in a space or under a page",
-    suite: "routes/knowledge/page/PageView.test.tsx",
+    suite: "routes/doclet/page/PageView.test.tsx",
   },
-  "routes/knowledge/Pages.tsx": {
+  "routes/doclet/Pages.tsx": {
     why:
       "a space's Create at the end of an open level: a folder named in place is a " +
       "write_page with an empty body, and a document opens the composer",
-    suite: "routes/knowledge/Pages.test.tsx",
+    suite: "routes/doclet/Pages.test.tsx",
   },
-  "routes/knowledge/page/Watch.tsx": {
+  "routes/doclet/page/Watch.tsx": {
     why: "a page's eye, a save_page carrying only the person's own watch",
-    suite: "routes/knowledge/page/PageView.test.tsx",
+    suite: "routes/doclet/page/PageView.test.tsx",
   },
   "routes/artifacts/new/fileTask.ts": {
     why:
@@ -124,17 +124,17 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "whose reason the page draws on its action for a reader who cannot file",
     suite: "routes/artifacts/new/fileTask.test.tsx",
   },
-  "routes/work/NewTask.tsx": {
+  "routes/worklet/NewTask.tsx": {
     why:
       "the New task sheet's Create — one create_work_item carrying the whole task — " +
       "disabled with its reason for a reader who cannot file",
-    suite: "routes/work/NewTask.test.tsx",
+    suite: "routes/worklet/NewTask.test.tsx",
   },
-  "routes/work/shapes/cells.tsx": {
+  "routes/worklet/shapes/cells.tsx": {
     why:
       "a list or table row's status, priority and assignee set in place — pickers " +
       "for a writer, the value and one sentence above the grid for everybody else",
-    suite: "routes/work/shapes/cells.test.tsx",
+    suite: "routes/worklet/shapes/cells.test.tsx",
   },
   "routes/me/Priorities.tsx": {
     why:
@@ -211,8 +211,8 @@ const NOBODY: ViewerState = {
   login: "",
   grants: [],
   admin: false,
-  tracker: false,
-  knowledge: false,
+  worklet: false,
+  doclet: false,
   handle: "",
   owner: "",
   name: "",
@@ -242,7 +242,7 @@ const READERS: readonly {
       anonymous: false,
       login: "ops.lead",
       owner: "ops.lead",
-      grants: ["tracker", "knowledge"],
+      grants: ["worklet", "doclet"],
       unbound: true,
       acts: EVERY_TOOL,
     }),
@@ -254,10 +254,10 @@ const READERS: readonly {
       ...NOBODY,
       anonymous: false,
       login: "founder",
-      grants: ["admin", "tracker", "knowledge"],
+      grants: ["admin", "worklet", "doclet"],
       admin: true,
-      tracker: true,
-      knowledge: true,
+      worklet: true,
+      doclet: true,
       handle: "jane",
       owner: "jane",
       name: "Jane Founder",
@@ -272,10 +272,10 @@ const READERS: readonly {
       ...NOBODY,
       anonymous: false,
       login: "founder",
-      grants: ["admin", "tracker", "knowledge"],
+      grants: ["admin", "worklet", "doclet"],
       admin: true,
-      tracker: true,
-      knowledge: true,
+      worklet: true,
+      doclet: true,
       handle: "jane",
       owner: "jane",
       name: "Jane Founder",

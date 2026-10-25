@@ -276,12 +276,12 @@ function phrase(row: FeedEntry, index: OrgIndex, now: number) {
         <>
           <strong>{nameOf(index, p.actor)}</strong>{" "}
           {p.change === "created" ? FEED_PHRASES.page_created : FEED_PHRASES.page_saved}{" "}
-          <a className="prose-link" href={href(["knowledge", "pages", p.page_id])}>
+          <a className="prose-link" href={href(["doclet", "pages", p.page_id])}>
             {p.title ? `“${p.title}”` : "a page"}
           </a>
         </>
       ),
-      aside: "Knowledge",
+      aside: "Doclet",
     };
   }
   const s = row.schedule;

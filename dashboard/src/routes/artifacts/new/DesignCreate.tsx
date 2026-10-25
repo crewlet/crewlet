@@ -252,7 +252,7 @@ export function DesignCreate() {
         variant: "warning",
         title: "The task was filed, and the design is not on its Artifacts card",
         message: filed.linked,
-        action: { label: "Open the task", href: href(["work", filed.item]) },
+        action: { label: "Open the task", href: href(["worklet", filed.item]) },
       });
     }
     nav.replace(artifactPath(id));

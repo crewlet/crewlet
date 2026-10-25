@@ -29,7 +29,7 @@ export const DIRECTORY: { key: string; label: string; lines: Line[] }[] = [
     key: "work",
     label: "Work tracking",
     lines: [
-      { kind: "service", key: "works" },
+      { kind: "service", key: "worklet" },
       { kind: "product", key: "jira", name: "Jira", app: "atlassian" },
     ],
   },
@@ -37,7 +37,7 @@ export const DIRECTORY: { key: string; label: string; lines: Line[] }[] = [
     key: "docs",
     label: "Docs and knowledge",
     lines: [
-      { kind: "service", key: "knowledge" },
+      { kind: "service", key: "doclet" },
       { kind: "product", key: "confluence", name: "Confluence", app: "atlassian" },
     ],
   },

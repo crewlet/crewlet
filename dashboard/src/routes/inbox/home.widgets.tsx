@@ -28,7 +28,7 @@ import {
   shortWhen,
 } from "~/routes/inbox/model.ts";
 import { WidgetCard, WidgetNote, defineWidgets } from "~/routes/home/board/kit.tsx";
-import { ROWS, countLabel } from "~/routes/work/taskRows.tsx";
+import { ROWS, countLabel } from "~/routes/worklet/taskRows.tsx";
 
 function Updates() {
   const viewer = useViewer();
@@ -36,7 +36,7 @@ function Updates() {
   const read = useQuery(
     "work_inbox",
     owner ? { handle: owner, limit: ROWS, unread: true, primary_only: true } : undefined,
-    { enabled: owner !== "" && viewer.tracker, pollMs: 60_000, refetchOnInboxOf: owner },
+    { enabled: owner !== "" && viewer.worklet, pollMs: 60_000, refetchOnInboxOf: owner },
   );
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
@@ -109,7 +109,7 @@ export const widgets = defineWidgets([
     hue: "rose",
     size: { w: 4, minW: 3, minH: 8, vertical: true },
     once: true,
-    // THE UPDATES ARE CREWLET WORKS' NOTICES, while the Inbox itself stays
+    // THE UPDATES ARE WORKLET'S NOTICES, while the Inbox itself stays
     // for the conditions that arrive without it.
     service: () => "tracker",
     Component: Updates,

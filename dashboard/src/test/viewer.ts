@@ -15,14 +15,14 @@ export const ADMIN_VIEWER = {
   handle: "jane",
   name: "Jane Founder",
   kind: "human",
-  grants: ["admin", "tracker", "knowledge"],
+  grants: ["admin", "worklet", "doclet"],
   acts: [],
 };
 
 /**
  * What the frame itself asks of the socket on every screen, answered as the
  * engine answers an admin with nothing waiting: who is reading, and the inbox
- * and queue counts a reader holding Tracker is asked for. A suite's own
+ * and queue counts a reader holding Worklet is asked for. A suite's own
  * answers come first.
  */
 export const FRAME_ANSWERS: Readonly<Record<string, unknown>> = {

@@ -7,7 +7,7 @@
 import { Button, Card, Divider, ErrorBoundary, Link, Note, Skeleton, Text } from "@crewlethq/ui";
 import { LinkGlyph } from "@crewlethq/icons/glyphs";
 import { renderMarkdown } from "~/lib/markdown.ts";
-import { useOrgArrived, useServicesRun, type ServicesRun } from "~/lib/services.ts";
+import { SERVICE_NAMES, useOrgArrived, useServicesRun, type ServicesRun } from "~/lib/services.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { WidgetNote, destinationOf, pageOpens, widgetMissing } from "./kit.tsx";
 import { canUse, widgetDef } from "./registry.tsx";
@@ -77,9 +77,6 @@ function WidgetSkeleton() {
     </Card>
   );
 }
-
-/** Each of Crewlet's services by the name a reader knows it by. */
-const SERVICE_NAMES = { tracker: "Crewlet Works", knowledge: "Crewlet Knowledge" } as const;
 
 /**
  * A widget a section offers, drawn by the section's component, or the

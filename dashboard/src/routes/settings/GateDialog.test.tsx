@@ -156,7 +156,7 @@ test("the gesture carries the confirmation and an op id the route accepts", asyn
   confirmAndPress("node-2", "Evict");
   await waitFor(() => expect(sent.length).toBe(1));
 
-  expect(sent[0]!.path).toBe("/work/retention/evict/node-2");
+  expect(sent[0]!.path).toBe("/worklet/retention/evict/node-2");
   expect(sent[0]!.query.get("confirm")).toBe("node-2");
   const opId = sent[0]!.query.get("op_id") ?? "";
   expect(opId).toMatch(OP_ID);

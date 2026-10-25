@@ -339,7 +339,7 @@ function capitalise(s: string): string {
 /** The feed filter's four settings and the kinds each asks the engine for. */
 export const FEED_FILTERS = [
   { value: "all", label: "Everything", kinds: "" },
-  // CREWLET WORKS' KINDS, offered only where the company runs it: the engine
+  // WORKLET'S KINDS, offered only where the company runs it: the engine
   // keeps a kind only where its half is its own, and refuses one named that
   // it does not keep.
   { value: "completed", label: "Completed", kinds: "completed", service: "tracker" },

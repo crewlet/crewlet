@@ -27,17 +27,20 @@ test("a recorded key is the label", () => {
 });
 
 // 43 UNBREAKABLE CHARACTERS took a phone's whole cell and laid the summary
-// beside it out one letter per line.
-test("a keyless native task is named by its kind and the head of its uuid, whole on the title", () => {
+// beside it out one letter per line. AND THE STORED BACKEND WORD IS NEVER
+// SHOWN: Worklet's own task is titled by Worklet's name. Mutation: title it
+// `<backend>:<id>` again and "native" is on the screen.
+test("a keyless Worklet task is named by its kind and the head of its uuid, whole on the title", () => {
   const label = workItemLabel({ backend: "native", id: ID, key: "", project: "ENG" });
   expect(label.text).toBe("task 4d631f6d");
-  expect(label.title).toContain(`native:${ID}`);
+  expect(label.title).toBe(`Worklet task ${ID}: no key recorded`);
+  expect(label.title).not.toContain("native");
 });
 
 test("a keyless external item keeps its backend and an id that is not a uuid whole", () => {
-  expect(workItemLabel({ backend: "jira", id: "10042", key: "", project: "" }).text).toBe(
-    "jira 10042",
-  );
+  const label = workItemLabel({ backend: "jira", id: "10042", key: "", project: "" });
+  expect(label.text).toBe("jira 10042");
+  expect(label.title).toBe("jira:10042: no key recorded");
 });
 
 // ---------------------------------------------------------------------------

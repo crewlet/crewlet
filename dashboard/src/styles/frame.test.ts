@@ -455,7 +455,7 @@ describe("the frame's layout", () => {
   // WRAPPED RATHER THAN CLAMPED, and the clamp's own gate is why this test
   // can say so: `text.test.ts` holds `.clamp` to a single copy in base.css, so
   // a second one here would fail there. What bounds the value instead is the
-  // engine's own `tracker.MaxTitle`, and there is no uniform row height to
+  // engine's own `worklet.MaxTitle`, and there is no uniform row height to
   // protect — a card is already a stack of six to twelve labelled lines.
   test("a card's value wraps, because the column that justified cutting it is gone", () => {
     const css = sheet("frame.css");
@@ -971,7 +971,7 @@ describe("a task's activity", () => {
   // IN THE SHEET because there is nowhere else: jsdom computes no layout, so
   // every case that renders these stays green whether the text wraps or
   // ellipses. The other direction is covered already — each class is declared
-  // here and written only by `routes/work/item/Activity.tsx`, so
+  // here and written only by `routes/worklet/item/Activity.tsx`, so
   // classes.test.ts fails if either side alone goes back.
   test("a task's activity wraps rather than ellipsing what changed", () => {
     const css = sheet("screens.css");
@@ -1318,7 +1318,7 @@ describe("the Spend overview's rows", () => {
     expect(block(css, ".inbox-list")).toMatch(/padding:\s*var\(--spacing-2\) var\(--spacing-3\)/);
   });
 
-  // A LONE CARD TAKES ITS ROW: without Crewlet Works a seat's Assigned work
+  // A LONE CARD TAKES ITS ROW: without Worklet a seat's Assigned work
   // draws nothing, and Turns per day sat beside a 334px hole.
   test("a seat's pair gives a lone card the whole row", () => {
     expect(block(css, ".prof-pair > :only-child")).toMatch(/grid-column:\s*1 \/ -1/);
@@ -1479,7 +1479,7 @@ test("no screen cancels the content column's padding with a negative margin", ()
  * column cap (`frame.css`, "NO MAX WIDTH") because these screens are tiles,
  * tables and boards that want the width a wide window bought, and prose takes
  * `--size-measure` where it needs one. A screen's own column capped at
- * `--size-content-max` brings the same defect back on one screen: Knowledge's
+ * `--size-content-max` brings the same defect back on one screen: Doclet's
  * landing and a space's outline sat in a 1600px column against the left edge
  * of a 2560px sheet. Mutation: cap `.knowledge-home` again and this names it.
  */

@@ -198,7 +198,7 @@ test("Ask an agent opens the hand-off beside the page and files the brief as a t
     target: { value: "  How we run incident reviews. " },
   });
   fireEvent.click(ask());
-  await waitFor(() => expect(location.hash).toBe("#/work/ENG-2"));
+  await waitFor(() => expect(location.hash).toBe("#/worklet/ENG-2"));
   expect(fileTask).toHaveBeenCalledWith({
     kind: "doc",
     title: "Incident review guide",

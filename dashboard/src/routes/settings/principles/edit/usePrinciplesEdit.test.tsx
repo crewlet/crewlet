@@ -139,7 +139,7 @@ const saveKey = (el: Element) => fireEvent.keyDown(el, { key: "Enter", ctrlKey: 
 // `mayChangeConfig` gate and the Edit appears for the tracker reader.
 test("a reader who may not write the charter is offered no control at all", async () => {
   location.hash = "#/company/principles?edit=mission";
-  mount(["tracker"], { ...ACME, vision: "" });
+  mount(["worklet"], { ...ACME, vision: "" });
   // The address naming a part is dropped once the reader is known.
   await waitFor(() => expect(location.hash).toBe("#/company/principles"));
   expect(screen.queryByRole("button", { name: /^Edit/ })).toBeNull();
@@ -275,7 +275,7 @@ test("moving to another page with unsaved writing asks first", async () => {
   fireEvent.click(await editOf("mission"));
   fireEvent.change(missionBox(), { target: { value: "Half a thought" } });
   act(() => {
-    location.hash = "#/work";
+    location.hash = "#/worklet";
   });
   const dialog = await screen.findByRole("alertdialog", { name: "Leave without saving?" });
   expect(within(dialog).getByText("Your changes to the mission will be lost.")).toBeDefined();

@@ -294,7 +294,7 @@ a.seat-chip:hover {
    Every list is a `DataGrid` now (see app/frame/DataGrid.tsx), which is a CSS
    grid rather than a `<table>` because its columns, its sort and its bands are
    all things the URL carries. What remains here is a project's Files listing
-   (routes/work/Files.tsx): a block inside a card that already titles it, with
+   (routes/worklet/Files.tsx): a block inside a card that already titles it, with
    nothing to sort, so a table in the sense the element means rather than a
    list of objects. So this is the quiet nested treatment and nothing else; the
    sortable-header chrome, the row hover and the selected and failed marks went

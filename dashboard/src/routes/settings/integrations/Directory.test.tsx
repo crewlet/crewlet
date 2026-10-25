@@ -126,12 +126,12 @@ const MEMBER = {
   login: "lee",
   owner: "lee",
   handle: "lee",
-  grants: ["tracker", "knowledge"],
+  grants: ["worklet", "doclet"],
   acts: [],
 };
 const NOBODY = { login: "", owner: "", grants: [], acts: [] };
 
-const NATIVE: OrgServices = { tracker: "native", knowledge: "native" };
+const BUILT_IN: OrgServices = { tracker: "worklet", knowledge: "doclet" };
 
 interface Mounted {
   /** Every socket question the page asked. */
@@ -157,7 +157,7 @@ function mount(
   viewer: unknown,
   kind?: string | typeof ROUTED,
   /** What the company runs, or null for a node running no company. */
-  services: OrgServices | null = NATIVE,
+  services: OrgServices | null = BUILT_IN,
   setup: { status: number; body: unknown } = { status: 200, body: listing },
 ): Mounted {
   const fetched: string[] = [];
@@ -218,7 +218,10 @@ afterEach(() => {
 // GROUPED BY NEED, CREWLET'S OWN FIRST: the built-in answer to a need opens
 // its group, beside the apps that answer it. ATLASSIAN IS LISTED BY PRODUCT,
 // one line under work tracking and one under docs, because it is one
-// connection that serves two needs.
+// connection that serves two needs. A PRODUCT NAMES ITS MAKER beside it:
+// Worklet and Doclet name Crewlet as Jira and Confluence name Atlassian, and
+// Crewlet Chat, whose name already says it, names nobody. Mutation: drop the
+// services' vendor and the two lines lose "Crewlet".
 test("the directory groups by need, with Crewlet's own service first in each", async () => {
   mount(ADMIN);
   const nav = await screen.findByRole("navigation", { name: "Integrations" });
@@ -230,13 +233,17 @@ test("the directory groups by need, with Crewlet's own service first in each", a
         h.textContent,
         within(list)
           .getAllByRole("link")
-          .map((a) => a.querySelector(".crewlet-directory__label")!.textContent),
+          .map((a) => {
+            const label = a.querySelector(".crewlet-directory__label")!.textContent;
+            const hint = a.querySelector(".crewlet-directory__hint")?.textContent;
+            return hint ? `${label} (${hint})` : label;
+          }),
       ];
     });
   expect(groups).toEqual([
     ["Chat", ["Crewlet Chat", "Slack", "Mattermost"]],
-    ["Work tracking", ["Crewlet Works", "Jira"]],
-    ["Docs and knowledge", ["Crewlet Knowledge", "Confluence"]],
+    ["Work tracking", ["Worklet (Crewlet)", "Jira (Atlassian)"]],
+    ["Docs and knowledge", ["Doclet (Crewlet)", "Confluence (Atlassian)"]],
     ["Code", ["GitHub", "GitLab"]],
     ["Observability", ["Datadog"]],
   ]);
@@ -251,7 +258,7 @@ test("each line carries its own state, and a product only its own", async () => 
   expect((await line(/^Jira/)).textContent).not.toContain("Connected");
   expect((await line(/GitLab/)).textContent).toContain("Needs attention");
   expect((await line(/Slack/)).textContent).toBe("Slack");
-  expect((await line(/Crewlet Works/)).textContent).toContain("In use");
+  expect((await line(/Worklet/)).textContent).toContain("In use");
   expect((await line(/Crewlet Chat/)).textContent).toContain("Soon");
 });
 
@@ -263,7 +270,7 @@ test("an address selects its line, Atlassian and its relay on Jira's", async () 
     ["atlassian", /^Jira/],
     ["forge", /^Jira/],
     ["confluence", /Confluence/],
-    ["works", /Crewlet Works/],
+    ["worklet", /^Worklet/],
   ] as const) {
     mount(ADMIN, kind);
     expect((await line(name)).getAttribute("aria-current"), kind).toBe("page");
@@ -288,7 +295,7 @@ test("the home shows only what is in use, each a compact card with one action", 
   mount(ADMIN);
   const inUse = await screen.findByRole("region", { name: /^In use/ });
   const names = [...inUse.querySelectorAll(".int-tile-link")].map((a) => a.textContent);
-  expect(names).toEqual(["Crewlet Works", "Crewlet Knowledge", "Confluence", "GitLab", "Datadog"]);
+  expect(names).toEqual(["Worklet", "Doclet", "Confluence", "GitLab", "Datadog"]);
   for (const card of inUse.querySelectorAll(".crewlet-catalog-tile")) {
     expect(card.className).toContain("crewlet-catalog-tile--compact");
   }
@@ -303,7 +310,7 @@ test("the home shows only what is in use, each a compact card with one action", 
 });
 
 // EVERY CARD'S ACTION NAMES ITS CARD: a reader listing the links in In use
-// meets "Open Crewlet Works" and "Replace key GitLab", never a column of
+// meets "Open Worklet" and "Replace key GitLab", never a column of
 // "Open". Mutation: drop the action's aria-label and the names repeat.
 test("each card's action is named for its app, and no two share a name", async () => {
   mount(ADMIN);
@@ -440,7 +447,7 @@ test("a managed document holds Connect and keeps Replace key", async () => {
 // AN ADMIN THE ENGINE REFUSES `/setup` is told what it takes, and every form
 // action is held with that reason rather than removed.
 test("a refused setup listing names the access it takes and holds every form action", async () => {
-  mount(ADMIN, "github", NATIVE, {
+  mount(ADMIN, "github", BUILT_IN, {
     status: 403,
     body: { error: "unauthorized", reason: "no_grant", grants: ["admin"] },
   });
@@ -457,7 +464,7 @@ test("a refused setup listing names the access it takes and holds every form act
 // every reader and the first list names `integrations`.
 test("a reader without Admin is shown the services and asked nothing an Admin's", async () => {
   const { asked, fetched } = mount(MEMBER);
-  expect((await line(/Crewlet Works/)).textContent).toContain("In use");
+  expect((await line(/Worklet/)).textContent).toContain("In use");
   expect((await line(/GitLab/)).textContent).toBe("GitLab");
   // THE SAME DESCRIPTION, and no hint to connect what an Admin connects.
   expect(screen.getByText(DESCRIPTION)).toBeTruthy();
@@ -488,26 +495,26 @@ test("a reader nobody signed in is offered the sign-in", async () => {
 // --- Crewlet's own services -------------------------------------------------------- //
 
 test("a service the company runs is in use, with its way in", async () => {
-  mount(MEMBER, "works");
-  expect(await screen.findByRole("heading", { level: 2, name: "Crewlet Works" })).toBeTruthy();
-  expect(screen.getByRole("link", { name: "Open Work" }).getAttribute("href")).toBe("#/work");
+  mount(MEMBER, "worklet");
+  expect(await screen.findByRole("heading", { level: 2, name: "Worklet" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Open Worklet" }).getAttribute("href")).toBe("#/worklet");
 });
 
 // WHAT RUNS INSTEAD, IN THE ENGINE'S WORD, with the way to it, and nothing
 // asked of a service the company does not run. Mutation: ask the counts
 // whatever runs, and the list names `work_projects`.
 test("a service run elsewhere says what replaces it and asks nothing of it", async () => {
-  const { asked } = mount(ADMIN, "works", { tracker: "jira", knowledge: "native" });
+  const { asked } = mount(ADMIN, "worklet", { tracker: "jira", knowledge: "doclet" });
   expect(await screen.findByText("Jira does this for your company")).toBeTruthy();
   expect(screen.getByRole("link", { name: "Open Jira" }).getAttribute("href")).toBe(
     "#/company/integrations/jira",
   );
-  expect((await line(/Crewlet Works/)).textContent).toContain("Not in use");
+  expect((await line(/Worklet/)).textContent).toContain("Not in use");
   expect(asked).not.toContain("work_projects");
 });
 
 test("a service the company runs none of says so, with no product to open", async () => {
-  mount(ADMIN, "knowledge", { tracker: "native", knowledge: "none" });
+  mount(ADMIN, "doclet", { tracker: "worklet", knowledge: "none" });
   expect(await screen.findByText("Nothing does this for your company")).toBeTruthy();
   expect(screen.queryByRole("link", { name: /Open Confluence/ })).toBeNull();
 });
@@ -515,10 +522,11 @@ test("a service the company runs none of says so, with no product to open", asyn
 // UNTIL THE ENGINE HAS SAID, nothing is guessed: a node running no company
 // says so, and no service wears On or Off.
 test("a node running no company says so and wears no state", async () => {
-  mount(ADMIN, "works", null);
+  mount(ADMIN, "worklet", null);
   expect(await screen.findByText("This node runs no company yet.")).toBeTruthy();
-  const works = await line(/Crewlet Works/);
-  expect(works.textContent).toBe("Crewlet Works");
+  // ITS NAME AND ITS MAKER, and nothing after them.
+  const worklet = await line(/Worklet/);
+  expect(worklet.textContent).toBe("WorkletCrewlet");
 });
 
 test("Crewlet Chat is coming soon, pointing at the chat apps meanwhile", async () => {

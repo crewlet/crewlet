@@ -18,7 +18,7 @@ import { Card, DATA_COLOR_OTHER, StackedColumns } from "@crewlethq/ui";
 import { ChartColumnGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import { companyDateLabel } from "~/lib/format.ts";
-import { TRACKER, needsWords } from "~/lib/access.ts";
+import { WORKLET, needsWords } from "~/lib/access.ts";
 import type { QueryResult } from "~/lib/useQuery.ts";
 import type { WorkFlowAnswer } from "~/protocol/index.ts";
 
@@ -32,7 +32,7 @@ export function CompletedChart({
   locked,
 }: {
   flow: QueryResult<WorkFlowAnswer>;
-  /** The reader holds no Tracker, so the series was never asked. */
+  /** The reader holds no Worklet, so the series was never asked. */
   locked: boolean;
 }) {
   const points = flow.data?.points?.slice(-CHART_DAYS) ?? [];
@@ -67,7 +67,7 @@ export function CompletedChart({
       </Card.Header>
       <Card.Body className="home-chart">
         {locked ? (
-          <p className="home-card-note">{needsWords("The tracker's history", [TRACKER])}</p>
+          <p className="home-card-note">{needsWords("Worklet's history", [WORKLET])}</p>
         ) : (
           <QueryState
             error={flow.error}

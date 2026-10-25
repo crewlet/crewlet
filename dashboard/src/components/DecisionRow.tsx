@@ -565,10 +565,10 @@ function SeatRow({ seat, index, now }: { seat: SeatCondition; index: OrgIndex; n
  * version this reader saw, like every assignment (`AssignButton`).
  */
 export function ReassignItem({ item }: { item: string }) {
-  // A HAND-OFF IS A TRACKER WRITE, so the version it is conditional on is
-  // read only for a reader holding Tracker; without it there is no button.
-  const { tracker } = useViewer();
-  const read = useQuery("work_item", { id: item }, { enabled: tracker });
+  // A HAND-OFF IS A WORKLET WRITE, so the version it is conditional on is
+  // read only for a reader holding Worklet; without it there is no button.
+  const { worklet } = useViewer();
+  const read = useQuery("work_item", { id: item }, { enabled: worklet });
   const task = read.data?.task;
   if (!task) return null;
   return (

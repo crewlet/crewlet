@@ -3,8 +3,8 @@
  *
  * # Said where the reader is, to every reader
  *
- * Work and My work are Crewlet Works' pages and Knowledge is Crewlet
- * Knowledge's, so where the company runs another tracker or knowledge base,
+ * The Worklet workspace and My work read Worklet, and the Doclet workspace
+ * reads Doclet, so where the company runs another tracker or knowledge base,
  * or none, every read those pages make is refused (`lib/services.ts`). A star,
  * a recent or a link pasted before the company changed what it runs still
  * opens one. It draws this notice in its place: what the company runs
@@ -43,15 +43,18 @@ export function noticeTitle(service: Service, backends: OrgServices): string {
 /** The sentence under it: why the page the address names is not here. */
 export function noticeText(service: Service, path: readonly string[]): string {
   if (service === "knowledge") {
-    return "Knowledge is part of Crewlet Knowledge, which is not in use here. Each agent's diary is still on its Memory tab, under the Org chart.";
+    return "Doclet is not in use here. Each agent's diary is still on its Memory tab, under the Org chart.";
   }
   // A NEW DESIGN IS MADE BY AN AGENT WORKING A TASK, so a reader who asked
   // for one is told that, not only that Jira handles work.
   if (path[0] === "artifacts") {
-    return "A new design is made by an agent working a task, and Crewlet Works, where tasks live, is not in use here.";
+    return "A new design is made by an agent working a task, and Worklet, where tasks live, is not in use here.";
   }
-  const label = workspaceRow(workspaceOf(path))?.label ?? "This page";
-  return `${label} is part of Crewlet Works, which is not in use here.`;
+  // WORKLET'S OWN PAGES ARE THE SERVICE, so they name it once.
+  const row = workspaceRow(workspaceOf(path));
+  if (row?.key === "worklet") return "Worklet is not in use here.";
+  const label = row?.label ?? "This page";
+  return `${label} is part of Worklet, which is not in use here.`;
 }
 
 export function ServiceNotice({ service, path }: { service: Service; path: readonly string[] }) {
@@ -71,7 +74,7 @@ export function ServiceNotice({ service, path }: { service: Service; path: reado
         canOpen ? (
           <ButtonLink
             variant="secondary"
-            href={href([...INTEGRATIONS_PATH, service === "tracker" ? "works" : "knowledge"])}
+            href={href([...INTEGRATIONS_PATH, service === "tracker" ? "worklet" : "doclet"])}
           >
             See what is built into Crewlet
           </ButtonLink>

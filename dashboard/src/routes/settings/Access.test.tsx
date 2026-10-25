@@ -493,7 +493,7 @@ test("a reader without Admin is told what reading a seat's surfaces needs", asyn
   const { queried } = mount({
     login: "ana.diaz",
     owner: "jane",
-    grants: ["tracker", "knowledge"],
+    grants: ["worklet", "doclet"],
   });
   // ONE SENTENCE PER SEAT, every seat refused alike.
   expect(

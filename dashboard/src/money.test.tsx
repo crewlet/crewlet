@@ -34,7 +34,7 @@ import { TurnScreen } from "~/routes/live/Turn.tsx";
 import { SeatScreen } from "~/routes/agents/Seat.tsx";
 import { Spend } from "~/routes/spend/Spend.tsx";
 import { Home } from "~/routes/home/Home.tsx";
-import { WorkItem } from "~/routes/work/WorkItem.tsx";
+import { WorkItem } from "~/routes/worklet/WorkItem.tsx";
 import { type Lang, type Node, childrenOf, isNode, lineOf, modules, parse } from "~/test/source.ts";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { SessionReading } from "~/lib/frameSession.ts";
@@ -464,12 +464,12 @@ afterEach(() => {
 /**
  * What the frame itself asks, answered as the engine answers an admin with
  * nothing waiting — unless a case names its own: who is reading, and the
- * inbox and queue counts a reader holding Tracker is asked for.
+ * inbox and queue counts a reader holding Worklet is asked for.
  */
 const FRAME_ANSWERS: Record<string, unknown> = {
   viewer: {
     login: "founder",
-    grants: ["admin", "tracker", "knowledge"],
+    grants: ["admin", "worklet", "doclet"],
     handle: "ceo",
     owner: "ceo",
     name: "Chief",
@@ -544,7 +544,7 @@ describe("the screens", () => {
     ["spend", "#/settings/spend", <Spend />, { token_series: series(), tokens: rollup() }],
     [
       "the task page",
-      "#/work/ENG-42",
+      "#/worklet/ENG-42",
       <WorkItem id="ENG-42" />,
       {
         work_item: {
