@@ -1099,8 +1099,12 @@ const (
 	// of page actions, the question the palette queues for the panel, and the
 	// object kinds a peek is named by, which a page's selection reads. Every
 	// screen's own actions are in that screen's chunk. 338 KiB, still under
-	// two seconds on that link.
-	initialBudget = 338 << 10
+	// two seconds on that link. uilet 0.57.1 measured 338.1 KiB with the same
+	// dashboard source: the design system's one stylesheet, which first paint
+	// carries whole, gained the proposal card's decision refusal and
+	// unconfirmed outcome, the non-modal overlay aside and table cells that
+	// wrap. 339 KiB, still under two seconds on that link.
+	initialBudget = 339 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
