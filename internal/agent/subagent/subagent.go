@@ -672,8 +672,13 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 	}
 
 	var surface *tools.Surface
+	// discovers is whether the worker holds its whole discovery pair: a
+	// configured Discovery whose every meta-tool reached the surface.
+	discovers := false
 	if cfg.Discovery != nil {
-		for _, meta := range cfg.Discovery(func() *tools.Surface { return surface }) {
+		metas := cfg.Discovery(func() *tools.Surface { return surface })
+		discovers = len(metas) > 0
+		for _, meta := range metas {
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			next, err := universe.With(tools.Entry{Tool: meta, Origin: tools.OriginBuiltin})
 			if err != nil {
@@ -682,6 +687,7 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 				// the catalogue described the other. Drop the meta-tool — the
 				// worker loses discovery, not correctness.
 				log.WarnContext(ctx, "subagent_meta_tool_skipped", "tool", meta.Name(), "error", err)
+				discovers = false
 				continue
 			}
 			universe = next
@@ -707,12 +713,14 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 	}
 
 	// The tools to discover are rendered only for a worker that can act on
-	// them. Listing tools to one with no activate_tool is an invitation to
-	// call a name it was never offered, which costs a round and produces a
-	// refusal. And only what it was NOT granted: a granted tool's whole
-	// definition reaches the worker with every request already.
+	// them — one HOLDING its discovery pair, not merely configured with it,
+	// since a meta-tool a granted name shadowed was dropped above. Listing
+	// tools to one with no activate_tool is an invitation to call a name it
+	// was never offered, which costs a round and produces a refusal. And
+	// only what it was NOT granted: a granted tool's whole definition
+	// reaches the worker with every request already.
 	var discoverable string
-	if cfg.Discovery != nil {
+	if discovers {
 		discoverable = grant.Universe.Discoverable(surface.Active())
 	}
 	res.SystemPrompt = prompts.BuildSubagent(cfg.Seat, prompts.SubagentInput{

@@ -613,6 +613,34 @@ func TestAChildWithNoDiscoveryStaysFrozen(t *testing.T) {
 	}
 }
 
+// shadowedActivator is the activator under a name a granted tool already
+// holds, so the child's surface refuses it.
+type shadowedActivator struct{ activator }
+
+func (a *shadowedActivator) Name() string { return "read_file" }
+
+// A CHILD THAT LOST ITS DISCOVERY TOOL IS NOT TOLD TO DISCOVER. A meta-tool
+// whose name a granted tool holds is dropped, which leaves discovery
+// configured and the worker without the tool its guidance names: told to call
+// activate_tool, it would spend a round on a name it was never offered.
+func TestAChildWhoseDiscoveryToolWasDroppedIsNotToldToDiscover(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	p := &provider{name: "sub"}
+	cfg := baseConfig(t, w, p)
+	cfg.Discovery = func(get func() *tools.Surface) []tools.Callable {
+		return []tools.Callable{&shadowedActivator{activator{surface: get}}}
+	}
+
+	res := one(t, cfg, request("read_file"))
+	if strings.Contains(res.SystemPrompt.Text, "## Tools to discover") {
+		t.Error("a child without its discovery tool was shown tools to discover")
+	}
+	if strings.Contains(res.SystemPrompt.Text, "activate_tool") {
+		t.Error("a child without its discovery tool was told to call it")
+	}
+}
+
 func TestADiscoveryCapableChildIsShownTheSafeCatalogue(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
