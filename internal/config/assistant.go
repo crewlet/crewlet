@@ -254,12 +254,32 @@ func assistantMemberProblems(member Path, key string, entry *LLMProvider) error 
 				"does not load (see %s)", key, entryField("overrides"))
 		return p.err()
 	}
-	if profile.LocalTools != cliprofile.LocalToolsDenied {
+	// NO TOOL OF ITS OWN, BY CONSTRUCTION. The stance is a claim; what the
+	// assistant is admitted on is the argv its calls run (the profile Load
+	// returned, its web denial applied, as written and streamed), which must
+	// leave the model no shell, file tool or tool server: one on the engine
+	// host reads the engine's own data and keys, outside every request of the
+	// person's (ADR-0049).
+	eligible := strings.Join(cliprofile.AssistantEligible(), ", ")
+	switch {
+	case profile.LocalTools != cliprofile.LocalToolsDenied:
 		p.add(member, ErrConflict,
-			"providers.llm.%s runs the %s CLI with its own local tools %s, so a shell "+
-				"on the engine host could read what no request of the person's "+
-				"returned: the assistant needs a CLI whose profile has local_tools: "+
-				"denied, and this one's does not", key, entry.AgentName(), localToolsWord(profile.LocalTools))
+			"providers.llm.%s runs the %s CLI with its own local tools %s (%s), so a shell "+
+				"or a file reader on the engine host could read what no request of the "+
+				"person's returned: the assistant needs a CLI whose profile has local_tools: "+
+				"denied and whose run has no tool of its own, which of the built-in profiles "+
+				"is %s", key, entry.AgentName(), localToolsWord(profile.LocalTools),
+			strings.TrimSpace(profile.LocalToolsNote), eligible)
+	default:
+		if problem := profile.ToolsOffProblem(); problem != "" {
+			p.add(member, ErrConflict,
+				"providers.llm.%s says the %s CLI's local tools are denied, but %s, so its "+
+					"run is not shown to leave the model without a tool of its own: a shell or "+
+					"a file reader on the engine host could read what no request of the "+
+					"person's returned. The assistant runs only on a CLI whose argv removes "+
+					"every tool (tools_off), which of the built-in profiles is %s; check %s",
+				key, entry.AgentName(), problem, eligible, entryField("overrides"))
+		}
 	}
 	if profile.EffectiveWebTools() != cliprofile.WebToolsDenied {
 		remedy := fmt.Sprintf("set %s: {web_tools: denied}", entryField("overrides"))

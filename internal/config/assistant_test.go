@@ -129,6 +129,75 @@ func TestTheAssistantRefusesAnEntryThatReachesTheWeb(t *testing.T) {
 	}
 }
 
+// THE ASSISTANT REFUSES AN ENTRY THAT CAN RUN LOCAL TOOLS, judged on the argv
+// its calls run rather than on the profile's word. Codex keeps apply_patch,
+// which has no switch; OpenCode's deny-all policy refuses a tool
+// when called rather than removing it, which has never been measured; and a
+// Claude Code entry whose override drops the empty allow list, or adds a tool
+// server, claims the denial its argv no longer carries. Each is refused at the
+// chain member, saying why, and AssistantChain refuses the same document.
+//
+// Mutation: drop the ToolsOffProblem check from assistantMemberProblems and
+// the OpenCode and Claude Code cases load.
+func TestTheAssistantRefusesAnEntryThatCanRunLocalTools(t *testing.T) {
+	t.Parallel()
+	denied := []string{"-p", "--output-format", "json", "--no-session-persistence", "--safe-mode",
+		"--strict-mcp-config", "--disable-slash-commands", "--disallowedTools", "Bash", "Read",
+		"WebFetch", "WebSearch"}
+	argv := func(extra ...string) string {
+		quoted := make([]string, 0, len(denied)+len(extra))
+		for _, a := range append(slices.Clone(denied), extra...) {
+			quoted = append(quoted, fmt.Sprintf("%q", a))
+		}
+		return "[" + strings.Join(quoted, ", ") + "]"
+	}
+	claude := func(args string) string {
+		return "    assistant:\n      agent: claude-code\n      model: sonnet\n      overrides:\n" +
+			"        web_tools: denied\n        web_denial: {complete_args: " + args + "}\n"
+	}
+	cases := map[string]struct{ entry, want string }{
+		"codex keeps apply_patch": {
+			entry: "    assistant:\n      agent: codex\n      model: gpt-5\n      overrides: {web_tools: denied}\n",
+			want:  "no measured way to run the CLI with no tool of its own",
+		},
+		"opencode is unmeasured": {
+			entry: "    assistant:\n      agent: opencode\n      model: openrouter/qwen\n      overrides: {web_tools: denied}\n",
+			want:  "no measured way to run the CLI with no tool of its own",
+		},
+		"claude-code without the empty allow list": {
+			entry: claude(argv()), want: `does not carry "--tools "`,
+		},
+		"claude-code with a tool server": {
+			entry: claude(argv("--tools", "", "--mcp-config", "servers.json")), want: "--mcp-config, which brings a tool back",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			doc := assistantCompany(tc.entry, "  enabled: true\n  llm: [assistant]\n")
+			err := rejects(t, doc, "assistant.llm[0]")
+			if !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("the refusal does not say %q:\n%v", tc.want, err)
+			}
+			if !strings.Contains(err.Error(), "claude-code, pi") {
+				t.Errorf("the refusal does not name the CLIs that qualify:\n%v", err)
+			}
+			stored, decodeErr := ParseCompanyDocument([]byte(doc))
+			if decodeErr != nil {
+				t.Fatal(decodeErr)
+			}
+			if _, chainErr := stored.AssistantChain(); chainErr == nil || !strings.Contains(chainErr.Error(), tc.want) {
+				t.Errorf("AssistantChain handed out a chain admission refuses: %v", chainErr)
+			}
+		})
+	}
+	// The same Claude Code entry WITH the empty allow list is admitted.
+	ok := mustCompany(t, assistantCompany(claude(argv("--tools", "")), "  enabled: true\n  llm: [assistant]\n"))
+	if _, err := ok.AssistantChain(); err != nil {
+		t.Errorf("an entry whose argv removes every tool was refused: %v", err)
+	}
+}
+
 // AN ENABLED ASSISTANT NAMES A MODEL, and every key it names is configured.
 func TestTheAssistantChainMustNameConfiguredEntries(t *testing.T) {
 	t.Parallel()

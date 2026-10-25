@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/assistant`
-- **Enforced-by:** `internal/assistant.TestTheAssistantImportsNoWriterAndNoSeat`, `internal/iam.TestAnAssistedPrincipalIsAPersonCarryingItsScope`, `internal/iam.TestAnAssistGrantsNameIsNobodysLogin`, `internal/api/auth.TestAnAssistGrantOverTheWireIsRefused`, `internal/api/auth.TestAnAssistGrantIsTheSessionsPrincipalRecomposed`, `internal/api/auth.TestARevokedSessionEndsItsGrant`, `internal/api/auth.TestAnExecGrantCarriesOnlyItsBoundRequestOnce`, `internal/api/auth.TestAnAssistGrantIsRefusedTheGuardedEdges`, `internal/api/auth.TestAnAssistGrantNeverProvesAFresherIdentityThanItsSession`, `internal/api/auth.TestOnlyASessionPersonDerivesAGrant`, `internal/api.TestTheDispatcherServesTheAPIsOwnHandler`, `internal/api.TestTheGuardAndTheAuthorityTableAgreeOnTheAssistant`, `internal/assistant.TestTheAssistantReachesToolsOnlyAsRequests`, `internal/assistant.TestTheAssistantSendsThroughTheDispatcherAlone`, `internal/assistant.TestNoTokenReachesARecordALogOrAPrompt`, `internal/assistant.TestAGrantEndingMidTurnEndsTheTurn`
+- **Enforced-by:** `internal/assistant.TestTheAssistantImportsNoWriterAndNoSeat`, `internal/iam.TestAnAssistedPrincipalIsAPersonCarryingItsScope`, `internal/iam.TestAnAssistGrantsNameIsNobodysLogin`, `internal/api/auth.TestAnAssistGrantOverTheWireIsRefused`, `internal/api/auth.TestAnAssistGrantIsTheSessionsPrincipalRecomposed`, `internal/api/auth.TestARevokedSessionEndsItsGrant`, `internal/api/auth.TestAnExecGrantCarriesOnlyItsBoundRequestOnce`, `internal/api/auth.TestAnAssistGrantIsRefusedTheGuardedEdges`, `internal/api/auth.TestAnAssistGrantNeverProvesAFresherIdentityThanItsSession`, `internal/api/auth.TestOnlyASessionPersonDerivesAGrant`, `internal/api.TestTheDispatcherServesTheAPIsOwnHandler`, `internal/api.TestTheGuardAndTheAuthorityTableAgreeOnTheAssistant`, `internal/assistant.TestTheAssistantReachesToolsOnlyAsRequests`, `internal/assistant.TestTheAssistantSendsThroughTheDispatcherAlone`, `internal/assistant.TestNoTokenReachesARecordALogOrAPrompt`, `internal/assistant.TestAGrantEndingMidTurnEndsTheTurn`, `internal/config.TestTheAssistantRefusesAnEntryThatCanRunLocalTools`, `internal/providers/llm/cliagent.TestTheAssistantArgvLeavesTheCLIWithNoToolOfItsOwn`
 - **Cost-when-tried:** the one existing path that runs a model against the company's tools on somebody's behalf, the sandbox MCP bridge, replaces the request's principal with the SEAT (`internal/api/mcpbridge`'s `actingAs`), and a seat holds every app, so a person without the tracker app routed through it would read the tracker; and the agent turn context falls back to a seat's principal when none is set
 - **Tag-status:** unreleased
 
@@ -38,6 +38,16 @@ present (`internal/assistant/exec`'s `Grant`), and no package under
 `internal/assistant` may import the store, another domain's writer or reader,
 the operator surface, the question registry, the tool registry, the builtins,
 the MCP bridge, the agent turn context or the credential owner.
+
+**Its model has no tool of its own.** A coding CLI's own shell or file reader
+runs on the engine host as the engine user, so it would read the engine's data
+directory and keys, a read no request of the person's made. The assistant's
+chain therefore admits only an entry whose every call's argv (web denied, as
+written and streamed) leaves the CLI with no tool at all, checked off that
+argv by `cliprofile.Profile.ToolsOffProblem` rather than taken from the
+profile's `local_tools` claim, since a deny list is always a release behind the
+tools a vendor adds. Codex keeps `apply_patch`, which has no switch and whose
+patch check answers whether a host file holds given lines, so Codex is refused.
 
 ## Why the obvious alternatives are wrong
 
