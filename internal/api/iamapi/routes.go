@@ -421,6 +421,10 @@ func (s *Service) answerWrite(w http.ResponseWriter, r *http.Request, opID strin
 //     at the route — an administrative identity record needs a person
 //     present, and the remedy is to sign in rather than to be granted
 //     anything. Before the authority arm it wraps.
+//   - THE DASHBOARD ASSISTANT, [iamdomain.ErrAssistRefused]: 403
+//     `unauthorized` with the table's `assist_refused` reason, the answer its
+//     row gives the same request at the route: the person takes the gesture
+//     themselves. Before the authority arm it wraps, for the token's reason.
 //   - AUTHORITY, [iamdomain.ErrRefused]: 403, and it will never land however
 //     often it is retried.
 //   - SOMEBODY ELSE HOLDS IT, [iamdomain.ErrTaken]: an address, a login or a
@@ -498,6 +502,14 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 		fields := authz.RefusalDetail(authz.ReasonTokenRefused, nil)
 		fields["detail"] = err.Error()
 		refuse(http.StatusForbidden, httpjson.CodeTokenRefused, fields)
+		return
+	case errors.Is(err, iamdomain.ErrAssistRefused):
+		// THE SAME LOCK FOR THE DASHBOARD ASSISTANT, answered as the
+		// table's own refusal of it: its reason and no permission, since
+		// the person takes the gesture themselves.
+		fields := authz.RefusalDetail(authz.ReasonAssistRefused, nil)
+		fields["detail"] = err.Error()
+		refuse(http.StatusForbidden, httpjson.CodeUnauthorized, fields)
 		return
 	case errors.Is(err, iamdomain.ErrRefused):
 		refuse(http.StatusForbidden, httpjson.CodeUnauthorized,
