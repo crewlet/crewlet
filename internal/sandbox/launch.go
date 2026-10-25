@@ -489,22 +489,21 @@ func (c *Coordinator) abandon(ctx context.Context, m *Manager, req LaunchRequest
 	c.uncountRun(req.Turn.AgentHandle, StatusLaunching)
 }
 
-// label is what the run is named by, cut by [Summarise]: the caller's own
+// label is what the run is named by, cut by [summarise]: the caller's own
 // label where it gave one, else the brief's first line. ONE ANSWER for the
 // announcement and the record, so a run a process learns of from the record
 // after a restart is named exactly as the one it saw announced.
 func (r LaunchRequest) label() string {
 	if strings.TrimSpace(r.Label) != "" {
-		return Summarise(r.Label)
+		return summarise(r.Label)
 	}
-	return Summarise(r.Brief)
+	return summarise(r.Brief)
 }
 
-// Summarise is a brief's first line, WHOLE: the label a running-runs panel
-// draws for a run. Exported because the live projection labels a run it
-// learned of from the durable record — a process that came up mid-run never
-// saw the announcement that carried the label — with the same rule, rather
-// than a second one.
+// summarise is a brief's first line, WHOLE: the label a running-runs panel
+// draws for a run. The record keeps the label it cut ([PendingRun.Label]), so
+// a process that learns of the run from the record after a restart names it as
+// the announcement did, with no second rule of its own.
 //
 // The first line because the brief opens with the concrete task the executor
 // asked for (see [buildBrief]) and the rest is the goal it serves. Never cut
@@ -512,7 +511,7 @@ func (r LaunchRequest) label() string {
 // sentence's first half on the run's page as its title — and a row too narrow
 // for a label is the renderer's to elide, which the dashboard's rows already
 // do, with the whole line still there to read.
-func Summarise(brief string) string {
+func summarise(brief string) string {
 	line, _, _ := strings.Cut(strings.TrimSpace(brief), "\n")
 	return strings.TrimSpace(line)
 }

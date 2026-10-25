@@ -63,6 +63,7 @@ func TestARecordRendersAsTheEntryItsRunWouldHaveAnnounced(t *testing.T) {
 			TurnID: "tn-parked", Role: "Coder", AgentHandle: "coder", CodingAgent: "claude-code",
 			SandboxID: "sb-1", Status: sandbox.StatusAwaiting, Owner: "core-2",
 			TaskDescription: "Add retry to the webhook client\nand the rest of the brief",
+			Label:           "Add retry to the webhook client",
 			Question:        "which ceiling?", Audience: "founder", WorkItem: item,
 			AudienceHandles: []string{"founder", "cto"},
 			LaunchID:        "l-1", Launch: sandbox.LaunchRecord{StartedAt: launched},
@@ -98,7 +99,7 @@ func TestARecordRendersAsTheEntryItsRunWouldHaveAnnounced(t *testing.T) {
 		}
 	}
 	if e.Task != "Add retry to the webhook client" {
-		t.Errorf("task = %q, want the first line, as the announcement cuts it", e.Task)
+		t.Errorf("task = %q, want the label its launch announced", e.Task)
 	}
 	if e.StartedAt != launched.Format(time.RFC3339Nano) {
 		t.Errorf("started at %q, want the launch's own instant", e.StartedAt)
@@ -112,31 +113,19 @@ func TestARecordRendersAsTheEntryItsRunWouldHaveAnnounced(t *testing.T) {
 
 // A RUN IS NAMED FROM ITS RECORD AS IT WAS ANNOUNCED: by the label its launch
 // stored, which for an agent-mode executor is its turn's task rather than the
-// heading its brief opens with. A row an older build wrote carries no label and
-// keeps being named by its task, as such rows always were.
+// heading its brief opens with.
 func TestARecordIsNamedByTheLabelItsLaunchAnnounced(t *testing.T) {
 	t.Parallel()
-	for name, tc := range map[string]struct {
-		run  sandbox.PendingRun
-		want string
-	}{
-		"labelled": {
-			run:  sandbox.PendingRun{Label: "Ship the login fix", TaskDescription: "the turn's task\nand more"},
-			want: "Ship the login fix",
-		},
-		"written before labels": {
-			run:  sandbox.PendingRun{TaskDescription: "the turn's task\nand more"},
-			want: "the turn's task",
-		},
-	} {
-		tc.run.TurnID, tc.run.Status = "tn-1", sandbox.StatusRunning
-		records := observe.SandboxRecords([]sandbox.PendingRun{tc.run})
-		if len(records) != 1 {
-			t.Fatalf("%s: records = %+v, want the run in flight", name, records)
-		}
-		if got := records[0].Entry.Task; got != tc.want {
-			t.Errorf("%s: the run is named %q, want %q", name, got, tc.want)
-		}
+	run := sandbox.PendingRun{
+		TurnID: "tn-1", Status: sandbox.StatusRunning,
+		Label: "Ship the login fix", TaskDescription: "## Task\n\nthe turn's task\nand more",
+	}
+	records := observe.SandboxRecords([]sandbox.PendingRun{run})
+	if len(records) != 1 {
+		t.Fatalf("records = %+v, want the run in flight", records)
+	}
+	if got := records[0].Entry.Task; got != run.Label {
+		t.Errorf("the run is named %q, want %q", got, run.Label)
 	}
 }
 

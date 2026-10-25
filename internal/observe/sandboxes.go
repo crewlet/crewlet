@@ -1,7 +1,6 @@
 package observe
 
 import (
-	"cmp"
 	"context"
 	"slices"
 	"sync"
@@ -152,9 +151,8 @@ func SandboxRecords(runs []sandbox.PendingRun) []livestate.SandboxRecord {
 			AgentID: run.AgentID, CodingAgent: run.CodingAgent, SandboxID: run.SandboxID,
 			// The label the announcement carried, kept on the record for
 			// exactly this: an entry this process never saw announced is
-			// named as the one it did see would have been. A row an older
-			// build wrote has no label, and is named by its task.
-			Task:      cmp.Or(run.Label, sandbox.Summarise(run.TaskDescription)),
+			// named as the one it did see would have been.
+			Task:      run.Label,
 			Status:    status,
 			StartedAt: isoOrEmpty(started),
 			Question:  run.Question, Audience: run.Audience,

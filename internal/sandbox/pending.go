@@ -572,8 +572,6 @@ type PendingRun struct {
 	// Label is what the run is named by on the running-runs panel — the
 	// label its launch announced ([LaunchRequest.Label]) — so a process that
 	// learns of the run from this row after a restart names it the same way.
-	// A row written before the field existed has none, and is named by its
-	// task description's first line, as such rows always were.
 	Label string `json:"label,omitempty"`
 
 	// Reply is who is waiting for the suspended turn — [turn.Reply]'s wire
