@@ -2146,6 +2146,19 @@ grok:
   #                       the two lists fail closed in either direction: a
   #                       renamed web tool leaves the deny list in force, and
   #                       a new tool is outside the allowlist.
+  #   --allow WebFetch    web_fetch has to be ALLOWED as well as offered: it
+  #                       asks first, a headless run cannot ask, and 1.0.70
+  #                       then CANCELS THE WHOLE RUN — the fetch "was not run,
+  #                       as a headless run cannot ask for approval" on stderr,
+  #                       an `end` of stopReason `cancelled`, exit 0 and nothing
+  #                       on stdout, so a text function that fetched a page
+  #                       failed with "printed nothing at all" (measured through
+  #                       the engine; with the rule the fetch ran and the call
+  #                       answered). web_search runs unasked. A fetch is a
+  #                       read, which never gates delivery, and a seat that is
+  #                       told it can fetch must be able to. --permission-mode
+  #                       dontAsk does not take its place: under it the run was
+  #                       cancelled the same way (measured).
   #
   # --sandbox is deliberately not used: it restricts the network along with
   # the filesystem, which would cut the web tools.
@@ -2154,6 +2167,8 @@ grok:
     - "web_search,web_fetch"
     - "--disallowed-tools"
     - "run_terminal_cmd,bash,get_terminal_command_output,kill_terminal_command,read_file,search_replace,write,list_dir,grep,lsp,task,send_subagent_message,workflow,monitor,get_task_output,wait_tasks,kill_task,todo_write,scheduler_create,scheduler_delete,scheduler_list,image_gen,image_edit,image_to_video,reference_to_video,search_tool,use_tool,send_feedback,enter_plan_mode,exit_plan_mode,ask_user_question"
+    - "--allow"
+    - "WebFetch"
   local_tools: denied
   model_args: ["--model", "{model}"]
   # BOTH CHANNELS, and both on argv: each flag takes the text itself, and a
