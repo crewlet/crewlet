@@ -716,7 +716,8 @@ it. Until it is done the company runs and no agent seat takes a turn; whatever
 is sent to a seat waits on its inbox. The builder's next steps give it: with
 `crewlet run` stopped, write the company to a file with `crewlet config
 export`, add `providers.llm` to it, sign the CLI in with `crewlet llm login`,
-import the file and start the node again
+import the file and start the node again, then check it with `crewlet llm
+doctor` through the running node
 ([Giving the company a model](../guides/org-builder.md#giving-the-company-a-model)),
 and the work that waited runs.
 

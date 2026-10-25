@@ -287,8 +287,9 @@ export function NextSteps({
               <span className="t-caption">
                 Agents can’t work until one is added. Every model runs through a coding CLI, signed
                 in on the node’s host. These steps write the company you just created to a file, add
-                Claude Code to it, sign it in with <InlineCode>crewlet llm login</InlineCode> and
-                import the file:
+                Claude Code to it, sign it in with <InlineCode>crewlet llm login</InlineCode>,
+                import the file, and check it with <InlineCode>crewlet llm doctor</InlineCode> once
+                the node runs again:
               </span>
               <CodeBlock plain wrap code={PROVIDER_STEPS} />
             </>

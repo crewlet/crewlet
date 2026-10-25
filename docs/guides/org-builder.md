@@ -188,20 +188,23 @@ providers:
     default:
       model: sonnet
 
-# 3. Sign its CLI in to your subscription, and check it end to end
+# 3. Sign its CLI in to your subscription
 crewlet llm login default -capture-token
-crewlet llm doctor default
 
 # 4. Import the file, and start the node again
 crewlet config import company.yaml
 crewlet run
+
+# 5. In a second terminal, with CREWLET_API_TOKEN set to one of
+# crewlet.yaml's api.auth tokens, check it end to end through
+# the running node
+crewlet llm doctor default
 ```
 
 - **The node is stopped first** because `crewlet config export` reads the
   company out of the node's own store, and a running node holds it: one
   process at a time. Run the steps on the host and in the directory of the
-  node that holds the store. `crewlet llm` itself would run beside the node,
-  reading the stored values through it, but the export it follows would not.
+  node that holds the store.
 - **The file comes from `crewlet config export`**, the active revision as it
   is stored, rather than from `GET /config?format=yaml` or **Copy as YAML**:
   those are redacted, and `crewlet llm` refuses a company file that still
@@ -213,13 +216,25 @@ crewlet run
   default CLI, on your subscription; `-capture-token` mints a headless token
   and stores it in the [secret store](../concepts/secret-store.md) under the
   CLI's own token variable, which an entry that names no `auth.token` reads.
-  `crewlet llm doctor` then makes a real call with a tool to prove the CLI is
-  installed, signed in and still matches the profile Crewlet drives it with.
-  For another CLI or an API key, write the entry
-  [LLM Backends](../concepts/llm-backends.md) describes instead.
+  With the node stopped the token lands in the node's own rows, and the node
+  carries it onto the fleet's store as it starts. For another CLI or an API
+  key, write the entry [LLM Backends](../concepts/llm-backends.md) describes
+  instead.
 - **The import is offline**, with the node stopped: it marks the revision
   active in the node's store, and the node publishes it to the fleet as it
   starts. The work that waited on the seats' inboxes runs on the new model.
+- **The check comes last, through the running node.** `crewlet llm doctor`
+  makes a real call with a tool to prove the CLI is installed, signed in and
+  still matches the profile Crewlet drives it with, and it reads the
+  company's stored values to do it — the token the login stored among them.
+  The builder's node has run, so while it is stopped its own rows are not the
+  company's whole secret store, and every command that reads the company's
+  values is refused there rather than answered from them
+  ([where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values)).
+  Running, the node serves the values the engine runs on, and the doctor reads
+  them through it. Each is a reveal, which takes `admin` and a person present,
+  so `CREWLET_API_TOKEN` holds one of `crewlet.yaml`'s `api.auth.tokens`, one
+  that carries `admin`: a machine token is refused one.
 
 None of this applies to a company another system
 [manages](../concepts/configuration.md#managed-configuration): an offline

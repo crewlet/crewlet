@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -216,9 +217,12 @@ func TestABrokenBootstrapRefusesRatherThanResolvingFromTheEnvironment(t *testing
 // the single break-glass GET, and the write.
 type revealNode struct {
 	server *httptest.Server
-	held   map[string]string
 
 	mu sync.Mutex
+
+	// held is every value the node holds, by name: what it was made with,
+	// and what [revealNode.hold] has added since, while it serves.
+	held map[string]string
 
 	// refuse, when set, is the status every reveal is answered with, and
 	// its body the engine's own refusal of a machine token.
@@ -270,11 +274,11 @@ func newRevealNode(t *testing.T, held map[string]string) *revealNode {
 		if r.URL.Path == "/secrets" {
 			n.mu.Lock()
 			n.listings++
-			n.mu.Unlock()
 			var rows []map[string]string
 			for name := range n.held {
 				rows = append(rows, map[string]string{"name": name, "key_id": "k1"})
 			}
+			n.mu.Unlock()
 			_ = json.NewEncoder(w).Encode(map[string]any{"secrets": rows})
 			return
 		}
@@ -288,14 +292,15 @@ func newRevealNode(t *testing.T, held map[string]string) *revealNode {
 		n.revealed = append(n.revealed, name)
 		n.gets = append(n.gets, name)
 		refuse := n.refuse
+		value, held := n.held[name]
+		gone := n.gone[name]
 		n.mu.Unlock()
 		if refuse != 0 {
 			w.WriteHeader(refuse)
 			_, _ = fmt.Fprint(w, `{"error":"token_refused","detail":"a person must be present"}`)
 			return
 		}
-		value, held := n.held[name]
-		if !held || n.gone[name] {
+		if !held || gone {
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = fmt.Fprint(w, `{"error":"not_found"}`)
 			return
@@ -352,6 +357,31 @@ func (n *revealNode) revealMany(w http.ResponseWriter, r *http.Request) {
 	}
 	n.mu.Unlock()
 	_ = json.NewEncoder(w).Encode(map[string]any{"values": values, "missing": missing})
+}
+
+// hold makes the node hold rows beside what it already holds, as a node's
+// start carries its own table's rows onto the fleet's store.
+func (n *revealNode) hold(rows map[string]string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.held == nil {
+		n.held = map[string]string{}
+	}
+	maps.Copy(n.held, rows)
+}
+
+// listed is how many times the node has been asked for its listing.
+func (n *revealNode) listed() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.listings
+}
+
+// requests is how many requests of any kind have reached the node.
+func (n *revealNode) requests() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return len(n.tokens)
 }
 
 // reveals is every name a reveal of either kind asked for, sorted.
