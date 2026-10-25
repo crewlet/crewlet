@@ -516,3 +516,45 @@ func TestASharedKeyVariableNeedsAVariable(t *testing.T) {
 		t.Errorf("the shipped qwen-code profile does not load: %v", err)
 	}
 }
+
+// A SUBSCRIPTION VARIABLE CHOOSES A LOGIN AND NOTHING ELSE. It is set under one
+// mode, over the entry's env, so a value that clashes with what the rest of the
+// child's environment holds — the isolation, a variable env sets under every
+// other mode, a credential — or an empty one that selects nothing is refused
+// where the profile loads, not discovered on a call.
+func TestASubscriptionVariableIsRefusedWhereItWouldClash(t *testing.T) {
+	t.Parallel()
+	if _, err := Load("gemini-cli", nil); err != nil {
+		t.Fatalf("the shipped gemini-cli profile does not load: %v", err)
+	}
+	for name, tc := range map[string]struct {
+		overrides map[string]any
+		says      string
+	}{
+		"an empty value": {map[string]any{"subscription_env": map[string]any{"GOOGLE_GENAI_USE_GCA": ""}},
+			"subscription_env.GOOGLE_GENAI_USE_GCA is empty"},
+		"an isolation variable": {map[string]any{"subscription_env": map[string]any{"HOME": "/elsewhere"}},
+			"subscription_env names HOME, which the engine sets"},
+		"a variable env sets too": {map[string]any{"subscription_env": map[string]any{"NO_BROWSER": "1"}},
+			"subscription_env and env both name NO_BROWSER"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Load("gemini-cli", tc.overrides)
+			if err == nil || !strings.Contains(err.Error(), tc.says) {
+				t.Errorf("err = %v, want one saying %q", err, tc.says)
+			}
+		})
+	}
+	for _, variable := range []string{"GEMINI_API_KEY", "VENDOR_SECRET_TOKEN"} {
+		p, ok := Builtin("gemini-cli")
+		if !ok {
+			t.Fatal("no built-in gemini-cli profile")
+		}
+		p.SubscriptionEnv = map[string]string{variable: "x"}
+		if err := p.ValidateCredentials("gemini-cli"); err == nil ||
+			!strings.Contains(err.Error(), "subscription_env names \""+variable+"\", which is a credential variable") {
+			t.Errorf("subscription_env naming %s: err = %v", variable, err)
+		}
+	}
+}

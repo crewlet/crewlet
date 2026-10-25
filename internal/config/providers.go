@@ -946,6 +946,16 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 					"resolves or the engine's environment holds a key of its own. Give "+
 					"the key as auth.api_key with auth.mode api-key", name)
 		default:
+			if subscriptionEnvName(profile, mode, name) {
+				// Set with the mode, over env: a value here would be
+				// replaced on every call without a word.
+				p.add(entry(at(path, "env"), name), ErrConflict,
+					"%s is set by the %q profile under auth.mode subscription, to %q, to "+
+						"choose the login the seat's home holds; a value here is replaced on "+
+						"every call, so drop it — a different value is set with "+
+						"overrides.subscription_env", name, l.Agent, profile.SubscriptionEnv[name])
+				continue
+			}
 			// env is layered OVER the variables that keep each seat's CLI
 			// inside its own home and its call's working directory, so a
 			// value here would replace them for every seat on the entry —
@@ -965,6 +975,14 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 		}
 	}
 	return p.err()
+}
+
+// subscriptionEnvName reports whether name is one the profile sets under
+// subscription ([cliprofile.Profile.SubscriptionEnv]) on an entry running
+// under it.
+func subscriptionEnvName(profile cliprofile.Profile, mode CLIAgentAuthMode, name string) bool {
+	_, ok := profile.SubscriptionEnv[name]
+	return ok && mode == AuthSubscription
 }
 
 // isolationRemedy is where an isolation variable's value IS changed, for the

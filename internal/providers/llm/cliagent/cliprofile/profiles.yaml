@@ -564,8 +564,25 @@ gemini-cli:
   # directory, which holds only what the engine writes there; GEMINI.md above
   # it stays out because the engine's `.git` file there is the root the CLI's
   # walk for it stops at.
+  #
+  # NO_BROWSER keeps a call that reaches the CLI's login flow — a subscription
+  # seat whose copied login is missing or refused — from asking to open a
+  # browser. Asked, the CLI read the call's own prompt from stdin as the
+  # answer and then ran with an empty prompt (measured on 0.65.0 with a
+  # display); told, it exits 41 at once, "Manual authorization is required".
   env:
     GEMINI_CLI_TRUST_WORKSPACE: "true"
+    NO_BROWSER: "true"
+  # THE LOGIN IS CHOSEN BY THE ENVIRONMENT, under subscription only. The CLI
+  # signs in with what settings name or, naming none, GOOGLE_GENAI_USE_GCA=true
+  # (the Google login), else GEMINI_API_KEY — read from both bundles. A copied
+  # login selects nothing, so without this every subscription call exited 41,
+  # "Please set an Auth method"; with it, the CLI read the copied
+  # oauth_creds.json and went to Google's token endpoint with it (0.58.0 and
+  # 0.65.0). Not in env and not a settings seed, either of which would put
+  # every api-key call on the login instead of its key.
+  subscription_env:
+    GOOGLE_GENAI_USE_GCA: "true"
   model_args: ["--model", "{model}"]
   # ONE CHANNEL, AND IT REPLACES: GEMINI_SYSTEM_MD names a file whose text is
   # the request's whole systemInstruction — no identity line of the vendor's
@@ -630,10 +647,13 @@ gemini-cli:
     - sentinel: "TerminalQuotaError"
     - sentinel: "RetryableQuotaError"
   # A refused login is relayed with the API's UNAUTHENTICATED, a refused key
-  # with the API's own sentence.
+  # with the API's own sentence, and a login the call could not use — none
+  # copied, or one Google's token endpoint did not accept — with the CLI's
+  # own (measured on 0.58.0 and 0.65.0).
   auth_markers:
     - sentinel: "UNAUTHENTICATED"
     - sentinel: "API key not valid"
+    - sentinel: "Manual authorization is required"
 
 qwen-code:
   binary: qwen

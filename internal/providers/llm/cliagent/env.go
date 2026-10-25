@@ -171,6 +171,12 @@ func applyAuth(env map[string]string, p cliprofile.Profile, auth Auth) {
 		if p.APIKeyEnv != "" {
 			delete(env, p.APIKeyEnv)
 		}
+		// Part of the mode, so over the operator's env: what points the
+		// CLI at the login it would otherwise not choose
+		// ([cliprofile.Profile.SubscriptionEnv]).
+		for name, value := range p.SubscriptionEnv {
+			env[name] = value
+		}
 	}
 }
 

@@ -970,6 +970,23 @@ type Profile struct {
 	// [Profile.Validate].
 	Env map[string]string `yaml:"env,omitempty"`
 
+	// SubscriptionEnv is child environment set under auth.mode subscription
+	// alone, after the operator's env: what tells a CLI that picks its
+	// sign-in from its environment to use the login the seat's home holds.
+	//
+	// A FIELD OF ITS OWN, because the same setting under api-key would
+	// overrule the key. Gemini CLI chooses its sign-in from settings or,
+	// failing those, its environment — GOOGLE_GENAI_USE_GCA=true first,
+	// GEMINI_API_KEY after — and a copied login selects nothing, so every
+	// subscription call exited 41 asking for an auth method (measured on
+	// 0.58.0 and 0.65.0). In env, or as a settings seed, the variable would
+	// have sent every api-key call to the login instead of the key.
+	//
+	// Never a credential, never the profile's token_env or api_key_env
+	// ([Profile.ValidateCredentials]), never a variable the engine sets to
+	// isolate the call or one env sets too, and never an empty value.
+	SubscriptionEnv map[string]string `yaml:"subscription_env,omitempty"`
+
 	// PassthroughEnv names engine environment variables forwarded to the
 	// child. It MAY NOT name a credential, and config refuses a profile
 	// that does ([Profile.ValidateCredentials]): everything here is
@@ -1970,6 +1987,26 @@ func (p *Profile) validateRelocations(add func(string, ...any)) {
 				"own would hand the CLI the engine user's directories", name)
 		}
 	}
+	for _, name := range slices.Sorted(maps.Keys(p.SubscriptionEnv)) {
+		_, inEnv := p.Env[name]
+		switch {
+		case strings.TrimSpace(name) == "":
+			add("subscription_env names an empty variable")
+		case slices.Contains(isolation, name):
+			add("subscription_env names %s, which the engine sets to keep the CLI inside "+
+				"its seat's home and its call's working directory — a value here would "+
+				"replace that isolation on every subscription call", name)
+		case inEnv:
+			// Two values for one variable, of which the child gets the
+			// subscription one under subscription and the other under
+			// every other mode — a sign-in choice made in two places.
+			add("subscription_env and env both name %s — set it in subscription_env "+
+				"alone, which is the only mode it may apply under", name)
+		case strings.TrimSpace(p.SubscriptionEnv[name]) == "":
+			add("subscription_env.%s is empty — give the value that selects the CLI's "+
+				"login, e.g. \"true\"", name)
+		}
+	}
 }
 
 // strandedBy reports every relocation an override MOVED that left behind a
@@ -2270,6 +2307,16 @@ func (p *Profile) ValidateCredentials(name string) error {
 				"engine sets on every command is forwarded whatever auth.mode says and is "+
 				"stored unredacted; give the credential through the entry's auth or its "+
 				"own env", env)
+		}
+	}
+	for _, env := range slices.Sorted(maps.Keys(p.SubscriptionEnv)) {
+		// Set under subscription alone, which removes the key variable and
+		// sets the token's from auth: a credential here would sign the CLI
+		// in with a value no auth field names, stored unredacted.
+		if env != "" && (env == p.TokenEnv || env == p.APIKeyEnv || IsCredentialName(env)) {
+			add("subscription_env names %q, which is a credential variable — it selects "+
+				"the login a subscription call signs in with and carries no secret; give "+
+				"a credential through the entry's auth", env)
 		}
 	}
 	for _, env := range slices.Sorted(maps.Keys(p.Env)) {

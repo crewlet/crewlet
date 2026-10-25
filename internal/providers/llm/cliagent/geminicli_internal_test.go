@@ -204,6 +204,39 @@ func TestGeminiCallsTrustTheirOwnDirectory(t *testing.T) {
 	}
 }
 
+// A SUBSCRIPTION CALL SIGNS IN WITH THE LOGIN, AN API-KEY CALL WITH ITS KEY. The
+// CLI picks its sign-in from its environment — GOOGLE_GENAI_USE_GCA=true ahead
+// of GEMINI_API_KEY — and a copied login selects nothing: without the variable
+// every subscription call exited 41, and with it under api-key the key would
+// go unused. Set over the operator's env, as part of the mode; and NO_BROWSER
+// on every call, so one whose login is missing exits rather than read its own
+// prompt as the answer to "open a browser?".
+func TestGeminiSignsInWithWhatTheModeNames(t *testing.T) {
+	t.Parallel()
+	for mode, want := range map[AuthMode]string{
+		AuthSubscription: "true",
+		AuthAPIKey:       "",
+		AuthInheritEnv:   "",
+	} {
+		t.Run(string(mode), func(t *testing.T) {
+			t.Parallel()
+			env := childEnv(geminiCLI(t), &Checkout{Home: t.TempDir(), Cache: t.TempDir(), Work: t.TempDir()},
+				map[string]string{"GOOGLE_GENAI_USE_GCA": "false"}, Auth{Mode: mode, APIKey: "sk-test-dummy"})
+			got := env["GOOGLE_GENAI_USE_GCA"]
+			if want == "" {
+				// The operator's own value, untouched.
+				want = "false"
+			}
+			if got != want {
+				t.Errorf("GOOGLE_GENAI_USE_GCA = %q, want %q", got, want)
+			}
+			if env["NO_BROWSER"] != "true" {
+				t.Errorf("NO_BROWSER = %q, want true", env["NO_BROWSER"])
+			}
+		})
+	}
+}
+
 // NO ENVIRONMENT FILE ABOVE THE CALL IS READ. The CLI loads the first
 // `.gemini/.env` or `.env` it meets walking up from its working directory to
 // the root — past the engine's `.git` marker — and takes every key its
@@ -363,6 +396,9 @@ func TestGeminiRecognisesItsOwnQuotaAndSignInFailures(t *testing.T) {
 			"    at classifyGoogleError (file:///bundle/chunk.js:306678:16)", llm.KindRateLimit},
 		"a refused login": {report + `_ApiError: {"error":{"code":401,"message":"Request had invalid authentication credentials.","status":"UNAUTHENTICATED"}}`, llm.KindAuth},
 		"a refused key":   {report + `_ApiError: {"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT"}}`, llm.KindAuth},
+		"a login it could not use": {"FatalAuthenticationError: Manual authorization is required but the current session is " +
+			"non-interactive. Please run the Gemini CLI in an interactive terminal to log in, provide a GEMINI_API_KEY, or " +
+			"ensure Application Default Credentials are configured.\n  exitCode: 41", llm.KindAuth},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

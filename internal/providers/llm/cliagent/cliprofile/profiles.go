@@ -98,6 +98,7 @@ func (p Profile) Clone() Profile {
 	out.WorkConfigEnv = cloneMap(p.WorkConfigEnv)
 	out.IsolationEnv = cloneMap(p.IsolationEnv)
 	out.Env = cloneMap(p.Env)
+	out.SubscriptionEnv = cloneMap(p.SubscriptionEnv)
 	if p.StdinLogin != nil {
 		login := *p.StdinLogin
 		login.Args = append([]string(nil), p.StdinLogin.Args...)

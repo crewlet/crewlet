@@ -107,6 +107,14 @@ func TestACLIAgentCredentialWithNowhereToGoIsRefused(t *testing.T) {
 			says: "the token as auth.token",
 		},
 		{
+			// Set with the mode, over env: under subscription a value here
+			// would be replaced on every call and nothing would say so.
+			name:  "a subscription's login selector in env",
+			lines: []string{"agent: gemini-cli", `env: {GOOGLE_GENAI_USE_GCA: "false"}`},
+			path:  "providers.llm.sub.env.GOOGLE_GENAI_USE_GCA", kind: ErrConflict,
+			says: "set by the \"gemini-cli\" profile under auth.mode subscription, to \"true\"",
+		},
+		{
 			// env is layered over the variables that keep every seat's
 			// CLI in its own home, so this would hand every seat the
 			// engine user's dotfiles and nothing would say so.
@@ -240,6 +248,11 @@ func TestEveryCredentialRouteACLIReadsIsAccepted(t *testing.T) {
 			"overrides: {api_key_env: OPENROUTER_API_KEY}"},
 		"cursor-agent's own key variable": {
 			"agent: cursor-agent", `auth: {mode: api-key, api_key: "${CURSOR_API_KEY}"}`},
+		// Under api-key the profile sets nothing there, so the operator's
+		// own choice of sign-in stands.
+		"a login selector in env under api-key": {
+			"agent: gemini-cli", `auth: {mode: api-key, api_key: "${GEMINI_API_KEY}"}`,
+			`env: {GOOGLE_GENAI_USE_GCA: "false"}`},
 		"qwen-code's key and its endpoint": {
 			"agent: qwen-code", `auth: {mode: api-key, api_key: "${DASHSCOPE_API_KEY}"}`,
 			"env: {OPENAI_BASE_URL: https://dashscope-intl.aliyuncs.com/compatible-mode/v1}"},
