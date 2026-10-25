@@ -75,6 +75,9 @@ workers: {...}                          # optional — reusable delegate templat
 roles: [...]                            # optional — root-level org-wide agents (see below)
 units: [...]                            # optional — org structure tree (see below)
 
+assistant: {...}                        # optional, the Dashboard Assistant; off unless enabled
+                                        #   (see "The Dashboard Assistant" below)
+
 turn_engine:                            # optional — executor/reviewer turn config
   max_iterations: 3                     # hard cap on self_iterate loops per turn
   max_tool_rounds: 24                   # max tool-call rounds within one executor run
@@ -322,6 +325,70 @@ A schedule that names no `timezone` of its own fires on the company's
 See the [Scheduling](../concepts/scheduling.md) concept doc for delivery
 modes (`each` / `lead`), at-most-once semantics, catchup, and the
 per-task wall-clock timeout.
+
+### The Dashboard Assistant
+
+The assistant is a drawer in the dashboard that answers a person's questions
+about the company and prepares changes for them to approve. It has no
+identity of its own: every read is a request made as the signed-in person,
+and nothing is written until that person approves the change it previews. It
+is **off** unless the company turns it on.
+
+```yaml
+providers:
+  llm:
+    assistant:                          # a dedicated entry, recommended
+      agent: claude-code
+      model: sonnet
+      timeout_seconds: 90               # one interactive round
+      max_concurrent: 4                 # its own slots, apart from the seats'
+      overrides: { web_tools: denied }  # required for every assistant entry
+
+assistant:
+  enabled: true                         # absent or false: off
+  llm: [assistant]                      # providers.llm keys, a fallback chain
+  max_steps: 8                          # tool steps per turn, 1..16
+  turn_timeout_seconds: 120             # longest turn, 30..600
+  proposal_ttl_seconds: 900             # how long a proposal waits, 60..3600
+  retention_days: 30                    # conversation history, 1..365
+  token_budget: { day: 200000 }         # per person, optional
+```
+
+| Field | Default | Meaning |
+|---|---|---|
+| `enabled` | off | Runs the assistant. A pointer, so an absent key and `false` both mean off. |
+| `llm` | none | The model chain, first key first, in the shape a seat's `llm_auxiliary` takes. Required when `enabled` is true. |
+| `max_steps` | 8 | The most tool steps one turn may take. |
+| `turn_timeout_seconds` | 120 | The longest one turn may run. Every round is a CLI launch. |
+| `proposal_ttl_seconds` | 900 | How long a proposed change waits for its owner's approval before it expires. |
+| `retention_days` | 30 | How long a person's conversations are kept. |
+| `token_budget` | none | Each person's ceiling per calendar window, the shape of [a token budget](#token-budgets), charged on top of the company's own. |
+
+A numeric field left out, or `0`, takes its default; a value outside its range
+is refused naming the field.
+
+**Every model in the chain must reach nothing the person's requests did not
+return.** Each `llm` key must name a `providers.llm` entry that is:
+
+- in **text mode**. An entry with `mode: agent` is refused: agent mode runs
+  the CLI's own tool loop, whose calls never pass the engine's guard.
+- on a profile with **`local_tools: denied`**. A CLI with its own shell on
+  the engine host could read whatever the engine user can.
+- **`web_tools: denied`**, set on the entry with
+  `overrides: { web_tools: denied }`. A page the model fetched itself is text
+  no authority decision saw, and a fetch is a way out for the person's data.
+  Seats keep their web tools; only the entry that sets this loses them. The
+  CLIs that can deny web are `claude-code`, `codex`, `opencode` and `pi`
+  (see [Tool calls in text mode](../concepts/llm-backends.md#tool-calls-in-text-mode));
+  any other is refused.
+
+A document that breaks one of these is refused by `crewlet validate` and by
+every `/config` write, each naming the chain member and the entry field to
+change. A stored revision that somehow carries one still applies, so every
+seat keeps running, and the assistant stays unavailable with that reason
+until the chain is fixed. Run `crewlet llm doctor assistant` before turning
+it on: on a denied entry it asks the CLI to fetch a page and reports a fetch
+that succeeded as a problem.
 
 ---
 

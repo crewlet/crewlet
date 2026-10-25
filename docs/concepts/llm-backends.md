@@ -1742,7 +1742,7 @@ you configure.
 **An entry can turn the web off, and the Dashboard Assistant requires it.**
 Web stays on for every seat unless its entry says otherwise. An entry whose
 model must read nothing the engine's own guard did not hand it (the
-Dashboard Assistant's) sets `overrides: {web_tools: denied}`, and the profile's `web_denial` says
+[Dashboard Assistant's](../getting-started/configuration.md#the-dashboard-assistant)) sets `overrides: {web_tools: denied}`, and the profile's `web_denial` says
 what that CLI runs with instead:
 
 | Profile | How web is turned off | Measured |
