@@ -189,12 +189,11 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 //
 // The token counters are FLEET state: they live in the coordination store so
 // that a company's cap is one number rather than one per node. On the default
-// topology that store is the engine's own embedded broker, which means there
-// is nothing on disk this command could open — and, worse, that opening it
-// anyway would be dangerous rather than merely useless: a second JetStream
-// server on the same store directory is ACCEPTED rather than refused
-// (measured), so two writers would corrupt the counters instead of contending
-// for them.
+// topology that store is the engine's own embedded broker, held by the
+// running engine: a second broker on its store directory is refused
+// (internal/queue/jetstream's StoreDirLock), so there is nothing this command
+// could open beside it — and a budget is a question about a company that is
+// running, which the running node answers.
 //
 // So `show` reads the same answer the dashboard renders. It takes the running
 // node's address, which defaults to what this node's own Tier A config says it

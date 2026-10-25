@@ -515,7 +515,7 @@ That distinction was not always drawn, and each consequence was silent. The toke
 >
 > An *offline* `crewlet config import` — one run while the engine is stopped — cannot move the activation pointer, because there is nothing running to move it in. It marks the revision active in this node's own database and says so; a node that starts holding an active revision the fleet has no pointer for publishes it at boot, so a restart converges without any operator action. Against a **running** node the same command takes the other route entirely: it detects the held store and goes through that node's `PUT /config`, which moves the pointer immediately.
 >
-> And the operator commands that read or act on this state talk to a **running node** rather than to a file: `crewlet budgets show`, `crewlet backup` and `crewlet secrets` are clients of that node's API. Opening the store from outside would either find nothing (the engine is down, and an embedded broker exists only while it runs) or corrupt it (the engine is up, and a second broker on the same store directory is *accepted* rather than refused).
+> And the operator commands that read or act on this state talk to a **running node** rather than to a file: `crewlet budgets show`, `crewlet backup` and `crewlet secrets` are clients of that node's API. Opening the store from outside would either find nothing (the engine is down, and an embedded broker exists only while it runs) or be refused (the engine is up, and holds its store directory against a second broker — nats-server itself would *accept* one, and two brokers writing one directory corrupt it).
 
 ---
 

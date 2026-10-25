@@ -22,10 +22,10 @@ import (
 // coordination store's positions register, and an eviction or a readmission is
 // a record on every identity-claiming state log. Both live in the broker, and
 // on the default topology that is the engine's own embedded one, which binds no
-// socket: a CLI run while the engine is down cannot reach it, and one run
-// while the engine is UP must not try, because a second server on the same
-// store directory is accepted rather than refused and two writers on one
-// JetStream store is corruption rather than contention.
+// socket: a CLI run while the engine is UP cannot reach it — a second broker
+// on its store directory is refused (internal/queue/jetstream's
+// StoreDirLock) — and these gestures act on a fleet that is running, so the
+// node already holding that state is where they go.
 //
 // So each gesture goes where the state is reachable: through a node that
 // already holds it. `crewlet retention ack`, `evict` and `readmit` are clients
