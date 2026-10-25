@@ -212,8 +212,9 @@ func TestAMintRefusesWhatATokenMayNotCarry(t *testing.T) {
 // Now the id comes from the principal the writer was derived for. Mutations:
 // decide the person arm on anything but the party's id and the Tier A party
 // mints; drop the person arm and the administrator mints; drop the
-// machine-token refusal and jane's own token mints another; drop the machine
-// arm and a party without admin mints for a pipeline.
+// machine-token refusal and jane's own token mints another; read the token's
+// name rather than its class and a malformed one does; drop the machine arm
+// and a party without admin mints for a pipeline.
 func TestAPersonsTokenIsMintedByThatPersonAlone(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -266,6 +267,15 @@ func TestAPersonsTokenIsMintedByThatPersonAlone(t *testing.T) {
 		iamdomain.TokenMint{PersonID: owner}); !errors.Is(err, iamdomain.ErrRefused) {
 		t.Errorf("jane's own machine token minting another answered %v, want "+
 			"a refusal", err)
+	}
+	// AND NOT THROUGH AN ID OF THE TOKEN'S CLASS this build cannot parse:
+	// the class decides, never the spelling, or the person arm mints as jane.
+	malformed := *rig.writer.As(throughToken)
+	malformed.OperatorID = iam.MachineTokenPrefix + "x"
+	if _, _, err := mintFor(t, rig, &malformed,
+		iamdomain.TokenMint{PersonID: owner}); !errors.Is(err, iamdomain.ErrRefused) {
+		t.Errorf("an operator id of the token's class minting another answered "+
+			"%v, want a refusal", err)
 	}
 
 	// A SERVICE ACCOUNT: the administrator mints for it, and a party
