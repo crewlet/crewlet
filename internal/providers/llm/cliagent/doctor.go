@@ -539,9 +539,7 @@ func (p *Provider) fileProbe(ctx context.Context) (verdict, problem string) {
 	if err := os.WriteFile(path, []byte(token+"\n"), 0o600); err != nil {
 		return "file probe failed: " + err.Error(), ""
 	}
-	comp, err := p.Complete(ctx, tokenStreamed(llm.Request{
-		Messages: []llm.Message{{Role: llm.RoleUser, Content: fmt.Sprintf(fileProbePrompt, path)}},
-	}))
+	comp, err := p.Complete(ctx, tokenStreamed(probeRequest(fmt.Sprintf(fileProbePrompt, path))))
 	if err != nil {
 		return "file probe failed: " + err.Error(), ""
 	}
