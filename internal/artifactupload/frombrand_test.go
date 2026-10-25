@@ -194,7 +194,11 @@ func TestADeckBegunInTheBrandCopiesItsLogoAndFaces(t *testing.T) {
 		!strings.Contains(idx, `"src": "`+p+`"`) {
 		t.Errorf("the heading face is %+v (held %v) and the index declares:\n%s", e, ok, idx)
 	}
-	if theme := brandformat.SlideTheme(b); !strings.Contains(h.file(v, slideformat.SlidePath("cover")), theme.Feature) {
+	adopted, ok := brandformat.AsAdoptable(b)
+	if !ok {
+		t.Fatalf("the adopted fixture leaves out %v", brandformat.MissingToAdopt(b))
+	}
+	if theme := brandformat.SlideTheme(adopted); !strings.Contains(h.file(v, slideformat.SlidePath("cover")), theme.Feature) {
 		t.Errorf("the cover is not drawn on the brand theme's ground %s", theme.Feature)
 	}
 }

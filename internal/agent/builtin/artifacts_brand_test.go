@@ -121,7 +121,11 @@ func TestTheCompanyBrandAnswersWhatAModelWritesLiterally(t *testing.T) {
 	face := heading["deck_face"].(map[string]any)
 	// THE BRAND THEME SETS HEADINGS BOLD, so the bold file is the one a deck
 	// declares, at the path the copy puts it.
-	theme := brandformat.SlideTheme(b)
+	adopted, ok := brandformat.AsAdoptable(b)
+	if !ok {
+		t.Fatalf("the adopted fixture leaves out %v", brandformat.MissingToAdopt(b))
+	}
+	theme := brandformat.SlideTheme(adopted)
 	wantFile := "brand/fonts/heading-0.woff2"
 	if theme.DisplayWeight < 550 {
 		wantFile = "brand/fonts/heading-1.woff2"
@@ -256,5 +260,36 @@ func TestADeckBeginsFromAStarterPlan(t *testing.T) {
 		if tools.RefusalOf(got) != tools.RefusalInvalid || len(r.f.creates) != before {
 			t.Errorf("%s answered %v: %s", name, tools.RefusalOf(got), got.Output)
 		}
+	}
+}
+
+// A DRAFT KIT IS OUTLINED AS IT STANDS: a kit holding its name alone answers
+// get_artifact's outline with its name and its faces as unset, and says
+// nothing of a logo or a colour it does not hold.
+//
+// Mutation: print every logo and colour role unconditionally and the draft's
+// outline names an empty primary.
+func TestADraftKitIsOutlinedAsItStands(t *testing.T) {
+	t.Parallel()
+	r := newArtifactRig(t, artifactChart{}, requesters{"founder": founderPrincipal(iam.Apps...)}, nil)
+	turn := asked(t)
+	h := r.f.seed("founder", iam.ActorHuman, founder,
+		[]artifacts.Share{shareWith("agent-cto", artifacts.RoleEditor)},
+		[2]string{brandformat.EntryPath, `{"v":1,"name":"Acme"}`})
+	r.f.setKind(h.ID, artifacts.KindBrand)
+
+	got := r.call(t, turn, builtin.GetArtifactTool, map[string]any{"artifact": h.ID.String(), "view": "outline"})
+	if got.Failed {
+		t.Fatalf("the draft's outline was refused: %s", got.Output)
+	}
+	outline, _ := decode(t, got)["outline"].(map[string]any)
+	text, _ := outline["text"].(string)
+	for _, want := range []string{"Brand kit: Acme", "Heading face: not set", "Body face: not set"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the outline lacks %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "Logo") || strings.Contains(text, "Colour") || outline["name"] != "Acme" {
+		t.Errorf("the draft's outline answered %v:\n%s", outline["name"], text)
 	}
 }

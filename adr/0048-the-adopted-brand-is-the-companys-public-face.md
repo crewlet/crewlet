@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/artifactsdomain`
-- **Enforced-by:** `internal/artifactsdomain.TestTheAdoptedBrandOutlivesItsKitAndIgnoresItsDrafts`, `internal/artifactsdomain.TestAnUnreadableBrandIsNeverAdopted`, `internal/artifactsdomain.TestAnAdoptionNamesOnlyTheFreshCopiesItsBrandServes`, `internal/artifactsdomain.TestASupersededAdoptionIsServedWhileAVersionPinsIt`, `internal/artifactsdomain.TestASupersededAdoptionGoesWithTheLastVersionThatPinsIt`, `internal/artifactsdomain.TestAFramedVersionPinsTheStylesheetAdoptedWhenItIsPublished`, `internal/artifactupload.TestAnAdoptionCopiesEveryFileAndGeneratesTheStylesheet`, `internal/artifactserve.TestTheBrandRouteServesOnlyAdoptedBytes`, `internal/artifactserve.TestTheArtifactListenerServesOnlyTheServingRoutes`, `internal/artifacts/brandformat.TestNoValueLeavesItsDeclaration`, `internal/artifacts/svgsafe.TestNothingThatRunsLoadsOrExpandsIsStored`, `internal/api/artifactsapi.TestTheAdoptedBrandIsEverybodysAndADraftIsNot`, `internal/api/artifactsapi.TestAdoptingIsAnAdministratorsAndRecordsTheOverride`
+- **Enforced-by:** `internal/artifactsdomain.TestTheAdoptedBrandOutlivesItsKitAndIgnoresItsDrafts`, `internal/artifactsdomain.TestAnUnreadableBrandIsNeverAdopted`, `internal/artifactsdomain.TestADraftIsNeverAdopted`, `internal/artifacts/brandformat.TestADraftNeedsOnlyItsName`, `internal/artifacts/brandformat.TestOnlyACompleteBrandIsReadAsAdopted`, `internal/artifactsdomain.TestAnAdoptionNamesOnlyTheFreshCopiesItsBrandServes`, `internal/artifactsdomain.TestASupersededAdoptionIsServedWhileAVersionPinsIt`, `internal/artifactsdomain.TestASupersededAdoptionGoesWithTheLastVersionThatPinsIt`, `internal/artifactsdomain.TestAFramedVersionPinsTheStylesheetAdoptedWhenItIsPublished`, `internal/artifactupload.TestAnAdoptionCopiesEveryFileAndGeneratesTheStylesheet`, `internal/artifactserve.TestTheBrandRouteServesOnlyAdoptedBytes`, `internal/artifactserve.TestTheArtifactListenerServesOnlyTheServingRoutes`, `internal/artifacts/brandformat.TestNoValueLeavesItsDeclaration`, `internal/artifacts/svgsafe.TestNothingThatRunsLoadsOrExpandsIsStored`, `internal/api/artifactsapi.TestTheAdoptedBrandIsEverybodysAndADraftIsNot`, `internal/api/artifactsapi.TestAdoptingIsAnAdministratorsAndRecordsTheOverride`
 - **Cost-when-tried:** the first design put the brand in one artifact at a fixed id whose editors published what every page showed. A purge of that artifact leaves a deletion marker that refuses its id for ever, so the company could never have a brand again; and any editor of it, an agent included, restyled every page the company publishes with no administrator involved.
 - **Tag-status:** unreleased
 
@@ -49,6 +49,19 @@ the brand's voice reaches a model only through the tool, fenced as
 company-adopted text naming both who wrote it (the adopted version's author)
 and who adopted it. The adoption also labels the version it adopts where the
 label is free, as provenance: the snapshot never depends on it.
+
+**A kit is drafted step by step and adopted only when complete.** A version of
+a kit needs only its `name` to publish, so a setup flow saves the kit after
+each step; every field a draft does hold keeps all its rules (the closed keys,
+the colour grammar, every asset check). Adoption requires `logos.primary` and
+`colors.primary`, and the domain decides it where it measures contrast
+(`artifactsdomain.CheckBrandAdoptable`): a brand that leaves either out is
+refused as `BrandIncomplete`, naming each missing field (answered as `422
+policy_refused` with findings and the bare `missing` list), before its contrast
+is measured and before a byte is stored. An unset face draws the artifact kit's
+own face. The stylesheet and the slide theme are computed only from a
+`brandformat.Adoptable`, a value that can only be made from a complete brand,
+so no draft can reach them.
 
 ## Why the obvious alternatives are wrong
 

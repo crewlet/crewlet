@@ -168,3 +168,40 @@ func TestAnUnreadableBrandIsAnsweredWithItsPair(t *testing.T) {
 		t.Errorf("the refusal carries %+v (%v)", body.Contrast, err)
 	}
 }
+
+// AN INCOMPLETE BRAND IS REFUSED NAMING WHAT IT LEAVES OUT, as findings the
+// adopt dialog lists beside the fields to fill and as the bare field names.
+//
+// Mutation: answer BrandIncomplete through the default failure and the
+// dialog gets no findings and no missing list.
+func TestAnIncompleteBrandIsAnsweredWithWhatItLeavesOut(t *testing.T) {
+	t.Parallel()
+	g := newRig(t, true)
+	g.pipeline.err = &artifactsdomain.BrandIncomplete{Missing: []string{"logos.primary", "colors.primary"}}
+	w := g.do(person("ada", iam.GrantAdmin), "POST", "/brand/adoptions",
+		`{"kit":"`+page.String()+`","version":1}`, keyed()...)
+	if w.Code != http.StatusUnprocessableEntity || errorOf(t, w) != "policy_refused" {
+		t.Fatalf("an incomplete brand answered %d %s", w.Code, w.Body)
+	}
+	var body struct {
+		Missing  []string `json:"missing"`
+		Findings []struct {
+			Path    string `json:"path"`
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"findings"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("the refusal does not decode: %v", err)
+	}
+	if strings.Join(body.Missing, ",") != "logos.primary,colors.primary" || len(body.Findings) != 2 {
+		t.Fatalf("the refusal carries missing %v and %d findings", body.Missing, len(body.Findings))
+	}
+	for i, field := range body.Missing {
+		f := body.Findings[i]
+		if f.Path != brandformat.EntryPath || f.Code != "brand_format" ||
+			!strings.HasPrefix(f.Message, "field: "+field+": is required to adopt the brand") {
+			t.Errorf("finding %d is %+v, want it to name %s", i, f, field)
+		}
+	}
+}

@@ -36,13 +36,16 @@
 //     Plain text: NFC, trimmed, no control or format character, no `<` or
 //     `>`, no link (a scheme and `//`, `javascript:`, a `data:` address, a
 //     `www.` host).
-//   - `logos.primary` is required; `logos.on_dark` and `logos.mark` are
-//     optional. Each is the path of an SVG ([MaxSVGBytes], sanitised by
+//   - `name` is the one field a publish requires: a kit is saved step by step
+//     while it is set up. `logos.primary` and `colors.primary` are required
+//     to ADOPT the brand ([AdoptionFields], [MissingToAdopt]); a draft may
+//     leave them out, and every field it holds is held to its rule.
+//   - `logos.primary`, `logos.on_dark` and `logos.mark` are each the path of an SVG ([MaxSVGBytes], sanitised by
 //     internal/artifacts/svgsafe, a `viewBox` required), a PNG or a WebP
 //     ([MaxImageBytes], at most [MaxImageSide] pixels a side and
 //     [MaxImagePixels] in all, APNG refused).
-//   - `colors.primary` is required; `secondary`, `text`, `light_ground`,
-//     `dark_ground` and `primary_on_dark` are optional, an absent role taking
+//   - `colors.primary`, `secondary`, `text`, `light_ground`, `dark_ground`
+//     and `primary_on_dark` are colour roles, an absent optional role taking
 //     the kit's Crewlet fallback. Each is `#rrggbb`, lowercase hex
 //     ([ColorPattern]). Contrast is judged on the effective values (fallbacks
 //     filled): `text` on `light_ground` below [MinTextContrast] refuses an
@@ -56,8 +59,9 @@
 //     spaces and hyphens, with 1 to [MaxFontFilesPerFamily] WOFF2 `files`,
 //     each at most [MaxFontFileBytes], a weight a whole hundred from 100 to
 //     900 and a style `normal` or `italic`, no weight and style twice, and
-//     `licensed` true: the publisher attests the company may embed it). Both
-//     faces are required.
+//     `licensed` true: the publisher attests the company may embed it). A face
+//     that names none of the three and carries no file and no licence is
+//     unset, and the kit's own face (Geist) is drawn in its place.
 //   - `voice.summary` is 0 to [MaxVoiceSummaryBytes] bytes; `voice.write_like`
 //     and `voice.avoid` are each up to [MaxVoiceExamples] lines of at most
 //     [MaxVoiceExampleBytes] bytes. No URL anywhere in the voice. The voice
@@ -69,7 +73,8 @@
 // source an agent copies into a version names a slot, never a path, so a copy
 // reads only the adopted snapshot.
 //
-// WHAT AN ADOPTION MAKES OF A KIT: the canonical index it snapshots
+// WHAT AN ADOPTION MAKES OF A KIT is made only from an [Adoptable], a brand that
+// holds every field an adoption requires: the canonical index it snapshots
 // ([Canonical], read back with [Decode]), the one stylesheet generated from it
 // ([CSS]: `--brand-*` inputs on `:root` and `@font-face` rules, every value
 // re-checked as it is written), the extensions the public route serves its

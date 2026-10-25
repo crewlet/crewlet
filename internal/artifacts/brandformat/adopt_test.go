@@ -50,6 +50,9 @@ func TestADraftNeedsOnlyItsName(t *testing.T) {
 			if err != nil {
 				t.Fatalf("the draft was refused at publish: %v", err)
 			}
+			if b.Text() != "Acme" {
+				t.Errorf("the draft's search text is %q", b.Text())
+			}
 			if got := brandformat.MissingToAdopt(b); !slices.Equal(got, c.missing) {
 				t.Errorf("the draft leaves out %v for an adoption, want %v", got, c.missing)
 			}

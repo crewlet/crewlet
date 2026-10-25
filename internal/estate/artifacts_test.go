@@ -257,6 +257,10 @@ func (v *vault) Move(_ context.Context, c artifactsdomain.Call, _ artifacts.ID, 
 
 func (v *vault) AdoptBrand(_ context.Context, c artifactsdomain.Call, in artifactsdomain.BrandAdoptInput) (
 	artifactsdomain.Written, error) {
+	if in.Version == 98 {
+		return artifactsdomain.Written{}, &artifactsdomain.BrandIncomplete{
+			Missing: []string{"logos.primary", "colors.primary"}}
+	}
 	if in.Version == 99 {
 		return artifactsdomain.Written{}, &artifactsdomain.BrandContrast{Pair: brandformat.ContrastResult{
 			ContrastPair:    brandformat.ContrastPairs[0],
@@ -387,6 +391,12 @@ func TestEveryArtifactsOperationCrossesWhole(t *testing.T) {
 	if !errors.Is(err, artifactsdomain.ErrBrandContrast) || !errors.As(err, &contrast) ||
 		contrast.Pair.Ratio != 2.66 || contrast.Pair.ForegroundColor != "#999999" {
 		t.Errorf("a contrast refusal crossed as %v, without the pair that refused it", err)
+	}
+	_, err = a.AdoptBrand(ctx, jane, artifactsdomain.BrandAdoptInput{Version: 98})
+	var incomplete *artifactsdomain.BrandIncomplete
+	if !errors.Is(err, artifactsdomain.ErrBrandIncomplete) || !errors.As(err, &incomplete) ||
+		strings.Join(incomplete.Missing, ",") != "logos.primary,colors.primary" {
+		t.Errorf("an incomplete brand's refusal crossed as %v, without the fields it leaves out", err)
 	}
 	for name, write := range map[string]func() error{
 		"patch": func() error { _, err := a.Patch(ctx, jane, id, artifactsdomain.Patch{}); return err },

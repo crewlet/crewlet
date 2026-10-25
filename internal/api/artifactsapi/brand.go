@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifacts/brandformat"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/artifactupload"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -104,12 +105,12 @@ func (g Gate) Brand(ctx context.Context, reads BrandReads, p iam.Principal,
 	if err != nil || !adopted {
 		return BrandAnswer{}, err
 	}
-	doc, err := brandformat.Decode(a.BrandJSON)
+	snapshot, err := brandformat.DecodeAdopted(a.BrandJSON)
 	if err != nil {
 		return BrandAnswer{}, fmt.Errorf("artifactsapi: the adopted brand does not read under "+
 			"the brand format this build holds: %w", err)
 	}
-	out := &AdoptedBrand{Kit: a.Kit, KitVersion: a.KitVersion, Document: doc, CSSSha: a.CSSSha,
+	out := &AdoptedBrand{Kit: a.Kit, KitVersion: a.KitVersion, Document: snapshot.Brand(), CSSSha: a.CSSSha,
 		AdoptedBy: publicActor(a.AdoptedBy), AdoptedAt: a.AdoptedAt}
 	for _, f := range a.Files {
 		out.Files = append(out.Files, BrandFileRef{Slot: f.Slot, ContentType: f.ContentType,
@@ -291,7 +292,20 @@ func (s *Service) brandCall(p iam.Principal, key string) artifactsdomain.Call {
 // brandFailed renders a brand write's refusal: an unreadable brand with the
 // pair that refuses it, everything else as any write's.
 func brandFailed(w http.ResponseWriter, r *http.Request, key, verb string, err error) {
-	var contrast *artifactsdomain.BrandContrast
+	var (
+		contrast   *artifactsdomain.BrandContrast
+		incomplete *artifactsdomain.BrandIncomplete
+	)
+	if errors.As(err, &incomplete) {
+		// A BRAND THAT LEAVES A FIELD OUT is answered as a kit outside its
+		// format is, a finding per field, and the fields as a list beside
+		// them for a surface that sends its reader to the step that sets one.
+		httpjson.FailWithFields(w, http.StatusUnprocessableEntity, httpjson.CodePolicyRefused,
+			httpjson.Detail{"detail": say(err), "op_id": key,
+				"findings": artifactupload.BrandFindings(brandformat.AdoptionFindings(incomplete.Missing)),
+				"missing":  incomplete.Missing})
+		return
+	}
 	if errors.As(err, &contrast) {
 		httpjson.FailWithFields(w, http.StatusUnprocessableEntity, httpjson.CodeBrandContrast,
 			httpjson.Detail{"detail": say(err), "op_id": key, "contrast": contrast.Pair})

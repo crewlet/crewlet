@@ -712,6 +712,15 @@ func (t *getArtifact) outline(ctx context.Context, read *foreignRead, h artifact
 	return out, nil
 }
 
+// outlineFace is a kit's face as its outline says it: its font-family list,
+// or that a draft left it unset, which draws the kit's own face.
+func outlineFace(f brandformat.Face) string {
+	if stack := brandformat.FontStack(f); stack != "" {
+		return stack
+	}
+	return "not set (Geist, the kit's own face)"
+}
+
 // brandOutline is a brand kit's index as one text: its name and tagline, its
 // colour roles, its faces, its logos by path and its voice. A kit is a draft
 // until an administrator adopts it; the company's adopted brand is
@@ -731,8 +740,8 @@ func brandOutline(b brandformat.Brand) string {
 			fmt.Fprintf(&w, "Colour %s: %s\n", role.name, role.value)
 		}
 	}
-	fmt.Fprintf(&w, "Heading face: %s\nBody face: %s\n", brandformat.FontStack(b.Type.Heading),
-		brandformat.FontStack(b.Type.Body))
+	fmt.Fprintf(&w, "Heading face: %s\nBody face: %s\n", outlineFace(b.Type.Heading),
+		outlineFace(b.Type.Body))
 	for _, logo := range []struct{ name, path string }{
 		{"primary", b.Logos.Primary}, {"on_dark", b.Logos.OnDark}, {"mark", b.Logos.Mark},
 	} {
