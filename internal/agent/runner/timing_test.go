@@ -173,10 +173,17 @@ func TestProgressCarriesTheCurrentCapAndCeiling(t *testing.T) {
 		if frame.RoundStartedAt.IsZero() {
 			t.Errorf("a round-%d frame names no start", round)
 		}
-		// A frame carries every round the phase has made so far, on the
-		// phase's scale — the round its count says it is on.
-		if len(frame.Rounds) != round {
-			t.Errorf("a round-%d frame carries %d timed rounds", round, len(frame.Rounds))
+		// A frame carries every round the phase has finished, on the
+		// phase's scale: every one before the round it is on, and that
+		// round too once its response has been read — while its request
+		// is still out, the frame names it and has no timing for it yet.
+		if n := len(frame.Rounds); n != round && n != round-1 {
+			t.Errorf("a round-%d frame carries %d timed rounds", round, n)
+		}
+		for _, r := range frame.Rounds {
+			if r.Round > round {
+				t.Errorf("a round-%d frame carries round %d, which has not begun", round, r.Round)
+			}
 		}
 		for _, call := range frame.RunningCalls {
 			if call.Round != round {

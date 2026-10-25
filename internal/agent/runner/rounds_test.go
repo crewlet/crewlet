@@ -641,12 +641,11 @@ func TestTheReviewAfterARefusedJudgementMakesNoCall(t *testing.T) {
 // not another of the CLI's requests. The judge is a model call like any other
 // — billed, then charged — and once nothing more fits a window every charge
 // after is refused. Here the phase's two rounds fill the ceiling exactly: both
-// are admitted, nothing refused them, and the meter knows no later charge can
-// fit. So the phase ends there on the budget, at the gate every call of the
-// CLI's loop passes, rather than running out its rounds into a judge whose only
-// possible verdict was the refusal. (The judge's own guard, for a refusal that
-// lands only once the phase is out of rounds, is held in
-// judge_internal_test.go.)
+// are admitted, nothing refused them, and the phase runs out of rounds with the
+// window full. So the extension is decided by the budget, not the judge: the
+// phase is rescued as incomplete, no judgement is bought, and the CLI asks its
+// model nothing past the two requests the window held. (The judge's own guard is
+// held in judge_internal_test.go.)
 func TestNothingMoreIsBoughtOnARefusalAlreadyCertain(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{execute: []llmtest.Response{
@@ -657,8 +656,12 @@ func TestNothingMoreIsBoughtOnARefusalAlreadyCertain(t *testing.T) {
 	meter := &ceilingMeter{ceiling: 200}
 	r := extendableRunner(t, prov, pub, spendingJudge{}, meter)
 
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); !errors.Is(err, toolloop.ErrBudgetExhausted) {
-		t.Fatalf("Execute = %v, want the refusal the full window made certain", err)
+	w, _, err := r.Execute(context.Background(), 1, "", nil)
+	if err != nil {
+		t.Fatalf("Execute = %v, want the phase rescued on the budget", err)
+	}
+	if !w.Rescued {
+		t.Errorf("the executor was not rescued, though nothing more could be bought")
 	}
 	if got := phasesOfKind(t, pub, "judge"); len(got) != 0 {
 		t.Errorf("%d judge phases published on a refusal the meter already held", len(got))
