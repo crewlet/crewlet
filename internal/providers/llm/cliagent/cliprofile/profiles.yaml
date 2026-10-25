@@ -1176,6 +1176,77 @@ qwen-code:
   usage:
     input: [["usage", "input_tokens"]]
     output: [["usage", "output_tokens"]]
+  # THE SEAT'S TOOLS: one stdio server in a configuration file in the call's
+  # own directory, named by --mcp-config, with --allowed-mcp-server-names
+  # admitting it alone and --allowed-tools letting its tools run unprompted
+  # (`mcp__crewlet` is every tool of the server). Measured on 0.26.1 through
+  # the engine's own code path against a local stand-in, the state directory
+  # inside a checkout holding a .qwen/settings.json, an .mcp.json and every
+  # other CLI's MCP configuration at each level above the call, and an
+  # extension with a server of its own in the seat's home: the model was
+  # offered the seat's tools and web_fetch, and no other server started.
+  # Without --allowed-mcp-server-names, the home's extension started its
+  # server.
+  #
+  # The server's `timeout` is the CLI's per-call timeout, in milliseconds
+  # (600,000 by default; 4,000 gave a slow call up at 4.0s). The CLI does not
+  # re-read a server's list mid-run (a tool activated mid-run was never
+  # offered), and makes one response's calls at once only where every one is
+  # to a tool annotated read-only: two read-only calls of 1.5s each
+  # overlapped, two others ran one after the other.
+  #
+  # A failed run's result event says why, by field: its subtype and its
+  # error's message.
+  mcp:
+    seed:
+      - path: crewlet-mcp.json
+        in: work
+        content: '{"mcpServers":{"crewlet":{"command":{relay_command_json},"args":{relay_args_json},"timeout":{tool_timeout_ms}}}}'
+    args: ["--mcp-config", "{work}/crewlet-mcp.json", "--allowed-mcp-server-names", "crewlet"]
+    allow_args: ["--allowed-tools", "mcp__crewlet"]
+    tool_timeout_seconds: 600
+    relists: false
+    concurrency: read_only
+    failure_events:
+      - match: [{path: ["type"], equals: "result"}, {path: ["is_error"], equals: true}]
+        fields: [["subtype"], ["error", "message"]]
+  # EACH REQUEST, FROM THE STREAM: a response is one or more `assistant`
+  # events — its prose, then its calls with the request's counts and its stop
+  # reason — each under an id of its own, so the response is not told by id:
+  # it ENDS where the `user` events carrying its calls' results begin
+  # (closes), and the next `assistant` event begins the next. The CLI sends no
+  # id of its own with a call; a call is joined to its request by name and
+  # arguments. The init event lists the tools the model is offered.
+  #
+  # Measured on 0.26.1: each request in the stream before its calls reached
+  # the server, its counts there, their sum equal to the result's.
+  requests:
+    source: stdout
+    host_prefix: "mcp__crewlet__"
+    stops: {tool_use: tool_use}
+    events:
+      - match: [{path: ["type"], equals: "system"}, {path: ["subtype"], equals: "init"}]
+        tools: ["tools"]
+      - match: [{path: ["type"], equals: "assistant"}]
+        model: ["message", "model"]
+        stop: ["message", "stop_reason"]
+        blocks:
+          path: ["message", "content"]
+          each:
+            - match: [{path: ["type"], equals: "text"}]
+              text: ["text"]
+            - match: [{path: ["type"], equals: "tool_use"}]
+              call: {id: ["id"], name: ["name"], args: ["input"]}
+        usage:
+          input: [["message", "usage", "input_tokens"]]
+          output: [["message", "usage", "output_tokens"]]
+      - match: [{path: ["type"], equals: "user"}]
+        closes: true
+  # --max-session-turns, where an operator adds it: the run exits 53 with no
+  # result event, "Reached max session turns for this session." on stderr
+  # (measured on 0.26.1). The CLI's code for that one cause.
+  cap:
+    exit_code: 53
   env:
     # 0.26.1 fetched the models.dev catalogue on every call, a connection of
     # its own; "off" leaves it on the table the build ships. 0.23.4 has no
