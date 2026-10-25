@@ -235,6 +235,83 @@ func TestPathsIndexIntoArrays(t *testing.T) {
 	}
 }
 
+// A COUNT UNDER EVERY MEMBER IS THEIR SUM, for a CLI that keys its counts by
+// something no profile can name in advance — the model that served each
+// request. A member without the count adds nothing, an array's elements are
+// members too, and a path no member resolves is unread usage, estimated,
+// rather than a zero.
+func TestAUsageCountUnderEveryMemberIsTheirSum(t *testing.T) {
+	t.Parallel()
+	p := cliprofile.Profile{
+		Output:    cliprofile.OutputJSON,
+		TextPaths: []cliprofile.Path{{"response"}},
+		Usage: cliprofile.UsagePaths{
+			Input:     []cliprofile.Path{{"models", cliprofile.PathEvery, "tokens", "input"}},
+			Output:    []cliprofile.Path{{"models", cliprofile.PathEvery, "tokens", "output"}},
+			CacheRead: []cliprofile.Path{{"steps", cliprofile.PathEvery, "cached"}},
+		},
+	}
+	got := extract(p, `{"response":"hi","models":{
+		"big":{"tokens":{"input":100,"output":7}},
+		"small":{"tokens":{"input":20,"output":"3"}},
+		"idle":{"tokens":{}}},
+		"steps":[{"cached":5},{"other":1},{"cached":6}]}`)
+	if !got.reported {
+		t.Fatal("usage under every member went unread")
+	}
+	if got.input != 120 || got.output != 10 || got.cacheRead != 11 {
+		t.Errorf("usage = in %d out %d cached %d, want 120 10 11", got.input, got.output, got.cacheRead)
+	}
+
+	none := extract(p, `{"response":"hi","models":{"big":{"api":{}}}}`)
+	if none.reported {
+		t.Errorf("no member carried a count, and usage was reported as in %d out %d",
+			none.input, none.output)
+	}
+}
+
+// A MODEL-SIDE TOOL'S PROMPT IS CHARGED AS INPUT. Gemini reports the pages a
+// web fetch put in front of the model apart from the prompt count, and bills
+// them as input: a fetching call charged only its question would be charged a
+// fraction of what it read.
+func TestAToolsPromptIsChargedAsInput(t *testing.T) {
+	t.Parallel()
+	p := cliprofile.Profile{
+		Output:    cliprofile.OutputJSON,
+		TextPaths: []cliprofile.Path{{"response"}},
+		Usage: cliprofile.UsagePaths{
+			Input:      []cliprofile.Path{{"usage", "input"}},
+			Output:     []cliprofile.Path{{"usage", "output"}},
+			CacheRead:  []cliprofile.Path{{"usage", "cached"}},
+			ToolPrompt: []cliprofile.Path{{"usage", "tool"}},
+		},
+	}
+	stdout := `{"response":"hi","usage":{"input":40,"output":2,"cached":100,"tool":5000}}`
+	prov := &Provider{profile: p, model: "m", now: time.Now}
+	comp, err := prov.completion(t.Context(), "prompt", true, &rawResult{stdout: stdout}, "")
+	if err != nil {
+		t.Fatalf("completion: %v", err)
+	}
+	if comp.InputTokens != 5140 || comp.CacheRead != 100 || comp.OutputTokens != 2 {
+		t.Errorf("completion = in %d cached %d out %d, want 5140 100 2",
+			comp.InputTokens, comp.CacheRead, comp.OutputTokens)
+	}
+
+	// Read wherever usage is: the last event of a stream, and a usage
+	// report the CLI is asked for after the call.
+	stream := p
+	stream.Output = cliprofile.OutputJSONL
+	if got := extract(stream, `{"usage":{"tool":1}}`+"\n"+stdout); got.toolPrompt != 5000 {
+		t.Errorf("a stream's tool prompt = %d, want the last event's 5000", got.toolPrompt)
+	}
+	report := p
+	report.UsageArgs = []string{"usage"}
+	var fromReport extracted
+	if outcome := fromReport.applyUsageReport(report, stdout); outcome != usageApplied || fromReport.toolPrompt != 5000 {
+		t.Errorf("a usage report's tool prompt = %d (%v), want 5000", fromReport.toolPrompt, outcome)
+	}
+}
+
 // The cap exists so one runaway CLI cannot put the engine under memory
 // pressure; dropping past it must not lose what came before.
 func TestOutputIsCappedWithoutLosingTheStart(t *testing.T) {

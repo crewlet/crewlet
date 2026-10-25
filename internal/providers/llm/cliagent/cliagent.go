@@ -814,8 +814,10 @@ func (p *Provider) completion(
 		// whatever the cache did. CacheRead and CacheWrite break the same
 		// total down for cost reporting; adding them again double-counts,
 		// which is why a vendor whose input count already holds them says
-		// so ([cliprofile.UsagePaths.InputIncludesCache]).
-		comp.InputTokens = p.profile.Usage.PromptTokens(out.input, out.cacheRead, out.cacheWrite)
+		// so ([cliprofile.UsagePaths.InputIncludesCache]). A model-side
+		// tool's prompt a CLI reports apart from its input is billed as
+		// input, so it is charged as input — see [cliprofile.UsagePaths].
+		comp.InputTokens = p.profile.Usage.PromptTokens(out.input, out.cacheRead, out.cacheWrite) + out.toolPrompt
 		// Reasoning a CLI reports apart from its output is billed as
 		// output, so it is charged as output — see [cliprofile.UsagePaths].
 		comp.OutputTokens = out.output + out.reasoning

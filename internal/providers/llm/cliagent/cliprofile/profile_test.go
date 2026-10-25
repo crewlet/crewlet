@@ -339,6 +339,44 @@ func TestTheTextPathsRuleNamesTheDefaultedOutput(t *testing.T) {
 	}
 }
 
+// ONLY A USAGE PATH MAY STEP INTO EVERY MEMBER: a count under every member adds
+// up, while the answer, a failure flag, an event's kind and its failure class
+// are each one value, and the members of an object have no order — the same
+// stdout would answer differently from one call to the next.
+func TestOnlyAUsagePathMayStepIntoEveryMember(t *testing.T) {
+	t.Parallel()
+	base := map[string]any{"binary": "x", "complete_args": []any{"-p"}, "text_paths": []any{[]any{"answer"}}}
+	with := func(extra map[string]any) map[string]any {
+		out := map[string]any{}
+		for k, v := range base {
+			out[k] = v
+		}
+		for k, v := range extra {
+			out[k] = v
+		}
+		return out
+	}
+	if _, err := Load("custom", with(map[string]any{
+		"usage": map[string]any{"input": []any{[]any{"stats", "models", PathEvery, "tokens", "input"}}},
+	})); err != nil {
+		t.Errorf("a usage path stepping into every member was refused: %v", err)
+	}
+	for field, extra := range map[string]map[string]any{
+		"text_paths":      {"text_paths": []any{[]any{"candidates", PathEvery, "text"}}},
+		"error_paths":     {"error_paths": []any{[]any{"errors", PathEvery}}},
+		"event_type_path": {"output": "jsonl", "event_type_path": []any{PathEvery, "type"}, "text_events": []any{"x"}},
+		"marker_path": {
+			"output": "jsonl", "event_type_path": []any{"type"}, "text_events": []any{"x"},
+			"marker_scope": "events", "marker_events": []any{"error"}, "marker_path": []any{"error", PathEvery},
+		},
+	} {
+		_, err := Load("custom", with(extra))
+		if err == nil || !strings.Contains(err.Error(), field+" ") || !strings.Contains(err.Error(), "only a usage path may") {
+			t.Errorf("%s stepping into every member: err = %v, want a refusal naming %s", field, err, field)
+		}
+	}
+}
+
 // A typo in overrides is refused with a pointer to the field list in the
 // docs, so the list has to exist and be THE list: every field the decoder
 // accepts, and nothing it refuses. It did not exist when the pointer was

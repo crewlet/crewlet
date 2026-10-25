@@ -83,6 +83,7 @@ func (p Profile) Clone() Profile {
 		CacheRead:  clonePaths(p.Usage.CacheRead),
 		CacheWrite: clonePaths(p.Usage.CacheWrite),
 		Reasoning:  clonePaths(p.Usage.Reasoning),
+		ToolPrompt: clonePaths(p.Usage.ToolPrompt),
 
 		InputIncludesCache: p.Usage.InputIncludesCache,
 	}

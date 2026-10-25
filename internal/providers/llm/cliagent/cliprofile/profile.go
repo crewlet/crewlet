@@ -63,7 +63,24 @@ func (m OutputMode) Valid() bool {
 
 // Path is a route to a value inside a decoded JSON document: successive
 // object keys, or a decimal index into an array.
+//
+// A USAGE path may also take [PathEvery] as a step, for every member of the
+// object or array there — and the count it reads is then the SUM of the count
+// under each member that has one. It exists because a CLI can key its counts
+// by something no profile can know in advance: Gemini CLI reports
+// `stats.models.<model>.tokens`, one entry for every model a call used, and its
+// web tools ask a second model on the side. Only a usage path may carry it
+// ([Profile.Validate]): a count adds up, while an answer, a failure flag or an
+// event's kind is one value, and which member's would be a guess.
 type Path []string
+
+// PathEvery is the [Path] step that stands for every member of the object or
+// array at that point. A key spelled `*` in a CLI's own document is therefore
+// out of a path's reach, which no CLI measured has.
+const PathEvery = "*"
+
+// HasEvery reports whether the path takes [PathEvery] anywhere.
+func (p Path) HasEvery() bool { return slices.Contains(p, PathEvery) }
 
 // String renders a path the way profiles.yaml would be read aloud —
 // `usage.input_tokens` for [][]string{{"usage", "input_tokens"}}.
@@ -106,12 +123,20 @@ func PathList(paths []Path) string {
 // only where the vendor's output count excludes them: OpenAI's own usage, and
 // every CLI that passes it through, counts reasoning INSIDE output already, and
 // adding it there would charge it twice.
+//
+// ToolPrompt is the same on the input side: the prompt a MODEL-SIDE tool put in
+// front of the model — the pages a URL-context fetch retrieved, the results a
+// search grounding returned — which Gemini reports as toolUsePromptTokenCount,
+// apart from the prompt count, and bills as input. A web fetch puts a whole
+// page there, so leaving it out would charge a fetching seat for its question
+// and not for what it read.
 type UsagePaths struct {
 	Input      []Path `yaml:"input,omitempty"`
 	Output     []Path `yaml:"output,omitempty"`
 	CacheRead  []Path `yaml:"cache_read,omitempty"`
 	CacheWrite []Path `yaml:"cache_write,omitempty"`
 	Reasoning  []Path `yaml:"reasoning,omitempty"`
+	ToolPrompt []Path `yaml:"tool_prompt,omitempty"`
 
 	// InputIncludesCache declares that the input count is ALREADY the whole
 	// prompt, the cached tokens inside it, so the cache figures only break it
@@ -1449,6 +1474,7 @@ func (p *Profile) problems() []string {
 		add("event_type_path is set but output is %q — an event discriminator "+
 			"only exists in a jsonl stream", p.EffectiveOutput())
 	}
+	p.validateEveryStep(add)
 	for _, ch := range p.channels() {
 		ch.validate(add)
 	}
@@ -1589,6 +1615,30 @@ func (p *Profile) problems() []string {
 	}
 	p.validateCollisions(add)
 	return bad
+}
+
+// validateEveryStep refuses [PathEvery] in every path that reads ONE value —
+// the answer, the failure flag, an event's kind and its failure class — where
+// only a usage count, which adds up, may take it ([Path]). Refused rather than
+// read as the first member: the members of a decoded object have no order, so
+// the same stdout would answer differently from one call to the next.
+func (p *Profile) validateEveryStep(add func(string, ...any)) {
+	for _, field := range []struct {
+		name  string
+		paths []Path
+	}{
+		{"text_paths", p.TextPaths},
+		{"error_paths", p.ErrorPaths},
+		{"event_type_path", []Path{p.EventTypePath}},
+		{"marker_path", []Path{p.MarkerPath}},
+	} {
+		for _, path := range field.paths {
+			if path.HasEvery() {
+				add("%s %q takes %q, which only a usage path may: a count under every "+
+					"member adds up, and %s reads one value", field.name, path.String(), PathEvery, field.name)
+			}
+		}
+	}
 }
 
 // pathClaim is one path a profile has the engine WRITE a file at, or has the
