@@ -557,7 +557,7 @@ describe("preload", () => {
     serve("spend", () => Promise.reject(new Error("offline")));
     const unhandled = vi.fn();
     process.on("unhandledRejection", unhandled);
-    preload(["spend"]);
+    preload(["settings", "spend"]);
     await new Promise((r) => setTimeout(r, 0));
     process.off("unhandledRejection", unhandled);
     expect(unhandled).not.toHaveBeenCalled();
