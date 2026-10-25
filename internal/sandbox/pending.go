@@ -1014,7 +1014,7 @@ type PendingStore interface {
 	// ([PendingRun.LaunchID]), and the instant it began
 	// ([LaunchRecord.StartedAt]) — because the store is the one party that knows
 	// the name, and something has to hold it before the job's box can act:
-	// an agent-mode run's bridge session records every call under its own
+	// a box-mode run's bridge session records every call under its own
 	// job ([BridgeAppend.Launch]), and a session that learned the name from
 	// the row later would learn whichever job the row held by then.
 	//
@@ -1828,7 +1828,7 @@ func (a AuxTokens) newest(b AuxTokens) AuxTokens {
 // by its CLI ([Result.InputTokens]).
 //
 // Two things put it there, and both happen while no segment is running to
-// tally them: an agent-mode run's calls through the tool bridge, which keep
+// tally them: a box-mode run's calls through the tool bridge, which keep
 // running after the segment that launched it has ended, and the condensation
 // of a collected run's account ([Condenser]), which the coordinator makes
 // between two segments. The segment that resumes from the job pays it

@@ -16,7 +16,7 @@ func catalogue(t *testing.T, opts ManagerOptions) (*Manager, error) {
 
 // A CATALOGUE WITH MORE THAN ONE CELL AND NO DEFAULT RESOLVES NOTHING BY
 // ITSELF — and is not refused, because it is the shape a company takes when
-// every seat and every agent-mode entry names its own cell, which is what the
+// every seat and every box-mode entry names its own cell, which is what the
 // catalogue exists for.
 //
 // What it must never do is resolve a run that names none by taking whichever

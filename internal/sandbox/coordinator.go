@@ -261,7 +261,7 @@ type CoordinatorOptions struct {
 	// finished it: collected, failed, torn down or reaped.
 	//
 	// It exists for credentials a run HOLDS rather than for its own state.
-	// An agent-mode run's box dials the engine's tool bridge with a
+	// A box-mode run's box dials the engine's tool bridge with a
 	// per-run token, and a session left open is a box that outlived its
 	// run keeping a working key to a live seat's whole surface. The token
 	// expires on its own clock, so this is the difference between a
