@@ -203,8 +203,7 @@ func (s *Store) get(ctx context.Context, name string) (string, error) {
 // namespace: no reference can name one, so decrypting the blind-index key into
 // each node's resolver on every apply was all exposure and no use.
 //
-// It FAILS CLOSED on the first row it cannot open, exactly as the local store
-// does. A partial snapshot is the worst outcome available: the names that are
+// It FAILS CLOSED on the first row it cannot open. A partial snapshot is the worst outcome available: the names that are
 // missing resolve to whatever the environment happens to hold, which is the
 // stale-.env shadowing this whole mechanism exists to prevent, and it would
 // happen silently. A row this node cannot open is not a fleet mid-rotation —
@@ -424,7 +423,7 @@ func (s *Store) rekeyRow(ctx context.Context, row coord.SecretRecord,
 		}
 		value, err := s.cipher.Decrypt(row.Value, secrets.AADForVar(row.Name))
 		if err != nil {
-			// ABORTS THE WHOLE PASS, as the local store's does. A row
+			// ABORTS THE WHOLE PASS. A row
 			// this keyring cannot open is a key that was dropped from
 			// the config, and moving the others while leaving it would
 			// report a successful rekey over a secret that is now
