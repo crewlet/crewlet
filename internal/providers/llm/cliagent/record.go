@@ -783,6 +783,14 @@ func (r *recordReader) stdoutResult() (extracted, bool) {
 	return r.stdout.result(), true
 }
 
+// failureLines is the CLI's own failure events, by field, one a line — what a
+// failed run's limit and sign-in markers are read in beside stderr.
+func (r *recordReader) failureLines() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return strings.Join(r.failures, "\n")
+}
+
 // failureDetail is what a failed run's error says beyond stderr: the CLI's own
 // failure events, by field.
 func (r *recordReader) failureDetail() string {

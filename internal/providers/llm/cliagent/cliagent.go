@@ -966,9 +966,12 @@ func (p *Provider) completion(
 //     is.
 //
 // Stderr is matched anywhere: it is the CLI's own channel, and the answer
-// does not reach it. The events scope reads the CLI's own failure
-// events and nothing else, and the stderr scope stderr alone — see
-// [cliprofile.MarkerScope].
+// does not reach it. So are the fields of a FAILED run with tools' own failure
+// events ([cliprofile.MCP.FailureEvents]): that run's answer is its record's
+// last prose, which a failed run never wrote, and a CLI whose stderr says only
+// that it failed (Muse Code: "run ended with Failed") says why there alone.
+// The events scope reads the CLI's own failure events and nothing else, and
+// the stderr scope stderr alone — see [cliprofile.MarkerScope].
 func classifyMarkers(p cliprofile.Profile, out cliOutput) (markerHit, bool) {
 	var haystacks []haystack
 	switch p.EffectiveMarkerScope() {
@@ -982,6 +985,9 @@ func classifyMarkers(p cliprofile.Profile, out cliOutput) (markerHit, bool) {
 			said = haystack{text: out.said, source: sourceFailedRun}
 		}
 		haystacks = []haystack{said, {text: out.stderr, source: sourceStderr}}
+		if out.failed && out.events != "" {
+			haystacks = append(haystacks, haystack{text: out.events, source: sourceEvent})
+		}
 	}
 	for _, marker := range p.LimitMarkers {
 		for _, hay := range haystacks {
@@ -1017,6 +1023,9 @@ type cliOutput struct {
 	stdout string
 	// stderr is the CLI's own diagnostic channel.
 	stderr string
+	// events is a run with tools' own failure events, by the profile's
+	// fields, one a line ([cliprofile.MCP.FailureEvents]).
+	events string
 	// failed is the CLI's own word that the run failed: a non-zero exit, or
 	// the flag at the profile's error_paths.
 	failed bool
@@ -1060,7 +1069,8 @@ const (
 	// sourceStderr is the CLI's stderr.
 	sourceStderr markerSource = "stderr"
 	// sourceEvent is one of the CLI's own failure events, under
-	// [cliprofile.MarkerScopeEvents].
+	// [cliprofile.MarkerScopeEvents] or, for a failed run with tools, by the
+	// profile's [cliprofile.MCP.FailureEvents].
 	sourceEvent markerSource = "event"
 )
 

@@ -102,6 +102,7 @@ func (p *Provider) toolCompletion(
 	// stderr — never the whole of stdout, which is the tools' words too.
 	if hit, ok := classifyMarkers(p.profile, cliOutput{
 		said: out.text, stdout: res.stdout, stderr: res.stderr, failed: failed,
+		events: t.reader.failureLines(),
 	}); ok {
 		reason := nonEmpty(hit.Said, firstLine(out.text, res.stderr))
 		if hit.Kind == llm.KindRateLimit {
