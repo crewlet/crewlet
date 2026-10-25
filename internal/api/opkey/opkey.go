@@ -1,7 +1,10 @@
 // Package opkey is the HTTP half of an operation id: the header a caller
 // sends one in, the rule a key it sends is held to, the digest that binds the
 // id a write is published under to the request that asked for it, and what an
-// unknown outcome tells the caller to retry with.
+// unknown outcome tells the caller to retry with. It also holds the ONE
+// canonical encoding of a request ([Canonical]) and the full-length digest
+// over it ([RequestDigest]) that the Dashboard Assistant binds an approval to,
+// so the two bindings of a request to what it asked can never disagree.
 //
 // # Why one package, and not a copy per surface
 //
@@ -42,7 +45,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -236,8 +238,8 @@ func UnknownDetail(unvouched bool) string {
 // Digest is what binds a write's operation to its request: the path (the
 // object), the query and the decoded body, in a form one request always
 // produces — the body re-encoded from its decoded value, so the same fields
-// in another order or spacing are the same request. asks is the decoded
-// body, nil for a route that takes none.
+// in another order or spacing are the same request ([Canonical] is the one
+// encoding). asks is the decoded body, nil for a route that takes none.
 //
 // # Why a key alone is not the operation
 //
@@ -256,17 +258,12 @@ func UnknownDetail(unvouched bool) string {
 // and will not encode: a type the surface declared wrongly, never the
 // caller's to fix.
 func Digest(r *http.Request, asks any) (string, error) {
-	body, err := json.Marshal(asks)
+	canon, err := Canonical(r.URL.Path, r.URL.Query(), asks)
 	if err != nil {
 		return "", err
 	}
-	h := sha256.New()
-	for _, part := range [][]byte{[]byte(r.URL.Path),
-		[]byte(r.URL.Query().Encode()), body} {
-		_, _ = h.Write(part)
-		_, _ = h.Write([]byte{0})
-	}
-	return hex.EncodeToString(h.Sum(nil))[:digestLen], nil
+	sum := sha256.Sum256(canon)
+	return hex.EncodeToString(sum[:])[:digestLen], nil
 }
 
 // digestLen is how many hex digits of a request's digest its operation

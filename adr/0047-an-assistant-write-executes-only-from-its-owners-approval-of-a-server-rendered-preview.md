@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/api/assistantapi`
-- **Enforced-by:** nothing
+- **Enforced-by:** `internal/api/opkey.TestARequestDigestBindsEveryPartOfTheRequest`, `internal/api/opkey.TestAnOperationsDigestIsTheCanonicalEncoding`
 - **Tag-status:** unreleased
 
 ## The decision

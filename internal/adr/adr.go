@@ -113,15 +113,6 @@ var Unenforced = []Exemption{
 			"here.",
 	},
 	{
-		ID: "ADR-0047",
-		Why: "The gates read the request digest an approval is bound to and the " +
-			"approval routes, none of which exist until they land on the " +
-			"feat/assistant integration branch. This entry is removed in the " +
-			"commit that adds the first of them and names it in the record, " +
-			"which the two-sided check in this package's tests forces, and no " +
-			"assistant record may reach main while it is listed here.",
-	},
-	{
 		ID: "ADR-0048",
 		Why: "The gate is the authority table's completeness walk over a field " +
 			"the table does not carry until the assistant's authority work lands " +
