@@ -153,6 +153,17 @@ type Completion struct {
 	Content   string
 	ToolCalls []ToolCall
 
+	// ProtocolError is why the backend could not read the reply's tool calls
+	// under the request's contract, or empty: the model asked for calls in a
+	// form the backend could neither read nor convert (markup naming a tool
+	// that was not offered, a call cut off). ToolCalls is then empty, and
+	// Content is the reply as it was, for the conversation only: the tool
+	// loop shows none of it and asks again ([toolloop.Run]). A FIELD, not an
+	// error, because the model answered and the round is charged; what is
+	// wrong is the answer's form, and the frame that holds the conversation
+	// is the one that can correct it.
+	ProtocolError string
+
 	// StopReason is why the model stopped writing this response — see
 	// [StopReason].
 	StopReason StopReason
@@ -383,6 +394,17 @@ const (
 	// vendor or binary that may well answer, and the entry is not sat out,
 	// since nothing says the failure lasts.
 	KindServer
+
+	// KindCancelled is a call its CALLER gave up on: a person stopped the
+	// turn, a node began to drain, a seat's turn was stopped. The CLI it
+	// started was signalled with it (and exits 143, or 130, or not at
+	// all), which says nothing about the CLI, its login or its vendor, so
+	// NOTHING is learned from it: the chain does not try another member,
+	// the entry's readiness is not touched, and it is not an incident to
+	// log. Decided from the caller's context, never from how the process
+	// ended: a CLI the engine killed exits exactly as one that crashed on a
+	// signal of its own.
+	KindCancelled
 )
 
 func (k ErrorKind) String() string {
@@ -395,6 +417,8 @@ func (k ErrorKind) String() string {
 		return "timeout"
 	case KindServer:
 		return "server"
+	case KindCancelled:
+		return "canceled"
 	default:
 		return "fatal"
 	}
@@ -403,8 +427,9 @@ func (k ErrorKind) String() string {
 // Retryable reports whether another member of a fallback chain is worth
 // trying: every kind but a fatal, which is a fault of the engine's or its
 // host's for the operator to fix rather than a failure one member's CLI or
-// vendor had.
-func (k ErrorKind) Retryable() bool { return k != KindFatal }
+// vendor had, and a cancellation, which no member can answer since nobody is
+// waiting for the answer.
+func (k ErrorKind) Retryable() bool { return k != KindFatal && k != KindCancelled }
 
 // Error is a classified provider failure.
 //
@@ -449,6 +474,9 @@ func KindOf(err error) ErrorKind {
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return KindTimeout
+	}
+	if errors.Is(err, context.Canceled) {
+		return KindCancelled
 	}
 	return KindFatal
 }

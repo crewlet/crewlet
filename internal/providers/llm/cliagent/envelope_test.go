@@ -69,7 +69,7 @@ func TestParseEnvelopeAcceptsTheShapesModelsProduce(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			env := ParseEnvelope(tc.reply)
+			env := ParseEnvelope(tc.reply, nil)
 			if env.Parsed != tc.parsed {
 				t.Fatalf("Parsed = %v, want %v", env.Parsed, tc.parsed)
 			}
@@ -99,7 +99,7 @@ func TestAnUnparseableReplyBecomesContentRatherThanAnError(t *testing.T) {
 		`{"answer": 42}`,
 		"",
 	} {
-		env := ParseEnvelope(reply)
+		env := ParseEnvelope(reply, nil)
 		if env.Parsed {
 			t.Errorf("ParseEnvelope(%q).Parsed = true, want false", reply)
 		}
@@ -116,7 +116,7 @@ func TestAnUnparseableReplyBecomesContentRatherThanAnError(t *testing.T) {
 // would silently drop the answer and hand the turn an empty message.
 func TestAJSONAnswerIsNotMistakenForAnEnvelope(t *testing.T) {
 	t.Parallel()
-	env := ParseEnvelope("```json\n{\"name\":\"Ada\",\"age\":36}\n```")
+	env := ParseEnvelope("```json\n{\"name\":\"Ada\",\"age\":36}\n```", nil)
 	if env.Parsed {
 		t.Fatalf("a JSON answer parsed as an envelope: %+v", env)
 	}
@@ -129,7 +129,7 @@ func TestAJSONAnswerIsNotMistakenForAnEnvelope(t *testing.T) {
 // layer later with a message that no longer names the reply it came from.
 func TestACallWithoutANameIsDropped(t *testing.T) {
 	t.Parallel()
-	env := ParseEnvelope(`{"message":"","tool_calls":[{"arguments":{"a":1}},{"name":"good"}]}`)
+	env := ParseEnvelope(`{"message":"","tool_calls":[{"arguments":{"a":1}},{"name":"good"}]}`, nil)
 	if len(env.ToolCalls) != 1 || env.ToolCalls[0].Name != "good" {
 		t.Fatalf("tool calls = %+v, want only the named one", env.ToolCalls)
 	}
@@ -144,7 +144,7 @@ func TestArgumentsAreAlwaysAMap(t *testing.T) {
 		`{"tool_calls":[{"name":"a","arguments":null}]}`,
 		`{"tool_calls":[{"name":"a","arguments":""}]}`,
 	} {
-		env := ParseEnvelope(reply)
+		env := ParseEnvelope(reply, nil)
 		if len(env.ToolCalls) != 1 {
 			t.Fatalf("%s: got %d calls", reply, len(env.ToolCalls))
 		}
@@ -196,7 +196,7 @@ func TestACallListNothingCouldBeReadFromIsNotAnEnvelope(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			env := ParseEnvelope(tc.reply)
+			env := ParseEnvelope(tc.reply, nil)
 			if env.Parsed {
 				t.Errorf("parsed as an envelope with %d calls — the request was dropped "+
 					"and the message reported as a final answer", len(env.ToolCalls))
@@ -212,7 +212,7 @@ func TestACallListNothingCouldBeReadFromIsNotAnEnvelope(t *testing.T) {
 // is my note" — and must keep parsing.
 func TestAnEmptyCallListIsStillAnEnvelope(t *testing.T) {
 	t.Parallel()
-	env := ParseEnvelope(`{"message":"nothing to do here","tool_calls":[]}`)
+	env := ParseEnvelope(`{"message":"nothing to do here","tool_calls":[]}`, nil)
 	if !env.Parsed {
 		t.Fatal("an explicit no-calls answer was refused")
 	}
@@ -228,7 +228,7 @@ func TestAnEmptyCallListIsStillAnEnvelope(t *testing.T) {
 func TestASingleCallObjectIsReadAsAListOfOne(t *testing.T) {
 	t.Parallel()
 	env := ParseEnvelope(
-		`{"message":"posting it now","tool_calls":{"name":"slack_post","arguments":{"channel":"C1"}}}`)
+		`{"message":"posting it now","tool_calls":{"name":"slack_post","arguments":{"channel":"C1"}}}`, nil)
 	if !env.Parsed {
 		t.Fatal("a single call object was refused")
 	}
@@ -245,7 +245,7 @@ func TestASingleCallObjectIsReadAsAListOfOne(t *testing.T) {
 // ordinary final answer exactly as `[]` is.
 func TestANullCallListIsAnEmptyOne(t *testing.T) {
 	t.Parallel()
-	env := ParseEnvelope(`{"message":"nothing to do here","tool_calls":null}`)
+	env := ParseEnvelope(`{"message":"nothing to do here","tool_calls":null}`, nil)
 	if !env.Parsed || env.Message != "nothing to do here" || len(env.ToolCalls) != 0 {
 		t.Errorf("env = %+v, want a parsed envelope with no calls", env)
 	}
@@ -257,7 +257,7 @@ func TestANullCallListIsAnEmptyOne(t *testing.T) {
 func TestAPartiallyReadableCallListKeepsWhatItCanRun(t *testing.T) {
 	t.Parallel()
 	env := ParseEnvelope(
-		`{"tool_calls":[{"nope":1},{"name":"submit_work","arguments":{"outcome":"delivered"}}]}`)
+		`{"tool_calls":[{"nope":1},{"name":"submit_work","arguments":{"outcome":"delivered"}}]}`, nil)
 	if !env.Parsed {
 		t.Fatal("a list with one good call was refused")
 	}
@@ -278,7 +278,7 @@ func TestAWideArgumentIDSurvivesTheEnvelope(t *testing.T) {
 		// the form a model that learned OpenAI's wire format reproduces.
 		`{"tool_calls": [{"name": "get_issue", "arguments": "{\"id\": 1234567890123456789}"}]}`,
 	} {
-		env := ParseEnvelope(reply)
+		env := ParseEnvelope(reply, nil)
 		if len(env.ToolCalls) != 1 {
 			t.Fatalf("ParseEnvelope(%s) gave %d calls, want 1", reply, len(env.ToolCalls))
 		}
@@ -301,7 +301,7 @@ func TestAWideArgumentIDSurvivesTheEnvelope(t *testing.T) {
 // model's arguments is not its request.
 func TestAnArgumentListWithATailIsRefused(t *testing.T) {
 	t.Parallel()
-	env := ParseEnvelope(`{"tool_calls": [{"name": "get_issue", "arguments": "{\"id\": 1}garbage"}]}`)
+	env := ParseEnvelope(`{"tool_calls": [{"name": "get_issue", "arguments": "{\"id\": 1}garbage"}]}`, nil)
 	if len(env.ToolCalls) != 1 {
 		t.Fatalf("ParseEnvelope gave %d calls, want 1", len(env.ToolCalls))
 	}
@@ -328,7 +328,7 @@ func TestUnreadableArgumentsKeepTheCallAndSayWhy(t *testing.T) {
 		{"a boolean", `{"tool_calls":[{"name":"search","args":true}]}`, "boolean"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			env := ParseEnvelope(tc.reply)
+			env := ParseEnvelope(tc.reply, nil)
 			if len(env.ToolCalls) != 1 {
 				t.Fatalf("got %d calls, want the one the model asked for", len(env.ToolCalls))
 			}
@@ -343,7 +343,7 @@ func TestUnreadableArgumentsKeepTheCallAndSayWhy(t *testing.T) {
 	}
 	// And a synonym that DOES read wins over one that does not, so a reply
 	// carrying both is the call it reads as, with no error.
-	env := ParseEnvelope(`{"tool_calls":[{"name":"search","arguments":42,"input":{"query":"x"}}]}`)
+	env := ParseEnvelope(`{"tool_calls":[{"name":"search","arguments":42,"input":{"query":"x"}}]}`, nil)
 	if len(env.ToolCalls) != 1 || env.ToolCalls[0].ArgumentsError != "" ||
 		env.ToolCalls[0].Arguments["query"] != "x" {
 		t.Errorf("calls = %+v, want the readable synonym's arguments and no error", env.ToolCalls)
@@ -354,7 +354,7 @@ func TestUnreadableArgumentsKeepTheCallAndSayWhy(t *testing.T) {
 		`{"tool_calls":[{"name":"a","arguments":null}]}`,
 		`{"tool_calls":[{"name":"a","arguments":""}]}`,
 	} {
-		if got := ParseEnvelope(reply).ToolCalls[0].ArgumentsError; got != "" {
+		if got := ParseEnvelope(reply, nil).ToolCalls[0].ArgumentsError; got != "" {
 			t.Errorf("%s: ArgumentsError = %q, want none", reply, got)
 		}
 	}

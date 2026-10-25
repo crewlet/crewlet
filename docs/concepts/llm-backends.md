@@ -615,6 +615,13 @@ process for it, refused before any CLI exists. Those are yours to fix, and
 walking past one would only carry every call to the next entry, and its bill,
 until somebody read why. A CLI that started is never `fatal`, however it ended.
 
+A call its caller **cancelled** (`canceled`) stops the walk too: a person
+pressed Stop, a seat's turn was stopped, a node began to drain. The CLI was
+signalled with the call and exits as if it had crashed (143 for a Node
+runtime), so the kind is read from the caller's context and never from the
+exit status. Nothing is learned from it: no `provider_fallback` is logged,
+the next entry is not started, and the entry's readiness is left as it was.
+
 The natural chain is **one CLI, two ways to pay**: the plan first, the key
 after it.
 
@@ -1831,6 +1838,29 @@ and on `crewlet llm doctor`'s smoke test alike, which therefore certifies
 the shape a seat actually sends: the tool offered, the instruction naming
 it, and nothing demanding the call. A malformed reply costs a round; it
 never crashes a turn.
+
+**A call written in the vendor's own form runs when it names an offered
+tool.** A model trained on its vendor's native tool channel sometimes types
+a call out in that channel's form instead of the envelope: Anthropic's
+`<invoke name="..."><parameter name="...">` markup (inside
+`<function_calls>` or not, its tags namespaced or not), a
+`<tool_call>{...}</tool_call>` tag, the coder models'
+`<function=name><parameter=key>`, an Anthropic `tool_use` block or message
+of content blocks, or an OpenAI function call. After the envelope, the
+parser reads each of these as the call it is when it names a tool the
+request offered; a markup parameter is typed by the tool's schema (a
+declared string as written, anything else its JSON value where it holds
+one), and what the reply said around the calls is its message. Markup
+inside a fenced block or inline code is an example, not a call. One that
+names any other tool, is cut off, or sits beside the envelope's own calls
+runs nothing: it is a **protocol fault**, and the tool loop asks once more
+with a corrective naming the fault and the contract's shape. Such a reply
+is never shown. Its prose is not narrated, its text never joins the
+conversation, a live view is cut short of any tag before it arrives, and
+a model that repeats the fault ends the loop with `model_protocol` (the
+Dashboard Assistant's error code, and a seat's `error_kind`) rather than
+with the markup as its answer. The same guard covers prose from any
+backend: tool-call markup outside code is never handed to a reader.
 
 **A call with no tools gets no contract.** Auxiliary work
 (summarisation, the relevance filter) sends a plain prompt and reads a

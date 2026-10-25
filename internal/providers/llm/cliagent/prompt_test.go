@@ -65,7 +65,7 @@ func TestPriorToolCallsRenderInTheContractShape(t *testing.T) {
 		t.Errorf("a prior call did not render as an envelope:\n%s", got)
 	}
 	// And it round-trips through the parser that reads the model's own answers.
-	env := ParseEnvelope(got)
+	env := ParseEnvelope(got, nil)
 	if !env.Parsed || len(env.ToolCalls) != 1 || env.ToolCalls[0].Name != "read_file" {
 		t.Errorf("the rendered call does not parse back: %+v", env)
 	}

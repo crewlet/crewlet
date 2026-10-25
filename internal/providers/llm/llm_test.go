@@ -141,9 +141,11 @@ func TestACompletionsTurnCarriesEverythingItShares(t *testing.T) {
 	// RESULT rather than an answer.
 	turnOnly := map[string]bool{"Role": true, "ToolCallID": true, "Name": true, "Failed": true}
 	// The answer's own: who served it and what it cost and why it stopped
-	// — the round's record, not the conversation's.
+	// — the round's record, not the conversation's. A protocol fault too:
+	// a round whose calls could not be read never joins the conversation
+	// at all (the tool loop asks again), so no turn carries it.
 	answerOnly := map[string]bool{
-		"Model": true, "ProviderKey": true, "StopReason": true,
+		"Model": true, "ProviderKey": true, "StopReason": true, "ProtocolError": true,
 		"InputTokens": true, "OutputTokens": true, "CacheRead": true, "CacheWrite": true,
 	}
 	cv, mv := reflect.ValueOf(c), reflect.ValueOf(m)

@@ -189,10 +189,16 @@ func (c *Chain) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 		}
 
 		kind := llm.KindOf(err)
-		if !kind.Retryable() {
+		if !kind.Retryable() || ctx.Err() != nil {
 			// Returned as it came, so errors.As still reaches the
 			// backend's own *llm.Error with its provider and model
 			// intact.
+			//
+			// A CALL WHOSE CALLER IS GONE IS NOT WALKED, whatever its
+			// member called the failure: the next member would be
+			// started on a context that has already ended, and a
+			// cancellation logged as a fallback reads as an outage of a
+			// member that did nothing wrong.
 			return nil, err
 		}
 

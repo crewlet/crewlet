@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
 // Envelope is what a reply parses into: the prose the operator sees, and the
@@ -19,6 +21,15 @@ type Envelope struct {
 	// every phase that finishes by a call, naming its submission: a
 	// malformed reply costs one round, it never fails a turn.
 	Parsed bool
+	// ProtocolError is why the reply's tool calls could not be read, when it
+	// asked for some in a form that is not the envelope and could not be
+	// converted to it: markup naming a tool the request did not offer, markup
+	// that is cut off or malformed, or the envelope's calls and markup in
+	// one reply. ToolCalls is then EMPTY, since a reply whose calls cannot
+	// all be read runs none of them, and Message holds the reply as it was,
+	// for the conversation only: the tool loop never shows it
+	// ([llm.Completion.ProtocolError]).
+	ProtocolError string
 }
 
 // EnvelopeCall is one requested tool call.
@@ -51,7 +62,8 @@ var argumentKeys = []string{"arguments", "args", "input", "parameters"}
 // nameKeys are the synonyms accepted for one call's tool name.
 var nameKeys = []string{"name", "tool", "tool_name", "function"}
 
-// ParseEnvelope reads a CLI's reply into an [Envelope].
+// ParseEnvelope reads a CLI's reply into an [Envelope], against the tools the
+// request offered.
 //
 // Deliberately forgiving, in a specific direction: it accepts every shape a
 // model plausibly produces under the contract, and it NEVER errors. The
@@ -62,18 +74,42 @@ var nameKeys = []string{"name", "tool", "tool_name", "function"}
 // The order matters. A fenced block is tried first and the LAST one wins,
 // because a model that reasons in prose and then answers puts the answer at
 // the end; taking the first would return its worked example.
-func ParseEnvelope(reply string) Envelope {
+//
+// THE ENVELOPE FIRST, THEN THE VENDORS' OWN FORMS. A model trained on its
+// vendor's native tool channel sometimes writes a call in that channel's form
+// instead: a JSON tool_use block, an OpenAI function call, or markup
+// ([toolmarkup]). Each is read as the call it is when it names a tool in
+// tools, so the round runs rather than ending with the markup as its answer;
+// one that names any other tool, or does not read as a whole call, is the
+// envelope's [Envelope.ProtocolError] instead, and runs nothing. The gate is
+// the catalogue because nothing else separates a call from a model answering
+// a question about calls: a document naming an offered tool is a request to
+// run it, and anything else in that shape is a protocol fault the tool loop
+// asks again about, never prose shown to a person.
+func ParseEnvelope(reply string, tools []llm.ToolDef) Envelope {
+	env, ok := strictEnvelope(reply)
+	if !ok {
+		env, ok = nativeEnvelope(reply, tools)
+	}
+	if !ok {
+		env = Envelope{Message: reply}
+	}
+	return withMarkupCalls(env, tools)
+}
+
+// strictEnvelope is the envelope the contract asks for, read from the reply's
+// candidate documents in order.
+func strictEnvelope(reply string) (Envelope, bool) {
 	for _, candidate := range envelopeCandidates(reply) {
 		doc, ok := decodeEnvelopeObject(candidate)
 		if !ok {
 			continue
 		}
-		env, ok := fromDocument(doc)
-		if ok {
-			return env
+		if env, ok := fromDocument(doc); ok {
+			return env, true
 		}
 	}
-	return Envelope{Message: reply}
+	return Envelope{}, false
 }
 
 // decodeEnvelopeObject reads one candidate document, THROUGH json.Number.
@@ -263,6 +299,12 @@ func readCall(raw any) (EnvelopeCall, bool) {
 	obj, ok := raw.(map[string]any)
 	if !ok {
 		return EnvelopeCall{}, false
+	}
+	if fn, isObject := obj["function"].(map[string]any); isObject {
+		// THE OPENAI TOOL-CALL SHAPE, `{"type": "function", "function":
+		// {"name": ..., "arguments": "..."}}`: the call is the inner
+		// object, and reading the outer one found no name and dropped it.
+		return readCall(fn)
 	}
 	var call EnvelopeCall
 	for _, key := range nameKeys {

@@ -46,6 +46,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -312,8 +313,19 @@ func (p *Provider) routeFor(req llm.Request) cliprofile.Route {
 // waited out the very call that sat the entry out.
 //
 // What the call met is remembered for [Provider.Unready].
+//
+// A CALL ITS CALLER CANCELLED FAILED AS A CANCELLATION, however it surfaced:
+// a CLI signalled with the call that exited 143 or held its pipes, a slot or
+// a home the call stopped waiting for. Decided here, once, from the caller's
+// context rather than from the process, which a cancellation and a crash
+// end identically, so no path below can report a person's Stop as the
+// vendor's outage ([llm.KindCancelled]).
 func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
 	comp, err := p.complete(ctx, req)
+	if err != nil && errors.Is(ctx.Err(), context.Canceled) {
+		comp, err = nil, p.fail(llm.KindCancelled, fmt.Errorf("the call was cancelled before "+
+			"the %s CLI answered: %w", p.agent, context.Cause(ctx)))
+	}
 	p.remember(err)
 	return comp, err
 }
@@ -351,9 +363,11 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 	case p.slots <- struct{}{}:
 		defer func() { <-p.slots }()
 	case <-ctx.Done():
-		// Queued behind other seats and the caller gave up. Reported as
-		// a timeout rather than fatal: nothing about the request was
-		// wrong, and the chain should be free to try another member.
+		// Queued behind other seats and the call's time ran out. Reported
+		// as a timeout rather than fatal: nothing about the request was
+		// wrong, and the chain should be free to try another member. A
+		// caller that CANCELLED is a cancellation instead, which
+		// [Provider.Complete] decides for every path alike.
 		return nil, p.fail(llm.KindTimeout, fmt.Errorf("waiting for a CLI slot: %w", ctx.Err()))
 	}
 	// AGAIN, NOW THAT THE SLOT IS HELD. A call that queued behind a full
@@ -568,7 +582,7 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 		}
 	}
 
-	comp, err := p.completion(ctx, prof, system+prompt, len(req.Tools) > 0, res, usageDoc)
+	comp, err := p.completion(ctx, prof, system+prompt, req.Tools, res, usageDoc)
 	if err == nil && live != nil {
 		live.settle(comp.Content)
 	}
@@ -635,11 +649,12 @@ func (p *Provider) argv(prof *cliprofile.Profile) []string {
 // largest stable thing in it; what is NOT in it is a vendor's own system
 // prompt kept beside the engine's, which the engine never sees.
 //
-// offeredTools says whether the prompt carried the response contract, which
-// [RenderPrompt] appends exactly when the request offered tools. Only then is
-// the reply read as an envelope: see the read below.
+// tools are the tools the request offered. A prompt carries the response
+// contract exactly when there are some ([RenderPrompt]), so only then is the
+// reply read as an envelope (see the read below), and against them: a call
+// written in a vendor's own form runs only when it names one.
 func (p *Provider) completion(
-	ctx context.Context, prof *cliprofile.Profile, sent string, offeredTools bool,
+	ctx context.Context, prof *cliprofile.Profile, sent string, tools []llm.ToolDef,
 	res *rawResult, usageDoc string,
 ) (*llm.Completion, error) {
 	if res.timedOut {
@@ -849,11 +864,15 @@ func (p *Provider) completion(
 	// as that one field, its caller's decode failed, and the decision was
 	// silently dropped.
 	var env Envelope
-	if offeredTools {
-		env = ParseEnvelope(out.text)
+	if len(tools) > 0 {
+		env = ParseEnvelope(out.text, tools)
 		if env.Parsed {
 			comp.Content = env.Message
 		}
+		// A reply whose calls could not be read is still the round's
+		// content, for the conversation the corrective follows; the tool
+		// loop never shows it.
+		comp.ProtocolError = env.ProtocolError
 	}
 	for i, call := range env.ToolCalls {
 		comp.ToolCalls = append(comp.ToolCalls, llm.ToolCall{

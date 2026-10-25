@@ -139,7 +139,7 @@ func TestEveryCutOfAValidEnvelopeStreamsExactlyItsMessage(t *testing.T) {
 	r := rand.New(rand.NewPCG(15, 2026))
 	for i := range 400 {
 		reply := randomEnvelope(r, randomMessage(r))
-		env := cliagent.ParseEnvelope(reply)
+		env := cliagent.ParseEnvelope(reply, nil)
 		if !env.Parsed {
 			t.Fatalf("case %d: the generator built a reply the parser refuses: %q", i, reply)
 		}
@@ -178,7 +178,7 @@ func TestEscapesDecodeAsEncodingJSONDecodesThem(t *testing.T) {
 		if err := json.Unmarshal([]byte(reply), &want); err != nil {
 			t.Fatalf("%q does not decode: %v", reply, err)
 		}
-		if env := cliagent.ParseEnvelope(reply); env.Message != want.Message {
+		if env := cliagent.ParseEnvelope(reply, nil); env.Message != want.Message {
 			t.Fatalf("%q: the parser reads %q and encoding/json %q", reply, env.Message, want.Message)
 		}
 		for _, cuts := range [][]int{nil, everyByte(reply)} {

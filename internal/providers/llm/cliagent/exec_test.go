@@ -953,8 +953,35 @@ func TestACancelledCallerDoesNotLaunchAProcess(t *testing.T) {
 	p.slots <- struct{}{}
 	p.slots <- struct{}{}
 	_, err := p.Complete(ctx, llm.Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}}})
-	if got := llm.KindOf(err); got != llm.KindTimeout {
-		t.Fatalf("kind = %v, want timeout (err %v)", got, err)
+	if got := llm.KindOf(err); got != llm.KindCancelled {
+		t.Fatalf("kind = %v, want canceled (err %v)", got, err)
+	}
+}
+
+// A CALL STOPPED UNDER A RUNNING CLI IS A CANCELLATION, never the vendor's
+// outage: the CLI exits on the signal the stop sent (143 for a Node runtime),
+// which reads exactly like a crash, so a classification from the exit status
+// walked the assistant's chain to its next model and logged a fallback for a
+// person's Stop. Nothing is learned from it either: a member that was ready
+// stays ready.
+func TestAStoppedCallIsCancelledNotAServerFailure(t *testing.T) {
+	t.Parallel()
+	p := fakeProvider(t, map[string]string{"FAKE_SLEEP_MS": "20000", "FAKE_STDOUT": "late"}, nil)
+	stopped := errors.New("the person stopped the turn")
+	ctx, cancel := context.WithCancelCause(t.Context())
+	time.AfterFunc(300*time.Millisecond, func() { cancel(stopped) })
+	_, err := p.Complete(ctx, llm.Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}}})
+	if got := llm.KindOf(err); got != llm.KindCancelled {
+		t.Fatalf("kind = %v, want canceled (err %v)", got, err)
+	}
+	if llm.KindOf(err).Retryable() {
+		t.Error("a cancellation is retryable: the chain would start its next member for nobody")
+	}
+	if !errors.Is(err, stopped) {
+		t.Errorf("err = %v, want it to name why the caller stopped", err)
+	}
+	if unready := p.Unready(t.Context()); unready != nil {
+		t.Errorf("a cancelled call left a readiness verdict: %v", unready)
 	}
 }
 
