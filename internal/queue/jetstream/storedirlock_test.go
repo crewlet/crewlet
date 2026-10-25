@@ -95,3 +95,28 @@ func TestAFailedStartReleasesItsStoreDirectory(t *testing.T) {
 	}
 	srv.Shutdown()
 }
+
+// A STORE DIRECTORY THAT IS NOT ONE IS REFUSED AT THE LOCK, naming the setting
+// to fix, before any server is built — the lock is taken inside the directory,
+// so a file where the directory goes fails there rather than in nats-server.
+//
+// Mutation: swallow the lock's failure to prepare the directory and the start
+// reaches nats-server, which dies on the store instead of naming the setting.
+func TestAStoreDirectoryThatIsAFileIsRefusedNamingTheSetting(t *testing.T) {
+	t.Parallel()
+	store := filepath.Join(t.TempDir(), "store")
+	if err := os.WriteFile(store, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv, err := StartServer(t.Context(), Config{StoreDir: store})
+	if err == nil {
+		srv.Shutdown()
+		t.Fatal("a broker started on a store directory that is a file")
+	}
+	if !strings.Contains(err.Error(), "stream.store_dir "+store) {
+		t.Errorf("the refusal does not name the setting and its value: %v", err)
+	}
+	if errors.Is(err, ErrStoreDirHeld) {
+		t.Errorf("a store directory that is a file is reported as held by another broker: %v", err)
+	}
+}
