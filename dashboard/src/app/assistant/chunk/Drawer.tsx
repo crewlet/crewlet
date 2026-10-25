@@ -85,6 +85,7 @@ import {
   recentConversations,
   send,
   stop,
+  undoAction,
   useConversation,
   conversation,
 } from "./session.ts";
@@ -420,6 +421,7 @@ export function Drawer({ unavailable, onClose, initialFocus, name, shape }: Draw
                   approve: (proposal) => void approve(proposal),
                   decline: (proposal) => void decline(proposal),
                   openHere: (target) => openHere(target),
+                  undo: undoAction,
                 }}
                 onRetry={(text) => ask(text)}
                 onReconnect={reconnect}

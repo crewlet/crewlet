@@ -4023,6 +4023,18 @@ talk over a typed module-scoped bus (`app/assistant/bus.ts`), never
 `postMessage` or a DOM event, which an artifact's frame or any script could
 reach.
 
+**A page action is carried out exactly once** (`app/assistant/chunk/pageActions.ts`).
+Every tab open on the conversation hears it, so the tab it was meant for (the
+one that approved it or asked the question, or else a tab showing the very
+page it was prepared against) claims it first (`PUT /assistant/actions/{id}`,
+`applying`), and every later claim is answered `409 action_already_claimed`.
+A claim nobody answered applies nothing. The screen then applies it through
+its own parser, gate and setters with a fresh look at the page's revision,
+and the outcome goes back on the same claim, so the turn hears it as the
+action's result. An approved change shows its outcome on its card; a pure
+view change the screen declared needs no approval (D11) shows a receipt in
+the thread, with Undo while the page still shows what the change made of it.
+
 **A turn is the engine's frames, reduced** (`app/assistant/chunk/turn.ts`):
 one pure reducer over every gesture and every frame, a frame at or below the
 sequence a turn holds dropped, so a resumed stream never draws a delta twice.
@@ -4041,7 +4053,8 @@ downloads from the stored snapshot, `EntityList`, `OpenInAppCard`,
 names, never an anchor; a picture is its alt text, never fetched
 (`ASSISTANT_WORDS` in `lib/markdown.ts`). The assistant moves the page only
 through an engine-built Open in app card, whose address the drawer checks is
-one of this dashboard's own framed routes before it follows it. There is no
+one of this dashboard's own framed routes before it follows it, or through a
+page action the screen itself declared. There is no
 answer rating, and the one toast is "Conversation cleared". The toast stack
 keeps clear of the panel (`app/toastInset.tsx`): beside it while it is a
 column or over the page, above its composer while it is the whole window on a

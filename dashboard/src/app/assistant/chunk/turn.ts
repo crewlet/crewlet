@@ -16,6 +16,7 @@
  *     thinking, working  --proposal card-->       awaiting_approval
  *     thinking, working  --action, confirm none-> applying
  *     awaiting_approval  --approve-->             applying
+ *     applying           --page applied it-->     working, its card applied
  *     awaiting_approval  --page moved-->          awaiting_approval, the card marked stale
  *     applying           --settled-->             working
  *     applying           --unknown-->             unconfirmed
@@ -46,6 +47,7 @@ import type {
 import { ASSISTANT_ACTION_CONTEXT_INVALIDATE } from "~/contract/assistant.ts";
 import type { AssistantNarrowFrame } from "~/protocol/assistantWire.ts";
 import type { StreamState } from "~/protocol/assistant.ts";
+import type { ActionLocal } from "./pageActions.ts";
 
 /** The page a message was sent with, as its chip shows it. */
 export type PageChip = NonNullable<AssistantPageContextEvent["page"]>;
@@ -138,6 +140,8 @@ export interface TurnView {
   proposals: Record<string, ProposalLocal>;
   /** The page actions the engine sent, for the page to claim and apply. */
   actions: AssistantActionEvent[];
+  /** What became of each page action in this tab, by its id. */
+  actionStates: Record<string, ActionLocal>;
   done: AssistantDoneEvent | null;
   error: AssistantErrorEvent | null;
   refusal: SendRefusal | null;
@@ -186,6 +190,7 @@ export type TurnEvent =
   | { type: "approval_settled"; proposalId: string; state: AssistantProposalCard["state"] }
   | { type: "approval_failed"; proposalId: string; failure: string; unknown: boolean }
   | { type: "page_moved"; revision: string }
+  | { type: "action_local"; actionId: string; local: ActionLocal }
   | { type: "transcript"; transcript: AssistantTranscript }
   | { type: "reset" };
 
@@ -338,6 +343,7 @@ function fromTranscript(transcript: AssistantTranscript): TurnView[] {
         cards: [],
         proposals: {},
         actions: [],
+        actionStates: {},
         done: null,
         error: null,
         refusal: null,
@@ -408,6 +414,7 @@ export function reduce(view: ConversationView, event: TurnEvent): ConversationVi
             cards: [],
             proposals: {},
             actions: [],
+            actionStates: {},
             done: null,
             error: null,
             refusal: null,
@@ -498,6 +505,12 @@ export function reduce(view: ConversationView, event: TurnEvent): ConversationVi
               ? "awaiting_approval"
               : "working",
       }));
+    case "action_local":
+      return withTurn(
+        view,
+        (t) => t.actions.some((a) => a.action_id === event.actionId),
+        (turn) => actionSettled(turn, event.actionId, event.local),
+      );
     case "page_moved":
       return {
         ...view,
@@ -533,6 +546,61 @@ export function reduce(view: ConversationView, event: TurnEvent): ConversationVi
         fault: null,
       };
   }
+}
+
+/** A proposal's state once its page action settled in this tab, or null where the card is the engine's to move. */
+const CARD_AFTER: Record<ActionLocal["state"], AssistantProposalCard["state"] | null> = {
+  applied: "applied",
+  undone: "applied",
+  stale: "stale",
+  blocked: "failed",
+  invalid: "failed",
+  no_handler: "failed",
+  unconfirmed: "failed",
+  // ANOTHER TAB APPLIES IT: the engine's own card frames say what came of it.
+  elsewhere: null,
+};
+
+/**
+ * A turn once one of its page actions settled in this tab: the outcome kept
+ * for its receipt, the proposal it applies drawn at its outcome (applied with
+ * the receipt, or refused with the screen's sentence), and the turn back to
+ * work once nothing is being applied.
+ */
+function actionSettled(turn: TurnView, actionId: string, local: ActionLocal): TurnView {
+  const action = turn.actions.find((a) => a.action_id === actionId);
+  const after = CARD_AFTER[local.state];
+  const proposalId = action?.proposal_id;
+  let next: TurnView = { ...turn, actionStates: { ...turn.actionStates, [actionId]: local } };
+  if (proposalId !== undefined && after !== null) {
+    const failed = after === "failed";
+    next = {
+      ...next,
+      cards: next.cards.map((card) => {
+        const proposal = proposalOf(card);
+        if (proposal?.proposal_id !== proposalId) return card;
+        const receipt = after === "applied" ? { summary: local.words } : proposal.receipt;
+        return {
+          ...card,
+          card: {
+            ...card.card,
+            proposal: { ...proposal, state: after, ...(receipt ? { receipt } : {}) },
+          },
+        };
+      }),
+      proposals: failed
+        ? {
+            ...next.proposals,
+            [proposalId]: {
+              pageMoved: next.proposals[proposalId]?.pageMoved ?? false,
+              failure: local.words,
+            },
+          }
+        : next.proposals,
+    };
+  }
+  if (next.phase !== "applying" || local.state === "elsewhere") return next;
+  return { ...next, phase: waitsOnPerson(next) ? "awaiting_approval" : "working" };
 }
 
 /** Change the turn holding a proposal. */

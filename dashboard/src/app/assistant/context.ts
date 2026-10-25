@@ -49,7 +49,7 @@ import {
 import { pageContextFits } from "~/protocol/assistantWire.ts";
 import { resolve } from "../routes.ts";
 import type { Crumb } from "../crumbs.ts";
-import { emit, type AssistantBusEvents, type AssistantInvalidateReason } from "./bus.ts";
+import { emit, on, type AssistantBusEvents, type AssistantInvalidateReason } from "./bus.ts";
 
 /** A resource or a selection, as the wire names it. */
 type ResourceKind = AssistantPageContext["resources"][number]["kind"];
@@ -78,6 +78,14 @@ export interface PageActionSpec<P> {
   blocked: (value: P) => string | null;
   /** Apply it with the setters the screen already has. */
   apply: (value: P) => void;
+  /**
+   * What puts the page back, taken BEFORE it applies: a function that undoes
+   * this one change and says whether it did. It answers false, and changes
+   * nothing, once the page no longer shows what the change made of it, so an
+   * undo never reverts something the person changed since. A pure view change
+   * offers it, so its receipt can say Undo (D11).
+   */
+  undo?: (value: P) => () => boolean;
   /** Whether the person approves it first (D11): a pure view change may say `none`. */
   confirm?: "approve" | "none";
 }
@@ -162,6 +170,12 @@ let frame: FramePage | null = null;
 let registration: AssistantPageRegistration | null = null;
 let snapshot: PageSnapshot | null = null;
 const listeners = new Set<() => void>();
+/**
+ * The undo each applied action left, by its correlation id. Held while the
+ * page stays on the same screen: an address that moves to another screen
+ * takes its undos with it, since the change they put back was that screen's.
+ */
+const undos = new Map<string, () => boolean>();
 
 const encoder = new TextEncoder();
 
@@ -290,6 +304,7 @@ function whatMoved(a: FramePage | null, b: FramePage): AssistantInvalidateReason
 /** The frame publishes the page on screen; null where there is none (signed out). */
 export function setFramePage(page: FramePage | null): void {
   const reason = page === null ? null : whatMoved(frame, page);
+  if (reason !== "filters") undos.clear();
   frame = page;
   publish(reason);
 }
@@ -339,29 +354,58 @@ export function usePageSnapshot(): PageSnapshot | null {
 export function applyPageAction(
   request: AssistantBusEvents["assistant.action.apply"],
 ): AssistantBusEvents["assistant.action.result"] {
-  const now = snapshot?.context.source_revision ?? "";
   const result = (
     outcome: AssistantBusEvents["assistant.action.result"]["outcome"],
-    reason?: string,
+    extra: { reason?: string; receipt?: string; undoable?: boolean } = {},
   ): AssistantBusEvents["assistant.action.result"] => ({
     correlation_id: request.correlation_id,
     outcome,
-    revision: now,
-    ...(reason === undefined ? {} : { reason }),
+    revision: snapshot?.context.source_revision ?? "",
+    ...extra,
   });
   const spec = registration?.actions?.[request.action] as PageActionSpec<unknown> | undefined;
-  if (!spec) return result("no_handler");
-  if (request.source_revision !== now) return result("stale");
+  if (!spec) return result("no_handler", { reason: "This page does not take that change." });
+  // A FRESH REVISION, read at the moment of applying: what the page shows
+  // now, never what it showed when the change was prepared or approved.
+  if (request.source_revision !== (snapshot?.context.source_revision ?? "")) {
+    return result("stale", { reason: "The page changed since this was prepared." });
+  }
   const parsed = spec.parse(request.payload);
-  if (!parsed.ok) return result("invalid", parsed.reason);
+  if (!parsed.ok) return result("invalid", { reason: parsed.reason });
   const blocked = spec.blocked(parsed.value);
-  if (blocked !== null) return result("blocked", blocked);
+  if (blocked !== null) return result("blocked", { reason: blocked });
+  const title = snapshot?.title ?? "";
+  const undo = spec.undo?.(parsed.value);
   spec.apply(parsed.value);
-  return result("applied");
+  if (undo) undos.set(request.correlation_id, undo);
+  return result("applied", {
+    receipt: title === "" ? "Applied to this page." : `Applied to ${title}.`,
+    undoable: undo !== undefined,
+  });
 }
+
+/**
+ * Undo an applied action: `undone` where the screen put the page back,
+ * `moved` where the page has changed since (nothing is changed, and the undo
+ * is dropped), and `gone` where there is nothing to undo, because the screen
+ * that applied it has gone.
+ */
+export function undoPageAction(correlationId: string): "undone" | "moved" | "gone" {
+  const undo = undos.get(correlationId);
+  if (!undo) return "gone";
+  undos.delete(correlationId);
+  return undo() ? "undone" : "moved";
+}
+
+// THE REGISTRY ANSWERS THE BUS: the drawer (a chunk) asks for an action by
+// name and hears its result, and never holds a screen's handler itself.
+on("assistant.action.apply", (request) => {
+  emit("assistant.action.result", applyPageAction(request));
+});
 
 /** Test seam: the registry as a fresh page has it. */
 export function resetPageContextForTest(): void {
+  undos.clear();
   frame = null;
   registration = null;
   snapshot = null;

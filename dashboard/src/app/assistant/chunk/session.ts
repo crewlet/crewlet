@@ -17,6 +17,11 @@
  * landed at, and the tab's read floors rise to it (`protocol/session.ts`),
  * exactly as a button's own write raises them, so the page under the drawer
  * reads its own change.
+ *
+ * A PAGE ACTION the stream carries is taken here, once per tab, by the
+ * claim, apply and report flow (`pageActions.ts`): this module knows which
+ * changes this tab approved and which questions it asked, which is what
+ * decides whether this tab is the one to apply it.
  */
 
 import { useSyncExternalStore } from "react";
@@ -40,7 +45,8 @@ import { session as floors, type SessionDomain } from "~/protocol/session.ts";
 import { writeFailed } from "~/protocol/writeOutcome.ts";
 import { setAssistantActivity } from "../status.ts";
 import { writeTab } from "../tab.ts";
-import type { PageSnapshot } from "../context.ts";
+import { undoPageAction, type PageSnapshot } from "../context.ts";
+import { takeAction } from "./pageActions.ts";
 import {
   EMPTY,
   activityOf,
@@ -120,6 +126,21 @@ function invalidated(frame: AssistantNarrowFrame): void {
   floors.written(write.domain as SessionDomain, write.position, []);
 }
 
+/** The turns this tab asked, so a page action answering one of them is this tab's to apply. */
+const asked = new Set<string>();
+
+/** Claim, apply and report a page action the stream carried, if this tab is the one to. */
+function pageAction(frame: AssistantNarrowFrame): void {
+  if (frame.kind !== "action" || frame.action.name === ASSISTANT_ACTION_CONTEXT_INVALIDATE) return;
+  const action = frame.action;
+  const mine =
+    asked.has(frame.turn_id) ||
+    (action.proposal_id !== undefined && approvals.has(action.proposal_id));
+  void takeAction(action, mine, {
+    settle: (local) => dispatch({ type: "action_local", actionId: action.action_id, local }),
+  });
+}
+
 /** The stream stopped for good: what the drawer says about it. */
 function stopped(reason: StreamStop): TurnEvent {
   switch (reason.code) {
@@ -150,6 +171,7 @@ function follow(streamUrl: string, lastEventId: string | undefined): void {
         if (mine !== generation) return;
         invalidated(frame);
         dispatch({ type: "frame", frame });
+        pageAction(frame);
       },
       state: (state, since) => live({ type: "stream", state, since }),
       stop: (reason) => live(stopped(reason)),
@@ -199,6 +221,7 @@ export async function send(text: string, page: PageSnapshot | null): Promise<voi
       { id, opKey },
     );
     if (mine !== generation) return;
+    asked.add(accepted.turn_id);
     dispatch({ type: "accepted", key, turnId: accepted.turn_id, afterSeq: accepted.after_seq });
     follow(
       accepted.stream_url,
@@ -373,6 +396,28 @@ export async function decline(proposal: AssistantProposalCard): Promise<void> {
   }
 }
 
+/**
+ * Undo a page change from its receipt, through the screen that applied it.
+ * The receipt then says it was undone, or, where the page has moved on since
+ * (or the screen has gone), that it can no longer be undone from here.
+ */
+export function undoAction(actionId: string): void {
+  const answer = undoPageAction(actionId);
+  dispatch({
+    type: "action_local",
+    actionId,
+    local:
+      answer === "undone"
+        ? { state: "undone", words: "Undone. The page is back as it was.", undoable: false }
+        : {
+            state: "applied",
+            words:
+              "The page has changed since, so this can no longer be undone from here. Use the page's own controls.",
+            undoable: false,
+          },
+  });
+}
+
 /** Tell the conversation the page under the drawer moved, so a prepared page change is stale. */
 export function pageMoved(revision: string): void {
   dispatch({ type: "page_moved", revision });
@@ -381,6 +426,8 @@ export function pageMoved(revision: string): void {
 /** Test seam: a fresh store, as a fresh page has. */
 export function resetSessionForTest(): void {
   generation += 1;
+  asked.clear();
+  approvals.clear();
   stream?.close();
   stream = null;
   view = EMPTY;

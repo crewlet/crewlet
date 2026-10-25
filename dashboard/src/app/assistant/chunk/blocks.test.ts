@@ -78,6 +78,7 @@ describe("the run chip says the turn's state in words", () => {
     cards: [],
     proposals: {},
     actions: [],
+    actionStates: {},
     done: null,
     error: null,
     refusal: null,

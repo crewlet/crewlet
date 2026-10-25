@@ -31,7 +31,14 @@ import {
   announce,
 } from "@crewlethq/ui";
 import { LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
-import { CardBlock, ReplyProse, runChipOf, stepsOf, type CardHandlers } from "./blocks.tsx";
+import {
+  ActionReceipt,
+  CardBlock,
+  ReplyProse,
+  runChipOf,
+  stepsOf,
+  type CardHandlers,
+} from "./blocks.tsx";
 import { isOpen, type ConversationView, type TurnView } from "./turn.ts";
 
 /** How long a reconnect may run before the drawer offers to try again by hand. */
@@ -88,6 +95,18 @@ function Turn({
   const placed = new Set(turn.replies.map((r) => r.id));
   const cardsOf = (messageId: string) => turn.cards.filter((c) => c.message_id === messageId);
   const loose = turn.cards.filter((c) => !placed.has(c.message_id));
+  // A PAGE CHANGE WITH NO CARD of its own (a pure view change, D11) is drawn
+  // as its receipt; one a card proposed is drawn on that card.
+  const carded = new Set(
+    turn.cards.flatMap((c) =>
+      c.card.type === "proposal" && c.card.proposal ? [c.card.proposal.proposal_id] : [],
+    ),
+  );
+  const receipts = turn.actions.filter(
+    (a) =>
+      turn.actionStates[a.action_id] !== undefined &&
+      (a.proposal_id === undefined || !carded.has(a.proposal_id)),
+  );
   const card = (event: (typeof turn.cards)[number]) => {
     const proposal = event.card.type === "proposal" ? event.card.proposal : undefined;
     return (
@@ -135,6 +154,14 @@ function Turn({
         </Stack>
       ))}
       {loose.map(card)}
+      {receipts.map((a) => (
+        <ActionReceipt
+          key={a.action_id}
+          actionId={a.action_id}
+          local={turn.actionStates[a.action_id]!}
+          on={on}
+        />
+      ))}
       {turn.phase === "stopped" ? <ReplyProse text="Stopped. Nothing changed." dimmed /> : null}
       {turn.error ? (
         <Callout
