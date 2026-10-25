@@ -989,6 +989,20 @@ type Profile struct {
 	// under auth.mode api-key or inherit-env.
 	APIKeyEnv string `yaml:"api_key_env,omitempty"`
 
+	// APIKeyEnvShared declares that APIKeyEnv is a GENERIC name, one other
+	// vendors' keys are kept under too, so an entry names its key
+	// (auth.api_key) and the engine never reads that variable from its own
+	// secret store or environment in its place.
+	//
+	// The fallback exists for a vendor's own variable: ANTHROPIC_API_KEY
+	// read for Claude Code is the key a person exported for exactly that
+	// CLI. Qwen Code reads OPENAI_API_KEY and sends it to whatever endpoint
+	// OPENAI_BASE_URL names — DashScope's when it names none — so falling
+	// back to it handed an OpenAI key, kept on the host for embeddings or
+	// for OpenAI itself, to another vendor. Copilot's GITHUB_TOKEN is the
+	// same shape: the token a code-host integration runs on.
+	APIKeyEnvShared bool `yaml:"api_key_env_shared,omitempty"`
+
 	// EnvSignIn declares that the CLI reads its model provider's credential
 	// from its OWN environment, under that provider's own variable — so a
 	// credential-named variable the operator sets in an entry's `env` signs
@@ -1482,6 +1496,10 @@ func (p *Profile) problems() []string {
 	p.validateEveryStep(add)
 	for _, ch := range p.channels() {
 		ch.validate(add)
+	}
+	if p.APIKeyEnvShared && p.APIKeyEnv == "" {
+		add("api_key_env_shared is set but api_key_env is empty — it says the key " +
+			"variable is one other vendors' keys go in too, and there is no variable")
 	}
 	p.validateUsageCommand(add)
 	if len(p.UsageFileArgs) > 0 {

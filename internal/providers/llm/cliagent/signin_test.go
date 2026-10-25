@@ -323,6 +323,15 @@ func TestEachModesSignInNamesOnlyTheVariablesItsProfileHas(t *testing.T) {
 				"`crewlet secrets set`"},
 		},
 		{
+			// OPENAI_API_KEY holds other vendors' keys too: the engine
+			// never reads it in the entry's place, so nothing says to
+			// export it there.
+			agent: "qwen-code", mode: AuthAPIKey, variables: []string{"OPENAI_API_KEY"},
+			want: []string{"its key, as OPENAI_API_KEY (providers.llm.sub.auth.api_key)",
+				"under the name auth.api_key references"},
+			notWant: []string{"else ", "export"},
+		},
+		{
 			agent: "codex", mode: AuthInheritEnv, variables: []string{"CODEX_API_KEY"},
 			want:    []string{"only CODEX_API_KEY from the engine's own process environment", "it is not set there", "export it"},
 			notWant: []string{" or ", "neither"},

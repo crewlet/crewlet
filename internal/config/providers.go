@@ -604,7 +604,11 @@ func (l *LLMProvider) CredentialSources(key string) CredentialSources {
 	case AuthSubscription:
 		sources.Token.Fallback = profile.TokenEnv
 	case AuthAPIKey:
-		sources.APIKey.Fallback = profile.APIKeyEnv
+		// NOT a variable other vendors' keys go in too: the entry names
+		// its key ([cliprofile.Profile.APIKeyEnvShared]).
+		if !profile.APIKeyEnvShared {
+			sources.APIKey.Fallback = profile.APIKeyEnv
+		}
 	}
 	return sources
 }
@@ -862,6 +866,17 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 					"the CLI does read a key variable, name it with "+
 					"overrides.api_key_env",
 				agent, profile.LoginLocation())
+		case profile.APIKeyEnvShared && strings.TrimSpace(l.Auth.APIKey) == "":
+			// Refused rather than left to fall back: the variable the
+			// CLI reads holds other vendors' keys too, and the one the
+			// engine would find there is the wrong one more often than
+			// not — sent to this CLI's endpoint all the same.
+			p.add(at(path, "auth.api_key"), ErrMissing,
+				"name this entry's key as auth.api_key: the %q CLI reads its key from "+
+					"%s, a variable other vendors' keys are kept under too, so the "+
+					"engine does not read it from its own environment or secret store "+
+					`in this entry's place — e.g. api_key: "${DASHSCOPE_API_KEY}"`,
+				agent, profile.APIKeyEnv)
 		}
 	}
 

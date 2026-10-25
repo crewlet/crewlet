@@ -159,6 +159,18 @@ func (p *Provider) ModeSignIn() (ModeSignIn, bool) {
 			return misconfigured(AuthAPIKey, fmt.Sprintf(
 				"puts its key in no variable, since the %q profile names no api_key_env", p.agent)), true
 		}
+		if p.profile.APIKeyEnvShared {
+			// No "else": other vendors' keys are kept under this
+			// variable too, so the engine never reads it in the entry's
+			// place ([cliprofile.Profile.APIKeyEnvShared]).
+			return ModeSignIn{
+				Mode: AuthAPIKey, Variables: []string{p.profile.APIKeyEnv},
+				Reads: fmt.Sprintf("hands the CLI only its key, as %s (providers.llm.%s.auth.api_key)",
+					p.profile.APIKeyEnv, p.key),
+				Unset:  "and that key resolved to nothing",
+				Supply: "store it with `crewlet secrets set` under the name auth.api_key references",
+			}, true
+		}
 		return ModeSignIn{
 			Mode: AuthAPIKey, Variables: []string{p.profile.APIKeyEnv},
 			Reads: fmt.Sprintf("hands the CLI only its key (providers.llm.%s.auth.api_key, else %s)",

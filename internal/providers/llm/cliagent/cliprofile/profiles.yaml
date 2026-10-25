@@ -827,6 +827,9 @@ qwen-code:
   # variable this profile named before, is read by neither build's model
   # sign-in.
   api_key_env: "OPENAI_API_KEY"
+  # A name other vendors' keys go in too, sent to whatever OPENAI_BASE_URL
+  # names: an entry names its key, and nothing falls back to this variable.
+  api_key_env_shared: true
   # The CLI's own words, measured on both builds against a stub refusing
   # every request: the call exits 1 and its result event's error reads
   # "[API Error: <status> <the provider's message>]". A call with no key is
@@ -1401,6 +1404,9 @@ copilot:
   # reached deliberately through auth.mode api-key or inherit-env, never
   # forwarded silently.
   api_key_env: "GITHUB_TOKEN"
+  # The token a code-host integration runs on is kept under the same name:
+  # an entry names its key, and nothing falls back to this variable.
+  api_key_env_shared: true
   login_args: ["login"]
   logout_args: ["logout"]
   # NOT MEASURED, the limit markers below: generic phrases rather than this

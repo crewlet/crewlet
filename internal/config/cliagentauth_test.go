@@ -47,6 +47,21 @@ func TestACLIAgentCredentialWithNowhereToGoIsRefused(t *testing.T) {
 			says: "config.toml), so put it there",
 		},
 		{
+			// OPENAI_API_KEY holds other vendors' keys too, and Qwen Code
+			// sends whatever it finds there to DashScope unless
+			// OPENAI_BASE_URL says otherwise: nothing falls back to it.
+			name:  "api-key naming no key on a CLI whose key variable is shared",
+			lines: []string{"agent: qwen-code", "auth: {mode: api-key}"},
+			path:  "providers.llm.sub.auth.api_key", kind: ErrMissing,
+			says: "reads its key from OPENAI_API_KEY, a variable other vendors' keys are kept under too",
+		},
+		{
+			name:  "api-key naming no key on copilot, whose GITHUB_TOKEN is shared",
+			lines: []string{"agent: copilot", "auth: {mode: api-key}"},
+			path:  "providers.llm.sub.auth.api_key", kind: ErrMissing,
+			says: "reads its key from GITHUB_TOKEN",
+		},
+		{
 			name:  "an API key under subscription",
 			lines: []string{"agent: claude-code", `auth: {api_key: "${ANTHROPIC_API_KEY}"}`},
 			path:  "providers.llm.sub.auth.api_key", kind: ErrConflict,
@@ -250,5 +265,25 @@ func TestACLIAgentProfileThatCannotLoadIsRefusedAtItsOverrides(t *testing.T) {
 		"providers.llm.sub.overrides")
 	if !errors.Is(err, ErrShape) || !strings.Contains(err.Error(), "complete_arg") {
 		t.Errorf("want a shape error naming the misspelled field, got %v", err)
+	}
+}
+
+// A SHARED KEY VARIABLE IS NEVER READ IN AN ENTRY'S PLACE. The fallback exists
+// for a vendor's own variable — ANTHROPIC_API_KEY for Claude Code is the key
+// somebody exported for exactly that CLI — and must not reach for a generic
+// one: Qwen Code's OPENAI_API_KEY on the engine's host is usually an OpenAI
+// key, and Qwen Code would send it to DashScope.
+func TestASharedKeyVariableIsNeverAnEntrysFallback(t *testing.T) {
+	t.Parallel()
+	for agent, want := range map[CLIAgentName]string{
+		"claude-code": "ANTHROPIC_API_KEY",
+		"codex":       "CODEX_API_KEY",
+		"qwen-code":   "",
+		"copilot":     "",
+	} {
+		entry := LLMProvider{Agent: agent, Model: "m", Auth: CLIAgentAuth{Mode: AuthAPIKey}}
+		if got := entry.CredentialSources("sub").APIKey.Fallback; got != want {
+			t.Errorf("%s: an api-key entry naming no key falls back to %q, want %q", agent, got, want)
+		}
 	}
 }

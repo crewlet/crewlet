@@ -501,3 +501,18 @@ func TestModelNamesProviderIsDeclaredOnlyWhereItIsMeasured(t *testing.T) {
 		t.Error("overrides.model_names_provider did not reach the profile")
 	}
 }
+
+// A SHARED KEY VARIABLE NEEDS A VARIABLE. api_key_env_shared says the CLI's key
+// variable holds other vendors' keys too; on a profile that names none it
+// declares nothing, and an override that dropped the variable and kept the
+// flag is a mistake to say rather than a no-op to ignore.
+func TestASharedKeyVariableNeedsAVariable(t *testing.T) {
+	t.Parallel()
+	_, err := Load("qwen-code", map[string]any{"api_key_env": ""})
+	if err == nil || !strings.Contains(err.Error(), "api_key_env_shared is set but api_key_env is empty") {
+		t.Errorf("a shared key variable with no variable: err = %v", err)
+	}
+	if _, err := Load("qwen-code", nil); err != nil {
+		t.Errorf("the shipped qwen-code profile does not load: %v", err)
+	}
+}
