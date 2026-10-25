@@ -38,12 +38,18 @@ export function pairNeeds(pair: BrandContrast): string {
   return `needs ${pair.min}:1`;
 }
 
-/** One change a pair's panel offers: which role becomes which colour, and the button's words. */
+/**
+ * One change a pair's panel offers, as an answer option says it: the colour
+ * (`label`, "#00a0a0") or the move ("Use on dark grounds"), a quiet line on
+ * what it gives (`detail`, "3:1, meets the minimum"), the chip's colour, and
+ * the roles it sets.
+ */
 export interface ContrastSuggestion {
   key: string;
   label: string;
-  /** The colour the offer applies, for the chip on its button. */
-  color: string;
+  detail: string;
+  /** The colour the offer applies, for its chip; none for a move. */
+  color?: string | undefined;
   /** The roles it sets, and to what. */
   set: Partial<Record<BrandColorRole, string>>;
 }
@@ -76,24 +82,30 @@ function fixOf(
 /** The minimum body text needs: the shade a link reads at when it is text. */
 const TEXT_MIN = 4.5;
 
-/** A shade's offer: "Use #00a0a0 · 3:1", with what it is best for where that differs. */
+/** A shade's offer: "#00a0a0", with the ratio it reaches and what that is good for. */
 function shadeOffer(
   key: string,
   role: BrandColorRole,
   shade: string,
   against: string,
-  note = "",
+  goodFor: string,
 ): ContrastSuggestion {
   const ratio = contrastRatio(shade, against);
-  const measured = ratio === null ? "" : ` · ${formatContrastRatio(ratio)}:1`;
-  return { key, label: `Use ${shade}${measured}${note}`, color: shade, set: { [role]: shade } };
+  const measured = ratio === null ? "" : `${formatContrastRatio(ratio)}:1, `;
+  return {
+    key,
+    label: shade,
+    detail: `${measured}${goodFor}`,
+    color: shade,
+    set: { [role]: shade },
+  };
 }
 
 /**
  * What a pair that falls short offers: the nearest shade of the colour it
- * changes that meets the minimum ("Use #00a0a0 · 3:1"); for a primary too light
- * for a light page, also the shade that reads as text links ("Use #007f7f ·
- * 4.5:1, best for text links") and, where it reads on the dark ground, using
+ * changes that meets the minimum ("#00a0a0", "3:1, meets the minimum"); for a
+ * primary too light for a light page, also the shade that reads as text links
+ * ("4.5:1, best for text links") and, where it reads on the dark ground, using
  * it there instead (it moves to Primary on dark grounds and the primary takes
  * the nearest shade). Nothing for a pair that passes or cannot be measured.
  */
@@ -107,12 +119,12 @@ export function contrastSuggestions(
   const out: ContrastSuggestion[] = [];
   const id = `${pair.foreground}/${pair.ground}`;
   const shade = nearestContrastShade(fix.from, fix.against, pair.min);
-  if (shade) out.push(shadeOffer(`${id}:shade`, fix.role, shade, fix.against));
+  if (shade) out.push(shadeOffer(`${id}:shade`, fix.role, shade, fix.against, "meets the minimum"));
   const primaryOnLight = pair.foreground === "primary" && pair.ground === "light_ground";
   if (primaryOnLight && pair.min < TEXT_MIN) {
     const text = nearestContrastShade(fix.from, fix.against, TEXT_MIN);
     if (text && text !== shade) {
-      out.push(shadeOffer(`${id}:text`, fix.role, text, fix.against, ", best for text links"));
+      out.push(shadeOffer(`${id}:text`, fix.role, text, fix.against, "best for text links"));
     }
   }
   if (primaryOnLight && !colors.primary_on_dark) {
@@ -121,8 +133,8 @@ export function contrastSuggestions(
     if (onDark !== null && onDark >= pair.min) {
       out.push({
         key: `${id}:move`,
-        label: "Use on dark grounds instead",
-        color: fix.from,
+        label: "Use on dark grounds",
+        detail: `Keep ${fix.from}, use it on dark grounds`,
         set: { primary_on_dark: fix.from, ...(shade ? { primary: shade } : {}) },
       });
     }

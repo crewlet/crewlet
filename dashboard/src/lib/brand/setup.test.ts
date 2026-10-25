@@ -158,15 +158,17 @@ describe("the contrast panel's suggestions", () => {
     // MEASURED, never the spec's example: each shade meets what it says.
     const shade = offers[0]!.set.primary!;
     expect(contrastRatio(shade, low.groundColor)!).toBeGreaterThanOrEqual(low.min);
-    expect(offers[0]!.label).toMatch(new RegExp(`^Use ${shade} · \\d+(\\.\\d+)?:1$`));
+    expect(offers[0]!.label).toBe(shade);
+    expect(offers[0]!.detail).toMatch(/^[\d.]+:1, meets the minimum$/);
     expect(offers[0]!.color).toBe(shade);
     const text = offers[1]!.set.primary!;
     expect(contrastRatio(text, low.groundColor)!).toBeGreaterThanOrEqual(4.5);
-    expect(offers[1]!.label).toMatch(new RegExp(`^Use ${text} · [\\d.]+:1, best for text links$`));
+    expect(offers[1]!.label).toBe(text);
+    expect(offers[1]!.detail).toMatch(/^[\d.]+:1, best for text links$/);
     expect(offers[2]).toEqual({
       key: "primary/light_ground:move",
-      label: "Use on dark grounds instead",
-      color: "#00baba",
+      label: "Use on dark grounds",
+      detail: "Keep #00baba, use it on dark grounds",
       set: { primary_on_dark: "#00baba", primary: shade },
     });
   });

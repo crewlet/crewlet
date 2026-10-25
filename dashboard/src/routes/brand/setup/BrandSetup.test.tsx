@@ -246,7 +246,7 @@ test("the pair that blocks an adoption holds Colours until a suggested shade fix
     ).toBe(true),
   );
   expect(screen.getByRole("heading", { name: "Colours", level: 3 })).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: /^Use #[0-9a-f]{6} · / }));
+  fireEvent.click(screen.getAllByRole("button", { name: /^#[0-9a-f]{6}/ })[0]!);
   await waitFor(() => expect(screen.queryByText("Blocks adoption")).toBeNull());
 });
 
@@ -390,9 +390,17 @@ test("a low pair says what it needs and why in one line, and offers shades and d
   expect(await stepHeading("Colours")).toBeTruthy();
   expect(screen.getByText("needs 3:1")).toBeTruthy();
   expect(screen.getByText("Hard to see as links and buttons on light pages.")).toBeTruthy();
-  expect(screen.getByRole("button", { name: /^Use #[0-9a-f]{6} · [\d.]+:1$/ })).toBeTruthy();
-  expect(screen.getByRole("button", { name: /, best for text links$/ })).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Use on dark grounds instead" }));
+  const offers = screen.getByRole("group", { name: "Suggestions for Primary on light ground" });
+  expect(within(offers).getByRole("button", { name: /meets the minimum/ })).toBeTruthy();
+  expect(within(offers).getByRole("button", { name: /best for text links/ })).toBeTruthy();
+  fireEvent.click(within(offers).getByRole("button", { name: /^Use on dark grounds/ }));
   await waitFor(() => expect(screen.queryByText("needs 3:1")).toBeNull());
+  // THE APPLIED OFFER STAYS DRAWN, marked chosen, while the colours hold it.
+  const kept = screen.getByRole("group", { name: "Suggestions for Primary on light ground" });
+  expect(
+    within(kept)
+      .getByRole("button", { name: /^Use on dark grounds/ })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
   expect(screen.getAllByDisplayValue(/00baba/).length).toBeGreaterThan(0);
 });

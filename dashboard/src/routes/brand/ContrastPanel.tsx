@@ -5,14 +5,19 @@
  *
  * ONE COMPACT ROW A PAIR. The badge says the pair, its measure and its level
  * ("Low" for a pair that only advises, `ContrastBadge advisory`); a low pair
- * adds what it needs, one muted line on why it matters, and small offers, each
- * with a chip of the colour it applies. Text on the light ground below its
- * minimum refuses an adoption: it says "Blocks adoption" and the engine's own
- * reason instead.
+ * adds what it needs, one muted line on why it matters, and its offers as
+ * small answer options (`ChoiceButtons size="sm"`), each with a chip of the
+ * colour it applies. Text on the light ground below its minimum refuses an
+ * adoption: it says "Blocks adoption" and the engine's own reason instead.
+ *
+ * AN APPLIED OFFER STAYS CHOSEN. Applying one fixes the pair, which would
+ * take its offers away with it; they stay drawn, the applied one marked, for
+ * as long as the colours are still what it set, so the person sees what they
+ * chose and can pick another.
  */
 
-import { useId } from "react";
-import { Button, ColorChip, ContrastBadge, ContrastHelp, Tag, Text } from "@crewlethq/ui";
+import { useId, useState } from "react";
+import { ChoiceButtons, ColorChip, ContrastBadge, ContrastHelp, Tag, Text } from "@crewlethq/ui";
 import { CircleAlertGlyph } from "@crewlethq/icons/glyphs";
 import type { BrandDocument } from "~/protocol/index.ts";
 import {
@@ -21,7 +26,26 @@ import {
   type BrandColorRole,
   type BrandContrast,
 } from "~/lib/brand/brand.ts";
-import { contrastSuggestions, pairNeeds, pairReason } from "~/lib/brand/suggest.ts";
+import {
+  contrastSuggestions,
+  pairNeeds,
+  pairReason,
+  type ContrastSuggestion,
+} from "~/lib/brand/suggest.ts";
+
+/** An applied offer: the pair's offers when it was applied, and which one. */
+interface Applied {
+  offers: ContrastSuggestion[];
+  key: string;
+}
+
+/** Whether the colours still hold everything an offer set. */
+function holds(colors: BrandDocument["colors"], offer: ContrastSuggestion | undefined): boolean {
+  if (!offer) return false;
+  return Object.entries(offer.set).every(
+    ([role, value]) => colors[role as BrandColorRole] === value,
+  );
+}
 
 /** Whether a pair falls short of its minimum, measured. */
 function short(pair: BrandContrast): boolean {
@@ -38,6 +62,7 @@ export function ContrastPanel({
 }) {
   const heading = useId();
   const results = brandContrast(colors);
+  const [applied, setApplied] = useState<Readonly<Record<string, Applied>>>({});
   return (
     <div className="brand-contrast">
       <div className="brand-contrast-head">
@@ -49,10 +74,24 @@ export function ContrastPanel({
       </div>
       <ul className="brand-contrast-pairs" aria-labelledby={heading}>
         {results.map((pair) => {
+          const id = `${pair.foreground}/${pair.ground}`;
           const low = short(pair);
-          const offers = onApply && low ? contrastSuggestions(colors, pair) : [];
+          const kept = applied[id];
+          const chosen =
+            kept &&
+            holds(
+              colors,
+              kept.offers.find((o) => o.key === kept.key),
+            );
+          const offers = !onApply
+            ? []
+            : chosen
+              ? kept.offers
+              : low
+                ? contrastSuggestions(colors, pair)
+                : [];
           return (
-            <li key={`${pair.foreground}/${pair.ground}`} className="brand-contrast-pair">
+            <li key={id} className="brand-contrast-pair">
               <div className="brand-contrast-pair-head">
                 <ContrastBadge
                   foreground={pair.foregroundColor}
@@ -89,19 +128,23 @@ export function ContrastPanel({
                 </Text>
               ) : null}
               {offers.length > 0 ? (
-                <div className="brand-contrast-offers">
-                  {offers.map((offer) => (
-                    <Button
-                      key={offer.key}
-                      size="small"
-                      variant="outline"
-                      leadingIcon={<ColorChip value={offer.color} size="xs" />}
-                      onClick={() => onApply?.(offer.set)}
-                    >
-                      {offer.label}
-                    </Button>
-                  ))}
-                </div>
+                <ChoiceButtons
+                  label={`Suggestions for ${pair.label}`}
+                  size="sm"
+                  chosen={chosen ? kept.key : null}
+                  onChoose={(key) => {
+                    const offer = offers.find((o) => o.key === key);
+                    if (!offer) return;
+                    setApplied((was) => ({ ...was, [id]: { offers, key } }));
+                    onApply?.(offer.set);
+                  }}
+                  options={offers.map((offer) => ({
+                    value: offer.key,
+                    label: offer.label,
+                    detail: offer.detail,
+                    ...(offer.color ? { media: <ColorChip value={offer.color} /> } : {}),
+                  }))}
+                />
               ) : null}
             </li>
           );
