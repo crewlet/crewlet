@@ -39,6 +39,7 @@ import { QueueCountProvider, queueCountParams } from "~/lib/useQueueCount.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
 import { withDerived } from "~/test/org.ts";
+import { applyPageAction, resetPageContextForTest } from "~/app/assistant/context.ts";
 
 // THE FRAME'S ONE COVERAGE SLOT, stood in for so a case can say WHAT was
 // published rather than only that something was drawn: the state bar renders
@@ -697,6 +698,38 @@ test("the assignee is locked on the wire and absent from the URL and the chips",
   fireEvent.click(screen.getByRole("button", { name: "Filter" }));
   await waitFor(() => expect(screen.getByText("priority=")).toBeTruthy());
   expect(screen.queryByText("assignee=")).toBeNull();
+});
+
+// AND THE ASSISTANT CANNOT WIDEN IT EITHER: the queue's page action writes
+// the list's own filters, and refuses a patch naming the key the page is,
+// clearing it included, rather than applying a change the lock would undo.
+test("the assistant's page action never widens the queue past its person", async () => {
+  location.hash = "#/me?handle=rui";
+  serving({
+    viewer: ada,
+    work_my_work: { ...emptyDay, handle: "rui" },
+    work_items: { ...noWork, items: [task()] },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("Ship the thing")).toBeTruthy());
+  const ask = (payload: unknown) =>
+    applyPageAction({
+      correlation_id: "c",
+      action: "work.filter.apply",
+      payload,
+      source_revision: "",
+    });
+  for (const payload of [
+    { assignee: null },
+    { assignee: "ada" },
+    { status: "open", assignee: "" },
+  ]) {
+    expect(ask(payload)).toMatchObject({ outcome: "blocked" });
+  }
+  expect(location.hash).not.toContain("assignee=");
+  expect(ask({ status: "open" }).outcome).toBe("applied");
+  await waitFor(() => expect(location.hash).toContain("status=open"));
+  resetPageContextForTest();
 });
 
 // AND THE WORKSPACE'S SAVED VIEWS ARE NOT THIS PERSON'S CLAIMS. The strip's
