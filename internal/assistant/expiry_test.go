@@ -2,13 +2,11 @@ package assistant_test
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/assistant"
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
@@ -38,8 +36,8 @@ func expiredOnce(t *testing.T, f *assistanttest.Rig, turn uuid.UUID) {
 }
 
 // A PARKED TURN ENDS WITH ITS PROPOSAL'S LIFETIME, wherever it is next met:
-// a reload reads it expired, a new question is admitted rather than refused
-// assistant_turn_running, the decision that found the proposal expired ends
+// a reload reads it expired, a new question finds it expired rather than
+// superseding it, the decision that found the proposal expired ends
 // it, and the reaper ends one nobody meets again. Inside the lifetime it
 // stays parked.
 //
@@ -87,8 +85,10 @@ func TestAParkedTurnClosesExpiredWhenItsProposalExpires(t *testing.T) {
 			if n, err := f.Svc.ReapLapsed(t.Context()); err != nil || n != 0 {
 				t.Fatalf("inside its lifetime the reaper closed %d, %v", n, err)
 			}
-			if _, err := f.Ask("early", "And another thing", nil); !errors.Is(err, assistant.ErrTurnRunning) {
-				t.Fatalf("a question beside a live proposal answers %v, want the turn running", err)
+			if got, err := f.Svc.Transcript(t.Context(), f.Person, f.Conversation); err != nil ||
+				got.OpenTurn == nil || got.OpenTurn.State != wire.TurnWaitingForApproval {
+				t.Fatalf("inside its lifetime the reload reads %+v, %v; want the turn waiting",
+					got.OpenTurn, err)
 			}
 			pastExpiry(f, p)
 			meet(t, f, p)

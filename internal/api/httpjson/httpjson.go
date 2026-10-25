@@ -1001,7 +1001,7 @@ const (
 	// not_a_person, no_permission). 403.
 	CodeAssistantNotAvailable Code = "assistant_not_available"
 	// CodeAssistantTurnRunning is a question asked in a conversation whose
-	// turn is still running or waiting on an approval: one at a time. 409.
+	// turn is still running: one at a time. 409.
 	CodeAssistantTurnRunning Code = "assistant_turn_running"
 	// CodeAssistantBusy is a person past their running turns or their turn
 	// rate. 429 with a Retry-After.

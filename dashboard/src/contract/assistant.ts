@@ -59,7 +59,8 @@ type AssistantTurnState =
   | "failed"
   | "interrupted"
   | "expired"
-  | "budget_exhausted";
+  | "budget_exhausted"
+  | "superseded";
 
 /** The run chip's state while a segment runs. */
 type AssistantStatusState = "thinking" | "working" | "waiting_for_approval" | "applying";

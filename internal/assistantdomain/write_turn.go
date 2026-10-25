@@ -369,10 +369,11 @@ func (w *Writer) CloseTurn(ctx context.Context, c Call, turn uuid.UUID, end Turn
 }
 
 // ClosableFrom is the states a turn may close into end from: expired (a
-// parked turn whose proposals nobody decided in time) from waiting for
-// approval alone, every other end from running or waiting.
+// parked turn whose proposals nobody decided in time) and superseded (a
+// parked turn the person asked past) from waiting for approval alone, every
+// other end from running or waiting.
 func ClosableFrom(end wire.TurnState) []wire.TurnState {
-	if end == wire.TurnExpired {
+	if end == wire.TurnExpired || end == wire.TurnSuperseded {
 		return []wire.TurnState{wire.TurnWaitingForApproval}
 	}
 	return []wire.TurnState{wire.TurnRunning, wire.TurnWaitingForApproval}
