@@ -43,6 +43,15 @@ type RigOptions struct {
 	Company assistant.Company
 	// Acts are the writes the rig's person may propose.
 	Acts []string
+	// Node is the rig's node id; empty is "node-a".
+	Node string
+	// Store is shared with another rig, for a suite about two nodes of one
+	// fleet reading one replicated estate; nil is a store of the rig's own.
+	Store *Store
+	// Remote and Rate are the rig's fleet half and the fleet's turn
+	// counter; nil serves this node's own turns and counts them here.
+	Remote assistant.Remote
+	Rate   assistant.TurnRate
 }
 
 // NewRig builds a rig and closes its service when the suite ends. Its person is
@@ -51,7 +60,15 @@ type RigOptions struct {
 func NewRig(t testing.TB, o RigOptions) *Rig {
 	t.Helper()
 	clock := NewClock()
-	r := &Rig{t: t, Clock: clock, Store: NewStore(clock.Now), Model: NewModel(o.Rounds...),
+	store := o.Store
+	if store == nil {
+		store = NewStore(clock.Now)
+	}
+	node := o.Node
+	if node == "" {
+		node = "node-a"
+	}
+	r := &Rig{t: t, Clock: clock, Store: store, Model: NewModel(o.Rounds...),
 		Dispatcher: &Dispatcher{Handler: o.Handler}, Revoker: &Revoker{}, Audit: &Audit{},
 		Person:       Person("grace", "grace", iam.GrantTracker),
 		Conversation: ID("conversation/one"),
@@ -65,7 +82,7 @@ func NewRig(t testing.TB, o RigOptions) *Rig {
 		company = Company(t, !o.Off, "grace", "ada")
 	}
 	svc, err := assistant.New(assistant.Deps{
-		Node: "node-a", Company: company,
+		Node: node, Company: company, Remote: o.Remote, Rate: o.Rate,
 		Acts:   func(context.Context, iam.Principal) ([]string, error) { return o.Acts, nil },
 		Models: models, Budget: o.Budget, Catalogue: Catalogue(o.Tools),
 		Transcripts: r.Store, Records: r.Store, Dispatcher: r.Dispatcher, Revoker: r.Revoker,

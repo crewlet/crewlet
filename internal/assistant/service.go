@@ -31,7 +31,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// Deps is what a [Service] is built from. Every field but Remote and Now is
+// Deps is what a [Service] is built from. Every field but Remote, Rate and Now is
 // REQUIRED, and a nil is refused by name: the assistant runs beside an
 // engine that holds all of them, so a missing one is a wiring mistake a
 // narrower assistant would hide.
@@ -57,6 +57,9 @@ type Deps struct {
 	// Remote follows and stops turns running on other nodes; nil serves
 	// this node's own.
 	Remote Remote
+	// Rate counts a person's turn starts across the fleet; nil counts them
+	// on this node alone.
+	Rate TurnRate
 
 	// Now is injectable so a test pins every instant.
 	Now func() time.Time
@@ -78,6 +81,7 @@ type Service struct {
 	audit       AuditPublisher
 	metrics     Metrics
 	remote      Remote
+	rate        TurnRate
 	now         func() time.Time
 	log         *slog.Logger
 
@@ -128,13 +132,18 @@ func New(d Deps) (*Service, error) {
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	base, cancel := context.WithCancelCause(context.Background())
+	var tap live.Tap
+	if d.Remote != nil {
+		tap = d.Remote.Publish
+	}
 	return &Service{
 		node: d.Node, company: d.Company, acts: d.Acts, models: d.Models, budget: d.Budget,
 		catalogue: d.Catalogue, transcripts: d.Transcripts,
 		records: d.Records, dispatcher: d.Dispatcher, revoker: d.Revoker, audit: d.Audit,
-		metrics: d.Metrics, remote: d.Remote, now: now,
+		metrics: d.Metrics, remote: d.Remote, rate: d.Rate, now: now,
 		log: logging.Get("assistant"),
-		hub: live.NewHub(now, config.Assistant{ProposalTTLSeconds: maxProposalTTLSeconds}.ProposalTTL()),
+		hub: live.NewHub(now, config.Assistant{ProposalTTLSeconds: maxProposalTTLSeconds}.ProposalTTL(),
+			tap),
 		limiter: costlimit.New(costlimit.Rates{
 			PrincipalRate: TurnsPerMinute / 60.0, PrincipalBurst: TurnBurst,
 			ScopeRate: NodeTurnsPerSecond, ScopeBurst: NodeTurnBurst,
@@ -271,7 +280,7 @@ func (s *Service) Start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	if err != nil {
 		return wire.TurnAccepted{}, &Unavailable{RetryAfter: 2 * time.Second, Cause: err}
 	}
-	if err = s.admit(ts.Person); err != nil {
+	if err = s.admit(ctx, ts.Person); err != nil {
 		return wire.TurnAccepted{}, err
 	}
 	admitted := true
@@ -358,7 +367,7 @@ func (s *Service) newTurn(p iam.Principal, conversation, id uuid.UUID, key strin
 // openStream opens the segment's frame log and writes its opening frames,
 // answering the seq a client that drew everything before it reads after.
 func (s *Service) openStream(t *turn, c assistantdomain.Conversation, resumed bool) uint64 {
-	t.log = s.hub.Open(t.conversation, t.id)
+	t.log = s.hub.Open(t.person.ID, t.conversation, t.id)
 	after := t.log.Last()
 	t.emit(wire.Frame{Kind: wire.EventConversation, Conversation: &wire.ConversationEvent{
 		Title: c.Title, CreatedAt: c.CreatedAt, Resumed: resumed}})
@@ -416,7 +425,22 @@ func budgetRefusal(ctx context.Context, meter toolloop.BudgetMeter) error {
 
 // admit takes one turn for p from their running allowance and the turn rate,
 // or answers why not.
-func (s *Service) admit(p iam.Principal) error {
+func (s *Service) admit(ctx context.Context, p iam.Principal) error {
+	if err := s.admitHere(p); err != nil {
+		return err
+	}
+	// THE FLEET'S COUNT, outside the lock: it is a round trip to the
+	// coordination store, and no other person's start waits on it.
+	if err := s.admitAcrossTheFleet(ctx, p.ID); err != nil {
+		s.unadmit(p.ID)
+		return err
+	}
+	return nil
+}
+
+// admitHere takes one turn for p from this node's running allowance and
+// turn rate.
+func (s *Service) admitHere(p iam.Principal) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -428,12 +452,15 @@ func (s *Service) admit(p iam.Principal) error {
 			RunningTurnsPerPerson)}
 	}
 	if refused := s.limiter.Take(turnRateScope, p.ID.String(), 1); refused != nil {
-		return &Busy{RetryAfter: refused.RetryAfter, Reason: "too many questions in a " +
-			"short time; wait a moment"}
+		return &Busy{RetryAfter: refused.RetryAfter, Reason: turnRateReason}
 	}
 	s.running[p.ID]++
 	return nil
 }
+
+// turnRateReason is what a person past their turn rate is told, on this node
+// or across the fleet alike.
+const turnRateReason = "too many questions in a short time; wait a moment"
 
 // unadmit gives back a turn [Service.admit] took for a start that failed
 // before its runner began.
@@ -496,15 +523,10 @@ func (s *Service) Stop(ctx context.Context, owner, turnID uuid.UUID, key string)
 	if err != nil {
 		return wire.StopAnswer{}, s.readFailure(err)
 	}
-	if t, ok := s.local(owner, turnID); ok {
-		t.stop()
-		select {
-		case <-t.done:
-		case <-ctx.Done():
-		case <-time.After(stopWait):
-		}
-		return wire.StopAnswer{State: wire.TurnStopped}, nil
-	}
+	// THE ROW DECIDES FIRST: a runner that has just parked or ended its turn
+	// is still tearing down on this node for a moment after its record
+	// landed, and cancelling it then stops nothing while the turn stays
+	// parked. Only a turn the record still says runs is a runner's to stop.
 	switch {
 	case row.State.Final():
 		return wire.StopAnswer{State: row.State}, nil
@@ -528,13 +550,24 @@ func (s *Service) Stop(ctx context.Context, owner, turnID uuid.UUID, key string)
 		s.declineParked(ctx, p, row, key)
 		return wire.StopAnswer{State: wire.TurnStopped}, nil
 	}
+	if t, ok := s.local(owner, turnID); ok {
+		return wire.StopAnswer{State: s.stopRunner(ctx, t)}, nil
+	}
 	if s.remote != nil {
-		answer, answered, err := s.remote.Stop(ctx, owner, turnID)
-		if err != nil {
+		state, reach, err := s.remote.Stop(ctx, owner, turnID, row.Node)
+		switch {
+		case errors.Is(err, ErrNotFound):
+			return wire.StopAnswer{}, err
+		case err != nil:
 			return wire.StopAnswer{}, &Unavailable{RetryAfter: 2 * time.Second, Cause: err}
-		}
-		if answered {
-			return answer, nil
+		case reach == live.ReachServed:
+			return wire.StopAnswer{State: state}, nil
+		case reach == live.ReachGone:
+			// THE RUNNER DIED WITH THE TURN: there is nothing to stop,
+			// and the turn is closed interrupted, once, as a stream of
+			// it would close it.
+			state, _ := s.closeInterrupted(ctx, owner, row)
+			return wire.StopAnswer{State: state}, nil
 		}
 	}
 	return wire.StopAnswer{}, &Unavailable{RetryAfter: 2 * time.Second, Cause: fmt.Errorf(
@@ -558,6 +591,18 @@ func (s *Service) declineParked(ctx context.Context, p iam.Principal, row assist
 		s.log.WarnContext(ctx, "assistant_stop_decline_failed", "turn", row.ID,
 			"error", redact.Secrets(err.Error()))
 	}
+}
+
+// stopRunner stops a turn this node runs and waits, at most [stopWait], for
+// its runner to record its end.
+func (s *Service) stopRunner(ctx context.Context, t *turn) wire.TurnState {
+	t.stop()
+	select {
+	case <-t.done:
+	case <-ctx.Done():
+	case <-time.After(stopWait):
+	}
+	return wire.TurnStopped
 }
 
 // stopWait is how long a Stop waits for the runner to record its end before
@@ -589,13 +634,15 @@ func (s *Service) Stream(ctx context.Context, owner, conversation, turnID uuid.U
 	if l, ok := s.hub.Get(turnID); ok {
 		return s.follow(ctx, owner, row, l, after, w)
 	}
+	gone := false
 	if !row.State.Ended() && row.Node != s.node && s.remote != nil {
-		answered, err := s.remote.Follow(ctx, owner, turnID, after, w)
-		if err != nil || answered {
+		reach, err := s.remote.Follow(ctx, owner, turnID, row.Node, after, w)
+		if err != nil || reach == live.ReachServed {
 			return err
 		}
+		gone = reach == live.ReachGone
 	}
-	return s.answerFromTranscript(ctx, owner, row, after, w)
+	return s.answerFromTranscript(ctx, owner, row, after, w, gone)
 }
 
 // follow serves a stream from this node's frame log.
@@ -604,15 +651,9 @@ func (s *Service) follow(ctx context.Context, owner uuid.UUID, row assistantdoma
 
 	replay, sub, gap := l.Subscribe(after)
 	defer sub.Cancel()
-	if gap {
-		snap, err := s.snapshot(ctx, owner, row, after)
-		if err != nil {
-			return err
-		}
-		if err := w.Frame(snap); err != nil {
-			return err
-		}
-		replay = slices.DeleteFunc(replay, func(f wire.Frame) bool { return f.Seq <= snap.Seq })
+	replay, err := s.filled(ctx, owner, row, after, replay, gap)
+	if err != nil {
+		return err
 	}
 	for _, f := range replay {
 		if err := w.Frame(f); err != nil {
@@ -640,12 +681,29 @@ func (s *Service) follow(ctx context.Context, owner uuid.UUID, row assistantdoma
 	}
 }
 
+// filled is a log's frames after seq after as a stream is handed them: where
+// the log no longer holds every frame after it (gap), a snapshot of the
+// transcript first, then the frames numbered past the snapshot.
+func (s *Service) filled(ctx context.Context, owner uuid.UUID, row assistantdomain.Turn,
+	after uint64, frames []wire.Frame, gap bool) ([]wire.Frame, error) {
+
+	if !gap {
+		return frames, nil
+	}
+	snap, err := s.snapshot(ctx, owner, row, after)
+	if err != nil {
+		return nil, err
+	}
+	frames = slices.DeleteFunc(frames, func(f wire.Frame) bool { return f.Seq <= snap.Seq })
+	return append([]wire.Frame{snap}, frames...), nil
+}
+
 // answerFromTranscript answers a stream no live log serves: a snapshot of what
 // the transcript holds of the turn, then how it ended. A turn still open whose
-// runner was this node died with it, and is closed interrupted once (the close
-// is arbitrated, so of two nodes noticing, one records it).
+// runner was this node, or whose runner the fleet found gone, died with it,
+// and is closed interrupted once ([Service.closeInterrupted]).
 func (s *Service) answerFromTranscript(ctx context.Context, owner uuid.UUID,
-	row assistantdomain.Turn, after uint64, w FrameWriter) error {
+	row assistantdomain.Turn, after uint64, w FrameWriter, gone bool) error {
 
 	snap, err := s.snapshot(ctx, owner, row, after)
 	if err != nil {
@@ -657,27 +715,8 @@ func (s *Service) answerFromTranscript(ctx context.Context, owner uuid.UUID,
 	state := row.State
 	var failure *wire.ErrorEvent
 	switch {
-	case state == wire.TurnRunning && row.Node == s.node:
-		err := s.records.CloseTurn(ctx, Write{Owner: owner,
-			By: iam.Actor{Name: "engine", Kind: iam.ActorSystem},
-			Derived: &Derivation{At: row.StartedAt, Name: "assistant_interrupt",
-				Identity: []string{row.ID.String()}}}, row.ID, assistantdomain.TurnEnd{
-			State: wire.TurnInterrupted, Steps: row.Steps, ErrorCode: string(wire.ErrorTurnInterrupted)})
-		var moved *assistantdomain.TurnMoved
-		switch {
-		case errors.As(err, &moved):
-			state = moved.State
-		case err != nil:
-			s.log.WarnContext(ctx, "assistant_interrupt_unrecorded", "turn", row.ID,
-				"error", redact.Secrets(err.Error()))
-			state = wire.TurnInterrupted
-		default:
-			state = wire.TurnInterrupted
-		}
-		if state == wire.TurnInterrupted {
-			failure = &wire.ErrorEvent{Code: wire.ErrorTurnInterrupted, Retryable: true,
-				Message: "The node answering you restarted before the turn finished."}
-		}
+	case state == wire.TurnRunning && (row.Node == s.node || gone):
+		state, failure = s.closeInterrupted(ctx, owner, row)
 	case state == wire.TurnRunning:
 		// Running on another node this one cannot follow: the snapshot is
 		// what it can say, and the client asks again.
@@ -694,6 +733,37 @@ func (s *Service) answerFromTranscript(ctx context.Context, owner uuid.UUID,
 	seq++
 	return w.Frame(frameAt(row, seq, s.now(), wire.Frame{Kind: wire.EventDone,
 		Done: &wire.DoneEvent{State: state, Steps: row.Steps, TraceID: row.TraceID}}))
+}
+
+// closeInterrupted closes a running turn whose runner died with it, and answers
+// the state it is in now and the error a stream shows for it.
+//
+// EXACTLY ONCE across the fleet: the close is published under an operation
+// every node derives alike from the turn ([Derivation]), and the state log
+// arbitrates the turn's end, so of two nodes noticing at once one records it
+// and the other reads the state it landed in ([assistantdomain.TurnMoved]).
+func (s *Service) closeInterrupted(ctx context.Context, owner uuid.UUID,
+	row assistantdomain.Turn) (wire.TurnState, *wire.ErrorEvent) {
+
+	err := s.records.CloseTurn(ctx, Write{Owner: owner,
+		By: iam.Actor{Name: "engine", Kind: iam.ActorSystem},
+		Derived: &Derivation{At: row.StartedAt, Name: "assistant_interrupt",
+			Identity: []string{row.ID.String()}}}, row.ID, assistantdomain.TurnEnd{
+		State: wire.TurnInterrupted, Steps: row.Steps, ErrorCode: string(wire.ErrorTurnInterrupted)})
+	state := wire.TurnInterrupted
+	var moved *assistantdomain.TurnMoved
+	switch {
+	case errors.As(err, &moved):
+		state = moved.State
+	case err != nil:
+		s.log.WarnContext(ctx, "assistant_interrupt_unrecorded", "turn", row.ID,
+			"error", redact.Secrets(err.Error()))
+	}
+	if state != wire.TurnInterrupted {
+		return state, nil
+	}
+	return state, &wire.ErrorEvent{Code: wire.ErrorTurnInterrupted, Retryable: true,
+		Message: "The node running this turn restarted before the turn finished."}
 }
 
 // snapshot is the turn as the transcript holds it, numbered after seq after.

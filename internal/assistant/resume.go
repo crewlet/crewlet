@@ -107,7 +107,7 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 	if err != nil {
 		return wire.TurnAccepted{}, &Unavailable{RetryAfter: 2 * time.Second, Cause: err}
 	}
-	if err = s.admit(person); err != nil {
+	if err = s.admit(ctx, person); err != nil {
 		return wire.TurnAccepted{}, err
 	}
 	admitted := true
@@ -238,7 +238,7 @@ func (s *Service) Emit(ctx context.Context, owner, conversation, turn uuid.UUID,
 	}
 	t := s.newTurn(person, conversation, turn, "", nil, nil, nil)
 	defer t.cancel(nil)
-	t.log = s.hub.Open(conversation, turn)
+	t.log = s.hub.Open(owner, conversation, turn)
 	after := t.log.Last()
 	if e.Card != nil {
 		if err := s.showProposal(ctx, t, uuid.Nil, *e.Card); err != nil {

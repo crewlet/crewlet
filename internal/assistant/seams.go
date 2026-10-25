@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
+	"github.com/crewlet/crewlet/internal/assistant/live"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/auxspend"
@@ -159,15 +160,31 @@ type FrameWriter interface {
 	Keepalive() error
 }
 
-// Remote follows and stops a turn running on another node (the fleet's
-// sealed broadcast and signed instruction channels). NIL IS A NODE THAT
-// SERVES ITS OWN TURNS: a stream of a turn running elsewhere is answered with
-// its persisted transcript, and a Stop of one is unavailable.
+// Remote is this node's half of the fleet (internal/assistant/live's Fleet,
+// through [FleetRemote]): it tells the fleet every frame this node appends,
+// follows a turn running on another node, and stops one there. NIL IS A NODE
+// THAT SERVES ITS OWN TURNS: a stream of a turn running elsewhere is answered
+// with its persisted transcript, and a Stop of one is unavailable.
 type Remote interface {
-	// Follow streams a turn running on another node after seq after,
-	// reporting false when no node answers for it (its runner died).
-	Follow(ctx context.Context, owner, turn uuid.UUID, after uint64, w FrameWriter) (bool, error)
-	// Stop asks the node running a turn to stop it, reporting false when
-	// no node answers for it.
-	Stop(ctx context.Context, owner, turn uuid.UUID) (wire.StopAnswer, bool, error)
+	// Publish tells the fleet one frame this node appended. It never
+	// blocks (live.Tap).
+	Publish(f wire.Frame)
+	// Follow streams owner's turn running on node after seq after, and
+	// reports what asking found: served (the runner answered), gone (its
+	// node is not running it or has left the fleet: the turn died with
+	// it) or unreachable. Nothing is written unless it was served.
+	// Another person's turn is [ErrNotFound].
+	Follow(ctx context.Context, owner, turn uuid.UUID, node string, after uint64,
+		w FrameWriter) (live.Reach, error)
+	// Stop asks node to stop owner's turn, answering the state it ended
+	// in where it was served. Another person's turn is [ErrNotFound].
+	Stop(ctx context.Context, owner, turn uuid.UUID, node string) (wire.TurnState, live.Reach, error)
+}
+
+// TurnRate is the fleet's fixed-window counter (internal/coord's Counter as
+// written): a person's turn starts are counted across every node, so a
+// script spreading its questions over the fleet meets the same
+// [TurnsPerMinute] one node would hold it to.
+type TurnRate interface {
+	Allow(ctx context.Context, bucket string, limit int, window time.Duration, now time.Time) (bool, error)
 }

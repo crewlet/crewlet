@@ -1,0 +1,346 @@
+package assistant_test
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/assistant"
+	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
+	"github.com/crewlet/crewlet/internal/assistant/live"
+	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/assistantdomain"
+	"github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/iam"
+	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/signedask"
+	"github.com/crewlet/crewlet/internal/statelog"
+)
+
+// present is the fleet's roster: the nodes named are present.
+type present map[string]bool
+
+func (p present) Present(_ context.Context, node string) (bool, error) { return p[node], nil }
+
+// fleetOf is a fleet of two rigs, node-a and node-b, on one in-memory broker
+// and one replicated store, each with its fleet half started over its service.
+// a's model is gated, so its turns run until the suite opens the gate.
+func fleetOf(t *testing.T, a assistanttest.RigOptions) (*assistanttest.Rig, *assistanttest.Rig) {
+	t.Helper()
+	broker := queuememory.NewBroker()
+	roster := present{"node-a": true, "node-b": true}
+	cipher, err := secrets.NewCipher(secrets.Keyring{ActiveID: "k1",
+		Keys: map[string][]byte{"k1": bytes.Repeat([]byte{7}, 32)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ring := statelog.OneKey("k1", "fleet-material")
+	half := func(node string) *live.Fleet {
+		q := broker.Client()
+		if err := q.Start(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = q.Stop(context.Background()) })
+		frames, err := signedask.NewOneWay[live.Sealed](live.FrameChannel, ring)
+		if err != nil {
+			t.Fatal(err)
+		}
+		replays, err := signedask.New[live.ReplayRequest, live.ReplayReply](live.ReplayChannel, ring)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stops, err := signedask.New[live.StopRequest, live.StopReply](live.StopChannel, ring)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f, err := live.NewFleet(live.FleetOptions{Node: node, Broker: q, Roster: roster,
+			Cipher: cipher, Frames: frames, Replays: replays, Stops: stops})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	fa, fb := half("node-a"), half("node-b")
+	a.Node, a.Remote = "node-a", assistant.FleetRemote(fa)
+	ra := assistanttest.NewRig(t, a)
+	ra.Model.Gate = make(chan struct{})
+	rb := assistanttest.NewRig(t, assistanttest.RigOptions{Node: "node-b",
+		Remote: assistant.FleetRemote(fb), Store: ra.Store})
+	for _, n := range []struct {
+		f   *live.Fleet
+		svc *assistant.Service
+	}{{fa, ra.Svc}, {fb, rb.Svc}} {
+		if err := n.f.Start(t.Context(), n.svc); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := n.f.Close(context.Background()); err != nil {
+				t.Errorf("close the fleet half: %v", err)
+			}
+		})
+	}
+	return ra, rb
+}
+
+// stream follows a turn on rig r from after seq after, in the background.
+func stream(t *testing.T, r *assistanttest.Rig, turn uuid.UUID, after uint64) (*assistanttest.Collector,
+	<-chan error) {
+
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	c := &assistanttest.Collector{}
+	done := make(chan error, 1)
+	go func() {
+		defer cancel()
+		err := r.Svc.Stream(ctx, r.Person.ID, r.Conversation, turn, after, c)
+		if err == nil && ctx.Err() != nil {
+			err = errors.New("the stream never ended")
+		}
+		done <- err
+	}()
+	return c, done
+}
+
+func waitUntil(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// A STREAM RESUMES ON ANOTHER NODE: a client whose connection moved to a node
+// not running its turn draws every frame after its Last-Event-ID, exactly as
+// the running node numbered them, and the turn's end.
+//
+// Mutation: drop the replay's frames in live.Fleet.catchUp (write none) and
+// the resumed stream misses the frames appended before it followed.
+func TestAStreamResumesOnAnotherNode(t *testing.T) {
+	t.Parallel()
+	a, b := fleetOf(t, assistanttest.RigOptions{Rounds: []assistanttest.Round{
+		assistanttest.Say("The signing keys rotate on Friday.")}})
+	accepted, err := a.Ask("resume", "When do the keys rotate?", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The client drew seq 1 on node-a, then reconnected to node-b.
+	c, done := stream(t, b, accepted.TurnID, 1)
+	waitUntil(t, func() bool { return len(c.Frames()) >= 2 })
+	close(a.Model.Gate)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	want := a.Follow(accepted.TurnID, 1)
+	got := c.Frames()
+	if len(got) != len(want) {
+		t.Fatalf("node-b drew %d frames after seq 1, the runner numbered %d: %v", len(got),
+			len(want), kinds(got))
+	}
+	for i := range want {
+		if got[i].Seq != want[i].Seq || got[i].Kind != want[i].Kind {
+			t.Fatalf("frame %d is %d %s on node-b and %d %s on the runner", i, got[i].Seq,
+				got[i].Kind, want[i].Seq, want[i].Kind)
+		}
+	}
+	if d := assistanttest.Last(got, wire.EventDone); d == nil || d.Done.State != wire.TurnCompleted {
+		t.Fatalf("node-b's stream ended %v, want the completed turn", kinds(got))
+	}
+}
+
+// STOP REACHES THE RUNNING NODE: a Stop pressed on a node not running the turn
+// stops it where it runs, and the running node refuses a Stop for a person
+// whose turn it is not, stopping nothing.
+//
+// Mutation: drop the owner check in Service.StopHere and another person's
+// stop ends the turn.
+func TestStopReachesTheRunningNode(t *testing.T) {
+	t.Parallel()
+	a, b := fleetOf(t, assistanttest.RigOptions{Rounds: []assistanttest.Round{
+		assistanttest.Say("Never said.")}})
+	accepted, err := a.Ask("stop", "Who works here?", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stranger := assistanttest.Person("ada", "ada", iam.GrantTracker)
+	if _, err := b.Svc.Stop(t.Context(), stranger.ID, accepted.TurnID,
+		assistanttest.Key("stranger")); !errors.Is(err, assistant.ErrNotFound) {
+		t.Fatalf("another person's stop on node-b: err = %v, want ErrNotFound", err)
+	}
+	if _, err := a.Svc.StopHere(t.Context(), stranger.ID, accepted.TurnID); !errors.Is(err,
+		live.ErrNotYours) {
+		t.Fatalf("the runner asked to stop another person's turn: err = %v, want ErrNotYours", err)
+	}
+	if row, _ := a.Store.Turn(t.Context(), a.Person.ID, accepted.TurnID); row.State != wire.TurnRunning {
+		t.Fatalf("another person's stop left the turn %s, want running", row.State)
+	}
+	answer, err := b.Svc.Stop(t.Context(), b.Person.ID, accepted.TurnID, assistanttest.Key("stopping"))
+	if err != nil || answer.State != wire.TurnStopped {
+		t.Fatalf("the owner's stop on node-b = %+v, %v; want stopped", answer, err)
+	}
+	waitUntil(t, func() bool {
+		row, _ := a.Store.Turn(t.Context(), a.Person.ID, accepted.TurnID)
+		return row.State == wire.TurnStopped
+	})
+}
+
+// AN INTERRUPTED TURN IS CLOSED ONCE: two nodes finding at once that a turn's
+// runner left the fleet both answer it interrupted, under ONE operation every
+// node derives alike, and its end is recorded once.
+//
+// Mutation: derive the close's operation from the noticing node (add the node
+// to Derivation.Identity in closeInterrupted) and the two nodes publish two
+// operations for one end.
+func TestAnInterruptedTurnIsClosedOnce(t *testing.T) {
+	t.Parallel()
+	a, b := fleetOf(t, assistanttest.RigOptions{})
+	turn := assistanttest.ID("turn/orphan")
+	if _, err := a.Store.OpenTurn(t.Context(), assistant.Write{Owner: a.Person.ID,
+		By: iam.ActorFor(a.Person), Key: assistanttest.Key("orphan")}, assistantdomain.NewTurn{
+		Conversation: a.Conversation, Turn: turn, Node: "node-gone",
+		PromptVersion: assistant.PromptVersion}); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	streams := make([]*assistanttest.Collector, 2)
+	errs := make([]error, 2)
+	for i, r := range []*assistanttest.Rig{a, b} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c, done := stream(t, r, turn, 0)
+			streams[i], errs[i] = c, <-done
+		}()
+	}
+	wg.Wait()
+	for i, c := range streams {
+		if errs[i] != nil {
+			t.Fatalf("stream %d: %v", i, errs[i])
+		}
+		d := assistanttest.Last(c.Frames(), wire.EventDone)
+		if d == nil || d.Done.State != wire.TurnInterrupted {
+			t.Fatalf("stream %d ended %v, want the turn interrupted", i, kinds(c.Frames()))
+		}
+	}
+	if n := a.Store.Closes(turn); n != 1 {
+		t.Fatalf("the turn's end was recorded %d times, want once", n)
+	}
+	var ops []string
+	for _, raw := range a.Store.Records() {
+		var rec struct {
+			Record string          `json:"record"`
+			Write  assistant.Write `json:"write"`
+		}
+		if err := json.Unmarshal([]byte(raw), &rec); err != nil {
+			t.Fatal(err)
+		}
+		if rec.Record == "turn_closed" && rec.Write.Derived != nil {
+			id, err := json.Marshal(rec.Write.Derived)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ops = append(ops, string(id))
+		}
+	}
+	if len(ops) == 0 || strings.Join(ops, "") != strings.Repeat(ops[0], len(ops)) {
+		t.Fatalf("the nodes closed the turn under operations %v, want one they all derive", ops)
+	}
+}
+
+// counted is the fleet's turn counter, as every node of the suite shares it,
+// with the buckets it was asked about.
+type counted struct {
+	*memory.Fleet
+	mu      sync.Mutex
+	buckets []string
+	err     error
+}
+
+func (c *counted) Allow(ctx context.Context, bucket string, limit int, window time.Duration,
+	now time.Time) (bool, error) {
+
+	c.mu.Lock()
+	c.buckets = append(c.buckets, bucket)
+	err := c.err
+	c.mu.Unlock()
+	if err != nil {
+		return false, err
+	}
+	return c.Fleet.Allow(ctx, bucket, limit, window, now)
+}
+
+// THE TURN RATE IS COUNTED ACROSS THE FLEET: a person's starts on every node
+// share one count, so spreading questions over the fleet does not multiply
+// their allowance.
+//
+// Mutation: count per node (put the node in the bucket's name) and node-b
+// starts a turn past the person's minute.
+func TestTheTurnRateIsCountedAcrossTheFleet(t *testing.T) {
+	t.Parallel()
+	counter := &counted{Fleet: memory.NewFleet()}
+	a := assistanttest.NewRig(t, assistanttest.RigOptions{Node: "node-a", Rate: counter,
+		Rounds: []assistanttest.Round{assistanttest.Say("ok")}})
+	b := assistanttest.NewRig(t, assistanttest.RigOptions{Node: "node-b", Rate: counter,
+		Store: a.Store})
+	accepted, err := a.Ask("first", "Hi", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Follow(accepted.TurnID, 0)
+	if len(counter.buckets) != 1 {
+		t.Fatalf("one start was counted %d times on the fleet", len(counter.buckets))
+	}
+	// The rest of the person's minute, spent on other nodes.
+	for range assistant.TurnsPerMinute - 1 {
+		if ok, err := counter.Fleet.Allow(t.Context(), counter.buckets[0],
+			assistant.TurnsPerMinute, time.Minute, b.Clock.Now()); err != nil || !ok {
+			t.Fatalf("the fleet refused a start inside the minute: %v %v", ok, err)
+		}
+	}
+	_, err = b.Ask("over", "Hi", nil)
+	busy, ok := errorAs[*assistant.Busy](err)
+	if !ok || busy.RetryAfter <= 0 || busy.RetryAfter > time.Minute {
+		t.Fatalf("a start past the person's minute on another node: err = %v, want Busy "+
+			"with a wait inside the minute", err)
+	}
+	if len(counter.buckets) != 2 || counter.buckets[1] != counter.buckets[0] {
+		t.Fatalf("the two nodes counted the person in buckets %v, want one", counter.buckets)
+	}
+}
+
+// A FLEET COUNT THAT CANNOT BE READ FALLS BACK TO THE NODE'S OWN RATE: a
+// person's question is not refused for a store the engine cannot reach, and
+// the node's own limit still holds them (never no limit at all).
+//
+// Mutation: leave the node's own admission to the fleet's count where one is
+// wired (skip admitHere when Rate is set) and the burst passes.
+func TestATurnRateTheFleetCannotCountFallsBackToTheNode(t *testing.T) {
+	t.Parallel()
+	counter := &counted{Fleet: memory.NewFleet(), err: errors.New("the store is away")}
+	var rounds []assistanttest.Round
+	for range assistant.TurnBurst {
+		rounds = append(rounds, assistanttest.Say("ok"))
+	}
+	f := assistanttest.NewRig(t, assistanttest.RigOptions{Rate: counter, Rounds: rounds})
+	for i := range assistant.TurnBurst {
+		accepted, err := f.Ask("burst"+string(rune('a'+i)), "Hi", nil)
+		if err != nil {
+			t.Fatalf("turn %d on an unreadable fleet count: %v", i, err)
+		}
+		f.Follow(accepted.TurnID, 0)
+	}
+	if _, err := f.Ask("over", "Hi", nil); !errors.Is(err, assistant.ErrBusy) {
+		t.Fatalf("a turn past the node's burst with the fleet count away: err = %v, want "+
+			"ErrBusy", err)
+	}
+}
