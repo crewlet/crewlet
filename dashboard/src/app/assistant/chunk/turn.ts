@@ -351,14 +351,24 @@ function fromTranscript(transcript: AssistantTranscript): TurnView[] {
   const turns = new Map<string, TurnView>();
   const replyTurn = new Map<string, string>();
   const open = transcript.open_turn;
+  // HOW EACH TURN ENDED, as the engine recorded it: a turn stopped or failed
+  // before it wrote a word is drawn with its outcome line, as it was live,
+  // rather than read as completed and drawn as nothing at all.
+  const outcomes = new Map(transcript.turns.map((t) => [t.turn_id, t]));
   for (const message of transcript.messages) {
     let turn = turns.get(message.turn_id);
     if (!turn) {
       order.push(message.turn_id);
+      const ended = outcomes.get(message.turn_id);
       turn = {
         key: message.turn_id,
         id: message.turn_id,
-        phase: open?.turn_id === message.turn_id ? phaseOf(open.state) : "completed",
+        phase:
+          open?.turn_id === message.turn_id
+            ? phaseOf(open.state)
+            : ended
+              ? phaseOf(ended.state)
+              : "completed",
         seq: open?.turn_id === message.turn_id ? open.after_seq : 0,
         question: "",
         page: null,
@@ -371,7 +381,7 @@ function fromTranscript(transcript: AssistantTranscript): TurnView[] {
         actions: [],
         actionStates: {},
         done: null,
-        error: null,
+        error: open?.turn_id === message.turn_id ? null : (ended?.error ?? null),
         refusal: null,
         stopping: false,
       };

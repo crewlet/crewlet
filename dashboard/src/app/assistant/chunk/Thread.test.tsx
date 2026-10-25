@@ -191,3 +191,29 @@ test("a model that took too long offers Try again, held off while Send is", () =
     "true",
   );
 });
+
+test("a turn stopped before it wrote a word still says how it ended", () => {
+  draw({ ...turn, phase: "stopped", replies: [] });
+  expect(screen.getByText("Stopped. Nothing changed.")).toBeTruthy();
+});
+
+test("a turn stopped after an empty round says how it ended, the empty prose hidden", () => {
+  const { container } = draw({ ...turn, phase: "stopped", replies: [{ id: "m", text: "" }] });
+  expect(screen.getByText("Stopped. Nothing changed.")).toBeTruthy();
+  expect(container.querySelectorAll(".crewlet-prose").length).toBe(1);
+});
+
+test("a turn that failed before it wrote a word shows its sentence", () => {
+  draw({
+    ...turn,
+    phase: "failed",
+    error: {
+      code: "model_protocol",
+      message: "The assistant's model answered in a form the engine could not read.",
+      retryable: true,
+    },
+  });
+  expect(
+    screen.getByText("The assistant's model answered in a form the engine could not read."),
+  ).toBeTruthy();
+});

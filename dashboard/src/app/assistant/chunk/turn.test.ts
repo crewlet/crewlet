@@ -559,6 +559,7 @@ describe("a reloaded transcript's compliance reads", () => {
         cards: [],
         open_turn: null,
         audit_reads: reads,
+        turns: [],
       },
     });
     expect(view.auditReads).toEqual(reads);
@@ -610,6 +611,7 @@ describe("a reloaded transcript", () => {
           after_seq: 7,
         },
         audit_reads: [],
+        turns: [],
       },
     });
     expect(view.turns.map((t) => [t.question, t.phase, t.page?.title ?? null])).toEqual([
@@ -617,6 +619,67 @@ describe("a reloaded transcript", () => {
       ["Two?", "working", null],
     ]);
     expect(view.turns[1]!.seq).toBe(7);
+  });
+});
+
+describe("a reloaded transcript's ended turns", () => {
+  test("a turn stopped or failed before it wrote a word keeps its outcome", () => {
+    const view = after({
+      type: "transcript",
+      transcript: {
+        conversation: {
+          id: CONV,
+          title: "awdwad",
+          created_at: "2026-10-24T09:00:00Z",
+          updated_at: "2026-10-24T09:05:00Z",
+        },
+        messages: [
+          {
+            id: "q1",
+            turn_id: "t1",
+            role: "user",
+            text: "awdwad",
+            created_at: "2026-10-24T09:00:00Z",
+          },
+          {
+            id: "q2",
+            turn_id: "t2",
+            role: "user",
+            text: "Add a role",
+            created_at: "2026-10-24T09:01:00Z",
+          },
+          {
+            id: "q3",
+            turn_id: "t3",
+            role: "user",
+            text: "Agents?",
+            created_at: "2026-10-24T09:02:00Z",
+          },
+        ],
+        steps: [],
+        cards: [],
+        open_turn: null,
+        audit_reads: [],
+        turns: [
+          { turn_id: "t1", state: "stopped" },
+          {
+            turn_id: "t2",
+            state: "failed",
+            error: {
+              code: "model_protocol",
+              message: "The assistant's model answered in a form the engine could not read.",
+              retryable: false,
+            },
+          },
+          { turn_id: "t3", state: "completed" },
+        ],
+      },
+    });
+    expect(view.turns.map((t) => [t.question, t.phase, t.error?.code ?? null])).toEqual([
+      ["awdwad", "stopped", null],
+      ["Add a role", "failed", "model_protocol"],
+      ["Agents?", "completed", null],
+    ]);
   });
 });
 
@@ -666,6 +729,7 @@ describe("a reloaded transcript's steps", () => {
         cards: [],
         open_turn: null,
         audit_reads: [],
+        turns: [],
       },
     });
     expect(view.turns.map((t) => t.steps.map((s) => s.step_id))).toEqual([["s1"], ["s2", "s3"]]);

@@ -334,8 +334,8 @@ func (s *Service) withdrawn(ctx context.Context, person iam.Principal,
 	s.revoker.RevokeTurn(row.ID)
 	row.State = state
 	return s.settledPast(ctx, person, row, r, &wire.ErrorEvent{Code: wire.ErrorAccessWithdrawn,
-		Message: "The assistant stopped: you no longer have access to something this " +
-			"conversation read.", Hint: "Ask again to start from what you can open now."})
+		Message: wire.ErrorAccessWithdrawn.Sentence(),
+		Hint:    "Ask again to start from what you can open now."})
 }
 
 // settledPast shows what became of a proposal of a turn no loop resumes (one

@@ -424,6 +424,18 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 		s.log.WarnContext(ctx, "assistant_record_failed", "turn", id, "record", "question",
 			"error", redact.Secrets(err.Error()))
 	}
+	// A CONVERSATION IS NAMED BY ITS FIRST QUESTION AT ONCE, whatever its
+	// first turn then does: stopped, failed or parked on a change, it is
+	// still the conversation that question started, and the history lists
+	// it by that question rather than as one more untitled entry. A title
+	// the model writes once a first answer completes replaces it
+	// ([Service.title]).
+	if history.Conversation.Title == "" {
+		t.record(ctx, "title", func(ctx context.Context, w Write) error {
+			return s.records.TitleConversation(ctx, w.Step("title", "question"), ts.Conversation,
+				conversationTitle(input))
+		})
+	}
 
 	c, organization := s.company()
 	tools := s.catalogue.Offered(ts.Person, acts)
@@ -967,7 +979,7 @@ func (s *Service) closeInterrupted(ctx context.Context, owner uuid.UUID,
 		return state, nil, nil
 	}
 	return state, &wire.ErrorEvent{Code: wire.ErrorTurnInterrupted, Retryable: true,
-		Message: "The node running this turn restarted before the turn finished."}, nil
+		Message: wire.ErrorTurnInterrupted.Sentence()}, nil
 }
 
 // snapshot is the turn as the transcript holds it, numbered after seq after.

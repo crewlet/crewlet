@@ -7059,6 +7059,7 @@ again can help without anybody acting.
 | `model_signed_out` | The CLI's login expired or is missing, or its token is invalid. An administrator is told to run `crewlet llm login <key>`, anybody else to ask an administrator | No |
 | `model_busy` | The plan is spent or rate limited; `retry_after_seconds` is the wait until the CLI's named reset | Yes, after the reset |
 | `model_timeout` | The CLI ran out of its own time (`providers.llm.<key>.timeout_seconds`) before it answered | Yes |
+| `model_protocol` | The model wrote its tool calls in a form the engine could not read (markup, or another vendor's format naming a tool it was not offered), and again after it was asked once for the response contract. Nothing it wrote is shown | Yes |
 | `model_unavailable` | The CLI could not be started on the node, or failed for a reason none of the codes above names (`retry_after_seconds: 10`) | Only for the second |
 
 The first three, and a CLI that cannot start, are also known before a question

@@ -316,3 +316,15 @@ func TestAStepNamesOnlyItsOwnTurn(t *testing.T) {
 		t.Errorf("a snapshot step naming another turn validated (%v)", err)
 	}
 }
+
+// Every turn-level failure has a sentence a person reads: a transcript
+// redraws a failed turn from its code alone, and a code with no sentence
+// would be a failure drawn with no words.
+func TestEveryErrorCodeHasASentence(t *testing.T) {
+	t.Parallel()
+	for _, code := range wire.ErrorCodes {
+		if s := code.Sentence(); s == "" || !strings.HasSuffix(s, ".") {
+			t.Errorf("%s has the sentence %q, want a sentence", code, s)
+		}
+	}
+}

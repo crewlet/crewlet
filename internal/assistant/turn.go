@@ -557,7 +557,7 @@ func (t *turn) outcome(ctx context.Context, res *toolloop.Result, err error) (wi
 		return wire.TurnWaitingForApproval, nil
 	case err == nil && res.ExhaustedRounds:
 		return wire.TurnFailed, &wire.ErrorEvent{Code: wire.ErrorStepLimit,
-			Message:   "This question needed more steps than a turn may take. Ask a narrower one.",
+			Message:   wire.ErrorStepLimit.Sentence(),
 			Retryable: true}
 	case err == nil:
 		return wire.TurnCompleted, nil
@@ -565,7 +565,7 @@ func (t *turn) outcome(ctx context.Context, res *toolloop.Result, err error) (wi
 		return wire.TurnStopped, nil
 	case errors.Is(err, toolloop.ErrBudgetExhausted):
 		failure := &wire.ErrorEvent{Code: wire.ErrorBudgetExhausted,
-			Message: "The company's token budget for this window is spent."}
+			Message: wire.ErrorBudgetExhausted.Sentence()}
 		var budget *toolloop.BudgetError
 		if errors.As(err, &budget) {
 			if budget.Scope == PersonBudgetScope {
@@ -578,15 +578,25 @@ func (t *turn) outcome(ctx context.Context, res *toolloop.Result, err error) (wi
 		return wire.TurnBudgetExhausted, failure
 	case errors.Is(err, errGrantEnded) || errors.Is(err, errGrantEnding):
 		return wire.TurnFailed, &wire.ErrorEvent{Code: wire.ErrorGrantEnded,
-			Message: "Your session ended, so the assistant stopped acting for you.",
+			Message: wire.ErrorGrantEnded.Sentence(),
 			Hint:    "Sign in again, then ask again.", Retryable: true}
 	case errors.Is(err, errDraining) || errors.Is(cause, errDraining):
 		return wire.TurnInterrupted, &wire.ErrorEvent{Code: wire.ErrorTurnInterrupted,
-			Message:   "The node answering you restarted before the turn finished.",
+			Message:   wire.ErrorTurnInterrupted.Sentence(),
 			Retryable: true}
 	case errors.Is(cause, errTurnTimeout):
 		return wire.TurnFailed, &wire.ErrorEvent{Code: wire.ErrorTurnTimeout,
-			Message:   "The turn took longer than it may. Ask again, or ask a narrower question.",
+			Message:   wire.ErrorTurnTimeout.Sentence(),
+			Retryable: true}
+	case errors.Is(err, toolloop.ErrModelProtocol):
+		// THE ANSWER WAS NEVER SHOWN ([toolloop.ErrModelProtocol]), so the
+		// person is told it could not be read, never what it said; the
+		// fault itself is the operator's, in this node's log.
+		t.svc.log.WarnContext(ctx, "assistant_model_protocol", "turn", t.id,
+			"error", redact.Secrets(err.Error()))
+		return wire.TurnFailed, &wire.ErrorEvent{Code: wire.ErrorModelProtocol,
+			Message:   wire.ErrorModelProtocol.Sentence(),
+			Hint:      "Ask again. If it keeps happening, try another model in assistant.llm.",
 			Retryable: true}
 	}
 	if problem, ok := modelProblemOf(err, t.person.Can(iam.GrantAdmin)); ok {
@@ -595,7 +605,7 @@ func (t *turn) outcome(ctx context.Context, res *toolloop.Result, err error) (wi
 	t.svc.log.ErrorContext(ctx, "assistant_turn_failed", "turn", t.id,
 		"error", redact.Secrets(err.Error()))
 	return wire.TurnFailed, &wire.ErrorEvent{Code: wire.ErrorInternal,
-		Message: "Something went wrong inside the engine. The reason is in this node's log."}
+		Message: wire.ErrorInternal.Sentence()}
 }
 
 // stepCount is how many steps the turn has taken.

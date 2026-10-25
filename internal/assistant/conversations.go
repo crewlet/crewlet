@@ -5,7 +5,6 @@ import (
 	"errors"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -115,6 +114,14 @@ func (s *Service) render(t assistantdomain.Transcript, reader iam.Principal) wir
 	for _, a := range t.AuditReads {
 		out.AuditReads = append(out.AuditReads, a.Wire())
 	}
+	out.Turns = make([]wire.TurnOutcome, 0, len(t.Turns))
+	for _, turn := range t.Turns {
+		outcome := wire.TurnOutcome{TurnID: turn.ID, State: turn.State}
+		if code := wire.ErrorCode(turn.ErrorCode); code.Valid() {
+			outcome.Error = &wire.ErrorEvent{Code: code, Message: code.Sentence()}
+		}
+		out.Turns = append(out.Turns, outcome)
+	}
 	if open := t.Conversation.OpenTurn; open != uuid.Nil {
 		state := wire.TurnRunning
 		for _, turn := range t.Turns {
@@ -207,8 +214,8 @@ func (s *Service) Clear(ctx context.Context, p iam.Principal, id uuid.UUID, key 
 
 // title names a conversation after its first answer, in the background: one
 // model call, recorded on the ledger and charged through the turn's meter,
-// best effort. A title that cannot be had leaves the conversation untitled,
-// which the drawer draws as its first question. ctx is the turn's, detached
+// best effort. A title that cannot be had leaves the conversation named by its
+// first question, which its first turn recorded ([Service.Start]). ctx is the turn's, detached
 // so the title outlives the segment that asked for it and keeps its trace.
 func (s *Service) title(ctx context.Context, t *turn, question, answer string,
 	meter toolloop.BudgetMeter) {
@@ -257,15 +264,29 @@ func (s *Service) nameConversation(ctx context.Context, t *turn, question, answe
 	if err != nil {
 		return err
 	}
-	title := oneLine(redact.Secrets(strings.Trim(strings.TrimSpace(completion.Content), "\"'")))
-	if utf8.RuneCountInString(title) > TitleMaxRunes {
-		title = textcut.Within(title, TitleMaxRunes)
-	}
+	title := conversationTitle(strings.Trim(strings.TrimSpace(completion.Content), "\"'"))
 	if title == "" {
 		return errors.New("the model answered no title")
 	}
 	return s.records.TitleConversation(ctx, Write{Owner: t.person.ID, By: t.by, Key: t.key,
 		Steps: []string{"title"}}, t.conversation, title)
+}
+
+// conversationTitle is text as a conversation's title, the ONE rule for both
+// titles a conversation gets (its first question at once, the model's once an
+// answer completes): redacted, on one line, and at most [TitleMaxRunes], cut
+// at a word where one is near the end and marked as cut.
+func conversationTitle(text string) string {
+	title := oneLine(redact.Secrets(text))
+	runes := []rune(title)
+	if len(runes) <= TitleMaxRunes {
+		return title
+	}
+	cut := string(runes[:TitleMaxRunes-1])
+	if space := strings.LastIndexByte(cut, ' '); space > len(cut)/2 {
+		cut = cut[:space]
+	}
+	return strings.TrimRight(cut, " ,.;:") + "…"
 }
 
 // titleInstruction is the title call's whole instruction.

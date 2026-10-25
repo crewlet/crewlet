@@ -56,14 +56,14 @@ func modelProblemOf(err error, admin bool) (modelProblem, bool) {
 				", then ask again."
 		}
 		return modelProblem{Code: wire.ErrorModelSignedOut,
-			Message: "The assistant's model is signed out, so it cannot answer.", Hint: hint}, true
+			Message: wire.ErrorModelSignedOut.Sentence(), Hint: hint}, true
 	case failure.Kind == llm.KindRateLimit:
 		hint := "It is tried again once the limit resets."
 		if admin {
 			hint += " To keep the assistant answering through a limit, add another model to assistant.llm."
 		}
 		return modelProblem{Code: wire.ErrorModelBusy,
-			Message: "The assistant's model has reached its usage limit for now.", Hint: hint,
+			Message: wire.ErrorModelBusy.Sentence(), Hint: hint,
 			Retryable: true, RetryAt: failure.RetryAt}, true
 	case failure.Kind == llm.KindTimeout:
 		hint := "Ask again, or ask a narrower question."
@@ -71,7 +71,7 @@ func modelProblemOf(err error, admin bool) (modelProblem, bool) {
 			hint += fmt.Sprintf(" If this keeps happening, raise providers.llm.%s.timeout_seconds.", key)
 		}
 		return modelProblem{Code: wire.ErrorModelTimeout,
-			Message: "The assistant's model took too long to answer.", Hint: hint,
+			Message: wire.ErrorModelTimeout.Sentence(), Hint: hint,
 			Retryable: true}, true
 	case errors.Is(failure, llm.ErrNotRunnable):
 		hint := "Ask an administrator to check the assistant's model."
@@ -87,7 +87,7 @@ func modelProblemOf(err error, admin bool) (modelProblem, bool) {
 		hint = doctorCommand(key) + " on the engine's host shows why."
 	}
 	return modelProblem{Code: wire.ErrorModelUnavailable,
-		Message: "The assistant's model did not answer.", Hint: hint, Retryable: true,
+		Message: wire.ErrorModelUnavailable.Sentence(), Hint: hint, Retryable: true,
 		RetryAfter: modelRetrySeconds * time.Second}, true
 }
 

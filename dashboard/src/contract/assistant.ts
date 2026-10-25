@@ -113,6 +113,7 @@ export type AssistantErrorCode =
   | "model_signed_out"
   | "model_busy"
   | "model_timeout"
+  | "model_protocol"
   | "turn_timeout"
   | "step_limit"
   | "budget_exhausted"
@@ -582,6 +583,16 @@ export interface AssistantTranscript {
   cards: AssistantCardEvent[];
   open_turn: AssistantOpenTurn | null;
   audit_reads: AssistantAuditRead[];
+  /** How each turn stands, oldest first: what a reload draws its outcome line from. */
+  turns: AssistantTurnOutcome[];
+}
+
+/** How one turn of a transcript stands. */
+interface AssistantTurnOutcome {
+  turn_id: string;
+  state: AssistantDoneEvent["state"];
+  /** The turn-level failure it ended with, in its code's sentence. */
+  error?: AssistantErrorEvent;
 }
 
 /** One message in a transcript. */

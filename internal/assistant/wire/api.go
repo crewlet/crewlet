@@ -135,6 +135,21 @@ type Transcript struct {
 	// AuditReads are the compliance reads of this conversation, so its
 	// owner sees who read it and why (D06).
 	AuditReads []AuditRead `json:"audit_reads"`
+	// Turns are how each of its turns stands, oldest first: what a reload
+	// draws each turn's outcome line from ("Stopped. Nothing changed.", a
+	// failure's sentence), as the live stream drew it from the done and
+	// error frames. Without them a reloaded turn that was stopped or failed
+	// before it wrote a word read as completed and drew nothing at all.
+	Turns []TurnOutcome `json:"turns"`
+}
+
+// TurnOutcome is how one turn of a transcript stands.
+type TurnOutcome struct {
+	TurnID uuid.UUID `json:"turn_id"`
+	State  TurnState `json:"state"`
+	// Error is the turn-level failure it ended with, in its code's sentence
+	// ([ErrorCode.Sentence]); absent for a turn that did not fail.
+	Error *ErrorEvent `json:"error,omitempty"`
 }
 
 // Message is one message in a transcript.

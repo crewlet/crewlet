@@ -214,6 +214,7 @@ suite is under `examples/assistant-evals/`.
 | Signed out (`model_signed_out`) | The CLI's login expired or is missing. Sign it in again with `crewlet llm login <key>`, then `crewlet llm doctor <key>` |
 | Usage limit reached (`model_busy`) | The plan is spent until the reset the notice names. Add a second model to `assistant.llm` to keep answering through a limit |
 | Took too long (`model_timeout`) | The entry's `timeout_seconds`, and the CLI's own start time on the host |
+| Answer could not be read (`model_protocol`) | The model wrote its tool calls as markup or in another vendor's format, twice. The engine log's `assistant_model_protocol` line names the fault. Asking again usually works; if it keeps happening, put another model first in `assistant.llm` |
 | Cannot be started (`model_unavailable`) | The CLI's binary on the engine host's `PATH`: `crewlet llm doctor <key>` names it |
 
 **The model's state is checked before anyone asks.** When every model in
