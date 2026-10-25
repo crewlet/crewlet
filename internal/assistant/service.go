@@ -746,15 +746,21 @@ func (s *Service) declineParked(ctx context.Context, p iam.Principal, row assist
 }
 
 // stopRunner stops a turn this node runs and waits, at most [stopWait], for
-// its runner to record its end.
+// its runner to record its end, answering the state it truly ended in: stopped,
+// or what it reached first (completed, waiting for approval, failed). A runner
+// that has not ended in the wait is still running, the stop asked of it, and
+// that is the answer; the client reads the end on the turn's stream.
 func (s *Service) stopRunner(ctx context.Context, t *turn) wire.TurnState {
 	t.stop()
 	select {
 	case <-t.done:
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		return t.ended
 	case <-ctx.Done():
 	case <-time.After(stopWait):
 	}
-	return wire.TurnStopped
+	return wire.TurnRunning
 }
 
 // stopWait is how long a Stop waits for the runner to record its end before

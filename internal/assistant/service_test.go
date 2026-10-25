@@ -1,6 +1,7 @@
 package assistant_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -366,4 +367,33 @@ func kinds(frames []wire.Frame) []wire.EventKind {
 		out = append(out, f.Kind)
 	}
 	return out
+}
+
+// A STOP ANSWERS WHAT THE TURN TRULY CAME TO: a runner that has not recorded
+// its end within the Stop's wait is still running, and the Stop says so
+// rather than claiming a stop the record does not hold.
+//
+// Mutation: answer stopped unconditionally (as before) and the Stop reports a
+// state no record says.
+func TestAStopAnswersTheStateTheTurnTrulyReached(t *testing.T) {
+	t.Parallel()
+	f := assistanttest.NewRig(t, evals.RigOptions{Rounds: []evals.Round{evals.Say("Hi.")}})
+	f.Model.Gate = make(chan struct{})
+	accepted, err := f.Ask("stuck", "Hello?", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The close never lands within the wait: the runner retries it behind
+	// the Stop's answer.
+	f.Store.FailCloses(1 << 20)
+	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+	defer cancel()
+	answer, err := f.Svc.Stop(ctx, f.Person.ID, accepted.TurnID, evals.Key("stopping"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, _ := f.Store.Turn(t.Context(), f.Person.ID, accepted.TurnID)
+	if answer.State != row.State {
+		t.Errorf("the Stop answered %s while the record says %s", answer.State, row.State)
+	}
 }

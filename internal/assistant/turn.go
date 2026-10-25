@@ -74,8 +74,11 @@ type turn struct {
 	// anchor is the turn's newest assistant message, the one a card shown
 	// now hangs on: uuid.Nil until the turn has one ([turn.emitCard]).
 	anchor uuid.UUID
-	audit  []types.AssistantAuditStep
-	shown  bool
+	// ended is the state the segment ended in, set once its end is told:
+	// what a Stop that waited for it answers ([Service.stopRunner]).
+	ended wire.TurnState
+	audit []types.AssistantAuditStep
+	shown bool
 	// outside is the source of the last answer this turn read that somebody
 	// the company cannot vouch for wrote, named on any proposal it makes
 	// after (D25).
@@ -496,6 +499,9 @@ func (t *turn) conclude(ctx context.Context, res *toolloop.Result, err error) as
 		DurationMS: duration.Milliseconds(), Steps: end.Steps, MessageID: answer,
 		TraceID: tracing.TraceOf(ctx).TraceID}})
 	t.log.End()
+	t.mu.Lock()
+	t.ended = state
+	t.mu.Unlock()
 	if !settled {
 		// AFTER THE STREAM HAS ITS END: the person is told at once, and
 		// the record is retried behind it ([turn.settle]).
