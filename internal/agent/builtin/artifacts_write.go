@@ -421,6 +421,7 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 		mismatch *artifactupload.UploadMismatch
 		pending  *artifactupload.UploadsOutstanding
 		quota    *artifactsdomain.QuotaExceeded
+		full     *artifactupload.StoreFull
 		gone     *artifactsdomain.CarriedObjectGone
 	)
 	said := domainSentence(err)
@@ -465,6 +466,18 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 			"company's artifact quota is reached (%d in use of %d, `%s`). Nothing was "+
 			"published. Say so: an operator raises the quota, or somebody removes "+
 			"artifacts the company no longer needs.", tool, quota.Usage, quota.Limit, quota.Key))
+	case errors.As(err, &full):
+		// NO ROOM, WHICH NO RETRY MAKES: the store refuses the same file the
+		// same way until an operator makes the room it names — never the
+		// fault a failure nothing classified reads as. The store's own words
+		// name its bucket, which is the log's ([objectFailure]'s line, with
+		// them).
+		log.WarnContext(ctx, "builtin_tool_object_store_failed", "tool", tool,
+			"class", string(tools.RefusalStoreFull), "path", full.Path, "error", full.Err)
+		return refusedBy(tools.RefusalStoreFull, err, fmt.Sprintf("%s "+
+			"refused that: the object store has no room left for %s, so nothing was "+
+			"published. Making the call again is refused the same until %s — say so, "+
+			"and say the version was not published.", tool, full.Path, full.Remedy))
 	case errors.As(err, &pending):
 		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s refused that: %s",
 			tool, said))

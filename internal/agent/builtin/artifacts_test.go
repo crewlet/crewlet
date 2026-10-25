@@ -536,6 +536,41 @@ func TestATurnPastItsGuardrailIsToldToStop(t *testing.T) {
 	}
 }
 
+// A PUBLISH THE OBJECT STORE HAS NO ROOM FOR IS REFUSED AS FULL: the store
+// refuses the same file the same way until an operator makes room, so the seat
+// is told that — the file, nothing published, and the room the store named —
+// under the class a person's surface answers 507, never the fault ("a fault in
+// this node itself") a failure nothing classified reads as, and never an
+// invitation to make the call again. The store's own words name its bucket and
+// stay in the node's log.
+//
+// Mutation: drop publishFailure's StoreFull case and this fails on the class
+// and the sentence; splice a room of the tool's own and it fails on the room.
+func TestAPublishTheStoreHasNoRoomForIsRefusedAsFull(t *testing.T) {
+	t.Parallel()
+	r := newArtifactRig(t, artifactChart{}, requesters{}, nil)
+	h := r.f.seed("agent-cto", iam.ActorAgent, cto, nil, [2]string{"index.html", "x"})
+	r.f.publishErr = &artifactupload.StoreFull{Path: "index.html", Remedy: caseRemedy, Err: &objstore.Full{
+		Remedy: caseRemedy, Err: errors.New("natsobj: put files/x: OBJ_crewlet_files holds as many bytes " +
+			"as it reserves")}}
+	got := r.call(t, turnFor(t, "agent-cto"), builtin.PublishArtifactTool, map[string]any{
+		"artifact": h.ID.String(), "base_version": 1, "content": "y"})
+	if !got.Failed || tools.RefusalOf(got) != tools.RefusalStoreFull || !errors.Is(got.Cause, objstore.ErrFull) {
+		t.Fatalf("a publish the store had no room for answered %q (refusal %q), want store_full over ErrFull",
+			got.Output, tools.RefusalOf(got))
+	}
+	switch out := strings.ToLower(got.Output); {
+	case !strings.Contains(got.Output, caseRemedy) || !strings.Contains(got.Output, "index.html"):
+		t.Errorf("a publish the store had no room for answered %q, which does not name the file and %q",
+			got.Output, caseRemedy)
+	case strings.Contains(out, "try again") || strings.Contains(out, "make the call again"):
+		t.Errorf("a publish the store had no room for answered %q, which invites the retry the full store "+
+			"refuses the same", got.Output)
+	case strings.Contains(got.Output, "OBJ_crewlet_files"):
+		t.Errorf("the store's own words reached the sentence: %q", got.Output)
+	}
+}
+
 // THE TURN NAMES EVERY PUBLISH: a re-run turn's call is the first run's
 // operation and lands once, and the same content published again after a
 // different publish in one run is a third publish, not the first answered back.

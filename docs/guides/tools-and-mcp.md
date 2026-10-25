@@ -269,7 +269,10 @@ readable after `run_sandbox` returns and until the Execute phase ends.
 
 **Per turn**, an agent makes at most 20 publishes, 10 of them on one artifact,
 and writes at most 128 MiB; past either the call is refused `turn_quota` and
-told to stop and report. File text another principal wrote is
+told to stop and report. A file whose bytes the object store has no room for
+is refused [`store_full`](#when-a-tool-refuses), naming the file: nothing is
+published, and the same call is refused the same until an operator makes
+room. File text another principal wrote is
 [fenced](../concepts/agent-runtime.md#text-somebody-else-wrote), and a long one
 is condensed by the seat's auxiliary model unless the call passes `offset`.
 **Publishing delivers nowhere**: no artifact tool counts as a delivery, so a
