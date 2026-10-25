@@ -1962,12 +1962,19 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		return nil, errors.New("api: the engine opened no identity estate — " +
 			"engine.New opens it on every node holding the estate, company or not")
 	}
+	// The assistant estate opens beside the identity estate (engine core),
+	// so a node holding one holds the other.
+	assistantValues := e.AssistantReader()
+	if assistantValues == nil {
+		return nil, errors.New("api: the engine opened no assistant estate: " +
+			"engine.New opens it beside the identity estate on every node holding the estate")
+	}
 	secretSurface, err := secretsapi.New(secretsapi.Options{
 		Fleet: e.Backends().Fleet, Cipher: cipher,
 		ActiveKeyID: boot.Secrets.ActiveKeyID,
 		// AND THE IDENTITY ESTATE'S HALF of a rotation, which only a
-		// record can move.
-		Identity: keyring,
+		// record can move, and the assistant's, which a rotation waits out.
+		Identity: keyring, Assistant: assistantValues,
 	})
 	if err != nil {
 		return nil, err

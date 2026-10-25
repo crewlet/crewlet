@@ -167,10 +167,12 @@ estate's sealed values per key the same way (`identity_values`), and the rekey
 moves those too (see
 [Rotating the keyring](#rotating-the-keyring-with-nothing-in-flight-lost)); the
 store reached directly, with the engine stopped, holds no identity estate, so
-neither is counted or moved there, and the rekey says so. A dry run counts
-whatever it reached still under an old key, so an operator is never told
-"nothing to move" while the address index's key or every person's name is
-still sealed under the key they are about to retire.
+neither is counted or moved there, and the rekey says so. Through a running
+node it counts the Dashboard Assistant's sealed conversations per key as well
+(`assistant_values`), which no rekey moves. A dry run counts whatever it
+reached still under an old key, so an operator is never told "nothing to move"
+while the address index's key, every person's name or somebody's conversation
+is still sealed under the key they are about to retire.
 
 The blind-index key is never minted over one that was deleted — it comes back
 with the coordination store it lived in, from the backup that holds it
@@ -255,7 +257,13 @@ That makes the rotation a runbook with no window in it:
      keys — but not the identity estate, which only the engine holding it can
      re-seal; it says so, and the rekey is run again through a running node
      for those values. Its dry run counts no person's values and no
-     invitation either, for the same reason.
+     invitation either, for the same reason. The **Dashboard Assistant's
+     conversations** are counted, through a running node, and left too: each
+     value leaves with its conversation, once it is untouched for
+     `assistant.retention_days` or its owner clears it, so the rekey says how
+     many are still under an old key. A conversation still in use keeps what
+     it sealed before step 3, so this count can stay above zero for as long
+     as somebody keeps using a conversation started before the flip.
    - **The company document** — `POST /config/reload` to a node that is up
      stores the active document again, sealed under that node's active key, and
      activates it. On a stopped node, [`crewlet config rekey`](../reference/cli.md#crewlet-config-rekey)
@@ -268,7 +276,10 @@ That makes the rotation a runbook with no window in it:
    under it, the absolute session lifetime (`api.auth.session.absolute`) has
    elapsed since step 3, *and* `crewlet secrets rekey -dry-run`, through a
    running node, reports no outstanding invitation under it — each is redeemed
-   or lapses within a week of being issued.
+   or lapses within a week of being issued. It must also report no Dashboard
+   Assistant value under it: dropped while a conversation is still sealed under
+   it, that conversation no longer opens for its owner for the rest of its
+   retention.
    From that moment a token, a record or a cookie signed under it is refused,
    which is the point. Dropping it while a log still holds such records leaves
    those records unappliable on a node replaying from the floor, which reports

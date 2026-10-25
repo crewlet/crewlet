@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
+	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
@@ -423,6 +424,37 @@ func (f *fakeIdentity) SealedKeys(context.Context) (iamdomain.SealedCount, error
 func (f *fakeIdentity) Reseal(context.Context) (iamdomain.ResealReport, error) {
 	f.resealed++
 	return f.report, f.err
+}
+
+// THE LISTING COUNTS THE ASSISTANT'S SEALED VALUES BY KEY, which a rotation
+// waits out rather than moves: an operator retires the old key on "nothing is
+// under it", and a listing that left the conversations out read nothing under
+// it while live conversations still were. A node given no assistant estate
+// says so with a null. Mutation: drop the count from the listing and the
+// first case fails.
+func TestAListingCountsTheAssistantsSealedValues(t *testing.T) {
+	t.Parallel()
+	opts := secretsapi.Options{Fleet: coordmem.NewFleet(), Cipher: cipherFor(t, "k1"),
+		ActiveKeyID: "k1", Now: func() time.Time { return clock },
+		Assistant: fakeAssistant{assistantdomain.SealedCount{
+			Values: secrets.KeyCounts{"k0": 4, "k1": 2}}}}
+	code, body := call(t, mounted(t, opts, iam.AllGrants...), http.MethodGet, "/secrets", "")
+	if code != http.StatusOK ||
+		!strings.Contains(body, `"assistant_values":{"values":{"k0":4,"k1":2}}`) {
+		t.Errorf("the listing = %d %s, want the assistant's values counted by key", code, body)
+	}
+	opts.Assistant = nil
+	code, body = call(t, mounted(t, opts, iam.AllGrants...), http.MethodGet, "/secrets", "")
+	if code != http.StatusOK || !strings.Contains(body, `"assistant_values":null`) {
+		t.Errorf("a node with no assistant estate listed %d %s, want it said", code, body)
+	}
+}
+
+// fakeAssistant is an assistant estate holding count.
+type fakeAssistant struct{ count assistantdomain.SealedCount }
+
+func (f fakeAssistant) SealedKeys(context.Context) (assistantdomain.SealedCount, error) {
+	return f.count, nil
 }
 
 // A REKEY IS THE WHOLE ROTATION, THE IDENTITY ESTATE INCLUDED.

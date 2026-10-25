@@ -44,10 +44,11 @@ import (
 // # Rotation
 //
 // A value sealed under a key opens for as long as the ring holds that key, and
-// no value outlives its conversation's retention. So a key may be retired from
-// the ring once the retention has passed since it stopped being active; a key
-// dropped sooner leaves the values still sealed under it unreadable, which a
-// read reports ([ErrUnreadable]) rather than hides.
+// leaves with its conversation. So a key may be retired from the ring once no
+// value is sealed under it any more, which [Reader.SealedKeys] counts and the
+// secret store's listing reports (`assistant_values`); a key dropped sooner
+// leaves the values still sealed under it unreadable, which a read reports
+// ([ErrUnreadable]) rather than hides.
 
 // RecordKind names what a sealed value belongs to in its associated data.
 type RecordKind string
