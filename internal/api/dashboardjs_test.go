@@ -1089,8 +1089,18 @@ const (
 	// button, the page context registry, the bus, the aside's arithmetic) is
 	// the rest. The drawer, its store, its reducer, its cards and its stream
 	// client are a chunk of their own, fetched when the panel first opens.
-	// 337 KiB, still under two seconds on that link.
-	initialBudget = 337 << 10
+	// 337 KiB, still under two seconds on that link. uilet 0.56.0 measured
+	// 336.0 KiB here: its icons package's main entry now tree-shakes to the
+	// one mark asked for, so the Orbit mark costs the same through it as
+	// through `@crewlethq/icons/product-mark`, which the frame imports anyway.
+	// The assistant's page actions took it to 337.8 KiB (measured with and
+	// without them on that release): the registry merging every mounted
+	// screen's actions, the undo a view change leaves, the contract's table
+	// of page actions, the question the palette queues for the panel, and the
+	// object kinds a peek is named by, which a page's selection reads. Every
+	// screen's own actions are in that screen's chunk. 338 KiB, still under
+	// two seconds on that link.
+	initialBudget = 338 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1126,8 +1136,13 @@ const (
 	// 4400.5 KiB: its panel is a chunk of about 51 KiB fetched when the
 	// panel first opens, and the rest is the kit's assistant components and
 	// rules and the frame code that came with them. It moved to 4.3 MiB
-	// then, which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 320<<10
+	// then, which still refuses a doubled baseline. The assistant's page
+	// actions took it to 4427.2 KiB, 26.6 KiB of it theirs (measured with
+	// and without them on uilet 0.56.0): each screen's parser, gate and
+	// setters in that screen's chunk, the claim and report flow in the
+	// panel's, and the address helper and contract table they share. 4432
+	// KiB, which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 336<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
