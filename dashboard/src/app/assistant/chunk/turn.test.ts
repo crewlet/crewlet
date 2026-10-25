@@ -256,6 +256,71 @@ describe("one row per move of the state machine", () => {
     expect(view.turns[0]!.proposals[PROPOSAL_ID]?.failure).toBe("Not permitted.");
   });
 
+  test("applying, the page applied it: working, the card applied with the page's receipt", () => {
+    const view = after(
+      ...SENT,
+      frame("card", 1, proposal("proposed", "page")),
+      { type: "approve", proposalId: PROPOSAL_ID },
+      frame("action", 2, { action_id: "a3", name: "work.filter.apply", proposal_id: PROPOSAL_ID }),
+      {
+        type: "action_local",
+        actionId: "a3",
+        local: { state: "applied", words: "Applied to Work › Tasks.", undoable: false },
+      },
+    );
+    expect(phase(view)).toBe("working");
+    const settled = view.turns[0]!.cards[0]!.card.proposal;
+    expect(settled?.state).toBe("applied");
+    expect(settled?.receipt?.summary).toBe("Applied to Work › Tasks.");
+  });
+
+  test("applying, the page refused it: working, the card failed in the screen's own words", () => {
+    const view = after(
+      ...SENT,
+      frame("card", 1, proposal("proposed", "page")),
+      { type: "approve", proposalId: PROPOSAL_ID },
+      frame("action", 2, { action_id: "a3", name: "work.filter.apply", proposal_id: PROPOSAL_ID }),
+      {
+        type: "action_local",
+        actionId: "a3",
+        local: { state: "blocked", words: "That filter is what the page is.", undoable: false },
+      },
+    );
+    expect(phase(view)).toBe("working");
+    expect(view.turns[0]!.cards[0]!.card.proposal?.state).toBe("failed");
+    expect(view.turns[0]!.proposals[PROPOSAL_ID]?.failure).toBe("That filter is what the page is.");
+  });
+
+  test("applying, another tab took it: the card is left for the engine to move", () => {
+    const view = after(
+      ...SENT,
+      frame("card", 1, proposal("proposed", "page")),
+      { type: "approve", proposalId: PROPOSAL_ID },
+      frame("action", 2, { action_id: "a3", name: "work.filter.apply", proposal_id: PROPOSAL_ID }),
+      {
+        type: "action_local",
+        actionId: "a3",
+        local: { state: "elsewhere", words: "Applied in another tab of Crewlet.", undoable: false },
+      },
+    );
+    expect(phase(view)).toBe("applying");
+    expect(view.turns[0]!.cards[0]!.card.proposal?.state).toBe("proposed");
+  });
+
+  test("a view change with no card, applied: working, its receipt kept for the thread", () => {
+    const view = after(
+      ...SENT,
+      frame("action", 1, { action_id: "a1", name: "spend.window.apply", confirm: "none" }),
+      {
+        type: "action_local",
+        actionId: "a1",
+        local: { state: "applied", words: "Applied to Spend.", undoable: true },
+      },
+    );
+    expect(phase(view)).toBe("working");
+    expect(view.turns[0]!.actionStates.a1).toMatchObject({ state: "applied", undoable: true });
+  });
+
   test("applying, unknown: unconfirmed, and the turn stays open for a retry under the same key", () => {
     const view = after(
       ...SENT,

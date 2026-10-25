@@ -31,11 +31,13 @@ import {
   PropertyList,
   ProposalCard,
   Prose,
+  ReceiptStrip,
   RefusalCard,
   ResultTableCard,
   StatusCard,
   type ChangeListRow,
   type ProposalState,
+  type ReceiptStripTone,
   type RunState,
   type StepListStep,
   type StepState,
@@ -55,6 +57,7 @@ import { youNeedWords } from "~/lib/access.ts";
 import { crumbsFor } from "../../crumbs.ts";
 import { href as hrefOf } from "../../router.tsx";
 import { openInApp, type InAppTarget } from "./openInApp.ts";
+import { changedNothing, type ActionLocal, type ActionLocalState } from "./pageActions.ts";
 import type { ProposalLocal, TurnPhase, TurnView } from "./turn.ts";
 
 type WireStepState = AssistantStepEvent["state"];
@@ -246,6 +249,52 @@ export interface ProposalHandlers {
 export interface CardHandlers extends ProposalHandlers {
   /** Go to an address the engine built, already checked to be this dashboard's own. */
   openHere: (target: InAppTarget) => void;
+  /** Undo a page change from its receipt. */
+  undo: (actionId: string) => void;
+}
+
+/** A page action's outcome as its receipt's tone. */
+export const ACTION_TONE: Record<ActionLocalState, ReceiptStripTone> = {
+  applied: "success",
+  undone: "neutral",
+  elsewhere: "info",
+  stale: "warning",
+  blocked: "danger",
+  invalid: "danger",
+  no_handler: "danger",
+  unconfirmed: "danger",
+};
+
+/**
+ * What a page change the person approved nothing for (a pure view change,
+ * D11) came to: a receipt in the thread, with Undo while the page still shows
+ * what it made of it. A change that came with a card is drawn on the card.
+ */
+export function ActionReceipt({
+  actionId,
+  local,
+  on,
+}: {
+  actionId: string;
+  local: ActionLocal;
+  on: CardHandlers;
+}) {
+  return (
+    <ReceiptStrip
+      tone={ACTION_TONE[local.state]}
+      actions={
+        local.undoable ? (
+          <Button size="small" variant="ghost" onClick={() => on.undo(actionId)}>
+            Undo
+          </Button>
+        ) : undefined
+      }
+    >
+      {changedNothing(local.state) && local.state !== "undone"
+        ? `${local.words} Nothing changed.`
+        : local.words}
+    </ReceiptStrip>
+  );
 }
 
 /** A proposal card, at its state now. */

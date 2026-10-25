@@ -42,6 +42,9 @@ export function useAssistantContext(registration: AssistantPageRegistration): vo
         preview: (value) => at()?.preview(value) ?? [],
         blocked: (value) => (at() ? at()!.blocked(value) : "The page no longer takes it."),
         apply: (value) => at()?.apply(value),
+        ...(first.undo === undefined
+          ? {}
+          : { undo: (value: unknown) => at()?.undo?.(value) ?? (() => false) }),
       } as PageActionSpec<never>;
     }
     return registerPage({ ...latest.current, actions });
