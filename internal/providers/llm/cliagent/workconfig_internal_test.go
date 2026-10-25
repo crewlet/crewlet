@@ -45,7 +45,11 @@ func TestAWorkConfigDirIsInsideTheCallAndHoldsWhatTheCLIReads(t *testing.T) {
 		t.Fatalf("Complete: %v", err)
 	}
 	cwd, dir := envValue(comp.Content, "CWD"), envValue(comp.Content, "VENDOR_CONFIG_DIR")
-	if cwd == "" || dir != filepath.Join(cwd, ".vendor-config") {
+	// Compared RESOLVED: the child's working directory is what the kernel
+	// reports, symbolic links followed (macOS keeps temporary directories
+	// under /var, a link to /private/var), while the variable is the path
+	// the engine built. Both name one directory, which is the claim.
+	if cwd == "" || resolved(t, dir) != filepath.Join(resolved(t, cwd), ".vendor-config") {
 		t.Fatalf("VENDOR_CONFIG_DIR = %q with the child in %q — want the call's own "+
 			"directory's .vendor-config:\n%s", dir, cwd, comp.Content)
 	}
@@ -144,5 +148,22 @@ func TestTheChildIsGivenEveryIsolationVariableInsideTheSeat(t *testing.T) {
 				t.Errorf("%s: %s = %q (set %v), want a path inside %s", name, variable, value, set, seat)
 			}
 		}
+	}
+}
+
+// resolved is path with every symbolic link in it followed. The call's
+// directory is removed on release, so the links are resolved on the deepest
+// ancestor that still exists and the rest is joined back on.
+func resolved(t *testing.T, path string) string {
+	t.Helper()
+	rest := ""
+	for dir := filepath.Clean(path); ; dir = filepath.Dir(dir) {
+		if real, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(real, rest)
+		}
+		if parent := filepath.Dir(dir); parent == dir {
+			return path
+		}
+		rest = filepath.Join(filepath.Base(dir), rest)
 	}
 }
