@@ -710,13 +710,16 @@ func (d *dispatcher) admit(in toolsession.Call) (*callRec, string) {
 	}
 	d.calls = append(d.calls, c)
 
-	refuse := func(why string) (*callRec, string) {
-		d.settleLocked(c, ToolResult{Output: why, Failed: true}, true)
+	// Each refusal names its class: the run is not taking calls (not
+	// running), the call names nothing offered here (not found), or its
+	// arguments are wrong (invalid) — for a surface that is not a model.
+	refuse := func(class mcp.Refusal, why string) (*callRec, string) {
+		d.settleLocked(c, ToolResult{Output: why, Failed: true, Cause: class}, true)
 		d.endIfCompleteLocked()
 		return c, why
 	}
 	if d.state != stateOpen {
-		return refuse(notRun(c.recorded()))
+		return refuse(mcp.RefusalNotRunning, notRun(c.recorded()))
 	}
 	// THE FENCE, BEFORE ANY CALL: a node whose lease moved stops at the
 	// next call, not the next model request, because the calls are what
@@ -734,7 +737,7 @@ func (d *dispatcher) admit(in toolsession.Call) (*callRec, string) {
 	if d.cfg.Fence != nil {
 		if err := d.cfg.Fence(); err != nil {
 			d.cutLocked(err)
-			return refuse(notRun(c.recorded()))
+			return refuse(mcp.RefusalNotRunning, notRun(c.recorded()))
 		}
 	}
 	// PAST THE ROUND BUDGET: the CLI made a request the budget did not
@@ -742,19 +745,19 @@ func (d *dispatcher) admit(in toolsession.Call) (*callRec, string) {
 	// or it records none. Nothing of it runs.
 	if c.round > d.cfg.MaxRounds {
 		d.exhaustLocked()
-		return refuse(notRun(c.recorded()))
+		return refuse(mcp.RefusalNotRunning, notRun(c.recorded()))
 	}
 	if d.pend != stateOpen {
 		if c.round != d.pendRound {
 			// A call of a later request than the one that decided the
 			// run's end: the CLI moved on.
 			d.endLocked()
-			return refuse(notRun(c.recorded()))
+			return refuse(mcp.RefusalNotRunning, notRun(c.recorded()))
 		}
 		if d.pend == stateFinished && c.exclusive {
 			// A second submission, or a park, beside a submission that
 			// already finished the phase.
-			return refuse(notRun(c.recorded()))
+			return refuse(mcp.RefusalNotRunning, notRun(c.recorded()))
 		}
 	}
 	// ONLY WHAT IS OFFERED, UNDER THE NAME THE MODEL ASKED FOR. A session
@@ -762,15 +765,15 @@ func (d *dispatcher) admit(in toolsession.Call) (*callRec, string) {
 	// routes the name here, and a CLI that rewrote a name the model wrote
 	// made a call nobody chose.
 	if c.asked != "" && c.asked != c.name {
-		return refuse(rewritten(c.asked, c.name))
+		return refuse(mcp.RefusalNotFound, rewritten(c.asked, c.name))
 	}
 	if !d.offeredLocked(c.name) {
-		return refuse(notOffered(c.name))
+		return refuse(mcp.RefusalNotFound, notOffered(c.name))
 	}
 	if c.argsErr != "" {
 		// ARGUMENTS THAT DID NOT PARSE ARE ANSWERED, NOT RUN: running the
 		// call on an empty object is a write the model never asked for.
-		return refuse(unparsedArguments(c.name, c.argsErr))
+		return refuse(mcp.RefusalInvalid, unparsedArguments(c.name, c.argsErr))
 	}
 	c.admitted = true
 	d.inflight++
@@ -789,7 +792,7 @@ func (d *dispatcher) recheck(c *callRec) string {
 		return ""
 	}
 	why := notRun(c.recorded())
-	d.settleLocked(c, ToolResult{Output: why, Failed: true}, true)
+	d.settleLocked(c, ToolResult{Output: why, Failed: true, Cause: mcp.RefusalNotRunning}, true)
 	d.endIfCompleteLocked()
 	return why
 }
@@ -1016,7 +1019,7 @@ func (d *dispatcher) execute(c *callRec) (res ToolResult) {
 				"stack", perr.Stack)
 			d.cut(perr)
 			res = ToolResult{Output: c.name + " failed: the tool stopped with an internal error, " +
-				"and the phase was stopped.", Failed: true}
+				"and the phase was stopped.", Failed: true, Cause: mcp.RefusalInternalError}
 		}
 		d.mu.Lock()
 		c.took = time.Since(c.started)
@@ -1035,7 +1038,7 @@ func (d *dispatcher) execute(c *callRec) (res ToolResult) {
 		// go on.
 		d.cut(fmt.Errorf("toolloop: surface failed on %q: %w", c.name, err))
 		return ToolResult{Output: c.name + " failed: the phase was stopped before it could answer.",
-			Failed: true}
+			Failed: true, Cause: mcp.RefusalNotRunning}
 	}
 	return out
 }
