@@ -138,12 +138,12 @@ func TestALinkNamesALiveWorkItemByItsKey(t *testing.T) {
 		}
 	}
 
-	g.work.down = artifactsapi.ErrTrackerNotUp
+	g.work.down = artifactsapi.ErrWorkletNotUp
 	if w := g.do(jane, "POST", at(page, "/work-items"), linkENG12, keyed()...); w.Code !=
 		http.StatusServiceUnavailable || errorOf(t, w) != "no_active_revision" {
 		t.Errorf("a link on a node with no company yet: %d %s", w.Code, w.Body)
 	}
-	g.work.down = artifactsapi.ErrNoTracker
+	g.work.down = artifactsapi.ErrNoWorklet
 	if w := g.do(jane, "POST", at(page, "/work-items"), linkENG12, keyed()...); w.Code !=
 		http.StatusUnprocessableEntity || errorOf(t, w) != "invalid" {
 		t.Errorf("a link in a company on another tracker: %d %s", w.Code, w.Body)

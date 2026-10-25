@@ -21,7 +21,7 @@ import (
 
 // errNotOurs is what the engine's live source answers for a half this company
 // does not keep in the engine (internal/api's `nativeAbsent`).
-var errNotOurs = fmt.Errorf("%w: this company's half is not the engine's own", queries.ErrUnknown)
+var errNotOurs = fmt.Errorf("%w: this company does not run this half", queries.ErrUnknown)
 
 // errNotUpYet is what it answers on a node that has not met its company yet.
 var errNotUpYet = fmt.Errorf("%w: no company yet", queries.ErrUnavailable)

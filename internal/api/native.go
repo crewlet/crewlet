@@ -85,14 +85,13 @@ func NativeSources(e *engine.Engine) (queries.WorkReader, queries.PageReader,
 }
 
 // nativeAbsent is why a half is not here: the node has not met its company
-// yet, or the company does not keep this half in the engine. See the file
-// comment for why the two are different answers.
+// yet, or the company does not run this half (Worklet or Doclet, named by
+// half). See the file comment for why the two are different answers.
 func nativeAbsent(started bool, half string) error {
 	if !started {
 		return errNoCompanyYet
 	}
-	return fmt.Errorf("%w: this company's %s is not the engine's own",
-		queries.ErrUnknown, half)
+	return fmt.Errorf("%w: this company does not run %s", queries.ErrUnknown, half)
 }
 
 // liveWork is the tracker's read side, resolved per question.
@@ -103,7 +102,7 @@ func (l liveWork) reader() (estate.Work, error) {
 	if r, ok := engine.OperatorWork(l.engine); ok {
 		return r, nil
 	}
-	return estate.Work{}, nativeAbsent(started, "tracker")
+	return estate.Work{}, nativeAbsent(started, "Worklet")
 }
 
 // Kept answers whether this node serves the tracker half, by the same
@@ -310,7 +309,7 @@ func (l livePages) reader() (estate.Pages, error) {
 	if r, ok := engine.OperatorPages(l.engine); ok {
 		return r, nil
 	}
-	return estate.Pages{}, nativeAbsent(started, "knowledge base")
+	return estate.Pages{}, nativeAbsent(started, "Doclet")
 }
 
 // Kept answers whether this node serves the knowledge half, by the same
@@ -377,7 +376,7 @@ func (l liveBacklinks) LinkedFrom(ctx context.Context, pageID string) (
 	started := l.engine.NativeStarted()
 	x := l.engine.Backlinks()
 	if x == nil {
-		return search.Backlinks{}, nativeAbsent(started, "knowledge base")
+		return search.Backlinks{}, nativeAbsent(started, "Doclet")
 	}
 	return x.LinkedFrom(ctx, pageID)
 }
@@ -397,7 +396,7 @@ func (l liveWorkSearch) Search(ctx context.Context, q worklet.SearchQuery) (
 	started := l.engine.NativeStarted()
 	s := engine.WorkSearcher(l.engine)
 	if s == nil {
-		return worklet.SearchAnswer{}, nativeAbsent(started, "tracker")
+		return worklet.SearchAnswer{}, nativeAbsent(started, "Worklet")
 	}
 	return s.Search(ctx, q)
 }

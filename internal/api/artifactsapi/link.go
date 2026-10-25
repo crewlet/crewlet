@@ -23,21 +23,20 @@ import (
 // card. The domain records the link as a history row filed under the item
 // ([artifactsdomain.OpLinkWorkItem]); this surface decides who may make it.
 
-// WorkItems is the company's own tracker as a link reads it: one item, by key
-// or by id, through the estate router, so a node holding no data reads it
-// through a data node.
+// WorkItems is Worklet as a link reads it: one item, by key or by id, through
+// the estate router, so a node holding no data reads it through a data node.
 type WorkItems interface {
 	Task(ctx context.Context, idOrKey string, want worklet.DetailWants,
 		fresh statelog.Freshness) (worklet.TaskDetail, error)
 }
 
-// ErrTrackerNotUp is a node not yet handed a company, so the company's own
-// tracker is not running here: it comes up with the first revision.
-var ErrTrackerNotUp = errors.New("artifactsapi: the company's own tracker is not running here yet")
+// ErrWorkletNotUp is a node not yet handed a company, so Worklet is not
+// running here: it comes up with the first revision.
+var ErrWorkletNotUp = errors.New("artifactsapi: Worklet is not running here yet")
 
-// ErrNoTracker is a company whose work items are not kept by the engine's own
-// tracker, so there is no item here an artifact could be linked to.
-var ErrNoTracker = errors.New("artifactsapi: this company keeps no work items in the engine's tracker")
+// ErrNoWorklet is a company that does not run Worklet, so there is no item
+// here an artifact could be linked to.
+var ErrNoWorklet = errors.New("artifactsapi: this company does not run Worklet")
 
 // linkBody names the work item an artifact is linked to: its key (`ENG-12`),
 // or its id, and where the caller's own create of that item landed.
@@ -206,15 +205,15 @@ func (s *Service) liveWorkItem(w http.ResponseWriter, r *http.Request, ref strin
 	fresh statelog.Freshness) (worklet.Task, bool) {
 	items, err := s.workItems()
 	switch {
-	case errors.Is(err, ErrTrackerNotUp):
+	case errors.Is(err, ErrWorkletNotUp):
 		httpjson.NoActiveRevision(w, httpjson.Detail{"detail": httpjson.NativeHalvesNotUp})
 		return worklet.Task{}, false
-	case errors.Is(err, ErrNoTracker):
-		invalid(w, "this company's work items are not kept in Crewlet's tracker, so there is "+
-			"no work item here to link the artifact to")
+	case errors.Is(err, ErrNoWorklet):
+		invalid(w, "this company does not run Worklet, so there is no work item "+
+			"here to link the artifact to")
 		return worklet.Task{}, false
 	case err != nil:
-		unavailable(w, err, "this node could not reach the company's tracker; try again")
+		unavailable(w, err, "this node could not reach Worklet; try again")
 		return worklet.Task{}, false
 	}
 	detail, err := items.Task(r.Context(), ref, worklet.DetailWants{}, fresh)

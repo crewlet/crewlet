@@ -53,11 +53,11 @@
 //
 // # A link reads the work item from the caller's own create on
 //
-// Linking an artifact to a work item reads the item from the company's tracker
-// first, so a link to an item nobody filed is refused. A caller that has just
-// filed the item names the position the create answered with as `after`, and
-// the item is read through the tracker's own read-your-writes floor, the one
-// `min_position` sets on every tracker read: the read waits up to the read
+// Linking an artifact to a work item reads the item from Worklet first, so a
+// link to an item nobody filed is refused. A caller that has just filed the
+// item names the position the create answered with as `after`, and the item
+// is read through Worklet's own read-your-writes floor, the one
+// `min_position` sets on every Worklet read: the read waits up to the read
 // budget for this node to apply the create, a node that does not is refused
 // `503 unavailable` with the state log's `behind` refusal and its Retry-After,
 // and a position on another log is refused as the request's mistake. Without

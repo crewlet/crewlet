@@ -575,7 +575,7 @@ var _ knowledge.Searcher = Knowledge{}
 
 // Backend is the native one: the engine's own knowledge base, searched on a
 // node that holds it.
-func (Knowledge) Backend() string { return "native" }
+func (Knowledge) Backend() string { return doclet.Backend }
 
 // CanSearch is the no-I/O pre-gate, and on the native backend every seat can
 // read every page — so it is true, and a data node that answers nothing is

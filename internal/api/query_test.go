@@ -450,7 +450,7 @@ func TestANativeQuestionOnANodeWithNoCompanyIsOneAnswerOnBothTransports(t *testi
 		a := seededApp(t, nil)
 		a.Queries().Register("board", queries.Everybody(),
 			func(context.Context, queries.Params) (any, error) {
-				return nil, api.NativeAbsent(false, "tracker")
+				return nil, api.NativeAbsent(false, "Worklet")
 			})
 
 		rec := httptest.NewRecorder()
@@ -487,7 +487,7 @@ func TestANativeQuestionOnANodeWithNoCompanyIsOneAnswerOnBothTransports(t *testi
 		a := seededApp(t, nil)
 		a.Queries().Register("board", queries.Everybody(),
 			func(context.Context, queries.Params) (any, error) {
-				return nil, api.NativeAbsent(true, "tracker")
+				return nil, api.NativeAbsent(true, "Worklet")
 			})
 		status, answered := overREST(t, a, "board", nil)
 		body, _ := answered.(map[string]any)

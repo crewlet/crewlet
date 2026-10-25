@@ -688,15 +688,15 @@ func notInATurn(name string) tools.Result {
 		name+" can only be called during a turn, on behalf of a seat.")
 }
 
-// unconfigured is the refusal when the company runs no native tracker.
+// unconfigured is the refusal when the company does not run Worklet.
 //
 // [tools.RefusalUnavailable]: the call is well-formed and the object may well
 // exist in the tracker the company DOES run, so neither "invalid" nor "not
 // found" is true of it.
 func unconfigured(name string) tools.Result {
 	return refused(tools.RefusalUnavailable, name+" is unavailable: this "+
-		"company does not run the native work tracker. Use the tracker tools "+
-		"your company has configured.")
+		"company does not run Worklet. Use the tracker tools your company has "+
+		"configured.")
 }
 
 // queryAlias is one argument this surface spells differently from the query

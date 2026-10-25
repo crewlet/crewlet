@@ -120,10 +120,10 @@ type native struct {
 	done sync.WaitGroup
 }
 
-// errNoCore is what the native half refuses to start without on a data node:
-// every one of its writers and readers is over one of the core's logs.
-var errNoCore = errors.New("engine: the native tracker and knowledge base run " +
-	"over the core runtime's state log, and this engine has not started one")
+// errNoCore is what the native halves refuse to start without on a data node:
+// every one of their writers and readers is over one of the core's logs.
+var errNoCore = errors.New("engine: Worklet and Doclet run over the core " +
+	"runtime's state log, and this engine has not started one")
 
 // startNative opens this node's native backends, once per process, over the
 // core runtime [Engine.startCore] already published.
@@ -717,7 +717,7 @@ func (e *Engine) startNativeFeeds(ctx context.Context) {
 			if err := feed.Run(n.run); err != nil {
 				log.ErrorContext(ctx, "changefeed_stopped",
 					"source", translator.Source().Name, "error", err.Error(),
-					"detail", "native writes still land; nothing is woken by them "+
+					"detail", "writes still land; nothing is woken by them "+
 						"until this node or a peer reopens the feed")
 			}
 		}()

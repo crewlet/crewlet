@@ -171,7 +171,7 @@ func newBoardRig(t *testing.T) *boardRig {
 		Objects: estate, Ready: ready, Uploads: func() (artifactsapi.Pipeline, error) {
 			return nil, artifactupload.ErrInvalid
 		},
-		WorkItems: func() (artifactsapi.WorkItems, error) { return nil, artifactsapi.ErrTrackerNotUp }})
+		WorkItems: func() (artifactsapi.WorkItems, error) { return nil, artifactsapi.ErrWorkletNotUp }})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -100,11 +100,11 @@ func (k FeedKind) object() authz.ObjectKind {
 func (k FeedKind) half() string {
 	switch k {
 	case FeedPage:
-		return "knowledge base"
+		return "Doclet"
 	case FeedSchedule:
-		return "usage domain"
+		return "the usage domain"
 	}
-	return "tracker"
+	return "Worklet"
 }
 
 // DefaultFeedPage is what one screen of the landing feed shows before "Load
@@ -268,7 +268,7 @@ func (s Sources) companyFeed(ctx context.Context, p Params) (any, error) {
 	for _, kind := range kinds {
 		if !slices.Contains(kept, kind) {
 			return nil, fmt.Errorf("%w: kinds=%s is not kept on this node, because "+
-				"the company has no native %s here", ErrBadParams, kind, kind.half())
+				"%s is not running here", ErrBadParams, kind, kind.half())
 		}
 	}
 	limit := Clamp(p.Int("limit", 0), DefaultFeedPage, worklet.MaxFeedPage)

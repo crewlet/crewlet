@@ -162,13 +162,12 @@ type OrgProjection struct {
 // OrgServices is which tracker and which knowledge base the company runs, each
 // as [config.Company.TrackerBackendFor] and [config.Company.KnowledgeBackendFor]
 // resolve it: the backend the document names, else the vendor whose block is
-// connected, else the engine's own.
+// connected, else Worklet and Doclet.
 //
 // AN OVERVIEW FIELD, and the one narrow exception to the `tracker:` and
 // `knowledge:` blocks being guarded. What decides which of the dashboard's own
-// surfaces exist is whether the company runs the engine's tracker and
-// knowledge base at all: a company on Jira or on none has no Work, no My work
-// and no task to file, and a reader shown those surfaces is shown screens
+// surfaces exist is whether the company runs Worklet and Doclet at all: a
+// company on Jira or on none has no Worklet, no My work and no task to file, and a reader shown those surfaces is shown screens
 // whose every question is refused. Every reader learns the first half already,
 // from that refusal, and the vendor's name is the one fact a screen needs to
 // say where the work went instead. NOTHING ELSE of either block reaches this
@@ -180,9 +179,9 @@ type OrgProjection struct {
 // one of the same constants. Present on every running company and absent only
 // on `{}`, so a reader tells "not known yet" from "none".
 type OrgServices struct {
-	// Tracker is `native`, `jira` or `none`.
+	// Tracker is `worklet`, `jira` or `none`.
 	Tracker string `json:"tracker"`
-	// Knowledge is `native`, `confluence` or `none`.
+	// Knowledge is `doclet`, `confluence` or `none`.
 	Knowledge string `json:"knowledge"`
 }
 

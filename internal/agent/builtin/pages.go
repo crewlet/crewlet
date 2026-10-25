@@ -262,10 +262,11 @@ func (d PageDeps) maySkillPage(ctx context.Context, container string) *tools.Res
 	return d.mayWrite(ctx, authz.ActionSkillPageWrite, object)
 }
 
+// unconfiguredKB is the refusal when the company does not run Doclet.
 func unconfiguredKB(name string) tools.Result {
 	return refused(tools.RefusalUnavailable, name+" is unavailable: this "+
-		"company does not run the native knowledge base. Use the tools your "+
-		"company has configured.")
+		"company does not run Doclet. Use the tools your company has "+
+		"configured.")
 }
 
 // ---- list_pages -------------------------------------------------------- //

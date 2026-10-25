@@ -1499,7 +1499,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// this one is the recovery to measure.
 	log.InfoContext(ctx, "engine_recovered", "node", nodeID,
 		"detail", "what this node holds is open and recovered; what its company "+
-			"configures (sandboxes, native halves, tool servers) starts next")
+			"configures (sandboxes, Worklet and Doclet, tool servers) starts next")
 	if opts.Recovered != nil {
 		opts.Recovered()
 	}

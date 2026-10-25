@@ -443,7 +443,7 @@ func (s *fileSources) projectFile(ctx context.Context, published string,
 	work := s.deps.work
 	if work.Files == nil || work.Objects == nil {
 		r := refused(tools.RefusalUnavailable, s.tool+" cannot read project files: this "+
-			"company does not run the native tracker.")
+			"company does not run Worklet.")
 		return artifactFile{}, &r
 	}
 	// READING THE FILE IS read_project_file's VERB, asked as that tool's own

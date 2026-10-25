@@ -725,7 +725,7 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 	host, ok := e.backends.Queue.(domainHost)
 	if !ok {
 		return nil, fmt.Errorf("engine: this node's broker cannot host a state "+
-			"log (%T) — the native tracker needs a conditional append and a "+
+			"log (%T): Worklet and Doclet need a conditional append and a "+
 			"per-node durable consumer, and neither is in the event-queue "+
 			"contract because nothing else needs them", e.backends.Queue)
 	}

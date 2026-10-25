@@ -303,8 +303,8 @@ func (l evidenceLookup) TaskID(ctx context.Context, ref string) (string, error) 
 // A trashed page is not live: it is where nobody deciding can read it.
 func (l evidenceLookup) PageID(ctx context.Context, ref string) (string, bool, error) {
 	if l.pages == nil {
-		return "", false, fmt.Errorf("%w: this company has no native knowledge "+
-			"base, so a `page` cannot be checked — cite it as a `url`",
+		return "", false, fmt.Errorf("%w: this company does not run Doclet, "+
+			"so a `page` cannot be checked; cite it as a `url`",
 			worklet.ErrInvalid)
 	}
 	detail, err := l.pages.Get(ctx, strings.TrimSpace(ref), seatRead)
