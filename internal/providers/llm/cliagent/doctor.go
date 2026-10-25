@@ -536,8 +536,8 @@ func (p *Provider) fileProbe(ctx context.Context) (verdict, problem string) {
 	}()
 	token := "crewlet-file-probe-" + newSessionID()
 	path := filepath.Join(dir, "probe.txt")
-	if err := os.WriteFile(path, []byte(token+"\n"), 0o600); err != nil {
-		return "file probe failed: " + err.Error(), ""
+	if writeErr := os.WriteFile(path, []byte(token+"\n"), 0o600); writeErr != nil {
+		return "file probe failed: " + writeErr.Error(), ""
 	}
 	comp, err := p.Complete(ctx, tokenStreamed(probeRequest(fmt.Sprintf(fileProbePrompt, path))))
 	if err != nil {
