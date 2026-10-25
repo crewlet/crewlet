@@ -238,7 +238,7 @@ function withTurn(
 }
 
 /** A proposal card's body, where a card event is one. */
-function proposalOf(card: AssistantCardEvent): AssistantProposalCard | null {
+export function proposalOf(card: AssistantCardEvent): AssistantProposalCard | null {
   return card.card.type === "proposal" ? (card.card.proposal ?? null) : null;
 }
 

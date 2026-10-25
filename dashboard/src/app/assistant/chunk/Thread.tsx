@@ -41,7 +41,8 @@ import {
   stepsOf,
   type CardHandlers,
 } from "./blocks.tsx";
-import { isOpen, type ConversationView, type TurnView } from "./turn.ts";
+import { changedNothing } from "./pageActions.ts";
+import { isOpen, proposalOf, type ConversationView, type TurnView } from "./turn.ts";
 
 /** How long a reconnect may run before the drawer offers to try again by hand. */
 export const RECONNECT_PATIENCE_MS = 30_000;
@@ -66,6 +67,36 @@ function SentWith({ title }: { title: string }) {
       {title}
     </Tag>
   );
+}
+
+/** The proposal states whose write is on its way, or landed without anyone hearing. */
+const MAY_HAVE_LANDED: ReadonlySet<string> = new Set([
+  "approved",
+  "executing",
+  "applying",
+  "unknown",
+]);
+
+/**
+ * What a turn that stopped or failed left changed, in the words its end is
+ * said with. A STOP OR A FAILURE ENDS WHAT IS LEFT, NOT WHAT WAS DONE: a
+ * change approved earlier in the same turn stays applied, and one whose
+ * outcome nobody heard may have landed, so "Nothing changed." is said only
+ * where neither is true.
+ */
+export function consequenceOf(turn: TurnView): string {
+  let uncertain = false;
+  for (const event of turn.cards) {
+    const state = proposalOf(event)?.state;
+    if (state === "applied") return "What was already applied stays applied.";
+    if (state !== undefined && MAY_HAVE_LANDED.has(state)) uncertain = true;
+  }
+  for (const local of Object.values(turn.actionStates)) {
+    if (!changedNothing(local.state)) return "What was already applied stays applied.";
+  }
+  return uncertain
+    ? "A change may have landed. Its card says where it stands."
+    : "Nothing changed.";
 }
 
 /** What an ended turn's foot copies: the answer as Markdown. */
@@ -168,7 +199,9 @@ function Turn({
           on={on}
         />
       ))}
-      {turn.phase === "stopped" ? <ReplyProse text="Stopped. Nothing changed." dimmed /> : null}
+      {turn.phase === "stopped" ? (
+        <ReplyProse text={`Stopped. ${consequenceOf(turn)}`} dimmed />
+      ) : null}
       {turn.error ? (
         <Callout
           variant="danger"
@@ -182,7 +215,8 @@ function Turn({
             ) : undefined
           }
         >
-          {turn.error.hint ? `${turn.error.hint} ` : ""}Nothing changed.
+          {turn.error.hint ? `${turn.error.hint} ` : ""}
+          {consequenceOf(turn)}
         </Callout>
       ) : null}
       {!open && !turn.refusal ? (
@@ -212,9 +246,9 @@ function announcement(turn: TurnView): string | null {
     case "completed":
       return "Answer ready";
     case "stopped":
-      return "Stopped. Nothing changed.";
+      return `Stopped. ${consequenceOf(turn)}`;
     case "failed":
-      return turn.error?.message ?? "The answer failed. Nothing changed.";
+      return turn.error?.message ?? `The answer failed. ${consequenceOf(turn)}`;
     default:
       return null;
   }
