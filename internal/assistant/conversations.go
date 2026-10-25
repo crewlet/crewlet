@@ -278,16 +278,26 @@ func traceOf(ctx context.Context) string { return tracing.TraceOf(ctx).TraceID }
 
 // Close stops every turn this node runs, each ending interrupted, and waits
 // for their ends to be recorded and for any title in flight, within ctx.
+//
+// A START ADMITTED BEFORE CLOSE IS WAITED FOR: once closed, nothing more is
+// admitted, and every start or resume already admitted either tracks its
+// runner (which meets the cancelled base at once and ends interrupted) or
+// gives up, before the runners are gathered.
 func (s *Service) Close(ctx context.Context) error {
 	s.mu.Lock()
 	s.closed = true
+	s.mu.Unlock()
+	s.cancel(errDraining)
+	s.reaperWG.Wait()
+	if err := waitWithin(ctx, s.admissions.Wait); err != nil {
+		return err
+	}
+	s.mu.Lock()
 	running := make([]*turn, 0, len(s.turns))
 	for _, t := range s.turns {
 		running = append(running, t)
 	}
 	s.mu.Unlock()
-	s.cancel(errDraining)
-	s.reaperWG.Wait()
 	for _, t := range running {
 		select {
 		case <-t.done:
@@ -304,5 +314,18 @@ func (s *Service) Close(ctx context.Context) error {
 		return ctx.Err()
 	case <-time.After(TitleTimeout):
 		return nil
+	}
+}
+
+// waitWithin runs wait (a WaitGroup's Wait) and answers once it returns, or
+// ctx's error when ctx ends first.
+func waitWithin(ctx context.Context, wait func()) error {
+	done := make(chan struct{})
+	go func() { wait(); close(done) }()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }

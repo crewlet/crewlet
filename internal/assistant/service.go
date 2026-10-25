@@ -107,6 +107,11 @@ type Service struct {
 	closed    bool
 	titlesWG  sync.WaitGroup
 	reaperWG  sync.WaitGroup
+	// admissions counts the starts and resumes admitted and not yet either
+	// running or given up: what Close waits for before it gathers the
+	// runners, so a start that passed its admission just before Close is
+	// never missed.
+	admissions sync.WaitGroup
 }
 
 // turnNamespace is the UUIDv5 namespace a turn's id is derived in from the
@@ -349,6 +354,7 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	if err = s.admit(ctx, ts.Person); err != nil {
 		return wire.TurnAccepted{}, err
 	}
+	defer s.admissions.Done()
 	admitted := true
 	defer func() {
 		if admitted {
@@ -555,7 +561,8 @@ func budgetRefusal(ctx context.Context, meter toolloop.BudgetMeter) error {
 }
 
 // admit takes one turn for p from their running allowance and the turn rate,
-// or answers why not.
+// or answers why not. A caller admitted calls s.admissions.Done once its
+// runner is tracked or it gave up.
 func (s *Service) admit(ctx context.Context, p iam.Principal) error {
 	if err := s.admitHere(p); err != nil {
 		return err
@@ -565,6 +572,7 @@ func (s *Service) admit(ctx context.Context, p iam.Principal) error {
 	if err := s.admitAcrossTheFleet(ctx, turnRateScope, p.ID, TurnsPerMinute,
 		turnRateReason); err != nil {
 		s.unadmit(p.ID)
+		s.admissions.Done()
 		return err
 	}
 	return nil
@@ -587,6 +595,7 @@ func (s *Service) admitHere(p iam.Principal) error {
 		return &Busy{RetryAfter: refused.RetryAfter, Reason: turnRateReason}
 	}
 	s.running[p.ID]++
+	s.admissions.Add(1)
 	return nil
 }
 

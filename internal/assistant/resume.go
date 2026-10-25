@@ -111,6 +111,7 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 	if err = s.admit(ctx, person); err != nil {
 		return wire.TurnAccepted{}, err
 	}
+	defer s.admissions.Done()
 	admitted := true
 	defer func() {
 		if admitted {
