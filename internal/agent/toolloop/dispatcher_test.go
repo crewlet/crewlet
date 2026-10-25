@@ -441,6 +441,40 @@ func TestACallNearTheCLIsToolTimeoutEndsTheRun(t *testing.T) {
 	}
 }
 
+// A CALL WHOSE RESPONSE THE CLI'S RECORD SHOWS LATE IS STILL ITS ROUND. A record
+// read off a file the CLI writes can lag the call by more than the join waits:
+// the call is placed on a round of its own, and when the record does show the
+// response, that response IS that round — not one more.
+func TestAResponseRecordedAfterItsCallIsTheCallsRound(t *testing.T) {
+	t.Parallel()
+	surf := newSurface("look")
+	prov := script(runOf(calling("", "look"), says("done")))
+	res, err := run(t, toolloop.Config{Provider: &lagging{Script: prov, by: 2500 * time.Millisecond},
+		Surface: surf})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.RoundsUsed != 2 || len(res.Rounds) != 2 {
+		t.Errorf("rounds %d (%d recorded), want the two requests the CLI made", res.RoundsUsed, len(res.Rounds))
+	}
+	if len(res.Executions) != 1 || res.Executions[0].Round != 1 {
+		t.Errorf("executions %+v, want the call on round 1", res.Executions)
+	}
+	// And the record pairs the response's call with what it returned: the
+	// call that ran IS the one the response asked for, not a second beside
+	// it while the response's own reads as never made.
+	var asked []string
+	for _, m := range res.Messages {
+		for _, c := range m.ToolCalls {
+			asked = append(asked, c.ID)
+		}
+	}
+	results := toolResults(res.Messages)
+	if len(asked) != 1 || results[asked[0]].Content != "look ok" || results[asked[0]].Failed {
+		t.Errorf("the record holds calls %v answered %+v, want the one call and its result", asked, results)
+	}
+}
+
 // lagging reports the run's records in order, but only once a lag has passed
 // from the first — a backend reading a session file the CLI flushes late — and
 // every one of them before the run is over.

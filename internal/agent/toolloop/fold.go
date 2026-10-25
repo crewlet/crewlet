@@ -51,6 +51,13 @@ type group struct {
 func (d *dispatcher) fold(comp *llm.Completion, model string) folded {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	// A CALL THE RECORD NEVER SHOWED was placed on the request after the
+	// last one it did; with the run over, that request is counted.
+	for _, c := range d.calls[d.foldedCalls:] {
+		if c.provisional && c.round > d.rounds {
+			d.rounds = c.round
+		}
+	}
 	if r := d.currentRunLocked(); comp != nil && r != nil && r.synthetic == 0 &&
 		len(d.turns) == d.foldedTurns {
 		// A RUN WHOSE RECORD SHOWED NO REQUEST — a CLI that records none, or

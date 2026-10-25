@@ -96,8 +96,8 @@ func (s dstate) ended() bool {
 // file it writes, and the call arrives over a socket, and either can be first
 // by milliseconds. Two seconds is three orders of magnitude over that race and
 // still short against the model's own latency; a call whose response the
-// record never shows within it is placed by the rule for one it did not show
-// (see [dispatcher.placeLocked]) rather than held for nothing.
+// record never shows within it is placed on the request after the last one the
+// record did show (see [dispatcher.placeLocked]) rather than held for nothing.
 // Calls a CLI issues at once arrive within the same milliseconds, so the same
 // bound serves the barrier: a sibling that has not come by then is one the CLI
 // will make only once this call is answered.
@@ -155,6 +155,11 @@ type callRec struct {
 	// call — what the conversation records it as; different from name only
 	// on a call the CLI rewrote.
 	asked string
+
+	// provisional marks a call whose response the record had not shown when
+	// it was placed: its round is the request after the last one shown,
+	// until the record shows it ([dispatcher.Observe] adopts it).
+	provisional bool
 
 	// exclusive marks a call that ends or parks the phase: it runs alone.
 	exclusive bool
@@ -396,6 +401,7 @@ func (d *dispatcher) Observe(t llm.Turn) {
 			d.endLocked()
 		}
 	}
+	d.adoptLocked(turn)
 	d.reviewLocked(turn)
 	d.endIfCompleteLocked()
 	d.cond.Broadcast()
@@ -409,6 +415,25 @@ func (d *dispatcher) expectLocked(t *observedTurn) {
 	t.expect = make([]bool, len(t.calls))
 	for i, c := range t.calls {
 		t.expect[i] = c.Host && d.offeredLocked(c.Name)
+	}
+}
+
+// adoptLocked joins the calls placed before the record showed their response
+// to it, now that it does: that response is the round they were placed on.
+// One that is not this response's moves on to the request after it.
+func (d *dispatcher) adoptLocked(t *observedTurn) {
+	for _, c := range d.calls[d.invCalls:] {
+		if !c.provisional {
+			continue
+		}
+		if i, ok := d.matchLocked(t, c); ok {
+			d.joinLocked(c, t, i)
+			c.round, c.provisional = t.round, false
+			continue
+		}
+		if c.round <= d.rounds {
+			c.round = d.rounds + 1
+		}
 	}
 }
 
@@ -745,16 +770,12 @@ func (d *dispatcher) placeLocked(c *callRec) {
 		}
 		d.waitLocked(time.Until(deadline))
 	}
-	// THE RECORD NEVER SHOWED IT: the call belongs to the latest response,
-	// or to the next one if that response's calls have all arrived.
-	if n := len(d.turns); n > 0 {
-		if last := d.turns[n-1]; last.awaiting(-1, nil) {
-			c.round = last.round
-			return
-		}
-	}
-	d.rounds++
-	c.round = d.rounds
+	// THE RECORD HAS NOT SHOWN IT: the call is the request after the last
+	// one the record did show, until the record catches up and says which
+	// response it was ([dispatcher.adoptLocked]). Counted no sooner, so a
+	// response whose calls all came before its record is one round, not one
+	// per call.
+	c.round, c.provisional = d.rounds+1, true
 }
 
 // findLocked is the response's call this call is, in the CLI's record: by the
@@ -762,7 +783,9 @@ func (d *dispatcher) placeLocked(c *callRec) {
 // that rewrote a name its list does not hold to one it does — the one call of
 // a name no tool here answers to, with the very same arguments.
 func (d *dispatcher) findLocked(c *callRec) (*observedTurn, int, bool) {
-	for _, t := range d.turns {
+	// THIS RUN'S RESPONSES ONLY: a call an earlier run's response asked for
+	// and never made is not one a later run makes.
+	for _, t := range d.turns[d.invTurns:] {
 		if i, ok := d.matchLocked(t, c); ok {
 			return t, i, true
 		}
