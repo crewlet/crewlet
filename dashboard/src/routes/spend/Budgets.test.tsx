@@ -27,6 +27,7 @@ import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { BudgetWindow, BudgetsAnswer } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
+import { applyPageAction, resetPageContextForTest } from "~/app/assistant/context.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -428,4 +429,30 @@ test("no control resets a budget", async () => {
     const source = readFileSync(resolve(__dirname, file), "utf8");
     expect(source, file).not.toMatch(/budgets\/reset|resetBudget|Reset budget/i);
   }
+});
+
+// THE ASSISTANT FILLS THE FIELD AND NOTHING MORE: the editor of that scope's
+// window opens with the value in it, nothing is sent, and the save is the
+// person's own press.
+test("a ceiling the assistant prepared opens its editor filled in, and saves nothing", async () => {
+  const calls = stubConfig(() => valid());
+  mount(answer());
+  await settle();
+  const ask = (payload: unknown) =>
+    applyPageAction({
+      correlation_id: "c",
+      action: "budgets.ceiling.prefill",
+      payload,
+      source_revision: "",
+    });
+  expect(ask({ seat: "nobody", period: "day", ceiling: "1M" }).outcome).toBe("invalid");
+  expect(ask({ period: "day", ceiling: "0" }).outcome).toBe("invalid");
+  await act(async () => {
+    expect(ask({ seat: "pm", period: "week", ceiling: "2M" }).outcome).toBe("applied");
+  });
+  await settle();
+  const field = screen.getByRole("textbox") as HTMLInputElement;
+  expect(field.value).toBe("2M");
+  expect(calls).toEqual([]);
+  resetPageContextForTest();
 });
