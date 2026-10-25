@@ -92,6 +92,20 @@ func BuiltinNames() []string {
 	return names
 }
 
+// WebDeniable lists the built-in profiles that can run with their web tools
+// off ([Profile.CanDenyWeb]), sorted: the CLIs an entry may point the
+// Dashboard Assistant at. Derived from the table, so a profile that gains a
+// measured web_denial is named everywhere this list is printed.
+func WebDeniable() []string {
+	var out []string
+	for _, name := range BuiltinNames() {
+		if p := builtins()[name]; p.CanDenyWeb() {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 // Builtin returns a copy of one built-in profile.
 //
 // A copy because callers merge overrides into it, and a shared map value
@@ -156,6 +170,14 @@ func (p Profile) Clone() Profile {
 		login.Args = append([]string(nil), p.StdinLogin.Args...)
 		out.StdinLogin = &login
 	}
+	if p.WebDenial != nil {
+		// slices.Clone keeps a nil list nil, and nil is meaningful here:
+		// an unset field leaves its profile field alone.
+		out.WebDenial = &WebDenial{
+			CompleteArgs: slices.Clone(p.WebDenial.CompleteArgs),
+			SeedFiles:    slices.Clone(p.WebDenial.SeedFiles),
+		}
+	}
 	if p.CredentialStore != nil {
 		out.CredentialStore = &CredentialStore{
 			ExportArgs: append([]string(nil), p.CredentialStore.ExportArgs...),
@@ -206,6 +228,11 @@ var ErrOverrides = errors.New("overrides does not decode into a profile")
 // built-in it was merged into besides: an override that moves a relocation
 // directory must move what the built-in keeps under it ([Profile.strandedBy]),
 // which only the pair can show.
+//
+// The profile it returns is the one the CLI RUNS: an entry whose merged stance
+// is `web_tools: denied` comes back with its [WebDenial] already applied, so
+// every caller (the backend that launches it, config validating it, the
+// doctor probing it) reads the same argv and the same seeded files.
 func Load(name string, overrides map[string]any) (Profile, error) {
 	builtin, ok := Builtin(name)
 	if !ok {
@@ -222,10 +249,37 @@ func Load(name string, overrides map[string]any) (Profile, error) {
 	if err != nil {
 		return Profile{}, fmt.Errorf("cli-agent %q: %w: %w", name, ErrOverrides, err)
 	}
-	if err := profileError(name, append(merged.problems(), merged.strandedBy(&builtin)...)); err != nil {
+	bad := merged.webOverrideConflicts(overrides)
+	if merged.EffectiveWebTools() == WebToolsDenied && merged.WebDenial != nil {
+		merged = merged.withWebDenied()
+	}
+	bad = append(bad, merged.problems()...)
+	if err := profileError(name, append(bad, merged.strandedBy(&builtin)...)); err != nil {
 		return Profile{}, err
 	}
 	return merged, nil
+}
+
+// webOverrideConflicts refuses an override the web denial would silently
+// discard: a complete_args or seed_files written beside `web_tools: denied`
+// when the profile's web_denial replaces that same field. Applied as written,
+// the denial wins and the operator's edit never runs; applied the other way,
+// the edit wins and the denial never runs. Neither is what was written, so
+// the operator is told which field to edit instead.
+func (p *Profile) webOverrideConflicts(overrides map[string]any) []string {
+	if p.EffectiveWebTools() != WebToolsDenied || p.WebDenial == nil {
+		return nil
+	}
+	var bad []string
+	if _, set := overrides["complete_args"]; set && p.WebDenial.CompleteArgs != nil {
+		bad = append(bad, "complete_args is overridden, but web_tools is denied and "+
+			"web_denial.complete_args replaces it; override web_denial.complete_args instead")
+	}
+	if _, set := overrides["seed_files"]; set && p.WebDenial.SeedFiles != nil {
+		bad = append(bad, "seed_files is overridden, but web_tools is denied and "+
+			"web_denial.seed_files replaces it; override web_denial.seed_files instead")
+	}
+	return bad
 }
 
 // applyOverrides merges an operator's override map into a profile.

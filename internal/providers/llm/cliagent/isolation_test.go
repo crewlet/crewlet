@@ -411,7 +411,7 @@ func TestDoctorProbesReportADeniedShellAndAReachableWeb(t *testing.T) {
 	if !strings.HasPrefix(d.LocalTools, "denied by profile — probe: refused") {
 		t.Errorf("LocalTools = %q", d.LocalTools)
 	}
-	if !strings.HasPrefix(d.Web, "ok") {
+	if !strings.HasPrefix(d.Web, "allowed; ok") {
 		t.Errorf("Web = %q", d.Web)
 	}
 	// Not Healthy(): the fake has no usage paths and no login, which are
@@ -470,12 +470,141 @@ func TestDoctorReportsAnUnreachableWeb(t *testing.T) {
 	t.Parallel()
 	p := probeProvider(t, cliprofile.LocalToolsDenied, noLocalToolsReply, noWebReply)
 	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
-	if !strings.HasPrefix(d.Web, "failed") {
+	if !strings.HasPrefix(d.Web, "allowed; failed") {
 		t.Errorf("Web = %q", d.Web)
 	}
 	joined := strings.Join(d.Problems, "\n")
 	if !strings.Contains(joined, "egress proxy") {
 		t.Errorf("the problem does not point at the proxy:\n%s", joined)
+	}
+}
+
+// deniedWebProvider is a fake CLI on an entry that turns its web tools off,
+// answering the web probe with webReply. The fake's web_denial seeds a file
+// rather than replacing argv, because its argv is what makes it the fake.
+func deniedWebProvider(t *testing.T, webReply string) *Provider {
+	t.Helper()
+	return fakeProvider(t, map[string]string{
+		"FAKE_STDOUT":             `{"message":"","tool_calls":[{"name":"crewlet_smoke","arguments":{"ok":true}}]}`,
+		"FAKE_SHELL_PROBE_STDOUT": noLocalToolsReply,
+		"FAKE_WEB_PROBE_STDOUT":   webReply,
+	}, map[string]any{
+		"local_tools":    "denied",
+		"version_args":   []any{"-test.run=NoSuchTest"},
+		"web_tools":      "denied",
+		"web_tools_note": "the fake's own policy file",
+		"web_denial": map[string]any{"seed_files": []any{
+			map[string]any{"path": ".fake/web.json", "in": "work", "content": `{"web":false}`},
+		}},
+	})
+}
+
+// THE DOCTOR PROVES A WEB FETCH IS REFUSED on an entry that denies it, as it
+// proves a shell is refused on a profile denying local tools. The denial is
+// the claim the Dashboard Assistant is admitted on, so a CLI that fetched
+// anyway is the finding this probe exists for, and a refusal is the healthy
+// answer rather than the "web is unreachable" problem it is on a seat.
+//
+// Mutation: drop the stance from webProbe's switch, and the fetch reads "ok"
+// while the refusal reads as a failure; both halves go red.
+func TestTheDoctorProvesAWebFetchIsRefused(t *testing.T) {
+	t.Parallel()
+	t.Run("refused", func(t *testing.T) {
+		t.Parallel()
+		d := deniedWebProvider(t, noWebReply).Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
+		if !strings.HasPrefix(d.Web, "denied by entry (the fake's own policy file); probe: refused") {
+			t.Errorf("Web = %q", d.Web)
+		}
+		for _, problem := range d.Problems {
+			if strings.Contains(problem, "web") {
+				t.Errorf("a refused fetch on a denied entry is the healthy answer, reported: %s", problem)
+			}
+		}
+	})
+	t.Run("fetched", func(t *testing.T) {
+		t.Parallel()
+		d := deniedWebProvider(t, "ts="+nowEpoch()).Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
+		if !strings.Contains(d.Web, "probe: FETCHED") {
+			t.Errorf("Web = %q", d.Web)
+		}
+		joined := strings.Join(d.Problems, "\n")
+		if !strings.Contains(joined, "web_denial is not taking effect") {
+			t.Errorf("a fetch through a denied entry was not reported as the denial failing:\n%s", joined)
+		}
+	})
+	t.Run("silent", func(t *testing.T) {
+		t.Parallel()
+		// No answer is no evidence: neither a refusal nor a fetch, and
+		// a problem rather than a pass, since the denial is unproven.
+		d := deniedWebProvider(t, "").Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
+		if strings.Contains(d.Web, "refused") {
+			t.Errorf("an empty answer was read as a refusal: Web = %q", d.Web)
+		}
+		if !slices.ContainsFunc(d.Problems, func(p string) bool { return strings.Contains(p, "web probe") }) {
+			t.Errorf("an unproven denial raised no problem: %q", d.Problems)
+		}
+	})
+}
+
+// EVERY PROFILE THAT CAN SERVE THE ASSISTANT TURNS THE WEB OFF. For each
+// built-in with a web_denial, the profile Load returns for an entry setting
+// `web_tools: denied` must offer the model no web tool by any of the
+// spellings this table uses, keep its local tools denied, and differ from the
+// seats' profile, whose web stays on.
+//
+// The set itself is pinned: it is the S2 measurement (Claude Code and Codex
+// measured refused, OpenCode derived from its policy format, pi shipping no
+// web tool), and a profile gaining a web_denial is a decision that lands here
+// with its measurement.
+func TestEveryAssistantProfileTurnsTheWebOff(t *testing.T) {
+	t.Parallel()
+	want := []string{"claude-code", "codex", "opencode", "pi"}
+	if got := cliprofile.WebDeniable(); !slices.Equal(got, want) {
+		t.Errorf("profiles with a web denial = %v, want %v", got, want)
+	}
+	for _, name := range cliprofile.WebDeniable() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			seat, err := cliprofile.Load(name, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p, err := cliprofile.Load(name, map[string]any{"web_tools": "denied"})
+			if err != nil {
+				t.Fatalf("Load with web_tools denied: %v", err)
+			}
+			if p.EffectiveWebTools() != cliprofile.WebToolsDenied || p.LocalTools != cliprofile.LocalToolsDenied {
+				t.Errorf("web %q, local %q: an assistant profile denies both", p.EffectiveWebTools(), p.LocalTools)
+			}
+			for _, arg := range p.CompleteArgs {
+				if strings.Contains(arg, `web_search="live"`) || strings.Contains(arg, `web_search="cached"`) ||
+					strings.Contains(arg, `web_search="indexed"`) {
+					t.Errorf("argv still turns a web search on: %q", arg)
+				}
+			}
+			for _, flag := range []string{"--allowedTools", "--allowed-tools", "--allow-tool"} {
+				for _, tool := range []string{"WebFetch", "WebSearch", "web_fetch", "web_search"} {
+					if allowsAfterFlag(p.CompleteArgs, flag, tool) {
+						t.Errorf("argv allows %s through %s: %q", tool, flag, p.CompleteArgs)
+					}
+				}
+			}
+			for _, f := range p.SeedFiles {
+				lowered := strings.ToLower(f.Content)
+				for _, tool := range []string{"webfetch", "websearch", "web_fetch", "web_search"} {
+					if strings.Contains(lowered, tool) {
+						t.Errorf("seeded %s still names %s:\n%s", f.Path, tool, f.Content)
+					}
+				}
+			}
+			if name == "claude-code" && !allowsAfterFlag(p.CompleteArgs, "--disallowedTools", "WebFetch", "WebSearch") {
+				t.Errorf("claude-code must put both web tools on --disallowedTools: %q", p.CompleteArgs)
+			}
+			if name != "pi" && slices.Equal(p.CompleteArgs, seat.CompleteArgs) &&
+				slices.Equal(p.SeedFiles, seat.SeedFiles) {
+				t.Error("the denied profile runs exactly as the seats' does, so it denies nothing")
+			}
+		})
 	}
 }
 

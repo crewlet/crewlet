@@ -364,9 +364,10 @@ func (s MarkerScope) Valid() bool {
 // tools wherever the vendor offers a way to, and says so here, so that
 // `crewlet llm doctor` can print the claim next to what its probe measured.
 //
-// Web is the deliberate exception and is never denied: a seat on a
+// Web is the deliberate exception and is not one of these: a seat on a
 // subscription must not have less reach than the same CLI at a terminal, and
-// a fetch is a read — it never gates delivery.
+// a fetch is a read — it never gates delivery. An entry turns web off on its
+// own stance, [WebTools], never through this one.
 type LocalTools string
 
 const (
@@ -384,6 +385,66 @@ const (
 // Valid reports whether t is a stance this package knows.
 func (t LocalTools) Valid() bool {
 	return t == LocalToolsDenied || t == LocalToolsVendorDefault
+}
+
+// WebTools says whether a profile's run keeps the CLI's OWN web tools (its
+// fetch and its search) or turns them off.
+//
+// A SECOND STANCE BESIDE [LocalTools] rather than a value of it, because the
+// two answer different questions for different readers. Local tools are
+// denied wherever a vendor allows it, for every entry, since a shell on the
+// engine host reads whatever the engine user can. Web stays on for a seat by
+// default (see [LocalTools]) and is turned off PER ENTRY, by
+// `overrides: {web_tools: denied}`, for a caller whose whole security model
+// is that every byte it reads arrives through the engine's own guard: the
+// Dashboard Assistant (ADR-0046) refuses any member of `assistant.llm` whose
+// merged profile is not denied here, because a page the model fetched for
+// itself is text no authority decision ever saw, and a fetch is also a way
+// OUT for whatever the person's data put in the prompt.
+//
+// The empty value reads as [WebToolsAllowed], so every profile and every
+// entry that says nothing runs exactly as it did before the field existed.
+type WebTools string
+
+const (
+	// WebToolsAllowed keeps the CLI's web tools on, the seats' default.
+	WebToolsAllowed WebTools = "allowed"
+	// WebToolsDenied runs the CLI with its web tools off, through the
+	// profile's [WebDenial]. A profile with no web_denial cannot be denied,
+	// and Load refuses the stance on it rather than run a CLI that still
+	// fetches under a configuration that says it does not.
+	WebToolsDenied WebTools = "denied"
+)
+
+// Valid reports whether w is a stance this package knows. The empty value is
+// not one: it is the absence of a stance, which [Profile.EffectiveWebTools]
+// reads as allowed.
+func (w WebTools) Valid() bool { return w == WebToolsAllowed || w == WebToolsDenied }
+
+// WebDenial is how one CLI turns its web tools off: what its run uses INSTEAD
+// when the entry is `web_tools: denied`.
+//
+// REPLACEMENTS, NOT EDITS. Each field, when set, replaces the profile field
+// of the same name whole, for the reason [applyOverrides] replaces lists
+// whole: position matters in an argv, and the denied command line is one a
+// person wrote and measured as a unit (an allow list removed and a deny list
+// extended are two edits that only mean something together). A field left
+// unset leaves its profile field as it is, which is how a CLI that takes its
+// tool policy from a file (OpenCode) denies web without restating its argv.
+// A denial that sets neither field changes nothing and is refused.
+//
+// Every built-in denial was measured against the installed CLI with the
+// doctor's own web probe; the profile's web_tools_note says on which release.
+type WebDenial struct {
+	// CompleteArgs replaces complete_args when web is denied.
+	CompleteArgs []string `yaml:"complete_args,omitempty"`
+	// SeedFiles replaces seed_files when web is denied.
+	SeedFiles []SeedFile `yaml:"seed_files,omitempty"`
+}
+
+// changes reports whether the denial replaces anything at all.
+func (d *WebDenial) changes() bool {
+	return d != nil && (d.CompleteArgs != nil || d.SeedFiles != nil)
 }
 
 // SeedScope is where a seeded file lands.
@@ -1130,6 +1191,48 @@ type Profile struct {
 	// — the vendors that take their tool policy from a file rather than a
 	// flag. See [SeedFile].
 	SeedFiles []SeedFile `yaml:"seed_files,omitempty"`
+
+	// WebTools is the profile's stance on the CLI's own web tools, see
+	// [WebTools]. Empty reads as allowed. Set per entry through overrides;
+	// no built-in profile sets it.
+	WebTools WebTools `yaml:"web_tools,omitempty"`
+
+	// WebToolsNote says how this CLI's web denial was measured, or why the
+	// profile has none. Printed by the doctor beside the web probe.
+	WebToolsNote string `yaml:"web_tools_note,omitempty"`
+
+	// WebDenial is how this CLI turns its web tools off, or nil where it
+	// has no measured way to. See [WebDenial].
+	WebDenial *WebDenial `yaml:"web_denial,omitempty"`
+}
+
+// EffectiveWebTools is the web stance with its default applied: empty reads
+// as [WebToolsAllowed].
+func (p *Profile) EffectiveWebTools() WebTools {
+	if p.WebTools == "" {
+		return WebToolsAllowed
+	}
+	return p.WebTools
+}
+
+// CanDenyWeb reports whether the profile has a way to turn its web tools off.
+func (p *Profile) CanDenyWeb() bool { return p.WebDenial.changes() }
+
+// withWebDenied is the profile as it runs with its web tools off: the stance
+// set and every field the denial names replaced. The denial itself is kept,
+// so the doctor can still print it, and applying it twice is applying it once.
+func (p Profile) withWebDenied() Profile {
+	out := p.Clone()
+	out.WebTools = WebToolsDenied
+	if d := p.WebDenial; d != nil {
+		if d.CompleteArgs != nil {
+			out.CompleteArgs = append([]string(nil), d.CompleteArgs...)
+		}
+		if d.SeedFiles != nil {
+			out.SeedFiles = append([]SeedFile(nil), d.SeedFiles...)
+		}
+	}
+	return out
 }
 
 // credentialWords are the name components that mark a variable as carrying a
@@ -1629,6 +1732,7 @@ func (p *Profile) problems() []string {
 		add("local_tools is vendor-default but local_tools_note is empty — say which " +
 			"denial the vendor lacks")
 	}
+	p.validateWebStance(add)
 	for i, f := range p.SeedFiles {
 		if strings.TrimSpace(f.Path) == "" {
 			add("seed_files[%d].path is empty", i)
@@ -1692,6 +1796,45 @@ func (p *Profile) validateEveryStep(add func(string, ...any)) {
 			}
 		}
 	}
+}
+
+// validateWebStance holds the web stance and its denial to their rules.
+//
+// A profile that keeps web on but CARRIES a denial has that denial validated
+// as the profile it would become, so a broken web_denial is refused where it
+// is written rather than on the first entry that turns web off.
+func (p *Profile) validateWebStance(add func(string, ...any)) {
+	if p.WebTools != "" && !p.WebTools.Valid() {
+		add("web_tools %q (want allowed or denied)", p.WebTools)
+		return
+	}
+	if p.WebDenial != nil && !p.WebDenial.changes() {
+		add("web_denial sets neither complete_args nor seed_files, so it turns " +
+			"nothing off; say what the CLI runs with instead, or remove it")
+		return
+	}
+	switch {
+	case p.EffectiveWebTools() == WebToolsDenied && p.WebDenial == nil:
+		// Refused rather than run: the stance would be a claim the CLI
+		// does not honour, and the assistant admits an entry on exactly
+		// this claim.
+		add("web_tools is denied but the profile has no web_denial, so this CLI "+
+			"has no measured way to turn its web tools off (%s); set "+
+			"overrides.web_denial, or keep web_tools allowed", orUnstated(p.WebToolsNote))
+	case p.EffectiveWebTools() == WebToolsAllowed && p.WebDenial != nil:
+		denied := p.withWebDenied()
+		for _, problem := range denied.problems() {
+			add("with web_tools denied, %s", problem)
+		}
+	}
+}
+
+// orUnstated renders an optional note inside a sentence.
+func orUnstated(note string) string {
+	if strings.TrimSpace(note) == "" {
+		return "the profile does not say why"
+	}
+	return note
 }
 
 // pathClaim is one path a profile has the engine WRITE a file at, or has the
