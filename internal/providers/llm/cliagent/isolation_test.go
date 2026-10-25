@@ -238,8 +238,8 @@ func TestEveryShippedProfileDeclaresItsLocalToolsStance(t *testing.T) {
 // streamed): checked off the argv, never taken from the profile's claim. The
 // set is pinned: Claude Code's empty allow list and pi's --no-tools were
 // measured; Codex keeps apply_patch, which has no switch, and OpenCode's
-// deny-all policy refuses a tool when called rather than removing it, so both
-// are refused. A seat's argv is untouched by any of it.
+// deny-all policy has never been measured to leave a call offered no tool, so
+// both are refused. A seat's argv is untouched by any of it.
 func TestTheAssistantArgvLeavesTheCLIWithNoToolOfItsOwn(t *testing.T) {
 	t.Parallel()
 	if got, want := cliprofile.AssistantEligible(), []string{"claude-code", "pi"}; !slices.Equal(got, want) {

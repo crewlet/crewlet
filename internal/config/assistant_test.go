@@ -131,8 +131,8 @@ func TestTheAssistantRefusesAnEntryThatReachesTheWeb(t *testing.T) {
 
 // THE ASSISTANT REFUSES AN ENTRY THAT CAN RUN LOCAL TOOLS, judged on the argv
 // its calls run rather than on the profile's word. Codex keeps apply_patch,
-// which has no switch; OpenCode's deny-all policy refuses a tool
-// when called rather than removing it, which has never been measured; and a
+// which has no switch; OpenCode's deny-all policy has never been measured to
+// leave a call offered no tool; and a
 // Claude Code entry whose override drops the empty allow list, or adds a tool
 // server, claims the denial its argv no longer carries. Each is refused at the
 // chain member, saying why, and AssistantChain refuses the same document.
