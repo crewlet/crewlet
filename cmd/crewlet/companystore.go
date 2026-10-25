@@ -425,12 +425,13 @@ func (s *companyStore) holding(ctx context.Context, names []string, notes io.Wri
 //
 // # A read outside the scope is still answered from the store
 //
-// Read as it is made, one name in one request, and said on notes. A command whose scope missed a field it reads — a new one, say — then
-// resolves the store's value rather than the environment's, which is the
-// engine's answer; resolving it as unset would be the same mint. That read has
-// no error to return either, so a failed one PANICS: the run stops where it
-// is, as it would on a vendor's own failure part way through, rather than
-// going on to act on a value it does not have.
+// Read as it is made, one name in one request, and said on notes. A command
+// whose scope missed a field it reads — a new one, say — then resolves the
+// store's value rather than the environment's, which is the engine's answer;
+// resolving it as unset would be the same mint. That read has no error to
+// return either, so a failed one PANICS: the run stops where it is, as it would
+// on a vendor's own failure part way through, rather than going on to act on a
+// value it does not have.
 type storedValues struct {
 	// mu guards values and held: a provisioner may read from more than one
 	// goroutine, and a read is a request the lock holds across.
