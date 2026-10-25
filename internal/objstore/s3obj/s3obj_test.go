@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"testing/iotest"
@@ -327,6 +328,104 @@ func TestAFailedUploadIsAbandoned(t *testing.T) {
 	if held := s3obj.SparesHeld(b); held != 0 {
 		t.Fatalf("failed uploads kept %d of the node's spare part buffers", held)
 	}
+}
+
+// A WRITE THE PROVIDER HAS NO ROOM FOR IS REFUSED AS FULL: a bucket whose
+// provider refuses a write for want of room — MinIO's drives at their floor or
+// its bucket quota spent, Ceph's gateway out of space or past a quota, any
+// gateway's 507 — refuses the same write the same way until an operator makes
+// room, so the put is answered as the store having none ([objstore.Full], over
+// [objstore.ErrFull]), naming the provider's room ([s3obj.FullRemedy]) — on
+// the PutObject, on a part, on the completion and on the upload's start alike
+// — asked once, storing nothing and leaving no upload open. A refusal that is
+// no want of room stays what it was.
+//
+// Mutation: drop Put's classification and every case fails; drop a code from
+// fullCodes and its case fails; read only the status and the 400 and 403 cases
+// fail.
+func TestAWriteTheProviderHasNoRoomForIsRefusedAsFull(t *testing.T) {
+	t.Parallel()
+	small, large := bytes.Repeat([]byte{7}, part/2), bytes.Repeat([]byte{7}, 3*part)
+	for _, c := range []struct {
+		name   string
+		body   []byte
+		refuse func(srv *s3fake.Server)
+		code   string
+		// asked is the operation the refusal answers, asked only once.
+		asked string
+	}{
+		{"MinIO's drives at their floor", small, func(srv *s3fake.Server) {
+			srv.Fill(http.StatusInsufficientStorage, "XMinioStorageFull")
+		}, "XMinioStorageFull", "PutObject"},
+		{"MinIO's bucket quota", small, func(srv *s3fake.Server) {
+			srv.Fill(http.StatusBadRequest, "XMinioAdminBucketQuotaExceeded")
+		}, "XMinioAdminBucketQuotaExceeded", "PutObject"},
+		{"Ceph out of space", small, func(srv *s3fake.Server) {
+			srv.Fill(http.StatusInsufficientStorage, "InsufficientCapacity")
+		}, "InsufficientCapacity", "PutObject"},
+		{"Ceph's quota", small, func(srv *s3fake.Server) {
+			srv.Fill(http.StatusForbidden, "QuotaExceeded")
+		}, "QuotaExceeded", "PutObject"},
+		{"a gateway's 507 by any code", small, func(srv *s3fake.Server) {
+			srv.Fill(http.StatusInsufficientStorage, "NoSpaceLeft")
+		}, "NoSpaceLeft", "PutObject"},
+		{"a part", large, func(srv *s3fake.Server) {
+			srv.Fill(http.StatusInsufficientStorage, "XMinioStorageFull")
+		}, "XMinioStorageFull", ""},
+		{"the completion", large, func(srv *s3fake.Server) {
+			var landed sync.WaitGroup
+			landed.Add(3)
+			srv.PartHook = func(int32) { landed.Done() }
+			go func() {
+				landed.Wait()
+				srv.Fill(http.StatusInsufficientStorage, "XMinioStorageFull")
+			}()
+		}, "XMinioStorageFull", "CompleteMultipartUpload"},
+		{"the upload's start", large, func(srv *s3fake.Server) {
+			srv.FailNext(1, http.StatusInsufficientStorage, "XMinioStorageFull")
+		}, "XMinioStorageFull", "CreateMultipartUpload"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			srv := s3fake.Start(t, "files")
+			b := open(t, srv, "")
+			// THE PROBE'S OWN REQUESTS AT OPEN are not the put's.
+			before := srv.RequestsOf(c.asked)
+			c.refuse(srv)
+			err := b.Put(t.Context(), "refused", bytes.NewReader(c.body), objstore.PutMeta{})
+			full, ok := errors.AsType[*objstore.Full](err)
+			switch {
+			case !ok || !errors.Is(err, objstore.ErrFull):
+				t.Fatalf("a write the provider had no room for answered %v, want an objstore.Full over ErrFull",
+					err)
+			case full.Remedy != s3obj.FullRemedy:
+				t.Errorf("the refusal named the room %q, want the provider's, %q", full.Remedy, s3obj.FullRemedy)
+			case !strings.Contains(full.Err.Error(), c.code):
+				t.Errorf("the refusal kept %q, which does not carry the provider's own answer %s", full.Err, c.code)
+			}
+			if c.asked != "" {
+				if n := srv.RequestsOf(c.asked) - before; n != 1 {
+					t.Errorf("the refused %s was asked %d times, want once: no wait makes room", c.asked, n)
+				}
+			}
+			if keys := srv.Keys(); len(keys) != 0 {
+				t.Errorf("a write the provider had no room for stored %v", keys)
+			}
+			if open := srv.Uploads(); len(open) != 0 {
+				t.Errorf("a write the provider had no room for left its upload open: %v", open)
+			}
+		})
+	}
+	t.Run("a refusal that is no want of room", func(t *testing.T) {
+		t.Parallel()
+		srv := s3fake.Start(t, "files")
+		b := open(t, srv, "")
+		srv.Fill(http.StatusForbidden, "AccessDenied")
+		err := b.Put(t.Context(), "refused", bytes.NewReader(small), objstore.PutMeta{})
+		if err == nil || errors.Is(err, objstore.ErrFull) {
+			t.Fatalf("a put refused AccessDenied answered %v, want a failure that is no full store", err)
+		}
+	})
 }
 
 // A PART IS GIVEN ITS SHARE OF THE LINK. An upload's parts in flight cross ONE

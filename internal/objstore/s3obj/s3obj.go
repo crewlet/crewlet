@@ -222,6 +222,18 @@
 // minute after its first failure or its deadline, whichever is first
 // ([newRetryer]).
 //
+// # A bucket with no room is full, never failing
+//
+// Amazon S3 holds whatever it is sent; a self-hosted gateway does not. MinIO
+// at its drives' free-space floor, or past a bucket's quota, and Ceph's
+// gateway out of space or past a quota refuse a write for want of room
+// ([fullCodes], any `507`), and refuse the same write the same way until an
+// operator makes room. So [Backend.Put] answers such a refusal — on the put,
+// a part, the completion or the upload's start — as the store having none
+// ([objstore.Full]), naming the provider's room ([FullRemedy]); read as the
+// bucket failing, every surface invited the retry, and a client or a script
+// honouring a Retry-After sent the same bytes into the same bucket again.
+//
 // # What it counts
 //
 // Into the node's recorder ([Config.Metrics]), by S3 `operation` — the API's
@@ -789,7 +801,35 @@ func open(ctx context.Context, cfg Config, backoff retry.BackoffDelayer, c clock
 func (b *Backend) key(name string) string { return b.prefix + name }
 
 // Put implements [objstore.Backend].
+//
+// A WRITE THE PROVIDER REFUSES FOR ROOM ([noRoom]) — the PutObject, any part
+// of a multipart upload, or its completion, the upload abandoned as for every
+// failure — is answered as the store having none ([objstore.Full]), naming the
+// room this bucket needs ([FullRemedy]): never as the bucket failing, which
+// every surface answers with "try again", into a bucket that refuses the same
+// write the same way until an operator makes room.
 func (b *Backend) Put(ctx context.Context, name string, r io.Reader, m objstore.PutMeta) error {
+	err := b.put(ctx, name, r, m)
+	if noRoom(err) {
+		return &objstore.Full{Remedy: FullRemedy, Err: err}
+	}
+	return err
+}
+
+// FullRemedy is the room a bucket its provider refused a write for room needs
+// ([objstore.Full.Remedy]), made on the provider's side — space on the storage
+// it keeps the bucket on, or a quota it holds the bucket to — or by the
+// collector, removing what nothing names.
+//
+// THE PROVIDER'S ROOM, NEVER THE NATS BUCKET'S: moving the files to a bucket,
+// or raising a broker's reservation, are nothing an operator already on a
+// bucket can do, and told them, one would migrate to the store that refused.
+const FullRemedy = "an operator makes room in the bucket — frees space on the storage its " +
+	"provider keeps it on, or raises the quota the provider holds it to — or lets the " +
+	"collector remove what nothing names"
+
+// put stores one object, from a body of any length ([Backend.Put]).
+func (b *Backend) put(ctx context.Context, name string, r io.Reader, m objstore.PutMeta) error {
 	r = objstore.ContextReader(ctx, r)
 	buf := b.parts.Get().(*[]byte)
 	n, end, err := objstore.Fill(r, *buf)
@@ -1477,6 +1517,48 @@ func missing(err error) bool {
 	switch api.ErrorCode() {
 	case "NoSuchKey", "NotFound", "NoSuchUpload":
 		return true
+	}
+	return false
+}
+
+// fullCodes is every error code an S3-compatible provider refuses a write
+// with for want of room, read from each provider's own source: MinIO's
+// `XMinioStorageFull` (507, its drives at their free-space floor) and
+// `XMinioAdminBucketQuotaExceeded` (400, the bucket's quota spent;
+// cmd/api-errors.go), and Ceph's gateway's `InsufficientCapacity` (507,
+// ENOSPC or EDQUOT) and `QuotaExceeded` (403, a user's or a bucket's quota;
+// src/rgw/rgw_common.cc). Amazon S3 itself has none: a bucket there holds
+// whatever it is sent.
+//
+// BY CODE AS WELL AS BY STATUS, because two of them come as a 400 and a 403,
+// which name a hundred other refusals; and a code a gateway answers under
+// another status is still the provider saying it has no room.
+var fullCodes = map[string]struct{}{
+	"XMinioStorageFull":              {},
+	"XMinioAdminBucketQuotaExceeded": {},
+	"InsufficientCapacity":           {},
+	"QuotaExceeded":                  {},
+}
+
+// noRoom reports a write the bucket's provider refused for room: any `507
+// Insufficient Storage` — HTTP's own status for a server that cannot store
+// what a request needs, whatever code a gateway names beside it — or one of
+// [fullCodes].
+//
+// NEVER ASKED AGAIN, by the SDK's own rules: it retries a 500, 502, 503 or
+// 504, its throttle codes and a failure to send, and none of these is one —
+// so a full bucket is answered once, and the store's caller is told so at the
+// first refusal rather than a minute of them later.
+func noRoom(err error) bool {
+	if err == nil {
+		return false
+	}
+	if status(err) == http.StatusInsufficientStorage {
+		return true
+	}
+	if api, ok := errors.AsType[smithy.APIError](err); ok {
+		_, full := fullCodes[api.ErrorCode()]
+		return full
 	}
 	return false
 }

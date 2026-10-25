@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactupload/lint"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/objstore/s3obj"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -296,43 +297,66 @@ func TestARefusedPublishLeavesNothingBehind(t *testing.T) {
 // `store_full` — never a failure a client retries at once. Nothing was stored,
 // so the file's claim is given back and the same file transfers on the same
 // upload once room is made. The store's own words name its bucket and stay
-// out of the sentence.
+// out of the sentence. Over the fleet's own bucket's twin, and over S3 whose
+// provider has no room (MinIO's drives at their floor), through the
+// production backend.
 //
 // Mutation: answer ErrFull as any other failed put (transfer.go's case
-// removed) and this fails on the refusal, its reason and its sentence.
+// removed) and this fails on the refusal, its reason and its sentence; drop
+// s3obj's classification and the s3fake arm fails.
 func TestATransferTheStoreHasNoRoomForIsRefusedAsFull(t *testing.T) {
 	t.Parallel()
-	h := newHarness(t, options{fillable: true})
-	c := h.person("ada", h.opKey("upload"))
-	files := map[string]string{"index.html": "<p>no room</p>"}
-	intent, err := h.svc.Intend(t.Context(), c, artifacts.ID{}, declare(files))
-	if err != nil {
-		t.Fatal(err)
+	for _, arm := range fullArms {
+		t.Run(arm.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t, arm.o)
+			c := h.person("ada", h.opKey("upload"))
+			files := map[string]string{"index.html": "<p>no room</p>"}
+			intent, err := h.svc.Intend(t.Context(), c, artifacts.ID{}, declare(files))
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.fill(true)
+			err = h.svc.Transfer(t.Context(), c, intent.Upload, "index.html",
+				strings.NewReader(files["index.html"]), int64(len(files["index.html"])))
+			var full *artifactupload.StoreFull
+			switch {
+			case !errors.As(err, &full) || full.Path != "index.html" || !errors.Is(err, objstore.ErrFull):
+				t.Fatalf("a transfer the store had no room for answered %v, want StoreFull of index.html "+
+					"over ErrFull", err)
+			case full.Remedy != arm.remedy || !strings.Contains(err.Error(), arm.remedy):
+				t.Errorf("the refusal %q (remedy %q) does not name the store's room %q", err, full.Remedy,
+					arm.remedy)
+			case strings.Contains(err.Error(), arm.said):
+				t.Errorf("the store's own words reached the refusal's sentence: %q", err)
+			}
+			if got := h.meter.count(metrics.ArtifactsPublishRefusals,
+				metrics.Attrs{"reason": "store_full"}); got != 1 {
+				t.Errorf("the refusal was counted %d times as store_full, want once", got)
+			}
+			if stored := h.stored(); len(stored) != 0 {
+				t.Errorf("a transfer the store had no room for left %v", stored)
+			}
+			h.fill(false)
+			if err := h.svc.Transfer(t.Context(), c, intent.Upload, "index.html",
+				strings.NewReader(files["index.html"]), int64(len(files["index.html"]))); err != nil {
+				t.Fatalf("the same file, sent again once room was made, answered %v", err)
+			}
+		})
 	}
-	h.fill(true)
-	err = h.svc.Transfer(t.Context(), c, intent.Upload, "index.html", strings.NewReader(files["index.html"]),
-		int64(len(files["index.html"])))
-	var full *artifactupload.StoreFull
-	switch {
-	case !errors.As(err, &full) || full.Path != "index.html" || !errors.Is(err, objstore.ErrFull):
-		t.Fatalf("a transfer the store had no room for answered %v, want StoreFull of index.html over ErrFull",
-			err)
-	case full.Remedy != caseRemedy || !strings.Contains(err.Error(), caseRemedy):
-		t.Errorf("the refusal %q (remedy %q) does not name the store's room %q", err, full.Remedy, caseRemedy)
-	case strings.Contains(err.Error(), "OBJ_crewlet_files"):
-		t.Errorf("the store's own words reached the refusal's sentence: %q", err)
-	}
-	if got := h.meter.count(metrics.ArtifactsPublishRefusals, metrics.Attrs{"reason": "store_full"}); got != 1 {
-		t.Errorf("the refusal was counted %d times as store_full, want once", got)
-	}
-	if stored := h.stored(); len(stored) != 0 {
-		t.Errorf("a transfer the store had no room for left %v", stored)
-	}
-	h.fill(false)
-	if err := h.svc.Transfer(t.Context(), c, intent.Upload, "index.html",
-		strings.NewReader(files["index.html"]), int64(len(files["index.html"]))); err != nil {
-		t.Fatalf("the same file, sent again once room was made, answered %v", err)
-	}
+}
+
+// fullArms is every store a full-store case runs over: the fleet's own
+// bucket's twin, naming a room of the case's own, and S3 through the
+// production backend, naming the provider's — each with words of its own that
+// no sentence may carry.
+var fullArms = []struct {
+	name         string
+	o            options
+	remedy, said string
+}{
+	{"the nats twin", options{fillable: true}, caseRemedy, "OBJ_crewlet_files"},
+	{"s3fake", options{s3: true}, s3obj.FullRemedy, "XMinioStorageFull"},
 }
 
 // A PUBLISH THE STORE HAS NO ROOM FOR IS REFUSED AS FULL, AND GIVES BACK WHAT
@@ -342,37 +366,50 @@ func TestATransferTheStoreHasNoRoomForIsRefusedAsFull(t *testing.T) {
 // refusal does, rather than hold them for a retry that would meet the same
 // full bucket. Counted `store_full`, and the same publish lands once room is
 // made. (Judged a bad publish_success event, the deployment's refusal and
-// never the client's: TestEveryPublishIsOneObjectiveEvent.)
+// never the client's: TestEveryPublishIsOneObjectiveEvent.) Over the fleet's
+// own bucket's twin, and over S3 whose provider has no room.
 //
 // Mutation: answer ErrFull as any other failed put (stage.go's case removed)
-// and this fails on the refusal, its reason and the bytes still held.
+// and this fails on the refusal, its reason and the bytes still held; drop
+// s3obj's classification and the s3fake arm fails.
 func TestAPublishTheStoreHasNoRoomForIsRefusedAsFull(t *testing.T) {
 	t.Parallel()
-	h := newHarness(t, options{fillable: true, noVendor: true})
-	created := h.create(h.person("ada", h.opKey("create")), map[string]string{"index.html": "<p>v1</p>"})
-	h.fill(true)
-	req := artifactupload.PublishRequest{Artifact: created.Artifact, Base: 1, Mode: manifest.ModePatch,
-		Files: []artifactupload.FileSpec{{Path: "notes.txt", Inline: []byte("no room for these notes")}}}
-	_, _, err := h.svc.Publish(t.Context(), h.person("ada", h.opKey("full")), req)
-	var full *artifactupload.StoreFull
-	if !errors.As(err, &full) || full.Path != "notes.txt" || !errors.Is(err, objstore.ErrFull) {
-		t.Fatalf("a publish the store had no room for answered %v, want StoreFull of notes.txt over ErrFull", err)
-	}
-	if full.Remedy != caseRemedy || !strings.Contains(err.Error(), caseRemedy) {
-		t.Errorf("the refusal %q (remedy %q) does not name the store's room %q", err, full.Remedy, caseRemedy)
-	}
-	if got := h.meter.count(metrics.ArtifactsPublishRefusals, metrics.Attrs{"reason": "store_full"}); got != 1 {
-		t.Errorf("the refusal was counted %d times as store_full, want once", got)
-	}
-	if held := h.held(); held != 0 {
-		t.Errorf("the reservations hold %d bytes after the refusal, want the publish's given back", held)
-	}
-	if unnamed := h.unnamedBytes(); unnamed != 0 {
-		t.Errorf("the refused publish left %d bytes no row names", unnamed)
-	}
-	h.fill(false)
-	if _, _, err := h.svc.Publish(t.Context(), h.person("ada", h.opKey("room")), req); err != nil {
-		t.Fatalf("the same publish, once room was made, answered %v", err)
+	for _, arm := range fullArms {
+		t.Run(arm.name, func(t *testing.T) {
+			t.Parallel()
+			o := arm.o
+			o.noVendor = true
+			h := newHarness(t, o)
+			created := h.create(h.person("ada", h.opKey("create")), map[string]string{"index.html": "<p>v1</p>"})
+			h.fill(true)
+			req := artifactupload.PublishRequest{Artifact: created.Artifact, Base: 1, Mode: manifest.ModePatch,
+				Files: []artifactupload.FileSpec{{Path: "notes.txt", Inline: []byte("no room for these notes")}}}
+			_, _, err := h.svc.Publish(t.Context(), h.person("ada", h.opKey("full")), req)
+			var full *artifactupload.StoreFull
+			if !errors.As(err, &full) || full.Path != "notes.txt" || !errors.Is(err, objstore.ErrFull) {
+				t.Fatalf("a publish the store had no room for answered %v, want StoreFull of notes.txt over "+
+					"ErrFull", err)
+			}
+			if full.Remedy != arm.remedy || !strings.Contains(err.Error(), arm.remedy) ||
+				strings.Contains(err.Error(), arm.said) {
+				t.Errorf("the refusal %q (remedy %q) does not name the store's room %q alone", err,
+					full.Remedy, arm.remedy)
+			}
+			if got := h.meter.count(metrics.ArtifactsPublishRefusals,
+				metrics.Attrs{"reason": "store_full"}); got != 1 {
+				t.Errorf("the refusal was counted %d times as store_full, want once", got)
+			}
+			if held := h.held(); held != 0 {
+				t.Errorf("the reservations hold %d bytes after the refusal, want the publish's given back", held)
+			}
+			if unnamed := h.unnamedBytes(); unnamed != 0 {
+				t.Errorf("the refused publish left %d bytes no row names", unnamed)
+			}
+			h.fill(false)
+			if _, _, err := h.svc.Publish(t.Context(), h.person("ada", h.opKey("room")), req); err != nil {
+				t.Fatalf("the same publish, once room was made, answered %v", err)
+			}
+		})
 	}
 }
 

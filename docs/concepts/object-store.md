@@ -323,7 +323,9 @@ store:
 Each object is one S3 object, `<prefix>files/<key>`. Any S3-compatible store
 works — Amazon S3, Cloudflare R2, MinIO, Ceph's gateway, GCS through its
 interoperability endpoint. The bucket keeps whatever copies its provider
-promises, and its size is the provider's problem rather than any node's disk.
+promises, and its size is the provider's problem rather than any node's disk —
+up to the point the provider has no room left, when a write is refused as full
+(below).
 
 - **An upload of up to 8 MiB is one `PutObject`; a larger one is a multipart
   upload** of equal 8 MiB parts, up to four of them in flight at once while the
@@ -415,6 +417,22 @@ promises, and its size is the provider's problem rather than any node's disk.
   [Writing and reading](#writing-and-reading)). The node speaks HTTP/1.1 to
   the bucket, the protocol S3's API is defined over, so each request has a
   connection of its own to watch.
+- **A bucket its provider has no room in refuses the upload as full**, as the
+  fleet's own bucket at its [reservation](#its-byte-reservation) does. Amazon
+  S3 holds whatever it is sent, but a self-hosted gateway refuses a write for
+  want of room — MinIO at its drives' free-space floor (`507
+  XMinioStorageFull`) or past a bucket quota (`400
+  XMinioAdminBucketQuotaExceeded`), Ceph's gateway out of space (`507
+  InsufficientCapacity`) or past a quota (`403 QuotaExceeded`), any gateway's
+  `507` — on a `PutObject`, a part or an upload's completion, and refuses the
+  same write the same way until room is made. So it is sent once, never asked
+  again, the unfinished upload is abandoned, and it is answered with the same
+  refusal the full NATS bucket gets — a push `store_full`, a project file's
+  write and an artifact's file `507` — naming the provider's room: free space
+  on the storage the provider keeps the bucket on, raise the quota it holds the
+  bucket to, or let the collector remove what nothing names. Never a failure to
+  try again, which sent a client, or a script honouring a `Retry-After`, to
+  upload the same bytes into a bucket that refused them.
 - **A throttle slows the node down rather than failing its requests.** One
   client on each node carries every upload, download, git sync, collection and
   backup copy, and the moment the bucket answers one of them with a throttle —

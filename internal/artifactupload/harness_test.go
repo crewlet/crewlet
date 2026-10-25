@@ -27,6 +27,8 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
+	"github.com/crewlet/crewlet/internal/objstore/s3obj"
+	"github.com/crewlet/crewlet/internal/objstore/s3obj/s3fake"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -107,9 +109,11 @@ func attrString(attrs metrics.Attrs) string {
 
 // harness is one node: the pipeline over its stores and a domain of its own.
 type harness struct {
-	t       *testing.T
-	clock   *clock
-	backend *memobj.Backend
+	t     *testing.T
+	clock *clock
+	// backend is what the store writes through, which [harness.stored]
+	// lists.
+	backend objstore.Backend
 	objects *objstore.Store
 	fleet   *memory.Fleet
 	domain  *domainNode
@@ -120,6 +124,9 @@ type harness struct {
 
 	// fillable is the backend a fillable harness fills, nil otherwise.
 	fillable *fillableBackend
+	// bucket is the in-process S3 bucket an s3 harness's store writes to,
+	// which [harness.fill] fills; nil otherwise.
+	bucket *s3fake.Server
 
 	mu     sync.Mutex
 	limits artifacts.Limits
@@ -136,6 +143,11 @@ type options struct {
 	// fillable makes the object store's backend one a case fills
 	// ([harness.fill]).
 	fillable bool
+
+	// s3 makes the object store S3, through the production backend over an
+	// in-process bucket a case fills ([harness.fill]) as a provider with no
+	// room refuses writes.
+	s3 bool
 }
 
 func newHarness(t *testing.T, o options) *harness {
@@ -143,16 +155,26 @@ func newHarness(t *testing.T, o options) *harness {
 	h := &harness{t: t, clock: &clock{t: start}, fleet: memory.NewFleet(),
 		meter:  &meter{counts: map[string]uint64{}, gauges: map[string]float64{}},
 		judged: &judged{}, limits: defaultLimits()}
-	h.backend = memobj.NewAt(h.clock.Now)
-	var backend objstore.Backend = h.backend
+	mem := memobj.NewAt(h.clock.Now)
+	h.backend = mem
 	switch {
 	case o.presign:
-		backend = &signingBackend{Backend: h.backend}
+		h.backend = &signingBackend{Backend: mem}
 	case o.fillable:
-		h.fillable = &fillableBackend{Backend: h.backend}
-		backend = h.fillable
+		h.fillable = &fillableBackend{Backend: mem}
+		h.backend = h.fillable
+	case o.s3:
+		h.bucket = s3fake.Start(t, "files")
+		b, err := s3obj.Open(t.Context(), s3obj.Config{
+			Endpoint: h.bucket.URL, Region: "us-east-1", Bucket: "files", PathStyle: true,
+			AccessKeyID: "AKIAEXAMPLE", SecretAccessKey: "example-secret",
+		})
+		if err != nil {
+			t.Fatalf("opening the S3 fake: %v", err)
+		}
+		h.backend = b
 	}
-	store, err := objstore.NewStoreAt(backend, h.clock.Now)
+	store, err := objstore.NewStoreAt(h.backend, h.clock.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,13 +230,21 @@ func defaultLimits() artifacts.Limits {
 	}
 }
 
-// fill makes a fillable harness's bucket full, or makes room in it again.
+// fill makes a fillable or an s3 harness's bucket full, or makes room in it
+// again: an s3 bucket refuses every write `507 XMinioStorageFull`, as MinIO
+// does at its drives' free-space floor.
 func (h *harness) fill(full bool) {
 	h.t.Helper()
-	if h.fillable == nil {
+	switch {
+	case h.fillable != nil:
+		h.fillable.full.Store(full)
+	case h.bucket != nil && full:
+		h.bucket.Fill(http.StatusInsufficientStorage, "XMinioStorageFull")
+	case h.bucket != nil:
+		h.bucket.Fill(0, "")
+	default:
 		h.t.Fatal("fill on a harness whose store is not fillable")
 	}
-	h.fillable.full.Store(full)
 }
 
 // setLimits changes the quotas the pipeline and its calls are held to.

@@ -50,8 +50,10 @@ var ErrNoDeadline = errors.New("objstore: a read must carry a deadline")
 
 // ErrFull is a put the backend refused because the store has no room for it:
 // the fleet's own bucket (natsobj) holds as many bytes as it was created to
-// reserve, and refuses a new object rather than discard an old one. Nothing is
-// stored, as for every failed put ([Backend.Put]).
+// reserve, and refuses a new object rather than discard an old one; or an
+// S3-compatible bucket's provider refuses the write for want of room — its
+// drives at their floor, a quota spent (s3obj). Nothing is stored, as for
+// every failed put ([Backend.Put]).
 //
 // A SENTINEL rather than the backend's own text, because the caller's answer
 // is specific: the upload is refused for room the deployment has to make, never

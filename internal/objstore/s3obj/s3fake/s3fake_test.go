@@ -543,6 +543,82 @@ func TestTheNextRequestsAreRefusedAndTheRestAnswered(t *testing.T) {
 	}
 }
 
+// A FULL BUCKET REFUSES EVERY WRITE AND SERVES THE REST, as a provider with no
+// room does: once [s3fake.Server.Fill] is called, a put, a part and a
+// completion are answered the S3 error named and store nothing, while a read,
+// an upload's start, an abandonment and a deletion are answered as ever — the
+// deletions an operator frees room with among them — and a status of zero
+// makes room again.
+//
+// Mutation: refuse every request while full, or route a completion past the
+// refusal, and this fails.
+func TestAFullBucketRefusesEveryWriteAndServesTheRest(t *testing.T) {
+	t.Parallel()
+	srv := s3fake.Start(t, "files")
+	do := func(method, path, body string) (int, string) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), method, srv.URL+"/files/"+path,
+			strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", method, path, err)
+		}
+		defer resp.Body.Close()
+		answer, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.StatusCode, string(answer)
+	}
+	srv.Put("kept", []byte("before"))
+	id := srv.Begin("big")
+	if status, _ := do(http.MethodPut, "big?partNumber=1&uploadId="+id, "part one"); status != http.StatusOK {
+		t.Fatalf("a part sent with room answered %d, want 200", status)
+	}
+
+	srv.Fill(http.StatusInsufficientStorage, "XMinioStorageFull")
+	for _, w := range []struct{ what, method, path, body string }{
+		{"a put", http.MethodPut, "new", "refused"},
+		{"a part", http.MethodPut, "big?partNumber=2&uploadId=" + id, "part two"},
+		{"a completion", http.MethodPost, "big?uploadId=" + id,
+			"<CompleteMultipartUpload><Part><PartNumber>1</PartNumber></Part></CompleteMultipartUpload>"},
+	} {
+		if status, answer := do(w.method, w.path, w.body); status != http.StatusInsufficientStorage ||
+			!strings.Contains(answer, "<Code>XMinioStorageFull</Code>") {
+			t.Errorf("%s on a full bucket answered %d %q, want 507 XMinioStorageFull", w.what, status, answer)
+		}
+	}
+	if keys := srv.Keys(); !slices.Equal(keys, []string{"kept"}) {
+		t.Errorf("a full bucket holds %q, want only what it held before", keys)
+	}
+	if parts := srv.Parts("big"); parts != 0 {
+		t.Errorf("a refused completion assembled %d parts", parts)
+	}
+	if status, answer := do(http.MethodGet, "kept", ""); status != http.StatusOK || answer != "before" {
+		t.Errorf("a read of a full bucket answered %d %q, want 200 \"before\"", status, answer)
+	}
+	if status, _ := do(http.MethodPost, "other?uploads", ""); status != http.StatusOK {
+		t.Errorf("an upload's start on a full bucket answered %d, want 200: it stores nothing", status)
+	}
+	if status, _ := do(http.MethodDelete, "big?uploadId="+id, ""); status != http.StatusNoContent {
+		t.Errorf("an abandonment on a full bucket answered %d, want 204", status)
+	}
+	if status, _ := do(http.MethodDelete, "kept", ""); status != http.StatusNoContent {
+		t.Errorf("a deletion on a full bucket answered %d, want 204", status)
+	}
+
+	srv.Fill(0, "")
+	if status, _ := do(http.MethodPut, "new", "stored"); status != http.StatusOK {
+		t.Fatalf("a put once room was made answered %d, want 200", status)
+	}
+	if keys := srv.Keys(); !slices.Equal(keys, []string{"new"}) {
+		t.Errorf("the bucket holds %q once room was made, want the put's key", keys)
+	}
+}
+
 // A PART IS REFUSED AS ASKED, ONCE ITS HOOK LETS IT GO: every upload of the
 // part [s3fake.Server.FailPart] names is answered the S3 error named, a part of
 // another number as ever — and [s3fake.Server.PartHook] runs with the part's

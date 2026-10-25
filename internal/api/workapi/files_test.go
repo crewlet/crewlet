@@ -26,6 +26,8 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
+	"github.com/crewlet/crewlet/internal/objstore/s3obj"
+	"github.com/crewlet/crewlet/internal/objstore/s3obj/s3fake"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -551,47 +553,82 @@ func (fullBucket) Put(_ context.Context, name string, r io.Reader, _ objstore.Pu
 		"natsobj: put %s: OBJ_crewlet_files holds as many bytes as it reserves", name)}
 }
 
+// fullS3 is an S3 bucket whose provider has no room left — MinIO's drives at
+// their floor — through the production backend: every write is refused `507
+// XMinioStorageFull`.
+func fullS3(t *testing.T) objstore.Backend {
+	t.Helper()
+	srv := s3fake.Start(t, "files")
+	b, err := s3obj.Open(t.Context(), s3obj.Config{
+		Endpoint: srv.URL, Region: "us-east-1", Bucket: "files", PathStyle: true,
+		AccessKeyID: "AKIAEXAMPLE", SecretAccessKey: "example-secret",
+	})
+	if err != nil {
+		t.Fatalf("opening the S3 fake: %v", err)
+	}
+	srv.Fill(http.StatusInsufficientStorage, "XMinioStorageFull")
+	return b
+}
+
 // AN UPLOAD THE OBJECT STORE HAS NO ROOM FOR IS `507 store_full`, NAMING THE
 // ROOM AN OPERATOR MAKES: the store refuses the same upload the same way until
 // then, so the answer is HTTP's own status for a server that cannot store what
 // a request needs, with no Retry-After — never the 503 that asked a client to
 // send the same gibibyte again in two seconds. Nothing is recorded, and the
-// store's own words, naming its bucket, stay in the node's log.
+// store's own words, naming its bucket, stay in the node's log. Over the
+// fleet's own bucket's twin, and over S3 whose provider has no room.
 //
 // Mutation: answer the full store through the catch-all (503 unavailable) and
 // this fails on the status, the code and the Retry-After; splice a room of the
-// route's own and it fails on the hint.
+// route's own and it fails on the hint; drop s3obj's classification and the
+// s3fake arm fails.
 func TestAnUploadTheStoreHasNoRoomForIsRefusedAsFull(t *testing.T) {
 	t.Parallel()
-	fake := newFakeFiles(t)
-	store, err := objstore.NewStore(fullBucket{fake.backend})
-	if err != nil {
-		t.Fatal(err)
-	}
-	fake.store = store
-	s := filesSurface(t, fake, chart{})
-	rec := httptest.NewRecorder()
-	s.upload(bytes.NewReader([]byte("no room")), rec)
+	for _, arm := range []struct {
+		name    string
+		backend func(t *testing.T, fake *fakeFiles) objstore.Backend
+		// remedy is the room the store names, and said its own words.
+		remedy, said string
+	}{
+		{"the nats twin", func(_ *testing.T, fake *fakeFiles) objstore.Backend {
+			return fullBucket{fake.backend}
+		}, caseRemedy, "OBJ_crewlet_files"},
+		{"s3fake", func(t *testing.T, _ *fakeFiles) objstore.Backend { return fullS3(t) },
+			s3obj.FullRemedy, "XMinioStorageFull"},
+	} {
+		t.Run(arm.name, func(t *testing.T) {
+			t.Parallel()
+			fake := newFakeFiles(t)
+			store, err := objstore.NewStore(arm.backend(t, fake))
+			if err != nil {
+				t.Fatal(err)
+			}
+			fake.store = store
+			s := filesSurface(t, fake, chart{})
+			rec := httptest.NewRecorder()
+			s.upload(bytes.NewReader([]byte("no room")), rec)
 
-	answer := answerOf(t, rec)
-	hint, _ := answer["hint"].(string)
-	switch {
-	case rec.Code != http.StatusInsufficientStorage || answer["error"] != string(httpjson.CodeStoreFull):
-		t.Fatalf("an upload the store had no room for answered %d: %s, want 507 store_full",
-			rec.Code, rec.Body.String())
-	case rec.Header().Get("Retry-After") != "":
-		t.Errorf("an upload the store had no room for asked its client back in %s seconds",
-			rec.Header().Get("Retry-After"))
-	case !strings.Contains(hint, caseRemedy):
-		t.Errorf("an upload the store had no room for answered the hint %q, which does not name %q",
-			hint, caseRemedy)
-	case strings.Contains(rec.Body.String(), "OBJ_crewlet_files"):
-		t.Errorf("the object store's own words reached the client: %s", rec.Body.String())
-	}
-	fake.mu.Lock()
-	defer fake.mu.Unlock()
-	if len(fake.puts) != 0 {
-		t.Errorf("a file was recorded whose content the store had no room for")
+			answer := answerOf(t, rec)
+			hint, _ := answer["hint"].(string)
+			switch {
+			case rec.Code != http.StatusInsufficientStorage || answer["error"] != string(httpjson.CodeStoreFull):
+				t.Fatalf("an upload the store had no room for answered %d: %s, want 507 store_full",
+					rec.Code, rec.Body.String())
+			case rec.Header().Get("Retry-After") != "":
+				t.Errorf("an upload the store had no room for asked its client back in %s seconds",
+					rec.Header().Get("Retry-After"))
+			case !strings.Contains(hint, arm.remedy):
+				t.Errorf("an upload the store had no room for answered the hint %q, which does not name %q",
+					hint, arm.remedy)
+			case strings.Contains(rec.Body.String(), arm.said):
+				t.Errorf("the object store's own words reached the client: %s", rec.Body.String())
+			}
+			fake.mu.Lock()
+			defer fake.mu.Unlock()
+			if len(fake.puts) != 0 {
+				t.Errorf("a file was recorded whose content the store had no room for")
+			}
+		})
 	}
 }
 

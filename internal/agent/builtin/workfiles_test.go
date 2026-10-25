@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +16,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/objstore/s3obj"
+	"github.com/crewlet/crewlet/internal/objstore/s3obj/s3fake"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -432,35 +435,72 @@ func TestWritingTheSameContentAgainStoresNothing(t *testing.T) {
 // shortly", which had it upload the same bytes into the same full bucket —
 // under the class a person's surface answers 507 rather than a 503 asking it
 // back. Nothing is recorded, and the store's own words, naming its bucket,
-// stay in the node's log.
+// stay in the node's log. Over the fleet's own bucket's twin, and over the
+// store itself on S3 whose provider has no room (MinIO's drives at their
+// floor), through the production backend.
 //
 // Mutation: answer the full store through the catch-all (`unavailable`, "Try
 // again shortly") and this fails on the class and on the sentence; splice a
-// room of the tool's own and it fails on the room.
+// room of the tool's own and it fails on the room; drop s3obj's
+// classification and the s3fake arm fails.
 func TestAFileTheStoreHasNoRoomForIsRefusedAsFull(t *testing.T) {
 	t.Parallel()
-	files, objects := newFakeFiles(), newFakeObjects()
-	objects.full = true
-	reg := workRegistry(t, fileDeps(files, objects))
-	got := callWork(t, reg, tracker.WriteProjectFileTool, map[string]any{
-		"path": "report.md", "content": "no room",
-	})
-	if !got.Failed || tools.RefusalOf(got) != tools.RefusalStoreFull || !errors.Is(got.Cause, objstore.ErrFull) {
-		t.Fatalf("a write the store had no room for answered %s (refusal %q, cause %v), want store_full "+
-			"over ErrFull", got.Output, tools.RefusalOf(got), got.Cause)
-	}
-	switch out := strings.ToLower(got.Output); {
-	case !strings.Contains(got.Output, caseRemedy):
-		t.Errorf("a write the store had no room for answered %s, which does not name the store's room %q",
-			got.Output, caseRemedy)
-	case strings.Contains(out, "try again shortly") || strings.Contains(out, "make the same call again"):
-		t.Errorf("a write the store had no room for answered %s, which invites the retry the full "+
-			"store refuses the same", got.Output)
-	case strings.Contains(got.Output, "OBJ_crewlet_files"):
-		t.Errorf("the object store's own words reached the sentence: %s", got.Output)
-	}
-	if files.puts != 0 {
-		t.Errorf("a write the store had no room for recorded %d rows", files.puts)
+	for _, arm := range []struct {
+		name    string
+		objects func(t *testing.T) builtin.ObjectStore
+		// remedy is the room the store names, and said its own words.
+		remedy, said string
+	}{
+		{"the nats twin", func(*testing.T) builtin.ObjectStore {
+			objects := newFakeObjects()
+			objects.full = true
+			return objects
+		}, caseRemedy, "OBJ_crewlet_files"},
+		{"s3fake", func(t *testing.T) builtin.ObjectStore {
+			srv := s3fake.Start(t, "files")
+			b, err := s3obj.Open(t.Context(), s3obj.Config{
+				Endpoint: srv.URL, Region: "us-east-1", Bucket: "files", PathStyle: true,
+				AccessKeyID: "AKIAEXAMPLE", SecretAccessKey: "example-secret",
+			})
+			if err != nil {
+				t.Fatalf("opening the S3 fake: %v", err)
+			}
+			srv.Fill(http.StatusInsufficientStorage, "XMinioStorageFull")
+			store, err := objstore.NewStore(b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return store
+		}, s3obj.FullRemedy, "XMinioStorageFull"},
+	} {
+		t.Run(arm.name, func(t *testing.T) {
+			t.Parallel()
+			files := newFakeFiles()
+			deps := fileDeps(files, newFakeObjects())
+			deps.Objects = arm.objects(t)
+			reg := workRegistry(t, deps)
+			got := callWork(t, reg, tracker.WriteProjectFileTool, map[string]any{
+				"path": "report.md", "content": "no room",
+			})
+			if !got.Failed || tools.RefusalOf(got) != tools.RefusalStoreFull ||
+				!errors.Is(got.Cause, objstore.ErrFull) {
+				t.Fatalf("a write the store had no room for answered %s (refusal %q, cause %v), want "+
+					"store_full over ErrFull", got.Output, tools.RefusalOf(got), got.Cause)
+			}
+			switch out := strings.ToLower(got.Output); {
+			case !strings.Contains(got.Output, arm.remedy):
+				t.Errorf("a write the store had no room for answered %s, which does not name the store's "+
+					"room %q", got.Output, arm.remedy)
+			case strings.Contains(out, "try again shortly") || strings.Contains(out, "make the same call again"):
+				t.Errorf("a write the store had no room for answered %s, which invites the retry the full "+
+					"store refuses the same", got.Output)
+			case strings.Contains(got.Output, arm.said):
+				t.Errorf("the object store's own words reached the sentence: %s", got.Output)
+			}
+			if files.puts != 0 {
+				t.Errorf("a write the store had no room for recorded %d rows", files.puts)
+			}
+		})
 	}
 }
 

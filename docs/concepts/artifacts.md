@@ -195,12 +195,14 @@ collector could have deleted those objects. Only then does a byte move.
 
 One principal may hold `artifacts.limits.pending_bytes` reserved (512 MiB by
 default) and a company four times that; past it an intent is refused `429
-uploads_outstanding`, naming when the oldest reservation expires. On the
-default `nats` store, a file whose bytes the bucket has no room for — it holds
-as many bytes as it [reserves](object-store.md#its-byte-reservation) — is
-refused `507 store_full`, naming the file and the room an operator makes; a
-publish refused for it gives back what it staged and its reservation, since the
-same publish is refused the same until that room is made.
+uploads_outstanding`, naming when the oldest reservation expires. A file
+whose bytes the object store has no room for — the default `nats` bucket
+holding as many bytes as it [reserves](object-store.md#its-byte-reservation),
+or an `s3` bucket whose provider [refuses the write for
+room](object-store.md#an-s3-bucket--s3) — is refused `507 store_full`, naming
+the file and the room an operator makes; a publish refused for it gives back
+what it staged and its reservation, since the same publish is refused the same
+until that room is made.
 
 **The quotas are Tier A**, because a tenant administrator must not raise their
 own, and each record that consumes quota carries the limits it was decided

@@ -27,8 +27,10 @@
 // It REFUSES WHAT A CASE ASKS IT TO, with the S3 error the case names: the next
 // few requests whatever they are ([Server.FailNext]), or every request for a
 // span of time ([Server.FailFor]) — a bucket that throttles or fails for a
-// while and recovers — every upload of one part ([Server.FailPart]), or every
-// session a directory bucket's client asks for ([Server.RefuseSessions]). And
+// while and recovers — every upload of one part ([Server.FailPart]), every
+// session a directory bucket's client asks for ([Server.RefuseSessions]), or
+// every request that would store bytes while the bucket has no room
+// ([Server.Fill]) — a provider's drives at their floor, a quota spent. And
 // it STOPS what a case asks it to: every request of one kind taking only so
 // much of its body and then nothing, with no answer ([Server.Hang]), or
 // answering its headers and nothing after ([Server.HangAnswer]) — a bucket
@@ -246,6 +248,9 @@ type Server struct {
 	// sessionRefusal is what every CreateSession answers while its status is
 	// set ([Server.RefuseSessions]).
 	sessionRefusal refusal
+	// fullWith is what every request that would store bytes answers while
+	// its status is set ([Server.Fill]).
+	fullWith refusal
 	// held is the part [Server.HoldPart] holds, or nil.
 	held *heldPart
 	// undated is the keys whose listings leave the date out.
@@ -782,6 +787,46 @@ func (s *Server) RefuseSessions(status int, code string) {
 	s.sessionRefusal = refusal{status: status, code: code}
 }
 
+// Fill makes the bucket one with no room left: every request that would store
+// bytes — a PutObject, an UploadPart, a CompleteMultipartUpload — answers the
+// S3 error status and code, its body read first and nothing stored, while
+// every other request is answered as ever, as a provider refuses writes and
+// still serves reads, deletions and abandonments: MinIO at its drives'
+// free-space floor (`507 XMinioStorageFull`) or past a bucket's quota (`400
+// XMinioAdminBucketQuotaExceeded`), Ceph's gateway out of space (`507
+// InsufficientCapacity`) or past a quota (`403 QuotaExceeded`). A status of
+// zero makes room again.
+//
+// AN UPLOAD STARTS ON A FULL BUCKET, because its start stores nothing — so a
+// case that fills the bucket reaches the parts and the completion, and one
+// that refuses the start does so with [Server.FailNext].
+func (s *Server) Fill(status int, code string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.fullWith = refusal{status: status, code: code}
+}
+
+// refuseFull answers true, having answered the request with the refusal, for a
+// request op that would store bytes on a bucket [Server.Fill] filled — its
+// body read first, so the client hears the refusal rather than a connection
+// closed under a body it was still sending.
+func (s *Server) refuseFull(w http.ResponseWriter, r *http.Request, op string) bool {
+	switch op {
+	case "PutObject", "UploadPart", "CompleteMultipartUpload":
+	default:
+		return false
+	}
+	s.mu.Lock()
+	with := s.fullWith
+	s.mu.Unlock()
+	if with.status == 0 {
+		return false
+	}
+	_, _ = io.Copy(io.Discard, r.Body)
+	s.fail(w, r, with.status, with.code)
+	return true
+}
+
 // refuseNext answers true, having answered the request with the refusal, for a
 // request [Server.FailFor] or [Server.FailNext] still refuses.
 //
@@ -869,6 +914,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.denied(key, q) {
 		s.fail(w, r, http.StatusForbidden, "AccessDenied")
+		return
+	}
+	if s.refuseFull(w, r, op) {
 		return
 	}
 	switch {
