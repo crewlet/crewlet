@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // WHERE AN ASKER MAY PROMISE TO REPORT A DECISION is the chart's, read from the
@@ -47,7 +47,7 @@ units:
         handle: ops
 `))
 	directory := liveChannels{engine: e}
-	if got := directory.ChatSurfaces("dev"); !slices.Equal(got, []tracker.InformSurface{tracker.InformSlack}) {
+	if got := directory.ChatSurfaces("dev"); !slices.Equal(got, []worklet.InformSurface{worklet.InformSlack}) {
 		t.Errorf("dev can post on %v, want slack alone — Mattermost is switched "+
 			"off for the company, so dev's bot there is started by nothing", got)
 	}

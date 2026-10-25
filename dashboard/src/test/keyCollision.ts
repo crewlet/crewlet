@@ -25,8 +25,8 @@ export const CLAIMANT_TITLE = "The claimant";
 export const DUPLICATE_TITLE = "The duplicate";
 
 /** The route each one's page is at: the claimant by its key, the duplicate by its id. */
-export const CLAIMANT_HREF = `#/work/${SHARED_KEY}`;
-export const DUPLICATE_HREF = `#/work/${DUPLICATE}`;
+export const CLAIMANT_HREF = `#/worklet/${SHARED_KEY}`;
+export const DUPLICATE_HREF = `#/worklet/${DUPLICATE}`;
 
 /** The two as board rows, the claimant first. */
 export function collidingRows(over: Partial<WorkSummary> = {}): [WorkSummary, WorkSummary] {

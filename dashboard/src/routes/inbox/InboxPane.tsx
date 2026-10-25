@@ -387,7 +387,7 @@ function EvidenceLink({ evidence }: { evidence: WorkDecisionEvidence }) {
       return (
         <ButtonLink
           {...look}
-          href={href(["knowledge", "pages", evidence.ref])}
+          href={href(["doclet", "pages", evidence.ref])}
           leadingIcon={<FileTextGlyph size="sm" />}
         >
           {evidence.label || "Page"}

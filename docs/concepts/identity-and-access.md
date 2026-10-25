@@ -155,13 +155,13 @@ it, and which of its three apps they **use**.
 | Permission | On the dashboard | What it is |
 |---|---|---|
 | `admin` | **Admin** | Runs the company and the engine — its configuration, its credentials, its people, its deployment and its company-wide trail. **It includes every app**, and it is host access ([below](#what-admin-runs)) |
-| `tracker` | **Tracker** | Uses the native [work tracker](../guides/work-tracker.md): reads it and writes it |
-| `knowledge` | **Knowledge** | Uses the native [knowledge base](knowledge-system.md): reads it and writes it |
+| `worklet` | **Worklet** | Uses [Worklet](../guides/worklet.md), the engine's own work tracker: reads it and writes it |
+| `doclet` | **Doclet** | Uses Doclet, the engine's own [knowledge base](knowledge-system.md): reads it and writes it |
 | `artifacts` | **Artifacts** | **Authors** artifacts: creates them, publishes their versions and shapes their data. It never gates opening one: what somebody may do on an artifact is decided by its [shares](#an-artifact-is-opened-by-its-shares) |
 
 They are stored in the `grants` field of a person's row, an invitation, a
 machine token and a Tier A token entry — the field keeps its name, and the
-dashboard calls the concept **Access**. `tracker`, `knowledge` and `artifacts`
+dashboard calls the concept **Access**. `worklet`, `doclet` and `artifacts`
 are the **apps**, and `iam.Apps` is the one place an app is declared: an agent
 seat's own set, the dashboard's picker, the live socket's reader and the
 authority table's checks all read it, so a new app is a new member there and a
@@ -256,14 +256,14 @@ permission is needed to take ([Your own account](#your-own-account-is-account)).
 
 **An answer that crosses apps is filtered row by row**, through one helper
 (`authz.Shows`) that asks which app a row belongs to: a work row needs
-`tracker`, a page row `knowledge`, and anything else nothing. So the Home
+`worklet`, a page row `doclet`, and anything else nothing. So the Home
 feed carries only the rows its reader may see — an explicit `kinds=` entry
 they may not see is dropped rather than refused, since a refusal would confirm
-what exists; the decisions list carries a work item's ask only to a tracker
+what exists; the decisions list carries a work item's ask only to a `worklet`
 holder or to the person it names; Spend's task tiles and an agent's current
-task need `tracker`; a page's `linked_from` tasks need `tracker`; and a
+task need `worklet`; a page's `linked_from` tasks need `worklet`; and a
 question answered from the company's knowledge searches the pages only for a
-`knowledge` holder and the board only for a `tracker` holder.
+`doclet` holder and the board only for a `worklet` holder.
 
 **An artifact row is never shown by its kind.** An artifact belongs to no app,
 and "no app" in that filter means everybody's, so artifact rows go through a
@@ -278,31 +278,31 @@ hands an administrator private titles by that override.
 
 | App | What it opens |
 |---|---|
-| `tracker` | Every tracker read and write — the board, a project, its files, its views and reading the workspace catalogue (writing it is admin's); filing, updating, commenting, merging and placing work — and every `work_*` question. A person's own **Inbox**, **My work** and person view, and the same for a report as their lead (or anybody, as an administrator). The `inbox_changed` push |
-| `knowledge` | Reading, listing and searching the company's pages (`get_page`, `list_pages`, `search_knowledge`, and the `pages`, `page`, `containers`, `page_activity`, `page_revision` and `page_reads` questions); writing, saving and commenting on them (`write_page`, `save_page`, `comment_on_page`) |
+| `worklet` | Every Worklet read and write: the board, a project, its files, its views and reading the workspace catalogue (writing it is admin's); filing, updating, commenting, merging and placing work; and every `work_*` question. A person's own **Inbox**, **My work** and person view, and the same for a report as their lead (or anybody, as an administrator). The `inbox_changed` push |
+| `doclet` | Reading, listing and searching the company's pages (`get_page`, `list_pages`, `search_knowledge`, and the `pages`, `page`, `containers`, `page_activity`, `page_revision` and `page_reads` questions); writing, saving and commenting on them (`write_page`, `save_page`, `comment_on_page`) |
 | `artifacts` | Authoring artifacts, beside the role each asks: creating one (`create_artifact`), and on an artifact somebody holds editor on, publishing a version (`publish_artifact`), renaming it (`update_artifact`), adding an asset (`upload_artifact_asset`), changing its datastore's schema (`set_artifact_schema`) and filing it in a folder (`move_artifact`, beside contributor on the folder); creating a folder inside one they may file in (`create_artifact_folder`); trashing and restoring one they own (`artifacts.trash`, `artifacts.restore`). **Nothing else**: opening an artifact, reading and writing its data, being present on it, sharing it and exporting it ask only the role |
 
 **A relation asks the app beside it.** Leading a project, being the owner of an
 inbox, having written a comment, owning a saved view: each is a relation, and
 on an app's verb it admits only a caller who also uses the app. A project lead
-who does not use the tracker does not set its policy there, and a comment's
-author who no longer uses the knowledge base does not edit it there. A
-refusal names exactly what would change the answer — `[tracker]` to a lead
+who does not use Worklet does not set its policy there, and a comment's
+author who no longer uses Doclet does not edit it there. A
+refusal names exactly what would change the answer: `[worklet]` to a lead
 missing the app, `[admin]` to somebody missing the relation.
 
 Three narrow rules sit beside the apps, each the owner's own decision:
 
-- **You may answer what you were asked, without Tracker.** When a colleague
+- **You may answer what you were asked, without Worklet.** When a colleague
   puts a structured ask on a work item to you, you may read that item and post
   your answer to it — the comment or choice that answers that ask — whether or
-  not you hold `tracker`. It is a self arm on the read and on the answer, and
+  not you hold `worklet`. It is a self arm on the read and on the answer, and
   nothing wider: the tool reads the item, finds the open ask that names you
-  (`tracker.AskedOn`), and admits only the answer, which the tracker's writer
+  (`worklet.AskedOn`), and admits only the answer, which Worklet's writer
   checks again is yours; a plain comment, a new ask and a decision are still
-  the tracker's. A missing item and one you were not asked on are one
+  Worklet's. A missing item and one you were not asked on are one
   refusal, so the arm says nothing about which items exist, and once you have
-  answered the item is the tracker's again. The dashboard opens a work item's
-  own page (`#/work/{KEY}-{n}`) to somebody it was put to for exactly this.
+  answered the item is Worklet's again. The dashboard opens a work item's
+  own page (`#/worklet/{KEY}-{n}`) to somebody it was put to for exactly this.
 - **Authors tidy their own work.** Whoever created a page may rename, trash
   and restore it, and whoever reported a work item may remove and restore it —
   beside the container's lead and an administrator, and with the app. An
@@ -320,7 +320,7 @@ Three narrow rules sit beside the apps, each the owner's own decision:
 
 ### An artifact is opened by its shares
 
-Every other object is decided per **app**: whoever holds `tracker` reads every
+Every other object is decided per **app**: whoever holds `worklet` reads every
 task. An artifact is decided per **object**, because it is somebody's own work
 handed to the people it names. What a principal may do on one is their
 **role** on it, a ladder where each role includes every role below it:
@@ -643,7 +643,7 @@ document from the stage the row holds, so no edit made while somebody is
 suspended can quietly reinstate them.
 
 **What it does not reach is the seat.** It stays in the org chart, work can still
-be assigned to it, and the tracker still writes its notices. The suspended
+be assigned to it, and Worklet still writes its notices. The suspended
 person **keeps it** — as a retired one does — so nobody else can be invited
 onto it, created on it or bound to it while they hold it, and whoever holds it
 next reads what accumulated: the person themselves once reinstated, or a
@@ -1373,7 +1373,7 @@ enrol one**:
   answer `200` with `"status": "second_factor_enrolment_required"` and the
   cookie of that session. `GET /auth/session` says the same.
 - The request guard answers **every other route** `403
-  second_factor_enrolment_required` for that session — `/iam`, `/work`, the
+  second_factor_enrolment_required` for that session: `/iam`, `/worklet`, the
   socket, and the rest of `/auth` too, which regenerates recovery codes and
   signs a person out everywhere. It admits exactly three: `GET /auth/session`,
   `POST /auth/totp` and `POST /auth/step-up` (enrolling asks a proof inside
@@ -1662,10 +1662,10 @@ other:
 ```bash
 # Your own, for the assistant you work through: signs in as you for the one
 # request (the password is read without echo), mints, and signs out.
-crewlet iam token -login jane.doe -label "my assistant" -grants tracker
+crewlet iam token -login jane.doe -label "my assistant" -grants worklet
 
 # A service account's, minted by an administrator.
-crewlet iam token -person <service account id> -label "release pipeline" -grants tracker -days 30
+crewlet iam token -person <service account id> -label "release pipeline" -grants worklet -days 30
 
 export CREWLET_API_TOKEN=cwl_pat_…
 ```
@@ -1982,7 +1982,7 @@ directory does happens on its own screens, **Settings › People** and, for
 machine principals, **Settings › Service accounts**, through the same `/iam`
 routes `crewlet iam` calls, and they are an administrator's; People sends you
 to the org chart to invite or create somebody. Each list's **Access** column
-reads a row's permissions in words: "Admin", "Tracker · Knowledge",
+reads a row's permissions in words: "Admin", "Worklet · Doclet",
 "Overview only".
 
 **The access picker** is the same in every dialog that sets permissions.
@@ -1993,8 +1993,8 @@ every app ticked and Admin not; a **new service account** opens with nothing
 ticked; and **Create token** for a service account opens with the account's own
 permissions that the minter holds too — the account exists to act with them —
 while a person's own **New token** opens with nothing ticked. A note under
-the picker says what an unticked app costs: with **Tracker** unticked a person
-receives no work from their agents, who send work through the tracker, and with
+the picker says what an unticked app costs: with **Worklet** unticked a person
+receives no work from their agents, who send work through Worklet, and with
 nothing ticked they have the overview only. What each gesture ends is the
 route's:
 
@@ -2324,7 +2324,7 @@ comment you wrote. One function takes that decision, over one table, and every
 surface asks it: an HTTP route, a seat's own tool, the operator's assistant.
 
 That matters because there used to be no such function. Three structs carried
-pre-resolved booleans into the tracker, each filled by a different surface from
+pre-resolved booleans into Worklet, each filled by a different surface from
 a different lookup, and two of them were filled *wrong* in ways that only
 showed up as a support question:
 
@@ -2339,7 +2339,7 @@ showed up as a support question:
 
 And none of those lookups consulted a permission, so the deployment's own
 administrator was refused by a tool where every HTTP route let them through.
-The tracker still takes an authority value on the writes that need one, but it
+Worklet still takes an authority value on the writes that need one, but it
 states what the table **decided** — never the inputs a caller resolved — and
 keeps only the half a chart cannot know: which facet of a write each answer
 unlocks.
@@ -2349,17 +2349,17 @@ unlocks.
 | Rule | Covers | Decided by |
 |---|---|---|
 | **Everybody** | The overview's reads that a tool or a route asks about, such as who to ask (`lookup_colleague`) and who holds each human seat (`GET /iam/seats`); the route to a work item's thread (`work.thread`), which admits the request and leaves the decision to `comment_on_work_item` once the item is read; listing artifacts (`list_artifacts`), a filter answering only the artifacts reading admits; the dashboard source catalogue (`list_dashboard_sources`), which names reads and holds no row; and a browser's report that an artifact finished rendering (`artifacts.ready`) | Any principal whose stage may act |
-| **App** | Every tracker and page read and write: the board, a project, its files, its views and reading its catalogue (writing it is Admin's); filing, updating, merging and placing work, and a project's tags; reading, listing, searching, writing, saving and commenting on pages | The row's app — `tracker` or `knowledge` — which an administrator holds through `Expand` |
-| **Any app** | A person's question answered from what the company has written down (`answer_knowledge`), which a principal no seat binds — a token or a service account bound to none — is refused, because it runs on the bound seat's model | Either app; the answer searches the pages only for a `knowledge` holder and the board only for a `tracker` holder |
-| **App or asked** | Reading one work item, and commenting on it (`get_work_item`, `comment_on_work_item`) | `tracker`, or the person an open ask on the item names — and on the comment only their answer to it ([You may answer what you were asked](#what-each-app-opens)) |
+| **App** | Every Worklet and Doclet read and write: the board, a project, its files, its views and reading its catalogue (writing it is Admin's); filing, updating, merging and placing work, and a project's tags; reading, listing, searching, writing, saving and commenting on pages | The row's app (`worklet` or `doclet`), which an administrator holds through `Expand` |
+| **Any app** | A person's question answered from what the company has written down (`answer_knowledge`), which a principal no seat binds (a token or a service account bound to none) is refused, because it runs on the bound seat's model | Either app; the answer searches the pages only for a `doclet` holder and the board only for a `worklet` holder |
+| **App or asked** | Reading one work item, and commenting on it (`get_work_item`, `comment_on_work_item`) | `worklet`, or the person an open ask on the item names, and on the comment only their answer to it ([You may answer what you were asked](#what-each-app-opens)) |
 | **Self** | The caller's own diary, episodes, skills and onboarding marker | The caller, and **nobody else** — not even admin |
-| **Own record** | Marking an inbox, pinned views | The owner, or admin — with `tracker` |
-| **Own or lead** | Priorities, a person's day and queue (`set_priorities`, `my_work`, `work_inbox`, `get_person`); whether a seat works — pausing it, resuming it, a note to the turn it is running (`pause_seat`, `resume_seat`, `steer_turn`) — answering the question a coding run parked on (`answer_run`); and reading one seat's own trail (`audit.seat.read`) | The owner, whoever leads them, or admin — with `tracker` on the four tracker verbs, and with no app on the rest, since a lead who uses neither app still runs their team. For a seat's controls the owner is the person bound to the seat; for a run's question it is the run's **requester** — the person whose message woke the turn that launched it — and otherwise whoever leads the run's seat, so nobody who merely leads the requester answers a question the run put to them |
-| **Saved view** | Saving a view | With `tracker`: a **personal** view (one naming an owner) is its owner's, or admin's; a **shared** one is its container's lead's — a project's, a unit's, or the person whose page it sits on and whoever leads them — or admin's, which is the only way to a workspace-wide tab. Replacing a stored view asks this twice: for the view written, and for the view it overwrites as it stands |
-| **Container** | A project's policy — its fields, default assignee, tag renames and archives, archiving the project — and re-routing a task to another team | The project's lead, or admin — with `tracker` |
+| **Own record** | Marking an inbox, pinned views | The owner, or admin, with `worklet` |
+| **Own or lead** | Priorities, a person's day and queue (`set_priorities`, `my_work`, `work_inbox`, `get_person`); whether a seat works (pausing it, resuming it, a note to the turn it is running: `pause_seat`, `resume_seat`, `steer_turn`); answering the question a coding run parked on (`answer_run`); and reading one seat's own trail (`audit.seat.read`) | The owner, whoever leads them, or admin, with `worklet` on the four Worklet verbs, and with no app on the rest, since a lead who uses neither app still runs their team. For a seat's controls the owner is the person bound to the seat; for a run's question it is the run's **requester** (the person whose message woke the turn that launched it), and otherwise whoever leads the run's seat, so nobody who merely leads the requester answers a question the run put to them |
+| **Saved view** | Saving a view | With `worklet`: a **personal** view (one naming an owner) is its owner's, or admin's; a **shared** one is its container's lead's (a project's, a unit's, or the person whose page it sits on and whoever leads them) or admin's, which is the only way to a workspace-wide tab. Replacing a stored view asks this twice: for the view written, and for the view it overwrites as it stands |
+| **Container** | A project's policy (its fields, default assignee, tag renames and archives, archiving the project) and re-routing a task to another team | The project's lead, or admin, with `worklet` |
 | **Tidy** | Removing and restoring a work item; renaming, trashing and restoring a page | The container's lead, the item's **reporter** or the page's **creator**, or admin — with the app. An author tidies their own item and never a subtree beneath it |
 | **Subtree** | The org chart — its seats and units — read and written through `/config` (`config.org.read`, `config.org.write`) | `admin` for any of it, or a person who **leads** the part concerned: a unit is in their subtree when they lead it or a unit above it, and a seat when its unit is. A write by a lead is judged change by change on **both sides** of it — see [A lead edits their own team](#a-lead-edits-their-own-team). The company root is nobody's subtree, and no agent takes either verb |
-| **Destructive** | Moving a task out of its project; removing a project's file | The project's lead, or admin — with `tracker` |
+| **Destructive** | Moving a task out of its project; removing a project's file | The project's lead, or admin, with `worklet` |
 | **Authored** | Editing and removing a comment, on a page or a work item | Whoever wrote it, or admin — with the comment's app |
 | **Admin** | Configuration, secrets, integrations, the deployment, the company-wide trail, the workspace catalogue, a page in the tool-skills container, every directory write, ending every session in the company, the purges (an artifact's among them, with a person present), and what the company's artifacts hold against their quotas | `admin` |
 | **Shared** | One artifact: reading it and its data, writing its data, publishing it, renaming it, its assets and schema, sharing it, trashing and restoring it, a forced publish, a transfer, a pin and an export | The caller's **role** on the artifact, the best of owning it, a share naming their seat, a unit they sit in or the whole company, and leading the agent that owns it; the verb names the least role it admits, and an authoring verb asks the `artifacts` app beside it. No relation is "not found". Admin through the admin path, marked elevated where nothing else admitted. An agent holds at most `contributor` on work it does not own unless the company allows more ([An artifact is opened by its shares](#an-artifact-is-opened-by-its-shares)) |
@@ -2509,9 +2509,9 @@ verb of their own — re-routing a task, a project's policy facets, archiving it
 setting somebody's priorities. And two rules the table cannot state stay with
 the domain that owns them, because they are about the gesture rather than
 anybody's authority: an agent never re-orders a colleague's queue even when it
-leads them, which the tracker enforces on top of the table's answer, and an
+leads them, which Worklet enforces on top of the table's answer, and an
 agent never writes into a [reserved page
-container](knowledge-system.md#who-may-write-where), which the knowledge base's
+container](knowledge-system.md#who-may-write-where), which Doclet's
 own store refuses on every write path.
 
 **A verb with no row is refused.** Not defaulted, not passed through: a default
@@ -2532,7 +2532,7 @@ own: a verb removed from the engine leaves behind a row that is perfectly
 consistent and decides nothing. So a fourth walk holds it against the tools the
 build actually registers, over both surfaces — a seat's own and the operator's
 assistant — in both directions. It earned its place twice on its first run: two
-rows had outlived the goal verbs being removed from the tracker, and seven
+rows had outlived the goal verbs being removed from Worklet, and seven
 tools a seat uses every turn had no rule at all.
 
 A fifth goes one level further down, to the **argument names**. Which argument
@@ -2687,11 +2687,11 @@ An HTTP route declares its verb where it is **mounted**, not in a middleware
 that inspects the request. A middleware runs before the router matches, so it
 has no route identity to decide from — anything it decided from would be a
 second router that has to agree with the real one, which is the divergence that
-made `/work/items/` and `/work/items/{key}/purge` one gate. A route mounted
+made `/worklet/items/` and `/worklet/items/{key}/purge` one gate. A route mounted
 without a policy, or naming a verb with no rule, fails where it is written.
 
 One authority concern *does* live outside: a request whose path is not already
-canonical is refused, because `/work/items/../config` matches one pattern and
+canonical is refused, because `/worklet/items/../config` matches one pattern and
 reads to a person as another. It has to be outside, because Go's router cleans
 the path and redirects before it matches at all.
 
@@ -2739,7 +2739,7 @@ Identity has **two trails**, and they answer different questions.
 | `iam_password_reset_issued` | The directory, when an administrator issues somebody a one-time password reset link, or creates a person and so issues their first password link (`first: true`) — for whom, by whom and until when, never the link | Once per link, by the call whose record issued it — never by a retry that hands the same first link back |
 | `iam_password_changed` | The sign-in surface, when a person changes their own password — which ended every other session and token they held | Once per change |
 | `iam_password_reset` | The sign-in surface, when a reset link is spent — the password set, every session and token the person held ended, and nobody signed in — or a first password link is (`first: true`), which sets the person's first password and has nothing of theirs to end | Once per link |
-| `iam_grants_changed` | The identity writer, from the snapshot it decided the write in | One per person write that moved a permission, with what it added and removed — compared through `Expand`, so storing `[admin]` as `[admin, tracker, knowledge]` moves nothing — by whoever decided it — for a redemption, the person who issued the invitation, never the person redeeming it |
+| `iam_grants_changed` | The identity writer, from the snapshot it decided the write in | One per person write that moved a permission, with what it added and removed (compared through `Expand`, so storing `[admin]` as `[admin, worklet, doclet]` moves nothing), by whoever decided it: for a redemption, the person who issued the invitation, never the person redeeming it |
 | `iam_session_generation_bumped` | The identity writer | Once per company-wide invalidation, with the generation it moved to |
 | `statelog_record_unverifiable`, `statelog_record_tampered` | Any domain's applier, for a record signed under a key this node lacks, or failing under one it holds | Once per domain and key id per node process, capped at sixteen ids |
 
@@ -2836,8 +2836,8 @@ the store:
 ## Where identity is kept: the fourth state-log domain
 
 The vocabulary above is what the engine *names*. Where it is **stored** is a
-replicated state machine of its own — the state log's fourth domain, beside the
-work tracker, the vectors and the knowledge base. Every change is one record on one ordered stream
+replicated state machine of its own: the state log's fourth domain, beside
+Worklet, the vectors and Doclet. Every change is one record on one ordered stream
 (`CREWLET_IAM_LOG`), applied by a deterministic applier into an identical set
 of SQL tables on every data node, with the checkpoint committed in the same
 transaction as the rows.
@@ -3265,7 +3265,7 @@ today is smaller, and lives in two places:
 
 - **Tier A, `api.auth`** — `tokens`, the deployment's own credentials,
   each carrying an id recorded as the author of anything written with it and
-  the `grants` it may use (`admin`, `tracker`, `knowledge`, `artifacts`); `admin`, whether
+  the `grants` it may use (`admin`, `worklet`, `doclet`, `artifacts`); `admin`, whether
   this node [serves admin](#access-admin-and-one-permission-per-app) at all
   (`serve` or `refuse`); what a password
   sign-in asks for — `totp` (unset is `required`), `accept_insecure` and

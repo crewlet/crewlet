@@ -195,7 +195,7 @@ func (s Sources) trailOf(ctx context.Context, what string, p Params) (string, ia
 
 // turnsFor is a page of turns as p is shown it: each turn's work item — the
 // task it was charged to — only where [authz.Shows] shows p a task (ADR-0033).
-// A lead reads their agents' trail whether or not they use the tracker, and
+// A lead reads their agents' trail whether or not they use Worklet, and
 // their agents' turns are not a way into it. A COPY wherever it changes
 // anything.
 func turnsFor(turns []store.Turn, p iam.Principal) []store.Turn {

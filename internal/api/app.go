@@ -27,7 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 	"github.com/crewlet/crewlet/static"
 )
 
@@ -289,7 +289,7 @@ type guardedMounter interface {
 // (a health body missing the engine's fields, a 503, an unregistered /config)
 // would hide that mistake behind something an operator reads as deliberate.
 //
-// What stays optional is what a real node can lack: a native tracker (a company
+// What stays optional is what a real node can lack: Worklet (a company
 // on Jira), an operator MCP surface, a telemetry receiver or a tool bridge (an
 // unset environment variable), and the defaults a test injects.
 type Options struct {
@@ -444,7 +444,7 @@ type Options struct {
 	// other source left
 	// nil makes its questions UNREGISTERED rather than failing, which is the
 	// honest answer for a node that does not have that surface at all (no
-	// knowledge backend, no native tracker) and distinct from an empty one.
+	// knowledge backend, no Worklet) and distinct from an empty one.
 	Sources queries.Sources
 
 	// QueueBackend names the broker, for the health body.
@@ -503,7 +503,7 @@ type Options struct {
 	// exactly where the first person is invited.
 	IAM guardedMounter
 
-	// Work serves the human write surface over the company's own tracker
+	// Work serves the human write surface over Worklet
 	// and knowledge base, normally a workapi.Service: the same tools a seat
 	// and the operator's assistant hold, as routes a person reaches from a
 	// browser or a script.
@@ -575,7 +575,7 @@ type Options struct {
 	// nothing else, through [Probes].
 	Bridge *mcpbridge.Bridge
 
-	// Operator is the company's own tracker and knowledge base as ONE tool
+	// Operator is Worklet and Doclet as ONE tool
 	// catalogue, served to the people who run it — over MCP for an
 	// operator's own AI assistant, and over the act route for a person at
 	// the dashboard (ADR-0024) — and the one dispatch the human write
@@ -1199,15 +1199,15 @@ func (o Options) missing() error {
 // operator token and "somebody resolved" meant "the operator". The guard in
 // front of every route answers the same question and no other: is there a
 // principal. So once a person could sign in holding nothing but the company's
-// overview, or a pipeline hold the tracker alone, every one of them could
+// overview, or a pipeline hold Worklet alone, every one of them could
 // clear a spend ceiling, copy the node's whole durable state to a directory of
 // their choosing, move the floor the trim deletes against, and evict a machine
 // from the fleet. Through [authz.Router] each route is refused `403` naming
 // admin, and a route mounted without a policy is a boot failure rather than an
 // open door.
 //
-// THE READS TOO — the maintenance status and the reanchor confirmation value
-// — because `/work/retention*` is the deployment's surface whole, which is
+// THE READS TOO (the maintenance status and the reanchor confirmation value),
+// because `/worklet/retention*` is the deployment's surface whole, which is
 // what the `retention` question already declares: a map of which machine
 // holds what, and the value a reanchor must echo, are not the company's
 // working state.
@@ -1345,7 +1345,7 @@ func (a *App) Public() http.Handler { return a.public }
 // [engine.Engine.SetOnInboxMoved] and [engine.Engine.SetOnInboxGap]; a test
 // hands in a feed it fires by hand.
 type InboxFeed interface {
-	SetOnInboxMoved(func([]tracker.InboxMovement))
+	SetOnInboxMoved(func([]worklet.InboxMovement))
 	SetOnInboxGap(func())
 }
 
@@ -1359,7 +1359,7 @@ type InboxFeed interface {
 // rotation and its applier announces nothing it can trust, so for as long as
 // it is out the engine relays a sound peer's movements instead, and says when
 // it switched ([App.pushInboxGap]).
-func (a *App) pushInboxMoved(moved []tracker.InboxMovement) {
+func (a *App) pushInboxMoved(moved []worklet.InboxMovement) {
 	for _, m := range moved {
 		a.stream.InboxChanged(stream.InboxChange{
 			Handle: m.Handle, UnreadDelta: m.UnreadDelta,

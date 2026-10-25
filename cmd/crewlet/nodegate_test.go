@@ -17,14 +17,14 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // evictionLog is one identity-claiming log's eviction table, as its domain
@@ -70,7 +70,7 @@ func TestAnEvictionIsWrittenAsWhoPressedItOnEveryLog(t *testing.T) {
 
 	// EVERY IDENTITY-CLAIMING LOG, named: a log this build adds has to be
 	// added here too, or the gesture answering for it goes unchecked.
-	logs := []evictionLog{tracker.Domain{}, pages.Domain{}, iamdomain.Domain{},
+	logs := []evictionLog{worklet.Domain{}, doclet.Domain{}, iamdomain.Domain{},
 		artifactsdomain.Domain{}, artifactdata.Domain{}, assistantdomain.Domain{}}
 	var answered, want []string
 	for _, d := range res.Domains {
@@ -136,9 +136,9 @@ func TestAnEvictionIsWrittenAsWhoPressedItOnEveryLog(t *testing.T) {
 func TestAReanchorIsPublishedAsWhoRanIt(t *testing.T) {
 	t.Parallel()
 	e := bootedEngineAt(t, reanchorCompanyYAML, time.Now())
-	stream := tracker.Domain{}.Stream().Name
+	stream := worklet.Domain{}.Stream().Name
 	before := cursorGenerations(t, e)
-	view := rebuiltLog(t, e, tracker.Domain{}.Stream())
+	view := rebuiltLog(t, e, worklet.Domain{}.Stream())
 
 	by := iam.Actor{Name: "jane.doe", Kind: iam.ActorOperator,
 		OperatorID: "pat:0192f00d-0000-7000-8000-00000000000a"}
@@ -205,8 +205,8 @@ func TestAReanchorIsPublishedAsWhoRanIt(t *testing.T) {
 func TestAReanchorNamingNobodyIsRefused(t *testing.T) {
 	t.Parallel()
 	e := bootedEngine(t)
-	stream := tracker.Domain{}.Stream().Name
-	view := rebuiltLog(t, e, tracker.Domain{}.Stream())
+	stream := worklet.Domain{}.Stream().Name
+	view := rebuiltLog(t, e, worklet.Domain{}.Stream())
 	confirm := statelog.ConfirmationOf(view.CreatedAt)
 
 	_, err := e.Reanchor(t.Context(), engine.ReanchorRequest{Stream: stream, Confirm: confirm})

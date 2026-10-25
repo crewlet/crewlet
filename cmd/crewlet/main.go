@@ -214,8 +214,8 @@ func runIn(environ config.Source, args []string, stdout, stderr io.Writer) (err 
 		return runBackup(environ, rest, stdout, stderr)
 	case "retention":
 		return runRetention(environ, rest, stdout, stderr)
-	case "work":
-		return runWork(environ, rest, stdout, stderr)
+	case "worklet":
+		return runWorklet(environ, rest, stdout, stderr)
 	case "objects":
 		return runObjects(environ, rest, stdout, stderr)
 	case "fleet":
@@ -253,9 +253,9 @@ Usage:
                               the running engine, to a path on ITS host
   crewlet retention <cmd>     What the state log is holding, why it is not
                               shrinking, and the gestures that change it
-  crewlet work <cmd>          The gestures on work items that belong to a person:
-                              purge, which destroys a task and every row it
-                              produced and which nothing undoes
+  crewlet worklet <cmd>       The gestures on Worklet's work items that belong to
+                              a person: purge, which destroys a task and every
+                              row it produced and which nothing undoes
   crewlet objects status      Where the company's files are kept, and what the
                               object store's collector last found missing
   crewlet objects migrate     Move the company's files to an S3 bucket: copy on a
@@ -2148,8 +2148,8 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// bind of a development build.
 		DevPrincipal: dev,
 		Runtime:      runtime,
-		// WHOSE INBOX MOVED, from this engine's own tracker applier —
-		// how a person at the dashboard learns they have work.
+		// WHOSE INBOX MOVED, from this engine's own Worklet applier: how a
+		// person at the dashboard learns they have work.
 		Inbox: e,
 		// WHOSE CREDENTIALS MOVED, from this engine's own identity
 		// applier — what closes the open tab of a session that ended.
@@ -2296,7 +2296,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// it registered on every node is the other half of the same
 			// protocol, and a node serving no API may be the owner.
 			SandboxTail: sandboxTails(e),
-			// THE COMPANY'S OWN TRACKER AND KNOWLEDGE BASE through the
+			// WORKLET AND DOCLET through the
 			// estate router, exactly as a seat's tools reach them
 			// (engine.OperatorWork), so an operator and an agent looking
 			// at one item see one item: answered from this node's copy

@@ -27,7 +27,7 @@ func vocabularyFrames() []wire.Frame {
 	id := evals.ID
 	answer := id("message:answer")
 	proposal := id("proposal:create-task")
-	page := &wire.PageChip{Title: "Work › Tasks", Screen: "work-tasks"}
+	page := &wire.PageChip{Title: "Worklet › Tasks", Screen: "worklet-tasks"}
 	read := assistanttest.NewTurn("conversation", "turn:read")
 	at := evals.Epoch
 	frames := []wire.Frame{
@@ -40,12 +40,12 @@ func vocabularyFrames() []wire.Frame {
 		read.Frame(wire.Frame{Kind: wire.EventStep, Step: &wire.StepEvent{
 			StepID: id("step:search"), Index: 1, Tool: "search_work",
 			Label:   "Search tasks for “sign-in test”",
-			Request: &wire.StepRequest{Method: "GET", Route: "/work/search"},
+			Request: &wire.StepRequest{Method: "GET", Route: "/worklet/search"},
 			State:   wire.StepRunning, StartedAt: at}}),
 		read.Frame(wire.Frame{Kind: wire.EventStep, Step: &wire.StepEvent{
 			StepID: id("step:search"), Index: 1, Tool: "search_work",
 			Label:   "Search tasks for “sign-in test”",
-			Request: &wire.StepRequest{Method: "GET", Route: "/work/search"},
+			Request: &wire.StepRequest{Method: "GET", Route: "/worklet/search"},
 			State:   wire.StepDone, StartedAt: at, DurationMS: 812, Summary: "2 tasks"}}),
 		read.Frame(wire.Frame{Kind: wire.EventStatus, Status: &wire.StatusEvent{
 			State: wire.StatusWorking, StepsDone: 1}}),
@@ -66,7 +66,7 @@ func vocabularyFrames() []wire.Frame {
 					Fact: "Working", Depth: 1}}}})),
 		read.Frame(cardFrame(answer, "card:open", wire.Card{Type: wire.CardOpenInApp,
 			OpenInApp: &wire.OpenInAppCard{Link: wire.Link{Label: "ENG-133", Screen: "item",
-				Href: "#/work/ENG-133"}, Permitted: true}})),
+				Href: "#/worklet/ENG-133"}, Permitted: true}})),
 		read.Frame(cardFrame(answer, "card:notice", wire.Card{Type: wire.CardNotice,
 			Notice: &wire.NoticeCard{Tone: wire.NoticeInfo,
 				Text: "Showing the first 50 of 210 rows."}})),
@@ -97,7 +97,7 @@ func vocabularyFrames() []wire.Frame {
 				SourceRevision: "url:3f9c1a0e", ApproveLabel: "Approve and save"}})),
 		read.Frame(cardFrame(answer, "card:page", wire.Card{Type: wire.CardProposal,
 			Proposal: &wire.ProposalCard{ProposalID: id("proposal:page"), Scope: wire.ScopePage,
-				Tool: "propose_page_change", Title: "Filter the list", Target: "Work › Tasks",
+				Tool: "propose_page_change", Title: "Filter the list", Target: "Worklet › Tasks",
 				Changes: []wire.Change{
 					{Kind: wire.ChangeChanged, Field: "blocked", Label: "Blocked", From: "Any", To: "Blocked only"},
 				},

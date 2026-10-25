@@ -14,7 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // Asker is what a router needs from the queue: the ephemeral request/reply
@@ -240,19 +240,19 @@ type exchange struct {
 	// decode is a remote answer's result, in the caller's type.
 	decode func(raw json.RawMessage) (any, error)
 
-	// written is the asking turn's [tracker.WriteLog], which every node
+	// written is the asking turn's [worklet.WriteLog], which every node
 	// that RAN the operation remotely answers into ([reply.Written]) — the
 	// one an answer kept is not the only one that committed, since a walk
 	// asks the next node after an unvouched one. Nil where the actor holds
 	// none; an in-process run reports into it directly.
-	written tracker.WriteLog
+	written worklet.WriteLog
 }
 
 // call runs one operation on a data node whose copy serves.
 func call[A, R any](ctx context.Context, r *Router, o op[A, R], actor *Actor, args A) (R, error) {
 	var zero R
 	spec := o.spec
-	var written tracker.WriteLog
+	var written worklet.WriteLog
 	if actor != nil && actor.Provenance.Written != nil {
 		// THE TURN'S SET OF ITEMS IT WROTE is in this process, so a node
 		// that runs the write elsewhere is asked to name them instead —
@@ -768,9 +768,9 @@ func (r *Router) markAnswered(node string) {
 // unvouched reports an idempotent write's answer that is NOT final: an
 // `unknown` the answering node's operation ledger could not vouch for
 // ([statelog.Result.Unvouched]) on ANY step the answer reports — a walking
-// gesture answers one outcome per step ([tracker.PlaceResult]), and a page
-// write names its outcome rather than embedding it ([pages.Written]) — or a
-// walking gesture that stopped at such a step ([tracker.ErrStepUnvouched]).
+// gesture answers one outcome per step ([worklet.PlaceResult]), and a page
+// write names its outcome rather than embedding it ([doclet.Written]), or a
+// walking gesture that stopped at such a step ([worklet.ErrStepUnvouched]).
 // Another node's ledger may hold the row this one lost, so the router asks
 // it, under the same operation id, before reporting the outcome unknown. Never
 // true for another class: a read has no ledger, and a once-write is never
@@ -780,7 +780,7 @@ func unvouched(spec *opSpec, value any, err error) bool {
 		return false
 	}
 	if err != nil {
-		return errors.Is(err, tracker.ErrStepUnvouched)
+		return errors.Is(err, worklet.ErrStepUnvouched)
 	}
 	for _, res := range resultsIn(value) {
 		if res.Outcome == statelog.OutcomeUnknown && res.Unvouched {

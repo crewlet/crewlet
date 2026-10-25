@@ -33,7 +33,7 @@ describe("a href", () => {
     );
     expect(safeHref("http://example.com")).toBe("http://example.com");
     expect(safeHref("mailto:ops@example.com")).toBe("mailto:ops@example.com");
-    expect(safeHref("#/work/ENG-1")).toBe("#/work/ENG-1");
+    expect(safeHref("#/worklet/ENG-1")).toBe("#/worklet/ENG-1");
   });
 
   it("refuses everything else, by allowlist rather than by enumeration", () => {
@@ -214,7 +214,7 @@ describe("a company page", () => {
     expect(out?.getAttribute("rel")).toBe("noopener noreferrer");
 
     const inApp = el.querySelector<HTMLAnchorElement>('a[href^="#/"]');
-    expect(inApp?.getAttribute("href")).toBe("#/work/ENG-214");
+    expect(inApp?.getAttribute("href")).toBe("#/worklet/ENG-214");
     // An in-app link IS this application: opening it in a tab would break
     // every internal reference a page makes.
     expect(inApp?.getAttribute("target")).toBeNull();
@@ -314,7 +314,7 @@ describe("what the shared grammar adds", () => {
   });
 
   it("reads a link whose label holds an escaped bracket", () => {
-    const el = draw("[a \\] b](#/knowledge/pages/7)");
+    const el = draw("[a \\] b](#/doclet/pages/7)");
     expect(el.querySelector("a")?.textContent).toBe("a ] b");
   });
 });
@@ -845,7 +845,7 @@ describe("pictures a host resolves", () => {
 describe("a picture with no resolver", () => {
   // THE DASHBOARD LOADS PICTURES FROM ITS OWN ORIGIN ONLY (`img-src 'self'
   // data: blob:`), so an `img` naming another origin is a picture the browser
-  // refuses: a Knowledge page's remote picture drew as a broken image.
+  // refuses: a Doclet page's remote picture drew as a broken image.
   it("links to a picture on another origin rather than drawing one the policy refuses", () => {
     const el = draw("![The rota](https://example.com/rota.png)");
     expect(el.querySelector("img")).toBeNull();
@@ -866,7 +866,7 @@ describe("a picture with no resolver", () => {
     expect(el.querySelector("img")?.getAttribute("src")).toBe(own);
     expect(shownImage(own)).toBe(own);
     expect(shownImage("https://example.com/rota.png")).toBeNull();
-    expect(shownImage("#/knowledge")).toBeNull();
+    expect(shownImage("#/doclet")).toBeNull();
   });
 });
 

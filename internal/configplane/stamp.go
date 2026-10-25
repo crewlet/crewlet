@@ -7,9 +7,8 @@ import "time"
 // newer one wrote: the instant that configuration was activated, in Unix
 // MILLISECONDS.
 //
-// Two writers stamp with it — the tracker's projects ([tracker.Writer.ApplyChart])
-// and the knowledge base's containers ([pages.Store.EnsureContainer]) — and
-// each compares a stamp only against its own kind's. One definition anyway,
+// Two writers stamp with it, Worklet's projects ([worklet.Writer.ApplyChart])
+// and Doclet's containers ([doclet.Store.EnsureContainer]), and each compares a stamp only against its own kind's. One definition anyway,
 // because the rule is the control plane's rather than either writer's, and the
 // first copy of it that drifted (a seconds resolution beside a milliseconds
 // one) would make "which configuration wrote this" a question with two
@@ -50,6 +49,6 @@ import "time"
 // — but the activation pointer publishes each one LATER, at this resolution,
 // than the one it replaces (coord.ActivationAt, decided inside the
 // compare-and-set that moves the pointer), so a later activation always
-// carries a later stamp whichever node's clock made it. The work-tracker guide
+// carries a later stamp whichever node's clock made it. The Worklet guide
 // still asks for synchronised clocks, because the stamps are read off them.
 func ActivationStamp(activatedAt time.Time) int64 { return activatedAt.UTC().UnixMilli() }

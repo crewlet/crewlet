@@ -48,7 +48,7 @@ type RigOptions struct {
 	// Catalogue replaces the fixed Tools: catalog.Curated offers each
 	// person the curated table as a running node does.
 	Catalogue assistant.Catalogue
-	// Person replaces grace, who holds the tracker on the seat grace.
+	// Person replaces grace, who holds Worklet on the seat grace.
 	Person *iam.Principal
 	// Dispatcher and Revoker replace the recording fakes with the real
 	// grant machinery (internal/api/auth's Dispatcher and Delegations), for
@@ -68,7 +68,7 @@ type RigOptions struct {
 	Rate   assistant.TurnRate
 }
 
-// Assemble builds a rig over o. Its person is grace, holding the tracker, on
+// Assemble builds a rig over o. Its person is grace, holding Worklet, on
 // the human seat grace, unless o names another; o.Company is required. The
 // one construction every suite (through assistanttest.NewRig) and every
 // evaluation case share, so a case runs on exactly the service a suite does.
@@ -86,7 +86,7 @@ func Assemble(o RigOptions) (*Rig, error) {
 		node = "node-a"
 	}
 	r := &Rig{Clock: clock, Store: store, Model: NewModel(o.Rounds...),
-		Audit: &Audit{}, Person: Person("grace", "grace", iam.GrantTracker),
+		Audit: &Audit{}, Person: Person("grace", "grace", iam.GrantWorklet),
 		Conversation: ID("conversation/one"),
 	}
 	if o.Person != nil {

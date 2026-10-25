@@ -55,7 +55,7 @@ export type UrlPatch = Readonly<Record<string, string | null>>;
 
 /** What a URL action is built from. */
 export interface UrlActionOptions {
-  /** What it touches, for the card's scope line: "Work list filters (not saved)". */
+  /** What it touches, for the card's scope line: "Worklet list filters (not saved)". */
   scope: string;
   /**
    * The keys it may write, by their address spelling. A key ending in a dot

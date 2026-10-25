@@ -8,7 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // EVICTING A PEER THAT RE-ANCHORED AND VANISHED RELEASES THE FLEET IT STRANDED.
@@ -57,10 +57,10 @@ func strandedByAVanishedPeer(t *testing.T, published bool, stranded string) {
 	t.Helper()
 	e, _ := aRunningNode(t)
 	s := e.core.Load().log
-	running := s.Domain(tracker.Domain{}.Name())
+	running := s.Domain(worklet.Domain{}.Name())
 	name := running.domain.Name()
 	spec := running.spec
-	mustApply(t, "a write before the peer's move", func() (tracker.WriteResult, error) {
+	mustApply(t, "a write before the peer's move", func() (worklet.WriteResult, error) {
 		return e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-before")
 	})
 	own := running.runner.Committed()
@@ -72,7 +72,7 @@ func strandedByAVanishedPeer(t *testing.T, published bool, stranded string) {
 
 	// THE PEER'S MOVE: its generation record, a record it wrote in that
 	// generation, and — when it lived long enough — its row.
-	rec, _, err := tracker.GenerationRecord{}.GenerationRecord(statelog.GenerationFacts{
+	rec, _, err := worklet.GenerationRecord{}.GenerationRecord(statelog.GenerationFacts{
 		Generation: own.Generation + 1, Case: statelog.ReanchorRestored,
 		Inputs: statelog.ReanchorInputs{Stream: spec.Name, StreamCreatedAt: live},
 		By:     "ops-x", Writer: "node-x", At: time.Now().UTC(),
@@ -201,7 +201,7 @@ func strandedByAVanishedPeer(t *testing.T, published bool, stranded string) {
 		WHERE generation = ?`, own.Generation+1); got != 0 {
 		t.Errorf("node-x's generation record applied into this node's rows (%d row)", got)
 	}
-	after := mustApply(t, "a write after the reanchor", func() (tracker.WriteResult, error) {
+	after := mustApply(t, "a write after the reanchor", func() (worklet.WriteResult, error) {
 		return e.native.Load().writer.EvictNode(t.Context(), "op-after", "node-after")
 	})
 	if after.Position.Generation != plan.Generation {

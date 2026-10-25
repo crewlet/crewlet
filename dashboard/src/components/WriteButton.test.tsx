@@ -27,7 +27,7 @@ test("a press is the button's, not the link's around it", () => {
   const onPress = vi.fn();
   const navigate = vi.fn();
   render(
-    <a href="#/work/ENG-1" onClick={navigate}>
+    <a href="#/worklet/ENG-1" onClick={navigate}>
       <WriteButton write={write()} onPress={onPress}>
         Pin
       </WriteButton>

@@ -855,7 +855,7 @@ func TestAnUnreadableRegisterIsNotAnEmptyFleet(t *testing.T) {
 // THE WHOLE DOCUMENT IS ONE WIRE CONTRACT, so every field in it is spelled
 // the same way.
 //
-// `GET /work/retention` and `crewlet retention status --json` hand this
+// `GET /worklet/retention` and `crewlet retention status --json` hand this
 // document to a script and to a dashboard, and both address fields by name.
 // [Alarm] shipped untagged, so the alarms array alone came back as
 // `Kind`/`Detail`/`Remedy` beside siblings spelling themselves `node_id` and

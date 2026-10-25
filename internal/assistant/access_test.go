@@ -54,11 +54,11 @@ func TestAMessageIsHiddenFromAReaderWhoLostItsApps(t *testing.T) {
 		return texts
 	}
 	if got := shownTo(f.Person); len(got) != 1 || got[0] != answerAboutENG7 {
-		t.Fatalf("the reader who holds the tracker is shown %q", got)
+		t.Fatalf("the reader who holds Worklet is shown %q", got)
 	}
 	lost := withoutApps(f.Person)
 	if got := shownTo(lost); len(got) != 1 || strings.Contains(got[0], "ENG-7") {
-		t.Errorf("a reader who lost the tracker is shown %q, want a notice in its place", got)
+		t.Errorf("a reader who lost Worklet is shown %q, want a notice in its place", got)
 	}
 
 	f.Person = lost
@@ -75,7 +75,7 @@ func TestAMessageIsHiddenFromAReaderWhoLostItsApps(t *testing.T) {
 	}
 }
 
-// readThenProposeRig is a rig whose turn reads ENG-7 through the tracker and
+// readThenProposeRig is a rig whose turn reads ENG-7 through Worklet and
 // then proposes a task, parking on it.
 func readThenProposeRig(t *testing.T) (*assistanttest.Rig, wire.TurnAccepted, assistantdomain.Proposal) {
 	t.Helper()
@@ -110,11 +110,11 @@ func TestAParkedLoopIsNotResumedForAPersonWhoLostItsApps(t *testing.T) {
 	carries, err := f.Svc.Carries(iam.WithPrincipal(context.Background(), f.Person),
 		f.Person.ID, f.Conversation, accepted.TurnID)
 	if err != nil || !carries {
-		t.Fatalf("the person who holds the tracker: Carries = %v, %v", carries, err)
+		t.Fatalf("the person who holds Worklet: Carries = %v, %v", carries, err)
 	}
 	ctx := iam.WithPrincipal(context.Background(), lost)
 	if carries, err = f.Svc.Carries(ctx, f.Person.ID, f.Conversation, accepted.TurnID); err != nil || carries {
-		t.Fatalf("a person who lost the tracker: Carries = %v, %v; want false", carries, err)
+		t.Fatalf("a person who lost Worklet: Carries = %v, %v; want false", carries, err)
 	}
 	rounds := len(f.Model.Requests())
 	at, err := f.Svc.Resume(ctx, approval.Resumption{Owner: f.Person.ID,
@@ -126,7 +126,7 @@ func TestAParkedLoopIsNotResumedForAPersonWhoLostItsApps(t *testing.T) {
 	}
 	frames := f.Follow(accepted.TurnID, at.AfterSeq)
 	if n := len(f.Model.Requests()); n != rounds {
-		t.Errorf("the model was asked %d more rounds for a person who lost the tracker", n-rounds)
+		t.Errorf("the model was asked %d more rounds for a person who lost Worklet", n-rounds)
 	}
 	failure := evals.Last(frames, wire.EventError)
 	done := evals.Last(frames, wire.EventDone)
@@ -147,7 +147,7 @@ func TestAParkedLoopIsNotResumedForAPersonWhoLostItsApps(t *testing.T) {
 func TestCarriesIsTheOwnersQuestion(t *testing.T) {
 	t.Parallel()
 	f, accepted, _ := readThenProposeRig(t)
-	ada := evals.Person("ada", "ada", iam.GrantTracker)
+	ada := evals.Person("ada", "ada", iam.GrantWorklet)
 	_, err := f.Svc.Carries(iam.WithPrincipal(context.Background(), ada), f.Person.ID,
 		f.Conversation, accepted.TurnID)
 	if !errors.Is(err, assistant.ErrNotFound) {

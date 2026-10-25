@@ -9,7 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 )
 
-// pageRig is a rig whose turn proposes action on the Work screen, which
+// pageRig is a rig whose turn proposes action on the Worklet screen, which
 // accepts it, then answers.
 func pageRig(t *testing.T, action string) (*assistanttest.Rig, []wire.Frame) {
 	t.Helper()
@@ -19,7 +19,7 @@ func pageRig(t *testing.T, action string) (*assistanttest.Rig, []wire.Frame) {
 			evals.Call("c1", "propose_page_change", map[string]any{
 				"action": action, "args": map[string]any{"status": "todo"}}),
 			evals.Say("Done.")}})
-	page := &wire.PageContext{Screen: "work", Title: "Work › Tasks",
+	page := &wire.PageContext{Screen: "work", Title: "Worklet › Tasks",
 		Params: map[string]string{}, Query: map[string]string{}, Resources: []wire.Resource{},
 		SourceRevision: "work@3", Accepts: []string{action}}
 	accepted, err := f.Ask("page", "Show only what is still to do", page)

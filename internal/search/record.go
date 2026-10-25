@@ -66,7 +66,7 @@ const (
 	// SourcePage is a knowledge-base page.
 	SourcePage Source = "page"
 
-	// SourceTask is a work item in the native tracker.
+	// SourceTask is a work item in Worklet.
 	SourceTask Source = "task"
 )
 

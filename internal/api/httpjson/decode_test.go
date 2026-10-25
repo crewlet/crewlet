@@ -37,10 +37,10 @@ func TestEveryEnvelopeDecodesBackToItsValues(t *testing.T) {
 		name: "an authority refusal",
 		write: func(w http.ResponseWriter) {
 			httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-				authz.RefusalDetail(authz.ReasonAssistScope, []iam.Grant{iam.GrantTracker, iam.GrantAdmin}))
+				authz.RefusalDetail(authz.ReasonAssistScope, []iam.Grant{iam.GrantWorklet, iam.GrantAdmin}))
 		},
 		want: httpjson.Refused{Code: httpjson.CodeUnauthorized,
-			Reason: string(authz.ReasonAssistScope), Grants: []string{"tracker", "admin"}},
+			Reason: string(authz.ReasonAssistScope), Grants: []string{"worklet", "admin"}},
 	}, {
 		name: "a step-up",
 		write: func(w http.ResponseWriter) {

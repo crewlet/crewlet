@@ -5,8 +5,8 @@
  *
  * # Three questions, and the rest is pushes
  *
- * `work_flow` (the tracker's history replayed backward from today's census,
- * asked only with Tracker), `token_series` (the spend over the window, by
+ * `work_flow` (Worklet's history replayed backward from today's census,
+ * asked only with Worklet), `token_series` (the spend over the window, by
  * team) and `decisions` (what waits on this person). Who is working, the
  * budget meter and the fleet are the pushes every screen already holds, so
  * nothing here polls for them. The feed asks its own question (`Feed`).
@@ -82,16 +82,16 @@ export function useHomeData() {
     enabled: viewer.owner !== "",
     pollMs: DECISIONS_POLL_MS,
   });
-  // THE TRACKER'S HISTORY, asked only of a reader holding Tracker: the
+  // WORKLET'S HISTORY, asked only of a reader holding Worklet: the
   // engine refuses it to anybody else, and the tiles and chart it feeds say
   // what would open them rather than drawing a refusal as a broken read.
-  // AND OF A COMPANY RUNNING CREWLET WORKS, where the history is: elsewhere
+  // AND OF A COMPANY RUNNING WORKLET, where the history is: elsewhere
   // the tiles and chart it feeds are not drawn (`Kpis.tsx`'s `KPI_SERVICES`).
   const ask = useServicesAsk();
   const flow = useQuery(
     "work_flow",
     { bucket: "day", points: flowPoints(range) },
-    { pollMs: SLOW_POLL_MS, enabled: viewer.tracker && ask.tracker },
+    { pollMs: SLOW_POLL_MS, enabled: viewer.worklet && ask.tracker },
   );
   const spend = useQuery(
     "token_series",

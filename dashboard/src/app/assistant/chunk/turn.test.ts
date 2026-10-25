@@ -86,7 +86,7 @@ function proposal(state: AssistantProposalCard["state"], scope: "page" | "server
         digest: `sha256:${"a".repeat(64)}`,
         expires_at: "2026-10-24T10:41:00Z",
         state,
-        source_revision: "work-tasks@00000001",
+        source_revision: "worklet-tasks@00000001",
         approve_label: "Create task",
       },
     },
@@ -213,7 +213,7 @@ describe("one row per move of the state machine", () => {
   test("awaiting approval, the page moved: still waiting, the page card marked stale", () => {
     const view = after(...SENT, frame("card", 1, proposal("proposed", "page")), {
       type: "page_moved",
-      revision: "work-tasks@00000002",
+      revision: "worklet-tasks@00000002",
     });
     expect(phase(view)).toBe("awaiting_approval");
     expect(view.turns[0]!.proposals[PROPOSAL_ID]?.pageMoved).toBe(true);
@@ -222,7 +222,7 @@ describe("one row per move of the state machine", () => {
   test("a server proposal is not stale because the page moved", () => {
     const view = after(...SENT, frame("card", 1, proposal("proposed", "server")), {
       type: "page_moved",
-      revision: "work-tasks@00000002",
+      revision: "worklet-tasks@00000002",
     });
     expect(view.turns[0]!.proposals[PROPOSAL_ID]).toBeUndefined();
   });
@@ -270,13 +270,13 @@ describe("one row per move of the state machine", () => {
       {
         type: "action_local",
         actionId: "a3",
-        local: { state: "applied", words: "Applied to Work › Tasks.", undoable: false },
+        local: { state: "applied", words: "Applied to Worklet › Tasks.", undoable: false },
       },
     );
     expect(phase(view)).toBe("working");
     const settled = view.turns[0]!.cards[0]!.card.proposal;
     expect(settled?.state).toBe("applied");
-    expect(settled?.receipt?.summary).toBe("Applied to Work › Tasks.");
+    expect(settled?.receipt?.summary).toBe("Applied to Worklet › Tasks.");
   });
 
   test("applying, the page refused it: working, the card failed in the screen's own words", () => {
@@ -405,10 +405,10 @@ describe("one row per move of the state machine", () => {
       frame("page_context", 1, {
         used: true,
         trimmed: false,
-        page: { title: "Work › Tasks", screen: "work-tasks" },
+        page: { title: "Worklet › Tasks", screen: "worklet-tasks" },
       }),
     );
-    expect(used.turns[0]!.page?.title).toBe("Work › Tasks");
+    expect(used.turns[0]!.page?.title).toBe("Worklet › Tasks");
     const unused = after(...SENT, frame("page_context", 1, { used: false, trimmed: false }));
     expect(unused.turns[0]!.page).toBeNull();
   });
@@ -583,7 +583,7 @@ describe("a reloaded transcript", () => {
             role: "user",
             text: "One?",
             created_at: "2026-10-24T09:00:00Z",
-            page: { title: "Work › Tasks", screen: "work-tasks" },
+            page: { title: "Worklet › Tasks", screen: "worklet-tasks" },
           },
           {
             id: "a1",
@@ -612,7 +612,7 @@ describe("a reloaded transcript", () => {
       },
     });
     expect(view.turns.map((t) => [t.question, t.phase, t.page?.title ?? null])).toEqual([
-      ["One?", "completed", "Work › Tasks"],
+      ["One?", "completed", "Worklet › Tasks"],
       ["Two?", "working", null],
     ]);
     expect(view.turns[1]!.seq).toBe(7);

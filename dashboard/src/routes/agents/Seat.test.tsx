@@ -164,7 +164,7 @@ const DOCUMENT: CompanyDocument = {
 
 const OPERATOR = {
   login: "ops",
-  grants: ["admin", "tracker", "knowledge"],
+  grants: ["admin", "worklet", "doclet"],
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -190,7 +190,7 @@ const DEFAULTS: Record<string, unknown> = {
   // card reads the card whole; a case about a lock names the reader it means.
   viewer: {
     login: "token:ops",
-    grants: ["admin", "tracker", "knowledge"],
+    grants: ["admin", "worklet", "doclet"],
     handle: "",
     owner: "",
     acts: [],
@@ -461,7 +461,7 @@ test("an agent's profile has six tabs, and Work counts the engine's total rather
   await waitFor(() => expect(work?.textContent).toBe("Work7"));
   // AND THE OVERVIEW'S CARD OFFERS ALL SEVEN, from the same answer.
   expect(screen.getByRole("link", { name: "All 7" }).getAttribute("href")).toBe(
-    "#/work/tasks?assignee=swe",
+    "#/worklet/tasks?assignee=swe",
   );
 });
 
@@ -1126,7 +1126,7 @@ test("a turn on a task whose key another claimed names and opens that task, not 
   const card = document.querySelector(".prof-turn") as HTMLElement;
   await waitFor(() => expect(card.textContent).toContain("The duplicate"));
   expect(card.textContent).not.toContain("The claimant");
-  expect(card.querySelector("a.work-key")?.getAttribute("href")).toBe("#/work/t-dup");
+  expect(card.querySelector("a.work-key")?.getAttribute("href")).toBe("#/worklet/t-dup");
   expect(askedFor("work_item_turns").map((q) => q.params)).toEqual([{ id: "t-dup", limit: 1 }]);
 });
 
@@ -1141,7 +1141,7 @@ test("the current turn names its round against the granted cap, its calls and th
         items: [{ key: "ENG-7", title: "Something else entirely", status: "todo" }],
         total_hint: 1,
       },
-      // A NATIVE TASK IS ASKED FOR BY ITS ID: its key may be one another task
+      // A WORKLET TASK IS ASKED FOR BY ITS ID: its key may be one another task
       // claimed first, which would answer about the claimant.
       work_item: (p: Record<string, unknown>) =>
         p.id === "i-412"
@@ -1162,7 +1162,7 @@ test("the current turn names its round against the granted cap, its calls and th
     limit: 1,
   });
   // And opened by the address the answer gives: the key, which it claimed.
-  expect(card.querySelector("a.work-key")?.getAttribute("href")).toBe("#/work/ENG-412");
+  expect(card.querySelector("a.work-key")?.getAttribute("href")).toBe("#/worklet/ENG-412");
   // THE ENGINE'S ROUND, one-based, against what the phase was GRANTED.
   expect(card.textContent).toContain("Execute · round 7 of 25");
   const rows = [...card.querySelectorAll(".prof-feed-row")];
@@ -1201,7 +1201,7 @@ test("the setup card reads the chart's model and tools, and the document's own r
 test("without the document the setup card says whose read it is, not that nothing is set", async () => {
   mount("#/company/org/seats/swe", {
     answers: {
-      viewer: { login: "jane.doe", grants: ["tracker"], handle: "jane", owner: "jane", acts: [] },
+      viewer: { login: "jane.doe", grants: ["worklet"], handle: "jane", owner: "jane", acts: [] },
     },
   });
   await settle();
@@ -1217,12 +1217,12 @@ test("without the document the setup card says whose read it is, not that nothin
 // ---------------------------------------------------------------------------
 
 // A COLLEAGUE'S DAY IS THEIRS, and the reason a reader is not shown it depends
-// on what they hold: with Tracker it is whose the record is (their lead and an
+// on what they hold: with Worklet it is whose the record is (their lead and an
 // admin read it too); without, it is the app their whole day is kept in.
 test("a colleague's day is withheld with the reason, and never asked for", async () => {
   mount("#/company/org/seats/jane", {
     answers: {
-      viewer: { login: "t-cto", grants: ["tracker"], handle: "cto", owner: "cto", acts: [] },
+      viewer: { login: "t-cto", grants: ["worklet"], handle: "cto", owner: "cto", acts: [] },
     },
   });
   await settle();
@@ -1238,7 +1238,7 @@ test("a colleague's day is withheld with the reason, and never asked for", async
   });
   await settle();
   expect(
-    screen.getByText("Their day needs Tracker access. An admin can give it to you."),
+    screen.getByText("Their day needs Worklet access. An admin can give it to you."),
   ).toBeTruthy();
   expect(askedFor("work_person")).toEqual([]);
 });
@@ -1276,7 +1276,7 @@ const JANE_QUEUE = {
 test("a person's Priorities tile counts what is still open, as the Work tab does", async () => {
   mount("#/company/org/seats/jane", {
     answers: {
-      viewer: { login: "jane-token", grants: ["tracker"], handle: "jane", owner: "jane", acts: [] },
+      viewer: { login: "jane-token", grants: ["worklet"], handle: "jane", owner: "jane", acts: [] },
       work_person: {
         handle: "jane",
         priorities: ["t1", "t2", "t-done"],
@@ -1323,7 +1323,7 @@ test("your own day's Unread is the sidebar badge's count, and the day is yours",
     answers: {
       viewer: {
         login: "jane-token",
-        grants: ["tracker"],
+        grants: ["worklet"],
         handle: "jane",
         owner: "jane",
         name: "Jane Founder",
@@ -1379,7 +1379,7 @@ test("an operator reading a colleague's day asks that colleague's inbox", async 
     answers: {
       viewer: {
         login: "ops",
-        grants: ["admin", "tracker", "knowledge"],
+        grants: ["admin", "worklet", "doclet"],
         handle: "cto",
         owner: "cto",
         acts: [],
@@ -1771,8 +1771,8 @@ test("the turns list says it holds a page, and loads the one before it", async (
   expect(within(card).queryByRole("button", { name: "Load older turns" })).toBeNull();
 });
 
-// A KEYLESS ITEM IS NAMED SHORT, whole on its title: `native:<uuid>` took the
-// whole cell on a phone and laid the summary out one letter per line.
+// A KEYLESS ITEM IS NAMED SHORT, whole on its title: `<backend>:<uuid>` took
+// the whole cell on a phone and laid the summary out one letter per line.
 test("a turn's keyless work item is named by its kind and the head of its id", async () => {
   const id = "b375beaf-1d2e-4c6a-9f0b-2a1c3d4e5f60";
   mount("#/company/org/seats/swe?tab=turns", {
@@ -1788,10 +1788,10 @@ test("a turn's keyless work item is named by its kind and the head of its id", a
   });
   await settle();
   const keyless = screen.getByText("task b375beaf");
-  expect(keyless.getAttribute("title")).toContain(`native:${id}`);
+  expect(keyless.getAttribute("title")).toContain(`Worklet task ${id}`);
   expect(keyless.className).toContain("turn-what-key");
   expect(screen.getByText("ENG-29").className).toContain("turn-what-key");
-  expect(document.body.textContent).not.toContain(`native:${id}`);
+  expect(document.body.textContent).not.toContain(`Worklet task ${id}`);
 });
 
 const memoryOf = (over: Record<string, unknown> = {}) => ({
@@ -2008,7 +2008,7 @@ test("a long ask is listed as its marked opening and read whole on demand", asyn
 });
 
 // THE CONVERSATION COLUMN IS CAPPED AND A UUID IS CUT TO ITS HEAD: printed
-// whole, a native task's `work:task:<uuid>` took the grid's width and left
+// whole, a Worklet task's `work:task:<uuid>` took the grid's width and left
 // "What it did" a third of it.
 test("an episode's conversation prints a uuid's head, and the whole key on its title", async () => {
   const key = "work:task:4d631f6d-5107-46f0-8043-a1f9d7a74abc";
@@ -2075,7 +2075,7 @@ function header(title: string): HTMLElement {
 // A THREAD'S KEY IS ITS ONLY IDENTITY, SO IT HAS THE ROW: its own line, whole,
 // with what is known about the thread as the caption under it. Beside a tag
 // and a full timestamp it kept 78px of the list and ENG-28 to ENG-32 all read
-// `work:ENG-…`. A native task's uuid is cut to its head, the key whole on the
+// `work:ENG-…`. A Worklet task's uuid is cut to its head, the key whole on the
 // row's title.
 test("a thread's key has its row, a uuid cut to its head and the key on the title", async () => {
   const native = "work:task:b375beaf-52ee-4db1-a1e3-06d450fbd9f1";
@@ -2319,7 +2319,7 @@ test("the settings tab asks for the company document once", async () => {
 test("a reader the document is not asked for is told the grant, never that none is active", async () => {
   const reader = {
     login: "jane.doe",
-    grants: ["tracker"],
+    grants: ["worklet"],
     handle: "jane",
     owner: "jane",
     acts: [],
@@ -2420,15 +2420,15 @@ test("the trail names the seat and the unit it sits in, and titles the tab with 
   expect(document.title).toBe("SWE · Crewlet");
 });
 
-// WITHOUT CREWLET WORKS, MESSAGE AND ASSIGN TAKE THEIR WRAPPERS WITH THEM:
+// WITHOUT WORKLET, MESSAGE AND ASSIGN TAKE THEIR WRAPPERS WITH THEM:
 // the buttons drew nothing and their empty spans still took the bar's gap.
 // Mutation: keep the spans whatever the services, and the bar holds two
 // empty children.
-test("a company running no Crewlet Works leaves no empty slot in the seat's bar", async () => {
+test("a company running no Worklet leaves no empty slot in the seat's bar", async () => {
   mount("#/company/org/seats/swe", {
     shell: true,
     agents: [WORKING],
-    org: { ...ORG, services: { tracker: "jira", knowledge: "native" } } as OrgProjection,
+    org: { ...ORG, services: { tracker: "jira", knowledge: "doclet" } } as OrgProjection,
   });
   await settle();
   const bar = document.getElementById(PAGE_ACTIONS_SLOT) as HTMLElement;

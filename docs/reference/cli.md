@@ -23,7 +23,7 @@ subcommand below is served by it.
 | `crewlet retention maintenance status\|abandon\|exclude -stream NAME` | Where that window stands, who has not acknowledged, and the two gestures that act on it |
 | `crewlet retention reanchor -stream NAME -confirm <created_at> [-force] [-discard]` | Adopt a recreated stream, or a broker restored from an older copy: move that one log to its next generation, declaring every position below it comparable and safely stale, and resume its applier with no restart. A recreated log is followed from its first surviving record, a restored one from its end, and one continuing in a generation only an evicted peer held from this node's own checkpoint, that generation's records void. A restored log holding records written after the restore that this node's rows do not hold is refused unless `-discard` accepts that they are applied on no node |
 | `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** — the cron hook that turns a lapsed restore test into a failing check. Talks to no node |
-| `crewlet work purge <item> -reason TEXT -confirm <item-key> [-op-id ID]` | Destroy a task and every row it produced, on every node. The one operation with no inverse, restricted to a credential holding `admin`, and never a seat. Its children move onto its own parent rather than being destroyed with it |
+| `crewlet worklet purge <item> -reason TEXT -confirm <item-key> [-op-id ID]` | Destroy a task and every row it produced, on every node. The one operation with no inverse, restricted to a credential holding `admin`, and never a seat. Its children move onto its own parent rather than being destroyed with it |
 | `crewlet objects migrate -to s3 -target <path> [-final]` | Moves the company's files from the fleet's NATS bucket to an S3-compatible bucket, through a running data node: a copy pass on a live fleet, then `-final` with every node in maintenance mode, which seals the NATS bucket and moves the fleet's record. See [Moving the files to a bucket](../concepts/object-store.md#moving-the-files-to-a-bucket). The token takes `admin` |
 | `crewlet objects status [config] [-json]` | Where the company's files are kept — the [object store's](../concepts/object-store.md) backend, `nats` or an S3 bucket — read from a running node, the node that ran the collector's last passes, and what each found: objects listed and deleted and unfinished uploads abandoned by the last collection; files named, **missing** and **damaged** by the last audit to finish, with those files listed. `-json` prints the fleet view's `objects` block as the node answered it. The token takes `admin` |
 | `crewlet fleet broker list [config] [-json]` | The fleet broker's membership: each live node's broker kind (`member`, `leaf`, `client`, or `unknown` for a kind this build does not know) beside how the JetStream metadata group counts it — read through a member — and, in words, every disagreement: a member gone for good that the group still counts in every election, with the command that removes it. The token takes `admin` |
@@ -544,7 +544,7 @@ optional. `seats` lists which seats are free.
 | `create` | Create somebody directly, active from the moment it lands. **A person** — `create -email E -seat SEAT [-login L] [-name N] [-grants G,...]`, every app when `-grants` is left out — needs the address they sign in with and the vacant human seat they will hold, and the command refuses either missing before it reads any config. `-login` may be left out: the node proposes one from the address (`jane.doe@example.com` → `jane.doe`), as an invitation's screen does, and the command prints the login it took. It prints their id, login and seat and the outcome, and then their **first password link, once** — `<api.external_url>/dashboard#/reset/<id>.<secret>`, good for a week — which sets their first password once and signs nobody in: they sign in afterwards, enrolling a second factor there where the deployment requires one. Send it to them yourself; this engine sends no mail. See [A person created directly gets their first password link](../concepts/identity-and-access.md#a-person-created-directly-gets-their-first-password-link). **A service account** — `create -kind machine -login L -grants G,... [-seat SEAT] [-name N]` — needs its login, because it has no address to be found by, and `-grants`, because nobody is behind it to have meant a default (`-grants none` for the overview alone; a missing one is refused before any config is read); `-seat` is optional and binds it to act as that human seat (`-login token:<id> -seat SEAT -grants none` binds a Tier A token in one step — the row carries nothing itself, since the token's permissions are its Tier A entry's). It gets no link — it has no password — and the command prints the `iam token -person ID` that mints its token. **Every principal enrols with a login** in its kind's grammar — a person's is dotted (`jane.doe`), a machine's coloned (`ci:release`, or `token:<id>`), at most 64 characters either way — and anything else is refused |
 | `bind ID SEAT` | **Move a person to another vacant human seat**, or bind a service account to one, so they act as it on the engine's own surface — its inbox, its day, the lead relations it holds. `SEAT` is the seat's handle, and it must be a **human** seat that no person and no open invitation holds. A Tier A token acts under the login `token:<id>`, so binding one is a service account's row under that login — `create -kind machine -login token:<id> -seat SEAT -grants none` makes it bound. See [Humans in the Org Chart](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api) |
 | `unbind ID` | Take a **service account's** seat back. A person always holds a human seat, so the node refuses to unbind one (`seat_required`) and the command names what does free it: `bind ID SEAT` moves them to another seat, `remove ID` frees it |
-| `grant ID` | Change someone's permissions: `-grants`, the whole set: `admin` (which stores every app beside it), `tracker`, `knowledge`, `artifacts`, or `none` |
+| `grant ID` | Change someone's permissions: `-grants`, the whole set: `admin` (which stores every app beside it), `worklet`, `doclet`, `artifacts`, or `none` |
 | `suspend ID` / `activate ID` | Stop somebody acting, or let them again. The row stays either way; a suspension also ends every session, token and password reset link they hold, which activating does not bring back |
 | `remove ID` | Tombstone them — which frees the seat they held — and erase every sealed value of theirs — name, address, second factor — from every node's rows, the invitation and trail rows that outlive them included. The identity log keeps the records that wrote those values, sealed under the keyring, until the retention trim passes them, and a backup keeps what it held until you delete it; their login is not sealed and outlives the removal in the clear. See [Removing somebody erases what is theirs from every node's rows](../concepts/identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-nodes-rows) |
 | `revoke ID` | End every session, token and password reset link they hold, by raising their sign-out count |
@@ -566,7 +566,7 @@ optional. `seats` lists which seats are free.
 | `-api URL` | the `api.host:port` in `-config` | The running node to talk to |
 | `-json` | off | Print the raw answer rather than a table |
 | `-reason TEXT` | the surface's own | Saved with the change for the audit trail |
-| `-grants G,...` | see below | A comma-separated list of `admin`, `tracker`, `knowledge` and `artifacts`, or the word `none` for an empty one — anything else is refused before any config is read, naming the set. `admin` also sends every app, as the dashboard's picker stores it, so taking admin away later leaves the apps. Left out: on a person's `invite` or `create`, **every app** and not admin; on a service account's `create`, refused — it has no default; on `grant`, nothing is changed; on `token`, everything the owner holds. `none` stands alone — beside a permission it is refused, since the two say opposite things — and the flag is refused on every command but `invite`, `create`, `grant` and `token` rather than ignored |
+| `-grants G,...` | see below | A comma-separated list of `admin`, `worklet`, `doclet` and `artifacts`, or the word `none` for an empty one; anything else is refused before any config is read, naming the set. `admin` also sends every app, as the dashboard's picker stores it, so taking admin away later leaves the apps. Left out: on a person's `invite` or `create`, **every app** and not admin; on a service account's `create`, refused (it has no default); on `grant`, nothing is changed; on `token`, everything the owner holds. `none` stands alone (beside a permission it is refused, since the two say opposite things), and the flag is refused on every command but `invite`, `create`, `grant` and `token` rather than ignored |
 | `-person ID` | yourself | Whose credentials or sessions, and — on `token` — the **service account** a minted token is for; a person's id is refused there, whoever asks |
 | `-login L` | — | On `create`, the login to enrol under — required for a service account, and proposed from the address for a person given none. On `token`, **your own** login: the command signs in as you for the one request, mints, and signs out. The password and any second-factor code are read from the terminal or piped in, and **no flag takes either**: a recovery code on a command line lands in shell history and `ps`, and stays good there — a sign-in refused for a mistyped password spends nothing |
 | `-email E` | — | On `create`, the address a person signs in with — required for a person, optional for a service account |
@@ -912,7 +912,7 @@ crewlet budgets show                       # usage per scope
 | `-url` | the `api` block of the config named on the command line | The running node's base URL. A wildcard bind (`0.0.0.0`, `::`) becomes the loopback address, because a wildcard is not something anything can dial |
 
 **The credential is `CREWLET_API_TOKEN` and nothing else**, here and on every
-command that talks to a running node — `backup`, `retention`, `work`,
+command that talks to a running node: `backup`, `retention`, `worklet`,
 `objects`, `fleet`, `seats`, `secrets`, `config` and `iam` too. Every guarded route needs one,
 reads included. It is never a flag: a token typed as an argument is in the
 shell history, in `ps`, and in any CI log that echoes the command, so
@@ -1033,10 +1033,10 @@ what the copy is a copy *of*, and how a restore uses it.
 
 ---
 
-## `crewlet work`
+## `crewlet worklet`
 
 ```
-crewlet work purge <item> -reason TEXT -confirm <item-key>
+crewlet worklet purge <item> -reason TEXT -confirm <item-key>
     [-op-id ID] [<config.yaml>] [-url URL]
 ```
 
@@ -1045,11 +1045,11 @@ company does to its tasks is done by seats through their own tools, or by a
 person through the [write surface](api-endpoints.md#the-human-write-surface)
 the dashboard is built on. The one here is the operation no seat may perform,
 which an operator acting on an erasure request runs from a terminal and a
-runbook — and it goes through that same surface's own route,
-`POST /work/items/{key}/purge`, so it is decided by the same authority table:
+runbook, and it goes through that same surface's own route,
+`POST /worklet/items/{key}/purge`, so it is decided by the same authority table:
 `admin`, and never a seat.
 
-### `crewlet work purge`
+### `crewlet worklet purge`
 
 Destroys a task and every row it produced: its own row, its comments, its body
 revisions, its checklist, its field values, its watchers, its relations, its

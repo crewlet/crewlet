@@ -31,10 +31,10 @@ vi.mock("./viewer.ts", () => ({ useViewer: vi.fn() }));
 
 const BOUND: ViewerState = {
   login: "jane.founder",
-  grants: ["tracker"],
+  grants: ["worklet"],
   admin: false,
-  tracker: true,
-  knowledge: false,
+  worklet: true,
+  doclet: false,
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -290,7 +290,7 @@ test("a refusal on authority carries the grants the engine named, and draws them
         error: "unauthorized",
         tool: "set_pins",
         reason: "needs access this person does not hold",
-        grants: ["tracker"],
+        grants: ["worklet"],
       },
       403,
     ),
@@ -304,8 +304,8 @@ test("a refusal on authority carries the grants the engine named, and draws them
   fireEvent.click(screen.getByRole("button", { name: "Pin" }));
   const refusal = () => document.querySelector(".crewlet-refusal-strip");
   await waitFor(() => expect(refusal()).not.toBeNull());
-  expect(seen).toMatchObject({ grants: ["tracker"] });
-  expect(refusal()?.textContent).toContain("You need Tracker access for this. Ask an admin.");
+  expect(seen).toMatchObject({ grants: ["worklet"] });
+  expect(refusal()?.textContent).toContain("You need Worklet access for this. Ask an admin.");
 });
 
 // AND A REFUSAL THAT IS NOT ON AUTHORITY NAMES NONE, rather than a grant

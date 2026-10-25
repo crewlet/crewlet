@@ -192,8 +192,8 @@ func TestTheSurfaceHandedToTheTurnCarriesWhatLeavesTheProcess(t *testing.T) {
 
 // WHAT A SEAT HOLDS AND WHAT IT HAS TO GO AND FIND reach the turn too, or a
 // delivery refusal cannot tell them apart. It once could not: every refusal
-// sent the seat to `list_mcp_server_tools`, and a seat woken on the engine's
-// own tracker — whose tools no discovery call lists — went to the only MCP
+// sent the seat to `list_mcp_server_tools`, and a seat woken on Worklet
+// (whose tools no discovery call lists) went to the only MCP
 // server it held and posted in chat instead. See [turn.Remedy].
 func TestTheSurfaceHandedToTheTurnSaysWhichToolsSitBehindDiscovery(t *testing.T) {
 	t.Parallel()

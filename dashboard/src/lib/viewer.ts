@@ -6,7 +6,7 @@
  * called the result "My work"; `work_views` was asked without a viewer, so no
  * pinned or personal view could arrive at all and a shared board was
  * pixel-identical to one somebody had pinned; and the five `preset=` values
- * the tracker's grammar resolves against the caller's own identity were parsed,
+ * Worklet's grammar resolves against the caller's own identity were parsed,
  * tested, documented and never sent.
  *
  * The answer is the PRINCIPAL the engine resolved for this browser — a person
@@ -43,7 +43,7 @@
 import { createContext, createElement, useContext, useMemo, type ReactNode } from "react";
 import { useQuery } from "./useQuery.ts";
 import { useFrameSession } from "./frameSession.ts";
-import { ADMIN, KNOWLEDGE, TRACKER, holds } from "./access.ts";
+import { ADMIN, DOCLET, WORKLET, holds } from "./access.ts";
 import type { SessionAnswer, Viewer } from "~/protocol/index.ts";
 import type { AssistantViewerReason } from "~/contract/assistant.ts";
 import { assistantUnavailable } from "~/protocol/assistantWire.ts";
@@ -67,13 +67,13 @@ export interface ViewerState {
    */
   admin: boolean;
   /**
-   * Whether this caller holds the TRACKER — every work item, project, view,
-   * inbox and queue question. A surface that reads the tracker asks nothing
-   * without it, and says what would open it rather than drawing a refusal.
+   * Whether this caller holds WORKLET: every work item, project, view, inbox
+   * and queue question. A surface that reads Worklet asks nothing without it,
+   * and says what would open it rather than drawing a refusal.
    */
-  tracker: boolean;
-  /** Whether this caller holds the KNOWLEDGE base — every page question. */
-  knowledge: boolean;
+  worklet: boolean;
+  /** Whether this caller holds DOCLET: every page question. */
+  doclet: boolean;
   /** The seat the directory binds this caller to, or "" — see the note above. */
   handle: string;
   /**
@@ -163,8 +163,8 @@ function useViewerRead(): ViewerState {
     login,
     grants,
     admin: holds(grants, ADMIN),
-    tracker: holds(grants, TRACKER),
-    knowledge: holds(grants, KNOWLEDGE),
+    worklet: holds(grants, WORKLET),
+    doclet: holds(grants, DOCLET),
     handle,
     owner: data?.owner ?? "",
     name: data?.name ?? "",

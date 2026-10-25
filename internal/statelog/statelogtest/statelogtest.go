@@ -1,7 +1,7 @@
 // Package statelogtest is the contract suite every statelog domain must pass.
 //
-// One suite, every domain — the engine's own work tracker, the compacted
-// vector domain, anything a later build registers. A domain the suite has not
+// One suite, every domain: Worklet, the compacted vector domain, anything a
+// later build registers. A domain the suite has not
 // certified does not exist as far as the framework is concerned, and a
 // divergence between two domains becomes a failing test here rather than a
 // production-only surprise on the one node that happens to run the other.

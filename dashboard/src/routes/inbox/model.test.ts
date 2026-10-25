@@ -252,7 +252,7 @@ describe("the quiet sentences", () => {
 });
 
 // A PARKED RUN'S TASK is a turn's: its work item carries no collision flag, so
-// the pane opens, threads and replies by the native task's id, since a key another
+// the pane opens, threads and replies by the Worklet task's id, since a key another
 // task claimed first would read and write the claimant's conversation.
 test("a parked run's task is addressed by its id", () => {
   const run = {

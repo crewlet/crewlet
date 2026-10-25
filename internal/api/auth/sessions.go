@@ -258,7 +258,7 @@ const RetryIdentitySeconds = 2
 // IT TAKES THE CAUSE because the identity surfaces answered every state-log
 // refusal with the constant: an identity write refused `record_too_large` or
 // `log_full` told a client to come back in two seconds for a write that could
-// never land, which the same refusal on /work did not. /iam and
+// never land, which the same refusal on /worklet did not. /iam and
 // /auth are held to naming the cause at every 503 by a gate in each package,
 // which refuses the constant there — a site with nothing in hand passes nil,
 // so the absence of a cause is written down rather than defaulted.

@@ -39,8 +39,8 @@ func TestARefusalReadsAsTheAPISaidIt(t *testing.T) {
 		resp exec.Response
 		want wire.Refusal
 	}{
-		{"an authority deny", deny(authz.ReasonNoGrant, iam.GrantTracker),
-			wire.Refusal{Code: "unauthorized", Message: unauthorized, Grants: []string{"tracker"}}},
+		{"an authority deny", deny(authz.ReasonNoGrant, iam.GrantWorklet),
+			wire.Refusal{Code: "unauthorized", Message: unauthorized, Grants: []string{"worklet"}}},
 		{"the assistant's scope", deny(authz.ReasonAssistScope),
 			wire.Refusal{Code: "unauthorized", Message: unauthorized, Grants: []string{}}},
 		{"a verb never the assistant's", deny(authz.ReasonAssistRefused),

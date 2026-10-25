@@ -43,7 +43,7 @@ func (m FullMeter) outcome() toolloop.SpendOutcome {
 		Window: "2026-10-24", ResetsAt: m.ResetsAt}
 }
 
-// Task is GET /work/{id}'s answer for one task, as the route writes it.
+// Task is GET /worklet/{id}'s answer for one task, as the route writes it.
 func Task(key, title, body string) exec.Response {
 	return evals.JSON(map[string]any{"task": map[string]any{"id": evals.ID("task/" + key).String(),
 		"key": key, "title": title, "status": "todo", "priority": "none",
@@ -51,7 +51,7 @@ func Task(key, title, body string) exec.Response {
 		"body": body, "version": 3, "updated_at": evals.Epoch.Format(time.RFC3339)}})
 }
 
-// Routes answers each request by its method and path, "GET /work/ENG-7", and
+// Routes answers each request by its method and path, "GET /worklet/ENG-7", and
 // 404 in the engine's envelope for any other.
 func Routes(answers map[string]exec.Response) func(exec.Request) exec.Response {
 	return func(r exec.Request) exec.Response {

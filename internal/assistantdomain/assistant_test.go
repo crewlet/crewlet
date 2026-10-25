@@ -36,7 +36,7 @@ func TestAnotherPersonsConversationIsNotFound(t *testing.T) {
 		CardID: card, MessageID: message,
 		Card: wire.Card{Type: wire.CardNotice, Notice: &wire.NoticeCard{
 			Tone: wire.NoticeTones[0], Text: "Spend is up"}},
-	}, []string{"tracker"}); err != nil {
+	}, []string{"worklet"}); err != nil {
 		t.Fatalf("record a card: %v", err)
 	}
 	proposal := n.propose(adaCall, turn)
@@ -116,7 +116,7 @@ func TestATranscriptReadsBackWhatWasRecorded(t *testing.T) {
 		got.Proposals[0].State != wire.ProposalProposed ||
 		string(got.Proposals[0].Body) != `{"title":"Payroll review"}`:
 		t.Errorf("the proposals read %+v", got.Proposals)
-	case len(got.Turns) != 1 || got.Turns[0].Page == nil || got.Turns[0].Page.Title != "Work › Tasks":
+	case len(got.Turns) != 1 || got.Turns[0].Page == nil || got.Turns[0].Page.Title != "Worklet › Tasks":
 		t.Errorf("the turn reads %+v", got.Turns)
 	case got.Conversation.OpenTurn != turn:
 		t.Errorf("the open turn reads %s, want %s", got.Conversation.OpenTurn, turn)
@@ -597,7 +597,7 @@ func TestNothingSaidIsStoredInTheClear(t *testing.T) {
 	}
 	for _, table := range assistantdomain.ReproducibleTables {
 		got := n.table(table)
-		for _, plain := range []string{"PAYROLL", "Payroll review", "Work › Tasks", "Create task"} {
+		for _, plain := range []string{"PAYROLL", "Payroll review", "Worklet › Tasks", "Create task"} {
 			if strings.Contains(got, plain) {
 				t.Errorf("%s holds %q in the clear:\n%s", table, plain, got)
 			}

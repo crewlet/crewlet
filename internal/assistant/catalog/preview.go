@@ -164,7 +164,7 @@ func updateTaskPreview(t Tool) proposal.Previewer {
 			return proposal.Preview{}, err
 		}
 		a := Args(args)
-		doc, err := readGet(ctx, read, "GET /work/{id}",
+		doc, err := readGet(ctx, read, "GET /worklet/{id}",
 			map[string]string{"id": a.String("item")}, nil)
 		if err != nil {
 			return proposal.Preview{}, err
@@ -353,7 +353,7 @@ func commentPreview(t Tool) proposal.Previewer {
 			return proposal.Preview{}, err
 		}
 		a := Args(args)
-		doc, err := readGet(ctx, read, "GET /work/{id}",
+		doc, err := readGet(ctx, read, "GET /worklet/{id}",
 			map[string]string{"id": a.String("item")}, nil)
 		if err != nil {
 			return proposal.Preview{}, err
@@ -375,7 +375,7 @@ func answerPreview(t Tool) proposal.Previewer {
 			return proposal.Preview{}, err
 		}
 		a := Args(args)
-		doc, err := readGet(ctx, read, "GET /work/comments", nil,
+		doc, err := readGet(ctx, read, "GET /worklet/comments", nil,
 			query(a).str("item", "item").fixed("limit", "50").values())
 		if err != nil {
 			return proposal.Preview{}, err
@@ -435,7 +435,7 @@ func prioritiesPreview(t Tool) proposal.Previewer {
 		a := Args(args)
 		handle := a.String("handle")
 		if handle == "" {
-			mine, mineErr := readGet(ctx, read, "GET /work/my-work", nil, nil)
+			mine, mineErr := readGet(ctx, read, "GET /worklet/my-work", nil, nil)
 			if mineErr != nil {
 				return proposal.Preview{}, mineErr
 			}
@@ -462,7 +462,7 @@ func prioritiesPreview(t Tool) proposal.Previewer {
 
 // personRoute is the read of a person's tracker record, which a priority
 // change is bound to.
-const personRoute = "GET /work/people/{handle}"
+const personRoute = "GET /worklet/people/{handle}"
 
 // inboxPreview names the notices a mark_inbox call marks, read through the
 // grant from the person's own inbox: a card that said "Mark read: 12 notices"
@@ -520,7 +520,7 @@ func noticeNames(ctx context.Context, read proposal.Read, ids []string) (map[str
 		if cursor != "" {
 			q.Set("cursor", cursor)
 		}
-		doc, err := readGet(ctx, read, "GET /work/inbox", nil, q)
+		doc, err := readGet(ctx, read, "GET /worklet/inbox", nil, q)
 		if err != nil {
 			return nil, err
 		}
@@ -678,7 +678,7 @@ func editPagePreview(t Tool) proposal.Previewer {
 			return proposal.Preview{}, err
 		}
 		a := Args(args)
-		doc, err := readGet(ctx, read, "GET /pages/{id}",
+		doc, err := readGet(ctx, read, "GET /doclet/pages/{id}",
 			map[string]string{"id": a.String("page")}, nil)
 		if err != nil {
 			return proposal.Preview{}, err
@@ -803,10 +803,10 @@ var Revision proposal.Revisions = func(ctx context.Context, read proposal.Read, 
 	path, versionAt, idAt := "", "", ""
 	switch r.Kind {
 	case proposal.RevisionTask:
-		req, err = get("GET /work/{id}", map[string]string{"id": r.ID}, nil)
+		req, err = get("GET /worklet/{id}", map[string]string{"id": r.ID}, nil)
 		path, idAt, versionAt = "task", "key", "version"
 	case proposal.RevisionPage:
-		req, err = get("GET /pages/{id}", map[string]string{"id": r.ID}, nil)
+		req, err = get("GET /doclet/pages/{id}", map[string]string{"id": r.ID}, nil)
 		path, idAt, versionAt = "page", "id", "version"
 	case proposal.RevisionArtifact:
 		req, err = get("GET /artifacts/{id}", map[string]string{"id": r.ID}, nil)

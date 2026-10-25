@@ -173,7 +173,7 @@ export function AgentsHeader({
  * the page shows: the Org chart's sections.
  *
  * ASKED THE GATE THE BUILDER ASKS (`useOrgWriteAccess`): a reader holding only
- * Tracker was offered an enabled Edit org beside a disabled Add seat, and the
+ * Worklet was offered an enabled Edit org beside a disabled Add seat, and the
  * page it opened refused them. Never hidden: the control says why.
  */
 export function EditOrgButton() {

@@ -4,7 +4,7 @@ data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":
 
 id: 98857d10-0497-5792-b9ae-1449110c2ff5.2
 event: page_context
-data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":2,"at":"2026-10-24T09:41:00Z","kind":"page_context","page_context":{"used":true,"trimmed":false,"page":{"title":"Work › Tasks","screen":"work"}}}
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":2,"at":"2026-10-24T09:41:00Z","kind":"page_context","page_context":{"used":true,"trimmed":false,"page":{"title":"Worklet › Tasks","screen":"worklet-tasks"}}}
 
 id: 98857d10-0497-5792-b9ae-1449110c2ff5.3
 event: status

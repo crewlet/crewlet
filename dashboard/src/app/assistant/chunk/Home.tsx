@@ -48,7 +48,7 @@ interface Anywhere {
   /** Whether it fills the composer instead of asking: a change, in the person's words. */
   fills?: string;
   /** Whether the reader may ask it. */
-  offered: (v: { tracker: boolean; knowledge: boolean; acts: readonly string[] }) => boolean;
+  offered: (v: { worklet: boolean; doclet: boolean; acts: readonly string[] }) => boolean;
 }
 
 const ANYWHERE: readonly Anywhere[] = [
@@ -74,13 +74,13 @@ const ANYWHERE: readonly Anywhere[] = [
     key: "shipped",
     icon: <PackageGlyph size="sm" />,
     words: "What shipped this week?",
-    offered: (v) => v.tracker,
+    offered: (v) => v.worklet,
   },
   {
     key: "runbook",
     icon: <BookOpenGlyph size="sm" />,
     words: "Where is the on-call runbook?",
-    offered: (v) => v.knowledge,
+    offered: (v) => v.doclet,
   },
   {
     key: "pause",
@@ -183,7 +183,7 @@ export function Home({ name, onAsk, onFill, now }: HomeProps) {
   }
 
   const offered = ANYWHERE.filter((row) =>
-    row.offered({ tracker: viewer.tracker, knowledge: viewer.knowledge, acts: viewer.acts }),
+    row.offered({ worklet: viewer.worklet, doclet: viewer.doclet, acts: viewer.acts }),
   );
 
   return (

@@ -2216,7 +2216,7 @@ var ErrInvalidToken = errors.New("invalid token request")
 // token is presented to applies its own on every request.
 //
 // ASKED, every name must be one this build knows that the owner holds through
-// [iam.Expand]: a token minted [tracker] by an administrator whose row says
+// [iam.Expand]: a token minted [worklet] by an administrator whose row says
 // only [admin] carries the app they hold through admin, and a name nobody can
 // read is refused rather than minted onto a credential that would carry it
 // for a year.

@@ -4,7 +4,7 @@
  *
  * # Why the frame owns it
  *
- * The tracker grew its own peek (`item=` on the board, a rail rendered by the
+ * Worklet grew its own peek (`item=` on the board, a rail rendered by the
  * board), so a board could peek a task and nothing else in the product could
  * peek anything. Here it is one query key, `peek=`, so any list can open any
  * kind, and a pasted URL carrying one opens the same thing on arrival. The

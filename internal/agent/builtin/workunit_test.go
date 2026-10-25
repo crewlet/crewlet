@@ -9,7 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A CREATE STORES THE CHART'S OWN KEY, not the string the model typed.
@@ -131,7 +131,7 @@ func viewRegistry(t *testing.T, trk *fakeTracker, views builtin.ViewWriter) *too
 			Reader: trk, Writer: trk.as, Units: stubUnits{},
 			ViewWriter: func(builtin.Actor) builtin.ViewWriter { return views },
 			Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
-				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
+				return builtin.Actor{Handle: "ops", Kind: worklet.AuthorOperator}, nil
 			},
 		},
 		Authorize: builtin.Decide(chartLeads),
@@ -145,22 +145,22 @@ func viewRegistry(t *testing.T, trk *fakeTracker, views builtin.ViewWriter) *too
 
 // viewSpy captures the view a save wrote.
 type viewSpy struct {
-	saved []tracker.View
+	saved []worklet.View
 	ops   []string
 }
 
-func (s *viewSpy) WriteView(_ context.Context, opID string, view tracker.View,
-	_ tracker.ViewPrior) (tracker.WriteResult, error) {
+func (s *viewSpy) WriteView(_ context.Context, opID string, view worklet.View,
+	_ worklet.ViewPrior) (worklet.WriteResult, error) {
 
 	s.saved = append(s.saved, view)
 	s.ops = append(s.ops, opID)
-	return tracker.WriteResult{Outcome: statelog.OutcomeApplied}, nil
+	return worklet.WriteResult{Outcome: statelog.OutcomeApplied}, nil
 }
 
 // ViewPrior answers that no view is stored under the id, which is what every
 // case using this spy saves: a new view, or the same one again.
-func (s *viewSpy) ViewPrior(context.Context, string) (tracker.ViewPrior, error) {
-	return tracker.ViewPrior{}, nil
+func (s *viewSpy) ViewPrior(context.Context, string) (worklet.ViewPrior, error) {
+	return worklet.ViewPrior{}, nil
 }
 
 // A VIEW'S UNIT CONTAINER IS STORED UNDER THE TEAM'S KEY.
@@ -175,8 +175,8 @@ func TestASavedViewsUnitContainerIsStoredUnderTheKey(t *testing.T) {
 		trk := newFakeTracker()
 		views := &viewSpy{}
 		reg := viewRegistry(t, trk, views)
-		got := callPlain(t, reg, tracker.SaveWorkViewTool, map[string]any{
-			"container": typed, "name": "Ours", "type": string(tracker.ViewList),
+		got := callPlain(t, reg, worklet.SaveWorkViewTool, map[string]any{
+			"container": typed, "name": "Ours", "type": string(worklet.ViewList),
 		})
 		if got.Failed {
 			t.Fatalf("saving a view in %s failed: %s", typed, got.Output)
@@ -185,7 +185,7 @@ func TestASavedViewsUnitContainerIsStoredUnderTheKey(t *testing.T) {
 			t.Fatalf("saved %d views, want 1", len(views.saved))
 		}
 		container := views.saved[0].Container
-		if container.Kind != tracker.ContainerUnit || container.ID != "plat" {
+		if container.Kind != worklet.ContainerUnit || container.ID != "plat" {
 			t.Errorf("%s was stored as %+v, want the unit container keyed "+
 				"plat", typed, container)
 		}
@@ -198,7 +198,7 @@ func TestAViewStripIsReadWithTheChart(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	reg := viewRegistry(t, trk, &viewSpy{})
-	if got := callPlain(t, reg, tracker.ListWorkViewsTool,
+	if got := callPlain(t, reg, worklet.ListWorkViewsTool,
 		map[string]any{"container": "unit:Platform"}); got.Failed {
 		t.Fatalf("listing a unit's strip failed: %s", got.Output)
 	}

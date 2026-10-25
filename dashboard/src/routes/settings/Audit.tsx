@@ -3,13 +3,13 @@
  *
  * # Why it is one screen and not six
  *
- * Every write in this product is attributed — the tracker records the actor
- * and their kind on every commit, the knowledge base does the same, a config
+ * Every write in this product is attributed: Worklet records the actor and
+ * their kind on every commit, Doclet does the same, a config
  * revision names who created it, a credential row names who last stored it,
  * and the identity estate keeps its own trail of who enrolled, signed in and
  * changed whom. Five subsystems, five honest records, and until now five places
  * to look: a question as ordinary as "what did we change last Tuesday" meant
- * reading the tracker's feed, the wiki's feed, the config history, the
+ * reading Worklet's feed, Doclet's feed, the config history, the
  * credential table and the directory's trail, each in its own chrome, each
  * ordered differently.
  *
@@ -175,7 +175,7 @@ const AUDIT_OFFER: Offer = {
  * nothing else — and a loop that chased cursors until the window was covered
  * would make the cost of opening this screen a property of how busy the
  * company has been, with no bound a reader could see. 200 is the tracker
- * feed's own maximum page (`tracker.MaxActivityRows`); the runtime audit and
+ * feed's own maximum page (`worklet.MaxActivityRows`); the runtime audit and
  * the identity trail are asked for the same so the three windowed sources
  * reach equally far back, and the others are sized to it: the footer says what
  * was loaded, and a window wider than the page reaches is reported rather than
@@ -197,8 +197,8 @@ const POLL_MS = 60_000;
  *  call a person made, the identity estate's own trail, and every artifact's
  *  history. */
 const SOURCES = [
-  "work",
-  "knowledge",
+  "worklet",
+  "doclet",
   "config",
   "credentials",
   "runtime",
@@ -208,8 +208,8 @@ const SOURCES = [
 type Source = (typeof SOURCES)[number];
 
 const SOURCE_LABEL: Record<Source, string> = {
-  work: "Work",
-  knowledge: "Knowledge",
+  worklet: "Worklet",
+  doclet: "Doclet",
   config: "Configuration",
   credentials: "Credentials",
   runtime: "Runtime",
@@ -358,9 +358,9 @@ export interface AuditEntry {
 }
 
 /**
- * WHAT A TRACKER COMMIT WAS ABOUT, as a person would name it.
+ * WHAT A WORKLET COMMIT WAS ABOUT, as a person would name it.
  *
- * A FEED OF UUIDS IS A FEED NOBODY READS, which is the tracker's own rule
+ * A FEED OF UUIDS IS A FEED NOBODY READS, which is Worklet's own rule
  * about its own history — and this screen broke it the moment it showed
  * anything but a task. A task carries a key and a project and a person carry
  * their own names, so those three read fine; a SAVED VIEW is addressed by
@@ -386,11 +386,11 @@ function workSubject(record: WorkActivityRecord): Pick<AuditEntry, "subject" | "
   }
   switch (kind) {
     case "view":
-      return { subject: `view ${short(id)}`, path: ["work", "views", id] };
+      return { subject: `view ${short(id)}`, path: ["worklet", "views", id] };
     case "person":
       return { subject: id, path: ["company", "org", "seats", id] };
     case "project":
-      return { subject: id, path: ["work", id] };
+      return { subject: id, path: ["worklet", id] };
     case "file": {
       // A FILE'S ID IS ITS ADDRESS'S TOKEN, never its path — the path is in
       // the change's own fields, whichever side of it is not empty — and
@@ -399,7 +399,7 @@ function workSubject(record: WorkActivityRecord): Pick<AuditEntry, "subject" | "
       const path = record.fields?.path?.to || record.fields?.path?.from;
       return {
         subject: path ? `${project}/${path}` : `file in ${project}`,
-        path: ["work", project],
+        path: ["worklet", project],
       };
     }
     default:
@@ -625,7 +625,7 @@ export function Audit() {
   const seatOf = useSeatOf();
   // THE WINDOW MOVES ONCE A POLL, NOT ONCE A SECOND. Every windowed source is
   // keyed on the edges it is asked with, and anchored on the one-second clock
-  // those edges were a new question every tick: the tracker's feed and the
+  // those edges were a new question every tick: Worklet's feed and the
   // fleet-wide event read were asked once a second where the poll says once a
   // minute, and an answer slower than a second — the event read waits up to
   // two for a node that does not answer — was dropped for the next tick's, so
@@ -660,7 +660,7 @@ export function Audit() {
     { pollMs: POLL_MS },
   );
   const config = useQuery("config_audit", { limit: PAGE.config }, { pollMs: POLL_MS });
-  // THE RUNTIME AUDIT, windowed by the engine like the tracker's feed: the
+  // THE RUNTIME AUDIT, windowed by the engine like Worklet's feed: the
   // event log narrowed to the source every runtime audit event carries.
   const runtime = useQuery(
     "events",
@@ -674,7 +674,7 @@ export function Audit() {
   const identity = useIdentityTrail(windowParam(range.window), since);
   // A REFUSAL ON AUTHORITY WITHHOLDS ONE SOURCE; IT DOES NOT FAIL THE SCREEN.
   // The section opens on Admin, and the sources answer to different access —
-  // the tracker's history to Tracker, the wiki's to Knowledge, the
+  // Worklet's history to Worklet, Doclet's to Doclet, the
   // configuration's revisions to Admin — so a source withheld from a reader
   // the engine has narrowed (a node that refuses admin keeps every app) is an
   // ordinary answer. The banner replaces the whole grid, so one refused source hid
@@ -683,8 +683,8 @@ export function Audit() {
   // the first read that failed for any other reason, its code and refusal
   // shown together.
   const reads = [
-    { read: work, gesture: "Reading the tracker's history" },
-    { read: knowledge, gesture: "Reading the knowledge base's history" },
+    { read: work, gesture: "Reading Worklet's history" },
+    { read: knowledge, gesture: "Reading Doclet's history" },
     { read: config, gesture: "Reading the configuration's revisions" },
     { read: runtime, gesture: "Reading the runtime audit" },
     { read: artifacts, gesture: "Reading every artifact's history" },
@@ -711,7 +711,7 @@ export function Audit() {
       out.push({
         id: `work:${record.id}`,
         at: record.at,
-        source: "work",
+        source: "worklet",
         kind: record.kind,
         actor: record.actor ?? "",
         actorKind: record.actor_kind ?? "",
@@ -727,7 +727,7 @@ export function Audit() {
       out.push({
         id: `page:${change.id}`,
         at: change.at,
-        source: "knowledge",
+        source: "doclet",
         kind: change.kind,
         actor: change.actor ?? "",
         actorKind: change.actor_kind ?? "",
@@ -735,7 +735,7 @@ export function Audit() {
         subject: change.title || change.page_id,
         // A PURGED PAGE HAS NO TITLE, and no page to open: its entry is the
         // record it ever existed.
-        path: change.title ? ["knowledge", "pages", change.page_id] : undefined,
+        path: change.title ? ["doclet", "pages", change.page_id] : undefined,
         titled: Boolean(change.title),
         detail: plainText(change.excerpt ?? ""),
       });
@@ -880,7 +880,7 @@ export function Audit() {
     // A WINDOWED PAGE CAN FILL TOO. Every row it holds is inside the window,
     // so a full one whose oldest row is still after the window's start is a
     // busy week reaching further back than a page — the same test.
-    oldest(list(workData?.records), PAGE.work, "Work");
+    oldest(list(workData?.records), PAGE.work, "Worklet");
     oldest(
       list(identity.page?.events).map((entry) => ({ at: entry.at ?? "" })),
       PAGE.identity,
@@ -891,7 +891,7 @@ export function Audit() {
       PAGE.runtime,
       "Runtime",
     );
-    oldest(list(knowledgeData?.changes), PAGE.pages, "Knowledge");
+    oldest(list(knowledgeData?.changes), PAGE.pages, "Doclet");
     oldest(
       list(configData).map((revision) => ({ at: revision.created_at })),
       PAGE.config,
@@ -1164,8 +1164,8 @@ export function Audit() {
  *
  * BEST EFFORT, like every other credential read on a screen that is not about
  * credentials: a reader without the grant for `/secrets` still has an audit of
- * everything else, and a failed read here must not take the tracker's and the
- * wiki's rows down with it. But best effort is not SILENT: its failure is the
+ * everything else, and a failed read here must not take Worklet's and
+ * Doclet's rows down with it. But best effort is not SILENT: its failure is the
  * `withheld` sentence the notice carries.
  */
 function useSecrets(): { rows: SecretRow[] | null; withheld: string } {

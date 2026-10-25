@@ -124,7 +124,7 @@ func TestAChangePreparedAgainstAnOldVersionIsStale(t *testing.T) {
 		t.Errorf("an edit against version 1 of a page at 2 = %v, want ErrStale", err)
 	}
 	moved := assistanttest.World()
-	moved["/work/ENG-42"].(map[string]any)["task"].(map[string]any)["version"] = 4
+	moved["/worklet/ENG-42"].(map[string]any)["task"].(map[string]any)["version"] = 4
 	if now, err := catalog.Revision(t.Context(), reader(moved), "task:ENG-42@3"); err != nil ||
 		now != "task:ENG-42@4" {
 		t.Errorf("a moved task re-reads as %q, %v", now, err)

@@ -195,9 +195,9 @@ func TestWithNoFleetThereIsNoAnswerBudget(t *testing.T) {
 	}
 }
 
-// A COMPANY WITH NO NATIVE KNOWLEDGE HAS NO CORPUS POSITION, so its answers
+// A COMPANY WITHOUT DOCLET HAS NO CORPUS POSITION, so its answers
 // are never cached: an external wiki moves without this node hearing.
-func TestAnEngineWithNoNativeKnowledgeNamesNoCorpus(t *testing.T) {
+func TestAnEngineWithoutDocletNamesNoCorpus(t *testing.T) {
 	t.Parallel()
 	if position, ok := (&Engine{}).KnowledgeCorpus(); ok || position != "" {
 		t.Fatalf("KnowledgeCorpus = (%q, %v), want nothing", position, ok)

@@ -379,7 +379,7 @@ export default defineConfig({
       // The state log's two operator gates, evict and readmit, which the
       // Fleet screen's replication panels write. The retention document they
       // sit beside is read over the socket.
-      "/work": { target: "http://localhost:8000" },
+      "/worklet": { target: "http://localhost:8000" },
       // Every change a screen makes, as the signed-in person
       // (protocol/act.ts). Only the act route: /operator/mcp is a person's
       // assistant's surface, and nothing in the dashboard dials it.

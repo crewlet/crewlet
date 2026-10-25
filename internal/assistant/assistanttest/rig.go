@@ -18,7 +18,7 @@ type Rig struct {
 }
 
 // NewRig assembles a rig ([evals.Assemble]) and closes its service when the
-// suite ends. Its person is grace, holding the tracker, on the human seat
+// suite ends. Its person is grace, holding Worklet, on the human seat
 // grace; ada is a second human seat of the default company.
 func NewRig(t testing.TB, o evals.RigOptions) *Rig {
 	t.Helper()

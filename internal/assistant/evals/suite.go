@@ -44,7 +44,7 @@ type CasePerson struct {
 }
 
 // CaseAnswer is what one route answers: a pattern in net/http's grammar
-// ("GET /work/{id}"), a status (200 when left out) and a JSON body.
+// ("GET /worklet/{id}"), a status (200 when left out) and a JSON body.
 type CaseAnswer struct {
 	Route  string `yaml:"route"`
 	Status int    `yaml:"status"`

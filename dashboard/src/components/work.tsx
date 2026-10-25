@@ -333,7 +333,7 @@ export function DueMark({ due, overdue, now }: { due?: string; overdue?: boolean
  * The mark for a notice that ASKS something of its recipient.
  *
  * ONE MARK, because there were two. The engine writes ONE fact —
- * `tracker.Reason.Addressed`, a wake that obliges its seat to answer rather than
+ * `worklet.Reason.Addressed`, a wake that obliges its seat to answer rather than
  * absorb — and two screens drew it: My work as a caution-toned "asks" beside a
  * neutral reason chip, the item's Woke tab as a TINT ON the reason chip. Two
  * marks for one fact is two facts to a reader, and folding it into the reason

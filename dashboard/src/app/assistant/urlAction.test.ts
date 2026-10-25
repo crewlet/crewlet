@@ -40,7 +40,7 @@ function navigator() {
 
 function spec(nav: ReturnType<typeof navigator>, blocked?: (p: UrlPatch) => string | null) {
   return urlAction("work.filter.apply", {
-    scope: "Work list filters (not saved)",
+    scope: "Worklet list filters (not saved)",
     keys: KEYS,
     nav,
     ...(blocked ? { blocked } : {}),
@@ -48,7 +48,7 @@ function spec(nav: ReturnType<typeof navigator>, blocked?: (p: UrlPatch) => stri
 }
 
 beforeEach(() => {
-  location.hash = "/work/tasks?status=done&sort=rank";
+  location.hash = "/worklet/tasks?status=done&sort=rank";
 });
 
 afterEach(() => {

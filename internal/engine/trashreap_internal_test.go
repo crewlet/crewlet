@@ -12,9 +12,9 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/trashreap"
 )
@@ -59,8 +59,8 @@ func TestADataNodeReapsAPageOnlyOnceItsTermHasRunOut(t *testing.T) {
 	if kb == nil {
 		t.Fatal("the premise: the node writes its knowledge base")
 	}
-	jane := pages.Actor{Handle: "jane", Kind: pages.AuthorHuman}
-	page := createEventually(t, kb, jane, pages.NewPage{
+	jane := doclet.Actor{Handle: "jane", Kind: doclet.AuthorHuman}
+	page := createEventually(t, kb, jane, doclet.NewPage{
 		Container: "DOCS", Title: "Superseded runbook", Body: "old steps",
 	})
 	if _, err := kb.Trash(t.Context(), jane, page); err != nil {
@@ -86,7 +86,7 @@ func TestADataNodeReapsAPageOnlyOnceItsTermHasRunOut(t *testing.T) {
 		t.Fatalf("a pass past the term reports %+v, want the page purged", got)
 	}
 	if _, err := e.Pages().Get(t.Context(), page,
-		statelog.Freshness{Level: statelog.ReadSession}); !errors.Is(err, pages.ErrNotFound) {
+		statelog.Freshness{Level: statelog.ReadSession}); !errors.Is(err, doclet.ErrNotFound) {
 		t.Errorf("the page past its term still reads: %v", err)
 	}
 	if last, found, err := trashreap.LastReport(t.Context(), fleet); err != nil || !found ||
@@ -195,8 +195,8 @@ func artifactsLimits() artifacts.Limits {
 
 // createEventually writes a page, waiting out the moments after boot before
 // the chart's space reaches this node's copy.
-func createEventually(t *testing.T, kb *pages.Store, actor pages.Actor,
-	in pages.NewPage) string {
+func createEventually(t *testing.T, kb *doclet.Store, actor doclet.Actor,
+	in doclet.NewPage) string {
 
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)

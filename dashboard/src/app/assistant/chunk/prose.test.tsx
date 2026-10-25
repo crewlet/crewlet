@@ -42,7 +42,7 @@ test("a picture is its alt text and nothing is fetched", () => {
 
 test("a script link or an app route is drawn as its label alone", () => {
   const { container } = render(
-    <ReplyProse text="[click me](javascript:alert(1)) or [this task](#/work/ENG-1)" />,
+    <ReplyProse text="[click me](javascript:alert(1)) or [this task](#/worklet/ENG-1)" />,
   );
   expect(container.querySelector("a")).toBeNull();
   expect(container.textContent).toContain("click me");

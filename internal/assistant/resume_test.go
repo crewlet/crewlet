@@ -121,7 +121,7 @@ func TestAnApprovalResumesTheParkedTurn(t *testing.T) {
 func TestAnotherPersonCannotResumeATurn(t *testing.T) {
 	t.Parallel()
 	f, accepted, p := parkedRig(t)
-	ada := evals.Person("ada", "ada", iam.GrantTracker)
+	ada := evals.Person("ada", "ada", iam.GrantWorklet)
 	_, err := f.Svc.Resume(iam.WithPrincipal(context.Background(), ada), approval.Resumption{
 		Owner: f.Person.ID, Conversation: f.Conversation, Turn: accepted.TurnID,
 		Proposal: p.ID, Read: f.Grant("ada"), State: wire.ProposalApplied,

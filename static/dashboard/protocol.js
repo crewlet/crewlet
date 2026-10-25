@@ -1170,94 +1170,6 @@ async function blob(path, signal) {
 		signal?.removeEventListener("abort", forward);
 	}
 }
-/**
-* A long-lived text answer, read as it arrives: the Dashboard Assistant's
-* turn stream (`assistant.ts`), whose bytes are server-sent events.
-*
-* THE SAME CREDENTIAL AND THE SAME REFUSALS as every request here: the
-* session cookie and nothing else, no browser cache in front of it, and a
-* refusal read as the engine's JSON ([RestError]), a `401` reaching
-* [noteSession] exactly as a request's does. Only the STATUS LINE has a
-* deadline ([REQUEST_TIMEOUT_MS]); the body runs for as long as the engine
-* keeps it open, and the caller decides when a quiet stream has stalled,
-* since only the caller knows how often the engine promised to speak.
-*
-* NOT COUNTED IN FLIGHT ([whenRequestsSettle]), for a download's reason: a
-* stream may run for minutes, and it sets no cookie.
-*/
-async function stream(path, options = {}) {
-	const { headers = {}, signal } = options;
-	if (signal?.aborted) throw signal.reason;
-	const controller = new AbortController();
-	let timedOut = false;
-	const timer = setTimeout(() => {
-		timedOut = true;
-		controller.abort();
-	}, REQUEST_TIMEOUT_MS);
-	const forward = () => controller.abort(signal?.reason);
-	signal?.addEventListener("abort", forward, { once: true });
-	const unanswered = (err) => {
-		if (signal?.aborted) return signal.reason;
-		return timedOut ? new RestError(0, {
-			error: "unreachable",
-			detail: `the engine did not answer within ${waitWords(REQUEST_TIMEOUT_MS)}`
-		}) : offline(err);
-	};
-	const release = () => signal?.removeEventListener("abort", forward);
-	let response;
-	try {
-		response = await fetch(location.origin + path, {
-			method: "GET",
-			cache: "no-store",
-			credentials: "same-origin",
-			headers: {
-				Accept: "text/event-stream",
-				...headers
-			},
-			signal: controller.signal
-		});
-	} catch (err) {
-		release();
-		throw unanswered(err);
-	} finally {
-		clearTimeout(timer);
-	}
-	answeredAt = Date.now();
-	if (!response.ok || response.body === null) {
-		let body;
-		try {
-			body = await response.json();
-		} catch {
-			body = { error: "unreadable_body" };
-		} finally {
-			release();
-		}
-		const refusal = new RestError(response.ok ? 502 : response.status, body, retryAfterOf(response));
-		noteSession(refusal);
-		throw refusal;
-	}
-	const reader = response.body.getReader();
-	controller.signal.addEventListener("abort", () => {
-		reader.cancel(controller.signal.reason).catch(() => {});
-	}, { once: true });
-	const decoder = new TextDecoder();
-	return { async next() {
-		let chunk;
-		try {
-			chunk = await reader.read();
-		} catch (err) {
-			release();
-			throw unanswered(err);
-		}
-		if (chunk.done) {
-			release();
-			const tail = decoder.decode();
-			return tail === "" ? null : tail;
-		}
-		answeredAt = Date.now();
-		return decoder.decode(chunk.value, { stream: true });
-	} };
-}
 var rest = {
 	/**
 	* The whole answer: status, entity-tag and body. For a caller that sends a
@@ -1306,9 +1218,7 @@ var rest = {
 		headers
 	}),
 	/** A file's bytes — see [blob]. */
-	blob,
-	/** A long-lived text answer, read as it arrives (see [stream]). */
-	stream
+	blob
 };
 //#endregion
 //#region src/protocol/api.ts
@@ -2892,6 +2802,67 @@ var ACTIONS = {
 	}
 };
 //#endregion
+//#region src/contract/errors.ts
+/**
+* Every `error` a write through `POST /operator/act/{tool}` can come back
+* with, and the sentence the dashboard shows for it.
+*
+* EXACTLY THE ENGINE'S TWO SETS, held both ways by `internal/api/operator`'s
+* `TestTheDashboardKnowsExactlyTheActRefusals`: the transport's own codes
+* (`operator.ActTransportCodes` — the request guard's, the authority table's,
+* the operation key's, a body, a drain) and the tool refusal classes
+* (`mcp.Refusals` — what the tool itself refused, or a fault of the node it
+* met). One union because a caller branching on `error` must never need to
+* know which half a code came from, and the engine keeps them disjoint for
+* that reason. A code missing here is a refusal rendered as "something went
+* wrong"; one listed that nothing sends is a sentence nobody will ever read.
+*
+* NO SENTENCE MENTIONS A TOKEN. The dashboard holds no credential a script can
+* read — the browser's session cookie is the whole of it — so a person is
+* told to sign in again, never to set anything.
+*
+* THE SENTENCE IS SECOND PERSON, and it is ours — except where it is `null`,
+* which means "show the tool's own `detail`". Those are the two classes whose
+* sentence names the argument that was wrong (`invalid`) or the rule that
+* forbade it (`forbidden`); every other class's sentence is written for a
+* model reading a tool result, and a person reading it would be told about
+* `if_match` and record ids.
+*/
+var ACT_ERRORS = {
+	invalid_token: "Signed out. Sign in again.",
+	identity_unavailable: "Couldn’t confirm who you are. Try again.",
+	seat_unavailable: "Your seat was removed. Ask an admin to move you.",
+	second_factor_enrolment_required: "Set up two-step verification first.",
+	csrf_origin: "The engine refused a change sent from another site. Make it from this page's own address.",
+	unauthorized: "You don’t have access to this.",
+	step_up_required: "Confirm it’s you first.",
+	unknown_tool: "This engine does not support that change. It may be running a different version. Reload the page.",
+	read_only_tool: "The dashboard sent a read as a change. Reload; if it persists, it is a bug.",
+	unsupported_media_type: "The dashboard sent the change in a form the engine does not take.",
+	op_id_invalid: "The dashboard sent the change without a usable operation key. Reload; if it persists, it is a bug.",
+	invalid_input: "What this change was about moved since you opened it. Look again, then make the change.",
+	invalid_body: "The dashboard sent a change the engine could not read.",
+	body_too_large: "The change is larger than the engine accepts in one request.",
+	unreadable_body: "The change could not be read in full by the engine.",
+	no_active_revision: "This node has not been handed a company yet, so there is nothing to change. Try again once it has.",
+	draining: "This node is shutting down and takes no changes now. Try again in a moment.",
+	starting: "This node is still starting and takes no changes yet. Try again in a moment.",
+	invalid: null,
+	not_found: "It is not there any more. Somebody may have removed or moved it.",
+	forbidden: null,
+	stale_version: "Changed by somebody else since you opened it. Look again, then retry.",
+	conflict: "It collided with another change landing at the same moment. Look again, then retry.",
+	exists: "That already exists.",
+	already_answered: "Somebody has already answered it.",
+	reassignment_budget: "It has been handed between seats too many times. A person has to pick it up now.",
+	inbox_full: "Your inbox holds too many marks. Mark everything read up to here first.",
+	not_running: "It is not running any more.",
+	steer_unsupported: "That turn cannot take a note: it runs in a coding agent's own loop.",
+	budget_exhausted: "The token budget for this window is spent. Raise it, or wait for the window to reset.",
+	unavailable: "This node could not make the change just now. Try again in a moment.",
+	internal_error: "The change failed inside the engine, and trying again will not fix it. Its log has the reason; nothing was refused on purpose."
+};
+//#endregion
 //#region src/contract/domains.ts
 /**
 * Which questions a write can be read back through.
@@ -2972,7 +2943,7 @@ var SESSION_QUERIES = {
 /**
 * A position off the wire, or null for one this client cannot read.
 *
-* THE ENGINE'S OWN GRAMMAR (`tracker.ParseLogPosition`), so the value handed
+* THE ENGINE'S OWN GRAMMAR (`worklet.ParseLogPosition`), so the value handed
 * back as `min_position` is one the engine will accept: a stream name, then a
 * generation and a sequence that are both non-negative integers.
 */
@@ -3074,152 +3045,6 @@ function domainOf(kind) {
 /** This tab's floors. */
 var session = new SessionFloors();
 //#endregion
-//#region src/contract/errors.ts
-/**
-* Every `error` a write through `POST /operator/act/{tool}` can come back
-* with, and the sentence the dashboard shows for it.
-*
-* EXACTLY THE ENGINE'S TWO SETS, held both ways by `internal/api/operator`'s
-* `TestTheDashboardKnowsExactlyTheActRefusals`: the transport's own codes
-* (`operator.ActTransportCodes` — the request guard's, the authority table's,
-* the operation key's, a body, a drain) and the tool refusal classes
-* (`mcp.Refusals` — what the tool itself refused, or a fault of the node it
-* met). One union because a caller branching on `error` must never need to
-* know which half a code came from, and the engine keeps them disjoint for
-* that reason. A code missing here is a refusal rendered as "something went
-* wrong"; one listed that nothing sends is a sentence nobody will ever read.
-*
-* NO SENTENCE MENTIONS A TOKEN. The dashboard holds no credential a script can
-* read — the browser's session cookie is the whole of it — so a person is
-* told to sign in again, never to set anything.
-*
-* THE SENTENCE IS SECOND PERSON, and it is ours — except where it is `null`,
-* which means "show the tool's own `detail`". Those are the two classes whose
-* sentence names the argument that was wrong (`invalid`) or the rule that
-* forbade it (`forbidden`); every other class's sentence is written for a
-* model reading a tool result, and a person reading it would be told about
-* `if_match` and record ids.
-*/
-var ACT_ERRORS = {
-	invalid_token: "Signed out. Sign in again.",
-	identity_unavailable: "Couldn’t confirm who you are. Try again.",
-	seat_unavailable: "Your seat was removed. Ask an admin to move you.",
-	second_factor_enrolment_required: "Set up two-step verification first.",
-	csrf_origin: "The engine refused a change sent from another site. Make it from this page's own address.",
-	unauthorized: "You don’t have access to this.",
-	step_up_required: "Confirm it’s you first.",
-	unknown_tool: "This engine does not support that change. It may be running a different version. Reload the page.",
-	read_only_tool: "The dashboard sent a read as a change. Reload; if it persists, it is a bug.",
-	unsupported_media_type: "The dashboard sent the change in a form the engine does not take.",
-	op_id_invalid: "The dashboard sent the change without a usable operation key. Reload; if it persists, it is a bug.",
-	invalid_input: "What this change was about moved since you opened it. Look again, then make the change.",
-	invalid_body: "The dashboard sent a change the engine could not read.",
-	body_too_large: "The change is larger than the engine accepts in one request.",
-	unreadable_body: "The change could not be read in full by the engine.",
-	no_active_revision: "This node has not been handed a company yet, so there is nothing to change. Try again once it has.",
-	draining: "This node is shutting down and takes no changes now. Try again in a moment.",
-	starting: "This node is still starting and takes no changes yet. Try again in a moment.",
-	invalid: null,
-	not_found: "It is not there any more. Somebody may have removed or moved it.",
-	forbidden: null,
-	stale_version: "Changed by somebody else since you opened it. Look again, then retry.",
-	conflict: "It collided with another change landing at the same moment. Look again, then retry.",
-	exists: "That already exists.",
-	already_answered: "Somebody has already answered it.",
-	reassignment_budget: "It has been handed between seats too many times. A person has to pick it up now.",
-	inbox_full: "Your inbox holds too many marks. Mark everything read up to here first.",
-	not_running: "It is not running any more.",
-	steer_unsupported: "That turn cannot take a note: it runs in a coding agent's own loop.",
-	budget_exhausted: "The token budget for this window is spent. Raise it, or wait for the window to reset.",
-	unavailable: "This node could not make the change just now. Try again in a moment.",
-	internal_error: "The change failed inside the engine, and trying again will not fix it. Its log has the reason; nothing was refused on purpose."
-};
-//#endregion
-//#region src/protocol/writeOutcome.ts
-/**
-* What a write's answer means: the one interpreter of "did it land", shared by
-* every surface that makes a change for a person.
-*
-* THE DASHBOARD'S BUTTONS (`act.ts`) AND THE ASSISTANT'S APPROVALS
-* (`assistant.ts`) READ ONE ANSWER. An approval executes the same request the
-* button beside it would have sent, so what its answer can be, and what each
-* tells a person, cannot be decided twice: a copy would come to call a lost
-* connection a refusal, or a refusal a success, on one surface and not the
-* other.
-*
-* # What an answer can be
-*
-*  - `applied`: the record landed, at a position;
-*  - `pending`: the engine accepted it and this node has not applied it yet;
-*  - `unknown`: nobody can say whether it landed (the connection dropped
-*    after the request left, a gateway gave up, or the engine said so). A
-*    retry is the person's decision, made under the same operation;
-*  - `refused`: the engine said no, with a code from `contract/errors.ts` and
-*    the sentence a person is shown for it.
-*/
-/** Whether a code off the wire is one this build knows. */
-function isActErrorCode(code) {
-	return Object.hasOwn(ACT_ERRORS, code);
-}
-/**
-* The 2xx answer `{outcome, position, receipt}` a write returns.
-*
-* AN OUTCOME THIS BUILD DOES NOT KNOW IS NOT A SUCCESS, the engine's own rule
-* for its own answer (`receiptOf`), for the same reason: it is the one reading
-* that cannot tell a person to stop looking at a change nobody vouched for.
-*/
-function writeLanded(body) {
-	const answer = body ?? {};
-	if (answer.outcome !== "applied" && answer.outcome !== "pending") return {
-		kind: "unknown",
-		reason: "The engine accepted the change and could not confirm it landed."
-	};
-	return {
-		kind: answer.outcome,
-		position: typeof answer.position === "string" ? answer.position : null,
-		receipt: answer.receipt
-	};
-}
-/**
-* The refusals that say the screen the press was made from is OUT OF DATE:
-* somebody else changed the object since it was drawn (`stale_version`,
-* `conflict`), removed it (`not_found`), made it already (`exists`), answered
-* it (`already_answered`), or moved what the request named so its operation
-* already landed on something else (`invalid_input`). Each asks again every
-* question the write would have moved, without raising a floor, since nothing
-* of this tab's landed, so the page redraws what IS there and the next press
-* is made against it.
-*/
-var LOOK_AGAIN = /* @__PURE__ */ new Set([
-	"stale_version",
-	"conflict",
-	"not_found",
-	"exists",
-	"already_answered",
-	"invalid_input"
-]);
-/** What a refusal, or a request that never got an answer, came to. */
-function writeFailed(err) {
-	if (err.body.outcome === "unknown") return {
-		kind: "unknown",
-		reason: err.detail || err.code
-	};
-	const code = isActErrorCode(err.code) ? err.code : "";
-	if (err.unanswered || err.status >= 500 && code === "") return {
-		kind: "unknown",
-		reason: err.detail || `The answer was lost (status ${err.status}).`
-	};
-	return {
-		kind: "refused",
-		code,
-		sentence: (code === "" ? null : ACT_ERRORS[code]) ?? (err.detail || err.sentence || `The engine refused the change (status ${err.status}).`),
-		hint: err.hint,
-		grants: err.grants,
-		retryable: err.retryHint !== null && retryAfterMs(err.retryHint) !== null,
-		lookAgain: LOOK_AGAIN.has(code)
-	};
-}
-//#endregion
 //#region src/protocol/act.ts
 /**
 * The dashboard's one write: a change, made as the principal this browser's
@@ -3263,6 +3088,10 @@ function writeFailed(err) {
 * abort, which is not an answer at all.
 */
 var ROWS = ACTIONS;
+/** Whether a code off the wire is one this build knows. */
+function isActErrorCode(code) {
+	return Object.hasOwn(ACT_ERRORS, code);
+}
 /**
 * A fresh operation key: a UUIDv7, stamped with the instant the gesture began.
 *
@@ -3313,37 +3142,69 @@ async function act(tool, args, options = {}) {
 		if (!(err instanceof RestError)) return unknown(String(err));
 		return refusalOf(tool, opId, err, floors);
 	}
-	const landed = writeLanded(body);
-	if (landed.kind === "unknown") return unknown(landed.reason);
+	const answer = body ?? {};
+	const outcome = answer.outcome;
+	if (outcome !== "applied" && outcome !== "pending") return unknown("The engine accepted the change and could not confirm it landed.");
+	const position = typeof answer.position === "string" ? answer.position : null;
 	const { domain, refreshes } = ROWS[tool];
-	floors.written(domain, landed.position, refreshes);
+	floors.written(domain, position, refreshes);
 	return {
-		kind: landed.kind,
+		kind: outcome,
 		tool,
 		opId,
-		position: landed.position,
+		position,
 		domain,
-		receipt: landed.receipt
+		receipt: answer.receipt
 	};
 }
+/**
+* The refusals that say the screen the press was made from is OUT OF DATE:
+* somebody else changed the object since it was drawn (`stale_version`,
+* `conflict`), removed it (`not_found`), made it already (`exists`), answered
+* it (`already_answered`), or moved what the request named so its operation
+* already landed on something else (`invalid_input`). Each asks again every
+* question the write would have moved — without raising a floor, since
+* nothing of this tab's landed — so the page redraws what IS there and the
+* next press is made against it. Without that a task page kept sending the
+* version it was drawn at and was refused `stale_version` on every press
+* until its own poll happened to come round.
+*/
+var LOOK_AGAIN = /* @__PURE__ */ new Set([
+	"stale_version",
+	"conflict",
+	"not_found",
+	"exists",
+	"already_answered",
+	"invalid_input"
+]);
 /** What a refusal, or a request that never got an answer, came to. */
 function refusalOf(tool, opId, err, floors) {
-	const failed = writeFailed(err);
-	if (failed.kind === "unknown") return {
+	if (err.body.outcome === "unknown") return {
 		kind: "unknown",
 		tool,
 		opId,
-		reason: failed.reason
+		reason: err.detail || err.code
 	};
-	if (failed.lookAgain) {
+	const code = isActErrorCode(err.code) ? err.code : "";
+	if (err.unanswered || err.status >= 500 && code === "") return {
+		kind: "unknown",
+		tool,
+		opId,
+		reason: err.detail || `The answer was lost (status ${err.status}).`
+	};
+	if (LOOK_AGAIN.has(code)) {
 		const { domain, refreshes } = ROWS[tool];
 		floors.written(domain, null, refreshes);
 	}
-	const { lookAgain: _lookAgain, ...refused } = failed;
 	return {
-		...refused,
+		kind: "refused",
 		tool,
-		opId
+		opId,
+		code,
+		sentence: (code === "" ? null : ACT_ERRORS[code]) ?? (err.detail || err.sentence || `The engine refused the change (status ${err.status}).`),
+		hint: err.hint,
+		grants: err.grants,
+		retryable: err.retryHint !== null && retryAfterMs(err.retryHint) !== null
 	};
 }
 //#endregion

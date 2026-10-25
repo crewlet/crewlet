@@ -19,18 +19,18 @@ const RecordID = "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
 // against it.
 func World() map[string]any {
 	return map[string]any{
-		"/work/ENG-42": map[string]any{"task": map[string]any{"id": RecordID, "key": "ENG-42",
+		"/worklet/ENG-42": map[string]any{"task": map[string]any{"id": RecordID, "key": "ENG-42",
 			"title": "Ship it", "status": "todo", "priority": "normal", "assignee": "pm",
 			"body": "The old description.", "version": 3, "tags": []any{"release"}}},
-		"/work/comments": map[string]any{"key": "ENG-42", "title": "Ship it",
+		"/worklet/comments": map[string]any{"key": "ENG-42", "title": "Ship it",
 			"comments": []any{map[string]any{"id": "c1", "ask": "pm", "body": "Which day?",
 				"decision": map[string]any{"question": "Which day?", "options": []any{
 					map[string]any{"id": "a", "label": "Monday"}}}}}},
-		"/work/my-work": map[string]any{"handle": "pm"},
-		"/work/inbox": map[string]any{"handle": "pm", "notices": []any{
+		"/worklet/my-work": map[string]any{"handle": "pm"},
+		"/worklet/inbox": map[string]any{"handle": "pm", "notices": []any{
 			map[string]any{"record_id": "r1", "subject_key": "ENG-42", "excerpt": "Ship it moved to review."},
 			map[string]any{"record_id": "r2", "subject_key": "SEC-7", "excerpt": "Rotate the signing key."}}},
-		"/work/people/pm": map[string]any{"handle": "pm", "version": 7, "priorities": []any{"ENG-9"}},
+		"/worklet/people/pm": map[string]any{"handle": "pm", "version": 7, "priorities": []any{"ENG-9"}},
 		"/org": map[string]any{"timezone": "Europe/Berlin",
 			"roles": []any{map[string]any{"handle": "pm", "name": "Product manager", "kind": "agent"}},
 			"units": []any{map[string]any{"name": "Platform", "roles": []any{
@@ -41,7 +41,7 @@ func World() map[string]any {
 			"live": map[string]any{"activity": "working"}},
 		"/sandbox-runs": map[string]any{"runs": []any{map[string]any{"turn_id": RecordID,
 			"agent_handle": "dev", "work_key": "ENG-42", "question": "Which branch?"}}},
-		"/pages/" + RecordID: map[string]any{"page": map[string]any{"id": RecordID,
+		"/doclet/pages/" + RecordID: map[string]any{"page": map[string]any{"id": RecordID,
 			"title": "Runbook", "body": "Step one.", "version": 2}},
 		"/artifacts/" + RecordID: map[string]any{"id": RecordID, "title": "Q3 deck",
 			"head_number": 5},
@@ -90,7 +90,7 @@ func Answer(world map[string]any, r exec.Request) exec.Response {
 // FilterPage is the task list's page context, accepting the filter the page
 // change in [ProposalArgs] applies.
 func FilterPage() *wire.PageContext {
-	return &wire.PageContext{Screen: "work-tasks", Title: "Work › Tasks",
+	return &wire.PageContext{Screen: "worklet-tasks", Title: "Worklet › Tasks",
 		Params: map[string]string{}, Query: map[string]string{},
 		Resources:      []wire.Resource{{Kind: wire.ResourceProject, ID: "ENG"}},
 		SourceRevision: "url:3f9c1a0e", Accepts: []string{"work.filter.apply"}}

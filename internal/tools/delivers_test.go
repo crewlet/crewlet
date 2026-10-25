@@ -26,7 +26,7 @@ func (t deliverStub) Call(context.Context, map[string]any) (tools.Result, error)
 //
 // The rule this replaced keyed on origin — server-backed and not a known read
 // — which was right for as long as every shared surface belonged to a vendor.
-// A native tracker breaks it: commenting on a work item reaches the person who
+// Worklet breaks it: commenting on a work item reaches the person who
 // asked, and it is a builtin, so a gate keyed on origin judged that turn to
 // have answered nobody and looped it to failure. Registering the write with
 // [tools.DeliversTo] is what says otherwise, one tool at a time — never an
@@ -35,7 +35,7 @@ func TestDeliveriesIsDeclaredNotDerived(t *testing.T) {
 	t.Parallel()
 	r := tools.NewRegistry()
 
-	// First-party, declared: the native tracker's write.
+	// First-party, declared: Worklet's write.
 	if err := r.RegisterWith(deliverStub{"comment_on_work_item"}, tools.OriginBuiltin,
 		tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes},
 		tools.DeliversTo("work")); err != nil {

@@ -297,7 +297,7 @@ func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap) error {
 //
 // THE USAGE PUBLISHER IS THE CORE'S TOO, and not a native duty, although it
 // is no singleton: every data node publishes its own days, from its own event
-// log, whether or not its company keeps a native tracker or wiki. Armed with
+// log, whether or not its company keeps Worklet or Doclet. Armed with
 // the native half it used to be, a company on Jira and Confluence never
 // replicated a day of its spend, and a node handed its first company by an
 // apply published none until it restarted. A node without `data` keeps no event

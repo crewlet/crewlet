@@ -343,8 +343,8 @@ func (e noAnswer) Unwrap() error { return e.error }
 // closed set each surface renders in its own words — and `crewlet retention
 // evict` renders them as the flags it has (-force, -op-id), which it can only
 // do if it can read them, and which ones it renders depends on the refusal's
-// code; and a write names the operation it was sent under, which `crewlet work
-// purge` prints as the -op-id a retry must carry.
+// code; and a write names the operation it was sent under, which `crewlet
+// worklet purge` prints as the -op-id a retry must carry.
 type nodeRefusal struct {
 	Status  int
 	Code    string

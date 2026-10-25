@@ -1192,7 +1192,7 @@ export function AssignToSeatButton({
     setOwn(next);
     onOpenChange?.(next);
   };
-  // A TASK TO ASSIGN IS CREWLET WORKS', so where the company runs none there
+  // A TASK TO ASSIGN IS WORKLET'S, so where the company runs none there
   // is no button (`lib/services.ts`).
   const runs = useServicesRun();
   if (!runs.tracker) return null;

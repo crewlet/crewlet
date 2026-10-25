@@ -361,7 +361,7 @@ func issueOnto(t *testing.T, rig *writeRig, address, seat string,
 	if err := rig.during(func() error {
 		var err error
 		issued, err = rig.writer.Invite(t.Context(), iamdomain.InviteMint{
-			Email: address, Grants: []iam.Grant{iam.GrantTracker},
+			Email: address, Grants: []iam.Grant{iam.GrantWorklet},
 			Seat: rig.vacantSeat(seat), ExpiresAt: expires,
 			OpID: operationKey(), Reason: "onboarding",
 		})

@@ -2401,7 +2401,7 @@ func testAParkedJobsCondensationIsKeptForItsAnswer(t *testing.T, s sandbox.Pendi
 }
 
 // item is the work item a launching turn was charged to.
-var item = types.WorkItem{Backend: types.WorkNative, ID: "task-7", Key: "ENG-7", Project: "ENG"}
+var item = types.WorkItem{Backend: types.WorkWorklet, ID: "task-7", Key: "ENG-7", Project: "ENG"}
 
 func testWorkItemSurvivesParkAndResume(t *testing.T, s sandbox.PendingStore) {
 	// THE RESUMED TURN READS ITS ITEM OFF THE ROW, because nothing else can

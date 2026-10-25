@@ -10,7 +10,7 @@ package prompts
 // copies of one instruction, one of them a sentence before the other.
 //
 // BACKEND-NEUTRAL, by capability ("your knowledge-base tools"), never by
-// product or by tool name: on the native backend they are first-party tools
+// product or by tool name: on Doclet they are first-party tools
 // (`search_knowledge`, `get_page`) listed among the tools to discover, and on
 // Confluence the page reads are an MCP server's. It said once that they were
 // always MCP tools, which on the default backend sent every seat to list a

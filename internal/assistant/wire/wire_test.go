@@ -238,7 +238,7 @@ func TestACardCarriesExactlyItsKindsBody(t *testing.T) {
 func TestAPageContextIsBoundedPlainAndNamedByID(t *testing.T) {
 	t.Parallel()
 	base := func() wire.PageContext {
-		return wire.PageContext{Screen: "work-tasks", Title: "Work › Tasks",
+		return wire.PageContext{Screen: "worklet-tasks", Title: "Worklet › Tasks",
 			Params: map[string]string{}, Query: map[string]string{"blocked": "true"},
 			Resources:      []wire.Resource{{Kind: wire.ResourceProject, ID: "ENG"}},
 			Selection:      &wire.ResourceRef{Kind: wire.ResourceTask, ID: "ENG-142"},

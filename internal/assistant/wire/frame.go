@@ -61,7 +61,7 @@ type PageContextEvent struct {
 }
 
 // PageChip is how a message shows the page it was sent with: the label the
-// frame drew ("Work › Tasks") and the screen it names.
+// frame drew ("Worklet › Tasks") and the screen it names.
 type PageChip struct {
 	Title  string `json:"title"`
 	Screen string `json:"screen"`

@@ -5,7 +5,7 @@ person:
   acts: [create_work_item]
 page:
   screen: work-tasks
-  title: Work › Tasks
+  title: Worklet › Tasks
   params: {}
   query: {}
   resources: [{kind: project, id: ENG}]

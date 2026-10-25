@@ -22,11 +22,11 @@ describe("the bus", () => {
     const heard: string[] = [];
     const off = on("assistant.navigation.open", (e) => heard.push(e.path.join("/")));
     const other = on("assistant.context.invalidate", () => heard.push("wrong"));
-    emit("assistant.navigation.open", { path: ["work", "ENG-1"], query: {}, mode: "here" });
+    emit("assistant.navigation.open", { path: ["worklet", "ENG-1"], query: {}, mode: "here" });
     off();
     other();
-    emit("assistant.navigation.open", { path: ["work", "ENG-2"], query: {}, mode: "here" });
-    expect(heard).toEqual(["work/ENG-1"]);
+    emit("assistant.navigation.open", { path: ["worklet", "ENG-2"], query: {}, mode: "here" });
+    expect(heard).toEqual(["worklet/ENG-1"]);
   });
 
   test("is not reachable by a message posted to the window", async () => {

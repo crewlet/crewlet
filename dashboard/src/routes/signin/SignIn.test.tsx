@@ -202,7 +202,7 @@ async function refusal(): Promise<string> {
   return alerts()[0]!;
 }
 
-const NEXT = "#/work/ENG-42";
+const NEXT = "#/worklet/ENG-42";
 
 // THE SIGN-IN SCREENS ARE A CHUNK OF THEIR OWN (`app/lazyScreen.ts`), and so is
 // every workspace a finished sign-in lands on. This suite asserts what is drawn

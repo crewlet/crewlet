@@ -228,7 +228,7 @@ func TestARefusalAndATruncatedAnswerAreNeverCardedAsData(t *testing.T) {
 	b := provenance.NewBoundary()
 	tool, _ := catalog.Lookup("list_tasks")
 	res, err := catalog.Shape(tool, nil, exec.Response{Status: 403,
-		Body: []byte(`{"error":"unauthorized","message":"You may not.","grants":["tracker"]}`)},
+		Body: []byte(`{"error":"unauthorized","message":"You may not.","grants":["worklet"]}`)},
 		b, evals.Epoch)
 	if err != nil {
 		t.Fatal(err)

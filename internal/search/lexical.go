@@ -128,8 +128,8 @@ type Indexer struct {
 	// SQL is theirs and the walk is this type's.
 	sources []LexicalSource
 
-	// links reads the page ids a body links to — `pages.Links`, handed in
-	// by [Indexer.WithLinks] because `pages` imports this package and the
+	// links reads the page ids a body links to (`doclet.Links`), handed in
+	// by [Indexer.WithLinks] because `doclet` imports this package and the
 	// grammar is theirs. Nil derives no backlinks, which is what an index
 	// built for one question about RANKING is; the engine always wires it.
 	links func(body string) []string
@@ -148,7 +148,7 @@ type Indexer struct {
 const IndexDerivation = 1
 
 // WithLinks has this index derive the backlinks from every body it indexes,
-// through the grammar given — `pages.Links`. Called once, at construction,
+// through the grammar given (`doclet.Links`). Called once, at construction,
 // before [Indexer.Run]: the field is read by the one loop that writes.
 func (x *Indexer) WithLinks(links func(body string) []string) *Indexer {
 	x.links = links
@@ -675,7 +675,7 @@ func (x *Indexer) Pending(ctx context.Context) (int, error) {
 	var published, indexed int
 	// SUMMED ACROSS SOURCES, because the gate is about the whole index: a
 	// seat whose company has pages indexed and items not is one that would
-	// be told its own tracker holds nothing.
+	// be told its own Worklet holds nothing.
 	// THROUGH THE HANDLE, for [Indexer.nextBatch]' reason.
 	if err := x.estate.Read(ctx, func(tx *sql.Tx) error {
 		for _, source := range x.sources {

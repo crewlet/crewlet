@@ -27,10 +27,10 @@ function pending<T>(): QueryResult<T> {
 /** An admin bound to a seat, with the whole state a screen reads. */
 const VIEWER: ViewerState = {
   login: "U0FOUNDER",
-  grants: ["admin", "tracker", "knowledge"],
+  grants: ["admin", "worklet", "doclet"],
   admin: true,
-  tracker: true,
-  knowledge: true,
+  worklet: true,
+  doclet: true,
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",

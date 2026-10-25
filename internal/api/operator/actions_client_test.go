@@ -12,7 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // facetActions names the rows whose write is decided by a verb OTHER than its
@@ -25,7 +25,7 @@ import (
 // Declared HERE, beside the gate that holds the client to it, because it is a
 // statement about what the dashboard's row SENDS rather than about the tool.
 var facetActions = map[string]authz.Action{
-	tracker.WriteProjectTool: authz.ActionProjectPolicy,
+	worklet.WriteProjectTool: authz.ActionProjectPolicy,
 }
 
 // scopeOf is the scope a row has to declare, read off the authority table: a

@@ -347,7 +347,7 @@ func TestAFailedPurgeIsRetriedAfterTheRetryInterval(t *testing.T) {
 	for _, id := range []string{"a", "b", "c"} {
 		pages.put(id, cutoff.Add(-time.Hour))
 	}
-	pages.failing["b"] = errors.New("pages: the outcome is unknown")
+	pages.failing["b"] = errors.New("doclet: the outcome is unknown")
 	c := &clock{at: noon}
 	r := newRig(t, "node-a", memory.NewFleet(), c, pages)
 

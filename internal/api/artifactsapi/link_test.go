@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 const linkENG12 = `{"work_item":"ENG-12"}`
@@ -29,7 +29,7 @@ const linkENG12 = `{"work_item":"ENG-12"}`
 func TestALinkNeedsAReadOfTheArtifact(t *testing.T) {
 	t.Parallel()
 	g := newRig(t, true)
-	bob := person("bob", iam.GrantTracker)
+	bob := person("bob", iam.GrantWorklet)
 	w := g.do(bob, "POST", at(page, "/work-items"), linkENG12, keyed()...)
 	if w.Code != http.StatusOK {
 		t.Fatalf("a viewer's link: %d %s", w.Code, w.Body)
@@ -47,7 +47,7 @@ func TestALinkNeedsAReadOfTheArtifact(t *testing.T) {
 		t.Errorf("the link was stamped %+v", a)
 	}
 
-	dana := person("dana", iam.GrantTracker)
+	dana := person("dana", iam.GrantWorklet)
 	stranger := g.do(dana, "POST", at(page, "/work-items"), linkENG12, keyed()...)
 	nothing := g.do(dana, "POST", at(unknown, "/work-items"), linkENG12, keyed()...)
 	if stranger.Code != http.StatusNotFound || stranger.Body.String() != nothing.Body.String() {
@@ -71,7 +71,7 @@ func TestALinkNeedsAReadOfTheArtifact(t *testing.T) {
 }
 
 // A LINK NEEDS A WRITE OF THE WORK ITEM, decided as `update_work_item` decides
-// it: a caller who may read the artifact and does not use the tracker is
+// it: a caller who may read the artifact and does not use Worklet is
 // refused naming the verb, and nothing is read or written.
 //
 // Mutation: drop mayUpdateWorkItem from the handler and the link lands.
@@ -80,7 +80,7 @@ func TestALinkNeedsAWriteOfTheWorkItem(t *testing.T) {
 	g := newRig(t, true)
 	w := g.do(person("bob"), "POST", at(page, "/work-items"), linkENG12, keyed()...)
 	if w.Code != http.StatusForbidden || errorOf(t, w) != "unauthorized" {
-		t.Fatalf("a link by a viewer without the tracker: %d %s", w.Code, w.Body)
+		t.Fatalf("a link by a viewer without Worklet: %d %s", w.Code, w.Body)
 	}
 	if !strings.Contains(w.Body.String(), "update_work_item") {
 		t.Errorf("the refusal does not name the verb it refused: %s", w.Body)
@@ -98,7 +98,7 @@ func TestALinkNeedsAWriteOfTheWorkItem(t *testing.T) {
 func TestALinkNamesALiveWorkItemByItsKey(t *testing.T) {
 	t.Parallel()
 	g := newRig(t, true)
-	jane := person("jane", iam.GrantTracker)
+	jane := person("jane", iam.GrantWorklet)
 	for _, c := range []struct {
 		name, body string
 		id         artifacts.ID
@@ -138,12 +138,12 @@ func TestALinkNamesALiveWorkItemByItsKey(t *testing.T) {
 		}
 	}
 
-	g.work.down = artifactsapi.ErrTrackerNotUp
+	g.work.down = artifactsapi.ErrWorkletNotUp
 	if w := g.do(jane, "POST", at(page, "/work-items"), linkENG12, keyed()...); w.Code !=
 		http.StatusServiceUnavailable || errorOf(t, w) != "no_active_revision" {
 		t.Errorf("a link on a node with no company yet: %d %s", w.Code, w.Body)
 	}
-	g.work.down = artifactsapi.ErrNoTracker
+	g.work.down = artifactsapi.ErrNoWorklet
 	if w := g.do(jane, "POST", at(page, "/work-items"), linkENG12, keyed()...); w.Code !=
 		http.StatusUnprocessableEntity || errorOf(t, w) != "invalid" {
 		t.Errorf("a link in a company on another tracker: %d %s", w.Code, w.Body)
@@ -157,7 +157,7 @@ func TestALinkNamesALiveWorkItemByItsKey(t *testing.T) {
 
 // trackerAt is a position on the tracker's own log.
 func trackerAt(seq uint64) statelog.Position {
-	return statelog.Position{Stream: tracker.Domain{}.Stream().Name, Generation: 1, Seq: seq}
+	return statelog.Position{Stream: worklet.Domain{}.Stream().Name, Generation: 1, Seq: seq}
 }
 
 // linkAfter is a link body naming ENG-12 and the position its create landed at.
@@ -180,7 +180,7 @@ func TestALinkAfterItsCreateWaitsForTheTrackerToApplyIt(t *testing.T) {
 	t.Parallel()
 	g := newRig(t, true)
 	applied := g.work.behind(t, trackerAt(8))
-	jane := person("jane", iam.GrantTracker)
+	jane := person("jane", iam.GrantWorklet)
 
 	if w := g.do(jane, "POST", at(page, "/work-items"), linkENG12, keyed()...); w.Code != http.StatusOK {
 		t.Fatalf("a link with no after on a node behind: %d %s", w.Code, w.Body)
@@ -234,7 +234,7 @@ func TestALinkWhoseCreateNeverAppliesIsRefusedBehind(t *testing.T) {
 	t.Parallel()
 	g := newRig(t, true)
 	g.work.behind(t, trackerAt(8))
-	jane := person("jane", iam.GrantTracker)
+	jane := person("jane", iam.GrantWorklet)
 
 	began := time.Now()
 	w := g.do(jane, "POST", at(page, "/work-items"), linkAfter(trackerAt(50).String()), keyed()...)
@@ -268,7 +268,7 @@ func TestALinkRefusesAnAfterThatIsNotATrackerPosition(t *testing.T) {
 	t.Parallel()
 	g := newRig(t, true)
 	g.work.behind(t, trackerAt(8))
-	jane := person("jane", iam.GrantTracker)
+	jane := person("jane", iam.GrantWorklet)
 
 	for _, after := range []string{"nine", "CREWLET_TRACKER_LOG@1", "CREWLET_TRACKER_LOG@x:9", "@1:9"} {
 		w := g.do(jane, "POST", at(page, "/work-items"), linkAfter(after), keyed()...)
@@ -287,7 +287,7 @@ func TestALinkRefusesAnAfterThatIsNotATrackerPosition(t *testing.T) {
 	began := time.Now()
 	w := g.do(jane, "POST", at(page, "/work-items"), linkAfter(foreign.String()), keyed()...)
 	if w.Code != http.StatusUnprocessableEntity || errorOf(t, w) != "invalid" ||
-		!strings.Contains(w.Body.String(), tracker.Domain{}.Stream().Name) {
+		!strings.Contains(w.Body.String(), worklet.Domain{}.Stream().Name) {
 		t.Errorf("a link after a position on another log: %d %s", w.Code, w.Body)
 	}
 	if waited := time.Since(began); waited >= statelog.ReadBudget {

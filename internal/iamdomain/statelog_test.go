@@ -121,7 +121,7 @@ func TestTheIdentityGateReaderKeepsTheSharedRule(t *testing.T) {
 			Write: func(id, writer, opID string) ([]byte, error) {
 				return gateSuiteRecord(iamdomain.PersonSubject(id), iamdomain.OpUpdate,
 					id, writer, opID, iamdomain.PeopleScope(id),
-					gateSuitePerson([]iam.Grant{iam.GrantTracker}))
+					gateSuitePerson([]iam.Grant{iam.GrantWorklet}))
 			},
 			// A REMOVAL IS THE PURGE: the one record here with no inverse,
 			// and the one that writes the tombstone every later record
@@ -261,7 +261,7 @@ func suitePayload(kind iamdomain.ObjectKind, id string) (
 			V: iamdomain.DocumentVersion, Kind: iam.KindPerson,
 			Stage:      iam.StageActive,
 			NameSealed: "sealed:renamed", EmailSealed: "sealed:email",
-			Grants: []iam.Grant{iam.GrantTracker},
+			Grants: []iam.Grant{iam.GrantWorklet},
 		}, iamdomain.PeopleScope(id)
 	case iamdomain.KindSession:
 		return iamdomain.OpOpen, suitePerson, iamdomain.Session{

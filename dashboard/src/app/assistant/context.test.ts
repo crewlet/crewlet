@@ -35,9 +35,9 @@ import {
 afterEach(resetPageContextForTest);
 
 const PAGE: FramePage = {
-  screen: "work-tasks",
-  title: "Work › Tasks",
-  path: ["work", "tasks"],
+  screen: "worklet-tasks",
+  title: "Worklet › Tasks",
+  path: ["worklet", "tasks"],
   params: {},
   query: { blocked: "true" },
 };
@@ -49,8 +49,8 @@ describe("the context a turn sends", () => {
       selection: { kind: "task", id: "ENG-1" },
     });
     expect(context).toMatchObject({
-      screen: "work-tasks",
-      title: "Work › Tasks",
+      screen: "worklet-tasks",
+      title: "Worklet › Tasks",
       query: { blocked: "true" },
       resources: [{ kind: "task", id: "ENG-1", version: "4" }],
       selection: { kind: "task", id: "ENG-1" },
@@ -117,7 +117,7 @@ describe("the registry", () => {
     const off = on("assistant.context.invalidate", (e) => heard.push(e.reason));
     setFramePage(PAGE);
     setFramePage({ ...PAGE, query: {} });
-    setFramePage({ ...PAGE, path: ["work", "ENG-1"], screen: "item" });
+    setFramePage({ ...PAGE, path: ["worklet", "ENG-1"], screen: "item" });
     off();
     expect(heard).toEqual(["route", "filters", "route"]);
   });
@@ -174,7 +174,7 @@ describe("a page of several components", () => {
 describe("applying a page action", () => {
   const applied: string[] = [];
   const spec: PageActionSpec<string> = {
-    scope: "Work list filters (not saved)",
+    scope: "Worklet list filters (not saved)",
     parse: (raw) =>
       typeof raw === "string" ? { ok: true, value: raw } : { ok: false, reason: "Not a status." },
     preview: (v) => [{ field: "Status", next: v, current: null }],
@@ -197,7 +197,7 @@ describe("applying a page action", () => {
     expect(applyPageAction({ ...request("blocked"), action: "nope.here" }).outcome).toBe(
       "no_handler",
     );
-    expect(applyPageAction(request("blocked", "work-tasks@00000000")).outcome).toBe("stale");
+    expect(applyPageAction(request("blocked", "worklet-tasks@00000000")).outcome).toBe("stale");
     expect(applyPageAction(request(42))).toMatchObject({
       outcome: "invalid",
       reason: "Not a status.",
@@ -209,19 +209,19 @@ describe("applying a page action", () => {
   });
 });
 
-// THE CHIP NAMES THE TAB THE READER IS ON: Work's scope pages end their trail
+// THE CHIP NAMES THE TAB THE READER IS ON: Worklet's scope pages end their trail
 // in the scope and the lens is a tab, so the lens takes the scope's place
-// ("Work › Tasks", the plan's own example); elsewhere it is the trail's last
+// ("Worklet › Tasks", the plan's own example); elsewhere it is the trail's last
 // two crumbs.
-test("the page chip names the Work lens and its scope, and the last two crumbs elsewhere", () => {
+test("the page chip names the Worklet lens and its scope, and the last two crumbs elsewhere", () => {
   const tasks = framePageOf(
-    ["work", "tasks"],
+    ["worklet", "tasks"],
     new URLSearchParams(),
-    crumbsFor(["work", "tasks"], {}),
+    crumbsFor(["worklet", "tasks"], {}),
   );
-  expect(tasks?.title).toBe("Work › Tasks");
-  const projects = framePageOf(["work"], new URLSearchParams(), crumbsFor(["work"], {}));
-  expect(projects?.title).toBe("Work › Projects");
+  expect(tasks?.title).toBe("Worklet › Tasks");
+  const projects = framePageOf(["worklet"], new URLSearchParams(), crumbsFor(["worklet"], {}));
+  expect(projects?.title).toBe("Worklet › Projects");
   const spend = framePageOf(
     ["settings", "spend"],
     new URLSearchParams(),

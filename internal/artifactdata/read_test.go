@@ -470,7 +470,7 @@ func TestTheApplierReadsNoOtherDomain(t *testing.T) {
 	}
 	// THE SUBJECT CONSTANTS (internal/queue/topics) are names, not a
 	// reader of anything, and are the one queue package the applier names.
-	forbidden := []string{"artifactsdomain", "iamdomain", "/tracker", "/pages", "/usage", "/search",
+	forbidden := []string{"artifactsdomain", "iamdomain", "/worklet", "/doclet", "/usage", "/search",
 		"/authz", "/config", "/org", "/estate", "/engine", "/coord", "/queue/", "/objstore"}
 	table := regexp.MustCompile(`\b(?:FROM|JOIN|INTO|UPDATE)\s+([a-z_][a-z0-9_]*)`)
 	fset := token.NewFileSet()

@@ -7,7 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A TURN READS NO OLDER THAN THE CHANGE THAT WOKE IT: the committing record's
@@ -18,7 +18,7 @@ import (
 func TestATurnReadsNoOlderThanTheChangeThatWokeIt(t *testing.T) {
 	t.Parallel()
 	e, _ := spendingEngine(t)
-	stream := tracker.Domain{}.Stream().Name
+	stream := worklet.Domain{}.Stream().Name
 	at := statelog.Position{Stream: stream, Generation: 2, Seq: 77}
 	woke := taskWake("task-9", "ENG-9")
 	woke.Payload = map[string]any{notify.TriggerField: at.String()}

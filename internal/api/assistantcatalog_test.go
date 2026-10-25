@@ -130,7 +130,7 @@ func TestEveryGuardedRouteIsCoveredForTheAssistant(t *testing.T) {
 // on a named read route the question behind it must be one the table reads
 // AS THIS TOOL, which is what the registry's assist gate admits; on an
 // overview route the route itself must be. Mutation: point get_task at
-// `GET /work/{key}`, or move work_item's row to another tool, and this fails.
+// `GET /worklet/{key}`, or move work_item's row to another tool, and this fails.
 func TestEveryAssistantToolRouteIsMounted(t *testing.T) {
 	t.Parallel()
 	app := everySurfaceApp(t)

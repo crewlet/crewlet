@@ -24,16 +24,16 @@ The engine registers these into each epoch's tool registry with the origin `buil
 
 `delegate`, the tool that hands work to short-lived [workers](../concepts/turn-engine.md#workers), is not registered here: it is built per turn for the executor, because it carries that turn's grant.
 
-### The native tracker and knowledge base
+### Worklet and Doclet
 
-Twenty-three more, registered **only where the company runs the engine's own backends**
-(`tracker.backend: native` / `knowledge.backend: native`, which are the
+Twenty-three more, registered **only where the company runs Worklet or Doclet**
+(`tracker.backend: worklet` / `knowledge.backend: doclet`, which are the
 defaults). A company on Jira and Confluence gets none of them, and that is the
 point: a seat offered a tool against a tracker its company does not run would
 reach for it and fail at the call, and a model shown a tool that always fails
 learns to distrust the whole catalogue. The seventeen below are the item, file and page
 tools; the other six read the catalogue, the projects and the activity feed,
-and [The Work Tracker](work-tracker.md#what-a-seat-can-do) lists the tracker's
+and [Worklet](worklet.md#what-a-seat-can-do) lists the tracker's
 eighteen in full.
 
 | Tool | Description |
@@ -52,7 +52,7 @@ eighteen in full.
 | `remove_project_file` | Take a file out of a project; its content is deleted from storage — the project lead's, as removing an item is |
 | `list_pages` | Browse the knowledge base by container, parent or title |
 | `get_page` | One page's body, breadcrumb, children and history |
-| `write_page` | Create one. Titles are addresses and are unique per container; a `parent` must be a page in the same container that is not in the trash; a body links another page by id, `[its title](#/knowledge/pages/<page id>)`, which is what "Linked from" reads. `status` is `published` (the default) or `draft`, which is listed in its container and returned by no search until it is published, and any other value is refused; an empty body files a folder, a page that only groups the pages under it |
+| `write_page` | Create one. Titles are addresses and are unique per container; a `parent` must be a page in the same container that is not in the trash; a body links another page by id, `[its title](#/doclet/pages/<page id>)`, which is what "Linked from" reads. `status` is `published` (the default) or `draft`, which is listed in its container and returned by no search until it is published, and any other value is refused; an empty body files a folder, a page that only groups the pages under it |
 | `save_page` | Edit one, stating the version you read: there is no per-field merge that makes overwriting prose safe. A `parent` moves it, and may not be the page itself or one beneath it; an empty one moves it to the container's top. `watch` is `true` to follow the page or `false` to stop, and anything else is refused rather than read as no change |
 | `comment_on_page` | Remark on a page, or replace one of your own with `edit` |
 
@@ -138,8 +138,8 @@ probe nobody answers is `unavailable`), each for the seat's holder, its lead
 or an administrator; `answer_run`, for the person who asked the parked
 coding run its question or a lead of its seat; and `answer_knowledge`, which
 asks the company's knowledge a question on the auxiliary model of the asker's
-seat, so it needs either app — it searches the pages only for a `knowledge`
-holder and the board only for a `tracker` holder — **and** a credential bound
+seat, so it needs either app (it searches the pages only for a `doclet`
+holder and the board only for a `worklet` holder) **and** a credential bound
 to a seat. That set
 is ONE operator catalogue, built for every call from what the node runs now,
 and every operator transport serves it — MCP at `/operator/mcp` and the
@@ -166,7 +166,7 @@ argument beside it: the key is scoped to the principal that sent it, so a
 retry is the same request sent again with the same key, and a key somebody
 else learned names a different operation for them.
 
-Note the deliberate split between personal and shared writes: `reflect_and_persist` is **personal-only** (it writes to the agent's private `agent_diary`), while team-shared content is a knowledge-base page — `write_page` on the native backend, or the vendor's own MCP tools on Confluence (see [Knowledge System](../concepts/knowledge-system.md)). `use_skill` resolves the agent's own synthesized skills; shared procedures are knowledge-base pages.
+Note the deliberate split between personal and shared writes: `reflect_and_persist` is **personal-only** (it writes to the agent's private `agent_diary`), while team-shared content is a knowledge-base page: `write_page` on Doclet, or the vendor's own MCP tools on Confluence (see [Knowledge System](../concepts/knowledge-system.md)). `use_skill` resolves the agent's own synthesized skills; shared procedures are knowledge-base pages.
 
 **On a vendor tracker there are still no task builtins.** `create_task`,
 `assign_task`, `update_task` and `list_tasks` are not registered against Jira
@@ -428,7 +428,7 @@ An argument that merely *names* something missing — a `parent`, a `waiting_on`
 item, an `assignee` nobody has — is `invalid`, not `not_found`: the fix is the
 argument, and the call is not about that object.
 
-**`invalid` is claimed, never assumed.** A write the work tracker refuses on
+**`invalid` is claimed, never assumed.** A write Worklet refuses on
 what it was asked — a field value it will not round, a tombstoned item, a cap
 the object would pass — is marked as such where the refusal is written. Any
 failure that is *not* marked is read as the node's, in one of two ways: a
@@ -659,7 +659,7 @@ When the engine launches a per-role MCP server instance, it merges the base serv
 
 ### Per-Unit Config
 
-A unit declares its tracker project and knowledge container *identity* under `project` / `space` (used for inbound webhook routing and as the team's write home; not a tool credential, and it does not scope knowledge reads). The two keys are vendor-neutral: they name a native project and container, or a Jira project and a Confluence space, depending on which backends the company runs. Real per-agent tool credentials still live in `mcp_env`, which the unit's direct agent seats inherit:
+A unit declares its tracker project and knowledge container *identity* under `project` / `space` (used for inbound webhook routing and as the team's write home; not a tool credential, and it does not scope knowledge reads). The two keys are vendor-neutral: they name a Worklet project and a Doclet container, or a Jira project and a Confluence space, depending on which backends the company runs. Real per-agent tool credentials still live in `mcp_env`, which the unit's direct agent seats inherit:
 
 ```yaml
 units:

@@ -11,9 +11,9 @@ import { openInApp } from "./openInApp.ts";
 
 describe("an open in app address", () => {
   test("a framed route this build draws is followed, with its query", () => {
-    expect(openInApp("#/work/ENG-156")).toEqual({ path: ["work", "ENG-156"], query: {} });
-    expect(openInApp("#/work/tasks?blocked=true")).toEqual({
-      path: ["work", "tasks"],
+    expect(openInApp("#/worklet/ENG-156")).toEqual({ path: ["worklet", "ENG-156"], query: {} });
+    expect(openInApp("#/worklet/tasks?blocked=true")).toEqual({
+      path: ["worklet", "tasks"],
       query: { blocked: "true" },
     });
   });
@@ -22,16 +22,16 @@ describe("an open in app address", () => {
     for (const refused of [
       "javascript:alert(1)",
       "JAVASCRIPT:alert(1)",
-      "https://evil.example/#/work",
-      "//evil.example/#/work",
+      "https://evil.example/#/worklet",
+      "//evil.example/#/worklet",
       "#//evil.example",
-      "/work/ENG-1",
-      "work/ENG-1",
-      "#/work/ENG-1\\..",
-      "#/work/ENG-1\nhttp://x",
+      "/worklet/ENG-1",
+      "worklet/ENG-1",
+      "#/worklet/ENG-1\\..",
+      "#/worklet/ENG-1\nhttp://x",
       "data:text/html,hi",
       "",
-      `#/work/${"x".repeat(3000)}`,
+      `#/worklet/${"x".repeat(3000)}`,
     ]) {
       expect(openInApp(refused), refused).toBeNull();
     }

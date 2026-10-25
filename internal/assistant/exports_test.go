@@ -19,7 +19,7 @@ import (
 func TestEveryTableCardCarriesItsDownloads(t *testing.T) {
 	t.Parallel()
 	list := assistanttest.Routes(map[string]exec.Response{
-		"GET /work": evals.JSON(map[string]any{"items": []any{
+		"GET /worklet": evals.JSON(map[string]any{"items": []any{
 			map[string]any{"key": "ENG-7", "title": "Rotate keys", "status": "todo"}}}),
 	})
 	f := assistanttest.NewRig(t, evals.RigOptions{

@@ -689,7 +689,7 @@ func retentionAck(environ config.Source, args []string, stdout, stderr io.Writer
 		Position   uint64 `json:"position"`
 		Generation uint32 `json:"generation"`
 	}
-	path := "/work/retention/ack?stream=" + url.QueryEscape(*stream) +
+	path := "/worklet/retention/ack?stream=" + url.QueryEscape(*stream) +
 		"&position=" + strconv.FormatUint(*position, 10)
 	if err := client.post(context.Background(), path, &answer); err != nil {
 		return err
@@ -787,7 +787,7 @@ func retentionGate(environ config.Source, args []string, stdout, stderr io.Write
 	if forced {
 		query.Set("force", "true")
 	}
-	path := fmt.Sprintf("/work/retention/%s/%s?%s", verb, url.PathEscape(node),
+	path := fmt.Sprintf("/worklet/retention/%s/%s?%s", verb, url.PathEscape(node),
 		query.Encode())
 	// PATIENTLY, for the reason [nodeClient.patiently] names: how long a
 	// gesture takes is a property of what it waits on — a write per log,

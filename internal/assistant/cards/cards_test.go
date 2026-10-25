@@ -26,7 +26,7 @@ func person(grants ...iam.Grant) iam.Principal {
 // A REVOKED APP HIDES A STORED CARD.
 //
 // A transcript outlives the grants it was read under: a table of tasks read
-// while the person held the tracker is tracker data, and once the app is
+// while the person held Worklet is Worklet data, and once the app is
 // withdrawn the card is a notice saying it is hidden, never the rows. An
 // administrator holds every app, and an app name this build does not know
 // opens nothing. Mutation: return the card whatever the grants and this fails.
@@ -40,9 +40,9 @@ func TestARevokedAppHidesAStoredCard(t *testing.T) {
 		p     iam.Principal
 		shown bool
 	}{
-		"still held":       {[]string{"tracker"}, person(iam.GrantTracker), true},
-		"withdrawn":        {[]string{"tracker"}, person(iam.GrantKnowledge), false},
-		"an administrator": {[]string{"tracker", "knowledge"}, person(iam.GrantAdmin), true},
+		"still held":       {[]string{"worklet"}, person(iam.GrantWorklet), true},
+		"withdrawn":        {[]string{"worklet"}, person(iam.GrantDoclet), false},
+		"an administrator": {[]string{"worklet", "doclet"}, person(iam.GrantAdmin), true},
 		"no app needed":    {nil, person(), true},
 		"an unknown app":   {[]string{"forecasts"}, person(iam.GrantAdmin), false},
 	} {
@@ -67,7 +67,7 @@ var taskSpec = cards.Spec{Table: &cards.Table{Title: "Tasks", Rows: "items",
 		{Key: "tokens", Label: "Tokens", Path: "spend.tokens", Type: wire.ColumnTokens},
 		{Key: "due", Label: "Due", Path: "due", Type: wire.ColumnDatetime},
 	},
-	Open: &cards.Open{Screen: "work-tasks"}}}
+	Open: &cards.Open{Screen: "worklet-tasks"}}}
 
 func taskAnswer(rows int, title string) []byte {
 	items := make([]map[string]any, rows)
@@ -101,7 +101,7 @@ func TestATableIsTheAnswersOwnFieldsCutWholeRows(t *testing.T) {
 		row[2] != json.Number("1200") || row[3] != "2026-11-02T00:00:00Z" {
 		t.Errorf("the first row is %v", row)
 	}
-	if tbl.Open == nil || tbl.Open.Href != "#/work/tasks" {
+	if tbl.Open == nil || tbl.Open.Href != "#/worklet/tasks" {
 		t.Errorf("the card opens %+v, want the tasks list", tbl.Open)
 	}
 
@@ -174,7 +174,7 @@ func TestAnEntityIsOneRecordFromItsAnswer(t *testing.T) {
 	if !reflect.DeepEqual(e.Facts, want) {
 		t.Errorf("the facts are %+v, want %+v", e.Facts, want)
 	}
-	if e.Open == nil || e.Open.Href != "#/knowledge/pages/"+id || e.Open.Label != "Runbook" {
+	if e.Open == nil || e.Open.Href != "#/doclet/pages/"+id || e.Open.Label != "Runbook" {
 		t.Errorf("the entity opens %+v", e.Open)
 	}
 }
@@ -200,7 +200,7 @@ func TestALinkHoldsEachParameterToItsGrammar(t *testing.T) {
 		}
 	}
 	link, err := cards.Link("item", map[string]string{"id": "ENG-42"}, "")
-	if err != nil || link.Href != "#/work/ENG-42" || link.Label != "ENG-42" {
+	if err != nil || link.Href != "#/worklet/ENG-42" || link.Label != "ENG-42" {
 		t.Errorf("a task link = %+v, %v", link, err)
 	}
 }

@@ -51,10 +51,10 @@
  * # Status for everybody, the rest by access
  *
  * The page is the OVERVIEW's: anybody signed in reads a seat's state, its
- * figures and its schedules. What it is working on is the tracker's, so the
- * open work — the strip's count, the Overview's card, the Work tab — is asked
- * only of a reader holding Tracker. What it SAID — the Turns and Memory tabs,
- * a call's prompt and answer — is its trail, which the engine answers to an
+ * figures and its schedules. What it is working on is Worklet's, so the
+ * open work (the strip's count, the Overview's card, the Work tab) is asked
+ * only of a reader holding Worklet. What it SAID (the Turns and Memory tabs,
+ * a call's prompt and answer) is its trail, which the engine answers to an
  * admin and to whoever leads the seat (`seat/profile.ts`' `mayReadTrail`);
  * every other reader finds those tabs drawn and locked, saying what would
  * open them, and nothing is asked.
@@ -129,7 +129,7 @@ import {
 } from "~/lib/seats.ts";
 import { useAgents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { ADMIN, TRACKER } from "~/lib/access.ts";
+import { ADMIN, WORKLET } from "~/lib/access.ts";
 import { canManagePeople, SeatHolding, useHumanSeats } from "~/components/people.tsx";
 import type { HumanSeat } from "~/contract/identity.ts";
 import type { RestResult } from "~/lib/useRest.ts";
@@ -211,8 +211,8 @@ export function SeatScreen({ handle }: { handle: string }) {
       sort: "-priority,updated",
       limit: WORK_PAGE,
     },
-    // THE TRACKER'S QUESTION, asked only of a reader holding it.
-    { enabled: !!seat?.handle && viewer.tracker && ask.tracker, pollMs: 30_000 },
+    // WORKLET'S QUESTION, asked only of a reader holding it.
+    { enabled: !!seat?.handle && viewer.worklet && ask.tracker, pollMs: 30_000 },
   );
   // WHAT THE SEAT SAID is its lead's and an admin's to read — see the file's
   // doc.
@@ -271,7 +271,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                 },
               ]
             : []),
-          // FILING OR HANDING OVER A TASK is Crewlet Works', and offered only
+          // FILING OR HANDING OVER A TASK is Worklet's, and offered only
           // where the company runs it, as the inline buttons are.
           ...(runs.tracker
             ? [
@@ -351,8 +351,8 @@ export function SeatScreen({ handle }: { handle: string }) {
         )}
         {/* FOLDED ON A PHONE into the bar's "More" (published above), all
             but the one action the bar keeps in view. */}
-        {/* THE TRACKER'S TWO WRITES, and their wrappers with them: where the
-            company runs no Crewlet Works the buttons draw nothing, and their
+        {/* WORKLET'S TWO WRITES, and their wrappers with them: where the
+            company runs no Worklet the buttons draw nothing, and their
             empty spans still took the bar's gap. */}
         {runs.tracker && (
           <>
@@ -476,10 +476,10 @@ export function SeatScreen({ handle }: { handle: string }) {
           {tab === "work" &&
             (viewer.loading ? (
               <AccessPending />
-            ) : viewer.tracker ? (
+            ) : viewer.worklet ? (
               <Work seat={seat} index={index} work={work} chrome={chrome} now={now} />
             ) : (
-              <GrantRequired size="compact" grants={[TRACKER]} reader={viewer.login} />
+              <GrantRequired size="compact" grants={[WORKLET]} reader={viewer.login} />
             ))}
           {tab === "turns" &&
             !human &&

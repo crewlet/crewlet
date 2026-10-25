@@ -120,7 +120,7 @@ export interface KeyRow {
   whileTyping?: boolean;
   /**
    * The service built into Crewlet the row's place reads (`nav.ts`): a jump
-   * to Work is no key at all where the company runs no Crewlet Works, so the
+   * to Worklet is no key at all where the company runs no Worklet, so the
    * legend leaves it out and the frame binds nothing to it.
    */
   service?: Service;
@@ -171,7 +171,7 @@ const FRAME: KeyRow[] = [
     does: "Watch running turns",
     by: "dashboard",
   },
-  // AND THE SCOPE OF WORK: the switcher under Work's trail, or centred over
+  // AND THE SCOPE OF WORKLET: the switcher under Worklet's trail, or centred over
   // any other page, where nothing moves until a project is chosen.
   {
     id: "project",
@@ -179,7 +179,7 @@ const FRAME: KeyRow[] = [
     presses: [{ after: "g", key: "p" }],
     does: "Switch project",
     by: "dashboard",
-    // A PROJECT IS CREWLET WORKS', so where the company runs none there is
+    // A PROJECT IS WORKLET'S, so where the company runs none there is
     // nothing to switch between.
     service: "tracker",
   },
@@ -208,7 +208,7 @@ const FRAME: KeyRow[] = [
 
 const PAGE: KeyRow[] = [
   // ON A TASK OPENED FROM A LIST the task is that list's row, so the same two
-  // keys step to the task before and after it (`routes/work/ListPosition.tsx`).
+  // keys step to the task before and after it (`routes/worklet/ListPosition.tsx`).
   {
     id: "list.next",
     scope: "list",

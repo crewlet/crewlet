@@ -195,7 +195,7 @@ const noWork = { items: [], groups: [], total_hint: 0, complete: true };
 
 const ada = {
   login: "ops-1",
-  grants: ["admin", "tracker", "knowledge"],
+  grants: ["admin", "worklet", "doclet"],
   handle: "ada",
   owner: "ada",
   name: "Ada Okonkwo",
@@ -205,7 +205,7 @@ const ada = {
 /** A principal the directory binds to no seat: their record is their login. */
 const unbound = {
   login: "token:ops-7",
-  grants: ["tracker", "knowledge", "admin"],
+  grants: ["worklet", "doclet", "admin"],
   handle: "",
   owner: "token:ops-7",
   name: "",

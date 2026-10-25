@@ -96,7 +96,7 @@ const (
 	// TransportMCP is an operator's own assistant, `/operator/mcp`.
 	TransportMCP = "mcp"
 	// TransportWork is the human write surface's tool-backed routes,
-	// `/work/…` and `/pages/…` (internal/api/workapi) — the scriptable
+	// `/worklet/…` and `/doclet/pages/…` (internal/api/workapi): the scriptable
 	// resource REST a CLI or a script writes through, which calls the
 	// same dispatch rather than the tools directly.
 	TransportWork = "work"

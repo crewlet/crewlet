@@ -1193,9 +1193,9 @@
       "additionalProperties": false,
       "properties": {
         "backend": {
-          "description": "Which knowledge base: native, confluence, or none. Empty derives from integrations.confluence.",
+          "description": "Which knowledge base: doclet, confluence, or none. Empty derives from integrations.confluence.",
           "enum": [
-            "native",
+            "doclet",
             "confluence",
             "none",
             "",
@@ -3468,35 +3468,17 @@
       "additionalProperties": false,
       "properties": {
         "backend": {
-          "description": "Which work tracker: native, jira, or none. Empty derives from integrations.jira.",
+          "description": "Which work tracker: worklet, jira, or none. Empty derives from integrations.jira.",
           "enum": [
-            "native",
+            "worklet",
             "jira",
             "none",
             "",
             null
           ]
         },
-        "native": {
-          "$ref": "#/$defs/TrackerNativeConfig"
-        }
-      },
-      "type": [
-        "object",
-        "null"
-      ]
-    },
-    "TrackerNativeConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "inbox_retention_days": {
-          "description": "How long a person's inbox keeps a row (default 365, 30..3650). The history it points at is untouched.",
-          "maximum": 3650,
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
+        "worklet": {
+          "$ref": "#/$defs/WorkletConfig"
         }
       },
       "type": [
@@ -3832,6 +3814,24 @@
         "description",
         "system_prompt"
       ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "WorkletConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "inbox_retention_days": {
+          "description": "How long a person's inbox keeps a row (default 365, 30..3650). The history it points at is untouched.",
+          "maximum": 3650,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
       "type": [
         "object",
         "null"

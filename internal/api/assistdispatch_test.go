@@ -161,7 +161,7 @@ func approved(call exec.Request) auth.AssistRequest {
 // to anything but this App and the cookie and the grant answer differently.
 func TestTheDispatcherServesTheAPIsOwnHandler(t *testing.T) {
 	t.Parallel()
-	fx := newAssistApp(t, []iam.Grant{iam.GrantTracker}, nil)
+	fx := newAssistApp(t, []iam.Grant{iam.GrantWorklet}, nil)
 	a, b, arm, cookie, person, keys, d, disp := fx.app, fx.b, fx.arm, fx.cookie, fx.person,
 		fx.keys, fx.d, fx.disp
 	now := func() time.Time { return clock }

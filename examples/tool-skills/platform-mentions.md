@@ -13,14 +13,14 @@ trigger:
 phases: [execute]
 title: Mentioning teammates
 summary: |
-  How a mention reaches somebody on each surface (the company's own
-  tracker and pages, and Mattermost) + shareable link shapes. Resolve IDs
+  How a mention reaches somebody on each surface (Worklet, Doclet and
+  Mattermost) + shareable link shapes. Resolve IDs
   via lookup_colleague before writing.
 ---
 
 Call `lookup_colleague` for their identity before writing the body. The surfaces take different markup, and the wrong one posts as plain text with nobody notified.
 
-- **Work items and pages** (the company's own tracker and knowledge base): a literal `@handle` — e.g. `@agent-cto`, `@founder`. The handle is the `handle:` line `lookup_colleague` returns — the seat's own name in the org chart, not one of the per-platform ids under it: the engine resolves it against the chart when the comment is written and wakes that seat specifically, rather than only the people already watching the item. A handle nobody holds resolves to nobody and wakes nobody, so never guess a spelling.
+- **Work items and pages** (Worklet and Doclet): a literal `@handle`, for example `@agent-cto` or `@founder`. The handle is the `handle:` line `lookup_colleague` returns, the seat's own name in the org chart, not one of the per-platform ids under it: the engine resolves it against the chart when the comment is written and wakes that seat specifically, rather than only the people already watching the item. A handle nobody holds resolves to nobody and wakes nobody, so never guess a spelling.
 - **Mattermost**: a literal `@username` — e.g. `@agent-cto`, `@founder`. Use the `mattermost` line from `lookup_colleague` verbatim; that field already holds the username, not an opaque ID. No angle brackets, no `<@…>` wrapper: that is Slack markup and posts as visible punctuation here. The server resolves the name and notifies, so a typo'd username silently reaches nobody — and never assume somebody's Mattermost username matches their seat handle.
 
 **Who already hears you.** On a work item, its assignee, its reporter, its collaborators and its watchers are told about every change without being mentioned — a mention is for somebody who is NOT already on it. A page is the opposite: commenting on one does not subscribe you to it and does not wake the people who commented before you, so somebody who must read a page has to be mentioned in it by handle.
@@ -29,8 +29,8 @@ Call `lookup_colleague` for their identity before writing the body. The surfaces
 
 **Sharing links.** When you share a link to a work item or a page, build it on this deployment's own address:
 
-- **Work item:** `${crewlet_base_url}/#/work/{KEY}` — e.g. `ENG-42`
-- **Page:** `${crewlet_base_url}/#/knowledge/pages/{page-id}`
+- **Work item:** `${crewlet_base_url}/#/worklet/{KEY}` (for example `ENG-42`)
+- **Page:** `${crewlet_base_url}/#/doclet/pages/{page-id}`
 
 `${crewlet_base_url}` is filled in for you by the engine from where people reach this deployment's dashboard; if it still shows as a literal dollar-brace placeholder, this deployment has no dashboard address configured — say so rather than guessing a URL, and share the item's KEY instead, which a colleague can paste into the board's own search.
 

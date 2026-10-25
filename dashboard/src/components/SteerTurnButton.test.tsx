@@ -26,10 +26,10 @@ vi.mock("~/lib/viewer.ts", () => ({ useViewer: vi.fn() }));
 
 const JANE: ViewerState = {
   login: "founder",
-  grants: ["admin", "tracker", "knowledge"],
+  grants: ["admin", "worklet", "doclet"],
   admin: true,
-  tracker: true,
-  knowledge: true,
+  worklet: true,
+  doclet: true,
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",

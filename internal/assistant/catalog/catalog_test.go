@@ -106,7 +106,7 @@ func mustTool(t *testing.T, name string) catalog.Tool {
 // EVERY TOOL SENDS ONLY ITS OWN ROUTES, with each path value one escaped
 // segment: a call's request is checked against the tool's Routes after it is
 // built, so a value carrying a slash can never reach another route. Mutation:
-// drop the escape in at() and the traversal case reaches /work/../secrets.
+// drop the escape in at() and the traversal case reaches /worklet/../secrets.
 func TestEveryToolSendsOnlyItsOwnRoutes(t *testing.T) {
 	t.Parallel()
 	for _, tool := range catalog.Tools() {
@@ -129,7 +129,7 @@ func TestEveryToolSendsOnlyItsOwnRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if req.Path != "/work/..%2F..%2Fsecrets" {
+	if req.Path != "/worklet/..%2F..%2Fsecrets" {
 		t.Errorf("a traversal key was sent as %q", req.Path)
 	}
 }
@@ -169,7 +169,7 @@ func TestATiersDerivationIsNeverLowered(t *testing.T) {
 // ONLY WHAT THE PERSON CAN TAKE IS OFFERED: a read whose app they do not hold,
 // an administrator's read to anybody else, and a write whose act tool the
 // viewer's acts do not list are left out, in a stable order. Mutation: offer
-// every read and the tracker-less person is handed list_tasks.
+// every read and the person without Worklet is handed list_tasks.
 func TestOnlyWhatThePersonCanTakeIsOffered(t *testing.T) {
 	t.Parallel()
 	names := func(tools []catalog.Tool) []string {
@@ -180,7 +180,7 @@ func TestOnlyWhatThePersonCanTakeIsOffered(t *testing.T) {
 		return out
 	}
 	writer := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson, Stage: iam.StageActive,
-		Grants: []iam.Grant{iam.GrantKnowledge}}
+		Grants: []iam.Grant{iam.GrantDoclet}}
 	offered := names(catalog.Offered(writer, []string{"write_page"}))
 	for _, want := range []string{"search_knowledge", "get_page", "list_agents", "create_page",
 		"propose_page_change", "open_in_app"} {
@@ -249,8 +249,8 @@ func TestAnOpenInAppLinkProbesTheRecordsOwnRead(t *testing.T) {
 	t.Parallel()
 	id := "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
 	link, probe, err := catalog.Open(catalog.Args{"screen": "page", "id": id})
-	if err != nil || link.Href != "#/knowledge/pages/"+id || probe == nil ||
-		probe.Path != "/pages/"+id {
+	if err != nil || link.Href != "#/doclet/pages/"+id || probe == nil ||
+		probe.Path != "/doclet/pages/"+id {
 		t.Errorf("a page link = %+v, probe %+v, %v", link, probe, err)
 	}
 	if _, probe, err := catalog.Open(catalog.Args{"screen": "budgets"}); err != nil || probe != nil {
@@ -311,7 +311,7 @@ func TestEveryStepIsASentence(t *testing.T) {
 }
 
 // A STEP SHOWS ITS METHOD ONCE: every read's step carries the method apart and
-// the route as a path pattern, so the drawer's "get_task · GET /work/{id}"
+// the route as a path pattern, so the drawer's "get_task · GET /worklet/{id}"
 // never doubles the method. Mutation: show the whole route pattern and every
 // read fails.
 func TestAStepShowsItsRouteWithoutTheMethod(t *testing.T) {
@@ -334,7 +334,7 @@ func TestAStepShowsItsRouteWithoutTheMethod(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if shown, _ := mustTool(t, "get_task").StepRequest(req); shown.Route != "/work/{id}" {
-		t.Errorf("get_task's step shows the route %q, want /work/{id}", shown.Route)
+	if shown, _ := mustTool(t, "get_task").StepRequest(req); shown.Route != "/worklet/{id}" {
+		t.Errorf("get_task's step shows the route %q, want /worklet/{id}", shown.Route)
 	}
 }

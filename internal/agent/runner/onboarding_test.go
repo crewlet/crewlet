@@ -378,8 +378,8 @@ func TestTheOnboardingSurfaceCannotSubmitWork(t *testing.T) {
 }
 
 // ONBOARDING DISCOVERS. Its knowledge-base tools are not on its surface from
-// the first round — on the native backend first-party ones, on Confluence an
-// MCP server's — so its prompt lists them under the tools to discover, and it
+// the first round (first-party ones on Doclet, an MCP server's on
+// Confluence), so its prompt lists them under the tools to discover, and it
 // reaches them only through the discovery pair. The gate that keeps the pair
 // off the reviewer must not take it off this pass.
 //

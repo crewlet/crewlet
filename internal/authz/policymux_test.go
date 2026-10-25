@@ -27,7 +27,7 @@ func TestARouterReportsEveryPolicyToATableThatKeepsThem(t *testing.T) {
 	ok := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
 
 	direct := authz.NewRouter(outer, nil)
-	if err := direct.Handle("GET /work", authz.Policy{Action: authz.ActionWorkList}, ok); err != nil {
+	if err := direct.Handle("GET /worklet", authz.Policy{Action: authz.ActionWorkList}, ok); err != nil {
 		t.Fatal(err)
 	}
 	inner := http.NewServeMux()
@@ -36,7 +36,7 @@ func TestARouterReportsEveryPolicyToATableThatKeepsThem(t *testing.T) {
 		t.Fatal(err)
 	}
 	for pattern, want := range map[string]authz.Action{
-		"GET /work": authz.ActionWorkList, "GET /config": authz.ActionConfigRead,
+		"GET /worklet": authz.ActionWorkList, "GET /config": authz.ActionConfigRead,
 	} {
 		if got := outer.policies[pattern].Action; got != want {
 			t.Errorf("the table keeps %q for %s, want %q", got, pattern, want)

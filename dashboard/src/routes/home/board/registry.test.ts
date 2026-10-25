@@ -24,7 +24,7 @@ import {
 } from "./kit.tsx";
 
 const ADMIN = ["admin"];
-const MEMBER = ["tracker", "knowledge"];
+const MEMBER = ["worklet", "doclet"];
 
 describe("every contribution", () => {
   test("passes its check: nothing a section offers is left out", () => {
@@ -60,9 +60,9 @@ describe("the tray's sections", () => {
       "schedules",
       "integrations",
       "budgets",
-      "work",
+      "worklet",
       "live",
-      "knowledge",
+      "doclet",
       "settings",
     ] as const) {
       expect(areas, key).toContain(key);
@@ -108,11 +108,11 @@ describe("who may add what", () => {
     for (const def of WIDGETS.values()) expect(canUse(def, ADMIN), def.key).toBe(true);
   });
 
-  test("a reader without the tracker is offered none of the tracker's widgets", () => {
-    for (const key of ["inbox", "me", "work"] as const) {
+  test("a reader without Worklet is offered none of Worklet's widgets", () => {
+    for (const key of ["inbox", "me", "worklet"] as const) {
       for (const def of AREAS.find((a) => a.key === key)!.widgets) {
-        expect(canUse(def, ["knowledge"]), def.key).toBe(false);
-        expect(canUse(def, ["tracker"]), def.key).toBe(true);
+        expect(canUse(def, ["doclet"]), def.key).toBe(false);
+        expect(canUse(def, ["worklet"]), def.key).toBe(true);
       }
     }
   });
@@ -139,7 +139,7 @@ describe("a contribution that fails its check", () => {
       const kept = defineWidgets([
         def({}),
         def({ key: "home.lost", from: "nowhere" }),
-        def({ key: "work.misfiled", from: "home" }),
+        def({ key: "worklet.misfiled", from: "home" }),
         def({ key: "home.tiny", size: { w: 1, minW: 1, minH: 1, vertical: true } }),
         def({
           key: "home.twice",
@@ -152,7 +152,7 @@ describe("a contribution that fails its check", () => {
       expect(kept.map((d) => d.key)).toEqual(["home.example"]);
       const reported = WIDGET_PROBLEMS.slice(before).join("\n");
       expect(reported).toContain('home.lost: "nowhere" is not a page in the navigation.');
-      expect(reported).toContain("work.misfiled: its key starts with its page's workspace");
+      expect(reported).toContain("worklet.misfiled: its key starts with its page's workspace");
       expect(reported).toContain("home.tiny: 2 <= minW <= w <= 12.");
       expect(reported).toContain('home.twice: param "a" is a unique lowercase key.');
       expect(said).toHaveBeenCalledTimes(4);

@@ -328,7 +328,7 @@ func (Domain) ReadinessInput() bool { return false }
 // node's applier has diverged.
 //
 // ASSERTED AND NOT VERIFIED, like every other domain's — see
-// [internal/tracker.Domain.ClaimsIdentity] for the checksum nobody builds.
+// [internal/worklet.Domain.ClaimsIdentity] for the checksum nobody builds.
 func (Domain) ClaimsIdentity() bool { return true }
 
 // BarrierTables is the empty set, DECLARED.

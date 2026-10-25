@@ -27,7 +27,12 @@
   {
     "label": "ENG",
     "screen": "container",
-    "href": "#/knowledge/ENG"
+    "href": "#/doclet/ENG"
+  },
+  {
+    "label": "Doclet",
+    "screen": "doclet",
+    "href": "#/doclet"
   },
   {
     "label": "Home",
@@ -47,12 +52,7 @@
   {
     "label": "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
     "screen": "item",
-    "href": "#/work/5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
-  },
-  {
-    "label": "Knowledge",
-    "screen": "knowledge",
-    "href": "#/knowledge"
+    "href": "#/worklet/5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
   },
   {
     "label": "Now running",
@@ -77,12 +77,12 @@
   {
     "label": "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
     "screen": "page",
-    "href": "#/knowledge/pages/5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
+    "href": "#/doclet/pages/5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
   },
   {
     "label": "ENG",
     "screen": "project",
-    "href": "#/work/ENG"
+    "href": "#/worklet/ENG"
   },
   {
     "label": "Roster",
@@ -131,17 +131,17 @@
   },
   {
     "label": "Projects",
-    "screen": "work-projects",
-    "href": "#/work"
+    "screen": "worklet-projects",
+    "href": "#/worklet"
   },
   {
     "label": "Search",
-    "screen": "work-search",
-    "href": "#/work/search"
+    "screen": "worklet-search",
+    "href": "#/worklet/search"
   },
   {
     "label": "Tasks",
-    "screen": "work-tasks",
-    "href": "#/work/tasks"
+    "screen": "worklet-tasks",
+    "href": "#/worklet/tasks"
   }
 ]

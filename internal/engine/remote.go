@@ -53,14 +53,14 @@ func (e *Engine) startRemote(c *Company) error {
 			"to reach a node that does")
 	}
 	e.remote.Store(&remoteNative{
-		tracker: c.Config.TrackerBackendFor() == config.TrackerNative,
-		wiki:    c.Config.KnowledgeBackendFor() == config.KnowledgeNative,
+		tracker: c.Config.TrackerBackendFor() == config.TrackerWorklet,
+		wiki:    c.Config.KnowledgeBackendFor() == config.KnowledgeDoclet,
 	})
 	log.Info("native_backends_remote", "node", e.id,
-		"tracker", c.Config.TrackerBackendFor() == config.TrackerNative,
-		"knowledge", c.Config.KnowledgeBackendFor() == config.KnowledgeNative,
-		"detail", "this node holds no data: its seats read and write the "+
-			"company's tracker and knowledge base through a data node")
+		"tracker", c.Config.TrackerBackendFor() == config.TrackerWorklet,
+		"knowledge", c.Config.KnowledgeBackendFor() == config.KnowledgeDoclet,
+		"detail", "this node holds no data: its seats read and write "+
+			"Worklet and Doclet through a data node")
 	return nil
 }
 

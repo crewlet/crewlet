@@ -120,12 +120,12 @@ type Options struct {
 	// routes. REQUIRED.
 	Objects Objects
 
-	// WorkItems is the company's own tracker, asked for per request: the
-	// tracker comes up with the node's first company, which a node that
-	// booted with none meets after this surface is serving. It answers
-	// [ErrTrackerNotUp] before then and [ErrNoTracker] for a company whose
-	// work items another tracker keeps. REQUIRED: a link to a work item is
-	// refused unless the item is one the tracker holds.
+	// WorkItems is Worklet, asked for per request: Worklet comes up with the
+	// node's first company, which a node that booted with none meets after
+	// this surface is serving. It answers [ErrWorkletNotUp] before then and
+	// [ErrNoWorklet] for a company whose work items another tracker keeps.
+	// REQUIRED: a link to a work item is refused unless the item is one
+	// Worklet holds.
 	WorkItems func() (WorkItems, error)
 
 	// Frames mints view frames. NIL IS A DEPLOYMENT WITH NO ARTIFACT ORIGIN
@@ -189,8 +189,8 @@ func New(opts Options) (*Service, error) {
 		return nil, errors.New("artifactsapi: no ready beacon: a frame's ready report is " +
 			"counted into the node's service objectives through it")
 	case opts.WorkItems == nil:
-		return nil, errors.New("artifactsapi: no tracker: a link to a work item is checked " +
-			"against the item the company's tracker holds")
+		return nil, errors.New("artifactsapi: no Worklet: a link to a work item is " +
+			"checked against the item Worklet holds")
 	}
 	pace := opts.PaceClock
 	if pace == nil {
@@ -342,11 +342,11 @@ func pathVersion(w http.ResponseWriter, r *http.Request) (int, bool) {
 func checkWorkItem(item string) (string, error) {
 	item = strings.TrimSpace(item)
 	if len(item) > artifacts.MaxWorkItemBytes {
-		return "", fmt.Errorf("work_item is a tracker key, at most %d bytes", artifacts.MaxWorkItemBytes)
+		return "", fmt.Errorf("work_item is a Worklet key, at most %d bytes", artifacts.MaxWorkItemBytes)
 	}
 	for i := 0; i < len(item); i++ {
 		if c := item[i]; c <= ' ' || c > '~' {
-			return "", errors.New("work_item is a tracker key: visible ASCII, no space")
+			return "", errors.New("work_item is a Worklet key: visible ASCII, no space")
 		}
 	}
 	return item, nil

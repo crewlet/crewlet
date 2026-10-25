@@ -573,9 +573,9 @@ func (b *Bootstrap) ValidateRoles() error {
 		if b.Store.Scratch {
 			p.add(field("store.scratch"), ErrConflict,
 				"this node holds data, and a scratch store is deleted at every "+
-					"boot — the company's tracker, pages and this node's record "+
-					"of its own turns with it. Remove it, or drop %q from "+
-					"node.roles", placement.RoleData)
+					"boot, and with it the company's Worklet and Doclet copies and "+
+					"this node's record of its own turns. Remove it, or drop %q "+
+					"from node.roles", placement.RoleData)
 		}
 	} else {
 		if !b.Store.Scratch {
@@ -1593,8 +1593,8 @@ type Stream struct {
 	// refusals the mutation log's field describes apply here unchanged.
 	TrackerVectorsMaxBytes int64 `yaml:"tracker_vectors_max_bytes,omitempty" json:"tracker_vectors_max_bytes,omitempty" js:"min=1073741824;max=2199023255552" desc:"Byte ceiling on the vector changelog, sized for a model change rather than the steady state; unset derives what the mutation log derives from the volume, a quarter of its free space clamped to 4 GiB..64 GiB, whatever tracker_log_max_bytes is set to."`
 
-	// PagesLogMaxBytes is the byte ceiling on the knowledge base's log, the
-	// ordered stream every native page write goes through.
+	// PagesLogMaxBytes is the byte ceiling on Doclet's log, the ordered
+	// stream every page write goes through.
 	//
 	// UNSET DERIVES IT beside the mutation log's, at a quarter of that
 	// log's ceiling as set or derived (1 GiB..16 GiB from a volume alone,
@@ -2313,7 +2313,7 @@ type Coordination struct {
 	// follows its own tick and a tracker walk's claim its own heartbeat, each
 	// up to coord.MaxDutyTTL, which is why every lease but a seat's and a
 	// presence lease is kept in a lease bucket of its own.
-	LeaseTTLSeconds float64 `yaml:"lease_ttl_seconds,omitempty" json:"lease_ttl_seconds,omitempty" js:"min=0" desc:"Seat and presence lease TTL; 0 takes the measured default. Every other lease — a fleet duty, a tracker walk's claim — sizes its own."`
+	LeaseTTLSeconds float64 `yaml:"lease_ttl_seconds,omitempty" json:"lease_ttl_seconds,omitempty" js:"min=0" desc:"Seat and presence lease TTL; 0 takes the measured default. Every other lease (a fleet duty, a Worklet walk's claim) sizes its own."`
 }
 
 // NATSTLS is the transport material for an external NATS server.

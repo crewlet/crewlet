@@ -384,14 +384,14 @@ func TestCompanyValidatorRejections(t *testing.T) {
 func TestTheBackendAxesAreExclusiveAndDerived(t *testing.T) {
 	t.Parallel()
 
-	t.Run("a bare company gets a native tracker and a native wiki", func(t *testing.T) {
+	t.Run("a bare company gets Worklet and Doclet", func(t *testing.T) {
 		t.Parallel()
 		cfg := mustCompany(t, "name: Acme\n")
-		if got := cfg.TrackerBackendFor(); got != TrackerNative {
-			t.Errorf("tracker = %q, want native", got)
+		if got := cfg.TrackerBackendFor(); got != TrackerWorklet {
+			t.Errorf("tracker = %q, want worklet", got)
 		}
-		if got := cfg.KnowledgeBackendFor(); got != KnowledgeNative {
-			t.Errorf("knowledge = %q, want native", got)
+		if got := cfg.KnowledgeBackendFor(); got != KnowledgeDoclet {
+			t.Errorf("knowledge = %q, want doclet", got)
 		}
 	})
 
@@ -413,11 +413,11 @@ integrations:
 		}
 	})
 
-	t.Run("native beside its vendor is refused", func(t *testing.T) {
+	t.Run("Worklet or Doclet beside its vendor is refused", func(t *testing.T) {
 		t.Parallel()
 		err := rejects(t, `
 name: Acme
-knowledge: {backend: native}
+knowledge: {backend: doclet}
 integrations:
   confluence: {url: "https://wiki.example.com", token: "${T}", webhook_secret: "${S}"}
 `, "knowledge.backend")
@@ -426,7 +426,7 @@ integrations:
 		}
 		err = rejects(t, `
 name: Acme
-tracker: {backend: native}
+tracker: {backend: worklet}
 integrations:
   jira: {url: "https://jira.example.com", token: "${T}", webhook_secret: "${S}"}
 `, "tracker.backend")
@@ -458,16 +458,16 @@ integrations:
 		}
 	})
 
-	// A NARROWING ON THE NATIVE BACKEND IS ORDINARY, and this is the case
+	// A NARROWING ON DOCLET IS ORDINARY, and this is the case
 	// the rule it replaces got wrong: a scope used to require
 	// integrations.confluence, because presence was the only signal there
 	// was. With a backend named explicitly, a curated floor over the
 	// company's own pages needs no vendor at all.
-	t.Run("a scope narrows the native backend", func(t *testing.T) {
+	t.Run("a scope narrows Doclet", func(t *testing.T) {
 		t.Parallel()
 		cfg := mustCompany(t, "name: Acme\nknowledge:\n  scope: [HANDBOOK, ENG]\n")
-		if got := cfg.KnowledgeBackendFor(); got != KnowledgeNative {
-			t.Errorf("backend = %q, want native", got)
+		if got := cfg.KnowledgeBackendFor(); got != KnowledgeDoclet {
+			t.Errorf("backend = %q, want doclet", got)
 		}
 		if got := cfg.SkillsContainerKey(); got != DefaultSkillsContainer {
 			t.Errorf("skills container = %q, want the default", got)

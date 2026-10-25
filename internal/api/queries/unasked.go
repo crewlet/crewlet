@@ -18,7 +18,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning/memread"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // WorkSearcher is the ranked item search, as this surface needs it.
@@ -27,7 +27,7 @@ import (
 // index is this node's own and the rows are the fleet's, which the searcher
 // already reconciles.
 type WorkSearcher interface {
-	Search(ctx context.Context, q tracker.SearchQuery) (tracker.SearchAnswer, error)
+	Search(ctx context.Context, q worklet.SearchQuery) (worklet.SearchAnswer, error)
 }
 
 // SeatMemory is a seat's memory and its conversation ledger, answered by the
@@ -52,8 +52,8 @@ type SeatMemory interface {
 
 // DefaultSearchLimit is what a caller that names none gets.
 //
-// TWENTY-FIVE, against a seat's own [tracker.SearchLimit] of 20 and under the
-// reader's [tracker.MaxSearchLimit] ceiling of 50 — so it is a real default
+// TWENTY-FIVE, against a seat's own [worklet.SearchLimit] of 20 and under the
+// reader's [worklet.MaxSearchLimit] ceiling of 50, so it is a real default
 // rather than a second spelling of either. The two callers want different
 // numbers: a tool's answer is read into a PROMPT, where every row costs
 // context the turn could spend on the work, and a screen's is SCANNED, where a
@@ -87,13 +87,13 @@ func (s Sources) workSearch(ctx context.Context, p Params) (any, error) {
 	if err = searchTextRefusal(text); err != nil {
 		return nil, err
 	}
-	answer, err := s.WorkSearch.Search(ctx, tracker.SearchQuery{
+	answer, err := s.WorkSearch.Search(ctx, worklet.SearchQuery{
 		Text: text, Limit: p.Int("limit", DefaultSearchLimit), Mode: mode,
 	})
 	switch {
-	case errors.Is(err, tracker.ErrIndexBuilding):
+	case errors.Is(err, worklet.ErrIndexBuilding):
 		out := map[string]any{
-			"hits":      []tracker.Ranked{},
+			"hits":      []worklet.Ranked{},
 			"mode":      string(mode),
 			"available": false,
 			"reason":    "building",
@@ -109,7 +109,7 @@ func (s Sources) workSearch(ctx context.Context, p Params) (any, error) {
 	if hits == nil {
 		// An EMPTY SLICE, never null: a client that renders `hits.length`
 		// on the answer should not have to guard the field as well.
-		hits = []tracker.Ranked{}
+		hits = []worklet.Ranked{}
 	}
 	out := map[string]any{"hits": hits, "mode": string(mode), "available": true}
 	outcome(out, answer.Outcome)
@@ -157,7 +157,7 @@ func (s Sources) workRouting(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	answer, err := s.Work.Routing(ctx, tracker.RoutingQuery{
+	answer, err := s.Work.Routing(ctx, worklet.RoutingQuery{
 		RecordID: record,
 		// THE HORIZON THIS COMPANY IS ACTUALLY RUNNING, read per call
 		// from the current epoch — which is the whole reason the
@@ -180,7 +180,7 @@ func (s Sources) workRouting(ctx context.Context, p Params) (any, error) {
 // cannot say.
 //
 // ZERO IS "I DO NOT KNOW", which the reader answers `unknown` to rather than
-// guessing — see [tracker.DeliveryUnknown]. A registry wired without a company
+// guessing (see [worklet.DeliveryUnknown]). A registry wired without a company
 // source genuinely cannot say how long this company keeps a notice, and
 // answering with the shipped default would date a set against a retention
 // nobody here is running.
@@ -192,5 +192,5 @@ func (s Sources) inboxRetention() time.Duration {
 	if company == nil {
 		return 0
 	}
-	return company.Tracker.Native.InboxRetention()
+	return company.Tracker.Worklet.InboxRetention()
 }

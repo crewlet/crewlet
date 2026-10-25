@@ -84,7 +84,7 @@ test("after a page action this tab applied, the turn is read again from its last
     action: {
       action_id: "a1",
       name: "work.filter.apply",
-      source_revision: "work-tasks@1",
+      source_revision: "worklet-tasks@1",
       payload: { assignee: "engineer" },
       confirm: "none",
     },

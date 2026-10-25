@@ -179,7 +179,7 @@ func frames(t *testing.T, body []byte) []wire.Frame {
 func readTurn(t *testing.T) evals.RigOptions {
 	return evals.RigOptions{Tools: []catalog.Tool{assistanttest.Tool(t, "get_task")},
 		Handler: assistanttest.Routes(map[string]exec.Response{
-			"GET /work/ENG-7": assistanttest.Task("ENG-7", "Rotate keys",
+			"GET /worklet/ENG-7": assistanttest.Task("ENG-7", "Rotate keys",
 				"Rotate the signing keys before Friday."),
 		}),
 		Rounds: []evals.Round{
@@ -228,7 +228,7 @@ func TestEveryAssistantRouteAnswersNotFoundForAnotherPersonsConversation(t *test
 		t.Fatalf("grace's transcript = %+v, %v", transcript, err)
 	}
 	card := transcript.Cards[0].CardID
-	ada := evals.Person("ada", "ada", iam.GrantTracker)
+	ada := evals.Person("ada", "ada", iam.GrantWorklet)
 	conv := "/assistant/conversations/" + s.rig.Conversation.String()
 	versioned := wire.Versioned{ProtocolVersion: wire.ProtocolVersion}
 	for _, c := range []struct {
@@ -298,7 +298,7 @@ func TestTheViewerSaysWhyTheAssistantIsUnavailable(t *testing.T) {
 	on := true
 	unusable := &config.Company{Name: "Nimbus", Assistant: config.Assistant{Enabled: &on,
 		LLM: config.ProviderKeys{"missing"}}}
-	token := evals.Person("ci", "grace", iam.GrantTracker)
+	token := evals.Person("ci", "grace", iam.GrantWorklet)
 	token.Via = "pat:" + uuid.NewSHA1(uuid.NameSpaceOID, []byte("token")).String()
 	for _, c := range []struct {
 		name   string
@@ -393,7 +393,7 @@ func TestThePageActionTurnFixtureIsTheRoutesOwn(t *testing.T) {
 			evals.Call("c1", "propose_page_change", map[string]any{
 				"action": "work.filter.apply", "args": map[string]any{"status": "todo"}}),
 			evals.Say("Showing only the tasks still to do.")}})
-	page := &wire.PageContext{Screen: "work", Title: "Work \u203a Tasks",
+	page := &wire.PageContext{Screen: "worklet-tasks", Title: "Worklet \u203a Tasks",
 		Params: map[string]string{}, Query: map[string]string{}, Resources: []wire.Resource{},
 		SourceRevision: "work@3", Accepts: []string{"work.filter.apply"}}
 	rec := s.do(s.rig.Person, http.MethodPost, "/assistant/conversations/"+

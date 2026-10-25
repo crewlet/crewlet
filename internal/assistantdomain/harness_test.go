@@ -373,7 +373,7 @@ func (n *node) openTurn(c assistantdomain.Call, conversation uuid.UUID) uuid.UUI
 	turn := uuid.New()
 	if _, _, err := n.writer.OpenTurn(n.t.Context(), fresh(c), assistantdomain.NewTurn{
 		Conversation: conversation, Turn: turn, Node: n.id, Model: "claude",
-		Page: &wire.PageChip{Title: "Work › Tasks", Screen: "work-tasks"},
+		Page: &wire.PageChip{Title: "Worklet › Tasks", Screen: "worklet-tasks"},
 	}); err != nil {
 		n.t.Fatalf("open a turn: %v", err)
 	}

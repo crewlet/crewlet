@@ -196,13 +196,13 @@ func TestATierATokensLoginStandsForItsEntry(t *testing.T) {
 	t.Parallel()
 	b := config.DefaultBootstrap()
 	b.API.Auth.Tokens = []config.APIToken{{ID: "ci", Token: "a-tier-a-token",
-		Grants: []iam.Grant{iam.GrantTracker}}}
+		Grants: []iam.Grant{iam.GrantWorklet}}}
 	b.API.Auth.Admin = iam.AdminServe
 	g := auth.New(&b)
 	l := lineages(t, g, &standings{})
 	got, how := l.Principal(t.Context(), iam.TokenLogin("ci"))
 	if how != iam.Resolved || got.Login != iam.TokenLogin("ci") ||
-		!slices.Equal(got.Grants, []iam.Grant{iam.GrantTracker}) || got.Via != "" {
+		!slices.Equal(got.Grants, []iam.Grant{iam.GrantWorklet}) || got.Via != "" {
 		t.Fatalf("the ci token's login resolved %v to %+v", how, got)
 	}
 	for _, name := range []string{

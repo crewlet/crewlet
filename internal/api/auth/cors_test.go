@@ -36,7 +36,7 @@ func serveCORS(t *testing.T, c *auth.CORS, r *http.Request) (*httptest.ResponseR
 // A PERMITTED ORIGIN IS NAMED IN THE ANSWER.
 func TestAPermittedOriginIsAllowed(t *testing.T) {
 	t.Parallel()
-	r := httptest.NewRequest(http.MethodGet, "/work", nil)
+	r := httptest.NewRequest(http.MethodGet, "/worklet", nil)
 	r.Header.Set("Origin", "https://ops.example.com")
 	rec, reached := serveCORS(t, corsFor("https://ops.example.com"), r)
 
@@ -69,7 +69,7 @@ func TestAnEntryIsComparedAsABrowserSpellsIt(t *testing.T) {
 		{"https://Ops.Example.com:443", "https://ops.example.com"},
 		{"http://[::ffff:127.0.0.1]:8080", "http://[::ffff:7f00:1]:8080"},
 	} {
-		r := httptest.NewRequest(http.MethodGet, "/work", nil)
+		r := httptest.NewRequest(http.MethodGet, "/worklet", nil)
 		r.Header.Set("Origin", tc.origin)
 		rec, _ := serveCORS(t, corsFor(tc.entry), r)
 		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != tc.origin {
@@ -98,7 +98,7 @@ func TestAnUnknownOriginIsUnpermittedRatherThanRefused(t *testing.T) {
 			"own path")
 	}
 	// AND THE DEFAULT IS SAME-ORIGIN ONLY.
-	r2 := httptest.NewRequest(http.MethodGet, "/work", nil)
+	r2 := httptest.NewRequest(http.MethodGet, "/worklet", nil)
 	r2.Header.Set("Origin", "https://ops.example.com")
 	if rec2, _ := serveCORS(t, corsFor(), r2); rec2.Header().Get("Access-Control-Allow-Origin") != "" {
 		t.Error("a company that configured no origin permitted one")
@@ -141,7 +141,7 @@ func TestAPreflightIsAnsweredWithoutACredential(t *testing.T) {
 // and they are the overwhelming majority of this API's traffic.
 func TestARequestWithNoOriginIsUntouched(t *testing.T) {
 	t.Parallel()
-	r := httptest.NewRequest(http.MethodGet, "/work", nil)
+	r := httptest.NewRequest(http.MethodGet, "/worklet", nil)
 	rec, reached := serveCORS(t, corsFor("https://ops.example.com"), r)
 	if !reached {
 		t.Fatal("a request with no Origin was not served")

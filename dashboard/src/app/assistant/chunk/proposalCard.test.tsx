@@ -62,7 +62,7 @@ function draw(proposal: Partial<AssistantProposalCard>, local?: ProposalLocal) {
 test("the screen's gate holds Approve, and says why, before anything is pressed", () => {
   setFramePage({ screen: "me", title: "My work", path: ["me"], params: {}, query: {} });
   const spec: PageActionSpec<unknown> = {
-    scope: "Work list filters",
+    scope: "Worklet list filters",
     parse: (raw) => ({ ok: true, value: raw }),
     preview: () => [{ field: "Assignee", next: "Cleared", current: "Jane" }],
     blocked: () =>
@@ -88,13 +88,13 @@ test("a refused proposal draws the route's next step on its own line", () => {
       refusal: {
         code: "invalid",
         message: "The project is archived.",
-        hint: "Restore it in Work.",
+        hint: "Restore it in Worklet.",
       },
       retryable: false,
     },
   });
   expect(screen.getByText(/The project is archived\./)).toBeTruthy();
-  expect(screen.getByText("Restore it in Work.")).toBeTruthy();
+  expect(screen.getByText("Restore it in Worklet.")).toBeTruthy();
 });
 
 // A REFUSED DECISION IS SAID ABOVE THE DECISION while the card still waits,

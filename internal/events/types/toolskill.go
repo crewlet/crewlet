@@ -44,8 +44,8 @@ type ToolSkillPageChanged struct {
 	PageID string `json:"page_id"`
 
 	// Walk says the backend knows its skills container moved but not
-	// WHICH page — the native knowledge base's applier sees a batch touch
-	// a skill page and nothing finer — so a hearer walks the whole
+	// WHICH page (Doclet's applier sees a batch touch a skill page and
+	// nothing finer), so a hearer walks the whole
 	// container rather than reading one page.
 	//
 	// It is what reaches a node that holds NO copy of the knowledge base

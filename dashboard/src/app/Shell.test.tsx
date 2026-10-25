@@ -27,7 +27,7 @@ import { Home } from "~/routes/home/Home.tsx";
 import { Inbox } from "~/routes/inbox/Inbox.tsx";
 import { installWindow } from "~/testing.tsx";
 import { PAGE_ACTIONS_SLOT, PAGE_LENSES_SLOT } from "./frame/PageActions.tsx";
-import { Project } from "~/routes/work/Project.tsx";
+import { Project } from "~/routes/worklet/Project.tsx";
 import { healthFrame } from "~/test/health.ts";
 import { emptyDay } from "~/test/myWork.ts";
 import { withDerived } from "~/test/org.ts";
@@ -80,7 +80,7 @@ const INCOMPLETE: CoverageFacts = {
 // test transformer, which a `waitFor` would otherwise be measuring (the same
 // reason `App.test.tsx` loads every chunk first).
 beforeAll(async () => {
-  await loadChunk("work");
+  await loadChunk("worklet");
 });
 
 beforeEach(() => {
@@ -236,7 +236,7 @@ function answering(
       return Promise.resolve(
         answers.viewer ?? {
           login: "U0FOUNDER",
-          grants: ["admin", "tracker", "knowledge"],
+          grants: ["admin", "worklet", "doclet"],
           handle: "ada",
           owner: "ada",
           name: "Ada Lovelace",
@@ -626,7 +626,7 @@ describe("the sidebar's figures", () => {
     // A PIN RUNS THE VIEW: the list with the view's key as `view=`, not the
     // inventory page that describes the view and offers to run it.
     const pin = screen.getByRole("link", { name: /^Blocked, org-wide/ });
-    expect(pin.getAttribute("href")).toBe("#/work/tasks?view=blocked");
+    expect(pin.getAttribute("href")).toBe("#/worklet/tasks?view=blocked");
     expect(pin.textContent).toContain("7");
     expect(screen.queryByText("Not pinned")).toBeNull();
   });
@@ -636,7 +636,7 @@ describe("the sidebar's figures", () => {
   // `work_saved_views` row for it — the only read that can return a project
   // view at all, since the workspace strip holds none.
   test("a pinned project view runs on its project, and is current while it runs", async () => {
-    location.hash = "#/work/ENG?view=mine";
+    location.hash = "#/worklet/ENG?view=mine";
     const { store, socket } = answering({
       work_saved_views: {
         complete: true,
@@ -657,7 +657,7 @@ describe("the sidebar's figures", () => {
     await settle();
     // THE PROJECT IS ITS LEAD, so two pins of one name in two projects differ.
     const pin = screen.getByRole("link", { name: /^ENG\s*My ENG bugs/ });
-    expect(pin.getAttribute("href")).toBe("#/work/ENG?view=mine");
+    expect(pin.getAttribute("href")).toBe("#/worklet/ENG?view=mine");
     expect(pin.getAttribute("aria-current")).toBe("page");
   });
 
@@ -771,7 +771,7 @@ describe("the sidebar's figures", () => {
   // A PROJECT IS NOT A SIDEBAR ROW: it is a scope of Work, switched where
   // Work's trail names it, so the rail carries no group of them.
   test("the sidebar draws no Projects group", async () => {
-    location.hash = "#/work/ENG";
+    location.hash = "#/worklet/ENG";
     const eng = {
       key: "ENG",
       name: "Core platform",
@@ -787,7 +787,7 @@ describe("the sidebar's figures", () => {
     await settle();
     const nav = screen.getByRole("navigation", { name: "Navigation" });
     expect(within(nav).queryByText("Projects")).toBeNull();
-    expect(nav.querySelector('a[href="#/work/ENG"]')).toBeNull();
+    expect(nav.querySelector('a[href="#/worklet/ENG"]')).toBeNull();
     expect(within(nav).queryByRole("button", { name: /^New task in/ })).toBeNull();
   });
 
@@ -869,7 +869,7 @@ describe("the page header", () => {
   // ON AN OBJECT PAGE the crumbs are the way back; a strip of tabs over a
   // task would say it is a fourth kind of list.
   test("no section tabs are drawn on an object's own page", async () => {
-    location.hash = "#/work/ENG-42";
+    location.hash = "#/worklet/ENG-42";
     const { store, socket } = answering({});
     mountShell(store, socket);
     expect(document.querySelector(".section-tabs")).toBeNull();
@@ -915,13 +915,13 @@ describe("the page header", () => {
   });
 
   // ONE KEY FOR A GROUP THE READER HOLDS NONE OF, on the group's label, the
-  // sidebar's rule too: a Tracker-only reader met a key on 13 of 15 rows. A
+  // sidebar's rule too: a Worklet-only reader met a key on 13 of 15 rows. A
   // group with an open row keeps the key on each locked row, and every locked
   // row still says why, as its title and after its name.
   test("a Settings group the reader holds none of draws its key once, on its label", async () => {
     location.hash = "#/settings/spend";
     const { store, socket } = answering({
-      viewer: { login: "t", grants: ["tracker"], handle: "", owner: "t", name: "", kind: "" },
+      viewer: { login: "t", grants: ["worklet"], handle: "", owner: "t", name: "", kind: "" },
     });
     mountShell(store, socket);
     await settle();
@@ -995,7 +995,7 @@ describe("the page header", () => {
   // operator questions on a timer behind every screen of every tab.
   const OPERATOR_ANSWERS = ["fleet", "retention"];
   test("the operator answers are asked only while the Settings column is drawn", async () => {
-    for (const where of ["#/home", "#/work", "#/company/budgets", "#/knowledge"]) {
+    for (const where of ["#/home", "#/worklet", "#/company/budgets", "#/doclet"]) {
       location.hash = where;
       const asked: { what: string }[] = [];
       const { store, socket } = answering({}, asked);
@@ -1036,7 +1036,7 @@ describe("the page header", () => {
   test("a Settings row the reader cannot open draws no figure", async () => {
     location.hash = "#/settings/spend";
     const { store, socket } = answering({
-      viewer: { login: "lee", grants: ["tracker"], handle: "", owner: "lee", name: "", kind: "" },
+      viewer: { login: "lee", grants: ["worklet"], handle: "", owner: "lee", name: "", kind: "" },
     });
     mountShell(store, socket);
     act(() => store.applyHealth(healthFrame({ applied_epoch: 2, nodes: 1 })));
@@ -1125,7 +1125,7 @@ describe("what the frame holds open", () => {
     ).not.toBeNull();
 
     await act(async () => {
-      location.hash = "#/work";
+      location.hash = "#/worklet";
       window.dispatchEvent(new HashChangeEvent("hashchange"));
     });
     expect(
@@ -1212,12 +1212,12 @@ test("the engine panel asks the alarms' names only of a reader the report's sect
   }
 });
 
-// A PROJECT'S LENSES ARE BESIDE ITS NAME, on the bar: `Work › ENG Core ·
+// A PROJECT'S LENSES ARE BESIDE ITS NAME, on the bar: `Worklet › ENG Core ·
 // Tasks | About | History | Files`. As a row of their own under it they cost the
 // first screenful a line the approved Board does not spend. And the row on
 // the bar still controls the region in the page, by id.
 test("an object's lenses sit on the page bar beside the breadcrumb and control the page", async () => {
-  location.hash = "#/work/ENG?lens=about";
+  location.hash = "#/worklet/ENG?lens=about";
   const eng = {
     key: "ENG",
     name: "Core platform",
@@ -1246,7 +1246,7 @@ test("an object's lenses sit on the page bar beside the breadcrumb and control t
   expect(panel?.closest("main")).toBeTruthy();
   // AND A PAGE WITH NO LENSES LEAVES THE SLOT EMPTY, which draws nothing.
   cleanup();
-  location.hash = "#/work/views";
+  location.hash = "#/worklet/views";
   const bare = answering({});
   mountShell(bare.store, bare.socket);
   expect(document.getElementById(PAGE_LENSES_SLOT)?.childElementCount).toBe(0);
@@ -1302,7 +1302,7 @@ describe("where the peek is a column", () => {
   }
 
   test("beside a screen, from the width that leaves its list the floor", async () => {
-    const { win, app } = await peekAt("#/work?peek=seat:ceo", 1159);
+    const { win, app } = await peekAt("#/worklet?peek=seat:ceo", 1159);
     try {
       expect(win.asked).toContain("(width >= 1160px)");
       expect(app.getAttribute("data-peek")).toBe("drawer");
@@ -1334,7 +1334,7 @@ describe("where the peek is a column", () => {
   // can read — so the width asked moves with the reader's choice.
   test("at the reader's density", async () => {
     setDensity("comfortable");
-    const { win, app } = await peekAt("#/work?peek=seat:ceo", 1167);
+    const { win, app } = await peekAt("#/worklet?peek=seat:ceo", 1167);
     try {
       expect(win.asked).toContain("(width >= 1168px)");
       expect(app.getAttribute("data-peek")).toBe("drawer");
@@ -1348,7 +1348,7 @@ describe("where the peek is a column", () => {
   // A PHONE IS ONE PANE: the widest phone is a drawer for a peek, as every
   // window under the column's width is, and the sidebar is its drawer too.
   test("on a phone a peek is a drawer, and so is the sidebar", async () => {
-    const { win, app } = await peekAt("#/work?peek=seat:ceo", 639);
+    const { win, app } = await peekAt("#/worklet?peek=seat:ceo", 639);
     try {
       expect(app.getAttribute("data-peek")).toBe("drawer");
       const sidebar = document.querySelector(".crewlet-app-shell__rail");
@@ -1363,7 +1363,7 @@ describe("where the peek is a column", () => {
   });
 
   test("with no peek open, the sheet is one column at every width", async () => {
-    const { win, app } = await peekAt("#/work", 1600);
+    const { win, app } = await peekAt("#/worklet", 1600);
     try {
       expect(app.hasAttribute("data-peek")).toBe(false);
       expect(document.querySelector(".crewlet-peek-rail")).toBeNull();
@@ -1488,7 +1488,7 @@ describe("the frame's keys", () => {
     frame(<Bare />);
     key("g");
     key("w");
-    expect(location.hash).toBe("#/work");
+    expect(location.hash).toBe("#/worklet");
   });
 });
 
@@ -1520,7 +1520,7 @@ describe("the assistant", () => {
   }
 
   test("⌘. opens it as a column where the frame holds it, and the peek beside it becomes a drawer", async () => {
-    const { win, app } = await open(1440, "#/work?peek=seat:ceo");
+    const { win, app } = await open(1440, "#/worklet?peek=seat:ceo");
     try {
       expect(app.getAttribute("data-aside")).toBe("column");
       expect(app.getAttribute("data-peek")).toBe("drawer");
@@ -1533,7 +1533,7 @@ describe("the assistant", () => {
   });
 
   test("over the page below the column's width, and the whole window on a phone", async () => {
-    const narrow = await open(1100, "#/work");
+    const narrow = await open(1100, "#/worklet");
     try {
       expect(narrow.app.getAttribute("data-aside")).toBe("overlay");
       narrow.win.set(600);
@@ -1544,7 +1544,7 @@ describe("the assistant", () => {
   });
 
   test("Escape inside it closes the assistant and leaves an open peek open", async () => {
-    const { win, app } = await open(1600, "#/work?peek=seat:ceo");
+    const { win, app } = await open(1600, "#/worklet?peek=seat:ceo");
     try {
       expect(app.getAttribute("data-peek")).toBe("column");
       const heading = screen.getByRole("heading", { name: "Crewlet Assistant" });
@@ -1559,7 +1559,7 @@ describe("the assistant", () => {
   });
 
   test("an assistant the company left off is drawn disabled with its reason, and the panel says why", async () => {
-    const { win } = await open(1440, "#/work");
+    const { win } = await open(1440, "#/worklet");
     try {
       // THE DEFAULT VIEWER ANSWER CARRIES NO `assistant` MEMBER: an engine
       // that does not serve it, read as off.
@@ -1571,9 +1571,9 @@ describe("the assistant", () => {
   });
 
   test("a reader the engine allows gets the composer, with the page attached", async () => {
-    const { win } = await open(1440, "#/work", {
+    const { win } = await open(1440, "#/worklet", {
       login: "U0FOUNDER",
-      grants: ["admin", "tracker", "knowledge"],
+      grants: ["admin", "worklet", "doclet"],
       handle: "ada",
       owner: "ada",
       name: "Ada Lovelace",
@@ -1586,7 +1586,7 @@ describe("the assistant", () => {
       );
       expect(
         screen.getByRole("group", { name: "Attached to this question" }).textContent,
-      ).toContain("Work");
+      ).toContain("Worklet");
     } finally {
       win.restore();
     }

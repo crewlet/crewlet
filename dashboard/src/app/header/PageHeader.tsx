@@ -17,7 +17,7 @@
  * way back out, and a strip of tabs over a task page would say the task is a
  * fourth kind of list.
  *
- * WORK DRAWS NO SECOND ROW. Its sections are the lenses of the scope its
+ * WORKLET DRAWS NO SECOND ROW. Its sections are the lenses of the scope its
  * trail names (`renderer: "lenses"` in `nav.ts`), drawn as chips beside the
  * trail's switcher ([AllProjectsLenses]) the way a project draws its own, so
  * the bar reads one way in either scope. The frame's star is not drawn there:
@@ -150,9 +150,9 @@ export function PageHeader({
   const route = useRoute();
   const controls = useRef<HTMLDivElement>(null);
   const edges = useScrollEdges(controls);
-  // WORK'S SCOPE PAGES: All projects' lenses, or a project's.
+  // WORKLET'S SCOPE PAGES: All projects' lenses, or a project's.
   const at = scopeAt(route.path, route.query);
-  // THE FRAME'S STAR: not on Work's scope pages (see the module doc), not
+  // THE FRAME'S STAR: not on Worklet's scope pages (see the module doc), not
   // where the screen's own menu carries it, and not in a workspace that draws
   // none (`WorkspaceRow.starless`).
   const framesStar = star && !at && !row?.starless;
@@ -381,7 +381,7 @@ export function keptQuery(row: WorkspaceRow, query: URLSearchParams): Record<str
  * since a lock on every section while the first read is out claims a refusal
  * nobody has made. Each row's title is its hint. A section reading a service
  * the company does not run is not drawn (`serviceShown`): Expensive tasks,
- * where it runs no Crewlet Works. A figure beside a section is handed in
+ * where it runs no Worklet. A figure beside a section is handed in
  * whole, in the column's own two shapes (`settingsFigures.tsx` decides them
  * and asks for what they need), so the column itself asks nothing.
  */
@@ -488,7 +488,7 @@ export function SectionColumn({
  * page's `h1` are the kit's; what is here is how a crumb of this product
  * becomes one of the kit's.
  *
- * WORK'S LAST CRUMB NAMES A SCOPE THE READER CAN SWITCH ([Crumb.switch]), and
+ * WORKLET'S LAST CRUMB NAMES A SCOPE THE READER CAN SWITCH ([Crumb.switch]), and
  * is drawn as the switcher's button ([ScopeSwitcher]): the heading is the
  * control, so the name a reader lands on by heading is the one they change.
  */
@@ -548,7 +548,7 @@ function kitCrumb(crumb: Crumb): BreadcrumbCrumb {
 }
 
 /**
- * All projects' lenses: Work's own sections, drawn as the chips a project's
+ * All projects' lenses: Worklet's own sections, drawn as the chips a project's
  * lenses are, beside the scope's name in the trail.
  *
  * LINKS, each to its section's address: the kit's router mode, a `nav` with
@@ -691,7 +691,7 @@ export function PageMore({
 }: Omit<Star, "at"> & {
   entries: readonly PageMenuEntry[];
   /**
-   * Whether the frame's star is offered here: not on Work's scope pages, nor
+   * Whether the frame's star is offered here: not on Worklet's scope pages, nor
    * where the screen's own menu carries it.
    */
   star?: boolean;

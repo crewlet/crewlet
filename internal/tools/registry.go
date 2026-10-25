@@ -137,7 +137,7 @@ type Entry struct {
 	// A first-party declaration at all because the gate used to key on
 	// ORIGIN — a tool delivered if an MCP server served it — and that was a
 	// proxy for the real question, correct only while every shared surface
-	// was somebody else's product. A native tracker breaks the proxy:
+	// was somebody else's product. Worklet breaks the proxy:
 	// commenting on a work item reaches the person who asked, and it is a
 	// builtin.
 	//
@@ -244,8 +244,9 @@ type Option func(*Entry)
 //
 // The surface name has to be the SAME vocabulary the trigger's own source is
 // reported in, because the delivery gate compares the two: an engine builtin
-// says `tracker` or `pages`, and a vendor's tool takes its MCP server's name,
-// which is what an inbound notification reports itself as.
+// says `work` or `page` (Worklet's and Doclet's feed sources), and a vendor's
+// tool takes its MCP server's name, which is what an inbound notification
+// reports itself as.
 func DeliversTo(surface string) Option { return func(e *Entry) { e.Surface = surface } }
 
 // RegisterWith adds a tool together with its annotations.
@@ -370,13 +371,14 @@ func (r *Registry) MCPNames() []string {
 // delivers to its own SERVER, which is the name an inbound notification from
 // that vendor reports itself under. A first-party tool delivers only when it
 // was registered with [DeliversTo], because the engine ships its own tools and
-// knows which of them reach anybody and where: a native work-item comment
+// knows which of them reach anybody and where: a Worklet work-item comment
 // reaches the tracker, a diary write reaches nobody.
 //
 // This replaced an origin test. The rule "a delivery only ever comes from an
 // MCP server" was true of a company whose every shared surface was a vendor's,
-// and false the moment the tracker moved in-process — a seat that answered its
-// assignment natively was judged to have reached nobody and looped to failure.
+// and false the moment the tracker moved in-process: a seat that answered
+// its assignment in Worklet was judged to have reached nobody and looped to
+// failure.
 // Widening it to a flat set of NAMES then bought the opposite error: every
 // deliverable satisfied every obligation, so the tracker write that fixed the
 // first incident discharged a Mattermost DM in the second. A name and a

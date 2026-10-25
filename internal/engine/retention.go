@@ -14,15 +14,15 @@ import (
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/objectives"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE TRIM, and it is the one loop without which the log only grows.
@@ -946,8 +946,8 @@ type evictionLister interface {
 // ([statelog.EvictionProbe]) — at compile time, so a reshaped method is a
 // build failure rather than a boot refusal.
 var (
-	_ evictionLister = tracker.Domain{}
-	_ evictionLister = pages.Domain{}
+	_ evictionLister = worklet.Domain{}
+	_ evictionLister = doclet.Domain{}
 	_ evictionLister = iamdomain.Domain{}
 	_ evictionLister = artifactsdomain.Domain{}
 	_ evictionLister = artifactdata.Domain{}
@@ -956,8 +956,8 @@ var (
 	// AND EVERY ONE READS ITS GATE RECORDS OFF THE LOG — an eviction and the
 	// readmission that lifts it — which [checkRegister] refuses a registered
 	// identity-claiming domain for lacking.
-	_ statelog.EvictionProbe = tracker.Domain{}
-	_ statelog.EvictionProbe = pages.Domain{}
+	_ statelog.EvictionProbe = worklet.Domain{}
+	_ statelog.EvictionProbe = doclet.Domain{}
 	_ statelog.EvictionProbe = iamdomain.Domain{}
 	_ statelog.EvictionProbe = artifactsdomain.Domain{}
 	_ statelog.EvictionProbe = artifactdata.Domain{}

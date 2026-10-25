@@ -124,9 +124,9 @@ function mount(unavailable: AssistantUnavailable | null = null) {
 test("a question is sent with its page, streamed, and drawn with every card the engine built", async () => {
   const sent = engine();
   setFramePage({
-    screen: "work-tasks",
-    title: "Work › Tasks",
-    path: ["work", "tasks"],
+    screen: "worklet-tasks",
+    title: "Worklet › Tasks",
+    path: ["worklet", "tasks"],
     params: {},
     query: {},
   });
@@ -150,13 +150,13 @@ test("a question is sent with its page, streamed, and drawn with every card the 
     protocol_version: 1,
     input: { text: "Fix the flaky sign-in test" },
   });
-  expect(body.page_context).toMatchObject({ screen: "work-tasks", title: "Work › Tasks" });
+  expect(body.page_context).toMatchObject({ screen: "worklet-tasks", title: "Worklet › Tasks" });
 
   // The question, the page it carried, and the engine's cards.
   expect(screen.getByRole("article", { name: "You said" }).textContent).toContain(
     "Fix the flaky sign-in test",
   );
-  expect(screen.getAllByText("Work › Tasks").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("Worklet › Tasks").length).toBeGreaterThan(0);
   expect(screen.getAllByText("Matching tasks").length).toBeGreaterThan(0);
   expect(screen.getAllByText("No open task covers it yet.").length).toBeGreaterThan(0);
   // A CHANGE WAITS ON THE PERSON, and the Ask button would say so.
@@ -177,15 +177,19 @@ test("a question past the length a turn takes is not sent", async () => {
 test("the page goes with a question until the reader removes it", async () => {
   const sent = engine();
   setFramePage({
-    screen: "work-tasks",
-    title: "Work › Tasks",
-    path: ["work", "tasks"],
+    screen: "worklet-tasks",
+    title: "Worklet › Tasks",
+    path: ["worklet", "tasks"],
     params: {},
     query: {},
   });
   mount();
-  fireEvent.click(screen.getByRole("button", { name: "Remove Work › Tasks from this question" }));
-  expect(screen.getByRole("button", { name: "Add Work › Tasks to this question" })).toBeDefined();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Remove Worklet › Tasks from this question" }),
+  );
+  expect(
+    screen.getByRole("button", { name: "Add Worklet › Tasks to this question" }),
+  ).toBeDefined();
   const box = screen.getByRole("textbox", { name: "Ask the assistant" });
   fireEvent.change(box, { target: { value: "Who spent most?" } });
   await act(async () => {

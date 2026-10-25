@@ -17,7 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // viewerCompany holds two human seats, so "somebody else's handle" is a real
@@ -281,7 +281,7 @@ func TestReadingAnotherPersonsDayNeedsTheLeadRelation(t *testing.T) {
 	led.Chart = leadsChart{lead: "ana", report: "bo"}
 	if _, err := askHolding(t, led, "ana", "work_my_work",
 		map[string]any{"handle": "bo"},
-		iam.GrantTracker); err != nil {
+		iam.GrantWorklet); err != nil {
 
 		t.Fatalf("ana reading her report's day: %v", err)
 	}
@@ -297,7 +297,7 @@ func TestReadingAnotherPersonsDayNeedsTheLeadRelation(t *testing.T) {
 	blind.Chart = authz.NoChart{}
 	if _, err := askHolding(t, blind, "ana", "work_my_work",
 		map[string]any{"handle": "bo"},
-		iam.GrantTracker); !errors.Is(err, queries.ErrUnavailable) {
+		iam.GrantWorklet); !errors.Is(err, queries.ErrUnavailable) {
 
 		t.Errorf("an unreadable chart answered %v, want unavailable", err)
 	}
@@ -345,7 +345,7 @@ func TestEachPersonalQuestionAsksItsOwnVerb(t *testing.T) {
 		// reporting no relation: admitted to ASK, refused the record —
 		// so the refusal is the verb's rather than the registration's.
 		_, err := askHolding(t, viewerSources(t, &stubWork{}), "ana", what,
-			map[string]any{"handle": "bo"}, iam.GrantTracker)
+			map[string]any{"handle": "bo"}, iam.GrantWorklet)
 		var refusal *queries.Refusal
 		if !errors.As(err, &refusal) {
 			t.Errorf("%s naming bo = %v, want a refusal", what, err)
@@ -407,7 +407,7 @@ func TestACallersOwnRecordIsReadUnderTheNameItIsWrittenUnder(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			c.caller.ID, c.caller.Stage = uuid.New(), iam.StageActive
-			c.caller.Grants = []iam.Grant{iam.GrantTracker}
+			c.caller.Grants = []iam.Grant{iam.GrantWorklet}
 			ctx := iam.WithPrincipal(t.Context(), c.caller)
 			if want := iam.ActorFor(c.caller).Name; want != c.want {
 				t.Fatalf("this caller writes under %q; the case wants %q", want, c.want)
@@ -489,7 +489,7 @@ func TestSomebodyElsesLoginIsReadUnderTheirHoldersRecord(t *testing.T) {
 		Stage:  iam.StageActive,
 		Grants: []iam.Grant{iam.GrantAdmin}}
 	lead := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson, Login: "lead.person",
-		Seat: "lead", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantTracker}}
+		Seat: "lead", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantWorklet}}
 	for _, c := range []struct {
 		name   string
 		caller iam.Principal
@@ -540,7 +540,7 @@ func TestALoginThatNamesNobodyIsNotARosterForAQuestion(t *testing.T) {
 		Stage:  iam.StageActive,
 		Grants: []iam.Grant{iam.GrantAdmin}}
 	lead := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson, Login: "lead.person",
-		Seat: "lead", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantTracker}}
+		Seat: "lead", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantWorklet}}
 	for _, c := range []struct {
 		name   string
 		caller iam.Principal
@@ -614,7 +614,7 @@ func TestTheInboxIsScopedTheSameWay(t *testing.T) {
 	}
 	if _, err := askHolding(t, viewerSources(t, work), "ana", "work_inbox",
 		map[string]any{"handle": "bo"},
-		iam.GrantTracker); !errors.Is(err, queries.ErrUnauthorized) {
+		iam.GrantWorklet); !errors.Is(err, queries.ErrUnauthorized) {
 
 		t.Errorf("a colleague read bo's inbox = %v, want unauthorized", err)
 	}
@@ -638,13 +638,13 @@ func TestEveryInboxFilterReachesTheReader(t *testing.T) {
 		t.Fatalf("work_inbox: %v", err)
 	}
 	q := work.inboxQuery
-	if !q.Unread || !q.PrimaryOnly || q.Snoozed != tracker.SnoozeOnly {
+	if !q.Unread || !q.PrimaryOnly || q.Snoozed != worklet.SnoozeOnly {
 		t.Errorf("the three filters reached the reader as %+v", q)
 	}
 	if q.Limit != 7 || q.Cursor != "c-9" {
 		t.Errorf("limit/cursor reached the reader as %d/%q", q.Limit, q.Cursor)
 	}
-	want := []tracker.Reason{tracker.ReasonMention, tracker.ReasonAsked}
+	want := []worklet.Reason{worklet.ReasonMention, worklet.ReasonAsked}
 	if len(q.Reasons) != len(want) || q.Reasons[0] != want[0] || q.Reasons[1] != want[1] {
 		t.Errorf("reasons reached the reader as %v, want %v", q.Reasons, want)
 	}
@@ -677,9 +677,9 @@ func TestTheSnoozedScopeDefaultsToExcludeAndRefusesAnUnknownOne(t *testing.T) {
 		map[string]any{}); err != nil {
 		t.Fatalf("work_inbox: %v", err)
 	}
-	if work.inboxQuery.Snoozed != tracker.SnoozeExclude {
+	if work.inboxQuery.Snoozed != worklet.SnoozeExclude {
 		t.Errorf("an absent `snoozed` reached the reader as %q, want %q",
-			work.inboxQuery.Snoozed, tracker.SnoozeExclude)
+			work.inboxQuery.Snoozed, worklet.SnoozeExclude)
 	}
 	_, err := askAsOperator(t, viewerSources(t, &stubWork{}), "work_inbox",
 		map[string]any{"snoozed": "bogus"})
@@ -788,9 +788,9 @@ func TestACallerWithNoAuthorityLearnsNothingFromTheDirectoryOnAQuestion(t *testi
 	t.Parallel()
 	stranger := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson,
 		Login: "pat.nobody", Seat: "pat", Stage: iam.StageActive,
-		Grants: []iam.Grant{iam.GrantTracker}}
+		Grants: []iam.Grant{iam.GrantWorklet}}
 	lead := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson, Login: "lead.person",
-		Seat: "lead", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantTracker}}
+		Seat: "lead", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantWorklet}}
 	blind := loginDirectory{err: errors.New("engine: ana.diaz is bound to ana " +
 		"and this node cannot say where that seat is now")}
 	for _, question := range []string{"work_my_work", "work_inbox", "work_person"} {

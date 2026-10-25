@@ -51,7 +51,7 @@ function useFacts(): (star: Star) => Facts {
   const projects = useQuery(
     "work_projects",
     { limit: 50 },
-    { enabled: viewer.tracker && ask.tracker },
+    { enabled: viewer.worklet && ask.tracker },
   );
   return (star) => {
     const route = resolve(star.path);
@@ -81,20 +81,20 @@ function useFacts(): (star: Star) => Facts {
       }
       case "project": {
         const row = projects.data?.projects?.find((p) => p.key === route.key);
-        if (!row) return { kind: "Project", leading: glyph("work") };
+        if (!row) return { kind: "Project", leading: glyph("worklet") };
         const { todo, active, done } = row.task_counts;
         const whole = todo + active + done;
         return {
           kind: "Project",
-          leading: glyph("work"),
+          leading: glyph("worklet"),
           meta: whole === 0 ? "No work yet" : censusLine(done, active, todo),
           figure: whole > 0 ? `${Math.round((done / whole) * 100)}%` : undefined,
         };
       }
       case "item":
-        return { kind: "Task", leading: glyph("work"), meta: route.id };
+        return { kind: "Task", leading: glyph("worklet"), meta: route.id };
       case "page":
-        return { kind: "Page", leading: glyph("knowledge") };
+        return { kind: "Page", leading: glyph("doclet") };
       default:
         return {
           kind: workspaceRow(route.workspace)?.label ?? "Page",
@@ -115,7 +115,7 @@ function useSuggestions(pins: readonly Star[]): Omit<Star, "at">[] {
   const projects = useQuery(
     "work_projects",
     { limit: 10 },
-    { enabled: viewer.tracker && ask.tracker },
+    { enabled: viewer.worklet && ask.tracker },
   );
   const pinned = new Set(pins.map((p) => keyOf(p.path)));
   const out: Omit<Star, "at">[] = [];
@@ -129,7 +129,8 @@ function useSuggestions(pins: readonly Star[]): Omit<Star, "at">[] {
   for (const seat of index.seats)
     if (seat.kind !== "human") offer({ path: seatPath(seat), label: seat.name, workspace: "org" });
   for (const p of projects.data?.projects ?? [])
-    if (!p.archived) offer({ path: projectPath(p.key), label: p.name || p.key, workspace: "work" });
+    if (!p.archived)
+      offer({ path: projectPath(p.key), label: p.name || p.key, workspace: "worklet" });
   return out.slice(0, 4);
 }
 

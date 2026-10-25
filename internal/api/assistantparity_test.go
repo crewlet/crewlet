@@ -36,14 +36,14 @@ import (
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // TestPermissionParityAcrossFivePrincipals: THE ASSISTANT SEES WHAT ITS PERSON
 // SEES, AND NOTHING ELSE (ADR-0049), for every read tool in the catalogue.
 //
 // Four people sign in to one company through the guard's real session arm:
-// an administrator, a person holding only the tracker, one holding only the
+// an administrator, a person holding only Worklet, one holding only the
 // knowledge base, and one holding nothing but the overview everybody reads.
 // For each of them, every catalogue read is made twice: once as the person,
 // with their own cookie, and once through the assistant, as a scripted model
@@ -73,7 +73,7 @@ import (
 // instant an answer reads off the wall clock while it is asked ([sameAnswer]).
 // Mutation: give the principal an assistant grant resolves to one more
 // permission (internal/api/auth's assist arm), and the overview-only person's
-// assistant reads the tracker; let iam.Assistable admit everybody, and a
+// assistant reads Worklet; let iam.Assistable admit everybody, and a
 // token's session derives a grant and a machine token is started a turn.
 func TestPermissionParityAcrossFivePrincipals(t *testing.T) {
 	t.Parallel()
@@ -84,8 +84,8 @@ func TestPermissionParityAcrossFivePrincipals(t *testing.T) {
 		grants []iam.Grant
 	}{
 		{"an administrator", []iam.Grant{iam.GrantAdmin}},
-		{"a tracker-only person", []iam.Grant{iam.GrantTracker}},
-		{"a knowledge-only person", []iam.Grant{iam.GrantKnowledge}},
+		{"a tracker-only person", []iam.Grant{iam.GrantWorklet}},
+		{"a knowledge-only person", []iam.Grant{iam.GrantDoclet}},
 		{"an overview-only person", []iam.Grant{}},
 	}
 	for _, who := range people {
@@ -373,8 +373,8 @@ func (s paritySources) mount(opts *api.Options) {
 // noWorkHits is a work index that finds nothing.
 type noWorkHits struct{}
 
-func (noWorkHits) Search(context.Context, tracker.SearchQuery) (tracker.SearchAnswer, error) {
-	return tracker.SearchAnswer{Hits: []tracker.Ranked{}}, nil
+func (noWorkHits) Search(context.Context, worklet.SearchQuery) (worklet.SearchAnswer, error) {
+	return worklet.SearchAnswer{Hits: []worklet.Ranked{}}, nil
 }
 
 // noCodingRuns is a node running no coding run.

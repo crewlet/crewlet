@@ -1393,7 +1393,7 @@ func administrativeGestures(ctx context.Context,
 			_, err := w.Create(ctx, iamdomain.Creation{
 				PersonID: uuid.Must(uuid.NewV7()).String(), Kind: iam.KindMachine,
 				Stage: iam.StageActive, Login: "svc:token-made", OpID: operationKey(),
-				Reason: "a hire", Grants: []iam.Grant{iam.GrantTracker},
+				Reason: "a hire", Grants: []iam.Grant{iam.GrantWorklet},
 			})
 			return err
 		},
@@ -1408,7 +1408,7 @@ func administrativeGestures(ctx context.Context,
 		},
 		"invite": func(w *iamdomain.Writer) error {
 			_, err := w.Invite(ctx, iamdomain.InviteMint{
-				Email: "y@example.com", Grants: []iam.Grant{iam.GrantTracker},
+				Email: "y@example.com", Grants: []iam.Grant{iam.GrantWorklet},
 				Seat: "nowhere", ExpiresAt: brokerAt.Add(time.Hour),
 				OpID: operationKey(), Reason: "onboarding",
 			})
@@ -1553,14 +1553,14 @@ func TestAnUnknownGrantMayBeRemovedButNotAdded(t *testing.T) {
 		before, after []iam.Grant
 		refused       bool
 	}{
-		{"kept", []iam.Grant{iam.GrantTracker, future},
-			[]iam.Grant{iam.GrantTracker, future, iam.GrantKnowledge}, false},
-		{"removed", []iam.Grant{iam.GrantTracker, future},
-			[]iam.Grant{iam.GrantTracker}, false},
-		{"added", []iam.Grant{iam.GrantTracker},
-			[]iam.Grant{iam.GrantTracker, future}, true},
+		{"kept", []iam.Grant{iam.GrantWorklet, future},
+			[]iam.Grant{iam.GrantWorklet, future, iam.GrantDoclet}, false},
+		{"removed", []iam.Grant{iam.GrantWorklet, future},
+			[]iam.Grant{iam.GrantWorklet}, false},
+		{"added", []iam.Grant{iam.GrantWorklet},
+			[]iam.Grant{iam.GrantWorklet, future}, true},
 		{"an app admin already includes", []iam.Grant{iam.GrantAdmin},
-			[]iam.Grant{iam.GrantAdmin, iam.GrantTracker}, false},
+			[]iam.Grant{iam.GrantAdmin, iam.GrantWorklet}, false},
 	} {
 		err := admin.MayConfer(c.before, c.after)
 		if c.refused != errors.Is(err, iamdomain.ErrRefused) {
@@ -1571,15 +1571,15 @@ func TestAnUnknownGrantMayBeRemovedButNotAdded(t *testing.T) {
 	// AND A PARTY WITHOUT ADMIN keeps what is there and adds only what it
 	// holds — the expansion of the row is no licence of its own.
 	user := rig.writer.As(principalNamed("app.user", iam.KindPerson,
-		[]iam.Grant{iam.GrantTracker}))
+		[]iam.Grant{iam.GrantWorklet}))
 	if err := user.MayConfer([]iam.Grant{iam.GrantAdmin},
-		[]iam.Grant{iam.GrantAdmin, iam.GrantKnowledge}); err != nil {
+		[]iam.Grant{iam.GrantAdmin, iam.GrantDoclet}); err != nil {
 		t.Errorf("spelling out an app the row holds through admin was "+
 			"refused: %v", err)
 	}
-	if err := user.MayConfer(nil, []iam.Grant{iam.GrantKnowledge}); !errors.Is(err,
+	if err := user.MayConfer(nil, []iam.Grant{iam.GrantDoclet}); !errors.Is(err,
 		iamdomain.ErrRefused) {
-		t.Errorf("a tracker user conferred knowledge (%v)", err)
+		t.Errorf("a Worklet user conferred Doclet (%v)", err)
 	}
 
 	person := uuid.Must(uuid.NewV7()).String()
@@ -1587,7 +1587,7 @@ func TestAnUnknownGrantMayBeRemovedButNotAdded(t *testing.T) {
 		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Dana Okafor", Email: "dana@example.com", Login: "dana.sre",
 		Seat:   rig.vacantSeat("dana-okafor"),
-		Grants: []iam.Grant{iam.GrantTracker},
+		Grants: []iam.Grant{iam.GrantWorklet},
 		OpID:   operationKey(), Reason: "a hire", LinkExpiresAt: firstLinkExpiry,
 	}); err != nil {
 		t.Fatalf("enrol: %v", err)
@@ -1628,7 +1628,7 @@ func TestTwoInvitationsToOneAddressYieldOneWinner(t *testing.T) {
 	invite := func(op, seat string) error {
 		_, err := rig.writer.Invite(rig.t.Context(), iamdomain.InviteMint{
 			Email:     "sarah@example.com",
-			Grants:    []iam.Grant{iam.GrantTracker},
+			Grants:    []iam.Grant{iam.GrantWorklet},
 			Seat:      rig.vacantSeat(seat),
 			ExpiresAt: brokerAt.Add(168 * time.Hour),
 			OpID:      op, Reason: "onboarding",
@@ -1672,7 +1672,7 @@ func TestTwoInvitationsToOneSeatYieldOneWinner(t *testing.T) {
 		err := rig.during(func() error {
 			var err error
 			issued, err = rig.writer.Invite(rig.t.Context(), iamdomain.InviteMint{
-				Email: address, Grants: []iam.Grant{iam.GrantTracker},
+				Email: address, Grants: []iam.Grant{iam.GrantWorklet},
 				Seat: seat, ExpiresAt: brokerAt.Add(168 * time.Hour),
 				OpID: operationKey(), Reason: "onboarding",
 			})

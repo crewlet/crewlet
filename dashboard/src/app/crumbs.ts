@@ -19,10 +19,11 @@
  * OBJECT and carries no link: a trail whose final crumb links to the page you
  * are already on teaches a reader that the control does nothing.
  *
- * WORK'S PAGES END IN THEIR SCOPE, All projects or one project, and that crumb
- * SWITCHES it ([Crumb.switch]): Work › All projects on its lenses, Work ›
- * FAIR Product and Engineering on a project's. On Work's landing the workspace
- * is plain words, because a link there would lead to the page it is on.
+ * WORKLET'S PAGES END IN THEIR SCOPE, All projects or one project, and that
+ * crumb SWITCHES it ([Crumb.switch]): Worklet › All projects on its lenses,
+ * Worklet › FAIR Product and Engineering on a project's. On Worklet's landing
+ * the workspace is plain words, because a link there would lead to the page it
+ * is on.
  *
  * `labels` is what a screen knows and the route does not — a project's name
  * for its key, a seat's display name for its handle, a page's title for its
@@ -63,7 +64,7 @@ export interface Crumb {
   seat?: { name: string; kind: "agent" | "human"; avatar?: AgentAvatar | null };
   /**
    * The crumb names a scope the reader can switch, and is drawn as the
-   * switcher's button (`header/ProjectSwitcher.tsx`). Only Work's last crumb
+   * switcher's button (`header/ProjectSwitcher.tsx`). Only Worklet's last crumb
    * carries it, and a project is the one kind of scope there is.
    */
   switch?: "project";
@@ -112,7 +113,7 @@ function avatarOfLabel(label: string | undefined): AgentAvatar | undefined {
  * The label keys a page's screen publishes for its trail: the space it is
  * filed in, and the id of each page above it, outermost first — whose titles
  * are ordinary labels keyed by their ids. NUL-prefixed for the reason the
- * seat keys are. Knowledge › Engineering › Runbooks › Provisioner runbook.
+ * seat keys are. Doclet › Engineering › Runbooks › Provisioner runbook.
  */
 export const pageSpaceKey = (id: string) => `\u0000page-space:${id}`;
 export const pageUpKey = (id: string, depth: number) => `\u0000page-up:${id}:${depth}`;
@@ -131,7 +132,7 @@ export const turnHandleKey = (turnId: string) => `\u0000turn-handle:${turnId}`;
 /**
  * A title for the browser tab, derived from the same trail.
  *
- * ON WORK'S SCOPE PAGES THE LENS COMES FIRST, given where the reader is
+ * ON WORKLET'S SCOPE PAGES THE LENS COMES FIRST, given where the reader is
  * ([ScopeAt]): "Tasks · All projects", "About · Product and Engineering", so
  * two tabs open on one project's board and its history read apart.
  */
@@ -240,31 +241,31 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
     case "org-chart":
     case "budgets":
     case "live":
-    case "knowledge":
+    case "doclet":
     case "account":
       return [root(row, false)];
     case "me":
       return sectionPage(where.section);
-    case "work-projects":
-      // WORK'S LANDING: All projects' first lens, where a link back to Work
-      // would lead to the page it is on.
+    case "worklet-projects":
+      // WORKLET'S LANDING: All projects' first lens, where a link back to
+      // Worklet would lead to the page it is on.
       return [root(row, false), allProjects()];
-    case "work-tasks":
-    case "work-history":
+    case "worklet-tasks":
+    case "worklet-history":
       return [root(row, true), allProjects()];
-    case "work-search":
+    case "worklet-search":
       return sectionPage("search");
-    case "work-views":
+    case "worklet-views":
       return where.id ? inside("views", named(labels, where.id)) : sectionPage("views");
     case "project":
       return [root(row, true), { ...projectCrumb(labels, where.key), switch: "project" }];
     case "item": {
       // AN ITEM KEY NAMES ITS PROJECT, so the trail carries the way to it
-      // with no lookup. An id names nothing, and the trail is Work › item.
+      // with no lookup. An id names nothing, and the trail is Worklet › item.
       const project = ITEM_KEY_SHAPE.test(where.id) ? where.id.replace(/-\d+$/, "") : "";
       const item = named(labels, where.id);
       return project
-        ? [root(row, true), { ...projectCrumb(labels, project), path: ["work", project] }, item]
+        ? [root(row, true), { ...projectCrumb(labels, project), path: ["worklet", project] }, item]
         : [root(row, true), item];
     }
     case "roster":
@@ -355,11 +356,11 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
       const up: Crumb[] = [];
       for (let i = 0; labels[pageUpKey(where.id, i)] !== undefined; i++) {
         const ancestor = labels[pageUpKey(where.id, i)]!;
-        up.push({ label: labels[ancestor] ?? ancestor, path: ["knowledge", "pages", ancestor] });
+        up.push({ label: labels[ancestor] ?? ancestor, path: ["doclet", "pages", ancestor] });
       }
       return [
         root(row, true),
-        ...(space ? [{ label: labels[space] ?? space, path: ["knowledge", space] }] : []),
+        ...(space ? [{ label: labels[space] ?? space, path: ["doclet", space] }] : []),
         ...up,
         named(labels, where.id),
       ];
@@ -468,7 +469,7 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
   }
 }
 
-/** All projects, as the scope Work's lenses end in. */
+/** All projects, as the scope Worklet's lenses end in. */
 function allProjects(): Crumb {
   return { label: ALL_PROJECTS, switch: "project" };
 }

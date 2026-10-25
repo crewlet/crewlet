@@ -21,7 +21,7 @@ import (
 type PageContext struct {
 	// Screen is the dashboard's screen name (its route table's union).
 	Screen string `json:"screen"`
-	// Title is the label the frame drew for the chip ("Work › Tasks").
+	// Title is the label the frame drew for the chip ("Worklet › Tasks").
 	Title string `json:"title"`
 	// Params are the screen's own path parameters.
 	Params map[string]string `json:"params"`

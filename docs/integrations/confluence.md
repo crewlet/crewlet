@@ -3,16 +3,16 @@
 Crewlet integrates with Confluence bidirectionally: agents read and write Confluence pages via MCP tools, and Confluence pushes content change events to agents via webhooks.
 
 > **Confluence is one of two knowledge backends, and it is not the default.**
-> The engine ships its own — `knowledge.backend: native`, which is what a
-> company that says nothing gets — with every page a record on the engine's
+> The engine ships its own, Doclet (`knowledge.backend: doclet`, which is what a
+> company that says nothing gets), with every page a record on the engine's
 > own pages log, applied on every data node, and searched by keyword over
 > each node's own BM25 index (and by meaning as well where
 > `knowledge.vectors` is on, the default for a company with an embeddings
 > provider). Set `knowledge.backend: confluence` (or declare this block,
-> which derives it) to run Confluence instead. It buys one thing the native
-> backend does not have: search runs **as the agent's own Atlassian user**,
+> which derives it) to run Confluence instead. It buys one thing Doclet
+> does not have: search runs **as the agent's own Atlassian user**,
 > so Confluence's page permissions are the boundary rather than the engine.
-> Exactly one backend per company — a config naming both is refused. See
+> Exactly one backend per company: a config naming both is refused. See
 > [Knowledge System](../concepts/knowledge-system.md).
 
 > **Prerequisites — the Atlassian side is set up by hand.** Atlassian offers no API for provisioning users, so the operator creates the Atlassian site (Cloud or Data Center) and each agent's Atlassian account and API token manually, then wires the tokens into `mcp_env` as shown below. `crewlet confluence provision` registers the inbound hooks on either deployment; on Cloud the [Crewlet Forge app](https://github.com/crewlet/forge) is the supported alternative (see [Webhooks](#webhooks-confluence-pushes-to-agents)).
@@ -60,7 +60,7 @@ mcp_servers:
 
 **Which deployment a `url` names is derived, by the rule the [Jira](jira.md#configuration) client uses.** A site under `atlassian.net`, `jira.com` or Atlassian Government Cloud's `atlassian-us-gov-mod.net` is Cloud, and serves Confluence under `/wiki`, which the engine appends when the address does not already end in it; a gateway a `cloud_id` is read through — `api.atlassian.com`, or Government Cloud's `api.atlassian-us-gov-mod.com`, chosen by the Cloud `site_url` names — is Cloud and already names the product, so nothing is appended. Any other host is what `integrations.atlassian.deployment` declares, and Data Center when nothing is declared, served at the address as written. An [Atlassian Isolated Cloud](https://support.atlassian.com/organization-administration/docs/ip-addresses-and-domains-for-atlassian-cloud-products/) site is at a base domain of its own, so it is Cloud by that declaration rather than by its host, and nothing is appended to it: write its `url` out whole, `/wiki` included. A `url` whose host is a `${VAR}` is judged when it resolves, so validation asks it for a Data Center's `webhook_secret` up front only when the company declares `data_center`.
 
-> **Human-clickable links agents share:** with `cloud_id`, the `mcp-atlassian` tools return `api.atlassian.com/ex/confluence/{cloud_id}/...` gateway URLs, which colleagues can't open. To have agents share a clickable `…atlassian.net/wiki/spaces/…/pages/…` link, set a [skill variable](../concepts/tool-skills.md#skill-variables) — `skill_variables.confluence_base_url: "https://mycompany.atlassian.net/wiki"` — for your mention/link Tool Skill to reference. (The bundled `examples/tool-skills/platform-mentions.md` does not: it links to the engine's own tracker and pages through `${crewlet_base_url}`, so a company on Confluence gives its link rule a skill of its own.) Note this is *enforced-reading guidance* (the required-skill guard puts the rule + base in context before the agent can post), not a rewrite of tool results — `mcp-atlassian` builds result links from `CONFLUENCE_URL` and does not read a site-URL env. (This is independent of `site_url`, which the notification transport and knowledge search use for their own links.)
+> **Human-clickable links agents share:** with `cloud_id`, the `mcp-atlassian` tools return `api.atlassian.com/ex/confluence/{cloud_id}/...` gateway URLs, which colleagues can't open. To have agents share a clickable `…atlassian.net/wiki/spaces/…/pages/…` link, set a [skill variable](../concepts/tool-skills.md#skill-variables) (`skill_variables.confluence_base_url: "https://mycompany.atlassian.net/wiki"`) for your mention/link Tool Skill to reference. (The bundled `examples/tool-skills/platform-mentions.md` does not: it links to Worklet and Doclet through `${crewlet_base_url}`, so a company on Confluence gives its link rule a skill of its own.) Note this is *enforced-reading guidance* (the required-skill guard puts the rule + base in context before the agent can post), not a rewrite of tool results: `mcp-atlassian` builds result links from `CONFLUENCE_URL` and does not read a site-URL env. (This is independent of `site_url`, which the notification transport and knowledge search use for their own links.)
 
 On **Cloud**, `crewlet confluence provision` registers token-bearing hooks on `/webhooks/confluence/{event}` through an endpoint Atlassian has never documented; the [Forge app](https://github.com/crewlet/forge) is the supported alternative and delivers to `POST /webhooks/forge`. `webhook_secret` signs Data Center deliveries; `webhook_token` authenticates Cloud ones. See [Webhooks](#webhooks-confluence-pushes-to-agents).
 
@@ -443,7 +443,7 @@ Operators publish locally authored markdown — [Tool Skills](../concepts/tool-s
 crewlet confluence import <company.yaml> ./docs-to-publish
 ```
 
-(Neither bundled Nimbus example ships a `confluence:` block — both run the engine's own knowledge base — so neither works as the positional argument as-is: add the block at the top of this page to one of them first, and switch its `knowledge.backend` to `confluence` in the same edit. `examples/nimbus-docs/` is the set of pages either publishes.)
+(Neither bundled Nimbus example ships a `confluence:` block, because both run Doclet. So neither works as the positional argument as-is: add the block at the top of this page to one of them first, and switch its `knowledge.backend` to `confluence` in the same edit. `examples/nimbus-docs/` is the set of pages either publishes.)
 
 - The **first positional argument is the Tier B company YAML** and the second is the directory — the Confluence credentials come from its `confluence:` block, resolved through the node's secret store and then the environment (pass `-config` to name a different Tier A document).
 - **Every target space is checked before a single page is written.** A typo in a directory name would otherwise be discovered half way through, leaving an operator to work out which pages landed. The importer never *creates* a space: that names a container the whole company then works in, and guessing it is not this command's job.

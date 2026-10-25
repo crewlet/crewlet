@@ -126,7 +126,7 @@ type ProposalCard struct {
 	Tool string `json:"tool"`
 	// Title is the action in sentence case ("Create task").
 	Title string `json:"title"`
-	// Target names what it changes ("ENG-142", "Work › Tasks").
+	// Target names what it changes ("ENG-142", "Worklet › Tasks").
 	Target string `json:"target,omitempty"`
 	// Changes is the "What will change" list, scope first, every change a
 	// before and after pair (D10).

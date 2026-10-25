@@ -55,7 +55,7 @@ type domainFeed struct {
 	verify *statelog.Verifier
 }
 
-// Consume implements [tracker.DomainConsumer] and [pages.DomainConsumer].
+// Consume implements [worklet.DomainConsumer] and [doclet.DomainConsumer].
 func (f domainFeed) Consume(ctx context.Context, group string) (changefeed.Records, error) {
 	g, err := f.log.Group(ctx, group)
 	if err != nil {
@@ -84,7 +84,7 @@ type domainRecords struct {
 // downstream is handed a byte of it — the framework's rule for every reader of
 // a signed log, and the feed is the second one. What travels on
 // [changefeed.Record.Payload] is therefore the BODY: the wake's own
-// translators decode it again ([tracker.DecodeEnvelope], [pages.Decode]), so a
+// translators decode it again ([worklet.DecodeEnvelope], [doclet.Decode]), so a
 // framed payload here would fail in a package that never heard of a frame.
 //
 // THE OPERATION ID IS THE DELIVERY'S IDENTITY, taken from the envelope every

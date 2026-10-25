@@ -37,7 +37,7 @@ Organization
     │                                       the project the team files under, and the
     │                                       unit an item filed into that project with
     │                                       no unit of its own belongs to.
-    │                                       VENDOR-NEUTRAL: it names a native project
+    │                                       VENDOR-NEUTRAL: it names a Worklet project
     │                                       or a Jira one, whichever tracker.backend
     │                                       the company runs)
     ├── Space string                       (knowledge identity: where its pages live
@@ -114,7 +114,7 @@ Roles can live in two places:
 
 > Every one of these identities is consulted. The tracker routes an item that names nobody to the lead of the unit that owns the project, and the knowledge base does the same for a page change nobody was mentioned in — whichever backend serves each, which is why the keys name neither. Neither narrows what an agent can READ: knowledge scope is the org-wide `knowledge.scope` only, because letting a unit's identity double as a read scope is how an agent ends up unable to read the page it was told to follow. See [Jira](../integrations/jira.md) and [Confluence](../integrations/confluence.md).
 
-> **They also decide who leads what.** On the engine's own tracker and knowledge base, the unit's effective lead leads the project its `project:` names and the page container its `space:` names, and a root seat leads its own — which is what the [authority table](identity-and-access.md#the-authority-table-one-function-decides) asks when a write is a lead's to make: a project's field declarations, re-routing its work, renaming, trashing and restoring a page in the container — each beside the app it belongs to. The two keys are separate relations, asked separately: a unit whose project and space are spelled differently has a lead for each all the same. A `space:` is also what makes a container a place pages can be created at all: a page is created only in a space the company declares — a unit's or a seat's `space:`, `knowledge.root_space`, or the tool-skills container ([Who may write where](knowledge-system.md#who-may-write-where)).
+> **They also decide who leads what.** On Worklet and Doclet, the unit's effective lead leads the project its `project:` names and the page container its `space:` names, and a root seat leads its own, which is what the [authority table](identity-and-access.md#the-authority-table-one-function-decides) asks when a write is a lead's to make: a project's field declarations, re-routing its work, renaming, trashing and restoring a page in the container, each beside the app it belongs to. The two keys are separate relations, asked separately: a unit whose project and space are spelled differently has a lead for each all the same. A `space:` is also what makes a container a place pages can be created at all: a page is created only in a space the company declares: a unit's or a seat's `space:`, `knowledge.root_space`, or the tool-skills container ([Who may write where](knowledge-system.md#who-may-write-where)).
 
 ---
 
@@ -420,7 +420,7 @@ they are written in. One naming nothing is reported as a
 
 **A new key does not take the old one's work.** Work carries the key it was
 filed under, and nothing rewrites it — see
-[Naming a team](../guides/work-tracker.md#naming-a-team-its-key-or-its-name).
+[Naming a team](../guides/worklet.md#naming-a-team-its-key-or-its-name).
 Nor does a new name re-onboard anybody: onboarding turns on the chain of unit
 keys and handles above a seat (see [Onboarding
 convention](#onboarding-convention)), so relabelling a team moves nobody.
@@ -601,7 +601,7 @@ Each line also carries `epoch`, `revision` and a `detail` sentence saying what t
 
 ## Onboarding convention
 
-Each unit (and the organisation root) is expected to publish a page titled exactly **`Onboarding`** in its container of the knowledge base — its Confluence space, on that backend. On an agent seat's first turn for its current org chain, a dedicated [onboarding pass](turn-engine.md#first-turn-onboarding) runs before the executor, its prompt listing the unit chain (org → ancestor units → own unit) under `## What to do`. The agent reads each `Onboarding` page with its knowledge-base tools — `search_knowledge` on either backend, then `get_page` on the native one or the Confluence server's own page tools on Confluence — activating them from the tools its prompt lists to discover, captures the conventions that matter via `reflect_and_persist`, and calls `mark_onboarded` when done. After that, the pass does not run again for that org chain. The executor is never told to onboard and never reaches `mark_onboarded`.
+Each unit (and the organisation root) is expected to publish a page titled exactly **`Onboarding`** in its container of the knowledge base (its Confluence space, on that backend). On an agent seat's first turn for its current org chain, a dedicated [onboarding pass](turn-engine.md#first-turn-onboarding) runs before the executor, its prompt listing the unit chain (org → ancestor units → own unit) under `## What to do`. The agent reads each `Onboarding` page with its knowledge-base tools (`search_knowledge` on either backend, then `get_page` on Doclet or the Confluence server's own page tools on Confluence), activating them from the tools its prompt lists to discover, captures the conventions that matter via `reflect_and_persist`, and calls `mark_onboarded` when done. After that, the pass does not run again for that org chain. The executor is never told to onboard and never reaches `mark_onboarded`.
 
 Re-onboarding fires automatically when the org structure changes (the role moves between units, a new ancestor unit is inserted) — the engine recomputes a chain hash and the prior marker no longer matches. A **rename** is not a structural change: the hash is built from the company name, the keys of the units in the chain and the seat's handle, all of which are fixed, so relabelling a division or a person moves nobody and re-onboards nobody. A unit or seat given a different key or handle is a removal and a creation, and the seat it leaves in the chain onboards as a new one.  Source-page content drift is **not** automatic: the agent re-reads at its own discretion, or in response to a page-update notification routed through the existing notification pipeline.
 

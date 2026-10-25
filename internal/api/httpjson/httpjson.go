@@ -680,8 +680,8 @@ const (
 	// — a write answered `unknown` without being published, on the first
 	// attempt as on every retry.
 	//
-	// ONE CODE WHEREVER THE ID ARRIVED — the node gate's `?op_id=` and
-	// every surface's `Idempotency-Key` (`/work`, `/pages`, `/iam`) — so a
+	// ONE CODE WHEREVER THE ID ARRIVED (the node gate's `?op_id=` and every
+	// surface's `Idempotency-Key`: `/worklet`, `/doclet/pages`, `/iam`), so a
 	// client branches on one spelling for one mistake. A
 	// refusal of a header also carries `field`, naming it.
 	CodeOpIDInvalid Code = "op_id_invalid"
@@ -778,7 +778,7 @@ const (
 	CodeBrokerRemoveFailed Code = "broker_remove_failed"
 
 	// A PROJECT'S FILE BYTES: the streamed download, the upload and the
-	// removal under /work/files/{project}/{path}. The listing is a
+	// removal under /worklet/files/{project}/{path}. The listing is a
 	// question and refuses as every question does.
 
 	// CodeNoProject is a file route naming a project there is none of. 404.
@@ -1066,11 +1066,11 @@ var codes = map[Code]string{
 	// token", which was true while an operator token was the only credential
 	// and authority a single yes-or-no; a person signed in with a session
 	// and refused one permission was told to go and find a token. It NAMES
-	// THE THREE PERMISSIONS there are (ADR-0033), because a person reading it
-	// on a screen has to know what to ask an admin for, and the refusal's
+	// THE PERMISSIONS there are (ADR-0033), because a person reading it on a
+	// screen has to know what to ask an admin for, and the refusal's
 	// `grants` beside it says which one.
-	CodeUnauthorized: "You don't have the access this needs (Admin, Tracker, " +
-		"Knowledge or Artifacts). Ask an admin for it.",
+	CodeUnauthorized: "You don't have the access this needs (Admin, Worklet, " +
+		"Doclet or Artifacts). Ask an admin for it.",
 	CodeQueryFailed: "That query could not be answered. The reason is in " +
 		"this node's log.",
 	CodeNotFound:  "There is no such record here.",
@@ -1675,8 +1675,8 @@ func Refuse(w http.ResponseWriter, err error) {
 const NoActiveRevisionRetry = configplane.ReconcileInterval
 
 // NoActiveRevision writes `503 no_active_revision`: a request for something
-// only a company can have — a delivery to route, the company's own tracker or
-// knowledge base — on a node that has not been handed one yet.
+// only a company can have (a delivery to route, Worklet or Doclet) on a
+// node that has not been handed one yet.
 //
 // ONE WRITER FOR THE CODE AND ITS HINT, used by the webhook edge, the human
 // write surface, the operator's MCP surface and the read surface's native
@@ -1688,17 +1688,17 @@ func NoActiveRevision(w http.ResponseWriter, detail Detail) {
 		detail)
 }
 
-// NativeHalvesNotUp is the detail every surface over the company's own tracker
-// and knowledge base answers beside `no_active_revision` — the human write
-// surface, the operator's MCP surface, and the work, page and search questions
-// on both transports.
+// NativeHalvesNotUp is the detail every surface over Worklet and Doclet
+// answers beside `no_active_revision`: the human write surface, the
+// operator's MCP surface, and the work, page and search questions on both
+// transports.
 //
 // ONE SENTENCE, for [NoActiveRevision]'s reason: it was written out at each of
 // the four places that answer it, and a client showing a person why a screen
 // is empty reads it from whichever of them it asked.
-const NativeHalvesNotUp = "this node has not been handed a company yet, so the " +
-	"company's own tracker and knowledge base are not running here; they come up " +
-	"with its first revision, with no restart"
+const NativeHalvesNotUp = "this node has not been handed a company yet, so " +
+	"Worklet and Doclet are not running here; they come up with its first " +
+	"revision, with no restart"
 
 // Unavailable writes a 503 carrying a Retry-After, which is the pair a client
 // needs to tell "come back" from "do not come back".
@@ -1795,9 +1795,9 @@ const (
 // they send a client opposite ways: the first is retried under the same
 // operation and never under a fresh one, which would make a second change if
 // the first landed; the second wrote nothing. Every surface wrote the unknown
-// for itself, and they had drifted — `/iam` said it only in a sentence,
-// `/work` said it on some routes because the tool's receipt happened
-// to carry an `outcome` and not on others — so `crewlet work purge`, which
+// for itself, and they had drifted (`/iam` said it only in a sentence,
+// `/worklet` said it on some routes because the tool's receipt happened
+// to carry an `outcome` and not on others), so `crewlet worklet purge`, which
 // branches on the field, told an operator whose purge may have destroyed the
 // item that the attempt "wrote nothing". One writer, and the three keys are
 // its and always win over a route's detail.

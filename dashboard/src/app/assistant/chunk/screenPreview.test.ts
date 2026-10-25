@@ -23,7 +23,7 @@ const seen: unknown[] = [];
 
 /** The work list's filter, as a screen declares it: it takes `{status}` and refuses `assignee`. */
 const spec: PageActionSpec<{ status?: string; assignee?: string }> = {
-  scope: "Work list filters",
+  scope: "Worklet list filters",
   parse: (raw) => {
     seen.push(raw);
     return raw && typeof raw === "object" && !Array.isArray(raw)
@@ -53,9 +53,9 @@ function card(over: Partial<AssistantProposalCard> = {}): AssistantProposalCard 
 
 function mounted() {
   setFramePage({
-    screen: "work-tasks",
-    title: "Work › Tasks",
-    path: ["work", "tasks"],
+    screen: "worklet-tasks",
+    title: "Worklet › Tasks",
+    path: ["worklet", "tasks"],
     params: {},
     query: {},
   });

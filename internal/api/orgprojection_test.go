@@ -65,7 +65,7 @@ var companyFields = map[string]classified{
 	"Timezone":       {exposure: exposurePublic, why: "every date a reader is shown is cut on it (ADR-0018)"},
 	"TokenBudget":    {exposure: exposurePublic, why: "a statement of what the company may spend, beside the /budgets meter spending against it"},
 	"Integrations":   {exposure: exposureGuarded, why: "vendor identities, bot tokens and signing secrets"},
-	"Tracker":        {exposure: exposureGuarded, why: "project keys and the native tracker's settings: a map of what is wired to what. Only the RESOLVED backend's name reaches a reader, as `services`"},
+	"Tracker":        {exposure: exposureGuarded, why: "project keys and Worklet's settings: a map of what is wired to what. Only the RESOLVED backend's name reaches a reader, as `services`"},
 	"Knowledge":      {exposure: exposureGuarded, why: "container keys, read scopes and search settings. Only the RESOLVED backend's name reaches a reader, as `services`"},
 	"Artifacts":      {exposure: exposureGuarded, why: "the company's artifact policy: what agents may manage and who sees who opened one"},
 	"SkillVariables": {exposure: exposureGuarded, why: "facts substituted into tool-skill text, routinely hostnames and account names"},
@@ -912,7 +912,7 @@ func TestTheOrgProjectionNamesTheServicesTheCompanyRuns(t *testing.T) {
 		company            *config.Company
 		tracker, knowledge string
 	}{
-		{"nothing written", &config.Company{Name: "Acme"}, "native", "native"},
+		{"nothing written", &config.Company{Name: "Acme"}, "worklet", "doclet"},
 		{"the vendor blocks connected", &config.Company{Name: "Acme",
 			Integrations: config.Integrations{
 				Jira:       &config.Jira{URL: "https://jira.example.com"},
@@ -924,8 +924,8 @@ func TestTheOrgProjectionNamesTheServicesTheCompanyRuns(t *testing.T) {
 		}, "none", "none"},
 		{"one of each", &config.Company{Name: "Acme",
 			Tracker:   config.Tracker{Backend: config.TrackerNone},
-			Knowledge: config.Knowledge{Backend: config.KnowledgeNative},
-		}, "none", "native"},
+			Knowledge: config.Knowledge{Backend: config.KnowledgeDoclet},
+		}, "none", "doclet"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

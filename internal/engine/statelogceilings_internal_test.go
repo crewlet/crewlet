@@ -13,11 +13,11 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 const gib = int64(1) << 30
@@ -538,7 +538,7 @@ func TestALogCreatedBesideOnesThatExistFitsTheShare(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			host := sizingHost{budget: tc.budget, unread: tc.unread, held: map[string]int64{
-				tracker.Domain{}.Stream().Name: trackerHolds,
+				worklet.Domain{}.Stream().Name: trackerHolds,
 			}}
 			sized, err := sizeCeilings(t.Context(), host, config.Stream{}, free, "/var/lib/crewlet/stream")
 			if err != nil {
@@ -546,7 +546,7 @@ func TestALogCreatedBesideOnesThatExistFitsTheShare(t *testing.T) {
 			}
 			reserved := trackerHolds
 			for _, domain := range registeredDomains() {
-				if domain.Name() != (tracker.Domain{}).Name() {
+				if domain.Name() != (worklet.Domain{}).Name() {
 					reserved += sized[domain.Name()].Bytes
 				}
 			}
@@ -700,7 +700,7 @@ func TestAnInterruptedFirstBootLeavesLogsARestartReportsAsMade(t *testing.T) {
 
 	first := boot()
 	host.held = map[string]int64{}
-	trackerName := tracker.Domain{}.Name()
+	trackerName := worklet.Domain{}.Name()
 	create(trackerName, first[trackerName].Bytes)
 
 	restart := boot()
@@ -1163,7 +1163,7 @@ func (*recordingHost) DomainLog(context.Context, string) (*jetstream.DomainLog, 
 // name before the broker is asked to create its stream at all.
 func TestALogNobodySizedIsRefusedBeforeItsStreamIsCreated(t *testing.T) {
 	t.Parallel()
-	unsized := pages.Domain{}
+	unsized := doclet.Domain{}
 	for name, ceiling := range map[string]*domainCeiling{
 		"left out of the sizing": nil,
 		"sized at zero bytes":    {Bytes: 0, Field: "stream.pages_log_max_bytes"},

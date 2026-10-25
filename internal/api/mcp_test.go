@@ -18,7 +18,7 @@ import (
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The bridge route on the App. What the bridge itself does with a call is
@@ -142,7 +142,7 @@ func TestTheActRouteIsMountedBehindTheGuard(t *testing.T) {
 	})
 	post := func(token string) (int, string) {
 		t.Helper()
-		r := httptest.NewRequest(http.MethodPost, operator.ActPathPrefix+tracker.ListWorkItemsTool,
+		r := httptest.NewRequest(http.MethodPost, operator.ActPathPrefix+worklet.ListWorkItemsTool,
 			strings.NewReader(`{"args":{}}`))
 		r.Header.Set("Content-Type", "application/json")
 		if token != "" {
@@ -170,7 +170,7 @@ func TestTheActRouteIsMountedBehindTheGuard(t *testing.T) {
 			"read_only_tool — the route is not mounted", status, code)
 	}
 	rec := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, operator.ActPathPrefix+tracker.ListWorkItemsTool, nil)
+	r := httptest.NewRequest(http.MethodGet, operator.ActPathPrefix+worklet.ListWorkItemsTool, nil)
 	r.Header.Set("Authorization", "Bearer secret")
 	a.ServeHTTP(rec, r)
 	if rec.Code != http.StatusMethodNotAllowed {

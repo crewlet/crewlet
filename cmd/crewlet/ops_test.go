@@ -419,7 +419,7 @@ func TestReachingANodeThatIsDownExplainsItself(t *testing.T) {
 		"  external_url: \"http://127.0.0.1:1\"\n"+
 		"  auth:\n    admin: serve\n"+
 		"    tokens:\n      - id: ops\n        token: %s\n"+
-		"        grants: [tracker]\n"+
+		"        grants: [worklet]\n"+
 		fixtureStream(dir)+fixtureKeyring,
 		filepath.Join(dir, "index.db"), cliFixtureToken)
 	cfg := filepath.Join(dir, "config.yaml")

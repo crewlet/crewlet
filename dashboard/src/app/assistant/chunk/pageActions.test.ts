@@ -32,9 +32,9 @@ import {
 } from "./pageActions.ts";
 
 const PAGE: FramePage = {
-  screen: "work-tasks",
-  title: "Work › Tasks",
-  path: ["work", "tasks"],
+  screen: "worklet-tasks",
+  title: "Worklet › Tasks",
+  path: ["worklet", "tasks"],
   params: {},
   query: {},
 };
@@ -44,7 +44,7 @@ let shown: string | null;
 
 /** A screen whose one action sets `blocked`, and puts it back while nothing moved it since. */
 const spec: PageActionSpec<string> = {
-  scope: "Work list filters (not saved)",
+  scope: "Worklet list filters (not saved)",
   parse: (raw) =>
     raw && typeof raw === "object" && typeof (raw as { blocked?: unknown }).blocked === "string"
       ? { ok: true, value: (raw as { blocked: string }).blocked }
@@ -120,10 +120,10 @@ describe("a page action", () => {
     ]);
     await takeAction(action(), true, deps, noWait);
     expect(reports.map((r) => r.state)).toEqual(["applying", "applied"]);
-    expect(reports[1]).toMatchObject({ receipt: "Applied to Work › Tasks." });
+    expect(reports[1]).toMatchObject({ receipt: "Applied to Worklet › Tasks." });
     expect(applied).toEqual(["true"]);
     expect(settled).toEqual([
-      { state: "applied", words: "Applied to Work › Tasks.", undoable: true },
+      { state: "applied", words: "Applied to Worklet › Tasks.", undoable: true },
     ]);
   });
 
@@ -186,7 +186,7 @@ describe("a page action", () => {
 
   test("a tab on another page leaves it for the tab it was prepared in", async () => {
     const { reports, deps } = harness();
-    await takeAction(action({ source_revision: "work-tasks@00000000" }), false, deps, noWait);
+    await takeAction(action({ source_revision: "worklet-tasks@00000000" }), false, deps, noWait);
     expect(reports).toEqual([]);
     expect(applied).toEqual([]);
   });
@@ -274,7 +274,7 @@ describe("an undo", () => {
   test("goes with the screen that applied it", async () => {
     const { deps } = harness();
     await takeAction(action(), true, deps, noWait);
-    setFramePage({ ...PAGE, screen: "work-projects", path: ["work", "projects"] });
+    setFramePage({ ...PAGE, screen: "worklet-projects", path: ["worklet", "projects"] });
     expect(undoPageAction(action().action_id)).toBe("gone");
   });
 });

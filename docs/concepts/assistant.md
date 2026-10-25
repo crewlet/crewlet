@@ -30,7 +30,7 @@ the apps your permissions open. Below that it lists what is waiting for you
 from anywhere.
 
 **The screen you are on travels with your question.** The chip above the
-message box (for example "Work › Tasks") tells the assistant which screen you
+message box (for example "Worklet › Tasks") tells the assistant which screen you
 are looking at: its filters, its selection and the records it shows, by id and
 never by content. Select the `×` on the chip to ask without it, and **Add this
 page** to put it back. Each message you send shows the page it carried.
@@ -71,8 +71,8 @@ were shown.
 
 | Area | Examples |
 |---|---|
-| Work tracker (needs `tracker`) | Search and list tasks, read a task and its thread, a task's cost, your inbox and queue, projects, workload, open decisions |
-| Knowledge base (needs `knowledge`) | Search pages and read a page |
+| Worklet (needs `worklet`) | Search and list tasks, read a task and its thread, a task's cost, your inbox and queue, projects, workload, open decisions |
+| Doclet (needs `doclet`) | Search pages and read a page |
 | Everyone | Agents and their activity, the org chart, turns you may read, coding runs, token spend and budgets, the company feed, artifacts shared with you |
 | Administrators (needs `admin`) | Integrations, fleet health, and the history of configuration changes |
 

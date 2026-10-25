@@ -238,9 +238,9 @@ func TestAnAssistGrantIsTheSessionsPrincipalRecomposed(t *testing.T) {
 
 	// THE ROWS DECIDE NOW: the person loses admin after the grant was
 	// derived, and the next call carries what they hold now.
-	rig.dir.identity.Person.Grants = []iam.Grant{iam.GrantTracker}
+	rig.dir.identity.Person.Grants = []iam.Grant{iam.GrantWorklet}
 	rig.do(g, get("/agents"))
-	if got := rig.seen(); !slices.Equal(got.principal.Grants, []iam.Grant{iam.GrantTracker}) {
+	if got := rig.seen(); !slices.Equal(got.principal.Grants, []iam.Grant{iam.GrantWorklet}) {
 		t.Errorf("after a demotion the grant carried %v", got.principal.Grants)
 	}
 

@@ -70,15 +70,15 @@ var taskColumns = []cards.Column{
 func taskTable(title, rows string) cards.Spec {
 	return cards.Spec{Table: &cards.Table{Title: title, Rows: rows, Columns: taskColumns,
 		Brief: []string{"title", "status", "assignee"},
-		Open:  &cards.Open{Screen: "work-tasks"}}}
+		Open:  &cards.Open{Screen: "worklet-tasks"}}}
 }
 
-var tracker = []iam.Grant{iam.GrantTracker}
-var knowledgeApp = []iam.Grant{iam.GrantKnowledge}
+var workletApp = []iam.Grant{iam.GrantWorklet}
+var docletApp = []iam.Grant{iam.GrantDoclet}
 var adminOnly = []iam.Grant{iam.GrantAdmin}
 
-// statuses and priorities are the tracker's own closed sets (internal/tracker),
-// which the tracker refuses anything outside.
+// statuses and priorities are Worklet's own closed sets (internal/worklet),
+// which Worklet refuses anything outside.
 var (
 	statuses   = []string{"todo", "in_progress", "in_review", "done", "cancelled", "closed"}
 	priorities = []string{"none", "low", "normal", "high", "urgent"}
@@ -95,9 +95,9 @@ func readTools() []Tool {
 				"q":     text("What the work is about, in plain words.", queryBytes),
 				"limit": positive("How many results, at most.", 25),
 			}),
-			Routes: []string{"GET /work/search"}, Apps: tracker, Fence: true,
+			Routes: []string{"GET /worklet/search"}, Apps: workletApp, Fence: true,
 			Build: func(a map[string]any) (exec.Request, error) {
-				return get("GET /work/search", nil,
+				return get("GET /worklet/search", nil,
 					query(a).str("q", "q").num("limit", "limit", 10).values())
 			},
 			Cards: one(cards.Spec{Table: &cards.Table{Title: "Matching tasks", Rows: "hits",
@@ -107,7 +107,7 @@ func readTools() []Tool {
 					col("assignee", "Assignee", "assignee", tText),
 					col("project", "Project", "project", tText),
 					prose("snippet", "Matched", "snippet")},
-				Open: &cards.Open{Screen: "work-search"}}}),
+				Open: &cards.Open{Screen: "worklet-search"}}}),
 			Label: func(map[string]any) string { return "Searching tasks" },
 		},
 		{
@@ -127,7 +127,7 @@ func readTools() []Tool {
 				"show_closed": flag("Include finished work, which is left out unless asked."),
 				"limit":       positive("How many tasks, at most.", 50),
 			}),
-			Routes: []string{"GET /work"}, Apps: tracker, Fence: true,
+			Routes: []string{"GET /worklet"}, Apps: workletApp, Fence: true,
 			Build: func(a map[string]any) (exec.Request, error) {
 				args := Args(a)
 				q := query(args).str("assignee", "assignee").list("status", "status").
@@ -137,7 +137,7 @@ func readTools() []Tool {
 				if p := args.String("project"); p != "" {
 					q.fixed("container", "project:"+p)
 				}
-				return get("GET /work", nil, q.values())
+				return get("GET /worklet", nil, q.values())
 			},
 			Cards: one(taskTable("Tasks", "items")),
 			Label: func(map[string]any) string { return "Listing tasks" },
@@ -149,9 +149,9 @@ func readTools() []Tool {
 			schema: object([]string{"item"}, map[string]*schema{
 				"item": text("The task's key (ENG-42) or id.", nameBytes),
 			}),
-			Routes: []string{"GET /work/{id}"}, Apps: tracker, Fence: true,
+			Routes: []string{"GET /worklet/{id}"}, Apps: workletApp, Fence: true,
 			Build: func(a map[string]any) (exec.Request, error) {
-				return get("GET /work/{id}", map[string]string{"id": Args(a).String("item")}, nil)
+				return get("GET /worklet/{id}", map[string]string{"id": Args(a).String("item")}, nil)
 			},
 			Cards: one(cards.Spec{Entity: &cards.Entity{Kind: wire.ResourceTask, Root: "task",
 				ID: "key", Title: "title", Subtitle: "key", Prose: true, Text: "body",
@@ -174,9 +174,9 @@ func readTools() []Tool {
 				"item":  text("The task's key or id.", nameBytes),
 				"limit": positive("How many comments, at most.", 50),
 			}),
-			Routes: []string{"GET /work/comments"}, Apps: tracker, Fence: true,
+			Routes: []string{"GET /worklet/comments"}, Apps: workletApp, Fence: true,
 			Build: func(a map[string]any) (exec.Request, error) {
-				return get("GET /work/comments", nil,
+				return get("GET /worklet/comments", nil,
 					query(a).str("item", "item").num("limit", "limit", 20).values())
 			},
 			Cards: one(cards.Spec{Entity: &cards.Entity{Kind: wire.ResourceTask, ID: "key",
@@ -197,9 +197,9 @@ func readTools() []Tool {
 				"item":  text("The task's key or id.", nameBytes),
 				"limit": positive("How many turns, at most.", 50),
 			}),
-			Routes: []string{"GET /work/turns"}, Apps: tracker, Fence: true,
+			Routes: []string{"GET /worklet/turns"}, Apps: workletApp, Fence: true,
 			Build: func(a map[string]any) (exec.Request, error) {
-				return get("GET /work/turns", nil,
+				return get("GET /worklet/turns", nil,
 					query(a).str("item", "id").num("limit", "limit", 20).values())
 			},
 			Cards: one(cards.Spec{Table: &cards.Table{Title: "Turns on the task", Rows: "turns",
@@ -220,12 +220,12 @@ func readTools() []Tool {
 				"section": oneOf("Which part. Default assigned.", "assigned", "priorities", "asked", "inbox"),
 				"unread":  flag("Inbox only: just what is unread."),
 			}),
-			Routes: []string{"GET /work/my-work", "GET /work/inbox"}, Apps: tracker, Fence: true,
+			Routes: []string{"GET /worklet/my-work", "GET /worklet/inbox"}, Apps: workletApp, Fence: true,
 			Build: func(a map[string]any) (exec.Request, error) {
 				if Args(a).String("section") == "inbox" {
-					return get("GET /work/inbox", nil, query(a).truth("unread", "unread").values())
+					return get("GET /worklet/inbox", nil, query(a).truth("unread", "unread").values())
 				}
-				return get("GET /work/my-work", nil, nil)
+				return get("GET /worklet/my-work", nil, nil)
 			},
 			Variant: by("section", "assigned"),
 			Cards: map[string]cards.Spec{
@@ -257,13 +257,13 @@ func readTools() []Tool {
 			schema: object(nil, map[string]*schema{
 				"key": text("One project's key, for that project alone.", nameBytes),
 			}),
-			Routes: []string{"GET /work/projects", "GET /work/projects/{key}"}, Apps: tracker,
+			Routes: []string{"GET /worklet/projects", "GET /worklet/projects/{key}"}, Apps: workletApp,
 			Fence: true,
 			Build: func(a map[string]any) (exec.Request, error) {
 				if key := Args(a).String("key"); key != "" {
-					return get("GET /work/projects/{key}", map[string]string{"key": key}, nil)
+					return get("GET /worklet/projects/{key}", map[string]string{"key": key}, nil)
 				}
-				return get("GET /work/projects", nil, nil)
+				return get("GET /worklet/projects", nil, nil)
 			},
 			Variant: func(a Args) string {
 				if a.String("key") != "" {
@@ -281,7 +281,7 @@ func readTools() []Tool {
 						col("todo", "To do", "task_counts.todo", tNumber),
 						col("active", "Active", "task_counts.active", tNumber),
 						col("done", "Done", "task_counts.done", tNumber)},
-					Open: &cards.Open{Screen: "work-projects"}}},
+					Open: &cards.Open{Screen: "worklet-projects"}}},
 				"one": {Entity: &cards.Entity{Kind: wire.ResourceProject, ID: "key",
 					Title: "name", Subtitle: "purpose", Prose: true,
 					Facts: []cards.Fact{fact("Lead", "lead.handle", tText),
@@ -300,9 +300,9 @@ func readTools() []Tool {
 			schema: object(nil, map[string]*schema{
 				"unit": text("A unit's key or name, for that team alone.", nameBytes),
 			}),
-			Routes: []string{"GET /work/workload"}, Apps: tracker,
+			Routes: []string{"GET /worklet/workload"}, Apps: workletApp,
 			Build: func(a map[string]any) (exec.Request, error) {
-				return get("GET /work/workload", nil, query(a).str("unit", "unit").values())
+				return get("GET /worklet/workload", nil, query(a).str("unit", "unit").values())
 			},
 			Cards: one(cards.Spec{Table: &cards.Table{Title: "Workload", Rows: "rows",
 				Brief: []string{"handle", "open", "blocked", "overdue"},
@@ -319,12 +319,12 @@ func readTools() []Tool {
 			Description: "What is waiting on the person: questions asked of them on tasks, and " +
 				"coding runs parked on a question for them.",
 			schema: object(nil, map[string]*schema{}),
-			Routes: []string{"GET /work/decisions"}, Fence: true,
+			Routes: []string{"GET /worklet/decisions"}, Fence: true,
 			// An ask is a colleague's; a coding run's question is not (see
 			// list_coding_runs), so an answer holding one is external.
 			TrustOf: outsideWhere("items", "run.question"),
 			Build: func(map[string]any) (exec.Request, error) {
-				return get("GET /work/decisions", nil, nil)
+				return get("GET /worklet/decisions", nil, nil)
 			},
 			Cards: one(cards.Spec{Table: &cards.Table{Title: "Waiting on you", Rows: "items",
 				Brief: []string{"title", "kind", "at"},
@@ -593,7 +593,7 @@ func readTools() []Tool {
 				Columns: []cards.Column{prose("title", "Title", "title"),
 					col("container", "Space", "container", tText),
 					prose("snippet", "Matched", "snippet"), col("id", "Page", "id", tText)},
-				Open: &cards.Open{Screen: "knowledge"}}}),
+				Open: &cards.Open{Screen: "doclet"}}}),
 			Label: func(map[string]any) string { return "Searching the knowledge base" },
 		},
 		{
@@ -603,9 +603,9 @@ func readTools() []Tool {
 			schema: object([]string{"page"}, map[string]*schema{
 				"page": text("The page's id.", nameBytes),
 			}),
-			Routes: []string{"GET /pages/{id}"}, Apps: knowledgeApp, Fence: true,
+			Routes: []string{"GET /doclet/pages/{id}"}, Apps: docletApp, Fence: true,
 			Build: func(a map[string]any) (exec.Request, error) {
-				return get("GET /pages/{id}", map[string]string{"id": Args(a).String("page")}, nil)
+				return get("GET /doclet/pages/{id}", map[string]string{"id": Args(a).String("page")}, nil)
 			},
 			Cards: one(cards.Spec{Entity: &cards.Entity{Kind: wire.ResourcePage, Root: "page",
 				ID: "id", Title: "title", Subtitle: "container", Prose: true, Text: "body",
@@ -808,9 +808,10 @@ func outsideWhere(rows, field string) func(answer any) provenance.Trust {
 	}
 }
 
-// knowledgeTrust is a knowledge search's trust: colleague from the native
-// knowledge base, external from a connected one, whose pages people outside
-// the company may write.
+// knowledgeTrust is a knowledge search's trust: colleague from Doclet (whose
+// answers carry the stored backend name "native", doclet.Backend), external
+// from a connected knowledge base, whose pages people outside the company may
+// write.
 func knowledgeTrust(answer any) provenance.Trust {
 	switch cards.Text(cards.Lookup(answer, "backend")) {
 	case "", "native":

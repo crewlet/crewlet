@@ -4,7 +4,7 @@
 //
 // # Why the engine has one at all
 //
-// The native knowledge base has to answer "what do we already know about
+// Doclet has to answer "what do we already know about
 // this" over the company's own pages, and the store cannot. Turso ships no
 // fts5, and `USING fts` is behind an experimental flag the driver refuses
 // without it — [store.Capabilities] measures both once per process and reports

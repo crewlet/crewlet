@@ -22,7 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A PERSON'S SESSION IS THE FLEET'S, NOT THE NODE'S THAT MINTED IT.
@@ -139,7 +139,7 @@ const (
 // janeGrants are what the invitation confers: the tracker, to file work, and
 // nothing else — the socket is the overview, which is everybody's — so no
 // phase passes on a permission it did not ask for.
-var janeGrants = []iam.Grant{iam.GrantTracker}
+var janeGrants = []iam.Grant{iam.GrantWorklet}
 
 // signIn invites Jane under the deployment's Tier A token, redeems the link
 // and signs her in with her password, all on one member — which leaves her
@@ -263,7 +263,7 @@ func writesAsThePerson(t *testing.T, n *node, b *browser) {
 	key := statelog.NewOpID(time.Now(), "")
 	var filed map[string]any
 	settle(t, "member "+n.id+" to take a write through the cookie", func() (bool, string) {
-		status, body := b.sendKeyed(n, http.MethodPost, "/work/items", key, map[string]any{
+		status, body := b.sendKeyed(n, http.MethodPost, "/worklet/items", key, map[string]any{
 			"title": "file the fleet session case", "project": "ENG",
 		})
 		switch status {
@@ -273,7 +273,7 @@ func writesAsThePerson(t *testing.T, n *node, b *browser) {
 		case http.StatusServiceUnavailable:
 			return false, ""
 		}
-		return false, fmt.Sprintf("POST /work/items through the cookie answered "+
+		return false, fmt.Sprintf("POST /worklet/items through the cookie answered "+
 			"%d: %v", status, body)
 	})
 	item, _ := filed["key"].(string)
@@ -281,10 +281,10 @@ func writesAsThePerson(t *testing.T, n *node, b *browser) {
 		t.Fatalf("the write answered no work item key: %v", filed)
 	}
 
-	var change tracker.HistoryEntry
+	var change worklet.HistoryEntry
 	settle(t, "member "+n.id+" to apply "+item, func() (bool, string) {
 		detail, err := n.engine.Tracker().Task(t.Context(), item,
-			tracker.DetailWants{History: true},
+			worklet.DetailWants{History: true},
 			statelog.Freshness{Level: statelog.ReadSession})
 		if err != nil || len(detail.History) == 0 {
 			return false, ""
@@ -292,7 +292,7 @@ func writesAsThePerson(t *testing.T, n *node, b *browser) {
 		change = detail.History[len(detail.History)-1]
 		return true, ""
 	})
-	if change.Actor != janeSeat || change.ActorKind != tracker.AuthorHuman ||
+	if change.Actor != janeSeat || change.ActorKind != worklet.AuthorHuman ||
 		!strings.HasPrefix(change.OperatorID, iam.SessionPrefix) {
 		t.Errorf("%s is written as %q (%s) through %q, want Jane's seat %q as a "+
 			"human, through her session", item, change.Actor, change.ActorKind,

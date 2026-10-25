@@ -33,7 +33,7 @@ test("nothing is asked until the projection arrives, and then only what the comp
   expect(out.run).toEqual({ tracker: true, knowledge: true });
   act(() =>
     store.applyOrg(
-      withDerived({ name: "Acme", roles: [], services: { tracker: "jira", knowledge: "native" } }),
+      withDerived({ name: "Acme", roles: [], services: { tracker: "jira", knowledge: "doclet" } }),
     ),
   );
   expect(out.ask).toEqual({ tracker: false, knowledge: true });

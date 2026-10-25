@@ -1254,14 +1254,14 @@ func (s countingSearcher) Search(context.Context, knowledge.Query) knowledge.Res
 
 // THE KNOWLEDGE QUESTION SEARCHES PAGES, AND ONLY FOR SOMEBODY WHO HOLDS THE
 // KNOWLEDGE BASE (ADR-0033). Everybody may ask it; a hit is a page, so a caller
-// holding the tracker alone is answered `available: false` with the reason
+// holding Worklet alone is answered `available: false` with the reason
 // `no_access` and never searched for — a screen says their access leaves the
 // pages out, not that the company wrote nothing down — and a caller holding
 // neither app is refused naming both, since nothing it searches is theirs.
 //
 // Mutation: drop the knowledge check and the tracker-only caller is handed a
 // page; drop the refusal and the caller holding nothing is answered.
-func TestTheKnowledgeQuestionSearchesPagesOnlyWithKnowledge(t *testing.T) {
+func TestTheKnowledgeQuestionSearchesPagesOnlyWithDoclet(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		name     string
@@ -1269,9 +1269,9 @@ func TestTheKnowledgeQuestionSearchesPagesOnlyWithKnowledge(t *testing.T) {
 		searched bool
 		refused  bool
 	}{
-		{"the knowledge base", []iam.Grant{iam.GrantKnowledge}, true, false},
+		{"the knowledge base", []iam.Grant{iam.GrantDoclet}, true, false},
 		{"an admin", []iam.Grant{iam.GrantAdmin}, true, false},
-		{"the tracker alone", []iam.Grant{iam.GrantTracker}, false, false},
+		{"the tracker alone", []iam.Grant{iam.GrantWorklet}, false, false},
 		{"neither app", nil, false, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -1305,17 +1305,17 @@ func TestTheKnowledgeQuestionSearchesPagesOnlyWithKnowledge(t *testing.T) {
 			}
 			if c.searched {
 				if len(hits) != 1 || answer["available"] != true {
-					t.Errorf("a knowledge holder was answered %v", answer)
+					t.Errorf("a Doclet holder was answered %v", answer)
 				}
 				return
 			}
 			reason := queries.KnowledgeReason(fmt.Sprint(answer["reason"]))
 			if len(hits) != 0 || answer["available"] != false ||
 				reason != queries.KnowledgeNoAccess || !reason.Valid() {
-				t.Errorf("a tracker-only caller was answered %v, want no hits, "+
+				t.Errorf("a Worklet-only caller was answered %v, want no hits, "+
 					"available false and the no_access reason", answer)
 			}
-			if !strings.Contains(fmt.Sprint(answer["note"]), "Knowledge") {
+			if !strings.Contains(fmt.Sprint(answer["note"]), "Doclet") {
 				t.Errorf("the note %q does not say which access is missing", answer["note"])
 			}
 		})

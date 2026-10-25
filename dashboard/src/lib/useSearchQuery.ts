@@ -22,16 +22,16 @@
  *
  * # Each search is its app's
  *
- * `work_search` searches the tracker and `knowledge` the knowledge base, so
- * each is asked only of a reader holding that app ([SEARCH_APP]) — the
- * engine refuses the first without Tracker and answers the second with
- * nothing searched (`no_access`) without Knowledge. Not asked, the hook says
- * why (`withheld`), in the words every lock uses, so a list draws "Search
- * needs Knowledge access" rather than "nothing matched".
+ * `work_search` searches Worklet and `knowledge` the knowledge base, so each
+ * is asked only of a reader holding that app ([SEARCH_APP]): the engine
+ * refuses the first without Worklet and answers the second with nothing
+ * searched (`no_access`) without Doclet. Not asked, the hook says why
+ * (`withheld`), in the words every lock uses, so a list draws "Search needs
+ * Doclet access" rather than "nothing matched".
  */
 
 import type { QueryMap } from "~/protocol/index.ts";
-import { KNOWLEDGE, TRACKER, holds, needsWords, type App } from "./access.ts";
+import { DOCLET, WORKLET, holds, needsWords, type App } from "./access.ts";
 import { searchTooLong } from "./search.ts";
 import { useQuery, type QueryOptions, type QueryResult } from "./useQuery.ts";
 import { useViewer } from "./viewer.ts";
@@ -41,9 +41,16 @@ export type SearchQueryName = "work_search" | "knowledge";
 
 /** The app each ranked search searches, which a reader must hold to ask it. */
 export const SEARCH_APP: Record<SearchQueryName, App> = {
-  work_search: TRACKER,
-  knowledge: KNOWLEDGE,
+  work_search: WORKLET,
+  knowledge: DOCLET,
 };
+
+/**
+ * The `backend` a `knowledge` answer names when Doclet answered it. The engine
+ * stores it on every search record, so it keeps this spelling; a screen
+ * compares against it and never shows it.
+ */
+export const DOCLET_SEARCH_BACKEND = "native";
 
 export interface SearchQueryResult<T> extends QueryResult<T> {
   /**
@@ -54,7 +61,7 @@ export interface SearchQueryResult<T> extends QueryResult<T> {
   tooLong: string | null;
   /**
    * Why the search was not asked because the reader does not hold its app —
-   * "Search needs Knowledge access. An admin can give it to you." — or null.
+   * "Search needs Doclet access. An admin can give it to you.", or null.
    * Decided once the viewer has answered; null while it has not.
    */
   withheld: string | null;

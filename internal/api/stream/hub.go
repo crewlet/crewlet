@@ -233,10 +233,10 @@ const (
 	// response for every seat at once.
 	NeedAdmin Need = "admin"
 
-	// NeedTracker is the tracker's: an `inbox_changed` frame says whose
-	// inbox moved, which is what the `work_inbox` question it tells a
-	// screen to ask again answers.
-	NeedTracker Need = "tracker"
+	// NeedWorklet is Worklet's: an `inbox_changed` frame says whose inbox
+	// moved, which is what the `work_inbox` question it tells a screen to
+	// ask again answers.
+	NeedWorklet Need = "worklet"
 
 	// NeedArtifact is an artifact room's: decided PER ARTIFACT, by the
 	// reader's role on it, which no app answers. A frame of such a kind
@@ -248,7 +248,7 @@ const (
 )
 
 // Needs is the closed set.
-var Needs = []Need{NeedEverybody, NeedAdmin, NeedTracker, NeedArtifact}
+var Needs = []Need{NeedEverybody, NeedAdmin, NeedWorklet, NeedArtifact}
 
 // Valid reports whether n is a need this build knows.
 func (n Need) Valid() bool { return slices.Contains(Needs, n) }
@@ -278,7 +278,7 @@ var needs = map[Kind]Need{
 	KindOrg:          NeedEverybody,
 	KindTools:        NeedEverybody,
 	KindHealth:       NeedEverybody,
-	KindInboxChanged: NeedTracker,
+	KindInboxChanged: NeedWorklet,
 
 	KindArtifactChanged:  NeedArtifact,
 	KindArtifactData:     NeedArtifact,
@@ -301,8 +301,8 @@ func (n Need) Grants() []iam.Grant {
 	switch n {
 	case NeedAdmin:
 		return []iam.Grant{iam.GrantAdmin}
-	case NeedTracker:
-		return []iam.Grant{iam.GrantTracker}
+	case NeedWorklet:
+		return []iam.Grant{iam.GrantWorklet}
 	}
 	return nil
 }
@@ -401,8 +401,8 @@ func (a Audience) Receives(kind Kind) bool {
 		return true
 	case NeedAdmin:
 		return a.admin
-	case NeedTracker:
-		return a.Has(iam.GrantTracker)
+	case NeedWorklet:
+		return a.Has(iam.GrantWorklet)
 	case NeedArtifact:
 		// THE ROOM DECIDES, by the reader's role on the artifact: a
 		// socket reaches a frame of this need only through a join that
@@ -453,7 +453,7 @@ func (a Audience) Record() string { return a.record }
 
 // Reach is what this audience may see of the seat with agentID's live state.
 func (a Audience) Reach(agentID string) livestate.Reach {
-	return livestate.Reach{Body: a.Body(agentID), Tracker: a.Has(iam.GrantTracker),
+	return livestate.Reach{Body: a.Body(agentID), Tracker: a.Has(iam.GrantWorklet),
 		Record: a.record}
 }
 

@@ -19,7 +19,7 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { useManagedConfig } from "~/lib/useWriteAccess.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { useBackends, type OrgServices } from "~/lib/services.ts";
+import { SERVICE_NAMES, useBackends, type OrgServices } from "~/lib/services.ts";
 import { asSentence, plural } from "~/lib/format.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { rest, RestError } from "~/protocol/index.ts";
@@ -204,8 +204,14 @@ export interface Tool {
 }
 
 export interface BuiltInService {
-  key: "works" | "knowledge" | "chat";
+  key: "worklet" | "doclet" | "chat";
   name: string;
+  /**
+   * Who makes it, where the directory names a product beside its maker (Jira
+   * beside Atlassian): Crewlet, for Worklet and Doclet. Absent where the name
+   * already says it (Crewlet Chat).
+   */
+  vendor?: string;
   /** Whether the engine has said what the company runs: false on a node running no company. */
   known: boolean;
   /** In use here, run elsewhere, or not shipped yet. */
@@ -471,27 +477,29 @@ export function builtIns(backends: OrgServices | null): BuiltInService[] {
   const knowledge = backends?.knowledge;
   return [
     {
-      key: "works",
-      name: "Crewlet Works",
+      key: "worklet",
+      name: SERVICE_NAMES.tracker,
+      vendor: "Crewlet",
       known: tracker !== undefined,
-      on: tracker === "native",
+      on: tracker === "worklet",
       soon: false,
       sentence: tracker === undefined ? NO_COMPANY : "Projects, tasks, your inbox and My work.",
       ...(tracker === "jira" ? { replacedBy: { key: "jira", name: "Jira" } as const } : {}),
-      ...(tracker === "native" ? { open: { label: "Open Work", path: ["work"] } } : {}),
+      ...(tracker === "worklet" ? { open: { label: "Open Worklet", path: ["worklet"] } } : {}),
     },
     {
-      key: "knowledge",
-      name: "Crewlet Knowledge",
+      key: "doclet",
+      name: SERVICE_NAMES.knowledge,
+      vendor: "Crewlet",
       known: knowledge !== undefined,
-      on: knowledge === "native",
+      on: knowledge === "doclet",
       soon: false,
       sentence:
         knowledge === undefined ? NO_COMPANY : "Spaces and pages, agent skills and diaries.",
       ...(knowledge === "confluence"
         ? { replacedBy: { key: "confluence", name: "Confluence" } as const }
         : {}),
-      ...(knowledge === "native" ? { open: { label: "Open Knowledge", path: ["knowledge"] } } : {}),
+      ...(knowledge === "doclet" ? { open: { label: "Open Doclet", path: ["doclet"] } } : {}),
     },
     {
       key: "chat",

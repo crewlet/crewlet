@@ -106,7 +106,7 @@ export type PageActionParse<P> = { ok: true; value: P } | { ok: false; reason: s
  * only ever hands a value back to the spec whose own parser produced it.
  */
 export interface PageActionSpec<P> {
-  /** What the action touches, as the person reads it: "Work list filters (not saved)". */
+  /** What the action touches, as the person reads it: "Worklet list filters (not saved)". */
   scope: string;
   /** Turn what the model proposed into a typed value, or refuse it. */
   parse(raw: unknown): PageActionParse<P>;
@@ -157,7 +157,7 @@ export interface AssistantPageRegistration {
 export interface FramePage {
   /** The route's screen name (`work-tasks`). */
   screen: string;
-  /** The page as its attachment chip names it: the last two crumbs, "Work › Tasks". */
+  /** The page as its attachment chip names it: the last two crumbs, "Worklet › Tasks". */
   title: string;
   /** The page's address, which identifies it for the chip's "another page" rule. */
   path: readonly string[];
@@ -170,9 +170,9 @@ export interface FramePage {
 /**
  * The page the frame is on, as it publishes it: the route's screen and its
  * own parameters, the address's query, and the last two crumbs as the chip's
- * title ("Work › Tasks", "Tasks › ENG-156"), the way an Open in app card names
- * a place. On Work's scope pages the trail ends in the scope and the lens is a
- * tab, so the lens takes the scope's place: "Work › Tasks" across all projects,
+ * title ("Worklet › Tasks", "Tasks › ENG-156"), the way an Open in app card names
+ * a place. On Worklet's scope pages the trail ends in the scope and the lens is a
+ * tab, so the lens takes the scope's place: "Worklet › Tasks" across all projects,
  * "Core platform › Board" in one, and the chip on the Tasks tab never names
  * only the scope. Null for an address the product has no framed page for.
  */

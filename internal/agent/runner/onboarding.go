@@ -25,8 +25,8 @@ import (
 // (turn_engine.onboarding_max_tool_rounds), and onboarding never competes with
 // the work. Its surface is the onboarding builtins plus the discovery
 // meta-tools, and its prompt lists every other tool it can reach, so the agent
-// activates its knowledge-base tools — first-party on the native backend, an
-// MCP server's on Confluence — the same way the executor reaches an MCP tool,
+// activates its knowledge-base tools (first-party on Doclet, an MCP server's
+// on Confluence) the same way the executor reaches an MCP tool,
 // on a separate budget.
 //
 // NO REQUIRED-SKILL GUARD, deliberately: onboarding is a fixed read → persist

@@ -4,7 +4,7 @@ person:
   apps: [tracker]
 question: Is anybody working on the release checklist?
 answers:
-  - route: GET /work/search
+  - route: GET /worklet/search
     body:
       hits:
         - {key: ENG-42, title: Release checklist for 2.4, status: in_progress, assignee: ada, project: ENG}

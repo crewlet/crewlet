@@ -1,7 +1,7 @@
-// Package workapi is the HUMAN WRITE SURFACE over the company's own tracker
-// and knowledge base: filing, editing, commenting on, arranging and taking
-// work and pages out of circulation, from a browser or a script, as the person
-// the request resolved to.
+// Package workapi is the HUMAN WRITE SURFACE over Worklet and Doclet, under
+// `/worklet` and `/doclet/pages`: filing, editing, commenting on, arranging
+// and taking work and pages out of circulation, from a browser or a script,
+// as the person the request resolved to.
 //
 // # It is the SAME TOOLS a seat and the operator's assistant hold
 //
@@ -15,7 +15,7 @@
 // own receipt under a status code.
 //
 // The alternative this replaces was the obvious one: a handler per route
-// calling the tracker's writer directly. It would have been the THIRD
+// calling Worklet's writer directly. It would have been the THIRD
 // implementation of "file an item" — the third place a field is trimmed, a
 // default applied, a mention resolved and a refusal worded — and the first
 // one a person uses. Two copies had already drifted on exactly those parts
@@ -23,8 +23,8 @@
 // tests reached, because the tools' suites exercise the tools.
 //
 // A FEW ROUTES HAVE NO TOOL, and are the ones a seat is never given: rewriting
-// one's own remark on a work item, purging a work item, and the knowledge
-// base's four destructive verbs and its rename. Those call the domain's writer
+// one's own remark on a work item, purging a work item, and Doclet's four
+// destructive verbs and its rename. Those call the domain's writer
 // themselves, decide first through the SAME table —
 // [authz.ActionWorkCommentEdit], [authz.ActionWorkPurge],
 // [authz.ActionPageRename], [authz.ActionPageTrash], [authz.ActionPageRestore],
@@ -33,14 +33,14 @@
 // `operator_acted` record the dispatch publishes for a tool
 // ([operator.AuditGesture]), so a verb with no tool is no less recorded. The
 // four page verbs had rules and no caller at all until this surface; the work
-// purge had a route of its own under /work/{id}/purge with an operator check
+// purge had a route of its own under /worklet/{id}/purge with an operator check
 // written beside it, which this replaces. Placing a card on a board used to be
 // one of them; it is `place_work_item` now, and its route an adapter over it.
 //
 // A PROJECT'S FILE BYTES are three more, for a different reason: a seat has
 // file tools, but a tool answers a model a page at a time, and a person's
 // upload or download STREAMS a gibibyte through one request. So
-// `/work/files/{project}/{path}` is decided on the project its path names by
+// `/worklet/files/{project}/{path}` is decided on the project its path names by
 // the rows the file tools are ([authz.ActionFileRead], [authz.ActionFileWrite],
 // [authz.ActionFileRemove]), writes through the file tools' own writer, takes
 // its operation from the request's key and leaves the same record — and keeps
@@ -53,10 +53,10 @@
 // # Authority is decided ONCE, and read identically everywhere
 //
 // Every route is mounted through [authz.Router] with a policy. Where the
-// object is knowable from the PATH — the project in /work/projects/{key} —
+// object is knowable from the PATH (the project in /worklet/projects/{key}),
 // the route decides the verb itself. Where it needs a STORED ROW — which
 // project a work item is filed under, which container a page is in, who wrote
-// a comment, whose record the name in /work/people/{handle} is (a login is its
+// a comment, whose record the name in /worklet/people/{handle} is (a login is its
 // holder's, which only the identity directory can say) — the route admits on
 // the weakest honest precondition and the verb is decided once the row is
 // read: by the tool's own ask, or by this package for a verb that has no tool.
@@ -136,13 +136,13 @@
 // operations of its own, which land as asked. Bound to the key alone, the
 // ledger answered the second request with the first one's outcome — `applied`,
 // with nothing of it written — see [keyedOp], builtin's own binding for the
-// tools, and the knowledge base's ([pages.Store], which binds what each write
+// tools, and the knowledge base's ([doclet.Store], which binds what each write
 // says).
 //
 // # What is NOT here
 //
 // Sprints and goals. The design this surface was drawn from listed
-// `PUT /work/projects/{key}/sprints` and `PUT /work/goals/{id}`, and the
+// `PUT /worklet/projects/{key}/sprints` and `PUT /worklet/goals/{id}`, and the
 // tracker has neither: both were dropped from the domain (the replicated
 // estate's migrations 0013 and 0015), so there is nothing to route, and a
 // route answering for a verb the domain does not have would be a promise the
@@ -165,13 +165,13 @@ import (
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 var log = logging.Get("api.workapi")
@@ -179,13 +179,13 @@ var log = logging.Get("api.workapi")
 // MaxBodyBytes bounds one request body.
 //
 // DERIVED FROM THE LARGEST THING A BODY CARRIES: a page at the knowledge
-// base's own cap ([pages.MaxBody]), doubled because JSON escaping a prose body
+// base's own cap ([doclet.MaxBody]), doubled because JSON escaping a prose body
 // heavy in quotes and backslashes can double it, plus 64 KiB for the rest of
 // the envelope — labels, custom fields, a message. A body under it but over
 // the domain's own cap is refused by the domain, naming the field, which is
 // the more useful refusal; this bound exists so a body nothing could accept is
 // not read into memory first.
-const MaxBodyBytes = 2*pages.MaxBody + 64<<10
+const MaxBodyBytes = 2*doclet.MaxBody + 64<<10
 
 // decisionRead is the level a route reads a row at before deciding on it.
 //
@@ -203,21 +203,21 @@ var decisionRead = statelog.Freshness{
 // `place_work_item`, reached through the dispatch like every other tool.
 type TrackerWriter interface {
 	PurgeTask(ctx context.Context, opID, id, project, reason string) (
-		tracker.WriteResult, error)
+		worklet.WriteResult, error)
 	EditComment(ctx context.Context, opID, taskID, project, commentID,
-		body string, notify *tracker.Notify) (tracker.WriteResult, error)
+		body string, notify *worklet.Notify) (worklet.WriteResult, error)
 }
 
 // PageStore is the knowledge base's write side for the verbs no tool makes.
 type PageStore interface {
-	Rename(ctx context.Context, actor pages.Actor, pageID, title string,
-		quiet bool) (pages.Written, error)
-	Trash(ctx context.Context, actor pages.Actor, pageID string) (pages.Written, error)
-	Restore(ctx context.Context, actor pages.Actor, pageID string) (pages.Written, error)
-	Purge(ctx context.Context, actor pages.Actor, pageID, reason string) (
-		pages.Written, error)
-	RemoveComment(ctx context.Context, actor pages.Actor, pageID, commentID string,
-		authority pages.CommentAuthority) (pages.Written, error)
+	Rename(ctx context.Context, actor doclet.Actor, pageID, title string,
+		quiet bool) (doclet.Written, error)
+	Trash(ctx context.Context, actor doclet.Actor, pageID string) (doclet.Written, error)
+	Restore(ctx context.Context, actor doclet.Actor, pageID string) (doclet.Written, error)
+	Purge(ctx context.Context, actor doclet.Actor, pageID, reason string) (
+		doclet.Written, error)
+	RemoveComment(ctx context.Context, actor doclet.Actor, pageID, commentID string,
+		authority doclet.CommentAuthority) (doclet.Written, error)
 }
 
 // Halves are the two halves this surface serves, as one request finds them:
@@ -244,12 +244,12 @@ type Halves struct {
 	Objects ObjectStore
 }
 
-// servesWork reports whether these halves hold the tracker's whole surface.
+// servesWork reports whether these halves hold Worklet's whole surface.
 func (h Halves) servesWork() bool {
 	return h.Work.Reader != nil && h.Work.Writer != nil && h.Tracker != nil
 }
 
-// servesPages reports whether these halves hold the knowledge base's.
+// servesPages reports whether these halves hold Doclet's.
 func (h Halves) servesPages() bool {
 	return h.Pages.Reader != nil && h.Pages.Writer != nil && h.PageStore != nil
 }
@@ -341,8 +341,8 @@ type Service struct {
 // company does not run answers in the very bytes its absence would have.
 func New(opts Options) (*Service, error) {
 	if opts.Halves == nil {
-		return nil, errors.New("workapi: no halves: every route reads the " +
-			"tracker and knowledge base this node serves as the request finds them")
+		return nil, errors.New("workapi: no halves: every route reads Worklet " +
+			"and Doclet as this node serves them when the request finds them")
 	}
 	if opts.Chart == nil {
 		return nil, errors.New("workapi: no chart: every decision here reads " +
@@ -532,12 +532,11 @@ func unavailableFor(w http.ResponseWriter, cause error, detail string) {
 // they did not — which is then handed back, so a retry can send it. It answers
 // false once it has refused a key that is not one ([opkey.Key]).
 //
-// Every id a write derives from the key carries the KEY'S instant — the
-// tracker's through [builtin.Actor.WorkSince], the knowledge base's inside
-// [pages.Store] — which is what the publisher vouches for a retry by; the
-// knowledge base refuses a key outside the grammar itself ([pages.ErrInvalid]
-// on `actor.op_key`), so without the check every page write through this
-// surface was refused.
+// Every id a write derives from the key carries the KEY'S instant (Worklet's
+// through [builtin.Actor.WorkSince], Doclet's inside [doclet.Store]), which is
+// what the publisher vouches for a retry by; Doclet refuses a key outside the
+// grammar itself ([doclet.ErrInvalid] on `actor.op_key`), so without the check
+// every page write through this surface was refused.
 //
 // BARE, with no name: the key is a SEED rather than the id of any one write —
 // each write derives its own, named for its verb and its object — so a name
@@ -614,12 +613,12 @@ func (s *Service) actor(w http.ResponseWriter, r *http.Request, key string) (
 // pageActor is [Service.actor] for the knowledge base, carrying the request's
 // key, which the store binds to what each write says.
 func (s *Service) pageActor(w http.ResponseWriter, r *http.Request,
-	key string) (pages.Actor, bool) {
+	key string) (doclet.Actor, bool) {
 
 	actor, err := builtin.PrincipalPageActor(r.Context(), nil)
 	if err != nil {
 		operator.RefuseDecision(w, r, "", authz.Decision{Err: err})
-		return pages.Actor{}, false
+		return doclet.Actor{}, false
 	}
 	actor.OpKey = key
 	return actor, true
@@ -756,7 +755,7 @@ func subtreeStoppedHere(receipt map[string]any) {
 // move differs from a removal: the root is already in the target and that
 // operation's ledger never put it there, which is exactly how somebody else's
 // move looks. And the root stays marked mid-move while anything is left, so
-// the tracker duty finishes the walk on its own — the remedy where this node
+// the Worklet duty finishes the walk on its own, the remedy where this node
 // cannot vouch for the step the walk stopped at, since the same key here stops
 // there again. Formed from the receipt's own fields, never from words read out
 // of the tool's sentence.
@@ -781,7 +780,7 @@ func moveStoppedHere(receipt map[string]any) {
 	}
 	followed, _ := receipt["subtree_followed"].(float64)
 	total, _ := receipt["subtree_total"].(float64)
-	duty := "the tracker duty finishes the move on its own once nobody is " +
+	duty := "the Worklet duty finishes the move on its own once nobody is " +
 		"walking it"
 	sameKey := "the SAME " + opkey.Header + " — send op_id back as that " +
 		"header, which is this request's key whether it sent one or not"
@@ -797,7 +796,7 @@ func moveStoppedHere(receipt map[string]any) {
 			"to another node under %s, or leave it: %s.", sameKey, duty)
 	case waits != "":
 		next = fmt.Sprintf("%s is in the trash under it, and the move waits for "+
-			"it: restore it (POST /work/items/%s/restore) or purge it, then send "+
+			"it: restore it (POST /worklet/items/%s/restore) or purge it, then send "+
 			"this request again under %s. Or leave it: once it is restored, %s.",
 			waits, waits, sameKey, duty)
 	}
@@ -887,7 +886,7 @@ func failErr(w http.ResponseWriter, r *http.Request, err error, key string) {
 // nor a fault, and it reached the fault's arm: a download floored on the wrong
 // log answered `500 internal_error` and logged an error about a request.
 func readFailed(w http.ResponseWriter, r *http.Request, err error) {
-	if errors.Is(err, tracker.ErrNoTask) || errors.Is(err, pages.ErrNotFound) {
+	if errors.Is(err, worklet.ErrNoTask) || errors.Is(err, doclet.ErrNotFound) {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound,
 			map[string]string{"detail": err.Error()})
 		return
@@ -945,7 +944,7 @@ func readArgs(w http.ResponseWriter, r *http.Request) (map[string]any, bool) {
 // body that names a different one.
 //
 // THE PATH WINS AND A DISAGREEING BODY IS REFUSED rather than overwritten: a
-// caller who sent `PATCH /work/items/ENG-1` with `"item": "ENG-2"` has a bug,
+// caller who sent `PATCH /worklet/items/ENG-1` with `"item": "ENG-2"` has a bug,
 // and writing either one would be guessing which half of it they meant.
 func fromPath(w http.ResponseWriter, args map[string]any, field, value string) bool {
 	if held, ok := args[field]; ok {

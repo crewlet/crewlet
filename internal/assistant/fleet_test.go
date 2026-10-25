@@ -185,7 +185,7 @@ func TestStopReachesTheRunningNode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stranger := evals.Person("ada", "ada", iam.GrantTracker)
+	stranger := evals.Person("ada", "ada", iam.GrantWorklet)
 	if _, err := b.Svc.Stop(t.Context(), stranger.ID, accepted.TurnID,
 		evals.Key("stranger")); !errors.Is(err, assistant.ErrNotFound) {
 		t.Fatalf("another person's stop on node-b: err = %v, want ErrNotFound", err)

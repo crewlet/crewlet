@@ -116,8 +116,8 @@ describe("a stream the parser must not trust", () => {
 
 describe("the bounds a request is held to before it is sent", () => {
   const context: AssistantPageContext = {
-    screen: "work-tasks",
-    title: "Work › Tasks",
+    screen: "worklet-tasks",
+    title: "Worklet › Tasks",
     params: {},
     query: {},
     resources: [],

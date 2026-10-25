@@ -201,7 +201,7 @@ func leased(fence Fence) func(string) (Fence, bool) {
 func notLeased(string) (Fence, bool) { return Fence{}, false }
 
 // rigItem is the work item every rig launch is charged to.
-var rigItem = types.WorkItem{Backend: types.WorkNative, ID: "task-1", Key: "ENG-1", Project: "ENG"}
+var rigItem = types.WorkItem{Backend: types.WorkWorklet, ID: "task-1", Key: "ENG-1", Project: "ENG"}
 
 // rigWorkKey is the unit of work every rig launch was dispatched for —
 // distinct from every turn id a case launches under, so an announcement that

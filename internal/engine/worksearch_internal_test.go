@@ -8,8 +8,8 @@ import (
 // THE INDEX FOLLOWS BOTH BACKENDS, not the wiki's alone.
 //
 // The lexical index covers pages AND work items, and it used to be built
-// inside the block gated on `knowledge.backend: native`. A company running the
-// engine's own tracker with Confluence for its knowledge therefore indexed
+// inside the block gated on `knowledge.backend: doclet`. A company running
+// Worklet with Confluence for its knowledge therefore indexed
 // none of its own work items and served no ranked item search — while the
 // embedding duty, armed on EITHER backend, went on paying for a vector on
 // every one of them. A paid index nobody could query.

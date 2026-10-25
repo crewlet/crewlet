@@ -70,11 +70,11 @@ const LOADERS = {
   home: () => import("~/routes/home/index.ts"),
   inbox: () => import("~/routes/inbox/index.ts"),
   me: () => import("~/routes/me/index.ts"),
-  work: () => import("~/routes/work/index.ts"),
+  worklet: () => import("~/routes/worklet/index.ts"),
   agents: () => import("~/routes/agents/index.ts"),
   org: () => import("~/routes/org/index.ts"),
   live: () => import("~/routes/live/index.ts"),
-  knowledge: () => import("~/routes/knowledge/index.ts"),
+  doclet: () => import("~/routes/doclet/index.ts"),
   artifacts: () => import("~/routes/artifacts/index.ts"),
   brand: () => import("~/routes/brand/index.ts"),
   spend: () => import("~/routes/spend/index.ts"),
@@ -99,10 +99,10 @@ type ScreenDir =
   | "home"
   | "inbox"
   | "me"
-  | "work"
+  | "worklet"
   | "agents"
   | "live"
-  | "knowledge"
+  | "doclet"
   | "artifacts"
   | "brand"
   | "spend"
@@ -143,20 +143,20 @@ const SCREEN_CHUNKS: Readonly<Record<FramedScreen["screen"], Chunk>> = {
   schedules: "agents",
   integrations: "settings",
   budgets: "spend",
-  "work-projects": "work",
-  "work-tasks": "work",
-  "work-views": "work",
-  "work-history": "work",
-  "work-search": "work",
-  project: "work",
-  item: "work",
-  knowledge: "knowledge",
-  container: "knowledge",
-  page: "knowledge",
-  "new-page": "knowledge",
-  skills: "knowledge",
-  diaries: "knowledge",
-  diary: "knowledge",
+  "worklet-projects": "worklet",
+  "worklet-tasks": "worklet",
+  "worklet-views": "worklet",
+  "worklet-history": "worklet",
+  "worklet-search": "worklet",
+  project: "worklet",
+  item: "worklet",
+  doclet: "doclet",
+  container: "doclet",
+  page: "doclet",
+  "new-page": "doclet",
+  skills: "doclet",
+  diaries: "doclet",
+  diary: "doclet",
   artifacts: "artifacts",
   "artifact-folders": "artifacts",
   "artifact-folder": "artifacts",
@@ -203,8 +203,8 @@ export const CHUNKS: readonly Chunk[] = [
   "brand",
   "agents",
   "spend",
-  "work",
-  "knowledge",
+  "worklet",
+  "doclet",
   "artifacts",
   "live",
   "account",
@@ -221,10 +221,10 @@ const CHUNK_LABELS: Readonly<
   home: "Home",
   inbox: "Inbox",
   me: "My work",
-  work: "Work",
+  worklet: "Worklet",
   agents: "Org chart",
   live: "Live",
-  knowledge: "Knowledge",
+  doclet: "Doclet",
   artifacts: "Artifacts",
   brand: "Brand",
   spend: "Spend and Budgets",

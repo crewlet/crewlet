@@ -29,12 +29,12 @@ package references
 import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/objstore"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // All is every replicated table whose rows keep objects alive.
 var All = []objstore.ReferenceTable{
-	tracker.FileObjectReferences,
+	worklet.FileObjectReferences,
 	artifactsdomain.ObjectReferences,
 	artifactsdomain.AssetReferences,
 	artifactsdomain.BrandFileReferences,

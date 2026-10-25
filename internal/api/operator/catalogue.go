@@ -1,4 +1,4 @@
-// Package operator serves the company's own tracker and knowledge base to the
+// Package operator serves Worklet and Doclet to the
 // people who run it: ONE catalogue of tools, built for every call from what
 // this node serves at that moment, and every transport that reaches it
 // drawing from that one value through one dispatch.
@@ -70,8 +70,8 @@
 //   - the act route and the human write surface take it from the
 //     `Idempotency-Key` header (internal/api/opkey), SCOPED by the principal
 //     that sent it, and every write the call makes derives its id from that
-//     key — the tracker's through [builtin.Actor.WorkKey], the knowledge
-//     base's through [pages.Actor.OpKey] — so the request sent again is the
+//     key (Worklet's through [builtin.Actor.WorkKey], Doclet's through
+//     [doclet.Actor.OpKey]), so the request sent again is the
 //     first attempt's writes rather than new ones;
 //   - an MCP client names none, so each of its calls is a new operation, and a
 //     tracker write answers with the `op_id` that operation was, which the
@@ -121,18 +121,18 @@ import (
 
 var log = logging.Get("api.operator")
 
-// Halves are the company's own tracker, knowledge base and knowledge search as
+// Halves are Worklet, Doclet and knowledge search as
 // ONE call finds them. Their Actor and Authorize fields are this surface's to
 // set and are overwritten: the actor is the request's principal carrying the
 // call's operation, and the decision is [Options.Authorize].
 type Halves struct {
-	// Work and Pages are the native backends. A zero half serves none of
+	// Work and Pages are Worklet and Doclet. A zero half serves none of
 	// its tools — the honest shape for a company on Jira or Confluence.
 	Work  builtin.WorkDeps
 	Pages builtin.PageDeps
 
 	// Knowledge is the company's ranked search, or nil. It is offered
-	// whatever backend the company runs, native or not: ranked search over
+	// whatever backend the company runs, Doclet or not: ranked search over
 	// the company's own wiki is exactly as useful on Confluence.
 	Knowledge builtin.KnowledgeSearcher
 
@@ -227,7 +227,7 @@ var ErrNoAuthorize = errors.New("operator: Options.Authorize is required: " +
 
 // ErrNoHalves refuses a surface with nothing to build a catalogue from.
 var ErrNoHalves = errors.New("operator: Options.Halves is required: every " +
-	"call reads the tracker and knowledge base this node serves as the call " +
+	"call reads Worklet and Doclet as this node serves them when the call " +
 	"finds them")
 
 // New builds the surface, or refuses a missing required dependency by name.
@@ -377,7 +377,7 @@ type Call struct {
 // ErrNotUp is a call to a node that has not been handed a company yet, which
 // every transport answers `503 no_active_revision`.
 var ErrNotUp = errors.New("operator: this node has not been handed a company " +
-	"yet, so it serves no tracker or knowledge base")
+	"yet, so it serves neither Worklet nor Doclet")
 
 // ErrNotServed is a call naming a tool this company's catalogue does not
 // serve. Not a refusal: the call is not one at all, so it is neither made nor

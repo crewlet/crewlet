@@ -24,13 +24,13 @@
  *  - ANONYMOUS — nobody is signed in, so there is nobody to record the
  *    change under;
  *  - NO ACCESS — the change is an app's and the reader does not hold that
- *    app: "This change needs Tracker access. An admin can give it to you."
+ *    app: "This change needs Worklet access. An admin can give it to you."
  *    Decided only for a change `viewer.acts` leaves out, and only where the
  *    app the change writes to ([actionApp]) is one the reader lacks — so a
  *    change the engine DOES offer without the app (answering an ask you were
  *    asked) is never held by it;
  *  - NOT SERVED — the engine does not make this change for this person at
- *    all: a company whose tracker is Jira has no native writer, and a caller
+ *    all: a company whose tracker is Jira has no Worklet to write to, and a caller
  *    the authority table admits to it under no object at all is not offered
  *    it. `viewer.acts` is the engine's own list, never a guess from the
  *    tool's name or from the access;
@@ -57,7 +57,7 @@ import { isOwnSeat } from "./seats.ts";
 import { useConnection } from "./store-hooks.ts";
 import { useViewer, type ViewerState } from "./viewer.ts";
 import { useServicesRun, type Service, type ServicesRun } from "./services.ts";
-import { ADMIN, KNOWLEDGE, TRACKER, holds, needsWords, type App } from "./access.ts";
+import { ADMIN, DOCLET, WORKLET, holds, needsWords, type App } from "./access.ts";
 import type { ActionTool } from "~/protocol/act.ts";
 import { ACTIONS } from "~/contract/actions.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
@@ -118,16 +118,16 @@ export const WRITE_REASONS: Readonly<Record<Exclude<WriteBlock, "held" | "no_acc
  */
 export function actionApp(tool: ActionTool): App | null {
   const domain: string | null = ACTIONS[tool].domain;
-  if (domain === "tracker") return TRACKER;
-  if (domain === "pages") return KNOWLEDGE;
+  if (domain === "tracker") return WORKLET;
+  if (domain === "pages") return DOCLET;
   return null;
 }
 
 /**
  * The service built into Crewlet a change lands in, read off the same
- * `domain`: Crewlet Works for the tracker's log, Crewlet Knowledge for the
- * pages'. A company running another system in its place, or none, has nowhere
- * for the change to land.
+ * `domain`: Worklet for the `tracker` log, Doclet for the `pages` log. A
+ * company running another system in its place, or none, has nowhere for the
+ * change to land.
  */
 export function actionService(tool: ActionTool): Service | null {
   const domain: string | null = ACTIONS[tool].domain;
@@ -143,8 +143,8 @@ export function actionService(tool: ActionTool): Service | null {
  * stays drawn, such as an action folded into a phone's More menu.
  */
 export const SERVICE_OFF_REASONS: Readonly<Record<Service, string>> = {
-  tracker: "Crewlet Works is not in use, so no task can be filed or changed here.",
-  knowledge: "Crewlet Knowledge is not in use, so no page can be written here.",
+  tracker: "Worklet is not in use, so no task can be filed or changed here.",
+  knowledge: "Doclet is not in use, so no page can be written here.",
 };
 
 /** The sentence a change is held with when the reader lacks its app. */
@@ -177,7 +177,7 @@ export function writeAccess(
     return { can: false, block: "held", reason: SERVICE_OFF_REASONS[service] };
   }
   if (!viewer.acts.includes(tool)) {
-    // THE APP FIRST, where the reader lacks it: "needs Tracker access" is a
+    // THE APP FIRST, where the reader lacks it: "needs Worklet access" is a
     // remedy they can ask an admin for, and "this engine does not make this
     // change for you" about a change it would make once they held it sends
     // them nowhere.

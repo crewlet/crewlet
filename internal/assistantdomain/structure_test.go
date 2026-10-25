@@ -189,7 +189,7 @@ func TestTheApplierNeverOpensASealedValue(t *testing.T) {
 // surface. A conversation is a copy of what one person was shown, and a
 // domain that could read another domain's rows could put more in it.
 var otherDomains = []string{
-	"internal/iamdomain", "internal/tracker", "internal/pages", "internal/artifactsdomain",
+	"internal/iamdomain", "internal/worklet", "internal/doclet", "internal/artifactsdomain",
 	"internal/artifactdata", "internal/search", "internal/usage", "internal/engine",
 	"internal/estate", "internal/api", "internal/agent", "internal/tools",
 	"internal/fleetsecrets",
@@ -279,7 +279,7 @@ func TestAProposalsRequestReadsBackWhole(t *testing.T) {
 	query := url.Values{"q": {"payroll review"}, "limit": {"5"}}
 	if _, err := n.writer.CreateProposal(t.Context(), fresh(c), assistantdomain.NewProposal{
 		Turn: turn, Proposal: id, Tool: "save_view", Scope: wire.ScopeServer, Method: "PUT",
-		Path: "/work/views/1", Query: query, Body: []byte(`{"name":"Mine"}`),
+		Path: "/worklet/views/1", Query: query, Body: []byte(`{"name":"Mine"}`),
 		RequestDigest: hex64("b"), Digest: "sha256:" + hex64("c"), OpKey: op("approve"),
 		Card: proposalCard(id), ExpiresAt: monday.Add(15 * 60e9),
 	}); err != nil {
@@ -290,7 +290,7 @@ func TestAProposalsRequestReadsBackWhole(t *testing.T) {
 		t.Fatalf("read the proposal: %v", err)
 	}
 	if got.Query.Encode() != query.Encode() || string(got.Body) != `{"name":"Mine"}` ||
-		got.Method != "PUT" || got.Path != "/work/views/1" || got.Card.Proposal == nil {
+		got.Method != "PUT" || got.Path != "/worklet/views/1" || got.Card.Proposal == nil {
 		t.Errorf("the proposal reads back as %+v", got)
 	}
 }

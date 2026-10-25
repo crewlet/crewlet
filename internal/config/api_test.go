@@ -329,7 +329,7 @@ func TestATokenListingAdminOnARefusingNodeIsRefused(t *testing.T) {
 	t.Parallel()
 	b := serving()
 	b.API.Auth.Admin = iam.AdminRefuse
-	b.API.Auth.Tokens[0].Grants = []iam.Grant{iam.GrantTracker, iam.GrantAdmin}
+	b.API.Auth.Tokens[0].Grants = []iam.Grant{iam.GrantWorklet, iam.GrantAdmin}
 	err := b.Validate()
 	if !errors.Is(err, ErrConflict) ||
 		!strings.Contains(err.Error(), "api.auth.tokens[0].grants[1]") ||

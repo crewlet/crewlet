@@ -19,7 +19,7 @@ import (
 // the body before the query in Digest and this fails.
 func TestAnOperationsDigestIsTheCanonicalEncoding(t *testing.T) {
 	t.Parallel()
-	r := httptest.NewRequest("POST", "/work/items?b=2&a=1", nil)
+	r := httptest.NewRequest("POST", "/worklet/items?b=2&a=1", nil)
 	asks := map[string]any{"title": "Fix the flaky test", "priority": "high"}
 	got, err := opkey.Digest(r, asks)
 	if err != nil {

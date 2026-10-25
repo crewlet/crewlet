@@ -164,9 +164,9 @@ func interactionTools() []Tool {
 var probes = map[string]struct {
 	route, wildcard, param string
 }{
-	"item":     {"GET /work/{id}", "id", "id"},
-	"project":  {"GET /work/projects/{key}", "key", "key"},
-	"page":     {"GET /pages/{id}", "id", "id"},
+	"item":     {"GET /worklet/{id}", "id", "id"},
+	"project":  {"GET /worklet/projects/{key}", "key", "key"},
+	"page":     {"GET /doclet/pages/{id}", "id", "id"},
 	"artifact": {"GET /artifacts/{id}", "id", "id"},
 	"seat":     {"GET /agents/{id}", "id", "handle"},
 }

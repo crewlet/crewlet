@@ -23,7 +23,7 @@ func getTask(t *testing.T) catalog.Tool { return assistanttest.Tool(t, "get_task
 
 // task answers ENG-7.
 var task = assistanttest.Routes(map[string]exec.Response{
-	"GET /work/ENG-7": assistanttest.Task("ENG-7", "Rotate keys", "Rotate the signing keys."),
+	"GET /worklet/ENG-7": assistanttest.Task("ENG-7", "Rotate keys", "Rotate the signing keys."),
 })
 
 // readTask is a round asking for ENG-7.
@@ -55,9 +55,9 @@ func TestTheAssistantReachesToolsOnlyAsRequests(t *testing.T) {
 	if len(sent) != 1 {
 		t.Fatalf("sent %d requests, want the one the tool builds: %+v", len(sent), sent)
 	}
-	if got := sent[0]; got.Request.Method != http.MethodGet || got.Request.Path != "/work/ENG-7" ||
+	if got := sent[0]; got.Request.Method != http.MethodGet || got.Request.Path != "/worklet/ENG-7" ||
 		got.Grant != f.Grant("read").ID() {
-		t.Errorf("sent %+v on grant %s, want GET /work/ENG-7 on the question's grant", got.Request, got.Grant)
+		t.Errorf("sent %+v on grant %s, want GET /worklet/ENG-7 on the question's grant", got.Request, got.Grant)
 	}
 	done := evals.Last(frames, wire.EventDone)
 	if done == nil || done.Done.State != wire.TurnCompleted || done.Done.Steps != 1 {
@@ -92,7 +92,7 @@ func TestNoTokenReachesARecordALogOrAPrompt(t *testing.T) {
 	t.Parallel()
 	const key = "ghp_" + "Zq3vT8mN2pL6wR9xK4cB7yH1jD5fG0sA2eQ8"
 	leaky := assistanttest.Routes(map[string]exec.Response{
-		"GET /work/ENG-7": assistanttest.Task("ENG-7", "Rotate keys", "token "+key),
+		"GET /worklet/ENG-7": assistanttest.Task("ENG-7", "Rotate keys", "token "+key),
 	})
 	f := assistanttest.NewRig(t, evals.RigOptions{Tools: []catalog.Tool{getTask(t)}, Handler: leaky,
 		Rounds: []evals.Round{readTask(),

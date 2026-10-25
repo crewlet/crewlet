@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/coordtest"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -31,14 +32,13 @@ import (
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/learning/memread"
 	"github.com/crewlet/crewlet/internal/observe"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
-	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/usage"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // pinned is the clock these answers run on. Pinned because a lease countdown
@@ -3140,10 +3140,10 @@ func TestThePageScreenReadsWhatTheseAnswersSend(t *testing.T) {
 	// A PLACE ON A TASK WHOSE KEY ANOTHER TASK CLAIMED FIRST, so the row
 	// carries `key_collision` — the field a link needs to reach this task by
 	// its id rather than open the claimant by the key.
-	sources.Work = &stubWork{places: map[string]tracker.TurnPlace{
+	sources.Work = &stubWork{places: map[string]worklet.TurnPlace{
 		"run-a": {TaskID: "t-1", Key: "ENG-412", KeyCollision: true,
 			Title: "Retry PXE boot", Ordinal: 2}}}
-	sources.Pages = &stubPages{detail: pages.Detail{Page: pages.Page{ID: readPage}, Skill: true}}
+	sources.Pages = &stubPages{detail: doclet.Detail{Page: doclet.Page{ID: readPage}, Skill: true}}
 	// A BACKLINK TO EACH HOLDER OF ONE KEY, so a row carries `key_collision`
 	// — the field the rail needs to open the duplicate by its id rather than
 	// the claimant by the key — and a row without it says the flag is

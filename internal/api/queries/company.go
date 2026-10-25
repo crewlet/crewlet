@@ -738,13 +738,13 @@ func seatsFor(roster *org.Organization, kind string) []string {
 			carries = !r.Mattermost.IsZero()
 		case "jira":
 			// A seat's own PROJECT, which is vendor-neutral now: the same
-			// key names a native project and a Jira one, and this answer
+			// key names a Worklet project and a Jira one, and this answer
 			// is about which seats carry an identity of their own rather
 			// than about which product serves it.
 			carries = r.Project != ""
 		case "confluence":
 			// The seat's own SPACE, vendor-neutral for the same reason
-			// the project is: one key names a native container and a
+			// the project is: one key names a Doclet container and a
 			// Confluence one.
 			carries = r.Space != ""
 		case "github":

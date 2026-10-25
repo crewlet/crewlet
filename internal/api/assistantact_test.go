@@ -17,7 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // actingAssistApp is the assistant's App with the act transport mounted,
@@ -38,7 +38,7 @@ func actingAssistApp(t *testing.T) (*assistApp, *recordedAudit) {
 	if err != nil {
 		t.Fatalf("operator.New: %v", err)
 	}
-	fx := newAssistAppWith(t, []iam.Grant{iam.GrantTracker}, func(opts *api.Options) {
+	fx := newAssistAppWith(t, []iam.Grant{iam.GrantWorklet}, func(opts *api.Options) {
 		opts.Operator, opts.Audit = operators, audit
 	})
 	return fx, audit
@@ -47,7 +47,7 @@ func actingAssistApp(t *testing.T) (*assistApp, *recordedAudit) {
 // createCall is the act request a create_task proposal sends.
 func createCall() exec.Request {
 	return exec.Request{Method: http.MethodPost,
-		Path:           operator.ActPathPrefix + tracker.CreateWorkItemTool,
+		Path:           operator.ActPathPrefix + worklet.CreateWorkItemTool,
 		Body:           []byte(`{"args":{"title":"Rotate the signing key","project":"ENG"}}`),
 		IdempotencyKey: uuid.Must(uuid.NewV7()).String()}
 }
@@ -108,7 +108,7 @@ func TestAnAssistedWriteTakesOnlyTheVerbItWasApprovedFor(t *testing.T) {
 	t.Parallel()
 	fx, audit := actingAssistApp(t)
 	call := exec.Request{Method: http.MethodPost,
-		Path:           operator.ActPathPrefix + tracker.UpdateWorkItemTool,
+		Path:           operator.ActPathPrefix + worklet.UpdateWorkItemTool,
 		Body:           []byte(`{"args":{"id":"ENG-1","title":"Something else"}}`),
 		IdempotencyKey: uuid.Must(uuid.NewV7()).String()}
 	g := fx.derive(t, approvedFor(call, authz.ActionWorkCreate))
@@ -119,7 +119,7 @@ func TestAnAssistedWriteTakesOnlyTheVerbItWasApprovedFor(t *testing.T) {
 	if resp.Status != http.StatusForbidden || !strings.Contains(string(resp.Body),
 		string(authz.ReasonAssistRefused)) {
 		t.Fatalf("a grant approved for %s carried %s: %d %s", authz.ActionWorkCreate,
-			tracker.UpdateWorkItemTool, resp.Status, resp.Body)
+			worklet.UpdateWorkItemTool, resp.Status, resp.Body)
 	}
 	_, recorded := audit.take()
 	if len(recorded) != 1 {

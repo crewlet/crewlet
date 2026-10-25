@@ -290,7 +290,7 @@ describe("the assistant's own paths", () => {
       "/assistant/./x",
       "/assistant/x\\y",
       "/assistant/x\ny",
-      "/work/items",
+      "/worklet/items",
       "assistant/x",
     ]) {
       expect(isAssistantPath(refused), refused).toBe(false);

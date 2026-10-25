@@ -33,7 +33,7 @@ import {
   tagFilter,
   viewQuery,
 } from "./work.ts";
-import { mergePages } from "~/routes/work/usePagedItems.ts";
+import { mergePages } from "~/routes/worklet/usePagedItems.ts";
 import type { WorkGroup, WorkSummary } from "~/protocol/index.ts";
 
 const row = (key: string, over: Partial<WorkSummary> = {}): WorkSummary => ({

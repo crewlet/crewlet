@@ -58,7 +58,7 @@ const CORPUS: { text: string; readable: string }[] = [
     text: "[inline page](data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==)",
     readable: "inline page",
   },
-  { text: "[this task](#/work/ENG-1)", readable: "this task" },
+  { text: "[this task](#/worklet/ENG-1)", readable: "this task" },
   { text: "[relative](/settings/iam)", readable: "relative" },
   { text: "[ref link][r1]\n\n[r1]: https://evil.example/r", readable: "ref link" },
   { text: "Open <https://evil.example/login?next=1> now.", readable: "evil.example/login" },
@@ -106,7 +106,7 @@ function cards(): AssistantCard[] {
         subtitle: line(9),
         facts: CORPUS.map((c, i) => ({ label: `Field ${i}`, value: c.text })),
         text: ALL,
-        open: { label: "Open ENG-7", screen: "item", href: "#/work/ENG-7" },
+        open: { label: "Open ENG-7", screen: "item", href: "#/worklet/ENG-7" },
       },
     },
     {
@@ -145,7 +145,7 @@ function cards(): AssistantCard[] {
     {
       type: "open_in_app",
       open_in_app: {
-        link: { label: line(18), screen: "item", href: "#/work/ENG-7" },
+        link: { label: line(18), screen: "item", href: "#/worklet/ENG-7" },
         permitted: true,
       },
     },
@@ -264,7 +264,7 @@ describe("TestTheAssistantRendersNoLinkAndNoImage", () => {
     // The entity card's Open and the Open in app card: each a `#/` route the
     // engine built from its own table, never an address the model wrote.
     expect(hrefs.length).toBeGreaterThan(0);
-    for (const href of hrefs) expect(href).toMatch(/^#\/work\/ENG-7$/);
+    for (const href of hrefs) expect(href).toMatch(/^#\/worklet\/ENG-7$/);
   });
 
   test("every corpus line is still there to read", () => {

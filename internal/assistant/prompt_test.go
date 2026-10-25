@@ -19,7 +19,7 @@ func basePrompt() promptInput {
 	return promptInput{Company: "Nimbus", Zone: zone,
 		Now:    time.Date(2026, 10, 24, 9, 41, 0, 0, time.UTC),
 		Person: iam.Principal{Login: "grace", Seat: "grace"}, Name: "Grace",
-		Apps: []iam.Grant{iam.GrantTracker}, Boundary: provenance.NewBoundary(),
+		Apps: []iam.Grant{iam.GrantWorklet}, Boundary: provenance.NewBoundary(),
 		Question: "Who is on call?"}
 }
 
@@ -65,7 +65,7 @@ func TestThePromptOpensWithItsRulesInCacheOrder(t *testing.T) {
 	}
 	order := []string{identityRules, PromptVersion, provenance.StandingInstruction,
 		"Europe/Berlin", "Saturday 24 October 2026", "You are helping Grace (seat grace)",
-		"tracker", "create_task"}
+		"worklet", "create_task"}
 	at := 0
 	for _, want := range order {
 		i := strings.Index(system.Content[at:], want)

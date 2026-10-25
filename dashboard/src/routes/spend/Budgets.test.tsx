@@ -95,7 +95,7 @@ function answer(extra: Partial<BudgetsAnswer> = {}): BudgetsAnswer {
 
 const OPERATOR = {
   login: "U0FOUNDER",
-  grants: ["admin", "tracker", "knowledge"],
+  grants: ["admin", "worklet", "doclet"],
   handle: "jane",
   owner: "jane",
   name: "Jane",

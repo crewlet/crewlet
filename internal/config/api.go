@@ -916,10 +916,10 @@ type APIToken struct {
 	// startup and never stored.
 	Token string `secret:"true" yaml:"token" json:"token" js:"required" desc:"Token value or ${VAR} reference."`
 
-	// Grants is what this credential may do: `admin`, `tracker`,
-	// `knowledge`. REQUIRED and non-empty: a credential's blast radius is
+	// Grants is what this credential may do: `admin`, `worklet`, `doclet`,
+	// `artifacts`. REQUIRED and non-empty: a credential's blast radius is
 	// stated at the pin, never inferred. The founder's break-glass token is
-	// `[admin]`; a CI pipeline that files work is `[tracker]`.
+	// `[admin]`; a CI pipeline that files work is `[worklet]`.
 	//
 	// THIS IS THE CHANGE THAT MAKES A TOKEN SAFE TO HAVE. Before it, one
 	// token was the whole operator surface — the config document, the
@@ -930,7 +930,7 @@ type APIToken struct {
 	// STRICT, unlike a replicated row: a name this build does not know is
 	// refused here, naming the set, because a file an operator wrote is a
 	// typo rather than a newer peer's record.
-	Grants []iam.Grant `yaml:"grants,omitempty" json:"grants,omitempty" desc:"What this credential may do: admin, tracker, knowledge, artifacts. Required and non-empty."`
+	Grants []iam.Grant `yaml:"grants,omitempty" json:"grants,omitempty" desc:"What this credential may do: admin, worklet, doclet, artifacts. Required and non-empty."`
 }
 
 // validate checks the auth block; serving is [Bootstrap.ServesAPI].

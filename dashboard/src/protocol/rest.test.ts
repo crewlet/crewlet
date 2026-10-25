@@ -127,7 +127,7 @@ test("a per-call deadline replaces the default for that call", async () => {
 
   let done = false;
   const settled = rest
-    .request("POST", "/work/retention/evict/node-4", {
+    .request("POST", "/worklet/retention/evict/node-4", {
       body: {},
       timeoutMs: GATE_REQUEST_TIMEOUT_MS,
     })
@@ -449,7 +449,7 @@ describe("whether an answer is the engine's own", () => {
     test(`${name} is ${unanswered ? "not " : ""}the engine's answer`, async () => {
       stub(respond);
       const err = await rest
-        .request("POST", "/work/retention/evict/node-4")
+        .request("POST", "/worklet/retention/evict/node-4")
         .catch((e: unknown) => e);
       expect(err).toBeInstanceOf(RestError);
       expect((err as RestError).unanswered).toBe(unanswered);
@@ -463,7 +463,9 @@ describe("whether an answer is the engine's own", () => {
         throw new TypeError("Failed to fetch");
       }),
     );
-    const err = await rest.request("POST", "/work/retention/evict/node-4").catch((e: unknown) => e);
+    const err = await rest
+      .request("POST", "/worklet/retention/evict/node-4")
+      .catch((e: unknown) => e);
     expect((err as RestError).status).toBe(0);
     expect((err as RestError).unanswered).toBe(true);
   });

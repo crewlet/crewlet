@@ -203,15 +203,15 @@ export function OrgChart() {
   const panelId = useId();
 
   // THE KEY ON A UNIT'S NODE is the project its work is filed under, which
-  // only the tracker knows. A company on another tracker answers nothing and
-  // a unit's node carries its type alone — as it does for a reader without
-  // Tracker, who is not asked a question the engine would refuse them.
+  // only Worklet knows. A company on another tracker answers nothing and a
+  // unit's node carries its type alone, as it does for a reader without
+  // Worklet, who is not asked a question the engine would refuse them.
   const viewer = useViewer();
   const ask = useServicesAsk();
   const projects = useQuery(
     "work_projects",
     { limit: PROJECT_PAGE },
-    { pollMs: 120_000, enabled: viewer.tracker && ask.tracker },
+    { pollMs: 120_000, enabled: viewer.worklet && ask.tracker },
   );
   const projectRows = projects.error ? undefined : projects.data?.projects;
   const keysOf = useMemo(() => projectsByUnit(projectRows ?? []), [projectRows]);
