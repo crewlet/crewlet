@@ -401,9 +401,15 @@ func TestAPageActionIsClaimedOnceAcrossTabs(t *testing.T) {
 		d.Preview.Request = exec.Request{Method: proposal.PageMethod,
 			Path: proposal.PageActionPath + "work.filters", Body: []byte(`{"status":"open"}`)}
 	})
-	got, err := f.Node(t).Approve(ctx, approvaltest.Approve(p))
+	ap := approvaltest.Approve(p)
+	got, err := f.Node(t).Approve(ctx, ap)
 	if err != nil || got.Proposal.State != wire.ProposalApproved || len(f.API.Sent()) != 0 {
 		t.Fatalf("a page approval answered %v, %v after %d sends", got.Proposal.State, err, len(f.API.Sent()))
+	}
+	if again, err := f.Node(t).Approve(ctx, ap); err != nil || len(f.Turns.Emitted()) != 2 ||
+		again.Proposal.State != wire.ProposalApproved {
+		t.Fatalf("the same approval again answered %v, %v and sent the page %d actions; "+
+			"want the action sent again", again.Proposal.State, err, len(f.Turns.Emitted()))
 	}
 	action := f.Turns.Emitted()[0].Action
 	if action == nil || action.ActionID != p.ID || action.Name != "work.filters" ||

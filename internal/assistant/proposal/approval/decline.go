@@ -82,8 +82,9 @@ func (a *Approver) DeclineTurn(ctx context.Context, s Stop) error {
 		return err
 	}
 	var errs []error
+	now := a.d.Now()
 	for _, p := range proposals {
-		if p.State != wire.ProposalProposed {
+		if proposal.StateNow(p, now) != wire.ProposalProposed {
 			continue
 		}
 		c := assistantdomain.Call{Owner: s.Owner, By: s.By,

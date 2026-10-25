@@ -172,10 +172,16 @@ func (a *Approver) repeat(ctx context.Context, d decider, p assistantdomain.Prop
 
 	w, err := a.d.Store.Move(ctx, d.call("approve"), p.ID, assistantdomain.ProposalMove{
 		From: wire.ProposalProposed, To: wire.ProposalApproved})
-	if err == nil && w.Collapsed {
-		return answer(p, state, wire.TurnAccepted{TurnID: p.Turn}), nil
+	if err != nil || !w.Collapsed {
+		return wire.ProposalAnswer{}, &Decided{State: state}
 	}
-	return wire.ProposalAnswer{}, &Decided{State: state}
+	if p.Scope == wire.ScopePage && state == wire.ProposalApproved {
+		// THE PAGE NEVER HEARD IT: the answer that carried the action was
+		// lost, so the same approval sends it again. Its claim is still
+		// arbitrated, so a page that did hear it applies it once.
+		return a.sendToPage(ctx, d, p)
+	}
+	return answer(p, state, wire.TurnAccepted{TurnID: p.Turn}), nil
 }
 
 // answerNow re-reads a proposal and answers its state now.
