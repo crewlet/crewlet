@@ -903,8 +903,7 @@ defensible for the same CLI on the same seat.
 | Needs | a sign-in on this host | a sign-in *plus* a coding-agent runner for the CLI (`claude-code` or `opencode`), `providers.sandbox` and a reachable bridge URL |
 
 **Text mode is predictable**: the tool log is the engine's own, every
-call goes through the permission model and redaction, and it needs no
-sandbox. **Agent mode is the vendor's own harness**: a real
+call goes through the permission model, and it needs no sandbox. **Agent mode is the vendor's own harness**: a real
 shell, a real editor and a real checkout, which is what makes it worth
 having for code work.
 
@@ -1538,7 +1537,7 @@ which looks like the configuration error it is.
 Every one of these CLIs has its own tools — file edits, shell, web
 fetch. In **text mode** Crewlet does **not** use them: they run in the CLI's sandbox,
 invisible to the [tool registry](../guides/tools-and-mcp.md), the
-permission model, secret redaction, and the event stream. Routing agent
+permission model and the event stream. Routing agent
 work through them would fork the engine's tool surface in two.
 
 So every profile **denies the CLI's shell and file tools** wherever the

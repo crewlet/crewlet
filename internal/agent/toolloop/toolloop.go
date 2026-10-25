@@ -218,7 +218,7 @@ type Execution struct {
 	Round int
 	Name  string
 	Args  map[string]any
-	// Output is the tool's own output, already redacted by the surface.
+	// Output is the tool's own output, as it returned it.
 	Output string
 	Failed bool
 
