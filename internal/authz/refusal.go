@@ -11,14 +11,15 @@ import (
 // that learned `missing_grant` from one route and `grants` from another would
 // branch twice on one fact.
 const (
-	// DetailReason is the rule's own [Reason].
-	DetailReason = "reason"
+	// DetailReason is the rule's own [Reason]. The envelope's key,
+	// spelled once in internal/api/httpjson, whose decoder reads it back.
+	DetailReason = httpjson.KeyReason
 	// DetailGrants is [Decision.Grants]: the smallest permissions any ONE
 	// of which would have admitted the caller — an app, or admin. Always
 	// present, and an EMPTY list is an answer — no permission would, and
 	// what is missing is a relation the chart does not hold — rather than an
 	// omission.
-	DetailGrants = "grants"
+	DetailGrants = httpjson.KeyGrants
 	// DetailWindow is [Decision.Recency] on a step-up refusal: the window
 	// the verb asks a proof inside, spelled as the `api.auth.session` key
 	// that sets it (`step_up`), so the word a client reads and the setting
