@@ -16,7 +16,8 @@ import {
   StatusDot,
   Tag,
 } from "@crewlethq/ui";
-import { ProductMark, VendorMark } from "@crewlethq/icons";
+import { VendorMark } from "@crewlethq/icons";
+import { ProductMark, type Product } from "@crewlethq/icons/product-mark";
 import { CheckGlyph, RotateCwGlyph } from "@crewlethq/icons/glyphs";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { relTime } from "~/lib/format.ts";
@@ -48,9 +49,21 @@ export function actionName(words: string, name: string): string {
   return `${words} ${name}`;
 }
 
+/**
+ * Each built-in service's mark, by the engine's own key for it. The keys are
+ * wire identifiers and stay what the engine says; the design system names its
+ * products, so this record is the one place the two vocabularies meet, and
+ * tsc holds both sides of it.
+ */
+const SERVICE_PRODUCT = {
+  works: "worklet",
+  knowledge: "doclet",
+  chat: "chat",
+} as const satisfies Record<BuiltInService["key"], Product>;
+
 /** A built-in service's own mark. */
 export function ServiceMark({ service, size }: { service: BuiltInService; size: "md" | number }) {
-  return <ProductMark product={service.key} size={size} soon={service.soon} />;
+  return <ProductMark product={SERVICE_PRODUCT[service.key]} size={size} soon={service.soon} />;
 }
 
 /** A tool's state as one tag, only where it carries meaning. */
