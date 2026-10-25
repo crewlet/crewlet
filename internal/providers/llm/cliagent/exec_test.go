@@ -289,6 +289,17 @@ func runFakeCLI() {
 		// probe is asking is read off the prompt.
 		prompt, _ := io.ReadAll(os.Stdin)
 		switch {
+		case strings.Contains(string(prompt), "read the file at "):
+			// The file probe: a CLI whose file tool works reads the
+			// path out of the prompt and answers with the file.
+			if os.Getenv("FAKE_FILE_PROBE") != "read" {
+				fmt.Print(noLocalToolsReply)
+				break
+			}
+			_, rest, _ := strings.Cut(string(prompt), "read the file at ")
+			path, _, _ := strings.Cut(rest, " and reply")
+			body, _ := os.ReadFile(path)
+			fmt.Print(string(body))
 		case strings.Contains(string(prompt), webProbeURL):
 			fmt.Print(os.Getenv("FAKE_WEB_PROBE_STDOUT"))
 		case strings.Contains(string(prompt), noLocalToolsReply):

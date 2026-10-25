@@ -724,3 +724,27 @@ func TestTheClaudeProfilePrunesTheBackupsOfWhatItPrunes(t *testing.T) {
 		}
 	}
 }
+
+// A REFUSED SHELL IS NOT A REFUSED HOST. The file tools read the engine host as
+// well as a shell does, so once the shell probe is refused the doctor writes a
+// file outside the seat's home, with a value minted for the run, and asks the
+// CLI to read it on the assistant's argv: a CLI that echoes the value read the
+// host, which is a problem on a profile that says its local tools are denied.
+func TestDoctorReportsAFileReadAfterTheShellWasRefused(t *testing.T) {
+	t.Parallel()
+	refused := probeProvider(t, cliprofile.LocalToolsDenied, noLocalToolsReply, noWebReply)
+	d := refused.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
+	if !strings.Contains(d.LocalTools, "refused (shell and file read)") {
+		t.Errorf("LocalTools = %q, want both refused", d.LocalTools)
+	}
+
+	reads := probeProvider(t, cliprofile.LocalToolsDenied, noLocalToolsReply, noWebReply)
+	reads.env["FAKE_FILE_PROBE"] = "read"
+	d = reads.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
+	if !strings.Contains(d.LocalTools, "FILE READ") {
+		t.Errorf("LocalTools = %q, want the read reported", d.LocalTools)
+	}
+	if joined := strings.Join(d.Problems, "\n"); !strings.Contains(joined, "file tools are not off") {
+		t.Errorf("the problem does not say the file tools are on:\n%s", joined)
+	}
+}
