@@ -264,6 +264,14 @@ type assistantRecords struct{ w *assistantdomain.Writer }
 
 // call is the domain's caller for one record.
 func (a assistantRecords) call(w assistant.Write) (assistantdomain.Call, error) {
+	return assistantCall(w)
+}
+
+// assistantCall is the domain's caller for one record of a gesture: the
+// operation derived from the gesture's key and the record's place in it. ONE
+// DERIVATION for every adapter of the domain's writer (the records and the
+// files), so a retry of a gesture is the same operation whichever records it.
+func assistantCall(w assistant.Write) (assistantdomain.Call, error) {
 	op := w.Key
 	if w.Derived != nil {
 		op = statelog.DeriveOpID(w.Derived.At, w.Derived.Name, w.Derived.Identity...)
