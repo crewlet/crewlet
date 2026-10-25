@@ -443,9 +443,9 @@ func TestTheDoctorsProbesAskAsASeatAsks(t *testing.T) {
 			probes = append(probes, argv)
 		}
 	}
-	if len(probes) != 3 {
-		t.Fatalf("recorded %d completions, want the smoke test and the two isolation "+
-			"probes: %q", len(probes), probes)
+	if len(probes) != 4 {
+		t.Fatalf("recorded %d completions, want the smoke test and the three isolation "+
+			"probes (shell, file read, web): %q", len(probes), probes)
 	}
 	for _, argv := range probes {
 		system, ok := valueAfter(argv, "--append-system-prompt")
