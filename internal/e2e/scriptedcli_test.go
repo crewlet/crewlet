@@ -48,11 +48,22 @@ import (
 // child an allowlisted environment, never the engine's.
 const scriptedCLIEnv = "CREWLET_E2E_SCRIPTED_CLI"
 
-// scriptedSystemFlag is the flag the entry passes its system prompt's file on —
-// the channel Claude Code takes it on, so the system prompt reaches the model
-// on its own channel exactly as it does for the default agent, and the model
-// reads it whole rather than out of a transcript section.
-const scriptedSystemFlag = "--system-prompt-file"
+// scriptedSystemFlag and scriptedAppendFlag are the flags the entry passes a
+// system prompt's file on — Claude Code's two channels, the first replacing
+// the CLI's own prompt and the second kept after it — so the system prompt
+// reaches the model on its own channel exactly as it does for the default
+// agent, by the route the default agent's would take: a seat's rounds on the
+// append channel, a side pass on the replace one ([cliprofile.Profile.RouteFor]).
+const (
+	scriptedSystemFlag = "--system-prompt-file"
+	scriptedAppendFlag = "--append-system-prompt-file"
+)
+
+// The channels a [cliCall] names its system prompt arrived on.
+const (
+	channelReplace = "replace"
+	channelAppend  = "append"
+)
 
 // scriptedCLIBinary is this test binary's own path, which the entry names as
 // its CLI. Set once by [TestMain], before any case runs.
@@ -107,6 +118,7 @@ func scriptedEntry(key, endpoint, stateDir string) string {
         complete_args: ["-test.run=^$"]
         model_args: ["--model", "{model}"]
         system_prompt: {args: [%q, "{file}"]}
+        append_system_prompt: {args: [%q, "{file}"]}
         prompt_mode: stdin
         output: json
         text_paths: [["result"]]
@@ -119,14 +131,18 @@ func scriptedEntry(key, endpoint, stateDir string) string {
 `, key, stateDir,
 		scriptedCLIEnv, endpoint,
 		procgrouptest.GORACE, procgrouptest.StandInRaceOptions(),
-		scriptedCLIBinary, scriptedSystemFlag)
+		scriptedCLIBinary, scriptedSystemFlag, scriptedAppendFlag)
 }
 
 // cliCall is what the scripted CLI posts for one invocation: the system prompt
-// it was handed on its own channel, and the transcript it read on stdin.
+// it was handed on its own channel, which channel that was, and the transcript
+// it read on stdin.
 type cliCall struct {
 	System string `json:"system"`
-	Prompt string `json:"prompt"`
+	// Channel is [channelReplace] or [channelAppend], or empty where the
+	// call carried no system prompt.
+	Channel string `json:"channel,omitempty"`
+	Prompt  string `json:"prompt"`
 }
 
 // runScriptedCLI is the scripted CLI: it posts the call to the model at
@@ -147,17 +163,27 @@ func runScriptedCLI(endpoint string) int {
 	}
 	// ABSENT IS NO SYSTEM PROMPT, not a fault: the backend passes no flag
 	// for a request that carries none, since a CLI handed an empty one
-	// would replace its default with nothing.
+	// would replace its default with nothing. BOTH IS: a call takes one
+	// route.
 	var system []byte
-	if i := slices.Index(os.Args, scriptedSystemFlag); i >= 0 {
+	channel := ""
+	for flag, name := range map[string]string{scriptedSystemFlag: channelReplace, scriptedAppendFlag: channelAppend} {
+		i := slices.Index(os.Args, flag)
+		if i < 0 {
+			continue
+		}
+		if channel != "" {
+			return fail("handed a system prompt on both channels")
+		}
 		if i+1 >= len(os.Args) {
-			return fail("%s names no file", scriptedSystemFlag)
+			return fail("%s names no file", flag)
 		}
 		if system, err = os.ReadFile(os.Args[i+1]); err != nil {
 			return fail("reading the system prompt: %v", err)
 		}
+		channel = name
 	}
-	body, err := json.Marshal(cliCall{System: string(system), Prompt: string(prompt)})
+	body, err := json.Marshal(cliCall{System: string(system), Channel: channel, Prompt: string(prompt)})
 	if err != nil {
 		return fail("encoding the call: %v", err)
 	}
@@ -405,7 +431,8 @@ func TestTheScriptedCLIAnswersTheBackendTheCompanyBuilds(t *testing.T) {
 	}
 	ctx := llm.WithSeat(t.Context(), "ceo")
 
-	// A PHASE: a system prompt, a conversation, and a tool to finish with.
+	// A PHASE: a system prompt, a conversation, and a tool to finish with,
+	// sent as the tool loop sends a seat's round.
 	const system = "You are the CEO of Nimbus. You answer to the founder."
 	work, err := provider.Complete(ctx, llm.Request{
 		Messages: []llm.Message{
@@ -413,6 +440,7 @@ func TestTheScriptedCLIAnswersTheBackendTheCompanyBuilds(t *testing.T) {
 			{Role: llm.RoleUser, Content: "How did the week go?"},
 		},
 		Tools: []llm.ToolDef{{Name: "submit_work", Description: "Finish the work."}},
+		Agent: true,
 	})
 	if err != nil {
 		t.Fatalf("an executor round: %v", err)
@@ -427,9 +455,11 @@ func TestTheScriptedCLIAnswersTheBackendTheCompanyBuilds(t *testing.T) {
 	}
 	// ON ITS OWN CHANNEL, WHOLE, and nowhere else: the system prompt every
 	// prompt case here reads is the one the CLI was handed apart from the
-	// transcript.
-	if got := model.systemPrompts(); len(got) != 1 || got[0] != system {
-		t.Errorf("the model was shown the system prompt %q, want %q", got, system)
+	// transcript — on the append channel, after the note that says the CLI's
+	// own prompt stays in force and the seat's is the role.
+	got := model.systemPrompts()
+	if len(got) != 1 || !strings.HasSuffix(got[0], system) || got[0] == system {
+		t.Errorf("the model was shown the system prompt %q, want %q after the harness note", got, system)
 	}
 	model.mu.Lock()
 	transcript := model.prompts[0]
@@ -456,6 +486,14 @@ func TestTheScriptedCLIAnswersTheBackendTheCompanyBuilds(t *testing.T) {
 	charged(t, "a text answer", persist, textReplyUsage)
 	if got := model.seen(); !slices.Equal(got, []string{"execute", "aux:persist"}) {
 		t.Errorf("the model recorded %v, want the executor round and the persist pass", got)
+	}
+	// Whole and alone, on the replace channel: a side pass has no use for
+	// the CLI's own prompt.
+	if got := model.systemPrompts(); len(got) != 2 || got[1] != strings.TrimSpace(learning.PersistSystemPrompt) {
+		t.Errorf("the persist pass was shown %q, want its own prompt alone", got)
+	}
+	if bad := model.misrouted(); len(bad) > 0 {
+		t.Errorf("system prompts on the wrong channel: %s", strings.Join(bad, "; "))
 	}
 }
 

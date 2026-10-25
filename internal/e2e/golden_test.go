@@ -515,6 +515,12 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 			t.Errorf("the %s phase never ran; phases = %v", want, got)
 		}
 	}
+	// EACH ON ITS ROUTE: a seat's rounds keep the CLI's own prompt and add
+	// the seat's after it, and an auxiliary pass replaces it, having no use
+	// for a coding agent's instructions.
+	if bad := n.model.misrouted(); len(bad) > 0 {
+		t.Errorf("system prompts on the wrong channel: %s", strings.Join(bad, "; "))
+	}
 	// Onboarding runs BEFORE the executor and on its own budget — that is
 	// the whole reason it is a phase rather than a hint inside the
 	// executor's prompt, where it could spend the turn's budget on reading
