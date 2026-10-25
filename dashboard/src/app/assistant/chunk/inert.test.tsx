@@ -225,7 +225,7 @@ function renderThread() {
     <Thread
       view={view()}
       now={Date.parse(AT) + 5_000}
-      on={{ approve: nothing, decline: nothing, openHere: nothing }}
+      on={{ approve: nothing, decline: nothing, openHere: nothing, undo: nothing }}
       opened={new Set()}
       onRetry={nothing}
       onReconnect={nothing}
