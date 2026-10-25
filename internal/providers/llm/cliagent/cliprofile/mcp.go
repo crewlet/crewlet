@@ -283,10 +283,16 @@ type FailureEvent struct {
 
 // Match is one condition an event must meet: the value at Path equals Equals,
 // compared as JSON values — a string with a string, a boolean with a boolean, a
-// number with a number.
+// number with a number — or, where Prefix is set in its place, is a string
+// that begins with Prefix.
 type Match struct {
 	Path   Path `yaml:"path,omitempty"`
 	Equals any  `yaml:"equals,omitempty"`
+	// Prefix is for a discriminator a CLI writes with what it names
+	// appended to it: Muse Code files a side effect under an operation of
+	// `tool:<the tool's name>` beside the `model.meta.response` of a model
+	// request, and no one value tells every tool's from the model's.
+	Prefix string `yaml:"prefix,omitempty"`
 }
 
 // ToolTimeout is [MCP.ToolTimeoutSeconds] as a duration.
@@ -410,7 +416,7 @@ func cloneMatches(in []Match) []Match {
 	}
 	out := make([]Match, len(in))
 	for i, m := range in {
-		out[i] = Match{Path: slices.Clone(m.Path), Equals: m.Equals}
+		out[i] = Match{Path: slices.Clone(m.Path), Equals: m.Equals, Prefix: m.Prefix}
 	}
 	return out
 }
@@ -672,10 +678,17 @@ func validateMatches(add func(string, ...any), label string, matches []Match) {
 	}
 	for i, m := range matches {
 		validatePath(add, fmt.Sprintf("%s[%d].path", label, i), m.Path)
+		if m.Prefix != "" {
+			if m.Equals != nil {
+				add("%s[%d] sets both equals and prefix — a condition is one or the other", label, i)
+			}
+			continue
+		}
 		switch m.Equals.(type) {
 		case string, bool, int, int64, uint64, float64:
 		default:
-			add("%s[%d].equals is %v — compare with a string, a boolean or a number", label, i, m.Equals)
+			add("%s[%d].equals is %v — compare with a string, a boolean or a number, or "+
+				"set prefix", label, i, m.Equals)
 		}
 	}
 }

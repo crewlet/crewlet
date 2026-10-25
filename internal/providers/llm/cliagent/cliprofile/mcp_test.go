@@ -168,6 +168,11 @@ func TestABrokenToolRouteIsRefusedByName(t *testing.T) {
 			"owner": map[string]any{"path": []any{"cwd"}, "equals": "{work}",
 				"match": []any{map[string]any{"path": []any{"type"}}}},
 		}}, "requests.owner.match[0].equals"},
+		"a condition that is both a value and a prefix": {map[string]any{"requests": map[string]any{
+			"source": "file", "file": ".cli/*.jsonl", "in": "home",
+			"owner": map[string]any{"path": []any{"cwd"}, "equals": "{work}",
+				"match": []any{map[string]any{"path": []any{"type"}, "equals": "bind", "prefix": "bi"}}},
+		}}, "requests.owner.match[0] sets both equals and prefix"},
 		"an owner the run cannot know": {map[string]any{"requests": map[string]any{
 			"source": "file", "file": ".cli/*.jsonl", "in": "home",
 			"owner": map[string]any{"path": []any{"thread"}, "equals": "{thread}"},

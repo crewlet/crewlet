@@ -298,6 +298,8 @@ func (r *recordReader) event(doc map[string]any) {
 			if s, ok := stringAt(doc, e.Delta); ok && s != "" {
 				req.streamed.WriteString(s)
 				deltas = append(deltas, llm.Delta{Content: s, Request: req.id})
+				// Its prose, where no text rule reads one ([request.prose]).
+				req.dirty = req.dirty || len(req.text) == 0
 			}
 		}
 		if e.Whole {
@@ -439,13 +441,22 @@ func (r *recordReader) estimateInputLocked(req *request) {
 	r.pending = append(r.pending, llm.Usage{Input: est, Estimated: true})
 }
 
+// prose is the request's prose: what its text rules read — or, for a record
+// that never writes a response's prose whole and only streams it in fragments
+// (Muse Code's run.output.delta), what its deltas spelled, run together as
+// they were streamed. Never the two together: a record that has both writes
+// the same prose twice.
+func (q *request) prose() string {
+	if len(q.text) > 0 {
+		return strings.TrimSpace(strings.Join(q.text, "\n"))
+	}
+	return strings.TrimSpace(q.streamed.String())
+}
+
 // writtenBy is the estimate of what a request wrote: its prose, and its calls'
 // names and arguments.
 func (r *recordReader) writtenBy(req *request) int {
-	n := EstimateTokens(strings.Join(req.text, "\n"))
-	if n == 0 {
-		n = EstimateTokens(req.streamed.String())
-	}
+	n := EstimateTokens(req.prose())
 	for _, c := range req.calls {
 		raw, _ := json.Marshal(c.Arguments)
 		n += EstimateTokens(c.Name) + EstimateTokens(string(raw))
@@ -643,7 +654,7 @@ func (r *recordReader) flushLocked(touched map[*request]bool, final bool) ([]llm
 // turnOf is one request as the host is told it.
 func (r *recordReader) turnOf(req *request) llm.Turn {
 	t := llm.Turn{
-		ID: req.id, Text: strings.TrimSpace(strings.Join(req.text, "\n")),
+		ID: req.id, Text: req.prose(),
 		Calls: slices.Clone(req.calls), Model: req.model, Stop: req.stop,
 	}
 	if req.has[figInput] || req.has[figOutput] {
@@ -744,7 +755,7 @@ func (r *recordReader) last() (text, model string, ok bool) {
 	for i := len(r.requests) - 1; i >= 0 && model == ""; i-- {
 		model = r.requests[i].model
 	}
-	return strings.TrimSpace(strings.Join(req.text, "\n")), model, true
+	return req.prose(), model, true
 }
 
 // observed is how many requests the record showed.
@@ -804,7 +815,16 @@ func (r *recordReader) hitCap() bool {
 func matches(doc map[string]any, conditions []cliprofile.Match) bool {
 	for _, c := range conditions {
 		v, ok := lookup(doc, c.Path)
-		if !ok || !equalJSON(v, c.Equals) {
+		if !ok {
+			return false
+		}
+		if c.Prefix != "" {
+			if s, ok := v.(string); !ok || !strings.HasPrefix(s, c.Prefix) {
+				return false
+			}
+			continue
+		}
+		if !equalJSON(v, c.Equals) {
 			return false
 		}
 	}
