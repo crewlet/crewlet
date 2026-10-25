@@ -313,6 +313,20 @@ type Options struct {
 	// the `data` role (ADR-0025).
 	Tokens *auth.Tokens
 
+	// --- the Dashboard Assistant's grants (WP1) ---
+
+	// Delegations mints and checks the assistant's grants, and Dispatcher
+	// sends the assistant's tool calls through this API's own handler with
+	// them (ADR-0046). The two are ONE PAIR (the dispatcher sends what the
+	// delegations mint), and New binds the delegations to this API's guard
+	// and the dispatcher to this API's handler, so a grant is accepted only
+	// by the chain it was minted for.
+	//
+	// NIL IS AN API WITH NO ASSISTANT: every grant-shaped bearer is refused,
+	// over the wire and in process alike.
+	Delegations *auth.Delegations
+	Dispatcher  *auth.Dispatcher
+
 	// AuthEvents is where the guard counts a refused credential.
 	// REQUIRED: the engine
 	// running beside this API holds the node's audit trail, and a guard
@@ -658,6 +672,15 @@ func New(opts Options) (*App, error) {
 		identity:    opts.Identity,
 	}
 	var err error
+	// --- the Dashboard Assistant's grants (WP1) ---
+	if opts.Dispatcher != nil && opts.Dispatcher.Delegations() != opts.Delegations {
+		return nil, errors.New("api: Options.Dispatcher sends grants that " +
+			"Options.Delegations did not mint; build it with auth.NewDispatcher " +
+			"over the same delegations")
+	}
+	if err = a.guard.BindDelegations(opts.Delegations); err != nil {
+		return nil, fmt.Errorf("api: %w", err)
+	}
 	a.stream, err = stream.NewService(state, stream.Options{
 		Health: a.streamHealth,
 		// The SAME set /ready refuses on, read from the one place it is
@@ -960,11 +983,34 @@ func New(opts Options) (*App, error) {
 	// exactly where the deployment had published them over https.
 	if opts.Bootstrap == nil || !opts.Bootstrap.API.Public.Enabled() {
 		a.handler = servedOn(opts.Bootstrap, false, chain)
+		// --- the Dashboard Assistant's dispatcher (WP1) ---
+		if err := bindDispatcher(opts.Dispatcher, a.handler); err != nil {
+			return nil, err
+		}
 		return a, nil
 	}
 	a.handler = servedOn(opts.Bootstrap, false, partition(false, chain))
+	// --- the Dashboard Assistant's dispatcher (WP1) ---
+	if err := bindDispatcher(opts.Dispatcher, a.handler); err != nil {
+		return nil, err
+	}
 	a.public = servedOn(opts.Bootstrap, true, partition(true, chain))
 	return a, nil
+}
+
+// --- the Dashboard Assistant's dispatcher (WP1) ---
+
+// bindDispatcher binds the assistant's dispatcher, when there is one, to the
+// handler api.port serves: the whole chain a click meets, and never the public
+// listener's, which serves none of the routes a grant may reach.
+func bindDispatcher(d *auth.Dispatcher, h http.Handler) error {
+	if d == nil {
+		return nil
+	}
+	if err := d.Bind(h); err != nil {
+		return fmt.Errorf("api: %w", err)
+	}
+	return nil
 }
 
 // servedOn is the outermost wrapping of everything one of a node's sockets
