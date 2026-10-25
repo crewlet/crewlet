@@ -169,6 +169,12 @@ func (s *Service) ReapLapsed(ctx context.Context) (int, error) {
 }
 
 // reapLoop runs the expiry backstop until the node drains.
+//
+// ITS LIFETIME IS THE SERVICE'S (s.base, ended by Close), never a caller's:
+// the backstop outlives the request that built the service, so no caller's
+// context reaches it.
+//
+//nolint:contextcheck // the service's own lifetime (s.base), never a caller's; see above
 func (s *Service) reapLoop() {
 	defer s.reaperWG.Done()
 	tick := time.NewTicker(ExpiryReapInterval)
