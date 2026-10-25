@@ -571,8 +571,7 @@ func (f *Fleet) Stop(ctx context.Context, owner, turn uuid.UUID, node string) (w
 		return "", "", err
 	}
 	if !answered {
-		reach, err := f.absent(ctx, node)
-		return "", reach, err
+		return "", f.absent(ctx, node), nil
 	}
 	switch reply.Answer {
 	case AnswerDone:
@@ -595,17 +594,18 @@ func (f *Fleet) Stop(ctx context.Context, owner, turn uuid.UUID, node string) (w
 
 // absent is what a request nobody answered found: a runner whose node has
 // left the fleet is gone, and one the roster still counts, or cannot say it
-// does not, is unreachable.
-func (f *Fleet) absent(ctx context.Context, node string) (Reach, error) {
+// does not, is unreachable. A roster that cannot answer is logged rather than
+// returned: the turn is left open, never ended on a guess.
+func (f *Fleet) absent(ctx context.Context, node string) Reach {
 	present, err := f.roster.Present(ctx, node)
 	if err != nil {
 		f.log.WarnContext(ctx, "assistant_runner_unknown", "node", node, "error", err,
 			"detail", "the runner did not answer and the fleet's roster could not say "+
 				"whether its node is still present; the turn is left open")
-		return ReachUnreachable, nil
+		return ReachUnreachable
 	}
 	if present {
-		return ReachUnreachable, nil
+		return ReachUnreachable
 	}
-	return ReachGone, nil
+	return ReachGone
 }

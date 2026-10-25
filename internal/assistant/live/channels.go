@@ -267,8 +267,7 @@ func (f *Fleet) askReplay(ctx context.Context, owner, turn uuid.UUID, node strin
 		return replayPage{}, "", err
 	}
 	if !answered {
-		reach, err := f.absent(ctx, node)
-		return replayPage{}, reach, err
+		return replayPage{}, f.absent(ctx, node), nil
 	}
 	switch rep.Answer {
 	case AnswerDone:
