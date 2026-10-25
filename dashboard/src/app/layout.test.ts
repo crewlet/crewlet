@@ -11,7 +11,7 @@
  */
 
 import { describe, expect, test } from "vitest";
-import { density, size } from "@crewlethq/tokens";
+import { density, size, spacing } from "@crewlethq/tokens";
 import {
   ASSISTANT_MAX,
   ASSISTANT_MIN,
@@ -24,6 +24,7 @@ import {
   SECTION_COLUMN_MIN,
   assistantColumnMin,
   assistantMaxWidth,
+  assistantOccupied,
   assistantShape,
   assistantTrack,
   columnWidth,
@@ -131,5 +132,21 @@ describe("how far a reader may drag it", () => {
     expect(ASSISTANT_MIN).toBeLessThanOrEqual(ASSISTANT_WIDTH);
     expect(ASSISTANT_WIDTH).toBeLessThanOrEqual(ASSISTANT_MAX);
     expect([ASSISTANT_MIN, ASSISTANT_WIDTH, ASSISTANT_MAX]).toEqual([360, 420, 640]);
+  });
+});
+
+describe("what the assistant takes from the window's end edge, for the toast stack", () => {
+  const scale = densityScale("normal");
+
+  test("a column or an overlay takes its width and its inset; a sheet takes none", () => {
+    expect(assistantOccupied("column", 420, 1440, scale)).toBe(420 + inset);
+    expect(assistantOccupied("overlay", 420, 1100, scale)).toBe(420 + inset);
+    expect(assistantOccupied("sheet", 420, 390, scale)).toBe(0);
+  });
+
+  test("an overlay on a narrow window is drawn narrower than its width, and takes only that", () => {
+    // The kit leaves a strip of the page (`spacing.10`) and both insets in view.
+    const strip = Number.parseFloat(spacing["10"]);
+    expect(assistantOccupied("overlay", 640, 700, scale)).toBe(700 - strip - 2 * inset + inset);
   });
 });

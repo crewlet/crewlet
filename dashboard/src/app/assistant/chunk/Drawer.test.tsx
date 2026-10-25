@@ -109,7 +109,7 @@ function mount() {
                 onClose={() => {}}
                 initialFocus="composer"
                 name="Ada Lovelace"
-                modal={false}
+                shape="column"
               />
             </LayerHost>
           </ToastProvider>
