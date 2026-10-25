@@ -780,18 +780,17 @@ object is garbage from then on. Instead one data node at a time — the
 judged against the replicated estate the data node holds:
 
 - **Collection, hourly.** It pins the estate (a barrier on the log of every
-  domain that declares a table naming objects — the tracker's and the code
-  log — so it reads every row committed when it began), lists the store, and deletes
-  every object **stored more than a day ago, whose key was minted more than a
-  day ago, that no row —
+  domain that declares a table naming objects — the tracker's, the code log
+  and the artifacts log — so it reads every row committed when it began),
+  lists the store, and deletes every object **stored more than a day ago,
+  whose key was minted more than a day ago, that no row —
   [live, retired or derived](#live-retired-and-derived-references) — names**.
-  The collector reads the rows of every domain that declares a table
-  naming objects, whichever of the engine's own backends the company runs — a
-  company that moved its tracker off native and keeps its knowledge base here
-  still holds its project files' rows, and their objects are still audited and
-  kept. A company that runs none of the engine's own backends runs no state
-  log, and so no collector: nothing is deleted or audited until it runs one of
-  them again. It deletes while the listing goes on: on S3, each batch of up
+  The collector reads the rows of every domain that declares a table naming
+  objects, whichever of the engine's own backends the company runs: every
+  data node applies every domain's log, so a company that moved its tracker
+  off native, or runs none of the engine's own backends, still holds its
+  project files' rows, and their objects are still audited and kept. It
+  deletes while the listing goes on: on S3, each batch of up
   to 500 objects it judged in one `DeleteObjects` request, one batch at a
   time; on `nats`, or on a gateway that refuses that request, each object on
   its own, up to sixteen at a time — [How far it scales](#how-far-it-scales)
@@ -851,11 +850,11 @@ judged against the replicated estate the data node holds:
   listing passes over is then asked about by name,
   and a range whose second listing fails too is unanswered, file by file.
 
-A node whose copy of the tracker or of the code log is out of service does
-not hold the duty at all — its passes would read the rows that name the files
-(a project's files, a push's pack) through a read that copy refuses — and gives
-the duty back if it holds it, so a node whose copies serve takes it at its next
-minute's turn
+A node whose copy of the tracker, of the code log or of the artifacts log is
+out of service does not hold the duty at all — its passes would read the rows
+that name the files (a project's files, a push's pack, an artifact's files)
+through a read that copy refuses — and gives the duty back if it holds it, so
+a node whose copies serve takes it at its next minute's turn
 ([singleton duties](seat-ownership.md#singleton-duties)).
 
 A pass that fails is tried again ten minutes later. The duty records each pass

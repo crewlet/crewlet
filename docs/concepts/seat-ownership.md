@@ -580,10 +580,12 @@ Without a placement host — the single-node case — the answer is always yes: 
 
 A duty whose one tick can outlast its lease — the embedding duty's index training, the object collector's audit of a large store, a code-retention pass over a long backlog of purges — **renews the lease while the tick runs**, four times a lease, and the tick is stopped the moment a renewal answers that another node holds the duty, or once none has confirmed it for the lease less one renewal, past which another node could hold it. A renewal the store does not answer — refused, or held on to while the coordination stream's leader moves — is neither: the last confirmation still keeps every other node out, and no renewal waits longer than one renewal interval for its answer, so the next is asked inside that window and one unanswered renewal costs the tick nothing; a tick stopped either way publishes or records nothing more.
 
-A duty that decides from a domain's rows — the trim (the evictions the
-tracker's, the knowledge base's and the code log's rows hold), the embedding
-duty (the tracker's, the knowledge base's and the vectors' rows), the
-object collector (the tracker's and the code log's, whose rows name the
+A duty that decides from a domain's rows — the trim (the evictions and the
+arbitration anchors in the rows of every log that claims identity: the
+tracker's, the knowledge base's, the identity estate's, the artifacts log's,
+the artifact datastore's and the code log's), the embedding duty (the
+tracker's, the knowledge base's and the vectors' rows), the object collector
+(the tracker's, the code log's and the artifacts log's, whose rows name the
 objects it collects) and the code-retention duty (the code log's, whose rows
 say which repositories are due a purge) — is declined by a node whose copy of
 any of them is out of service: it does not claim it, it gives the duty's lease back if it
