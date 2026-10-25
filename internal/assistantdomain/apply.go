@@ -193,6 +193,9 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 		return 0, fmt.Errorf("assistantdomain: the record at %s: %w", rec.Position, err)
 	}
 	switch record.Subject.Kind {
+	case KindBarrier:
+		// THE READ INDEX'S OWN APPEND writes no row on any node.
+		return 0, nil
 	case KindEviction:
 		return applyEviction(ctx, tx, c, payload)
 	case KindGeneration:

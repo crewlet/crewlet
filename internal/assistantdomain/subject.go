@@ -66,9 +66,13 @@ const (
 	// KindGeneration is a reanchor's record, create-only at an expectation
 	// of zero.
 	KindGeneration ObjectKind = "generation"
+
+	// KindBarrier is the read index's payload-free append, on ONE subject
+	// for the whole domain. The only kind that writes no row on any node.
+	KindBarrier ObjectKind = "barrier"
 )
 
-// ObjectKinds are the six, and THE ORDER IS LOAD-BEARING.
+// ObjectKinds are the seven, and THE ORDER IS LOAD-BEARING.
 //
 // The framework's conformance suite publishes the FIRST THREE a domain
 // declares, twice each, in order, so the declaration decides what the suite
@@ -78,6 +82,7 @@ const (
 // so any other order would certify a no-op.
 var ObjectKinds = []ObjectKind{
 	KindConversation, KindTurn, KindProposal, KindOwner, KindEviction, KindGeneration,
+	KindBarrier,
 }
 
 // Valid reports whether a kind off the wire is one this build knows.
@@ -86,11 +91,12 @@ func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
 // Arbitrated reports whether writes on this kind carry a per-subject
 // expectation, and so whether the framework keeps an anchor for it.
 //
-// EVERY KIND DOES. The additive records on a turn (a message, a step, a card)
-// carry no expectation of their own, and they move the anchor the turn's park
-// and close are arbitrated against, which costs those at most one round. This
-// log has no barrier: no read on it is linearizable ([Domain]).
-func (k ObjectKind) Arbitrated() bool { return k.Valid() }
+// EVERY KIND BUT THE BARRIER DOES. The additive records on a turn (a message, a
+// step, a card) carry no expectation of their own, and they move the anchor the
+// turn's park and close are arbitrated against, which costs those at most one
+// round. The barrier shares one subject across the whole domain, so an
+// expectation there would serialise every linearizable read behind every other.
+func (k ObjectKind) Arbitrated() bool { return k.Valid() && k != KindBarrier }
 
 // InstallsGate reports a kind whose unknown version must STOP the applier
 // rather than be filed for later. A conversation's purge and an owner's
@@ -127,6 +133,9 @@ func OwnerSubject(owner uuid.UUID) Subject {
 // the readmission that inverts it arbitrate against each other and nothing
 // else.
 func EvictionSubject(nodeID string) Subject { return Subject{Kind: KindEviction, ID: nodeID} }
+
+// BarrierSubject is the read index's one subject.
+func BarrierSubject() Subject { return Subject{Kind: KindBarrier} }
 
 // GenerationSubject names one generation of the stream, which a reanchor
 // claims create-only.
@@ -165,9 +174,9 @@ func (s Subject) Validate() error {
 		return fmt.Errorf("assistantdomain: subject kind %q carries a separator "+
 			"or a wildcard, so the kind and the id could not be told apart", s.Kind)
 	}
-	if s.ID == "" {
-		return fmt.Errorf("assistantdomain: a %s subject needs an id: no kind on "+
-			"this log has exactly one object", s.Kind)
+	if s.ID == "" && s.Kind != KindBarrier {
+		return fmt.Errorf("assistantdomain: a %s subject needs an id: only the "+
+			"barrier has exactly one object on this log", s.Kind)
 	}
 	if strings.ContainsAny(s.ID, " \t\r\n*>/") {
 		return fmt.Errorf("assistantdomain: subject id %q carries whitespace, a "+

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE TYPED PAYLOADS, one per (kind, op).
@@ -273,6 +274,10 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[Eviction](rec)
 	case k == KindGeneration && op == OpGeneration:
 		return decodePayload[Generation](rec)
+	case k == KindBarrier && op == OpBarrier:
+		// THE ONE PAYLOAD-FREE RECORD, and nil is its value rather than an
+		// absence: the applier has a case for it that writes nothing.
+		return nil, nil
 	}
 	return nil, fmt.Errorf("assistantdomain: no payload shape for (%s, %s): a "+
 		"record's kind and op together name its payload, and a pair this build "+
@@ -291,4 +296,28 @@ func decodePayload[T any](rec MutationRecord) (T, error) {
 			rec.Op, rec.Subject, err)
 	}
 	return out, nil
+}
+
+// EncodeBarrier renders the read index's payload-free append: the framework
+// owns when a barrier goes out, the domain owns what a record on its log looks
+// like.
+//
+// AN OP ID IS REFUSED: it would become the broker's message id, and a repeat
+// inside the duplicate window is answered from the dedupe cache with no quorum
+// round trip, which is the one claim a barrier must never fake.
+func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
+	if env.Kind != statelog.BarrierKind {
+		return nil, fmt.Errorf("assistantdomain: %q is not a barrier envelope", env.Kind)
+	}
+	if env.OpID != "" {
+		return nil, fmt.Errorf("assistantdomain: a barrier carries no op id and " +
+			"this one has one: an op id becomes a message id, and a duplicate " +
+			"acknowledgement is served with no quorum round trip at all")
+	}
+	return Encode(MutationRecord{
+		RecordEnvelope: RecordEnvelope{
+			Subject: BarrierSubject(), Op: OpBarrier,
+			Scope: ScopeSet{Subject: true}, Gen: env.Gen,
+		},
+	})
 }

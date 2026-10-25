@@ -113,6 +113,9 @@ const (
 
 	// OpGeneration is a reanchor's record.
 	OpGeneration OpKind = "generation"
+
+	// OpBarrier is the read index's payload-free append.
+	OpBarrier OpKind = "barrier"
 )
 
 // OpKinds are every op, in the order they are documented.
@@ -122,7 +125,7 @@ var OpKinds = []OpKind{
 	OpMessageRecorded, OpStepRecorded, OpCardRecorded, OpProposalCreated,
 	OpProposalApproved, OpProposalExecuting, OpProposalDeclined, OpProposalExpired,
 	OpProposalStale, OpProposalApplying, OpProposalSettled, OpProposalUnknown,
-	OpProposalRetried, OpOwnerErased, OpEviction, OpGeneration,
+	OpProposalRetried, OpOwnerErased, OpEviction, OpGeneration, OpBarrier,
 }
 
 // Valid reports whether an op off the wire is one this build knows.
@@ -174,10 +177,10 @@ func (e RecordEnvelope) InstallsGate() bool {
 	return e.Subject.Kind.InstallsGate() || e.Op.installsGate()
 }
 
-// readByEveryBuild reports a record every build must read: a gate and a
-// reanchor's generation. Neither may carry a versioned field.
+// readByEveryBuild reports a record every build must read: a gate, the barrier
+// and a reanchor's generation. None may carry a versioned field.
 func (e RecordEnvelope) readByEveryBuild() bool {
-	return e.InstallsGate() || e.Op == OpGeneration
+	return e.InstallsGate() || e.Op == OpBarrier || e.Op == OpGeneration
 }
 
 // MutationRecord is one committed mutation: the envelope, the typed payload as

@@ -239,6 +239,11 @@ func subjectPath(s Subject) string {
 		}
 		return ScopeTerm{Kind: kind, Conversation: conversation, ID: child}.Path()
 	}
+	if s.Kind == KindBarrier {
+		// THE FRAMEWORK'S OWN SCOPE, so a barrier never intersects any
+		// read's closure.
+		return statelog.BarrierScope
+	}
 	// A GATE IS ABOUT THE WHOLE DOMAIN, and so is a kind this build does
 	// not know: anything narrower would be a claim the record never made.
 	return pathDomain
