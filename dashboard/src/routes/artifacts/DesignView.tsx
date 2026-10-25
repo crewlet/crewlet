@@ -441,7 +441,7 @@ function Design({
 }
 
 /** How long the print view stays after the browser says the print is over. */
-const PRINT_TEARDOWN_MS = 1500;
+export const PRINT_TEARDOWN_MS = 1500;
 
 /**
  * One board printed: a view over the whole window holding the board alone,

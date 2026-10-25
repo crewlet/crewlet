@@ -13,6 +13,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { keyedWrite } from "~/lib/keyedWrite.ts";
 import { invalidShareWords } from "~/lib/artifacts/words.ts";
 import type { ArtifactDetail } from "~/protocol/index.ts";
+import { eventually } from "~/test/settle.ts";
 
 vi.mock("~/lib/useQuery.ts", () => ({ useQuery: vi.fn() }));
 vi.mock("~/lib/keyedWrite.ts", async () => {
@@ -76,7 +77,7 @@ test("a share the engine marks invalid is listed with why, and Remove withdraws 
   expect(within(row).getByText("No access")).toBeTruthy();
   expect(within(row).queryByRole("combobox")).toBeNull();
   fireEvent.click(within(row).getByRole("button", { name: /^Remove / }));
-  await vi.waitFor(() => expect(keyedWrite).toHaveBeenCalled());
+  await eventually(() => expect(keyedWrite).toHaveBeenCalled());
   const req = vi.mocked(keyedWrite).mock.calls[0]![0];
   expect(req.method).toBe("DELETE");
   expect(req.path).toBe(`/artifacts/${ID}/shares/seat:token:maya`);

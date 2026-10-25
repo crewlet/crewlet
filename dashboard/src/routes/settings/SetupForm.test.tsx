@@ -34,6 +34,7 @@ import {
   vendorLink,
 } from "./SetupForm.tsx";
 import type { SetupRequirement, SetupToolState, SetupVerdict } from "~/protocol/index.ts";
+import { eventually } from "~/test/settle.ts";
 
 function req(over: Partial<SetupRequirement>): SetupRequirement {
   return {
@@ -301,7 +302,7 @@ test("untouched dots are not submitted", async () => {
   );
   fireEvent.change(screen.getByLabelText("Instance"), { target: { value: "https://gitlab.com" } });
   fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
-  await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+  await eventually(() => expect(spy).toHaveBeenCalled());
 
   const body = JSON.parse(String(sent(spy)?.body)) as {
     values: Record<string, string>;
@@ -360,7 +361,7 @@ test("a shared field appears once and is submitted to both surfaces", async () =
   // stopped waiting before the second block was written. See [sent].
   const writes = () =>
     spy.mock.calls.filter(([, init]) => String(init?.method ?? "GET").toUpperCase() !== "GET");
-  await vi.waitFor(() => expect(writes().length).toBe(2));
+  await eventually(() => expect(writes().length).toBe(2));
   for (const [, init] of writes()) {
     const body = JSON.parse(String(init?.body)) as { values: Record<string, string> };
     expect(body.values.email).toBe("ops@example.com");
@@ -443,7 +444,7 @@ test("a hidden field is submitted from its default and never rendered", async ()
   expect(screen.queryByText("Accept Datadog deliveries")).toBeNull();
 
   fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
-  await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+  await eventually(() => expect(spy).toHaveBeenCalled());
   const body = JSON.parse(String(sent(spy)?.body)) as {
     values: Record<string, string>;
   };
@@ -516,7 +517,7 @@ test("submitting asks for the mint and sends only what was filled in", async () 
     />,
   );
   fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
-  await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+  await eventually(() => expect(spy).toHaveBeenCalled());
 
   const init = sent(spy);
   const body = JSON.parse(String(init?.body)) as {
@@ -927,7 +928,7 @@ test("an untouched credential is not written", async () => {
   );
   fireEvent.change(screen.getByLabelText(/Owner tag key/), { target: { value: "owner" } });
   fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
-  await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+  await eventually(() => expect(spy).toHaveBeenCalled());
 
   const body = JSON.parse(String(sent(spy)?.body)) as {
     values: Record<string, string>;
@@ -1403,7 +1404,7 @@ test("typing after the dots submits only what was typed", async () => {
   // What an insert at the caret produces when the box is genuinely empty.
   fireEvent.change(box, { target: { value: "brand-new-token" } });
   fireEvent.click(screen.getByRole("button", { name: /save|connect/i }));
-  await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+  await eventually(() => expect(spy).toHaveBeenCalled());
 
   const values = sent.values as Record<string, string>;
   expect(values.webhook_token).toBe("brand-new-token");
@@ -1969,7 +1970,7 @@ test("only the section that changed is written", async () => {
   if (!cto) throw new Error("the second seat has no field");
   fireEvent.change(cto, { target: { value: "#leadership" } });
   fireEvent.click(screen.getByRole("button", { name: /Save|Connect/ }));
-  await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+  await eventually(() => expect(spy).toHaveBeenCalled());
 
   expect(writes).toHaveLength(1);
 });
@@ -2006,7 +2007,7 @@ test("a save that changed nothing writes nothing", async () => {
     />,
   );
   fireEvent.click(screen.getByRole("button", { name: /Save|Connect/ }));
-  await vi.waitFor(() => expect(screen.getByText(/Nothing to submit/)).toBeTruthy());
+  await eventually(() => expect(screen.getByText(/Nothing to submit/)).toBeTruthy());
   const posts = spy.mock.calls.filter(
     ([, init]) => (init as RequestInit | undefined)?.method === "POST",
   );
@@ -2055,12 +2056,12 @@ test("saving a connected app does not say it connected", async () => {
   );
   choose(screen.getByLabelText("Fallback seat"), /sre-lead/);
   fireEvent.click(screen.getByRole("button", { name: /Save|Connect/ }));
-  await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+  await eventually(() => expect(spy).toHaveBeenCalled());
 
   // `getAllByText`, because uilet's toaster says it TWICE on purpose: once in
   // the visible message and once in the live region a screen reader hears. The
   // invariant is which sentence it is, not how many nodes carry it.
-  await vi.waitFor(() =>
+  await eventually(() =>
     expect(screen.getAllByText(/Datadog settings saved/).length).toBeGreaterThan(0),
   );
   expect(screen.queryAllByText(/Datadog connected/)).toHaveLength(0);
@@ -2497,7 +2498,7 @@ test("a form mid-write refuses Cancel, and otherwise takes it", async () => {
   expect(closed).toHaveBeenCalledTimes(1);
 
   fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
-  await vi.waitFor(() => expect(writing).toBe(true));
+  await eventually(() => expect(writing).toBe(true));
 
   // AND NOW IT DOES NOT, and says why rather than just going grey.
   expect(cancel().getAttribute("aria-disabled")).toBe("true");

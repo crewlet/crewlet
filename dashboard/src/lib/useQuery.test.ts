@@ -12,7 +12,7 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import { useQuery } from "./useQuery.ts";
 import { useClient, useConnection } from "./store-hooks.ts";
-import { settled } from "~/test/settle.ts";
+import { eventually, settled } from "~/test/settle.ts";
 
 vi.mock("./store-hooks.ts", () => ({
   useClient: vi.fn(),
@@ -61,11 +61,11 @@ afterEach(() => {
 test("a query that watches focus re-asks when the tab comes back", async () => {
   const query = asked();
   renderHook(() => useQuery("integrations", undefined, { refetchOnFocus: true }));
-  await vi.waitFor(() => expect(query).toHaveBeenCalledTimes(1));
+  await eventually(() => expect(query).toHaveBeenCalledTimes(1));
 
   visible(false);
   visible(true);
-  await vi.waitFor(() => expect(query).toHaveBeenCalledTimes(2));
+  await eventually(() => expect(query).toHaveBeenCalledTimes(2));
 });
 
 // AND A HIDDEN TAB DOES NOT.
@@ -75,7 +75,7 @@ test("a query that watches focus re-asks when the tab comes back", async () => {
 test("going away does not ask", async () => {
   const query = asked();
   renderHook(() => useQuery("integrations", undefined, { refetchOnFocus: true }));
-  await vi.waitFor(() => expect(query).toHaveBeenCalledTimes(1));
+  await eventually(() => expect(query).toHaveBeenCalledTimes(1));
 
   visible(false);
   await settled(() => query.mock.calls.length);
@@ -89,7 +89,7 @@ test("going away does not ask", async () => {
 test("focus is opt-in", async () => {
   const query = asked();
   renderHook(() => useQuery("integrations"));
-  await vi.waitFor(() => expect(query).toHaveBeenCalledTimes(1));
+  await eventually(() => expect(query).toHaveBeenCalledTimes(1));
 
   visible(false);
   visible(true);
@@ -125,7 +125,7 @@ test("a write from this tab asks the questions it moved again, and no others", a
   const query = asked();
   renderHook(() => useQuery("work_items", {}));
   renderHook(() => useQuery("pages", {}));
-  await vi.waitFor(() => expect(query).toHaveBeenCalledTimes(2));
+  await eventually(() => expect(query).toHaveBeenCalledTimes(2));
   act(() => session.written("tracker", "CREWLET_TRACKER_LOG@1:5", []));
   await settled(() => query.mock.calls.length);
   expect(query).toHaveBeenCalledTimes(3);
@@ -169,6 +169,6 @@ test("a question answered null is not loading", async () => {
   vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   const { result } = renderHook(() => useQuery("config"));
   expect(result.current.loading).toBe(true);
-  await vi.waitFor(() => expect(result.current.loading).toBe(false));
+  await eventually(() => expect(result.current.loading).toBe(false));
   expect(result.current.data).toBeNull();
 });

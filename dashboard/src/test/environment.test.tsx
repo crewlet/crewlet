@@ -22,13 +22,24 @@
  *
  * So all three are held here, by what they produce rather than by reading the
  * config files: an offset the zone must give, a component the kit must render
- * with its own class names, and the bounds a wait and a case actually get.
+ * with its own class names, and the bounds a wait, a case and a hook actually
+ * get.
  */
 
 import { cleanup, getConfig, render, screen } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  onTestFinished,
+  test,
+  TestRunner,
+  vi,
+} from "vitest";
 import { Button } from "@crewlethq/ui";
-import { CASE_BOUND_MS, WAIT_BOUND_MS } from "./bounds.ts";
+import { CASE_BOUND_MS, HOOK_BOUND_MS, WAIT_BOUND_MS } from "./bounds.ts";
+import { eventually } from "./settle.ts";
 
 afterEach(cleanup);
 
@@ -55,12 +66,40 @@ test("a kit component loads with its stylesheet and renders its own classes", ()
   expect(button.className).toContain("crewlet-btn--secondary");
 });
 
-test("a wait and a case get the bounds the suite sized, the wait well inside the case", ({
-  task,
-}) => {
-  expect(getConfig().asyncUtilTimeout).toBe(WAIT_BOUND_MS);
-  expect(task.timeout).toBe(CASE_BOUND_MS);
-  // A hung wait must fail as itself, with the DOM it searched, rather than
-  // be overtaken by the case's bound — and a case holds several waits.
-  expect(3 * WAIT_BOUND_MS).toBeLessThanOrEqual(CASE_BOUND_MS);
+describe("the bounds", () => {
+  // A hook registered with no bound of its own, so the runner records the
+  // suite's: what the case below reads.
+  beforeEach(() => {});
+
+  test("a wait, a case and a hook get the bounds the suite sized, the wait well inside the case", ({
+    task,
+  }) => {
+    expect(getConfig().asyncUtilTimeout).toBe(WAIT_BOUND_MS);
+    expect(task.timeout).toBe(CASE_BOUND_MS);
+    // A HOOK'S BOUND is read where the runner keeps it: Vitest stamps every
+    // `beforeEach` it registers with the bound it was registered under, under
+    // a registered symbol, because the hook's clean-up runs under the same
+    // one. No public call reports it, and a release that stopped stamping it
+    // would fail this line by reading nothing rather than pass it. The bound
+    // sized happens to be Vitest's own default today (`bounds.ts` says why),
+    // so this holds the figure in effect rather than the line that sets it: a
+    // configuration naming another, or a release moving the default, fails it.
+    const [hook] = TestRunner.getSuiteHooks(task.suite!).beforeEach;
+    expect((hook as unknown as Record<symbol, unknown>)[Symbol.for("VITEST_CLEANUP_TIMEOUT")]).toBe(
+      HOOK_BOUND_MS,
+    );
+    // A hung wait must fail as itself, with the DOM it searched, rather than
+    // be overtaken by the case's bound — and a case holds several waits.
+    expect(3 * WAIT_BOUND_MS).toBeLessThanOrEqual(CASE_BOUND_MS);
+  });
+
+  // AND VITEST'S OWN WAIT, which a case on a faked clock waits with, gets the
+  // same bound rather than its one-second default.
+  test("Vitest's wait, through eventually, gets the wait's bound", async () => {
+    const wait = vi.spyOn(vi, "waitFor");
+    onTestFinished(() => wait.mockRestore());
+    await expect(eventually(() => "held")).resolves.toBe("held");
+    expect(wait).toHaveBeenCalledOnce();
+    expect(wait.mock.calls[0]![1]).toEqual({ timeout: WAIT_BOUND_MS });
+  });
 });

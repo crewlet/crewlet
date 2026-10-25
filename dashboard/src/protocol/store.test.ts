@@ -15,6 +15,7 @@ import { LiveSocket, QueryError } from "./socket.ts";
 import { nodeCountLabel } from "../lib/format.ts";
 import type { EventEnvelope, FeedRow, OverlayRow } from "./types.ts";
 import { healthFrame } from "~/test/health.ts";
+import { eventually } from "~/test/settle.ts";
 
 function feedRow(id: string, over: Partial<FeedRow> = {}): FeedRow {
   return {
@@ -599,7 +600,7 @@ describe("a live call's heavy fields", () => {
         },
       }),
     );
-    await vi.waitFor(() =>
+    await eventually(() =>
       expect(store.state.agents[0]?.live_call?.round_narration).toHaveLength(4),
     );
   });
@@ -752,11 +753,11 @@ describe("a live_call answer the socket delivers late", () => {
 
     // Read at 10: narration 3 is taken, and 4 is still missing.
     answer(1, call(10, 3, whole(3)));
-    await vi.waitFor(() => expect(ask).toHaveBeenCalledTimes(2));
+    await eventually(() => expect(ask).toHaveBeenCalledTimes(2));
     expect(store.state.agents[0]?.live_call?.round_narration).toHaveLength(3);
 
     answer(2, call(12, 4, whole(4)));
-    await vi.waitFor(() =>
+    await eventually(() =>
       expect(store.state.agents[0]?.live_call?.round_narration).toHaveLength(4),
     );
     expect(store.state.agents[0]?.live_call_seq).toBe(12);
@@ -766,7 +767,7 @@ describe("a live_call answer the socket delivers late", () => {
     frame([call(15, 6, {})]);
     expect(ask).toHaveBeenCalledTimes(3);
     answer(3, call(15, 6, whole(6)));
-    await vi.waitFor(() =>
+    await eventually(() =>
       expect(store.state.agents[0]?.live_call?.round_narration).toHaveLength(6),
     );
     // A TASK BOUNDARY, NOT A WAIT FOR TIME: whether to ask again is decided in

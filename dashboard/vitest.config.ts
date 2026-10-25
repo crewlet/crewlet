@@ -1,7 +1,7 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
-import { CASE_BOUND_MS } from "./src/test/bounds.ts";
+import { CASE_BOUND_MS, HOOK_BOUND_MS } from "./src/test/bounds.ts";
 
 export default defineConfig({
   plugins: [react()],
@@ -13,10 +13,13 @@ export default defineConfig({
     globals: false,
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     setupFiles: ["./src/test/setup.ts"],
-    // A HANG DETECTOR, sized in `src/test/bounds.ts` with the wait's bound it
-    // has to stay above, because a case's duration is CPU work over the share
-    // of a CPU its worker gets on a machine the gate shares.
+    // HANG DETECTORS, sized in `src/test/bounds.ts` from what a case and a
+    // hook were measured to take beside `go build` and `go vet`, because a
+    // duration is CPU work over the share of a CPU its worker gets on a
+    // machine the gate shares. No case or hook names one of its own
+    // (`src/test/budgets.test.ts`).
     testTimeout: CASE_BOUND_MS,
+    hookTimeout: HOOK_BOUND_MS,
     // THE SUITE RUNS IN A ZONE WITH AN OFFSET AND A DST CHANGE, because the
     // default is the machine's and every machine that runs this — CI, a
     // container, a release box — is UTC. Under UTC a whole family of date

@@ -11,6 +11,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { DisconnectDialog } from "./DisconnectDialog.tsx";
+import { eventually } from "~/test/settle.ts";
 
 type Sent = { method: string; path: string; body: unknown };
 
@@ -387,12 +388,12 @@ test("a surface that is busy is retried rather than abandoning the rest", async 
 
   // THE WAIT IS SAID, and not as an error: the disconnect has not failed, it
   // has not started.
-  await vi.waitFor(() =>
+  await eventually(() =>
     expect(screen.getByText("Waiting for Atlassian to finish provisioning.")).toBeTruthy(),
   );
   await vi.advanceTimersByTimeAsync(10_000);
 
-  await vi.waitFor(() => expect(done).toHaveBeenCalled());
+  await eventually(() => expect(done).toHaveBeenCalled());
   const asked = sent.filter((s) => s.method === "DELETE").map((s) => s.path);
   for (const kind of ["jira", "confluence", "atlassian"]) {
     expect(asked.some((p) => p.endsWith(`/${kind}`))).toBe(true);

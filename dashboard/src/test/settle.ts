@@ -34,6 +34,9 @@
  */
 
 import { act } from "@testing-library/react";
+import { vi } from "vitest";
+
+import { WAIT_BOUND_MS } from "./bounds.ts";
 
 /**
  * The runtime's own timer, taken when this module loads, before any case can
@@ -58,8 +61,29 @@ export async function afterMicrotasks(): Promise<void> {
  */
 export async function settled(...asked: (() => number)[]): Promise<void> {
   const counts = () => asked.map((count) => count()).join(",");
-  for (let seen: string | null = null; seen !== counts(); ) {
+  for (let seen: string | null = null; seen !== counts();) {
     seen = counts();
     await afterMicrotasks();
   }
+}
+
+/**
+ * Vitest's own wait, held to the suite's wait bound: looks at `condition`
+ * until it returns without throwing, and answers what it returned.
+ *
+ * THE WAIT FOR A CASE ON A FAKED CLOCK. Testing Library's `waitFor` arms its
+ * polls and its bound on whatever `setTimeout` is installed, so on a faked
+ * one it never looks again and never gives up; `vi.waitFor` keeps the
+ * runtime's own timers, and moves a faked clock on by its interval at every
+ * look.
+ *
+ * NEVER CALLED BARE. `vi.waitFor` gives up after one second unless told
+ * otherwise, which is a budget beside the suite's that nobody here chose.
+ * With React's tasks landing late, as on a loaded machine, the hook suites
+ * that waited with it took 1.5 to 1.9 s to draw an answer their stub had
+ * already given, and the default failed them. `budgets.test.ts` refuses
+ * `vi.waitFor`, `vi.waitUntil` and `expect.poll` anywhere but here.
+ */
+export function eventually<T>(condition: () => T | Promise<T>): Promise<T> {
+  return vi.waitFor(condition, { timeout: WAIT_BOUND_MS });
 }

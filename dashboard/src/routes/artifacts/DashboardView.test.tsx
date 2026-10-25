@@ -306,14 +306,25 @@ test("a dataset the reader may not read draws the refusal and no row", async () 
 });
 
 test("a read the budget refused is asked again once the wait it named is over", async () => {
+  // THE WAIT IS ON THE CASE'S CLOCK: the refusal names one second, which is
+  // run out rather than slept, so "once it is over" is held exactly.
+  // Waited for by settling, not by `eventually`, whose `vi.waitFor` moves a
+  // faked clock on at every look and would spend part of the wait itself.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   budgetSpent = true;
   mount(dataStore());
-  await waitFor(() => expect(reads.spend).toBe(1));
+  await settled(
+    () => reads.spend ?? 0,
+    () => reads.total ?? 0,
+  );
+  expect(reads.spend).toBe(1);
   expect(within(widget("seats")).queryByText("ana")).toBeNull();
-  await waitFor(() => expect(within(widget("seats")).getByText("ana")).toBeTruthy(), {
-    timeout: 3000,
-  });
+  await act(() => vi.advanceTimersByTimeAsync(999));
+  expect(reads.spend).toBe(1);
+  await act(() => vi.advanceTimersByTimeAsync(1));
+  await settled(() => reads.spend ?? 0);
   expect(reads.spend).toBe(2);
+  expect(within(widget("seats")).getByText("ana")).toBeTruthy();
 });
 
 // A READ THAT FAILED OUTSIDE THE ANSWER'S STATUSES is said in a reader's

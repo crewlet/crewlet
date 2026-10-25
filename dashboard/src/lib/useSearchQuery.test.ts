@@ -16,7 +16,7 @@ import { SEARCH_QUERY_MAX } from "~/contract/wire.ts";
 import { useSearchQuery } from "./useSearchQuery.ts";
 import { useClient, useConnection } from "./store-hooks.ts";
 import { useViewer } from "./viewer.ts";
-import { settled } from "~/test/settle.ts";
+import { eventually, settled } from "~/test/settle.ts";
 
 vi.mock("./store-hooks.ts", () => ({
   useClient: vi.fn(),
@@ -44,7 +44,7 @@ test("a phrase inside the bound is asked as useQuery asks it", async () => {
   const { result } = renderHook(() =>
     useSearchQuery("work_search", { q: "x".repeat(SEARCH_QUERY_MAX), mode: "hybrid" }),
   );
-  await vi.waitFor(() => expect(result.current.data).not.toBeNull());
+  await eventually(() => expect(result.current.data).not.toBeNull());
   expect(query).toHaveBeenCalledTimes(1);
   expect(query.mock.calls[0]![0]).toBe("work_search");
   expect(result.current.tooLong).toBeNull();
@@ -70,9 +70,9 @@ test("growing past the bound drops the answer the shorter phrase got", async () 
     ({ q }: { q: string }) => useSearchQuery("work_search", { q }),
     { initialProps: { q: "auth" } },
   );
-  await vi.waitFor(() => expect(result.current.data).not.toBeNull());
+  await eventually(() => expect(result.current.data).not.toBeNull());
   rerender({ q: "auth ".repeat(SEARCH_QUERY_MAX) });
-  await vi.waitFor(() => expect(result.current.data).toBeNull());
+  await eventually(() => expect(result.current.data).toBeNull());
   expect(result.current.tooLong).not.toBeNull();
 });
 
@@ -84,7 +84,7 @@ test("a search in an app the reader lacks is never sent, and says which app", as
   const query = answering({ hits: [] }, ["knowledge"]);
   const tasks = renderHook(() => useSearchQuery("work_search", { q: "auth" }));
   const pages = renderHook(() => useSearchQuery("knowledge", { q: "auth" }));
-  await vi.waitFor(() => expect(query).toHaveBeenCalledTimes(1));
+  await eventually(() => expect(query).toHaveBeenCalledTimes(1));
   expect(query.mock.calls[0]![0]).toBe("knowledge");
   expect(tasks.result.current.withheld).toBe(
     "Search needs Tracker access. An admin can give it to you.",

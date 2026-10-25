@@ -12,7 +12,8 @@ import { ToastProvider } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
 import type { ArtifactDetail } from "~/protocol/index.ts";
-import { DesignView } from "./DesignView.tsx";
+import { afterMicrotasks } from "~/test/settle.ts";
+import { DesignView, PRINT_TEARDOWN_MS } from "./DesignView.tsx";
 
 vi.mock("./FrameView.tsx", async () => {
   const { useEffect } = await import("react");
@@ -118,6 +119,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   globalThis.ResizeObserver = realResizeObserver;
   location.hash = "";
 });
@@ -280,14 +282,24 @@ test("a board's print shows that board alone at its own size, prints, and goes a
     }
   });
   removal.observe(document.body, { childList: true });
+  // THE MOMENT IT OUTLIVES THE PRINT is the view's own timer, run on the
+  // case's clock: not gone a millisecond early, and gone on time.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   act(() => {
     window.dispatchEvent(new Event("afterprint"));
   });
   // NOT AT ONCE: the browser is still taking the board's frame into the print.
-  expect(document.querySelector(".design-print-view")).not.toBeNull();
-  await waitFor(() => expect(document.querySelector(".design-print-view")).toBeNull(), {
-    timeout: 3000,
+  act(() => {
+    vi.advanceTimersByTime(PRINT_TEARDOWN_MS - 1);
   });
+  expect(document.querySelector(".design-print-view")).not.toBeNull();
+  act(() => {
+    vi.advanceTimersByTime(1);
+  });
+  expect(document.querySelector(".design-print-view")).toBeNull();
+  // The observer's record of the removal is delivered in a microtask after
+  // it.
+  await afterMicrotasks();
   removal.disconnect();
   expect(atRemoval).toEqual([]);
   printed.mockRestore();

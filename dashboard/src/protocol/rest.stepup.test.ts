@@ -13,6 +13,7 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { rest, RestError, setStepUpConfirmer } from "./index.ts";
+import { eventually } from "~/test/settle.ts";
 
 interface Sent {
   method: string;
@@ -101,7 +102,7 @@ describe("a refused gesture, confirmed", () => {
     const confirmer = confirming(new Promise<boolean>((resolve) => (release = resolve)));
 
     const both = Promise.all([rest.post("/secrets/A", {}), rest.post("/secrets/B", {})]);
-    await vi.waitFor(() => expect(sent).toHaveLength(2));
+    await eventually(() => expect(sent).toHaveLength(2));
     release(true);
     await both;
 
@@ -172,7 +173,7 @@ describe("a refused gesture, not confirmed", () => {
     const pending = rest
       .request("POST", "/secrets/A", { body: {}, signal: controller.signal })
       .catch((e: unknown) => e);
-    await vi.waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1));
+    await eventually(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1));
     controller.abort();
     expect(((await pending) as Error).name).toBe("AbortError");
     // THE PERSON ANSWERS LATER, and the request that gave up is not replayed.

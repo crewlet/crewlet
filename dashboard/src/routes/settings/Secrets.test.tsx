@@ -22,7 +22,7 @@ import type { ReactElement } from "react";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
-import { afterMicrotasks } from "~/test/settle.ts";
+import { afterMicrotasks, eventually } from "~/test/settle.ts";
 
 /**
  * A screen renders inside the Router.
@@ -200,7 +200,7 @@ test("a stored value goes as the request body rather than wrapped in JSON", asyn
   fireEvent.change(screen.getByLabelText("Value"), { target: { value: 'glpat-"quoted"' } });
   fireEvent.click(screen.getByRole("button", { name: "Store" }));
 
-  await vi.waitFor(() => {
+  await eventually(() => {
     const write = spy.mock.calls.find(([, init]) => init?.method === "PUT");
     expect(write).toBeDefined();
     expect(String(write?.[0])).toContain("/secrets/NEW_TOKEN");
@@ -279,7 +279,7 @@ test("a secret nothing reads is removed without a second gesture", async () => {
   expect(screen.queryByRole("checkbox")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Remove" }));
 
-  await vi.waitFor(() => {
+  await eventually(() => {
     const gone = spy.mock.calls.find(([, init]) => init?.method === "DELETE");
     expect(gone).toBeDefined();
     expect(String(gone?.[0])).toContain("/secrets/DATADOG_WEBHOOK_TOKEN");
@@ -342,7 +342,7 @@ test("editing a secret asks for a new value and never receives the old one", asy
   fireEvent.change(screen.getByLabelText("New value"), { target: { value: "ghp-rotated" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
-  await vi.waitFor(() => {
+  await eventually(() => {
     const write = spy.mock.calls.find(([, init]) => init?.method === "PUT");
     expect(String(write?.[0])).toContain("/secrets/GITHUB_TOKEN");
   });

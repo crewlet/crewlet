@@ -20,11 +20,10 @@ import { join, relative } from "node:path";
 import { render } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
 import { canonicalMarkdown, roundTripMarkdown } from "@crewlethq/ui/RichEditorMarkdown";
-import { renderMarkdown } from "./markdown.ts";
+import { headingLines, renderMarkdown } from "./markdown.ts";
 import { TEMPLATES } from "~/routes/knowledge/Composer.tsx";
 import { DOC_TEMPLATES } from "~/lib/artifacts/docTemplates.ts";
 import { repoRoot } from "~/test/engineFiles.ts";
-import { CASE_BOUND_MS } from "~/test/bounds.ts";
 
 const SKIP = new Set(["node_modules", ".git", "static", "dashboard"]);
 
@@ -39,11 +38,53 @@ function markdownUnder(dir: string): string[] {
   return out;
 }
 
-/** A document this long is rendered twice in the rewrite case, which takes time in its size. */
-const LONG_DOCUMENT_CHARS = 500_000;
+/**
+ * The most of a document one rewrite case reads, unless one section is longer.
+ *
+ * A REWRITE CASE RENDERS ITS TEXT TWICE through React into jsdom, which is CPU
+ * work in the text's size: `docs/reference/api-endpoints.md` (about 760 KB)
+ * costs about six seconds of it on an idle machine and took 8 to 37 over nine
+ * runs beside `go build` and `go vet`, one case outrunning the bound every
+ * other case is held to and growing with the document. So a document longer
+ * than this is read in parts, cut at its heading lines (`headingLines`, the
+ * fence-aware walk the page outline cuts on), each part a case of its own: a
+ * heading ends every block before it, so a part renders as that stretch of the
+ * whole does, and the same bytes are read. A part of 50 000 characters costs
+ * well under a second idle, and a few dozen of the corpus's documents are cut.
+ */
+const PART_CHARS = 50_000;
 
-/** The rewrite case's bound for such a document: three times the suite's. */
-const LONG_DOCUMENT_BOUND_MS = 3 * CASE_BOUND_MS;
+/** One stretch of a document a rewrite case reads: where it starts, and its text. */
+interface Part {
+  /** The heading the part opens with, or "" for a document's lead. */
+  from: string;
+  text: string;
+}
+
+/**
+ * `text` cut at its heading lines into parts of at most [PART_CHARS]: whole
+ * sections run together while they fit, and a section longer than that is a
+ * part on its own. The parts, joined, are the document byte for byte.
+ */
+function parts(text: string): Part[] {
+  const headings = headingLines(text).filter((h) => h.at > 0);
+  const starts = [0, ...headings.map((h) => h.at)];
+  const titles = new Map(headingLines(text).map((h) => [h.at, h.title]));
+  const out: Part[] = [];
+  let open: { at: number; end: number } | null = null;
+  for (let i = 0; i < starts.length; i++) {
+    const at = starts[i]!;
+    const end = starts[i + 1] ?? text.length;
+    if (open !== null && end - open.at > PART_CHARS) {
+      out.push({ from: titles.get(open.at) ?? "", text: text.slice(open.at, open.end) });
+      open = null;
+    }
+    open = open === null ? { at, end } : { at: open.at, end };
+  }
+  if (open !== null)
+    out.push({ from: titles.get(open.at) ?? "", text: text.slice(open.at, open.end) });
+  return out;
+}
 
 const root = repoRoot();
 const fixtures = join(root, "dashboard", "src", "test", "markdown");
@@ -135,11 +176,9 @@ describe("the rich editor's round trip", () => {
     expect(roundTripMarkdown(text)).toBe(text);
   });
 
-  // A LONG DOCUMENT IS RENDERED TWICE HERE, and that is CPU work in its size:
-  // `docs/reference/api-endpoints.md` (about 700 KB) and the design doc took
-  // close to the suite's case bound under a loaded machine. Only those cases
-  // get the larger bound, so a hang anywhere else is still caught at the
-  // usual one.
+  // A DOCUMENT IS READ IN PARTS once it is longer than [PART_CHARS] (which
+  // says why), so no case's cost grows with the longest document the
+  // repository holds.
   const rewritten = (text: string) => {
     const before = seen(text);
     const after = seen(canonicalMarkdown(text));
@@ -151,13 +190,34 @@ describe("the rich editor's round trip", () => {
       before.text.slice(Math.max(0, at - 80), at + 80),
     );
   };
-  const long = (c: { text: string }) => c.text.length >= LONG_DOCUMENT_CHARS;
-  test.each(corpus.filter((c) => !long(c)))("$name rewritten whole reads as it did", ({ text }) =>
-    rewritten(text),
-  );
-  test.each(corpus.filter(long))(
-    "$name rewritten whole reads as it did",
-    ({ text }) => rewritten(text),
-    LONG_DOCUMENT_BOUND_MS,
-  );
+  const whole = corpus.filter((c) => c.text.length <= PART_CHARS);
+  const cut = corpus
+    .filter((c) => c.text.length > PART_CHARS)
+    .flatMap((c) => parts(c.text).map((p) => ({ name: c.name, ...p })));
+  test.each(whole)("$name rewritten whole reads as it did", ({ text }) => rewritten(text));
+  test.each(cut)("$name rewritten from “$from” reads as it did", ({ text }) => rewritten(text));
+
+  // THE PARTS ARE THE DOCUMENT, every byte once and in order, each no longer
+  // than a part may be unless it is one section — so reading them is reading
+  // the document, and a cut that dropped or doubled a stretch fails here.
+  test("a long document's parts are the document, cut at its headings", () => {
+    const long = corpus.filter((c) => c.text.length > PART_CHARS);
+    expect(long.map((c) => c.name)).toContain("docs/reference/api-endpoints.md");
+    for (const { name, text } of long) {
+      const cutUp = parts(text);
+      expect(cutUp.map((p) => p.text).join(""), name).toBe(text);
+      expect(cutUp.length, name).toBeGreaterThan(1);
+      const starts = new Set(headingLines(text).map((h) => h.at));
+      let at = 0;
+      for (const p of cutUp) {
+        if (at > 0) expect(starts.has(at), `${name} cut at ${at}`).toBe(true);
+        if (p.text.length > PART_CHARS) {
+          // One section on its own: no heading inside it to cut at.
+          const inside = [...starts].filter((s) => s > at && s < at + p.text.length);
+          expect(inside, `${name} part at ${at}`).toEqual([]);
+        }
+        at += p.text.length;
+      }
+    }
+  });
 });

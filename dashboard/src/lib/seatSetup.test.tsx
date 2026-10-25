@@ -17,7 +17,7 @@ import { ClientContext } from "./store-hooks.ts";
 import { useViewer, type ViewerState } from "./viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
-import { afterMicrotasks } from "~/test/settle.ts";
+import { afterMicrotasks, eventually } from "~/test/settle.ts";
 
 vi.mock("./viewer.ts", () => ({ useViewer: vi.fn() }));
 
@@ -177,7 +177,7 @@ test("a lead of the seat's unit reads the seat and its unit, and never the docum
       <Reader />
     </ClientContext.Provider>,
   );
-  await vi.waitFor(() => expect(seen!.reading.state).toBe("read"));
+  await eventually(() => expect(seen!.reading.state).toBe("read"));
   expect(asked).not.toContain("config");
   expect([...paths].sort()).toEqual(["/config/roles/pm", "/config/units/product"]);
   const reading = seen!.reading;

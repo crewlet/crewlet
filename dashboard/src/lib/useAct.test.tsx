@@ -19,6 +19,7 @@ import { useClient, useConnection } from "./store-hooks.ts";
 import { useViewer, type ViewerState } from "./viewer.ts";
 import { WriteButton } from "~/components/WriteButton.tsx";
 import { session } from "~/protocol/session.ts";
+import { eventually } from "~/test/settle.ts";
 
 // NO ORG: the company's services are not known, so every write is the
 // engine's to decide, as on a node that has not sent its chart yet.
@@ -80,9 +81,9 @@ afterEach(() => {
 /**
  * A faked clock for a case that asserts something does NOT happen later: a
  * retry, a refusal that clears itself, a press queued for a reconnect. Timers
- * only — the stubbed answers are promises, and Vitest's own `vi.waitFor` keeps
- * the real clock, so a case waits with it rather than with testing-library's,
- * whose timeout this clock would hold back.
+ * only — the stubbed answers are promises, and `eventually` (Vitest's own
+ * wait) keeps the real clock, so a case waits with it rather than with
+ * testing-library's, whose timeout this clock would hold back.
  */
 function fakeTimers() {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
@@ -195,7 +196,7 @@ test("unknown stays on screen, and its Retry sends the same operation key", asyn
   const posts = engine(() => new Response("bad gateway", { status: 502 }));
   mount();
   fireEvent.click(screen.getByRole("button", { name: "Pin" }));
-  await vi.waitFor(() =>
+  await eventually(() =>
     expect(screen.getAllByText(/Could not confirm\. It may have landed/).length).toBeGreaterThan(0),
   );
   await runPendingTimers();
@@ -286,7 +287,7 @@ test("a refusal is drawn beside the control and stays until the next press", asy
   mount();
   fireEvent.click(screen.getByRole("button", { name: "Pin" }));
   const refusal = () => document.querySelector(".write-refusal");
-  await vi.waitFor(() => expect(refusal()?.textContent).toContain("views: v9 is not a view"));
+  await eventually(() => expect(refusal()?.textContent).toContain("views: v9 is not a view"));
   expect(refusal()?.getAttribute("role")).toBe("alert");
   await runPendingTimers();
   expect(refusal()?.textContent).toContain("views: v9 is not a view");

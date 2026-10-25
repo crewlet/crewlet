@@ -45,7 +45,33 @@ export interface Module {
   lang: Lang;
 }
 
-let cached: Module[] | null = null;
+let cached: { modules: Module[]; suites: Module[] } | null = null;
+
+/** The one walk: every `.ts` and `.tsx` file under `src/`, modules and suites apart, each sorted by path. */
+function tree(): { modules: Module[]; suites: Module[] } {
+  if (cached) return cached;
+  const modules: Module[] = [];
+  const suites: Module[] = [];
+  (function walk(dir: string): void {
+    for (const entry of readdirSync(dir)) {
+      const full = join(dir, entry);
+      if (statSync(full).isDirectory()) {
+        walk(full);
+        continue;
+      }
+      if (!/\.tsx?$/.test(entry)) continue;
+      const lang: Lang = entry.endsWith(".d.ts") ? "dts" : entry.endsWith(".tsx") ? "tsx" : "ts";
+      (entry.includes(".test.") ? suites : modules).push({
+        path: relative(SRC, full).split("\\").join("/"),
+        text: readFileSync(full, "utf8"),
+        lang,
+      });
+    }
+  })(SRC);
+  const byPath = (a: Module, b: Module) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  cached = { modules: modules.sort(byPath), suites: suites.sort(byPath) };
+  return cached;
+}
 
 /**
  * Every `.ts` and `.tsx` module under `src/` that is not itself a suite, sorted
@@ -57,27 +83,15 @@ let cached: Module[] | null = null;
  * says so in its own suite rather than here.
  */
 export function modules(): Module[] {
-  if (cached) return cached;
-  const out: Module[] = [];
-  (function walk(dir: string): void {
-    for (const entry of readdirSync(dir)) {
-      const full = join(dir, entry);
-      if (statSync(full).isDirectory()) {
-        walk(full);
-        continue;
-      }
-      if (!/\.tsx?$/.test(entry) || entry.includes(".test.")) continue;
-      const lang: Lang = entry.endsWith(".d.ts") ? "dts" : entry.endsWith(".tsx") ? "tsx" : "ts";
-      out.push({
-        path: relative(SRC, full).split("\\").join("/"),
-        text: readFileSync(full, "utf8"),
-        lang,
-      });
-    }
-  })(SRC);
-  out.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-  cached = out;
-  return out;
+  return tree().modules;
+}
+
+/**
+ * Every suite under `src/` — a file whose name carries `.test.` — sorted by
+ * path, from the same walk: what a gate over the suites themselves reads.
+ */
+export function suites(): Module[] {
+  return tree().suites;
 }
 
 /** An ESTree node as `parseAst` returns it. */
