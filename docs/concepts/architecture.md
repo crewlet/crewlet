@@ -515,10 +515,11 @@ prompt is smaller: is this round's work right, given the record. A frontier mode
 reviews; see [Turn Engine](turn-engine.md).
 
 **Tools are discovered, not enumerated.** A role with 50–150 MCP tools would
-push 15–25 KB of catalogue into every prompt, so the executor sees *server
-names* and walks `list_mcp_server_tools` → `activate_tool` to promote what it
-actually needs. From the model's side a builtin and an MCP tool are the same
-thing: a function it can ask the engine to call.
+send 15–25 KB of tool definitions with every model request, so the executor sees
+*server names* and walks `list_mcp_server_tools` → `activate_tool` to promote
+what it actually needs. From the model's side a builtin and an MCP tool are the
+same thing: two tools of the one `crewlet` server its CLI lists, which the
+engine answers ([Tool calls in host mode](llm-backends.md#tool-calls-in-host-mode)).
 
 **A suspended turn is the reason there is no parked goroutine anywhere.** A
 detached coding run stops the executor's loop mid-round with its `run_sandbox`
