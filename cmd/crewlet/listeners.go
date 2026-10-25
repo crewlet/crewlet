@@ -25,7 +25,7 @@ type nodeListeners struct {
 // serves them the boot surface, or binds nothing when api.port is 0, which is
 // the hard off switch for every one of them.
 //
-// bridge says whether this node will have an agent-mode tool bridge, which is
+// bridge says whether this node will have a box-mode tool bridge, which is
 // what decides whether a node without the ingress role binds api.public at all
 // ([api.PublicListener]), and whether its boot surface tells a call to the
 // bridge to come back ([api.NewBoot]). The artifact origin is bound by

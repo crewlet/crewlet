@@ -279,9 +279,9 @@ func TestALocalRunNeedsNoTravellingCredential(t *testing.T) {
 }
 
 // THE GUARD READS THE ENTRY THE RUN'S MODEL COMES FROM, which is a different
-// entry for the two kinds of run: run_sandbox work runs on llm_sandbox, and an
-// agent-mode run IS the executor and runs on the seat's own llm. A guard that
-// always asked llm_sandbox answered for a model an agent-mode run never
+// entry for the two kinds of run: run_sandbox work runs on llm_sandbox, and a
+// box-mode run IS the executor and runs on the seat's own llm. A guard that
+// always asked llm_sandbox answered for a model a box-mode run never
 // touches — waving through a remote box whose CLI had no token, and refusing
 // one whose executor entry would have minted a token that travels.
 func TestTheGuardAsksTheEntryTheRunActuallyRunsOn(t *testing.T) {
@@ -309,14 +309,14 @@ func TestTheGuardAsksTheEntryTheRunActuallyRunsOn(t *testing.T) {
 		t.Errorf("run_sandbox work on an API-key entry was refused: %v", err)
 	}
 	if err := sandboxCredentials(c, seat, phase.Execute, sandbox.E2B, nil); err == nil {
-		t.Error("an agent-mode run on a login that cannot follow it was launched " +
+		t.Error("a box-mode run on a login that cannot follow it was launched " +
 			"because the guard looked at llm_sandbox instead")
 	}
 
 	// And the mirror image, or the guard could simply always refuse.
 	reversed := &org.Role{Name: "QA", LLM: org.ProviderKeys{"api"}, LLMSandbox: org.ProviderKeys{"sub"}}
 	if err := sandboxCredentials(c, reversed, phase.Execute, sandbox.E2B, nil); err != nil {
-		t.Errorf("an agent-mode run on an API-key entry was refused: %v", err)
+		t.Errorf("a box-mode run on an API-key entry was refused: %v", err)
 	}
 	if err := sandboxCredentials(c, reversed, phase.Sandbox, sandbox.E2B, nil); err == nil {
 		t.Error("run_sandbox work on a login that cannot follow it was launched")
@@ -327,8 +327,8 @@ func TestTheGuardAsksTheEntryTheRunActuallyRunsOn(t *testing.T) {
 //
 // OpenCode reads its provider's key from its own environment, so an entry's
 // whole sign-in can be one variable in env — which the doctor counts. The
-// run environment carried only the token and the api-key variable, so an
-// agent-mode or sandbox run on such an entry started its CLI signed in to
+// run environment carried only the token and the api-key variable, so a
+// box-mode or sandbox run on such an entry started its CLI signed in to
 // nothing, and a remote one was refused as having no credential at all.
 func TestACLIEnvSignInTravelsIntoTheRun(t *testing.T) {
 	t.Parallel()

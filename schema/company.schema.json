@@ -1219,10 +1219,10 @@
           ]
         },
         "mode": {
-          "description": "text (a model behind the engine's tool loop) or agent (the CLI runs the executor).",
+          "description": "host (the CLI runs on this engine's host, turn by turn) or box (the executor runs detached in a box of providers.sandbox).",
           "enum": [
-            "text",
-            "agent",
+            "host",
+            "box",
             "",
             null
           ]
@@ -1245,7 +1245,7 @@
           ]
         },
         "run_in": {
-          "description": "Where an agent-mode run happens. Empty = providers.sandbox.default_run_in.",
+          "description": "Where a box-mode run happens. Empty = providers.sandbox.default_run_in.",
           "enum": [
             "direct",
             "container",
@@ -2658,7 +2658,7 @@
           ]
         },
         "run_in": {
-          "description": "Where this seat's code work runs; self = inside its own agent-mode executor run. Empty inherits providers.sandbox.default_run_in.",
+          "description": "Where this seat's code work runs; self = inside its own box-mode executor run. Empty inherits providers.sandbox.default_run_in.",
           "enum": [
             "direct",
             "container",
@@ -2766,7 +2766,7 @@
           ]
         },
         "default_run_in": {
-          "description": "Where a box whose placer names no cell runs: a sandbox-enabled seat whose executor is not in agent mode and names no run_in, or an agent-mode providers.llm entry with no run_in. Required unless the catalogue names exactly one cell, or every such seat and entry names its own.",
+          "description": "Where a box whose placer names no cell runs: a sandbox-enabled seat whose executor is not in box mode and names no run_in, or a box-mode providers.llm entry with no run_in. Required unless the catalogue names exactly one cell, or every such seat and entry names its own.",
           "enum": [
             "direct",
             "container",

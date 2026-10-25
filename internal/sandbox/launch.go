@@ -128,20 +128,20 @@ type TurnRef struct {
 type LaunchRequest struct {
 	Turn TurnRef
 
-	// System is the run's own standing instructions, empty for none. An
-	// agent-mode executor's is the seat's system prompt; a run_sandbox job
+	// System is the run's own standing instructions, empty for none. A
+	// box-mode executor's is the seat's system prompt; a run_sandbox job
 	// has none of its own, its executor having written everything it means
 	// into the Brief. It is FRAMED as the brief is: what the box provides,
 	// and how to ask a person, follow it ([buildSystem]).
 	System string
 
-	// Brief is the task: an agent-mode executor's turn's ask, or the
+	// Brief is the task: a box-mode executor's turn's ask, or the
 	// executor's own description of the code task.
 	Brief string
 
 	// Wider is the goal the Brief serves, framed after it ([buildBrief]): a
 	// run_sandbox job's turn task, of which its executor's brief is one
-	// step. Empty for an agent-mode executor, whose Brief IS the turn's ask
+	// step. Empty for a box-mode executor, whose Brief IS the turn's ask
 	// — its task again under a second heading was paid for on every launch,
 	// and read as a goal beyond the one it was given.
 	Wider string
@@ -153,7 +153,7 @@ type LaunchRequest struct {
 	// Label is what a person sees the run named by — on the running-runs
 	// panel, live and after a restart alike ([LaunchRequest.label]). Empty
 	// takes the brief's first line, which for a run_sandbox job is the
-	// concrete code task its executor wrote. An agent-mode executor names
+	// concrete code task its executor wrote. A box-mode executor names
 	// its turn's task: its brief is the turn's whole message, which opens
 	// with a heading rather than with what the run is doing.
 	Label string
@@ -180,7 +180,7 @@ type LaunchRequest struct {
 
 	// Opened is told the job's name the moment the store has opened it
 	// ([PendingStore.BeginLaunch]) and BEFORE ANY BOX EXISTS, for what must
-	// name the job before its box can act: an agent-mode run's bridge
+	// name the job before its box can act: a box-mode run's bridge
 	// session, which records every call the box makes under its own job
 	// ([BridgeAppend.Launch]). Learned any later — from the row, say, on the
 	// session's first append — the name would be whichever job the row held
@@ -549,7 +549,7 @@ func buildBrief(req LaunchRequest) string {
 // its own system prompt ([RunRequest.System]).
 //
 // THREE PARTS, each present only where it says something: the run's own
-// instructions (an agent-mode executor's seat prompt), what the environment
+// instructions (a box-mode executor's seat prompt), what the environment
 // already provides, and how to stop and ask a person. The environment is the
 // setup steps' own briefs — the mechanism and the hint together, so the agent
 // does not spend rounds rediscovering that git auth is already wired — and,
@@ -557,7 +557,7 @@ func buildBrief(req LaunchRequest) string {
 // prompt is for. The runner adds the last standing instruction, the report
 // it must write, because only it knows the box's path for it.
 //
-// THE RUN'S OWN TEXT FIRST, the framing after it: for an agent-mode executor
+// THE RUN'S OWN TEXT FIRST, the framing after it: for a box-mode executor
 // that text is who the model is and what it answers for, and the box and the
 // ask shim are details of where it is working.
 func buildSystem(req LaunchRequest) string {
@@ -574,18 +574,19 @@ func buildSystem(req LaunchRequest) string {
 	return strings.Join(slices.DeleteFunc(parts, func(p string) bool { return p == "" }), "\n\n")
 }
 
-// agentRunNote opens a run's own instructions — an agent-mode executor's seat
+// agentRunNote opens a run's own instructions — a box-mode executor's seat
 // prompt — where they follow the coding CLI's system prompt.
 //
 // The vendor's prompt says what the model is, and says it first: Claude Code
 // opens with "You are Claude Code, Anthropic's official CLI for Claude", and
 // no flag removes it. A seat prompt that only implies who it is loses to that,
-// so this says outright which of the two prompts is the role. The text-mode
+// so this says outright which of the two prompts is the role. The host-mode
 // backend opens its calls with the same note
-// (internal/providers/llm/cliagent harnessNote), less the sentence about
-// Crewlet's JSON envelope: here the run's tools are its own and the seat's,
-// called the way its CLI calls any tool. Constant, so it stays part of the
-// prefix a vendor caches.
+// (internal/providers/llm/cliagent harnessNote), less the sentence it adds on
+// a call that offers tools — act through the `crewlet` server's tools, never
+// the CLI's own: here the run's shell and editor are what the box is for, and
+// the seat's tools are called the way its CLI calls any tool. Constant, so it
+// stays part of the prefix a vendor caches.
 const agentRunNote = "You are running inside a command-line coding tool as one seat of a " +
 	"Crewlet company, and Crewlet — not a person at a terminal — reads what you " +
 	"report. The tool's own instructions describe the program you run in, not your " +

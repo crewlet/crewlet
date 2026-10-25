@@ -105,7 +105,7 @@ func newBudgetedTurn(t *testing.T, dayCeiling, auxTokens int) *budgetedTurn {
 	if err != nil {
 		t.Fatalf("phase.NewRegistry: %v", err)
 	}
-	r.e = &Engine{backends: &Backends{Queue: r.pub, Fleet: r.fleet}}
+	r.e = withSessions(t, &Engine{backends: &Backends{Queue: r.pub, Fleet: r.fleet}})
 	r.e.epoch.current.Store(&Company{
 		Org: r.org, Models: models, Tools: tools.NewRegistry(),
 		Config: &config.Company{Name: "Acme", TurnEngine: config.TurnEngine{

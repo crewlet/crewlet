@@ -69,13 +69,13 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"providers.llm.sub.max_concurrent", ErrOutOfRange,
 		},
 		{
-			"a placement on a text-mode entry",
+			"a placement on a host-mode entry",
 			"name: Acme\nproviders:\n  llm:\n    sub:\n      model: sonnet\n      run_in: direct\n",
 			"providers.llm.sub.run_in", ErrConflict,
 		},
 		{
-			"self as an agent-mode entry's cell",
-			"name: Acme\nproviders:\n  llm:\n    sub:\n      model: sonnet\n      mode: agent\n      run_in: self\n",
+			"self as a box-mode entry's cell",
+			"name: Acme\nproviders:\n  llm:\n    sub:\n      model: sonnet\n      mode: box\n      run_in: self\n",
 			"providers.llm.sub.run_in", ErrUnknownValue,
 		},
 

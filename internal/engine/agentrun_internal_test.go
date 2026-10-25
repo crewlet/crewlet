@@ -23,10 +23,10 @@ import (
 // modeCompany is a one-seat epoch whose executor is the named CLI in the named
 // mode, over a REAL cliagent provider: the question is what the provider's own
 // answer makes the engine do, and a fake would answer whatever the test wanted.
-func modeCompany(t *testing.T, agent string, agentMode bool, runIn config.Placement) (*Company, *org.Role) {
+func modeCompany(t *testing.T, agent string, boxMode bool, runIn config.Placement) (*Company, *org.Role) {
 	t.Helper()
 	provider, err := cliagent.New(cliagent.Config{
-		Key: "sub", Agent: agent, Box: agentMode,
+		Key: "sub", Agent: agent, Box: boxMode,
 		StateDir: t.TempDir(), Timeout: time.Minute,
 	})
 	if err != nil {
@@ -38,7 +38,7 @@ func modeCompany(t *testing.T, agent string, agentMode bool, runIn config.Placem
 	}
 	seat := &org.Role{Name: "SWE", LLM: org.ProviderKeys{"sub"}}
 	mode := config.CLIModeHost
-	if agentMode {
+	if boxMode {
 		mode = config.CLIModeBox
 	}
 	return &Company{
@@ -55,32 +55,32 @@ func modeCompany(t *testing.T, agent string, agentMode bool, runIn config.Placem
 // A TYPED NIL IS NOT A NIL INTERFACE, and this is the bug that class of
 // mistake produces here: a nil *agentLauncher assigned into the runner's
 // AgentLauncher field is a NON-nil interface, so every seat in the company —
-// every text-mode seat included — takes the agent branch and dereferences
+// every host-mode seat included — takes the agent branch and dereferences
 // nothing on its first turn.
-func TestATextModeSeatGetsNoAgentLauncher(t *testing.T) {
+func TestAHostModeSeatGetsNoAgentLauncher(t *testing.T) {
 	t.Parallel()
 	c, _ := modeCompany(t, "claude-code", false, "")
 	e := &Engine{}
 	if got := e.agentRunFor(c, "swe", &turnctx.Turn{RunID: "t1"}); got != nil {
-		t.Fatalf("a text-mode seat got %T, want a nil interface", got)
+		t.Fatalf("a host-mode seat got %T, want a nil interface", got)
 	}
 }
 
-// AN AGENT-MODE SEAT GETS ONE, carrying the CLI and the cell resolved from its
+// A BOX-MODE SEAT GETS ONE, carrying the CLI and the cell resolved from its
 // own entry — resolved ONCE, before the turn, so an apply landing mid-turn
 // cannot move a run that is already going.
 //
 // Its PRESENCE is also the whole signal the runner reads to decide that this
 // executor already holds a shell and must not also be offered run_sandbox
 // (see runner.offersSandbox), so these two tests pin that too: there is no
-// second derivation of "is this seat in agent mode" to keep in step.
-func TestAnAgentModeSeatGetsALauncherForItsOwnCLIAndCell(t *testing.T) {
+// second derivation of "is this seat in box mode" to keep in step.
+func TestABoxModeSeatGetsALauncherForItsOwnCLIAndCell(t *testing.T) {
 	t.Parallel()
 	c, _ := modeCompany(t, "opencode", true, config.PlacementE2B)
 	e := &Engine{}
 	got := e.agentRunFor(c, "swe", &turnctx.Turn{RunID: "t1"})
 	if got == nil {
-		t.Fatal("an agent-mode seat got no launcher, so its executor ran natively")
+		t.Fatal("a box-mode seat got no launcher, so its executor ran natively")
 	}
 	launcher, ok := got.(*agentLauncher)
 	if !ok {
@@ -116,7 +116,7 @@ func TestAnAgentEntryWithNoCellDefersToTheCatalogue(t *testing.T) {
 // touch a ticket and cannot submit its work: it would burn a subscription
 // producing prose nothing collects, and the turn would be rescued as
 // incomplete with no sign of why. The refusal names the variable that fixes it.
-func TestAgentModeIsRefusedWithNoBridge(t *testing.T) {
+func TestBoxModeIsRefusedWithNoBridge(t *testing.T) {
 	t.Parallel()
 	c, seat := modeCompany(t, "claude-code", true, config.PlacementDirect)
 	e := &Engine{}
@@ -199,13 +199,13 @@ func runnerAgentRequest() runner.AgentRunRequest {
 	return runner.AgentRunRequest{Brief: "fix the failing test", Round: 1}
 }
 
-// AN AGENT-MODE RUN IS THE EXECUTOR, so it runs on the executor's own entry.
+// A BOX-MODE RUN IS THE EXECUTOR, so it runs on the executor's own entry.
 //
 // A seat legitimately points llm_sandbox at a cheaper, more code-shaped model
-// than the one it thinks with — that is what the field is for. Sending an
-// agent-mode run there would run the seat's whole turn on the model it chose
+// than the one it thinks with — that is what the field is for. Sending a
+// box-mode run there would run the seat's whole turn on the model it chose
 // for a subordinate job, silently, on any seat that set both.
-func TestAnAgentModeRunUsesTheExecutorsModelNotTheSandboxOne(t *testing.T) {
+func TestABoxModeRunUsesTheExecutorsModelNotTheSandboxOne(t *testing.T) {
 	t.Parallel()
 	thinker, err := cliagent.New(cliagent.Config{
 		Key: "thinker", Agent: "claude-code", Box: true, Model: "opus",
@@ -245,12 +245,12 @@ func TestAnAgentModeRunUsesTheExecutorsModelNotTheSandboxOne(t *testing.T) {
 	}
 
 	// ASKED THROUGH THE LAUNCHER, not through runLLM directly: what is
-	// under test is which phase the agent-mode path chooses, and a test
+	// under test is which phase the box-mode path chooses, and a test
 	// that named the phase itself would pass whatever the launcher did.
 	launcher := &agentLauncher{seat: seat, codingAgent: "claude-code"}
 	executor, err := launcher.executorRun(c, nil)
 	if err != nil || executor.model != "opus" {
-		t.Fatalf("an agent-mode run resolved to %q (err %v), want the executor's own model",
+		t.Fatalf("a box-mode run resolved to %q (err %v), want the executor's own model",
 			executor.model, err)
 	}
 	// And a run_sandbox call still goes to the model the seat chose for it.
@@ -261,13 +261,13 @@ func TestAnAgentModeRunUsesTheExecutorsModelNotTheSandboxOne(t *testing.T) {
 	}
 }
 
-// A SEAT WITH NO role.sandbox BLOCK IS A SUPPORTED AGENT-MODE CONFIGURATION.
+// A SEAT WITH NO role.sandbox BLOCK IS A SUPPORTED BOX-MODE CONFIGURATION.
 //
-// An agent-mode executor is placed by its own providers.llm entry's `run_in`,
+// A box-mode executor is placed by its own providers.llm entry's `run_in`,
 // so it runs in a box whether or not that block was ever written — and
 // assembling the run environment used to range over the nil block's Env and
 // panic on the seat's very first launch.
-func TestAnAgentModeSeatNeedsNoSandboxBlock(t *testing.T) {
+func TestABoxModeSeatNeedsNoSandboxBlock(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
 	seat := &org.Role{Name: "SWE"}
@@ -396,7 +396,7 @@ func composed(t *testing.T, cfg *config.Company) *Company {
 	return &Company{Config: cfg, Org: o}
 }
 
-// launchReadyEngine is an engine that can take an agent-mode launch all the
+// launchReadyEngine is an engine that can take a box-mode launch all the
 // way to a box: a remote cell served by the in-process double, a durable run
 // store, a queue for the start event and a bridge with somewhere to dial.
 func launchReadyEngine(t *testing.T, c *Company) *Engine {
@@ -443,14 +443,14 @@ func launchRig(t *testing.T, c *Company, bridge *mcpbridge.Bridge) (*Engine, *sa
 	return e, jobs
 }
 
-// A NODE THAT SERVES NO BRIDGE REFUSES AGENT MODE, AND SAYS WHICH SETTING.
+// A NODE THAT SERVES NO BRIDGE REFUSES BOX MODE, AND SAYS WHICH SETTING.
 //
 // A base URL on a node that binds no listener (api.port 0) used to mint an
 // endpoint naming this node: the box launched, every tool call it made found
 // nothing listening, and the turn was rescued as incomplete with no sign of
 // why. The refusal names api.port, because the message for an unset base URL
 // would send the operator to a variable that is already set.
-func TestAnAgentModeRunIsRefusedOnANodeThatServesNoBridge(t *testing.T) {
+func TestABoxModeRunIsRefusedOnANodeThatServesNoBridge(t *testing.T) {
 	t.Parallel()
 	c, seat := splitLoginCompany(t, "api", "codex")
 	e := launchReadyEngine(t, c)
@@ -467,7 +467,7 @@ func TestAnAgentModeRunIsRefusedOnANodeThatServesNoBridge(t *testing.T) {
 			ForTurn(launcher.turn),
 	})
 	if err == nil {
-		t.Fatal("an agent-mode run launched on a node whose bridge no listener serves")
+		t.Fatal("a box-mode run launched on a node whose bridge no listener serves")
 	}
 	if !strings.Contains(err.Error(), "api.port") {
 		t.Errorf("the refusal does not name the setting that fixes it: %v", err)
@@ -487,7 +487,7 @@ func TestAnAgentModeRunIsRefusedOnANodeThatServesNoBridge(t *testing.T) {
 // answer as "no bridge URL", sending an operator to a variable that was set on
 // a node whose bridge was mounted and serving. The runner always binds its
 // phase surface, so this is an assembly fault, and the refusal says so.
-func TestAnAgentModeRunOnASurfaceWithNoSeatIsRefusedAsAnAssemblyFault(t *testing.T) {
+func TestABoxModeRunOnASurfaceWithNoSeatIsRefusedAsAnAssemblyFault(t *testing.T) {
 	t.Parallel()
 	c, seat := splitLoginCompany(t, "api", "codex")
 	e := launchReadyEngine(t, c)
@@ -500,7 +500,7 @@ func TestAnAgentModeRunOnASurfaceWithNoSeatIsRefusedAsAnAssemblyFault(t *testing
 		Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil),
 	})
 	if err == nil {
-		t.Fatal("an agent-mode run launched over a surface bound to no seat")
+		t.Fatal("a box-mode run launched over a surface bound to no seat")
 	}
 	if strings.Contains(err.Error(), mcpbridge.BaseURLVar) ||
 		!strings.Contains(err.Error(), "bound to no seat") {
@@ -561,7 +561,7 @@ func splitLoginCompany(t *testing.T, executor, coder string) (*Company, *org.Rol
 	}, seat
 }
 
-// THE LAUNCHER GUARDS THE EXECUTOR'S OWN LOGIN, because an agent-mode run IS
+// THE LAUNCHER GUARDS THE EXECUTOR'S OWN LOGIN, because a box-mode run IS
 // the executor. Asked about llm_sandbox instead, the guard inspected a model
 // the run never touches: a seat whose executor was a codex subscription and
 // whose code work was an API key launched a remote box that failed at its
@@ -585,7 +585,7 @@ func TestTheLauncherGuardsTheExecutorsOwnLogin(t *testing.T) {
 		}
 	}
 	// The runner the turn resolved from the executor's own entry, as
-	// executorRuntime resolves it: a CLI's agent mode runs on that CLI.
+	// executorRuntime resolves it: a CLI's box mode runs on that CLI.
 	launcherFor := func(e *Engine, seat *org.Role, runner string) *agentLauncher {
 		return &agentLauncher{
 			engine: e, turn: &turnctx.Turn{RunID: "t1", Seat: seat}, seat: seat,
@@ -601,7 +601,7 @@ func TestTheLauncherGuardsTheExecutorsOwnLogin(t *testing.T) {
 	err := launcher.LaunchExecutor(t.Context(), request(launcher))
 	var credErr *SandboxCredentialError
 	if !errors.As(err, &credErr) {
-		t.Fatalf("an agent-mode run on a login that cannot follow it was launched "+
+		t.Fatalf("a box-mode run on a login that cannot follow it was launched "+
 			"(err = %v): the launcher asked the guard about llm_sandbox", err)
 	}
 	if e.bridge.Live() != 0 {
@@ -613,7 +613,7 @@ func TestTheLauncherGuardsTheExecutorsOwnLogin(t *testing.T) {
 	e = launchReadyEngine(t, c)
 	launcher = launcherFor(e, seat, "claude-code")
 	if err := launcher.LaunchExecutor(t.Context(), request(launcher)); err != nil {
-		t.Fatalf("an agent-mode run on an API-key executor was refused: %v", err)
+		t.Fatalf("a box-mode run on an API-key executor was refused: %v", err)
 	}
 }
 
@@ -622,7 +622,7 @@ func TestTheLauncherGuardsTheExecutorsOwnLogin(t *testing.T) {
 // which hands the first to the CLI on the channel that adds to its own system
 // prompt and runs the second. Dropped here, the run went out with the box's
 // framing alone and a seat that did not know whose work it was doing.
-func TestAnAgentModeRunCarriesTheSeatsSystemPromptApartFromItsAsk(t *testing.T) {
+func TestABoxModeRunCarriesTheSeatsSystemPromptApartFromItsAsk(t *testing.T) {
 	t.Parallel()
 	c, seat := splitLoginCompany(t, "api", "codex")
 	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{

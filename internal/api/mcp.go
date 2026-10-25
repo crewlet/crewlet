@@ -13,7 +13,7 @@ import (
 
 // The MCP bridge edge.
 //
-// A coding agent in agent mode calls its seat's tools HERE rather than holding
+// A coding agent in box mode calls its seat's tools HERE rather than holding
 // them, so the seat's credentials — its chat token, its tracker token, its
 // code-host token — never enter a box running generated code. See
 // internal/api/mcpbridge for what the bridge does with a call once it arrives.
@@ -38,7 +38,7 @@ import (
 
 // mountBridge registers the bridge, or says why it did not.
 //
-// A nil bridge is an ordinary configuration — most deployments run no agent
+// A nil bridge is an ordinary configuration — most deployments run no box
 // mode — and the route is then ABSENT rather than answering 503: an endpoint
 // that exists and refuses everything reads to an operator as broken, while one
 // that is not there matches what the config says.

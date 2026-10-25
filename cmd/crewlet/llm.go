@@ -39,11 +39,10 @@ import (
 // An entry can be configured perfectly and still not work: the
 // binary can be missing from the engine host, the profile's flags can have
 // drifted from the installed version, the login can be present but expired,
-// and — the one nothing else catches — the model can answer prose instead of
-// the tool-call envelope, which costs every phase corrective rounds and, when
-// the model never manages the envelope, ends it without its submission.
-// Only a real completion with a real tool proves the last one, so `doctor`
-// runs one.
+// and — the one nothing else catches — the CLI can fail to reach the seat's
+// tools at all (the `crewlet` MCP server it is handed) and answer in prose with
+// nothing called, which ends every phase without its submission. Only a real
+// run calling a real tool proves the last one, so `doctor` runs one.
 //
 // Two of the profile's claims are measured the same way, because a flag that
 // stopped working is silent in both directions. The shell probe asks the CLI
@@ -418,7 +417,7 @@ func doctorEntries(company *config.Company, keys []string, resolver *config.Reso
 				// THE ENGINE'S OWN ANSWERS, not the provider's guess at
 				// them: which runners this build registers and what a
 				// sandbox can dial are facts about the process, and both
-				// decide whether an agent-mode entry works at all.
+				// decide whether a box-mode entry works at all.
 				AgentRunners: codingagent.Names(),
 				BridgeURL:    os.Getenv(mcpbridge.BaseURLVar),
 			})

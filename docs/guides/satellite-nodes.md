@@ -189,7 +189,7 @@ no estate, serves no API and signs no session cookie. The company document it
 fetches from its peers is sealed under the fleet keyring and authenticated by
 that seal; every request it sends a data node's estate service is signed
 under it, because the data node runs a write as the actor the request names
-and the broker authenticates nothing; and a seat in agent mode is handed a
+and the broker authenticates nothing; and a seat in box mode is handed a
 per-run token signed under it. `crewlet validate` refuses a Tier A file
 without it, naming `secrets.keys`; generate a key once with `crewlet secrets
 keygen` and give every node the same material.
@@ -205,7 +205,7 @@ without the `ingress` role binds it for its [probes](#probe-it) alone —
 (`api_probes_listening`). Every other path answers `404`, or `401` for a write
 or an always-guarded prefix, exactly as an unknown path does on an ingress
 node. The one route it adds is for a seat in
-[agent mode](../concepts/llm-backends.md#the-tool-bridge): its box
+[box mode](../concepts/llm-backends.md#the-tool-bridge): its box
 calls the seat's tools back over `/mcp/{token}`, and only the node that runs
 the seat can answer, so a satellite with `CREWLET_MCP_BRIDGE_URL` set serves
 that route (`tool_bridge=true` on the same line) — beside the probes, or on
@@ -214,7 +214,7 @@ it), since the bridge is a route a sandbox outside your network calls (see
 [Deployment → Exposing webhooks without the admin API](deployment.md#exposing-webhooks-without-the-admin-api)).
 With `api.port: 0` the satellite binds nothing at all, which is the shape for a
 host that must accept no connection of any kind — at the price of no probe
-and no agent mode.
+and no box mode.
 
 ### 2. Pin the role
 
@@ -452,7 +452,7 @@ the dependency surface before choosing a host for it:
   coordination slot and is never dialled back. That is what makes this
   shape workable in a zone the rest of the fleet is not in. What reaches
   `api.port` is the orchestrator's probes and, if a seat pinned here runs
-  in agent mode, that seat's box calling its `/mcp/{token}` bridge — the
+  in box mode, that seat's box calling its `/mcp/{token}` bridge — the
   box must be able to dial this node for that one. `api.port: 0` closes
   both.
 

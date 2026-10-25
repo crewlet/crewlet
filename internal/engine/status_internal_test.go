@@ -25,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat/placement"
@@ -223,28 +224,31 @@ func (refusingProvider) Complete(context.Context, llm.Request) (*llm.Completion,
 // workspace — the window where that post is promised. Without it a case
 // asserts a post the teardown is racing, which is the flake this fixture is
 // written against; see "WHAT IS PROMISED, AND WHEN" above.
+//
+// A coding CLI on the real session ([phasedCLI]): the phase's tools reach it
+// over MCP and it calls the submission there, so `waiting` runs as the CLI
+// run starts — still on the turn's goroutine, and still before the answer.
 type scripted struct{ waiting func(reviewing bool) }
 
 func (scripted) Model() string { return "scripted" }
 
-func (s scripted) Complete(_ context.Context, req llm.Request) (*llm.Completion, error) {
+func (s scripted) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
+	return phasedCLI{model: "scripted", pick: s.run}.Complete(ctx, req)
+}
+
+func (s scripted) run(offered []string) llmtest.Run {
 	name, args := runner.SubmitWorkTool, map[string]any{
 		"outcome": "blocked", "summary": "nothing to do here",
 		"evidence": "this seat holds no write tool",
 	}
-	reviewing := false
-	for _, tool := range req.Tools {
-		if tool.Name == runner.SubmitReviewTool {
-			name, args = runner.SubmitReviewTool, map[string]any{"decision": "done"}
-			reviewing = true
-		}
+	reviewing := offers(offered, runner.SubmitReviewTool)
+	if reviewing {
+		name, args = runner.SubmitReviewTool, map[string]any{"decision": "done"}
 	}
 	if s.waiting != nil {
 		s.waiting(reviewing)
 	}
-	return &llm.Completion{
-		ToolCalls: []llm.ToolCall{{ID: "c1", Name: name, Arguments: args}},
-	}, nil
+	return calling(name, args, llmtest.DefaultUsage)
 }
 
 // indicating builds an engine whose one seat is on a Slack workspace, with a
@@ -295,7 +299,7 @@ func indicatingWith(t *testing.T, mode notify.StatusMode, prov llm.Provider) (*E
 
 	// A COORDINATION STORE, as every engine `crewlet run` builds has one —
 	// see [starting] for what a turn needs it for.
-	e := &Engine{backends: &Backends{Queue: q, Fleet: coordmem.NewFleet()}}
+	e := withSessions(t, &Engine{backends: &Backends{Queue: q, Fleet: coordmem.NewFleet()}})
 	e.epoch.current.Store(&Company{
 		Org:    organization,
 		Models: models,
@@ -730,11 +734,11 @@ func equipForCodeWith(t *testing.T, e *Engine, pending sandbox.PendingStore, det
 type suspendingModel struct{}
 
 func (suspendingModel) Model() string { return "suspending" }
-func (suspendingModel) Complete(context.Context, llm.Request) (*llm.Completion, error) {
-	return &llm.Completion{ToolCalls: []llm.ToolCall{{
-		ID: "c1", Name: builtin.RunSandboxTool,
-		Arguments: map[string]any{"brief": "fix the failing test"},
-	}}}, nil
+func (suspendingModel) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
+	return phasedCLI{model: "suspending", pick: func([]string) llmtest.Run {
+		return calling(builtin.RunSandboxTool,
+			map[string]any{"brief": "fix the failing test"}, llmtest.DefaultUsage)
+	}}.Complete(ctx, req)
 }
 
 // suspendingTool is run_sandbox as far as the tool loop can tell.

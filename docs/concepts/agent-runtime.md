@@ -84,7 +84,7 @@ Each agent, when triggered (by event or task assignment), executes a **turn** th
 2. Executor phase
    ├── Tool surface = every first-party tool except mark_onboarded —
    │     and run_sandbox unless the seat's gate is enabled and the
-   │     executor is not in agent mode — plus submit_work,
+   │     executor is not in box mode — plus submit_work,
    │     activate_tool, list_mcp_server_tools. A tool left out is out
    │     of reach too, and activate_tool cannot reach it
    ├── The system prompt lists no tool the surface holds — each one's
@@ -124,7 +124,7 @@ The executor and the reviewer can run on different LLM models — see the [Turn 
 
 ## The LLM ↔ Tool Proxy
 
-The LLM is reached through a coding CLI the engine drives as a process — in text mode its own tools are denied, and it cannot reach MCP servers or engine internals directly. The shared tool-call loop (`internal/agent/toolloop`, driven by each phase of the [Turn Engine](turn-engine.md)) acts as a **proxy** that translates between the LLM's text-based tool calls and local execution:
+The LLM is reached through a coding CLI the engine drives as a process — in host mode its own tools are denied, and it cannot reach MCP servers or engine internals directly. The shared tool-call loop (`internal/agent/toolloop`, driven by each phase of the [Turn Engine](turn-engine.md)) acts as a **proxy** that translates between the LLM's text-based tool calls and local execution:
 
 ```mermaid
 flowchart TD
@@ -153,7 +153,7 @@ flowchart TD
     S6 -->|"LLM responds without tool_calls"| DONE["phase ends"]
 ```
 
-In text mode the CLI has no tool-call channel of its own, so the tools ride the prompt as a catalogue and a response contract, and step 3 reads the calls out of the envelope the reply carries. Each round records **why the model stopped** — an answer (`end`) or calls to run (`tool_use`), the two a CLI can report — and a tool call whose arguments did not parse is answered with a failed result saying why rather than run with none. See [How a round ends](turn-engine.md#how-a-round-ends).
+In host mode the CLI has no tool-call channel of its own, so the tools ride the prompt as a catalogue and a response contract, and step 3 reads the calls out of the envelope the reply carries. Each round records **why the model stopped** — an answer (`end`) or calls to run (`tool_use`), the two a CLI can report — and a tool call whose arguments did not parse is answered with a failed result saying why rather than run with none. See [How a round ends](turn-engine.md#how-a-round-ends).
 
 Both builtin and MCP tools produce identical tool definition schemas. From the LLM's perspective, `lookup_colleague` (builtin) and an MCP server's issue-creation tool look the same: a function it can ask the engine to call.
 

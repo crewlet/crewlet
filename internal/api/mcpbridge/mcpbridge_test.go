@@ -90,11 +90,11 @@ func (a *activator) Call(context.Context, map[string]any) (tools.Result, error) 
 // ledger records what a resume would read back.
 type ledger struct {
 	mu    sync.Mutex
-	calls []tools.Call
+	calls []mcpbridge.Call
 	err   error
 }
 
-func (l *ledger) Append(_ context.Context, _ string, c tools.Call) error {
+func (l *ledger) Append(_ context.Context, _ string, c mcpbridge.Call) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.err != nil {
@@ -104,10 +104,10 @@ func (l *ledger) Append(_ context.Context, _ string, c tools.Call) error {
 	return nil
 }
 
-func (l *ledger) rows() []tools.Call {
+func (l *ledger) rows() []mcpbridge.Call {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return append([]tools.Call(nil), l.calls...)
+	return append([]mcpbridge.Call(nil), l.calls...)
 }
 
 // denyGuard refuses one tool, standing in for the required-skill gate.
@@ -199,7 +199,7 @@ func (f *fixture) open(t *testing.T) string {
 	mux := http.NewServeMux()
 	mux.Handle(mcpbridge.PathPrefix+"{token}", f.bridge.Handler())
 	f.server.Config.Handler = mux
-	return f.bridge.Open(f.session)
+	return f.bridge.Open(t.Context(), f.session)
 }
 
 // dial connects an MCP client the way a coding agent's own client would.
@@ -378,7 +378,7 @@ func TestAKeyringThatCannotSignBuildsNoBridge(t *testing.T) {
 }
 
 // A DEPLOYMENT WHOSE API IS NOT REACHABLE FROM A BOX cannot bridge, and the
-// honest answer is an empty endpoint the caller can refuse agent mode on —
+// honest answer is an empty endpoint the caller can refuse box mode on —
 // not a run that starts and fails on its first tool call.
 //
 // AND NOTHING IS REGISTERED FOR IT. The minted token is the only way to reach
@@ -390,7 +390,7 @@ func TestNoBaseURLMintsNoEndpointAndHoldsNoSession(t *testing.T) {
 	b := bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "k")})
 	// Mounted, so the missing base URL is the only reason to refuse.
 	_ = b.Handler()
-	if url := b.Open(&mcpbridge.Session{
+	if url := b.Open(t.Context(), &mcpbridge.Session{
 		RunID: "run-1", Surface: emptySurface(),
 	}); url != "" {
 		t.Errorf("endpoint = %q, want empty", url)
@@ -411,7 +411,7 @@ func TestAnExpiredTokenIsRefused(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.Handle(mcpbridge.PathPrefix+"{token}", f.bridge.Handler())
 	f.server.Config.Handler = mux
-	url := f.bridge.Open(f.session)
+	url := f.bridge.Open(t.Context(), f.session)
 
 	clock = clock.Add(2 * time.Minute)
 	res, err := f.server.Client().Post(url, "application/json",
@@ -652,7 +652,7 @@ func TestTheAdvertisedToolsFollowTheLiveSurface(t *testing.T) {
 // own map entry. The SDK keeps every session a box opened — transport,
 // server, and through the server's handlers the seat's live surface — until
 // the client sends a DELETE or an idle clock fires, and a box torn down
-// mid-run sends nothing. Left there, each agent-mode run this process ever
+// mid-run sends nothing. Left there, each box-mode run this process ever
 // served would pin its seat's surface for the life of the process.
 func TestClosingARunEndsTheBoxesOpenSessions(t *testing.T) {
 	t.Parallel()
@@ -697,7 +697,7 @@ func TestReopeningARunReplacesItsEarlierSession(t *testing.T) {
 		RunID: "run-1", Handle: "dev", Role: "Engineer",
 		Surface: f.surface, Ledger: f.ledger,
 	}
-	url := f.bridge.Open(second)
+	url := f.bridge.Open(t.Context(), second)
 	if n := first.Connections(); n != 0 {
 		t.Errorf("the relaunched run's earlier session keeps %d box connections", n)
 	}
@@ -723,7 +723,7 @@ func TestASupersededBoxsTokenNoLongerResolves(t *testing.T) {
 		t.Fatalf("the first run could not dispatch: %s", text(res))
 	}
 
-	fresh := f.bridge.Open(&mcpbridge.Session{
+	fresh := f.bridge.Open(t.Context(), &mcpbridge.Session{
 		RunID: "run-1", Handle: "dev", Role: "Engineer",
 		Surface: f.surface, Ledger: f.ledger,
 	})
@@ -832,7 +832,7 @@ func TestAnIncompleteSessionIsRefusedRatherThanRegistered(t *testing.T) {
 		{"nothing at all", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if url := b.Open(tc.session); url != "" {
+			if url := b.Open(t.Context(), tc.session); url != "" {
 				t.Errorf("endpoint = %q, want empty", url)
 			}
 		})
@@ -854,7 +854,7 @@ func TestABridgeNoListenerMountedOpensNoSession(t *testing.T) {
 	if b.Mounted() {
 		t.Fatal("a bridge nothing mounted reports itself mounted")
 	}
-	if url := b.Open(session); url != "" {
+	if url := b.Open(t.Context(), session); url != "" {
 		t.Errorf("endpoint = %q for a bridge no listener serves, want empty", url)
 	}
 	if b.Live() != 0 {
@@ -865,7 +865,7 @@ func TestABridgeNoListenerMountedOpensNoSession(t *testing.T) {
 	if !b.Mounted() {
 		t.Fatal("building the handler did not mark the bridge mounted")
 	}
-	if url := b.Open(session); url == "" {
+	if url := b.Open(t.Context(), session); url == "" {
 		t.Error("a mounted bridge refused a complete session")
 	}
 	var unset *mcpbridge.Bridge
@@ -930,7 +930,7 @@ func TestAnUnresolvedTokenSaysWhyInTheLogNotTheResponse(t *testing.T) {
 // for, so a case can hand the transport exactly what a box would.
 func (f *fixture) token(t *testing.T, runID string) string {
 	t.Helper()
-	url := f.bridge.Open(&mcpbridge.Session{
+	url := f.bridge.Open(t.Context(), &mcpbridge.Session{
 		RunID: runID, Handle: "dev", Role: "Engineer", Surface: f.surface,
 	})
 	if url == "" {

@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/toolsession"
 )
 
 // Company is one immutable configuration epoch.
@@ -252,6 +253,9 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 			Withheld: in.Turn.Context.WithholdsContacts},
 		Registry: reg,
 		Models:   c.Models,
+		// THE PROCESS'S, threaded per turn like the publisher: the epoch is
+		// configuration and the session directory is not.
+		Sessions: in.Sessions,
 		Caps: runner.Caps{
 			ExecutorRounds:  te.MaxToolRounds,
 			ExecutorCeiling: te.ExecuteMaxToolRoundsCeiling,
@@ -308,7 +312,7 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 		},
 		Resume: in.Resume,
 		// The executor's RUNTIME: nil for the native tool loop, non-nil
-		// for a coding CLI in agent mode. Supplied by the caller rather
+		// for a coding CLI in box mode. Supplied by the caller rather
 		// than resolved here, because building it needs the engine and
 		// the turn — and there is one helper behind both call sites, so
 		// a turn cannot change runtime by being resumed.
@@ -376,6 +380,13 @@ type RunnerInput struct {
 	// rather than epoch configuration.
 	Publisher queue.Publisher
 	Turn      runner.Turn
+
+	// Sessions is where the turn's phases serve their tools to the CLI that
+	// runs them: the engine's one [toolsession.Host] ([Engine.sessions]).
+	// Both RunnerFor call sites pass it, because a phase that offers tools
+	// reaches its CLI through nothing else — a runner built without it can
+	// be built, and refuses its first phase with tools.
+	Sessions *toolsession.Host
 
 	// OnPhase moves the working indicator's wording as the turn changes
 	// phase. Nil is a turn nobody is watching a composer for — see

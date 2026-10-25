@@ -456,7 +456,7 @@ func TestANodeWithoutTheIngressRoleServesOnlyItsProbes(t *testing.T) {
 
 // A SEATS NODE WITHOUT INGRESS ALSO SERVES ITS OWN TOOL BRIDGE, beside its
 // probes. A bridged session lives in the process that opened it, so the box of
-// an agent-mode seat can reach only the node running that seat; gating the
+// a box-mode seat can reach only the node running that seat; gating the
 // bridge on ingress with the rest of the API launched boxes whose every tool
 // call found nothing listening. The listener carries the bridge's own refusal
 // for a bad token, the probes, and no dashboard or REST route.
@@ -479,7 +479,7 @@ func TestASeatsNodeWithoutIngressServesItsProbesAndToolBridge(t *testing.T) {
 	}
 	if surface == nil {
 		t.Fatalf("a seats node with a bridge URL bound no listener, so its "+
-			"agent-mode boxes can reach no tools:\n%s", logged.String())
+			"box-mode runs can reach no tools:\n%s", logged.String())
 	}
 	t.Cleanup(func() { surface.stop(context.Background(), logging.Get("test")) })
 	if surface.app != nil || surface.projector != nil {

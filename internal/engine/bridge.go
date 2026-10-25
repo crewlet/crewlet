@@ -24,7 +24,7 @@ import (
 // bridgedCalls turns a run's durable bridged-call log into the ledger shape
 // the resumed phase reads.
 //
-// THE ONLY RECORD AN AGENT-MODE RESUME HAS. The process collecting a run may
+// THE ONLY RECORD A BOX-MODE RESUME HAS. The process collecting a run may
 // not be the one that launched it, so its tool surface is fresh and has
 // executed nothing: the delivery check, the submission's citations and the
 // iteration ledger all read this list. A call whose arguments cannot be
@@ -114,7 +114,7 @@ func (l *bridgeLedger) bind(launch string) {
 // through the launch, which binds before the box that makes calls exists, so it
 // is a wiring mistake — said in the log rather than filed under whatever job
 // the row holds.
-func (l *bridgeLedger) Append(ctx context.Context, runID string, call tools.Call) error {
+func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.Call) error {
 	if l == nil || l.store == nil {
 		return nil
 	}
@@ -138,6 +138,15 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call tools.Call
 			Args:   encodeArgs(call.Args),
 			Output: call.Output,
 			Failed: call.Failed,
+			// WHEN, FOR HOW LONG AND WHO ANSWERED, which a box-mode
+			// run's record had none of: its calls were the only ones a
+			// phase card could not place on a timeline or name a server
+			// for.
+			Seq:        call.Seq,
+			StartedAt:  call.StartedAt,
+			DurationMS: call.Duration.Milliseconds(),
+			Origin:     call.Origin,
+			Server:     call.Server,
 		},
 		Spent: l.spent(),
 	})

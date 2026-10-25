@@ -163,7 +163,7 @@ func TestAnEndedTurnIsAnsweredClosedForAWhile(t *testing.T) {
 	}
 }
 
-// launcherStub is an agent-mode executor, which no case launches.
+// launcherStub is a box-mode executor, which no case launches.
 type launcherStub struct{}
 
 func (launcherStub) LaunchExecutor(context.Context, runner.AgentRunRequest) error { return nil }

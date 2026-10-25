@@ -278,7 +278,7 @@ func TestTheCodingAgentIsToldTheGoalAndItsEnvironment(t *testing.T) {
 // A RUN'S OWN SYSTEM TEXT LEADS ITS STANDING INSTRUCTIONS, and the task leads
 // its brief.
 //
-// An agent-mode executor launches with the seat's system prompt: it reaches
+// A box-mode executor launches with the seat's system prompt: it reaches
 // the runner ahead of the environment and the ask, whole, opened by the note
 // that says it is the role rather than the coding tool's own prompt, and none
 // of it in the brief. A run with no system text of its own (a run_sandbox job)
@@ -286,7 +286,7 @@ func TestTheCodingAgentIsToldTheGoalAndItsEnvironment(t *testing.T) {
 // than on an empty section or a note introducing nothing.
 //
 // AND THE RUN IS NAMED THE SAME WAY LIVE AND FROM ITS RECORD: by its caller's
-// label where it gave one (an agent-mode executor names its turn's task, since
+// label where it gave one (a box-mode executor names its turn's task, since
 // its brief opens with a heading), else by the brief's first line.
 func TestARunsOwnSystemTextLeadsItsStandingInstructions(t *testing.T) {
 	t.Parallel()
@@ -294,11 +294,11 @@ func TestARunsOwnSystemTextLeadsItsStandingInstructions(t *testing.T) {
 	const ask = "## If you get blocked on a human decision\nRun crewlet-ask --to founder"
 	for name, tc := range map[string]struct {
 		system, label, opens, named string
-		// agent marks an agent-mode executor, whose brief is the turn's
+		// agent marks a box-mode executor, whose brief is the turn's
 		// own ask and so carries no wider task.
 		agent bool
 	}{
-		"agent mode": {
+		"box mode": {
 			system: seat, label: "Ship the login fix\nand tell Ana", agent: true,
 			opens: agentRunNote + "\n\n" + seat + "\n\n## Your environment\n", named: "Ship the login fix",
 		},
@@ -327,7 +327,7 @@ func TestARunsOwnSystemTextLeadsItsStandingInstructions(t *testing.T) {
 			if !strings.HasSuffix(got.System, "\n\n"+ask) {
 				t.Errorf("the ask is not the last standing instruction the launch adds:\n%s", got.System)
 			}
-			// THE TASK ONCE: an agent-mode executor's brief is the turn's
+			// THE TASK ONCE: a box-mode executor's brief is the turn's
 			// ask already, and a run_sandbox job's is one step of a goal
 			// framed after it.
 			want := req.Brief
@@ -461,7 +461,7 @@ func TestTheRowExistsBeforeTheBoxDoes(t *testing.T) {
 	}
 }
 
-// THE JOB IS NAMED BEFORE ITS BOX EXISTS. An agent-mode run's bridge session
+// THE JOB IS NAMED BEFORE ITS BOX EXISTS. A box-mode run's bridge session
 // files every call the box makes under the name a launch hands it, so the name
 // has to reach it before the box can make one — and it has to be the name the
 // row holds, which is the one the store minted. Learned later, from the row,

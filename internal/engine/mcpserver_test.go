@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/mcprelay"
 )
 
 // A REAL MCP server, run as a REAL child process, for the ENGINE's wiring.
@@ -90,6 +91,9 @@ const (
 var thisLaunch int
 
 func TestMain(m *testing.M) {
+	// FIRST: a phase serves its tools to its CLI through `<this binary>
+	// mcp-relay <socket>`, and under `go test` this binary is the engine.
+	mcprelay.DispatchIfRelay()
 	if os.Getenv(toolServerModeEnv) != "" {
 		os.Exit(runToolServer())
 	}

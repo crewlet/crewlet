@@ -171,7 +171,7 @@ func TestTaskSpendNeverExceedsTheRollup(t *testing.T) {
 // A RESUMED SEGMENT PAYS WHAT THE ENGINE SPENT ON ITS JOB.
 //
 // Between the segment that launched a coding run and the one that resumes from
-// it, the engine spends on the job with no segment running: an agent-mode
+// it, the engine spends on the job with no segment running: a box-mode
 // run's bridged calls — the auxiliary rewrites its tools asked for, the workers
 // it delegated to — and the condensation of the run's account at collection.
 // The resume request carries it, and the resumed segment's charge adds each
@@ -629,8 +629,8 @@ func (p *cardRewriter) Complete(context.Context, llm.Request) (*llm.Completion, 
 	return &llm.Completion{Model: "aux", Content: p.answer, InputTokens: p.in, OutputTokens: p.out}, nil
 }
 
-// A RESUMED SEGMENT'S END COUNTS THE WORKERS ITS RUN DELEGATED TO. An
-// agent-mode run's workers ran over the tool bridge while no segment was
+// A RESUMED SEGMENT'S END COUNTS THE WORKERS ITS RUN DELEGATED TO. A
+// box-mode run's workers ran over the tool bridge while no segment was
 // running, so the segment that resumes from the run is the one that pays for
 // them — and its completion is the one record of the turn that can say they
 // ran, beside the workers it delegated to itself.

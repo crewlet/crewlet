@@ -115,9 +115,9 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		{"CLIAgentAuth", "mode", strs(CLIAgentAuthModes)},
 		{"EmbeddingProvider", "type", strs(EmbeddingProviderTypes)},
 		// TWO DIFFERENT CLOSED SETS, deliberately. A seat may name `self`
-		// — code work inside its own agent-mode executor run — and a
+		// — code work inside its own box-mode executor run — and a
 		// company default may not, because it would silently turn code
-		// work off for every seat that is not in agent mode.
+		// work off for every seat that is not in box mode.
 		{"SandboxProvider", "default_run_in", strs(BackendPlacements())},
 		{"LLMProvider", "run_in", strs(BackendPlacements())},
 		{"SandboxProvider", "default_coding_agent", strs(CodingAgents)},
@@ -1149,7 +1149,7 @@ func TestShippedExamplesValidateAgainstTheSchema(t *testing.T) {
 	schema := compileSchema(t, TierCompany)
 	// BOTH, because they exercise different halves of the model: the
 	// full-stack one every integration block, the subscription one a
-	// signed-in CLI, agent mode, its sandbox cell and the seat-level
+	// signed-in CLI, box mode, its sandbox cell and the seat-level
 	// `run_in`.
 	for _, name := range shippedCompanies {
 		t.Run(name, func(t *testing.T) {

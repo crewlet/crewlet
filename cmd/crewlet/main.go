@@ -1883,11 +1883,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// off Tier A, whose answer is the presence lease's: the profile's id
 		// is the one field it does not need.
 		hint := "api.port is 0, so this node binds no listener: no " +
-			"orchestrator can probe it (/health, /ready) and an agent-mode " +
+			"orchestrator can probe it (/health, /ready) and a box-mode " +
 			"seat's box finds no tool bridge here"
 		if boot.Profile("").RunsIngress() {
 			hint = "api.port is 0, so this node serves no dashboard, no REST " +
-				"API, no webhook endpoint, no probe and no agent-mode tool " +
+				"API, no webhook endpoint, no probe and no box-mode tool " +
 				"bridge; every integration is deaf here"
 		}
 		// A WARNING ONLY WHERE NOTHING ELSE WARNED. An ingress node whose
@@ -1931,7 +1931,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// orchestrator runs every node and has to be able to restart one that
 	// wedged and wait on one that has not joined, and the TOOL BRIDGE, because
 	// a bridged session is a live tool surface in the process that opened it,
-	// so a seats node running an agent-mode seat is the only node its box can
+	// so a seats node running a box-mode seat is the only node its box can
 	// reach. See [api.Probes].
 	if !boot.Profile(nodeID).RunsIngress() {
 		return serveProbes(ctx, boot, e, reconciler, listeners, log)
@@ -2730,7 +2730,7 @@ func serveProbes(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// Empty unless the bridge has a listener of its own on api.public.
 		"public_addr", publicAddr,
 		"hint", "node.roles does not include ingress, so this node serves only "+
-			"/health and /ready, and the agent-mode tool bridge ("+
+			"/health and /ready, and the box-mode tool bridge ("+
 			mcpbridge.PathPrefix+"{token}) where it runs seats with "+
 			mcpbridge.BaseURLVar+" set — on api.public when the file sets one; "+
 			"webhooks, the dashboard and the REST API are a peer's with the "+

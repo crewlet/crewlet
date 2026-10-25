@@ -332,13 +332,13 @@ func TestARunsOptionalValuesAreLeftOutByTheLayerThatWroteThem(t *testing.T) {
 	}
 }
 
-// AN AGENT-MODE EXECUTOR STARTS WITHOUT WHAT ITS ENVIRONMENT LACKS, where a
+// A BOX-MODE EXECUTOR STARTS WITHOUT WHAT ITS ENVIRONMENT LACKS, where a
 // run_sandbox call is refused.
 //
 // The executor is not a tool call a turn chose but the turn itself: refused,
 // the phase fails and the turn with it, so every message the seat could answer
 // through its bridge would fail for a token a pass may mint in a minute.
-func TestAnAgentModeExecutorStartsWithoutWhatItsEnvironmentLacks(t *testing.T) {
+func TestABoxModeExecutorStartsWithoutWhatItsEnvironmentLacks(t *testing.T) {
 	logs := captureEngineLogs(t)
 	c, seat := splitLoginCompany(t, "api", "codex")
 	seat.Sandbox = &org.RoleSandbox{Env: map[string]string{"GITHUB_TOKEN": "${SWE_GITHUB_TOKEN}"}}
