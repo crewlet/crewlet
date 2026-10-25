@@ -67,11 +67,17 @@ import (
 // value the next start carries onto the fleet later-wins, is the one write
 // left.
 //
-// # Every command here needs the keyring, and the keyring is Tier A
+// # The keyring is Tier A, and a node named by -api holds its own
 //
 // The store holds only ciphertext. The key material lives in the bootstrap
 // config — on disk or in the environment, never in the database it opens —
 // which is why these commands read Tier A and not the company document.
+//
+// Through a node `-api` names, this command seals and opens nothing: the node
+// does both, under its own keyring. So a machine that is not a node, holding
+// no Tier A file, runs every subcommand there but `rekey`, which judges the
+// rows against the `secrets.active_key_id` that file names, and so needs it
+// ([secretsBootstrap]).
 
 const secretsUsage = `crewlet secrets — read and rotate the encrypted secret store
 
@@ -85,7 +91,7 @@ Usage:
 
 Flags:
   -config PATH   Tier A config carrying the keyring (default %q)
-  -api URL       The running node to write through; default is its own api.host:port
+  -api URL       The running node to go through; default is its own api.host:port
 
 A running engine holds its database, so these commands go through its
 authenticated /secrets surface — which is what puts a value on every node.
@@ -99,6 +105,9 @@ else — once the node has run, or on a member of a cluster (stream.cluster) or
 a client of an external broker (stream.type: nats) — only set works there,
 its value reaching the fleet at the next start, and list, get, unset and
 rekey need the running engine or -api.
+
+Through -api, a machine with no Tier A file at -config runs every command
+but rekey, which reads the key it re-seals under from -config.
 `
 
 func runSecrets(environ config.Source, args []string, stdout, stderr io.Writer) error {
@@ -161,6 +170,9 @@ func runSecrets(environ config.Source, args []string, stdout, stderr io.Writer) 
 	}
 
 	ctx := context.Background()
+	// boot is the run's Tier A, read once the command line is known to be
+	// good ([secretsBootstrap]), which never leaves it nil for a rekey.
+	var boot *config.Bootstrap
 	commands := map[string]func(sv *secretTarget) error{
 		"list": func(sv *secretTarget) error { return listSecrets(ctx, sv, stdout) },
 		"set": func(sv *secretTarget) error {
@@ -169,7 +181,7 @@ func runSecrets(environ config.Source, args []string, stdout, stderr io.Writer) 
 		"get":   func(sv *secretTarget) error { return getSecret(ctx, sv, name, stdout) },
 		"unset": func(sv *secretTarget) error { return unsetSecret(ctx, sv, name, stdout) },
 		"rekey": func(sv *secretTarget) error {
-			return rekeySecrets(ctx, sv, *bootstrapPath, *dryRun, stdout)
+			return rekeySecrets(ctx, sv, boot.Secrets.ActiveKeyID, *dryRun, stdout)
 		},
 	}
 	// EVERY USAGE ERROR BEFORE A ROUTE IS DECIDED. A route may refuse — on a
@@ -190,7 +202,11 @@ func runSecrets(environ config.Source, args []string, stdout, stderr io.Writer) 
 	if sub == "set" {
 		run.use, run.offline = actsOnItsOwn, true
 	}
-	sv, closeStore, err := openSecretStore(ctx, environ, *bootstrapPath, *apiURL, run)
+	boot, err := secretsBootstrap(*bootstrapPath, *apiURL, run.command, sub == "rekey")
+	if err != nil {
+		return err
+	}
+	sv, closeStore, err := routeSecretStore(ctx, environ, boot, *bootstrapPath, *apiURL, run)
 	if err != nil {
 		return err
 	}
@@ -506,19 +522,60 @@ type secretTarget struct {
 // broker's first start ([stoppedNode]).
 func (t *secretTarget) wholeStore() bool { return !t.fleet && t.stopped == nil }
 
-// openSecretStore picks the store this `crewlet secrets` invocation reads and
-// writes: the Tier A file at bootstrapPath, routed by [routeSecretStore].
-func openSecretStore(ctx context.Context, environ config.Source, bootstrapPath, apiURL string,
-	run storeRun) (*secretTarget, func(), error) {
-
-	// NO KEYRING CHECK OF ITS OWN: Tier A refuses a file without one, so a
-	// document that loaded carries it, and the refusal an operator sees
-	// names `secrets.keys` in the file's own terms.
-	boot, err := loadBootstrapForStore(bootstrapPath)
-	if err != nil {
-		return nil, nil, err
+// secretsBootstrap is the Tier A document a `crewlet secrets` run is routed
+// under ([routeSecretStore]): the file at bootstrapPath, or nil where there is
+// none and apiURL names the node to go through — a machine that is not a node,
+// which needs none. command names the run for a refusal, and needsKeyID is
+// whether it needs Tier A's `secrets.active_key_id`, which `rekey` does.
+//
+// NO KEYRING CHECK OF ITS OWN: Tier A refuses a file without one, so a
+// document that loaded carries it, and the refusal an operator sees names
+// `secrets.keys` in the file's own terms. And a file that exists and does not
+// load fails the run, -api or not, as it fails every command that reads the
+// company ([companyBootstrap]): someone who configured a node and did not get
+// it must not have the run quietly go somewhere else.
+//
+// # Where no file is no answer
+//
+// With no -api the file is the only way to the store: it names this node's
+// table, the keyring that table is sealed under, and the address of the
+// engine that holds it. A command reading the company resolves from the
+// environment alone there ([companyStore.route]); this one has nothing to fall
+// back to, since the store is its whole subject, so it is refused, naming both
+// ways to a store — or, for a rekey, naming only -config, since -api would
+// not spare it the file.
+//
+// A rekey needs the file through -api too: it judges the rows against the
+// active key id it expects, Tier A's `secrets.active_key_id`. Its -dry-run
+// lists, from the node's listing, what is sealed under any other key. Its
+// real pass also sends that id, and the node refuses a rotation onto a key it
+// does not seal with: that check is what keeps a rekey from reporting a
+// rotation the fleet did not make, and sending the node's own key in its place
+// would check nothing.
+func secretsBootstrap(bootstrapPath, apiURL, command string, needsKeyID bool) (*config.Bootstrap, error) {
+	if strings.TrimSpace(apiURL) == "" {
+		boot, err := loadBootstrapForStore(bootstrapPath)
+		if errors.Is(err, os.ErrNotExist) {
+			remedy := "Point -config at it, or pass -api URL naming a running node"
+			if needsKeyID {
+				remedy = "Point -config at it: a rekey needs the file even through " +
+					"-api, since it judges the rows against the secrets.active_key_id " +
+					"the file names"
+			}
+			return nil, fmt.Errorf("%s: %w\n\nThat file names this node's store and "+
+				"the keyring it is sealed under. %s", command, err, remedy)
+		}
+		return boot, err
 	}
-	return routeSecretStore(ctx, environ, boot, bootstrapPath, apiURL, run)
+	boot, err := companyBootstrap(bootstrapPath)
+	if err != nil || boot != nil || !needsKeyID {
+		return boot, err
+	}
+	return nil, fmt.Errorf("%s: there is no Tier A file at %s, and a rekey reads from "+
+		"it the key it re-seals under (secrets.active_key_id): the rows are judged "+
+		"against that key, -dry-run's included, and the pass sends it for the node to "+
+		"check against the key it seals with. Point -config at a crewlet.yaml carrying "+
+		"the fleet's keyring; -api still names the node to go through", command, bootstrapPath)
 }
 
 // storeUse is what a run does with the company's stored values, which decides
@@ -956,20 +1013,17 @@ func unsetSecret(ctx context.Context, sv *secretTarget, name string, stdout io.W
 	return nil
 }
 
-func rekeySecrets(ctx context.Context, sv *secretTarget, bootstrapPath string,
+// rekeySecrets re-seals what sv holds under active, the run's Tier A
+// `secrets.active_key_id` ([secretsBootstrap]), or with dryRun reports what it
+// would re-seal.
+func rekeySecrets(ctx context.Context, sv *secretTarget, active string,
 	dryRun bool, stdout io.Writer,
 ) error {
-	boot, err := config.LoadBootstrap(bootstrapPath, config.EnvOnly())
-	if err != nil {
-		return err
-	}
-	active := boot.Secrets.ActiveKeyID
 	if dryRun {
 		// LISTED FROM THE KEY ID COLUMN, which is denormalised out of the
 		// envelope for exactly this: reporting what a rekey would touch
 		// must not decrypt anything, or the dry run is a bigger exposure
 		// than the pass it is previewing.
-		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		rows, err := sv.List(ctx)
 		if err != nil {
 			return err

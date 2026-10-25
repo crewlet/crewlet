@@ -111,6 +111,9 @@ type fakeSecretsNode struct {
 	last   secretsRequest
 	status int
 	body   string
+
+	// requests counts every request the node was sent.
+	requests int
 }
 
 type secretsRequest struct {
@@ -126,6 +129,7 @@ func newFakeSecretsNode(t *testing.T) *fakeSecretsNode {
 	n := &fakeSecretsNode{t: t}
 	n.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
+		n.requests++
 		n.last = secretsRequest{
 			method: r.Method, path: r.URL.Path, query: r.URL.RawQuery,
 			auth: r.Header.Get("Authorization"), body: string(raw),
@@ -538,6 +542,102 @@ func TestTheCommandWritesThroughTheNamedNode(t *testing.T) {
 	// The local database beside the Tier A file must not have been created.
 	if _, statErr := os.Stat(filepath.Join(filepath.Dir(cfg), "index.db")); statErr == nil {
 		t.Error("a database was created on a machine writing through a remote node")
+	}
+}
+
+// A MACHINE THAT IS NOT A NODE RUNS `crewlet secrets` THROUGH -api WITH NO TIER
+// A FILE, and creates nothing there.
+//
+// Through a named node this command seals and opens nothing — the node does
+// both, under its own keyring — so the Tier A file it reads for a keyring has
+// nothing to give it, and requiring one sent an operator on a laptop to put a
+// Tier A file carrying a keyring on it (in practice a copy of a node's) to
+// take a listing. With no file, nothing names a store on this machine, so
+// nothing is opened or created on it either.
+//
+// rekey is the one subcommand still refused without the file, and before it
+// asks the node anything: it judges the rows against the key it expects to
+// re-seal under, which is Tier A's, and its real pass sends that key so that a
+// node sealing under another refuses it. And with no -api either there is no
+// store to reach at all, so the run is refused naming both ways to one —
+// except a rekey's, which names only -config, since -api would not spare it
+// the file — rather than going on with none.
+func TestTheSecretsCommandReachesANamedNodeWithNoTierAHere(t *testing.T) {
+	t.Parallel()
+	node := newFakeSecretsNode(t)
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "crewlet.yaml")
+	secretsVia := func(answer string, args ...string) (string, error) {
+		t.Helper()
+		node.body = answer
+		var out, errs bytes.Buffer
+		full := append(append([]string{"secrets"}, args...), "-config", missing)
+		err := runIn(tokenEnviron("ops-token"), full, &out, &errs)
+		return out.String(), err
+	}
+
+	for _, step := range []struct {
+		args                []string
+		answer              string
+		method, path, query string
+		says                string
+	}{
+		{[]string{"list"}, `{"secrets":[{"name":"GL_TOKEN","key_id":"k1"}]}`,
+			http.MethodGet, "/secrets", "", "GL_TOKEN"},
+		{[]string{"set", "GL_TOKEN", "-value", "glpat-new"},
+			`{"updated_by":"token:ops","updated_by_kind":"operator"}`,
+			http.MethodPut, "/secrets/GL_TOKEN", "", "stored GL_TOKEN"},
+		{[]string{"get", "GL_TOKEN", "-reveal"}, `{"name":"GL_TOKEN","value":"glpat-new"}`,
+			http.MethodGet, "/secrets/GL_TOKEN", "reveal=true", "glpat-new"},
+		{[]string{"unset", "GL_TOKEN"}, `{"removed":true}`,
+			http.MethodDelete, "/secrets/GL_TOKEN", "", "removed GL_TOKEN"},
+	} {
+		out, err := secretsVia(step.answer, append(step.args, "-api", node.server.URL)...)
+		if err != nil {
+			t.Fatalf("secrets %s through -api with no Tier A here: %v", step.args[0], err)
+		}
+		if !strings.Contains(out, step.says) {
+			t.Errorf("secrets %s said %q, want %q", step.args[0], out, step.says)
+		}
+		if got := node.last; got.method != step.method || got.path != step.path ||
+			got.query != step.query || got.auth != "Bearer ops-token" {
+			t.Errorf("secrets %s sent %s %s?%s (%s), want %s %s?%s with the "+
+				"environment's token", step.args[0], got.method, got.path, got.query,
+				got.auth, step.method, step.path, step.query)
+		}
+	}
+
+	asked := node.requests
+	_, err := secretsVia(`{}`, "rekey", "-api", node.server.URL)
+	if err == nil || !strings.Contains(err.Error(), "-config") ||
+		!strings.Contains(err.Error(), "secrets.active_key_id") {
+		t.Errorf("a rekey with no Tier A to name its key was not refused naming "+
+			"-config and the key it reads there: %v", err)
+	}
+	_, err = secretsVia(`{}`, "list")
+	if !errors.Is(err, os.ErrNotExist) || !strings.Contains(err.Error(), "-config") ||
+		!strings.Contains(err.Error(), "-api URL") {
+		t.Errorf("a run with neither a Tier A file nor -api was not refused naming "+
+			"both: %v", err)
+	}
+	_, err = secretsVia(`{}`, "rekey", "-dry-run")
+	if !errors.Is(err, os.ErrNotExist) || !strings.Contains(err.Error(), "-config") ||
+		!strings.Contains(err.Error(), "secrets.active_key_id") ||
+		strings.Contains(err.Error(), "-api URL naming") {
+		t.Errorf("a rekey with neither a Tier A file nor -api was not refused naming "+
+			"-config alone, and the key it reads there: %v", err)
+	}
+	if node.requests != asked {
+		t.Errorf("the node was sent %d requests by runs refused before they reach "+
+			"a store", node.requests-asked)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		t.Errorf("a run with no Tier A here created %s", filepath.Join(dir, entry.Name()))
 	}
 }
 

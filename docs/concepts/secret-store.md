@@ -302,7 +302,7 @@ Every other command that touches the store — each command that reads the compa
 
 `crewlet secrets keygen` needs no config and no store: it is what an operator runs *before* either exists, and it prints the base64 form the keyring's `material` field takes.
 
-Every other command reads the **Tier A** config for its keyring, never the company document. The store holds only ciphertext; the key material lives in the bootstrap file — on disk or in the environment, never in the database it opens.
+A subcommand that opens this node's own table reads its keyring from the **Tier A** config, never the company document. The store holds only ciphertext; the key material lives in the bootstrap file — on disk or in the environment, never in the database it opens. Through `-api` a machine needs no Tier A file, because the node seals and opens every value under its own keyring, so every subcommand runs there but `rekey`, which judges the rows against the `secrets.active_key_id` the file names and, in its real pass, sends that id for the node to check against its own ([CLI reference](../reference/cli.md#crewlet-secrets)).
 
 ### From the dashboard
 
