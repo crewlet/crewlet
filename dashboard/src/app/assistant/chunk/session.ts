@@ -27,6 +27,7 @@
 import { useSyncExternalStore } from "react";
 import {
   ASSISTANT_ACTION_CONTEXT_INVALIDATE,
+  type AssistantErrorCode,
   type AssistantProposalAnswer,
   type AssistantProposalCard,
 } from "~/contract/assistant.ts";
@@ -41,6 +42,7 @@ import {
 import { assistantEventId, type AssistantNarrowFrame } from "~/protocol/assistantWire.ts";
 import { newActOpID } from "~/protocol/act.ts";
 import { RestError, isAbort } from "~/protocol/rest.ts";
+import { rereadViewer } from "~/lib/viewer.ts";
 import { session as floors, type SessionDomain } from "~/protocol/session.ts";
 import { writeFailed } from "~/protocol/writeOutcome.ts";
 import { setAssistantActivity } from "../status.ts";
@@ -112,6 +114,7 @@ export function sendRefusalOf(err: RestError): SendRefusal {
   return {
     code: err.code,
     sentence: refusalWords(err),
+    hint: err.code === "assistant_model_not_ready" && err.hint !== "" ? err.hint : null,
     retryAfterSeconds: typeof retry === "number" && retry > 0 ? Math.ceil(retry) : null,
   };
 }
@@ -127,6 +130,10 @@ function refusalWords(err: RestError): string {
       return "Crewlet was updated. Reload the page to keep asking.";
     case "assistant_unavailable":
       return "The assistant cannot answer right now. Try again in a moment.";
+    case "assistant_model_not_ready":
+      // THE ENGINE'S OWN SENTENCE for the model's state (signed out, its plan
+      // spent), the one a failed answer would have carried.
+      return err.detail || err.sentence;
     case "budget_exhausted":
       return "The assistant's budget for now is spent. Try again when it resets.";
     default:
@@ -134,6 +141,22 @@ function refusalWords(err: RestError): string {
         return "The question could not be sent. Check your connection and try again.";
       return err.sentence || err.detail || "The engine refused the question.";
   }
+}
+
+/** The turn error codes a model failure ends a turn with. */
+const MODEL_FAILURES: ReadonlySet<AssistantErrorCode> = new Set([
+  "model_signed_out",
+  "model_busy",
+  "model_timeout",
+  "model_unavailable",
+]);
+
+/**
+ * A turn the model failed asks the viewer again, so the drawer's notice (a
+ * model signed out, a plan spent) is drawn before the reader asks again.
+ */
+function modelFailed(frame: AssistantNarrowFrame): void {
+  if (frame.kind === "error" && MODEL_FAILURES.has(frame.error.code)) rereadViewer();
 }
 
 /** Raise the tab's read floors to a write the engine says landed. */
@@ -217,6 +240,7 @@ function read(
         invalidated(frame);
         dispatch({ type: "frame", frame });
         pageAction(frame);
+        modelFailed(frame);
       },
       state: (state, since) => {
         if (own) live({ type: "stream", state, since });
@@ -284,8 +308,16 @@ export async function send(text: string, page: PageSnapshot | null): Promise<voi
     const refusal =
       err instanceof RestError
         ? sendRefusalOf(err)
-        : { code: "", sentence: "The question could not be sent.", retryAfterSeconds: null };
+        : {
+            code: "",
+            sentence: "The question could not be sent.",
+            hint: null,
+            retryAfterSeconds: null,
+          };
     dispatch({ type: "refused", key, refusal });
+    // A MODEL THE ENGINE KNOWS IS NOT READY: the drawer's notice is drawn now,
+    // not at the next poll.
+    if (refusal.code === "assistant_model_not_ready") rereadViewer();
   }
 }
 

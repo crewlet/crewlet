@@ -146,6 +146,9 @@ type Provider struct {
 	// spent plan ([Provider.bench]).
 	sitOut bench
 
+	// ready is what the entry's calls met, for [Provider.Unready].
+	ready readiness
+
 	// now is the clock the bench is read against — time.Now, and a fixed
 	// clock in the suite, which has to watch a window end without waiting
 	// a minute for it.
@@ -307,7 +310,16 @@ func (p *Provider) routeFor(req llm.Request) cliprofile.Route {
 // launched to learn again what the last one said. Checked as the call arrives
 // and again once it holds a slot, because a call that queued for one may have
 // waited out the very call that sat the entry out.
+//
+// What the call met is remembered for [Provider.Unready].
 func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
+	comp, err := p.complete(ctx, req)
+	p.remember(err)
+	return comp, err
+}
+
+// complete is one call, as [Provider.Complete] describes it.
+func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
 	if err := p.benched(); err != nil {
 		return nil, err
 	}
@@ -495,7 +507,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		// the next member is no answer to, so it is fatal. A CLI that DID run
 		// comes back as a result whatever happened to it, and [completion]
 		// classifies it by what that was.
-		return nil, p.fail(llm.KindFatal, err)
+		return nil, p.fail(llm.KindFatal, fmt.Errorf("%w: %w", llm.ErrNotRunnable, err))
 	}
 	log.DebugContext(ctx, "cli_agent_call", "provider", p.key, "agent", p.agent, "model", p.model,
 		"seat", seat, "exit", res.exitCode, "elapsed_ms", time.Since(started).Milliseconds())
@@ -713,12 +725,13 @@ func (p *Provider) completion(
 	}); ok {
 		reason := nonEmpty(hit.Said, firstLine(said, res.stderr))
 		if hit.Kind == llm.KindRateLimit {
-			p.bench(hit.Retry, reason)
+			until := p.bench(hit.Retry, reason)
 			// WHERE IT MATCHED, beside what it matched: a sit-out takes the
 			// entry from every seat on this node, and the one question an
 			// operator who doubts it has is whether the vendor said it.
 			log.WarnContext(ctx, "cli_agent_limit_reported", "provider", p.key, "agent", p.agent,
 				"source", string(hit.Source), "said", reason)
+			return nil, p.limited(fmt.Errorf("%s", reason), until)
 		}
 		return nil, p.fail(hit.Kind, fmt.Errorf("%s", reason))
 	}
@@ -1104,8 +1117,13 @@ func resetAfter(from string, marker cliprofile.LimitMarker) time.Duration {
 }
 
 // fail wraps an error as a classified provider failure.
-func (p *Provider) fail(kind llm.ErrorKind, err error) error {
-	return &llm.Error{Kind: kind, Provider: providerName + "/" + p.agent, Model: p.model, Err: err}
+func (p *Provider) fail(kind llm.ErrorKind, err error) error { return p.failure(kind, err) }
+
+// failure is [Provider.fail] as its concrete type, for a caller that adds to
+// it.
+func (p *Provider) failure(kind llm.ErrorKind, err error) *llm.Error {
+	return &llm.Error{Kind: kind, Provider: providerName + "/" + p.agent, Model: p.model,
+		Key: p.key, Err: err}
 }
 
 // firstLine is the first non-empty line across the given texts, for a failure

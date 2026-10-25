@@ -11668,3 +11668,8 @@ a.live-row:focus-visible {
   margin: var(--spacing-2) 0 0;
   text-align: center;
 }
+
+/* The model notice stands above the composer, the disclaimer's step apart. */
+.assistant-model-notice {
+  margin: 0 0 var(--spacing-2);
+}

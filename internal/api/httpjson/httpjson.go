@@ -1010,6 +1010,14 @@ const (
 	// every model in its chain failing, or the turn's runner out of
 	// reach. 503, with a Retry-After where a wait is known to help.
 	CodeAssistantUnavailable Code = "assistant_unavailable"
+	// CodeAssistantModelNotReady is a question refused before its first
+	// round because every model in the assistant's chain is known unusable
+	// now: its detail `reason` is the error code a turn would have failed
+	// with (model_signed_out, model_busy, model_unavailable), with the
+	// `detail` and `hint` a person reads. 503, with a Retry-After only for
+	// a spent plan whose reset is known: a signed-out model needs somebody
+	// to act, not a wait.
+	CodeAssistantModelNotReady Code = "assistant_model_not_ready"
 	// CodeProposalAlreadyDecided is an approval or a decline of a proposal
 	// somebody, or another tab, already decided; its detail `state` is the
 	// state it is in now. 409.
@@ -1386,6 +1394,7 @@ var codes = map[Code]string{
 	CodeAssistantBusy: "You have asked the assistant too much at once. Wait the moment " +
 		"Retry-After names, then ask again.",
 	CodeAssistantUnavailable:   "The assistant cannot answer right now. Try again in a moment.",
+	CodeAssistantModelNotReady: "The assistant's model cannot answer right now.",
 	CodeProposalAlreadyDecided: "This change was already decided, so nothing more was done.",
 	CodeProposalExpired: "This proposed change expired before it was approved. Ask the " +
 		"assistant to propose it again.",

@@ -194,6 +194,28 @@ says so and when it resets, and stops before using more. A turn takes at most
 a few tool steps and a couple of minutes; a question that needs more is best
 split in two.
 
+## When the assistant cannot answer
+
+The assistant runs on a model your company set up, and it tells you when that
+model cannot answer rather than leaving you waiting:
+
+- **Before you ask.** When the model is known to be unavailable, the panel says
+  so above the box and Send stays off, so you are not left waiting for an
+  answer that cannot come. Your earlier conversations stay readable.
+- **When an answer fails.** The failure says what happened: the model is
+  signed out, it reached its usage limit, it took too long, or it could not be
+  started. **Try again** is offered only where asking again can help: after a
+  usage limit resets, or after a model that took too long.
+
+| You see | What to do |
+|---|---|
+| The model is signed out | Ask an administrator to sign it in again. Asking again does not help until they do |
+| The model reached its usage limit | Wait until the time shown, or ask an administrator to add another model |
+| The model took too long | Try again, or ask a narrower question |
+| The model cannot be started | Ask an administrator to check the assistant's model |
+
+An administrator sees the command that fixes it instead.
+
 ## Related
 
 - [Running the Dashboard Assistant](../guides/assistant.md): turning it on,

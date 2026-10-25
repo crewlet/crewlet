@@ -41,7 +41,7 @@ func TestDoctorReportsAMissingBinary(t *testing.T) {
 	if !strings.Contains(joined, "ENGINE host") {
 		t.Errorf("the problem does not say where the CLI must be installed:\n%s", joined)
 	}
-	if d.Smoke != "skipped — no binary to run" {
+	if d.Smoke != "skipped: no binary to run" {
 		t.Errorf("Smoke = %q, want a skip rather than a second failure", d.Smoke)
 	}
 }

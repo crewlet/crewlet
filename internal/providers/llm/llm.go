@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 )
 
 // Role names a message's author.
@@ -414,7 +415,14 @@ type Error struct {
 	Kind     ErrorKind
 	Provider string
 	Model    string
-	Err      error
+	// Key is the providers.llm key of the entry that failed, so a remedy
+	// can name the entry an operator signs in again; empty where the
+	// backend was built without one.
+	Key string
+	// RetryAt is when the entry is tried again, for a [KindRateLimit] whose
+	// backend sits the entry out until then; zero where no instant is known.
+	RetryAt time.Time
+	Err     error
 }
 
 func (e *Error) Error() string {
@@ -422,6 +430,12 @@ func (e *Error) Error() string {
 }
 
 func (e *Error) Unwrap() error { return e.Err }
+
+// ErrNotRunnable is a CLI that could not be started on this host at all: its
+// binary missing or not executable, or no process to give it. A backend wraps
+// it under [KindFatal], so a caller telling a person why the model did not
+// answer can say the model's program is missing rather than that it failed.
+var ErrNotRunnable = errors.New("the model's CLI could not be started on this host")
 
 // KindOf returns the classification of an error, or KindFatal for anything
 // this package did not classify. Fatal is the safe default for an UNRECOGNISED

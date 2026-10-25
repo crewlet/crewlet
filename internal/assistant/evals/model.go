@@ -22,6 +22,9 @@ type Model struct {
 	// Gate, when set, is waited on before each round is answered, so a
 	// suite can stop a turn while its model is thinking.
 	Gate chan struct{}
+	// unready is what the model says its next call would meet, without a
+	// call ([Model.Unready]).
+	unready error
 }
 
 // Round is one scripted answer: prose, tool calls, or an error.
@@ -99,6 +102,22 @@ func (m *Model) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 		c.StopReason = llm.StopToolUse
 	}
 	return c, nil
+}
+
+// Unready is what the model says, without a call, its next call would meet:
+// nil until a suite sets it ([Model.SetUnready]), as a CLI entry that is
+// signed out or spent would.
+func (m *Model) Unready() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.unready
+}
+
+// SetUnready makes [Model.Unready] answer err.
+func (m *Model) SetUnready(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.unready = err
 }
 
 // Requests is every request the model was sent, in order.

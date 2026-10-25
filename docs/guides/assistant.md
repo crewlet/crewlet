@@ -173,4 +173,21 @@ suite is under `examples/assistant-evals/`.
 | No model | `crewlet llm doctor <key>` for each `assistant.llm` member, and the engine log for the chain's refusal |
 | Not a person | The caller is a token or a token's session. Sign in as the person |
 | No permission | The person's account and the authority table's assistant column for the verbs they expected |
+| Signed out (`model_signed_out`) | The CLI's login expired or is missing. Sign it in again with `crewlet llm login <key>`, then `crewlet llm doctor <key>` |
+| Usage limit reached (`model_busy`) | The plan is spent until the reset the notice names. Add a second model to `assistant.llm` to keep answering through a limit |
+| Took too long (`model_timeout`) | The entry's `timeout_seconds`, and the CLI's own start time on the host |
+| Cannot be started (`model_unavailable`) | The CLI's binary on the engine host's `PATH`: `crewlet llm doctor <key>` names it |
+
+**The model's state is checked before anyone asks.** When every model in
+`assistant.llm` is known unusable, the drawer says so above its composer and
+disables Send rather than letting a person ask and wait for a failure. What
+the node knows comes from its own calls and configuration, never from a call
+made to check: a spent plan until its reset, a login a call was refused on, a
+CLI with nothing that signs it in, or a CLI that could not start. A login
+written with `crewlet llm login`, or any call through the entry that answers,
+clears it at once; with no new evidence the node tries the model again after
+ten minutes, so a sign-in the engine cannot see never keeps the assistant away
+for longer. An administrator is shown the command that fixes it, and anybody
+else is told to ask an administrator. The codes are listed in the
+[API reference](../reference/api-endpoints.md#how-a-turn-fails-on-the-model).
 | Answers are slow | `crewlet.assistant.first_output.latency`, the entry's `max_concurrent`, and the CLI's own start time on the host |

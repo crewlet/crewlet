@@ -55,6 +55,8 @@ export interface ThreadProps {
   opened: ReadonlySet<string>;
   /** Send a question again, for a turn that failed on something that may pass. */
   onRetry: (text: string) => void;
+  /** Why a question cannot be sent now (Send's own reason), which holds Try again off too. */
+  retryDisabledReason?: string | undefined;
   /** Dial the running turn's stream again. */
   onReconnect: () => void;
 }
@@ -111,6 +113,7 @@ function Turn({
   on,
   opened,
   onRetry,
+  retryDisabledReason,
   last,
 }: {
   turn: TurnView;
@@ -118,6 +121,7 @@ function Turn({
   on: CardHandlers;
   opened: ReadonlySet<string>;
   onRetry: (text: string) => void;
+  retryDisabledReason: string | undefined;
   last: boolean;
 }) {
   const open = isOpen(turn.phase);
@@ -170,9 +174,10 @@ function Turn({
           role="status"
           title={turn.refusal.sentence}
         >
-          {turn.refusal.retryAfterSeconds !== null
-            ? `You can ask again in ${turn.refusal.retryAfterSeconds} seconds, and your question is back in the box below.`
-            : "Nothing changed."}
+          {turn.refusal.hint ??
+            (turn.refusal.retryAfterSeconds !== null
+              ? `You can ask again in ${turn.refusal.retryAfterSeconds} seconds, and your question is back in the box below.`
+              : "Nothing changed.")}
         </Callout>
       ) : (
         <RunChip state={chip.state} title={chip.title} meta={chip.meta} defaultOpen={open}>
@@ -209,7 +214,12 @@ function Turn({
           title={turn.error.message}
           action={
             turn.error.retryable ? (
-              <Button size="small" variant="secondary" onClick={() => onRetry(turn.question)}>
+              <Button
+                size="small"
+                variant="secondary"
+                disabledReason={retryDisabledReason}
+                onClick={() => onRetry(turn.question)}
+              >
                 Try again
               </Button>
             ) : undefined
@@ -299,7 +309,15 @@ function AuditReads({ reads }: { reads: ConversationView["auditReads"] }) {
   );
 }
 
-export function Thread({ view, now, on, opened, onRetry, onReconnect }: ThreadProps) {
+export function Thread({
+  view,
+  now,
+  on,
+  opened,
+  onRetry,
+  retryDisabledReason,
+  onReconnect,
+}: ThreadProps) {
   useAnnouncements(view);
   const reconnecting = view.stream === "reconnecting";
   const patient =
@@ -315,6 +333,7 @@ export function Thread({ view, now, on, opened, onRetry, onReconnect }: ThreadPr
           on={on}
           opened={opened}
           onRetry={onRetry}
+          retryDisabledReason={retryDisabledReason}
           last={i === view.turns.length - 1}
         />
       ))}

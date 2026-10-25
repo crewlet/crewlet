@@ -46,17 +46,9 @@ func (m assistantModels) Chain(_ context.Context, person iam.Principal,
 	if err := use.Validate(); err != nil {
 		return nil, "", err
 	}
-	c := m.e.Company()
-	if c == nil || c.Config == nil {
-		return nil, "", errors.New("engine: this node runs no company yet, so it has no " +
-			"assistant to run")
-	}
-	keys, err := c.Config.AssistantChain()
+	c, keys, providers, err := m.entries()
 	if err != nil {
 		return nil, "", err
-	}
-	if c.Models == nil {
-		return nil, "", errors.New("engine: the company configures no providers.llm entry")
 	}
 	seat := auxspend.Seat{Person: person.Seat}
 	if c.Org != nil {
@@ -66,12 +58,8 @@ func (m assistantModels) Chain(_ context.Context, person iam.Principal,
 	}
 	zone := basisOf(c, nil).zone
 	members := make([]chain.Member, 0, len(keys))
-	for _, key := range keys {
-		provider, ok := c.Models.Provider(key)
-		if !ok {
-			return nil, "", fmt.Errorf("engine: assistant.llm names %q, which the running "+
-				"company does not build", key)
-		}
+	for i, key := range keys {
+		provider := providers[i]
 		members = append(members, chain.Member{Key: key, Provider: recordedProvider{
 			inner: provider, key: key, use: use, seat: seat, ledger: m.e.auxSpend,
 			zone: zone, now: m.e.now,
@@ -85,6 +73,49 @@ func (m assistantModels) Chain(_ context.Context, person iam.Principal,
 		return nil, "", fmt.Errorf("engine: assistant chain: %w", err)
 	}
 	return built, keys[0], nil
+}
+
+// Unready is the failure the assistant's chain would meet as far as its
+// members know without a call ([chain.Unready] over the entries
+// `assistant.llm` names, as this node built them), or nil when any may answer
+// or the chain does not resolve.
+func (m assistantModels) Unready(context.Context) error {
+	_, _, providers, err := m.entries()
+	if err != nil {
+		// A chain that does not resolve is the turn's own refusal
+		// ([assistantModels.Chain]) and `/viewer`'s no_model, not a state
+		// of a model's.
+		return nil //nolint:nilerr // see above: not a model's state
+	}
+	return chain.Unready(providers)
+}
+
+// entries resolves `assistant.llm` through the ONE accessor that hands it out
+// ([config.Company.AssistantChain]) to the entries this node built, in order:
+// the company, the keys and each key's provider as built, unwrapped.
+func (m assistantModels) entries() (*Company, []string, []llm.Provider, error) {
+	c := m.e.Company()
+	if c == nil || c.Config == nil {
+		return nil, nil, nil, errors.New("engine: this node runs no company yet, so it has " +
+			"no assistant to run")
+	}
+	keys, err := c.Config.AssistantChain()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if c.Models == nil {
+		return nil, nil, nil, errors.New("engine: the company configures no providers.llm entry")
+	}
+	providers := make([]llm.Provider, 0, len(keys))
+	for _, key := range keys {
+		provider, ok := c.Models.Provider(key)
+		if !ok {
+			return nil, nil, nil, fmt.Errorf("engine: assistant.llm names %q, which the "+
+				"running company does not build", key)
+		}
+		providers = append(providers, provider)
+	}
+	return c, keys, providers, nil
 }
 
 // AssistantBudget is the meter an assistant turn charges its rounds through.

@@ -42,17 +42,33 @@ const smokePrompt = "Call the crewlet_smoke tool with ok set to true. Reply with
 // running the tool. Each is sent with no tools of Crewlet's own, so no
 // envelope contract is rendered and the reply is plain prose.
 
+// THE NO-TOOL ANSWER COMES FIRST, AND A CALL WRITTEN AS TEXT IS RULED OUT. A
+// prompt that opened "Using your shell tool, run ..." on a CLI given no tools
+// at all (Claude Code 2.1.310 under `--tools ""`, Sonnet) was answered with a
+// tool call typed out as prose (`<invoke name="Bash">...`), measured: no
+// command ran, and a model that goes on to write the call's output and the
+// next step as prose kept the probe running to the entry's whole timeout
+// before the doctor could read a refusal. Asked which case it is in first,
+// the model answers the refusal at once, and a model that has the tool still
+// runs it, which is the finding the probe exists for.
+
 // shellProbePrompt asks the CLI to run a command on the engine host.
-const shellProbePrompt = "Using your shell or command-execution tool, run exactly this " +
-	"command and reply with only its output, nothing else: date +%s\n" +
-	"If you have no tool that can run commands, reply with only: " + noLocalToolsReply
+const shellProbePrompt = "If you were given a tool that runs shell commands, use it to run " +
+	"exactly this command and reply with only its output, nothing else: date +%s\n" +
+	"If you were given no such tool, reply with only: " + noLocalToolsReply + "\n" +
+	noProseCall
 
 // fileProbePrompt asks the CLI to read a file on the engine host, the path
 // substituted for %s. The file holds a value minted for the one run, so a
 // model can echo it only by reading it.
-const fileProbePrompt = "Using your file-reading tool, read the file at %s and reply with " +
-	"only its contents, nothing else.\n" +
-	"If you have no tool that can read files, reply with only: " + noLocalToolsReply
+const fileProbePrompt = "If you were given a tool that reads files, use it to read the file " +
+	"at %s and reply with only its contents, nothing else.\n" +
+	"If you were given no such tool, reply with only: " + noLocalToolsReply + "\n" +
+	noProseCall
+
+// noProseCall is the line every isolation probe ends on: a tool is called or
+// the refusal is given, never a call written out as text.
+const noProseCall = "Never write a tool call, or what a tool would return, as text."
 
 // noLocalToolsReply is what a CLI whose shell is denied is asked to say.
 const noLocalToolsReply = "NO-LOCAL-TOOLS"
@@ -65,10 +81,11 @@ const noLocalToolsReply = "NO-LOCAL-TOOLS"
 const webProbeURL = "https://www.cloudflare.com/cdn-cgi/trace"
 
 // webProbePrompt asks the CLI to fetch the URL with its own browser.
-const webProbePrompt = "Using your web fetch tool, fetch " + webProbeURL + " and reply with " +
-	"only the value after ts= on the line that starts with ts=, nothing else.\n" +
-	"If you have no tool that can fetch a URL, or the fetch fails, reply with only: " +
-	noWebReply
+const webProbePrompt = "If you were given a tool that fetches URLs, use it to fetch " +
+	webProbeURL + " and reply with only the value after ts= on the line that starts with " +
+	"ts=, nothing else.\n" +
+	"If you were given no such tool, or the fetch fails, reply with only: " + noWebReply + "\n" +
+	noProseCall
 
 // noWebReply is what a CLI with no reachable web tool is asked to say.
 const noWebReply = "NO-WEB"
@@ -249,11 +266,11 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 	switch {
 	case !smoke:
 		d.Smoke = "skipped (-no-smoke)"
-		d.LocalTools = stance + " — probe skipped (-no-smoke)"
+		d.LocalTools = stance + "; probe skipped (-no-smoke)"
 		d.Web = web + "; probe skipped (-no-smoke)"
 	case d.BinaryPath == "not on PATH":
-		d.Smoke = "skipped — no binary to run"
-		d.LocalTools = stance + " — probe skipped, no binary to run"
+		d.Smoke = "skipped: no binary to run"
+		d.LocalTools = stance + "; probe skipped, no binary to run"
 		d.Web = web + "; probe skipped, no binary to run"
 	default:
 		d.Smoke, answered = p.smokeTest(ctx, smokeRequest())
@@ -280,7 +297,7 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 			// refused one says nothing about the other.
 			verdict, problem = p.fileProbe(ctx)
 		}
-		d.LocalTools = stance + " — " + verdict
+		d.LocalTools = stance + "; " + verdict
 		if problem != "" {
 			d.Problems = append(d.Problems, problem)
 		}
@@ -496,7 +513,7 @@ func (p *Provider) localToolsStance() string {
 func (p *Provider) shellProbe(ctx context.Context) (verdict, problem string) {
 	comp, err := p.Complete(ctx, tokenStreamed(probeRequest(shellProbePrompt)))
 	if err != nil {
-		return "probe failed — " + err.Error(), ""
+		return "probe failed: " + err.Error(), ""
 	}
 	ran := reportsCurrentClock(comp.Content, time.Now())
 	switch {
@@ -707,7 +724,7 @@ func (p *Provider) probeVersion(ctx context.Context) string {
 func (p *Provider) smokeTest(ctx context.Context, req llm.Request) (verdict string, answered bool) {
 	comp, err := p.Complete(ctx, req)
 	if err != nil {
-		return "failed — " + err.Error(), false
+		return "failed: " + err.Error(), false
 	}
 	if len(comp.ToolCalls) == 0 {
 		// TWO DIFFERENT FAILURES, and `It said: ""` describes only one of
@@ -719,7 +736,7 @@ func (p *Provider) smokeTest(ctx context.Context, req llm.Request) (verdict stri
 		// only command that names which one an operator has.
 		if strings.TrimSpace(comp.Content) == "" {
 			return fmt.Sprintf(
-				"failed — the CLI exited 0 and answered with nothing at all (%d output "+
+				"failed: the CLI exited 0 and answered with nothing at all (%d output "+
 					"tokens billed), so it spent its whole answer on hidden reasoning. "+
 					"Every phase a seat runs on this provider will spend corrective rounds "+
 					"asking again and then end without its submission: point this entry "+
@@ -727,7 +744,7 @@ func (p *Provider) smokeTest(ctx context.Context, req llm.Request) (verdict stri
 				comp.OutputTokens), true
 		}
 		return fmt.Sprintf(
-			"failed — the CLI answered but produced no parseable tool call, so every phase "+
+			"failed: the CLI answered but produced no parseable tool call, so every phase "+
 				"a seat runs on this provider will spend a corrective round asking again, and "+
 				"end without its submission whenever the model never manages one. It said: %q",
 			strings.TrimSpace(comp.Content)), true

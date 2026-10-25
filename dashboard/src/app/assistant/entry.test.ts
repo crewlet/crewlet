@@ -12,7 +12,8 @@
 import { afterEach, describe, expect, test } from "vitest";
 import { emit, on } from "./bus.ts";
 import { readTab, writeTab } from "./tab.ts";
-import { assistantUnavailableFor } from "./availability.ts";
+import { assistantModelFor, assistantUnavailableFor } from "./availability.ts";
+import { assistantModelNotice, assistantUnavailable } from "~/protocol/assistantWire.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
 
 afterEach(() => sessionStorage.clear());
@@ -110,5 +111,62 @@ describe("whether the reader may ask", () => {
     expect(
       assistantUnavailableFor({ ...ready, asking: true, assistant: "disabled" }, "")?.reason,
     ).toBe("checking");
+  });
+});
+
+describe("the assistant's model", () => {
+  const signedOut = {
+    available: false,
+    reason: "model_not_ready",
+    model: {
+      code: "model_signed_out",
+      message: "The assistant's model is signed out, so it cannot answer.",
+      hint: "Ask an administrator to sign the assistant's model in again.",
+    },
+  } as const;
+
+  // THE MODEL'S STATE LEAVES THE ASK BUTTON LIT: the drawer opens, with the
+  // conversation readable, and says it there instead.
+  test("a model that is not ready is the drawer's notice, never a reason to refuse the reader", () => {
+    expect(assistantUnavailable(signedOut)).toBeNull();
+    expect(assistantModelNotice(signedOut)?.code).toBe("model_signed_out");
+    expect(assistantModelNotice({ available: true })).toBeNull();
+    expect(assistantModelNotice({ available: false, reason: "no_permission" })).toBeNull();
+    expect(assistantUnavailable({ available: false, reason: "no_permission" })).toBe(
+      "no_permission",
+    );
+  });
+
+  test("the notice is the engine's sentence and hint, and Send's reason its own phrase", () => {
+    const problem = assistantModelFor({ assistantModel: signedOut.model });
+    expect(problem).toEqual({
+      code: "model_signed_out",
+      short: "The assistant's model is signed out",
+      title: signedOut.model.message,
+      body: signedOut.model.hint,
+    });
+    expect(assistantModelFor({ assistantModel: null })).toBeNull();
+  });
+
+  test("a spent plan says when the reader can ask again", () => {
+    const busy = assistantModelFor({
+      assistantModel: {
+        code: "model_busy",
+        message: "The assistant's model has reached its usage limit for now.",
+        hint: "It is tried again once the limit resets.",
+        retry_at: "2026-10-25T14:05:00Z",
+      },
+    });
+    expect(busy?.short).toBe("The assistant's model is at its usage limit");
+    expect(busy?.body).toMatch(
+      /^It is tried again once the limit resets\. You can ask again from .+\.$/,
+    );
+  });
+
+  test("no copy carries an en or em dash", () => {
+    for (const code of ["model_signed_out", "model_busy", "model_unavailable"] as const) {
+      const problem = assistantModelFor({ assistantModel: { code, message: "m" } });
+      expect(problem?.short).not.toMatch(/[\u2013\u2014]/);
+    }
   });
 });

@@ -471,7 +471,7 @@ func TestDoctorProbesReportADeniedShellAndAReachableWeb(t *testing.T) {
 	t.Parallel()
 	p := probeProvider(t, cliprofile.LocalToolsDenied, noLocalToolsReply, "ts="+nowEpoch()+".123")
 	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
-	if !strings.HasPrefix(d.LocalTools, "denied by profile — probe: refused") {
+	if !strings.HasPrefix(d.LocalTools, "denied by profile; probe: refused") {
 		t.Errorf("LocalTools = %q", d.LocalTools)
 	}
 	if !strings.HasPrefix(d.Web, "allowed; ok") {
@@ -518,7 +518,7 @@ func TestDoctorReportsAVendorDefaultShellHonestly(t *testing.T) {
 	t.Parallel()
 	p := probeProvider(t, cliprofile.LocalToolsVendorDefault, nowEpoch(), "ts="+nowEpoch())
 	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
-	if !strings.HasPrefix(d.LocalTools, "vendor default (no denial flag on this fake) — probe: SHELL RAN") {
+	if !strings.HasPrefix(d.LocalTools, "vendor default (no denial flag on this fake); probe: SHELL RAN") {
 		t.Errorf("LocalTools = %q", d.LocalTools)
 	}
 	joined := strings.Join(d.Problems, "\n")

@@ -582,26 +582,14 @@ func (t *turn) outcome(ctx context.Context, res *toolloop.Result, err error) (wi
 		return wire.TurnFailed, &wire.ErrorEvent{Code: wire.ErrorTurnTimeout,
 			Message:   "The turn took longer than it may. Ask again, or ask a narrower question.",
 			Retryable: true}
-	case isModelFailure(err):
-		return wire.TurnFailed, &wire.ErrorEvent{Code: wire.ErrorModelUnavailable,
-			Message: "The assistant's model did not answer.", Retryable: true,
-			RetryAfterSeconds: modelRetrySeconds}
+	}
+	if problem, ok := modelProblemOf(err, t.person.Can(iam.GrantAdmin)); ok {
+		return wire.TurnFailed, problem.event(t.svc.now())
 	}
 	t.svc.log.ErrorContext(ctx, "assistant_turn_failed", "turn", t.id,
 		"error", redact.Secrets(err.Error()))
 	return wire.TurnFailed, &wire.ErrorEvent{Code: wire.ErrorInternal,
 		Message: "Something went wrong inside the engine. The reason is in this node's log."}
-}
-
-// modelRetrySeconds is how long a person is told to wait after the model chain
-// failed: long enough for a rate limit's bench or a CLI's restart.
-const modelRetrySeconds = 10
-
-// isModelFailure reports whether err is the provider chain's: every model in
-// it failed or sat out.
-func isModelFailure(err error) bool {
-	var failure *llm.Error
-	return errors.As(err, &failure)
 }
 
 // stepCount is how many steps the turn has taken.

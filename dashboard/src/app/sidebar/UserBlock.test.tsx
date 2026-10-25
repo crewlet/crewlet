@@ -93,6 +93,7 @@ const nobody: ViewerState = {
   configWriter: true,
   configManagedBy: [],
   assistant: "disabled",
+  assistantModel: null,
 };
 const ada: ViewerState = {
   ...nobody,
