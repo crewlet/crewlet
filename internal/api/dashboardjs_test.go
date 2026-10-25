@@ -1154,7 +1154,12 @@ const (
 	// cannot answer before they ask took it to 4434.2 KiB: the drawer's
 	// notice, its words and the viewer's model member, in the panel's chunk
 	// and the frame's. 4435 KiB, which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 339<<10
+	// Folding the assistant's supporting reads and moving the Ask button's
+	// dot onto its mark, on uilet 0.60.0, took it to 4438.7 KiB: the kit's
+	// card fold and IndicatorAnchor and their rules in the one sheet, and
+	// the panel's fold store and summaries. 4439 KiB, which still refuses a
+	// doubled baseline.
+	treeBudget = 4<<20 + 343<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
