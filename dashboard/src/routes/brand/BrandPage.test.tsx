@@ -24,6 +24,7 @@ import {
 } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
+import { brandKitRow } from "~/test/brand.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -77,29 +78,6 @@ const ADOPTED: NonNullable<BrandAnswer["brand"]> = {
   adopted_by: { name: "maya", kind: "human" },
   adopted_at: "2026-10-24T09:00:00Z",
 };
-
-/** A brand kit in the reader's listing: the draft a setup left. */
-function kitRow(over: Partial<ArtifactListItem> = {}): ArtifactListItem {
-  return {
-    id: "01DRAFT",
-    kind: "brand",
-    title: "FairSplit brand",
-    owner: "ana",
-    owner_kind: "human",
-    head_number: 2,
-    role: "owner",
-    status: "live",
-    capabilities: [],
-    share_count: 1,
-    created_by: { name: "ana", kind: "human" },
-    updated_by: { name: "ana", kind: "human" },
-    created_at: "2026-10-24T09:00:00Z",
-    updated_at: "2026-10-24T09:00:00Z",
-    trashed_at: "0001-01-01T00:00:00Z",
-    opened_at: "0001-01-01T00:00:00Z",
-    ...over,
-  } as ArtifactListItem;
-}
 
 /** A draft with nothing chosen but its name: what the first Continue publishes. */
 const PARTIAL: BrandDocument = {
@@ -200,7 +178,7 @@ test("an administrator with no brand adopted is offered the setup, on a page of 
 
 test("a draft a setup left is offered to continue, and says what it lacks before it can be adopted", async () => {
   serveVersions({ "01DRAFT:2": PARTIAL });
-  mount(["admin"], null, [kitRow()]);
+  mount(["admin"], null, [brandKitRow()]);
   const notice = await screen.findByText(
     /Draft, not ready to adopt: add a primary logo and colour\./,
   );
@@ -219,18 +197,18 @@ test("a complete draft is offered to an administrator for review, and an editor 
     colors: { primary: "#0f7b5f" },
   };
   serveVersions({ "01DRAFT:2": ready });
-  mount(["admin"], null, [kitRow()]);
+  mount(["admin"], null, [brandKitRow()]);
   expect(await screen.findByRole("button", { name: "Review and adopt" })).toBeTruthy();
   expect(screen.queryByText(/not ready to adopt/)).toBeNull();
   cleanup();
   // AN EDITOR OF THE KIT, who may not adopt: theirs to continue, an
   // administrator's to adopt.
-  mount([], null, [kitRow({ role: "editor" })]);
+  mount([], null, [brandKitRow({ role: "editor" })]);
   expect(await screen.findByRole("link", { name: "Continue setting up" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Review and adopt" })).toBeNull();
   cleanup();
   // A VIEWER OF IT is not handed the draft at all.
-  mount([], null, [kitRow({ role: "viewer" })]);
+  mount([], null, [brandKitRow({ role: "viewer" })]);
   expect(await screen.findByText("No brand yet")).toBeTruthy();
   expect(screen.queryByRole("link", { name: "Continue setting up" })).toBeNull();
 });

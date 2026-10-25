@@ -228,7 +228,10 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
       // and, as there, not a link. Its setup adds a crumb, and Brand becomes
       // the way back.
       const landing = workspaceRow("company");
-      const group = { label: landing ? rootLabel(landing) : "Company", icon: landing?.icon ?? row.icon };
+      const group = {
+        label: landing ? rootLabel(landing) : "Company",
+        icon: landing?.icon ?? row.icon,
+      };
       if (where.screen === "brand") return [group, { label: row.label }];
       return [group, { label: row.label, path: row.path }, { label: "Set up" }];
     }

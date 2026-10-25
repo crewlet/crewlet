@@ -142,7 +142,11 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
     [target.document],
   );
   const [edit, setEdit] = useState<BrandEdit>(initial);
-  const [step, setStepNow] = useState<SetupStepId>(() => resumeStep(initial));
+  // A FRESH SETUP STARTS AT THE START, its name prefilled from the company's;
+  // a draft resumes at its first step not done.
+  const [step, setStepNow] = useState<SetupStepId>(() =>
+    target.kit ? resumeStep(initial) : "identity",
+  );
   // THE FURTHEST STEP VISITED, so walking back to Logos keeps every step up
   // to it a button in the rail.
   const [reached, setReached] = useState<SetupStepId>(step);
@@ -154,7 +158,7 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
     kit: target.kit,
     version: target.version,
     head: target.head,
-    text: target.kit ? serializeBrandDocument(target.document) : "",
+    text: serializeBrandDocument(target.document),
     files: new Map(),
     at: null,
   }));
@@ -167,9 +171,13 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
   const source = useMemo(() => draftSource(target.source, edit), [target.source, edit]);
   const assets = useBrandAssets(source);
 
+  // WHAT A LEAVE WOULD LOSE: anything changed since the setup opened or last
+  // saved. A fresh setup has nothing saved yet, so its first Continue saves
+  // even an unchanged step: that is what makes the draft kit.
   const dirty =
     serializeBrandDocument(edit.document) !== saved.text ||
     [...edit.files].some(([path, file]) => saved.files.get(path) !== file);
+  const unsaved = dirty || saved.kit === null;
 
   useLeaveGuard(
     dirty && !finishing
@@ -180,9 +188,12 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
       : null,
   );
 
-  /** Save the draft as it stands, when anything changed; true once it is saved. */
-  const save = useCallback(async (): Promise<boolean> => {
-    if (!dirty) return true;
+  /**
+   * Save the draft as it stands, when anything changed: what is saved once it
+   * is (the version a finish adopts), or null when it was not.
+   */
+  const save = useCallback(async (): Promise<Saved | null> => {
+    if (!unsaved) return saved;
     setSaid(null);
     let files: BrandSaveFile[];
     try {
@@ -192,7 +203,7 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
       });
     } catch (err) {
       setSaid(err instanceof Error ? err.message : String(err));
-      return false;
+      return null;
     }
     const answer = await draftSave.run({
       kit: saved.kit,
@@ -201,25 +212,26 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
       document: edit.document,
       files,
     });
-    if (!answer) return false;
+    if (!answer) return null;
     if (answer.kind === "saved") {
-      setRefused({});
-      setSaved({
+      const now: Saved = {
         kit: answer.kit,
         version: answer.version,
         head: answer.version,
         text: serializeBrandDocument(edit.document),
         files: new Map(edit.files),
         at: new Date(),
-      });
-      return true;
+      };
+      setRefused({});
+      setSaved(now);
+      return now;
     }
     if (answer.kind === "refused")
       setRefused(refusedLogos(answer.error?.body.findings, edit.document));
     setSaid(answer.text);
     announce(answer.text);
-    return false;
-  }, [dirty, target.source, edit, saved, draftSave, announce]);
+    return null;
+  }, [unsaved, target.source, edit, saved, draftSave, announce]);
 
   /** Hold a step that cannot be saved: focus its first refused field and say why. */
   const hold = (problem: string) => {
@@ -236,7 +248,7 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
     const problem = part ? partProblem(part, edit) : undefined;
     const forward = indexOf(to) > indexOf(step);
     if (forward && problem) return hold(problem);
-    if (!problem && !(await save())) return;
+    if (!problem && (await save()) === null) return;
     setSaid(null);
     setStep(to);
   };
@@ -252,16 +264,16 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
 
   const finish = async () => {
     if (finishHold) return hold(finishHold);
-    if (!(await save())) return;
+    const now = await save();
+    if (now === null) return;
     if (!admin) {
       setFinishing(true);
       toast.ok("Saved for review. An administrator adopts it from the Brand page.");
       nav.to(BRAND_PAGE);
       return;
     }
-    const kit = saved.kit;
-    if (!kit) return;
-    const answer = await adopt.run(adoptBrand(kit, saved.version));
+    if (!now.kit) return;
+    const answer = await adopt.run(adoptBrand(now.kit, now.version));
     if (answer?.kind === "done") {
       setFinishing(true);
       toast.ok(`The ${edit.document.name.trim()} brand is adopted`);
@@ -273,7 +285,7 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
   };
 
   const saveDraft = async () => {
-    if (await save()) toast.ok("Draft saved");
+    if ((await save()) !== null) toast.ok("Draft saved");
   };
 
   // ENTER CONTINUES from a one-line field, when the field did not take the
