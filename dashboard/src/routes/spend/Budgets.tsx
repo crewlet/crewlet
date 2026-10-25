@@ -53,7 +53,7 @@
  * could ask.
  */
 
-import { useMemo, type CSSProperties } from "react";
+import { useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   Callout,
   Card,
@@ -68,7 +68,14 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { plainSeat } from "~/app/frame/cells.tsx";
 import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
-import { CeilingEditor } from "~/components/budgetWrite.tsx";
+import {
+  CeilingEditor,
+  CeilingPrefillContext,
+  type CeilingPrefill,
+} from "~/components/budgetWrite.tsx";
+import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
+import type { PageActionSpec } from "~/app/assistant/context.ts";
+import { parseCeilingPrefill, type CeilingProposal } from "./assistantActions.ts";
 import { QueryState } from "~/components/common.tsx";
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import { PERIOD_ADJECTIVE, windowOf } from "~/lib/budget.ts";
@@ -78,7 +85,7 @@ import { companyDateLabel, fmtCount, fmtExact, relTime } from "~/lib/format.ts";
 import { dayLabelIn } from "~/lib/range.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useOrgWriteAccess } from "~/lib/useWriteAccess.ts";
+import { useOrgWriteAccess, useOrgWriteAccessFor } from "~/lib/useWriteAccess.ts";
 import type { BudgetWindow, BudgetsAnswer } from "~/protocol/types.ts";
 
 /** How often the counters are re-read: the gate's own report cadence is 15s,
@@ -295,6 +302,49 @@ export function Budgets() {
     useMemo(() => seats.map((s) => ({ kind: "seat" as const, id: s.handle || s.role })), [seats]),
   );
 
+  // --- assistant page actions (WP12) ---
+  // A CEILING PREPARED FOR ITS EDITOR: the field of that scope's window opens
+  // with the value in it, and the warning, the save and its step-up are the
+  // person's. The gate is the one each pencil is drawn by.
+  const accessFor = useOrgWriteAccessFor();
+  const [prefill, setPrefill] = useState<CeilingPrefill | null>(null);
+  const nonce = useRef(0);
+  const handles = useMemo(() => new Set(seats.map((s) => s.handle).filter(Boolean)), [seats]);
+  const limitOf = (p: CeilingProposal) =>
+    windowOf(
+      p.scope === "company"
+        ? answer?.org.windows
+        : seats.find((s) => s.handle === p.scope)?.windows,
+      p.period,
+    )?.limit;
+  const ceilingWords = (limit: number | null | undefined) =>
+    limit === null || limit === undefined ? "No ceiling" : `${fmtExact(limit)} tokens`;
+  useAssistantContext({
+    actions: {
+      "budgets.ceiling.prefill": {
+        scope: "A ceiling on this screen, filled in for you to save (not saved)",
+        parse: (raw) => parseCeilingPrefill(raw, handles),
+        preview: (p) => [
+          {
+            field: `${p.scope === "company" ? "The company" : seatBadge(seats.find((s) => s.handle === p.scope)?.role ?? p.scope).name}, ${PERIOD_ADJECTIVE[p.period]} ceiling`,
+            next: ceilingWords(p.value),
+            current: ceilingWords(limitOf(p)),
+          },
+        ],
+        blocked: (p) => {
+          const a = accessFor(p.scope === "company" ? "company" : { seat: p.scope });
+          return a.can ? null : a.reason;
+        },
+        apply: (p) => {
+          nonce.current += 1;
+          setPrefill({ scope: p.scope, period: p.period, text: p.text, nonce: nonce.current });
+        },
+        confirm: "approve",
+      } satisfies PageActionSpec<CeilingProposal>,
+    },
+  });
+  // --- end assistant page actions (WP12) ---
+
   const seatWindow = (s: BudgetsAnswer["seats"][number], period: Period) => (
     <SeatWindow
       seat={s.handle}
@@ -335,86 +385,88 @@ export function Budgets() {
       )}
 
       {answer && answer.durable && (
-        <div className="budgets">
-          <Card padding="none">
-            <Card.Header icon={<BuildingComplexGlyph size="sm" />}>
-              <Card.Title>The company</Card.Title>
-            </Card.Header>
-            <div className="budget-row" style={{ "--budget-tracks": TRACKS } as CSSProperties}>
-              <p className="budget-row-scope t-caption muted">{companyLine(answer)}</p>
-              {BUDGET_WINDOWS.map(({ period }) => (
-                <CompanyWindow
-                  key={period}
-                  period={period}
-                  w={windowOf(answer.org.windows, period)}
-                  zone={zone}
-                  now={now}
-                  onApplied={refetch}
-                />
-              ))}
-            </div>
-          </Card>
+        <CeilingPrefillContext.Provider value={prefill}>
+          <div className="budgets">
+            <Card padding="none">
+              <Card.Header icon={<BuildingComplexGlyph size="sm" />}>
+                <Card.Title>The company</Card.Title>
+              </Card.Header>
+              <div className="budget-row" style={{ "--budget-tracks": TRACKS } as CSSProperties}>
+                <p className="budget-row-scope t-caption muted">{companyLine(answer)}</p>
+                {BUDGET_WINDOWS.map(({ period }) => (
+                  <CompanyWindow
+                    key={period}
+                    period={period}
+                    w={windowOf(answer.org.windows, period)}
+                    zone={zone}
+                    now={now}
+                    onApplied={refetch}
+                  />
+                ))}
+              </div>
+            </Card>
 
-          <Card padding="none">
-            {/* NO SUBTITLE: when the windows turn over is the company row's,
+            <Card padding="none">
+              {/* NO SUBTITLE: when the windows turn over is the company row's,
                 said once above the columns it is about. */}
-            <Card.Header icon={<UsersGlyph size="sm" />}>
-              <Card.Title>Agent seats</Card.Title>
-            </Card.Header>
-            <DataGrid
-              rows={seats}
-              rowKey={(s) => s.agent_id || s.role}
-              defaultSort="-month"
-              // THE CARD IS THE FRAME: unflushed, the table drew a bordered
-              // box of its own inside the card's border.
-              flush
-              // THE SEAT BESIDE ITS BUDGET: the rail answers "what is it, what
-              // was it doing" without losing the row that raised it.
-              rowHref={(s) => peekHref({ kind: "seat", id: s.handle || s.role })}
-              onRowActivate={(s, e) => {
-                const go = () => openPeek({ kind: "seat", id: s.handle || s.role });
-                if (!("button" in e)) {
-                  go();
-                  return;
-                }
-                peekClickHandler(go)?.(e);
-              }}
-              empty={{ title: "No agent seats to count" }}
-              columns={[
-                {
-                  key: "seat",
-                  header: "Seat",
-                  width: TRACK,
-                  sortValue: (s) => s.role,
-                  cell: (s) => <TableEntityCell {...plainSeat({ ...seatBadge(s.role) })} />,
-                },
-                // ONE COLUMN PER WINDOW, spelled out: each heading is a word
-                // the phone's card layout reads beside its value.
-                {
-                  key: "day",
-                  header: "Today",
-                  width: TRACK,
-                  sortValue: (s) => windowOf(s.windows, "day")?.used ?? 0,
-                  cell: (s) => seatWindow(s, "day"),
-                },
-                {
-                  key: "week",
-                  header: "This week",
-                  width: TRACK,
-                  sortValue: (s) => windowOf(s.windows, "week")?.used ?? 0,
-                  cell: (s) => seatWindow(s, "week"),
-                },
-                {
-                  key: "month",
-                  header: "This month",
-                  width: TRACK,
-                  sortValue: (s) => windowOf(s.windows, "month")?.used ?? 0,
-                  cell: (s) => seatWindow(s, "month"),
-                },
-              ]}
-            />
-          </Card>
-        </div>
+              <Card.Header icon={<UsersGlyph size="sm" />}>
+                <Card.Title>Agent seats</Card.Title>
+              </Card.Header>
+              <DataGrid
+                rows={seats}
+                rowKey={(s) => s.agent_id || s.role}
+                defaultSort="-month"
+                // THE CARD IS THE FRAME: unflushed, the table drew a bordered
+                // box of its own inside the card's border.
+                flush
+                // THE SEAT BESIDE ITS BUDGET: the rail answers "what is it, what
+                // was it doing" without losing the row that raised it.
+                rowHref={(s) => peekHref({ kind: "seat", id: s.handle || s.role })}
+                onRowActivate={(s, e) => {
+                  const go = () => openPeek({ kind: "seat", id: s.handle || s.role });
+                  if (!("button" in e)) {
+                    go();
+                    return;
+                  }
+                  peekClickHandler(go)?.(e);
+                }}
+                empty={{ title: "No agent seats to count" }}
+                columns={[
+                  {
+                    key: "seat",
+                    header: "Seat",
+                    width: TRACK,
+                    sortValue: (s) => s.role,
+                    cell: (s) => <TableEntityCell {...plainSeat({ ...seatBadge(s.role) })} />,
+                  },
+                  // ONE COLUMN PER WINDOW, spelled out: each heading is a word
+                  // the phone's card layout reads beside its value.
+                  {
+                    key: "day",
+                    header: "Today",
+                    width: TRACK,
+                    sortValue: (s) => windowOf(s.windows, "day")?.used ?? 0,
+                    cell: (s) => seatWindow(s, "day"),
+                  },
+                  {
+                    key: "week",
+                    header: "This week",
+                    width: TRACK,
+                    sortValue: (s) => windowOf(s.windows, "week")?.used ?? 0,
+                    cell: (s) => seatWindow(s, "week"),
+                  },
+                  {
+                    key: "month",
+                    header: "This month",
+                    width: TRACK,
+                    sortValue: (s) => windowOf(s.windows, "month")?.used ?? 0,
+                    cell: (s) => seatWindow(s, "month"),
+                  },
+                ]}
+              />
+            </Card>
+          </div>
+        </CeilingPrefillContext.Provider>
       )}
     </>
   );
