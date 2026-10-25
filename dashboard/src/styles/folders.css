@@ -8,19 +8,21 @@
    rule that pads the frame's own content for the docked selection bar stays
    in screens.css, with the frame's sheets. */
 
-/* THE FOLDERS' TILES (`FolderTile`): four across a laptop's page and three on
-   a narrower one, as the cards under them, and one column under the phone
-   breakpoint, where each tile takes the 44px row shape on its own. A count by
-   the page's width, for the reason the cards take one. */
+/* THE FOLDERS' TILES (`FolderTile`): in the cards' own columns, four across a
+   laptop's page, three on a narrower one and five on a wide one, with the
+   cards' step between columns (both declared once, in screens.css), so each
+   tile's edges line up with the card's under it. A tile is shorter than a
+   card, so its rows sit a step closer. One column under the phone
+   breakpoint, where each tile takes the row shape on its own. */
 .artifacts-folders {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--spacing-4);
+  grid-template-columns: repeat(var(--artifacts-grid-columns), minmax(0, 1fr));
+  gap: var(--spacing-4) var(--artifacts-grid-column-gap);
   margin: 0;
   padding: 0;
   list-style: none;
 }
-/* ONE HEIGHT A ROW: a tile whose words wrap ("Everyone" over "Nothing you
+/* ONE HEIGHT A ROW: a tile whose facts wrap ("Only you" over "Nothing you
    can open yet") stood taller than its neighbours, so each tile fills the
    row's cell rather than its own content's height. */
 .artifacts-folders > li {
@@ -30,12 +32,6 @@
 .artifacts-folders > li > * {
   flex: 1 1 auto;
   min-width: 0;
-}
-@container page (width < 1000px) {
-  .artifacts-folders {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: var(--spacing-3);
-  }
 }
 @container page (width < 640px) {
   .artifacts-folders {

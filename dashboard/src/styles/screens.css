@@ -10338,34 +10338,51 @@ a.live-row:focus-visible {
    and one on a phone, five only on a screen wide enough that four would be
    posters. A column count by the page's width rather than auto-fill, so a
    card's size moves in steps a reader recognises rather than with every
-   pixel. */
+   pixel.
+
+   THE FOLDERS' TILES ABOVE THE CARDS STAND IN THE SAME COLUMNS (folders.css),
+   so a tile's edges line up with the card's under it at every width: the
+   count and the step between columns are declared here once, for both, and
+   only the cards go on to two and one across, where the tiles are rows. */
+.artifacts-cards,
+.artifacts-folders {
+  --artifacts-grid-columns: 4;
+  --artifacts-grid-column-gap: var(--spacing-5);
+}
+@container page (width >= 1500px) {
+  .artifacts-cards,
+  .artifacts-folders {
+    --artifacts-grid-columns: 5;
+  }
+}
+@container page (width < 1000px) {
+  .artifacts-cards,
+  .artifacts-folders {
+    --artifacts-grid-columns: 3;
+    --artifacts-grid-column-gap: var(--spacing-4);
+  }
+}
 .artifacts-cards {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--spacing-6) var(--spacing-5);
+  grid-template-columns: repeat(var(--artifacts-grid-columns), minmax(0, 1fr));
+  gap: var(--spacing-6) var(--artifacts-grid-column-gap);
   margin: 0;
   padding: 0;
   list-style: none;
 }
-@container page (width >= 1500px) {
-  .artifacts-cards {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-  }
-}
 @container page (width < 1000px) {
   .artifacts-cards {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: var(--spacing-5) var(--spacing-4);
+    row-gap: var(--spacing-5);
   }
 }
 @container page (width < 640px) {
   .artifacts-cards {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    --artifacts-grid-columns: 2;
   }
 }
 @container page (width < 440px) {
   .artifacts-cards {
-    grid-template-columns: minmax(0, 1fr);
+    --artifacts-grid-columns: 1;
   }
 }
 .artifacts-more {
