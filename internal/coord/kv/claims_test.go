@@ -19,7 +19,7 @@ func openFleetClaims(t *testing.T, js jetstream.JetStream, prefix string,
 
 	t.Helper()
 	return OpenFleet(context.Background(), js, FleetConfig{
-		BucketPrefix: prefix, RateWindow: time.Minute, MaxClaimTTL: maxClaim,
+		BucketPrefix: prefix, MaxRateWindow: time.Minute, MaxClaimTTL: maxClaim,
 		LedgerRetention: 10 * time.Minute, FireRetention: 10 * time.Minute,
 		FollowRetention: 10 * time.Minute, RebaseRetention: 10 * time.Minute,
 		BudgetRetention: time.Hour,

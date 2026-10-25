@@ -539,10 +539,11 @@ type FleetConfig struct {
 	// giving them different prefixes.
 	BucketPrefix string
 
-	// RateWindow is the valve's window width. The bucket keeps a few
-	// multiples of it so a window that has just closed is still readable
-	// while a straggler finishes writing to it.
-	RateWindow time.Duration
+	// MaxRateWindow is the widest window a rate caller counts over, and
+	// what every deployment passes is [coord.MaxRateWindow]. The bucket
+	// keeps a few multiples of it so a window that has just closed is still
+	// readable while a straggler finishes writing to it.
+	MaxRateWindow time.Duration
 
 	// MaxClaimTTL is the longest claim the claims bucket holds, and so its
 	// age — see [coord.MaxClaimTTL], which is what every deployment passes.
@@ -621,7 +622,7 @@ func (c *FleetConfig) normalize() error {
 		name  string
 		value time.Duration
 	}{
-		{"RateWindow", c.RateWindow}, {"MaxClaimTTL", c.MaxClaimTTL},
+		{"MaxRateWindow", c.MaxRateWindow}, {"MaxClaimTTL", c.MaxClaimTTL},
 		{"LedgerRetention", c.LedgerRetention}, {"FireRetention", c.FireRetention},
 		{"FollowRetention", c.FollowRetention},
 		{"RebaseRetention", c.RebaseRetention},
@@ -694,8 +695,8 @@ type FleetStore struct {
 	// remembering to say so.
 	ageless []jetstream.KeyValue
 
-	rateWindow time.Duration
-	freshness  time.Duration
+	maxRateWindow time.Duration
+	freshness     time.Duration
 
 	// maxClaim is the longest claim [FleetStore.Claim] accepts: the claims
 	// bucket's age IN FORCE, never this node's config — the bucket is
@@ -770,11 +771,11 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 	}
 
 	store := &FleetStore{
-		js:         js,
-		rateWindow: cfg.RateWindow, freshness: cfg.StatusFreshness,
+		js:            js,
+		maxRateWindow: cfg.MaxRateWindow, freshness: cfg.StatusFreshness,
 		patience: js.Options().DefaultTimeout,
 	}
-	var claimFacts bucketFacts
+	var claimFacts, rateFacts bucketFacts
 	for _, bucket := range []struct {
 		into     *jetstream.KeyValue
 		suffix   string
@@ -783,7 +784,7 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 	}{
 		{&store.rate, rateSuffix,
 			"Crewlet notification-valve windows; the bucket TTL reaps a closed window",
-			cfg.RateWindow * rateBucketFactor},
+			cfg.MaxRateWindow * rateBucketFactor},
 		{&store.claims, claimsSuffix,
 			"Crewlet inbound-delivery claims; each record carries its own deadline, and the " +
 				"bucket age is the longest claim's",
@@ -834,8 +835,11 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 			return nil, err
 		}
 		*bucket.into = got
-		if bucket.into == &store.claims {
+		switch bucket.into {
+		case &store.claims:
 			claimFacts = facts
+		case &store.rate:
+			rateFacts = facts
 		}
 		if bucket.ttl == 0 {
 			store.ageless = append(store.ageless, got)
@@ -849,9 +853,14 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 	// refuses one ([coord.ErrTTLTooLong]) rather than take it on a promise
 	// the bucket cannot keep. The age is the one openBucket read back.
 	store.maxClaim = claimFacts.age
+	// AND SO IS THE RATE BUCKET'S, for the same reason: a bucket an
+	// earlier boot created with a shorter age keeps it, so the widest window
+	// counted is the one the age IN FORCE holds, and a wider one is refused
+	// rather than reaped mid-window.
+	store.maxRateWindow = min(cfg.MaxRateWindow, rateFacts.age/rateBucketFactor)
 
 	log.DebugContext(ctx, "coord_kv_fleet_open", "prefix", cfg.BucketPrefix,
-		"rate_window", cfg.RateWindow, "max_claim_ttl", store.maxClaim,
+		"max_rate_window", cfg.MaxRateWindow, "max_claim_ttl", store.maxClaim,
 		"ledger_retention", cfg.LedgerRetention,
 		"budget_retention", cfg.BudgetRetention,
 		"status_freshness", cfg.StatusFreshness)
@@ -923,13 +932,12 @@ func (f *FleetStore) Allow(ctx context.Context, bucket string, limit int, window
 	if limit <= 0 || window <= 0 {
 		return false, nil
 	}
-	if window > f.rateWindow*rateBucketFactor {
+	if window > f.maxRateWindow {
 		// The bucket would reap the window before it closed, so the count
-		// would restart mid-window and the valve would pass far more than
-		// the operator asked for. Refused loudly rather than silently.
-		return false, fmt.Errorf(
-			"coord/kv: rate window %v exceeds what the bucket retains (%v) — "+
-				"raise FleetConfig.RateWindow", window, f.rateWindow*rateBucketFactor)
+		// would restart mid-window and the caller would pass far more than
+		// it asked for. Refused loudly rather than silently.
+		return false, fmt.Errorf("coord/kv: rate window %v is wider than the widest the "+
+			"bucket keeps (%v); raise FleetConfig.MaxRateWindow", window, f.maxRateWindow)
 	}
 	key := encodeKey(bucket + "|" + strconv.FormatInt(now.Truncate(window).UnixNano(), 10))
 
