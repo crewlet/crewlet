@@ -15,7 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A FRESH NODE DOES NOT ASK THE FLEET FOR A SNAPSHOT.
@@ -110,7 +110,7 @@ func TestANodeWithTheWholeLogAheadOfItDoesNotAsk(t *testing.T) {
 	if !ok {
 		t.Fatalf("the stream is %T", backends.Queue)
 	}
-	spec := tracker.Domain{}.Stream()
+	spec := worklet.Domain{}.Stream()
 	if err := q.EnsureDomainStream(t.Context(), jetstream.DomainStream{
 		Name: spec.Name, Subjects: spec.Subjects,
 		// AT THE FLOOR A BOOT SIZES A LOG TO, not at the ceiling the
@@ -133,7 +133,7 @@ func TestANodeWithTheWholeLogAheadOfItDoesNotAsk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open the tracker's log: %v", err)
 	}
-	body, err := tracker.EncodeBarrier(statelog.Envelope{
+	body, err := worklet.EncodeBarrier(statelog.Envelope{
 		V: statelog.BarrierVersion, Kind: statelog.BarrierKind,
 		Subject: statelog.Subject{Kind: statelog.BarrierKind},
 		Scope:   statelog.ScopeSet{Paths: []string{statelog.BarrierScope}},
@@ -147,7 +147,7 @@ func TestANodeWithTheWholeLogAheadOfItDoesNotAsk(t *testing.T) {
 	for _, key := range boot.Secrets.Keys {
 		ring.Keys = append(ring.Keys, statelog.Key{ID: key.ID, Material: key.Material})
 	}
-	signer, err := statelog.NewSigner(tracker.Domain{}.Name(), ring)
+	signer, err := statelog.NewSigner(worklet.Domain{}.Name(), ring)
 	if err != nil {
 		t.Fatalf("the peer's signer: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestANodeWithTheWholeLogAheadOfItDoesNotAsk(t *testing.T) {
 func TestANodeTheFleetHasMovedPastAsksForASnapshotAtBoot(t *testing.T) {
 	t.Parallel()
 	boot, company, backends := joinBackends(t)
-	name := tracker.Domain{}.Name()
+	name := worklet.Domain{}.Name()
 	if err := backends.Fleet.PutFloor(t.Context(), coord.TrimFloor{
 		Domain: name, Generation: 1, BlockedBy: "applied",
 		At: time.Now().UTC(), By: "peer",
@@ -324,7 +324,7 @@ func TestEveryDomainReportsItsOwnReplicationRow(t *testing.T) {
 		byName[row.Name] = row
 	}
 	// THE TRACKER'S, whose health DOES gate admission.
-	if _, held := byName[tracker.Domain{}.Name()]; !held {
+	if _, held := byName[worklet.Domain{}.Name()]; !held {
 		t.Errorf("no row for the tracker's own log; rows = %+v", rows)
 	}
 	// AND THE VECTOR DOMAIN'S, whose health does not.

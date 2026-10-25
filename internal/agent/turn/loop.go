@@ -122,10 +122,9 @@ type Surface struct {
 	// It exists for one sentence: the one a delivery refusal ends with,
 	// saying how to reach the surface the asker is waiting on (see
 	// [Remedy]). That sentence used to send every seat to discovery, which
-	// is right for a vendor's surface and wrong for the engine's own
-	// tracker and knowledge base — a seat woken by a work-item comment
-	// followed it to the only MCP server it held and posted in a chat
-	// channel the check could never count.
+	// is right for a vendor's surface and wrong for Worklet and Doclet: a
+	// seat woken by a work-item comment followed it to the only MCP server
+	// it held and posted in a chat channel the check could never count.
 	Discoverable []string
 }
 

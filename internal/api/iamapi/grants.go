@@ -19,8 +19,8 @@ import (
 // There is no default an omission could stand for here: a person enrolled
 // holding every app and a person enrolled holding the overview alone are both
 // legitimate, so a body that names neither is a body whose author did not
-// decide — and the record that lands from it decides who may use the tracker
-// and the knowledge base until somebody notices. The field is a POINTER so the
+// decide, and the record that lands from it decides who may use Worklet
+// and Doclet until somebody notices. The field is a POINTER so the
 // two are told apart: `[]` is the overview alone (ADR-0033), and an omitted
 // field is refused. The CLI and the dashboard each state a default of their
 // own, out loud, before they send.

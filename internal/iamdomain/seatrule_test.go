@@ -819,7 +819,7 @@ func TestANodeRunningNoCompanyRefusesEveryBindingByName(t *testing.T) {
 			PersonID: uuid.Must(uuid.NewV7()).String(), Stage: iam.StageActive,
 			Email: "priya@example.com", Login: iam.LoginFromAddress("priya@example.com"),
 			Password: aPassword(),
-			Grants:   []iam.Grant{iam.GrantTracker}, Seat: "platform-lead",
+			Grants:   []iam.Grant{iam.GrantWorklet}, Seat: "platform-lead",
 			Invitation: issued.ID, InvitationSecret: issued.Secret,
 			OpID: "invite:" + issued.ID, Reason: "redeemed an invitation",
 		})
@@ -906,7 +906,7 @@ func applyInvitationByHand(t *testing.T, rig *writeRig, id, address, secret,
 	blind := blindOf(t, address)
 	mutation, err := iamdomain.EncodeInvitation(iamdomain.Invitation{
 		V: iamdomain.DocumentVersion, ID: id, EmailBlind: blind, Sealed: sealed,
-		InvitedBy: "ana.admin", Grants: []iam.Grant{iam.GrantTracker},
+		InvitedBy: "ana.admin", Grants: []iam.Grant{iam.GrantWorklet},
 		Verifier: iamdomain.InvitationVerifier(secret), Seat: seat,
 		ExpiresAt: expires,
 	})

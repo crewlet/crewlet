@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE EPOCH EVERY APPLIER READS IS THE PUBLISHED COMPANY'S, AS IT STANDS NOW.
@@ -17,7 +18,7 @@ import (
 // asks this source per batch ([statelog.RunnerDeps.Epoch]). It was handed the
 // boot company's epoch as a value, so a node that booted with none applied
 // every record under none for the life of the process, and a revision that
-// moved the tracker's inbox retention reached no applier until a restart.
+// moved Worklet's inbox retention reached no applier until a restart.
 // statelog certifies that a runner asks per batch; this certifies that what it
 // asks is the company this node has published, through two activations and no
 // restart.
@@ -35,7 +36,7 @@ func TestTheLogsEpochFollowsThePublishedCompany(t *testing.T) {
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
 
-	const key = "tracker.native.inbox_retention_days"
+	const key = worklet.EpochInboxRetentionDays
 	epochOf := func() map[string]any {
 		t.Helper()
 		c := e.core.Load()
@@ -53,7 +54,7 @@ func TestTheLogsEpochFollowsThePublishedCompany(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parse the company: %v", err)
 		}
-		cfg.Tracker.Native = &config.TrackerNativeConfig{InboxRetentionDays: days}
+		cfg.Tracker.Worklet = &config.WorkletConfig{InboxRetentionDays: days}
 		status, stages, err := e.Apply(t.Context(), cfg, time.Now())
 		if err != nil || status != configplane.StatusOK {
 			t.Fatalf("Apply (%d days) = (%s, %v, %v), want ok", days, status, stages, err)

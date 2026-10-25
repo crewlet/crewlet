@@ -79,9 +79,9 @@ doctor` checks all three. Text mode stays the default and is the better answer
 when you want the tool log to be the engine's own. See
 [LLM Backends § Two modes](../concepts/llm-backends.md#two-modes-a-text-model-or-the-agent-itself).
 
-**Embeddings** (`providers.embeddings`) power the semantic half of a native
-knowledge search — the company's own pages and work items, embedded once for
-the whole fleet, and each search's query — and the agent-learning subsystem's
+**Embeddings** (`providers.embeddings`) power the semantic half of a Doclet
+or Worklet search (the company's own pages and work items, embedded once for
+the whole fleet, and each search's query) and the agent-learning subsystem's
 similarity recall (personal diary + episode recall). They are the one model
 call the engine makes itself, since a coding CLI computes no vectors: any
 OpenAI-compatible embeddings endpoint works via `base_url`, including a
@@ -130,14 +130,14 @@ everything genuinely shared lives in coordination instead. See
 
 Agents file and pick up work in a tracker, and search a shared knowledge base.
 
-**You do not have to bring either one.** The engine ships its own, and they
-are the default:
+**You do not have to bring either one.** The engine ships its own, Worklet and
+Doclet, and they are the default:
 
 ```yaml
 tracker:
-  backend: native      # the default
+  backend: worklet     # the default
 knowledge:
-  backend: native      # the default
+  backend: doclet      # the default
 ```
 
 That is the whole setup. Items and pages live in the fleet's own store, there
@@ -149,7 +149,7 @@ Nothing to create, nothing to provision, no per-seat accounts, no webhook.
 
 ### Which to choose
 
-| | Native | Atlassian |
+| | Worklet and Doclet | Atlassian |
 |---|---|---|
 | Setup | none | a site, a project, a space, a per-seat account each, webhooks |
 | Where the record lives | your own deployment | Atlassian's |
@@ -157,7 +157,7 @@ Nothing to create, nothing to provision, no per-seat accounts, no webhook.
 | Workflows, custom fields, sprints, permission schemes | no | yes |
 | Existing tickets | none — it starts empty | whatever you already have |
 
-**Take the native one unless you have a reason not to.** The reasons are real
+**Take Worklet and Doclet unless you have a reason not to.** The reasons are real
 and they are all about the people rather than the agents: a team that already
 works in Jira should not be asked to watch a second board, and an existing
 backlog does not migrate (there is deliberately no migration path — see
@@ -206,14 +206,14 @@ Details: [Jira](../integrations/jira.md) ·
 [Confluence](../integrations/confluence.md).
 
 > **One knowledge backend per company**, and validation enforces it: a company
-> that sets `knowledge.backend: native` *and* declares
+> that sets `knowledge.backend: doclet` *and* declares
 > `integrations.confluence` is refused. "What do we already know about this"
 > must not depend on which searcher was asked. See
 > [Knowledge System](../concepts/knowledge-system.md).
 >
 > An empty `backend` **derives**: declare `integrations.confluence` and you get
-> `confluence`; declare nothing and you get `native`. So an Atlassian company
-> that has not read this page keeps the backend it had.
+> `confluence`; declare nothing and you get `doclet`. So an Atlassian company
+> that has not read this page still searches Confluence.
 
 ---
 
@@ -412,7 +412,7 @@ ends of this page. `examples/nimbus.company.yaml` + `examples/nimbus.config.yaml
 is the **reference**: a pick from every row — GitLab, Mattermost, open models
 through OpenCode on an OpenRouter key, a sandbox its engineers push merge
 requests from, and
-the engine's own tracker and knowledge base rather than a vendor's. Read it to
+Worklet and Doclet rather than a vendor's. Read it to
 see what a full stack looks like written out, and
 [Jira](../integrations/jira.md) / [Confluence](../integrations/confluence.md)
 for the blocks that move those two halves to Atlassian.

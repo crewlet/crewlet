@@ -336,7 +336,7 @@
       "additionalProperties": false,
       "properties": {
         "grants": {
-          "description": "What this credential may do: admin, tracker, knowledge, artifacts. Required and non-empty.",
+          "description": "What this credential may do: admin, worklet, doclet, artifacts. Required and non-empty.",
           "items": {
             "type": [
               "string",
@@ -514,7 +514,7 @@
               "type": "string"
             }
           ],
-          "description": "Seat and presence lease TTL; 0 takes the measured default. Every other lease — a fleet duty, a tracker walk's claim — sizes its own."
+          "description": "Seat and presence lease TTL; 0 takes the measured default. Every other lease (a fleet duty, a Worklet walk's claim) sizes its own."
         },
         "type": {
           "anyOf": [

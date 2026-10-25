@@ -1,6 +1,6 @@
 # Replication
 
-Crewlet's own tracker, knowledge base, identity directory, artifacts and
+Worklet and Doclet, Crewlet's identity directory, its artifacts and
 artifact datastores are **replicated state machines**: seven domains on one
 framework, the embeddings
 and each node's usage history riding it as
@@ -142,8 +142,8 @@ a call that brings it back is that operation again
 arguments, and brought back with any other it is refused before anything is
 written, rather than half-answered from the first call. The dashboard's
 [act route](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface)
-and the `/work` and `/pages` routes take the key in an `Idempotency-Key` header
-instead — the act route refuses a write without one — and answer the `op_id`
+and the `/worklet` and `/doclet/pages` routes take the key in an `Idempotency-Key` header
+instead (the act route refuses a write without one) and answer the `op_id`
 they wrote under. The purge and node-gate routes take theirs as `?op_id=`. A
 caller that sends
 neither starts a new operation, which finishes nothing: a create repeated that
@@ -567,7 +567,7 @@ the same replicated database, and a node hands that database's write lock to
 its writers in the order they asked for it. A bulk update commits one
 transaction at a time — at most 4 000 rows, about two seconds at the measured
 drain — and a waiting writer takes the lock as soon as the one in front of it
-commits. So a bulk update in the work tracker delays the knowledge base's
+commits. So a bulk update in Worklet delays Doclet's
 apply by the transactions already queued ahead of it, at most one per other
 writer on that node, never by the whole 16 seconds.
 

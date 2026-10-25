@@ -11,12 +11,12 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iamdomain"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // routerEnvelopes are a test fleet member's estate envelopes: every node of the
@@ -94,7 +94,7 @@ func TestTheLocalEstateServesItsCopyWithWhatItRuns(t *testing.T) {
 		t.Fatalf("a copy with a core and no company = (%+v, %v), want its directory "+
 			"and no halves", b, ok)
 	}
-	e.native.Store(&native{trackerReader: &tracker.Reader{}})
+	e.native.Store(&native{trackerReader: &worklet.Reader{}})
 	if b, ok = judged(t.Context(), l); !ok || b.Tracker == nil || b.Identity == nil ||
 		b.Answers == nil || !b.Answers(t.Context()) {
 		t.Fatalf("a copy with its halves = (%+v, %v), want its directory and its "+
@@ -116,7 +116,7 @@ func TestAWrongCopyStopsServingAndTheSeatsStay(t *testing.T) {
 	verdict := copyVerdict{answers: true}
 	e := &Engine{backends: &Backends{}}
 	withCore(e)
-	e.native.Store(&native{trackerReader: &tracker.Reader{}})
+	e.native.Store(&native{trackerReader: &worklet.Reader{}})
 	l := localWith(e, func() time.Time { return now },
 		func(context.Context, *core) copyVerdict { return verdict })
 
@@ -449,7 +449,7 @@ func dataNodeOver(t *testing.T, view *coord.LeaseView, now func() time.Time,
 	t.Helper()
 	e := &Engine{backends: &Backends{}, dataView: view}
 	withCore(e)
-	e.native.Store(&native{trackerReader: &tracker.Reader{}})
+	e.native.Store(&native{trackerReader: &worklet.Reader{}})
 	e.local = localWith(e, now, read)
 	router, err := estate.NewRouter(estate.RouterOptions{
 		Self: "data-self", Queue: silentAsker{}, Placement: e.estatePlacement(),
@@ -649,10 +649,10 @@ func (h *servedHalves) For(context.Context) (estate.Backend, bool) {
 	defer h.mu.Unlock()
 	var b estate.Backend
 	if h.tracker {
-		b.Tracker = &tracker.Reader{}
+		b.Tracker = &worklet.Reader{}
 	}
 	if h.wiki {
-		b.Pages = &pages.Reader{}
+		b.Pages = &doclet.Reader{}
 	}
 	return b, true
 }

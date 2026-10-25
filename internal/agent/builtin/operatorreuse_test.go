@@ -7,7 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // AN `op_id` BROUGHT BACK WITH ANOTHER CALL IS REFUSED BEFORE ANY WRITE.
@@ -52,23 +52,23 @@ func TestAnOpIDBroughtBackWithAnotherCallIsRefusedBeforeAnyWrite(t *testing.T) {
 			call{builtin.CommentOnWorkTool, map[string]any{"item": "ENG-1", "body": "see the PR"}},
 			call{builtin.CommentOnWorkTool, map[string]any{"item": "ENG-2", "body": "see the PR"}}},
 		"a merge into another item": {
-			call{tracker.MergeWorkItemTool, map[string]any{"item": "ENG-2", "into": "ENG-1"}},
-			call{tracker.MergeWorkItemTool, map[string]any{"item": "ENG-2", "into": "ENG-3"}}},
+			call{worklet.MergeWorkItemTool, map[string]any{"item": "ENG-2", "into": "ENG-1"}},
+			call{worklet.MergeWorkItemTool, map[string]any{"item": "ENG-2", "into": "ENG-3"}}},
 		"a move of another item": {
-			call{tracker.MoveWorkItemTool, map[string]any{"item": "ENG-1", "project": "OPS"}},
-			call{tracker.MoveWorkItemTool, map[string]any{"item": "ENG-2", "project": "OPS"}}},
+			call{worklet.MoveWorkItemTool, map[string]any{"item": "ENG-1", "project": "OPS"}},
+			call{worklet.MoveWorkItemTool, map[string]any{"item": "ENG-2", "project": "OPS"}}},
 		"a removal of another item": {
-			call{tracker.RemoveWorkItemTool, map[string]any{"item": "ENG-1"}},
-			call{tracker.RemoveWorkItemTool, map[string]any{"item": "ENG-2"}}},
+			call{worklet.RemoveWorkItemTool, map[string]any{"item": "ENG-1"}},
+			call{worklet.RemoveWorkItemTool, map[string]any{"item": "ENG-2"}}},
 		"a restore of another item": {
-			call{tracker.RestoreWorkItemTool, map[string]any{"item": "ENG-1"}},
-			call{tracker.RestoreWorkItemTool, map[string]any{"item": "ENG-2"}}},
+			call{worklet.RestoreWorkItemTool, map[string]any{"item": "ENG-1"}},
+			call{worklet.RestoreWorkItemTool, map[string]any{"item": "ENG-2"}}},
 		"another person's priorities": {
-			call{tracker.SetPrioritiesTool, map[string]any{"handle": "ana", "items": []any{"ENG-1"}}},
-			call{tracker.SetPrioritiesTool, map[string]any{"handle": "bo", "items": []any{"ENG-1"}}}},
+			call{worklet.SetPrioritiesTool, map[string]any{"handle": "ana", "items": []any{"ENG-1"}}},
+			call{worklet.SetPrioritiesTool, map[string]any{"handle": "bo", "items": []any{"ENG-1"}}}},
 		"another view": {
-			call{tracker.SaveWorkViewTool, view("v-1")},
-			call{tracker.SaveWorkViewTool, view("v-2")}},
+			call{worklet.SaveWorkViewTool, view("v-1")},
+			call{worklet.SaveWorkViewTool, view("v-2")}},
 		"another tool": {
 			call{builtin.UpdateWorkItemTool, map[string]any{"item": "ENG-1", "status": "done"}},
 			call{builtin.CommentOnWorkTool, map[string]any{"item": "ENG-1", "body": "done"}}},

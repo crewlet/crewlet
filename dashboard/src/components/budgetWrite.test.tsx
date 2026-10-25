@@ -57,7 +57,7 @@ const BUDGETS: BudgetsAnswer = {
 /** An administrator, who holds every grant. */
 const ADMIN = {
   login: "U0",
-  grants: ["admin", "tracker", "knowledge"],
+  grants: ["admin", "worklet", "doclet"],
   handle: "jane",
   owner: "jane",
   name: "Jane",

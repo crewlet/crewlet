@@ -63,7 +63,7 @@ const PERSON: SessionAnswer = {
   login: "ada.lovelace",
   seat: "ada",
   kind: "person",
-  grants: ["tracker"],
+  grants: ["worklet"],
   expires_at: "2026-10-07T00:00:00Z",
   lineage: HERE,
   status: "signed_in",
@@ -87,7 +87,7 @@ const ROW = {
   name: "Ada Lovelace",
   email: "ada@example.com",
   seat: "ada",
-  grants: ["tracker"],
+  grants: ["worklet"],
 };
 
 const SESSIONS = {
@@ -641,14 +641,14 @@ describe("personal access tokens", () => {
     // THE PERSON'S OWN ACCESS STARTS TICKED, the token they almost always
     // want: with nothing ticked, one pressed through could not read their own
     // inbox. They untick what the token does not need.
-    expect(within(dialog).getByRole("checkbox", { name: "Tracker" })).toHaveProperty(
+    expect(within(dialog).getByRole("checkbox", { name: "Worklet" })).toHaveProperty(
       "checked",
       true,
     );
     expect(within(dialog).queryByText(/Nothing ticked/)).toBeNull();
     // AND A TOKEN CARRYING NO ACCESS SAYS WHAT IT REACHES rather than reading
     // as one that does nothing. Mutation: drop the sentence and this goes red.
-    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Tracker" }));
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Worklet" }));
     expect(
       within(dialog).getByText("Nothing ticked: overview only. No tasks or pages."),
     ).toBeDefined();
@@ -666,7 +666,7 @@ describe("personal access tokens", () => {
   // purpose or not at all. The apps an admin holds start ticked as anybody's
   // do. Mutation: drop the Admin exception and Admin starts ticked.
   test("an admin's own token starts with their apps and never Admin", async () => {
-    const grants = ["admin", "tracker", "knowledge"];
+    const grants = ["admin", "worklet", "doclet"];
     engine({ session: { ...PERSON, grants }, row: { ...ROW, grants } });
     mount();
     await screen.findByText("ada@example.com");
@@ -676,7 +676,7 @@ describe("personal access tokens", () => {
       "checked",
       false,
     );
-    for (const name of ["Tracker", "Knowledge"]) {
+    for (const name of ["Worklet", "Doclet"]) {
       expect(within(dialog).getByRole("checkbox", { name })).toHaveProperty("checked", true);
     }
   });
@@ -858,11 +858,11 @@ describe("the profile", () => {
     mount();
     await screen.findByText("ada@example.com");
     expect(tagWords(screen.getByText("Access").nextElementSibling as HTMLElement)).toEqual([
-      "Tracker",
+      "Worklet",
     ]);
     cleanup();
 
-    engine({ session: { ...PERSON, grants: ["tracker"] }, row: { ...ROW, grants: [] } });
+    engine({ session: { ...PERSON, grants: ["worklet"] }, row: { ...ROW, grants: [] } });
     mount();
     await screen.findByText("ada@example.com");
     expect(tagWords(screen.getByText("Access").nextElementSibling as HTMLElement)).toEqual([
@@ -870,7 +870,7 @@ describe("the profile", () => {
     ]);
     cleanup();
 
-    engine({ row: { ...ROW, grants: ["admin", "tracker", "knowledge"] } });
+    engine({ row: { ...ROW, grants: ["admin", "worklet", "doclet"] } });
     mount();
     await screen.findByText("ada@example.com");
     expect(tagWords(screen.getByText("Access").nextElementSibling as HTMLElement)).toEqual([

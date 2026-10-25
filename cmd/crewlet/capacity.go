@@ -82,7 +82,7 @@ func retentionSetCapacity(environ config.Source, args []string, stdout, stderr i
 			"operation and never changed")
 	}
 
-	path := fmt.Sprintf("/work/retention/capacity?stream=%s&bytes=%d&confirm=%d",
+	path := fmt.Sprintf("/worklet/retention/capacity?stream=%s&bytes=%d&confirm=%d",
 		url.QueryEscape(stream), bytes, bytes)
 	if *assert {
 		path += "&assert_excluded=true"
@@ -253,7 +253,7 @@ func maintenanceStatus(environ config.Source, args []string, stdout, stderr io.W
 		} `json:"admissions"`
 	}
 	if err := client.get(context.Background(),
-		"/work/retention/maintenance?stream="+url.QueryEscape(*stream), &answer); err != nil {
+		"/worklet/retention/maintenance?stream="+url.QueryEscape(*stream), &answer); err != nil {
 		return err
 	}
 	if !answer.Open {
@@ -342,7 +342,7 @@ func maintenanceAbandon(environ config.Source, args []string, stdout, stderr io.
 		Operation *capacityOperation `json:"operation"`
 	}
 	if err := client.post(context.Background(),
-		"/work/retention/maintenance/abandon?stream="+url.QueryEscape(*stream),
+		"/worklet/retention/maintenance/abandon?stream="+url.QueryEscape(*stream),
 		&answer); err != nil {
 		return err
 	}
@@ -386,7 +386,7 @@ func maintenanceExclude(environ config.Source, args []string, stdout, stderr io.
 	var answer struct {
 		Operation *capacityOperation `json:"operation"`
 	}
-	path := fmt.Sprintf("/work/retention/maintenance/exclude?stream=%s&node=%s&confirm=%s",
+	path := fmt.Sprintf("/worklet/retention/maintenance/exclude?stream=%s&node=%s&confirm=%s",
 		url.QueryEscape(*stream), url.QueryEscape(*node), url.QueryEscape(*node))
 	if err := client.post(context.Background(), path, &answer); err != nil {
 		return err
@@ -474,7 +474,7 @@ func reanchor(ctx context.Context, client *nodeClient, ask reanchorAsk, stdout i
 		Discarding string                `json:"discarding"`
 	}
 	if err := client.get(ctx,
-		"/work/retention/reanchor?stream="+url.QueryEscape(ask.stream), &status); err != nil {
+		"/worklet/retention/reanchor?stream="+url.QueryEscape(ask.stream), &status); err != nil {
 		return err
 	}
 	if strings.TrimSpace(ask.confirm) == "" {
@@ -509,7 +509,7 @@ func reanchor(ctx context.Context, client *nodeClient, ask reanchorAsk, stdout i
 		return errors.New("confirm the stream's own created_at")
 	}
 
-	path := fmt.Sprintf("/work/retention/reanchor?stream=%s&confirm=%s",
+	path := fmt.Sprintf("/worklet/retention/reanchor?stream=%s&confirm=%s",
 		url.QueryEscape(ask.stream), url.QueryEscape(ask.confirm))
 	if ask.force {
 		path += "&force=true"

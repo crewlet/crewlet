@@ -28,7 +28,7 @@
 // people three rows apart, because a work commit carried the bare id and a
 // page commit carried the prefixed one. The prefix is gone, the author KIND is
 // a column, and what keeps the names apart now is the SHAPE OF THE VALUE —
-// tracker/rank.go's move, applied to names instead of ranks:
+// worklet/rank.go's move, applied to names instead of ranks:
 //
 //   - a SEAT HANDLE is one segment, [a-z0-9][a-z0-9-]* — [ValidSeatHandle];
 //   - a PERSON's login is segments joined by DOTS — jane.doe;

@@ -112,7 +112,7 @@ func newRoomNode(t *testing.T, broker *memory.Broker, name string, acc *access,
 	for login := range bound {
 		id := strings.TrimPrefix(login, "token:")
 		b.API.Auth.Tokens = append(b.API.Auth.Tokens, config.APIToken{
-			ID: id, Token: id + "-token-long-enough-to-pass", Grants: []iam.Grant{iam.GrantTracker},
+			ID: id, Token: id + "-token-long-enough-to-pass", Grants: []iam.Grant{iam.GrantWorklet},
 		})
 	}
 	guard := auth.New(&b).BindSeats(auth.SeatBindings{
@@ -665,7 +665,7 @@ func TestPresenceFramesAreHeldToTheirAllowance(t *testing.T) {
 	b := config.DefaultBootstrap()
 	b.API.Auth.Admin = iam.AdminServe
 	b.API.Auth.Tokens = []config.APIToken{{ID: "dana", Token: "dana-token-long-enough-to-pass",
-		Grants: []iam.Grant{iam.GrantTracker}}}
+		Grants: []iam.Grant{iam.GrantWorklet}}}
 	guard := auth.New(&b).BindSeats(auth.SeatBindings{
 		Directory: watchBindings(people), Chart: watchSeats(people)})
 	srv := httptest.NewServer(stream.Handler(guard, auth.NewCSRF(&b), svc, nil))

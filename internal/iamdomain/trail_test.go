@@ -35,7 +35,7 @@ func TestAGestureMadeThroughATokenIsRecordedAsOneOnTheTrail(t *testing.T) {
 
 	const token = "pat:0192f00d-0000-7000-8000-00000000000a"
 	sarah := principalNamed("sarah.chen", iam.KindPerson,
-		[]iam.Grant{iam.GrantTracker, iam.GrantKnowledge})
+		[]iam.Grant{iam.GrantWorklet, iam.GrantDoclet})
 	sarah.ID = uuid.MustParse(id)
 	sarah.Via = token
 	herToken := rig.writer.As(sarah)

@@ -85,7 +85,7 @@ func TestAnAbsentLoginIsNobodyRatherThanAnError(t *testing.T) {
 		Name: "Sarah Chen", Email: "sarah.chen@example.com",
 		Login: "sarah.chen", OpID: "op-1", Reason: "the joiner",
 		Seat: rig.vacantSeat("sarah-chen"), LinkExpiresAt: firstLinkExpiry,
-		Grants: []iam.Grant{iam.GrantTracker},
+		Grants: []iam.Grant{iam.GrantWorklet},
 	}); err != nil {
 		t.Fatalf("enrol: %v", err)
 	}
@@ -103,8 +103,8 @@ func TestAnAbsentLoginIsNobodyRatherThanAnError(t *testing.T) {
 	}
 	// THE GRANTS COME BACK: a reader that dropped them would compose a
 	// principal indistinguishable from a person who was given less.
-	if len(held.Grants) != 1 || held.Grants[0] != iam.GrantTracker {
-		t.Errorf("grants = %v, want the tracker", held.Grants)
+	if len(held.Grants) != 1 || held.Grants[0] != iam.GrantWorklet {
+		t.Errorf("grants = %v, want worklet", held.Grants)
 	}
 }
 
@@ -275,7 +275,7 @@ func TestOneResolveAnswersTheSessionAndThePersonTogether(t *testing.T) {
 		Name: "Sarah Chen", Email: "sarah.chen@example.com",
 		Login: "sarah.chen", OpID: "op-1", Reason: "the joiner",
 		Seat: rig.vacantSeat("sarah-chen"), LinkExpiresAt: firstLinkExpiry,
-		Grants: []iam.Grant{iam.GrantTracker},
+		Grants: []iam.Grant{iam.GrantWorklet},
 	}); err != nil {
 		t.Fatalf("enrol: %v", err)
 	}

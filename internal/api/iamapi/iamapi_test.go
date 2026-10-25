@@ -62,7 +62,7 @@ func newRig(t *testing.T, options ...func(*iamapi.Options)) *rig {
 		bob.String(): {
 			ID: bob.String(), Kind: iam.KindPerson, Stage: iam.StageActive,
 			Login: "bob.sre", Seat: "sre-desk", NameSealed: []byte("sealed-name"),
-			Grants: []iam.Grant{iam.GrantTracker},
+			Grants: []iam.Grant{iam.GrantWorklet},
 		},
 	}}
 	writer := &fakeWriter{}
@@ -1159,8 +1159,8 @@ func TestAPersonIsNeverCreatedOrInvitedWithoutASeat(t *testing.T) {
 // There is no default an omission could stand for: somebody enrolled holding
 // every app and somebody enrolled holding the overview alone are both
 // legitimate, so a body naming neither is one whose author did not decide —
-// and the record it lands decides who may use the tracker and the knowledge
-// base until somebody notices. So `grants` is REQUIRED on a create, a service
+// and the record it lands decides who may use Worklet and Doclet until
+// somebody notices. So `grants` is REQUIRED on a create, a service
 // account's included, and on an invitation: absent is `400 invalid_body`
 // naming the field, decided BEFORE ANY KEY IS READ OR LINK MINTED, as a
 // missing seat is. A name this build does not know is refused the same way,
@@ -1193,7 +1193,7 @@ func TestAPersonIsNeverCreatedOrInvitedWithoutGrants(t *testing.T) {
 					"naming grants", got.status, got.body)
 			}
 			if detail, _ := got.body["detail"].(string); !strings.Contains(detail,
-				"admin, tracker, knowledge") {
+				"admin, worklet, doclet") {
 				t.Errorf("the refusal reads %q, want the permissions named", detail)
 			}
 			if len(r.writer.calls) != 0 {
@@ -1206,7 +1206,7 @@ func TestAPersonIsNeverCreatedOrInvitedWithoutGrants(t *testing.T) {
 			}
 
 			unknown := maps.Clone(tc.body)
-			unknown["grants"] = []string{"tracker", "billing"}
+			unknown["grants"] = []string{"worklet", "billing"}
 			got = r.as(administrator(), http.MethodPost, tc.target, unknown)
 			if got.status != http.StatusBadRequest || got.body["field"] != "grants" ||
 				!strings.Contains(fmt.Sprint(got.body["detail"]), `"billing"`) {
@@ -1264,11 +1264,11 @@ func TestAnEmptyGrantListIsTheOverview(t *testing.T) {
 	}
 	got = r.as(administrator(), http.MethodPost, "/iam/invitations", map[string]any{
 		"email": "fay@example.com", "seat": "founder",
-		"grants": []string{"knowledge"},
+		"grants": []string{"doclet"},
 	})
 	if got.status != http.StatusCreated ||
-		!slices.Equal(r.writer.invited.Grants, []iam.Grant{iam.GrantKnowledge}) {
-		t.Errorf("the control answered %d and carries %v, want knowledge",
+		!slices.Equal(r.writer.invited.Grants, []iam.Grant{iam.GrantDoclet}) {
+		t.Errorf("the control answered %d and carries %v, want doclet",
 			got.status, r.writer.invited.Grants)
 	}
 }
@@ -1291,7 +1291,7 @@ func TestAnUnknownGrantMayBeRemovedButNotAddedOverHTTP(t *testing.T) {
 	carrying := func(t *testing.T) *rig {
 		r := newRig(t)
 		row := r.directory.people[bob.String()]
-		row.Grants = []iam.Grant{iam.GrantTracker, "billing"}
+		row.Grants = []iam.Grant{iam.GrantWorklet, "billing"}
 		r.directory.people[bob.String()] = row
 		r.writer.document = &iamdomain.Person{V: iamdomain.DocumentVersion,
 			Kind: iam.KindPerson, Stage: iam.StageActive, Grants: row.Grants}
@@ -1305,14 +1305,14 @@ func TestAnUnknownGrantMayBeRemovedButNotAddedOverHTTP(t *testing.T) {
 	}{
 		{"taken off with remove_grants", map[string]any{
 			"remove_grants": []string{"billing"}}, http.StatusOK,
-			[]iam.Grant{iam.GrantTracker}},
+			[]iam.Grant{iam.GrantWorklet}},
 		{"kept by a whole set that restates it", map[string]any{
-			"grants": []string{"tracker", "knowledge", "billing"}}, http.StatusOK,
-			[]iam.Grant{iam.GrantTracker, iam.GrantKnowledge, "billing"}},
+			"grants": []string{"worklet", "doclet", "billing"}}, http.StatusOK,
+			[]iam.Grant{iam.GrantWorklet, iam.GrantDoclet, "billing"}},
 		{"added with add_grants", map[string]any{
 			"add_grants": []string{"payroll"}}, http.StatusBadRequest, nil},
 		{"added inside a whole set", map[string]any{
-			"grants": []string{"tracker", "billing", "payroll"}},
+			"grants": []string{"worklet", "billing", "payroll"}},
 			http.StatusBadRequest, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1325,7 +1325,7 @@ func TestAnUnknownGrantMayBeRemovedButNotAddedOverHTTP(t *testing.T) {
 			}
 			if tc.status != http.StatusOK {
 				if !strings.Contains(fmt.Sprint(got.body["detail"]), `"payroll"`) ||
-					!strings.Contains(fmt.Sprint(got.body["detail"]), "admin, tracker, knowledge") {
+					!strings.Contains(fmt.Sprint(got.body["detail"]), "admin, worklet, doclet") {
 					t.Errorf("the refusal reads %v, want the name and the set", got.body)
 				}
 				if len(r.writer.calls) != 0 {
@@ -1982,7 +1982,7 @@ func TestARefusedLoginOrKindIsABadRequestAndNotAFault(t *testing.T) {
 // statelog.ErrConflict, and the same request read again resolves it. This
 // surface answered it `bad_params`, whose contract is a request that can never
 // succeed however often it is sent — so a client following the code would drop
-// a write it only had to retry. `/work` answers the same error `stale`.
+// a write it only had to retry. `/worklet` answers the same error `stale`.
 //
 // Mutation: map the conflict back to `bad_params` and this goes red.
 func TestAWriteThatLostItsRaceIsStale(t *testing.T) {
@@ -2080,7 +2080,7 @@ func TestALoginAndASeatMoveInOneRecord(t *testing.T) {
 	// path: a seat move and a grants edit, both landed.
 	r = newRig(t)
 	got = r.as(administrator(), http.MethodPatch, "/iam/people/"+bob.String(),
-		map[string]any{"seat": "sre", "grants": []string{"knowledge"}})
+		map[string]any{"seat": "sre", "grants": []string{"doclet"}})
 	if got.status != http.StatusOK || got.body["landed"] != nil {
 		t.Errorf("an edit whose every record landed answered %d %v, want 200 "+
 			"naming nothing as landed", got.status, got.body)
@@ -2167,13 +2167,13 @@ func TestAGrantChangeLeavesWhatItDoesNotNameAsItLands(t *testing.T) {
 	}{
 		"a grant stripped meanwhile stays stripped": {
 			decided: nil,
-			body:    map[string]any{"add_grants": []string{"knowledge"}},
-			want:    []iam.Grant{iam.GrantKnowledge},
+			body:    map[string]any{"add_grants": []string{"doclet"}},
+			want:    []iam.Grant{iam.GrantDoclet},
 		},
 		"a grant given meanwhile stays given": {
-			decided: []iam.Grant{iam.GrantTracker, iam.GrantKnowledge},
-			body:    map[string]any{"remove_grants": []string{"tracker"}},
-			want:    []iam.Grant{iam.GrantKnowledge},
+			decided: []iam.Grant{iam.GrantWorklet, iam.GrantDoclet},
+			body:    map[string]any{"remove_grants": []string{"worklet"}},
+			want:    []iam.Grant{iam.GrantDoclet},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -2205,10 +2205,10 @@ func TestAGrantChangeLeavesWhatItDoesNotNameAsItLands(t *testing.T) {
 		status int
 	}{
 		"the whole set and a change": {map[string]any{
-			"grants": []string{"tracker"}, "add_grants": []string{"knowledge"}},
+			"grants": []string{"worklet"}, "add_grants": []string{"doclet"}},
 			administrator(), http.StatusBadRequest},
 		"a grant added and removed": {map[string]any{
-			"add_grants": []string{"tracker"}, "remove_grants": []string{"tracker"}},
+			"add_grants": []string{"worklet"}, "remove_grants": []string{"worklet"}},
 			administrator(), http.StatusBadRequest},
 		"a name that is no permission, added": {map[string]any{
 			"add_grants": []string{"trackr"}}, administrator(), http.StatusBadRequest},
@@ -2234,12 +2234,12 @@ func TestAGrantChangeLeavesWhatItDoesNotNameAsItLands(t *testing.T) {
 	r := newRig(t, func(o *iamapi.Options) {
 		inner := o.Authority
 		o.Authority = func(p iam.Principal) iamapi.Writer {
-			p.Grants = []iam.Grant{iam.GrantTracker}
+			p.Grants = []iam.Grant{iam.GrantWorklet}
 			return inner(p)
 		}
 	})
 	got := r.as(administrator(), http.MethodPatch, "/iam/people/"+bob.String(),
-		map[string]any{"add_grants": []string{"knowledge"}})
+		map[string]any{"add_grants": []string{"doclet"}})
 	if got.status != http.StatusForbidden {
 		t.Errorf("an addition the writer may not confer answered %d, want 403 "+
 			"(body %v)", got.status, got.body)
@@ -2287,9 +2287,9 @@ func TestARefusalPartwayNamesWhatLanded(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	r.writer.refusals = map[string]error{"update": fmt.Errorf(
-		"%w: conferring knowledge needs the same grant", iamdomain.ErrRefused)}
+		"%w: conferring doclet needs the same grant", iamdomain.ErrRefused)}
 	got := r.as(administrator(), http.MethodPatch, "/iam/people/"+alice.String(),
-		map[string]any{"login": "alice.ops", "grants": []string{"knowledge"}})
+		map[string]any{"login": "alice.ops", "grants": []string{"doclet"}})
 	if got.status != http.StatusForbidden {
 		t.Fatalf("status %d (body %v), want 403", got.status, got.body)
 	}
@@ -2546,8 +2546,8 @@ func TestTwoEditsAreTwoOperationsAndARetryIsOne(t *testing.T) {
 		_ = json.Unmarshal(rec.Body.Bytes(), &answer)
 		return r.writer.updated.OpID, answer.OpID
 	}
-	first, _ := patch("", []iam.Grant{iam.GrantTracker})
-	second, _ := patch("", []iam.Grant{iam.GrantKnowledge})
+	first, _ := patch("", []iam.Grant{iam.GrantWorklet})
+	second, _ := patch("", []iam.Grant{iam.GrantDoclet})
 	if first == second {
 		t.Errorf("two different edits of one person were published under one "+
 			"op id %q, so the broker acknowledges the second as the first", first)
@@ -2556,21 +2556,21 @@ func TestTwoEditsAreTwoOperationsAndARetryIsOne(t *testing.T) {
 	// request publishes under is a step of the scoped key its answer hands
 	// back — the one a retry sends unchanged.
 	key := statelog.NewOpID(time.Now(), "people-update")
-	keyed, scoped := patch(key, []iam.Grant{iam.GrantTracker})
+	keyed, scoped := patch(key, []iam.Grant{iam.GrantWorklet})
 	if scoped == "" || !strings.HasPrefix(keyed, scoped+".") {
 		t.Errorf("a request carrying the Idempotency-Key %q answered %q and "+
 			"was published as %q, which is not a step of it", key, scoped, keyed)
 	}
-	if again, _ := patch(key, []iam.Grant{iam.GrantTracker}); again != keyed {
+	if again, _ := patch(key, []iam.Grant{iam.GrantWorklet}); again != keyed {
 		t.Errorf("the same request under the same key was published as %q "+
 			"and then %q: a retry would land twice", keyed, again)
 	}
-	if retried, _ := patch(scoped, []iam.Grant{iam.GrantTracker}); retried != keyed {
+	if retried, _ := patch(scoped, []iam.Grant{iam.GrantWorklet}); retried != keyed {
 		t.Errorf("the same request under the key its answer handed back was "+
 			"published as %q, not %q: the retry an unknown asks for would land "+
 			"twice", retried, keyed)
 	}
-	if other, _ := patch(key, []iam.Grant{iam.GrantKnowledge}); other == keyed {
+	if other, _ := patch(key, []iam.Grant{iam.GrantDoclet}); other == keyed {
 		t.Errorf("another edit under the same key was the first one's "+
 			"operation %q: the ledger answers it as landed and writes "+
 			"nothing of it", keyed)

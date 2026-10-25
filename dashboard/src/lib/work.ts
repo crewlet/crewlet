@@ -103,19 +103,19 @@ export interface ItemRef {
  * addresses nothing.
  *
  * THE ONE PLACE THIS IS WRITTEN. The engine states the same sentence as
- * `tracker.ItemAddress`.
+ * `worklet.ItemAddress`.
  */
 export function itemAddress(ref: ItemRef): string {
   return ref.key && !ref.key_collision ? ref.key : ref.id;
 }
 
-/** Where a task's page is: `#/work/{address}`. See [itemAddress]. */
+/** Where a task's page is: `#/worklet/{address}`. See [itemAddress]. */
 export function itemPath(ref: ItemRef): string[] {
-  return ["work", itemAddress(ref)];
+  return ["worklet", itemAddress(ref)];
 }
 
 /**
- * Where a project's page is: `#/work/{KEY}`.
+ * Where a project's page is: `#/worklet/{KEY}`.
  *
  * A PROJECT KEY IS ITS ADDRESS — no two projects hold one — so this is the
  * route and nothing more. It is a function rather than an array written at the
@@ -123,7 +123,7 @@ export function itemPath(ref: ItemRef): string[] {
  * an item's route is the one shape that must never be.
  */
 export function projectPath(key: string): string[] {
-  return ["work", key];
+  return ["worklet", key];
 }
 
 /** A feed record's subject, as a task to address. */
@@ -142,7 +142,7 @@ export function subjectItem(row: {
  * subject, but a `prioritised` notice's subject is the PERSON whose list a
  * lead reordered, and its key is the task's — read as a subject, the one
  * notice whose key could open another task had a person's handle for an id,
- * and its link went to `#/work/{handle}`. A notice naming no task keeps its
+ * and its link went to `#/worklet/{handle}`. A notice naming no task keeps its
  * key as its only address, and the engine never flags one.
  */
 export function noticeItem(notice: WorkInboxNotice): ItemRef {
@@ -169,15 +169,24 @@ export function detailItem(detail: WorkItemDetail): ItemRef {
 }
 
 /**
+ * The `backend` a turn's work item names when the item lives in Worklet. Every
+ * turn and event record stores it, so it keeps this spelling; a screen
+ * compares against it and names the item in Worklet's words instead.
+ */
+export const WORKLET_ITEM_BACKEND = "native";
+
+/**
  * The task a TURN is charged to. A turn's work item is the turn's own record,
  * not a tracker row, so it carries no `key_collision`: its key may be one
  * another task claimed first, and asked for or opened by that key the claimant
- * answers. So a native task is addressed by its id, which every route and
+ * answers. So a Worklet task is addressed by its id, which every route and
  * question about a task takes, and a vendor item — whose id is the vendor's,
  * which none of them takes — by its key. The key is still what a turn SHOWS.
  */
 export function turnItem(ref: WorkItemRef): ItemRef {
-  return ref.backend === "native" && ref.id ? { id: ref.id } : { id: ref.id, key: ref.key };
+  return ref.backend === WORKLET_ITEM_BACKEND && ref.id
+    ? { id: ref.id }
+    : { id: ref.id, key: ref.key };
 }
 
 /**
@@ -309,7 +318,7 @@ export function statusShape(status: string): StatusShape {
 
 /**
  * The type a task is filed under when nobody named one — the engine's
- * `tracker.DefaultTaskType`, a builtin every company has.
+ * `worklet.DefaultTaskType`, a builtin every company has.
  *
  * A CARD DRAWS NO MARK FOR IT. A board is mostly tasks, and a mark on every
  * card says nothing a reader can use; drawn only for the exceptions, the bug
@@ -590,7 +599,7 @@ export const SORTS: { value: string; label: string }[] = [
   { value: "-created", label: "Newest" },
   { value: "title", label: "Title" },
   // TOKENS, NEVER MONEY: the engine keeps each task's spend as the tokens its
-  // turns were charged (`internal/tracker`'s `spend_tokens`), and that is the
+  // turns were charged (`internal/worklet`'s `spend_tokens`), and that is the
   // one measure of cost this dashboard draws.
   { value: "-spend_tokens", label: "Most tokens" },
 ];
@@ -659,10 +668,10 @@ export function describeChange(record: WorkActivityRecord, ctx: LabelContext): s
 /**
  * The change kinds whose excerpt is a sentence the ENGINE composed naming a
  * PERSON by handle, rather than somebody's own prose: a reorder of somebody's
- * list (`tracker.prioritisedWake`, "<person> put ENG-1 at position 1 of your
+ * list (`worklet.prioritisedWake`, "<person> put ENG-1 at position 1 of your
  * priorities"). Every other excerpt is a comment or a description, whose
  * words are whoever wrote them — and a purge's line names the credential's
- * login (`tracker.purgeExcerpt`), which no screen renames.
+ * login (`worklet.purgeExcerpt`), which no screen renames.
  */
 export const ENGINE_SENTENCES: ReadonlySet<string> = new Set(["prioritised"]);
 
@@ -708,7 +717,7 @@ export function nameAuthor(
  *
  * `chart_epoch` is the config activation a project's chart fields were last
  * re-declared at. The tracker records it because it is the only thing such a
- * re-declaration moves (`internal/tracker/deltas.go`), so the row is not empty
+ * re-declaration moves (`internal/worklet/deltas.go`), so the row is not empty
  * — but "Chart epoch: 1790538626 → 1790538628" is an internal counter, not a
  * fact about the work. A record whose ONLY delta it is reads as the org chart
  * being re-applied ([isChartReapply]), and runs of them fold into one line
@@ -786,7 +795,7 @@ export function reapplySentence(projects: readonly string[]): string {
  * A sentence the engine addressed to ONE seat, re-addressed to whoever is
  * reading it.
  *
- * `tracker.Writer.prioritisedWake` writes "<actor> put ENG-1 at position 1 of
+ * `worklet.Writer.prioritisedWake` writes "<actor> put ENG-1 at position 1 of
  * your priorities" — a notification CARD's text, correct for the seat the wake
  * was delivered to and second person to everybody else. The company-wide log
  * draws the same record for a founder, a lead and every other agent, so there
@@ -795,8 +804,8 @@ export function reapplySentence(projects: readonly string[]): string {
  * ONLY A SURFACE CAN FIX THIS, which is the division `deltaValue` states for
  * the reader's zone one function below: the record is the state log's, written
  * identically by N nodes, so it cannot carry a rendering that depends on who
- * opens it. What the record DOES carry is whose record it is — a person
- * subject's id is the handle itself (`tracker.PersonSubject`) — so the owner is
+ * opens it. What the record DOES carry is whose record it is (a person
+ * subject's id is the handle itself, `worklet.PersonSubject`), so the owner is
  * always nameable, and second person survives exactly when the reader is that
  * owner.
  *
@@ -809,8 +818,8 @@ function readdress(text: string, record: WorkActivityRecord, ctx: LabelContext):
   const owner = record.subject_id;
   // THE RECORD'S OWNER IS THE ONLY IDENTITY THAT CAN MATCH HERE. A person
   // subject's id is the name their own record is kept under
-  // (`tracker.PersonSubject`, `iam.RecordOwner`) — their seat when the
-  // directory binds them to one, their login when it does not — which is what
+  // (`worklet.PersonSubject`, `iam.RecordOwner`): their seat when the
+  // directory binds them to one, their login when it does not, which is what
   // `/viewer` answers as `owner` (`lib/viewer.ts`) and what a surface passes
   // as [LabelContext.viewer]. Compared against the seat handle alone, an
   // unbound reader's own queue read as somebody else's.
@@ -835,7 +844,7 @@ function readdress(text: string, record: WorkActivityRecord, ctx: LabelContext):
  * comment that stood here said otherwise: it claimed the applier writes "the
  * notification's own fields" as plain scalars for a comment, a mention or an
  * ask. It does not, and never did. `fields_json` is `jsonOf` of a
- * `map[string]Delta` on both of its two paths (`internal/tracker/apply_history.go`),
+ * `map[string]Delta` on both of its two paths (`internal/worklet/apply_history.go`),
  * and `Delta`'s `From`/`To` carry no `omitempty` — so every value this engine
  * has ever written to that column has BOTH keys and takes the pair arm. The
  * arm below is what stops a payload this build cannot type-check from
@@ -843,7 +852,7 @@ function readdress(text: string, record: WorkActivityRecord, ctx: LabelContext):
  *
  * THE EXCERPT IS DELIBERATELY NOT A RUNG. It used to be the one below the
  * deltas, and for the whole comment family the excerpt IS the comment body:
- * `tracker.Wake.excerpt` copies it verbatim, cut to six hundred bytes. So the
+ * `worklet.Wake.excerpt` copies it verbatim, cut to six hundred bytes. So the
  * History tab printed the Thread tab back, one clipped line per comment, and the
  * row never said what the change WAS. What the item's history is for is what
  * MOVED; what was said is one click away on the tab beside it, whole and
@@ -886,9 +895,9 @@ export function describeHistory(entry: WorkChange, ctx: LabelContext): string {
  * It said the engine writes "the notification's own fields where it cannot
  * compare two documents (a comment, a mention, an ask)", and therefore that a
  * reader decoding only from/to pairs would silently drop those records.
- * `internal/tracker/apply_history.go` refutes it in its own words — a comment's
+ * `internal/worklet/apply_history.go` refutes it in its own words (a comment's
  * wake builds its deltas with `TaskDeltas` like every other, so the fallback
- * branch there "can carry no key the one above could not" — and both of that
+ * branch there "can carry no key the one above could not"), and both of that
  * column's producers are `map[string]Delta`, so every value on the wire is a
  * pair and a comment stores `{}`. Measured over a company exercising comments
  * with mentions and asks, status moves, re-parents and project writes: seven
@@ -923,8 +932,8 @@ function deltaSentence(fields: Record<string, unknown> | undefined, ctx: LabelCo
 }
 
 /**
- * What a SET gained and lost, when `raw` is a set's delta — `tracker.Delta`'s
- * `added` and `removed`, each sorted and each member whole — and null for any
+ * What a SET gained and lost, when `raw` is a set's delta (`worklet.Delta`'s
+ * `added` and `removed`, each sorted and each member whole), and null for any
  * other shape.
  *
  * A SET RECORDS ITS MOVES, NOT BOTH SIDES. The engine used to carry both
@@ -957,7 +966,7 @@ function setClause(
 /**
  * ONE FIELD'S VALUE, in the word the rest of the product uses for it.
  *
- * A DELTA IS STORED AS THE LOG'S OWN TEXT. `tracker.TaskDeltas` writes
+ * A DELTA IS STORED AS THE LOG'S OWN TEXT. `worklet.TaskDeltas` writes
  * `in_review`, a bare handle and a whole RFC3339 instant; the item's header chip
  * reads "In review", its assignee chip reads the seat's name and its Due row
  * reads "Sep 19, 2026". The history was the ONE surface in this product printing
@@ -967,7 +976,7 @@ function setClause(
  *
  * WHY THE ENGINE CANNOT DO THIS. The delta is the state log's: N nodes write it
  * identically, so it may not carry a rendering that depends on the company's
- * live vocabulary or on this reader's zone. `internal/tracker/wake.go` says
+ * live vocabulary or on this reader's zone. `internal/worklet/wake.go` says
  * exactly that from the other end — "rendering a day from it belongs to a
  * surface, which knows the zone". This is that surface.
  *
@@ -991,7 +1000,7 @@ function deltaValue(field: string, value: string, ctx: LabelContext): string {
       return typeName(value, ctx.types);
     // A FIELD WHOSE VALUE IS PEOPLE, which travels as HANDLES: the one a task
     // is assigned to, the one who reported it, and the three sets
-    // `tracker.TaskDeltas` sorts before it stores them — the watchers, the
+    // `worklet.TaskDeltas` sorts before it stores them: the watchers, the
     // handles that muted the task, and its collaborators. A handle nobody can
     // resolve renders as the handle, which is what `seatName` already does:
     // a seat the chart no longer holds still moved this field.
@@ -1021,7 +1030,7 @@ function deltaValue(field: string, value: string, ctx: LabelContext): string {
     case "estimate":
       return /^\d+m$/.test(value) ? fmtMinutes(Number(value.slice(0, -1))) : value;
     // A FIELD WHOSE VALUE IS OTHER TASKS, which travels as their IDS: three of
-    // `tracker.RelationKinds`, the `blocking` mirror, the ordered queue a
+    // `worklet.RelationKinds`, the `blocking` mirror, the ordered queue a
     // person record carries, the parent a re-parent moves a task between, and
     // the root a cascade removed it with. The last two are SCALARS rather than
     // lists and take the same arm, because one id splits into one member. NOT
@@ -1056,7 +1065,7 @@ function deltaValue(field: string, value: string, ctx: LabelContext): string {
  * AN EMPTY SIDE IS AN EM DASH on either end: "Assignee:  → Ada" reads as a
  * rendering bug where "Assignee: — → Ada" reads as an assignment.
  *
- * AND A DELTA NEVER RENDERS AS NO CHANGE. `tracker.TaskDeltas` compares the
+ * AND A DELTA NEVER RENDERS AS NO CHANGE. `worklet.TaskDeltas` compares the
  * WHOLE instant precisely so that pulling a due time from 09:00 to 17:00 is a
  * change at all; rendered as a day, both sides of that move print "Sep 19, 2026"
  * and the line claims a field moved to where it already was — the exact failure
@@ -1093,7 +1102,7 @@ function deltaClause(field: string, from: string, to: string, ctx: LabelContext)
  * mid-sentence.
  *
  * CHECKLISTS ARE COUNTS PER NAMED LIST (`checklistText` in
- * `internal/tracker/wake.go`), so the clause compares the two sides list by
+ * `internal/worklet/wake.go`), so the clause compares the two sides list by
  * list: one only on the new side was added, one only on the old was removed,
  * and one on both moved its done count or its size. A side this build cannot
  * parse falls through to the generic clause rather than guessing.
@@ -1392,8 +1401,8 @@ export function viewRun(view: Pick<WorkView, "key" | "container">): {
 } {
   const path =
     view.container.kind === "project" && view.container.id
-      ? ["work", view.container.id]
-      : ["work", "tasks"];
+      ? ["worklet", view.container.id]
+      : ["worklet", "tasks"];
   return { path, query: { view: view.key } };
 }
 
@@ -1469,14 +1478,14 @@ export interface TrackerFilters {
    * would have had two URL keys competing for one wire parameter and a
    * precedence rule between them that nothing could state on screen. Overdue
    * is now what it is on the wire: one value of this filter
-   * (`internal/tracker/dates.go` resolves it, carrying the open-status
+   * (`internal/worklet/dates.go` resolves it, carrying the open-status
    * condition with it), beside the engine's own aliases.
    */
   due: string;
   /**
    * The trash, AS A FILTER, because that is what the engine says it is.
    *
-   * `internal/tracker/viewsread.go`: "what makes it the trash is `removed=true`
+   * `internal/worklet/viewsread.go`: "what makes it the trash is `removed=true`
    * … any view carrying that parameter is a trash listing and a client may
    * treat it as one". It was a TAB in the view strip beside five shapes — so a
    * reader could reach removed work only by leaving whatever arrangement they
@@ -1578,7 +1587,7 @@ export type ControlHome = "chip" | "arrangement" | "bar" | "strip" | "shape";
  * set is the company's, and the per-shape column arrangements, whose set is
  * the grid shapes'.
  *
- * `routes/work/toolbar/grammar.test.tsx` READS THIS and holds it in both
+ * `routes/worklet/toolbar/grammar.test.tsx` READS THIS and holds it in both
  * directions: every key the screen puts on the address has a home here, and
  * every home here is a key the screen actually writes — so a key added later
  * with nowhere to live fails rather than shipping invisible.
@@ -1733,9 +1742,9 @@ function itemsParams(args: {
   // QUERY keys. `cols`, `cols.list` and `cols.table` are DISPLAY keys this
   // screen keeps in the address, and the engine would refuse a read carrying
   // one — but no view can carry one to begin with, so there is nothing to
-  // strip here: `internal/tracker/views.go:274` runs every saved view's params
+  // strip here: `internal/worklet/views.go:274` runs every saved view's params
   // through `ParseQuery` at the SAVE, whose `checkKeys`
-  // (`internal/tracker/query.go:449`) refuses any key outside `QueryKeys`
+  // (`internal/worklet/query.go:449`) refuses any key outside `QueryKeys`
   // (`query.go:429`) that is not an `f.<ref>` custom field, and `cols` is in
   // neither. `WriteView` (`views.go:66`) is the only write path and
   // `save_work_view` reaches it (`internal/agent/builtin/workviews.go:216`).
@@ -1784,7 +1793,7 @@ function itemsParams(args: {
   // including one a view brought with it.
   //
   // AND THE TWO SEGMENTS THAT INCLUDE FINISHED WORK NEED `show_closed`, because
-  // the group alone cannot widen the answer. `internal/tracker/read.go` ANDs an
+  // the group alone cannot widen the answer. `internal/worklet/read.go` ANDs an
   // unconditional `t.status_group IN ('not_started','active')` unless this key
   // is set, so sending `done,closed` without it asks for the intersection of
   // two disjoint halves — the Closed segment returned nothing at all, on every
@@ -1839,7 +1848,7 @@ function itemsParams(args: {
 
   // A REMOVED TASK IS VERY OFTEN A FINISHED ONE, so this carries `show_closed`
   // exactly as the builtin trash view does — the group predicate is ANDed
-  // unconditionally otherwise (`internal/tracker/read.go`), which is what hid
+  // unconditionally otherwise (`internal/worklet/read.go`), which is what hid
   // every removal of anything already done. As a FLOOR rather than an
   // override, for the reason the scope segment gives above: a view that
   // narrowed the window it widened to keeps its own value.
@@ -2182,8 +2191,8 @@ export function filterChips(f: TrackerFilters, ctx: LabelContext = {}): FilterCh
  * How a priority filter compares: equal to one step, anything but one step,
  * or that step and everything above it.
  *
- * THE WIRE HAS ONE SPELLING FOR ALL THREE — a list of priorities
- * (`internal/tracker/query.go` `parsePriorities`) — so the operator is the
+ * THE WIRE HAS ONE SPELLING FOR ALL THREE, a list of priorities
+ * (`internal/worklet/query.go` `parsePriorities`), so the operator is the
  * CLIENT's and it is EXPANDED on the way out: `≥ normal` is
  * `priority=normal,high,urgent`, and `is not low` is every other step. The
  * grammar gains no operator and a saved view carrying either stays a plain
@@ -2291,7 +2300,7 @@ function tagVerb({ mode, tags }: { mode: TagMode; tags: string[] }): string {
 /**
  * The due filters a person is offered, which are the ENGINE'S OWN ALIASES.
  *
- * Every value here is one `internal/tracker/dates.go` expands itself
+ * Every value here is one `internal/worklet/dates.go` expands itself
  * (`DateAlias`, plus `overdue`, which carries an open-status condition with
  * it), so the control cannot compose a window the engine resolves differently
  * from the word on the chip. A comparison this list does not offer —
@@ -2514,7 +2523,7 @@ const LIST_DRAWING_KEYS = new Set(["limit", "cursor", "group_limit", "fields"]);
  *
  * ONE ROW AND ONE CARD PER LANE, because the answer this page reads is the
  * `around` block and nothing else: the engine places the task over the whole
- * drawing order whatever the page size (`internal/tracker/around.go`), so a
+ * drawing order whatever the page size (`internal/worklet/around.go`), so a
  * full page of rows would be a board's worth of bytes for three numbers.
  */
 export function aroundParams(list: string, key: string): Record<string, unknown> | null {
@@ -2584,7 +2593,7 @@ export function loadedOf(loaded: number, hint: number, capped?: boolean): string
  * Four shapes draw this indicator in the same corner of the same bar, in the
  * same words, over the same question: how many items match the filters you set.
  * The calendar does not. [buildItemsParams] bounds its fetch to the days the
- * grid draws, and `internal/tracker/read.go` compiles that to `due_at IS NOT
+ * grid draws, and `internal/worklet/read.go` compiles that to `due_at IS NOT
  * NULL AND due_at >= ? AND due_at < ?` — so the same filters answered "6 items"
  * beside a list saying "17", with eleven tasks gone and nothing on screen saying
  * where. A number that means two things in one place is worse than no number: a
@@ -2606,7 +2615,7 @@ export function loadedOf(loaded: number, hint: number, capped?: boolean): string
  *
  * It UNDER-states rather than over-states where it cannot tell: the engine's
  * date aliases (`due=thismonth`) resolve to a range server-side, and that table
- * belongs to `internal/tracker/dates.go` — a copy of it here is the drift
+ * belongs to `internal/worklet/dates.go`, and a copy of it here is the drift
  * `internal/clientsource` exists to catch. A view carrying one gets the plain
  * count, which is vague rather than wrong.
  */
@@ -2650,7 +2659,7 @@ export function countedLabel(
  * The design's own sentence was "Two items match. Widen the filters, or clear
  * them, to see the other six" — and "the other six" is a count over the
  * UNFILTERED set, which no answer carries: `total_hint` is `countHint` over
- * the SAME predicate as the rows (`internal/tracker/read.go`), so it counts
+ * the SAME predicate as the rows (`internal/worklet/read.go`), so it counts
  * what matched and never what was excluded. Stating it would mean a second
  * query at a second instant, printing a difference nobody wrote. So the
  * narrowed form says only that these are the ones that match.
@@ -2747,7 +2756,7 @@ export type Scope = (typeof SCOPES)[number];
  * COMPANY's clock, as the grammar's own date token.
  *
  * A TOKEN RATHER THAN A DATE, so the engine resolves it: `closed_since` goes
- * through the same calendar every `due=` bound does (`internal/tracker/dates.go`),
+ * through the same calendar every `due=` bound does (`internal/worklet/dates.go`),
  * which is what makes "this week" the week the `due:bucket` bands and the Done
  * lane's "N more this week" mean. A date computed here would be the browser's
  * week, and a reader in another zone than the company would see a Done lane
@@ -2941,7 +2950,7 @@ export const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 /**
  * The month's grid, Monday first, with the neighbouring days that fill it.
  *
- * MONDAY because `internal/tracker/dates.go` pins the week's start there — the
+ * MONDAY because `internal/worklet/dates.go` pins the week's start there: the
  * relative tokens a saved view can carry (`sow`, `eow`) mean Monday, and a
  * calendar that started on Sunday would draw "this week" across two of its own
  * rows.

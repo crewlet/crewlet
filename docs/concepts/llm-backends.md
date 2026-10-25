@@ -1086,7 +1086,7 @@ far — the auxiliary rewrites the seat's tools asked for and the workers the CL
 delegated to — because those calls happen after the part of the turn that
 launched the run has ended and charged what it spent. The part of the turn that
 resumes from the run pays them to the turn's [work
-item](../guides/work-tracker.md#spend-is-on-the-task), beside the run's own
+item](../guides/worklet.md#spend-is-on-the-task), beside the run's own
 tokens. Each call is recorded under the run it was made for — the bridge
 session is given the run's name before its box exists — so a call still in
 flight when the turn launches its next run (a delegated worker outliving the

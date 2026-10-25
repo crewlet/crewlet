@@ -8,14 +8,14 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// The engine's own tracker and knowledge base, end to end.
+// Worklet and Doclet, end to end.
 //
 // What these assert is NOT that a store round-trips — the unit suites cover
 // that against fakes. It is that a REAL node, with a real embedded broker, a
@@ -25,12 +25,12 @@ import (
 // backends has no other way to record anything.
 
 // operator is the tracker's write authority acting as a person's own
-// credential would — one writer per party, derived with [tracker.Writer.As]
+// credential would: one writer per party, derived with [worklet.Writer.As]
 // from an identity the caller cannot choose per call.
-func operator(t *testing.T, n *node) *tracker.Writer {
+func operator(t *testing.T, n *node) *worklet.Writer {
 	t.Helper()
-	w := n.engine.TrackerWriter().As("e2e", tracker.AuthorOperator,
-		tracker.Provenance{OperatorID: "e2e"})
+	w := n.engine.TrackerWriter().As("e2e", worklet.AuthorOperator,
+		worklet.Provenance{OperatorID: "e2e"})
 	if w == nil {
 		t.Fatal("the operator identity was refused")
 	}
@@ -39,13 +39,13 @@ func operator(t *testing.T, n *node) *tracker.Writer {
 
 // newTask is one task as a caller files it: the fields a create names, and
 // the derived ones the write path fills in.
-func newTask(project, title string) tracker.Task {
+func newTask(project, title string) worklet.Task {
 	now := time.Now().UTC()
-	return tracker.Task{
-		V: tracker.DocumentVersion, ID: uuid.NewString(), Project: project,
-		Type: tracker.DefaultType, Title: title, Status: tracker.StatusTodo,
-		StatusGroup: tracker.GroupNotStarted, Priority: tracker.PriorityNormal,
-		Rank: tracker.RankOrigin, Reporter: "e2e",
+	return worklet.Task{
+		V: worklet.DocumentVersion, ID: uuid.NewString(), Project: project,
+		Type: worklet.DefaultType, Title: title, Status: worklet.StatusTodo,
+		StatusGroup: worklet.GroupNotStarted, Priority: worklet.PriorityNormal,
+		Rank: worklet.RankOrigin, Reporter: "e2e",
 		CreatedAt: now, UpdatedAt: now,
 	}
 }
@@ -54,9 +54,9 @@ func newTask(project, title string) tracker.Task {
 // [builtin.PageActorOf] names one: the credential's login is both who wrote it
 // and what it wrote through, since a token acting for nobody has nobody else
 // to name — and a write naming nobody is refused.
-func pageOperator() pages.Actor {
+func pageOperator() doclet.Actor {
 	login := iam.TokenLogin("e2e")
-	return pages.Actor{Kind: pages.AuthorOperator, Handle: login, OperatorID: login}
+	return doclet.Actor{Kind: doclet.AuthorOperator, Handle: login, OperatorID: login}
 }
 
 // A COMPANY THAT CONFIGURES NOTHING GETS A TRACKER AND A WIKI. That is the
@@ -68,12 +68,12 @@ func TestADefaultCompanyHasATrackerAndAWiki(t *testing.T) {
 	waitFor(t, "the native backends to hydrate", hydrated(t, n.engine))
 
 	if n.engine.TrackerWriter() == nil || n.engine.Tracker() == nil {
-		t.Fatal("a company that declares no tracker got no native one")
+		t.Fatal("a company that declares no tracker got no Worklet")
 	}
 	if n.engine.PagesStore() == nil || n.engine.Pages() == nil {
-		t.Fatal("a company that declares no knowledge base got no native one")
+		t.Fatal("a company that declares no knowledge base got no Doclet")
 	}
-	// AND THE SEARCHER IS THE NATIVE ONE, which is what the turn-start
+	// AND THE SEARCHER IS DOCLET'S, which is what the turn-start
 	// prefetch and every seat's search_knowledge read through.
 	searcher := n.engine.Knowledge()
 	if searcher == nil {
@@ -120,7 +120,7 @@ func TestAnItemWrittenToTheFleetLandsOnTheBoard(t *testing.T) {
 		t.Fatalf("wait for the applier: %v", err)
 	}
 	detail, err := n.engine.Tracker().Task(t.Context(), written.Key,
-		tracker.DetailWants{History: true}, statelog.Freshness{Level: statelog.ReadSession})
+		worklet.DetailWants{History: true}, statelog.Freshness{Level: statelog.ReadSession})
 	if err != nil {
 		t.Fatalf("read %s back: %v", written.Key, err)
 	}
@@ -143,13 +143,13 @@ func TestAnItemWrittenToTheFleetLandsOnTheBoard(t *testing.T) {
 	// SESSION, which is the level a seat's own tools read at: this case is
 	// about a node finding work IT just filed, and that is precisely the
 	// read-your-own-writes guarantee.
-	answer, err := n.engine.Tracker().Tasks(t.Context(), tracker.Query{
-		Scope: tracker.Scope{Project: "ENG"}, Level: statelog.ReadSession,
+	answer, err := n.engine.Tracker().Tasks(t.Context(), worklet.Query{
+		Scope: worklet.Scope{Project: "ENG"}, Level: statelog.ReadSession,
 	}, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	found := slices.ContainsFunc(answer.Rows, func(r tracker.TaskRow) bool {
+	found := slices.ContainsFunc(answer.Rows, func(r worklet.TaskRow) bool {
 		return r.Key == written.Key
 	})
 	if !found {
@@ -169,7 +169,7 @@ func TestAPageBecomesSearchable(t *testing.T) {
 	n := start(t)
 	waitFor(t, "the native backends to hydrate", hydrated(t, n.engine))
 
-	written, err := n.engine.PagesStore().Create(t.Context(), pageOperator(), pages.NewPage{
+	written, err := n.engine.PagesStore().Create(t.Context(), pageOperator(), doclet.NewPage{
 		Container: "ENG", Title: "Rollback runbook",
 		Body: "When a deploy hangs on rollback, drain the node before retrying.",
 	})
@@ -180,9 +180,9 @@ func TestAPageBecomesSearchable(t *testing.T) {
 		t.Fatalf("wait for this node to apply the write: %v", err)
 	}
 
-	searcher := n.engine.NativeSearcher()
+	searcher := n.engine.DocletSearcher()
 	if searcher == nil {
-		t.Fatal("no native searcher")
+		t.Fatal("no Doclet searcher")
 	}
 	// THE INDEX CATCHES UP ON ITS OWN, and what has to end is the wait for
 	// the PAGE rather than the wait for the gate. The gate reports this
@@ -238,7 +238,7 @@ func TestAnOperatorWriteIsStillAnOperatorWriteOnTheBoard(t *testing.T) {
 		t.Fatalf("wait for the applier: %v", err)
 	}
 	detail, err := n.engine.Tracker().Task(t.Context(), written.Key,
-		tracker.DetailWants{History: true}, statelog.Freshness{Level: statelog.ReadSession})
+		worklet.DetailWants{History: true}, statelog.Freshness{Level: statelog.ReadSession})
 	if err != nil {
 		t.Fatalf("read back: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestAnOperatorWriteIsStillAnOperatorWriteOnTheBoard(t *testing.T) {
 	// THE KIND IS THE DISCRIMINATOR, and it is what every renderer and
 	// every recipient rule reads. An author string alone cannot say
 	// whether `e2e` is a credential or a colleague.
-	if change.ActorKind != tracker.AuthorOperator {
+	if change.ActorKind != worklet.AuthorOperator {
 		t.Errorf("the filing is attributed as %q, not as an operator", change.ActorKind)
 	}
 	if change.Actor != "e2e" {

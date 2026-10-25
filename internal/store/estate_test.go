@@ -26,7 +26,7 @@ import (
 // closing:
 //
 //	database/sql.(*DB).conn(0x0, …)
-//	tracker.Evictions(…)
+//	worklet.Evictions(…)
 //	engine.(*retention).tombstones(…)
 //
 // Every one of them now goes through Read or Tx on the handle, which answer

@@ -143,7 +143,7 @@ func TestAStaleSeedNeverBecomesTheEnginesCompany(t *testing.T) {
 			posture, configplane.PostureServe)
 	}
 	if e.Tracker() == nil || e.Pages() == nil {
-		t.Errorf("the live company keeps the native tracker and knowledge base, and "+
+		t.Errorf("the live company keeps Worklet and Doclet, and "+
 			"this node runs tracker %v and pages %v: the halves were started for "+
 			"another company", e.Tracker() != nil, e.Pages() != nil)
 	}

@@ -15,9 +15,9 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/opkey"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -51,17 +51,17 @@ const ActPathPrefix = "/operator/act/"
 // sixty-four kibibytes for everything else a request carries.
 //
 // DERIVED FROM THE LARGEST THING ANY ACT CARRIES, which is a page body on
-// `write_page` or `save_page`. A page is capped at [pages.MaxBody] as TEXT,
+// `write_page` or `save_page`. A page is capped at [doclet.MaxBody] as TEXT,
 // and the request carries it as a JSON STRING, where every quote, backslash
 // and newline is two bytes — so a legal page of nothing but those encodes to
 // twice its length, and a cap at the page's own size refused the page the
 // knowledge base would have accepted. The browser's JSON.stringify escapes
 // nothing else to more than two bytes but the other C0 controls, which are
 // six, and a document is not made of them. The sixty-four kibibytes cover the
-// envelope, a title at [pages.MaxTitle], labels, a message and a parent, with
+// envelope, a title at [doclet.MaxTitle], labels, a message and a parent, with
 // room to spare: every other tool's arguments are bounded far below it (a work
 // item's description is 64 KiB of text).
-const MaxActBody = 2*pages.MaxBody + 64<<10
+const MaxActBody = 2*doclet.MaxBody + 64<<10
 
 // ActTransportCodes is every `error` the act transport can answer with that
 // is NOT a tool's refusal class: its own three, the operation key's, the

@@ -543,7 +543,7 @@ type Reading struct {
 // TAGGED, like every other struct in [Report], and the tags are load-bearing
 // for a reader this package does not have yet.
 //
-// This is reached through `GET /work/retention`, so its field names are a wire
+// This is reached through `GET /worklet/retention`, so its field names are a wire
 // contract. Untagged it was the ONE struct in that document emitting
 // `Kind`/`Detail`/`Remedy` beside siblings emitting `node_id` and `first_seq`
 // — which `crewlet retention status` survived only because Go's own decoder

@@ -8,11 +8,11 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/compact"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/search"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // What the operator surface's `answer_knowledge` needs from the engine: the
@@ -102,7 +102,7 @@ func (b answerBudget) Refusing(ctx context.Context) (builtin.BudgetRefusal, bool
 // write to any of them can change what an answer would say, and moves the
 // position, which is what retires every answer cached at the old one.
 //
-// FALSE FOR A COMPANY WHOSE KNOWLEDGE BASE IS NOT NATIVE: an external wiki
+// FALSE FOR A COMPANY WHOSE KNOWLEDGE BASE IS NOT DOCLET: an external wiki
 // changes without this node hearing, so a position that covered only the
 // tracker would keep serving an answer whose pages had moved.
 //
@@ -111,12 +111,12 @@ func (b answerBudget) Refusing(ctx context.Context) (builtin.BudgetRefusal, bool
 // no log to read a position off, so it answers false and caches nothing.
 func (e *Engine) KnowledgeCorpus() (string, bool) {
 	c := e.core.Load()
-	if e.NativeSearcher() == nil || c == nil || c.log == nil {
+	if e.DocletSearcher() == nil || c == nil || c.log == nil {
 		return "", false
 	}
 	parts := make([]string, 0, 3)
 	for _, name := range []string{
-		tracker.Domain{}.Name(), pages.Domain{}.Name(), search.Domain{}.Name(),
+		worklet.Domain{}.Name(), doclet.Domain{}.Name(), search.Domain{}.Name(),
 	} {
 		running := c.log.Domain(name)
 		if running == nil || running.runner == nil {

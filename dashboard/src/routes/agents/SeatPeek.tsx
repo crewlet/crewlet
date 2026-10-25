@@ -27,16 +27,16 @@
  * windows all arrive with the org projection and the `agents` push, so they
  * cost nothing. What does cost a read:
  *
- *   * `work_workload` — the seat's open work, for a reader holding Tracker,
+ *   * `work_workload`: the seat's open work, for a reader holding Worklet,
  *     whose question it is;
- *   * `fleet` — which node holds the seat and since when — on Admin, so it
+ *   * `fleet`: which node holds the seat and since when, on Admin, so it
  *     is asked only of an admin; every
  *     other reader is told what the health push says (`heldBy`: this node, by
  *     name, or another),
  *     exactly as the profile's Setup card tells them, rather than being sent
  *     a refusal to draw or told a fact already on their screen is withheld;
- *   * `work_item_turns` — which turn this is on its task ("Turn 2") — asked
- *     only while the seat is working on one, of a Tracker holder.
+ *   * `work_item_turns`: which turn this is on its task ("Turn 2"), asked
+ *     only while the seat is working on one, of a Worklet holder.
  *
  * And for a HUMAN seat, one REST read of the directory (`GET /iam/seats`),
  * which every signed-in reader is answered (masked per reader), and never for
@@ -93,7 +93,7 @@ import { fmtCount, fmtElapsed, fmtMinute, fmtTime, plural, readerDay } from "~/l
 import { useAgents, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { TRACKER, accessNames } from "~/lib/access.ts";
+import { WORKLET, accessNames } from "~/lib/access.ts";
 import {
   canManagePeople,
   SEAT_GESTURE_WORDS,
@@ -235,11 +235,11 @@ function SeatPeekBody({
   const item = ref?.key ? itemAddress(turnItem(ref)) : "";
 
   // THE THREE READS — see the file's doc.
-  // THE TRACKER'S TWO, asked only of a company running Crewlet Works.
+  // WORKLET'S TWO, asked only of a company running Worklet.
   const runs = useServicesRun();
   const ask = useServicesAsk();
   const workload = useQuery("work_workload", undefined, {
-    enabled: viewer.tracker && runs.tracker,
+    enabled: viewer.worklet && runs.tracker,
     pollMs: 60_000,
   });
   // THE FLEET'S LEASES ARE THE DEPLOYMENT'S, read on Admin: asked only of an
@@ -248,7 +248,7 @@ function SeatPeekBody({
   const turns = useQuery(
     "work_item_turns",
     { id: item, limit: 1 },
-    { enabled: viewer.tracker && ask.tracker && state === "working" && item !== "" },
+    { enabled: viewer.worklet && ask.tracker && state === "working" && item !== "" },
   );
 
   const ordinal =
@@ -434,23 +434,23 @@ function SeatPeekBody({
           </>
         )}
 
-        {/* CREWLET WORKS' OPEN TASKS, drawn only where the company runs it. */}
+        {/* WORKLET'S OPEN TASKS, drawn only where the company runs it. */}
         {runs.tracker && (
           <>
             <dt>Open work</dt>
             <dd>
               {viewer.loading ? (
                 <EmptyValue label="Checking your access" />
-              ) : !viewer.tracker ? (
-                // NOT ASKED: the open work is the tracker's, and a reader without
+              ) : !viewer.worklet ? (
+                // NOT ASKED: the open work is Worklet's, and a reader without
                 // it is told what would show it rather than a refusal.
-                <EmptyValue label={`Needs ${accessNames([TRACKER])} access`} />
+                <EmptyValue label={`Needs ${accessNames([WORKLET])} access`} />
               ) : workload.error ? (
                 <EmptyValue label="The tracker did not answer" />
               ) : !workload.data ? (
                 <EmptyValue label="Reading the tracker" />
               ) : load && load.open > 0 ? (
-                <a className="t-link" href={href(["work", "tasks"], { assignee: seat.handle })}>
+                <a className="t-link" href={href(["worklet", "tasks"], { assignee: seat.handle })}>
                   {plural(load.open, "task")}
                   {load.blocked > 0 && ` · ${load.blocked} blocked`}
                   {load.overdue > 0 && ` · ${load.overdue} overdue`}

@@ -368,7 +368,7 @@ type Request struct {
 	// every later write that surface made. Only the gesture knows which of
 	// its own appends the next one has to see, which is why a domain's
 	// writer hands the position from step to step (see
-	// `tracker.Writer.After`) rather than this package deriving it.
+	// `worklet.Writer.After`) rather than this package deriving it.
 	//
 	// The zero position waits for nothing, which is every write a surface
 	// makes on its own.

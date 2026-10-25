@@ -77,7 +77,10 @@ export interface WidgetSize {
 }
 
 export interface WidgetDef {
-  /** `<workspace>.<name>`, stored in every board that holds it, so never renamed: `settings.backups`. */
+  /**
+   * `<workspace>.<name>`: `settings.backups`. Every board that holds the widget
+   * stores it, so a key a release has shipped is never renamed.
+   */
   key: string;
   /** The page it summarises, a key of `DESTINATIONS`: `settings-backups`. */
   from: string;
@@ -86,7 +89,7 @@ export interface WidgetDef {
   description: string;
   /**
    * The line where what it shows depends on the services the company runs:
-   * Figures draws no task figures without Crewlet Works, and a line that
+   * Figures draws no task figures without Worklet, and a line that
    * promised them described a widget the reader will not get
    * ([widgetDescription]). Absent, [description] holds everywhere.
    */
@@ -99,7 +102,7 @@ export interface WidgetDef {
   once?: boolean;
   /**
    * The service built into Crewlet this widget reads where the page it
-   * summarises reads none (Home's task chart reads Crewlet Works' flow, the
+   * summarises reads none (Home's task chart reads Worklet's flow, the
    * Inbox's updates its notices), for its settings where they decide it (a
    * figure, a page shortcut). Where the company does not run it the widget is
    * left off the board and out of the tray ([widgetShown]), and drawn again

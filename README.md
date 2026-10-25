@@ -197,14 +197,14 @@ first turn with no integrations at all, then wiring in the real ones.
 > **Want a whole company to run?** Two complete seven-seat reference orgs ship
 > in `examples/`, the same company at both ends of the stack.
 > `nimbus.company.yaml` is the full one — GitLab, Mattermost, open models
-> through OpenCode on an OpenRouter key, and the engine's own work tracker and
-> knowledge base.
+> through OpenCode on an OpenRouter key, and Worklet and Doclet, the engine's
+> own work tracker and knowledge base.
 > `nimbus-claude-cli.company.yaml` is the short path: chat on Mattermost, its
 > model Claude Code on the Claude plan you already pay for, and its engineering seats running
 > that same CLI as their own agentic loop in a sandbox on the engine host, on
 > that same login — no API key, and no service beyond the chat server in this
-> repo's compose file. Neither needs a tracker or a wiki account: both run the
-> engine's own, and [Jira](docs/integrations/jira.md) /
+> repo's compose file. Neither needs a tracker or a wiki account: both run Worklet
+> and Doclet, and [Jira](docs/integrations/jira.md) /
 > [Confluence](docs/integrations/confluence.md) are the blocks that move those
 > halves to Atlassian. Every setting in both carries its reasoning in a comment.
 

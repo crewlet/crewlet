@@ -257,7 +257,7 @@ type State struct {
 }
 
 // Uncharged is spend carried across a park, in the counters a work item's
-// charge is made of (see tracker.TurnSpend, which it mirrors field for field:
+// charge is made of (see worklet.TurnSpend, which it mirrors field for field:
 // this package is the conversation's wire format and does not import a
 // domain).
 type Uncharged struct {

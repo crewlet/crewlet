@@ -1,4 +1,4 @@
--- The native tracker's durable state: the read side of the mutation log.
+-- Worklet's durable state: the read side of the mutation log.
 --
 -- Every table here is REBUILT FROM THE LOG rather than written by a caller.
 -- The applier is the only writer, its transaction carries the checkpoint, and
@@ -305,7 +305,7 @@ CREATE TABLE tracker_projects (
     -- apply path only ever sets it, and the sole clear is the fleet-singleton
     -- duty's own local write on the node that holds the duty, so a peer's copy
     -- stays set. That is why the column is outside the identity claim (see
-    -- internal/tracker's Domain.ClaimsIdentity) and why nothing may read it as
+    -- internal/worklet's Domain.ClaimsIdentity) and why nothing may read it as
     -- a fleet-wide fact.
     rank_duplicate_pending INTEGER NOT NULL DEFAULT 0,
     -- MAINTAINED, never scanned: updated in the task apply when a status group

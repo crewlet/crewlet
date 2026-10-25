@@ -166,10 +166,10 @@ live-editable, so the first version does not need to be the last.
 
    Give each unit a `project` and a `space` in the first pass regardless:
    on the default backends that is the whole setup, and it is what gives
-   a team somewhere to file work and write things down — the native
-   knowledge base creates a page only in a declared space (a unit's or a
+   a team somewhere to file work and write things down: Doclet
+   creates a page only in a declared space (a unit's or a
    seat's `space`, `knowledge.root_space`, or the tool-skills container),
-   exactly as the tracker files work only in a declared project.
+   exactly as Worklet files work only in a declared project.
 5. **What model, and what budget?** One `providers.llm` entry is enough
    to start. Every model is reached through the vendor's own **coding
    CLI**, which the engine drives as a process, so ask *whose* models and
@@ -221,9 +221,9 @@ A company with no integrations only reacts to schedules. That is the
 right first milestone, because it proves the engine, the model, and the
 config all work before any external credential is in play.
 
-It is not a hollow one: the tracker and the knowledge base are on by
+It is not a hollow one: Worklet and Doclet are on by
 default, so that first turn can already file work and write pages, and
-the founder can watch it happen on the Tracker and Pages screens. The
+the founder can watch it happen on the Worklet and Doclet screens. The
 integrations that come later are about where their PEOPLE are, not about
 what the company can do.
 
@@ -250,8 +250,8 @@ reinvent them:
 - [Quickstart](https://docs.crewlet.ai/engine/latest/getting-started/quickstart/) — four seats,
   zero integrations, the minimal end-to-end config.
 - [`examples/nimbus.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml) —
-  a complete seven-seat company with GitLab + Mattermost + sandbox on the
-  engine's own tracker and knowledge base, its model open models through
+  a complete seven-seat company with GitLab + Mattermost + sandbox on
+  Worklet and Doclet, its model open models through
   OpenCode on an OpenRouter key.
 - [`examples/nimbus-claude-cli.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus-claude-cli.company.yaml) —
   the SAME seven seats with everything but chat removed: Mattermost alone, on
@@ -334,14 +334,14 @@ those accounts and tokens by hand, and their commands report which
 account each credential turned out to be.
 
 **The knowledge base and the tracker are each single-homed, and each is
-named.** `knowledge.backend` is `native` (the default), `confluence` or
-`none`; `tracker.backend` is `native`, `jira` or `none`. Two knowledge
+named.** `knowledge.backend` is `doclet` (the default), `confluence` or
+`none`; `tracker.backend` is `worklet` (the default), `jira` or `none`. Two knowledge
 bases would make an agent's answer to "what do we already know about
-this" depend on which was asked, so naming `native` beside an
-`integrations.confluence` block is refused — and the same for the
+this" depend on which was asked, so naming `doclet` beside an
+`integrations.confluence` block is refused, and the same for the
 tracker. Leaving a backend unset **derives** it from whether the vendor
 block is there, so an existing config keeps what it had. The two axes are
-independent: a native tracker against a Confluence wiki is ordinary. Put
+independent: Worklet against a Confluence wiki is ordinary. Put
 the org-wide read scope in `knowledge.scope`, and note a scope on a
 backend switched off is refused, because it reads as a working narrowing
 and narrows nothing.
@@ -353,7 +353,7 @@ and writes pages. It does **not** widen what agents can read (only
 `knowledge.scope` does) and it is **not** an MCP credential (those live
 in `role.mcp_env`). This is the single most-confused part of the config —
 get it right and say which one you mean. The keys are **vendor-neutral**
-by design: the same `project: ENG` names a native project and a Jira one,
+by design: the same `project: ENG` names a Worklet project and a Jira one,
 so switching backends never rewrites the org chart. Shape them as an
 upper-case letter plus 1–9 upper-case letters or digits (`ENG`, `PROD`),
 which is what every backend accepts, and never use the reserved `TS` or
@@ -488,15 +488,15 @@ crewlet run crewlet.yaml -company company.yaml
 5. How they join it. Nobody holds a password until they are put on a
    seat, and the API token is what puts the first person on theirs — so
    its `grants` must list `admin` (`grants: [admin]`), which runs the
-   company and includes both apps, and the node's `api.auth.admin` must be
+   company and includes every app, and the node's `api.auth.admin` must be
    `serve`. Sign in at the dashboard with the API token, open **Company › Org
    chart**, open the founder's seat (drawn **Vacant**) and press
    **Invite**, then open the link it shows once and choose a login and a
    password — or, from a shell, `crewlet iam invite <address> -seat
    jane-founder -grants admin` with `CREWLET_API_TOKEN` set. Every teammate
    after them is invited or created from their own vacant seat the same
-   way, by an administrator — with both apps (Tracker, Knowledge) ticked by
-   default, and Admin only for the people who run the company. See [How the first person
+   way, by an administrator, with every app (Worklet, Doclet, Artifacts)
+   ticked by default, and Admin only for the people who run the company. See [How the first person
    exists](https://docs.crewlet.ai/engine/latest/concepts/identity-and-access/#how-the-first-person-exists).
 
 Full field reference:

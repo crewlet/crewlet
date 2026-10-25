@@ -100,59 +100,59 @@ var namedRoutes = []struct {
 	// method on one path.
 	{method: "GET", pattern: "/backups", what: "backups"},
 	// The NATIVE backends. The literal segments beat the wildcards, as
-	// above, so /work/counters is not read as an item whose key is
+	// above, so /worklet/counters is not read as an item whose key is
 	// "counters" — net/http resolves the more specific pattern rather
 	// than the first registered.
-	{method: "GET", pattern: "/work/retention", what: "retention"},
-	{method: "GET", pattern: "/work/projects/{key}", what: "work_project", path: map[string]string{"key": "key"}},
-	{method: "GET", pattern: "/work/projects", what: "work_projects"},
-	{method: "GET", pattern: "/work/workload", what: "work_workload"},
+	{method: "GET", pattern: "/worklet/retention", what: "retention"},
+	{method: "GET", pattern: "/worklet/projects/{key}", what: "work_project", path: map[string]string{"key": "key"}},
+	{method: "GET", pattern: "/worklet/projects", what: "work_projects"},
+	{method: "GET", pattern: "/worklet/workload", what: "work_workload"},
 	// THE LANDING SCREEN'S SERIES AND WHAT WAITS ON THE CALLER, both
-	// literal segments above /work/{id} for the reason given there.
-	{method: "GET", pattern: "/work/flow", what: "work_flow"},
-	{method: "GET", pattern: "/work/decisions", what: "decisions"},
-	{method: "GET", pattern: "/work/activity", what: "work_activity"},
-	{method: "GET", pattern: "/work/my-work", what: "work_my_work"},
-	{method: "GET", pattern: "/work/inbox", what: "work_inbox"},
+	// literal segments above /worklet/{id} for the reason given there.
+	{method: "GET", pattern: "/worklet/flow", what: "work_flow"},
+	{method: "GET", pattern: "/worklet/decisions", what: "decisions"},
+	{method: "GET", pattern: "/worklet/activity", what: "work_activity"},
+	{method: "GET", pattern: "/worklet/my-work", what: "work_my_work"},
+	{method: "GET", pattern: "/worklet/inbox", what: "work_inbox"},
 	// A TASK'S THREAD, deeper than the detail's own page, with the task as
-	// `item=`. A literal segment rather than /work/{id}/comments, which
-	// net/http refuses beside /work/projects/{key}: neither is more specific
-	// for "/work/projects/comments", so the mux would not start.
-	{method: "GET", pattern: "/work/comments", what: "work_comments"},
+	// `item=`. A literal segment rather than /worklet/{id}/comments, which
+	// net/http refuses beside /worklet/projects/{key}: neither is more specific
+	// for "/worklet/projects/comments", so the mux would not start.
+	{method: "GET", pattern: "/worklet/comments", what: "work_comments"},
 	// A TASK'S TURNS, beside its thread and for the same reason: a literal
-	// segment with `id=` rather than /work/{id}/turns.
-	{method: "GET", pattern: "/work/turns", what: "work_item_turns"},
-	// SEARCH AND ROUTING, both above /work/{id} for the reason the comment
+	// segment with `id=` rather than /worklet/{id}/turns.
+	{method: "GET", pattern: "/worklet/turns", what: "work_item_turns"},
+	// SEARCH AND ROUTING, both above /worklet/{id} for the reason the comment
 	// there gives: a literal segment beats the wildcard, so neither is read
 	// as a task whose key is "search" or "routing".
-	{method: "GET", pattern: "/work/search", what: "work_search"},
-	{method: "GET", pattern: "/work/routing/{record_id}", what: "work_routing", path: map[string]string{"record_id": "record_id"}},
-	{method: "GET", pattern: "/work/views", what: "work_views"},
+	{method: "GET", pattern: "/worklet/search", what: "work_search"},
+	{method: "GET", pattern: "/worklet/routing/{record_id}", what: "work_routing", path: map[string]string{"record_id": "record_id"}},
+	{method: "GET", pattern: "/worklet/views", what: "work_views"},
 	// A PROJECT'S FILES. The listing is a question like every other here;
 	// one file's BYTES are not, and stream from the human write surface's
 	// own route beside it (internal/api/workapi's files.go), which the
-	// literal segment keeps apart from /work/{id}.
-	{method: "GET", pattern: "/work/files", what: "work_files"},
-	{method: "GET", pattern: "/work/views/saved", what: "work_saved_views"},
-	{method: "GET", pattern: "/work/catalogue", what: "work_catalogue"},
-	{method: "GET", pattern: "/work/people/{handle}", what: "work_person", path: map[string]string{"handle": "handle"}},
-	{method: "GET", pattern: "/work/{id}", what: "work_item", path: map[string]string{"id": "id"}},
-	{method: "GET", pattern: "/work", what: "work_items"},
-	// The page ACTIVITY and one REVISION's body. Both above /pages/{id},
+	// literal segment keeps apart from /worklet/{id}.
+	{method: "GET", pattern: "/worklet/files", what: "work_files"},
+	{method: "GET", pattern: "/worklet/views/saved", what: "work_saved_views"},
+	{method: "GET", pattern: "/worklet/catalogue", what: "work_catalogue"},
+	{method: "GET", pattern: "/worklet/people/{handle}", what: "work_person", path: map[string]string{"handle": "handle"}},
+	{method: "GET", pattern: "/worklet/{id}", what: "work_item", path: map[string]string{"id": "id"}},
+	{method: "GET", pattern: "/worklet", what: "work_items"},
+	// The page ACTIVITY and one REVISION's body. Both above /doclet/pages/{id},
 	// for the reason the work routes give: a literal segment beats the
 	// wildcard, so neither is read as a page whose id is "activity".
-	{method: "GET", pattern: "/pages/activity", what: "page_activity"},
-	{method: "GET", pattern: "/pages/{id}/revisions/{version}", what: "page_revision", path: map[string]string{"id": "page", "version": "version"}},
-	{method: "GET", pattern: "/pages/{id}", what: "page", path: map[string]string{"id": "id"}},
-	{method: "GET", pattern: "/pages", what: "pages"},
+	{method: "GET", pattern: "/doclet/pages/activity", what: "page_activity"},
+	{method: "GET", pattern: "/doclet/pages/{id}/revisions/{version}", what: "page_revision", path: map[string]string{"id": "page", "version": "version"}},
+	{method: "GET", pattern: "/doclet/pages/{id}", what: "page", path: map[string]string{"id": "id"}},
+	{method: "GET", pattern: "/doclet/pages", what: "pages"},
 	{method: "GET", pattern: "/containers", what: "containers"},
-	// WHAT THE COMPANY DID, merged across the tracker, the pages and the
-	// schedules — not under /work/, since two of its three sources are
-	// not the tracker's.
+	// WHAT THE COMPANY DID, merged across Worklet, Doclet and the schedules,
+	// and not under /worklet/, since two of its three sources are not
+	// Worklet's.
 	{method: "GET", pattern: "/feed", what: "company_feed"},
-	// WHO IS ASKING. Not under /work/: the answer is the caller's own
+	// WHO IS ASKING. Not under /worklet/: the answer is the caller's own
 	// identity rather than anything the tracker holds, and a node with no
-	// native tracker still has a viewer.
+	// Worklet still has a viewer.
 	{method: "GET", pattern: "/viewer", what: "viewer"},
 	// THE ARTIFACTS. The literals `/artifacts/usage` and `/artifacts/trail`
 	// beat the `{id}` wildcard, so neither is read as an artifact of that id; every other

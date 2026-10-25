@@ -9,7 +9,7 @@
 
 ## The decision
 
-A mutation to the company's own tracker, knowledge base or embeddings is
+A mutation to Worklet, Doclet or the embeddings is
 published as **one record on its domain's ordered NATS stream**, arbitrated by
 the broker on the subject of the object it changes, and reaches SQL only
 through that domain's deterministic applier — which writes N identical copies

@@ -318,9 +318,9 @@ type Sources struct {
 	// an unreported surface as connecting rather than guessing either way.
 	Converges func(kind integration.Kind) bool
 
-	// Work and Pages are this node's projections of the company's own
-	// tracker and knowledge base. Nil leaves their questions unregistered,
-	// which is the honest answer for a company on Jira and Confluence:
+	// Work and Pages are this node's projections of Worklet and Doclet.
+	// Nil leaves their questions unregistered, which is the honest
+	// answer for a company on Jira and Confluence:
 	// there is no native record for this node to have a copy of.
 	//
 	// Consumer-defined interfaces rather than the concrete readers, like
@@ -580,10 +580,10 @@ func Register(r *Registry, s Sources) {
 		// counting the rows of a list it loaded was counting the list.
 		r.Register("seat_activity", Everybody(), s.seatActivity)
 		// WHO READ A PAGE, from every node's days — see pagereads.go.
-		// Gated on the USAGE domain rather than on the native pages: a
+		// Gated on the USAGE domain rather than on Doclet's pages: a
 		// read is recorded with its backend, so a company on Confluence
-		// has readers too. The knowledge base's, as the pages are.
-		r.Register("page_reads", Requires(iam.GrantKnowledge), s.pageReads)
+		// has readers too. Doclet's, as the pages are.
+		r.Register("page_reads", Requires(iam.GrantDoclet), s.pageReads)
 	}
 	if s.Coord != nil {
 		// THE DEPLOYMENT'S OWN SHAPE rather than the company's work: the
@@ -699,14 +699,14 @@ func Register(r *Registry, s Sources) {
 		r.Register("sign_in_policy", Requires(iam.GrantAdmin), s.signInPolicy)
 	}
 	// The NATIVE backends, each gated on its own reader: a company can run
-	// the native tracker on Confluence, or the native knowledge base on
+	// Worklet on Confluence, or Doclet on
 	// Jira, and registering the pair together would offer one screen a
 	// question its half of the company cannot answer. Each is its app's —
 	// the tracker's questions the tracker's, the pages' the knowledge
 	// base's — with the overview's cross-app answers (`company_feed`,
 	// `decisions`) everybody's and filtered per row.
 	if s.Work != nil {
-		r.Register("work_items", Requires(iam.GrantTracker), s.workItems)
+		r.Register("work_items", Requires(iam.GrantWorklet), s.workItems)
 		// ONE ITEM, DECIDED ON THE ITEM: a tracker holder reads any, and
 		// somebody an open ask on it names reads that one to answer it
 		// (`get_work_item`'s asked arm) — which only the item says.
@@ -714,34 +714,34 @@ func Register(r *Registry, s Sources) {
 		// A TASK'S THREAD, PAGED — the one collection on a detail with
 		// no bound of its own, so the detail returns its newest page and
 		// this walks the rest. See [Sources.workComments].
-		r.Register("work_comments", Requires(iam.GrantTracker), s.workComments)
+		r.Register("work_comments", Requires(iam.GrantWorklet), s.workComments)
 		// A TASK'S TURNS, PAGED, from the tracker's own rows — the
 		// durable account its cost panel sums. See
 		// [Sources.workItemTurns].
-		r.Register("work_item_turns", Requires(iam.GrantTracker), s.workItemTurns)
+		r.Register("work_item_turns", Requires(iam.GrantWorklet), s.workItemTurns)
 		// A SEPARATE QUESTION from `work_items`, for the reason
 		// `containers` is separate from `pages`: a screen draws the tab
 		// strip once and the rows in it on every filter change.
-		r.Register("work_views", Requires(iam.GrantTracker), s.workViews)
+		r.Register("work_views", Requires(iam.GrantWorklet), s.workViews)
 		// AND EVERY VIEW THE CALLER CAN SEE, across the containers: the
 		// inventory and the sidebar's pins are about the caller's own
 		// views, not one container's tabs. See [Sources.workSavedViews].
-		r.Register("work_saved_views", Requires(iam.GrantTracker), s.workSavedViews)
+		r.Register("work_saved_views", Requires(iam.GrantWorklet), s.workSavedViews)
 		// A SEPARATE QUESTION from `work_items` for the reason
 		// `work_views` is: a home screen draws the project list once
 		// and its rows' tasks on every navigation, and the counts here
 		// are three MAINTAINED columns rather than an aggregate over
 		// every task in the company.
-		r.Register("work_projects", Requires(iam.GrantTracker), s.workProjects)
-		r.Register("work_project", Requires(iam.GrantTracker), s.workProject)
+		r.Register("work_projects", Requires(iam.GrantWorklet), s.workProjects)
+		r.Register("work_project", Requires(iam.GrantWorklet), s.workProject)
 		// AND WHO IS CARRYING HOW MUCH, across every project at once.
 		// A caller that grouped it itself paid one round trip per
 		// project and rewrote the arithmetic per surface.
-		r.Register("work_workload", Requires(iam.GrantTracker), s.workWorkload)
+		r.Register("work_workload", Requires(iam.GrantWorklet), s.workWorkload)
 		// THE FEED IS ITS OWN QUESTION, because it is ordered by the
 		// LOG rather than by anything a board sorts on: one durable
 		// table at any age, with a cursor that is a position.
-		r.Register("work_activity", Requires(iam.GrantTracker), s.workActivity)
+		r.Register("work_activity", Requires(iam.GrantWorklet), s.workActivity)
 		// AND ONE PERSON'S DAY, plus the notices that reached them.
 		//
 		// SCOPED RATHER THAN ADMIN-ONLY — see [Sources.recordHandle].
@@ -751,22 +751,22 @@ func Register(r *Registry, s Sources) {
 		// the tracker. Registered admin-only, the landing screen becomes
 		// the most-gated screen in the product and the human teammate —
 		// one of the two readers this dashboard is for — is fictional.
-		r.Register("work_my_work", Requires(iam.GrantTracker), s.workMyWork)
+		r.Register("work_my_work", Requires(iam.GrantWorklet), s.workMyWork)
 		// THE READER HAS ALWAYS EXISTED and nothing asked it: eighteen
 		// typed wake reasons, an addressed flag, a fallback flag and
 		// this person's own read and snooze marks, swept on a 365-day
 		// retention and reaching no screen.
-		r.Register("work_inbox", Requires(iam.GrantTracker), s.workInbox)
+		r.Register("work_inbox", Requires(iam.GrantWorklet), s.workInbox)
 		// WHO ONE CHANGE WOKE. The applier has written the set
 		// since the domain landed and its only trace on any surface
 		// was `work_activity.notified`: a boolean saying that
 		// somebody, somewhere, was told.
-		r.Register("work_routing", Requires(iam.GrantTracker), s.workRouting)
-		r.Register("work_catalogue", Requires(iam.GrantTracker), s.workCatalogue)
-		r.Register("work_person", Requires(iam.GrantTracker), s.workPerson)
+		r.Register("work_routing", Requires(iam.GrantWorklet), s.workRouting)
+		r.Register("work_catalogue", Requires(iam.GrantWorklet), s.workCatalogue)
+		r.Register("work_person", Requires(iam.GrantWorklet), s.workPerson)
 		// THE LANDING SCREEN'S SERIES: the tracker's history replayed
 		// backward from today's census. See home.go.
-		r.Register("work_flow", Requires(iam.GrantTracker), s.workFlow)
+		r.Register("work_flow", Requires(iam.GrantWorklet), s.workFlow)
 	}
 	// THE LANDING SCREEN'S TWO MERGED ANSWERS, registered wherever ANY half
 	// they merge is wired rather than behind the tracker alone: the feed
@@ -787,19 +787,19 @@ func Register(r *Registry, s Sources) {
 		r.Register("decisions", Everybody(), s.decisions)
 	}
 	if s.Pages != nil {
-		r.Register("pages", Requires(iam.GrantKnowledge), s.pageList)
-		r.Register("page", Requires(iam.GrantKnowledge), s.page)
+		r.Register("pages", Requires(iam.GrantDoclet), s.pageList)
+		r.Register("page", Requires(iam.GrantDoclet), s.page)
 		// A SEPARATE QUESTION from `pages`, not a facet of it: a browser
 		// draws the container list once and the page list on every
 		// navigation, and folding them together would ship every
 		// container's record with every page listing.
-		r.Register("containers", Requires(iam.GrantKnowledge), s.containers)
+		r.Register("containers", Requires(iam.GrantDoclet), s.containers)
 		// WHAT HAPPENED TO THE PAGES, which `pages_history` has recorded
 		// since the domain landed with two indexes naming readers nobody
 		// wrote — and ONE REVISION'S BODY, which the detail's summaries
 		// could say existed and never show.
-		r.Register("page_activity", Requires(iam.GrantKnowledge), s.pageActivity)
-		r.Register("page_revision", Requires(iam.GrantKnowledge), s.pageRevision)
+		r.Register("page_activity", Requires(iam.GrantDoclet), s.pageActivity)
+		r.Register("page_revision", Requires(iam.GrantDoclet), s.pageRevision)
 	}
 	if s.Memory != nil {
 		// A SEAT'S TRAIL — what it remembers and what it said — ANSWERED
@@ -834,7 +834,7 @@ func Register(r *Registry, s Sources) {
 		// not an answer on this channel — a download streams from its own
 		// route — so this is everything a file list draws and nothing a
 		// reader opens. The tracker's, as every other work question.
-		r.Register("work_files", Requires(iam.GrantTracker), s.workFiles)
+		r.Register("work_files", Requires(iam.GrantWorklet), s.workFiles)
 	}
 	if s.WorkSearch != nil {
 		// SEARCH IS A QUESTION, not a filter on the board, and it is
@@ -843,7 +843,7 @@ func Register(r *Registry, s Sources) {
 		// reading the same company had only `q=` — an escaped LIKE over
 		// the excerpt, gated to a span of days. The tracker's, as the
 		// board is.
-		r.Register("work_search", Requires(iam.GrantTracker), s.workSearch)
+		r.Register("work_search", Requires(iam.GrantWorklet), s.workSearch)
 	}
 	if s.Config != nil {
 		// ADMIN'S, all four. Reading the config document exposes the
@@ -952,7 +952,7 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 // with handle: its body where the authority table's `audit.seat.read` admits
 // them to the seat — an admin, or its lead — through the SAME decision the
 // seat's turns, memory and conversations are read under, never a second copy
-// of who that is; the work item it is on where they hold the tracker; and
+// of who that is; the work item it is on where they hold Worklet; and
 // their own record, to which a coding run's question may be put.
 //
 // AN UNDECIDABLE DECISION IS NO BODY: a chart this node cannot read withholds
@@ -966,7 +966,7 @@ func (s Sources) reach(ctx context.Context, handle string) livestate.Reach {
 		// else, never the zero principal read as somebody.
 		return livestate.Reach{}
 	}
-	r := livestate.Reach{Tracker: principal.Can(iam.GrantTracker),
+	r := livestate.Reach{Tracker: principal.Can(iam.GrantWorklet),
 		Record: iam.RecordOwner(principal)}
 	switch {
 	case principal.Can(iam.GrantAdmin):
@@ -987,7 +987,7 @@ func (s Sources) reach(ctx context.Context, handle string) livestate.Reach {
 // THE ITEM IS WITHHELD FROM THE PAYLOAD TOO, not only from the tags: a phase
 // record states the item it was charged to as its own top-level `work_item`
 // (types.AgentPhaseCompleted.WorkItem), so a lead reading their agent's body
-// without the tracker would otherwise be handed exactly the field the live
+// without Worklet would otherwise be handed exactly the field the live
 // call's mask (livestate.MaskCall) and the turn listing withhold from them.
 func maskHistory(rows []store.EventRecord, r livestate.Reach) []store.EventRecord {
 	if r.Body && r.Tracker {

@@ -17,7 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The shared argument and output helpers.
@@ -457,7 +457,7 @@ type UnknownOutcome struct {
 	Unvouched bool
 
 	// Err is what the writer answered, for a gesture that STOPPED at the
-	// unknown step ([tracker.ErrStepUnresolved]); nil for a write that
+	// unknown step ([worklet.ErrStepUnresolved]); nil for a write that
 	// answered `unknown` with no error of its own.
 	Err error
 }
@@ -506,7 +506,7 @@ func writeCause(actor Actor, err error) error {
 // that:
 //
 //   - a walking gesture that stopped at a step whose outcome is unknown
-//     ([tracker.ErrStepUnresolved]): the steps before it landed and the step
+//     ([worklet.ErrStepUnresolved]): the steps before it landed and the step
 //     itself may have;
 //   - a write the estate's router SENT to a data node that never answered,
 //     of a kind it may not send to a second ([estate.ErrOutcomeUnknown]) —
@@ -525,9 +525,9 @@ func writeCause(actor Actor, err error) error {
 // which writer errors may have landed is a list that misses one.
 func UnknownCause(opID string, err error) error {
 	switch {
-	case errors.Is(err, tracker.ErrStepUnresolved):
+	case errors.Is(err, worklet.ErrStepUnresolved):
 		return &UnknownOutcome{OpID: opID,
-			Unvouched: errors.Is(err, tracker.ErrStepUnvouched), Err: err}
+			Unvouched: errors.Is(err, worklet.ErrStepUnvouched), Err: err}
 	case errors.Is(err, estate.ErrOutcomeUnknown):
 		return &UnknownOutcome{OpID: opID, Err: err}
 	}

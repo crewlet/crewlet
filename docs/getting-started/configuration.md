@@ -455,8 +455,8 @@ The CLI itself must be installed on the engine host — see
 
 ```yaml
 providers:
-  embeddings:                           # optional — the semantic half of a native
-                                        #   knowledge search (the company's pages and
+  embeddings:                           # optional: the semantic half of Doclet's
+                                        #   and Worklet's search (the company's pages and
                                         #   work items, embedded once for the fleet)
                                         #   and similarity search for the
                                         #   agent-learning subsystem (agent_diary
@@ -913,7 +913,7 @@ stream:
                                     #   would refuse the one operation it exists
                                     #   to survive
   # pages_log_max_bytes: 4294967296 #   the knowledge base's log, the ordered
-                                    #   stream every native page write goes
+                                    #   stream every Doclet page write goes
                                     #   through (1..256 GiB). UNSET DERIVES a
                                     #   quarter of the mutation log's ceiling,
                                     #   set or derived (so 1..16 GiB from a
@@ -1301,7 +1301,7 @@ api:
                         #   by colons (ci-pipeline, ci:release), at most 58
                         #   characters so the login stays within 64
         token: "${CREWLET_API_TOKEN_FOUNDER}"   # 26+ chars, on the RESOLVED value
-        grants: [admin]  # admin, tracker, knowledge, artifacts: what it may do, and
+        grants: [admin]  # admin, worklet, doclet, artifacts: what it may do, and
                         #   the most an invitation or a create it makes may
                         #   confer — the first person's included. admin
                         #   includes every app; on a node whose admin is
@@ -1456,7 +1456,7 @@ the artifact note in `SECURITY.md`).
 **`api.auth.admin` says whether this node serves admin**, and it is required
 once a port is set: `serve`, or `refuse`. A person's
 [permissions](../concepts/identity-and-access.md#access-admin-and-one-permission-per-app)
-(`admin`, `tracker`, `knowledge`, `artifacts`) live in the replicated store and are
+(`admin`, `worklet`, `doclet`, `artifacts`) live in the replicated store and are
 written by an administrator; this is each node's statement, in the tier that
 holds the keyring and never read from Tier B, of whether `admin` counts here at
 all. A `refuse` node clamps admin away from every principal composed on it and
@@ -1482,7 +1482,7 @@ holds, so the token that brings them in has to hold `admin` — `grants:
 [admin]` — on a node that serves it. On a running deployment it is the way back
 in when an administrator has locked themselves out. Each entry states its own
 `grants` — required and non-empty, because a credential's blast radius belongs
-where it is pinned, naming only `admin`, `tracker`, `knowledge` and `artifacts`
+where it is pinned, naming only `admin`, `worklet`, `doclet` and `artifacts`
 (an unknown name is refused naming the set, and `admin` on a `refuse` node is refused
 too) — and its value must be at least 26 characters, checked on what the
 `${VAR}` resolves to.
@@ -1605,7 +1605,7 @@ units:
         project: "BACK"                 # optional — the unit's tracker "home": routing +
         space: "BACK"                   #   write target. NOT read scope, NOT a credential,
                                         #   and NOT vendor-specific — the same keys name a
-                                        #   native project/space or a Jira/Confluence one
+                                        #   Worklet/Doclet project/space or a Jira/Confluence one
         mcp_env:                        # optional: MCP creds shared by the unit's direct agent roles
           atlassian:                     #   (real tool credentials only; the chat transport
             JIRA_USERNAME: "${BACK_JIRA_USER}"    #   identity is per-agent; mcp-atlassian takes a
@@ -1669,7 +1669,7 @@ units:
 | `integrations.github` | dict | no | This seat's own [GitHub App](../integrations/github.md#one-github-app-per-agent) — one per agent, because an app has exactly one bot identity. A person writes two fields: `tier` (`read_only`, the default, `review` or `full_access`; a hyphen is accepted for the underscore) and `repos` (the repositories it works in as `owner/name`; empty means every repository the installation covers). `app_id`, `app_slug`, `installation_id`, `private_key` and `webhook_secret` are **written by the engine** when the app is created and installed, the last two as `${VAR}`s pointing at the [secret store](../concepts/secret-store.md) — see [What lands where](../integrations/github.md#what-lands-where) |
 | `integrations.slack` | dict | no | This seat's own Slack app: `bot_token` and `signing_secret`, and nothing else: the seat speaks in its unit's `channel`. **Both credentials are required together** — without the token the seat receives messages it cannot answer, without the secret its route answers 503 while the app's settings page reports a healthy request URL. `crewlet slack provision` mints both into the `${VAR}`s these fields point at |
 | `integrations.mattermost` | dict | no | Per-agent Mattermost **transport** identity (`bot_token`, optional `username`, optional `channel`). One credential, three readers: the same token is named as `mcp_env.mattermost.MATTERMOST_TOKEN` for the MCP subprocess, and the inbound websocket for this seat authenticates with it too |
-| `project` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.Project` / `org.Role.Project`). The team's tracker project as identity: an item that names nobody in the org chart routes to the unit lead, it is the project the team files work under, and on the engine's own tracker it is what an item filed with no `unit` belongs to — whoever filed it (see [the work tracker](../guides/work-tracker.md#which-team-an-item-belongs-to)). **Vendor-neutral** — it names a native project or a Jira one, whichever [`tracker.backend`](#tracker) the company runs, so switching backends does not rewrite the org chart. **Not** an MCP credential, and it does **not** scope knowledge reads. Keys are an upper-case letter plus 1–9 upper-case letters or digits (`ENG`, `PROD`), which is the shape every backend accepts |
+| `project` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.Project` / `org.Role.Project`). The team's tracker project as identity: an item that names nobody in the org chart routes to the unit lead, it is the project the team files work under, and on Worklet it is what an item filed with no `unit` belongs to, whoever filed it (see [Worklet](../guides/worklet.md#which-team-an-item-belongs-to)). **Vendor-neutral**: it names a Worklet project or a Jira one, whichever [`tracker.backend`](#tracker) the company runs, so switching backends does not rewrite the org chart. **Not** an MCP credential, and it does **not** scope knowledge reads. Keys are an upper-case letter plus 1–9 upper-case letters or digits (`ENG`, `PROD`), which is the shape every backend accepts |
 | `space` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.Space` / `org.Role.Space`). The team's knowledge container as identity: a page change that names nobody routes to the unit lead, and it is where the team writes. Vendor-neutral and shaped like `project`, above. It does **not** scope reads — read scope is the org-wide `knowledge.scope` only. The reserved containers (`knowledge.skills_container`, default `TS`, and `knowledge.root_space`, default `HOME`) are refused here |
 | `workers` | list[string] | no | Which [worker templates](#worker-templates) this seat may delegate to. **Empty means every one** — a company that publishes three workers wants its seats using them, and requiring each seat to opt in turns a shared library into per-seat copy-paste. A name no template defines is refused at load |
 | `sandbox` | dict | no | The seat's [code sandbox](../concepts/code-sandbox.md#per-role-gate--rolesandbox) gate. **Absent means the seat is never offered the sandbox tool.** `enabled: true` offers it; `run_in` picks where its code work runs (`direct`, `container`, `e2b`, or `self` — inside its own agent-mode executor run; empty inherits `providers.sandbox.default_run_in`); `coding_agent` (`claude-code` or `opencode`) overrides the provider default — the seat's code work runs on the entry its `llm_sandbox` resolves to, and the coding agent must be that entry's own CLI, so only a `claude-code` or `opencode` entry can do code work ([failure modes](../concepts/code-sandbox.md#failure-modes)); `pause_ttl_seconds` (unset inherits the provider's, `0` never holds a paused box, negative refused) and `max_turns` (unset inherits, `0` uncapped, negative refused) tune its runs; `env` is the environment injected into them and where external-service tokens are declared, every `${VAR}` in it resolving before a `run_sandbox` box starts unless its key is listed under `optional_keys`, which leaves it out instead ([credentials and the run environment](../concepts/code-sandbox.md#credentials-and-the-run-environment)) — a setup step declares its own `optional_keys`, over its `env` and the paths of its `files`; `mcp.servers` names which of the seat's MCP servers the coding agent gets; `setup` is per-seat provisioning applied after `providers.sandbox.setup`. On a seat whose executor runs in [agent mode](../concepts/llm-backends.md#agent-mode) the gate places nothing and drives nothing — that seat is never offered `run_sandbox`, and its one box is its executor's, placed by the entry's `run_in` — so its `run_in` may only be `self` or empty and its `coding_agent` only empty or that entry's own CLI, while its `setup`, `env`, `mcp`, `pause_ttl_seconds` and `max_turns` reach that box whether or not `enabled` is set. On any other seat a block with any of `run_in`, `env`, `mcp` or `setup` but `enabled` unset is refused, since none of it would be read. Each of these is an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to). A setup step's `files` entry — the seat's own or an engine-wide one — that a box the seat runs in would refuse is refused on the write, naming the step, the path and the seat: a `direct` box writes a file only inside its own home, which it mints per box, so it takes a relative path and refuses every absolute one, and a `container` box writes one only under its home mount at `/home/user`. An `e2b` box writes a file at any other path, but refuses another account's home (`~name/…`) and a path naming a directory, so the home itself and a directory above it are refused on the write as well. Name such a file relative to the box's home instead (`.npmrc`, or `~/.npmrc`), which every cell writes under its home, or have a command of the step write it under `"$HOME"` ([setup steps](../concepts/code-sandbox.md#setup-steps--provisioning-the-box)) |
@@ -1831,16 +1831,16 @@ integrations:
 
 ```yaml
 knowledge:
-  backend: confluence                    # native (default) | confluence | none
+  backend: confluence                    # doclet (default) | confluence | none
   scope: ["ENG", "HANDBOOK"]             # org-wide containers every agent can search (optional)
   skills_container: TS                   # tool-skill pages; excluded from routing and search
   root_space: HOME                       # the organisation's own pages, e.g. the root Onboarding page
   vectors: true                          # fuse semantic recall; unset derives from providers.embeddings
 ```
 
-`knowledge.backend` is **which knowledge base this company runs**, and there is exactly one: two would make an agent's answer to "what do we already know about this" depend on which was asked. Leaving it unset **derives** — `confluence` when an `integrations.confluence` block is declared, `native` otherwise — so a company that has configured nothing gets a wiki, and an Atlassian company that has not read this note keeps the backend it had. Naming `native` **beside** an `integrations.confluence` block is refused: pages would live in two places with nothing keeping them in step. `none` is a real posture — the `## Relevant knowledge` block stays empty and `search_knowledge` is not registered.
+`knowledge.backend` is **which knowledge base this company runs**, and there is exactly one: two would make an agent's answer to "what do we already know about this" depend on which was asked. Leaving it unset **derives**: `confluence` when an `integrations.confluence` block is declared, `doclet` otherwise, so a company that has configured nothing gets a wiki, and an Atlassian company that has not read this note still searches Confluence. Naming `doclet` **beside** an `integrations.confluence` block is refused: pages would live in two places with nothing keeping them in step. `none` is a real posture: the `## Relevant knowledge` block stays empty and `search_knowledge` is not registered.
 
-`knowledge.scope` is the org-wide read scope, materialised onto `org.Organization.KnowledgeScope` and read by whichever searcher is wired. **Empty means unscoped, and what unscoped MEANS differs by backend:** natively it is the whole company, because the engine is the boundary — every reader is a seat of one company and there is no second account to launder a read through. On Confluence it is whatever the asking seat's own account can read, which is why a credential-less seat searching unscoped there gets nothing: an unscoped query on the shared org token is how one seat reads a page its own account never could. Set it only to **narrow** to a curated floor.
+`knowledge.scope` is the org-wide read scope, materialised onto `org.Organization.KnowledgeScope` and read by whichever searcher is wired. **Empty means unscoped, and what unscoped MEANS differs by backend:** on Doclet it is the whole company, because the engine is the boundary: every reader is a seat of one company and there is no second account to launder a read through. On Confluence it is whatever the asking seat's own account can read, which is why a credential-less seat searching unscoped there gets nothing: an unscoped query on the shared org token is how one seat reads a page its own account never could. Set it only to **narrow** to a curated floor.
 
 `knowledge.skills_container` (default `TS`) holds [tool-skill](../concepts/tool-skills.md) pages and `knowledge.root_space` (default `HOME`) holds the organisation's own pages, starting with the root Onboarding page every seat reads first. Both are **reserved** — refused as a unit's own `space`, and held back from agents' writes — but not for the same reason, so not in the same way ([who may write where](../concepts/knowledge-system.md#who-may-write-where)). The skills container is machinery: excluded from knowledge search and from routing, closed to every agent write, and written by a person only with `admin`. The root is the company's own canon: searched and routed like any other container, and closed only to an agent adding a new page. `skills_container` is three-valued — absent takes the default, a name takes that container, and an explicit `""` turns tool skills **off** entirely.
 
@@ -1852,21 +1852,21 @@ knowledge:
 
 ```yaml
 tracker:
-  backend: native                        # native (default) | jira | none
+  backend: worklet                       # worklet (default) | jira | none
 ```
 
-Which **work tracker** this company runs, on exactly the terms `knowledge.backend` runs on. Unset derives `jira` when an `integrations.jira` block is declared and `native` otherwise; `native` beside `integrations.jira` is refused, because work would be filed in two places and a unit's `project` key would name two trackers. `none` is a company with no work tracker at all: nothing is filed or routed as a work item, and a seat is woken by everything else — chat, schedules, an `a2a_ask`, and the webhooks of the integrations the company has connected, a GitHub or GitLab issue among them.
+Which **work tracker** this company runs, on exactly the terms `knowledge.backend` runs on. Unset derives `jira` when an `integrations.jira` block is declared and `worklet` otherwise; `worklet` beside `integrations.jira` is refused, because work would be filed in two places and a unit's `project` key would name two trackers. `none` is a company with no work tracker at all: nothing is filed or routed as a work item, and a seat is woken by everything else: chat, schedules, an `a2a_ask`, and the webhooks of the integrations the company has connected, a GitHub or GitLab issue among them.
 
-The two axes are **separate** on purpose. A company running a native tracker against a Confluence wiki, or Jira against native pages, is an ordinary arrangement rather than a mixture to refuse — they are two products with separate routing and separate lead maps.
+The two axes are **separate** on purpose. A company running Worklet against a Confluence wiki, or Jira against Doclet, is an ordinary arrangement rather than a mixture to refuse: they are two products with separate routing and separate lead maps.
 
-The backend each axis resolves to, and nothing else of either block, is published to every signed-in reader as [`services` on the org answer](../reference/api-endpoints.md#get-org), because it decides which of the dashboard's own surfaces exist: a company that does not run the native tracker has no Work or My work there, and one that does not run the native knowledge base has no Knowledge.
+The backend each axis resolves to, and nothing else of either block, is published to every signed-in reader as [`services` on the org answer](../reference/api-endpoints.md#get-org), because it decides which of the dashboard's own surfaces exist: a company that does not run Worklet has no Worklet or My work there, and one that does not run Doclet has no Doclet.
 
-### The native tracker's own policy
+### Worklet's own policy
 
 ```yaml
 tracker:
-  backend: native
-  native:                                # ONLY on a native company — an inbox
+  backend: worklet
+  worklet:                               # ONLY on a Worklet company: an inbox
                                          #   horizon on a company running Jira
                                          #   describes nothing, and is refused
     inbox_retention_days: 365            # how long a person's inbox keeps a row
@@ -1881,7 +1881,7 @@ Everything else a tracker could be told is either a fact about the **operator** 
 
 **Every broker member needs a stream that survives a restart.** A state-log domain's write-ahead log lives on the stream, and an embedded member with no `stream.store_dir` — a single node included — keeps its streams in memory, so a restart recreates them empty, and a node whose durable tables are ahead of a stream that restarted from nothing refuses to serve permanently, with no snapshot that helps. `crewlet validate` refuses it from the Tier A file alone, and so does the engine at boot. A node without `data` is no member: it joins the members' broker as a leaf and keeps no stream of its own, so it is refused a `store_dir` instead, and a node dialling an external cluster keeps nothing either — that cluster's storage is its operator's.
 
-It applies whatever backends a company names, and whether the node has a company at all. A native tracker or knowledge base puts its items and its pages there, but the **identity estate** — the people who can sign in — is a domain too, and every node that holds the estate runs it from boot. This rule used to be judged on the two files together and ask about the backends: it let a company on Jira and Confluence through, and then a node started with no company, both of which started logs in memory and lost them on the first restart with nothing having warned.
+It applies whatever backends a company names, and whether the node has a company at all. Worklet or Doclet puts its items or its pages there, but the **identity estate** (the people who can sign in) is a domain too, and every node that holds the estate runs it from boot. This rule used to be judged on the two files together and ask about the backends: it let a company on Jira and Confluence through, and then a node started with no company, both of which started logs in memory and lost them on the first restart with nothing having warned.
 
 ---
 

@@ -37,7 +37,7 @@ import {
 
 /**
  * What an app's action is called to a screen reader: its visible words, then
- * whose it is ("Open Crewlet Works", "Replace key GitLab").
+ * whose it is ("Open Worklet", "Replace key GitLab").
  *
  * A COLUMN OF CARDS EACH SAYING "Open" is a list of identical link names, and
  * a reader listing the page's links could not tell one card's from the next.

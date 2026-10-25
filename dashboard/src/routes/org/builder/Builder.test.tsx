@@ -638,7 +638,7 @@ describe("the selection in the URL", () => {
 
     mountBuilder({
       engine: new Engine(company()),
-      viewer: () => ({ ...EDITOR, grants: ["tracker", "knowledge"], leads: [] }),
+      viewer: () => ({ ...EDITOR, grants: ["worklet", "doclet"], leads: [] }),
     });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Open the principles" }));

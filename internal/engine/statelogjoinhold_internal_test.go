@@ -16,7 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A JOIN PINS THE TAIL IN THE ARTEFACT'S GENERATION, NEVER ITS OWN.
@@ -214,9 +214,9 @@ func TestAnInstalledArtefactsPinIsKeptUntilThisNodeIsCounted(t *testing.T) {
 
 	pin := adopt()
 	ahead := rowAt(10, 1)
-	ahead.Domains[tracker.Domain{}.Name()] = coord.DomainPosition{Generation: 1, Seq: 11}
+	ahead.Domains[worklet.Domain{}.Name()] = coord.DomainPosition{Generation: 1, Seq: 11}
 	missing := rowAt(10, 1)
-	delete(missing.Domains, tracker.Domain{}.Name())
+	delete(missing.Domains, worklet.Domain{}.Name())
 	newer := rowAt(1, 2)
 	for name, row := range map[string]coord.NodePositions{
 		"a row ahead of the rows on one log": ahead,
@@ -233,7 +233,7 @@ func TestAnInstalledArtefactsPinIsKeptUntilThisNodeIsCounted(t *testing.T) {
 	// A ROW AT THE ROWS — or behind them, or at an earlier generation,
 	// which the trim reads as unknown and keeps everything for — COUNTS.
 	behind := rowAt(10, 1)
-	behind.Domains[tracker.Domain{}.Name()] = coord.DomainPosition{Generation: 1, Seq: 9}
+	behind.Domains[worklet.Domain{}.Name()] = coord.DomainPosition{Generation: 1, Seq: 9}
 	behind.Domains[search.Domain{}.Name()] = coord.DomainPosition{Generation: 0, Seq: 99}
 	s.releaseCountedTail(t.Context(), pin, behind)
 	if n := len(joinHolds(t, fleet, "node-join")); n != 0 || s.waitingTail() != nil {
@@ -339,7 +339,7 @@ func TestATrimTickSeesAJoinsPinOrTheRowThatReplacedIt(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	register := memory.NewFleet()
-	name, stream := tracker.Domain{}.Name(), tracker.Domain{}.Stream().Name
+	name, stream := worklet.Domain{}.Name(), worklet.Domain{}.Stream().Name
 	row := func(node string, seq uint64) coord.NodePositions {
 		return coord.NodePositions{NodeID: node, At: time.Now().UTC(),
 			Domains: map[string]coord.DomainPosition{name: {Generation: 1, Seq: seq}}}
@@ -417,7 +417,7 @@ func (e tapeEntry) String() string {
 	if e.op != "row" {
 		return e.op
 	}
-	at := e.row.Domains[tracker.Domain{}.Name()]
+	at := e.row.Domains[worklet.Domain{}.Name()]
 	return fmt.Sprintf("row(tracker %d@%d)", at.Seq, at.Generation)
 }
 
@@ -507,7 +507,7 @@ func TestABootJoinKeepsItsPinUntilItsFirstRowCountsIt(t *testing.T) {
 	if pinned < 0 || pinned > released {
 		t.Fatalf("the tape reads %v: the boot's join released a pin it never put", entries)
 	}
-	name := tracker.Domain{}.Name()
+	name := worklet.Domain{}.Name()
 	counted := slices.ContainsFunc(entries[pinned:released], func(x tapeEntry) bool {
 		pos, named := x.row.Domains[name]
 		return x.op == "row" && named && pos.Generation == at.Generation && pos.Seq <= last

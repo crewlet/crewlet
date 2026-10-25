@@ -101,7 +101,7 @@ export function InboxColumn({
   /** A read's refusal, drawn where its rows would be. */
   refusal?: ReactNode;
   /**
-   * Where the company runs no Crewlet Works: the line saying where asks and
+   * Where the company runs no Worklet: the line saying where asks and
    * mentions go instead, drawn in place of every tracker pane. Null where it
    * runs it.
    */

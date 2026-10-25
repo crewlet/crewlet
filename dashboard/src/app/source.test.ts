@@ -281,7 +281,7 @@ test("every link names a segment a workspace owns, and a whole literal path reso
  * Every workspace lives under one head: the event log under `#/live/events`,
  * spend under `#/settings/spend`, the fleet, the runs, the configuration and
  * the seats under Settings, Live and Company, and pages under
- * `#/knowledge/pages`. A link
+ * `#/doclet/pages`. A link
  * written against a plausible head beside one of those — `#/activity`,
  * `#/cost`, `#/pages` — resolves to nothing, and the rule above is only as good
  * as its reading of that — so each such head is fed through it here, beside the
@@ -297,7 +297,7 @@ test("a link to a head no route owns is reported, and the live address is not", 
     ['nav.to(["runs"])', 'nav.to(["live", "runs"])'],
     ['  path: ["config"],', '  path: ["settings", "config"],'],
     ['href(["seats", handle])', 'href(["company", "org", "seats", handle])'],
-    ['href(["pages", id])', 'href(["knowledge", "pages", id])'],
+    ['href(["pages", id])', 'href(["doclet", "pages", id])'],
     ['href(["agents"])', 'href(["company", "org"])'],
     ['href(["admin"])', 'href(["settings", "models"])'],
   ];
@@ -415,7 +415,7 @@ test("the document-pointer exemption fires, and spares no real link", () => {
   expect(documentPointer('    set: [{ path: ["goal"], value: "Ship" }],')).toBe(true);
   // The shapes a nav destination is written in, across all four tables.
   expect(documentPointer('      path: ["settings", "config"],')).toBe(false);
-  expect(documentPointer('        { label: "Work", path: ["work"] },')).toBe(false);
+  expect(documentPointer('        { label: "Worklet", path: ["worklet"] },')).toBe(false);
   expect(documentPointer('    path: ["live", "turns"],')).toBe(false);
   expect(documentPointer('      href(["company", "org", "seats", handle])')).toBe(false);
 });
@@ -484,7 +484,7 @@ function elements(text: string, tag: string): { at: number; text: string }[] {
  *
  * BOUNDING THE COUNT IS THE WRONG FIX and is why this is a gate rather than four
  * corrected lines: a name a founder writes is bounded at 256 characters
- * (`tracker.MaxTitle`), so ONE of them overflows a third-of-a-column tile and
+ * (`worklet.MaxTitle`), so ONE of them overflows a third-of-a-column tile and
  * "first two, +N more" keeps the same cut. The caption has to be a derived
  * qualifier — a split, a relative time, a pointer at the list that does hold the
  * names — which is what the other fifty-odd tiles in this tree write.
@@ -1071,7 +1071,7 @@ test("the seat-tab reading sees both link spellings", () => {
     read('const row = { path: ["company", "org", "seats", h], query: { tab: "cost" } };'),
   ).toEqual(["cost"]);
   // Another object's tab is not a seat's.
-  expect(read('href(["work", key], { tab: "turns" });')).toEqual([]);
+  expect(read('href(["worklet", key], { tab: "turns" });')).toEqual([]);
 });
 
 // THE PAGE BAR'S CONTROLS ARE ONE SIZE. Invite person, New service account

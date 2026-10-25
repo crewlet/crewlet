@@ -3,8 +3,8 @@
 Crewlet integrates with Jira in two directions: agents control Jira via MCP tools, and Jira pushes events to agents via webhooks.
 
 > **Jira is one of two trackers, and it is not the default.** The engine ships
-> its own — `tracker.backend: native`, which is what a company that says
-> nothing gets — and it needs no site, no project and no per-seat account. Set
+> its own, Worklet (`tracker.backend: worklet`, which is what a company that says
+> nothing gets), and it needs no site, no project and no per-seat account. Set
 > `tracker.backend: jira` (or declare this block, which derives it) to run
 > Jira instead. Take that path when your *people* already live in Jira or you
 > have a backlog there; the agents cannot tell the difference. There is
@@ -80,7 +80,7 @@ mcp_servers:
       JIRA_URL: "${JIRA_URL}"           # declare explicitly — the engine does not inject it
 ```
 
-> **Human-clickable links agents share:** with `cloud_id`, the `mcp-atlassian` tools return `api.atlassian.com/ex/jira/{cloud_id}/...` gateway URLs, which colleagues can't open. To have agents share a clickable `…atlassian.net/browse/{ISSUE-KEY}` link, set a [skill variable](../concepts/tool-skills.md#skill-variables) — `skill_variables.jira_base_url: "https://mycompany.atlassian.net"` — for your mention/link Tool Skill to reference. (The bundled `examples/tool-skills/platform-mentions.md` does not: it links to the engine's own tracker and pages through `${crewlet_base_url}`, so a company on Jira gives its link rule a skill of its own.) Note what the server hands back itself: every issue `mcp-atlassian` 0.23.1 returns carries a `browse_url` built from the server's own `JIRA_URL`, so it opens in a browser when that is the site and sits under the gateway when it is the gateway, and on a gateway this prompt-layer variable is the only clickable base an agent has.
+> **Human-clickable links agents share:** with `cloud_id`, the `mcp-atlassian` tools return `api.atlassian.com/ex/jira/{cloud_id}/...` gateway URLs, which colleagues can't open. To have agents share a clickable `…atlassian.net/browse/{ISSUE-KEY}` link, set a [skill variable](../concepts/tool-skills.md#skill-variables) (`skill_variables.jira_base_url: "https://mycompany.atlassian.net"`) for your mention/link Tool Skill to reference. (The bundled `examples/tool-skills/platform-mentions.md` does not: it links to Worklet and Doclet through `${crewlet_base_url}`, so a company on Jira gives its link rule a skill of its own.) Note what the server hands back itself: every issue `mcp-atlassian` 0.23.1 returns carries a `browse_url` built from the server's own `JIRA_URL`, so it opens in a browser when that is the site and sits under the gateway when it is the gateway, and on a gateway this prompt-layer variable is the only clickable base an agent has.
 
 `url` and `cloud_id` are two ways to name one instance, so config validation refuses both together rather than resolving the ambiguity silently — the engine reads through the Cloud gateway when both are set, so the `url` would end up used for links only.
 
@@ -216,7 +216,7 @@ When a lead receives an event via `project_lead_fallback`, the Jira notification
 
 The hint is suppressed for `watcher` / `assignee` / `mention` routings — those carry their own signal of personal involvement and don't need the extra framing. The block deliberately describes the CAPABILITY ("set the assignee") rather than naming a tool, because the deployed MCP server's tool names are not knowable by the engine — see [Tool capabilities](../concepts/tool-capabilities.md).
 
-The `## How to handle this` section follows the routing too, in the same two rules as the [native tracker's](../guides/work-tracker.md#what-wakes-a-seat):
+The `## How to handle this` section follows the routing too, in the same two rules as [Worklet's](../guides/worklet.md#what-wakes-a-seat):
 
 - **Staying out is for a routing nobody is waiting on.** "If its assignee is neither you nor on your team, stay silent" is rendered for a `watcher` (or a routing with no reason), never for `assignee` or `mention`, the two the prompt reads as addressed: the turn engine holds those to an answer, and a mentioned seat is ordinarily asked about somebody else's issue.
 - **Reassigning is for the issue's holder.** Only an `assignee` routing is told how an issue is declined here — reassigned to the right teammate, looked up for their Jira account id, or to the seat's manager if it cannot tell. A mentioned seat is asked about an issue that is not its to move, and a watcher is not asked at all.
@@ -276,4 +276,4 @@ flowchart TD
 
 There is no engine-side sync layer, no completion-comment automation, and no reconciliation poller: each MCP-tool action an agent takes fires the next webhook, which wakes the next participant — the same loop a human teammate drives. A webhook delivery that is lost is recovered the way it would be for a human: the issue's next activity (a comment, a transition, a nudge from a colleague) re-notifies the routed agents.
 
-See [The Tracker](../concepts/task-engine.md) for why the engine keeps no state of its own on this backend — and for the one it ships, which is the default.
+See [The Tracker](../concepts/task-engine.md) for why the engine keeps no state of its own on this backend, and for Worklet, the one it ships, which is the default.

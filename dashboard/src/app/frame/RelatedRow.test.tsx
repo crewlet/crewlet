@@ -73,10 +73,10 @@ test("the row is one link, named by its place and its sentence, in a Related lan
 });
 
 // A LINK TO A LOCK IS A DEAD END: a reader the page would refuse is offered
-// nothing. Mutation: drop the access check and the reader holding Tracker
+// nothing. Mutation: drop the access check and the reader holding Worklet
 // alone finds the link.
 test("a reader the page would refuse is offered no row", async () => {
-  mount(["tracker"]);
+  mount(["worklet"]);
   await screen.findByText("loaded");
   await new Promise((r) => setTimeout(r, 20));
   expect(screen.queryByRole("navigation", { name: "Related" })).toBeNull();

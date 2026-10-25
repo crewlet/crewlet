@@ -25,7 +25,7 @@ import { decisionsHref } from "~/components/DecisionRow.tsx";
 import { fmtCount } from "~/lib/format.ts";
 import { useOrgBudget, useOrg } from "~/lib/store-hooks.ts";
 import { mayChangeConfig } from "~/lib/useWriteAccess.ts";
-import { TRACKER, accessNames } from "~/lib/access.ts";
+import { WORKLET, accessNames } from "~/lib/access.ts";
 import type { ViewerState } from "~/lib/viewer.ts";
 import type { QueryResult } from "~/lib/useQuery.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
@@ -53,7 +53,7 @@ export type KpiId = (typeof KPI_IDS)[number];
 
 /**
  * The figures a service built into Crewlet answers, and which: tasks in
- * progress and tasks completed are Crewlet Works' flow (`work_flow`). Where
+ * progress and tasks completed are Worklet's flow (`work_flow`). Where
  * the company does not run it they are not drawn, and the rest fill the row.
  * What waits on the reader's decision is not among them: the seats stopped on
  * a spent budget and the coding runs parked on a question arrive whatever
@@ -114,9 +114,9 @@ export function Kpis({
       case "waiting":
         return <WaitingTile viewer={viewer} waiting={waiting} error={waitingError} now={now} />;
       case "progress":
-        return <InProgressTile flow={flow} locked={trackerLocked(viewer)} />;
+        return <InProgressTile flow={flow} locked={workletLocked(viewer)} />;
       case "completed":
-        return <CompletedTile flow={flow} range={range} locked={trackerLocked(viewer)} />;
+        return <CompletedTile flow={flow} range={range} locked={workletLocked(viewer)} />;
       case "tokens":
         // WHO MAY SET A BUDGET is whoever may write the company's configuration
         // (Admin, the access a ceiling is written under, and on a managed
@@ -177,10 +177,10 @@ function WaitingTile({
   error: QueryErrorCode | null;
   now: number;
 }) {
-  // THE INBOX IS THE TRACKER'S, so the way there is offered only to a reader
-  // who can open it; an asked person without Tracker answers on Home and on
+  // THE INBOX IS WORKLET'S, so the way there is offered only to a reader
+  // who can open it; an asked person without Worklet answers on Home and on
   // the task itself.
-  const review = viewer.tracker ? (
+  const review = viewer.worklet ? (
     <ButtonLink
       size="small"
       variant="secondary"
@@ -235,11 +235,11 @@ function WaitingTile({
 }
 
 /**
- * Whether the tracker's tiles are closed to this reader: once the viewer has
- * said they hold no Tracker, never on a guess while it has not.
+ * Whether Worklet's tiles are closed to this reader: once the viewer has
+ * said they hold no Worklet, never on a guess while it has not.
  */
-function trackerLocked(viewer: ViewerState): boolean {
-  return !viewer.loading && !viewer.tracker;
+function workletLocked(viewer: ViewerState): boolean {
+  return !viewer.loading && !viewer.worklet;
 }
 
 /** Open work somebody has started, its change over a week, and what is stuck. */
@@ -402,12 +402,12 @@ function RefusedTile({ label }: { label: string }) {
 }
 
 /**
- * A tile whose figure is the tracker's, for a reader without Tracker: the
+ * A tile whose figure is Worklet's, for a reader without Worklet: the
  * question is never asked, and the tile says what would open it rather than
  * waiting for an answer that will never come.
  */
 function LockedTile({ label }: { label: string }) {
   return (
-    <StatCard label={label} value={EMPTY_VALUE} sub={`Needs ${accessNames([TRACKER])} access`} />
+    <StatCard label={label} value={EMPTY_VALUE} sub={`Needs ${accessNames([WORKLET])} access`} />
   );
 }

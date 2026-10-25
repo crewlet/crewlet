@@ -11,7 +11,7 @@ package types
 // NOT the company's configured tracker (config.TrackerBackend), and the
 // difference is the reason this is its own type. That setting says where a
 // company keeps ITS work; this says where one ITEM lives. A company on the
-// native tracker still has seats woken by a GitHub issue or a GitLab one, and
+// Worklet still has seats woken by a GitHub issue or a GitLab one, and
 // a turn on that issue is on a GitHub item whatever the tracker setting reads —
 // so the set here is every place a turn's item can be, which is wider than the
 // set of trackers a company can choose.
@@ -23,8 +23,9 @@ type WorkBackend string
 
 // The places a work item can live.
 const (
-	// WorkNative is the engine's own tracker.
-	WorkNative WorkBackend = "native"
+	// WorkWorklet is a Worklet task. Its value, `native`, is part of every
+	// stored item ref (`native:<task id>`) and every event's `work_item`.
+	WorkWorklet WorkBackend = "native"
 
 	// WorkJira is a Jira issue.
 	WorkJira WorkBackend = "jira"
@@ -39,7 +40,7 @@ const (
 // Valid reports whether this build knows b.
 func (b WorkBackend) Valid() bool {
 	switch b {
-	case WorkNative, WorkJira, WorkGitHub, WorkGitLab:
+	case WorkWorklet, WorkJira, WorkGitHub, WorkGitLab:
 		return true
 	}
 	return false
@@ -57,7 +58,7 @@ type WorkItem struct {
 	Backend WorkBackend `json:"backend"`
 	// ID is the item's identity inside that tracker: the value it never
 	// hands to another item and does not change when the item is renamed
-	// or moved — a native task id, a Jira issue id, and on a code host the
+	// or moved: a Worklet task id, a Jira issue id, and on a code host the
 	// repository's or project's numeric id joined to the item's number:
 	// `<repository id>#<number>` on GitHub, `<project id>!<iid>` for a
 	// GitLab merge request and `<project id>#<iid>` for an issue. NOT the
@@ -72,13 +73,13 @@ type WorkItem struct {
 	// as it read when the turn named the item.
 	Key string `json:"key"`
 	// Project is the container the item was in when the turn named it: a
-	// native project key, a Jira project, a repository path.
+	// Worklet project key, a Jira project, a repository path.
 	Project string `json:"project"`
 }
 
 // Ref is the item's identity across every backend, `<backend>:<id>`.
 //
-// BACKEND-QUALIFIED because an id alone is not unique: a native task id and a
+// BACKEND-QUALIFIED because an id alone is not unique: a Worklet task id and a
 // Jira issue id are drawn from different spaces, and nothing stops two of them
 // being the same string. Everything that has to decide whether two turns were
 // on the same item — a set of what a turn wrote, a per-item rollup — compares

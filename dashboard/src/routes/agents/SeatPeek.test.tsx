@@ -192,7 +192,7 @@ async function mount(
 const ANONYMOUS = { login: "", owner: "", acts: [] };
 const OPERATOR = {
   login: "ops",
-  grants: ["admin", "tracker", "knowledge"],
+  grants: ["admin", "worklet", "doclet"],
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -277,7 +277,7 @@ test("an agent's seat and an anonymous reader ask it nothing, and every signed-i
   expect(screen.queryByText("Held by")).toBeNull();
   cleanup();
   const tracker = directory(VACANT);
-  await mount({ ...OPERATOR, grants: ["tracker"] }, { handle: "jane" });
+  await mount({ ...OPERATOR, grants: ["worklet"] }, { handle: "jane" });
   await act(async () => {});
   expect(tracker.filter((p) => p === "/iam/seats")).toHaveLength(1);
   expect(screen.getByText("Held by").nextElementSibling?.textContent).toBe("Nobody yet");
@@ -299,7 +299,7 @@ test("a vacant human seat's peek offers Invite and Create to an administrator al
   cleanup();
 
   directory(VACANT);
-  await mount({ ...OPERATOR, grants: ["tracker", "knowledge"] }, { handle: "jane" });
+  await mount({ ...OPERATOR, grants: ["worklet", "doclet"] }, { handle: "jane" });
   await act(async () => {});
   expect(screen.getByText("Held by").nextElementSibling?.textContent).toBe("Nobody yet");
   expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
@@ -408,7 +408,7 @@ test("Message is pressable for a reader who can file", async () => {
 test("your own seat's peek holds Message and points to your Account, and a colleague's does not", async () => {
   const jane = {
     login: "jane.doe",
-    grants: ["tracker"],
+    grants: ["worklet"],
     handle: "jane",
     owner: "jane",
     acts: ["create_work_item"],

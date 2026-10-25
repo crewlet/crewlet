@@ -9,14 +9,14 @@ import (
 	"time"
 
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE THREE ALARMS ABOUT THE MACHINE, and the fields nothing filled.
@@ -270,10 +270,10 @@ func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 	recorder.Add(metrics.StatelogRecordsGated, 2,
 		metrics.Attrs{"gate": "deleted", "subject_kind": "task"})
 	recorder.Add(metrics.TrackerFeedUnreadable, 3, metrics.Attrs{"source": "tracker"})
-	trackerLog := statelog.Domain(tracker.Domain{})
+	trackerLog := statelog.Domain(worklet.Domain{})
 	recorder.Add(metrics.StatelogBarriersApplied,
 		uint64(3*statelog.Census{Seats: 100}.Expected()),
-		metrics.Attrs{"domain": "tracker", "stream": tracker.Domain{}.Stream().Name})
+		metrics.Attrs{"domain": "tracker", "stream": worklet.Domain{}.Stream().Name})
 
 	r := &retention{metrics: recorder, state: censusLogs(trackerLog),
 		seats: func() int { return 100 }}
@@ -471,7 +471,7 @@ func censusLogs(domains ...statelog.Domain) *stateLog {
 // smaller it was.
 func TestALogIsHeldToItsOwnCensus(t *testing.T) {
 	t.Parallel()
-	var trackerLog, vectorLog statelog.Domain = tracker.Domain{}, search.Domain{}
+	var trackerLog, vectorLog statelog.Domain = worklet.Domain{}, search.Domain{}
 
 	for _, tc := range []struct {
 		name       string
@@ -638,14 +638,14 @@ roles:
 // on a node running no object store, nothing.
 func TestTheEnginesOwnReadsAreTheCollectorsPins(t *testing.T) {
 	t.Parallel()
-	if got := (&Engine{}).backgroundBarriers(tracker.Domain{}.Name()); got != 0 {
+	if got := (&Engine{}).backgroundBarriers(worklet.Domain{}.Name()); got != 0 {
 		t.Errorf("a node with no object store puts %d a day on the tracker's log, want none", got)
 	}
 	e := &Engine{objects: &objectStore{}}
-	if got := e.backgroundBarriers(tracker.Domain{}.Name()); got != collect.PinsPerDay {
+	if got := e.backgroundBarriers(worklet.Domain{}.Name()); got != collect.PinsPerDay {
 		t.Errorf("the collector puts %d a day on the tracker's log, want %d", got, collect.PinsPerDay)
 	}
-	for _, other := range []statelog.Domain{pages.Domain{}, search.Domain{}} {
+	for _, other := range []statelog.Domain{doclet.Domain{}, search.Domain{}} {
 		if got := e.backgroundBarriers(other.Name()); got != 0 {
 			t.Errorf("the collector puts %d a day on the %s log, which no declared "+
 				"table names", got, other.Name())

@@ -203,7 +203,7 @@ func TestTheObservedLagIsWhatTheRequestPathReads(t *testing.T) {
 // refused on a real deployment, invisibly, because the surface that drives
 // them is exercised against a stub writer. Pinned EXACTLY, because admin is
 // every app beside it and a list carrying anything more is a name the
-// vocabulary does not have. Mutation: write as [tracker, knowledge] and the
+// vocabulary does not have. Mutation: write as [worklet, doclet] and the
 // node cannot redeem an invitation; this goes red.
 func TestTheNodesOwnWriterIsAnAdministrator(t *testing.T) {
 	t.Parallel()

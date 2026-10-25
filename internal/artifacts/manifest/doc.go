@@ -6,7 +6,7 @@
 //
 // PURE. It reads no store and holds no clock, so the publish pipeline, the
 // domain's decide and the serving path all reach one answer about one path.
-// A path follows the engine's one file-path rule (internal/tracker's
+// A path follows the engine's one file-path rule (internal/worklet's
 // NormalizeFilePath): no empty, dot or dot-dot segment, no backslash, no
 // control character. The reserved prefixes `_crewlet/` and `_assets/` belong to
 // the serving origin, and `preflight.js` at the root is a reserved, size-bounded

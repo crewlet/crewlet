@@ -403,7 +403,7 @@ hold no streams of their own, so both are refused a `store_dir`; see
 **And the company's own records live there, whatever backends it names.**
 Every data node keeps the company's **identity estate** — its people, their
 credentials and sessions — on a state log, and a domain's log is a stream. With
-`tracker.backend: native` or `knowledge.backend: native` (the defaults), its
+`tracker.backend: worklet` or `knowledge.backend: doclet` (the defaults), its
 work items and its pages are there too. An unset `store_dir` means the first restart recreates those logs
 empty, and a node whose rows are ahead of a log that restarted from nothing
 stops serving for good. So the engine refuses to boot without one, and
@@ -981,7 +981,7 @@ api:
 | `/webhooks/*` — every vendor delivery, the Slack OAuth landing, the GitHub App return | `api.public` only |
 | `/otlp/{token}/v1/{signal}` — sandbox telemetry | `api.public` only |
 | `/mcp/{token}` — the agent-mode tool bridge | `api.public` only |
-| everything else: `/health`, `/ready`, `/dashboard` and its assets, the sign-in routes under `/auth`, every REST read, `/ws/stream`, `/config`, `/secrets`, `/setup`, `/iam/*`, `/operator/*`, `/backup`, `/fleet/*`, `/work/*` | `api.port` only |
+| everything else: `/health`, `/ready`, `/dashboard` and its assets, the sign-in routes under `/auth`, every REST read, `/ws/stream`, `/config`, `/secrets`, `/setup`, `/iam/*`, `/operator/*`, `/backup`, `/fleet/*`, `/worklet/*`, `/doclet/pages/*` | `api.port` only |
 
 `api.port` answers a public route with `404 no_route` and a hint naming
 `api.public` — a vendor pointed at the wrong port learns it from the first
@@ -1253,10 +1253,10 @@ deployment knows how large a store it gave the node.
 over the node logs `engine_recovered` and `/health` turns `200`, with
 `"phase": "preparing"`, while the node brings up what its company configures:
 the snapshot of the company's secrets its `${VAR}` references resolve from, the
-company built from its document, its shared MCP servers — each bounded by its
+company built from its document, its shared MCP servers (each bounded by its
 own [`startup_timeout_seconds`](../getting-started/configuration.md#mcp-servers),
 for its start and again for its first tool listing, with no ceiling on the
-setting — its sandboxes and native halves, its coding CLIs' credential bundles,
+setting), its sandboxes, Worklet's and Doclet's halves, its coding CLIs' credential bundles,
 the first apply of its active revision, and the dashboard's projection. A probe
 sized by the store knows
 nothing about any of them, so none of them is allowed to hold it: the startup

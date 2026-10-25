@@ -9,7 +9,7 @@
  * These are the pieces every tracker surface draws rather than one screen's
  * columns, which is why they are asserted here: the board card, the compact
  * row and the item page all mount [Assignee], and before [RowChrome] carried
- * the kind not one of them could draw a person at all. `routes/work/shapes/
+ * the kind not one of them could draw a person at all. `routes/worklet/shapes/
  * Grid.test.tsx` holds the same rule over the grid's two column sets.
  */
 
@@ -114,12 +114,12 @@ test("no kind resolver never draws a person", () => {
 // and it drew the badge through the same [Assignee] with the kind dropped.
 test("the board card draws a human seat as a person and an agent as an agent", () => {
   const human = render(
-    <WorkCard row={row({ assignee: "iris" })} href="#/work/ENG-9" now={NOW} chrome={chrome} />,
+    <WorkCard row={row({ assignee: "iris" })} href="#/worklet/ENG-9" now={NOW} chrome={chrome} />,
   );
   expect(outline(human.container)).toBe("human");
   cleanup();
   const agent = render(
-    <WorkCard row={row({ assignee: "ada" })} href="#/work/ENG-9" now={NOW} chrome={chrome} />,
+    <WorkCard row={row({ assignee: "ada" })} href="#/worklet/ENG-9" now={NOW} chrome={chrome} />,
   );
   expect(outline(agent.container)).toBe("agent");
 });
@@ -160,7 +160,7 @@ test("a card draws only the facts not put away, and never hides a state", () => 
     dependents_count: 2,
   });
   const all = new Set(CARD_FACTS.map((f) => f.key));
-  const { container } = render(<WorkCard row={full} href="#/work/ENG-9" now={NOW} omit={all} />);
+  const { container } = render(<WorkCard row={full} href="#/worklet/ENG-9" now={NOW} omit={all} />);
   expect(container.querySelector(".work-card-points")).toBeNull();
   expect(container.querySelector(".work-due")).toBeNull();
   expect(container.querySelector(".work-card-tokens")).toBeNull();
@@ -188,11 +188,11 @@ test("a card draws only the facts not put away, and never hides a state", () => 
 });
 
 test("a card draws a type mark for a bug and none for a plain task", () => {
-  const task = render(<WorkCard row={row()} href="#/work/ENG-9" now={NOW} chrome={chrome} />);
+  const task = render(<WorkCard row={row()} href="#/worklet/ENG-9" now={NOW} chrome={chrome} />);
   expect(task.container.querySelector(".work-card-top .work-type")).toBeNull();
   cleanup();
   const bug = render(
-    <WorkCard row={row({ type: "bug" })} href="#/work/ENG-9" now={NOW} chrome={chrome} />,
+    <WorkCard row={row({ type: "bug" })} href="#/worklet/ENG-9" now={NOW} chrome={chrome} />,
   );
   expect(bug.container.querySelector(".work-card-top .work-type")?.textContent).toBe("Bug");
 });
@@ -248,7 +248,7 @@ test("a card too narrow for its labels names the rest in a +N and keeps the coun
           due: "2031-04-20",
           spend: { tokens: 56_200, turns: 3, workers: 0, sent_back: 0, reopens: 0 },
         })}
-        href="#/work/ENG-9"
+        href="#/worklet/ENG-9"
         now={NOW}
         chrome={chrome}
       />,

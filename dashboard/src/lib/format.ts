@@ -595,7 +595,7 @@ const UUID_IN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
  * eight characters — `work:task:4d631f6d` — and everything else as it is, so
  * `work:ENG-32` and `slack:C9:1718.001` are untouched.
  *
- * THE KEY IS THE THREAD'S ONLY IDENTITY on a list of threads, and a native task
+ * THE KEY IS THE THREAD'S ONLY IDENTITY on a list of threads, and a Worklet task
  * nobody gave a key is `work:task:` and a uuid — 46 unbreakable characters that
  * no row has room for, so a list of them read `work:task…` five times over.
  * The head of a uuid is how this product names one everywhere a row is narrow

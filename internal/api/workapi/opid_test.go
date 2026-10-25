@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // assertMintedWith holds one operation id a write was published under to the
@@ -69,16 +69,16 @@ func TestAKeyOutsideTheGrammarIsRefusedBeforeAnyWrite(t *testing.T) {
 		name, method, target string
 		body                 any
 	}{
-		{"a tool-backed route", http.MethodPost, "/work/items",
+		{"a tool-backed route", http.MethodPost, "/worklet/items",
 			map[string]any{"title": "rotate the key", "project": "ENG"}},
-		{"somebody's record", http.MethodPut, "/work/people/ana/pins",
+		{"somebody's record", http.MethodPut, "/worklet/people/ana/pins",
 			map[string]any{"items": []string{}}},
-		{"a rank move", http.MethodPost, "/work/items/ENG-1/rank",
+		{"a rank move", http.MethodPost, "/worklet/items/ENG-1/rank",
 			map[string]any{"after": "ENG-2", "if_match": 3}},
 		{"a purge", http.MethodPost,
-			"/work/items/t-1/purge?confirm=ENG-1&reason=why", nil},
-		{"a page's trash", http.MethodDelete, "/pages/p-1", nil},
-		{"a page written through its tool", http.MethodPost, "/pages",
+			"/worklet/items/t-1/purge?confirm=ENG-1&reason=why", nil},
+		{"a page's trash", http.MethodDelete, "/doclet/pages/p-1", nil},
+		{"a page written through its tool", http.MethodPost, "/doclet/pages",
 			map[string]any{"container": "ENG", "title": "Notes", "body": "text"}},
 	} {
 		for _, key := range []string{"k-1", "0192f00d-0000-4000-8000-000000000001"} {
@@ -130,7 +130,7 @@ func TestEveryWriteCarriesItsKeysInstant(t *testing.T) {
 			}
 			r := newRig(t, chart{})
 
-			created := r.do(as(admin("ana")), http.MethodPost, "/work/items",
+			created := r.do(as(admin("ana")), http.MethodPost, "/worklet/items",
 				map[string]any{"title": "rotate the key", "project": "ENG"},
 				headers...)
 			answeredKey, _ := created.body["op_id"].(string)
@@ -150,14 +150,14 @@ func TestEveryWriteCarriesItsKeysInstant(t *testing.T) {
 			}
 
 			ranked := r.do(as(admin("ana")), http.MethodPost,
-				"/work/items/ENG-1/rank", map[string]any{"after": "ENG-2", "if_match": 3}, headers...)
+				"/worklet/items/ENG-1/rank", map[string]any{"after": "ENG-2", "if_match": 3}, headers...)
 			rankKey, _ := ranked.body["op_id"].(string)
 			if ranked.status != http.StatusOK {
 				t.Fatalf("the rank move answered %d: %v", ranked.status, ranked.body)
 			}
 			assertMintedWith(t, r.writes.opIDs[len(r.writes.opIDs)-1], rankKey)
 
-			page := r.do(as(admin("ana")), http.MethodDelete, "/pages/p-1", nil,
+			page := r.do(as(admin("ana")), http.MethodDelete, "/doclet/pages/p-1", nil,
 				headers...)
 			if page.status != http.StatusOK {
 				t.Fatalf("the trash answered %d: %v", page.status, page.body)
@@ -200,10 +200,10 @@ func TestAnUnvouchedUnknownSaysAnotherNodeCanAnswer(t *testing.T) {
 		name, method, target string
 		body                 any
 	}{
-		{"a tool-backed route", http.MethodPost, "/work/items",
+		{"a tool-backed route", http.MethodPost, "/worklet/items",
 			map[string]any{"title": "rotate the key", "project": "ENG"}},
 		{"a write this surface makes", http.MethodPost,
-			"/work/items/t-1/purge?confirm=ENG-1&reason=why", nil},
+			"/worklet/items/t-1/purge?confirm=ENG-1&reason=why", nil},
 	} {
 		for _, unvouched := range []bool{false, true} {
 			name := c.name + "/a lost acknowledgement"
@@ -252,10 +252,10 @@ func TestAWriteOnWhatAPurgeDestroyedIsNotFound(t *testing.T) {
 		name, method, target string
 		body                 any
 	}{
-		{"a tool-backed route", http.MethodPatch, "/work/items/ENG-1",
+		{"a tool-backed route", http.MethodPatch, "/worklet/items/ENG-1",
 			map[string]any{"status": "done"}},
 		{"a write this surface makes", http.MethodPost,
-			"/work/items/t-1/purge?confirm=ENG-1&reason=why", nil},
+			"/worklet/items/t-1/purge?confirm=ENG-1&reason=why", nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -282,9 +282,9 @@ func TestAWriteOnWhatAPurgeDestroyedIsNotFound(t *testing.T) {
 func TestAStoppedSubtreeSaysHowToFinishItHere(t *testing.T) {
 	t.Parallel()
 	r := newRig(t, chart{})
-	r.writes.err = &tracker.SubtreeStopped{Verb: "removal", Root: "t-1",
-		Followed: 2, Of: 5, OpID: "op", Err: tracker.ErrStepUnvouched}
-	got := r.do(as(admin("ana")), http.MethodDelete, "/work/items/ENG-1",
+	r.writes.err = &worklet.SubtreeStopped{Verb: "removal", Root: "t-1",
+		Followed: 2, Of: 5, OpID: "op", Err: worklet.ErrStepUnvouched}
+	got := r.do(as(admin("ana")), http.MethodDelete, "/worklet/items/ENG-1",
 		map[string]any{"subtree": true})
 	stopped, _ := got.body["subtree_stopped"].(string)
 	if got.status != http.StatusOK || stopped == "" {
@@ -308,7 +308,7 @@ func TestAStoppedSubtreeSaysHowToFinishItHere(t *testing.T) {
 // is refused, because the root is already in the target and that operation's
 // ledger never put it there. Where this node cannot vouch for the step it
 // stopped at, the same key here stops there again, and the answer sends the
-// client to another node or to the tracker duty; where a task in the trash
+// client to another node or to the Worklet duty; where a task in the trash
 // holds the walk, to its restore.
 //
 // AND IT SAYS WHERE THE KEY IS. These requests send none, so the key is the
@@ -321,26 +321,26 @@ func TestAStoppedSubtreeSaysHowToFinishItHere(t *testing.T) {
 func TestAStoppedMoveSaysHowToFinishItHere(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		stop tracker.MoveStopped
+		stop worklet.MoveStopped
 		want []string
 	}{
 		"a refused step": {
-			stop: tracker.MoveStopped{Root: "t-1", Key: "OPS-7", Target: "OPS",
+			stop: worklet.MoveStopped{Root: "t-1", Key: "OPS-7", Target: "OPS",
 				Followed: 2, Of: 5, Err: errors.New("refused")},
 			want: []string{"ENG-1 moved to OPS as OPS-7", "2 of the 5",
 				"SAME " + opkey.Header, "send op_id back",
 				"A new key is refused"},
 		},
 		"a task in the trash": {
-			stop: tracker.MoveStopped{Root: "t-1", Key: "OPS-7", Target: "OPS",
+			stop: worklet.MoveStopped{Root: "t-1", Key: "OPS-7", Target: "OPS",
 				Followed: 4, Of: 5, Waiting: "ENG-9", Err: errors.New("frozen")},
-			want: []string{"ENG-9 is in the trash", "/work/items/ENG-9/restore",
+			want: []string{"ENG-9 is in the trash", "/worklet/items/ENG-9/restore",
 				"SAME " + opkey.Header, "send op_id back"},
 		},
 		"a step this node cannot vouch for": {
-			stop: tracker.MoveStopped{Root: "t-1", Key: "OPS-7", Target: "OPS",
-				Followed: 1, Of: 5, Err: tracker.ErrStepUnvouched},
-			want: []string{"cannot vouch", "another node", "tracker duty",
+			stop: worklet.MoveStopped{Root: "t-1", Key: "OPS-7", Target: "OPS",
+				Followed: 1, Of: 5, Err: worklet.ErrStepUnvouched},
+			want: []string{"cannot vouch", "another node", "the Worklet duty",
 				"send op_id back"},
 		},
 	} {
@@ -349,7 +349,7 @@ func TestAStoppedMoveSaysHowToFinishItHere(t *testing.T) {
 			r := newRig(t, chart{})
 			stop := tc.stop
 			r.writes.err = &stop
-			got := r.do(as(admin("ana")), http.MethodPost, "/work/items/ENG-1/move",
+			got := r.do(as(admin("ana")), http.MethodPost, "/worklet/items/ENG-1/move",
 				map[string]any{"project": "OPS"})
 			said, _ := got.body["move_stopped"].(string)
 			if got.status != http.StatusOK || said == "" || got.body["key"] != "OPS-7" {
@@ -380,14 +380,14 @@ func TestAStoppedMoveSaysHowToFinishItHere(t *testing.T) {
 func TestAMoveIsServedHere(t *testing.T) {
 	t.Parallel()
 	r := newRig(t, chart{})
-	got := r.do(as(admin("ana")), http.MethodPost, "/work/items/ENG-1/move",
+	got := r.do(as(admin("ana")), http.MethodPost, "/worklet/items/ENG-1/move",
 		map[string]any{"project": "OPS"})
 	if got.status != http.StatusOK || got.body["project"] != "OPS" ||
 		len(r.writes.targets) != 1 || r.writes.targets[0] != "OPS" {
 		t.Fatalf("answered %d %v with the tracker asked %v, want the move into OPS",
 			got.status, got.body, r.writes.targets)
 	}
-	if got := r.do(as(admin("ana")), http.MethodPost, "/work/items/ENG-1/move",
+	if got := r.do(as(admin("ana")), http.MethodPost, "/worklet/items/ENG-1/move",
 		map[string]any{"project": "OPS", "status": "done"}); got.status != http.StatusBadRequest {
 		t.Errorf("a move carrying another route's argument answered %d, want 400",
 			got.status)
@@ -407,8 +407,8 @@ func TestAnOperationIDInABodyIsTheCallersToChange(t *testing.T) {
 	for _, c := range []struct {
 		name, method, target string
 	}{
-		{"a tool-backed route", http.MethodPost, "/work/items"},
-		{"somebody's record", http.MethodPut, "/work/people/ana/pins"},
+		{"a tool-backed route", http.MethodPost, "/worklet/items"},
+		{"somebody's record", http.MethodPut, "/worklet/people/ana/pins"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -442,10 +442,10 @@ func TestAKeyNamingAnotherWriteIsAConflict(t *testing.T) {
 		name, method, target string
 		body                 any
 	}{
-		{"a tool-backed route", http.MethodPatch, "/work/items/ENG-1",
+		{"a tool-backed route", http.MethodPatch, "/worklet/items/ENG-1",
 			map[string]any{"status": "done"}},
 		{"a write this surface makes", http.MethodPost,
-			"/work/items/t-1/purge?confirm=ENG-1&reason=why", nil},
+			"/worklet/items/t-1/purge?confirm=ENG-1&reason=why", nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -476,7 +476,7 @@ func TestAnUnknownStillSaysWhatItWasAbout(t *testing.T) {
 	t.Parallel()
 	r := newRig(t, chart{})
 	r.writes.result = statelog.Result{Outcome: statelog.OutcomeUnknown}
-	got := r.do(as(admin("ana")), http.MethodPost, "/work/items/ENG-1/rank",
+	got := r.do(as(admin("ana")), http.MethodPost, "/worklet/items/ENG-1/rank",
 		map[string]any{"after": "ENG-2", "if_match": 3})
 	if got.status != http.StatusServiceUnavailable || got.body["item"] != "ENG-1" ||
 		got.body["error"] != string(httpjson.CodeUnavailable) {
@@ -493,7 +493,7 @@ func TestAnUnknownStillSaysWhatItWasAbout(t *testing.T) {
 // elsewhere, a remark rewritten, a purge for another reason, each reported as
 // made and silently dropped. The tools behind the other routes already put a
 // digest of their arguments in every id they derive, and the knowledge base
-// binds every id to what its write says (internal/pages holds that); the
+// binds every id to what its write says (internal/doclet holds that); the
 // writes this surface makes itself are held to the same rule here: the same
 // request under the same key is the same operation (the retry), and any other
 // request under it is another.
@@ -509,25 +509,25 @@ func TestAKeySentWithAnotherRequestIsAnotherOperation(t *testing.T) {
 		op func(r *rig) []string
 	}{
 		{name: "a rank move", method: http.MethodPost,
-			target: "/work/items/ENG-1/rank",
+			target: "/worklet/items/ENG-1/rank",
 			first:  map[string]any{"after": "ENG-2", "if_match": 3},
 			second: map[string]any{"before": "ENG-2", "if_match": 3},
 			op:     func(r *rig) []string { return r.writes.opIDs }},
 		{name: "a remark's edit", method: http.MethodPatch,
-			target: "/work/items/ENG-1/comments/c-1",
+			target: "/worklet/items/ENG-1/comments/c-1",
 			first:  map[string]any{"body": "second"},
 			second: map[string]any{"body": "third"},
 			op:     func(r *rig) []string { return r.writes.opIDs }},
 		{name: "a purge", method: http.MethodPost,
-			target: "/work/items/t-1/purge?confirm=ENG-1&reason=",
+			target: "/worklet/items/t-1/purge?confirm=ENG-1&reason=",
 			first:  "an erasure request", second: "a retention request",
 			op: func(r *rig) []string { return r.writes.opIDs }},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			r := newRig(t, chart{})
-			r.reader.addComment("t-1", tracker.Comment{ID: "c-1", Task: "t-1",
-				Author: "ana", AuthorKind: tracker.AuthorHuman, Body: "first"})
+			r.reader.addComment("t-1", worklet.Comment{ID: "c-1", Task: "t-1",
+				Author: "ana", AuthorKind: worklet.AuthorHuman, Body: "first"})
 			key := statelog.NewOpID(time.Now(), "")
 			send := func(body any) {
 				t.Helper()
@@ -570,7 +570,7 @@ func TestAKeySentWithAnotherRequestIsAnotherOperation(t *testing.T) {
 //
 // It binds every operation it derives to what the write says — the title, the
 // body, the reason — so the same key sent with another request is another
-// operation there (internal/pages' own suite holds that). Bound here as well,
+// operation there (internal/doclet's own suite holds that). Bound here as well,
 // through the request's arguments, it was a second binding of one rule that
 // could only drift from the first, over a key the store then dated and
 // derived from: this surface's job is to hand over the request's operation —
@@ -586,11 +586,11 @@ func TestTheKnowledgeBaseIsHandedTheRequestsOperation(t *testing.T) {
 		headers              []string
 	}{
 		{name: "a page's rename", method: http.MethodPost,
-			target: "/pages/p-1/rename", body: map[string]any{"title": "Runbook v2"}},
+			target: "/doclet/pages/p-1/rename", body: map[string]any{"title": "Runbook v2"}},
 		{name: "a page saved through its tool", method: http.MethodPut,
-			target: "/pages/p-1", headers: []string{"If-Match", "2"},
+			target: "/doclet/pages/p-1", headers: []string{"If-Match", "2"},
 			body: map[string]any{"body": "new steps"}},
-		{name: "a page trashed", method: http.MethodDelete, target: "/pages/p-1"},
+		{name: "a page trashed", method: http.MethodDelete, target: "/doclet/pages/p-1"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()

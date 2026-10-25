@@ -291,7 +291,7 @@ func TestAWorkerNamesTheRoundThatSpawnedIt(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 	role := &org.Role{Name: "CTO", DeclaredHandle: "cto"}
-	item := &types.WorkItem{Backend: types.WorkNative, ID: "task-7", Key: "ENG-7"}
+	item := &types.WorkItem{Backend: types.WorkWorklet, ID: "task-7", Key: "ENG-7"}
 	r, err := runner.New(runner.Config{
 		Seat:     prompts.Seat{Org: &org.Organization{Name: "Acme", Roles: []*org.Role{role}}, Role: role},
 		Registry: reg, Models: models,

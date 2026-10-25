@@ -14,14 +14,14 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // ErrOutcomeUnknown is a write that was sent and never answered, of a kind a
@@ -53,40 +53,40 @@ var sentinels = []sentinel{
 	{"queue.ErrTooLarge", queue.ErrTooLarge},
 	{"queue.ErrNotLive", queue.ErrNotLive},
 
-	{"tracker.ErrAlreadyAnswered", tracker.ErrAlreadyAnswered},
-	{"tracker.ErrBadQuery", tracker.ErrBadQuery},
-	{"tracker.ErrBulkInFlight", tracker.ErrBulkInFlight},
-	{"tracker.ErrForbidden", tracker.ErrForbidden},
-	{"tracker.ErrInboxFull", tracker.ErrInboxFull},
-	{"tracker.ErrInvalid", tracker.ErrInvalid},
-	{"tracker.ErrIndexBuilding", tracker.ErrIndexBuilding},
-	{"tracker.ErrNoChartActivation", tracker.ErrNoChartActivation},
-	{"tracker.ErrNoComment", tracker.ErrNoComment},
-	{"tracker.ErrNoFile", tracker.ErrNoFile},
-	{"tracker.ErrNoProject", tracker.ErrNoProject},
-	{"tracker.ErrNoTask", tracker.ErrNoTask},
-	{"tracker.ErrNoType", tracker.ErrNoType},
-	{"tracker.ErrNotAuthor", tracker.ErrNotAuthor},
-	{"tracker.ErrNothingToRestore", tracker.ErrNothingToRestore},
-	{"tracker.ErrReassignmentBudget", tracker.ErrReassignmentBudget},
-	{"tracker.ErrReparentAcrossProjects", tracker.ErrReparentAcrossProjects},
-	{"tracker.ErrRestoresOthers", tracker.ErrRestoresOthers},
-	{"tracker.ErrStaleVersion", tracker.ErrStaleVersion},
-	{"tracker.ErrStepUnresolved", tracker.ErrStepUnresolved},
-	{"tracker.ErrStepUnvouched", tracker.ErrStepUnvouched},
-	{"tracker.ErrTooBroad", tracker.ErrTooBroad},
-	{"tracker.ErrUploadStale", tracker.ErrUploadStale},
+	{"worklet.ErrAlreadyAnswered", worklet.ErrAlreadyAnswered},
+	{"worklet.ErrBadQuery", worklet.ErrBadQuery},
+	{"worklet.ErrBulkInFlight", worklet.ErrBulkInFlight},
+	{"worklet.ErrForbidden", worklet.ErrForbidden},
+	{"worklet.ErrInboxFull", worklet.ErrInboxFull},
+	{"worklet.ErrInvalid", worklet.ErrInvalid},
+	{"worklet.ErrIndexBuilding", worklet.ErrIndexBuilding},
+	{"worklet.ErrNoChartActivation", worklet.ErrNoChartActivation},
+	{"worklet.ErrNoComment", worklet.ErrNoComment},
+	{"worklet.ErrNoFile", worklet.ErrNoFile},
+	{"worklet.ErrNoProject", worklet.ErrNoProject},
+	{"worklet.ErrNoTask", worklet.ErrNoTask},
+	{"worklet.ErrNoType", worklet.ErrNoType},
+	{"worklet.ErrNotAuthor", worklet.ErrNotAuthor},
+	{"worklet.ErrNothingToRestore", worklet.ErrNothingToRestore},
+	{"worklet.ErrReassignmentBudget", worklet.ErrReassignmentBudget},
+	{"worklet.ErrReparentAcrossProjects", worklet.ErrReparentAcrossProjects},
+	{"worklet.ErrRestoresOthers", worklet.ErrRestoresOthers},
+	{"worklet.ErrStaleVersion", worklet.ErrStaleVersion},
+	{"worklet.ErrStepUnresolved", worklet.ErrStepUnresolved},
+	{"worklet.ErrStepUnvouched", worklet.ErrStepUnvouched},
+	{"worklet.ErrTooBroad", worklet.ErrTooBroad},
+	{"worklet.ErrUploadStale", worklet.ErrUploadStale},
 
-	{"pages.ErrBadCursor", pages.ErrBadCursor},
-	{"pages.ErrConflict", pages.ErrConflict},
-	{"pages.ErrInvalid", pages.ErrInvalid},
-	{"pages.ErrNoActivation", pages.ErrNoActivation},
-	{"pages.ErrNotFound", pages.ErrNotFound},
-	{"pages.ErrNotInTrash", pages.ErrNotInTrash},
-	{"pages.ErrParent", pages.ErrParent},
-	{"pages.ErrReserved", pages.ErrReserved},
-	{"pages.ErrStaleVersion", pages.ErrStaleVersion},
-	{"pages.ErrTitleTaken", pages.ErrTitleTaken},
+	{"doclet.ErrBadCursor", doclet.ErrBadCursor},
+	{"doclet.ErrConflict", doclet.ErrConflict},
+	{"doclet.ErrInvalid", doclet.ErrInvalid},
+	{"doclet.ErrNoActivation", doclet.ErrNoActivation},
+	{"doclet.ErrNotFound", doclet.ErrNotFound},
+	{"doclet.ErrNotInTrash", doclet.ErrNotInTrash},
+	{"doclet.ErrParent", doclet.ErrParent},
+	{"doclet.ErrReserved", doclet.ErrReserved},
+	{"doclet.ErrStaleVersion", doclet.ErrStaleVersion},
+	{"doclet.ErrTitleTaken", doclet.ErrTitleTaken},
 
 	{"statelog.ErrAdoptionUnrecorded", statelog.ErrAdoptionUnrecorded},
 	{"statelog.ErrAheadOfLog", statelog.ErrAheadOfLog},
@@ -205,18 +205,18 @@ type typedKind struct {
 // error — the cause a refusal was concluded from — as a nested wire error, so
 // the cause still answers errors.Is on the far side.
 var typedKinds = []typedKind{
-	{"tracker.AlreadyAnsweredError", reflect.TypeFor[*tracker.AlreadyAnsweredError]()},
-	{"tracker.ErrAmbiguous", reflect.TypeFor[*tracker.ErrAmbiguous]()},
-	{"tracker.ErrAmbiguousAnswer", reflect.TypeFor[*tracker.ErrAmbiguousAnswer]()},
-	{"tracker.ErrFutureVersion", reflect.TypeFor[*tracker.ErrFutureVersion]()},
-	{"tracker.MoveStopped", reflect.TypeFor[*tracker.MoveStopped]()},
-	{"tracker.SubtreeStopped", reflect.TypeFor[*tracker.SubtreeStopped]()},
-	{"tracker.TagClash", reflect.TypeFor[*tracker.TagClash]()},
-	{"tracker.TagsFull", reflect.TypeFor[*tracker.TagsFull]()},
-	{"tracker.TextCapError", reflect.TypeFor[*tracker.TextCapError]()},
+	{"worklet.AlreadyAnsweredError", reflect.TypeFor[*worklet.AlreadyAnsweredError]()},
+	{"worklet.ErrAmbiguous", reflect.TypeFor[*worklet.ErrAmbiguous]()},
+	{"worklet.ErrAmbiguousAnswer", reflect.TypeFor[*worklet.ErrAmbiguousAnswer]()},
+	{"worklet.ErrFutureVersion", reflect.TypeFor[*worklet.ErrFutureVersion]()},
+	{"worklet.MoveStopped", reflect.TypeFor[*worklet.MoveStopped]()},
+	{"worklet.SubtreeStopped", reflect.TypeFor[*worklet.SubtreeStopped]()},
+	{"worklet.TagClash", reflect.TypeFor[*worklet.TagClash]()},
+	{"worklet.TagsFull", reflect.TypeFor[*worklet.TagsFull]()},
+	{"worklet.TextCapError", reflect.TypeFor[*worklet.TextCapError]()},
 
-	{"pages.ErrFutureVersion", reflect.TypeFor[*pages.ErrFutureVersion]()},
-	{"pages.ErrUnknownVersion", reflect.TypeFor[pages.ErrUnknownVersion]()},
+	{"doclet.ErrFutureVersion", reflect.TypeFor[*doclet.ErrFutureVersion]()},
+	{"doclet.ErrUnknownVersion", reflect.TypeFor[doclet.ErrUnknownVersion]()},
 
 	{"statelog.CallerOpIDError", reflect.TypeFor[*statelog.CallerOpIDError]()},
 	{"statelog.ErrSkipped", reflect.TypeFor[*statelog.ErrSkipped]()},

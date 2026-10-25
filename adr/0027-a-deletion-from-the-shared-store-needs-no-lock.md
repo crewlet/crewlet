@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/objstore/collect`
-- **Enforced-by:** `internal/tracker.TestAPutNamingAnOldKeyIsRefused`, `internal/objstore/references.TestTheGraceOutlastsTheLongestUnrecordedUpload`, `internal/objstore.TestEveryPutMintsAKeyNeverWrittenBefore`, `internal/objstore/collect.TestAnObjectIsJudgedByBothItsInstants`, `internal/objstore/collect.TestAnIncompleteEstateDeletesNothing`, `internal/objstore/collect.TestAnUnfinishedUploadIsAbandonedOnlyAfterTheGrace`
+- **Enforced-by:** `internal/worklet.TestAPutNamingAnOldKeyIsRefused`, `internal/objstore/references.TestTheGraceOutlastsTheLongestUnrecordedUpload`, `internal/objstore.TestEveryPutMintsAKeyNeverWrittenBefore`, `internal/objstore/collect.TestAnObjectIsJudgedByBothItsInstants`, `internal/objstore/collect.TestAnIncompleteEstateDeletesNothing`, `internal/objstore/collect.TestAnUnfinishedUploadIsAbandonedOnlyAfterTheGrace`
 - **Tag-status:** unreleased
 
 ## The decision
@@ -22,7 +22,7 @@ and the rule spans packages because no one of them can make it true alone:
 It takes no lock, and it needs none, because of the rule that replaces one:
 **a key is named only by the write that uploaded it, and that write is refused
 once the key is older than `objstore.RecordWithin`** (twelve hours) by the
-clock of the node deciding it (`tracker.ErrUploadStale`). A key is minted by
+clock of the node deciding it (`worklet.ErrUploadStale`). A key is minted by
 `objstore.Store.Put` for one upload, at random, and never derived from the
 content, so no second writer can be re-using an object the collector is
 deleting; and a key past the grace is one no write can name any more, however
@@ -32,13 +32,13 @@ deleting what the other already deleted is not an error.
 The inequalities are pinned in one test: the grace exceeds `RecordWithin` by
 more than any two nodes' clocks are assumed to disagree, and `RecordWithin`
 outlasts the slowest upload the engine accepts (a file of
-`tracker.MaxFileBytes` at the `objstore.MiBPace` floor, eight and a half
+`worklet.MaxFileBytes` at the `objstore.MiBPace` floor, eight and a half
 hours). What the rule rests on, then, is that the clocks of the node deciding a
 write and the node running the collector disagree by less than the twelve hours
 between the two figures.
 
 Five packages carry it: `objstore` (the key, its minting, and `RecordWithin`),
-`tracker` (the write that refuses an old key), `objstore/collect` (the
+`worklet` (the write that refuses an old key), `objstore/collect` (the
 judgement by both instants), `objstore/references` (the constants test) and
 every backend, whose stored instant is no earlier than its put began —
 `objstoretest` certifies that, and that a backend lists every upload it began

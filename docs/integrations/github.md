@@ -705,7 +705,7 @@ prompt renders differently.
 ### The one event addressed to its own actor
 
 A seat is never told about its own actions — with one exception on GitHub (the
-self-hosted host's failed pipeline and the tracker's notice that a task the
+self-hosted host's failed pipeline and Worklet's notice that a task the
 actor unblocked is now workable are the engine's others). A **failed workflow
 run** names the person whose push triggered it, and when it goes red they are
 the only one who can fix it. A build runs asynchronously, minutes after the

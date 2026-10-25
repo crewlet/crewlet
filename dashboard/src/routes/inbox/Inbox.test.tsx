@@ -45,7 +45,7 @@ const EVERY_TOOL = [
 
 const JANE = {
   login: "U0FOUNDER",
-  grants: ["admin", "tracker", "knowledge"],
+  grants: ["admin", "worklet", "doclet"],
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -409,7 +409,7 @@ describe("the list", () => {
     const list = within(screen.getByRole("navigation", { name: "Inbox" }));
     const task = list.getByRole("link", { name: "PROD-91 Ledger export" });
     // A REAL LINK, so a modified click opens the task's own page in a tab.
-    expect(task.getAttribute("href")).toBe("#/work/PROD-91");
+    expect(task.getAttribute("href")).toBe("#/worklet/PROD-91");
     // AND A QUIET ONE, in the kit's own ink for a reference among other
     // words: a column of full accent links read as a column of links.
     expect(task.className).toContain("crewlet-link--quiet");
@@ -442,7 +442,7 @@ describe("the list", () => {
     await settle();
     const list = within(screen.getByRole("navigation", { name: "Inbox" }));
     const task = list.getByRole("link", { name: "PROD-91 The duplicate" });
-    expect(task.getAttribute("href")).toBe("#/work/t-dup");
+    expect(task.getAttribute("href")).toBe("#/worklet/t-dup");
     expect(list.queryByText(/The claimant/)).toBeNull();
   });
 
@@ -744,7 +744,7 @@ describe("the pane", () => {
     // A TURN'S TASK IS OPENED BY ITS ID: the turn's reference carries no
     // collision flag, and a key another task claimed first opens that task.
     const pane = document.querySelector(".crewlet-reading-pane__byline") as HTMLElement;
-    expect(within(pane).getByRole("link").getAttribute("href")).toBe("#/work/t-12");
+    expect(within(pane).getByRole("link").getAttribute("href")).toBe("#/worklet/t-12");
     fireEvent.change(screen.getByRole("textbox", { name: "Your answer to the run" }), {
       target: { value: "Yes, delete it." },
     });
@@ -783,7 +783,7 @@ describe("who is looking", () => {
   const NOBODY = { login: "", grants: [], handle: "", owner: "", name: "", kind: "", acts: [] };
   const UNBOUND = {
     login: "svc:ops",
-    grants: ["tracker"],
+    grants: ["worklet"],
     handle: "",
     owner: "svc:ops",
     name: "",
@@ -882,7 +882,7 @@ describe("who is looking", () => {
 // promising updates that cannot arrive. Mutation: keep the pane's default
 // copy and the Jira title is gone.
 test("on a Jira company the list and the empty pane say asks and mentions arrive in Jira", async () => {
-  mount({ services: { tracker: "jira", knowledge: "native" } });
+  mount({ services: { tracker: "jira", knowledge: "doclet" } });
   await settle();
   expect(
     screen.getByText("Jira handles work items, so asks and mentions arrive there."),

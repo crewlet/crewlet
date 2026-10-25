@@ -19,7 +19,7 @@ crewlet retention status
 **Every `crewlet retention` command that talks to a node needs
 `admin`** — all of them but `verify --restore`, which opens a snapshot
 directory on disk — reads included:
-the `retention` question and every `/work/retention*` route take it, because a
+the `retention` question and every `/worklet/retention*` route take it, because a
 map of which machine holds what and the value a reanchor must echo describe the
 deployment rather than the company. The commands authenticate with
 `CREWLET_API_TOKEN`, and a credential without the grant is refused `403`
@@ -1558,13 +1558,13 @@ who ran it: the generation record every data node applies into its audit row nam
 the operator and the credential they used, where it named the node that served
 the request.
 
-**Today that log is the work tracker's**, `CREWLET_TRACKER_LOG`. A reanchor is
-three steps only the log's own domain can take — reset its rows' versions,
-publish its generation record, write its audit row — and the knowledge base,
+**Today that log is Worklet's**, `CREWLET_TRACKER_LOG`. A reanchor is
+three steps only the log's own domain can take (reset its rows' versions,
+publish its generation record, write its audit row), and Doclet,
 the identity estate, the vectors and the usage log have none of
 their own yet, so naming one of their logs is refused before anything moves.
-It used to run the tracker's steps for them, resetting the tracker's rows for a
-log that was not the tracker's. Recover one of those logs by adopting the snapshot of a
+It used to run Worklet's steps for them, resetting Worklet's rows for a
+log that was not Worklet's. Recover one of those logs by adopting the snapshot of a
 peer hydrated on the live stream, or from a backup.
 
 > **The verb could not have completed before this build.** Its reset named
@@ -1614,7 +1614,7 @@ Three different things:
 - **Purging** removes the rows, on every data node as each one reaches the record.
 
 ```
-crewlet work purge <item> -reason "why" -confirm <item-key> [-op-id ID]
+crewlet worklet purge <item> -reason "why" -confirm <item-key> [-op-id ID]
 ```
 
 `<item>` is the task's key or its id. The purge removes every row the task's own records wrote, not only the task's: its
@@ -1855,7 +1855,7 @@ names the duty a node armed and its interval — the only way to tell a duty
 that is running and finding nothing from one that was never armed.
 
 A person's **inbox** — one row per routed change per recipient — is swept at
-`tracker.native.inbox_retention_days`, **365 days** by default and settable
+`tracker.worklet.inbox_retention_days`, **365 days** by default and settable
 between 30 and 3650, and changed live: the sweep reads it off the running
 company at every tick, as the applier does at every batch. It is the one
 horizon here that deletes something a person reads, and it deletes a *pointer* rather than the thing pointed at: the history

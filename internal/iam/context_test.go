@@ -15,7 +15,7 @@ import (
 func TestFromIsThreeValued(t *testing.T) {
 	resolved := Principal{
 		ID: uuid.New(), Login: "jane.doe", Kind: KindPerson,
-		Stage: StageActive, Grants: []Grant{GrantTracker},
+		Stage: StageActive, Grants: []Grant{GrantWorklet},
 	}
 	storeDown := errors.New("coordination store unreachable")
 
@@ -95,7 +95,7 @@ func TestFromIsThreeValued(t *testing.T) {
 		context.Background(),
 	} {
 		who, _ := From(ctx)
-		if who.Can(GrantTracker) || len(who.Grants) != 0 {
+		if who.Can(GrantWorklet) || len(who.Grants) != 0 {
 			t.Errorf("an unresolved principal carries grants: %+v", who)
 		}
 	}

@@ -193,7 +193,7 @@ var categories = map[string]placement{
 	//
 	// THERE IS NO TASK LIFECYCLE HERE. The five that were — created,
 	// started, completed, failed, delegated — described an engine-owned
-	// task object the native tracker replaced, and none of them ever had a
+	// task object Worklet replaced, and none of them ever had a
 	// publisher. Work's own record is the tracker's log, its history rows
 	// and its change feed.
 	"task_assigned":                   {"task", RateAuthenticated},

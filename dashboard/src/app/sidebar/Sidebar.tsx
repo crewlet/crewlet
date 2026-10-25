@@ -6,15 +6,15 @@
  * The WORKSPACES, from `nav.ts`'s one table, in its groups (`SIDEBAR_GROUPS`):
  * the three that are about you (Home, Inbox, My work), then Company (Overview,
  * Policies, Org chart, Schedules, Integrations, Budgets), then Workspace
- * (Work, Knowledge, Artifacts, Live), and Settings at the foot.
+ * (Worklet, Doclet, Artifacts, Live), and Settings at the foot.
  * Then three LIVE SHORTCUTS, each a real object with its own path: the views
  * this reader pinned, the pages they starred, and the turns running now.
  * Nothing else. A workspace's own sections are tabs in its page header and its
  * objects are rows on the section that lists them; a sidebar that carried
  * either becomes a tree with a different shape on every screen, which is the
  * two-column navigation this replaced. The company's projects are no group
- * here for that reason: a project is a scope of Work, switched where Work's
- * trail names it (`header/ProjectSwitcher.tsx`).
+ * here for that reason: a project is a scope of Worklet, switched where
+ * Worklet's trail names it (`header/ProjectSwitcher.tsx`).
  *
  * # Running is the way to a turn from anywhere
  *
@@ -38,24 +38,24 @@
  *
  * # A lock goes where the closed thing is, and a row is hidden only for a service
  *
- * A ROW THAT READS A SERVICE THE COMPANY DOES NOT RUN IS NOT DRAWN: Work and
- * My work where it runs no Crewlet Works, Knowledge where it runs no Crewlet
- * Knowledge (`nav.ts`'s `serviceShown`, over `lib/services.ts`). There is
+ * A ROW THAT READS A SERVICE THE COMPANY DOES NOT RUN IS NOT DRAWN: Worklet
+ * and My work where it runs no Worklet, Doclet where it runs no Doclet
+ * (`nav.ts`'s `serviceShown`, over `lib/services.ts`). There is
  * nothing to ask anybody for, and a locked row would say there was.
  *
  * A ROW IS LOCKED ONLY WHEN NOTHING IN ITS WORKSPACE IS OPEN to the reader
  * (`nav.ts`'s `workspaceOpen`, over the one rule `sectionOpen`), and stays: a
  * row that vanished when access is absent is indistinguishable from one that
  * does not exist. Its title names what would open it — the access a reader
- * would ask an admin for: Inbox, My work and Work say Tracker, Knowledge says
- * Knowledge. A workspace only PART of which is closed is not locked as a
+ * would ask an admin for: Inbox, My work and Worklet say Worklet, Doclet says
+ * Doclet. A workspace only PART of which is closed is not locked as a
  * whole: Settings draws its locks per section, in its column, and is open to
  * every reader through Spend's readings.
  *
  * AND WHAT A LOCKED ROW WOULD SHOW IS NOT ASKED FOR: the Inbox's badge, My
- * work's count and the pinned views are tracker answers, so a reader without
- * Tracker asks none of them (`lib/useInboxCounts.ts`, `lib/useQueueCount.ts`,
- * [PinnedSection]) — a figure beside a lock would be a refusal drawn as a
+ * work's count and the pinned views are Worklet's answers, so a reader without
+ * Worklet asks none of them (`lib/useInboxCounts.ts`, `lib/useQueueCount.ts`,
+ * [PinnedSection]): a figure beside a lock would be a refusal drawn as a
  * number.
  */
 
@@ -177,7 +177,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   );
 
   const figures: Partial<Record<WorkspaceRow["key"], Pick<NavItemProps, "badge" | "count">>> = {
-    // WHERE THE COMPANY RUNS NO CREWLET WORKS no notice reaches the Inbox,
+    // WHERE THE COMPANY RUNS NO WORKLET no notice reaches the Inbox,
     // and its badge counts what still does: what waits on the reader's
     // decision ([useNeedsYouCount]).
     inbox: runs.tracker
@@ -229,7 +229,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   const viewKey = route.query.get("view") ?? "";
   const pinned = usePinned({
     owner: viewer.owner,
-    tracker: viewer.tracker && runs.tracker,
+    worklet: viewer.worklet && runs.tracker,
     enabled: !unserved,
   });
   // NOT A PLACE THE COMPANY DOES NOT RUN THE SERVICE FOR: its star's row is
@@ -389,8 +389,8 @@ function linkTo(path: string[], query?: Record<string, string>) {
  * pins of whoever asks — a `viewer=` that named anybody else was a free choice
  * of whose personal views to read, and the engine takes none — so the section
  * asks only once the reader has a record to keep pins under (`owner`), and
- * asks nothing of a reader with none. A saved view is the tracker's, so the
- * section is mounted only for a reader holding Tracker.
+ * asks nothing of a reader with none. A saved view is Worklet's, so the
+ * section is mounted only for a reader holding Worklet.
  *
  * AND ACROSS EVERY CONTAINER (`work_saved_views`), never the workspace strip: a
  * view pinned from a project board lives in that project, and read from the
@@ -407,13 +407,13 @@ function linkTo(path: string[], query?: Record<string, string>) {
  */
 function usePinned({
   owner,
-  tracker,
+  worklet,
   enabled,
 }: {
   /** The name the reader's own record is kept under, or "" for nobody's. */
   owner: string;
-  /** Whether the reader holds Tracker, which saved views need. */
-  tracker: boolean;
+  /** Whether the reader holds Worklet and the company runs it, which saved views need. */
+  worklet: boolean;
   /** False where the engine serves this browser nothing at all. */
   enabled: boolean;
 }) {
@@ -421,13 +421,13 @@ function usePinned({
     "work_saved_views",
     { counts: true },
     {
-      enabled: enabled && tracker && owner !== "",
+      enabled: enabled && worklet && owner !== "",
       pollMs: 120_000,
     },
   );
   const artifacts = usePins(enabled);
   return {
-    views: tracker ? (views.data?.views ?? []).filter((v) => v.pinned && v.id) : [],
+    views: worklet ? (views.data?.views ?? []).filter((v) => v.pinned && v.id) : [],
     artifacts: artifacts.data?.contents ?? [],
   };
 }
@@ -461,7 +461,7 @@ function PinnedSection({
         // describes the view and offers a button to run it — so the row a
         // reader pinned to get to their work one click away was two clicks
         // away, through a page about the pin. The inventory is still
-        // `#/work/views`, one tab over.
+        // `#/worklet/views`, one tab over.
         const run = viewRun(v);
         return (
           <SidebarNav.Item

@@ -51,7 +51,7 @@ export const ACTIONS = {
     // AND THE TASK PAGE'S "+ SUB-TASK": a title filed under the task it is
     // on (`parent`), in that task's project.
     //
-    // AND THE NEW TASK SHEET (`routes/work/NewTask.tsx`), which files the
+    // AND THE NEW TASK SHEET (`routes/worklet/NewTask.tsx`), which files the
     // whole of a task in one record: its type, the status it starts in (a
     // board lane's "+" names its own), its priority, due date and labels.
     args: [
@@ -204,7 +204,7 @@ export const ACTIONS = {
     // (`update_work_item{linked_pages}`) — the long form a comment's size
     // limit sends a writer to.
     //
-    // AND THE KNOWLEDGE BASE'S COMPOSER: "New page" and a tree's Create,
+    // AND DOCLET'S COMPOSER: "New page" and a tree's Create,
     // filed in a space at its top or under a page (`parent`), with the
     // composer's `labels`, and Save as draft (`status: "draft"`). A folder is
     // the same write with an empty body: a page that only groups pages.

@@ -86,7 +86,7 @@ func seatsAct(environ config.Source, args []string, tool string, pausing bool, s
 		return errors.New("name the seat: its handle, as the org chart spells it")
 	}
 
-	// THE OPERATION ID IS MINTED HERE, BEFORE THE REQUEST, as `work purge`
+	// THE OPERATION ID IS MINTED HERE, BEFORE THE REQUEST, as `worklet purge`
 	// mints one and for its reason: a gesture whose answer never came may
 	// well have landed, and the key it was sent under is the only handle on
 	// it. One the operator brought is held to the rule the node holds it to

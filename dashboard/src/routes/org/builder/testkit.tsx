@@ -409,7 +409,7 @@ export const fakeSurfaces: BuilderSurfaces = {
  * Who is reading, as the engine's `viewer` question answers: somebody signed
  * in who holds the grants the configuration is read and written under.
  */
-export const EDITOR = { login: "ops", owner: "ops", grants: ["admin", "tracker", "knowledge"] };
+export const EDITOR = { login: "ops", owner: "ops", grants: ["admin", "worklet", "doclet"] };
 
 export function mountBuilder({
   engine,

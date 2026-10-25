@@ -367,7 +367,7 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
       });
     }
     creating.current = true;
-    nav.to(filed.item ? ["work", filed.item] : artifactPath(id));
+    nav.to(filed.item ? ["worklet", filed.item] : artifactPath(id));
   };
 
   const add = (layout: string) => {

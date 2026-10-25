@@ -5,17 +5,18 @@ with one field:
 
 ```yaml
 tracker:
-  backend: native    # the default — the engine is the tracker
+  backend: worklet   # the default: the engine is the tracker
 # backend: jira      # the tracker is Jira, and the engine mirrors none of it
 ```
 
 The two are not variations on one design. They are opposite answers to the
 same question, and each is coherent on its own terms.
 
-## `native` — the engine is the tracker
+## `worklet`: the engine is the tracker
 
-Every change to the company's work is one **record on an ordered log the whole
-fleet shares**, and every data node derives the same SQL tables from that log — see
+Worklet is the engine's own tracker. Every change to the company's work is one
+**record on an ordered log the whole fleet shares**, and every data node
+derives the same SQL tables from that log; see
 [the log and the copies](#the-log-and-the-copies). There is a board on the
 dashboard, tools a seat calls, and an
 [MCP surface](../reference/api-endpoints.md#operatormcp--your-own-assistant)
@@ -46,7 +47,7 @@ second is not. There is no gate that refuses a transition, no scheme that
 hides a field from a role, and no setup form standing between a
 founder and their first task.
 
-The whole surface is in **[The Work Tracker](../guides/work-tracker.md)**.
+The whole surface is in **[Worklet](../guides/worklet.md)**.
 
 ### Who may change what
 
@@ -54,14 +55,14 @@ There is no permission scheme to configure, and there is still an answer to
 "may this caller do that": **one authority table**, fixed in the engine, that
 every surface asks — a seat's own tools and the operator's assistant decide a
 call through the same function over the same chart. The inputs are the ones
-a company already has: the permissions a caller carries — `admin`, and the
-`tracker` app — and the relations the org chart and the work itself draw.
+a company already has: the permissions a caller carries (`admin`, and the
+`worklet` app) and the relations the org chart and the work itself draw.
 
 ```mermaid
 flowchart LR
     CALL["a tool call<br/>(a seat's turn, or the operator's assistant)"]
     TABLE["<b>the authority table</b><br/>one rule per verb"]
-    GRANT["the caller's permissions<br/>tracker · admin"]
+    GRANT["the caller's permissions<br/>worklet · admin"]
     CHART["the relations<br/>who leads this project, unit or person;<br/>who reported this item; who was asked"]
     YES["allowed"]
     NO["refused, naming the rule"]
@@ -77,7 +78,7 @@ flowchart LR
 What it says about the work, in short:
 
 - **Reading the board, filing, updating, commenting and declaring a tag** are
-  anybody's who uses the tracker — the `tracker` app, which every agent seat
+  anybody's who uses Worklet: the `worklet` app, which every agent seat
   holds. Somebody a colleague put a question to on an item reads that item and
   posts their answer to it **without** the app, and nothing more.
 - **A project's policy** — its field declarations, its default assignee,
@@ -100,11 +101,11 @@ What it says about the work, in short:
   theirs alone.
 
 `admin` overrides every relation, and no seat carries it; every relation on a
-tracker verb also asks for the `tracker` app. A node that cannot read its chart answers **cannot tell** rather
+Worklet verb also asks for the `worklet` app. A node that cannot read its chart answers **cannot tell** rather
 than no, so a lead is never told they lead nothing because a node was behind.
-The full table is in [The Work Tracker § Who may do
-what](../guides/work-tracker.md#who-may-do-what), and the rules beyond the
-tracker in [Identity and
+The full table is in [Worklet § Who may do
+what](../guides/worklet.md#who-may-do-what), and the rules beyond
+Worklet in [Identity and
 Access](identity-and-access.md#the-authority-table-one-function-decides).
 
 ### Why the engine grew one
@@ -132,8 +133,8 @@ Jira is the one external tracker the field names. Work kept in **GitHub or
 GitLab issues** needs no tracker setting at all: the
 [GitHub](../integrations/github.md) and [GitLab](../integrations/gitlab.md)
 integrations route their issue webhooks to seats whatever `tracker.backend`
-says, and agents act on issues through those vendors' MCP tools — beside the
-engine's own tracker, or with `tracker.backend: none`, where the engine runs no
+says, and agents act on issues through those vendors' MCP tools, beside
+Worklet, or with `tracker.backend: none`, where the engine runs no
 tracker of its own.
 
 ## What is identical either way
@@ -144,13 +145,13 @@ unit's `project` key names its project on whichever tracker the company runs,
 which is why the field is not called `jira_project`.
 
 What differs is only the **write** that carries a decision and the signal that
-follows it. On `native` a seat writes through the engine's own tools, and the
+follows it. On `worklet` a seat writes through Worklet's own tools, and the
 committed record is what wakes the next seat. On `jira` it writes through
 Jira's tools over MCP, and Jira's webhook is what wakes the next seat.
 
 ## The log and the copies
 
-On the native backend a write does not go to a node's database. It is
+On Worklet a write does not go to a node's database. It is
 **published as a record** onto the domain's own log, on the subject of the
 object it changes — one task, one project, one saved view — and the broker
 arbitrates: two writers racing on one task contend there and exactly one wins,
@@ -234,11 +235,11 @@ old. A company that never backs up never trims, deliberately.
 
 ## How it works with webhooks
 
-A change is a change, whoever recorded it: a Jira webhook and a native item's
+A change is a change, whoever recorded it: a Jira webhook and a Worklet item's
 own change record both arrive at the notification service as a delivery and
 both become an `ExternalNotification`. Nothing above that seam knows which.
 
-PM-tool webhooks do **not** become dedicated task events. Every webhook is parsed by the notification service into an `external_notification` delivered to the routed agents' inboxes: the assignee, watchers, @-mentioned agents, or the project lead as a fallback (see [Jira Integration](../integrations/jira.md)). The woken agent then acts on the item through the tracker's own tools: the engine's builtins (`update_work_item`, `comment_on_work_item` and the rest) on `native`, and its MCP tools on Jira.
+PM-tool webhooks do **not** become dedicated task events. Every webhook is parsed by the notification service into an `external_notification` delivered to the routed agents' inboxes: the assignee, watchers, @-mentioned agents, or the project lead as a fallback (see [Jira Integration](../integrations/jira.md)). The woken agent then acts on the item through the tracker's own tools: the engine's builtins (`update_work_item`, `comment_on_work_item` and the rest) on `worklet`, and its MCP tools on Jira.
 
 ```mermaid
 sequenceDiagram
@@ -264,10 +265,10 @@ See [Organization Model](organization-model.md#unit-lead) for how unit leads and
 
 Task assignment is **not** an algorithmic strategy: it is a **team lead agent's reasoning decision**, on either backend. When a work item appears, the change reaches the team lead — through the lead fallback when it names nobody else, or because the lead is assigned, watching or mentioned. The lead reasons from the team roster in its prompt (each direct report's background, goal and responsibilities) and assigns the item. Only the write differs:
 
-- **`native`** — the lead calls `update_work_item` with an `assignee` (or files the item already assigned, with `create_work_item`), and may add a one-line `reason` that the new assignee is woken with and the item's history shows beside the hand-off. The committed record is what wakes the assignee: the wake is derived from the log, so there is no webhook to wait for and none to miss. An agent moving the assignee spends one of the task's **8 hand-offs**, and any touch by a person or an operator returns them all — see [Hand-offs are bounded on the task](../guides/work-tracker.md#hand-offs-are-bounded-on-the-task).
-- **`jira`** — the lead sets the assignee in Jira through its own MCP tools, and the assignment webhook wakes the assigned agent.
+- **`worklet`**: the lead calls `update_work_item` with an `assignee` (or files the item already assigned, with `create_work_item`), and may add a one-line `reason` that the new assignee is woken with and the item's history shows beside the hand-off. The committed record is what wakes the assignee: the wake is derived from the log, so there is no webhook to wait for and none to miss. An agent moving the assignee spends one of the task's **8 hand-offs**, and any touch by a person or an operator returns them all (see [Hand-offs are bounded on the task](../guides/worklet.md#hand-offs-are-bounded-on-the-task)).
+- **`jira`**: the lead sets the assignee in Jira through its own MCP tools, and the assignment webhook wakes the assigned agent.
 
-A human can also assign directly — on `native` from the dashboard, which writes as the principal the session resolves to — a person as the seat they hold, and a credential bound to no seat under its own login ([`/operator/act`](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface)), or through their own assistant over the [operator MCP](../reference/api-endpoints.md#operatormcp--your-own-assistant); on `jira` in Jira itself — and the same agent wakes up. For **top-level tasks** (no team lead above), the founder assigns directly, or a C-level agent role acts as the top-level assigner.
+A human can also assign directly, and the same agent wakes up. On `worklet` that is from the dashboard, which writes as the principal the session resolves to (a person as the seat they hold, and a credential bound to no seat under its own login: [`/operator/act`](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface)), or through their own assistant over the [operator MCP](../reference/api-endpoints.md#operatormcp--your-own-assistant); on `jira` it is in Jira itself. For **top-level tasks** (no team lead above), the founder assigns directly, or a C-level agent role acts as the top-level assigner.
 
 ---
 
@@ -275,7 +276,7 @@ A human can also assign directly — on `native` from the dashboard, which write
 
 There is no special escalation mechanism in Crewlet. When an agent is blocked or out of its depth, it hands off the same way a human would:
 
-- The agent reaches its manager from the executor with the colleague-surface tool that fits where the work lives: a comment on the work item (`comment_on_work_item` on `native`, a Jira comment on `jira`), a Slack mention, or `a2a_ask` for tight-loop sync. If the blocker only becomes clear at review, the reviewer returns `self_iterate` with a note saying so, and the executor's next round makes the outreach. Once the handoff *has* been made, the reviewer ends the turn `done`: the manager's reply is what re-triggers the agent, so no further round of that turn can produce it.
+- The agent reaches its manager from the executor with the colleague-surface tool that fits where the work lives: a comment on the work item (`comment_on_work_item` on `worklet`, a Jira comment on `jira`), a Slack mention, or `a2a_ask` for tight-loop sync. If the blocker only becomes clear at review, the reviewer returns `self_iterate` with a note saying so, and the executor's next round makes the outreach. Once the handoff *has* been made, the reviewer ends the turn `done`: the manager's reply is what re-triggers the agent, so no further round of that turn can produce it.
 - The `getting-unstuck` tool skill (see `examples/tool-skills/getting-unstuck.md`) teaches the agent the discipline: include what you tried, options you see, your recommendation, and urgency. Never hand a naked problem.
 - The agent's identity prompt names its manager, so the handoff target is always resolvable.
 
@@ -285,11 +286,11 @@ When the engine itself stops a turn it ends it as `failed` and publishes the cau
 
 ## Data Flow Examples
 
-### Task Created on the Native Tracker
+### Task Created in Worklet
 
 ```mermaid
 flowchart TD
-    NEW["<b>Native tracker</b><br/>A person files 'Build auth API' in project AUTH<br/>from the dashboard, with no assignee"]
+    NEW["<b>Worklet</b><br/>A person files 'Build auth API' in project AUTH<br/>from the dashboard, with no assignee"]
     FEED["<b>Engine</b><br/>the committed record names nobody else,<br/>so the lead fallback wakes the team lead"]
     TAKE["Team lead reads the task, queries knowledge,<br/>and assigns it to itself with update_work_item"]
     SUB["Team lead files subtasks with create_work_item, each assigned:<br/>'Design auth endpoints' → Senior Engineer<br/>'Implement JWT middleware' → Senior Engineer<br/>'Write auth tests' → Junior Engineer"]

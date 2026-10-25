@@ -148,7 +148,7 @@ func TestTheDevPrincipalResolvesARequestThatPresentedNothing(t *testing.T) {
 	t.Parallel()
 	b := devBootstrap(t)
 	b.API.Auth.Tokens = []config.APIToken{
-		{ID: "founder", Token: "a-real-credential-long-enough", Grants: []iam.Grant{iam.GrantTracker}},
+		{ID: "founder", Token: "a-real-credential-long-enough", Grants: []iam.Grant{iam.GrantWorklet}},
 	}
 	dev, err := auth.NewDevPrincipal("alice", &b)
 	if err != nil {

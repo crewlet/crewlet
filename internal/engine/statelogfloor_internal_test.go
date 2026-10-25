@@ -12,12 +12,12 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/estate"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE FLOOR IS THE TRIM'S PUBLISHED FLOOR, NOT ITS LAST CONCLUSION, and every
@@ -106,7 +106,7 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
 	s := e.core.Load().log
-	running := s.Domain(tracker.Domain{}.Name())
+	running := s.Domain(worklet.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
 	}
@@ -134,7 +134,7 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	publish := func(floor uint64) {
 		t.Helper()
 		if err := back.Fleet.PutFloor(t.Context(), coord.TrimFloor{
-			Domain: tracker.Domain{}.Name(), Generation: at.Generation,
+			Domain: worklet.Domain{}.Name(), Generation: at.Generation,
 			TrimTo: floor, Floor: floor, At: time.Now().UTC(), By: "peer",
 		}); err != nil {
 			t.Fatalf("publish a floor: %v", err)
@@ -241,7 +241,7 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 			"wrong copy goes out of service, and the seats stay", reason)
 	}
 	var unserved *estate.ErrUnserved
-	if _, err := e.router.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); !errors.As(err, &unserved) {
+	if _, err := e.router.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); !errors.As(err, &unserved) {
 		t.Fatalf("a read of the only copy, below the log, answered %v — want it "+
 			"refused as an estate nobody serves", err)
 	}
@@ -258,7 +258,7 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 // and requires the fence's refusal under want, with nothing appended.
 func requireZeroRefused(t *testing.T, e *Engine, opID, nodeID string, want statelog.Reason) {
 	t.Helper()
-	running := e.core.Load().log.Domain(tracker.Domain{}.Name())
+	running := e.core.Load().log.Domain(worklet.Domain{}.Name())
 	_, before, err := running.log.Bounds(t.Context())
 	if err != nil {
 		t.Fatalf("read the log's end: %v", err)
@@ -314,8 +314,8 @@ func TestTheRecoveryPathDrawsItsLineAtTheNextRecord(t *testing.T) {
 	e.stopRetention()
 
 	s := e.core.Load().log
-	name := tracker.Domain{}.Name()
-	spec := tracker.Domain{}.Stream()
+	name := worklet.Domain{}.Name()
+	spec := worklet.Domain{}.Stream()
 	running := s.Domain(name)
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
@@ -350,7 +350,7 @@ func TestTheRecoveryPathDrawsItsLineAtTheNextRecord(t *testing.T) {
 		defer s.rejoinMu.Unlock()
 		return s.rejoining || rejoins.Load() > 0
 	}
-	body, err := tracker.EncodeBarrier(statelog.Envelope{
+	body, err := worklet.EncodeBarrier(statelog.Envelope{
 		V: statelog.BarrierVersion, Kind: statelog.BarrierKind,
 		Subject: statelog.Subject{Kind: statelog.BarrierKind},
 		Gen:     running.runner.Committed().Generation,
@@ -578,7 +578,7 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 	if gate == nil {
 		t.Fatal("the node runs no node gate")
 	}
-	wiki := s.Domain(pages.Domain{}.Name())
+	wiki := s.Domain(doclet.Domain{}.Name())
 	vectors := s.Domain(search.Domain{}.Name())
 	if wiki == nil || vectors == nil {
 		t.Fatal("the pages or the vector domain is not running")
@@ -687,7 +687,7 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 			t.Fatalf("the readmission answered %+v on %s, want applied", d, d.Domain)
 		}
 	}
-	for _, lister := range []evictionLister{tracker.Domain{}, pages.Domain{}} {
+	for _, lister := range []evictionLister{worklet.Domain{}, doclet.Domain{}} {
 		rows, err := lister.Evictions(t.Context(), back.Store.Replicated().Reader())
 		if err != nil {
 			t.Fatalf("read the evictions: %v", err)
@@ -725,12 +725,12 @@ func TestAWriteFenceReadsTheFloorAtTheGenerationItNames(t *testing.T) {
 	s := &stateLog{fleet: fleet}
 	const generation = 4
 	if err := fleet.PutFloor(t.Context(), coord.TrimFloor{
-		Domain: tracker.Domain{}.Name(), Generation: generation, TrimTo: 700,
+		Domain: worklet.Domain{}.Name(), Generation: generation, TrimTo: 700,
 		Floor: 700, At: time.Now().UTC(), By: "peer",
 	}); err != nil {
 		t.Fatalf("publish a floor: %v", err)
 	}
-	read := s.floorOf(tracker.Domain{}.Name())
+	read := s.floorOf(worklet.Domain{}.Name())
 
 	if got, err := read(t.Context(), generation); err != nil || got != 700 {
 		t.Fatalf("the floor at the generation it was published at reads %d (err "+
@@ -744,7 +744,7 @@ func TestAWriteFenceReadsTheFloorAtTheGenerationItNames(t *testing.T) {
 		t.Fatalf("a floor from the generation ahead reads %d, want a refusal — "+
 			"the cursor is the one on the dead number space", got)
 	}
-	if got, err := s.floorOf(pages.Domain{}.Name())(t.Context(), generation); err != nil || got != 0 {
+	if got, err := s.floorOf(doclet.Domain{}.Name())(t.Context(), generation); err != nil || got != 0 {
 		t.Fatalf("the pages fence reads the tracker's floor as %d (err %v), want 0",
 			got, err)
 	}
@@ -783,11 +783,11 @@ func TestTheWiredWriteFencesRefuseOnThePublishedFloorAlone(t *testing.T) {
 		// write at an expectation of zero.
 		zero func(ctx context.Context, key string) error
 	}{
-		{domain: tracker.Domain{}.Name(), zero: func(ctx context.Context, key string) error {
+		{domain: worklet.Domain{}.Name(), zero: func(ctx context.Context, key string) error {
 			_, err := e.native.Load().writer.EvictNode(ctx, "op-"+key, "node-"+key)
 			return err
 		}},
-		{domain: pages.Domain{}.Name(), zero: func(ctx context.Context, key string) error {
+		{domain: doclet.Domain{}.Name(), zero: func(ctx context.Context, key string) error {
 			_, _, err := e.native.Load().pages.EnsureContainer(ctx, testActivation, key, key, "")
 			return err
 		}},

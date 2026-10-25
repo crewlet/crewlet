@@ -14,15 +14,15 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// THE INBOX RELAY: how a node whose own tracker copy is OUT OF SERVICE still
+// THE INBOX RELAY: how a node whose own Worklet copy is OUT OF SERVICE still
 // tells its open dashboards whose inbox moved.
 //
 // # Why one is needed at all
 //
-// A node learns whose inbox moved from its OWN tracker applier, after every
+// A node learns whose inbox moved from its OWN Worklet applier, after every
 // committed batch ([Engine.SetOnInboxMoved]), and that is complete only while
 // that applier applies every record. A copy that is WRONG — an applier halted
 // at a record it cannot decode, a stalled prefix, an estate file shut, rows
@@ -89,7 +89,7 @@ func inboxRelaySubject(node string) string {
 // hand-off to its sockets — well under a second, in which an applier that
 // commits a batch a millisecond fills fewer than this. And a ring that did
 // overflow is a DETECTED gap, answered with a re-read, never a lost movement.
-// Each batch is identifiers and a count per seat (tracker.InboxMovement), so
+// Each batch is identifiers and a count per seat (worklet.InboxMovement), so
 // the ring is tens of kilobytes on a busy node.
 const inboxRelayRing = 1024
 
@@ -114,7 +114,7 @@ const inboxRelayRetry = servingRecheck
 // server's own sequence.
 type relayedBatch struct {
 	Seq   uint64                  `json:"seq"`
-	Moved []tracker.InboxMovement `json:"moved"`
+	Moved []worklet.InboxMovement `json:"moved"`
 }
 
 // relayAsk is what a follower sends: the epoch and the sequence of the last
@@ -162,7 +162,7 @@ type inboxRelay struct {
 	// watched inbox to read itself again — the engine's registered
 	// listeners, read per call.
 	listening func() bool
-	deliver   func([]tracker.InboxMovement)
+	deliver   func([]worklet.InboxMovement)
 	gap       func()
 
 	// relaying is whether this node's sockets hear a peer now rather than
@@ -187,7 +187,7 @@ type inboxRelay struct {
 // newInboxRelay builds a relay with a fresh epoch.
 func newInboxRelay(self string, q relayQueue, roster func(context.Context) ([]string, error),
 	faulted func(context.Context) bool, listening func() bool,
-	deliver func([]tracker.InboxMovement), gap func()) *inboxRelay {
+	deliver func([]worklet.InboxMovement), gap func()) *inboxRelay {
 
 	return &inboxRelay{self: self, queue: q, roster: roster, faulted: faulted,
 		listening: listening, deliver: deliver, gap: gap, epoch: rand.Text(),
@@ -195,7 +195,7 @@ func newInboxRelay(self string, q relayQueue, roster func(context.Context) ([]st
 }
 
 // record keeps one batch this node's applier announced, for its followers.
-func (r *inboxRelay) record(moved []tracker.InboxMovement) {
+func (r *inboxRelay) record(moved []worklet.InboxMovement) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.seq++

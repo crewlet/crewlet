@@ -12,7 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The saved-view tools, and they are the OPERATOR's alone.
@@ -25,7 +25,7 @@ import (
 //
 // # Why the container is one string
 //
-// `container=project:ENG`, exactly as [tracker.ParseQuery] reads it, because a
+// `container=project:ENG`, exactly as [worklet.ParseQuery] reads it, because a
 // caller that lists a strip and then lists the work in it must not have to
 // write the same container two ways. The parse is shared for that reason.
 
@@ -34,23 +34,23 @@ import (
 // ViewPrior is the read a save is decided on: a save replaces a view whole by
 // id, so who may make one is a question about the view it OVERWRITES as well
 // as the one it writes, and the write refuses a prior that no longer holds —
-// see [tracker.ViewPrior].
+// see [worklet.ViewPrior].
 type ViewWriter interface {
-	ViewPrior(ctx context.Context, id string) (tracker.ViewPrior, error)
-	WriteView(ctx context.Context, opID string, view tracker.View,
-		prior tracker.ViewPrior) (tracker.WriteResult, error)
+	ViewPrior(ctx context.Context, id string) (worklet.ViewPrior, error)
+	WriteView(ctx context.Context, opID string, view worklet.View,
+		prior worklet.ViewPrior) (worklet.WriteResult, error)
 }
 
 // ViewReader is the read side.
 type ViewReader interface {
-	Views(ctx context.Context, q tracker.ViewQuery) (tracker.ViewListing, error)
+	Views(ctx context.Context, q worklet.ViewQuery) (worklet.ViewListing, error)
 }
 
 type listWorkViews struct{ deps WorkDeps }
 
 var _ tools.SeatCallable = (*listWorkViews)(nil)
 
-func (t *listWorkViews) Name() string { return tracker.ListWorkViewsTool }
+func (t *listWorkViews) Name() string { return worklet.ListWorkViewsTool }
 
 func (t *listWorkViews) Description() string {
 	return "List the saved views on a project, unit, person or the whole " +
@@ -89,20 +89,20 @@ func (t *listWorkViews) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(tracker.ListWorkViewsTool), nil
+		return notInATurn(worklet.ListWorkViewsTool), nil
 	}
 	if t.deps.Reader == nil {
-		return unconfigured(tracker.ListWorkViewsTool), nil
+		return unconfigured(worklet.ListWorkViewsTool), nil
 	}
 	container, refusal := parseContainerArg(argString(args, "container"))
 	if refusal != "" {
 		return failed(refusal), nil
 	}
-	listing, err := t.deps.Reader.Views(ctx, tracker.ViewQuery{
+	listing, err := t.deps.Reader.Views(ctx, worklet.ViewQuery{
 		Container: container,
 		Viewer:    actor.Handle,
 		// THE CHART, so `unit:engineering` and `unit:eng` are one
-		// strip rather than two — see [tracker.Units].
+		// strip rather than two (see [worklet.Units]).
 		Units: t.deps.Units,
 		// THE SEAT'S OWN LEVEL, like every other tool read here: a
 		// caller that saves a view and then lists the strip sees the
@@ -110,7 +110,7 @@ func (t *listWorkViews) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Level: seatReadLevel,
 	})
 	if err != nil {
-		return readFailure(ctx, tracker.ListWorkViewsTool, err), nil
+		return readFailure(ctx, worklet.ListWorkViewsTool, err), nil
 	}
 	return jsonResult(map[string]any{
 		"count": len(listing.Views), "views": listing.Views,
@@ -122,7 +122,7 @@ type saveWorkView struct{ deps WorkDeps }
 
 var _ tools.Callable = (*saveWorkView)(nil)
 
-func (t *saveWorkView) Name() string { return tracker.SaveWorkViewTool }
+func (t *saveWorkView) Name() string { return worklet.SaveWorkViewTool }
 
 func (t *saveWorkView) Description() string {
 	return "Save a view — a named query with a shape — on a project, unit, " +
@@ -161,7 +161,7 @@ func (t *saveWorkView) Parameters() map[string]any {
 				// tracker ships a builtin timeline — the shape was reachable
 				// by reading and unreachable by writing, with the tool's own
 				// schema as the only thing saying otherwise.
-				"enum": tracker.ViewTypeNames(),
+				"enum": worklet.ViewTypeNames(),
 			},
 			"params": map[string]any{
 				"type":                 "object",
@@ -213,12 +213,12 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(tracker.SaveWorkViewTool), nil
+		return notInATurn(worklet.SaveWorkViewTool), nil
 	}
 	if t.deps.ViewWriter == nil {
-		return unconfigured(tracker.SaveWorkViewTool), nil
+		return unconfigured(worklet.SaveWorkViewTool), nil
 	}
-	actor, denied := t.deps.bindOperation(actor, tracker.SaveWorkViewTool, args)
+	actor, denied := t.deps.bindOperation(actor, worklet.SaveWorkViewTool, args)
 	if denied != "" {
 		return failed(denied), nil
 	}
@@ -245,7 +245,7 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// a project container is stored upper-cased: a model writes the
 	// spelling it remembers, and a view saved under one spelling of a team
 	// is a view the strip asked for under the other never shows.
-	container = tracker.CanonicalContainer(t.deps.Units, container)
+	container = worklet.CanonicalContainer(t.deps.Units, container)
 	writer := t.deps.ViewWriter(actor)
 	// THE CALLER'S ID WHEN IT HAS ONE, and one derived from the call's
 	// operation when it does not. A verb that always minted would write a
@@ -262,7 +262,7 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// answered `applied` without landing. Derived from the call ([opIDFor]),
 	// a retry is one write and a second edit is a second one.
 	opID := opIDFor(actor, t.Name(), "view", viewObjectKey(id), args)
-	var prior tracker.ViewPrior
+	var prior worklet.ViewPrior
 	if id == "" {
 		id = createdViewID(opID)
 	} else {
@@ -277,7 +277,7 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// `work.route` is asked on a task's stored project; the write
 		// then refuses if the view changes under this decision.
 		if prior, err = writer.ViewPrior(ctx, id); err != nil {
-			return readFailure(ctx, tracker.SaveWorkViewTool, err), nil
+			return readFailure(ctx, worklet.SaveWorkViewTool, err), nil
 		}
 		if prior.Held {
 			if denied := t.deps.mayWrite(ctx, authz.ActionViewSave,
@@ -287,11 +287,11 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			}
 		}
 	}
-	view := tracker.View{
+	view := worklet.View{
 		ID:        id,
 		Container: container,
 		Name:      strings.TrimSpace(argString(args, "name")),
-		Type:      tracker.ViewType(strings.TrimSpace(argString(args, "type"))),
+		Type:      worklet.ViewType(strings.TrimSpace(argString(args, "type"))),
 		Params:    argStringMap(args, "params"),
 		Owner:     owner,
 		Protected: argBool(args, "protected"),
@@ -300,7 +300,7 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	result, err := writer.WriteView(ctx, opID, view, prior)
 	if err != nil {
-		return writeFailure(ctx, actor, tracker.SaveWorkViewTool, err), nil
+		return writeFailure(ctx, actor, worklet.SaveWorkViewTool, err), nil
 	}
 	if result.Outcome == statelog.OutcomeUnknown {
 		// NEVER THE ID OF A VIEW NOBODY CAN SAY WAS SAVED: handed back to
@@ -309,10 +309,10 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		if container.ID != "" {
 			where += ":" + container.ID
 		}
-		return unknownWrite(actor, tracker.SaveWorkViewTool,
+		return unknownWrite(actor, worklet.SaveWorkViewTool,
 			fmt.Sprintf("the view %q was saved", view.Name), opID,
 			result.Unvouched, unknownNext(result.Unvouched,
-				sameCall(actor, tracker.SaveWorkViewTool),
+				sameCall(actor, worklet.SaveWorkViewTool),
 				fmt.Sprintf("List the views in %s with list_work_views", where),
 				"it saves a second view")), nil
 	}
@@ -364,21 +364,21 @@ func containerParameter() map[string]any {
 // neither compares it, wraps it or propagates it, so the only reader is the
 // model. Shaped as an `error` it was prose no `errors.Is` would ever ask
 // about, written in a sentence style the error-string convention forbids.
-func parseContainerArg(raw string) (tracker.Container, string) {
+func parseContainerArg(raw string) (worklet.Container, string) {
 	raw = strings.TrimSpace(raw)
-	if raw == tracker.ContainerWorkspace {
-		return tracker.Container{Kind: tracker.ContainerWorkspace}, ""
+	if raw == worklet.ContainerWorkspace {
+		return worklet.Container{Kind: worklet.ContainerWorkspace}, ""
 	}
 	kind, id, found := strings.Cut(raw, ":")
-	if !found || !tracker.ValidContainerKind(kind) || id == "" ||
-		kind == tracker.ContainerWorkspace {
+	if !found || !worklet.ValidContainerKind(kind) || id == "" ||
+		kind == worklet.ContainerWorkspace {
 
-		return tracker.Container{}, fmt.Sprintf("%q does not name a container. "+
+		return worklet.Container{}, fmt.Sprintf("%q does not name a container. "+
 			"Write `workspace`, `project:ENG`, `unit:engineering` or "+
 			"`person:ana`.", clip(raw))
 	}
-	if kind == tracker.ContainerProject {
+	if kind == worklet.ContainerProject {
 		id = strings.ToUpper(id)
 	}
-	return tracker.Container{Kind: kind, ID: id}, ""
+	return worklet.Container{Kind: kind, ID: id}, ""
 }

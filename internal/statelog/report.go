@@ -13,7 +13,7 @@ import (
 
 // The operator's answer, and why it is ONE value.
 //
-// `crewlet retention status` and GET /work/retention answer the SAME BYTES —
+// `crewlet retention status` and GET /worklet/retention answer the SAME BYTES:
 // this type, encoded once by the node that assembled it. The CLI renders what
 // it was given and exits non-zero from the alarms it was given; it does not
 // re-derive either. That is not tidiness. An operator surface that computed

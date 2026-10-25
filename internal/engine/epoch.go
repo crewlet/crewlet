@@ -280,9 +280,8 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	startedNative, err := e.startNativeFor(ctx, next)
 	if err != nil {
 		log.WarnContext(ctx, "config_apply_failed", "error", err,
-			"detail", "the native tracker and knowledge base could not be "+
-				"started for this node's first company; the previous epoch is "+
-				"still current")
+			"detail", "Worklet and Doclet could not be started for this "+
+				"node's first company; the previous epoch is still current")
 		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
 	}
 	if startedNative {

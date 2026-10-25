@@ -67,17 +67,17 @@ import { AgentsHeader, useAgentsCounts } from "./header.tsx";
 const PROJECT_PAGE = 200;
 
 /**
- * Every live project filed to each unit, by unit key, from the tracker. A
+ * Every live project filed to each unit, by unit key, from Worklet. A
  * company on another tracker answers nothing, and a unit then carries no key
- * rather than a wrong one — as it does for a reader without Tracker, who is
+ * rather than a wrong one, as it does for a reader without Worklet, who is
  * not asked.
  */
 function useUnitProjects(): Map<string, string[]> {
-  const { tracker } = useViewer();
+  const { worklet } = useViewer();
   const projects = useQuery(
     "work_projects",
     { limit: PROJECT_PAGE },
-    { pollMs: 120_000, enabled: tracker },
+    { pollMs: 120_000, enabled: worklet },
   );
   const rows = projects.error ? undefined : projects.data?.projects;
   return useMemo(() => projectsByUnit(rows ?? []), [rows]);
@@ -88,7 +88,7 @@ function ProjectKeys({ keys }: { keys: readonly string[] }) {
   return (
     <>
       {keys.map((key) => (
-        <a key={key} className="oc-key" href={href(["work", key])} title={`The ${key} project`}>
+        <a key={key} className="oc-key" href={href(["worklet", key])} title={`The ${key} project`}>
           {key}
         </a>
       ))}
