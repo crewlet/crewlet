@@ -2433,6 +2433,16 @@ A key not in this table is refused by name. Every mapping field
 `credential_store`) merges key by key; lists and single values replace
 wholesale.
 
+A built-in profile may differ by platform. Its entry in the shipped table can
+carry a `platforms` section, keyed `darwin` or `linux`, of fields merged over
+it on that platform the same way, before your `overrides` are merged in — so
+an override of a field the section sets wins on both. `cursor-agent` is the
+one that needs it: its login is `~/.cursor/auth.json` on macOS and
+`$XDG_CONFIG_HOME/cursor/auth.json` on Linux, where the engine points
+`XDG_CONFIG_HOME` at the seat home's `.config`. `platforms` is not a key
+`overrides` takes, since an entry's overrides already apply only to the host
+it runs on.
+
 | Field | What it is |
 |---|---|
 | `binary` | The executable, looked up on `PATH` unless it is a path. |

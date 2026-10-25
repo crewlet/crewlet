@@ -1,6 +1,7 @@
 package cliprofile
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -555,6 +556,86 @@ func TestASubscriptionVariableIsRefusedWhereItWouldClash(t *testing.T) {
 		if err := p.ValidateCredentials("gemini-cli"); err == nil ||
 			!strings.Contains(err.Error(), "subscription_env names \""+variable+"\", which is a credential variable") {
 			t.Errorf("subscription_env naming %s: err = %v", variable, err)
+		}
+	}
+}
+
+// EVERY SHIPPED PROFILE LOADS ON EVERY PLATFORM A RELEASE RUNS ON, not only on
+// the one the suite happens to run on: a platform section is merged in before
+// the profile is validated, so one that broke a rule would otherwise reach
+// macOS users unvalidated by a Linux CI.
+func TestEveryShippedProfileLoadsOnEveryPlatform(t *testing.T) {
+	t.Parallel()
+	for _, goos := range Platforms {
+		table, err := decodeTable(profilesYAML, goos)
+		if err != nil {
+			t.Fatalf("%s: %v", goos, err)
+		}
+		for _, name := range slices.Sorted(maps.Keys(table)) {
+			if name == "custom" {
+				continue
+			}
+			p := table[name]
+			if err := p.Validate(name); err != nil {
+				t.Errorf("%s on %s: %v", name, goos, err)
+			}
+		}
+	}
+}
+
+// CURSOR'S LOGIN IS WHERE EACH PLATFORM'S BUILD KEEPS IT: ~/.cursor/auth.json
+// on macOS, $XDG_CONFIG_HOME/cursor/auth.json on Linux, which the engine points
+// at the seat home's `.config`. With the macOS path on Linux, an adopted login
+// never reached a seat and a refreshed one was never carried back.
+func TestCursorKeepsItsLoginWhereEachPlatformsBuildDoes(t *testing.T) {
+	t.Parallel()
+	for goos, want := range map[string]string{
+		"darwin": ".cursor/auth.json",
+		"linux":  ".config/cursor/auth.json",
+	} {
+		table, err := decodeTable(profilesYAML, goos)
+		if err != nil {
+			t.Fatalf("%s: %v", goos, err)
+		}
+		p := table["cursor-agent"]
+		for field, paths := range map[string][]string{
+			"credential_paths":      p.CredentialPaths,
+			"host_credential_paths": p.HostCredentialPaths,
+		} {
+			if !slices.Contains(paths, want) || !slices.Contains(paths, ".cursor/cli-config.json") {
+				t.Errorf("%s on %s = %v, want %s beside .cursor/cli-config.json", field, goos, paths, want)
+			}
+		}
+	}
+}
+
+// A PLATFORM SECTION IS THE BUILT-IN'S, AND AN OVERRIDE OUTRANKS IT. The section
+// is resolved before an entry's overrides are merged, so an operator who sets a
+// field a section also sets gets their own value on every platform; and a
+// section naming a platform no release runs on is refused, being a typo for one
+// that does.
+func TestAPlatformSectionIsResolvedBeforeOverrides(t *testing.T) {
+	t.Parallel()
+	override := []string{".cursor/cli-config.json", ".elsewhere/auth.json"}
+	p, err := Load("cursor-agent", map[string]any{"credential_paths": []any{override[0], override[1]}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(p.CredentialPaths, override) {
+		t.Errorf("credential_paths = %v, want the override", p.CredentialPaths)
+	}
+	raw := []byte("demo:\n  binary: demo\n  complete_args: [\"-p\"]\n  platforms:\n    windows:\n      binary: demo.exe\n")
+	if _, err := decodeTable(raw, "linux"); err == nil || !strings.Contains(err.Error(), `platforms names "windows"`) {
+		t.Errorf("a section for a platform no release runs on: err = %v", err)
+	}
+	raw = []byte("demo:\n  binary: demo\n  complete_args: [\"-p\"]\n  platforms:\n    linux:\n      binary: demo-linux\n")
+	for goos, want := range map[string]string{"linux": "demo-linux", "darwin": "demo"} {
+		table, err := decodeTable(raw, goos)
+		if err != nil {
+			t.Fatalf("%s: %v", goos, err)
+		}
+		if got := table["demo"].Binary; got != want {
+			t.Errorf("binary on %s = %q, want %q", goos, got, want)
 		}
 	}
 }

@@ -1240,6 +1240,14 @@ cursor-agent:
     output: [["usage", "output_tokens"]]
   config_env:
     CURSOR_CONFIG_DIR: ".cursor"
+  # THE LOGIN IS KEPT PER PLATFORM, and CURSOR_CONFIG_DIR does not move it:
+  # auth.json is ~/.cursor/auth.json on macOS and
+  # $XDG_CONFIG_HOME/cursor/auth.json on Linux — `.config/cursor/auth.json` in
+  # a seat's home, where the engine points that variable (read from the
+  # 2026.10.22 bundle; on Linux the CLI opened no other, measured). With the
+  # macOS path here on Linux, a login adopted from a host or a bundle was
+  # never where a seat's CLI looked, and the one it did use was never carried
+  # back. cli-config.json follows CURSOR_CONFIG_DIR on both.
   credential_paths: [".cursor/cli-config.json", ".cursor/auth.json"]
   # What a call leaves in the seat's home, measured on 2026.10.22: a chat
   # directory, and per call-directory a projects entry holding the trust
@@ -1247,6 +1255,10 @@ cursor-agent:
   # call the seat makes.
   volatile_paths: [".cursor/chats", ".cursor/logs", ".cursor/sessions", ".cursor/projects"]
   host_credential_paths: [".cursor/cli-config.json", ".cursor/auth.json"]
+  platforms:
+    linux:
+      credential_paths: [".cursor/cli-config.json", ".config/cursor/auth.json"]
+      host_credential_paths: [".cursor/cli-config.json", ".config/cursor/auth.json"]
   # The CLI's own authentication reference (cursor.com/docs/cli/reference/
   # authentication) gives CURSOR_API_KEY as the recommended headless sign-in,
   # "for automation, scripts, or CI environments", beside `--api-key`. It was
