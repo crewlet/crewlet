@@ -88,6 +88,7 @@ import {
   PHONE_BREAKPOINT,
   assistantColumnMin,
   assistantMaxWidth,
+  assistantOccupied,
   assistantTrack,
   columnWidth,
   densityScale,
@@ -110,6 +111,7 @@ import { framePageOf, setFramePage } from "./assistant/context.ts";
 import { on as onAssistantBus } from "./assistant/bus.ts";
 import { readTab, writeTab } from "./assistant/tab.ts";
 import { resolves } from "./routes.ts";
+import { useToastInset } from "./toastInset.tsx";
 import { goSignIn } from "~/lib/session.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
 import type { FleetAnswer } from "~/protocol/index.ts";
@@ -593,6 +595,16 @@ function Frame({ children }: { children: ReactNode }) {
     max: ASSISTANT_MAX,
   });
   const assistantMax = assistantMaxWidth(viewport, frame, peekShape === "column");
+  const assistantDrawn = Math.min(assistantWidth.width ?? ASSISTANT_WIDTH, assistantMax);
+  // THE TOAST STACK STANDS BESIDE THE PANEL, not over it, while the panel is
+  // a column or over the page; on a phone the panel itself keeps its foot
+  // clear (`toastInset.tsx`).
+  useToastInset(
+    "frame",
+    assistantOpen && assistantShape !== "sheet"
+      ? { inline: assistantOccupied(assistantShape, assistantDrawn, viewport, scale) }
+      : null,
+  );
   const crumbs = useMemo(() => crumbsFor(route.path, labels), [route.path, labels]);
 
   // WHAT THE ASSISTANT IS TOLD ABOUT THE PAGE: the screen, its parameters,
@@ -724,14 +736,14 @@ function Frame({ children }: { children: ReactNode }) {
                     unavailable={assistantUnavailable}
                     onClose={() => showAssistant(false)}
                     initialFocus={assistantFocus}
-                    modal={assistantShape !== "column"}
+                    shape={assistantShape}
                     name={ownName(session.answer)}
                   />
                 </AsideBoundary>
               ) : null
             }
             asideShape={assistantShape}
-            asideWidth={Math.min(assistantWidth.width ?? ASSISTANT_WIDTH, assistantMax)}
+            asideWidth={assistantDrawn}
             asideReserve={sheetFloor(frame, peekShape === "column")}
             asideLabel="Crewlet Assistant"
             onAsideClose={() => showAssistant(false)}
