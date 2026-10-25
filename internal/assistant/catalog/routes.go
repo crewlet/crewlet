@@ -51,6 +51,15 @@ var routeExposures = slices.Concat(
 		"GET /artifacts/{id}/versions/{n}/sources/{dataset}", "GET /artifacts/sources",
 		"GET /artifacts/{id}/data/export.csv"),
 
+	// THE GALLERY'S FOLDERS AND THE COMPANY'S BRAND.
+	nevers(whyFolders, "POST /artifact-folders", "PATCH /artifact-folders/{id}",
+		"DELETE /artifact-folders/{id}", "PUT /artifacts/{id}/folder",
+		"POST /artifacts/folder-moves"),
+	links(whyBrand, "GET /brand", "GET /brand/files/{hash}"),
+	nevers("adopting or clearing the brand changes the company's public face, an "+
+		"administrator's gesture on its own screen", "POST /brand/adoptions",
+		"DELETE /brand/adoptions/current"),
+
 	// THE COMPANY DOCUMENT, every route an administrator's or a lead's, and
 	// org and principles edits are page actions into their editors' drafts.
 	nevers("the company document names every secret reference, and its edits are "+
