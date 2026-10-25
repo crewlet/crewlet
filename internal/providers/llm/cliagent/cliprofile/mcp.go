@@ -92,6 +92,13 @@ type MCP struct {
 	// activation and starts the next with the new list.
 	Relists bool `yaml:"relists,omitempty"`
 
+	// Concurrency is which of one response's calls the CLI makes without
+	// waiting for the one before it to be answered. Required, because no
+	// value is safe for every CLI: the engine holds a call that ends a phase
+	// until the calls beside it in its response have run, and on a CLI that
+	// makes them in turn those calls never come until it is answered.
+	Concurrency Concurrency `yaml:"concurrency,omitempty"`
+
 	// FailureEvents are the CLI's own failure reports in what it prints, and
 	// the fields of each a failed run's error shows. A run with tools prints
 	// every call's arguments and result, so its output is never quoted in an
@@ -119,6 +126,29 @@ type MCP struct {
 	// Serve is the serve lifecycle: required with it, refused without it.
 	Serve *Serve `yaml:"serve,omitempty"`
 }
+
+// Concurrency is which of one response's calls a CLI makes without waiting for
+// the one before it to be answered — measured per CLI, by a response asking
+// for several calls at once.
+type Concurrency string
+
+const (
+	// ConcurrencyAtOnce: any call beside any other (Gemini CLI, OpenCode,
+	// Copilot, Grok, Pi).
+	ConcurrencyAtOnce Concurrency = "at_once"
+	// ConcurrencyReadOnly: only calls to tools annotated read-only beside
+	// each other; any other call alone (Claude Code, Qwen Code).
+	ConcurrencyReadOnly Concurrency = "read_only"
+	// ConcurrencyInTurn: one call at a time, each once the last is answered
+	// (Muse, Kimi, Hermes).
+	ConcurrencyInTurn Concurrency = "in_turn"
+)
+
+// ConcurrencyValues are the values [MCP.Concurrency] takes, in order.
+var ConcurrencyValues = []Concurrency{ConcurrencyAtOnce, ConcurrencyReadOnly, ConcurrencyInTurn}
+
+// Valid reports whether c is one of [ConcurrencyValues]; the empty one is not.
+func (c Concurrency) Valid() bool { return slices.Contains(ConcurrencyValues, c) }
 
 // Serves reports whether a run with tools on this route runs against a server
 // of the CLI's own ([LifecycleServe]).
@@ -383,6 +413,13 @@ func (p *Profile) validateMCP(add func(string, ...any)) {
 		add("mcp names no relay arguments — the relay is told its socket on its argv, so " +
 			"{relay_args_json}, {relay_argv_json} or {socket} has to reach the CLI's server " +
 			"configuration")
+	}
+	if !m.Concurrency.Valid() {
+		add("mcp.concurrency is %q — say which of one response's calls the CLI makes without "+
+			"waiting for the one before: at_once, read_only (only calls to read-only tools, as "+
+			"Claude Code) or in_turn (one at a time). The engine holds a call that ends a phase "+
+			"until the calls beside it have run, and on a CLI that makes them in turn those "+
+			"never come until it is answered", m.Concurrency)
 	}
 	if m.ToolTimeoutSeconds <= 0 {
 		add("mcp.tool_timeout_seconds is %d — say how long the CLI waits for one call, the "+

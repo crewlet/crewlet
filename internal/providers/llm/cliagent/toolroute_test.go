@@ -126,9 +126,10 @@ func TestARunsCallsReachTheHostAndAreJoinedToTheirRequests(t *testing.T) {
 	host.mu.Lock()
 	opts := host.opts[0]
 	host.mu.Unlock()
-	if !opts.Relists || opts.ToolTimeout != 10*time.Minute || !opts.ObservesRequests {
-		t.Errorf("the host was told %+v, want the profile's relisting, its 600s tool timeout "+
-			"and a record of requests", opts)
+	if !opts.Relists || opts.ToolTimeout != 10*time.Minute || !opts.ObservesRequests ||
+		opts.Concurrency != llm.CallsReadOnlyAtOnce {
+		t.Errorf("the host was told %+v, want the profile's relisting, its 600s tool timeout, "+
+			"a record of requests and calls made beside each other only when read-only", opts)
 	}
 }
 

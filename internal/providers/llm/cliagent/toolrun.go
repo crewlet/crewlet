@@ -90,6 +90,7 @@ func (p *Provider) serveTools(
 		ToolTimeout:      m.ToolTimeout(),
 		ObservesRequests: t.reader.observes(),
 		OnCall:           t.onCall,
+		Concurrency:      callConcurrency(m.Concurrency),
 	})
 	if err != nil {
 		t.carry.stop()
@@ -155,6 +156,20 @@ func (p *Provider) serveTools(
 		t.waitTail = tailRecord(pattern, t.reader.fileLine, t.stopTail)
 	}
 	return t, nil
+}
+
+// callConcurrency is the profile's word for which of one response's calls the
+// CLI makes at once, in the host's. The profile's is required and validated,
+// so at_once is the only value the default reaches.
+func callConcurrency(c cliprofile.Concurrency) llm.CallConcurrency {
+	switch c {
+	case cliprofile.ConcurrencyReadOnly:
+		return llm.CallsReadOnlyAtOnce
+	case cliprofile.ConcurrencyInTurn:
+		return llm.CallsInTurn
+	default:
+		return llm.CallsAtOnce
+	}
 }
 
 // onCall is the host's word that the first of its tools in flight started, or

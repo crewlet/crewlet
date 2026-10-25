@@ -23,6 +23,7 @@ func routed() map[string]any {
 			"allow_args":           []any{"--allowedTools", "mcp__crewlet__*"},
 			"tool_timeout_seconds": 600,
 			"relists":              true,
+			"concurrency":          "read_only",
 			"failure_events": []any{map[string]any{
 				"match":  []any{map[string]any{"path": []any{"type"}, "equals": "result"}, map[string]any{"path": []any{"is_error"}, "equals": true}},
 				"fields": []any{[]any{"subtype"}},
@@ -61,7 +62,8 @@ func TestARoutedProfileLoads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if p.MCP == nil || p.Requests == nil || p.Cap == nil || p.MCP.ToolTimeout().Minutes() != 10 {
+	if p.MCP == nil || p.Requests == nil || p.Cap == nil || p.MCP.ToolTimeout().Minutes() != 10 ||
+		p.MCP.Concurrency != ConcurrencyReadOnly {
 		t.Errorf("loaded %+v / %+v / %+v", p.MCP, p.Requests, p.Cap)
 	}
 }
@@ -89,6 +91,10 @@ func TestABrokenToolRouteIsRefusedByName(t *testing.T) {
 			"names no relay arguments"},
 		"no tool timeout": {map[string]any{"mcp": map[string]any{"tool_timeout_seconds": 0}},
 			"mcp.tool_timeout_seconds is 0"},
+		"no concurrency": {map[string]any{"mcp": map[string]any{"concurrency": nil}},
+			`mcp.concurrency is ""`},
+		"a concurrency the engine has no word for": {map[string]any{"mcp": map[string]any{"concurrency": "parallel"}},
+			`mcp.concurrency is "parallel"`},
 		"a seed in the seat's home": {map[string]any{"mcp": map[string]any{"seed": []any{map[string]any{
 			"path": "crewlet-mcp.json", "in": "home",
 			"content": `{"command":{relay_command_json},"args":{relay_args_json}}`}}}},

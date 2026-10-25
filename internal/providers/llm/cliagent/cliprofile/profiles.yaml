@@ -228,6 +228,10 @@ claude-code:
     allow_args: ["--allowedTools", "mcp__crewlet__*"]
     tool_timeout_seconds: 600
     relists: true
+    # A response asking for several calls has them made beside each other
+    # only where every one is to a tool annotated read-only; any other call
+    # is made alone, once the one before it is answered (measured on 2.1.310).
+    concurrency: read_only
     # A failed run's result event says why, by field: its subtype, the API
     # status it relayed, its errors and its message. The assistant and user
     # events around it carry every call and result, and are never quoted.
