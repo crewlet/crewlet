@@ -133,7 +133,9 @@
 // one goes to the class furthest below its weighted share of what the lane
 // has spent over the last [ShareWindow] (a person 4, a machine 2), within it
 // to the principal that spent least, each run charged the greater of its CPU
-// and the slot-time it held. So a CI system's storm of clones or lazy
+// and the slot-time it held, a slot-second at the share of a core one slot
+// stands for on the lane's shape (a quarter at four a core, a whole core on a
+// lane narrower than the cores). So a CI system's storm of clones or lazy
 // fetches waits behind itself, and a person's clone takes the next slot
 // released rather than the sixty-fifth. Work-conserving — a slot is never
 // free while anybody waits, so a class alone has the whole lane — and never
@@ -340,12 +342,13 @@
 // sixty-four. The machine token alone runs the lane at 56 clones a second
 // with the share and 55 without it: a weight decides who goes next, never
 // whether a slot is used. A person whose own burst of sixty-four clones is a
-// minute old waits 203 ms at the p99 behind the token's sixty-four, and three
-// minutes old 71 ms, about as one who spent nothing does — what [ShareWindow]
-// is for. One grant of a lane 10 000 waiters deep over 1 000 principals costs
-// 34 µs (BenchmarkTransferGrant, one count of 10 000 grants), so the scan
-// over the waiting principals stays a scan: under a grant's 100 µs budget,
-// where a heap would be owed past it.
+// minute old waits 187 ms at the p99 behind the token's sixty-four, and three
+// minutes old 67 ms, about as one who spent nothing does — what [ShareWindow]
+// is for (a held slot charged a whole core a second, as on every lane as wide
+// as its cores). One grant of a lane 10 000 waiters deep over 1 000
+// principals costs 34 µs (BenchmarkTransferGrant, one count of 10 000
+// grants), so the scan over the waiting principals stays a scan: under a
+// grant's 100 µs budget, where a heap would be owed past it.
 //
 // # Two floors, one pin (ADR-0057)
 //
@@ -702,8 +705,11 @@ func New(ctx context.Context, o Options) (*Pool, error) {
 		read:        newLane(ClassRead, cpuSlots),
 		maint:       newLane(ClassMaintenance, (cpuSlots+1)/2),
 		// THE TRANSFER LANE GRANTS BY SHARE (share.go), on the pool's own
-		// clock, recording each class's standing into the pool's recorder.
-		transfer:   newShareLane(transferSlots, newShareBook(time.Now, o.Metrics)),
+		// clock, charging a held slot the share of a core it stands for on
+		// the shape just resolved — the cores over the slots, at most one
+		// (occupancyRate) — and recording each class's standing into the
+		// pool's recorder.
+		transfer:   newShareLane(transferSlots, newShareBook(time.Now, occupancyRate(cpuSlots, transferSlots), o.Metrics)),
 		slotWait:   SlotWait,
 		killGrace:  KillGrace,
 		captureMax: CaptureMax,

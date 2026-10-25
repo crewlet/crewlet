@@ -1453,12 +1453,20 @@ first on a tie. A pipeline that pushes acts as the human seat the directory
 binds it to — one nobody else holds — so it is a `person`, but one principal
 among the people, and the one that spent most goes last: its burst still
 waits behind everyone who has asked less lately. A run is charged the greater
-of the CPU its git spent and the time it held its slot at a quarter of a core
-a second, so a slow clone holding a slot for an hour is charged for the hour,
-and a storm of short, CPU-heavy fetches for the CPU; what a principal has
-spent fades over **a minute** (a burst still counts while it lasts, and a
-twentieth of it is left three minutes on), so a person's clone this morning
-does not slow their fetch now.
+of the CPU its git spent and the time it held its slot, each second of a slot
+counted as the share of a core that slot stands for: the node's cores divided
+among its transfer slots — a quarter of a core at four slots a core, a
+sixteenth where `git.max_transfers` gives sixteen a core — and never more than
+a whole core, which is what a slot stands for wherever memory or
+`git.max_transfers` leaves the node fewer slots than cores, since one
+transfer's git runs on one core. So a slow clone holding a slot for an hour is
+charged for the hour, a storm of short, CPU-heavy fetches for the CPU, and on
+a node with fewer slots than cores — 32 cores whose 8 GiB back 16 slots —
+where slots rather than cores are what runs out, two credentials holding the
+same slots as long are charged alike however fast their clients read. What a
+principal has spent fades over **a minute** (a burst still counts while it
+lasts, and a twentieth of it is left three minutes on), so a person's clone
+this morning does not slow their fetch now.
 
 The share decides only **who goes next**. A slot is never left free while
 anybody waits, so a class alone — a CI system on a quiet node — has every
@@ -1500,9 +1508,10 @@ the clones beside it, which no order of granting changes. Granted in arrival
 order instead, the same clone took 1.19 s at the median and 1.54 s at the
 99th percentile, 1.46 s of it waiting behind the sixty-four. The CI token
 alone ran 56 clones a second with the share and 55 without it. A person whose
-own burst of sixty-four clones was a minute old waited 203 ms at the 99th
-percentile behind the token's sixty-four, and three minutes old 71 ms, about
-as someone who had spent nothing does.
+own burst of sixty-four clones was a minute old waited 187 ms at the 99th
+percentile behind the token's sixty-four, and three minutes old 67 ms, about
+as someone who had spent nothing does — on that lane, as wide as its cores,
+each second a slot is held is charged a whole core.
 
 ---
 

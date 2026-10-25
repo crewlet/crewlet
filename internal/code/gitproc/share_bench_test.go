@@ -49,7 +49,9 @@ import (
 // every running clone would be slowed fourfold by the others whichever was
 // granted first — a cost no grant order changes, while the lane four a core
 // is sized for clients that pace their transfers themselves. At one a core
-// the slots, and nothing else, are what a clone waits for.
+// the slots, and nothing else, are what a clone waits for, and a held slot is
+// charged a whole core a second (occupancyRate), as on every lane no wider
+// than its cores.
 //
 // Reported per arm: the person's clone p50 and p99 and the wait for its slot
 // p99, in milliseconds (clone-p50-ms, clone-p99-ms, wait-p99-ms); busy, the

@@ -17,7 +17,10 @@ import (
 )
 
 // THE TRANSFER LANE'S FAIR SHARE (share.go), driven on a clock of each case's
-// own through gitproc.NewShareLane: arrivals, settles and leaves, no git.
+// own through gitproc.NewShareLane — a lane of the shape the case names, its
+// cores and its slots — or, where what New makes of a node is the subject,
+// through the pool's own lane (gitproc.TransferLane): arrivals, settles and
+// leaves, no git.
 
 // fakeClock is a clock a case moves by hand.
 type fakeClock struct {
@@ -49,12 +52,16 @@ func personShare(who string) gitproc.Share {
 	return gitproc.Share{Class: gitproc.SharePerson, Principal: who}
 }
 
-// occupied is what a slot held for d accrues, decayed to its end: a quarter
-// of a core a second, each second's share decayed over ShareWindow by the
+// quarter is what a held slot is charged a second, in core-seconds, on a lane
+// of the default shape, TransfersPerProcess slots a core: a quarter of a core.
+const quarter = 1.0 / gitproc.TransfersPerProcess
+
+// occupied is what a slot held for d accrues at rate core-seconds a second,
+// decayed to its end: each second's charge decayed over ShareWindow by the
 // time d ends.
-func occupied(d time.Duration) float64 {
+func occupied(rate float64, d time.Duration) float64 {
 	w := gitproc.ShareWindow.Seconds()
-	return w / gitproc.TransfersPerProcess * (1 - math.Exp(-d.Seconds()/w))
+	return rate * w * (1 - math.Exp(-d.Seconds()/w))
 }
 
 // decayed is a charge after d of decay.
@@ -75,7 +82,7 @@ func near(a, b, tol float64) bool { return math.Abs(a-b) <= tol }
 func TestAContendedTransferLaneSharesByClass(t *testing.T) {
 	t.Parallel()
 	clk := newFakeClock()
-	lane := gitproc.NewShareLane(4, clk.now)
+	lane := gitproc.NewShareLane(1, 4, clk.now)
 	machine := machineShare("ci")
 	principals := []gitproc.Share{machine}
 	for i := range 8 {
@@ -135,7 +142,7 @@ func TestAContendedTransferLaneSharesByClass(t *testing.T) {
 func TestAClassAloneTakesTheWholeLane(t *testing.T) {
 	t.Parallel()
 	clk := newFakeClock()
-	lane := gitproc.NewShareLane(4, clk.now)
+	lane := gitproc.NewShareLane(1, 4, clk.now)
 	ci := machineShare("ci")
 	turns := make([]*gitproc.Turn, 64)
 	for i := range turns {
@@ -178,7 +185,7 @@ func TestAClassAloneTakesTheWholeLane(t *testing.T) {
 func TestWithinAClassThePrincipalThatSpentLeastGoesFirst(t *testing.T) {
 	t.Parallel()
 	clk := newFakeClock()
-	lane := gitproc.NewShareLane(1, clk.now)
+	lane := gitproc.NewShareLane(1, 1, clk.now)
 	spent, fresh := machineShare("spent"), machineShare("fresh")
 	lane.Arrive(spent).Settle(30 * time.Second)
 	if got, ok := lane.Charge(spent); !ok || got != 30 {
@@ -192,7 +199,7 @@ func TestWithinAClassThePrincipalThatSpentLeastGoesFirst(t *testing.T) {
 			"want the one that spent none, though it arrived second", first.Granted(), second.Granted())
 	}
 
-	tied := gitproc.NewShareLane(1, clk.now)
+	tied := gitproc.NewShareLane(1, 1, clk.now)
 	holder = tied.Arrive(personShare("holder"))
 	first, second = tied.Arrive(machineShare("one")), tied.Arrive(machineShare("two"))
 	holder.Settle(0)
@@ -213,7 +220,7 @@ func TestWithinAClassThePrincipalThatSpentLeastGoesFirst(t *testing.T) {
 func TestARunGrantedFromTheQueueIsChargedToItsPrincipal(t *testing.T) {
 	t.Parallel()
 	clk := newFakeClock()
-	lane := gitproc.NewShareLane(1, clk.now)
+	lane := gitproc.NewShareLane(1, 1, clk.now)
 	holder := lane.Arrive(personShare("holder"))
 	fresh := personShare("fresh")
 	queued := lane.Arrive(fresh)
@@ -221,9 +228,10 @@ func TestARunGrantedFromTheQueueIsChargedToItsPrincipal(t *testing.T) {
 	if !queued.Granted() {
 		t.Fatal("a settle with one waiter granted it nothing")
 	}
+	// A lane of one slot over one core: a held slot is a whole core a second.
 	clk.advance(4 * time.Second)
 	queued.Settle(10 * time.Second)
-	if got, want := chargeOf(t, lane, fresh), occupied(4*time.Second)+(10-1); !near(got, want, 1e-9) {
+	if got, want := chargeOf(t, lane, fresh), occupied(1, 4*time.Second)+(10-4); !near(got, want, 1e-9) {
 		t.Fatalf("a fresh principal granted from the queue, run 4 s on 10 s of CPU, stands at %v, want %v", got, want)
 	}
 	// A WINDOW ON — the sweep's turn — the class reads what its accounts do:
@@ -247,13 +255,13 @@ func TestARunGrantedFromTheQueueIsChargedToItsPrincipal(t *testing.T) {
 func TestAChargeIsTheGreaterOfCPUAndOccupancy(t *testing.T) {
 	t.Parallel()
 	clk := newFakeClock()
-	lane := gitproc.NewShareLane(4, clk.now)
+	lane := gitproc.NewShareLane(1, 4, clk.now)
 
 	slow := machineShare("slow")
 	turn := lane.Arrive(slow)
 	clk.advance(40 * time.Second)
 	turn.Settle(100 * time.Millisecond)
-	if got, want := chargeOf(t, lane, slow), occupied(40*time.Second); !near(got, want, 1e-9) {
+	if got, want := chargeOf(t, lane, slow), occupied(quarter, 40*time.Second); !near(got, want, 1e-9) {
 		t.Errorf("a run holding its slot 40 s on 0.1 s of CPU stands at %v, want its ten core-seconds of "+
 			"occupancy as they accrued: %v", got, want)
 	}
@@ -262,7 +270,7 @@ func TestAChargeIsTheGreaterOfCPUAndOccupancy(t *testing.T) {
 	turn = lane.Arrive(busy)
 	clk.advance(2 * time.Second)
 	turn.Settle(30 * time.Second)
-	if got, want := chargeOf(t, lane, busy), occupied(2*time.Second)+(30-0.5); !near(got, want, 1e-9) {
+	if got, want := chargeOf(t, lane, busy), occupied(quarter, 2*time.Second)+(30-0.5); !near(got, want, 1e-9) {
 		t.Errorf("a run holding its slot 2 s on 30 s of CPU stands at %v, want its half core-second of "+
 			"occupancy as it accrued and the CPU past it: %v", got, want)
 	}
@@ -278,9 +286,127 @@ func TestAChargeIsTheGreaterOfCPUAndOccupancy(t *testing.T) {
 	a.Settle(time.Second)
 	clk.advance(15 * time.Second)
 	b.Settle(20 * time.Second)
-	want := decayed(occupied(25*time.Second), 15*time.Second) + occupied(30*time.Second) + (20 - 7.5)
+	want := decayed(occupied(quarter, 25*time.Second), 15*time.Second) + occupied(quarter, 30*time.Second) + (20 - 7.5)
 	if got := chargeOf(t, lane, both); !near(got, want, 1e-9) {
 		t.Errorf("two overlapping runs stand at %v, want %v: the greater of CPU and occupancy each", got, want)
+	}
+}
+
+// A HELD SLOT IS CHARGED THE SHARE OF A CORE IT STANDS FOR, as New sized the
+// lane: the node's cores over its transfer slots, and never more than one,
+// since a transfer's git runs on one thread. A quarter of a core at the
+// default four a core; a whole core where the lane is narrower than the
+// cores — 32 cores whose 8 GiB back 16 slots, or an operator's two slots on
+// four cores; a half at two a core; and a sixteenth on four cores an
+// operator widened to 64.
+//
+// Mutations: the rate a constant quarter of a core — every row but the first
+// red; the cap at one core dropped — the two narrowed rows red.
+func TestAHeldSlotIsChargedTheShareOfACoreItStandsFor(t *testing.T) {
+	t.Parallel()
+	const plenty = 1 << 40
+	for _, tc := range []struct {
+		name  string
+		o     gitproc.Options
+		slots int
+		rate  float64
+	}{
+		{"four a core", gitproc.Options{MaxProcesses: 4, Memory: plenty}, 16, quarter},
+		{"narrowed by its memory", gitproc.Options{MaxProcesses: 32, Memory: 8 << 30}, 16, 1},
+		{"narrowed by its operator", gitproc.Options{MaxProcesses: 4, MaxTransfers: 2, Memory: plenty}, 2, 1},
+		{"two a core", gitproc.Options{MaxProcesses: 8, MaxTransfers: 16, Memory: plenty}, 16, 0.5},
+		{"widened by its operator", gitproc.Options{MaxProcesses: 4, MaxTransfers: 64, Memory: plenty}, 64, 1.0 / 16},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			p := fakePool(t, "exit 0", tc.o)
+			if got := p.Slots(gitproc.ClassTransfer); got != tc.slots {
+				t.Fatalf("%+v sized the transfer lane at %d slots, want %d", tc.o, got, tc.slots)
+			}
+			clk := newFakeClock()
+			gitproc.SetShareClock(p, clk.now)
+			lane := gitproc.TransferLane(p)
+			holder := machineShare("token:holder")
+			turn := lane.Arrive(holder)
+			clk.advance(40 * time.Second)
+			if got, want := chargeOf(t, lane, holder), occupied(tc.rate, 40*time.Second); !near(got, want, 1e-9) {
+				t.Errorf("a slot of a lane of %d over %d cores held 40 s stands at %v, want %v: %v core-seconds a second",
+					tc.slots, tc.o.MaxProcesses, got, want, tc.rate)
+			}
+			turn.Settle(0)
+		})
+	}
+}
+
+// SLOTS HELD ALIKE ARE CHARGED ALIKE WHERE SLOTS ARE WHAT RUNS OUT: on 32
+// cores whose 8 GiB back 16 slots, two cores' worth each, one credential's
+// four clones paced by slow links (no CPU) and another's four reading as fast
+// as one thread serves them (a core each) hold four slots each for a minute,
+// and stand equal — so when both wait, arrival order decides between them, as
+// it does between any two who spent the same. Where the cores run out first —
+// the default four a core — the fast one is charged its CPU, above the slow
+// one's slot-time.
+//
+// Mutation: the rate a constant quarter of a core — on 32 cores the slow
+// credential stands at 38 core-seconds to the fast one's 218, and would be
+// granted ahead of it though it asked second — red.
+func TestSlotsHeldAlikeAreChargedAlikeWhereSlotsRunOut(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		o     gitproc.Options
+		alike bool
+	}{
+		{"narrowed by its memory", gitproc.Options{MaxProcesses: 32, Memory: 8 << 30}, true},
+		{"four a core", gitproc.Options{MaxProcesses: 4, Memory: 1 << 40}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			p := fakePool(t, "exit 0", tc.o)
+			clk := newFakeClock()
+			gitproc.SetShareClock(p, clk.now)
+			lane := gitproc.TransferLane(p)
+			slots := p.Slots(gitproc.ClassTransfer)
+			slow, fast := machineShare("token:slow"), machineShare("token:fast")
+			var held []*gitproc.Turn
+			for range slots - 8 {
+				held = append(held, lane.Arrive(machineShare("token:holder")))
+			}
+			var slowTurns, fastTurns []*gitproc.Turn
+			for range 4 {
+				slowTurns, fastTurns = append(slowTurns, lane.Arrive(slow)), append(fastTurns, lane.Arrive(fast))
+			}
+			clk.advance(time.Minute)
+			for i := range 4 {
+				slowTurns[i].Settle(0)
+				fastTurns[i].Settle(time.Minute)
+			}
+			slowAt, fastAt := chargeOf(t, lane, slow), chargeOf(t, lane, fast)
+			if tc.alike {
+				if !near(slowAt, fastAt, 1e-9) {
+					t.Fatalf("four slots held a minute stand at %v by slow clients and %v by fast ones, want equal",
+						slowAt, fastAt)
+				}
+			} else {
+				want := 4*occupied(quarter, time.Minute) + 4*(60-60*quarter)
+				if !near(fastAt, want, 1e-9) || fastAt <= slowAt {
+					t.Fatalf("on a lane of four a core the fast credential stands at %v and the slow one at %v, "+
+						"want the fast one charged its CPU: %v", fastAt, slowAt, want)
+				}
+				return
+			}
+			// THE LANE FULL AGAIN, the fast credential asking first: a tie,
+			// and the older waiter goes first.
+			for range 8 {
+				held = append(held, lane.Arrive(machineShare("token:filler")))
+			}
+			first, second := lane.Arrive(fast), lane.Arrive(slow)
+			held[0].Settle(0)
+			if !first.Granted() || second.Granted() {
+				t.Fatalf("with the two standing equal, the first to ask was granted %v and the second %v: want "+
+					"arrival order", first.Granted(), second.Granted())
+			}
+		})
 	}
 }
 
@@ -303,7 +429,7 @@ func chargeOf(t *testing.T, lane *gitproc.ShareLane, s gitproc.Share) float64 {
 func TestARunningTransferAccruesWhileItRuns(t *testing.T) {
 	t.Parallel()
 	clk := newFakeClock()
-	lane := gitproc.NewShareLane(4, clk.now)
+	lane := gitproc.NewShareLane(1, 4, clk.now)
 	hog := machineShare("hog")
 	var turns []*gitproc.Turn
 	for range 4 {
@@ -311,7 +437,7 @@ func TestARunningTransferAccruesWhileItRuns(t *testing.T) {
 	}
 	later, fresh := lane.Arrive(hog), lane.Arrive(machineShare("fresh"))
 	clk.advance(9*time.Minute + 30*time.Second)
-	want := 4 * occupied(9*time.Minute+30*time.Second)
+	want := 4 * occupied(quarter, 9*time.Minute+30*time.Second)
 	if got := chargeOf(t, lane, hog); !near(got, want, 1e-9) || got < 59 {
 		t.Fatalf("a principal holding every slot for 570 s stands at %v, want %v", got, want)
 	}
@@ -330,7 +456,7 @@ func TestARunningTransferAccruesWhileItRuns(t *testing.T) {
 func TestAChargeDecaysOverTheWindow(t *testing.T) {
 	t.Parallel()
 	clk := newFakeClock()
-	lane := gitproc.NewShareLane(1, clk.now)
+	lane := gitproc.NewShareLane(1, 1, clk.now)
 	burst := machineShare("burst")
 	lane.Arrive(burst).Settle(time.Minute)
 	if got := chargeOf(t, lane, burst); got != 60 {
@@ -373,7 +499,7 @@ func TestTheInvariantHoldsUnderTheShare(t *testing.T) {
 		t.Parallel()
 		const size = 3
 		clk := newFakeClock()
-		lane := gitproc.NewShareLane(size, clk.now)
+		lane := gitproc.NewShareLane(1, size, clk.now)
 		rng := rand.New(rand.NewPCG(1, 2))
 		var principals []gitproc.Share
 		for i := range 6 {
@@ -425,7 +551,7 @@ func TestTheInvariantHoldsUnderTheShare(t *testing.T) {
 	})
 	t.Run("contexts", func(t *testing.T) {
 		t.Parallel()
-		lane := gitproc.NewShareLane(2, time.Now)
+		lane := gitproc.NewShareLane(1, 2, time.Now)
 		var wg sync.WaitGroup
 		for i := range 200 {
 			wg.Go(func() {
@@ -548,7 +674,7 @@ func TestTheShareIsRecordedByClass(t *testing.T) {
 func BenchmarkTransferGrant(b *testing.B) {
 	const principals, waiters = 1_000, 10_000
 	clk := newFakeClock()
-	lane := gitproc.NewShareLane(1, clk.now)
+	lane := gitproc.NewShareLane(1, 1, clk.now)
 	shares := make([]gitproc.Share, principals)
 	for i := range shares {
 		shares[i] = machineShare(fmt.Sprintf("m%04d", i))

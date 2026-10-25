@@ -44,10 +44,17 @@ func SetShareClock(p *Pool, now func() time.Time) {
 // process and no goroutine.
 type ShareLane struct{ l *lane }
 
-// NewShareLane is a share lane of size slots on the clock now.
-func NewShareLane(size int, now func() time.Time) *ShareLane {
-	return &ShareLane{l: newShareLane(int64(size), newShareBook(now, nil))}
+// NewShareLane is a share lane of slots on a node of cores read slots, on the
+// clock now: charged as New charges a lane of that shape (occupancyRate).
+func NewShareLane(cores, slots int, now func() time.Time) *ShareLane {
+	book := newShareBook(now, occupancyRate(int64(cores), int64(slots)), nil)
+	return &ShareLane{l: newShareLane(int64(slots), book)}
 }
+
+// TransferLane is p's own transfer lane — as New sized it and charges it —
+// driven as a ShareLane, with no git process. Move its clock with
+// SetShareClock first.
+func TransferLane(p *Pool) *ShareLane { return &ShareLane{l: p.transfer} }
 
 // Turn is one arrival at a ShareLane: granted at once, or queued until a
 // settle hands it a slot.
@@ -113,7 +120,7 @@ func (s *ShareLane) Counts() (held, waiting int64) {
 func (s *ShareLane) Usage(c ShareClass) float64 {
 	s.l.mu.Lock()
 	defer s.l.mu.Unlock()
-	return s.l.book.classes[c].value(s.l.book.now())
+	return s.l.book.classes[c].value(s.l.book.now(), s.l.book.occupancy)
 }
 
 // Charge is sh's standing now, and false when the book has forgotten it.
@@ -124,7 +131,7 @@ func (s *ShareLane) Charge(sh Share) (float64, bool) {
 	if a == nil {
 		return 0, false
 	}
-	return a.value(s.l.book.now()), true
+	return a.value(s.l.book.now(), s.l.book.occupancy), true
 }
 
 // Principals is how many accounts the book holds.

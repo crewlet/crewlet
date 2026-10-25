@@ -1184,9 +1184,13 @@ func Catalogue() []Instrument {
 			Attributes: []string{"share"},
 			Shows: "What each `share` of this node's transfer lane has spent " +
 				"lately, as the scheduler reads it: core-seconds, every run " +
-				"charged the greater of the CPU it spent and a quarter of a " +
-				"core for the time it held its slot, decayed over a minute — " +
-				"the figure the next contended slot is granted by. Set at each " +
+				"charged the greater of the CPU it spent and the time it held " +
+				"its slot at the share of a core one slot stands for — the " +
+				"node's cores over its transfer slots, never more than one: a " +
+				"quarter at four slots a core, a whole core where memory or " +
+				"`git.max_transfers` leaves fewer slots than cores — decayed " +
+				"over a minute, the figure the next contended slot is granted " +
+				"by. Set at each " +
 				"admission and release, so a lane idle since holds its last " +
 				"reading. One class's reading far above its weight's share of " +
 				"the total while the other's waits are short is a class alone " +

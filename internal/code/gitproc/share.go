@@ -27,15 +27,17 @@ import (
 // # Charged by what a transfer spends, and only while it matters
 //
 // A run costs the GREATER of the CPU its process tree spent ([Result.CPU]) and
-// its OCCUPANCY, the slot-time it held at a quarter of a core a slot
-// ([TransfersPerProcess]): CPU alone would charge nothing to a slow client
-// holding a slot for an hour, occupancy alone would charge a lazy-fetch storm
-// of short, CPU-heavy upload-packs a fraction of what it burns. Occupancy
-// ACCRUES while the run holds its slot, so a principal holding every slot with
-// hour-long clones never reads as idle; what CPU spends past the occupancy is
-// charged when the run ends, the only moment it is known. Every charge DECAYS
-// over [ShareWindow], so a burst counts against its credential while it lasts
-// and is forgotten minutes after.
+// its OCCUPANCY, the slot-time it held at the share of a core one slot stands
+// for on the lane's own shape (occupancyRate: a quarter of a core at the
+// default four a core, a whole core on a lane narrower than the cores): CPU
+// alone would charge nothing to a slow client holding a slot for an hour,
+// occupancy alone would charge a lazy-fetch storm of short, CPU-heavy
+// upload-packs a fraction of what it burns. Occupancy ACCRUES while the run
+// holds its slot, so a principal holding every slot with hour-long clones
+// never reads as idle; what CPU spends past the occupancy is charged when the
+// run ends, the only moment it is known. Every charge DECAYS over
+// [ShareWindow], so a burst counts against its credential while it lasts and
+// is forgotten minutes after.
 //
 // # What it never does
 //
@@ -141,9 +143,10 @@ func (s Share) Valid() bool {
 // lasts, and gone within a few minutes (e^-3, 5 %, of a charge is left after
 // three), so a person's clone this morning does not slow their fetch now.
 // BenchmarkTransferShare's decay arms measure it (one count of twenty clones
-// an arm): a person whose own burst of sixty-four clones is a minute old
-// waits 203 ms at the p99 behind a CI token's sixty-four, and three minutes
-// old 71 ms, about as one who spent nothing does (60 ms).
+// an arm, on its lane as wide as the cores, where a held slot is charged a
+// core a second): a person whose own burst of sixty-four clones is a minute
+// old waits 187 ms at the p99 behind a CI token's sixty-four, and three
+// minutes old 67 ms, about as one who spent nothing does (60 ms).
 const ShareWindow = time.Minute
 
 // shareForget is the decayed charge, in core-seconds, below which an account
@@ -154,43 +157,81 @@ const ShareWindow = time.Minute
 const shareForget = 0.001
 
 // occupancyRate is what a held transfer slot is charged a second, in
-// core-seconds: a quarter of a core, the share of one TransfersPerProcess
-// gives each of a core's transfers.
-const occupancyRate = 1.0 / TransfersPerProcess
+// core-seconds, on a pool of cores READ slots — the node's cores, as the pool
+// counts them — and slots TRANSFER slots: the share of a core one slot stands
+// for, cores over slots, and never more than one. New derives it where it
+// sizes the lane; the book holds it for the lane's life.
+//
+// # A charge is a principal's dominant share, in core-seconds
+//
+// A run holds two things the lane runs short of: a SLOT, which is memory
+// (TransferShare backs each), and the CPU its git spends. The charge is the
+// greater of the two, each counted against what the lane has of it — so a
+// slot-second is worth what one slot is of the cores the lane's transfers run
+// on. Those are the node's cores, every slot sharing them: a quarter of a core
+// a slot at the default four a core (TransfersPerProcess), where a lane of
+// fast clients runs out of cores before slots, so a CPU-heavy storm pays up to
+// four times what a client its link paces pays for the same slot-time. But
+// never more than one core a slot, because a transfer's git runs on one
+// thread (pack.threads=1 in the base; a receive-pack's lent threads are the
+// READ lane's cores, and charged as the CPU they spend): a lane narrower than
+// the cores can use no more cores than it has slots. On such a lane — 32 cores
+// whose 8 GiB back 16 slots, or a git.max_transfers below the cores — a held
+// slot is charged a whole core a second, which the CPU a transfer spends on
+// its one thread does not pass, so two principals holding the same slots as
+// long are charged alike however fast their clients read: slots are what that
+// node runs out of. A lane an operator widened past four a core charges each
+// slot less — a sixteenth at sixteen a core — since its slots are cheaper
+// than its cores.
+//
+// NEVER A CONSTANT. A quarter of a core on every shape — the slot's share at
+// the default — charges the 32-core node's slow credential, four slots held a
+// minute by clients its links pace, 38 core-seconds (decayed) where a fast
+// one holding the same four slots as long pays 218
+// (TestSlotsHeldAlikeAreChargedAlikeWhereSlotsRunOut), so the slow one is
+// granted ahead at every contended release though both held the same share
+// of what that node is short of — the skew the occupancy charge exists to
+// prevent; and on a lane widened to sixteen a core it reads slot-time at four
+// times what a slot there stands for.
+func occupancyRate(cores, slots int64) float64 {
+	return min(float64(cores)/float64(slots), 1)
+}
 
 // windowSeconds is ShareWindow as the decay's arithmetic reads it.
 var windowSeconds = ShareWindow.Seconds()
 
 // standing is a decayed charge in core-seconds, as of at, and the runs
-// accruing occupancy into it.
+// accruing occupancy into it, each at the book's occupancy rate.
 //
 // EXACT AT EVERY INSTANT, whatever the decisions in between: a run accrues
-// occupancyRate a second continuously, so its contribution over dt is the
-// decayed integral occupancyRate·W·(1−e^(−dt/W)) rather than occupancyRate·dt
-// added at the next decision — added that way, a principal's reading would
-// depend on how often others happened to arrive, and one holding every slot
-// for ten quiet minutes would read ten minutes undecayed at once.
+// rate core-seconds a second continuously, so its contribution over dt is the
+// decayed integral rate·W·(1−e^(−dt/W)) rather than rate·dt added at the next
+// decision — added that way, a principal's reading would depend on how often
+// others happened to arrive, and one holding every slot for ten quiet minutes
+// would read ten minutes undecayed at once.
 type standing struct {
 	charged float64
 	at      time.Time
 	running int
 }
 
-// value is the standing as of t, its running runs' accrual included; a t
-// before at (a clock that stepped back) reads it as of at.
-func (s *standing) value(t time.Time) float64 {
+// value is the standing as of t, each running run's accrual at rate
+// core-seconds a second included; a t before at (a clock that stepped back)
+// reads it as of at.
+func (s *standing) value(t time.Time, rate float64) float64 {
 	dt := t.Sub(s.at).Seconds()
 	if dt <= 0 {
 		return s.charged
 	}
 	keep := math.Exp(-dt / windowSeconds)
-	return s.charged*keep + float64(s.running)*occupancyRate*windowSeconds*(1-keep)
+	return s.charged*keep + float64(s.running)*rate*windowSeconds*(1-keep)
 }
 
-// bring moves the standing to t, folding its accrual into its charge.
-func (s *standing) bring(t time.Time) {
+// bring moves the standing to t, folding its runs' accrual at rate into its
+// charge.
+func (s *standing) bring(t time.Time, rate float64) {
 	if t.After(s.at) {
-		s.charged = s.value(t)
+		s.charged = s.value(t, rate)
 		s.at = t
 	}
 }
@@ -220,18 +261,23 @@ type run struct {
 // written under the lane's mutex. Nil on the other lanes, which grant in
 // arrival order.
 type shareBook struct {
-	now     func() time.Time
-	byKey   map[Share]*account
-	classes map[ShareClass]*classBook
-	swept   time.Time // the last forgetting pass
-	seq     uint64    // arrivals so far: a waiter's place in arrival order
-	metrics *metrics.Recorder
+	now       func() time.Time
+	occupancy float64 // what a held slot is charged a second (occupancyRate)
+	byKey     map[Share]*account
+	classes   map[ShareClass]*classBook
+	swept     time.Time // the last forgetting pass
+	seq       uint64    // arrivals so far: a waiter's place in arrival order
+	metrics   *metrics.Recorder
 }
 
-// newShareBook is an empty book on the clock now, reporting each class's
-// standing into rec (nil: nowhere).
-func newShareBook(now func() time.Time, rec *metrics.Recorder) *shareBook {
-	b := &shareBook{now: now, byKey: map[Share]*account{}, classes: map[ShareClass]*classBook{}, metrics: rec}
+// newShareBook is an empty book on the clock now, charging a held slot
+// occupancy core-seconds a second (occupancyRate of the lane's shape) and
+// reporting each class's standing into rec (nil: nowhere).
+func newShareBook(now func() time.Time, occupancy float64, rec *metrics.Recorder) *shareBook {
+	b := &shareBook{
+		now: now, occupancy: occupancy,
+		byKey: map[Share]*account{}, classes: map[ShareClass]*classBook{}, metrics: rec,
+	}
 	for _, c := range ShareClasses() {
 		b.classes[c] = &classBook{waiting: map[*account]struct{}{}}
 	}
@@ -253,8 +299,8 @@ func (b *shareBook) account(s Share, t time.Time) *account {
 // class.
 func (b *shareBook) start(a *account, t time.Time) *run {
 	c := b.classes[a.key.Class]
-	a.bring(t)
-	c.bring(t)
+	a.bring(t, b.occupancy)
+	c.bring(t, b.occupancy)
 	a.running++
 	c.running++
 	return &run{acct: a, since: t}
@@ -266,11 +312,11 @@ func (b *shareBook) start(a *account, t time.Time) *run {
 func (b *shareBook) settle(r *run, cpu time.Duration, t time.Time) {
 	a := r.acct
 	c := b.classes[a.key.Class]
-	a.bring(t)
-	c.bring(t)
+	a.bring(t, b.occupancy)
+	c.bring(t, b.occupancy)
 	a.running--
 	c.running--
-	occupied := max(t.Sub(r.since).Seconds(), 0) * occupancyRate
+	occupied := max(t.Sub(r.since).Seconds(), 0) * b.occupancy
 	if past := cpu.Seconds() - occupied; past > 0 {
 		a.charged += past
 		c.charged += past
@@ -340,7 +386,7 @@ func (b *shareBook) next(t time.Time) *waiter {
 		if len(c.waiting) == 0 {
 			continue
 		}
-		s := c.value(t) / float64(cls.Weight())
+		s := c.value(t, b.occupancy) / float64(cls.Weight())
 		switch {
 		case pick == nil || s < score:
 			pick, score, pickHead = c, s, 0
@@ -361,7 +407,7 @@ func (b *shareBook) next(t time.Time) *waiter {
 		least float64
 	)
 	for a := range pick.waiting {
-		v := a.value(t)
+		v := a.value(t, b.occupancy)
 		if who == nil || v < least || (v == least && head(a).seq < head(who).seq) {
 			who, least = a, v
 		}
@@ -390,13 +436,13 @@ func (b *shareBook) forgetIdle(a *account, t time.Time) {
 	if a.running > 0 || a.waiters.Len() > 0 {
 		return
 	}
-	v := a.value(t)
+	v := a.value(t, b.occupancy)
 	if v >= shareForget {
 		return
 	}
 	delete(b.byKey, a.key)
 	c := b.classes[a.key.Class]
-	c.bring(t)
+	c.bring(t, b.occupancy)
 	c.charged = max(c.charged-v, 0)
 }
 
@@ -418,7 +464,7 @@ func (b *shareBook) sweep(t time.Time) {
 		if b.byKey[a.key] == nil {
 			continue
 		}
-		a.bring(t)
+		a.bring(t, b.occupancy)
 		s := sums[a.key.Class]
 		s.charged += a.charged
 		s.running += a.running
@@ -437,6 +483,6 @@ func (b *shareBook) report(t time.Time) {
 		return
 	}
 	for _, cls := range ShareClasses() {
-		b.metrics.Set(metrics.CodeGitShare, b.classes[cls].value(t), metrics.Attrs{"share": string(cls)})
+		b.metrics.Set(metrics.CodeGitShare, b.classes[cls].value(t, b.occupancy), metrics.Attrs{"share": string(cls)})
 	}
 }
