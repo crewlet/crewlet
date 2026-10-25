@@ -268,6 +268,39 @@ func (l *lagging) Complete(ctx context.Context, req llm.Request) (*llm.Completio
 	return comp, err
 }
 
+// A SUSPEND IS REFUSED WHERE IT CANNOT BE RESUMED. Honouring it in a phase that
+// never persists a partial conversation strands the turn with a call nothing
+// will ever answer, so the model is answered a refusal — and the record says
+// exactly what the CLI was told, failed, so the two never disagree about it.
+func TestASuspendIsRefusedWhereItCannotBeResumed(t *testing.T) {
+	t.Parallel()
+	surf := newSurface("run_sandbox")
+	surf.detached["run_sandbox"] = true
+	surf.results["run_sandbox"] = toolloop.ToolResult{Output: "launched", Suspend: true}
+	prov := script(runOf(
+		llmtest.Response{Calls: []llmtest.Call{{ID: "call-1", Name: "run_sandbox"}}},
+		says("understood"),
+	))
+	res, err := run(t, toolloop.Config{Provider: prov, Surface: surf, AllowSuspend: false})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Suspended {
+		t.Fatal("a phase that cannot resume was allowed to suspend")
+	}
+	got := prov.Results()
+	if len(got) != 1 || !got[0].Failed || !strings.Contains(got[0].Output, "cannot suspend") {
+		t.Fatalf("the CLI was answered %+v, want the refusal", got)
+	}
+	answer, ok := toolResults(res.Messages)["call-1"]
+	if !ok || answer.Content != got[0].Output || !answer.Failed {
+		t.Errorf("the conversation answers the call %+v, want what the CLI was told: %+v", answer, got[0])
+	}
+	if len(res.Executions) != 1 || !res.Executions[0].Failed || res.Executions[0].Output != got[0].Output {
+		t.Errorf("executions = %+v, want the refusal the CLI was told, failed", res.Executions)
+	}
+}
+
 // halting is a backend that, as a fallback chain does, asks the host after its
 // run whether another member may continue it.
 type halting struct {

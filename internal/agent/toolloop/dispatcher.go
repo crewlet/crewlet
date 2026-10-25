@@ -446,7 +446,7 @@ func (d *dispatcher) Call(_ context.Context, in toolsession.Call) toolsession.Re
 	result := make(chan ToolResult, 1)
 	go func() {
 		defer d.unlockGate(exclusive)
-		res := d.execute(c)
+		res := d.honour(d.execute(c))
 		// SETTLED HERE, on the call's own goroutine, whoever is still
 		// waiting for it: a call answered "still running" is recorded when
 		// it returns, and the loop reads it from the record.
@@ -728,6 +728,18 @@ func (d *dispatcher) execute(c *callRec) (res ToolResult) {
 	return out
 }
 
+// honour is a call's result as this phase can take it: a suspend in a phase
+// that never persists a partial conversation cannot be resumed, so it is
+// refused — and the model told so — on the record and the answer alike.
+func (d *dispatcher) honour(res ToolResult) ToolResult {
+	if res.Suspend && !d.cfg.AllowSuspend {
+		res.Suspend = false
+		res.Failed = true
+		res.Output = "This tool cannot suspend in this phase. " + res.Output
+	}
+	return res
+}
+
 // deliver answers the CLI with a call's result — or withholds the answer,
 // when the phase or the run is over.
 func (d *dispatcher) deliver(c *callRec, res ToolResult, r *run, before uint64) toolsession.Result {
@@ -746,7 +758,7 @@ func (d *dispatcher) deliver(c *callRec, res ToolResult, r *run, before uint64) 
 	_, terminator := d.terminators[c.name]
 	switch {
 	case d.state != stateOpen:
-	case res.Suspend && d.cfg.AllowSuspend:
+	case res.Suspend:
 		d.state, d.suspended, d.payload = stateParked, c, res.SuspendPayload
 		d.closeDoneLocked()
 	case terminator && !res.Failed:
@@ -757,13 +769,6 @@ func (d *dispatcher) deliver(c *callRec, res ToolResult, r *run, before uint64) 
 	}
 	d.mu.Unlock()
 	d.frame()
-
-	if res.Suspend && !d.cfg.AllowSuspend {
-		// A phase that never persists a partial conversation cannot resume
-		// one, so the suspend is refused and the model told so.
-		res.Failed = true
-		res.Output = "This tool cannot suspend in this phase. " + res.Output
-	}
 	return d.withheld(r, toolsession.Result{Output: res.Output, Failed: res.Failed})
 }
 
