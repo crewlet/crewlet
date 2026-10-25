@@ -82,6 +82,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/period"
@@ -1276,10 +1277,6 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			OnDelta: onDelta,
 		})
 		took := time.Since(began)
-		if err != nil {
-			tracing.Fail(runSpan, err)
-		}
-		runSpan.End()
 
 		// The run is over, and an end it reached is taken; then EVERY CALL
 		// OF THE RUN HAS SETTLED before anything is read: a call answered
@@ -1317,10 +1314,12 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		outTokens += used.Output
 		cacheRead += used.CacheRead
 		cacheWrite += used.CacheWrite
-		invocations = append(invocations, d.invocation(began, took, completion, err, used))
+		inv := d.invocation(began, took, completion, err, used)
+		invocations = append(invocations, inv)
 		partial = nil
 		st, cutErr := d.current()
 		rec.Unlock()
+		endRunSpan(runSpan, inv, err)
 		publish()
 
 		switch st {
@@ -1423,6 +1422,27 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	out.Withheld = withheld
 	out.CorrectivesSpent = finishingRetries
 	return &out, nil
+}
+
+// endRunSpan closes a CLI run's `llm.run` span with what the run came to.
+//
+// ONCE EVERY CALL OF THE RUN HAS SETTLED, not when the CLI exits: a call's
+// `tool.call` span is a child of the run's, and one answered "still running"
+// goes on after its CLI stopped. The tokens are the run's whole spend — what
+// the CLI reported request by request and what was charged when it ended —
+// because a span that carried only the final answer's count would show a
+// twenty-request run as one request's worth.
+func endRunSpan(span trace.Span, inv Invocation, err error) {
+	span.SetAttributes(
+		attribute.String("crewlet.model", inv.Model),
+		attribute.Int("crewlet.input_tokens", inv.InputTokens),
+		attribute.Int("crewlet.output_tokens", inv.OutputTokens),
+		attribute.Int("crewlet.cache_read_tokens", inv.CacheRead),
+		attribute.Int("crewlet.cache_write_tokens", inv.CacheWrite),
+		attribute.Int("crewlet.tool_calls", inv.Calls),
+		attribute.String("crewlet.outcome", string(inv.Outcome)))
+	tracing.Fail(span, err)
+	span.End()
 }
 
 // streamTo is the OnDelta a run streams its text through, or nil where the

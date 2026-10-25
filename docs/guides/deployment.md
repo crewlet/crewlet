@@ -1752,18 +1752,22 @@ flowchart TD
     B["the wake is published to the seat's inbox<br/><i>trace rides in the event envelope</i>"]
     C["<b>agent.turn</b><br/>the dispatcher restores the trigger's trace"]
     D["<b>agent.turn.onboarding / .execute / .review / .judge</b><br/>one span per phase"]
-    E["<b>llm.round</b><br/>one per model round trip"]
+    E["<b>llm.run</b><br/>one per CLI run, which drives its own requests"]
     F["<b>tool.call</b><br/>one per call, including the refused ones"]
     G["<b>agent.turn.resume</b><br/>a suspended run re-entering, days later"]
     A --> B --> C --> D
     D --> E
-    D --> F
+    E --> F
     C -.->|"suspend, then resume"| G
 ```
 
 **Five span names, and that is the whole set.** `webhook.receive`,
-`agent.turn` (plus `agent.turn.resume`), `agent.turn.<phase>`, `llm.round` and
-`tool.call`, alongside `schedule.fire` for cron-started work.
+`agent.turn` (plus `agent.turn.resume`), `agent.turn.<phase>`, `llm.run` and
+`tool.call`, alongside `schedule.fire` for cron-started work. A phase is one or
+more runs of its CLI, and each run's tool calls are its children: a run's span
+ends once every call it made has settled, and carries the model, the run's
+whole token spend, its call count and how it ended (`crewlet.outcome`: `end`,
+`cap`, `stopped` or `failed`).
 
 Span attributes are deliberately thin: the seat, the phase, the model, the
 round, the tool and its outcome, and token counts. Everything about what a turn
@@ -1771,9 +1775,11 @@ round, the tool and its outcome, and token counts. Everything about what a turn
 decision — is already in the [event store](#the-event-store), and a span
 carries what no event does, which is **duration**.
 
-Only the LLM *round* is spanned, not the fallback chain and each member's
-backend beneath it — that would nest a span per member tried and tell you
-nothing you could act on. Which member answered is on the phase event.
+Only the CLI *run* is spanned — not each request the CLI made inside it, which
+the engine reads from the CLI's own record onto the phase event, and not the
+fallback chain and each member tried beneath it, which would nest a span per
+member and tell you nothing you could act on. Which member answered is on the
+phase event.
 
 **A suspended run is two spans, not one.** A [code sandbox](../concepts/code-sandbox.md)
 run detaches: the phase returns, the process may exit, the seat may move node,
