@@ -848,7 +848,9 @@ type Profile struct {
 	// while a file that cannot be read or is empty logs
 	// `cli_agent_usage_file_unreadable`, and one that does not decode, or in
 	// which usage.input and usage.output do not both resolve, logs
-	// `cli_agent_usage_report_unreadable`.
+	// `cli_agent_usage_report_unreadable` — for a run the CLI did not report
+	// failed: a failed call is charged nothing, and the vendor's report of one
+	// may hold no counts by design.
 	UsageFileArgs []string `yaml:"usage_file_args,omitempty"`
 
 	// SessionArgs name the session one call runs in, with `{session}`
@@ -887,7 +889,7 @@ type Profile struct {
 	// which: `cli_agent_usage_report_failed` for a command that failed or
 	// printed nothing, `cli_agent_usage_report_unreadable` for a report that
 	// does not decode or in which usage.input and usage.output do not both
-	// resolve.
+	// resolve, on a run the CLI did not report failed.
 	UsageArgs []string `yaml:"usage_args,omitempty"`
 
 	// ConfigEnv maps a vendor's own relocation variable to a directory

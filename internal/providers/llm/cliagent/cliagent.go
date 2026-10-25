@@ -630,6 +630,10 @@ func (p *Provider) completion(
 	}
 
 	out := extract(p.profile, res.stdout)
+	// Whether the CLI said the run FAILED — a non-zero exit, or its own flag
+	// at the profile's error_paths. It decides where a marker may stand, and
+	// that the call is refused below rather than answered.
+	failed := res.exitCode != 0 || out.failed
 	// The CLI's own report wins over anything stdout happened to carry:
 	// a profile only names one when its vendor puts the counts nowhere
 	// else, so a hit here is the only real figure there is. A report that
@@ -637,7 +641,14 @@ func (p *Provider) completion(
 	// then fall back to stdout's — an estimate, for a CLI that reports
 	// none there — on every call until somebody notices the budget
 	// figures are made up.
-	if outcome := out.applyUsageReport(p.profile, usageDoc); outcome.unreadable() {
+	//
+	// NOT FOR A RUN THE CLI SAID FAILED, which is refused below and charged
+	// nothing, so no count falls back to anything. A vendor's report of a
+	// failed run may hold no counts by design — Hermes writes them as null
+	// for a refused key or a spent plan (measured on 0.21.5) — and warning
+	// of drift on every such call names the profile as broken exactly when
+	// the operator is reading the log for the refusal.
+	if outcome := out.applyUsageReport(p.profile, usageDoc); outcome.unreadable() && !failed {
 		fallback := "an estimate, four characters a token"
 		if out.reported {
 			fallback = "the counts stdout reported"
@@ -674,8 +685,7 @@ func (p *Provider) completion(
 	// sentinel may stand — see [classifyMarkers].
 	said := nonEmpty(out.text, res.stdout)
 	if hit, ok := classifyMarkers(p.profile, cliOutput{
-		said: said, stdout: res.stdout, stderr: res.stderr,
-		failed: res.exitCode != 0 || out.failed,
+		said: said, stdout: res.stdout, stderr: res.stderr, failed: failed,
 	}); ok {
 		reason := nonEmpty(hit.Said, firstLine(said, res.stderr))
 		if hit.Kind == llm.KindRateLimit {
@@ -705,7 +715,7 @@ func (p *Provider) completion(
 	// NOT BENCHED: only a spent plan sits the entry out ([Provider.bench]),
 	// because only a spent plan is known to last. A failure the next call
 	// may not meet must not hold every seat on the node off a working entry.
-	if res.exitCode != 0 || out.failed {
+	if failed {
 		what := fmt.Sprintf("the %s CLI exited %d", p.agent, res.exitCode)
 		if res.exitCode == 0 {
 			what = fmt.Sprintf("the %s CLI exited 0 and reported that the run failed", p.agent)
