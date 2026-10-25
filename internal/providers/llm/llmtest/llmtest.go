@@ -39,6 +39,11 @@ type Response struct {
 	// Model names the model that answered; empty takes the script's.
 	Model string
 
+	// Trailing is prose the CLI streams for this response AFTER its record
+	// has shown it, as a CLI whose record opens a request before its text
+	// is written does — streamed with the request's id.
+	Trailing string
+
 	// Writing, when set, is called as the model begins this response —
 	// before any of it is streamed, reported or called. A case blocks in it
 	// to look at the host while the request is out, or sleeps in it to give
@@ -140,6 +145,11 @@ type Script struct {
 	// to one of the CLI's own tools included, which then takes as long as
 	// Before does; a case uses it to act between a response and its calls.
 	Before func(name string)
+
+	// NumberedRequests makes the CLI one whose requests are numbered from one
+	// in every run — as a backend numbers the requests of a CLI whose record
+	// carries no id — rather than given ids no other run shares.
+	NumberedRequests bool
 
 	// OnCall, when set, is told what the host tells a backend's
 	// [llm.ServeOptions.OnCall]: when the first call the CLI is waiting on
@@ -355,13 +365,20 @@ func (s *Script) play(ctx context.Context, req llm.Request, run Run, n int) (*ll
 				ID: r.Calls[j].ID, Name: c.Name, Arguments: argsOf(c.Args), Host: !c.Native,
 			})
 		}
+		id := fmt.Sprintf("req-%d-%d", n, i)
+		if s.NumberedRequests {
+			id = fmt.Sprintf("request-%d", i+1)
+		}
 		if !s.Unobserved {
 			uu := u
 			host.Observe(llm.Turn{
-				ID: fmt.Sprintf("req-%d-%d", n, i), Text: r.Text, Calls: calls,
+				ID: id, Text: r.Text, Calls: calls,
 				Model: s.modelOf(r), Usage: &uu,
 			})
 			host.Spent(u)
+		}
+		if r.Trailing != "" {
+			req.Send(llm.Delta{Content: r.Trailing, Request: id})
 		}
 		if len(r.Calls) == 0 {
 			break

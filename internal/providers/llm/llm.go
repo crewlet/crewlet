@@ -254,6 +254,13 @@ type Delta struct {
 	// Model names the backend that is answering now. Set on a Restart, so a
 	// consumer can say which model gave up and which took over.
 	Model string
+
+	// Request is the CLI's id of the model request this text belongs to
+	// ([Turn.ID]), where the backend knows it. A CLI's record can show a
+	// request before its prose is written, so text that arrives after the
+	// host was told of the request is filed under it by this id — read by
+	// arrival instead, it was filed under the request after.
+	Request string
 }
 
 // Send delivers one fragment, and is a no-op when nothing asked to stream or

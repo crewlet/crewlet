@@ -171,3 +171,25 @@ func TestAStreamedResponseNamesAModelBeforeTheRunReturns(t *testing.T) {
 		t.Errorf("model = %q, want the one the answer named", res.Model)
 	}
 }
+
+// TEXT IS FILED UNDER THE REQUEST IT BELONGS TO, not the one after it. A CLI's
+// record can show a request before its prose is written — Claude Code's
+// opens at message_start — so the rest of that prose arrives after the host
+// already counts the request; filed by arrival, it was drawn as the next
+// round, a round the model had not begun.
+func TestTextStreamedAfterItsRequestIsShownStaysOnThatRequest(t *testing.T) {
+	t.Parallel()
+	fr := &frames{}
+	prov := script(runOf(llmtest.Response{Text: "first", Trailing: " and the rest"}))
+	_, err := run(t, toolloop.Config{Provider: prov, Surface: newSurface(), MaxRounds: 3,
+		StreamPartials: true, PartialInterval: time.Nanosecond, OnProgress: fr.on})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, f := range fr.list() {
+		if f.Partial != nil && f.Partial.Round != 1 {
+			t.Errorf("a live frame drew %q as round %d, which the model never began",
+				f.Partial.Content, f.Partial.Round)
+		}
+	}
+}

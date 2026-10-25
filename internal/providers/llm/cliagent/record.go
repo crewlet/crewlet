@@ -247,7 +247,7 @@ func renderFields(doc map[string]any, fields []cliprofile.Path) string {
 // what changed.
 func (r *recordReader) event(doc map[string]any) {
 	r.mu.Lock()
-	var deltas []string
+	var deltas []llm.Delta
 	touched := map[*request]bool{}
 	for _, e := range r.rule.Events {
 		if !matches(doc, e.Match) {
@@ -280,14 +280,14 @@ func (r *recordReader) event(doc map[string]any) {
 		if len(e.Delta) > 0 {
 			if s, ok := stringAt(doc, e.Delta); ok && s != "" {
 				req.streamed.WriteString(s)
-				deltas = append(deltas, s)
+				deltas = append(deltas, llm.Delta{Content: s, Request: req.id})
 			}
 		}
 		if len(e.Text) > 0 {
 			if s, ok := stringAt(doc, e.Text); ok && s != "" {
 				req.text, req.dirty = append(req.text, s), true
 				if !r.streams {
-					deltas = append(deltas, s)
+					deltas = append(deltas, llm.Delta{Content: s, Request: req.id})
 				}
 			}
 		}
@@ -380,7 +380,7 @@ func (r *recordReader) writtenBy(req *request) int {
 
 // blocksLocked reads an event's content blocks into a request, and returns
 // the prose to stream.
-func (r *recordReader) blocksLocked(doc map[string]any, b *cliprofile.Blocks, req *request) []string {
+func (r *recordReader) blocksLocked(doc map[string]any, b *cliprofile.Blocks, req *request) []llm.Delta {
 	v, ok := lookup(doc, b.Path)
 	if !ok {
 		return nil
@@ -389,7 +389,7 @@ func (r *recordReader) blocksLocked(doc map[string]any, b *cliprofile.Blocks, re
 	if !isList {
 		return nil
 	}
-	var deltas []string
+	var deltas []llm.Delta
 	for _, item := range items {
 		block, isObject := item.(map[string]any)
 		if !isObject {
@@ -404,7 +404,7 @@ func (r *recordReader) blocksLocked(doc map[string]any, b *cliprofile.Blocks, re
 				if s, ok := stringAt(block, rule.Text); ok && s != "" {
 					req.text, req.dirty = append(req.text, s), true
 					if !r.streams {
-						deltas = append(deltas, s)
+						deltas = append(deltas, llm.Delta{Content: s, Request: req.id})
 					}
 				}
 			case rule.Call != nil:
@@ -558,9 +558,9 @@ func (r *recordReader) turnOf(req *request) llm.Turn {
 // tell hands the host what one event changed, outside the reader's lock:
 // the host may stop the run over a spend, and that must not wait on a reader
 // that is waiting on it.
-func (r *recordReader) tell(deltas []string, turns []llm.Turn, spends []llm.Usage) {
+func (r *recordReader) tell(deltas []llm.Delta, turns []llm.Turn, spends []llm.Usage) {
 	for _, d := range deltas {
-		r.req.Send(llm.Delta{Content: d})
+		r.req.Send(d)
 	}
 	for _, u := range spends {
 		r.host.Spent(u)

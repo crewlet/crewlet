@@ -804,6 +804,36 @@ func TestARunStopsWaitingOnACallItWasAnsweredStillRunning(t *testing.T) {
 	}
 }
 
+// A REQUEST'S ID NAMES IT WITHIN ITS RUN ONLY: a CLI's ids are its own, unique
+// within one process at most, and a backend that numbers a CLI's requests
+// itself numbers each run's from one. Read across runs, the next run's first
+// request was merged into the last run's, and the phase lost a round.
+func TestARequestOfOneRunIsNeverReadAsAnotherRunsRequest(t *testing.T) {
+	t.Parallel()
+	surf := newSurface("delegate", "post")
+	surf.results["delegate"] = toolloop.ToolResult{Output: "the workers' answer"}
+	prov := &llmtest.Script{NumberedRequests: true, Runs: []llmtest.Run{
+		{Responses: []llmtest.Response{{Text: "delegating", Calls: []llmtest.Call{{Name: "delegate"}}}, {Text: "never"}}},
+		{Responses: []llmtest.Response{{Text: "posting", Calls: []llmtest.Call{{Name: "post"}}}, {Text: "done"}}},
+	}}
+	began := time.Now()
+	res, err := run(t, toolloop.Config{Provider: prov, Surface: surf, ParkLocally: []string{"delegate"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.RoundsUsed != 3 || len(res.Rounds) != 3 {
+		t.Fatalf("rounds used %d, rounds %+v; want the three requests of the two runs", res.RoundsUsed, res.Rounds)
+	}
+	for _, ex := range res.Executions {
+		if ex.Name == "post" && ex.Round != 2 {
+			t.Errorf("the second run's call is on round %d, want 2 — the request that asked for it", ex.Round)
+		}
+	}
+	if took := time.Since(began); took >= toolloop.JoinWait {
+		t.Errorf("the run took %s: the second run's call waited for a request it could not find", took)
+	}
+}
+
 // A CONCURRENCY NOTHING CAN WAIT ON IS REFUSED, rather than read as one of the
 // three: a profile the backend should have refused reaches no session.
 func TestAnUnknownCallConcurrencyIsRefused(t *testing.T) {

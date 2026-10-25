@@ -541,16 +541,31 @@ func (d *dispatcher) modelStartLocked(now time.Time) time.Time {
 	return start
 }
 
+// turnByID is the current run's request of the CLI's id. THIS RUN'S ONLY: an
+// id is the CLI's, unique within its process at most — a backend that numbers
+// a CLI's requests itself numbers each run's from one — so a later run's
+// request read as an earlier run's was merged into it.
 func (d *dispatcher) turnByID(id string) *observedTurn {
 	if id == "" {
 		return nil
 	}
-	for _, t := range d.turns {
+	for _, t := range d.turns[d.invTurns:] {
 		if t.id == id {
 			return t
 		}
 	}
 	return nil
+}
+
+// roundOfRequest is the round of the current run's request of the CLI's id,
+// where the host has been told of it.
+func (d *dispatcher) roundOfRequest(id string) (int, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if t := d.turnByID(id); t != nil {
+		return t.round, true
+	}
+	return 0, false
 }
 
 // Spent charges what the run has spent.

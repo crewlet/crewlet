@@ -1425,7 +1425,12 @@ func streamTo(cfg Config, rec *sync.Mutex, partial **Partial, d *dispatcher, pub
 	// ZERO, so the FIRST fragment publishes immediately.
 	var last time.Time
 	return func(delta llm.Delta) {
-		round, _ := d.inFlight(time.Now())
+		// THE REQUEST THE TEXT BELONGS TO, where the backend named one the
+		// host already knows; else the request in flight.
+		round, known := d.roundOfRequest(delta.Request)
+		if !known {
+			round, _ = d.inFlight(time.Now())
+		}
 		rec.Lock()
 		p := *partial
 		if p == nil || p.Round != round {
