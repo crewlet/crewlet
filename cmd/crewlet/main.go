@@ -228,6 +228,8 @@ func runIn(environ config.Source, args []string, stdout, stderr io.Writer) (err 
 		return runLLM(environ, rest, stdout, stderr)
 	case "search":
 		return runSearch(rest, stdout, stderr)
+	case "assistant":
+		return runAssistant(environ, rest, stdout, stderr)
 	case "gitlab", "github", "jira", "slack", "confluence", "mattermost":
 		return runIntegration(environ, cmd, rest, stdout, stderr)
 	default:
@@ -273,6 +275,8 @@ Usage:
                               runs through
   crewlet search eval         Measure the semantic search against the exact scan,
                               on the vectors a store file actually holds
+  crewlet assistant eval      Run evaluation cases through the Dashboard Assistant,
+                              on their own scripts or against a candidate model
   crewlet gitlab <cmd>        Reconcile the company's seats into a GitLab instance
   crewlet github <cmd>        Report a GitHub deployment's seat accounts and hook it
   crewlet jira <cmd>          Report a Jira instance's seat accounts and projects
