@@ -51,6 +51,7 @@ import {
   announce,
   useToast,
   type MenuEntry,
+  type ChatThreadHandle,
 } from "@crewlethq/ui";
 import { ProductMark } from "@crewlethq/icons/product-mark";
 import {
@@ -208,11 +209,22 @@ export function Drawer({ unavailable, onClose, initialFocus, name, shape }: Draw
     return undefined;
   }, [view.fault, view.stream, waitSeconds]);
 
+  // THE PERSON'S OWN QUESTION IS ALWAYS SHOWN: the thread follows only while
+  // it is read at its end, so a question sent while scrolled up would land out
+  // of view behind "Jump to latest". Each ask brings the thread to its end once
+  // the question is drawn.
+  const thread = useRef<ChatThreadHandle>(null);
+  const [asked, setAsked] = useState(0);
+  useEffect(() => {
+    if (asked > 0) thread.current?.scrollToLatest();
+  }, [asked]);
+
   const ask = useCallback(
     (text: string) => {
       const question = text.trim();
       if (question === "" || !questionFits(question)) return;
       setDraft("");
+      setAsked((n) => n + 1);
       void send(question, attached);
     },
     [attached],
@@ -426,7 +438,7 @@ export function Drawer({ unavailable, onClose, initialFocus, name, shape }: Draw
             description={unavailable.body}
           />
         ) : (
-          <ChatThread label="Conversation" busy={running !== null}>
+          <ChatThread ref={thread} label="Conversation" busy={running !== null}>
             {clearFailed ? (
               <Callout variant="warning" role="alert">
                 The conversation could not be cleared. Try again from Conversations.
