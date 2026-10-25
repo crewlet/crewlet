@@ -83,6 +83,9 @@ var moves = map[move]wire.ProposalState{
 
 	{wire.ProposalApproved, EventExecute}: wire.ProposalExecuting,
 	{wire.ProposalApproved, EventClaim}:   wire.ProposalApplying,
+	// A page claiming an action from a screen whose revision moved since
+	// the action was prepared: it is never applied.
+	{wire.ProposalApproved, EventPageStale}: wire.ProposalStale,
 	// An approval whose node died before it sent the write: nothing can say
 	// whether it was sent, so it is unknown and offered a Retry.
 	{wire.ProposalApproved, EventUnknown}: wire.ProposalUnknown,

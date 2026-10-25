@@ -397,7 +397,7 @@ func TestAPageActionIsClaimedOnceAcrossTabs(t *testing.T) {
 	ctx := approvaltest.As(t.Context(), ada)
 	p := f.Propose(t, ada, func(d *proposal.Draft) {
 		d.Tool, d.Act, d.Scope = "propose_page_change", "", wire.ScopePage
-		d.Preview.SourceRevision = "r7"
+		d.Preview.SourceRevision, d.PageRevision = "", "r7"
 		d.Preview.Request = exec.Request{Method: proposal.PageMethod,
 			Path: proposal.PageActionPath + "work.filters", Body: []byte(`{"status":"open"}`)}
 	})
@@ -480,5 +480,45 @@ func TestAnUnconfirmedApprovalSendsNothing(t *testing.T) {
 	var unconfirmed *approval.Unconfirmed
 	if !errors.As(err, &unconfirmed) || unconfirmed.OpID == "" || len(f.API.Sent()) != 0 {
 		t.Errorf("an unconfirmed approval answered %v after %d sends", err, len(f.API.Sent()))
+	}
+}
+
+// A PAGE PROPOSAL IS STALE ONCE THE PAGE'S REVISION MOVES: a page action is
+// prepared against the open screen's revision, and a claim from a screen that
+// has moved since is refused by the server, recorded stale, and handed to the
+// turn, so nothing is applied to a screen the person was not shown it for.
+// Mutation: skip the revision check in Report and the action is claimed.
+func TestAPageProposalIsStaleOnceThePageMoves(t *testing.T) {
+	t.Parallel()
+	f := approvaltest.NewFleet()
+	ada := approvaltest.Person(approvaltest.Noon.Add(time.Hour))
+	ctx := approvaltest.As(t.Context(), ada)
+	p := f.Propose(t, ada, func(d *proposal.Draft) {
+		d.Tool, d.Act, d.Scope, d.PageRevision = "propose_page_change", "", wire.ScopePage, "url:r7"
+		d.Preview.SourceRevision = ""
+		d.Preview.Request = exec.Request{Method: proposal.PageMethod,
+			Path: proposal.PageActionPath + "work.filters", Body: []byte(`{"status":"open"}`)}
+	})
+	if p.SourceRevision != "url:r7" {
+		t.Fatalf("the page action was prepared against %q, want the page's url:r7", p.SourceRevision)
+	}
+	if _, err := f.Node(t).Approve(ctx, approvaltest.Approve(p)); err != nil {
+		t.Fatal(err)
+	}
+	_, err := f.Node(t).Report(ctx, approval.Report{Action: p.ID, Key: uuid.NewString(),
+		Report: wire.ActionReport{State: wire.ActionApplying, Revision: "url:r8"}})
+	if !errors.Is(err, approval.ErrStale) {
+		t.Fatalf("a claim from a moved page answered %v, want stale", err)
+	}
+	if f.Store.State(p.ID) != wire.ProposalStale {
+		t.Errorf("the page action is %s, want stale", f.Store.State(p.ID))
+	}
+	r := f.Turns.Resumed()
+	if len(r) != 1 || r[0].State != wire.ProposalStale || r[0].Failure == nil {
+		t.Errorf("the turn was not told the page moved: %+v", r)
+	}
+	if _, err := f.Node(t).Report(ctx, approval.Report{Action: p.ID, Key: uuid.NewString(),
+		Report: wire.ActionReport{State: wire.ActionApplying, Revision: "url:r7"}}); !errors.Is(err, approval.ErrActionClaimed) {
+		t.Errorf("a stale page action was claimed afterwards: %v", err)
 	}
 }
