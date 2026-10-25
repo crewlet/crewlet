@@ -114,6 +114,7 @@ type Collector struct {
 
 var _ assistant.FrameWriter = (*Collector)(nil)
 
+// Frame implements [assistant.FrameWriter].
 func (c *Collector) Frame(fr wire.Frame) error {
 	if err := fr.Validate(); err != nil {
 		return err
@@ -124,6 +125,7 @@ func (c *Collector) Frame(fr wire.Frame) error {
 	return nil
 }
 
+// Keepalive implements [assistant.FrameWriter].
 func (c *Collector) Keepalive() error { return nil }
 
 // Frames is every frame drawn.

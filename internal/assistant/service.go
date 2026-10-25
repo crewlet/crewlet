@@ -271,7 +271,7 @@ func (s *Service) Start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	if err != nil {
 		return wire.TurnAccepted{}, &Unavailable{RetryAfter: 2 * time.Second, Cause: err}
 	}
-	if err := s.admit(ts.Person); err != nil {
+	if err = s.admit(ts.Person); err != nil {
 		return wire.TurnAccepted{}, err
 	}
 	admitted := true
@@ -338,7 +338,8 @@ func (s *Service) Start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	}
 	admitted, started = false, true
 	s.track(t)
-	go t.run(loopRun{messages: buildMessages(in), provider: provider, key: key, meter: meter,
+	go t.run(loopRun{ //nolint:contextcheck // the turn's own lifetime (t.ctx, under the service's base), never the request's: a turn outlives the POST that started it
+		messages: buildMessages(in), provider: provider, key: key, meter: meter,
 		tools: tools, steps: assistantCfg.Steps(), timeout: assistantCfg.TurnTimeout(),
 		fresh: history.Conversation.Title == "", question: input})
 	return accepted, nil

@@ -93,9 +93,7 @@ func (s *Service) render(t assistantdomain.Transcript, reader iam.Principal) wir
 	for _, m := range t.Messages {
 		out.Messages = append(out.Messages, m.Wire())
 	}
-	for _, st := range t.Steps {
-		out.Steps = append(out.Steps, st)
-	}
+	out.Steps = append(out.Steps, t.Steps...)
 	proposals := map[uuid.UUID]assistantdomain.Proposal{}
 	for _, pr := range t.Proposals {
 		proposals[pr.ID] = pr
@@ -199,8 +197,10 @@ func (s *Service) Clear(ctx context.Context, p iam.Principal, id uuid.UUID, key 
 // title names a conversation after its first answer, in the background: one
 // model call, recorded on the ledger and charged through the turn's meter,
 // best effort. A title that cannot be had leaves the conversation untitled,
-// which the drawer draws as its first question.
-func (s *Service) title(t *turn, question, answer string, meter toolloop.BudgetMeter) {
+// which the drawer draws as its first question. ctx is the turn's, detached
+// so the title outlives the segment that asked for it and keeps its trace.
+func (s *Service) title(ctx context.Context, t *turn, question, answer string,
+	meter toolloop.BudgetMeter) {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -210,11 +210,10 @@ func (s *Service) title(t *turn, question, answer string, meter toolloop.BudgetM
 	s.mu.Unlock()
 	go func() {
 		defer s.titlesWG.Done()
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.ctx), TitleTimeout)
+		bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), TitleTimeout)
 		defer cancel()
-		ctx = llm.WithSeat(ctx, assistantHome(t.person.ID))
-		if err := s.nameConversation(ctx, t, question, answer, meter); err != nil {
-			s.log.InfoContext(ctx, "assistant_title_skipped", "conversation", t.conversation,
+		if err := s.nameConversation(bounded, t, question, answer, meter); err != nil {
+			s.log.InfoContext(bounded, "assistant_title_skipped", "conversation", t.conversation,
 				"reason", redact.Secrets(err.Error()))
 		}
 	}()
@@ -239,9 +238,9 @@ func (s *Service) nameConversation(ctx context.Context, t *turn, question, answe
 			"\n\nAnswer: " + textcut.Within(answer, 2000)},
 	}})
 	if completion != nil && meter != nil {
-		if _, err := meter.Spend(context.WithoutCancel(ctx),
-			completion.InputTokens+completion.OutputTokens); err != nil {
-			s.log.WarnContext(ctx, "assistant_title_uncounted", "error", err)
+		if _, spendErr := meter.Spend(context.WithoutCancel(ctx),
+			completion.InputTokens+completion.OutputTokens); spendErr != nil {
+			s.log.WarnContext(ctx, "assistant_title_uncounted", "error", spendErr)
 		}
 	}
 	if err != nil {
