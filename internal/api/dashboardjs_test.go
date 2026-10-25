@@ -1100,7 +1100,7 @@ const (
 	// version compare) took it from about 2.85 MiB to about 3.05 MiB, the
 	// screen that room was left for, and it moved to 3.5 MiB then: room for
 	// the screens still to come, while a bundle that doubled from the 2.3 MB
-	// baseline is still refused. The rich editor that Knowledge pages and doc
+	// baseline is still refused. The rich editor that Doclet's pages and doc
 	// tabs are edited in took it from about 3.23 MiB to about 3.53 MiB: its
 	// chunk is about 270 KB raw, ProseMirror being 228 KB of it, and the
 	// notices of the ten packages it brings add 15 KB. That chunk is fetched
