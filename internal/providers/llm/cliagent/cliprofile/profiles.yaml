@@ -1503,7 +1503,7 @@ opencode:
       discovered: selected
       template: |
         ---
-        description: The Crewlet seat this run serves. Crewlet drives the model and executes its tools; this CLI is a text model behind that loop.
+        description: The Crewlet seat this run serves. Its own tools are the crewlet MCP server's.
         mode: primary
         ---
         {system}
@@ -2866,7 +2866,7 @@ kimi-code:
       template: |
         ---
         name: crewlet-seat
-        description: The Crewlet seat this run serves. Crewlet drives the model and executes its tools; this CLI is a text model behind that loop.
+        description: The Crewlet seat this run serves. Its own tools are the crewlet MCP server's.
         tools:
           - WebSearch
           - FetchURL
@@ -2879,7 +2879,7 @@ kimi-code:
       template: |
         ---
         name: crewlet-seat
-        description: The Crewlet seat this run serves. Crewlet drives the model and executes its tools; this CLI is a text model behind that loop.
+        description: The Crewlet seat this run serves. Its own tools are the crewlet MCP server's.
         tools:
           - WebSearch
           - FetchURL

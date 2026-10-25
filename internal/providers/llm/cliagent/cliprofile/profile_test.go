@@ -560,6 +560,23 @@ func TestASubscriptionVariableIsRefusedWhereItWouldClash(t *testing.T) {
 	}
 }
 
+// NO SHIPPED AGENT FILE TELLS ITS CLI IT IS A TEXT MODEL BEHIND THE ENGINE'S
+// LOOP. That was true when the engine parsed tool calls out of a CLI's prose;
+// every CLI now drives its own loop and calls the seat's tools as the crewlet
+// MCP server, and a vendor that shows its model an agent's description shows
+// it a claim that no longer holds.
+func TestNoAgentFileCallsItsCLIATextModel(t *testing.T) {
+	t.Parallel()
+	for _, name := range BuiltinNames() {
+		p, _ := Builtin(name)
+		for _, ch := range p.channels() {
+			if ch.File != nil && strings.Contains(ch.File.Template, "text model") {
+				t.Errorf("%s's %s file says its CLI is a text model: %q", name, ch.field, ch.File.Template)
+			}
+		}
+	}
+}
+
 // A KEY HOME'S OWN SETTINGS ARE HELD TO A SEED'S RULES, in the one scope they
 // are written to. One at a seed_files path is that file's content in a key
 // home, written in its place; any other is a file of its own, and a second
