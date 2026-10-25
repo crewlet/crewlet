@@ -31,6 +31,7 @@ import {
   announce,
 } from "@crewlethq/ui";
 import { LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
+import { fmtDateTime } from "~/lib/format.ts";
 import {
   ActionReceipt,
   CardBlock,
@@ -228,6 +229,34 @@ function useAnnouncements(view: ConversationView): void {
   }, [key, last]);
 }
 
+/**
+ * WHO READ THIS CONVERSATION FOR COMPLIANCE, and why, at the top of it (D06):
+ * an administrator may read somebody's conversation only with a reason, and
+ * the engine records each read on the conversation itself, so its owner sees
+ * every one of them where they read their own words.
+ */
+function AuditReads({ reads }: { reads: ConversationView["auditReads"] }) {
+  if (reads.length === 0) return null;
+  return (
+    <Callout
+      variant="info"
+      title={
+        reads.length === 1
+          ? "An administrator read this conversation"
+          : `Administrators read this conversation ${reads.length} times`
+      }
+    >
+      <Stack gap={1}>
+        {reads.map((read) => (
+          <span key={`${read.reader}@${read.at}`}>
+            {`${read.reader}, ${fmtDateTime(read.at)}: “${read.reason}”`}
+          </span>
+        ))}
+      </Stack>
+    </Callout>
+  );
+}
+
 export function Thread({ view, now, on, opened, onRetry, onReconnect }: ThreadProps) {
   useAnnouncements(view);
   const reconnecting = view.stream === "reconnecting";
@@ -235,6 +264,7 @@ export function Thread({ view, now, on, opened, onRetry, onReconnect }: ThreadPr
     view.reconnectingSince !== null && now - view.reconnectingSince > RECONNECT_PATIENCE_MS;
   return (
     <>
+      <AuditReads reads={view.auditReads} />
       {view.turns.map((turn, i) => (
         <Turn
           key={turn.key}

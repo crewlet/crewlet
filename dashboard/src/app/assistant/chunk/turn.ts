@@ -152,11 +152,16 @@ export interface TurnView {
 /** Why the conversation's stream stopped for good, as the drawer says it. */
 export type ConversationFault = "protocol_mismatch" | "malformed" | "refused" | null;
 
+/** One administrator's compliance read of the conversation (D06). */
+export type AuditRead = AssistantTranscript["audit_reads"][number];
+
 /** A conversation as the drawer draws it. */
 export interface ConversationView {
   /** The engine's conversation id, or null for a conversation not yet created. */
   id: string | null;
   title: string;
+  /** Who read this conversation for compliance, and why, as the engine records it (D06). */
+  auditReads: readonly AuditRead[];
   turns: TurnView[];
   stream: StreamState;
   /** When the current outage began (ms), while reconnecting. */
@@ -168,6 +173,7 @@ export interface ConversationView {
 export const EMPTY: ConversationView = {
   id: null,
   title: "",
+  auditReads: [],
   turns: [],
   stream: "closed",
   reconnectingSince: null,
@@ -540,6 +546,7 @@ export function reduce(view: ConversationView, event: TurnEvent): ConversationVi
       return {
         id: event.transcript.conversation.id,
         title: event.transcript.conversation.title,
+        auditReads: event.transcript.audit_reads,
         turns: fromTranscript(event.transcript),
         stream: "closed",
         reconnectingSince: null,
