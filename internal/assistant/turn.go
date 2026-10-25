@@ -136,12 +136,7 @@ func (t *turn) stepStart(tool catalog.Tool, args map[string]any, req *wire.StepR
 	t.steps++
 	index := t.steps
 	t.mu.Unlock()
-	label := tool.Name
-	if tool.Label != nil {
-		if l := strings.TrimSpace(tool.Label(args)); l != "" {
-			label = oneLine(redact.Secrets(l))
-		}
-	}
+	label := oneLine(redact.Secrets(tool.StepLabel(args)))
 	step := stepClock{started: t.svc.now(), StepEvent: wire.StepEvent{
 		StepID: assistantdomain.StepID(t.id, index), TurnID: t.id, Index: index, Tool: tool.Name,
 		Label: label, Request: req, State: wire.StepRunning,

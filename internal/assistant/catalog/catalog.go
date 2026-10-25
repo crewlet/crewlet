@@ -233,6 +233,34 @@ type Tool struct {
 	schema *schema
 }
 
+// StepLabel is the sentence the drawer shows for one call of the tool: its
+// own [Tool.Label] where it has one, and otherwise a sentence from what the
+// catalogue already says of it, never its model-facing name. A write is a
+// proposal being prepared, named by the task it touches where the call names
+// one; a page action prepares a change to the screen; a link is looked up.
+func (t Tool) StepLabel(args map[string]any) string {
+	if t.Label != nil {
+		if l := strings.TrimSpace(t.Label(args)); l != "" {
+			return l
+		}
+	}
+	switch t.Kind {
+	case KindWrite:
+		if item := Args(args).String("item"); item != "" && len(item) <= nameBytes {
+			return "Preparing a change to " + item
+		}
+		return "Preparing a change for your approval"
+	case KindPageAction:
+		return "Preparing a change to this screen"
+	case KindNavigate:
+		return "Finding where to open it"
+	}
+	if t.Phrase == "" {
+		return t.Name
+	}
+	return strings.ToUpper(t.Phrase[:1]) + t.Phrase[1:]
+}
+
 // Check reports what is wrong with a call's arguments, wrapping
 // [ErrInvalidArguments]: an argument the schema does not declare, an
 // identity argument ([IdentityArguments]), a missing required one, or a value

@@ -1,14 +1,15 @@
 /**
  * What the drawer draws of the engine's cards: the columns the engine chose for
- * its width, values worded by their type as the screens word them, and the
- * facts kept for the model left out.
+ * its width, values worded by their type as the screens word them, the facts
+ * kept for the model left out, and a failed step's reason.
  */
 
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import type { AssistantCardEvent } from "~/contract/assistant.ts";
 import { Router } from "~/app/router.tsx";
-import { CardBlock, factText, type CardHandlers } from "./blocks.tsx";
+import { CardBlock, factText, stepsOf, type CardHandlers } from "./blocks.tsx";
+import type { TurnView } from "./turn.ts";
 
 afterEach(cleanup);
 
@@ -72,4 +73,48 @@ test("a fact is worded by its type, and one kept for the model is not drawn", ()
   });
   expect(screen.getByText("To do")).toBeTruthy();
   expect(screen.queryByText("Version")).toBeNull();
+});
+
+const base: TurnView = {
+  key: "k",
+  id: "t",
+  opKey: "o",
+  phase: "completed",
+  seq: 1,
+  question: "q",
+  page: null,
+  askedAt: "2026-10-24T09:41:00Z",
+  stepsDone: 0,
+  steps: [],
+  replies: [],
+  cards: [],
+  proposals: {},
+  actions: [],
+  actionStates: {},
+  done: { state: "completed", duration_ms: 1000, steps: 0 },
+  error: null,
+  refusal: null,
+  stopping: false,
+};
+
+test("a failed step says why, in the engine's words", () => {
+  const [step] = stepsOf({
+    ...base,
+    steps: [
+      {
+        step_id: "s",
+        index: 1,
+        tool: "update_task",
+        label: "Preparing a change to FAIR-2",
+        state: "failed",
+        started_at: "2026-10-24T09:41:00Z",
+        refusal: {
+          code: "stale",
+          message: "FAIR-2 changed since it was read.",
+          hint: "Read it again.",
+        },
+      },
+    ],
+  });
+  expect(step!.detail).toContain("FAIR-2 changed since it was read. Read it again.");
 });

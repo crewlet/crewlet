@@ -4,6 +4,7 @@ import (
 	"errors"
 	"maps"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -285,5 +286,26 @@ func TestEveryTableDrawsAFewColumnsNameFirst(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// EVERY STEP READS AS A SENTENCE, never as the tool's model-facing name: a read
+// by what it reads, a write as the change being prepared, the task it touches
+// named where the call names one.
+func TestEveryStepIsASentence(t *testing.T) {
+	t.Parallel()
+	for _, tool := range catalog.Tools() {
+		label := tool.StepLabel(map[string]any{})
+		if label == "" || label == tool.Name || label[:1] != strings.ToUpper(label[:1]) {
+			t.Errorf("%s steps read %q, want a sentence", tool.Name, label)
+		}
+	}
+	update := assistanttest.Tool(t, "update_task")
+	if got := update.StepLabel(map[string]any{"item": "FAIR-2"}); got != "Preparing a change to FAIR-2" {
+		t.Errorf("an update of FAIR-2 reads %q", got)
+	}
+	page := assistanttest.Tool(t, "propose_page_change")
+	if got := page.StepLabel(map[string]any{}); got != "Preparing a change to this screen" {
+		t.Errorf("a page change reads %q", got)
 	}
 }

@@ -220,10 +220,24 @@ export function stepsOf(turn: TurnView): StepListStep[] {
     label: step.label,
     state: STEP_STATE[step.state],
     ...(step.duration_ms === undefined ? {} : { duration: seconds(step.duration_ms) }),
-    detail: step.request
-      ? `${step.tool} · ${step.request.method} ${step.request.route}`
-      : step.tool,
+    detail: stepDetail(step),
   }));
+}
+
+/**
+ * What a step's line says under its sentence: the request it made, and for a
+ * step that failed or was refused, why, in the engine's own words, with what
+ * to do about it where the route said.
+ */
+function stepDetail(step: TurnView["steps"][number]): string {
+  const request = step.request
+    ? `${step.tool} · ${step.request.method} ${step.request.route}`
+    : step.tool;
+  if (step.state !== "failed" && step.state !== "refused") return request;
+  const why = step.refusal
+    ? [step.refusal.message, step.refusal.hint].filter(Boolean).join(" ")
+    : (step.summary ?? "");
+  return why ? `${why} (${request})` : request;
 }
 
 /** A model's prose, drawn inert. `streaming` while deltas arrive; `dimmed` for an abandoned attempt. */
