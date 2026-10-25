@@ -4,11 +4,15 @@
 // ([SeatsRoot], [ReservedSeatBranch]), which a push and a repository's default
 // branch are both judged by.
 //
-// Configuration validates a document with it at `crewlet validate` and the
-// code domain decides a push with it. Two copies of one grammar drift
+// Configuration validates a document with it at `crewlet validate`, the code
+// domain decides a push with it, and the sandbox judges with it the branch a
+// coding run names — the one a parked run records for its re-seed, and each
+// one a run's report says it delivered. Two copies of one grammar drift
 // (ADR-0008) — a name `crewlet validate` accepts and a push then refuses, or
-// the reverse — and the code domain imports config, so the grammar lives below
-// both. It imports nothing but the standard library for the same reason.
+// the reverse, or a branch a run records that no ref can be — and the code
+// domain imports config, so the grammar lives below both. It imports nothing
+// but the standard library for the same reason: whatever needs a git name
+// judged takes this package and nothing with it.
 //
 // # Git's rules are the floor
 //
@@ -28,8 +32,8 @@
 // Each is stated at its rule with its reason, and each is a row of the tests
 // where git's answer is the other one:
 //
-//   - a whole ref is at most [MaxRefNameBytes] (git bounds neither a ref nor
-//     a component);
+//   - a whole ref is at most [MaxRefNameBytes], and so a branch at most
+//     [MaxBranchBytes] (git bounds neither a ref nor a component);
 //   - a ref is valid UTF-8 (git takes any byte from 0x80 up);
 //   - a ref has the form refs/<namespace>/<name> (git takes refs/x);
 //   - a branch is never `@` (git takes it outside a repository);
@@ -85,6 +89,16 @@ import (
 // neither) and is what bounds the bytes a push of N refs carries: N refs of at
 // most this length, whatever their shape.
 const MaxRefNameBytes = 255
+
+// MaxBranchBytes is the longest branch [ValidBranch] accepts: 244 bytes, what
+// [MaxRefNameBytes] leaves after refs/heads/.
+//
+// DERIVED, NEVER A BOUND OF ITS OWN: a branch is the ref refs/heads/<branch>,
+// so a longer one is a ref no push can create. It is the figure a caller
+// states where it carries a branch by its name alone — the sandbox's parked
+// run, a run's delivered refs — so that what it says it keeps is what a ref
+// can hold.
+const MaxBranchBytes = MaxRefNameBytes - len("refs/heads/")
 
 // MaxRepoNameBytes is the longest repository name: 63, the longest DNS label
 // (RFC 1035), because a repository name IS one — a host-name label as RFC
@@ -242,10 +256,11 @@ var refused = func() (t [256]bool) {
 }()
 
 // ValidBranch reports whether branch is a branch name: refs/heads/<branch>
-// is a ValidRef, and git's two branch rules hold — it is not HEAD and does
-// not begin with '-' (git check-ref-format --branch refuses both: HEAD would
-// be refs/heads/HEAD, which every revision expression reads as the symbolic
-// HEAD, and a leading '-' is an option to every command that takes a branch).
+// is a ValidRef, so the name is valid UTF-8 and at most [MaxBranchBytes], and
+// git's two branch rules hold — it is not HEAD and does not begin with '-'
+// (git check-ref-format --branch refuses both: HEAD would be refs/heads/HEAD,
+// which every revision expression reads as the symbolic HEAD, and a leading
+// '-' is an option to every command that takes a branch).
 //
 // Stricter than git: it is not "@". Outside a repository git accepts it, but
 // "@" alone is HEAD in every revision expression — with a branch named @ and

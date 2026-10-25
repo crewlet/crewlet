@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
@@ -254,23 +255,6 @@ const MaxQuestionBytes = 16 << 10
 // unsaid.
 const MaxDeliveredRefBytes = 16 << 10
 
-// MaxBranchBytes bounds the branch a parked run records with its question
-// ([Result.WIPBranch], [PendingRun.Branch]).
-//
-// SIZED TO WHERE IT TRAVELS AND TO WHAT A BRANCH IS. It rides the run's
-// coordination row beside the question ([MaxQuestionBytes]) — read and written
-// whole on every status flip and every listing of active runs — and the
-// answer's text, which the resumed executor re-sends on every later round of
-// the turn. Git keeps a branch as a path under refs/heads, every part of which
-// a filesystem holds to 255 bytes, and a work-in-progress branch is a few
-// parts at most: 1 KiB is four parts at their longest, past any name a person
-// or an agent gives one, and a sixteenth of the question it is parked beside.
-//
-// A BRANCH IS AN IDENTIFIER, so one past it is NOT RECORDED rather than cut
-// ([fitBranch]): a shortened branch names nothing a fresh machine could check
-// out.
-const MaxBranchBytes = 1 << 10
-
 // MaxCondenseBytes is the most text one [Condenser] call reads: what the
 // engine's compactor takes in one condensation, its compact.MaxChunks first-
 // pass pieces of compact.ChunkBytes each — two MiB. Past it the compactor
@@ -445,26 +429,41 @@ func boundRefs(refs []string) ([]string, int) {
 	return kept, left
 }
 
-// fitBranch is the branch a run recorded with its question, redacted, or ""
-// where it is not one to hand on: past [MaxBranchBytes], or a name git would
-// refuse ([ValidBranch]) — which a credential the redaction replaced always is.
+// fitBranch is the branch a run recorded with its question ([Result.WIPBranch],
+// [PendingRun.Branch]), redacted, or "" where it is not one to hand on: a name
+// the engine's one grammar of a branch refuses ([gitref.ValidBranch]) — one
+// git refuses, which a credential the redaction replaced always is, one that
+// is not UTF-8, or one past [gitref.MaxBranchBytes].
+//
+// HELD TO THAT GRAMMAR, NEVER ONE OF ITS OWN (ADR-0008), because the branch is
+// a ref — what a re-seeded run is told to check out. One that is not UTF-8
+// does not survive the run's row, which is JSON: its bytes are replaced and it
+// arrives as another branch's name. One past the bound is a ref no push to the
+// engine's code host can create. And a ref's bound is all the row needs: the
+// branch rides the run's coordination row beside its question
+// ([MaxQuestionBytes]) — read and written whole on every status flip and every
+// listing of active runs — and the answer's text, which the resumed executor
+// re-sends on every later round of the turn, and 244 bytes is under a sixtieth
+// of the question beside it, so a tighter bound would spare neither anything.
 //
 // DROPPED RATHER THAN CUT OR MENDED, and said in the log. Without a branch the
 // answer's text tells a re-seeded run in general terms to check out the branch
-// the work was pushed to, which is true; with a wrong one it names a branch to
-// check out that does not exist. Here rather than in a runner, for the reason
-// the transcript's bound is ([Coordinator.fitResult]): this is where every
-// collected result enters, whichever runner read it.
+// the work was pushed to, which is true; with a wrong one — a name cut to fit,
+// or mended into UTF-8 — it names a branch to check out that does not exist.
+// Here rather than in a runner, for the reason the transcript's bound is
+// ([Coordinator.fitResult]): this is where every collected result enters,
+// whichever runner read it.
 func fitBranch(ctx context.Context, run PendingRun, branch string) string {
 	branch = redact.Secrets(branch)
-	if branch == "" || (len(branch) <= MaxBranchBytes && ValidBranch(branch)) {
+	if branch == "" || gitref.ValidBranch(branch) {
 		return branch
 	}
 	log.WarnContext(ctx, "sandbox_branch_not_recorded", "turn_id", run.TurnID,
 		"launch_id", run.LaunchID, "bytes", len(branch),
-		"detail", "the branch the run recorded with its question is not a name git accepts for a "+
-			"branch, or is past what a run's row carries, so the run is parked with no branch and "+
-			"its re-seed is told to check out the branch it pushed in general terms")
+		"detail", "the branch the run recorded with its question is not one a ref can be — a name "+
+			"git refuses for a branch, one that is not UTF-8, or one past what a ref may hold — so "+
+			"the run is parked with no branch and its re-seed is told to check out the branch it "+
+			"pushed in general terms")
 	return ""
 }
 

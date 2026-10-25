@@ -629,10 +629,11 @@ type PendingRun struct {
 
 	// Branch is the pushed WIP branch: the durable half of the work, and
 	// what a re-seeded run starts from when its snapshot is gone. It is the
-	// branch the run's ask recorded ([Result.WIPBranch]), held to
-	// [MaxBranchBytes] and to a name git accepts, and empty when the ask
-	// could not say — never one of the refs the run delivered, which are a
-	// pull request's URL as often as a branch.
+	// branch the run's ask recorded ([Result.WIPBranch]), held to the
+	// engine's one grammar of a branch ([gitref.ValidBranch]: a name git
+	// accepts, valid UTF-8 and at most [gitref.MaxBranchBytes]), and empty
+	// when the ask could not say — never one of the refs the run delivered,
+	// which are a pull request's URL as often as a branch.
 	Branch    string `json:"branch"`
 	SessionID string `json:"session_id"`
 

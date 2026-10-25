@@ -120,6 +120,10 @@ func TestValidRefAgreesWithGit(t *testing.T) {
 // TestValidBranchAgreesWithGitBranchRules holds ValidBranch to git
 // check-ref-format --branch, run outside any repository so git reads the name
 // as it is written rather than expanding @{-1} or @ against a HEAD.
+//
+// It is every caller's rule — the configuration's default branch, a push's
+// branch, the branch a coding run records — so a case any of them depends on
+// is a row here, held to git, never a table of a caller's own.
 func TestValidBranchAgreesWithGitBranchRules(t *testing.T) {
 	c := gittest.NewClient(t)
 	for _, tc := range []struct {
@@ -133,17 +137,38 @@ func TestValidBranchAgreesWithGitBranchRules(t *testing.T) {
 		{"x/HEAD", true, true, ""}, // only the whole name HEAD is refused
 		{"HEAD/x", true, true, ""},
 		{"x-", true, true, ""}, // only a LEADING '-'
+		{"ünïcode/branch", true, true, ""},
+		{"a./b", true, true, ""}, // a part may END with '.'
+		{"a@b", true, true, ""},  // '@' alone is no sequence git refuses
+		{"w!ip,x;y#z{}", true, true, ""},
 		{"HEAD", false, false, ""},
 		{"-a", false, false, ""},
 		{"-", false, false, ""},
 		{"a..b", false, false, ""},
 		{"a.lock", false, false, ""},
+		{"wip.lock/t1", false, false, ""},
 		{".a", false, false, ""},
+		{"wip/.t1", false, false, ""},
+		{"wip.", false, false, ""},
 		{"a b", false, false, ""},
+		{"wip\tt1", false, false, ""},
+		{"wip\x7ft1", false, false, ""},
+		{"wip~1", false, false, ""},
+		{"wip^", false, false, ""},
+		{"wip:x", false, false, ""},
+		{"wip?", false, false, ""},
+		{"wip*", false, false, ""},
+		{"wip[", false, false, ""},
+		{`wip\x`, false, false, ""},
+		{"/wip", false, false, ""},
+		{"wip/", false, false, ""},
+		{"wip//t1", false, false, ""},
+		{"wip@{1}", false, false, ""},
 		{"@{-1}", false, false, ""},
 		{"", false, false, ""},
-		{strings.Repeat("a", 244), true, true, ""},
-		{strings.Repeat("a", 245), true, false, "refs/heads/ and the name are past MaxRefNameBytes"},
+		{strings.Repeat("a", gitref.MaxBranchBytes), true, true, ""},
+		{strings.Repeat("a", gitref.MaxBranchBytes+1), true, false, "past MaxBranchBytes: refs/heads/ and the name are past MaxRefNameBytes"},
+		{"wip\xff", true, false, "a ref crosses JSON, where invalid UTF-8 is replaced and two refs arrive as one"},
 		{"@", true, false, "@ alone is HEAD in every revision expression"},
 	} {
 		if (tc.why != "") != (tc.git != tc.ours) {

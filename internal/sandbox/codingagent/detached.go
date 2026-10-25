@@ -12,6 +12,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -71,9 +72,11 @@ func namedRefs(text string) []string {
 }
 
 // namedRef is the ref a `Delivered:` line holds after its label, if it holds
-// one: a URL, or a name git accepts for a branch ([sandbox.ValidBranch]),
-// unwrapped from the backticks, emphasis or angle brackets a report puts
-// around it and from the full stop a sentence puts after it.
+// one: a URL, or a branch name the engine's one grammar takes
+// ([gitref.ValidBranch]: a name git accepts, valid UTF-8 and at most
+// [gitref.MaxBranchBytes], since the ref rides the run's phase record, which
+// is JSON), unwrapped from the backticks, emphasis or angle brackets a report
+// puts around it and from the full stop a sentence puts after it.
 //
 // ALONE ON ITS LINE, because the label is not proof of a ref: "Delivered: the
 // fix for the flake" is a sentence, and its first word is no branch anybody
@@ -92,7 +95,7 @@ func namedRef(rest string) (string, bool) {
 	if u, err := url.Parse(ref); err == nil && u.Scheme != "" && u.Host != "" {
 		return ref, u.User == nil
 	}
-	return ref, sandbox.ValidBranch(ref)
+	return ref, gitref.ValidBranch(ref)
 }
 
 // prPattern is a pull or merge request's URL by its SHAPE, on any host: the
@@ -856,8 +859,8 @@ func (r *Runner) overlayAsk(ctx context.Context, box sandbox.Sandbox, result san
 	}
 	// The branch as the ask recorded it, redacted like the question: it is
 	// a word from inside the box. Whether it is a branch at all, and short
-	// enough to carry, is the coordinator's to decide for every runner
-	// alike ([sandbox.MaxBranchBytes]).
+	// enough to be a ref, is the coordinator's to decide for every runner
+	// alike ([gitref.ValidBranch], [gitref.MaxBranchBytes]).
 	result.WIPBranch = redact.Secrets(strings.TrimSpace(ask.Branch))
 	return result, "", nil
 }

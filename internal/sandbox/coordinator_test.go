@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
@@ -3529,7 +3530,10 @@ func TestAnAnswerAfterTheBoxWasReclaimedSaysToReseedFromGit(t *testing.T) {
 // check out, and it was taken from the run's first delivered ref — which is a
 // pull request's URL whenever the run opened one, so the brief said "check
 // out the existing branch `https://…/pull/42`", which git cannot. It is the
-// branch the ask recorded, and nothing the run delivered stands in for it.
+// branch the ask recorded, and nothing the run delivered stands in for it —
+// and a branch is what the engine's one grammar says one is: a name git
+// accepts, valid UTF-8, since the row it rides is JSON, and no longer than a
+// ref may be.
 func TestAParkedRunsBranchIsNeverAPullRequestURL(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -3538,9 +3542,14 @@ func TestAParkedRunsBranchIsNeverAPullRequestURL(t *testing.T) {
 		"the ask recorded one":   {recorded: "wip/t1", want: "wip/t1"},
 		"the ask recorded none":  {recorded: "", want: ""},
 		"not a name git accepts": {recorded: "wip t1", want: ""},
-		"past what a row carries": {
-			recorded: "wip/" + strings.Repeat("b", MaxBranchBytes), want: "",
+		"as long as a ref may be": {
+			recorded: strings.Repeat("b", gitref.MaxBranchBytes),
+			want:     strings.Repeat("b", gitref.MaxBranchBytes),
 		},
+		"past what a ref may be": {
+			recorded: "wip/" + strings.Repeat("b", gitref.MaxBranchBytes), want: "",
+		},
+		"not UTF-8, which the row would rename": {recorded: "wip/\xff", want: ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

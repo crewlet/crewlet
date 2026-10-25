@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 )
@@ -99,10 +100,11 @@ func TestTheReportsDeliveredLinesAreItsRefs(t *testing.T) {
 
 // A `Delivered:` line is read however a report lays it out — a list marker,
 // emphasis, a ref in backticks — and one that does not hold a ref alone is not
-// a ref line: prose after the label, nothing after it, or a URL that carries
-// a credential.
+// a ref line: prose after the label, nothing after it, a branch longer than a
+// ref can be, or a URL that carries a credential.
 func TestADeliveredLineIsReadWhateverItsMarkup(t *testing.T) {
 	t.Parallel()
+	longest := strings.Repeat("b", gitref.MaxBranchBytes)
 	for line, want := range map[string]string{
 		"Delivered: wip/t1":                     "wip/t1",
 		"- Delivered: wip/t1":                   "wip/t1",
@@ -110,6 +112,8 @@ func TestADeliveredLineIsReadWhateverItsMarkup(t *testing.T) {
 		"**Delivered**: <https://h/a/b/pull/1>": "https://h/a/b/pull/1",
 		"2. delivered: feature/retry.":          "feature/retry",
 		"  DELIVERED:   wip/t1  ":               "wip/t1",
+		"Delivered: " + longest:                 longest,
+		"Delivered: " + longest + "b":           "",
 		"Delivered: the fix for the flake":      "",
 		"Delivered:":                            "",
 		"Delivered: wip..t1":                    "",
