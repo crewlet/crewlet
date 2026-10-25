@@ -36,6 +36,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
+	"github.com/crewlet/crewlet/internal/assistant"
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
@@ -1583,6 +1584,11 @@ type httpSurface struct {
 	// and must stop before the engine its writes go to does.
 	auth *authapi.Service
 	runs *observe.SandboxReconciler
+
+	// assistant is the Dashboard Assistant's service, nil on a node without
+	// the ingress role. Closed before any listener, so its open streams end
+	// rather than holding a listener's grace.
+	assistant *assistant.Service
 }
 
 // apiListener is one socket a node binds, the server serving it, and the slot
@@ -1623,6 +1629,11 @@ func (l *apiListener) serve(h http.Handler) { l.handler.store(h) }
 // that is doing exactly what it should. Each gets its own grace, so a bridge
 // session holding the public listener open never cuts a dashboard request.
 func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
+	// THE ASSISTANT BEFORE EVERY LISTENER: each turn it runs ends
+	// interrupted and is recorded so, which ends every stream following it,
+	// and a stream is a request a listener's grace would otherwise wait out
+	// whole. The engine its ends are written to has not been torn down yet.
+	closeAssistant(ctx, s.assistant, log)
 	// THE ARTIFACT ORIGIN FIRST: it serves no probe, and an artifact frame
 	// is the request most able to wait for a node that is going away.
 	if s.artifacts != nil {
@@ -2418,6 +2429,14 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// than mounting its routes over a nil service. See
 	// [api.HumanSurfaces.Mount].
 	humans.Mount(&opts)
+	// THE DASHBOARD ASSISTANT, after the hand-over above: the writes a person
+	// may propose are the operator surface's verdict. Its service is closed
+	// by every path that returns from here without a surface, and by the
+	// surface's stop once there is one.
+	assistantSvc, err := mountAssistant(boot, e, &opts)
+	if err != nil {
+		return nil, err
+	}
 	// THE ARTIFACTS' ROUTES, each stating its authority where it is
 	// mounted. Set only where it was built, so an absent surface is a nil
 	// interface rather than a nil service mounted.
@@ -2442,6 +2461,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	opts.Rooms = artifactRooms
 	app, err := api.New(opts) //nolint:contextcheck // see the paragraph above the options
 	if err != nil {
+		closeAssistant(ctx, assistantSvc, log)
 		return nil, err
 	}
 	// NOTHING PUSHES "CONFIGURED" FROM HERE. [api.App.Configured] reads the
@@ -2470,6 +2490,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	projector := observe.NewProjector(e.Backends().Queue, app.Stream())
 	if err = projector.Start(ctx); err != nil {
 		app.Stop()
+		closeAssistant(ctx, assistantSvc, log)
 		return nil, err
 	}
 
@@ -2524,7 +2545,8 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	cancelSeed()
 	runs.Start(ctx)
 
-	surface := &httpSurface{app: app, projector: projector, runs: runs, auth: humans.SignIn}
+	surface := &httpSurface{app: app, projector: projector, runs: runs, auth: humans.SignIn,
+		assistant: assistantSvc}
 	// THE PUBLIC LISTENER WAS BOUND BY THE SAME RULE THE APP SERVES ONE BY
 	// ([api.PublicListener]), and a disagreement is a node that would serve
 	// its webhooks on no socket, or leave one bound that answers `starting`
