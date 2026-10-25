@@ -7,11 +7,14 @@
  * Every tab open on the conversation reads the same stream, so every one of
  * them hears the action. Before any screen applies it, this tab CLAIMS it
  * (`PUT /assistant/actions/{id}` with `applying`), and the engine answers
- * `409 action_already_claimed` to every claim after the first. A claim whose
- * answer never arrived is not a claim: nothing is applied, because the one
- * thing worse than a change that did not happen is a change that happened
- * twice. Inside one tab, an action is taken once however often its frame is
- * read (a resumed stream, a second listener).
+ * `409 action_already_claimed` to every claim after the first. Each request
+ * is sent under ONE operation key, minted for it and sent again unchanged on
+ * a retry, so a claim whose answer was lost is asked again as the same claim
+ * rather than read as another tab's. A claim nobody ever answered is not a
+ * claim: nothing is applied, because the one thing worse than a change that
+ * did not happen is a change that happened twice. Inside one tab, an action
+ * is taken once however often its frame is read (a resumed stream, a second
+ * listener).
  *
  * # Which tab claims
  *
@@ -37,6 +40,7 @@ import {
   type AssistantActionReport,
 } from "~/contract/assistant.ts";
 import { call, versioned } from "~/protocol/assistant.ts";
+import { newActOpID } from "~/protocol/act.ts";
 import { RestError } from "~/protocol/rest.ts";
 import { emit, on, type AssistantBusEvents } from "../bus.ts";
 import { pageSnapshot } from "../context.ts";
@@ -77,21 +81,25 @@ export interface ActionLocal {
 export interface ActionDeps {
   /** Record what became of the action, for the drawer to draw. */
   settle: (local: ActionLocal) => void;
-  /** Send a report on the action's claim; the session's `call`, replaced in a test. */
-  report?: (actionId: string, body: AssistantActionReport) => Promise<unknown>;
+  /** Send a report on the action's claim, under `opKey`; the session's `call`, replaced in a test. */
+  report?: (actionId: string, body: AssistantActionReport, opKey: string) => Promise<unknown>;
 }
 
 /** The action ids this tab has taken, so a frame read twice is taken once. */
 const taken = new Set<string>();
 
-/** How many times an outcome report nobody answered is sent. */
+/** How many times a claim or a report nobody answered is sent. */
 const REPORT_ATTEMPTS = 3;
 
-/** How long to wait before sending an unanswered report again, doubled each time. */
+/** How long to wait before sending an unanswered request again, doubled each time. */
 const REPORT_BACKOFF_MS = 1_000;
 
-function sendReport(actionId: string, body: AssistantActionReport): Promise<unknown> {
-  return call("PUT /assistant/actions/{id}", body, { id: actionId });
+function sendReport(
+  actionId: string,
+  body: AssistantActionReport,
+  opKey: string,
+): Promise<unknown> {
+  return call("PUT /assistant/actions/{id}", body, { id: actionId, opKey });
 }
 
 /** Whether a report's failure is one a second copy may get past: no answer, or the engine unavailable. */
@@ -145,23 +153,27 @@ export function changedNothing(state: ActionLocalState): boolean {
   return state !== "applied" && state !== "elsewhere";
 }
 
-/** Report an outcome on the action's claim, sending again what nobody answered. */
-async function reportOutcome(
+/**
+ * Send a claim or a report under one operation key, sending it again while
+ * nobody answers; a refusal the engine wrote is thrown at once, and the last
+ * unanswered attempt's error once the attempts are spent.
+ */
+async function sendOnce(
   actionId: string,
   body: AssistantActionReport,
   report: NonNullable<ActionDeps["report"]>,
   wait: (ms: number) => Promise<void>,
-): Promise<boolean> {
-  for (let attempt = 0; attempt < REPORT_ATTEMPTS; attempt++) {
+): Promise<void> {
+  const opKey = newActOpID();
+  for (let attempt = 0; ; attempt++) {
     try {
-      await report(actionId, body);
-      return true;
+      await report(actionId, body, opKey);
+      return;
     } catch (err) {
-      if (!retryable(err) || attempt === REPORT_ATTEMPTS - 1) return false;
+      if (!retryable(err) || attempt === REPORT_ATTEMPTS - 1) throw err;
       await wait(REPORT_BACKOFF_MS * 2 ** attempt);
     }
   }
-  return false;
 }
 
 /**
@@ -182,7 +194,12 @@ export async function takeAction(
   taken.add(action.action_id);
   const report = deps.report ?? sendReport;
   try {
-    await report(action.action_id, { ...versioned, state: "applying", revision: here });
+    await sendOnce(
+      action.action_id,
+      { ...versioned, state: "applying", revision: here },
+      report,
+      wait,
+    );
   } catch (err) {
     if (err instanceof RestError && err.code === "action_already_claimed") {
       deps.settle({
@@ -210,7 +227,10 @@ export async function takeAction(
     words: wordsOf(result),
     undoable: result.outcome === "applied" && result.undoable === true,
   });
-  await reportOutcome(
+  // THE OUTCOME IS THE PAGE'S OWN STATEMENT and already drawn here; a report
+  // the engine never heard leaves the turn waiting on it, which the engine's
+  // own expiry settles, and is not a reason to say the change did not apply.
+  await sendOnce(
     action.action_id,
     {
       ...versioned,
@@ -221,7 +241,7 @@ export async function takeAction(
     },
     report,
     wait,
-  );
+  ).catch(() => {});
 }
 
 /** Test seam: a tab that has taken nothing. */

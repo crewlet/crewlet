@@ -80,17 +80,19 @@ function action(over: Partial<AssistantActionEvent> = {}): AssistantActionEvent 
 /** The reports a take sends, and what each is answered with. */
 function harness(answers: ((body: AssistantActionReport) => unknown)[] = []) {
   const reports: AssistantActionReport[] = [];
+  const keys: string[] = [];
   const settled: ActionLocal[] = [];
   const deps: ActionDeps = {
     settle: (local) => settled.push(local),
-    report: async (_id, body) => {
+    report: async (_id, body, opKey) => {
       reports.push(body);
+      keys.push(opKey);
       const answer = answers.shift();
       if (answer) return answer(body);
       return { action_id: "x", state: body.state };
     },
   };
-  return { reports, settled, deps };
+  return { reports, keys, settled, deps };
 }
 
 const noWait = () => Promise.resolve();
@@ -145,16 +147,41 @@ describe("a page action", () => {
     expect(settled[0]?.state).toBe("elsewhere");
   });
 
-  test("a claim nobody answered is not a claim: nothing is applied and nothing reported", async () => {
-    const { reports, settled, deps } = harness([
+  test("a claim nobody ever answered is not a claim: nothing is applied and nothing reported", async () => {
+    const unanswered = () => {
+      throw new RestError(0, { error: "unreachable" });
+    };
+    const { reports, keys, settled, deps } = harness([unanswered, unanswered, unanswered]);
+    await takeAction(action(), true, deps, noWait);
+    expect(applied).toEqual([]);
+    expect(reports.map((r) => r.state)).toEqual(["applying", "applying", "applying"]);
+    expect(new Set(keys).size).toBe(1);
+    expect(settled[0]).toMatchObject({ state: "unconfirmed", undoable: false });
+  });
+
+  test("a claim whose answer was lost is asked again as the same claim, and then applied", async () => {
+    const { reports, keys, deps } = harness([
       () => {
         throw new RestError(0, { error: "unreachable" });
       },
     ]);
     await takeAction(action(), true, deps, noWait);
+    expect(reports.map((r) => r.state)).toEqual(["applying", "applying", "applied"]);
+    // THE SAME OPERATION for the claim and its retry, another for the report.
+    expect(keys[0]).toBe(keys[1]);
+    expect(keys[2]).not.toBe(keys[0]);
+    expect(applied).toEqual(["true"]);
+  });
+
+  test("a claim the engine refused applies nothing, in the engine's words", async () => {
+    const { settled, deps } = harness([
+      () => {
+        throw new RestError(410, { error: "proposal_expired", message: "This change expired." });
+      },
+    ]);
+    await takeAction(action(), true, deps, noWait);
     expect(applied).toEqual([]);
-    expect(reports).toHaveLength(1);
-    expect(settled[0]).toMatchObject({ state: "unconfirmed", undoable: false });
+    expect(settled[0]).toMatchObject({ state: "unconfirmed", words: "This change expired." });
   });
 
   test("a tab on another page leaves it for the tab it was prepared in", async () => {
