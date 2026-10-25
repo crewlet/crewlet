@@ -202,10 +202,16 @@ func (f *fixture) open(t *testing.T) string {
 	return f.bridge.Open(t.Context(), f.session)
 }
 
-// dial connects an MCP client the way a coding agent's own client would.
+// dial connects an MCP client the way a coding agent's own client would —
+// re-reading the tool list when the server says it changed, as the CLIs that
+// run in a box do, so an activation's held answer is let go by the re-list.
 func dial(t *testing.T, url string) *mcp.ClientSession {
 	t.Helper()
-	client := mcp.NewClient(&mcp.Implementation{Name: "coding-agent", Version: "1"}, nil)
+	client := mcp.NewClient(&mcp.Implementation{Name: "coding-agent", Version: "1"}, &mcp.ClientOptions{
+		ToolListChangedHandler: func(ctx context.Context, req *mcp.ToolListChangedRequest) {
+			_, _ = req.Session.ListTools(ctx, nil)
+		},
+	})
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	// HTTPClient IS NOT OPTIONAL HERE. Left unset the SDK reaches for
