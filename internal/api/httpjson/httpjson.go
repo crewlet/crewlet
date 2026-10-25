@@ -989,6 +989,42 @@ const (
 	// writes, so a client sending one per keystroke is held to a few a
 	// second. 429 with a Retry-After; never a lockout.
 	CodeCheckBudget Code = "check_budget"
+
+	// --- the Dashboard Assistant ---
+
+	// CodeAssistantProtocolMismatch is a request naming an assistant
+	// protocol_version this node does not speak. 409: the dashboard is
+	// older or newer than the engine, and reloading it fixes it.
+	CodeAssistantProtocolMismatch Code = "assistant_protocol_mismatch"
+	// CodeAssistantNotAvailable is the assistant refused to this caller
+	// here, its detail `reason` the viewer's (disabled, no_model,
+	// not_a_person, no_permission). 403.
+	CodeAssistantNotAvailable Code = "assistant_not_available"
+	// CodeAssistantTurnRunning is a question asked in a conversation whose
+	// turn is still running or waiting on an approval: one at a time. 409.
+	CodeAssistantTurnRunning Code = "assistant_turn_running"
+	// CodeAssistantBusy is a person past their running turns or their turn
+	// rate. 429 with a Retry-After.
+	CodeAssistantBusy Code = "assistant_busy"
+	// CodeAssistantUnavailable is an assistant this node cannot run now:
+	// every model in its chain failing, or the turn's runner out of
+	// reach. 503, with a Retry-After where a wait is known to help.
+	CodeAssistantUnavailable Code = "assistant_unavailable"
+	// CodeProposalAlreadyDecided is an approval or a decline of a proposal
+	// somebody, or another tab, already decided; its detail `state` is the
+	// state it is in now. 409.
+	CodeProposalAlreadyDecided Code = "proposal_already_decided"
+	// CodeProposalExpired is an approval past the proposal's lifetime. 410.
+	CodeProposalExpired Code = "proposal_expired"
+	// CodeProposalDigestMismatch is an approval whose digest is not the
+	// proposal's, so nothing was sent. 409.
+	CodeProposalDigestMismatch Code = "proposal_digest_mismatch"
+	// CodeProposalStale is an approval of a change whose object moved since
+	// it was proposed. 409; the assistant may propose it again.
+	CodeProposalStale Code = "proposal_stale"
+	// CodeActionAlreadyClaimed is a page action another tab already
+	// claimed. 409.
+	CodeActionAlreadyClaimed Code = "action_already_claimed"
 )
 
 // codes is THE TABLE: every code this engine answers with, each with the one
@@ -1340,6 +1376,24 @@ var codes = map[Code]string{
 		"moment Retry-After names, then refresh it.",
 	CodeCheckBudget: "Too many checks at once. Wait the moment Retry-After names, " +
 		"then check the page again.",
+
+	// --- the Dashboard Assistant ---
+	CodeAssistantProtocolMismatch: "This dashboard speaks another version of the " +
+		"assistant's protocol than this engine. Reload the page.",
+	CodeAssistantNotAvailable: "The assistant is not available to you here.",
+	CodeAssistantTurnRunning: "The assistant is still working on this conversation. " +
+		"Wait for it to finish, or stop it, then ask again.",
+	CodeAssistantBusy: "You have asked the assistant too much at once. Wait the moment " +
+		"Retry-After names, then ask again.",
+	CodeAssistantUnavailable:   "The assistant cannot answer right now. Try again in a moment.",
+	CodeProposalAlreadyDecided: "This change was already decided, so nothing more was done.",
+	CodeProposalExpired: "This proposed change expired before it was approved. Ask the " +
+		"assistant to propose it again.",
+	CodeProposalDigestMismatch: "This approval does not match the change that was " +
+		"proposed, so nothing was sent. Reload the conversation and review it again.",
+	CodeProposalStale: "What this change would edit has moved since it was proposed, so " +
+		"nothing was sent. Ask the assistant to propose it again.",
+	CodeActionAlreadyClaimed: "Another tab is already applying this change.",
 }
 
 // Codes is every code in the vocabulary, sorted.
