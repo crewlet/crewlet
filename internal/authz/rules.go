@@ -364,6 +364,21 @@ const (
 	// The assistant's own verbs: using it, reading a conversation,
 	// approving or declining a proposal, and an administrator's audited
 	// read. Each is dotted, and lands here with the surface that asks it.
+
+	// ActionAssistantApprove is a person approving one of their own
+	// proposals: `POST /assistant/proposals/{id}/approve`. Everybody's,
+	// because whose proposal it is is the store's answer (ADR-0049) and what
+	// the write may do is the write's own row, decided again when it is sent.
+	// The write's own step-up is asked by the approval itself (ADR-0047).
+	ActionAssistantApprove Action = "assistant.approve"
+	// ActionAssistantDecline is a person declining one of their own
+	// proposals.
+	ActionAssistantDecline Action = "assistant.decline"
+	// ActionAssistantAuditRead is an administrator reading somebody else's
+	// conversation for compliance (decision D06): admin's, with a recent
+	// proof, every read recorded beside the reader's name and reason and
+	// shown to the conversation's owner.
+	ActionAssistantAuditRead Action = "assistant.conversation.audit_read"
 )
 
 // Presence is which arms of a verb need a PERSON present: refused to a request
@@ -1079,6 +1094,12 @@ var rules = map[Action]rule{
 	// approving its own proposal is the one gesture the whole design keeps
 	// from it. TestTheAssistantIsNeverOneStepFromTheNeverList holds every
 	// `assistant.` row here to all three.
+	ActionAssistantApprove: {class: ClassEverybody, humanOnly: true, recency: iam.RecencyAny,
+		presence: PresenceRequired, assist: AssistNever},
+	ActionAssistantDecline: {class: ClassEverybody, humanOnly: true, recency: iam.RecencyAny,
+		presence: PresenceRequired, assist: AssistNever},
+	ActionAssistantAuditRead: {class: ClassAdmin, humanOnly: true,
+		recency: iam.RecencyStepUp, presence: PresenceRequired, assist: AssistNever},
 }
 
 // RecencyOf reports how recent a proof a verb asks for, and whether the table
