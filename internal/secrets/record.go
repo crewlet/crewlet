@@ -88,20 +88,18 @@ const (
 
 	// SourceProvision is a credential an integration's provisioning pass
 	// minted: the engine's own pass, or `crewlet <vendor> provision
-	// -secret-store` against a stopped node's own table.
+	// -secret-store` written to the fleet's store directly, with the node's
+	// engine stopped.
 	SourceProvision Source = "provision"
 
-	// SourceMigrated is a row the engine moved onto the fleet from a node's
-	// own table at boot. It replaces the word the stopped node stamped, so
-	// [SourceCLI] and [SourceLLMLogin] are never on the fleet.
-	SourceMigrated Source = "migrated"
-
-	// SourceCLI is `crewlet secrets set` against a stopped node's own table.
+	// SourceCLI is `crewlet secrets set` written to the fleet's store
+	// directly, with the node's engine stopped. Through a running node the
+	// same command's row is [SourceAPI].
 	SourceCLI Source = "cli"
 
 	// SourceLLMLogin is a coding CLI's login — `crewlet llm login`'s headless
-	// token, or `crewlet llm export -secret-store`'s bundle — stored against
-	// a stopped node's own table.
+	// token, or `crewlet llm export -secret-store`'s bundle — written to the
+	// fleet's store directly, with the node's engine stopped.
 	SourceLLMLogin Source = "llm-login"
 
 	// SourceIAM is the engine's own key material, minted by the engine
@@ -110,8 +108,8 @@ const (
 )
 
 // Sources are every write path's word.
-var Sources = []Source{SourceAPI, SourceSetup, SourceProvision, SourceMigrated,
-	SourceCLI, SourceLLMLogin, SourceIAM}
+var Sources = []Source{SourceAPI, SourceSetup, SourceProvision, SourceCLI,
+	SourceLLMLogin, SourceIAM}
 
 // Valid reports whether a source off the wire is one this build stamps.
 func (s Source) Valid() bool { return slices.Contains(Sources, s) }

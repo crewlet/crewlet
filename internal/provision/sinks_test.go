@@ -9,11 +9,28 @@ import (
 	"strings"
 	"testing"
 
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/secrets"
-	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/store/storetest"
 )
+
+// fleetStore is the company's secret store, as a sink writing it directly
+// sees it: the fleet's, on a coordination store, under a keyring of its own.
+func fleetStore(t *testing.T) *fleetsecrets.Store {
+	t.Helper()
+	key, err := secrets.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	cipher, err := secrets.NewCipher(secrets.Keyring{
+		ActiveID: "k1", Keys: map[string][]byte{"k1": key},
+	})
+	if err != nil {
+		t.Fatalf("NewCipher: %v", err)
+	}
+	return fleetsecrets.New(coordmem.NewFleet(), cipher)
+}
 
 // runFor is the party a run is for: a person through their own machine token,
 // so each part of what a sealed row records is distinct.
@@ -26,19 +43,7 @@ var runFor = secrets.Author{Name: "jane.doe", Kind: "operator",
 // alone and the credential half fails.
 func TestAMintedCredentialRecordsWhoTheRunWasFor(t *testing.T) {
 	t.Parallel()
-	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "s.db"), store.Options{})
-	t.Cleanup(func() { _ = db.Close() })
-	key, err := secrets.GenerateKey()
-	if err != nil {
-		t.Fatalf("GenerateKey: %v", err)
-	}
-	cipher, err := secrets.NewCipher(secrets.Keyring{
-		ActiveID: "k1", Keys: map[string][]byte{"k1": key},
-	})
-	if err != nil {
-		t.Fatalf("NewCipher: %v", err)
-	}
-	values := db.SecretValues(cipher)
+	values := fleetStore(t)
 	if err := provision.NewSecretStoreSink(values, runFor).Record(t.Context(),
 		"GL_BOT_TOKEN", "glpat-minted"); err != nil {
 		t.Fatalf("Record: %v", err)
@@ -70,19 +75,7 @@ func sinkCases() []sinkCase {
 		{
 			name: "the secret store",
 			build: func(t *testing.T) (provision.TokenSink, func(*testing.T) map[string]string) {
-				db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "s.db"), store.Options{})
-				t.Cleanup(func() { _ = db.Close() })
-				key, err := secrets.GenerateKey()
-				if err != nil {
-					t.Fatalf("GenerateKey: %v", err)
-				}
-				cipher, err := secrets.NewCipher(secrets.Keyring{
-					ActiveID: "k1", Keys: map[string][]byte{"k1": key},
-				})
-				if err != nil {
-					t.Fatalf("NewCipher: %v", err)
-				}
-				values := db.SecretValues(cipher)
+				values := fleetStore(t)
 				return provision.NewSecretStoreSink(values, runFor),
 					func(t *testing.T) map[string]string {
 						got, err := values.All(context.Background())

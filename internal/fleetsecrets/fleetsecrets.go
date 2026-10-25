@@ -9,6 +9,13 @@
 // with, and nothing failed until a seat landed on one of them and a vendor
 // rejected a credential the operator believed they had rotated.
 //
+// Nor is there a node-local half any more. A command run while the engine is
+// stopped reaches this store through the node's own broker, or the external
+// one it dials (internal/engine's OpenFleetStore), rather than writing a
+// table of the node's own for the engine to carry here at its next start: a
+// command that read that table with the engine stopped read every value the
+// fleet held as unset, and a provisioner takes unset as the signal to mint.
+//
 // The company CONFIG already travels this way — the activation plane writes a
 // payload sealed with this very keyring into this very bucket family, and a
 // company document may itself carry credentials inline — so the secret store
@@ -22,10 +29,9 @@
 // can read the bucket learns which names exist and when they changed, not
 // what they are.
 //
-// The name is bound in as associated data, so an envelope moved to another
-// row fails to open rather than silently impersonating a different secret —
-// the same binding [store.SecretValues] uses, and the reason both can read
-// rows the other wrote during a migration.
+// The name is bound in as associated data ([secrets.AADForVar]), so an
+// envelope moved to another row fails to open rather than silently
+// impersonating a different secret.
 //
 // # Two views over one bucket: the operator's, and the engine's own
 //
@@ -57,11 +63,8 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
-	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
-
-var log = logging.Get("secrets.fleet")
 
 // Store is the fleet's secret values, sealed under one node's keyring, as the
 // OPERATOR's surfaces address them.
