@@ -34,17 +34,15 @@ func DeriveTier(act authz.Action, destructive bool) Tier {
 }
 
 // write is a write tool executing as act on the act route, the call's
-// arguments sent as the act tool's own (renamed where the model-facing name
-// differs).
-func write(name, tool string, destructive bool, phrase, description string, s *schema,
-	renamed map[string]string) Tool {
+// arguments sent as the act tool's own, under the same names.
+func write(name, tool string, destructive bool, phrase, description string, s *schema) Tool {
 	return Tool{
 		Name: name, Act: tool, Kind: KindWrite, Phrase: phrase, Description: description,
 		schema: s, Routes: []string{ActRoute}, Destructive: destructive,
 		Tier: DeriveTier(authz.Action(tool), destructive),
 		Apps: appsOf(authz.Action(tool)),
 		Build: func(a map[string]any) (exec.Request, error) {
-			return act(tool, Args(a), renamed)
+			return act(tool, Args(a))
 		},
 	}
 }
@@ -74,14 +72,14 @@ func writeTools() []Tool {
 				"status":   oneOf("Where it starts. Default todo.", statuses...),
 				"priority": oneOf("Its priority. Default none.", priorities...),
 				"due":      text("When it is due: a date (2031-04-16) or today, tomorrow, eow, eom, +7d.", nameBytes),
-				"labels":   texts("Tags the project declares.", 20, nameBytes),
-			}), nil),
+				"labels":   names("Tags the project declares.", 20),
+			})),
 		write("update_task", "update_work_item", true, "change tasks",
 			"Propose changing a task's fields. Read it with get_task first and pass its version "+
 				"as if_match, so the change applies to what the person saw.",
 			object([]string{"item", "if_match"}, map[string]*schema{
 				"item":     text("The task's key or id.", nameBytes),
-				"if_match": whole("The task's version from get_task.", 1, 1<<30),
+				"if_match": positive("The task's version from get_task.", 1<<30),
 				"title":    text("A new title.", lineBytes),
 				"body":     text("A new description, replacing the old one.", bodyBytes),
 				"status":   oneOf("A new status.", statuses...),
@@ -89,15 +87,15 @@ func writeTools() []Tool {
 				"assignee": text("A seat's handle, or \"\" to unassign.", nameBytes),
 				"reason":   text("With assignee: one line on why the work is theirs now.", lineBytes),
 				"due":      text("A new due date (2031-04-16, today, eow, +7d).", nameBytes),
-				"labels":   texts("The task's tags, replacing them.", 20, nameBytes),
-			}), nil),
+				"labels":   names("The task's tags, replacing them.", 20),
+			})),
 		write("comment_on_task", "comment_on_work_item", false, "comment on tasks",
 			"Propose a comment on a task, or a reply to one.",
 			object([]string{"item", "body"}, map[string]*schema{
 				"item":     text("The task's key or id.", nameBytes),
 				"body":     text("The comment, in Markdown.", bodyBytes),
 				"reply_to": text("The id of the comment this replies to.", nameBytes),
-			}), nil),
+			})),
 		write("answer_decision", "comment_on_work_item", false, "answer questions on tasks",
 			"Propose answering a question asked of the person on a task, choosing one of its "+
 				"options where it carries a decision.",
@@ -106,44 +104,44 @@ func writeTools() []Tool {
 				"answers": text("The comment id of the question this answers.", nameBytes),
 				"choice":  text("The id of the option chosen, where the question offers options.", nameBytes),
 				"body":    text("The answer, or why this option, in Markdown.", bodyBytes),
-			}), nil),
+			})),
 		write("set_my_priorities", "set_priorities", false, "reorder priorities",
 			"Propose the person's priority order, most important first, or a report's by "+
 				"their handle.",
 			object([]string{"items"}, map[string]*schema{
-				"items":  texts("Task keys or ids, most important first.", 100, nameBytes),
+				"items":  names("Task keys or ids, most important first.", 100),
 				"handle": text("A report's handle. Default the person's own list.", nameBytes),
-			}), nil),
+			})),
 		write("mark_inbox", "mark_inbox", false, "mark the inbox",
 			"Propose marking inbox notices read or unread, by their record ids.",
 			object(nil, map[string]*schema{
-				"read":   texts("Record ids to mark read.", 200, nameBytes),
-				"unread": texts("Record ids to mark unread.", 200, nameBytes),
-			}), nil),
+				"read":   names("Record ids to mark read.", 200),
+				"unread": names("Record ids to mark unread.", 200),
+			})),
 		write("pause_agent", "pause_seat", true, "pause agents",
 			"Propose pausing an agent seat, optionally stopping the turn it is running.",
 			object([]string{"handle", "reason"}, map[string]*schema{
 				"handle":       text("The seat's handle.", nameBytes),
 				"reason":       text("Why, in one line.", lineBytes),
 				"stop_running": flag("Stop the turn it is running now as well."),
-			}), nil),
+			})),
 		write("resume_agent", "resume_seat", false, "resume agents",
 			"Propose resuming a paused agent seat.",
 			object([]string{"handle"}, map[string]*schema{
 				"handle": text("The seat's handle.", nameBytes),
-			}), nil),
+			})),
 		write("steer_turn", "steer_turn", false, "steer running turns",
 			"Propose a note to a turn that is running now; it becomes that agent's input.",
 			object([]string{"turn_id", "note"}, map[string]*schema{
 				"turn_id": text("The running turn's id.", nameBytes),
 				"note":    text("The note, verbatim.", 8<<10),
-			}), nil),
+			})),
 		write("answer_coding_run", "answer_run", false, "answer coding runs",
 			"Propose an answer to a coding run parked on a question for the person.",
 			object([]string{"turn_id", "answer"}, map[string]*schema{
 				"turn_id": text("The run's turn id.", nameBytes),
 				"answer":  text("The answer, verbatim.", 32<<10),
-			}), nil),
+			})),
 		write("create_page", "write_page", false, "write pages",
 			"Propose a new knowledge page.",
 			object([]string{"title", "body"}, map[string]*schema{
@@ -151,20 +149,20 @@ func writeTools() []Tool {
 				"body":      text("The page, in Markdown.", bodyBytes),
 				"container": text("The space's key. Default the person's team's.", nameBytes),
 				"parent":    text("The id of the page it belongs under.", nameBytes),
-				"labels":    texts("Labels.", 20, nameBytes),
+				"labels":    names("Labels.", 20),
 				"status":    oneOf("published (the default) or draft.", "published", "draft"),
 				"message":   text("One line on why the page exists.", lineBytes),
-			}), nil),
+			})),
 		write("edit_page", "save_page", true, "edit pages",
 			"Propose a new version of a page. Read it with get_page first and pass its version "+
 				"as base_version.",
 			object([]string{"page", "base_version", "body"}, map[string]*schema{
 				"page":         text("The page's id.", nameBytes),
-				"base_version": whole("The page's version from get_page.", 1, 1<<30),
+				"base_version": positive("The page's version from get_page.", 1<<30),
 				"body":         text("The whole new body, in Markdown.", bodyBytes),
 				"title":        text("A new title.", lineBytes),
 				"message":      text("One line on what changed and why.", lineBytes),
-			}), nil),
+			})),
 	}
 	// AN ANSWER UNBLOCKS SOMEBODY ELSE: the agent that asked resumes on
 	// it, so it is R3 above the comment verb's own derivation.

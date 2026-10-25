@@ -124,9 +124,16 @@ type Exposure struct {
 type Tier string
 
 const (
-	TierRead          Tier = "R0"
-	TierPageLocal     Tier = "R1"
-	TierReversible    Tier = "R2"
+	// TierRead is a read (R0): sent at once, through the turn's read grant.
+	TierRead Tier = "R0"
+	// TierPageLocal is a page action (R1): a change to the screen the
+	// person has open, applied by the page itself.
+	TierPageLocal Tier = "R1"
+	// TierReversible is any write that is not consequential (R2).
+	TierReversible Tier = "R2"
+	// TierConsequential is a write whose verb row is human-only or asks a
+	// step-up, or whose tool is destructive beyond the caller's own record
+	// (R3).
 	TierConsequential Tier = "R3"
 )
 

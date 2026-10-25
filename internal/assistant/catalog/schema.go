@@ -190,8 +190,11 @@ func oneOf(description string, values ...string) *schema {
 	return &schema{kind: "string", description: description, enum: values}
 }
 
-func whole(description string, lo, hi int) *schema {
-	return &schema{kind: "integer", description: description, min: lo, max: hi,
+// positive is a whole number from 1 to hi. NEVER BELOW ONE: every number a
+// tool takes is a count, a window or a version, and none of them means
+// anything at zero.
+func positive(description string, hi int) *schema {
+	return &schema{kind: "integer", description: description, min: 1, max: hi,
 		hasMin: true, hasMax: true}
 }
 
@@ -199,9 +202,11 @@ func flag(description string) *schema {
 	return &schema{kind: "boolean", description: description}
 }
 
-func texts(description string, maxItems, maxLen int) *schema {
+// names is a list of at most maxItems identifiers (keys, ids, labels), each
+// held to [nameBytes]: the only lists a tool takes.
+func names(description string, maxItems int) *schema {
 	return &schema{kind: "array", description: description, maxItems: maxItems,
-		items: &schema{kind: "string", maxLen: maxLen}}
+		items: &schema{kind: "string", maxLen: nameBytes}}
 }
 
 // The bounds every catalogue string is held to, in bytes.

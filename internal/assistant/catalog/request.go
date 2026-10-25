@@ -97,17 +97,11 @@ func (p *params) fixed(key, value string) *params {
 func (p *params) values() url.Values { return p.q }
 
 // act is the request an approved write executes as: the act route's one
-// tool, with the call's arguments as its `args`, renamed where the
-// model-facing name differs from the act tool's.
-func act(tool string, args Args, renamed map[string]string) (exec.Request, error) {
-	out := make(map[string]any, len(args))
-	for k, v := range args {
-		if to, ok := renamed[k]; ok {
-			k = to
-		}
-		out[k] = v
-	}
-	body, err := json.Marshal(map[string]any{"args": out})
+// tool, with the call's arguments as its `args`. THE SAME NAMES: every write
+// tool's arguments are the act tool's own, so what the person approves and
+// what the route reads are spelled one way.
+func act(tool string, args Args) (exec.Request, error) {
+	body, err := json.Marshal(map[string]any{"args": map[string]any(args)})
 	if err != nil {
 		return exec.Request{}, fmt.Errorf("catalog: encode the %s request: %w", tool, err)
 	}

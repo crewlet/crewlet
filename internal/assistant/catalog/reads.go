@@ -90,7 +90,7 @@ func readTools() []Tool {
 				"new task, so you do not file a duplicate.",
 			schema: object([]string{"q"}, map[string]*schema{
 				"q":     text("What the work is about, in plain words.", queryBytes),
-				"limit": whole("How many results, at most.", 1, 25),
+				"limit": positive("How many results, at most.", 25),
 			}),
 			Routes: []string{"GET /work/search"}, Apps: tracker, Fence: true,
 			Build: func(a map[string]any) (exec.Request, error) {
@@ -122,7 +122,7 @@ func readTools() []Tool {
 				"due":         oneOf("When the work is due.", "overdue", "next7", "thisweek", "thismonth", "last7", "earlier"),
 				"q":           text("Words the title must contain.", queryBytes),
 				"show_closed": flag("Include finished work, which is left out unless asked."),
-				"limit":       whole("How many tasks, at most.", 1, 50),
+				"limit":       positive("How many tasks, at most.", 50),
 			}),
 			Routes: []string{"GET /work"}, Apps: tracker, Fence: true,
 			Build: func(a map[string]any) (exec.Request, error) {
@@ -169,7 +169,7 @@ func readTools() []Tool {
 				"on it.",
 			schema: object([]string{"item"}, map[string]*schema{
 				"item":  text("The task's key or id.", nameBytes),
-				"limit": whole("How many comments, at most.", 1, 50),
+				"limit": positive("How many comments, at most.", 50),
 			}),
 			Routes: []string{"GET /work/comments"}, Apps: tracker, Fence: true,
 			Build: func(a map[string]any) (exec.Request, error) {
@@ -192,7 +192,7 @@ func readTools() []Tool {
 				"and time.",
 			schema: object([]string{"item"}, map[string]*schema{
 				"item":  text("The task's key or id.", nameBytes),
-				"limit": whole("How many turns, at most.", 1, 50),
+				"limit": positive("How many turns, at most.", 50),
 			}),
 			Routes: []string{"GET /work/turns"}, Apps: tracker, Fence: true,
 			Build: func(a map[string]any) (exec.Request, error) {
@@ -358,7 +358,7 @@ func readTools() []Tool {
 			schema: object(nil, map[string]*schema{
 				"handle": text("The seat's handle. Required for the seat's detail.", nameBytes),
 				"view":   oneOf("detail (the default) or activity.", "detail", "activity"),
-				"days":   whole("Activity only: the window in days.", 1, 90),
+				"days":   positive("Activity only: the window in days.", 90),
 			}),
 			Routes: []string{"GET /agents/{id}", "GET /agents/activity"},
 			Build: func(a map[string]any) (exec.Request, error) {
@@ -431,8 +431,8 @@ func readTools() []Tool {
 			schema: object([]string{"handle"}, map[string]*schema{
 				"handle": text("The seat's handle.", nameBytes),
 				"failed": flag("Only the turns that failed."),
-				"days":   whole("The window in days.", 1, 30),
-				"limit":  whole("How many turns, at most.", 1, 50),
+				"days":   positive("The window in days.", 30),
+				"limit":  positive("How many turns, at most.", 50),
 			}),
 			Routes: []string{"GET /turns"}, Fence: true,
 			Build: func(a map[string]any) (exec.Request, error) {
@@ -476,7 +476,7 @@ func readTools() []Tool {
 			Description: "Token spend over a window of company days, by agent, by model or by " +
 				"phase.",
 			schema: object(nil, map[string]*schema{
-				"days":   whole("The window in company days. Default 7.", 1, 90),
+				"days":   positive("The window in company days. Default 7.", 90),
 				"by":     oneOf("How to break it down. Default agent.", "agent", "model", "phase"),
 				"handle": text("One seat's handle, for that seat alone.", nameBytes),
 			}),
@@ -499,7 +499,7 @@ func readTools() []Tool {
 			Description: "Token spend per day or week over a window, the company's whole, or its " +
 				"largest groups.",
 			schema: object(nil, map[string]*schema{
-				"days":   whole("The window in company days. Default 30.", 1, 90),
+				"days":   positive("The window in company days. Default 30.", 90),
 				"bucket": oneOf("day (the default) or week.", "day", "week"),
 				"view":   oneOf("over_time (the default) or by_group.", "over_time", "by_group"),
 				"group":  oneOf("by_group only: what to group by.", "phase", "model", "provider", "seat", "unit", "worker"),
@@ -607,7 +607,7 @@ func readTools() []Tool {
 			Description: "What the company did recently, across tasks, pages and schedules, " +
 				"newest first. Rows the person may not see are left out.",
 			schema: object(nil, map[string]*schema{
-				"limit": whole("How many entries, at most.", 1, 50),
+				"limit": positive("How many entries, at most.", 50),
 			}),
 			Routes: []string{"GET /feed"}, Fence: true,
 			Build: func(a map[string]any) (exec.Request, error) {
@@ -631,7 +631,7 @@ func readTools() []Tool {
 			schema: object(nil, map[string]*schema{
 				"q":     text("Words the title must contain.", queryBytes),
 				"kind":  oneOf("Only one kind.", artifactKinds()...),
-				"limit": whole("How many, at most.", 1, 50),
+				"limit": positive("How many, at most.", 50),
 			}),
 			Routes: []string{"GET /artifacts"}, Fence: true,
 			Build: func(a map[string]any) (exec.Request, error) {
@@ -736,7 +736,7 @@ func readTools() []Tool {
 			Description: "Administrators: who changed the company document and when, newest " +
 				"first, with each change's summary.",
 			schema: object(nil, map[string]*schema{
-				"limit": whole("How many revisions, at most.", 1, 50),
+				"limit": positive("How many revisions, at most.", 50),
 			}),
 			Routes: []string{"GET /query/{what}"}, Apps: adminOnly, Fence: true,
 			Build: func(a map[string]any) (exec.Request, error) {
