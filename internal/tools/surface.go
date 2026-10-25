@@ -321,6 +321,55 @@ func (s *Surface) ToolDefs() []llm.ToolDef {
 // cannot have, which is a thing to tell it about, and an error here would tear
 // down a turn over a hallucinated name.
 func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.ToolResult, error) {
+	return s.execute(ctx, call, s.turn, nil)
+}
+
+// Admission is one call's place in its run's call log, fixed when the call was
+// admitted ([Surface.Admit]). The zero value is a call admitted on a surface
+// bound to no run's log.
+type Admission struct {
+	// calls is the log the call counts its repeats from: the run's calls
+	// admitted before it.
+	calls *turnctx.CallLog
+}
+
+// Admit records a call in its run's call log NOW, in the order calls arrive,
+// for a caller that runs calls side by side — see [turnctx.CallLog.Admit] for
+// why a count read against the order calls RETURN in is one a re-run does not
+// reproduce. The caller admits each call under its own lock, in arrival order,
+// and runs it with [Surface.ExecuteAdmitted].
+//
+// AT ADMISSION, so a call the surface goes on to refuse — an unknown name, a
+// guard — is in the log as well. That can only raise a later count, and a
+// raised count is a fresh operation; see [turnctx.CallLog].
+func (s *Surface) Admit(name string, args map[string]any) Admission {
+	if args == nil {
+		args = map[string]any{}
+	}
+	return Admission{calls: s.turn.CallLog().Admit(name, args)}
+}
+
+// ExecuteAdmitted runs a call [Surface.Admit] admitted: exactly
+// [Surface.Execute], except that the tool counts its repeats from the log as
+// it stood at the admission, and the call, already in the log, is not recorded
+// there again. What the call recorded on its own view is handed back to the
+// run's log when it returns.
+func (s *Surface) ExecuteAdmitted(ctx context.Context, a Admission, call llm.ToolCall) (toolloop.ToolResult, error) {
+	turn := s.turn
+	if a.calls != nil {
+		turn = s.turn.WithCalls(a.calls)
+		defer s.turn.CallLog().Absorb(a.calls)
+	}
+	return s.execute(ctx, call, turn, &a)
+}
+
+// execute is [Surface.Execute] as turn — the surface's own, or a view of it
+// whose call log is an admitted call's ([Surface.ExecuteAdmitted]). admitted
+// is nil for a call nobody admitted, which the run's log records once it has
+// returned.
+func (s *Surface) execute(ctx context.Context, call llm.ToolCall, turn *turnctx.Turn,
+	admitted *Admission,
+) (toolloop.ToolResult, error) {
 	// Arguments arrive already decoded — the provider layer owns that,
 	// including keeping large integer ids exact.
 	args := call.Arguments
@@ -401,7 +450,7 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 	// one for a seat at all. An outer answer wins — see
 	// [turnctx.WithPrincipal] — so a surface reached through somebody's
 	// own credential still acts as them.
-	res, err := s.invoke(turnctx.WithPrincipal(ctx, s.turn), e.Tool, args)
+	res, err := s.invoke(turnctx.WithPrincipal(ctx, turn), turn, e.Tool, args)
 	if err != nil {
 		tracing.Fail(span, err)
 		// The caller's own context ended — the turn is being torn down.
@@ -416,8 +465,11 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 	// at a step whose outcome is unknown), and a call the log never heard
 	// of is one a later count misses — which hands a repeat its first
 	// copy's id. Recording one that wrote nothing only raises a count, and
-	// a raised count is a fresh operation. See [turnctx.CallLog].
-	s.turn.CallLog().Record(call.Name, args)
+	// a raised count is a fresh operation. See [turnctx.CallLog]. An
+	// ADMITTED call is in it already, from the moment it arrived.
+	if admitted == nil {
+		turn.CallLog().Record(call.Name, args)
+	}
 	if s.guard != nil && !res.Failed {
 		// SUCCESS ONLY. A load that named a key nobody has comes back
 		// failed, and treating it as an unlock would let a typo open
@@ -479,12 +531,14 @@ func invokedOutcome(failed, suspended bool) string {
 // widening the signature would put a turn-shaped argument on every bridged
 // tool to be ignored. This way the two kinds of tool coexist under one
 // registry, and the one that needs the fact asks for it.
-func (s *Surface) invoke(ctx context.Context, tool Callable, args map[string]any) (DetachedResult, error) {
+func (s *Surface) invoke(ctx context.Context, turn *turnctx.Turn, tool Callable,
+	args map[string]any,
+) (DetachedResult, error) {
 	switch t := tool.(type) {
 	case Detached:
-		return t.CallDetached(ctx, s.turn, args)
+		return t.CallDetached(ctx, turn, args)
 	case SeatCallable:
-		res, err := t.CallForTurn(ctx, s.turn, args)
+		res, err := t.CallForTurn(ctx, turn, args)
 		return DetachedResult{Result: res}, err
 	default:
 		res, err := tool.Call(ctx, args)
