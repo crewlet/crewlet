@@ -75,6 +75,10 @@ func damageNewestIndex(t *testing.T, c *Case, i int) {
 			newest, at = path, info.ModTime()
 		}
 	}
+	// The cache installs its indexes read-only; only root writes past that.
+	if err := os.Chmod(newest, 0o600); err != nil {
+		t.Fatalf("make %s writable: %v", newest, err)
+	}
 	if err := os.Truncate(newest, 100); err != nil {
 		t.Fatalf("truncate %s: %v", newest, err)
 	}

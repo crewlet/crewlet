@@ -697,6 +697,10 @@ func TestVerifyHashesTheBundleNotThePack(t *testing.T) {
 	}
 	damage(t, idx, 1, []byte{raw[len(raw)-1] ^ 0xff})
 	rev := filepath.Join(s.Dir, "objects", "pack", "pack-"+first.GitChecksum+".rev")
+	// The cache installs its indexes read-only; only root writes past that.
+	if err := os.Chmod(rev, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Truncate(rev, first.ReverseBytes-4); err != nil {
 		t.Fatal(err)
 	}

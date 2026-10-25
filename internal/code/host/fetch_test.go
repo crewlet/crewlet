@@ -323,6 +323,10 @@ func truncateNewestIndex(t *testing.T, c *codetest.Case) {
 	if newest == "" {
 		t.Fatalf("no pack index in %s", dir)
 	}
+	// The cache installs its indexes read-only; only root writes past that.
+	if err := os.Chmod(newest, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Truncate(newest, 100); err != nil {
 		t.Fatal(err)
 	}
