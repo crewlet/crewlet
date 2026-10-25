@@ -29,6 +29,7 @@
 import { useMemo } from "react";
 import { useParam } from "~/app/router.tsx";
 import { fmtMinute, parseUTC } from "~/lib/format.ts";
+import { dateTimeFormat, type DateShape } from "~/lib/formatters.ts";
 
 /** The windows every time-ranged screen offers, in the order a control reads. */
 export const RANGES = ["15m", "1h", "6h", "1d", "7d", "30d", "90d"] as const;
@@ -601,27 +602,16 @@ export function clockIn(at: number, zone: string | undefined): string {
   return clockFormat(zone).format(at);
 }
 
-/** One formatter per zone: a list draws a time per row, on one clock. */
-const clocks = new Map<string, Intl.DateTimeFormat>();
-
+/** One formatter per zone, through `formatters.ts`: a list draws a time per row, on one clock. */
 function clockFormat(zone: string | undefined): Intl.DateTimeFormat {
-  const key = zone || "UTC";
-  let format = clocks.get(key);
-  if (!format) {
-    const options: Intl.DateTimeFormatOptions = {
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23",
-    };
-    try {
-      format = new Intl.DateTimeFormat(undefined, { ...options, timeZone: key });
-    } catch {
-      format = new Intl.DateTimeFormat(undefined, { ...options, timeZone: "UTC" });
-    }
-    clocks.set(key, format);
+  try {
+    return dateTimeFormat(undefined, zone || "UTC", CLOCK);
+  } catch {
+    return dateTimeFormat(undefined, "UTC", CLOCK);
   }
-  return format;
 }
+
+const CLOCK: DateShape = { hour: "2-digit", minute: "2-digit", hourCycle: "h23" };
 
 /**
  * The first instant of the company date `label` in `zone`, or null for a
@@ -683,23 +673,16 @@ export function daysInterval(
   return { from, to: companyMidnight(last + 26 * 3_600_000, zone) };
 }
 
+/** `en-CA` writes a date in this shape as `YYYY-MM-DD`, which sorts as the date does. */
+const YMD: DateShape = { year: "numeric", month: "2-digit", day: "2-digit" };
+
 /** A function reading the `YYYY-MM-DD` an instant falls on in `zone`. */
 function dateIn(zone: string | undefined): (at: number) => string {
   let format: Intl.DateTimeFormat;
   try {
-    format = new Intl.DateTimeFormat("en-CA", {
-      timeZone: zone || "UTC",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    });
+    format = dateTimeFormat("en-CA", zone || "UTC", YMD);
   } catch {
-    format = new Intl.DateTimeFormat("en-CA", {
-      timeZone: "UTC",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    });
+    format = dateTimeFormat("en-CA", "UTC", YMD);
   }
   // `en-CA` writes a date as `YYYY-MM-DD`, which sorts as the date does.
   return (at) => format.format(at);

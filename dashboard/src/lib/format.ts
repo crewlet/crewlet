@@ -19,6 +19,7 @@
 // constant rather than the component keeps this module free of React, which is
 // what lets it stay a leaf every screen and every test can reach.
 import { EMPTY_VALUE } from "@crewlethq/ui";
+import { dateTimeFormat, type DateShape } from "./formatters.ts";
 import { zone } from "./prefs.ts";
 import { isWholeReference } from "./references.ts";
 
@@ -79,38 +80,33 @@ export function oldestFirst(
  * suite pins it (`pinZoneForTest`) to reach a date-line edge, and threading it
  * through three hundred call sites would let the ones that forgot render in a
  * different zone from the ones beside them.
+ *
+ * EVERY FORMATTER COMES FROM `formatters.ts`, built once per shape and zone:
+ * a `toLocaleString` with options built one on every call, so a list built
+ * one or two a row on every render.
  */
-const DATE_PARTS: Intl.DateTimeFormatOptions = { year: "numeric", month: "short", day: "2-digit" };
+const DATE_PARTS: DateShape = { year: "numeric", month: "short", day: "2-digit" };
+
+const TIME: DateShape = { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false };
+const DATE_TIME: DateShape = { ...DATE_PARTS, ...TIME };
+const DATE_MINUTE: DateShape = { ...DATE_PARTS, hour: "2-digit", minute: "2-digit", hour12: false };
 
 export function fmtTime(ts: string | null | undefined): string {
   const d = parseUTC(ts);
   if (!d) return "";
-  return d.toLocaleTimeString(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-    timeZone: zone(),
-  });
+  return dateTimeFormat(undefined, zone(), TIME).format(d);
 }
 
 export function fmtDateTime(ts: string | null | undefined): string {
   const d = parseUTC(ts);
   if (!d) return EMPTY_VALUE;
-  return d.toLocaleString(undefined, {
-    ...DATE_PARTS,
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-    timeZone: zone(),
-  });
+  return dateTimeFormat(undefined, zone(), DATE_TIME).format(d);
 }
 
 export function fmtDate(ts: string | null | undefined): string {
   const d = parseUTC(ts);
   if (!d) return EMPTY_VALUE;
-  return d.toLocaleDateString(undefined, { ...DATE_PARTS, timeZone: zone() });
+  return dateTimeFormat(undefined, zone(), DATE_PARTS).format(d);
 }
 
 /**
@@ -125,13 +121,7 @@ export function fmtDate(ts: string | null | undefined): string {
 export function fmtMinute(ts: string | null | undefined): string {
   const d = parseUTC(ts);
   if (!d) return EMPTY_VALUE;
-  return d.toLocaleString(undefined, {
-    ...DATE_PARTS,
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-    timeZone: zone(),
-  });
+  return dateTimeFormat(undefined, zone(), DATE_MINUTE).format(d);
 }
 
 /**
@@ -156,13 +146,15 @@ export function fmtDateCompact(ts: string | null | undefined, now: number): stri
   // than in the tooltip beside it — and, for thirteen hours a year, a year
   // earlier.
   const thisYear = calendarYear(new Date(now));
-  return d.toLocaleDateString(undefined, {
-    month: "short",
-    day: "2-digit",
-    timeZone: zone(),
-    ...(calendarYear(d) === thisYear ? {} : { year: "numeric" }),
-  });
+  return dateTimeFormat(
+    undefined,
+    zone(),
+    calendarYear(d) === thisYear ? MONTH_DAY : MONTH_DAY_YEAR,
+  ).format(d);
 }
+
+const MONTH_DAY: DateShape = { month: "short", day: "2-digit" };
+const MONTH_DAY_YEAR: DateShape = { ...MONTH_DAY, year: "numeric" };
 
 /**
  * "Sep 9", from a COMPANY DATE LABEL (`2026-09-09`) — a day the engine cut on
@@ -178,16 +170,12 @@ export function fmtDateCompact(ts: string | null | undefined, now: number): stri
 export function companyDateLabel(date: string): string {
   const at = Date.parse(`${date}T12:00:00Z`);
   if (!Number.isFinite(at)) return date;
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    timeZone: "UTC",
-  }).format(at);
+  return dateTimeFormat(undefined, "UTC", { month: "short", day: "numeric" }).format(at);
 }
 
 /** Which calendar year an instant falls in, IN THE VIEWER'S ZONE. */
 function calendarYear(at: Date): string {
-  return at.toLocaleDateString("en-US", { year: "numeric", timeZone: zone() });
+  return dateTimeFormat("en-US", zone(), { year: "numeric" }).format(at);
 }
 
 /**
@@ -713,35 +701,27 @@ function wallParts(at: number, tz: string): Record<string, string> {
   return out;
 }
 
-// One formatter per zone. Constructing an Intl.DateTimeFormat is the expensive
-// half of this file, and a range picker rebuilds its two fields on every
-// keystroke.
-const formatters = new Map<string, Intl.DateTimeFormat>();
-
+// One formatter per zone, through `formatters.ts`: a range picker rebuilds its
+// two fields on every keystroke.
 function wallFormatter(tz: string): Intl.DateTimeFormat {
-  let f = formatters.get(tz);
-  if (!f) {
-    f = new Intl.DateTimeFormat("en-US", {
-      timeZone: tz,
-      // `hourCycle: "h23"` RATHER THAN `hour12: false`, which is the legacy
-      // spelling and selects h24 in some engines: midnight comes back as
-      // "24", the previous day's twenty-fourth hour, and fed to Date.UTC it
-      // rolls the day forward and lands a whole day out. `h23` is the
-      // explicit 00–23 cycle, so there is no reading to fold back — and
-      // `hour12` takes precedence over `hourCycle` where both are given, so
-      // it is absent rather than set to false.
-      hourCycle: "h23",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    });
-    formatters.set(tz, f);
-  }
-  return f;
+  return dateTimeFormat("en-US", tz, WALL);
 }
+
+const WALL: DateShape = {
+  // `hourCycle: "h23"` RATHER THAN `hour12: false`, which is the legacy
+  // spelling and selects h24 in some engines: midnight comes back as "24", the
+  // previous day's twenty-fourth hour, and fed to Date.UTC it rolls the day
+  // forward and lands a whole day out. `h23` is the explicit 00–23 cycle, so
+  // there is no reading to fold back — and `hour12` takes precedence over
+  // `hourCycle` where both are given, so it is absent rather than set to false.
+  hourCycle: "h23",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+};
 
 // ---------------------------------------------------------------------------
 // Values read out of the company document

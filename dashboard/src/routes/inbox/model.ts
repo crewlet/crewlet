@@ -26,6 +26,8 @@
  */
 
 import { firstLine, fmtDateCompact, toWall, zoneOffset } from "~/lib/format.ts";
+import { dateTimeFormat, type DateShape } from "~/lib/formatters.ts";
+import { zone } from "~/lib/prefs.ts";
 import { plainText } from "~/lib/markdown.ts";
 import { reasonPhrase, reasonWhy } from "~/lib/reasons.ts";
 import {
@@ -426,8 +428,10 @@ export function shortWhen(at: string | undefined, now: number): string {
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h`;
-  if (hours < 24 * 7) return new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(t);
-  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(t);
+  // IN THE READER'S ZONE, as every other time on the screen: a formatter with
+  // no zone writes in the runtime's, which a suite pinning one does not move.
+  if (hours < 24 * 7) return dateTimeFormat(undefined, zone(), { weekday: "short" }).format(t);
+  return dateTimeFormat(undefined, zone(), { month: "short", day: "numeric" }).format(t);
 }
 
 /**
@@ -549,22 +553,14 @@ interface Civil {
   d: number;
 }
 
+const CIVIL: DateShape = { year: "numeric", month: "2-digit", day: "2-digit" };
+
 function civilDate(at: number, tz: string): Civil {
   let parts: Intl.DateTimeFormatPart[];
   try {
-    parts = new Intl.DateTimeFormat("en-CA", {
-      timeZone: tz,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).formatToParts(at);
+    parts = dateTimeFormat("en-CA", tz, CIVIL).formatToParts(at);
   } catch {
-    parts = new Intl.DateTimeFormat("en-CA", {
-      timeZone: "UTC",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).formatToParts(at);
+    parts = dateTimeFormat("en-CA", "UTC", CIVIL).formatToParts(at);
   }
   const get = (type: string) => Number(parts.find((p) => p.type === type)?.value);
   return { y: get("year"), m: get("month"), d: get("day") };
@@ -572,11 +568,10 @@ function civilDate(at: number, tz: string): Civil {
 
 /** A civil date as a reader names it: "Mon, Sep 28". */
 function dayIn(c: Civil): string {
-  return new Intl.DateTimeFormat("en-US", {
+  return dateTimeFormat("en-US", "UTC", {
     weekday: "short",
     month: "short",
     day: "numeric",
-    timeZone: "UTC",
   }).format(Date.UTC(c.y, c.m - 1, c.d));
 }
 

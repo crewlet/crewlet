@@ -1106,3 +1106,90 @@ test("every kit button in the page bar is the bar's small size", () => {
   }
   expect(offenders).toEqual([]);
 });
+
+/**
+ * Where a node builds an `Intl` date or number formatter: `new
+ * Intl.DateTimeFormat(…)` or `Intl.NumberFormat(…)` called bare, or a
+ * `toLocaleString`, `toLocaleDateString` or `toLocaleTimeString` handed a locale
+ * or options, which builds one on every call. Null for anything else — a call
+ * with no arguments reads the runtime's own cached default and builds nothing.
+ */
+function formatterBuild(node: Node): string | null {
+  if (node.type === "NewExpression" || node.type === "CallExpression") {
+    const callee = node.callee as Node;
+    const name = memberName(callee);
+    if (
+      (name === "DateTimeFormat" || name === "NumberFormat") &&
+      (callee.object as Node).type === "Identifier" &&
+      (callee.object as Node).name === "Intl"
+    ) {
+      return `Intl.${name}`;
+    }
+    if (
+      node.type === "CallExpression" &&
+      (name === "toLocaleString" ||
+        name === "toLocaleDateString" ||
+        name === "toLocaleTimeString") &&
+      (node.arguments as Node[]).length > 0
+    ) {
+      return `${name}(…)`;
+    }
+  }
+  return null;
+}
+
+/** Every formatter build in a module's text, as `path:line what`. */
+function formatterBuilds(path: string, text: string, lang: Lang): string[] {
+  const line = lineOf(text);
+  const found: string[] = [];
+  walk(parse(text, lang), (node) => {
+    const what = formatterBuild(node);
+    if (what) found.push(`${path}:${line(node.start)} ${what}`);
+  });
+  return found;
+}
+
+// ONE PLACE BUILDS A FORMATTER, `lib/formatters.ts`, once per locale, zone and
+// shape. Building one is the expensive half of writing a date or a number, and
+// a `toLocaleString` with options, or an `Intl.DateTimeFormat` built where it is
+// used, builds one on every call: a list built one or two a row on every
+// render, and reading the zone each was written in built another. The only
+// other build is `lib/prefs.ts`'s read of the browser's zone, made once and
+// kept. Mutation: a date drawn with `toLocaleDateString(undefined, …)` in any
+// module is named here.
+test("every date and number formatter is built through lib/formatters.ts", () => {
+  const allowed: Record<string, number> = {
+    // The cache's own two constructions.
+    "lib/formatters.ts": 2,
+    // The browser's zone, read once and kept.
+    "lib/prefs.ts": 1,
+  };
+  const offenders = modules().flatMap(({ path, text, lang }) => {
+    const found = formatterBuilds(path, text, lang);
+    return found.length === (allowed[path] ?? 0) ? [] : found;
+  });
+  expect(
+    offenders,
+    "build a date or number formatter through dateTimeFormat or numberFormat (lib/formatters.ts)",
+  ).toEqual([]);
+});
+
+test("the formatter reading sees every way to build one, and nothing that builds none", () => {
+  const snippet = [
+    'new Intl.DateTimeFormat("en-US", { timeZone: "UTC" });',
+    "Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });",
+    'at.toLocaleDateString(undefined, { month: "short" });',
+    'at.toLocaleString("en-GB");',
+    "at.toLocaleTimeString(undefined, {});",
+    "n.toLocaleString();",
+    "at.toLocaleDateString();",
+    "dateTimeFormat(undefined, zone, shape).format(at);",
+  ].join("\n");
+  expect(formatterBuilds("x.ts", snippet, "ts")).toEqual([
+    "x.ts:1 Intl.DateTimeFormat",
+    "x.ts:2 Intl.NumberFormat",
+    "x.ts:3 toLocaleDateString(…)",
+    "x.ts:4 toLocaleString(…)",
+    "x.ts:5 toLocaleTimeString(…)",
+  ]);
+});

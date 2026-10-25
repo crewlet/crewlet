@@ -27,6 +27,8 @@ import type {
   WorkFlowPoint,
 } from "~/protocol/index.ts";
 import { plural, toWall } from "~/lib/format.ts";
+import { dateTimeFormat, type DateShape } from "~/lib/formatters.ts";
+import { browserZone } from "~/lib/prefs.ts";
 
 /** The three windows the screen reads over, and what each is called. */
 export const HOME_RANGES = [
@@ -170,15 +172,16 @@ export function budgetCaption(week: BudgetWindow, zone: string | undefined): str
 function weekday(at: string, zone: string | undefined): string {
   const t = Date.parse(at);
   if (!Number.isFinite(t)) return "";
+  // A COMPANY WITH NO ZONE, or one this runtime cannot read, is read on the
+  // browser's clock, as a formatter given no zone reads it.
   try {
-    return new Intl.DateTimeFormat(undefined, {
-      weekday: "short",
-      timeZone: zone || undefined,
-    }).format(t);
+    return dateTimeFormat(undefined, zone || browserZone(), WEEKDAY).format(t);
   } catch {
-    return new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(t);
+    return dateTimeFormat(undefined, browserZone(), WEEKDAY).format(t);
   }
 }
+
+const WEEKDAY: DateShape = { weekday: "short" };
 
 /** What waits on the reader: the engine's count, whether it is a floor, and
  *  when the longest one began. Null while it is not known (nobody signed in,

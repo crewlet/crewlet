@@ -67,6 +67,7 @@ import { PERIOD_ADJECTIVE, windowOf } from "~/lib/budget.ts";
 import type { CeilingScope, Period } from "~/lib/ceilings.ts";
 import { useNow } from "~/lib/clock.ts";
 import { companyDateLabel, fmtCount, fmtExact, relTime } from "~/lib/format.ts";
+import { dateTimeFormat } from "~/lib/formatters.ts";
 import { dayLabelIn } from "~/lib/range.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -111,7 +112,7 @@ function windowName(w: BudgetWindow, zone: string): string {
   if (w.period === "week") return `Week ${w.window.slice(-2).replace(/^0/, "")}`;
   const starts = Date.parse(w.starts_at);
   return Number.isFinite(starts)
-    ? new Date(starts).toLocaleDateString(undefined, { month: "long", timeZone: zone || "UTC" })
+    ? dateTimeFormat(undefined, zone || "UTC", { month: "long" }).format(starts)
     : w.window;
 }
 

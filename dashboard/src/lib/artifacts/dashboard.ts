@@ -28,6 +28,8 @@ import type {
 } from "~/protocol/index.ts";
 import { DATA_COLORS, EMPTY_VALUE, type DatasetStatus } from "@crewlethq/ui";
 import { fmtCount, fmtExact, plural } from "~/lib/format.ts";
+import { dateTimeFormat, numberFormat, type DateShape } from "~/lib/formatters.ts";
+import { browserZone, zone } from "~/lib/prefs.ts";
 import { axisLabel } from "~/lib/work.ts";
 import { stateWord, type SeatState } from "~/lib/seats.ts";
 import type { DashboardColumn } from "~/protocol/index.ts";
@@ -71,12 +73,17 @@ export function allDays(values: readonly DashboardValue[]): boolean {
  */
 export function formatDay(at: number, now = Date.now()): string {
   const day = new Date(at);
-  return day.toLocaleDateString(undefined, {
-    day: "numeric",
-    month: "short",
-    ...(day.getFullYear() === new Date(now).getFullYear() ? {} : { year: "numeric" }),
-  });
+  // THE BROWSER'S ZONE, the one [chartTimeOf] builds a day's midnight in and
+  // `getFullYear` reads the year in, so the label is the day the value named.
+  return dateTimeFormat(
+    undefined,
+    browserZone(),
+    day.getFullYear() === new Date(now).getFullYear() ? DAY_MONTH : DAY_MONTH_YEAR,
+  ).format(day);
 }
+
+const DAY_MONTH: DateShape = { day: "numeric", month: "short" };
+const DAY_MONTH_YEAR: DateShape = { ...DAY_MONTH, year: "numeric" };
 
 /**
  * A value in its column's own words: a tracker status, status group or
@@ -122,7 +129,7 @@ export function cellText(column: DashboardColumn | undefined, v: DashboardValue)
     if (!Number.isNaN(at)) {
       return DAY.test(v)
         ? formatDay(at)
-        : new Date(at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+        : dateTimeFormat(undefined, zone(), { dateStyle: "medium", timeStyle: "short" }).format(at);
     }
   }
   return wordsOf(column, v);
@@ -223,13 +230,13 @@ export function formatNumber(
       text = fmtExact(Math.round(v));
       break;
     case "percent":
-      text = `${(v * 100).toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
+      text = `${numberFormat(undefined, { maximumFractionDigits: 1 }).format(v * 100)}%`;
       break;
     case "compact":
       text = fmtCount(v);
       break;
     default:
-      text = v.toLocaleString(undefined, { maximumFractionDigits: 2 });
+      text = numberFormat(undefined, { maximumFractionDigits: 2 }).format(v);
   }
   return unit ? `${text} ${unit}` : text;
 }
@@ -256,14 +263,14 @@ export function scaleFormat(w: Pick<DashboardWidget, "format">): (v: number) => 
   if (w.format === "percent") return (v) => formatNumber(v, "percent");
   return (v) => {
     const abs = Math.abs(v);
-    if (abs < 1000) return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    if (abs < 1000) return numberFormat(undefined, { maximumFractionDigits: 2 }).format(v);
     const [n, suffix] =
       abs < 1_000_000
         ? [v / 1000, "k"]
         : abs < 1_000_000_000
           ? [v / 1_000_000, "M"]
           : [v / 1e9, "B"];
-    return `${n.toLocaleString(undefined, { maximumFractionDigits: 1 })}${suffix}`;
+    return `${numberFormat(undefined, { maximumFractionDigits: 1 }).format(n)}${suffix}`;
   };
 }
 

@@ -32,6 +32,7 @@ import {
   plural,
   readerDay,
 } from "./format.ts";
+import { dateTimeFormat, type DateShape } from "./formatters.ts";
 // THE ONE IMPORT THAT REACHES A RENDERING FILE, and it is not a breach of the
 // rule above: `plainText` is a pure string→string function that happens to live
 // beside the grammar it has to agree with. A private stripper here instead would
@@ -2902,8 +2903,8 @@ export function shiftMonth(month: string, by: number): string {
  * the value is a UTC midnight standing for a date, not an instant: spelled in
  * any zone west of Greenwich it would name the day before.
  */
-function civilLabel(at: number, opts: Intl.DateTimeFormatOptions): string {
-  return new Date(at).toLocaleDateString(undefined, { ...opts, timeZone: "UTC" });
+function civilLabel(at: number, opts: DateShape): string {
+  return dateTimeFormat(undefined, "UTC", opts).format(at);
 }
 
 export function monthLabel(month: string): string {
@@ -3044,16 +3045,15 @@ export function unfinished(counts: WorkTaskCounts): number {
  * locale.
  *
  * A DAY, NOT AN INSTANT — the engine stores the target as the calendar date on
- * the company's clock — so it is built with `new Date(y, m - 1, d)` for
- * [dayLabel]'s reason: read through [fmtDate] as UTC midnight, it renders as the
- * 17th anywhere west of Greenwich.
+ * the company's clock — so it is a civil date ([civilLabel]): the UTC midnight
+ * that starts it, spelled in UTC, which no reader's zone moves. Read through
+ * [fmtDate] as an instant it renders as the 17th anywhere west of Greenwich;
+ * built as the runtime's local midnight and spelled with no zone, it was the
+ * 18th only while the zone the date was built in was still the one it was
+ * spelled in.
  */
 export function targetLabel(day: string): string {
   const [y, m, d] = day.split("-").map(Number);
   if (!y || !m || !d) return day;
-  return new Date(y, m - 1, d).toLocaleDateString(undefined, {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
+  return civilLabel(Date.UTC(y, m - 1, d), { day: "numeric", month: "short", year: "numeric" });
 }

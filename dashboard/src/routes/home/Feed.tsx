@@ -34,6 +34,7 @@ import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { useClient, useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, type OrgIndex } from "~/lib/seats.ts";
 import { fmtCount, fmtDateCompact, parseUTC, plural, readerDay } from "~/lib/format.ts";
+import { dateTimeFormat } from "~/lib/formatters.ts";
 import { zone } from "~/lib/prefs.ts";
 import type { CompanyFeedAnswer, FeedEntry, FeedWorkRow } from "~/protocol/index.ts";
 import {
@@ -185,12 +186,11 @@ function whenLabel(at: string, now: number): string {
   const d = parseUTC(at);
   if (!d) return "";
   if (readerDay(d) === readerDay(now)) {
-    return d.toLocaleTimeString(undefined, {
+    return dateTimeFormat(undefined, zone(), {
       hour: "2-digit",
       minute: "2-digit",
       hour12: false,
-      timeZone: zone(),
-    });
+    }).format(d);
   }
   return fmtDateCompact(at, now);
 }
