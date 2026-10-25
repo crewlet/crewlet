@@ -27,7 +27,11 @@ loop suspends with the call unanswered, and the parked turn holds no grant.
   carrying their session cookie and a matching Origin, to a proposal they own
   (anybody else's is not found), still proposed and unexpired (fifteen
   minutes). The assistant cannot make it: the guard refuses `/assistant/` to an
-  assistant grant.
+  assistant grant. An approver who no longer holds an app the proposing turn
+  read through sends nothing: the proposal settles `failed`
+  (`access_withdrawn`, the state machine's `withdrawn` event), and the parked
+  loop, which keeps those reads verbatim, is never handed back to the model
+  for them; the turn ends instead.
 - **It executes once.** The decision is an arbitrated state-log record on the
   proposal's own subject, so two approvals on two nodes produce one; the
   approving request derives a single-use exec grant, sixty seconds long, bound

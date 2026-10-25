@@ -87,7 +87,7 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 		return wire.TurnAccepted{}, s.readFailure(err)
 	}
 	if row.Conversation == r.Conversation && row.State == wire.TurnSuperseded {
-		return s.settledPast(ctx, person, row, r)
+		return s.settledPast(ctx, person, row, r, nil)
 	}
 	if row.State != wire.TurnWaitingForApproval || row.Conversation != r.Conversation {
 		return wire.TurnAccepted{}, ErrTurnRunning
@@ -95,6 +95,12 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 	keep, err := s.parkedLoop(ctx, r.Owner, r.Turn)
 	if err != nil {
 		return wire.TurnAccepted{}, err
+	}
+	if !holds(person, keep.Apps) {
+		// THE SECOND LOCK: whatever decided the proposal, a loop that read
+		// through an app the person no longer holds is never handed back to
+		// the model for them. The turn ends; the card shows its state.
+		return s.withdrawn(ctx, person, row, r)
 	}
 	// READ BEFORE THE RESUME RECORD, like everything that can fail: once it
 	// lands the turn is running on this node, and a return after it would
@@ -145,6 +151,7 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 	if anchor, err := uuid.Parse(keep.Anchor); err == nil {
 		t.anchor = anchor
 	}
+	t.used(keep.Apps)
 	messages := slices.Concat(keep.Messages, []llm.Message{{Role: llm.RoleTool, Name: keep.PendingTool,
 		ToolCallID: keep.PendingCall, Content: resultOf(r, t.boundary),
 		Failed: r.State != wire.ProposalApplied}})
@@ -286,15 +293,61 @@ func (s *Service) tell(ctx context.Context, person iam.Principal, row assistantd
 		AfterSeq: after}, nil
 }
 
-// settledPast shows what became of a proposal of a turn the person asked past
-// (superseded): its card at its state now, with the receipt, and where a
-// write landed the `context.invalidate` the open screens refresh by. The loop
-// is NOT resumed: the person moved on to another question, and a model woken
-// in a conversation that has since gone elsewhere would answer into the
-// middle of it. The decision's read grant ends unused ([Service.Resume]
-// revokes a grant no runner takes).
-func (s *Service) settledPast(ctx context.Context, person iam.Principal,
+// Carries reports whether the person the context resolves may have owner's
+// parked turn carry on (approval.Turns): false where they no longer hold an
+// app its loop read through. A turn no loop will resume (one superseded, or
+// over) carries nothing back to the model, and answers true.
+func (s *Service) Carries(ctx context.Context, owner, conversation, turnID uuid.UUID) (bool, error) {
+	person, how := iam.From(ctx)
+	if how != iam.Resolved || person.ID != owner {
+		return false, fmt.Errorf("%w: a turn carries on for its owner alone", ErrNotFound)
+	}
+	row, err := s.transcripts.Turn(ctx, owner, turnID)
+	if err != nil {
+		return false, s.readFailure(err)
+	}
+	if row.Conversation != conversation || row.State != wire.TurnWaitingForApproval {
+		return true, nil
+	}
+	keep, err := s.parkedLoop(ctx, owner, turnID)
+	if err != nil {
+		return false, err
+	}
+	return holds(person, keep.Apps), nil
+}
+
+// withdrawn ends a parked turn whose person no longer holds an app its loop
+// read through, instead of resuming it: closed failed (access withdrawn),
+// once across the fleet, and its stream shown the card at its state now and
+// why the assistant did not carry on.
+func (s *Service) withdrawn(ctx context.Context, person iam.Principal,
 	row assistantdomain.Turn, r approval.Resumption) (wire.TurnAccepted, error) {
+
+	w := Write{Owner: person.ID, By: iam.ActorFor(person), Derived: &Derivation{
+		At: row.StartedAt, Name: "assistant_withdrawn",
+		Identity: []string{row.ID.String(), r.Proposal.String()}}}
+	state, err := s.closeDerived(ctx, w, row.ID, assistantdomain.TurnEnd{State: wire.TurnFailed,
+		Steps: row.Steps, ErrorCode: string(wire.ErrorAccessWithdrawn)})
+	if err != nil {
+		return wire.TurnAccepted{}, err
+	}
+	s.revoker.RevokeTurn(row.ID)
+	row.State = state
+	return s.settledPast(ctx, person, row, r, &wire.ErrorEvent{Code: wire.ErrorAccessWithdrawn,
+		Message: "The assistant stopped: you no longer have access to something this " +
+			"conversation read.", Hint: "Ask again to start from what you can open now."})
+}
+
+// settledPast shows what became of a proposal of a turn no loop resumes (one
+// the person asked past, or one whose access they lost): its card at its state
+// now, with the receipt, where a write landed the `context.invalidate` the
+// open screens refresh by, and failure, if any. The loop is NOT resumed: a
+// person who moved on to another question would have a model answer into the
+// middle of it, and one who lost access may not be handed what it read. The
+// decision's read grant ends unused ([Service.Resume] revokes a grant no
+// runner takes).
+func (s *Service) settledPast(ctx context.Context, person iam.Principal,
+	row assistantdomain.Turn, r approval.Resumption, failure *wire.ErrorEvent) (wire.TurnAccepted, error) {
 
 	transcript, err := s.transcripts.Transcript(ctx, r.Owner, r.Conversation)
 	if err != nil {
@@ -312,6 +365,9 @@ func (s *Service) settledPast(ctx context.Context, person iam.Principal,
 		}
 		if r.Invalidate != nil {
 			t.emit(invalidation(r.Proposal, r.Invalidate))
+		}
+		if failure != nil {
+			t.emit(wire.Frame{Kind: wire.EventError, Error: failure})
 		}
 		return nil
 	})

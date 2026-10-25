@@ -93,16 +93,16 @@ func (s *Service) Transcript(ctx context.Context, p iam.Principal, id uuid.UUID)
 }
 
 // render is a conversation as reader is shown it: its messages, steps and
-// cards, the turn still open and every compliance read of it, with every card
-// built from an app the reader no longer holds replaced by a notice and every
-// proposal card at its state now. The owner's reload and an administrator's
+// cards, the turn still open and every compliance read of it, with every
+// message and card built from an app the reader no longer holds replaced by a
+// notice and every proposal card at its state now. The owner's reload and an administrator's
 // compliance read are rendered by this one rule.
 func (s *Service) render(t assistantdomain.Transcript, reader iam.Principal) wire.Transcript {
 	id := t.Conversation.ID
 	out := wire.Transcript{Conversation: t.Conversation.Summary(), Messages: []wire.Message{},
 		Steps: []wire.StepEvent{}, Cards: []wire.CardEvent{}, AuditReads: []wire.AuditRead{}}
 	for _, m := range t.Messages {
-		out.Messages = append(out.Messages, m.Wire())
+		out.Messages = append(out.Messages, shownMessage(m, reader).Wire())
 	}
 	out.Steps = append(out.Steps, t.Steps...)
 	proposals := map[uuid.UUID]assistantdomain.Proposal{}

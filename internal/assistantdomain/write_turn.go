@@ -76,6 +76,9 @@ type NewMessage struct {
 	Role wire.MessageRole
 	Text string
 	Page *wire.PageChip
+	// Apps are the apps the turn had read through when it was written: a
+	// reader who no longer holds one is shown a notice in its place.
+	Apps []string
 }
 
 // sealPage seals a page chip's title for one record, or answers empties for
@@ -225,6 +228,9 @@ func (w *Writer) RecordMessage(ctx context.Context, c Call, turn uuid.UUID,
 	if err := checkText("the message", m.Text, MessageMaxBytes); err != nil {
 		return statelog.Result{}, err
 	}
+	if err := checkApps("the message", m.Apps); err != nil {
+		return statelog.Result{}, err
+	}
 	return w.onTurn(ctx, c, turn, OpMessageRecorded, statelog.PatternAdditive, nil,
 		func(conversation uuid.UUID) (any, error) {
 			text, err := w.sealer.sealString(m.Text,
@@ -239,7 +245,7 @@ func (w *Writer) RecordMessage(ctx context.Context, c Call, turn uuid.UUID,
 			}
 			return MessageRecorded{V: baseRecordVersion, Message: m.ID.String(),
 				Role: m.Role, TextSealed: text, PageTitleSealed: pageTitle,
-				PageScreen: pageScreen}, nil
+				PageScreen: pageScreen, Apps: canonicalApps(m.Apps)}, nil
 		})
 }
 
@@ -285,14 +291,8 @@ func (w *Writer) RecordCard(ctx context.Context, c Call, turn uuid.UUID, card wi
 	if err := card.Validate(); err != nil {
 		return statelog.Result{}, fmt.Errorf("%w: the card: %w", ErrInvalid, err)
 	}
-	if len(apps) > MaxApps {
-		return statelog.Result{}, invalid("the card names %d apps and the maximum is %d",
-			len(apps), MaxApps)
-	}
-	for _, app := range apps {
-		if strings.TrimSpace(app) == "" || len(app) > TitleMaxBytes {
-			return statelog.Result{}, invalid("app %q is not an app name", app)
-		}
+	if err := checkApps("the card", apps); err != nil {
+		return statelog.Result{}, err
 	}
 	body, err := json.Marshal(card.Card)
 	if err != nil {
@@ -312,6 +312,19 @@ func (w *Writer) RecordCard(ctx context.Context, c Call, turn uuid.UUID, card wi
 				Message: card.MessageID.String(), Type: card.Card.Type,
 				Apps: canonicalApps(apps), BodySealed: sealed}, nil
 		})
+}
+
+// checkApps refuses a record's apps past [MaxApps] or one that is no app name.
+func checkApps(what string, apps []string) error {
+	if len(apps) > MaxApps {
+		return invalid("%s names %d apps and the maximum is %d", what, len(apps), MaxApps)
+	}
+	for _, app := range apps {
+		if strings.TrimSpace(app) == "" || len(app) > TitleMaxBytes {
+			return invalid("app %q is not an app name", app)
+		}
+	}
+	return nil
 }
 
 // ParkTurn parks a running turn on a proposal, with the loop's conversation

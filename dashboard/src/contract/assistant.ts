@@ -115,7 +115,8 @@ type AssistantErrorCode =
   | "budget_exhausted"
   | "turn_interrupted"
   | "grant_ended"
-  | "internal_error";
+  | "internal_error"
+  | "access_withdrawn";
 
 /** What a page context's resource or selection names. */
 type AssistantResourceKind =

@@ -84,6 +84,9 @@ CREATE TABLE assistant_turns (
 CREATE INDEX assistant_turns_conversation_idx ON assistant_turns (conversation_id, seq); -- a conversation's turns in order
 
 -- assistant_messages: one row per message the person sent or was shown.
+-- `apps` is the JSON array of the apps the turn had read through when the
+-- message was written: a reader who no longer holds one is shown a notice in
+-- its place.
 CREATE TABLE assistant_messages (
     id                TEXT    NOT NULL PRIMARY KEY,
     conversation_id   TEXT    NOT NULL,
@@ -94,6 +97,7 @@ CREATE TABLE assistant_messages (
     created_at        INTEGER NOT NULL,
     page_title_sealed TEXT    NOT NULL DEFAULT '',
     page_screen       TEXT    NOT NULL DEFAULT '',
+    apps              TEXT    NOT NULL DEFAULT '[]',
     version           INTEGER NOT NULL
 );
 CREATE INDEX assistant_messages_conversation_idx ON assistant_messages (conversation_id, version); -- a transcript's messages in log order

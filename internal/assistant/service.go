@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/live"
@@ -418,8 +419,10 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 
 	c, organization := s.company()
 	tools := s.catalogue.Offered(ts.Person, acts)
+	earlier := historyEntries(history, ts.Person)
+	t.used(historyApps(earlier))
 	in := promptInput{Person: ts.Person, Apps: iam.Expand(ts.Person.Grants), Now: s.now(),
-		History: historyEntries(history), Page: ts.Page, Boundary: t.boundary, Question: input,
+		History: earlier, Page: ts.Page, Boundary: t.boundary, Question: input,
 		Proposable: proposable(tools)}
 	if c != nil {
 		in.Company, in.Zone = c.Name, c.Location()
@@ -520,16 +523,35 @@ func (s *Service) openStream(t *turn, c assistantdomain.Conversation, resumed bo
 	return after
 }
 
-// historyEntries is a conversation's messages as the next turn re-reads them,
-// each answer with its cards' one-line summaries.
-func historyEntries(t assistantdomain.Transcript) []historyEntry {
-	cards := map[uuid.UUID][]string{}
+// historyEntries is a conversation's messages as the next turn re-reads them
+// for reader, each answer with its cards' one-line summaries: a message or a
+// card built from an app the reader no longer holds is its notice, so the
+// model is never handed what the reader may no longer read.
+func historyEntries(t assistantdomain.Transcript, reader iam.Principal) []historyEntry {
+	summaries := map[uuid.UUID][]string{}
+	apps := map[uuid.UUID][]string{}
 	for _, c := range t.Cards {
-		cards[c.Message] = append(cards[c.Message], cardSummary(c.Card))
+		card, visible := cards.Visible(c.Apps, c.Card, reader)
+		summaries[c.Message] = append(summaries[c.Message], cardSummary(card))
+		if visible {
+			apps[c.Message] = append(apps[c.Message], c.Apps...)
+		}
 	}
 	out := make([]historyEntry, 0, len(t.Messages))
 	for _, m := range t.Messages {
-		out = append(out, historyEntry{Role: m.Role, Text: m.Text, Cards: cards[m.ID]})
+		m = shownMessage(m, reader)
+		out = append(out, historyEntry{Role: m.Role, Text: m.Text, Cards: summaries[m.ID],
+			Apps: append(slices.Clone(m.Apps), apps[m.ID]...)})
+	}
+	return out
+}
+
+// historyApps are the apps of the history a turn's prompt carries (its last
+// [HistoryMessages] entries): what the turn knows before it reads anything.
+func historyApps(entries []historyEntry) []string {
+	var out []string
+	for _, e := range entries[max(0, len(entries)-HistoryMessages):] {
+		out = append(out, e.Apps...)
 	}
 	return out
 }

@@ -336,7 +336,7 @@ func (s *Store) RecordMessage(_ context.Context, w assistant.Write, turn uuid.UU
 	}
 	c.messages = slices.DeleteFunc(c.messages, func(x assistantdomain.Message) bool { return x.ID == m.ID })
 	c.messages = append(c.messages, assistantdomain.Message{ID: m.ID, Turn: turn, Role: m.Role,
-		Text: m.Text, CreatedAt: s.now().UTC(), Page: m.Page})
+		Text: m.Text, CreatedAt: s.now().UTC(), Page: m.Page, Apps: slices.Clone(m.Apps)})
 	return nil
 }
 

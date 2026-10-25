@@ -412,12 +412,16 @@ const (
 	ErrorGrantEnded ErrorCode = "grant_ended"
 	// ErrorInternal is a fault no retry of the question clears.
 	ErrorInternal ErrorCode = "internal_error"
+	// ErrorAccessWithdrawn is a parked turn that cannot carry on because
+	// the person no longer holds an app it read through: what it read may
+	// not be handed back to the model for them.
+	ErrorAccessWithdrawn ErrorCode = "access_withdrawn"
 )
 
-// ErrorCodes are the seven, in declaration order.
+// ErrorCodes are the eight, in declaration order.
 var ErrorCodes = []ErrorCode{
 	ErrorModelUnavailable, ErrorTurnTimeout, ErrorStepLimit, ErrorBudgetExhausted,
-	ErrorTurnInterrupted, ErrorGrantEnded, ErrorInternal,
+	ErrorTurnInterrupted, ErrorGrantEnded, ErrorInternal, ErrorAccessWithdrawn,
 }
 
 // Valid reports whether c is a code this build knows.

@@ -159,14 +159,18 @@ func applyMessage(ctx context.Context, tx *sql.Tx, c applyContext, conversation,
 	if ok := present(p.Message); !ok || !p.Role.Valid() {
 		return 0, nil
 	}
+	apps, err := json.Marshal(canonicalApps(p.Apps))
+	if err != nil {
+		return 0, fmt.Errorf("assistantdomain: encode message %s's apps: %w", p.Message, err)
+	}
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO assistant_messages
 			(id, conversation_id, turn_id, role, text_sealed, created_at,
-			 page_title_sealed, page_screen, version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 page_title_sealed, page_screen, apps, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO NOTHING`,
 		p.Message, conversation, turn, string(p.Role), p.TextSealed, c.at(),
-		p.PageTitleSealed, p.PageScreen, c.packed)
+		p.PageTitleSealed, p.PageScreen, string(apps), c.packed)
 	if err != nil {
 		return 0, fmt.Errorf("assistantdomain: record message %s at %s: %w",
 			p.Message, c.position, err)
@@ -227,7 +231,7 @@ func applyCard(ctx context.Context, tx *sql.Tx, c applyContext, conversation, tu
 	return affected(res), nil
 }
 
-// canonicalApps is a card's apps sorted and unique, never nil, so two nodes
+// canonicalApps is a card's or a message's apps sorted and unique, never nil, so two nodes
 // write one encoding.
 func canonicalApps(apps []string) []string {
 	out := slices.Clone(apps)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -74,6 +75,9 @@ type turn struct {
 	// anchor is the turn's newest assistant message, the one a card shown
 	// now hangs on: uuid.Nil until the turn has one ([turn.emitCard]).
 	anchor uuid.UUID
+	// apps are the apps the turn has read through, across its segments
+	// ([turn.used]).
+	apps map[string]struct{}
 	// ended is the state the segment ended in, set once its end is told:
 	// what a Stop that waited for it answers ([Service.stopRunner]).
 	ended wire.TurnState
@@ -344,9 +348,10 @@ func (t *turn) recordReply(ctx context.Context, id uuid.UUID, text string) {
 	if len(text) > MessageMaxBytes {
 		text = textcut.Within(text, MessageMaxBytes)
 	}
+	apps := t.appsNow()
 	t.record(ctx, "answer", func(ctx context.Context, w Write) error {
 		return t.svc.records.RecordMessage(ctx, w.Step("message", id.String()), t.id,
-			assistantdomain.NewMessage{ID: id, Role: wire.RoleAssistant, Text: text})
+			assistantdomain.NewMessage{ID: id, Role: wire.RoleAssistant, Text: text, Apps: apps})
 	})
 }
 
@@ -607,6 +612,9 @@ type parked struct {
 	// Anchor is the turn's newest assistant message, which a resumed
 	// segment's first cards hang on; empty for none.
 	Anchor string `json:"anchor,omitempty"`
+	// Apps are the apps the loop read through: a person who no longer
+	// holds one is never handed its answers back ([Service.Carries]).
+	Apps []string `json:"apps,omitempty"`
 	// Seq is the newest seq the parking segment told, its closing frames
 	// counted ([parkedTail]): what the segment an approval opens continues
 	// after where no node of the fleet remembers more.
@@ -629,6 +637,10 @@ func (t *turn) park(ctx context.Context, res *toolloop.Result) error {
 	if t.anchor != uuid.Nil {
 		keep.Anchor = t.anchor.String()
 	}
+	for app := range t.apps {
+		keep.Apps = append(keep.Apps, app)
+	}
+	slices.Sort(keep.Apps)
 	t.mu.Unlock()
 	raw, err := json.Marshal(keep)
 	if err != nil {

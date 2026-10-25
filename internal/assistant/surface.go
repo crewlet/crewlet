@@ -146,6 +146,7 @@ func (s *surface) read(ctx context.Context, tool catalog.Tool, args map[string]a
 		s.t.stepEnd(ctx, step, wire.StepDone, answerSummary(shaped.Cards), nil, resp.Status,
 			len(resp.Body))
 		s.t.tainted(tool, shaped.Trust)
+		s.t.used(appNames(tool.Apps))
 	}
 	for _, card := range shaped.Cards {
 		s.t.emitCard(ctx, card, appNames(tool.Apps))

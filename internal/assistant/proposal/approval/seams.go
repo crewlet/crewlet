@@ -114,6 +114,11 @@ type Turns interface {
 	// Lapse ends the parked turn as expired where none of its proposals
 	// can still move it, now that one of them expired.
 	Lapse(ctx context.Context, owner, conversation, turn uuid.UUID) error
+	// Carries reports whether the deciding person may still have the
+	// parked turn carry on: false where they no longer hold an app its loop
+	// read through, so what it read may not be handed back to the model
+	// for them.
+	Carries(ctx context.Context, owner, conversation, turn uuid.UUID) (bool, error)
 }
 
 // Deps is what an [Approver] is built from.

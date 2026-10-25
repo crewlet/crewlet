@@ -203,7 +203,7 @@ func TestEveryProposalMoveIsOneTheStateMachineAllows(t *testing.T) {
 		wire.ProposalProposed: {
 			proposal.EventApprove: wire.ProposalApproved, proposal.EventDecline: wire.ProposalDeclined,
 			proposal.EventStop: wire.ProposalDeclined, proposal.EventExpire: wire.ProposalExpired,
-			proposal.EventStale: wire.ProposalStale,
+			proposal.EventStale: wire.ProposalStale, proposal.EventWithdrawn: wire.ProposalFailed,
 		},
 		wire.ProposalApproved: {
 			proposal.EventExecute: wire.ProposalExecuting, proposal.EventClaim: wire.ProposalApplying,

@@ -342,6 +342,33 @@ func TestAnExpiredProposalIsNeverApproved(t *testing.T) {
 	}
 }
 
+// AN APPROVER WHO LOST WHAT THE TURN READ SENDS NOTHING: the proposal settles
+// failed with the access_withdrawn refusal before any write, and the turn is
+// handed the news only to end ([approval.Turns.Carries]).
+//
+// Mutation: skip the Carries check and the write is sent, and the turn resumes
+// with what the person may no longer read.
+func TestAnApproverWhoLostWhatTheTurnReadSendsNothing(t *testing.T) {
+	t.Parallel()
+	f := approvaltest.NewFleet()
+	ada := approvaltest.Person(approvaltest.Noon.Add(time.Hour))
+	p := f.Propose(t, ada, nil)
+	f.Turns.Withdraw()
+	got, err := f.Node(t).Approve(approvaltest.As(t.Context(), ada), approvaltest.Approve(p))
+	if err != nil || got.Proposal.State != wire.ProposalFailed {
+		t.Fatalf("approve = %+v, %v; want failed", got, err)
+	}
+	if len(f.API.Sent()) != 0 || f.Store.State(p.ID) != wire.ProposalFailed {
+		t.Errorf("sent %d and the proposal is %s; want nothing sent, failed",
+			len(f.API.Sent()), f.Store.State(p.ID))
+	}
+	resumed := f.Turns.Resumed()
+	if len(resumed) != 1 || resumed[0].State != wire.ProposalFailed || resumed[0].Failure == nil ||
+		resumed[0].Failure.Refusal.Code != approval.CodeAccessWithdrawn {
+		t.Errorf("the turn was handed %+v", resumed)
+	}
+}
+
 // A REFUSED WRITE FAILS IN THE ENGINE'S OWN WORDS, and the turn is told.
 func TestARefusedWriteFailsInTheEnginesWords(t *testing.T) {
 	t.Parallel()

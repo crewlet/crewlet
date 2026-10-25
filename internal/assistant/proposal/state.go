@@ -54,12 +54,17 @@ const (
 	EventRetry Event = "retry"
 	// EventPageStale is the page reporting its revision moved.
 	EventPageStale Event = "page_stale"
+	// EventWithdrawn is an approval finding that the person no longer holds
+	// an app the proposing turn read through: nothing is sent, and the turn
+	// does not carry on.
+	EventWithdrawn Event = "withdrawn"
 )
 
 // Events are every event, in declaration order.
 var Events = []Event{
 	EventApprove, EventDecline, EventStop, EventExpire, EventStale, EventExecute,
 	EventClaim, EventApplied, EventRefused, EventUnknown, EventRetry, EventPageStale,
+	EventWithdrawn,
 }
 
 // Valid reports whether e is an event this build knows.
@@ -80,6 +85,9 @@ var moves = map[move]wire.ProposalState{
 	{wire.ProposalProposed, EventStop}:    wire.ProposalDeclined,
 	{wire.ProposalProposed, EventExpire}:  wire.ProposalExpired,
 	{wire.ProposalProposed, EventStale}:   wire.ProposalStale,
+	// An approval that found the person's access to what the turn read
+	// withdrawn: refused before anything is sent.
+	{wire.ProposalProposed, EventWithdrawn}: wire.ProposalFailed,
 
 	{wire.ProposalApproved, EventExecute}: wire.ProposalExecuting,
 	{wire.ProposalApproved, EventClaim}:   wire.ProposalApplying,

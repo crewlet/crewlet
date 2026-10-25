@@ -175,6 +175,9 @@ type Message struct {
 	Text      string
 	CreatedAt time.Time
 	Page      *wire.PageChip
+	// Apps are the apps a reader must hold to be shown the message rather
+	// than a notice.
+	Apps []string
 }
 
 // Wire is the message as a transcript carries it.
@@ -488,7 +491,7 @@ func (r *Reader) transcriptIn(ctx context.Context, tx *sql.Tx, id uuid.UUID,
 		return Transcript{}, err
 	}
 	if err := eachRow(ctx, tx, `SELECT id, turn_id, role, text_sealed, created_at,
-		page_title_sealed, page_screen FROM assistant_messages
+		page_title_sealed, page_screen, apps FROM assistant_messages
 		WHERE conversation_id = ? ORDER BY version, id`, []any{conversation},
 		func(row rowScanner) error {
 			m, err := r.scanMessage(row, id)
@@ -754,9 +757,14 @@ func (r *Reader) scanMessage(row rowScanner, conversation uuid.UUID) (Message, e
 		id, turn, role, text  string
 		created               int64
 		pageTitle, pageScreen string
+		apps                  string
 	)
-	if err := row.Scan(&id, &turn, &role, &text, &created, &pageTitle, &pageScreen); err != nil {
+	if err := row.Scan(&id, &turn, &role, &text, &created, &pageTitle, &pageScreen,
+		&apps); err != nil {
 		return Message{}, err
+	}
+	if err := json.Unmarshal([]byte(apps), &m.Apps); err != nil {
+		return Message{}, fmt.Errorf("assistantdomain: message %s's apps: %w", id, err)
 	}
 	var err error
 	if m.ID, err = uuid.Parse(id); err != nil {

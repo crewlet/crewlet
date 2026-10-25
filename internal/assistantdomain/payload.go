@@ -131,6 +131,9 @@ type MessageRecorded struct {
 	TextSealed      string           `json:"text_sealed,omitempty"`
 	PageTitleSealed string           `json:"page_title_sealed,omitempty"`
 	PageScreen      string           `json:"page_screen,omitempty"`
+	// Apps are the apps the turn had read through when the message was
+	// written, as a card's are.
+	Apps []string `json:"apps,omitempty"`
 }
 
 // StepRecorded is one tool step at its latest state: its place, its tool, its

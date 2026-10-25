@@ -320,6 +320,8 @@ type Turns struct {
 	lapsed  []uuid.UUID
 	// bounds are the deadlines each resumption was handed, zero for none.
 	bounds []time.Time
+	// withdrawn makes Carries answer false.
+	withdrawn bool
 }
 
 var _ approval.Turns = (*Turns)(nil)
@@ -351,6 +353,21 @@ func (t *Turns) Lapse(_ context.Context, _, _, turn uuid.UUID) error {
 	defer t.mu.Unlock()
 	t.lapsed = append(t.lapsed, turn)
 	return nil
+}
+
+// Withdraw makes every turn report that its approver no longer holds what it
+// read ([Turns.Carries]).
+func (t *Turns) Withdraw() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.withdrawn = true
+}
+
+// Carries reports whether the turn may carry on: false once [Turns.Withdraw].
+func (t *Turns) Carries(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (bool, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return !t.withdrawn, nil
 }
 
 // Lapsed are the turns asked to end as expired, in order.

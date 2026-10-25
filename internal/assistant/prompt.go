@@ -92,6 +92,9 @@ type promptInput struct {
 type historyEntry struct {
 	Role wire.MessageRole
 	Text string
+	// Apps are the apps what the entry says was read through: its
+	// message's and its cards'.
+	Apps []string
 	// Cards are the one-line summaries of the cards shown with it.
 	Cards []string
 }

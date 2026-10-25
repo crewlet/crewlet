@@ -130,6 +130,12 @@ func (a *Approver) Approve(ctx context.Context, ap Approval) (wire.ProposalAnswe
 	if (p.StepUp || a.d.StepUp(p.Act)) && !d.person.Proved(iam.RecencyStepUp, now) {
 		return wire.ProposalAnswer{}, ErrStepUp
 	}
+	switch carries, err := a.d.Turns.Carries(ctx, d.person.ID, p.Conversation, p.Turn); {
+	case err != nil:
+		return wire.ProposalAnswer{}, &Unconfirmed{OpID: ap.Key, Cause: err}
+	case !carries:
+		return a.withdrawn(ctx, d, p)
+	}
 	read, err := a.d.Grants.Read(ctx, p.Conversation, p.Turn)
 	if err != nil {
 		return wire.ProposalAnswer{}, fmt.Errorf("%w: %w", ErrNotAPerson, err)
@@ -286,6 +292,34 @@ func (a *Approver) stale(ctx context.Context, d decider, p assistantdomain.Propo
 
 // CodeStale is the refusal code a stale proposal carries, the API's own.
 const CodeStale = "proposal_stale"
+
+// CodeAccessWithdrawn is the refusal a proposal meets when its approver no
+// longer holds an app the proposing turn read through.
+const CodeAccessWithdrawn = "access_withdrawn"
+
+// withdrawn refuses an approval whose person no longer holds an app the
+// proposing turn read through: the proposal settles failed, nothing is sent,
+// and the turn is handed the news only to end, never to carry on with what it
+// read ([Turns.Carries]).
+func (a *Approver) withdrawn(ctx context.Context, d decider, p assistantdomain.Proposal) (wire.ProposalAnswer, error) {
+	failure := &wire.Failure{Refusal: wire.Refusal{Code: CodeAccessWithdrawn,
+		Message: "You no longer have access to something this conversation read, so " +
+			"nothing was sent."}}
+	if _, err := a.move(ctx, d.call("withdrawn"), p.ID, assistantdomain.ProposalMove{
+		From: wire.ProposalProposed, To: wire.ProposalFailed, RefusalCode: CodeAccessWithdrawn,
+		Failure: failure}); err != nil {
+		return wire.ProposalAnswer{}, err
+	}
+	read, err := a.d.Grants.Read(ctx, p.Conversation, p.Turn)
+	if err != nil {
+		log.InfoContext(ctx, "assistant_withdrawn_not_told", "proposal", p.ID, "error", err)
+		return answer(p, wire.ProposalFailed, wire.TurnAccepted{TurnID: p.Turn}), nil
+	}
+	at := a.resume(ctx, Resumption{Owner: d.person.ID, Conversation: p.Conversation,
+		Turn: p.Turn, Proposal: p.ID, Read: read, State: wire.ProposalFailed, Failure: failure,
+		Card: proposal.CardAt(p, wire.ProposalFailed, nil, failure)})
+	return answer(p, wire.ProposalFailed, at), nil
+}
 
 // resume hands a decision to its parked turn. The decision is recorded either
 // way, so a turn that cannot be resumed is logged: the person sees the card's
