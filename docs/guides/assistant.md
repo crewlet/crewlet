@@ -25,8 +25,8 @@ have:
   ([ADR-0050](https://github.com/crewlet/crewlet/blob/main/adr/0050-an-assistant-write-executes-only-from-its-owners-approval-of-a-server-rendered-preview.md)).
 - Every row of the authority table states what the assistant may do with its
   verb: read it, propose it for approval, or never touch it. Identity, secrets,
-  setup, configuration writes, fleet operations, purges and token minting are
-  never available to it, for any principal
+  setup, configuration (but for the company's principles), fleet operations,
+  purges and token minting are never available to it, for any principal
   ([ADR-0051](https://github.com/crewlet/crewlet/blob/main/adr/0051-every-authority-row-says-what-the-assistant-may-do-with-it.md)).
 - A conversation belongs to its owner. No route serves one to anybody else,
   except the audited compliance read below
@@ -35,6 +35,23 @@ have:
 Only a **person** signed in through a browser session may use it. Machine
 tokens, service accounts and sessions exchanged from a Tier A token are
 refused, and the dashboard shows them the reason.
+
+### What it can change
+
+Each of these is a proposal the person approves, offered only to a person who
+could make the same change on its screen:
+
+| Change | Who is offered it | On approval |
+|---|---|---|
+| File a task, change one, comment on one, answer a question asked on one | People holding Worklet | Worklet's own write, as the person |
+| Reorder priorities, mark inbox notices | People holding Worklet | The person's own record |
+| Write a page, edit a page | People holding Doclet | Doclet's own write |
+| Share an artifact, withdraw a share | The artifact's owner | The artifact's sharing, with the audience named on the card; a share to the whole company asks the person to confirm it is them |
+| Pause or resume an agent, steer a running turn, answer a coding run | Whoever may do it on the seat's screen | The operator control the screen sends |
+| Change the company's mission, vision or standing policies | Administrators | `PUT /config/charter`, the route Company › Principles saves through: the card shows a word diff of the mission and vision and one row per policy, the approval asks the administrator to confirm it is them when their sign-in is not recent, and a change made to the principles meanwhile makes the proposal stale (**Prepare it again**) |
+
+A change to the screen the person has open (a filter, a range, a draft in an
+open editor) is applied by the page itself and saves nothing.
 
 ## Turning it on
 

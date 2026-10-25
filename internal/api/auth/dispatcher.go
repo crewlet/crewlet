@@ -129,6 +129,13 @@ func (d *Dispatcher) Do(ctx context.Context, g exec.Grant, r exec.Request) (exec
 	if r.IdempotencyKey != "" {
 		req.Header.Set(opkey.Header, r.IdempotencyKey)
 	}
+	if r.IfMatch != "" {
+		if !exec.ValidEntityTag(r.IfMatch) {
+			return exec.Response{}, fmt.Errorf("auth: an assistant call's If-Match %q is "+
+				"not one strong entity tag", r.IfMatch)
+		}
+		req.Header.Set("If-Match", r.IfMatch)
+	}
 
 	out := newCapture()
 	if err := serve(reqCtx, h, out, req); err != nil {

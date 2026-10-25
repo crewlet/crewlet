@@ -80,6 +80,11 @@
     "href": "#/doclet/pages/5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
   },
   {
+    "label": "Principles",
+    "screen": "principles",
+    "href": "#/company/principles"
+  },
+  {
     "label": "ENG",
     "screen": "project",
     "href": "#/worklet/ENG"

@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/api/assistantapi`
-- **Enforced-by:** `internal/api/opkey.TestARequestDigestBindsEveryPartOfTheRequest`, `internal/api/opkey.TestAnOperationsDigestIsTheCanonicalEncoding`, `internal/assistant/proposal.TestAProposalIsDrawnFromItsPreviewAlone`, `internal/assistant/proposal.TestAProposalWhoseDigestMovedIsRefused`, `internal/assistant/proposal.TestAVisibilityChangeNamesItsAudience`, `internal/assistant/proposal.TestEveryProposalMoveIsOneTheStateMachineAllows`, `internal/assistant/proposal/approval.TestAProposalExecutesOnce`, `internal/assistant/proposal/approval.TestARetriedProposalIsTheSameWrite`, `internal/assistant/proposal/approval.TestAnApprovalIsNeverAnotherPersons`, `internal/assistant/proposal/approval.TestAnApprovalOfAChangedProposalIsRefused`, `internal/assistant/proposal/approval.TestAStaleRevisionIsRefused`, `internal/assistant/proposal/approval.TestAStepUpRowAsksTheApprover`, `internal/assistant/proposal/approval.TestACompanyWideShareAsksAStepUp`, `internal/assistant/proposal/approval.TestAPageActionIsClaimedOnceAcrossTabs`, `internal/assistant/proposal/approval.TestAPageProposalIsStaleOnceThePageMoves`, `internal/api/assistantapi.TestTheAssistantCannotApproveItsOwnProposal`, `internal/api/assistantapi.TestEveryDecisionRefusesInTheEnvelope`, `internal/api.TestAReadingTurnCannotWrite`, `internal/api.TestAnAssistedWriteTakesOnlyTheVerbItWasApprovedFor`, `internal/api.TestAnAssistedWriteIsAuditedAsTheAssistant`, `internal/api.TestAnAssistGrantNeverReachesADecisionRoute`, `internal/api.TestNoWriteWithoutApproval`, `internal/api.TestInjectedTextNeverBecomesAWrite`
+- **Enforced-by:** `internal/api/opkey.TestARequestDigestBindsEveryPartOfTheRequest`, `internal/api/opkey.TestAnOperationsDigestIsTheCanonicalEncoding`, `internal/assistant/proposal.TestAProposalIsDrawnFromItsPreviewAlone`, `internal/assistant/proposal.TestAProposalWhoseDigestMovedIsRefused`, `internal/assistant/proposal.TestAVisibilityChangeNamesItsAudience`, `internal/assistant/proposal.TestEveryProposalMoveIsOneTheStateMachineAllows`, `internal/assistant/proposal/approval.TestAProposalExecutesOnce`, `internal/assistant/proposal/approval.TestARetriedProposalIsTheSameWrite`, `internal/assistant/proposal/approval.TestAnApprovalIsNeverAnotherPersons`, `internal/assistant/proposal/approval.TestAnApprovalOfAChangedProposalIsRefused`, `internal/assistant/proposal/approval.TestAStaleRevisionIsRefused`, `internal/assistant/proposal/approval.TestAStepUpRowAsksTheApprover`, `internal/assistant/proposal/approval.TestACompanyWideShareAsksAStepUp`, `internal/assistant/proposal/approval.TestAPageActionIsClaimedOnceAcrossTabs`, `internal/assistant/proposal/approval.TestAPageProposalIsStaleOnceThePageMoves`, `internal/api/assistantapi.TestTheAssistantCannotApproveItsOwnProposal`, `internal/api/assistantapi.TestEveryDecisionRefusesInTheEnvelope`, `internal/api.TestAReadingTurnCannotWrite`, `internal/api.TestAnAssistedWriteTakesOnlyTheVerbItWasApprovedFor`, `internal/api.TestAnAssistedWriteIsAuditedAsTheAssistant`, `internal/api.TestAnAssistGrantNeverReachesADecisionRoute`, `internal/api.TestNoWriteWithoutApproval`, `internal/api.TestInjectedTextNeverBecomesAWrite`, `internal/assistant/proposal.TestACharterWriteIsSentUnderTheRevisionItWasShown`, `internal/api.TestAPrinciplesChangeAsksAStepUp`
 - **Tag-status:** unreleased
 
 ## The decision
@@ -22,7 +22,11 @@ loop suspends with the call unanswered, and the parked turn holds no grant.
   SHA-256 over its owner, conversation, turn, scope, tool, bound request, source
   revision and expiry, is shown on the card and echoed by the approval; the
   stored fields are re-hashed against it; the source revision is read again
-  and a moved object is `stale`.
+  and a moved object is `stale`. Where the source revision is an HTTP entity
+  tag (the company's principles), the approved write is also sent under it as
+  its `If-Match`, derived from the digest-bound revision rather than stored
+  beside it, so the route itself refuses a change made between the re-read
+  and the write.
 - **The approval is the person's, from their own browser.** It is a request
   carrying their session cookie and a matching Origin, to a proposal they own
   (anybody else's is not found), still proposed and unexpired (fifteen

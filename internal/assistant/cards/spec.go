@@ -107,7 +107,8 @@ type Items struct {
 	// named, indents a tree.
 	ID, Label, Fact, Depth string
 	// Plain marks a list of plain values, each item its own label (the
-	// standing policies, a list of sentences), so Label names no path.
+	// standing policies, a list of sentences), so Label names no path, and
+	// its id its place in the list.
 	Plain bool
 	// Prose marks an item list a person or an agent wrote.
 	Prose bool
@@ -408,11 +409,13 @@ func buildEntity(e *Entity, doc any) (Built, error) {
 	}
 	if it := e.Items; it != nil {
 		list, _ := lookup(doc, it.Path).([]any)
-		for _, raw := range list {
+		for at, raw := range list {
 			item := wire.EntityItem{Kind: it.Kind, ID: text(lookup(raw, it.ID)),
 				Label: text(lookup(raw, it.Label)), Fact: text(lookup(raw, it.Fact))}
 			if it.Plain {
-				item.Label = text(raw)
+				// A PLAIN VALUE HAS NO ID OF ITS OWN: its place in the list
+				// is what tells two apart, from 1 as the page numbers them.
+				item.ID, item.Label = strconv.Itoa(at+1), text(raw)
 			}
 			if it.Depth != "" {
 				if n, err := strconv.Atoi(text(lookup(raw, it.Depth))); err == nil && n > 0 {

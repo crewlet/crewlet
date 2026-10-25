@@ -354,6 +354,25 @@ func parityWorld(t *testing.T) paritySources {
 	if err != nil {
 		t.Fatalf("configapi.New: %v", err)
 	}
+	// AN ACTIVE REVISION, with principles, so the company document's routes
+	// the catalogue reads (the principles) answer as the authority decides
+	// rather than 404 for everybody, which no principal could be compared on.
+	company.Mission = "Make every invoice add up."
+	company.Policies = []string{"Money is an integer number of cents."}
+	document, err := json.Marshal(company)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := secrets.Seal(cipher, document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Configs().InsertActive(t.Context(), store.Revision{
+		CreatedByKind: iam.ActorOperator, Source: "test", CreatedBy: "operator",
+		Summary: "the parity company", Payload: payload, CreatedAt: clock,
+	}); err != nil {
+		t.Fatalf("activate the parity company: %v", err)
+	}
 	state := livestate.New(livestate.WithClock(func() time.Time { return clock }))
 	estate := apiArtifacts{}
 	return paritySources{state: state, config: configs, Sources: queries.Sources{
@@ -367,7 +386,7 @@ func parityWorld(t *testing.T) paritySources {
 
 // mount hands an App the shared sources.
 func (s paritySources) mount(opts *api.Options) {
-	opts.State, opts.Sources = s.state, s.Sources
+	opts.State, opts.Sources, opts.Config = s.state, s.Sources, s.config
 }
 
 // noWorkHits is a work index that finds nothing.

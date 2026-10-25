@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -50,6 +51,19 @@ import (
 //
 // FROM THE TWO DOCUMENTS, NEVER THE RUNNING COMPANY, so a node behind on its
 // applies decides a write exactly as a current one does.
+//
+// # The charter, on its own verb
+//
+// A charter write (`PUT /config/charter`) is admitted on
+// `config.principles.write`, the verb its route is decided by, and ONLY
+// WHILE WHAT IT CHANGES IS THE CHARTER: every changed setting one of
+// [config.CharterSettings] and no seat or unit touched. The verb is decided
+// as `config.write` is for a person, so an administrator's own Save is
+// admitted exactly as before; it differs only in the Dashboard Assistant's
+// column (ADR-0051), which is why the narrower write must never stretch to
+// anything else. A charter draft that reached past the charter would be a
+// fault in the draft, and is decided by the document's own rules instead, as
+// any other write is, which the assistant is never admitted to.
 //
 // # What a refusal says
 //
@@ -141,11 +155,27 @@ func principalOf(w http.ResponseWriter, r *http.Request) (*iam.Principal, bool) 
 
 // admit refuses next when p may not turn prior into it — see the file's header.
 // addressedCheck is a dry run of one seat or unit whose address the caller was
-// admitted to, which is answered when it changes nothing.
+// admitted to, which is answered when it changes nothing; charter is a write
+// of the charter alone.
 func admit(ctx context.Context, p iam.Principal, prior, next *config.Company,
-	addressedCheck bool) error {
+	addressedCheck, charter bool) error {
 
 	now := time.Now()
+	if charter {
+		if diff := config.DiffOrg(prior, next); charterOnly(diff) {
+			d := authz.Decide(ctx, p, authz.ActionPrinciplesWrite,
+				authz.Object{Kind: authz.KindCompany}, authz.NoChart{}, now)
+			if d.Allowed {
+				return nil
+			}
+			refused := make([]RefusedChange, 0, len(diff.Settings))
+			for _, key := range diff.Settings {
+				refused = append(refused, RefusedChange{Kind: "setting", ID: key,
+					Reason: d.Reason})
+			}
+			return &AdmissionError{Refused: refused}
+		}
+	}
 	company := authz.Decide(ctx, p, authz.ActionConfigWrite,
 		authz.Object{Kind: authz.KindCompany}, authz.NoChart{}, now)
 	if company.Allowed {
@@ -201,6 +231,20 @@ func admit(ctx context.Context, p iam.Principal, prior, next *config.Company,
 		return &AdmissionError{Refused: refused}
 	}
 	return nil
+}
+
+// charterOnly reports a diff that changes the charter and nothing else: at
+// least one of [config.CharterSettings], no other setting, and no seat or unit.
+func charterOnly(diff config.OrgDiff) bool {
+	if len(diff.Changes) > 0 || len(diff.Settings) == 0 {
+		return false
+	}
+	for _, key := range diff.Settings {
+		if !slices.Contains(config.CharterSettings, key) {
+			return false
+		}
+	}
+	return true
 }
 
 // refuseAdmission answers a write its caller may not make: the authority

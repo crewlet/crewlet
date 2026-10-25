@@ -88,7 +88,11 @@ func Offered(p iam.Principal, acts []string) []Tool {
 				out = append(out, t)
 			}
 		case KindWrite:
-			if slices.Contains(acts, t.Act) {
+			// A WRITE ON A VERB NO OPERATOR TOOL IS NAMED FOR (the
+			// principles') is never in acts, which lists the act route's
+			// tools; it is offered by the apps its route admits, as a read
+			// is, and its row decides the call either way.
+			if slices.Contains(acts, t.Act) || (isDotted(t.Act) && t.offeredTo(p)) {
 				out = append(out, t)
 			}
 		case KindPageAction, KindNavigate:
@@ -120,6 +124,9 @@ func (t Tool) validate() error {
 		return fmt.Errorf("catalog: %s names no route", t.Name)
 	case (t.Kind == KindWrite || t.Kind == KindPageAction) != (t.Preview != nil):
 		return fmt.Errorf("catalog: %s has a preview exactly when it proposes", t.Name)
+	case t.Kind == KindWrite && isDotted(t.Act) && len(t.Apps) == 0:
+		return fmt.Errorf("catalog: %s executes as %s, which no operator tool is named for, "+
+			"so it is offered by the apps it declares, and declares none", t.Name, t.Act)
 	}
 	for name := range t.schema.properties {
 		if slices.Contains(IdentityArguments, name) {

@@ -247,9 +247,10 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// they remove a credential. See [Service.References].
 	read("GET /config/references", s.references)
 	// THE CHARTER, one resource of three fields: what Company › Principles
-	// edits in place. See charter.go for why it is not PATCH /config.
-	read("GET /config/charter", s.getCharter)
-	write("PUT /config/charter", s.putCharter)
+	// edits in place. See charter.go for why it is not PATCH /config, and
+	// for why it is decided on verbs of its own.
+	mount("GET /config/charter", authz.ActionPrinciplesRead, s.getCharter)
+	mount("PUT /config/charter", authz.ActionPrinciplesWrite, s.putCharter)
 	read("GET /config/revisions", s.listRevisions)
 	read("GET /config/revisions/{id}", s.getRevision)
 	read("GET /config/revisions/{id}/diff", s.diff)

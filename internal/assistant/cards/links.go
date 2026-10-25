@@ -49,6 +49,7 @@ var links = map[string]screen{
 	"project":          {address: "#/worklet/{KEY}", app: iam.GrantWorklet},
 	"item":             {address: "#/worklet/{id}", app: iam.GrantWorklet, id: taskName},
 	"org-chart":        {address: "#/company/org", label: "Org chart"},
+	"principles":       {address: "#/company/principles", label: "Principles"},
 	"roster":           {address: "#/company/org/roster", label: "Roster"},
 	"teams":            {address: "#/company/org/teams/{unit}"},
 	"seat":             {address: "#/company/org/seats/{handle}"},

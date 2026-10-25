@@ -64,6 +64,28 @@ type Request struct {
 	// IdempotencyKey is the operation an approved write executes under
 	// (internal/api/opkey's header); empty for a read.
 	IdempotencyKey string
+	// IfMatch is the entity tag a conditional write is sent under (the
+	// `If-Match` header, RFC 9110), quoted as the route answered it in its
+	// ETag; empty for an unconditional request. NEVER a tool's or a
+	// preview's to choose: internal/assistant/proposal derives it from the
+	// proposal's source revision, which the proposal's digest binds, so the
+	// precondition the route judges is the version the person was shown.
+	IfMatch string
+}
+
+// ValidEntityTag reports whether tag is one strong entity tag as RFC 9110
+// spells it: a quoted string of visible characters with no quote inside, the
+// only kind of If-Match a request here carries.
+func ValidEntityTag(tag string) bool {
+	if len(tag) < 2 || tag[0] != '"' || tag[len(tag)-1] != '"' {
+		return false
+	}
+	for _, c := range []byte(tag[1 : len(tag)-1]) {
+		if c == '"' || c < 0x21 || c == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 // ErrInvalidRequest reports a [Request] that is not a request to one of the

@@ -60,12 +60,20 @@ var routeExposures = slices.Concat(
 		"administrator's gesture on its own screen", "POST /brand/adoptions",
 		"DELETE /brand/adoptions/current"),
 
-	// THE COMPANY DOCUMENT, every route an administrator's or a lead's, and
-	// org and principles edits are page actions into their editors' drafts.
+	// THE COMPANY'S PRINCIPLES, the one part of the company document the
+	// assistant reaches (ADR-0051's exception): read as the person, and
+	// written only as the change its owner approved from a before-and-after.
+	[]Exposure{
+		routed(PrinciplesRoute, "get_company_principles"),
+		routeProposed(PrinciplesWriteRoute, "update_company_principles"),
+	},
+
+	// EVERY OTHER COMPANY DOCUMENT ROUTE, each an administrator's or a
+	// lead's; an org edit is a page action into the org builder's draft.
 	nevers("the company document names every secret reference, and its edits are "+
 		"page actions into the editors' drafts that the person saves",
 		"GET /config", "OPTIONS /config", "PUT /config", "PATCH /config", "POST /config/reload",
-		"GET /config/references", "GET /config/charter", "PUT /config/charter",
+		"GET /config/references",
 		"GET /config/revisions", "GET /config/revisions/{id}", "GET /config/revisions/{id}/diff",
 		"POST /config/revisions/{id}/revert", "GET /config/roles/{id}", "PUT /config/roles/{id}",
 		"GET /config/units/{id}", "PUT /config/units/{id}", "GET /config/llm-providers/{id}",

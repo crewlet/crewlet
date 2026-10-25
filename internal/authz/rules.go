@@ -187,14 +187,25 @@ const (
 	ActionKnowledgeAnswer Action = "answer_knowledge"
 
 	// --- the company's own controls --------------------------------- //
-	ActionConfigRead   Action = "config.read"
-	ActionConfigWrite  Action = "config.write"
-	ActionSecretList   Action = "secrets.list"
-	ActionSecretReveal Action = "secrets.reveal"
-	ActionSecretWrite  Action = "secrets.write"
-	ActionSetupRead    Action = "setup.read"
-	ActionSetupConnect Action = "setup.connect"
-	ActionFleetOperate Action = "fleet.operate"
+	ActionConfigRead  Action = "config.read"
+	ActionConfigWrite Action = "config.write"
+	// THE COMPANY'S PRINCIPLES (its mission, vision and standing policies),
+	// read and written as one resource (`GET` and `PUT /config/charter`,
+	// what Company › Principles edits in place). THEIR OWN VERBS, decided
+	// exactly as [ActionConfigRead] and [ActionConfigWrite] decide the whole
+	// document, for one reason: they are the one part of the company
+	// document the Dashboard Assistant may carry (ADR-0051's exception),
+	// and an assistant column is per verb. On the document's own verbs the
+	// assistant would be one approval from every secret reference, seat and
+	// provider; on these it reaches three fields of prose and nothing else.
+	ActionPrinciplesRead  Action = "config.principles.read"
+	ActionPrinciplesWrite Action = "config.principles.write"
+	ActionSecretList      Action = "secrets.list"
+	ActionSecretReveal    Action = "secrets.reveal"
+	ActionSecretWrite     Action = "secrets.write"
+	ActionSetupRead       Action = "setup.read"
+	ActionSetupConnect    Action = "setup.connect"
+	ActionFleetOperate    Action = "fleet.operate"
 	// ActionFleetRead is the deployment's own controls READ — the
 	// maintenance window's status and the value a reanchor must echo.
 	// Admin's as [ActionFleetOperate] is, and its own verb because it asks
@@ -909,7 +920,15 @@ var rules = map[Action]rule{
 	// --- the company's own controls ------------------------------------ //
 	ActionConfigRead:  {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistNever},
 	ActionConfigWrite: {class: ClassAdmin, recency: iam.RecencyStepUp, assist: AssistNever},
-	ActionSecretList:  {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistNever},
+	// THE PRINCIPLES, AS THE DOCUMENT IS: admin's, the write at the step-up
+	// window. The ASSISTANT'S, narrowly (ADR-0051): to read for whoever may
+	// read them, and to write only as the one request its owner approved
+	// from a server-rendered before-and-after, at the same step-up window
+	// (ADR-0050). The charter is the company's root, nobody's subtree, so no
+	// lead reaches either verb.
+	ActionPrinciplesRead:  {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistRead},
+	ActionPrinciplesWrite: {class: ClassAdmin, recency: iam.RecencyStepUp, assist: AssistApprove},
+	ActionSecretList:      {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistNever},
 	// A REVEAL HANDS OVER A CREDENTIAL'S VALUE, which is a person's to read
 	// and never a pipeline's: the row refuses any request a token presented.
 	ActionSecretReveal: {class: ClassAdmin, recency: iam.RecencyStepUp,

@@ -60,7 +60,8 @@ type Preview struct {
 	SourceRevision string
 
 	// Request is the exact request the approval sends, with no operation
-	// key: [New] mints it.
+	// key ([New] mints it) and no If-Match ([RequestOf] derives it from
+	// SourceRevision).
 	Request exec.Request
 }
 
@@ -78,6 +79,9 @@ func (p Preview) Check(changesVisibility bool) error {
 	case p.Request.IdempotencyKey != "":
 		return fmt.Errorf("%w: the operation key is minted with the proposal, never "+
 			"by its preview", ErrInvalid)
+	case p.Request.IfMatch != "":
+		return fmt.Errorf("%w: a write's If-Match is derived from its source revision, "+
+			"never set by its preview", ErrInvalid)
 	case changesVisibility && len(p.Audience) == 0:
 		return fmt.Errorf("%w: a write that changes who sees something names its "+
 			"audience (D09)", ErrInvalid)

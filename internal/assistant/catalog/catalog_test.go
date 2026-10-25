@@ -190,7 +190,7 @@ func TestOnlyWhatThePersonCanTakeIsOffered(t *testing.T) {
 		}
 	}
 	for _, refused := range []string{"list_tasks", "list_integrations", "create_task",
-		"edit_page"} {
+		"edit_page", "get_company_principles", "update_company_principles"} {
 		if slices.Contains(offered, refused) {
 			t.Errorf("a knowledge person with write_page alone is offered %s", refused)
 		}
@@ -200,6 +200,13 @@ func TestOnlyWhatThePersonCanTakeIsOffered(t *testing.T) {
 	all := names(catalog.Offered(admin, nil))
 	if !slices.Contains(all, "list_integrations") || !slices.Contains(all, "list_tasks") {
 		t.Errorf("an administrator is offered %v", all)
+	}
+	// THE PRINCIPLES' WRITE IS NO OPERATOR TOOL, so acts never lists it: an
+	// administrator is offered it by the route's own class, with no acts.
+	for _, want := range []string{"get_company_principles", "update_company_principles"} {
+		if !slices.Contains(all, want) {
+			t.Errorf("an administrator is not offered %s", want)
+		}
 	}
 	if again := names(catalog.Offered(admin, nil)); !slices.Equal(all, again) {
 		t.Error("two offers to one person differ in order")

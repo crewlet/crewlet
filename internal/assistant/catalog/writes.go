@@ -16,8 +16,9 @@ import (
 // preview of it and approves, and only the approval sends it, as them. Each
 // executes as one operator-catalogue tool through the act route, or (the two
 // artifact shares) through the artifacts surface the dashboard's own control
-// sends, so a write the assistant prepared and a write the person clicked are
-// one code path.
+// sends, or (the company's principles) through the route Company › Principles
+// saves through, so a write the assistant prepared and a write the person
+// clicked are one code path.
 
 // DeriveTier is a write's risk from the authority table and the act tool's own
 // hint: R3 (consequential) for a verb only a person takes, a verb that asks a
@@ -171,6 +172,7 @@ func writeTools() []Tool {
 			out[i].Tier = TierConsequential
 		}
 	}
+	out = append(out, principlesWrite())
 	return append(out, shareTools()...)
 }
 

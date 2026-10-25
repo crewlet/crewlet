@@ -422,6 +422,7 @@ func TestARevisionReadsBackAsWritten(t *testing.T) {
 	for _, r := range []proposal.Revision{
 		{Kind: proposal.RevisionTask, ID: "ENG-142", Version: "7"},
 		{Kind: proposal.RevisionPerson, ID: "ada@home", Version: "3"},
+		{Kind: proposal.RevisionCharter, ID: proposal.CharterID, Version: "charter-0a1b"},
 	} {
 		got, err := proposal.ParseRevision(r.String())
 		if err != nil || got != r {
@@ -431,6 +432,39 @@ func TestARevisionReadsBackAsWritten(t *testing.T) {
 	for _, bad := range []string{"", "task", "task:ENG", "task:@1", "task:ENG@", "seat:x@1"} {
 		if _, err := proposal.ParseRevision(bad); err == nil {
 			t.Errorf("revision %q was read", bad)
+		}
+	}
+}
+
+// A CHARTER-BOUND WRITE IS SENT UNDER THE REVISION IT WAS SHOWN, as its
+// If-Match: the request a stored proposal sends carries the entity tag its
+// source revision names, quoted, so the route refuses a change made after the
+// approval's re-read; a proposal bound to any other kind carries none (its
+// precondition travels in its own arguments). A preview cannot set one itself.
+// Mutation: stop deriving it in RequestOf and the charter request goes out
+// unconditional.
+func TestACharterWriteIsSentUnderTheRevisionItWasShown(t *testing.T) {
+	t.Parallel()
+	charter := proposal.Revision{Kind: proposal.RevisionCharter, ID: proposal.CharterID,
+		Version: "charter-0a1b"}.String()
+	req := proposal.RequestOf(assistantdomain.Proposal{Method: "PUT", Path: "/config/charter",
+		Body: []byte(`{}`), OpKey: "op", SourceRevision: charter})
+	if req.IfMatch != `"charter-0a1b"` || !exec.ValidEntityTag(req.IfMatch) {
+		t.Errorf("the charter write is sent under If-Match %q", req.IfMatch)
+	}
+	task := proposal.RequestOf(assistantdomain.Proposal{Method: "POST", Path: "/operator/act/x",
+		SourceRevision: "task:ENG-1@3"})
+	if task.IfMatch != "" {
+		t.Errorf("a task write is sent under If-Match %q", task.IfMatch)
+	}
+	d := draft()
+	d.Preview.Request.IfMatch = `"charter-0a1b"`
+	if _, err := proposal.New(d); !errors.Is(err, proposal.ErrInvalid) {
+		t.Errorf("a preview that set its own If-Match was proposed: %v", err)
+	}
+	for _, bad := range []string{``, `charter`, `"a"b"`, "\"a\nb\"", `W/"weak"`} {
+		if exec.ValidEntityTag(bad) {
+			t.Errorf("%q is read as one strong entity tag", bad)
 		}
 	}
 }

@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/authz`
-- **Enforced-by:** `internal/authz.TestEveryRowDecidesTheAssistant`, `internal/authz.TestAnAssistNeverRowRefusesAnAssistedPrincipal`, `internal/authz.TestAPresenceRowRefusesAnAssistedPrincipal`, `internal/authz.TestAReadGrantTakesOnlyAssistReadRows`, `internal/authz.TestTheAssistantIsNeverOneStepFromTheNeverList`, `internal/agent/builtin.TestAnAssistReadVerbIsAToolThatOnlyReads`, `internal/iamdomain.TestAnAdministrativeRecordIsNeverWrittenThroughTheAssistant`, `internal/iamdomain.TestATokenIsNeverMintedThroughTheAssistant`
+- **Enforced-by:** `internal/authz.TestEveryRowDecidesTheAssistant`, `internal/authz.TestAnAssistNeverRowRefusesAnAssistedPrincipal`, `internal/authz.TestAPresenceRowRefusesAnAssistedPrincipal`, `internal/authz.TestAReadGrantTakesOnlyAssistReadRows`, `internal/authz.TestTheAssistantIsNeverOneStepFromTheNeverList`, `internal/agent/builtin.TestAnAssistReadVerbIsAToolThatOnlyReads`, `internal/iamdomain.TestAnAdministrativeRecordIsNeverWrittenThroughTheAssistant`, `internal/iamdomain.TestATokenIsNeverMintedThroughTheAssistant`, `internal/api/configapi.TestACharterWriteIsAdmittedOnItsVerbOnlyForTheCharter`, `internal/api.TestAnApprovedPrinciplesChangeIsThePagesOwnWrite`
 - **Tag-status:** unreleased
 
 ## The decision
@@ -28,10 +28,11 @@ recency.
   bar reads the credential's class, never its spelling, and reads a zero
   class as never.
 - **`AssistNever` covers what a model must never be one step from**: every
-  credential, secret and setup verb, the company document's writes, fleet
-  operations, every identity directory write and proof, session control, every
-  purge and transfer, nested model spend (`answer_knowledge`), seat-only verbs
-  and bulk export, and every `assistant.*` verb itself.
+  credential, secret and setup verb, the company document's reads and writes
+  (but for the one exception below), fleet operations, every identity
+  directory write and proof, session control, every purge and transfer, nested
+  model spend (`answer_knowledge`), seat-only verbs and bulk export, and every
+  `assistant.*` verb itself.
 - **The record refuses too.** `internal/iamdomain` refuses an administrative
   identity record and a token mint whose operator is an assistant grant,
   whatever authority reached it, as it already refuses one made through a
@@ -40,6 +41,45 @@ recency.
 Layers only subtract. The person's own authority decision is still the whole
 decision: no assistant field can admit what the person's grants and relations
 refuse.
+
+### The one exception: the company's principles
+
+The company's mission, vision and standing policies are read and written on
+verbs of their own, `config.principles.read` (`AssistRead`) and
+`config.principles.write` (`AssistApprove`), decided for a person exactly as
+`config.read` and `config.write` decide the whole document: an
+administrator's, the write at the step-up window. They are the routes Company ›
+Principles itself uses (`GET` and `PUT /config/charter`), so the assistant's
+change and the person's Save are one write path, with no second route beside
+it. The exception is narrow by construction:
+
+- **The person holds the authority.** The assistant reads and proposes only as
+  an administrator who could read and save the principles themselves.
+- **The write is approval-gated with a server-rendered diff** (ADR-0050): the
+  preview reads the principles as they are stored and shows a word diff of the
+  mission and the vision and one row per policy added, removed or reworded,
+  bound to the principles' entity tag; the approved write is sent under that
+  tag as its `If-Match`, so a change made meanwhile is refused (`412`) rather
+  than overwritten.
+- **The step-up is kept.** The write asks the step-up window of the approver,
+  through the assistant as at their keyboard.
+- **The scope is the three settings and nothing else.** The charter resource
+  is exactly `mission`, `vision` and `policies`: `GET /config/charter`
+  answers those three fields, and `PUT` takes those three and refuses any
+  other field, so no proposal can name another part of the document. A change
+  the person asks for names the parts it changes, and the preview states the
+  rest as they are stored. The charter write is admitted on its own verb only
+  while what it changes is the charter: a draft
+  that reached past it (another setting, a seat, a unit) is decided by the
+  document's own rules, which the assistant is never admitted to. Every other
+  company document verb (`config.read`, `config.write`, `config.org.read`,
+  `config.org.write`) stays `AssistNever`, and the never-list walk pins the
+  exception by verb.
+
+Opening `config.write` instead would have put the assistant one approval from
+every secret reference, provider, seat and integration in the document; a
+page action into the Principles editor's draft alone left an explicit request
+("remove this word from our mission") with no way to be carried out.
 
 ## Why the obvious alternatives are wrong
 

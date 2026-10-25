@@ -1,6 +1,7 @@
 package builtin_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
@@ -64,6 +65,11 @@ func TestEveryOperatorToolHasOneAssistantExposure(t *testing.T) {
 			continue
 		}
 		params, ok := served[tool.Act]
+		if !ok && strings.Contains(tool.Act, ".") {
+			// A VERB NO TOOL IS NAMED FOR (the principles'): the write is
+			// sent on its own route, which internal/api's route walk holds.
+			continue
+		}
 		if !ok {
 			t.Errorf("%s executes as %s, which the operator catalogue does not serve",
 				tool.Name, tool.Act)

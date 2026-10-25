@@ -19,10 +19,19 @@ const (
 	RevisionArtifact RevisionKind = "artifact"
 	// RevisionPerson is a person's record by seat handle, at its version.
 	RevisionPerson RevisionKind = "person"
+	// RevisionCharter is the company's principles (`GET /config/charter`),
+	// at the entity tag the route answers, unquoted: the one revision whose
+	// version is an HTTP entity tag, which the approved write is sent under
+	// as its If-Match ([Revision.EntityTag]).
+	RevisionCharter RevisionKind = "charter"
 )
 
-// RevisionKinds are the four, in declaration order.
-var RevisionKinds = []RevisionKind{RevisionTask, RevisionPage, RevisionArtifact, RevisionPerson}
+// RevisionKinds are the five, in declaration order.
+var RevisionKinds = []RevisionKind{RevisionTask, RevisionPage, RevisionArtifact, RevisionPerson,
+	RevisionCharter}
+
+// CharterID is the one charter's id in a revision: a company has one.
+const CharterID = "company"
 
 // Valid reports whether k is a kind this build knows.
 func (k RevisionKind) Valid() bool { return slices.Contains(RevisionKinds, k) }
@@ -39,6 +48,19 @@ type Revision struct {
 
 // String is the revision's spelling.
 func (r Revision) String() string { return string(r.Kind) + ":" + r.ID + "@" + r.Version }
+
+// EntityTag is the If-Match a write bound to r is sent under, quoted, and
+// whether r carries one: a charter revision's version is the entity tag its
+// route judges a write against, so the route refuses a change made in the
+// moments between the approval's re-read and the write, which the re-read
+// alone cannot. Every other kind's precondition travels in the write's own
+// arguments (a task's if_match, a page's base_version).
+func (r Revision) EntityTag() (string, bool) {
+	if r.Kind != RevisionCharter || r.Version == "" {
+		return "", false
+	}
+	return `"` + r.Version + `"`, true
+}
 
 // ParseRevision reads a revision back, refusing a spelling [Revision.String]
 // does not write.

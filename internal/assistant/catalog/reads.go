@@ -771,6 +771,7 @@ func readTools() []Tool {
 				Open: &cards.Open{Screen: "config"}}}),
 			Label: func(map[string]any) string { return "Reading the configuration history" },
 		},
+		principlesRead(),
 	}
 }
 

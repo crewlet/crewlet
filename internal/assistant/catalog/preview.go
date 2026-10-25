@@ -36,21 +36,22 @@ var ErrPreviewRead = errors.New("catalog: the preview could not read the object"
 
 // previews are each write tool's and the page action's preview, by tool.
 var previews = map[string]func(t Tool) proposal.Previewer{
-	"create_task":         createTaskPreview,
-	"update_task":         updateTaskPreview,
-	"comment_on_task":     commentPreview,
-	"answer_decision":     answerPreview,
-	"set_my_priorities":   prioritiesPreview,
-	"mark_inbox":          inboxPreview,
-	"pause_agent":         seatPreview(true),
-	"resume_agent":        seatPreview(false),
-	"steer_turn":          steerPreview,
-	"answer_coding_run":   runAnswerPreview,
-	"create_page":         createPagePreview,
-	"edit_page":           editPagePreview,
-	"share_artifact":      sharePreview(true),
-	"unshare_artifact":    sharePreview(false),
-	"propose_page_change": pageActionPreview,
+	"create_task":               createTaskPreview,
+	"update_task":               updateTaskPreview,
+	"comment_on_task":           commentPreview,
+	"answer_decision":           answerPreview,
+	"set_my_priorities":         prioritiesPreview,
+	"mark_inbox":                inboxPreview,
+	"pause_agent":               seatPreview(true),
+	"resume_agent":              seatPreview(false),
+	"steer_turn":                steerPreview,
+	"answer_coding_run":         runAnswerPreview,
+	"create_page":               createPagePreview,
+	"edit_page":                 editPagePreview,
+	"share_artifact":            sharePreview(true),
+	"update_company_principles": principlesPreview,
+	"unshare_artifact":          sharePreview(false),
+	"propose_page_change":       pageActionPreview,
 }
 
 // readGet builds a read on route and sends it through [readOne].
@@ -791,13 +792,18 @@ func orDefault(v, fallback string) string {
 }
 
 // Revision re-reads, through the turn's grant, the revision a preview recorded
-// for the object it read: a task's version, a page's, an artifact's head and a
-// person's tracker record's. An approval compares what it answers with the
-// recorded revision, and an answer that differs is a stale proposal.
+// for the object it read: a task's version, a page's, an artifact's head, a
+// person's tracker record's and the principles' entity tag. An approval
+// compares what it answers with the recorded revision, and an answer that
+// differs is a stale proposal.
 var Revision proposal.Revisions = func(ctx context.Context, read proposal.Read, source string) (string, error) {
 	r, err := proposal.ParseRevision(source)
 	if err != nil {
 		return "", err
+	}
+	if r.Kind == proposal.RevisionCharter {
+		// THE TAG IS A HEADER, not a field of the answer's body.
+		return principlesRevision(ctx, read)
 	}
 	var req exec.Request
 	path, versionAt, idAt := "", "", ""

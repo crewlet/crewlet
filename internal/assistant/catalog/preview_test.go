@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,13 +23,7 @@ var wednesday = time.Date(2031, 4, 16, 14, 30, 0, 0, time.UTC)
 // reader is a turn grant over answers, refusing anything it does not hold.
 func reader(answers map[string]any) proposal.Read {
 	return func(_ context.Context, r exec.Request) (exec.Response, error) {
-		body, ok := answers[r.Path]
-		if !ok {
-			return exec.Response{Status: 404,
-				Body: []byte(`{"error":"not_found","message":"No such record."}`)}, nil
-		}
-		b, err := json.Marshal(body)
-		return exec.Response{Status: 200, Body: b}, err
+		return assistanttest.Answer(answers, r), nil
 	}
 }
 
@@ -70,7 +65,14 @@ func TestEveryWriteIsPreviewedFromTheObjectAsItIsNow(t *testing.T) {
 			t.Errorf("%s previews the audience %v and declares ChangesVisibility %v",
 				tool.Name, p.Audience, tool.ChangesVisibility)
 		}
-		want, err := tool.Request(args)
+		// A CALL THE PREVIEW COMPLETES FROM THE OBJECT is the tool's own
+		// request for the completed call: the principles' parts a change
+		// leaves out are stated as they stand.
+		built := args
+		if whole, completes := completedArgs[tool.Name]; completes {
+			built = whole
+		}
+		want, err := tool.Request(built)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -105,6 +107,15 @@ func TestEveryWriteIsPreviewedFromTheObjectAsItIsNow(t *testing.T) {
 		kinds["task"] != wire.ChangeFact || p.SourceRevision != "task:ENG-42@3" || p.Note == "" {
 		t.Errorf("the update previews %+v at %q", p.Changes, p.SourceRevision)
 	}
+}
+
+// completedArgs are the calls a preview completes from the object as it is,
+// whole: [assistanttest.ProposalArgs]' principles change with the parts it
+// leaves out as [assistanttest.World] states them.
+var completedArgs = map[string]map[string]any{
+	"update_company_principles": {"mission": "Help friends share costs fairly.",
+		"vision": "Settling up takes seconds.", "policies": []any{"Miles is the final " +
+			"authority.", "Money is an integer number of cents."}},
 }
 
 // A CHANGE PREPARED AGAINST AN OLD VERSION IS STALE, and a revision that moved
@@ -236,5 +247,78 @@ func TestAPageChangeReadsAsWords(t *testing.T) {
 	}
 	if rows["Assignee"] != "Backend engineer (engineer)" || rows["Due before"] != "2031-04-30" {
 		t.Errorf("the page change reads %v", rows)
+	}
+}
+
+// A PRINCIPLES CHANGE IS A DIFF OF THE PRINCIPLES AS THEY ARE STORED.
+//
+// The preview reads the principles through the turn's grant and renders the
+// mission's word diff from the stored mission (the stray "test" struck), and
+// nothing for the vision and the policies the call left out, which the request
+// states as they stand. A policy list is diffed policy by policy: one added,
+// one removed and one reworded each read as one row, and a list that only
+// gained a policy is not shown as every policy rewritten. The proposal is
+// bound to the principles' entity tag, which re-reads as itself until the
+// principles move, and the card says its approval asks a step-up. A call that
+// changes nothing is refused. Mutation: diff against the call's own mission,
+// or bind no revision, and this fails.
+func TestAPrinciplesChangeIsADiffOfTheStoredPrinciples(t *testing.T) {
+	t.Parallel()
+	world := assistanttest.World()
+	read := reader(world)
+	tool, _ := catalog.Lookup("update_company_principles")
+	p, err := tool.Preview(t.Context(), read, wednesday,
+		assistanttest.ProposalArgs["update_company_principles"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Changes) != 1 || p.Changes[0].Field != "mission" ||
+		p.Changes[0].Kind != wire.ChangeText || p.Changes[0].From != assistanttest.WorldMission ||
+		p.Changes[0].To != "Help friends share costs fairly." {
+		t.Fatalf("the mission change previews %+v", p.Changes)
+	}
+	struck := false
+	for _, w := range p.Changes[0].Words {
+		struck = struck || (w.Op == wire.WordRemoved && strings.Contains(w.Text, "test"))
+	}
+	if !struck {
+		t.Errorf("the word diff %+v does not strike the stray word", p.Changes[0].Words)
+	}
+	if !p.StepUp || !strings.HasPrefix(p.SourceRevision, "charter:company@charter-") {
+		t.Errorf("the change asks step-up %v and binds %q", p.StepUp, p.SourceRevision)
+	}
+	if now, err := catalog.Revision(t.Context(), read, p.SourceRevision); err != nil ||
+		now != p.SourceRevision {
+		t.Errorf("the principles' revision re-reads as %q, %v", now, err)
+	}
+	moved := assistanttest.World()
+	moved["/config/charter"] = assistanttest.Charter("Somebody else's mission.", "")
+	if now, _ := catalog.Revision(t.Context(), reader(moved), p.SourceRevision); now == p.SourceRevision {
+		t.Error("principles that moved re-read as the revision the proposal was bound to")
+	}
+
+	world["/config/charter"] = assistanttest.Charter("M.", "V.", "Keep it.", "Old wording.",
+		"Gone soon.")
+	p, err = tool.Preview(t.Context(), reader(world), wednesday, map[string]any{
+		"policies": []any{"First.", "Keep it.", "New wording.", "Gone soon."}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := map[wire.ChangeKind]int{}
+	for _, c := range p.Changes {
+		kinds[c.Kind]++
+	}
+	if len(p.Changes) != 2 || kinds[wire.ChangeAdded] != 1 || kinds[wire.ChangeText] != 1 {
+		t.Errorf("a policy added and one reworded previews %+v", p.Changes)
+	}
+	p, err = tool.Preview(t.Context(), reader(world), wednesday, map[string]any{
+		"policies": []any{"Keep it.", "Old wording."}})
+	if err != nil || len(p.Changes) != 1 || p.Changes[0].Kind != wire.ChangeRemoved ||
+		p.Changes[0].From != "Gone soon." {
+		t.Errorf("a policy removed previews %+v, %v", p.Changes, err)
+	}
+	if _, err := tool.Preview(t.Context(), reader(world), wednesday,
+		map[string]any{"mission": "M."}); !errors.Is(err, catalog.ErrInvalidArguments) {
+		t.Errorf("a change that changes nothing answered %v", err)
 	}
 }

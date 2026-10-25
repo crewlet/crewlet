@@ -2664,7 +2664,8 @@ how far it lets the assistant reach (ADR-0051):
 
 A row that does not decide fails the build. **Never** covers what a model must
 never be one step from: every secret, setup and fleet control, the company
-document, every identity directory verb but the org chart's seat read, every
+document but for its principles, every identity directory verb but the org
+chart's seat read, every
 credential and session control, every purge, transfer, forced publish and
 export, a question answered by a model at the company's expense, the agents'
 own verbs, and the assistant's own verbs. A verb no assistant tool reaches is
@@ -2672,6 +2673,16 @@ own verbs, and the assistant's own verbs. A verb no assistant tool reaches is
 tool that exposes it. And a row that needs a person present is refused to the
 assistant whatever it says, because the assistant is not a person at a
 keyboard.
+
+**The company's principles are the one part of the company document the
+assistant reaches** (ADR-0051). Their mission, vision and standing policies are
+read and written on verbs of their own, `config.principles.read` (**read**) and
+`config.principles.write` (**approve**), decided for a person exactly as
+`config.read` and `config.write` decide the whole document: an administrator's,
+the write at the step-up window. The write is admitted only while it changes
+those three settings and nothing else, is sent through the same route Company ›
+Principles saves through, and runs only from a before-and-after its owner
+approved. Every other verb of the document stays **never**.
 
 A refusal through the assistant is `403 unauthorized` with `reason:
 assist_refused` (the person takes the gesture themselves) or `reason:

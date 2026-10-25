@@ -1,6 +1,8 @@
 package assistanttest
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 
@@ -45,7 +47,28 @@ func World() map[string]any {
 			"title": "Runbook", "body": "Step one.", "version": 2}},
 		"/artifacts/" + RecordID: map[string]any{"id": RecordID, "title": "Q3 deck",
 			"head_number": 5},
+		"/config/charter": Charter(WorldMission, "Settling up takes seconds.",
+			"Miles is the final authority.", "Money is an integer number of cents."),
 	}
+}
+
+// WorldMission is the mission [World]'s principles state, with the stray word
+// a person asks the assistant to remove.
+const WorldMission = "Help friends share costs fairly. test"
+
+// Charter is `GET /config/charter`'s answer for the three parts: the
+// principles as JSON, and an entity tag that is a digest of them, as the route
+// answers one (a strong tag naming exactly these bytes).
+func Charter(mission, vision string, policies ...string) exec.Response {
+	if policies == nil {
+		policies = []string{}
+	}
+	raw, _ := json.Marshal(map[string]any{"mission": mission, "vision": vision,
+		"policies": policies})
+	sum := sha256.Sum256(raw)
+	return exec.Response{Status: http.StatusOK,
+		Header: http.Header{"Etag": {`"charter-` + hex.EncodeToString(sum[:16]) + `"`}},
+		Body:   raw}
 }
 
 // ProposalArgs are each proposing tool's call against [World], the page
@@ -54,28 +77,34 @@ var ProposalArgs = map[string]map[string]any{
 	"create_task": {"title": "File the report", "assignee": "pm", "body": "Details."},
 	"update_task": {"item": "ENG-42", "if_match": float64(3), "status": "in_progress",
 		"assignee": "dev", "body": "A new description."},
-	"comment_on_task":     {"item": "ENG-42", "body": "Done on my side."},
-	"answer_decision":     {"item": "ENG-42", "choice": "a"},
-	"set_my_priorities":   {"items": []any{"ENG-42", "ENG-9"}},
-	"mark_inbox":          {"read": []any{"r1", "r2"}},
-	"pause_agent":         {"handle": "pm", "reason": "Too many hand-offs.", "stop_running": true},
-	"resume_agent":        {"handle": "pm"},
-	"steer_turn":          {"turn_id": RecordID, "note": "Use the staging branch."},
-	"answer_coding_run":   {"turn_id": RecordID, "answer": "main"},
-	"create_page":         {"title": "Onboarding", "body": "Welcome."},
-	"edit_page":           {"page": RecordID, "base_version": float64(2), "body": "Step one, then two."},
-	"share_artifact":      {"artifact": RecordID, "to": "company", "role": "viewer"},
-	"unshare_artifact":    {"artifact": RecordID, "from": "unit:platform"},
-	"propose_page_change": {"action": "work.filter.apply", "args": map[string]any{"status": "blocked"}},
+	"comment_on_task":           {"item": "ENG-42", "body": "Done on my side."},
+	"answer_decision":           {"item": "ENG-42", "choice": "a"},
+	"set_my_priorities":         {"items": []any{"ENG-42", "ENG-9"}},
+	"mark_inbox":                {"read": []any{"r1", "r2"}},
+	"pause_agent":               {"handle": "pm", "reason": "Too many hand-offs.", "stop_running": true},
+	"resume_agent":              {"handle": "pm"},
+	"steer_turn":                {"turn_id": RecordID, "note": "Use the staging branch."},
+	"answer_coding_run":         {"turn_id": RecordID, "answer": "main"},
+	"create_page":               {"title": "Onboarding", "body": "Welcome."},
+	"edit_page":                 {"page": RecordID, "base_version": float64(2), "body": "Step one, then two."},
+	"share_artifact":            {"artifact": RecordID, "to": "company", "role": "viewer"},
+	"unshare_artifact":          {"artifact": RecordID, "from": "unit:platform"},
+	"propose_page_change":       {"action": "work.filter.apply", "args": map[string]any{"status": "blocked"}},
+	"update_company_principles": {"mission": "Help friends share costs fairly."},
 }
 
 // Answer is what a route answers world's record at r's path: 200 with it, or
-// 404 in the engine's envelope when world holds none.
+// 404 in the engine's envelope when world holds none. A record that is itself
+// a response (one whose route answers a header, [Charter]) is answered as it
+// is.
 func Answer(world map[string]any, r exec.Request) exec.Response {
 	body, ok := world[r.Path]
 	if !ok {
 		return exec.Response{Status: http.StatusNotFound,
 			Body: []byte(`{"error":"not_found","message":"There is no such record here."}`)}
+	}
+	if resp, whole := body.(exec.Response); whole {
+		return resp
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {

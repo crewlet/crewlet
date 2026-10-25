@@ -269,7 +269,10 @@ func sameDecision(a, b authz.Decision) bool {
 // ADR-0051's never list, pinned by FAMILY rather than by verb where a family
 // exists, so a verb added to it later is held without anybody remembering this
 // test: every credential, secret, setup and fleet verb, every company document
-// verb, every identity directory verb but the org chart's seat read, every
+// verb but the principles' two (ADR-0051's one exception: mission, vision and
+// policies, read as the person and written only from an approved
+// before-and-after at the step-up window), every identity directory verb but
+// the org chart's seat read, every
 // purge, the company-wide trail, a transfer, a forced publish, an export,
 // nested model spend, the agents' own verbs, the catalogue and every
 // `assistant.` verb itself (which is also a person's alone, present). And the
@@ -277,12 +280,18 @@ func sameDecision(a, b authz.Decision) bool {
 // is a write the assistant can be one approval away from: a verb joins that
 // list in a reviewed diff here, together with the catalogue row that offers it.
 //
-// Mutation: mark `secrets.reveal` assist-read, or `merge_work_item`
-// assist-approve, and this goes red naming it.
+// Mutation: mark `secrets.reveal` assist-read, `merge_work_item` or
+// `config.write` assist-approve, and this goes red naming it.
 func TestTheAssistantIsNeverOneStepFromTheNeverList(t *testing.T) {
 	t.Parallel()
+	// THE ONE EXCEPTION TO A NEVER FAMILY, by verb: the principles, and
+	// nothing else of the company document.
+	principles := []authz.Action{authz.ActionPrinciplesRead, authz.ActionPrinciplesWrite}
 	never := func(a authz.Action) bool {
 		s := string(a)
+		if slices.Contains(principles, a) {
+			return false
+		}
 		for _, family := range []string{"secrets.", "setup.", "fleet.", "config.",
 			"assistant."} {
 			if strings.HasPrefix(s, family) {
@@ -322,6 +331,21 @@ func TestTheAssistantIsNeverOneStepFromTheNeverList(t *testing.T) {
 				"so a machine token may take it", a, presence)
 		}
 	}
+	for _, a := range principles {
+		class, _ := authz.ClassOf(a)
+		recency, _ := authz.RecencyOf(a)
+		document := authz.ActionConfigRead
+		if a == authz.ActionPrinciplesWrite {
+			document = authz.ActionConfigWrite
+		}
+		want, _ := authz.ClassOf(document)
+		wantRecency, _ := authz.RecencyOf(document)
+		if class != want || recency != wantRecency {
+			t.Errorf("%s is decided by %s at %s, not as %s is (%s at %s): the exception "+
+				"is the assistant's column alone", a, class, recency, document, want,
+				wantRecency)
+		}
+	}
 	if pinned < 20 {
 		t.Fatalf("the never list matched %d verbs; the families no longer name "+
 			"the table's verbs", pinned)
@@ -339,6 +363,7 @@ func TestTheAssistantIsNeverOneStepFromTheNeverList(t *testing.T) {
 		authz.ActionPageCreate, authz.ActionPageSave,
 		authz.ActionSeatPause, authz.ActionSeatResume, authz.ActionTurnSteer,
 		authz.ActionRunAnswer, authz.ActionArtifactShare, authz.ActionArtifactUnshare,
+		authz.ActionPrinciplesWrite,
 	}
 	got := slices.Sorted(maps.Keys(approvable))
 	slices.Sort(want)

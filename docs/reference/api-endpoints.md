@@ -1953,8 +1953,15 @@ ETag: "charter-91ab…"
   answered rather than refused.
 - `?dry_run=true` judges the write and stores nothing, answering
   `{"valid": true, "charter": …, "changed": …}`.
-- It is `admin`'s, read and written (`config.read`, `config.write`), and the
-  write asks a recent proof as every write here does.
+- It is `admin`'s, read and written on verbs of its own
+  (`config.principles.read`, `config.principles.write`), decided as
+  `config.read` and `config.write` decide the whole document; the write asks a
+  recent proof as every write here does, and is admitted only while it changes
+  the mission, the vision or the policies and nothing else. The verbs are its
+  own because the Dashboard Assistant may read the charter as the person and
+  write it only as a change its owner approved from a before-and-after, sent
+  here with the `If-Match` its preview read (ADR-0051); no other part of the
+  document is the assistant's.
 
 **The bounds**, in characters (Unicode code points, the count an editor shows),
 because every character is in every seat's prompt on every round. A charter
