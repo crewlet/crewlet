@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/livestate"
+	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -149,6 +150,13 @@ type Sources struct {
 	// questions, and this is where they are gated instead (ADR-0051). Nil
 	// admits no assisted principal to any question, which fails closed.
 	AssistReads func(question string) bool
+
+	// Assistant answers whether the Dashboard Assistant is available to this
+	// principal on this node, and the first reason not
+	// (internal/api/assistantapi's Surface.Viewer), which `viewer` answers as
+	// `assistant`, so the Ask pill decides without a second request. NIL IS A
+	// NODE THAT SERVES NO ASSISTANT, answered as `disabled`.
+	Assistant func(ctx context.Context, p iam.Principal) wire.ViewerAssistant
 
 	// WithheldContacts reads the identity directory's withholding as the
 	// party registry holds it now — whether a human seat's contact

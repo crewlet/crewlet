@@ -1,15 +1,10 @@
 package assistantapi
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"mime"
 	"net/http"
-	"strings"
 
 	"github.com/google/uuid"
 
@@ -216,40 +211,10 @@ func pathID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	return id, true
 }
 
-// readBody reads a JSON body into v: declared JSON, within
-// [DecisionBodyMax], exactly one object, and no field v does not declare.
-//
-// JSON AND NOTHING ELSE, for the act route's reason: a cross-site form can post
-// text/plain without a preflight, and the Origin gate in front of every guarded
-// write is the second lock, never the only one.
+// readBody reads a decision's JSON body into v, within [DecisionBodyMax]
+// ([readBodyWithin]).
 func readBody(w http.ResponseWriter, r *http.Request, v any) bool {
-	media, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-	if charset, named := params["charset"]; err != nil || media != "application/json" ||
-		(named && !strings.EqualFold(charset, "utf-8")) {
-		httpjson.FailWithFields(w, http.StatusUnsupportedMediaType,
-			httpjson.CodeUnsupportedMediaType, httpjson.Detail{
-				"detail": "the body must be declared Content-Type: application/json"})
-		return false
-	}
-	raw, err := httpjson.ReadBody(w, r, DecisionBodyMax)
-	if err != nil {
-		httpjson.Refuse(w, err)
-		return false
-	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil {
-		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			httpjson.Detail{"detail": "the body must be one JSON object of the route's " +
-				"own fields: " + err.Error()})
-		return false
-	}
-	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			httpjson.Detail{"detail": "the body carries something after its JSON object"})
-		return false
-	}
-	return true
+	return readBodyWithin(w, r, v, DecisionBodyMax)
 }
 
 // speaks refuses a body written against another protocol version than this
