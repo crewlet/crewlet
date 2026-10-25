@@ -38,6 +38,7 @@
  * already answers is two handlers for one press.
  */
 
+import { isApplePlatform, keyGlyph } from "@crewlethq/ui";
 import { useKeyChords, type Chord, type Sequence } from "~/lib/keys.ts";
 import { WORKSPACES, type Service } from "./nav.ts";
 
@@ -684,4 +685,30 @@ export function capsOf(press: Press): string[] {
   if (press.shift) caps.push("Shift");
   caps.push(CAP_NAMES[press.key] ?? press.key);
   return caps;
+}
+
+/**
+ * One press as `aria-keyshortcuts` names it: a command-key press is both
+ * Meta and Control, because the attribute is read on every platform and the
+ * table's `mod` is Command on a Mac and Control elsewhere.
+ */
+export function ariaKeysOf(press: Press): string {
+  const rest = [
+    press.alt ? "Alt" : null,
+    press.shift ? "Shift" : null,
+    press.key.length === 1 ? press.key.toUpperCase() : (CAP_NAMES[press.key] ?? press.key),
+  ]
+    .filter((k): k is string => k !== null)
+    .join("+");
+  return press.mod ? `Meta+${rest} Control+${rest}` : rest;
+}
+
+/**
+ * One press as a tooltip prints it, in the platform's notation, from the
+ * kit's own key names: "⌘." on a Mac, "Ctrl+." elsewhere.
+ */
+export function pressText(press: Press, apple: boolean = isApplePlatform()): string {
+  return capsOf(press)
+    .map((key) => keyGlyph(key, apple).glyph)
+    .join(apple ? "" : "+");
 }

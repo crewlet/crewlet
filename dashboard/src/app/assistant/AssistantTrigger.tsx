@@ -11,7 +11,8 @@
  * because it is how a reader reaches help on a screen they do not follow.
  *
  * AND IT SAYS WHEN THE ASSISTANT NEEDS THEM while the panel is closed: a dot
- * when an answer is on its way or a change waits on their approval, read from
+ * on the mark's corner, and the reason in its name and its tooltip, when an
+ * answer is on its way or a change waits on their approval, read from
  * the entry's one-word store (`status.ts`), so this button never imports the
  * panel's chunk.
  */
@@ -19,20 +20,19 @@
 import {
   Button,
   IconButton,
-  Inline,
-  Kbd,
+  IndicatorAnchor,
   StatusDot,
   VisuallyHidden,
   useMediaMatch,
 } from "@crewlethq/ui";
 import { ProductMark } from "@crewlethq/icons/product-mark";
 import { PHONE_BREAKPOINT, useKeyHints } from "../layout.ts";
-import { capsOf, keyRow } from "../keymap.ts";
+import { ariaKeysOf, keyRow, pressText } from "../keymap.ts";
 import { ASSISTANT_TRIGGER_ID, useAssistantControl } from "./control.ts";
 import { useAssistantActivity } from "./status.ts";
 
 /** What the dot says, in words, while the panel is closed. */
-const ACTIVITY_WORDS = {
+export const ACTIVITY_WORDS = {
   working: "An answer is on its way",
   waiting: "A change waits on your approval",
 } as const;
@@ -45,31 +45,40 @@ export function AssistantTrigger() {
   const press = keyRow("assistant.open").presses[0]!;
   // THE DOT IS FOR A CLOSED PANEL: open, the panel says it itself.
   const shown = !open && activity !== "idle" ? activity : null;
-  const dot = shown ? (
-    <>
-      <StatusDot tone={shown === "waiting" ? "warning" : "info"} pulse={shown === "working"} />
-      <VisuallyHidden>{`, ${ACTIVITY_WORDS[shown]}`}</VisuallyHidden>
-    </>
-  ) : null;
-  const mark = <ProductMark product="assistant" size="sm" />;
+  // THE DOT IS WORN ON THE MARK'S CORNER (the kit's IndicatorAnchor), ringed
+  // in the button's own fill, never set after the word, where it sat on the
+  // text's baseline against the last letter.
+  const mark = (
+    <IndicatorAnchor
+      indicator={
+        shown ? (
+          <StatusDot tone={shown === "waiting" ? "warning" : "info"} pulse={shown === "working"} />
+        ) : null
+      }
+    >
+      <ProductMark product="assistant" size="sm" />
+    </IndicatorAnchor>
+  );
+  // NO KEYCAP ON THE BUTTON: the shortcut is the button's own property
+  // (`aria-keyshortcuts`) and its tooltip's words, for a reader with keys.
+  const ask = keyHints ? `Ask the assistant (${pressText(press)})` : "Ask the assistant";
+  const tooltip = shown ? `${ask}. ${ACTIVITY_WORDS[shown]}.` : ask;
   const common = {
     id: ASSISTANT_TRIGGER_ID,
     disabledReason: unavailable?.short,
     onClick: () => toggle("composer"),
+    "aria-keyshortcuts": ariaKeysOf(press),
   };
   if (phone) {
     return (
-      <Inline gap={1} align="center">
-        <IconButton
-          {...common}
-          size="md"
-          variant="secondary"
-          pressed={open}
-          icon={mark}
-          label={shown ? `Ask the assistant, ${ACTIVITY_WORDS[shown]}` : "Ask the assistant"}
-        />
-        {shown ? <StatusDot tone={shown === "waiting" ? "warning" : "info"} /> : null}
-      </Inline>
+      <IconButton
+        {...common}
+        size="md"
+        variant="secondary"
+        pressed={open}
+        icon={mark}
+        label={shown ? `Ask the assistant, ${ACTIVITY_WORDS[shown]}` : "Ask the assistant"}
+      />
     );
   }
   return (
@@ -80,11 +89,10 @@ export function AssistantTrigger() {
       size="medium"
       pressed={open}
       leadingIcon={mark}
-      title={unavailable ? undefined : "Ask the assistant"}
-      trailingIcon={keyHints ? <Kbd keys={capsOf(press)} subtle /> : undefined}
+      title={unavailable ? undefined : tooltip}
     >
       Ask
-      {dot}
+      {shown ? <VisuallyHidden>{`, ${ACTIVITY_WORDS[shown]}`}</VisuallyHidden> : null}
     </Button>
   );
 }
