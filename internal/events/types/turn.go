@@ -154,8 +154,8 @@ type PromptSize struct {
 	// WHAT IS COUNTED, per message: every message's text and the compact
 	// JSON of its tool calls' arguments.
 	//
-	// WHAT IS STILL OUT, in the same spirit as ToolBytes naming the
-	// cli-agent fence as the larger rendering: each tool call's id and name,
+	// WHAT IS STILL OUT, in the same spirit as ToolBytes naming the vendor's
+	// wrapping as the larger rendering: each tool call's id and name,
 	// bounded identifiers beside arguments that run to kilobytes, and the
 	// envelope the backend adds around all of it (the cli-agent transcript's
 	// own `## assistant` headings, its role labels), so the real figure is
@@ -168,17 +168,16 @@ type PromptSize struct {
 	// the same thing whichever CLI served the phase, and so a seat whose
 	// fallback chain moved it between CLIs is comparable with itself.
 	//
-	// SO IT IS A FLOOR, and the backend never sends exactly it: the
-	// `cli-agent` text backend renders those same definitions INDENTED,
-	// inside a fenced catalogue and followed by a response contract, and an
-	// agent-mode CLI reads them over MCP in its own vendor's wrapping. The
-	// same property ApproximateTokens' ratio has, for the same reason: a
-	// figure that changed shape with the CLI could not be compared across a
-	// chain or across builds, and comparison is what this row exists for.
+	// SO IT IS A FLOOR, and the backend never sends exactly it: in either
+	// mode the CLI lists those definitions over MCP — from its phase's tool
+	// session on this host, from the bridge in a box — and hands them to its
+	// model in its own vendor's wrapping. The same property
+	// ApproximateTokens' ratio has, for the same reason: a figure that
+	// changed shape with the CLI could not be compared across a chain or
+	// across builds, and comparison is what this row exists for.
 	//
-	// ROUND ONE'S ARRAY. The tool loop re-reads the surface at the top of
-	// every round precisely so a mid-phase activate_tool is offered on the
-	// next call, so a phase that promotes three MCP tools sends more than
+	// THE OPENING ARRAY. A mid-phase activate_tool adds a tool the CLI lists
+	// from then on, so a phase that promotes three MCP tools sends more than
 	// this says.
 	ToolBytes int `json:"tool_bytes"`
 
