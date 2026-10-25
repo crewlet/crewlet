@@ -1350,9 +1350,44 @@ func TestAnAdministrativeRecordIsNeverWrittenThroughAMachineToken(t *testing.T) 
 	rig := newWriteRig(t)
 	admin := rig.writer.As(principalNamed("ana.admin", iam.KindPerson,
 		[]iam.Grant{iam.GrantAdmin}))
-	person := uuid.Must(uuid.NewV7()).String()
-	ctx := rig.t.Context()
-	gestures := map[string]func(w *iamdomain.Writer) error{
+	gestures := administrativeGestures(rig.t.Context(), uuid.Must(uuid.NewV7()).String())
+	for _, through := range []string{
+		iam.MachineTokenName(uuid.Must(uuid.NewV7()).String()),
+		iam.MachineTokenPrefix + "x",
+	} {
+		token := *admin
+		token.OperatorID = through
+		for name, gesture := range gestures {
+			err := gesture(&token)
+			if !errors.Is(err, iamdomain.ErrTokenRefused) ||
+				!errors.Is(err, iamdomain.ErrRefused) {
+				t.Errorf("%s through %s: %v, want %v wrapping %v", name, through,
+					err, iamdomain.ErrTokenRefused, iamdomain.ErrRefused)
+			}
+		}
+	}
+	rig.drain()
+	if got := rig.column(`SELECT id FROM iam_people`); len(got) != 0 {
+		t.Errorf("a refused gesture left rows behind: %v", got)
+	}
+	// THE CONTROL: the deployment's own token is its principal, not a
+	// machine token acting as somebody, and it enrols.
+	tierA := *admin
+	tierA.OperatorID = iam.TokenLogin("ops")
+	if err := rig.draining(func() error { return gestures["create"](&tierA) }); err != nil {
+		t.Errorf("a Tier A token's own login was refused as a machine token: %v", err)
+	}
+}
+
+// administrativeGestures is every record [iamdomain.Writer.mayAdminister]
+// guards, each a call a party may try: enrolling, redeeming, inviting,
+// cancelling an invitation, editing, changing a login or a seat, a stage, a
+// removal, and ending everybody's sessions. The ones about an existing person
+// name person, whom a refused gesture never reaches.
+func administrativeGestures(ctx context.Context,
+	person string) map[string]func(w *iamdomain.Writer) error {
+
+	return map[string]func(w *iamdomain.Writer) error{
 		"create": func(w *iamdomain.Writer) error {
 			_, err := w.Create(ctx, iamdomain.Creation{
 				PersonID: uuid.Must(uuid.NewV7()).String(), Kind: iam.KindMachine,
@@ -1412,18 +1447,43 @@ func TestAnAdministrativeRecordIsNeverWrittenThroughAMachineToken(t *testing.T) 
 			return err
 		},
 	}
-	for _, through := range []string{
-		iam.MachineTokenName(uuid.Must(uuid.NewV7()).String()),
-		iam.MachineTokenPrefix + "x",
+}
+
+// AN ADMINISTRATIVE RECORD IS NEVER WRITTEN THROUGH THE ASSISTANT.
+//
+// A request the Dashboard Assistant makes is its person's own, so an
+// administrator's assistant is composed holding admin, and the authority
+// table's assist column is what refuses it the directory at the route
+// (ADR-0048). This is the record's own refusal, for the machine token's
+// reason: a record is formed by more than the routes that table guards. Over
+// every guarded record, an administrator acting through an assistant grant is
+// refused [iamdomain.ErrAssistRefused] (wrapping [iamdomain.ErrRefused], and
+// never read as a token), composed through [iamdomain.Writer.As] exactly as
+// the request path composes one, and so is an operator id of the assistant's
+// class this build cannot parse; nothing is published. The CONTROL, the same
+// administrator at their own keyboard, enrols. Mutation: drop the assistant's
+// lock and every case is admitted as the administrator.
+func TestAnAdministrativeRecordIsNeverWrittenThroughTheAssistant(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	keyboard := principalNamed("ana.admin", iam.KindPerson, []iam.Grant{iam.GrantAdmin})
+	gestures := administrativeGestures(rig.t.Context(), uuid.Must(uuid.NewV7()).String())
+	composed := keyboard
+	composed.Via = iam.AssistName(uuid.Must(uuid.NewV7()))
+	composed.AssistScope = iam.AssistScopeExec
+	malformed := *rig.writer.As(keyboard)
+	malformed.OperatorID = iam.AssistPrefix + "x"
+	for through, w := range map[string]*iamdomain.Writer{
+		"an assistant grant":             rig.writer.As(composed),
+		"an id of the assistant's class": &malformed,
 	} {
-		token := *admin
-		token.OperatorID = through
 		for name, gesture := range gestures {
-			err := gesture(&token)
-			if !errors.Is(err, iamdomain.ErrTokenRefused) ||
-				!errors.Is(err, iamdomain.ErrRefused) {
+			err := gesture(w)
+			if !errors.Is(err, iamdomain.ErrAssistRefused) ||
+				!errors.Is(err, iamdomain.ErrRefused) ||
+				errors.Is(err, iamdomain.ErrTokenRefused) {
 				t.Errorf("%s through %s: %v, want %v wrapping %v", name, through,
-					err, iamdomain.ErrTokenRefused, iamdomain.ErrRefused)
+					err, iamdomain.ErrAssistRefused, iamdomain.ErrRefused)
 			}
 		}
 	}
@@ -1431,12 +1491,10 @@ func TestAnAdministrativeRecordIsNeverWrittenThroughAMachineToken(t *testing.T) 
 	if got := rig.column(`SELECT id FROM iam_people`); len(got) != 0 {
 		t.Errorf("a refused gesture left rows behind: %v", got)
 	}
-	// THE CONTROL: the deployment's own token is its principal, not a
-	// machine token acting as somebody, and it enrols.
-	tierA := *admin
-	tierA.OperatorID = iam.TokenLogin("ops")
-	if err := rig.draining(func() error { return gestures["create"](&tierA) }); err != nil {
-		t.Errorf("a Tier A token's own login was refused as a machine token: %v", err)
+	if err := rig.draining(func() error {
+		return gestures["create"](rig.writer.As(keyboard))
+	}); err != nil {
+		t.Errorf("the administrator at their keyboard was refused: %v", err)
 	}
 }
 
