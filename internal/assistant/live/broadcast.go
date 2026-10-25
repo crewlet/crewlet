@@ -415,7 +415,7 @@ func (f *Fleet) sealFrame(fr wire.Frame) ([]byte, error) {
 // reporting false for one that must not be shown: not sealed by this fleet,
 // expired, about another turn, or not opening under this turn's associated
 // data. Each refusal is logged; nothing about a refused frame is believed.
-func (f *Fleet) openFrame(payload []byte, turn uuid.UUID) (wire.Frame, bool) {
+func (f *Fleet) openFrame(ctx context.Context, payload []byte, turn uuid.UUID) (wire.Frame, bool) {
 	s, disposition, err := f.frames.Open(payload, f.now())
 	if err != nil {
 		level := slog.LevelWarn
@@ -424,29 +424,31 @@ func (f *Fleet) openFrame(payload []byte, turn uuid.UUID) (wire.Frame, bool) {
 			// and is not the fleet.
 			level = slog.LevelError
 		}
-		f.log.Log(context.Background(), level, "assistant_frame_refused", "turn", turn,
+		f.log.Log(ctx, level, "assistant_frame_refused", "turn", turn,
 			"disposition", string(disposition), "error", err)
 		return wire.Frame{}, false
 	}
 	if s.Turn != turn {
-		f.log.Error("assistant_frame_refused", "turn", turn, "disposition", "another_turn",
+		f.log.ErrorContext(ctx, "assistant_frame_refused", "turn", turn,
+			"disposition", "another_turn",
 			"detail", "a frame sealed for another turn was heard on this turn's channel")
 		return wire.Frame{}, false
 	}
 	plain, err := f.cipher.Decrypt(s.Frame, FrameAAD(turn))
 	if err != nil {
-		f.log.Error("assistant_frame_refused", "turn", turn, "disposition", "unopened",
-			"error", err)
+		f.log.ErrorContext(ctx, "assistant_frame_refused", "turn", turn,
+			"disposition", "unopened", "error", err)
 		return wire.Frame{}, false
 	}
 	var fr wire.Frame
 	if err := json.Unmarshal([]byte(plain), &fr); err != nil {
-		f.log.Warn("assistant_frame_refused", "turn", turn, "disposition", "undecodable",
-			"error", err)
+		f.log.WarnContext(ctx, "assistant_frame_refused", "turn", turn,
+			"disposition", "undecodable", "error", err)
 		return wire.Frame{}, false
 	}
 	if fr.TurnID != turn || fr.Validate() != nil {
-		f.log.Error("assistant_frame_refused", "turn", turn, "disposition", "invalid",
+		f.log.ErrorContext(ctx, "assistant_frame_refused", "turn", turn,
+			"disposition", "invalid",
 			"detail", "the frame inside the seal does not belong to this turn")
 		return wire.Frame{}, false
 	}
@@ -468,7 +470,7 @@ func (f *Fleet) Follow(ctx context.Context, owner, turn uuid.UUID, node string, 
 	// replay or heard here, never in neither.
 	unsub, err := f.broker.Listen(ctx, topics.AssistantTurnSubject(turn),
 		func(_ string, payload []byte) {
-			fr, ok := f.openFrame(payload, turn)
+			fr, ok := f.openFrame(ctx, payload, turn)
 			if !ok {
 				return
 			}
