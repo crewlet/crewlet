@@ -56,12 +56,6 @@ func TestACLIAgentCredentialWithNowhereToGoIsRefused(t *testing.T) {
 			says: "reads its key from OPENAI_API_KEY, a variable other vendors' keys are kept under too",
 		},
 		{
-			name:  "api-key naming no key on copilot, whose GITHUB_TOKEN is shared",
-			lines: []string{"agent: copilot", "auth: {mode: api-key}"},
-			path:  "providers.llm.sub.auth.api_key", kind: ErrMissing,
-			says: "reads its key from GITHUB_TOKEN",
-		},
-		{
 			name:  "an API key under subscription",
 			lines: []string{"agent: claude-code", `auth: {api_key: "${ANTHROPIC_API_KEY}"}`},
 			path:  "providers.llm.sub.auth.api_key", kind: ErrConflict,
@@ -292,7 +286,7 @@ func TestASharedKeyVariableIsNeverAnEntrysFallback(t *testing.T) {
 		"claude-code": "ANTHROPIC_API_KEY",
 		"codex":       "CODEX_API_KEY",
 		"qwen-code":   "",
-		"copilot":     "",
+		"copilot":     "COPILOT_GITHUB_TOKEN",
 	} {
 		entry := LLMProvider{Agent: agent, Model: "m", Auth: CLIAgentAuth{Mode: AuthAPIKey}}
 		if got := entry.CredentialSources("sub").APIKey.Fallback; got != want {

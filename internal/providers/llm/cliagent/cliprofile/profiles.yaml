@@ -1449,16 +1449,15 @@ copilot:
   # seat. Nor does this CLI read that file: the 1.0.98 bundle reaches a gh
   # sign-in by RUNNING `gh auth token` (which may answer from a keyring), and
   # handing every seat gh's own token, with gh's scopes, is not this
-  # profile's decision — GITHUB_TOKEN below is the way to give a seat a
-  # GitHub token.
+  # profile's decision — COPILOT_GITHUB_TOKEN below is the way to give a seat
+  # a GitHub token.
   host_credential_paths: [".copilot/config.json"]
-  # Copilot authenticates with a GitHub token, so this is its key variable —
-  # reached deliberately through auth.mode api-key or inherit-env, never
-  # forwarded silently.
-  api_key_env: "GITHUB_TOKEN"
-  # The token a code-host integration runs on is kept under the same name:
-  # an entry names its key, and nothing falls back to this variable.
-  api_key_env_shared: true
+  # Copilot authenticates with a GitHub token, read from COPILOT_GITHUB_TOKEN,
+  # then GH_TOKEN, then GITHUB_TOKEN (read from the 1.0.103 bundle): this is
+  # the first of the three and the CLI's own, so it outranks the generic two,
+  # which a code-host integration's token is kept under. Reached deliberately
+  # through auth.mode api-key or inherit-env, never forwarded silently.
+  api_key_env: "COPILOT_GITHUB_TOKEN"
   login_args: ["login"]
   logout_args: ["logout"]
   # NOT MEASURED, the limit markers below: generic phrases rather than this

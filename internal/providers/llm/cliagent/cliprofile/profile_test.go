@@ -430,7 +430,7 @@ func TestEachProfileNamesTheVariablesItsCLIReads(t *testing.T) {
 		"qwen-code":    {"OPENAI_API_KEY", ""},
 		"opencode":     {"", ""},
 		"cursor-agent": {"CURSOR_API_KEY", ""},
-		"copilot":      {"GITHUB_TOKEN", ""},
+		"copilot":      {"COPILOT_GITHUB_TOKEN", ""},
 		"grok":         {"XAI_API_KEY", ""},
 		"muse-code":    {"META_API_KEY", ""},
 		"kimi-code":    {"", ""},

@@ -1017,8 +1017,7 @@ type Profile struct {
 	// CLI. Qwen Code reads OPENAI_API_KEY and sends it to whatever endpoint
 	// OPENAI_BASE_URL names — DashScope's when it names none — so falling
 	// back to it handed an OpenAI key, kept on the host for embeddings or
-	// for OpenAI itself, to another vendor. Copilot's GITHUB_TOKEN is the
-	// same shape: the token a code-host integration runs on.
+	// for OpenAI itself, to another vendor.
 	APIKeyEnvShared bool `yaml:"api_key_env_shared,omitempty"`
 
 	// EnvSignIn declares that the CLI reads its model provider's credential
