@@ -126,10 +126,13 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 
 	// The submission tool is on the surface for the same reason it is in a
 	// host-mode pass: it is how the executor says what it did. The CLI calls
-	// it over the bridge, which records the call in the run's durable log —
-	// and the resume reads it from there, through a fresh submission tool,
-	// in whatever process collects the run: the value this one captures is
-	// never read, since this surface is gone by then.
+	// it over the bridge, which records the call in the run's durable log,
+	// and the resume reads the outcome from THERE — [Runner.resumeAgentRun]
+	// replays the logged calls through a fresh submission tool every time,
+	// in whichever process collects the run, this one included. So the
+	// value this tool captures is never read: what it does is VALIDATE each
+	// submission as it is made, so the CLI's model is told about one it can
+	// correct while it is still running.
 	var surface *tools.Surface
 	submit := structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
 		decodeWork(r.cfg.Reply,
