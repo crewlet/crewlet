@@ -6,7 +6,7 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { parseHash } from "../router.tsx";
-import { urlAction, type UrlActionKey, type UrlPatch } from "./urlAction.ts";
+import { parseUrlPatch, tabKey, urlAction, type UrlActionKey, type UrlPatch } from "./urlAction.ts";
 
 const KEYS: Record<string, UrlActionKey> = {
   status: {
@@ -152,5 +152,18 @@ describe("undo", () => {
     nav.filter.mockClear();
     expect(undo()).toBe(false);
     expect(nav.filter).not.toHaveBeenCalled();
+  });
+});
+
+describe("a tab strip's key", () => {
+  test("takes only the object's own tabs, worded as the strip words them, its landing a clear", () => {
+    const keys = {
+      lens: tabKey("Lens", ["tasks", "about"] as const, { tasks: "Tasks", about: "About" }),
+    };
+    expect(parseUrlPatch({ lens: "about" }, keys)).toEqual({ ok: true, value: { lens: "about" } });
+    expect(parseUrlPatch({ lens: "tasks" }, keys)).toEqual({ ok: true, value: { lens: null } });
+    expect(parseUrlPatch({ lens: "files" }, keys).ok).toBe(false);
+    expect(keys.lens.words!("about")).toBe("About");
+    expect(keys.lens.history).toBe("section");
   });
 });
