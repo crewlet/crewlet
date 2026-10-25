@@ -6914,7 +6914,7 @@ written against; a version this engine does not speak is
 | `DELETE` | `/assistant/conversations/{id}` | | `200 {outcome, position}`: the conversation is purged at once, a turn of it running here is stopped and every grant of its open turn is ended |
 | `POST` | `/assistant/conversations/{id}/turns` | `{protocol_version, input: {text}, page_context}` | `202 {turn_id, stream_url, after_seq}`. `Idempotency-Key` is **required**, and the same key is the same turn |
 | `GET` | `/assistant/conversations/{id}/stream?turn=<id>` | | `200 text/event-stream`, below |
-| `POST` | `/assistant/turns/{id}/stop` | `{protocol_version}` | `202 {state}`: a running turn is stopped where it runs, a turn waiting on an approval is closed stopped, and a turn already over answers the state it ended in |
+| `POST` | `/assistant/turns/{id}/stop` | `{protocol_version}` | `202 {state}`: a running turn is stopped where it runs, a turn waiting on an approval is closed stopped and every proposal it waits on declined (under the request's `Idempotency-Key`, when sent), and a turn already over answers the state it ended in |
 | `GET` | `/assistant/cards/{id}/export.csv` | | `200` the table card as CSV, from the snapshot the conversation stored, never a fresh read |
 | `GET` | `/assistant/cards/{id}/export.xlsx` | | `200` the same table as XLSX |
 
@@ -6959,6 +6959,7 @@ asked, and a card is built by the engine from the route's own answer.
 | `403` | `assistant_not_available` | The assistant is not available to the caller; `reason` is the viewer's |
 | `404` | `not_found` | No such conversation, turn or card, or another person's |
 | `409` | `assistant_protocol_mismatch` | The request speaks another protocol version; reload the dashboard |
+| `415` | `unsupported_media_type` | A body not declared `Content-Type: application/json` |
 | `409` | `assistant_turn_running` | The conversation's turn is still running or waiting on an approval |
 | `429` | `assistant_busy` / `budget_exhausted` | Too many turns at once, or the company's window is spent; `Retry-After` says when |
 | `503` | `assistant_unavailable` | The assistant cannot run here now; a `Retry-After` where a wait is known to help |

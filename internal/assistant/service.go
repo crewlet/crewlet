@@ -2,7 +2,6 @@ package assistant
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -18,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/live"
+	"github.com/crewlet/crewlet/internal/assistant/proposal/approval"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/auxspend"
@@ -27,7 +27,6 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/provenance"
-	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -40,7 +39,11 @@ type Deps struct {
 	// Node is this node's id, recorded on every turn it runs.
 	Node string
 
-	Company     Company
+	Company Company
+	// Acts is the authority table's verdict on which writes a person may
+	// propose (internal/api/operator's Server.Acts): the act verbs it can
+	// admit them to before any object is named.
+	Acts        func(ctx context.Context, p iam.Principal) ([]string, error)
 	Models      Models
 	Budget      Budget
 	Catalogue   Catalogue
@@ -68,6 +71,7 @@ type Deps struct {
 type Service struct {
 	node        string
 	company     Company
+	acts        func(ctx context.Context, p iam.Principal) ([]string, error)
 	models      Models
 	budget      Budget
 	catalogue   Catalogue
@@ -92,6 +96,7 @@ type Service struct {
 	cancel context.CancelCauseFunc
 
 	mu       sync.Mutex
+	decliner Decliner
 	turns    map[uuid.UUID]*turn
 	running  map[uuid.UUID]int
 	streams  int
@@ -108,6 +113,7 @@ func New(d Deps) (*Service, error) {
 	var missing []string
 	for name, absent := range map[string]bool{
 		"Node": strings.TrimSpace(d.Node) == "", "Company": d.Company == nil,
+		"Acts":   d.Acts == nil,
 		"Models": d.Models == nil, "Budget": d.Budget == nil,
 		"Catalogue": d.Catalogue == nil, "Cards": d.Cards == nil,
 		"Transcripts": d.Transcripts == nil, "Records": d.Records == nil,
@@ -129,7 +135,7 @@ func New(d Deps) (*Service, error) {
 	}
 	base, cancel := context.WithCancelCause(context.Background())
 	return &Service{
-		node: d.Node, company: d.Company, models: d.Models, budget: d.Budget,
+		node: d.Node, company: d.Company, acts: d.Acts, models: d.Models, budget: d.Budget,
 		catalogue: d.Catalogue, cards: d.Cards, transcripts: d.Transcripts,
 		records: d.Records, dispatcher: d.Dispatcher, revoker: d.Revoker, audit: d.Audit,
 		metrics: d.Metrics, proposer: d.Proposer, remote: d.Remote, now: now,
@@ -186,10 +192,7 @@ func (s *Service) eligible(p iam.Principal) error {
 // TurnStart is one question.
 type TurnStart struct {
 	// Person is the resolved person asking.
-	Person iam.Principal
-	// Acts are the act verbs the authority table admits them to, for the
-	// writes they may propose.
-	Acts         []string
+	Person       iam.Principal
 	Conversation uuid.UUID
 	// Key is the request's Idempotency-Key, scoped to the person: the same
 	// key is the same turn.
@@ -270,6 +273,10 @@ func (s *Service) Start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	if history.Conversation.OpenTurn != uuid.Nil {
 		return wire.TurnAccepted{}, ErrTurnRunning
 	}
+	acts, err := s.acts(ctx, ts.Person)
+	if err != nil {
+		return wire.TurnAccepted{}, &Unavailable{RetryAfter: 2 * time.Second, Cause: err}
+	}
 	if err := s.admit(ts.Person); err != nil {
 		return wire.TurnAccepted{}, err
 	}
@@ -294,7 +301,7 @@ func (s *Service) Start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 		return wire.TurnAccepted{}, &Unavailable{Cause: err}
 	}
 
-	t := s.newTurn(ts.Person, ts.Conversation, id, ts.Key, ts.Read, ts.Page, ts.Acts)
+	t := s.newTurn(ts.Person, ts.Conversation, id, ts.Key, ts.Read, ts.Page, acts)
 	var chip *wire.PageChip
 	if ts.Page != nil {
 		chip = &wire.PageChip{Title: ts.Page.Title, Screen: ts.Page.Screen}
@@ -317,7 +324,7 @@ func (s *Service) Start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	t.answer = assistantdomain.MessageID(id, 2)
 
 	c, organization := s.company()
-	tools := s.catalogue.Offered(ts.Person, ts.Acts)
+	tools := s.catalogue.Offered(ts.Person, acts)
 	in := promptInput{Person: ts.Person, Apps: iam.Expand(ts.Person.Grants), Now: s.now(),
 		History: historyEntries(history), Page: ts.Page, Boundary: t.boundary, Question: input,
 		Proposable: proposable(tools, s.proposer != nil)}
@@ -341,113 +348,6 @@ func (s *Service) Start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 		tools: tools, steps: assistantCfg.Steps(), timeout: assistantCfg.TurnTimeout(),
 		fresh: history.Conversation.Title == "", question: input})
 	return accepted, nil
-}
-
-// ResumeStart resumes a turn parked on a proposal, with the answer to the call
-// it suspended on: the approval path's (internal/assistant/proposal) receipt
-// of the executed write, or a decline, fenced as the engine's own words.
-type ResumeStart struct {
-	Person iam.Principal
-	Acts   []string
-	Turn   uuid.UUID
-	// Key is the operation the approval or decline was made under.
-	Key string
-	// Read is a fresh read grant derived from the approving request.
-	Read exec.Grant
-	// Result is the answer to the pending call, and Failed whether it is a
-	// refusal or a decline rather than a receipt.
-	Result string
-	Failed bool
-}
-
-// Resume continues a parked turn on this node and answers where its stream
-// continues. ONCE: the resume record is arbitrated, so two approvals of one
-// proposal resume it at most once.
-func (s *Service) Resume(ctx context.Context, rs ResumeStart) (wire.TurnAccepted, error) {
-	started := false
-	defer func() {
-		if !started {
-			if rs.Read != nil {
-				s.revoker.Revoke(rs.Read.ID())
-			}
-		}
-	}()
-	if err := s.eligible(rs.Person); err != nil {
-		return wire.TurnAccepted{}, err
-	}
-	if rs.Read == nil {
-		return wire.TurnAccepted{}, errors.New("assistant: a resumed turn needs the read " +
-			"grant derived from the approving request")
-	}
-	row, err := s.transcripts.Turn(ctx, rs.Person.ID, rs.Turn)
-	if err != nil {
-		return wire.TurnAccepted{}, s.readFailure(err)
-	}
-	if row.State != wire.TurnWaitingForApproval {
-		return wire.TurnAccepted{}, ErrTurnRunning
-	}
-	raw, err := s.transcripts.Parked(ctx, rs.Person.ID, rs.Turn)
-	if err != nil {
-		return wire.TurnAccepted{}, s.readFailure(err)
-	}
-	var keep parked
-	if err := json.Unmarshal(raw, &keep); err != nil || keep.V != parkedVersion {
-		return wire.TurnAccepted{}, fmt.Errorf("assistant: turn %s parked a loop this build "+
-			"does not read (version %d): %w", rs.Turn, keep.V, err)
-	}
-	if err := s.admit(rs.Person); err != nil {
-		return wire.TurnAccepted{}, err
-	}
-	admitted := true
-	defer func() {
-		if admitted {
-			s.unadmit(rs.Person.ID)
-		}
-	}()
-	meter, err := s.budget.Meter(ctx, rs.Person)
-	if err != nil {
-		return wire.TurnAccepted{}, &Unavailable{RetryAfter: 2 * time.Second, Cause: err}
-	}
-	if refusal := budgetRefusal(ctx, meter); refusal != nil {
-		return wire.TurnAccepted{}, refusal
-	}
-	use := auxspend.Use{Stage: types.AuxStageOperator, Purpose: types.AuxAssistantTurn,
-		TurnID: rs.Turn.String()}
-	provider, key, err := s.models.Chain(ctx, rs.Person, use)
-	if err != nil {
-		return wire.TurnAccepted{}, &Unavailable{Cause: err}
-	}
-	t := s.newTurn(rs.Person, row.Conversation, rs.Turn, rs.Key, rs.Read, nil, rs.Acts)
-	if provenance.Boundary(keep.Boundary).Valid() {
-		t.boundary = provenance.Boundary(keep.Boundary)
-	}
-	if err := s.records.ResumeTurn(ctx, t.write().Step("resume"), rs.Turn, s.node); err != nil {
-		t.cancel(nil)
-		return wire.TurnAccepted{}, s.writeFailure(err)
-	}
-	t.steps, t.cards, t.messages = keep.Steps, keep.Cards, keep.Count+1
-	t.answer = assistantdomain.MessageID(rs.Turn, t.messages)
-	messages := append(keep.Messages, llm.Message{Role: llm.RoleTool, Name: keep.PendingTool,
-		ToolCallID: keep.PendingCall, Content: rs.Result, Failed: rs.Failed})
-
-	conversation, err := s.transcripts.Conversation(ctx, rs.Person.ID, row.Conversation)
-	if err != nil {
-		t.cancel(nil)
-		return wire.TurnAccepted{}, s.readFailure(err)
-	}
-	after := s.openStream(t, conversation, true)
-	c, _ := s.company()
-	assistantCfg := config.Assistant{}
-	if c != nil {
-		assistantCfg = c.Assistant
-	}
-	admitted, started = false, true
-	s.track(t)
-	go t.run(loopRun{messages: messages, provider: provider, key: key, meter: meter,
-		tools: s.catalogue.Offered(rs.Person, rs.Acts), steps: assistantCfg.Steps(),
-		timeout: assistantCfg.TurnTimeout()})
-	return wire.TurnAccepted{TurnID: rs.Turn, StreamURL: StreamPath(row.Conversation, rs.Turn),
-		AfterSeq: after}, nil
 }
 
 // newTurn builds a segment's runner state.
@@ -595,7 +495,11 @@ func (s *Service) local(owner, id uuid.UUID) (*turn, bool) {
 // Stop stops one of the owner's turns: a running one is cancelled where it
 // runs, and a parked one is closed stopped (its proposal can then no longer
 // resume it). A turn already over answers the state it ended in.
-func (s *Service) Stop(ctx context.Context, owner, turnID uuid.UUID) (wire.StopAnswer, error) {
+//
+// key is the operation the Stop was asked under (its Idempotency-Key, scoped
+// to the person), which a parked turn's close and the declines of what it
+// waited on are published under, so a retried Stop records nothing twice.
+func (s *Service) Stop(ctx context.Context, owner, turnID uuid.UUID, key string) (wire.StopAnswer, error) {
 	row, err := s.transcripts.Turn(ctx, owner, turnID)
 	if err != nil {
 		return wire.StopAnswer{}, s.readFailure(err)
@@ -618,8 +522,7 @@ func (s *Service) Stop(ctx context.Context, owner, turnID uuid.UUID) (wire.StopA
 			return wire.StopAnswer{}, errors.New("assistant: a parked turn is stopped by " +
 				"its owner's own request")
 		}
-		w := Write{Owner: owner, By: iam.ActorFor(p), Derived: &Derivation{
-			At: row.StartedAt, Name: "assistant_stop", Identity: []string{turnID.String()}}}
+		w := Write{Owner: owner, By: iam.ActorFor(p), Key: key, Steps: []string{"stop"}}
 		err := s.records.CloseTurn(ctx, w, turnID, assistantdomain.TurnEnd{
 			State: wire.TurnStopped, Steps: row.Steps})
 		var moved *assistantdomain.TurnMoved
@@ -630,6 +533,7 @@ func (s *Service) Stop(ctx context.Context, owner, turnID uuid.UUID) (wire.StopA
 			return wire.StopAnswer{}, s.writeFailure(err)
 		}
 		s.revoker.RevokeTurn(turnID)
+		s.declineParked(ctx, p, row, key)
 		return wire.StopAnswer{State: wire.TurnStopped}, nil
 	}
 	if s.remote != nil {
@@ -643,6 +547,25 @@ func (s *Service) Stop(ctx context.Context, owner, turnID uuid.UUID) (wire.StopA
 	}
 	return wire.StopAnswer{}, &Unavailable{RetryAfter: 2 * time.Second, Cause: fmt.Errorf(
 		"turn %s runs on node %s, which this node cannot reach", turnID, row.Node)}
+}
+
+// declineParked declines every proposal a stopped parked turn waited on, so
+// none of them can be approved into a turn that has ended. A decline that does
+// not land is logged: the turn is closed either way, and an approval of a
+// proposal whose turn ended resumes nothing.
+func (s *Service) declineParked(ctx context.Context, p iam.Principal, row assistantdomain.Turn,
+	key string) {
+	s.mu.Lock()
+	d := s.decliner
+	s.mu.Unlock()
+	if d == nil {
+		return
+	}
+	if err := d.DeclineTurn(ctx, approval.Stop{Owner: p.ID, Conversation: row.Conversation,
+		Turn: row.ID, By: iam.ActorFor(p), Key: key}); err != nil {
+		s.log.WarnContext(ctx, "assistant_stop_decline_failed", "turn", row.ID,
+			"error", redact.Secrets(err.Error()))
+	}
 }
 
 // stopWait is how long a Stop waits for the runner to record its end before

@@ -61,7 +61,7 @@ type Service interface {
 	Transcript(ctx context.Context, p iam.Principal, id uuid.UUID) (wire.Transcript, error)
 	Clear(ctx context.Context, p iam.Principal, id uuid.UUID, key string) (wire.PurgeAnswer, error)
 	Start(ctx context.Context, ts assistant.TurnStart) (wire.TurnAccepted, error)
-	Stop(ctx context.Context, owner, turn uuid.UUID) (wire.StopAnswer, error)
+	Stop(ctx context.Context, owner, turn uuid.UUID, key string) (wire.StopAnswer, error)
 	Stream(ctx context.Context, owner, conversation, turn uuid.UUID, after uint64, w assistant.FrameWriter) error
 	Table(ctx context.Context, p iam.Principal, card uuid.UUID) (wire.TableCard, error)
 }
@@ -81,27 +81,29 @@ type Options struct {
 	// Grants derives a turn's read grant from the request that asked it,
 	// the approval path's own ([Grants] over the node's delegations).
 	Grants approval.Grants
-	// Acts is the operator catalogue's verdict on what the person may write
-	// (internal/api/operator's Server.Acts), the writes a turn may propose.
-	Acts func(ctx context.Context, p iam.Principal) ([]string, error)
 	// Tables writes a table card's export.
 	Tables Tables
 	// Chart is the running company's lead relations, for the authority
 	// table's guard.
 	Chart authz.Chart
-	Now   func() time.Time
+	// Decisions are the approval routes (approve, decline, a page action's
+	// report, the compliance read), mounted beside the conversation routes
+	// on the same authority table. Nil mounts none: a node with no approval
+	// path, whose turns are offered no write.
+	Decisions *Decisions
+	Now       func() time.Time
 }
 
 // Surface is the assistant's routes.
 type Surface struct {
-	svc    Service
-	grants approval.Grants
-	acts   func(ctx context.Context, p iam.Principal) ([]string, error)
-	tables Tables
-	chart  authz.Chart
-	guard  authz.Guard
-	now    func() time.Time
-	log    *slog.Logger
+	svc       Service
+	grants    approval.Grants
+	tables    Tables
+	chart     authz.Chart
+	guard     authz.Guard
+	decisions *Decisions
+	now       func() time.Time
+	log       *slog.Logger
 }
 
 // New builds the surface, refusing a missing dependency by name.
@@ -112,9 +114,6 @@ func New(opts Options) (*Surface, error) {
 	case opts.Grants == nil:
 		return nil, errors.New("assistantapi: Options.Grants is required: a turn's every " +
 			"call carries a grant derived from the request that asked it")
-	case opts.Acts == nil:
-		return nil, errors.New("assistantapi: Options.Acts is required: it is the " +
-			"authority table's verdict on which writes a person may propose")
 	case opts.Tables == nil:
 		return nil, errors.New("assistantapi: Options.Tables is required")
 	case opts.Chart == nil:
@@ -124,9 +123,10 @@ func New(opts Options) (*Surface, error) {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Surface{svc: opts.Service, grants: opts.Grants, acts: opts.Acts,
+	return &Surface{svc: opts.Service, grants: opts.Grants,
 		tables: opts.Tables, chart: opts.Chart, guard: authz.ContextGuard(opts.Chart),
-		now: now, log: logging.Get("assistantapi")}, nil
+		decisions: opts.Decisions,
+		now:       now, log: logging.Get("assistantapi")}, nil
 }
 
 // Routes mounts every route through the authority table with its verb. A
@@ -149,6 +149,11 @@ func (s *Surface) Routes(mux authz.Mux) error {
 	mount("POST /assistant/turns/{id}/stop", converse, s.stop)
 	mount("GET /assistant/cards/{id}/export.csv", read, s.exportCSV)
 	mount("GET /assistant/cards/{id}/export.xlsx", read, s.exportXLSX)
+	if s.decisions != nil {
+		if err := s.decisions.Mount(router); err != nil {
+			failures = append(failures, err)
+		}
+	}
 	return errors.Join(failures...)
 }
 

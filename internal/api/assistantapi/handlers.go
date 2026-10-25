@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -109,18 +108,13 @@ func (s *Surface) ask(w http.ResponseWriter, r *http.Request) {
 	if !s.eligible(w, r, p) {
 		return
 	}
-	acts, err := s.acts(r.Context(), p)
-	if err != nil {
-		s.fail(w, r, &assistant.Unavailable{RetryAfter: 2 * time.Second, Cause: err})
-		return
-	}
 	grant, err := s.grants.Read(r.Context(), conversation, assistant.TurnID(key))
 	if err != nil {
 		s.fail(w, r, &assistant.NotAvailable{Reason: wire.ViewerNotAPerson,
 			Detail: err.Error()})
 		return
 	}
-	accepted, err := s.svc.Start(r.Context(), assistant.TurnStart{Person: p, Acts: acts,
+	accepted, err := s.svc.Start(r.Context(), assistant.TurnStart{Person: p,
 		Conversation: conversation, Key: key, Input: body.Input.Text, Page: body.PageContext,
 		Read: grant})
 	if err != nil {
@@ -140,11 +134,15 @@ func (s *Surface) stop(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body, func() int { return body.ProtocolVersion }) {
 		return
 	}
+	key, ok := opkey.Key(w, r, s.now())
+	if !ok {
+		return
+	}
 	p := principal(r)
 	if !s.eligible(w, r, p) {
 		return
 	}
-	answer, err := s.svc.Stop(r.Context(), p.ID, id)
+	answer, err := s.svc.Stop(r.Context(), p.ID, id, key)
 	if err != nil {
 		s.fail(w, r, err)
 		return

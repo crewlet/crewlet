@@ -46,8 +46,11 @@ type turn struct {
 	by           iam.Actor
 	conversation uuid.UUID
 	id           uuid.UUID
-	// key is the operation every record of this segment is published under.
+	// key is the operation every record of this segment is published under,
+	// or derived, for a segment no request's key names (one an approval
+	// resumed), the operation derived from what it is about.
 	key      string
+	derived  *Derivation
 	log      *live.Log
 	read     exec.Grant
 	page     *wire.PageContext
@@ -75,7 +78,7 @@ type turn struct {
 
 // write is the record caller for this segment, with no step yet.
 func (t *turn) write() Write {
-	return Write{Owner: t.person.ID, By: t.by, Key: t.key}
+	return Write{Owner: t.person.ID, By: t.by, Key: t.key, Derived: t.derived}
 }
 
 // emit appends one frame to the turn's log. A frame the log refuses is a
