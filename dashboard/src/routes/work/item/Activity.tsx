@@ -64,7 +64,9 @@ import {
   UsersGlyph,
   XGlyph,
 } from "@crewlethq/icons/glyphs";
-import { href, useParam } from "~/app/router.tsx";
+import { href, useNavigator, useParam } from "~/app/router.tsx";
+import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
+import { tabKey, urlAction } from "~/app/assistant/urlAction.ts";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { AsksTag, type RowChrome } from "~/components/work.tsx";
 import { Composer, type ComposeMode } from "~/components/Composer.tsx";
@@ -166,6 +168,21 @@ export function Activity({
   const tab: ActivityTab = (ACTIVITY_TABS as readonly string[]).includes(raw)
     ? (raw as ActivityTab)
     : "all";
+  // --- assistant page actions (WP12) ---
+  // THE TASK BY ITS KEY AND THE VERSION ITS NEXT EDIT CARRIES, and the one
+  // view change this history takes: which of its tabs is open, written under
+  // the key this instance keeps it in (the page's, or the peek's own).
+  const nav = useNavigator();
+  useAssistantContext({
+    resources: [{ kind: "task", id: item.key, version: String(item.version) }],
+    actions: urlAction("item.activity.set", {
+      scope: "Which of this task's history is shown",
+      keys: { [param]: tabKey("Activity", ACTIVITY_TABS, TAB_LABEL, "filter", "all") },
+      nav,
+      confirm: "none",
+    }),
+  });
+  // --- end assistant page actions (WP12) ---
   const [replyTo, setReplyTo] = useState<WorkComment | null>(null);
   const [answering, setAnswering] = useState<string | null>(null);
   const viewer = useViewer();

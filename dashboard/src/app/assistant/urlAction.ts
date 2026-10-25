@@ -260,3 +260,23 @@ export function choiceKey(
     words: (value) => options.find((o) => o.value === value)?.label ?? value,
   };
 }
+
+/**
+ * The key a `useTab` strip writes: the object's own tabs and nothing else,
+ * worded as the strip words them, with its landing tab as the fallback, so a
+ * patch to the landing tab clears the key as the strip itself does.
+ */
+export function tabKey<T extends string>(
+  label: string,
+  tabs: readonly T[],
+  words: Readonly<Record<T, string>>,
+  history: UrlKeyHistory = "section",
+  landing: T = tabs[0] as T,
+): UrlActionKey {
+  return choiceKey(
+    label,
+    tabs.map((value) => ({ value, label: words[value] })),
+    history,
+    landing,
+  );
+}

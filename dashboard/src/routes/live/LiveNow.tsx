@@ -64,7 +64,9 @@ import {
   SquareTerminalGlyph,
   XGlyph,
 } from "@crewlethq/icons/glyphs";
-import { href, useParam } from "~/app/router.tsx";
+import { href, useNavigator, useParam } from "~/app/router.tsx";
+import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
+import { choiceKey, urlAction, windowKey } from "~/app/assistant/urlAction.ts";
 import { EventRow, QueryState } from "~/components/common.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { DecisionRow } from "~/components/DecisionRow.tsx";
@@ -166,6 +168,34 @@ export function LiveNow() {
   const seatRow = agents.find((a) => a.handle === seat);
   const agentSeats = useMemo(() => index.seats.filter((s) => s.kind === "agent"), [index.seats]);
   const seatName = (handle: string) => index.byHandle.get(handle)?.name ?? handle;
+
+  // --- assistant page actions (WP12) ---
+  // THE CONTROLS' OWN VOCABULARY: a seat from the menu's agent seats, a phase
+  // from its picker, the one failures switch, and the window from this
+  // screen's offer.
+  const nav = useNavigator();
+  useAssistantContext({
+    actions: urlAction("live.filter.apply", {
+      scope: "Live filters and activity window (view only)",
+      keys: {
+        window: windowKey(STRIP_OFFER, () => now),
+        seat: choiceKey(
+          "Seat",
+          agentSeats.map((s) => ({ value: s.handle, label: s.name })),
+          "filter",
+        ),
+        phase: choiceKey(
+          "Phase",
+          PHASES.map((p) => ({ value: p, label: p })),
+          "filter",
+        ),
+        failed: choiceKey("Failures", [{ value: "true", label: "Failed phases" }], "filter"),
+      },
+      nav,
+      confirm: "none",
+    }),
+  });
+  // --- end assistant page actions (WP12) ---
 
   // --- running turns -----------------------------------------------------
   const running = useMemo(

@@ -43,7 +43,9 @@
  */
 
 import { useMemo, useState, type ReactNode } from "react";
-import { href, useRoute } from "~/app/router.tsx";
+import { href, useNavigator, useRoute } from "~/app/router.tsx";
+import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
+import { tabKey, urlAction } from "~/app/assistant/urlAction.ts";
 import { useTab } from "~/app/frame/tabs.ts";
 import { usePageCoverage, usePageLabels, usePageMenu } from "~/app/Shell.tsx";
 import { PageActions, PageLenses, lensLabel } from "~/app/frame/PageActions.tsx";
@@ -115,6 +117,20 @@ export function Project({ projectKey }: { projectKey: string }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   const [lens, setLens] = useTab("lens", PROJECT_LENSES);
+  // --- assistant page actions (WP12) ---
+  // THE LENS STRIP'S OWN TABS; the task list inside the Tasks lens registers
+  // its own filters beside this, and the registry offers both.
+  const nav = useNavigator();
+  useAssistantContext({
+    resources: [{ kind: "project", id: projectKey }],
+    actions: urlAction("project.lens.set", {
+      scope: "Which lens of this project is shown",
+      keys: { lens: tabKey("Lens", PROJECT_LENSES, LENS_LABELS) },
+      nav,
+      confirm: "none",
+    }),
+  });
+  // --- end assistant page actions (WP12) ---
   // THE TRASH IS THE ONE THING THE MAINTAINED COUNTS CANNOT SEE: a removed
   // task leaves them (`internal/tracker/projectsread.go`), so a project whose
   // every item was removed counts zero while `removed=true` has rows to draw.
