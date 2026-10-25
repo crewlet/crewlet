@@ -6949,6 +6949,15 @@ its transcript holds it, then how it ended. A turn whose runner was this node
 and is gone is closed `interrupted` once and answered with
 `error {code: turn_interrupted}`.
 
+A `delta` appends prose to one assistant message while the model writes it, a
+settled line at a time: nothing of a line still being written is sent, so a
+credential is never on screen before the end that would redact it arrives. A
+delta with `restart: true` replaces everything the message drew with its own
+text; it is sent when the chain fails over to another model, or when the engine
+withdraws a view of a round that the finished round does not bear out, so the
+message always ends as exactly the answer recorded. A model whose CLI cannot
+stream draws each round once, whole, when the round ends.
+
 A turn never streams a raw tool argument, a raw answer, a prompt, a token count
 or a grant: a step carries a label the engine renders and the route pattern it
 asked, and a card is built by the engine from the route's own answer.

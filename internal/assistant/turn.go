@@ -66,10 +66,12 @@ type turn struct {
 	// steps, cards and messages count what the turn has written across its
 	// segments, so a resumed segment's ids continue its first one's.
 	steps, cards, messages int
-	// answer is this segment's answer message; streamed is what its deltas
-	// have drawn so far.
+	// answer is this segment's answer message; streamed is its committed
+	// rounds' prose, and drawn is the whole text its deltas have drawn on
+	// the person's screen, a round being written included.
 	answer   uuid.UUID
 	streamed []string
+	drawn    string
 	audit    []types.AssistantAuditStep
 	shown    bool
 	// outside is the source of the last answer this turn read that somebody
@@ -216,19 +218,25 @@ func (t *turn) record(ctx context.Context, what string, write func(context.Conte
 // budget for a write, and well inside a turn.
 const recordTimeout = 10 * time.Second
 
-// onProgress streams the loop's prose as it commits each round: every new
-// round's narration, redacted, as a delta on the segment's answer.
+// onProgress draws the segment's answer as the loop writes it: every committed
+// round's prose, and while a round is being written, as much of it as is
+// settled ([settledView]).
+//
+// ONE RULE FOR EVERY CHANGE ([llm.Reconcile]): the text the screen should hold
+// is computed whole from the snapshot, and the frame sent is the tail that
+// takes the drawn text there, or a restart carrying the whole of it where the
+// drawn text is no prefix of it. A round's partial grows by tails; a provider
+// failover or a backend's retraction empties it, and the screen is redrawn
+// rather than left holding text the answer does not contain; a committed round
+// replaces its partial, whose settled view is a prefix of it, by its tail.
 func (t *turn) onProgress(res toolloop.Result) {
 	t.mu.Lock()
-	var fresh []string
 	for i := len(t.streamed); i < len(res.Narration); i++ {
-		text := strings.TrimSpace(redact.Secrets(res.Narration[i].Content))
-		t.streamed = append(t.streamed, text)
-		if text != "" {
-			fresh = append(fresh, text)
-		}
+		t.streamed = append(t.streamed, strings.TrimSpace(redact.Secrets(res.Narration[i].Content)))
 	}
-	prior := len(t.streamed) - len(fresh)
+	want := joinAnswer(t.streamed, settledView(res.Partial))
+	tail, restart := llm.Reconcile(t.drawn, want)
+	t.drawn = want
 	answer := t.answer
 	if res.Model != "" {
 		t.model = res.Model
@@ -237,27 +245,47 @@ func (t *turn) onProgress(res toolloop.Result) {
 		t.provider = res.ProviderKey
 	}
 	t.mu.Unlock()
-	for i, text := range fresh {
-		if prior+i > 0 {
-			text = "\n\n" + text
-		}
-		t.firstOutput()
-		t.emit(wire.Frame{Kind: wire.EventDelta, Delta: &wire.DeltaEvent{
-			MessageID: answer, Text: text}})
+	if tail == "" && !restart {
+		return
 	}
+	t.firstOutput()
+	t.emit(wire.Frame{Kind: wire.EventDelta, Delta: &wire.DeltaEvent{
+		MessageID: answer, Text: tail, Restart: restart}})
 }
 
-// answerText is the segment's answer as the person was shown it.
-func (t *turn) answerText() string {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	parts := make([]string, 0, len(t.streamed))
-	for _, p := range t.streamed {
+// settledView is the part of a round being written that may be shown now: the
+// prefix [redact.Settled] says no later text can change the redaction of,
+// redacted and trimmed as the round's narration will be. So a credential is
+// never on screen before the end that would redact it arrives, and the view is
+// always a prefix of the prose the round commits.
+func settledView(p *toolloop.Partial) string {
+	if p == nil {
+		return ""
+	}
+	return strings.TrimSpace(redact.Secrets(p.Content[:redact.Settled(p.Content)]))
+}
+
+// joinAnswer is a segment's answer: its rounds' prose, a paragraph apart,
+// with live (the round being written) last.
+func joinAnswer(rounds []string, live string) string {
+	parts := make([]string, 0, len(rounds)+1)
+	for _, p := range rounds {
 		if p != "" {
 			parts = append(parts, p)
 		}
 	}
+	if live != "" {
+		parts = append(parts, live)
+	}
 	return strings.Join(parts, "\n\n")
+}
+
+// answerText is the segment's answer as the person was shown it once its
+// rounds committed.
+func (t *turn) answerText() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return joinAnswer(t.streamed, "")
 }
 
 // fence is checked by the loop before every round and every call: a stopped
@@ -310,6 +338,10 @@ func (t *turn) run(r loopRun) {
 		Provider: r.provider, ProviderKey: r.key, Surface: surface, Messages: r.messages,
 		MaxRounds: r.steps + 1, AllowSuspend: true, Budget: r.meter,
 		Fence: t.fence, OnProgress: t.onProgress, Progress: progress,
+		// STREAMED, so a round's prose reaches the drawer while it is
+		// written. A CLI that cannot stream never sends a fragment, and its
+		// round arrives whole when it commits, as before.
+		StreamPartials: true,
 	})
 	if res == nil {
 		snap := progress.Snapshot()
