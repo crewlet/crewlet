@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
@@ -125,6 +126,13 @@ func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 	}
 	if out["config_managed_by"] == nil {
 		out["config_managed_by"] = []string{}
+	}
+	// WHETHER THE ASSISTANT IS AVAILABLE TO THIS CALLER HERE, with the first
+	// reason not (internal/assistant/wire's ViewerReason), so the Ask pill
+	// is drawn lit, or disabled with its reason, from this one answer.
+	out["assistant"] = wire.ViewerAssistant{Reason: wire.ViewerDisabled}
+	if s.Assistant != nil {
+		out["assistant"] = s.Assistant(ctx, principal)
 	}
 	if s.Acts != nil {
 		acts, err := s.Acts(ctx, principal)
