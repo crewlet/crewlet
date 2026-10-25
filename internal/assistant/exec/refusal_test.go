@@ -51,10 +51,11 @@ func TestARefusalReadsAsTheAPISaidIt(t *testing.T) {
 		{"a 404", answered(func(w http.ResponseWriter) {
 			httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
 		}), wire.Refusal{Code: "not_found", Message: httpjson.CodeNotFound.Message()}},
-		{"a 409 with its own sentence", answered(func(w http.ResponseWriter) {
+		{"a 409 with its own sentence and hint", answered(func(w http.ResponseWriter) {
 			httpjson.FailWith(w, http.StatusConflict, httpjson.CodeProposalStale,
-				map[string]string{"detail": "the task moved to version 9"})
-		}), wire.Refusal{Code: "proposal_stale", Message: httpjson.Sentence("the task moved to version 9")}},
+				map[string]string{"detail": "the task moved to version 9", "hint": "ask again"})
+		}), wire.Refusal{Code: "proposal_stale", Message: httpjson.Sentence("the task moved to version 9"),
+			Hint: httpjson.Sentence("ask again")}},
 		{"a body that is not the envelope",
 			exec.Response{Status: http.StatusBadGateway, Body: []byte("<html>bad gateway</html>")},
 			wire.Refusal{Code: "http_502", Message: http.StatusText(http.StatusBadGateway)}},
@@ -63,7 +64,7 @@ func TestARefusalReadsAsTheAPISaidIt(t *testing.T) {
 	}
 	for _, tc := range cases {
 		got := exec.RefusalOf(tc.resp)
-		if got.Code != tc.want.Code || got.Message != tc.want.Message ||
+		if got.Code != tc.want.Code || got.Message != tc.want.Message || got.Hint != tc.want.Hint ||
 			!slices.Equal(got.Grants, tc.want.Grants) {
 			t.Errorf("%s read as %+v, want %+v", tc.name, got, tc.want)
 		}
