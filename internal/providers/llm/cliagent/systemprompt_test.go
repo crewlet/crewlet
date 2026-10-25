@@ -198,10 +198,12 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 		// profile's --ignore-rules switches its injection off. `-p` on
 		// this CLI selects a PROFILE, not a prompt.
 		"hermes": "",
-		// 0.85.x: --system-prompt, string only. Its one file channel,
-		// ~/.pi/agent/SYSTEM.md, is static per home and cannot carry a
-		// prompt that differs per phase.
-		"pi": "{system}",
+		// 0.85.1 and 1.4.0: --system-prompt, which reads its value as a
+		// path when a file exists there — and sends the value itself as
+		// the prompt when none does, silently, so the file has to be
+		// written before the CLI starts. --append-system-prompt reads it
+		// the same way.
+		"pi": "{file}",
 	}
 	// THE TABLE IS THE SHIPPED SET. Without this, a profile added later is
 	// simply absent from the map and covered by nothing — the failure is

@@ -2075,37 +2075,60 @@ pi:
   # `@mariozechner` scope to Earendil Works, so the older package name is a
   # different, frozen thing.
   #
-  # MEASURED AGAINST 0.85.1: the flags off `pi --help`, the tool surface and
-  # the system prompt off the request body the CLI actually sent (a stub HTTP
-  # endpoint standing in for the model), and the error format off real 401
-  # and 429 responses.
-  written_for: "Pi Coding Agent 0.85.x (`pi --version`)"
+  # MEASURED ON 0.85.1 AND 1.4.0, through the engine's own code path against a
+  # stub HTTP endpoint standing in for the model, with the state directory
+  # inside a git checkout whose every level above the call held an AGENTS.md,
+  # an AGENTS.override.md, a CLAUDE.md, pi's own `.pi/SYSTEM.md`,
+  # `.pi/APPEND_SYSTEM.md`, prompts, skills and an extension, an MCP config and
+  # a .env, and with a trust default of `always` in the seat's settings: none
+  # of them reached a request, no extension or MCP server ran, no tool was
+  # offered, and the engine read each answer. The error format is off real 401
+  # and 429 responses to 0.85.1.
+  written_for: "Pi Coding Agent 1.4.x, measured on 0.85.1 and 1.4.0 (`pi --version`)"
   version_args: ["--version"]
-  # `-p` is print mode: answer and exit, no TUI. The rest is the isolation,
-  # and this CLI is unusually generous with it — every discovery path it has
-  # can be switched off by name:
+  # `-p` is print mode: answer and exit, no TUI. The rest is the isolation, and
+  # this CLI is unusually generous with it — every discovery path it has can be
+  # switched off by name. Three of them are what keeps the call to itself, each
+  # measured on both builds by taking it away:
   #
-  #   --no-tools          every built-in, extension and custom tool off
-  #   --no-context-files  no AGENTS.md / CLAUDE.md discovery
-  #   --no-extensions     no extension discovery (extensions EXECUTE)
-  #   --no-skills         no skill discovery
-  #   --no-prompt-templates / --no-themes  the remaining two discovery passes
-  #   --no-approve        project-local files ignored for this run
-  #   --no-session        ephemeral: nothing written to the session store
+  #   --no-context-files  the AGENTS.md / CLAUDE.md walk, which goes from the
+  #                       working directory up to `/`, one file per directory,
+  #                       whatever trust says. The engine's `.git` file does
+  #                       NOT end it: this walk ignores `.git`. Without the
+  #                       flag, five files from the checkout above the state
+  #                       directory reached the system prompt.
+  #   --no-approve        project trust pinned to none for the run. Print mode
+  #                       never asks, and falls back to `defaultProjectTrust`
+  #                       in settings.json in the agent directory — the seat's
+  #                       own, since PI_CODING_AGENT_DIR points into its home,
+  #                       so the operator's settings never apply, but a seed
+  #                       could put one there. Under `always`, a
+  #                       `.pi/APPEND_SYSTEM.md` in the working directory
+  #                       reached the system prompt of a call with no system
+  #                       prompt of its own (either flag skips that file),
+  #                       and with tools on so did the project's skills; with
+  #                       the flag, neither.
+  #   --no-extensions     extensions EXECUTE. On 1.4.0 the flag also stops
+  #                       an `mcp.json` server being started — with --no-tools
+  #                       alone, one was, and the system prompt grew an MCP
+  #                       section. 1.4.0's own `--no-mcp` adds nothing to
+  #                       this, and 0.85.1 does not have it, so it is not
+  #                       passed.
+  #
+  # And the rest:
+  #
+  #   --no-tools          every built-in, extension and custom tool off: the
+  #                       request carries no tools at all. Without it, `read`,
+  #                       `bash`, `edit` and `write`.
+  #   --no-skills         skill discovery off. With --no-tools pi renders no
+  #                       skills anyway; passed so that stays true if a build
+  #                       renders them without a reading tool.
+  #   --no-prompt-templates / --no-themes  the remaining two discovery passes.
+  #   --no-session        nothing written to the session store.
   #
   # --no-tools AND NOT an allowlist, which is the opposite of every other
-  # profile here, because there is no web tool to keep. MEASURED off the
-  # request body: the baseline this build advertises is FOUR tools — `bash`,
-  # `edit`, `read`, `write` — and `--no-tools` sends the tool array empty.
-  # (The vendor's README also lists `grep`, `find`, `ls` and a Windows
-  # `powershell`; none was registered here, so the four are what a Linux
-  # engine host actually faces.) Web is the one local tool this backend never
-  # denies, and on this CLI there is simply none to deny.
-  #
-  # --no-approve rather than trusting the per-call directory: non-interactive
-  # modes never show a trust prompt and fall back to `defaultProjectTrust`
-  # from the operator's own global settings, which may be `always`. This
-  # pins the answer for the run instead of inheriting it.
+  # profile here, because there is no web tool to keep: Web is the one local
+  # tool this backend never denies, and on this CLI there is none to deny.
   complete_args:
     - "-p"
     - "--no-tools"
@@ -2118,33 +2141,59 @@ pi:
     - "--no-session"
   local_tools: denied
   model_args: ["--model", "{model}"]
-  # Replace, not append: `--append-system-prompt` is the other half of this
-  # pair and would leave the harness's own prompt in front of the seat's. The
-  # vendor notes that context files and skills are still appended to a
-  # replaced prompt — which is why --no-context-files and --no-skills are in
-  # complete_args rather than being merely tidy.
+  # BOTH CHANNELS ARE FILES: each flag reads its value as a path when a file
+  # exists there. A seat's system prompt carries the org chart, its policies,
+  # its roster and its memory, and argv is readable by every account on the
+  # machine.
   #
-  # MEASURED, and the replacement is not quite total: what reached the model
-  # was the seat's own prompt followed by one line, `Current working
-  # directory: <path>`. That is this backend's per-call scratch directory,
-  # it is true, and it is 60-odd characters rather than a coding-agent
-  # identity — so it is recorded here rather than fought.
+  # AND A PATH THAT DOES NOT EXIST IS SENT AS THE PROMPT ITSELF, silently —
+  # exit 0, nothing on stderr, the path's text as the seat's whole identity.
+  # The engine writes the file into the call's directory before the CLI
+  # starts and hands over its absolute path, so pi always finds it; an
+  # override that names `{system}` instead puts the text on argv.
   #
-  # Inline, because this CLI takes a string and has no file variant. The one
-  # file channel it does have is `~/.pi/agent/SYSTEM.md`, which is static per
-  # home and cannot carry a prompt that differs per phase. So the seat's
-  # identity is on argv here, as it is for grok — and the prompt already is
-  # too, so on a shared host both are readable through /proc/<pid>/cmdline and
-  # both count against ARG_MAX. `overrides.system_prompt_args: []` puts
-  # the identity back in the transcript for an operator who would rather.
+  # Measured on both builds, in one cached block with the Anthropic API:
+  #
+  #   system_prompt         REPLACES pi's default: the engine's text, then the
+  #                         call's working directory — a line "Current working
+  #                         directory: <path>" on 0.85.1, a <cwd> block on
+  #                         1.4.0 — and nothing else. For a side pass.
+  #   append_system_prompt  KEEPS pi's default under its identity line "You
+  #                         are an expert coding assistant operating inside
+  #                         pi, a coding agent harness." and puts the engine's
+  #                         text after it — bare on 0.85.1, inside an
+  #                         <addendum> block on 1.4.0 — with the working
+  #                         directory last. For a seat at work. The default
+  #                         with no tools is about 1,810 characters on 0.85.1
+  #                         and 1,950 on 1.4.0, a few hundred of them the
+  #                         paths of pi's own documentation on the host, which
+  #                         change with where pi is installed and never per
+  #                         call.
+  #
+  # Nothing per call comes before the engine's text: two calls sent system
+  # prompts identical up to the working directory, which follows it. That
+  # directory is in the same block, though, so the block as a whole differs
+  # per call. On a Claude subscription login pi adds Claude Code's identity
+  # line, "You are Claude Code, Anthropic's official CLI for Claude.", as a
+  # block of its own ahead of either channel's text, and sends the request as
+  # that CLI; no flag removes it.
+  #
+  # `SYSTEM.md` and `APPEND_SYSTEM.md` are pi's file channels of its own: the
+  # working directory's `.pi/` copy when the project is trusted, which
+  # --no-approve rules out, and otherwise the agent directory's — one static
+  # file each per seat home, which cannot carry a prompt that differs per
+  # phase. `--system-prompt` skips the first and `--append-system-prompt` the
+  # second, and the agent directory holds neither unless a seed puts it there.
   system_prompt:
-    args: ["--system-prompt", "{system}"]
-  prompt_mode: argv
-  # `--` stops option parsing, so a transcript that happens to begin with a
-  # dash is a prompt rather than an unknown flag. This CLI is the only one
-  # here that offers the separator, and the vendor documents exactly this use
-  # (`pi -p -- "- Summarize these points"`).
-  prompt_args: ["--"]
+    args: ["--system-prompt", "{file}"]
+  append_system_prompt:
+    args: ["--append-system-prompt", "{file}"]
+  # THE TRANSCRIPT ON STDIN, which print mode reads to its end as the message
+  # when stdin is not a terminal. On argv it was readable by every account on
+  # the machine, as the system prompt was, and bounded by ARG_MAX. Measured on
+  # both builds: the request is the one an argv prompt sends, less the
+  # transcript's trailing newline, which pi trims.
+  prompt_mode: stdin
   # PLAIN TEXT, deliberately, although this CLI has a richer channel.
   # `--mode json` streams every session event and would carry real token
   # counts — but its answer lives at `message.content[N].text`, an array of
@@ -2181,12 +2230,14 @@ pi:
   # an expired token in place.
   credential_paths: [".pi/agent/auth.json"]
   # --no-session already keeps the store empty, and these are what the CLI
-  # writes anyway: sessions/ if an override ever drops the flag, trust.json
-  # which accumulates one record per per-call directory that will never exist
-  # again, and the model catalogue cache, which PI_OFFLINE keeps stale rather
-  # than fresh. Extensions and packages are pruned because an extension is
-  # EXECUTABLE: --no-extensions stops discovery, and this stops one turn from
-  # leaving something behind for the next to find.
+  # writes anyway, or would with a flag dropped: sessions/ without
+  # --no-session, trust.json — a project-trust decision per directory, none
+  # of which --no-approve makes, each naming a call's directory that never
+  # exists again — and the model catalogue cache, which every call measured
+  # wrote and PI_OFFLINE keeps stale rather than fresh. Extensions and
+  # packages are pruned because an extension is EXECUTABLE: --no-extensions
+  # stops discovery, and this stops one turn from leaving something behind for
+  # the next to find.
   volatile_paths:
     - ".pi/agent/sessions"
     - ".pi/agent/trust.json"
