@@ -29,8 +29,9 @@ import (
 //
 // # Placeholders
 //
-// Every string in args, allow_args, seed content and env values may carry
-// these, substituted per run:
+// Every string in args, allow_args, complete_args, usage_args, seed content,
+// env values and the serve lifecycle's arguments may carry these, substituted
+// per run:
 //
 //	{relay_command}         the relay's executable, as a path
 //	{relay_command_json}    the same as a JSON string, quotes included
@@ -40,6 +41,8 @@ import (
 //	{tool_timeout_seconds}  ToolTimeoutSeconds
 //	{tool_timeout_ms}       the same in milliseconds
 //	{work}                  the call's working directory, where seeds are written
+//	{<as>}                  a serve lifecycle's ready value ([Serve.Ready]),
+//	                        everywhere but seeds and serve.args
 //
 // The JSON forms are encoded without HTML escaping, so each is also a valid TOML
 // value — a string or an array — for a CLI configured in TOML.
@@ -94,7 +97,125 @@ type MCP struct {
 	// every call's arguments and result, so its output is never quoted in an
 	// error or a log line: what a failure says is stderr and these fields.
 	FailureEvents []FailureEvent `yaml:"failure_events,omitempty"`
+
+	// CompleteArgs, where set, is the argv of a run with tools in place of
+	// the profile's complete_args — for a CLI whose run against a server of
+	// its own takes another subcommand, or a flag that excludes one a text
+	// function passes (OpenCode's `run --server <url>` beside `run
+	// --standalone`). Rendered like Args.
+	CompleteArgs []string `yaml:"complete_args,omitempty"`
+
+	// UsageArgs, where set, is the usage command of a run with tools in place
+	// of the profile's usage_args, which it requires — for a CLI whose run's
+	// session is asked about through the server that held it. Rendered like
+	// Args, with {session} as usage_args takes it, and given the run's
+	// environment, mcp.env included.
+	UsageArgs []string `yaml:"usage_args,omitempty"`
+
+	// Lifecycle is how a run with tools is shaped: run, the default — the
+	// CLI is one process that starts the crewlet server itself — or serve.
+	Lifecycle Lifecycle `yaml:"lifecycle,omitempty"`
+
+	// Serve is the serve lifecycle: required with it, refused without it.
+	Serve *Serve `yaml:"serve,omitempty"`
 }
+
+// Serves reports whether a run with tools on this route runs against a server
+// of the CLI's own ([LifecycleServe]).
+func (m *MCP) Serves() bool { return m != nil && m.Lifecycle == LifecycleServe }
+
+// Lifecycle is how a run with tools is shaped.
+type Lifecycle string
+
+const (
+	// LifecycleRun is one CLI process for the run, which starts the
+	// crewlet server as its MCP server and drives its loop.
+	LifecycleRun Lifecycle = "run"
+
+	// LifecycleServe is a CLI whose loop runs in a SERVER of its own: the
+	// server is started first and starts the crewlet server; once it reports
+	// itself up and lists the crewlet server as started, the run is a client
+	// of it; and the server is stopped after the run — and with it, the
+	// moment the engine ends the run, since its loop is the server's.
+	// OpenCode 2.1 is the CLI that needs it: its one-shot run mode does not
+	// wait for a configured MCP server to start before asking its model.
+	LifecycleServe Lifecycle = "serve"
+)
+
+// Valid reports whether l is a lifecycle this package knows, the empty one
+// (run) included.
+func (l Lifecycle) Valid() bool { return l == "" || l == LifecycleRun || l == LifecycleServe }
+
+// Serve is how a serve-lifecycle CLI's own server is started and waited for.
+//
+// The server is the profile's binary run with Args in the call's working
+// directory and the run's environment — the tool route's seeds already
+// written, the system prompt's channel too — and with its stdin closed. It is
+// up once it has printed every Ready value and, where Poll is set, the poll
+// shows the crewlet server started; both within timeout_seconds, which bounds
+// its start as one stretch of its own. It is stopped — its group signalled, a
+// grace, then killed — the moment the run is cut short (the host ending it, a
+// stretch running out, a failure marker on either's stderr), and otherwise
+// once the run's usage has been asked for.
+type Serve struct {
+	// Args start the server, with the tool route's placeholders but none of
+	// the Ready ones, which it has not printed yet.
+	Args []string `yaml:"args,omitempty"`
+
+	// Ready are the values the server prints on stdout once it is up, each
+	// the rest of a line beginning with its prefix, spaces trimmed — its
+	// address, a password it minted. Each is the placeholder `{<as>}` in
+	// mcp.complete_args, mcp.args, mcp.allow_args, mcp.env, mcp.usage_args
+	// and poll.args. Never logged: a server's password is printed here.
+	Ready []ReadyValue `yaml:"ready,omitempty"`
+
+	// Poll is asked until the server lists the crewlet server as started —
+	// for a CLI whose run asks its model before a configured MCP server has
+	// connected, and so offers it none of that server's tools.
+	Poll *ServePoll `yaml:"poll,omitempty"`
+}
+
+// ReadyValue is one value a server prints when it is up.
+type ReadyValue struct {
+	// Prefix is what the line begins with.
+	Prefix string `yaml:"prefix,omitempty"`
+	// As names the placeholder, without its braces: a lower-case word.
+	As string `yaml:"as,omitempty"`
+}
+
+// ServePoll is a command that prints one JSON document listing the server's MCP
+// servers, asked every half second until the crewlet server's entry is
+// there and no longer starting. A poll that fails or prints something else is
+// asked again: a server that has printed its address may not answer yet.
+type ServePoll struct {
+	// Args are the command's, run like usage_args: the profile's binary, in
+	// the call's working directory and the run's environment.
+	Args []string `yaml:"args,omitempty"`
+	// Items is the array of MCP servers in the document.
+	Items Path `yaml:"items,omitempty"`
+	// Match picks the crewlet server's entry out of it.
+	Match []Match `yaml:"match,omitempty"`
+	// Starting holds of the entry while it is still starting. Empty: the
+	// entry is started once it is listed.
+	Starting []Match `yaml:"starting,omitempty"`
+}
+
+// readyNames is the placeholders a serve lifecycle's ready values add.
+func (m *MCP) readyNames() []string {
+	if m.Serve == nil {
+		return nil
+	}
+	var out []string
+	for _, r := range m.Serve.Ready {
+		out = append(out, "{"+r.As+"}")
+	}
+	return out
+}
+
+// ReadyPlaceholder reports whether s carries a placeholder only a serve
+// lifecycle's server can fill — so it cannot be rendered before the server is
+// up.
+func (m *MCP) ReadyPlaceholder(s string) bool { return carriesAny(s, m.readyNames()) }
 
 // FailureEvent is one kind of failure report a CLI prints as an event of its
 // own, and what of it to show.
@@ -124,6 +245,9 @@ type MCPValues struct {
 	RelayArgs    []string
 	Socket       string
 	Work         string
+	// Ready is a serve lifecycle's ready values, by their `as`, once its
+	// server has printed them.
+	Ready map[string]string
 }
 
 // Render substitutes a run's values into one profile string.
@@ -132,16 +256,20 @@ func (m *MCP) Render(s string, v MCPValues) string {
 		return s
 	}
 	argv := append([]string{v.RelayCommand}, v.RelayArgs...)
-	return strings.NewReplacer(
+	pairs := []string{
 		"{relay_command_json}", jsonValue(v.RelayCommand),
 		"{relay_args_json}", jsonValue(v.RelayArgs),
 		"{relay_argv_json}", jsonValue(argv),
 		"{relay_command}", v.RelayCommand,
 		"{socket}", v.Socket,
 		"{tool_timeout_seconds}", strconv.Itoa(m.ToolTimeoutSeconds),
-		"{tool_timeout_ms}", strconv.Itoa(m.ToolTimeoutSeconds*1000),
+		"{tool_timeout_ms}", strconv.Itoa(m.ToolTimeoutSeconds * 1000),
 		"{work}", v.Work,
-	).Replace(s)
+	}
+	for _, name := range slices.Sorted(maps.Keys(v.Ready)) {
+		pairs = append(pairs, "{"+name+"}", v.Ready[name])
+	}
+	return strings.NewReplacer(pairs...).Replace(s)
 }
 
 // jsonValue encodes v WITHOUT HTML escaping: `<`, `>` and `&` stay as they are,
@@ -173,10 +301,13 @@ func carriesAny(s string, placeholders []string) bool {
 	return slices.ContainsFunc(placeholders, func(ph string) bool { return strings.Contains(s, ph) })
 }
 
-// rendered is every string of the block that is rendered, for a check over all
-// of them.
+// rendered is every string of the block that can tell the CLI its server, for
+// the check that one does.
 func (m *MCP) rendered() []string {
-	out := slices.Concat(m.Args, m.AllowArgs)
+	out := slices.Concat(m.CompleteArgs, m.Args, m.AllowArgs)
+	if m.Serve != nil {
+		out = append(out, m.Serve.Args...)
+	}
 	for _, f := range m.Seed {
 		out = append(out, f.Content)
 	}
@@ -194,8 +325,20 @@ func (m *MCP) clone() *MCP {
 	out := *m
 	out.Args = slices.Clone(m.Args)
 	out.AllowArgs = slices.Clone(m.AllowArgs)
+	out.CompleteArgs = slices.Clone(m.CompleteArgs)
+	out.UsageArgs = slices.Clone(m.UsageArgs)
 	out.Seed = slices.Clone(m.Seed)
 	out.Env = cloneMap(m.Env)
+	if m.Serve != nil {
+		srv := Serve{Args: slices.Clone(m.Serve.Args), Ready: slices.Clone(m.Serve.Ready)}
+		if poll := m.Serve.Poll; poll != nil {
+			srv.Poll = &ServePoll{
+				Args: slices.Clone(poll.Args), Items: slices.Clone(poll.Items),
+				Match: cloneMatches(poll.Match), Starting: cloneMatches(poll.Starting),
+			}
+		}
+		out.Serve = &srv
+	}
 	out.FailureEvents = make([]FailureEvent, len(m.FailureEvents))
 	for i, e := range m.FailureEvents {
 		out.FailureEvents[i] = FailureEvent{Match: cloneMatches(e.Match), Fields: clonePaths(e.Fields)}
@@ -246,14 +389,33 @@ func (p *Profile) validateMCP(add func(string, ...any)) {
 			"value the profile sets or the CLI's own fixed one: a call still running near it "+
 			"is answered by the engine first, and with no value nothing is", m.ToolTimeoutSeconds)
 	}
+	// What the run itself is handed may carry a server's ready values; what
+	// is written or started before the server is up may not.
+	afterUp := slices.Concat(mcpPlaceholders, m.readyNames())
 	for _, field := range []struct {
-		name string
-		args []string
-	}{{"mcp.args", m.Args}, {"mcp.allow_args", m.AllowArgs}} {
+		name    string
+		args    []string
+		allowed []string
+	}{
+		{"mcp.complete_args", m.CompleteArgs, afterUp},
+		{"mcp.args", m.Args, afterUp},
+		{"mcp.allow_args", m.AllowArgs, afterUp},
+		{"mcp.usage_args", m.UsageArgs, append(slices.Clone(afterUp), "{session}")},
+	} {
 		for i, arg := range field.args {
-			if problem := unknownPlaceholder(arg); problem != "" {
+			if problem := unknownPlaceholder(arg, field.allowed); problem != "" {
 				add("%s[%d] %s", field.name, i, problem)
 			}
+		}
+	}
+	if len(m.UsageArgs) > 0 {
+		switch {
+		case len(p.UsageArgs) == 0:
+			add("mcp.usage_args is set but usage_args is not — it replaces the profile's usage " +
+				"command on a run with tools, and a profile with none asks for no report")
+		case !hasPlaceholder(m.UsageArgs, "{session}"):
+			add("mcp.usage_args carries no {session} placeholder — the report has to be asked " +
+				"about the run's own session")
 		}
 	}
 	for i, f := range m.Seed {
@@ -279,7 +441,7 @@ func (p *Profile) validateMCP(add func(string, ...any)) {
 		if strings.TrimSpace(f.Content) == "" {
 			add("%s.content is empty — a server configuration with nothing in it configures nothing", label)
 		}
-		if problem := unknownPlaceholder(f.Content); problem != "" {
+		if problem := m.beforeUpPlaceholder(f.Content); problem != "" {
 			add("%s.content %s", label, problem)
 		}
 	}
@@ -295,10 +457,11 @@ func (p *Profile) validateMCP(add func(string, ...any)) {
 		case strings.TrimSpace(m.Env[name]) == "":
 			add("mcp.env.%s is empty — give the value the CLI reads, or drop it", name)
 		}
-		if problem := unknownPlaceholder(m.Env[name]); problem != "" {
+		if problem := unknownPlaceholder(m.Env[name], afterUp); problem != "" {
 			add("mcp.env.%s %s", name, problem)
 		}
 	}
+	p.validateServe(add)
 	for i, e := range m.FailureEvents {
 		label := fmt.Sprintf("mcp.failure_events[%d]", i)
 		validateMatches(add, label+".match", e.Match)
@@ -316,10 +479,90 @@ func (p *Profile) validateMCP(add func(string, ...any)) {
 	}
 }
 
-// unknownPlaceholder reports a `{name}` in s that is not one the tool route
-// substitutes, or "" when there is none. A misspelt placeholder would reach the
-// CLI verbatim, which starts no server.
-func unknownPlaceholder(s string) string {
+// beforeUpPlaceholder is [unknownPlaceholder] for a string rendered before a
+// serve lifecycle's server is up — a seed, which it reads as it starts, and its
+// own arguments — naming a ready value as what it is.
+func (m *MCP) beforeUpPlaceholder(s string) string {
+	for _, name := range m.readyNames() {
+		if strings.Contains(s, name) {
+			return fmt.Sprintf("carries %s, a value the server prints once it is up — this is "+
+				"rendered before the server starts, so it would reach it unsubstituted", name)
+		}
+	}
+	return unknownPlaceholder(s, mcpPlaceholders)
+}
+
+// validateServe holds the lifecycle to a server that is told how to start and
+// how it is known to be up, and to values the rest of the route can be handed.
+func (p *Profile) validateServe(add func(string, ...any)) {
+	m := p.MCP
+	switch {
+	case !m.Lifecycle.Valid():
+		add("mcp.lifecycle %q (want run or serve)", m.Lifecycle)
+		return
+	case m.Lifecycle == LifecycleServe && m.Serve == nil:
+		add("mcp.lifecycle is serve but mcp.serve is not set — say how the CLI's server is " +
+			"started and how it is known to be up")
+		return
+	case m.Lifecycle != LifecycleServe && m.Serve != nil:
+		add("mcp.serve is set but mcp.lifecycle is %q — set lifecycle: serve, or drop serve", m.Lifecycle)
+		return
+	case m.Serve == nil:
+		return
+	}
+	s := m.Serve
+	if len(s.Args) == 0 {
+		add("mcp.serve.args is empty — give the arguments that start the CLI's server")
+	}
+	for i, arg := range s.Args {
+		if problem := m.beforeUpPlaceholder(arg); problem != "" {
+			add("mcp.serve.args[%d] %s", i, problem)
+		}
+	}
+	if len(s.Ready) == 0 && s.Poll == nil {
+		add("mcp.serve names neither ready nor poll — nothing would say the server is up, and " +
+			"the run would race its start")
+	}
+	reserved := slices.Concat(mcpPlaceholders, []string{"{session}"})
+	seen := map[string]bool{}
+	for i, r := range s.Ready {
+		label := fmt.Sprintf("mcp.serve.ready[%d]", i)
+		name := "{" + r.As + "}"
+		if strings.TrimSpace(r.Prefix) == "" {
+			add("%s.prefix is empty — every line would match it", label)
+		}
+		switch {
+		case !isPlaceholderShaped(name):
+			add("%s.as %q is not a lower-case word (letters and underscores)", label, r.As)
+		case slices.Contains(reserved, name):
+			add("%s.as %q is a placeholder the tool route already substitutes — name it something else", label, r.As)
+		case seen[name]:
+			add("%s.as %q names a value an earlier entry already does", label, r.As)
+		}
+		seen[name] = true
+	}
+	if poll := s.Poll; poll != nil {
+		if len(poll.Args) == 0 {
+			add("mcp.serve.poll.args is empty — give the command that lists the server's MCP servers")
+		}
+		afterUp := slices.Concat(mcpPlaceholders, m.readyNames())
+		for i, arg := range poll.Args {
+			if problem := unknownPlaceholder(arg, afterUp); problem != "" {
+				add("mcp.serve.poll.args[%d] %s", i, problem)
+			}
+		}
+		validatePath(add, "mcp.serve.poll.items", poll.Items)
+		validateMatches(add, "mcp.serve.poll.match", poll.Match)
+		if len(poll.Starting) > 0 {
+			validateMatches(add, "mcp.serve.poll.starting", poll.Starting)
+		}
+	}
+}
+
+// unknownPlaceholder reports a `{name}` in s that is not one of allowed, or ""
+// when there is none. A misspelt placeholder would reach the CLI verbatim,
+// which starts no server.
+func unknownPlaceholder(s string, allowed []string) string {
 	rest := s
 	for {
 		open := strings.IndexByte(rest, '{')
@@ -333,9 +576,9 @@ func unknownPlaceholder(s string) string {
 		name := rest[open : open+end+1]
 		// A JSON or TOML document's own braces enclose quotes, colons or
 		// spaces; a placeholder is a bare word.
-		if isPlaceholderShaped(name) && !slices.Contains(mcpPlaceholders, name) {
+		if isPlaceholderShaped(name) && !slices.Contains(allowed, name) {
 			return fmt.Sprintf("carries %s, which is no placeholder the tool route substitutes "+
-				"(it has %s)", name, strings.Join(mcpPlaceholders, ", "))
+				"here (it has %s)", name, strings.Join(allowed, ", "))
 		}
 		rest = rest[open+1:]
 	}

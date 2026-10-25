@@ -206,3 +206,169 @@ func TestTheToolRouteRendersARunsValues(t *testing.T) {
 		t.Errorf("rendered\n%s\nwant\n%s", got, want)
 	}
 }
+
+// served is routed on the serve lifecycle, in the shape OpenCode 2.1 was
+// measured to need: a server printing its address and a password, a poll of
+// its MCP servers, and a run and a usage command that are its clients.
+func served() map[string]any {
+	is := func(path []any, value any) []any {
+		return []any{map[string]any{"path": path, "equals": value}}
+	}
+	return map[string]any{
+		"session_args": []any{"--session", "ses_{session}"},
+		"usage_args":   []any{"report", "ses_{session}"},
+		"usage": map[string]any{
+			"input": []any{[]any{"tokens", "input"}}, "output": []any{[]any{"tokens", "output"}},
+		},
+		"mcp": map[string]any{
+			"lifecycle":     "serve",
+			"complete_args": []any{"run", "--server", "{url}"},
+			"usage_args":    []any{"report", "--server", "{url}", "ses_{session}"},
+			"env":           map[string]any{"CLI_SERVER_PASSWORD": "{password}"},
+			"serve": map[string]any{
+				"args": []any{"serve", "--port", "0"},
+				"ready": []any{
+					map[string]any{"prefix": "server listening on ", "as": "url"},
+					map[string]any{"prefix": "server password ", "as": "password"},
+				},
+				"poll": map[string]any{
+					"args":     []any{"api", "--server", "{url}", "mcp.list"},
+					"items":    []any{"data"},
+					"match":    is([]any{"name"}, "crewlet"),
+					"starting": is([]any{"status", "status"}, "pending"),
+				},
+			},
+		},
+	}
+}
+
+// loadServed is served, then overrides, merged over routed.
+func loadServed(overrides map[string]any) (Profile, error) {
+	base := routed()
+	mergeInto(base, served())
+	mergeInto(base, overrides)
+	return Load("custom", base)
+}
+
+// The control for the serve lifecycle: its every field loads, and its ready
+// values are placeholders in what the run is handed and nowhere before.
+func TestAServedRouteLoads(t *testing.T) {
+	t.Parallel()
+	p, err := loadServed(nil)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	m := p.MCP
+	if !m.Serves() || m.Serve.Poll == nil || len(m.Serve.Ready) != 2 || len(m.CompleteArgs) != 3 || len(m.UsageArgs) != 4 {
+		t.Fatalf("loaded %+v / %+v", m, m.Serve)
+	}
+	if !m.ReadyPlaceholder("--server={url}") || m.ReadyPlaceholder("{work}/x") {
+		t.Error("ReadyPlaceholder does not tell a ready value from the route's own")
+	}
+	got := m.Render("{url} {password} {work}", MCPValues{Work: "/w",
+		Ready: map[string]string{"url": "http://127.0.0.1:4096", "password": "pw"}})
+	if got != "http://127.0.0.1:4096 pw /w" {
+		t.Errorf("rendered %q", got)
+	}
+}
+
+// A SERVER THE ENGINE CANNOT START, OR CANNOT TELL IS UP, DOES NOT LOAD — and
+// neither does a value it prints put where it is read before it is printed.
+//
+// Mutation: drop any one rule from validateServe, or let seeds take a ready
+// value, and its case loads.
+func TestABrokenServeLifecycleIsRefusedByName(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		overrides map[string]any
+		want      string
+	}{
+		"an unknown lifecycle": {map[string]any{"mcp": map[string]any{"lifecycle": "daemon"}},
+			`mcp.lifecycle "daemon"`},
+		"serve with no server": {map[string]any{"mcp": map[string]any{"serve": nil}},
+			"mcp.lifecycle is serve but mcp.serve is not set"},
+		"a server on the run lifecycle": {map[string]any{"mcp": map[string]any{"lifecycle": "run"}},
+			`mcp.serve is set but mcp.lifecycle is "run"`},
+		"a server with no arguments": {map[string]any{"mcp": map[string]any{"serve": map[string]any{"args": []any{}}}},
+			"mcp.serve.args is empty"},
+		"a server nothing says is up": {map[string]any{"mcp": map[string]any{
+			"serve": map[string]any{"ready": []any{}, "poll": nil},
+			// Nothing printed, so nothing for the rest to name.
+			"complete_args": []any{"run"}, "usage_args": []any{"report", "ses_{session}"}, "env": nil,
+		}}, "names neither ready nor poll"},
+		"a ready value with no prefix": {map[string]any{"mcp": map[string]any{"serve": map[string]any{
+			"ready": []any{map[string]any{"prefix": " ", "as": "url"}, map[string]any{"prefix": "pw ", "as": "password"}},
+		}}}, "mcp.serve.ready[0].prefix is empty"},
+		"a ready value that is not a word": {map[string]any{"mcp": map[string]any{"serve": map[string]any{
+			"ready": []any{map[string]any{"prefix": "at ", "as": "URL"}, map[string]any{"prefix": "pw ", "as": "password"}},
+		}}}, `mcp.serve.ready[0].as "URL"`},
+		"a ready value shadowing the route's": {map[string]any{"mcp": map[string]any{"serve": map[string]any{
+			"ready": []any{map[string]any{"prefix": "at ", "as": "url"}, map[string]any{"prefix": "dir ", "as": "work"}},
+		}}}, `mcp.serve.ready[1].as "work"`},
+		"a ready value shadowing the session": {map[string]any{"mcp": map[string]any{"serve": map[string]any{
+			"ready": []any{map[string]any{"prefix": "at ", "as": "url"}, map[string]any{"prefix": "s ", "as": "session"}},
+		}}}, `mcp.serve.ready[1].as "session"`},
+		"a ready value named twice": {map[string]any{"mcp": map[string]any{"serve": map[string]any{
+			"ready": []any{map[string]any{"prefix": "at ", "as": "url"}, map[string]any{"prefix": "on ", "as": "url"}},
+		}}}, `mcp.serve.ready[1].as "url" names a value an earlier entry already does`},
+		"a ready value in a seed": {map[string]any{"mcp": map[string]any{"seed": []any{map[string]any{
+			"path": "crewlet-mcp.json", "in": "work",
+			"content": `{"command":{relay_command_json},"args":{relay_args_json},"url":"{url}"}`}}}},
+			"mcp.seed[0].content carries {url}, a value the server prints once it is up"},
+		"a ready value in the server's own arguments": {map[string]any{"mcp": map[string]any{"serve": map[string]any{
+			"args": []any{"serve", "--password", "{password}"},
+		}}}, "mcp.serve.args[2] carries {password}"},
+		"a poll with no command": {map[string]any{"mcp": map[string]any{"serve": map[string]any{
+			"poll": map[string]any{"args": []any{}},
+		}}}, "mcp.serve.poll.args is empty"},
+		"a poll with no list": {map[string]any{"mcp": map[string]any{"serve": map[string]any{
+			"poll": map[string]any{"items": []any{}},
+		}}}, "mcp.serve.poll.items is empty"},
+		"a poll that picks no entry": {map[string]any{"mcp": map[string]any{"serve": map[string]any{
+			"poll": map[string]any{"match": []any{}},
+		}}}, "mcp.serve.poll.match is empty"},
+		"a misspelt ready value": {map[string]any{"mcp": map[string]any{"complete_args": []any{"run", "--server", "{uri}"}}},
+			"mcp.complete_args[2] carries {uri}"},
+		"a ready value on the run lifecycle": {map[string]any{"mcp": map[string]any{
+			"lifecycle": "run", "serve": nil,
+		}}, "mcp.complete_args[2] carries {url}"},
+		"a usage command replacing none": {map[string]any{"usage_args": nil},
+			"mcp.usage_args is set but usage_args is not"},
+		"a usage command about no session": {map[string]any{"mcp": map[string]any{
+			"usage_args": []any{"report", "--server", "{url}"},
+		}}, "mcp.usage_args carries no {session} placeholder"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := loadServed(tc.overrides)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %v, want a refusal naming %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// AN OVERRIDE OF THE SERVE LIFECYCLE IS A COPY: overriding one entry's server
+// leaves the profile it was built from as it was.
+func TestAServedRouteIsClonedWhole(t *testing.T) {
+	t.Parallel()
+	p, err := loadServed(nil)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	c := p.Clone()
+	c.MCP.CompleteArgs[0] = "x"
+	c.MCP.UsageArgs[0] = "x"
+	c.MCP.Serve.Args[0] = "x"
+	c.MCP.Serve.Ready[0].As = "x"
+	c.MCP.Serve.Poll.Args[0] = "x"
+	c.MCP.Serve.Poll.Items[0] = "x"
+	c.MCP.Serve.Poll.Match[0].Path[0] = "x"
+	c.MCP.Serve.Poll.Starting[0].Path[0] = "x"
+	m := p.MCP
+	if m.CompleteArgs[0] != "run" || m.UsageArgs[0] != "report" || m.Serve.Args[0] != "serve" ||
+		m.Serve.Ready[0].As != "url" || m.Serve.Poll.Args[0] != "api" || m.Serve.Poll.Items[0] != "data" ||
+		m.Serve.Poll.Match[0].Path[0] != "name" || m.Serve.Poll.Starting[0].Path[0] != "status" {
+		t.Errorf("a clone's edit reached the original: %+v / %+v", m, m.Serve.Poll)
+	}
+}
