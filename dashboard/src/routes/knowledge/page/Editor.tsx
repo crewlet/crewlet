@@ -56,6 +56,9 @@ import { useAct } from "~/lib/useAct.ts";
 import type { PageDetail } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { linkPageCommand } from "./LinkPicker.tsx";
+import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
+import type { PageActionSpec } from "~/app/assistant/context.ts";
+import { parsePageDraft, type PageDraft } from "./assistantAction.ts";
 
 export function PageEditor({
   detail,
@@ -89,6 +92,37 @@ export function PageEditor({
 
   const moved = page.version > base.version;
   const dirty = draft !== base.body;
+
+  // --- assistant page actions (WP12) ---
+  // A NEW BODY FOR THE OPEN DRAFT, as typing writes it ([parsePageDraft]);
+  // the save stays the person's. The draft and its base are the page's data,
+  // so a body prepared against another draft is stale.
+  useAssistantContext({
+    resources: [{ kind: "page", id: page.id, version: String(base.version) }],
+    dataVersion: `page:${page.id}@${base.version}:${draft}`,
+    actions: {
+      "page.draft.replace": {
+        scope: `The draft of “${page.title}” you are editing (not saved)`,
+        parse: parsePageDraft,
+        preview: ({ body }) => [
+          {
+            field: "Body",
+            next: plural(markdownWords(body), "word"),
+            current: plural(markdownWords(draft), "word"),
+          },
+        ],
+        blocked: () =>
+          merging
+            ? "Settle where both edits changed the same lines first."
+            : save.busy
+              ? "The page is being saved."
+              : null,
+        apply: ({ body }) => setDraft(body),
+        confirm: "approve",
+      } satisfies PageActionSpec<PageDraft>,
+    },
+  });
+  // --- end assistant page actions (WP12) ---
   // WHY SAVE CANNOT BE PRESSED, one answer for the button and the shortcut
   // alike: a shortcut that skipped the "moved" clause sent a save the engine
   // could only refuse.
