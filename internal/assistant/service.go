@@ -399,8 +399,6 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 		s.log.WarnContext(ctx, "assistant_record_failed", "turn", id, "record", "question",
 			"error", redact.Secrets(err.Error()))
 	}
-	t.messages = 2
-	t.answer = assistantdomain.MessageID(id, 2)
 
 	c, organization := s.company()
 	tools := s.catalogue.Offered(ts.Person, acts)

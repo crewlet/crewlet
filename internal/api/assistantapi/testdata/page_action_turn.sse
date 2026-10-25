@@ -27,14 +27,18 @@ event: status
 data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":7,"at":"2026-10-24T09:41:00Z","kind":"status","status":{"state":"thinking","steps_done":1}}
 
 id: 98857d10-0497-5792-b9ae-1449110c2ff5.8
-event: card
-data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":8,"at":"2026-10-24T09:41:00Z","kind":"card","card":{"card_id":"8c4a178c-def3-523b-841b-e303f30c1a6c","message_id":"da6b18f3-0453-55a7-b9b5-3f0a7d361dee","card":{"type":"proposal","proposal":{"proposal_id":"091c9395-e395-568a-8468-c950e163f8c3","scope":"page","tool":"propose_page_change","title":"Change this screen","target":"work.filter.apply","changes":[{"kind":"fact","field":"scope","label":"This screen","to":"Changes the filters on this list. Nothing is saved."},{"kind":"fact","field":"status","label":"Status","to":"todo"}],"digest":"sha256:0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f","expires_at":"2026-10-24T09:56:00Z","state":"proposed","source_revision":"work@3","page_action":{"name":"work.filter.apply","payload":{"status":"todo"}},"approve_label":"Apply"}}}}
+event: delta
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":8,"at":"2026-10-24T09:41:00Z","kind":"delta","delta":{"message_id":"da6b18f3-0453-55a7-b9b5-3f0a7d361dee","text":""}}
 
 id: 98857d10-0497-5792-b9ae-1449110c2ff5.9
-event: status
-data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":9,"at":"2026-10-24T09:41:00Z","kind":"status","status":{"state":"waiting_for_approval","steps_done":1}}
+event: card
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":9,"at":"2026-10-24T09:41:00Z","kind":"card","card":{"card_id":"8c4a178c-def3-523b-841b-e303f30c1a6c","message_id":"da6b18f3-0453-55a7-b9b5-3f0a7d361dee","card":{"type":"proposal","proposal":{"proposal_id":"091c9395-e395-568a-8468-c950e163f8c3","scope":"page","tool":"propose_page_change","title":"Change this screen","target":"work.filter.apply","changes":[{"kind":"fact","field":"scope","label":"This screen","to":"Changes the filters on this list. Nothing is saved."},{"kind":"fact","field":"status","label":"Status","to":"todo"}],"digest":"sha256:0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f","expires_at":"2026-10-24T09:56:00Z","state":"proposed","source_revision":"work@3","page_action":{"name":"work.filter.apply","payload":{"status":"todo"}},"approve_label":"Apply"}}}}
 
 id: 98857d10-0497-5792-b9ae-1449110c2ff5.10
+event: status
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":10,"at":"2026-10-24T09:41:00Z","kind":"status","status":{"state":"waiting_for_approval","steps_done":1}}
+
+id: 98857d10-0497-5792-b9ae-1449110c2ff5.11
 event: done
-data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":10,"at":"2026-10-24T09:41:00Z","kind":"done","done":{"state":"waiting_for_approval","duration_ms":0,"steps":1,"message_id":"da6b18f3-0453-55a7-b9b5-3f0a7d361dee","trace_id":"4bf92f3577b34da6a3ce929d0e0e4736"}}
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":11,"at":"2026-10-24T09:41:00Z","kind":"done","done":{"state":"waiting_for_approval","duration_ms":0,"steps":1,"message_id":"da6b18f3-0453-55a7-b9b5-3f0a7d361dee","trace_id":"4bf92f3577b34da6a3ce929d0e0e4736"}}
 

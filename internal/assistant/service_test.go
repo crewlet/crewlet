@@ -347,7 +347,9 @@ func TestAResumedStreamReplaysOnlyWhatItMissed(t *testing.T) {
 		t.Fatalf("frames past retention = %v, want a snapshot at 4 then done", kinds(gone))
 	}
 	snap := gone[0].Snapshot
-	if len(snap.Messages) != 2 || len(snap.Steps) != 1 || len(snap.Cards) != 1 {
+	// The question, the empty answer the silent first round's card hangs
+	// on, and the second round's prose below it.
+	if len(snap.Messages) != 3 || len(snap.Steps) != 1 || len(snap.Cards) != 1 {
 		t.Errorf("snapshot = %d messages, %d steps, %d cards", len(snap.Messages),
 			len(snap.Steps), len(snap.Cards))
 	}

@@ -3,11 +3,14 @@ package assistant_test
 import (
 	"context"
 	"maps"
+	"slices"
 	"testing"
 
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
+	"github.com/crewlet/crewlet/internal/assistant/catalog"
+	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/assistant/proposal/approval"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -165,5 +168,87 @@ func TestAParkedTurnsEndSettlesTheStepItWaitedOn(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// order is a turn's answer as the drawer lays it out: each assistant message's
+// text, followed by the cards that hang on it, in the order drawn.
+func order(messages []uuid.UUID, text map[uuid.UUID]string, cards [][2]uuid.UUID) []string {
+	var out []string
+	for _, m := range messages {
+		if text[m] != "" {
+			out = append(out, "prose:"+text[m])
+		}
+		for _, c := range cards {
+			if c[1] == m {
+				out = append(out, "card:"+c[0].String())
+			}
+		}
+	}
+	return out
+}
+
+// EACH ROUND IS ITS OWN MESSAGE, LIVE AND RELOADED (QA E8): a round's prose
+// sits above the cards its calls showed and the final round's prose below
+// them, every round a paragraph of its own, and a reload lays the turn out
+// exactly as it was drawn.
+//
+// Mutation: join the rounds into one message and the final sentence renders
+// above the card it follows, with no break where the rounds met.
+func TestEachRoundsProseIsItsOwnMessageLiveAndReloaded(t *testing.T) {
+	t.Parallel()
+	look := readTask()
+	look.Text = "Let me look that task up."
+	f := assistanttest.NewRig(t, evals.RigOptions{Tools: []catalog.Tool{getTask(t)}, Handler: task,
+		Rounds: []evals.Round{look, evals.Say("ENG-7 rotates the signing keys.")}})
+	accepted, err := f.Ask("rounds", "What is ENG-7?", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames := f.Follow(accepted.TurnID, 0)
+	var drawnOrder []uuid.UUID
+	drawnText := map[uuid.UUID]string{}
+	var drawnCards [][2]uuid.UUID
+	for _, fr := range frames {
+		switch fr.Kind {
+		case wire.EventDelta:
+			id := fr.Delta.MessageID
+			if _, seen := drawnText[id]; !seen {
+				drawnOrder = append(drawnOrder, id)
+			}
+			if fr.Delta.Restart {
+				drawnText[id] = fr.Delta.Text
+			} else {
+				drawnText[id] += fr.Delta.Text
+			}
+		case wire.EventCard:
+			drawnCards = append(drawnCards, [2]uuid.UUID{fr.Card.CardID, fr.Card.MessageID})
+		}
+	}
+	live := order(drawnOrder, drawnText, drawnCards)
+	want := []string{"prose:Let me look that task up.", "card:" + drawnCards[0][0].String(),
+		"prose:ENG-7 rotates the signing keys."}
+	if !slices.Equal(live, want) {
+		t.Fatalf("drawn live as %q, want %q", live, want)
+	}
+
+	got, err := f.Svc.Transcript(t.Context(), f.Person, f.Conversation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var storedOrder []uuid.UUID
+	storedText := map[uuid.UUID]string{}
+	for _, m := range got.Messages {
+		if m.Role == wire.RoleAssistant {
+			storedOrder = append(storedOrder, m.ID)
+			storedText[m.ID] = m.Text
+		}
+	}
+	var storedCards [][2]uuid.UUID
+	for _, c := range got.Cards {
+		storedCards = append(storedCards, [2]uuid.UUID{c.CardID, c.MessageID})
+	}
+	if reloaded := order(storedOrder, storedText, storedCards); !slices.Equal(reloaded, live) {
+		t.Errorf("reloaded as %q, drawn live as %q", reloaded, live)
 	}
 }

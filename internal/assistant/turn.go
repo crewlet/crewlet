@@ -66,18 +66,16 @@ type turn struct {
 	// steps, cards and messages count what the turn has written across its
 	// segments, so a resumed segment's ids continue its first one's.
 	steps, cards, messages int
-	// answer is this segment's answer message; streamed is its committed
-	// rounds' prose, and drawn is the whole text its deltas have drawn on
-	// the person's screen, a round being written included.
-	answer uuid.UUID
-	// anchored says a card of this segment hangs on its answer, which is
-	// then recorded whether or not any prose was written, so every card's
-	// message is in the transcript a reload reads.
-	anchored bool
-	streamed []string
-	drawn    string
-	audit    []types.AssistantAuditStep
-	shown    bool
+	// replies are this segment's answer messages, one per round that wrote
+	// prose, in order; the last may be a round still being written.
+	// narrated is how many of the loop's narrations they hold.
+	replies  []*reply
+	narrated int
+	// anchor is the turn's newest assistant message, the one a card shown
+	// now hangs on: uuid.Nil until the turn has one ([turn.emitCard]).
+	anchor uuid.UUID
+	audit  []types.AssistantAuditStep
+	shown  bool
 	// outside is the source of the last answer this turn read that somebody
 	// the company cannot vouch for wrote, named on any proposal it makes
 	// after (D25).
@@ -180,8 +178,14 @@ func (t *turn) stepEnd(ctx context.Context, step stepClock, state wire.StepState
 	t.mu.Unlock()
 }
 
-// emitCard shows one card with the segment's answer and records it with the
-// apps a reader must hold to be shown it again.
+// emitCard shows one card under the turn's newest assistant message (the
+// round that asked for it, or the last one that wrote prose before it) and
+// records it with the apps a reader must hold to be shown it again.
+//
+// EVERY CARD'S MESSAGE IS IN THE TRANSCRIPT: a turn whose rounds have written
+// no prose yet opens an empty answer for its first card to hang on, drawn and
+// recorded, so a reload places the card where it was drawn live rather than
+// dropping it.
 func (t *turn) emitCard(ctx context.Context, card wire.Card, apps []string) {
 	if err := card.Validate(); err != nil {
 		t.svc.log.ErrorContext(ctx, "assistant_card_refused", "turn", t.id,
@@ -191,9 +195,17 @@ func (t *turn) emitCard(ctx context.Context, card wire.Card, apps []string) {
 	t.mu.Lock()
 	t.cards++
 	n := t.cards
-	message := t.answer
-	t.anchored = true
+	message, opened := t.anchor, false
+	if message == uuid.Nil {
+		t.messages++
+		message, opened = assistantdomain.MessageID(t.id, t.messages), true
+		t.anchor = message
+	}
 	t.mu.Unlock()
+	if opened {
+		t.emit(wire.Frame{Kind: wire.EventDelta, Delta: &wire.DeltaEvent{MessageID: message}})
+		t.recordReply(ctx, message, "")
+	}
 	id := assistantdomain.CardID(t.id, n)
 	if card.Type == wire.CardTable && card.Table != nil {
 		// EVERY TABLE IS DOWNLOADABLE, from here alone: the card's id is
@@ -228,26 +240,55 @@ func (t *turn) record(ctx context.Context, what string, write func(context.Conte
 // budget for a write, and well inside a turn.
 const recordTimeout = 10 * time.Second
 
-// onProgress draws the segment's answer as the loop writes it: every committed
-// round's prose, and while a round is being written, as much of it as is
-// settled ([settledView]).
+// reply is one round's answer message as the person was drawn it.
+type reply struct {
+	round int
+	id    uuid.UUID
+	// drawn is the text its deltas have drawn on the person's screen, and
+	// committed says its round has ended and drawn is its prose.
+	drawn     string
+	committed bool
+}
+
+// onProgress draws the segment's answer as the loop writes it, ONE MESSAGE PER
+// ROUND, in order, so each round's prose sits above the cards its calls showed
+// and the final round's below them, live and on a reload alike. A committed
+// round's prose is recorded as its own message the moment it commits.
 //
-// ONE RULE FOR EVERY CHANGE ([llm.Reconcile]): the text the screen should hold
-// is computed whole from the snapshot, and the frame sent is the tail that
-// takes the drawn text there, or a restart carrying the whole of it where the
-// drawn text is no prefix of it. A round's partial grows by tails; a provider
-// failover or a backend's retraction empties it, and the screen is redrawn
-// rather than left holding text the answer does not contain; a committed round
-// replaces its partial, whose settled view is a prefix of it, by its tail.
+// ONE RULE FOR EVERY CHANGE ([llm.Reconcile]), per message: the text a round's
+// message should hold is computed whole from the snapshot (its committed
+// prose, or while it is written as much as is settled, [settledView]), and the
+// frame sent is the tail that takes the drawn text there, or a restart
+// carrying the whole of it where the drawn text is no prefix of it. A round's
+// partial grows by tails; a provider failover or a backend's retraction
+// empties it, and the screen is redrawn rather than left holding text the
+// answer does not contain; a round that ends with no prose withdraws what it
+// drew.
 func (t *turn) onProgress(res toolloop.Result) {
 	t.mu.Lock()
-	for i := len(t.streamed); i < len(res.Narration); i++ {
-		t.streamed = append(t.streamed, strings.TrimSpace(redact.Secrets(res.Narration[i].Content)))
+	var deltas []wire.DeltaEvent
+	var commits []reply
+	for ; t.narrated < len(res.Narration); t.narrated++ {
+		n := res.Narration[t.narrated]
+		r := t.replyLocked(n.Round)
+		deltas = r.draw(deltas, strings.TrimSpace(redact.Secrets(n.Content)))
+		r.committed = true
+		if r.drawn != "" {
+			t.anchor = r.id
+			commits = append(commits, *r)
+		}
 	}
-	want := joinAnswer(t.streamed, settledView(res.Partial))
-	tail, restart := llm.Reconcile(t.drawn, want)
-	t.drawn = want
-	answer := t.answer
+	if live := t.liveLocked(); live != nil && (res.Partial == nil || res.Partial.Round != live.round) {
+		// THE ROUND ENDED WITH NO PROSE, or the loop moved past it: what it
+		// drew is withdrawn, and its message is never recorded.
+		deltas = live.draw(deltas, "")
+		t.replies = t.replies[:len(t.replies)-1]
+	}
+	if res.Partial != nil {
+		if view := settledView(res.Partial); view != "" || t.liveLocked() != nil {
+			deltas = t.replyLocked(res.Partial.Round).draw(deltas, view)
+		}
+	}
 	if res.Model != "" {
 		t.model = res.Model
 	}
@@ -255,12 +296,55 @@ func (t *turn) onProgress(res toolloop.Result) {
 		t.provider = res.ProviderKey
 	}
 	t.mu.Unlock()
-	if tail == "" && !restart {
-		return
+	for _, d := range deltas {
+		t.firstOutput()
+		t.emit(wire.Frame{Kind: wire.EventDelta, Delta: &d})
 	}
-	t.firstOutput()
-	t.emit(wire.Frame{Kind: wire.EventDelta, Delta: &wire.DeltaEvent{
-		MessageID: answer, Text: tail, Restart: restart}})
+	for _, r := range commits {
+		t.recordReply(t.ctx, r.id, r.drawn)
+	}
+}
+
+// replyLocked is the message of round: the round being written, or a new
+// message after every one the turn has, under t.mu.
+func (t *turn) replyLocked(round int) *reply {
+	if live := t.liveLocked(); live != nil && live.round == round {
+		return live
+	}
+	t.messages++
+	r := &reply{round: round, id: assistantdomain.MessageID(t.id, t.messages)}
+	t.replies = append(t.replies, r)
+	return r
+}
+
+// liveLocked is the reply of the round being written, or nil, under t.mu.
+func (t *turn) liveLocked() *reply {
+	if n := len(t.replies); n > 0 && !t.replies[n-1].committed {
+		return t.replies[n-1]
+	}
+	return nil
+}
+
+// draw appends the frame that takes r's drawn text to want, if any.
+func (r *reply) draw(deltas []wire.DeltaEvent, want string) []wire.DeltaEvent {
+	tail, restart := llm.Reconcile(r.drawn, want)
+	r.drawn = want
+	if tail == "" && !restart {
+		return deltas
+	}
+	return append(deltas, wire.DeltaEvent{MessageID: r.id, Text: tail, Restart: restart})
+}
+
+// recordReply records one of the turn's answer messages, cut to
+// [MessageMaxBytes].
+func (t *turn) recordReply(ctx context.Context, id uuid.UUID, text string) {
+	if len(text) > MessageMaxBytes {
+		text = textcut.Within(text, MessageMaxBytes)
+	}
+	t.record(ctx, "answer", func(ctx context.Context, w Write) error {
+		return t.svc.records.RecordMessage(ctx, w.Step("message", id.String()), t.id,
+			assistantdomain.NewMessage{ID: id, Role: wire.RoleAssistant, Text: text})
+	})
 }
 
 // settledView is the part of a round being written that may be shown now: the
@@ -275,27 +359,18 @@ func settledView(p *toolloop.Partial) string {
 	return strings.TrimSpace(redact.Secrets(p.Content[:redact.Settled(p.Content)]))
 }
 
-// joinAnswer is a segment's answer: its rounds' prose, a paragraph apart,
-// with live (the round being written) last.
-func joinAnswer(rounds []string, live string) string {
-	parts := make([]string, 0, len(rounds)+1)
-	for _, p := range rounds {
-		if p != "" {
-			parts = append(parts, p)
-		}
-	}
-	if live != "" {
-		parts = append(parts, live)
-	}
-	return strings.Join(parts, "\n\n")
-}
-
-// answerText is the segment's answer as the person was shown it once its
-// rounds committed.
+// answerText is the segment's committed prose, its rounds a paragraph apart:
+// what a new conversation is titled after.
 func (t *turn) answerText() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return joinAnswer(t.streamed, "")
+	parts := make([]string, 0, len(t.replies))
+	for _, r := range t.replies {
+		if r.committed && r.drawn != "" {
+			parts = append(parts, r.drawn)
+		}
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 // fence is checked by the loop before every round and every call: a stopped
@@ -376,10 +451,6 @@ func (t *turn) run(r loopRun) {
 // conclude ends the segment: it records the answer, parks or closes the turn,
 // tells the stream how it ended, and leaves its audit record.
 func (t *turn) conclude(ctx context.Context, res *toolloop.Result, err error) assistantdomain.TurnEnd {
-	text := t.answerText()
-	if len(text) > MessageMaxBytes {
-		text = textcut.Within(text, MessageMaxBytes)
-	}
 	state, failure := t.outcome(ctx, res, err)
 	end := assistantdomain.TurnEnd{State: state, Steps: t.stepCount(),
 		InputTokens: int64(res.InputTokens), OutputTokens: int64(res.OutputTokens),
@@ -388,17 +459,15 @@ func (t *turn) conclude(ctx context.Context, res *toolloop.Result, err error) as
 		end.ErrorCode = string(failure.Code)
 	}
 
+	// The answer the done frame names is the turn's newest message, every
+	// round's prose already recorded as it committed.
 	var answer *uuid.UUID
 	t.mu.Lock()
-	id, anchored := t.answer, t.anchored
-	t.mu.Unlock()
-	if text != "" || anchored {
+	if t.anchor != uuid.Nil {
+		id := t.anchor
 		answer = &id
-		t.record(ctx, "answer", func(ctx context.Context, w Write) error {
-			return t.svc.records.RecordMessage(ctx, w.Step("message", "answer"), t.id,
-				assistantdomain.NewMessage{ID: id, Role: wire.RoleAssistant, Text: text})
-		})
 	}
+	t.mu.Unlock()
 
 	if state == wire.TurnWaitingForApproval {
 		if parkErr := t.park(ctx, res); parkErr != nil {
@@ -529,6 +598,9 @@ type parked struct {
 	Cards    int    `json:"cards"`
 	Count    int    `json:"message_count"`
 	Boundary string `json:"boundary"`
+	// Anchor is the turn's newest assistant message, which a resumed
+	// segment's first cards hang on; empty for none.
+	Anchor string `json:"anchor,omitempty"`
 	// Seq is the newest seq the parking segment told, its closing frames
 	// counted ([parkedTail]): what the segment an approval opens continues
 	// after where no node of the fleet remembers more.
@@ -548,6 +620,9 @@ func (t *turn) park(ctx context.Context, res *toolloop.Result) error {
 	keep := parked{V: parkedVersion, Messages: res.Messages, PendingCall: res.PendingToolCallID,
 		PendingTool: res.PendingToolName, Steps: t.steps, Cards: t.cards, Count: t.messages,
 		Boundary: string(t.boundary), Seq: t.log.Last() + parkedTail}
+	if t.anchor != uuid.Nil {
+		keep.Anchor = t.anchor.String()
+	}
 	t.mu.Unlock()
 	raw, err := json.Marshal(keep)
 	if err != nil {

@@ -140,8 +140,10 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 		t.cancel(nil)
 		return wire.TurnAccepted{}, s.writeFailure(err)
 	}
-	t.steps, t.cards, t.messages = keep.Steps, keep.Cards, keep.Count+1
-	t.answer = assistantdomain.MessageID(r.Turn, t.messages)
+	t.steps, t.cards, t.messages = keep.Steps, keep.Cards, keep.Count
+	if anchor, err := uuid.Parse(keep.Anchor); err == nil {
+		t.anchor = anchor
+	}
 	messages := slices.Concat(keep.Messages, []llm.Message{{Role: llm.RoleTool, Name: keep.PendingTool,
 		ToolCallID: keep.PendingCall, Content: resultOf(r, t.boundary),
 		Failed: r.State != wire.ProposalApplied}})

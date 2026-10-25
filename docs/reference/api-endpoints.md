@@ -6981,6 +6981,13 @@ withdraws a view of a round that the finished round does not bear out, so the
 message always ends as exactly the answer recorded. A model whose CLI cannot
 stream draws each round once, whole, when the round ends.
 
+Each round that writes prose is its own assistant message, in order, and a
+`card` names the message it follows: the round that asked for it, or the last
+one that wrote prose before it. So a round's prose sits above the cards its
+calls showed and the final round's below them, and a reload's transcript lays
+the turn out exactly as it streamed. A card shown before the turn has written
+any prose hangs on an empty message opened for it (a `delta` with no text).
+
 A turn never streams a raw tool argument, a raw answer, a prompt, a token count
 or a grant: a step carries a label the engine renders and the route pattern it
 asked, and a card is built by the engine from the route's own answer.
