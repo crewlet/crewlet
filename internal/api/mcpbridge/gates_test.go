@@ -92,6 +92,23 @@ func (p *panicky) Call(context.Context, map[string]any) (tools.Result, error) {
 	panic("a tool fell over")
 }
 
+// launcher starts work that outlives its call, and asks the loop to park with
+// the call unanswered — run_sandbox's shape.
+type launcher struct{ calls atomic.Int32 }
+
+func (*launcher) Name() string               { return "launch" }
+func (*launcher) Description() string        { return "starts work that outlives the call" }
+func (*launcher) Parameters() map[string]any { return map[string]any{"type": "object"} }
+func (*launcher) Call(context.Context, map[string]any) (tools.Result, error) {
+	return tools.Result{Output: "unreachable: a detached tool is called for its turn", Failed: true,
+		Cause: tools.RefusalInternalError}, nil
+}
+
+func (l *launcher) CallDetached(context.Context, *turnctx.Turn, map[string]any) (tools.DetachedResult, error) {
+	l.calls.Add(1)
+	return tools.DetachedResult{Result: tools.Result{Output: "started"}, Suspend: true}, nil
+}
+
 // gated is a fixture over a surface of the given tools, on a turn with a call
 // log, whose session's fence answers what fenceErr holds.
 type gated struct {
@@ -365,6 +382,40 @@ func TestACallThatArrivesAfterItsRunEndedIsNotRun(t *testing.T) {
 	}
 	if n := len(g.byName["read_page"].seen()); n != 0 {
 		t.Errorf("the tool ran %d times on an ended run", n)
+	}
+}
+
+// A SUSPEND IS REFUSED, AND THE CALL THAT RAN IS RECORDED. A box-mode run's
+// loop is its CLI's own, which would wait for ever on a call parked unanswered,
+// so the box is told at once the tool cannot be used from a coding run — and
+// the run goes on. But the tool ran, and started what it would have parked on,
+// so the run's record holds the call as it holds any call that ran: when, for
+// how long, who answered, and refused as forbidden.
+//
+// Mutation: answer the suspend without recording it, and the ledger is empty.
+func TestASuspendIsRefusedAndRecordedAsACallThatRan(t *testing.T) {
+	t.Parallel()
+	launch := &launcher{}
+	g := newGated(t, t.Context(), launch)
+	sess := dial(t, g.url)
+	res := callTool(t, sess, "launch", map[string]any{})
+	if !res.IsError || !strings.Contains(text(res), "cannot be used from a coding run") {
+		t.Fatalf("a suspend was answered %v %q, want the refusal", res.IsError, text(res))
+	}
+	rows := g.ledger.rows()
+	if len(rows) != 1 {
+		t.Fatalf("%d rows, want the call that ran", len(rows))
+	}
+	if r := rows[0]; r.Name != "launch" || !r.Failed || r.Refusal() != tools.RefusalForbidden ||
+		r.StartedAt.IsZero() || r.Origin != string(tools.OriginBuiltin) {
+		t.Errorf("the refused suspend is recorded %+v, want a timed call that ran, refused "+
+			"as forbidden", r)
+	}
+	if again := callTool(t, sess, "read_page", map[string]any{}); again.IsError {
+		t.Errorf("the run's next call failed after a refused suspend: %q", text(again))
+	}
+	if n := launch.calls.Load(); n != 1 {
+		t.Errorf("the tool ran %d times", n)
 	}
 }
 

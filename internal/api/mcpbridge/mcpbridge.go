@@ -840,9 +840,15 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 		// simply wait on an answer that never comes. The one tool that
 		// wants it is run_sandbox, which a box-mode seat is never offered:
 		// its own box is where its code work runs.
+		//
+		// REFUSED, AND RECORDED as a call that ran, which it did: the tool
+		// started whatever it would have parked on, and the run's record,
+		// like the tool loop's, says so — forbidden, refused for where it
+		// was called.
 		log.ErrorContext(o.ctx, "mcp_bridge_suspend_refused",
 			"run_id", s.RunID, "seat", s.Handle, "tool", in.Name)
-		return refused(suspendNote)
+		res = toolloop.ToolResult{Output: suspendNote, Failed: true,
+			Cause: tools.RefusalForbidden, Origin: res.Origin, Server: res.Server}
 	}
 
 	// AND AGAIN ONCE THE TOOL HAS RETURNED. Its answer is delivered — it
