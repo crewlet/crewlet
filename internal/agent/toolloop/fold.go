@@ -182,7 +182,9 @@ func (d *dispatcher) foldGroup(g *group, comp *llm.Completion, model string, liv
 	var answers []llm.Message
 	for _, e := range entries {
 		rec := e.record
-		if rec != nil && live && !rec.settled {
+		if live && (rec == nil || !rec.settled) {
+			// NOT YET ANSWERED, on a live frame: a call still to come or
+			// still running is not a call that was not run.
 			continue
 		}
 		assistant.ToolCalls = append(assistant.ToolCalls, e.call)
@@ -269,7 +271,8 @@ func (d *dispatcher) roundsUsed() int {
 func (d *dispatcher) reopen() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.began = time.Now()
+	d.began, d.active = time.Now(), true
+	d.invRuns, d.invTurns = len(d.runs), len(d.turns)
 	if d.state.ended() || d.state == stateExhausted {
 		return
 	}
@@ -281,6 +284,61 @@ func (d *dispatcher) reopen() {
 	}
 	d.parked = nil
 	d.invCalls = len(d.calls)
+}
+
+// finish closes the run: its CLI has exited.
+func (d *dispatcher) finish() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.active = false
+}
+
+// inFlight is the round a live frame names and when it started: while a run
+// is out, the request its CLI is making — the round after the last one read,
+// once every call of that one has been answered — or the round whose calls are
+// running or still to come; between runs, the last round read.
+func (d *dispatcher) inFlight(now time.Time) (int, time.Time) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	last := func() (int, time.Time) {
+		if t := d.turnOfRoundLocked(d.rounds); t != nil {
+			return d.rounds, t.start
+		}
+		return d.rounds, d.began
+	}
+	if !d.active {
+		return last()
+	}
+	if r := d.currentRunLocked(); r != nil && !r.opts.ObservesRequests {
+		// A run whose record shows no requests is one round, out for as
+		// long as the run is.
+		if r.synthetic != 0 {
+			return r.synthetic, r.start
+		}
+		return d.rounds + 1, r.start
+	}
+	for _, c := range slices.Backward(d.calls[d.invCalls:]) {
+		if c.admitted && !c.settled && !slices.Contains(d.parked, c) {
+			if t := d.turnOfRoundLocked(c.round); t != nil {
+				return c.round, t.start
+			}
+			return c.round, d.modelStartLocked(now)
+		}
+	}
+	if n := len(d.turns); n > d.invTurns && slices.Contains(d.turns[n-1].joined, false) {
+		return last()
+	}
+	if d.state != stateOpen {
+		return last()
+	}
+	return d.rounds + 1, d.modelStartLocked(now)
+}
+
+// committed reports whether the record already holds round's response.
+func (d *dispatcher) committed(round int) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.turnOfRoundLocked(round) != nil
 }
 
 // running is the calls in flight, for a live frame.

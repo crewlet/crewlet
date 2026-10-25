@@ -57,6 +57,42 @@ func (f *fragmenting) Complete(ctx context.Context, req llm.Request) (*llm.Compl
 	return f.Script.Complete(ctx, req)
 }
 
+// THE PARTIAL IS GONE ONCE ITS RESPONSE IS COMMITTED. It is a view of a request
+// in progress, never a second source of truth: no frame carries a partial for a
+// round the record already holds, or the live view shows a finished round and
+// a piece of the same round at once — and the finished result carries none.
+func TestThePartialIsClearedWhenItsRoundCommits(t *testing.T) {
+	t.Parallel()
+	fr := &frames{}
+	prov := script(runOf(calling("reading", "read"), calling("writing", "read"), says("done")))
+	res, err := run(t, toolloop.Config{Provider: prov, Surface: newSurface("read"), MaxRounds: 4,
+		StreamPartials: true, PartialInterval: time.Nanosecond, OnProgress: fr.on})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	streamed := false
+	for i, f := range fr.list() {
+		if f.Partial == nil {
+			continue
+		}
+		streamed = true
+		for _, r := range f.Rounds {
+			if r.Round == f.Partial.Round {
+				t.Errorf("frame %d carries a partial of round %d, which its record already holds", i, r.Round)
+			}
+		}
+	}
+	if !streamed {
+		t.Fatal("no partial was ever published — the scenario did not run as written")
+	}
+	if last := fr.last(); last.Partial != nil {
+		t.Error("the last published view still carried a fragment of a committed round")
+	}
+	if res.Partial != nil {
+		t.Error("a finished Result carries a partial; it is a live-only view")
+	}
+}
+
 // AN ABANDONED ATTEMPT IS KEPT AND THE RETRY STARTS CLEAN. A failover is
 // invisible from inside a delta stream: without the restart a consumer appends
 // the replacement to the abandoned attempt and shows two half-answers from two

@@ -772,6 +772,14 @@ type Result struct {
 	// rather than a second copy of the config beside it.
 	MaxRounds int
 
+	// RunStartedAt is when the CLI run in flight was started, in UTC — the
+	// [Invocation.StartedAt] it will be recorded with — on a live snapshot
+	// published while one is out, and zero between runs and on a finished
+	// Result. Apart from [Result.RoundStartedAt] because a run is many
+	// rounds: "this run has been going for 6m" and "this request for 40s"
+	// are two different clocks.
+	RunStartedAt time.Time
+
 	// Running is the tool calls in flight, in the order they arrived,
 	// present only on a live snapshot published while calls run — see
 	// [RunningCall]. A LIST because a CLI may issue a response's calls at
@@ -783,15 +791,16 @@ type Result struct {
 	// Invocations is one entry per CLI run, in order — see [Invocation].
 	Invocations []Invocation
 
-	// RoundStartedAt is when the latest round's provider call was made, in
-	// UTC, on a live snapshot: the round in flight while the model is still
-	// answering, and the round whose tools are running after it has. What a
-	// live view counts "this round has taken 40s" from. Every round's
-	// opening frame carries it, published the moment the call is made, so
-	// a snapshot whose RoundStartedAt is later than every [Round] in
-	// [Result.Rounds] is a round in flight and one equal to the last is
-	// that round's tools. Zero on a finished Result, whose [Result.Rounds]
-	// carry every start.
+	// RoundStartedAt is when the latest round's request was made, in UTC,
+	// on a live snapshot: the request in flight while the model is still
+	// answering, and the round whose tools are running after it has. What
+	// a live view counts "this round has taken 40s" from. A request is in
+	// flight from the frame published as a run opens or as the last call
+	// of the previous response is answered, and [Result.RoundsUsed] counts
+	// it from there, so a snapshot whose RoundStartedAt is later than every
+	// [Round] in [Result.Rounds] is a request in flight and one equal to
+	// the last is that round's tools. Zero on a finished Result, whose
+	// [Result.Rounds] carry every start.
 	RoundStartedAt time.Time
 
 	// Narration is per-round what Text is in aggregate. Both are published:
@@ -1112,6 +1121,11 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			out.Narration = append(out.Narration, more.narration...)
 			out.Rounds = append(out.Rounds, more.rounds...)
 			out.Running = d.running()
+			// THE ROUND IN FLIGHT, and when it began: the request a run's
+			// CLI is making while the model answers, or the round whose
+			// calls are running — see [Result.RoundStartedAt].
+			round, started := d.inFlight(time.Now())
+			out.RoundsUsed, out.RoundStartedAt = round, started.UTC()
 		}
 		return out
 	}
@@ -1135,8 +1149,14 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			cfg.Progress.record(recorded)
 		}
 		if cfg.OnProgress != nil {
+			// A PARTIAL ENDS WHERE ITS RESPONSE IS READ: from then the
+			// narration is the round's text, and a frame carrying both
+			// shows one round twice.
+			if partial != nil && d.committed(partial.Round) {
+				partial = nil
+			}
 			live.Partial = partial.clone()
-			live.RoundStartedAt = runStarted
+			live.RunStartedAt = runStarted
 			cfg.OnProgress(live)
 		}
 	}
@@ -1206,9 +1226,11 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		}
 		runSpan.End()
 
-		// EVERY CALL OF THE RUN HAS SETTLED before anything is read: a call
-		// answered "still running" goes on after its CLI stopped, and its
-		// result is part of what the next run is handed.
+		// The run is over; then EVERY CALL OF THE RUN HAS SETTLED before
+		// anything is read: a call answered "still running" goes on after
+		// its CLI stopped, and its result is part of what the next run is
+		// handed.
+		d.finish()
 		d.awaitSettled()
 		if completion != nil {
 			// A backend that reported its spend as it went has charged it
@@ -1229,6 +1251,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 				providerKey, keyServed = completion.ProviderKey, true
 			}
 		}
+		runStarted = time.Time{}
 		folded := d.fold(completion, model)
 		msgs = append(msgs, folded.messages...)
 		execs = append(execs, folded.executions...)
@@ -1361,8 +1384,8 @@ func streamTo(cfg Config, rec *sync.Mutex, partial **Partial, d *dispatcher, pub
 	// ZERO, so the FIRST fragment publishes immediately.
 	var last time.Time
 	return func(delta llm.Delta) {
+		round, _ := d.inFlight(time.Now())
 		rec.Lock()
-		round := d.roundsUsed() + 1
 		p := *partial
 		if p == nil || p.Round != round {
 			p = &Partial{Round: round}

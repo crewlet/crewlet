@@ -196,8 +196,13 @@ type dispatcher struct {
 	lastBusy  bool
 	// invCalls is where the current CLI run's calls start in calls.
 	invCalls int
-	// began is when the loop's current run was started.
-	began time.Time
+	// began is when the loop's current run was started, and active a run
+	// in progress — between [dispatcher.reopen] and [dispatcher.finish].
+	began  time.Time
+	active bool
+	// invRuns and invTurns are where the current run's CLI runs and
+	// responses start in runs and turns.
+	invRuns, invTurns int
 
 	// folded is how much of turns and calls the loop has already turned
 	// into conversation, so [dispatcher.Pending] and the next fold start
@@ -641,6 +646,15 @@ func (d *dispatcher) waitLocked(within time.Duration) {
 	})
 	d.cond.Wait()
 	t.Stop()
+}
+
+// currentRunLocked is the CLI run of the loop's current run, or nil before
+// one was served.
+func (d *dispatcher) currentRunLocked() *run {
+	if n := len(d.runs); n > d.invRuns {
+		return d.runs[n-1]
+	}
+	return nil
 }
 
 func (d *dispatcher) lastRunLocked() *run {

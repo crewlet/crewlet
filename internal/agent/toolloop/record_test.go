@@ -4,6 +4,7 @@ import (
 	"context"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -188,6 +189,209 @@ func TestAToolCallIsTimedAndNamesItsOrigin(t *testing.T) {
 	if b.StartedAt.Before(a.StartedAt.Add(a.Duration)) {
 		t.Errorf("the second call began at %v, before the first ended — the CLI made them one after another",
 			b.StartedAt)
+	}
+}
+
+// THE RUNNING CALL IS PUBLISHED BEFORE THE CALL AND CLEARED AFTER: the frame a
+// tool sees when it starts names it running — its round, its arguments, a UTC
+// start — beside the calls that already answered and the round's own start, and
+// once the round's calls return no frame names it, nor does the finished result.
+func TestTheRunningCallIsPublishedBeforeTheCallAndClearedAfter(t *testing.T) {
+	t.Parallel()
+	fr := &frames{}
+	surf := newSurface("read", "write")
+	var atCall []toolloop.Result
+	surf.hook = func(context.Context, llm.ToolCall) { atCall = append(atCall, fr.last()) }
+	prov := script(runOf(
+		llmtest.Response{Text: "reading", Calls: []llmtest.Call{
+			{Name: "read", Args: `{"path":"a.go"}`}, {Name: "write", Args: `{"path":"b.go"}`},
+		}},
+		says("done"),
+	))
+	res, err := run(t, toolloop.Config{Provider: prov, Surface: surf, MaxRounds: 4, OnProgress: fr.on})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(atCall) != 2 {
+		t.Fatalf("saw %d frames at call time, want one per call", len(atCall))
+	}
+	for i, want := range []struct {
+		name, path string
+		done       int
+	}{{"read", "a.go", 0}, {"write", "b.go", 1}} {
+		frame := atCall[i]
+		if len(frame.Running) != 1 {
+			t.Fatalf("call %q reached the tool with %d calls named running", want.name, len(frame.Running))
+		}
+		running := frame.Running[0]
+		if running.Name != want.name || running.Args["path"] != want.path || running.Round != 1 || running.ID == "" {
+			t.Errorf("the frame before %q named %+v", want.name, running)
+		}
+		if running.StartedAt.IsZero() || running.StartedAt.Location() != time.UTC {
+			t.Errorf("the running call's start is %v, want a UTC instant", running.StartedAt)
+		}
+		if len(frame.Executions) != want.done {
+			t.Errorf("the frame before %q carried %d executions, want %d", want.name, len(frame.Executions), want.done)
+		}
+		if frame.RoundsUsed != 1 || !frame.RoundStartedAt.Equal(res.Rounds[0].StartedAt) {
+			t.Errorf("the frame before %q says round %d started %v, want round 1's %v",
+				want.name, frame.RoundsUsed, frame.RoundStartedAt, res.Rounds[0].StartedAt)
+		}
+	}
+	all := fr.list()
+	var after *toolloop.Result
+	for i := range all {
+		if len(all[i].Executions) == 2 {
+			after = &all[i]
+			break
+		}
+	}
+	if after == nil || len(after.Running) != 0 {
+		t.Errorf("the first frame after the round's calls = %+v; want none running", after)
+	}
+	if res.Running != nil || !res.RoundStartedAt.IsZero() || !res.RunStartedAt.IsZero() || res.Partial != nil {
+		t.Errorf("a finished result carries live-only state: running %+v, round start %v, run start %v",
+			res.Running, res.RoundStartedAt, res.RunStartedAt)
+	}
+}
+
+// A LIVE FRAME KEEPS THE RUN'S CLOCK APART FROM THE ROUND'S. A run is many
+// requests: while one is out, the frame names when the run began — the start
+// its invocation is recorded with — and when the request began, which is later
+// once the run has made one; between runs, and on the finished result, no run
+// is out and the run's start is zero.
+func TestALiveFrameNamesTheRunInFlightApartFromItsRound(t *testing.T) {
+	t.Parallel()
+	fr := &frames{}
+	var during toolloop.Result
+	prov := script(
+		runOf(calling("", "read"), llmtest.Response{Text: writtenSubmission, Writing: func() {
+			time.Sleep(5 * time.Millisecond)
+			during = fr.last()
+		}}),
+		runOf(calling("", "submit_work")),
+	)
+	res, err := run(t, toolloop.Config{Provider: prov, Surface: newSurface("read", "submit_work"),
+		OnProgress: fr.on, TerminateAfter: []string{"submit_work"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Invocations) != 2 {
+		t.Fatalf("invocations %+v, want two runs", res.Invocations)
+	}
+	if !during.RunStartedAt.Equal(res.Invocations[0].StartedAt) {
+		t.Errorf("while run 1's second request is out the frame says the run began %v, want run 1's %v",
+			during.RunStartedAt, res.Invocations[0].StartedAt)
+	}
+	if !during.RoundStartedAt.After(during.RunStartedAt) {
+		t.Errorf("the request in flight began %v, not after its run began %v — the run's clock, not the round's",
+			during.RoundStartedAt, during.RunStartedAt)
+	}
+	between := false
+	for _, f := range fr.list() {
+		if len(f.Invocations) == 1 && f.RunStartedAt.IsZero() {
+			between = true
+		}
+		if !f.RunStartedAt.IsZero() && len(f.Invocations) == 1 &&
+			!f.RunStartedAt.Equal(res.Invocations[1].StartedAt) {
+			t.Errorf("a frame of run 2 says it began %v, want %v", f.RunStartedAt, res.Invocations[1].StartedAt)
+		}
+	}
+	if !between {
+		t.Error("no frame between the two runs said no run was out")
+	}
+	if !res.RunStartedAt.IsZero() {
+		t.Errorf("a finished result names a run in flight from %v", res.RunStartedAt)
+	}
+}
+
+// A REQUEST IN FLIGHT HAS ITS OWN ROUND AND ITS OWN INSTANT on the live view.
+// Once a round's calls have all answered, the CLI is asking its model again:
+// the frame says so — the next round, started after every recorded one, no call
+// running — rather than naming the previous round for as long as the model
+// takes, which is what a reader counts "thinking for 40s" from.
+func TestARequestInFlightIsAnnouncedBeforeTheModelAnswers(t *testing.T) {
+	t.Parallel()
+	fr := &frames{}
+	var during toolloop.Result
+	prov := script(runOf(
+		calling("reading", "read"),
+		llmtest.Response{Text: "done", Writing: func() {
+			time.Sleep(5 * time.Millisecond)
+			during = fr.last()
+		}},
+	))
+	res, err := run(t, toolloop.Config{Provider: prov, Surface: newSurface("read"), MaxRounds: 4,
+		OnProgress: fr.on})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if during.RoundsUsed != 2 || len(during.Rounds) != 1 {
+		t.Fatalf("while round 2's request is out the live view says round %d with %d recorded; "+
+			"want round 2, 1 recorded", during.RoundsUsed, len(during.Rounds))
+	}
+	if !during.RoundStartedAt.After(during.Rounds[0].StartedAt) {
+		t.Errorf("round 2's frame carries start %v, not later than round 1's %v",
+			during.RoundStartedAt, during.Rounds[0].StartedAt)
+	}
+	if len(during.Running) != 0 {
+		t.Errorf("a request's frame names a tool call in flight: %+v", during.Running)
+	}
+	if res.RoundsUsed != 2 {
+		t.Errorf("rounds = %d, want 2", res.RoundsUsed)
+	}
+}
+
+// PROGRESS IS PUBLISHED AS A RUN OPENS, AS EACH RESPONSE IS READ, BEFORE EACH
+// CALL AND AFTER IT: a reader sees the request in flight before the model
+// answers, the model's prose before its tools run, each call named as it starts,
+// and its result once it returns.
+func TestProgressIsPublishedAsARunOpensAnswersAndAroundEachCall(t *testing.T) {
+	t.Parallel()
+	fr := &frames{}
+	prov := script(runOf(calling("working", "read", "read"), says("done")))
+	res, err := run(t, toolloop.Config{Provider: prov, Surface: newSurface("read"), MaxRounds: 5,
+		OnProgress: fr.on})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	all := fr.list()
+	if len(all) == 0 || len(all[0].Narration) != 0 || all[0].RoundsUsed != 1 {
+		t.Fatalf("the first frame %+v, want the opening of round 1 before the model answered", all)
+	}
+	// The order a reader saw things in.
+	var seen []string
+	for _, f := range all {
+		var step string
+		switch {
+		case len(f.Running) == 1:
+			step = "running " + strings.Repeat("+", len(f.Executions))
+		case len(f.Narration) > 0 && f.Narration[0].Content == "working" && len(f.Executions) == 0:
+			step = "spoke"
+		case len(f.Executions) == 2:
+			step = "returned"
+		default:
+			continue
+		}
+		if len(seen) == 0 || seen[len(seen)-1] != step {
+			seen = append(seen, step)
+		}
+	}
+	want := []string{"spoke", "running ", "running +", "returned"}
+	if !slices.Equal(seen[:min(len(seen), len(want))], want) {
+		t.Errorf("a reader saw %v, want %v", seen, want)
+	}
+	// A CALL STILL TO COME IS NOT A CALL THAT FAILED: no frame records one
+	// as not run while the CLI is about to make it.
+	for i, f := range all {
+		for _, m := range f.Messages {
+			if m.Role == llm.RoleTool && m.Failed {
+				t.Errorf("frame %d records %s as failed: %q", i, m.Name, m.Content)
+			}
+		}
+	}
+	if res.Running != nil {
+		t.Errorf("a finished result names a call in flight: %+v", res.Running)
 	}
 }
 
