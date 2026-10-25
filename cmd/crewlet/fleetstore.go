@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -51,42 +50,20 @@ import (
 // line this process wrote about itself would record nothing that holder could
 // not have done unrecorded.
 
-// fleetSession is the fleet's store this process reached, and how many of its
-// commands' readers and writers share it.
-//
-// SHARED, because one invocation reaches it twice — the company's values read
-// before a provisioning run and the sink its minted credentials are written
-// to, or `crewlet llm` reading the company and then storing a token — and a
-// second broker on the store directory is refused, in this process as in any
-// other ([jetstream.StoreDirLock]). Counted like the node database's own claim,
-// and let go when the last of them closes.
-type fleetSession struct {
-	store *engine.FleetStore
-	holds int
-}
-
-// fleetSessions is this process's open session per node database.
-var fleetSessions = struct {
-	mu sync.Mutex
-	by map[string]*fleetSession
-}{by: map[string]*fleetSession{}}
-
 // openFleetStore reaches the fleet's store for the node boot configures, with
-// that node's engine stopped, and hands back its release.
+// that node's engine stopped, and hands back its release, which may be called
+// more than once.
+//
+// ONCE PER RUN. A run decides its route to the store once and shares it with
+// everything it reads and writes ([routeSecretStore], [companyStore]), so one
+// invocation starts one broker; a second one on the store directory would be
+// refused, in this process as in any other ([jetstream.StoreDirLock]).
 //
 // [store.ErrLocked] means the engine is running: returned as it came, for the
 // caller to route through the node's API. Every other refusal names its way
 // round.
 func openFleetStore(ctx context.Context, boot *config.Bootstrap, bootstrapPath string) (
 	*engine.FleetStore, func(), error) {
-
-	key := filepath.Clean(boot.Store.Path)
-	fleetSessions.mu.Lock()
-	defer fleetSessions.mu.Unlock()
-	if held := fleetSessions.by[key]; held != nil {
-		held.holds++
-		return held.store, sync.OnceFunc(func() { leaveFleetSession(key) }), nil
-	}
 
 	// THE NODE'S DATABASE IS ASKED FIRST, and only asked: it is what says
 	// the engine is not running. The broker's own lock covers an engine that
@@ -98,24 +75,7 @@ func openFleetStore(ctx context.Context, boot *config.Bootstrap, bootstrapPath s
 	if err != nil {
 		return nil, nil, fleetStoreRemedy(err, bootstrapPath)
 	}
-	fleetSessions.by[key] = &fleetSession{store: fs, holds: 1}
-	return fs, sync.OnceFunc(func() { leaveFleetSession(key) }), nil
-}
-
-// leaveFleetSession drops one share of key's session, stopping its broker —
-// and with it, letting the store directory go — with the last.
-func leaveFleetSession(key string) {
-	fleetSessions.mu.Lock()
-	defer fleetSessions.mu.Unlock()
-	held := fleetSessions.by[key]
-	if held == nil {
-		return
-	}
-	if held.holds--; held.holds > 0 {
-		return
-	}
-	delete(fleetSessions.by, key)
-	held.store.Close()
+	return fs, sync.OnceFunc(fs.Close), nil
 }
 
 // fleetStoreRemedy answers a fleet store this node cannot reach on its own in

@@ -39,13 +39,13 @@ func answerNext(p *Provider) {
 func TestASpentPlanIsUnreadyUntilItsReset(t *testing.T) {
 	t.Parallel()
 	p, clock := spentProvider(t, 37*time.Minute)
-	if err := p.Unready(); err != nil {
+	if err := p.Unready(t.Context()); err != nil {
 		t.Fatalf("an entry nothing has called is unready: %v", err)
 	}
 	if _, err := ask(t, p, llm.Request{}); llm.KindOf(err) != llm.KindRateLimit {
 		t.Fatalf("the spent plan answered %v, want a rate limit", err)
 	}
-	err := p.Unready()
+	err := p.Unready(t.Context())
 	var failure *llm.Error
 	if !errors.As(err, &failure) || failure.Kind != llm.KindRateLimit {
 		t.Fatalf("a benched entry's Unready = %v, want its rate limit", err)
@@ -58,7 +58,7 @@ func TestASpentPlanIsUnreadyUntilItsReset(t *testing.T) {
 		t.Errorf("Key = %q, want the entry's key", failure.Key)
 	}
 	clock.advance(38 * time.Minute)
-	if err := p.Unready(); err != nil {
+	if err := p.Unready(t.Context()); err != nil {
 		t.Errorf("after the reset Unready = %v, want nil", err)
 	}
 }
@@ -76,14 +76,14 @@ func TestARefusedLoginIsUnreadyUntilACallAnswers(t *testing.T) {
 	if _, err := ask(t, p, llm.Request{}); llm.KindOf(err) != llm.KindAuth {
 		t.Fatalf("the expired login answered %v, want auth", err)
 	}
-	if err := p.Unready(); llm.KindOf(err) != llm.KindAuth {
+	if err := p.Unready(t.Context()); llm.KindOf(err) != llm.KindAuth {
 		t.Fatalf("after a refused login Unready = %v, want auth", err)
 	}
 	answerNext(p)
 	if _, err := ask(t, p, llm.Request{}); err != nil {
 		t.Fatalf("the mended CLI did not answer: %v", err)
 	}
-	if err := p.Unready(); err != nil {
+	if err := p.Unready(t.Context()); err != nil {
 		t.Errorf("after an answered call Unready = %v, want nil", err)
 	}
 }
@@ -101,7 +101,7 @@ func TestANewLoginLiftsASignedOutVerdict(t *testing.T) {
 		t.Fatalf("the expired login answered %v, want auth", err)
 	}
 	writeLogin(t, p.ws, `{"token":"fresh and longer than before"}`, "")
-	if err := p.Unready(); err != nil {
+	if err := p.Unready(t.Context()); err != nil {
 		t.Errorf("after a new login Unready = %v, want nil", err)
 	}
 }
@@ -115,20 +115,20 @@ func TestANewLoginLiftsASignedOutVerdict(t *testing.T) {
 func TestNoSignInIsUnreadyForABoundedTime(t *testing.T) {
 	t.Parallel()
 	p, clock := signedOutProvider(t)
-	if err := p.Unready(); llm.KindOf(err) != llm.KindAuth {
+	if err := p.Unready(t.Context()); llm.KindOf(err) != llm.KindAuth {
 		t.Fatalf("an entry with no sign-in is Unready = %v, want auth", err)
 	}
 	clock.advance(readinessMemory)
-	if err := p.Unready(); err != nil {
+	if err := p.Unready(t.Context()); err != nil {
 		t.Fatalf("past the memory Unready = %v, want nil: the entry is owed one call", err)
 	}
-	if err := p.Unready(); err != nil {
+	if err := p.Unready(t.Context()); err != nil {
 		t.Errorf("the verdict came back before any call was tried: %v", err)
 	}
 	if _, err := ask(t, p, llm.Request{}); llm.KindOf(err) != llm.KindAuth {
 		t.Fatalf("the call answered %v, want auth", err)
 	}
-	if err := p.Unready(); llm.KindOf(err) != llm.KindAuth {
+	if err := p.Unready(t.Context()); llm.KindOf(err) != llm.KindAuth {
 		t.Errorf("after the tried call failed Unready = %v, want auth again", err)
 	}
 }
@@ -138,7 +138,7 @@ func TestNoSignInIsUnreadyForABoundedTime(t *testing.T) {
 func TestAProfileWithNoSignInRouteIsNotJudged(t *testing.T) {
 	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": "ok"}, nil)
-	if err := p.Unready(); err != nil {
+	if err := p.Unready(t.Context()); err != nil {
 		t.Errorf("Unready = %v, want nil for a profile naming no sign-in route", err)
 	}
 }
@@ -156,7 +156,7 @@ func TestACLIThatCannotStartIsUnready(t *testing.T) {
 	if llm.KindOf(err) != llm.KindFatal || !errors.Is(err, llm.ErrNotRunnable) {
 		t.Fatalf("a missing binary answered %v, want a fatal wrapping ErrNotRunnable", err)
 	}
-	if err := p.Unready(); !errors.Is(err, llm.ErrNotRunnable) {
+	if err := p.Unready(t.Context()); !errors.Is(err, llm.ErrNotRunnable) {
 		t.Errorf("Unready = %v, want the CLI that cannot start", err)
 	}
 }

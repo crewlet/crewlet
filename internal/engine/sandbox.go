@@ -2905,6 +2905,12 @@ func sandboxCredentials(c *Company, seat *org.Role, ph phase.Phase, placement sa
 //     provider's key where the CLI reads it from its environment, and
 //     otherwise a local cell, which is seeded with the login itself.
 //
+// A variable the profile names outside the reference grammar is never offered
+// ([cliagent.ModeSignIn]'s Misnamed): no secret store, ${VAR}, export or token
+// mint can carry a credential under it, so where it is the route the mode or
+// the CLI would take, the remedy names the overrides field that names it —
+// beside every route the entry still has, and alone only where it has none.
+//
 // Its own function rather than the tail of [sandboxCredentials] so that the
 // guard's VERDICT — which runs are refused — reads apart from its wording.
 func credentialRefusal(agent *cliagent.Provider, key, seat string, placement sandbox.Placement) *SandboxCredentialError {
@@ -2913,11 +2919,23 @@ func credentialRefusal(agent *cliagent.Provider, key, seat string, placement san
 		lead := fmt.Sprintf("seat %q runs code in %q, and nothing in this run's environment "+
 			"authenticates %q: %s", seat, placement, key, sign.Missing())
 		switch {
-		case len(sign.Variables) == 0:
+		case len(sign.Variables) == 0 && len(sign.Misnamed) == 0:
 			// The mode hands the CLI nothing, so the remedy is the mode
 			// — and the login it names reaches a box only in a local cell.
 			return &SandboxCredentialError{msg: fmt.Sprintf(
 				"%s; that login reaches this seat's box only in a local cell (%s)", lead, localCell)}
+		case len(sign.Variables) == 0 && sign.Mode == cliagent.AuthAPIKey:
+			// Its one variable is outside the grammar, and the lead names
+			// that field as the remedy. Not role.sandbox.env: every write
+			// refuses the entry until the field changes, and a name
+			// carrying `=` sets a different variable wherever it is placed.
+			return &SandboxCredentialError{msg: lead}
+		case len(sign.Variables) == 0:
+			// inherit-env whose every variable is such a name: the login
+			// it seeds is the one sign-in left, and only a local cell has it.
+			return &SandboxCredentialError{msg: fmt.Sprintf(
+				"%s; or give this seat a local cell (%s), which is seeded with the entry's login",
+				lead, localCell)}
 		case sign.Mode == cliagent.AuthAPIKey:
 			return &SandboxCredentialError{msg: fmt.Sprintf(
 				"%s; or give this seat its own %s in role.sandbox.env", lead, sign.Variables[0])}
@@ -2927,6 +2945,15 @@ func credentialRefusal(agent *cliagent.Provider, key, seat string, placement san
 					"(%s), which is seeded with the entry's login",
 				lead, strings.Join(sign.Variables, " or "), localCell)}
 		}
+	}
+	// A token variable no store can hold: `-capture-token` refuses to mint
+	// for it, so it is named as the field to change rather than offered.
+	tokenVar := agent.Profile().TokenEnv
+	misnamedToken := ""
+	if tokenVar != "" && !agent.TokenCanBeStored() {
+		misnamedToken = fmt.Sprintf("providers.llm.%s.overrides.token_env is %q, which is not "+
+			"an environment variable name, so no secret store, ${VAR} or shell export can "+
+			"carry one and `crewlet llm login -capture-token` refuses to mint it", key, tokenVar)
 	}
 	remedy := "Give this seat a local cell — " + localCell
 	switch {
@@ -2949,6 +2976,15 @@ func credentialRefusal(agent *cliagent.Provider, key, seat string, placement san
 			"role.sandbox.env — both are exported into the box — or give this seat a "+
 			"local cell (%s)",
 			provider, agent.Agent(), key, localCell)
+		// The key travels whatever token_env says, so it stays the remedy,
+		// and the field the doctor reports is named beside it.
+		if misnamedToken != "" {
+			remedy += ". No headless token can travel instead: " + misnamedToken +
+				"; name the variable your build of the CLI reads there"
+		}
+	case misnamedToken != "":
+		remedy = fmt.Sprintf("No headless token can travel: %s. Name the variable your build "+
+			"of the CLI reads there, or give this seat a local cell (%s)", misnamedToken, localCell)
 	}
 	return &SandboxCredentialError{msg: fmt.Sprintf(
 		"seat %q runs code in %q, where the %q subscription login cannot follow it: "+

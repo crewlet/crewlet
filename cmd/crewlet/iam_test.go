@@ -1264,7 +1264,9 @@ func TestIamSeatsSaysWhoHoldsEachSeat(t *testing.T) {
 	}
 	fullFails = false
 
-	// A COMPANY THAT DECLARES NO HUMAN SEAT says so, with -unheld or without.
+	// A COMPANY THAT DECLARES NO HUMAN SEAT says so, with -unheld or without,
+	// and sends the reader to the builder by the name the dashboard draws it
+	// under: it has no Agents item, so a line naming one leads nowhere.
 	answer = `{"seats":[]}`
 	for _, args := range [][]string{{"seats"}, {"seats", "-unheld"}} {
 		none, err := cli(args...)
@@ -1274,6 +1276,11 @@ func TestIamSeatsSaysWhoHoldsEachSeat(t *testing.T) {
 		if !strings.Contains(none, "the company has no human seats") ||
 			strings.Contains(none, "no vacant") {
 			t.Errorf("iam %v over no human seat printed %q", args, none)
+		}
+		if !strings.Contains(none, "Org chart › Edit org") ||
+			strings.Contains(none, "Agents ›") {
+			t.Errorf("iam %v over no human seat named the builder as %q, "+
+				"want Org chart › Edit org", args, none)
 		}
 	}
 

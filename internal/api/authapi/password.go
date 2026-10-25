@@ -131,7 +131,7 @@ func (s *Service) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	if !s.mayChangeOwnPassword(w, r, principal) {
 		return
 	}
-	body, err := httpjson.ReadBody(w, r, maxLoginBody)
+	body, err := httpjson.ReadBody(w, r, MaxLoginBodyBytes)
 	if err != nil {
 		httpjson.Refuse(w, err)
 		return

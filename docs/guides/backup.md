@@ -432,9 +432,17 @@ exercises no recovery code at all. Use it when you want a copy that involves
 no running engine — before a risky upgrade, or when taking the deployment
 down anyway.
 
-1. **Drain and stop every node** — SIGTERM or Ctrl+C once, and let the drain
+1. **Export subscription logins first**, if any seats run on a coding CLI,
+   while the fleet is still up: `crewlet llm export <key>` packs each into one
+   portable bundle. It restores the entry's configured bundle before it reads
+   the login, so it reads the company's values: through the running engine,
+   with one of its Tier A tokens in `CREWLET_API_TOKEN`. Do it before the
+   drain, since with every node stopped a member of a cluster has no running
+   member to read through and is refused ([where a command reads the
+   company's values](../reference/cli.md#where-a-command-reads-the-companys-values)).
+2. **Drain and stop every node** — SIGTERM or Ctrl+C once, and let the drain
    converge; see [graceful shutdown](../concepts/agent-runtime.md#graceful-shutdown).
-2. **Copy, per node:** both store files — `store.path` and, on a node with
+3. **Copy, per node:** both store files — `store.path` and, on a node with
    the `data` role, `store.replicated_path` — each **together with its `-wal`
    sidecar** — committed data lives in both, while the `-shm` and `.lock`
    sidecars are transient — and `stream.store_dir` for every embedded member.
@@ -442,18 +450,16 @@ down anyway.
    the replicated estate and the fleet's shared state telling one story. On
    the default `nats` object store the company's files are a stream, so
    `stream.store_dir` already carries them.
-3. **Copy the bucket, on `s3`:** the objects under the configured prefix's
+4. **Copy the bucket, on `s3`:** the objects under the configured prefix's
    `files/`, with the provider's own tool (`aws s3 sync
    s3://acme-files/crewlet/files/ objects/files/`). Nothing writes them while
    the fleet is stopped, so this copy is of the same instant as the rest; a
    bucket left out is a backup whose rows name files it cannot restore.
-4. **Copy Tier A:** `crewlet.yaml` and any NATS credential/TLS files it
+5. **Copy Tier A:** `crewlet.yaml` and any NATS credential/TLS files it
    names — and record where the keyring material comes from. **Keep the
    keyring out of the data's backup domain**
    ([Secret Store § Backups](../concepts/secret-store.md)): a backup that
    carries both the ciphertext and its key has undone the sealing.
-5. **Export subscription logins**, if any seats run on a coding CLI:
-   `crewlet llm export <key>` packs each into one portable bundle.
 6. **Start the fleet again.**
 
 A `stream.store_dir` left empty selects an in-memory stream server: nothing

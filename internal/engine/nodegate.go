@@ -687,8 +687,8 @@ type liveLeases interface {
 //
 // ONE READING FOR THE TRIM AND FOR THE GATE, because they ask the same
 // question: which nodes are still reaching the fleet. The trim counts such a
-// node at position zero until its first heartbeat; the gate refuses to evict
-// one.
+// node whose row has not landed at position zero until it does
+// ([statelog.CountedSet]); the gate refuses to evict one.
 //
 // DATA NODES ONLY. A node without `data` applies no log and publishes no
 // position, so the trim that counted it at zero would never advance again,

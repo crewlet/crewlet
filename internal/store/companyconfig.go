@@ -76,6 +76,29 @@ const revisionColumns = `revision_id, parent_revision_id, created_at, created_by
 	created_by_kind, operator_id, source, summary, payload, is_active,
 	activated_at`
 
+// activeRow is the predicate that names the active revision, in the form the
+// partial unique index company_config_one_active_idx (`(is_active) WHERE
+// is_active <> 0`) serves.
+//
+// BOTH TERMS, because neither alone seeks the index. `is_active <> 0` is the
+// index's own predicate, which a statement has to state for the planner to
+// consider a partial index at all; `is_active = 1` is the term it SEEKS on.
+// With the predicate alone the planner, which keeps no statistics, scanned the
+// table and tested every row — and every row is a whole sealed company
+// document, kept for 400 days, read every reconcile tick, on every GET /config
+// and before every conditional write. Every writer stores exactly 1 for the
+// active row (insert, Activate, Adopt), so the two terms select the one row
+// the predicate alone did.
+const activeRow = `is_active = 1 AND is_active <> 0`
+
+// activeSQL reads the active revision, and deactivateSQL clears it ahead of an
+// activation; both are named so a test can read back the plan of the exact
+// statement each runs.
+const (
+	activeSQL     = `SELECT ` + revisionColumns + ` FROM company_config WHERE ` + activeRow + ` LIMIT 1`
+	deactivateSQL = `UPDATE company_config SET is_active = 0 WHERE ` + activeRow
+)
+
 // InsertActive writes a new revision and makes it the active one, returning
 // its id.
 //
@@ -159,7 +182,7 @@ func (c *Configs) insert(ctx context.Context, r Revision, active bool) (string, 
 	err := c.db.Tx(ctx, func(tx *sql.Tx) error {
 		if active {
 			if _, err := tx.ExecContext(ctx,
-				`UPDATE company_config SET is_active = 0 WHERE is_active <> 0`); err != nil {
+				deactivateSQL); err != nil {
 				return err
 			}
 		}
@@ -200,7 +223,7 @@ func (c *Configs) Activate(ctx context.Context, revisionID string, at time.Time)
 	var summary string
 	err := c.db.Tx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE company_config SET is_active = 0 WHERE is_active <> 0`); err != nil {
+			deactivateSQL); err != nil {
 			return err
 		}
 		res, err := tx.ExecContext(ctx,
@@ -292,7 +315,7 @@ func (c *Configs) Adopt(ctx context.Context, r Revision) error {
 	}
 	err := c.db.Tx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE company_config SET is_active = 0 WHERE is_active <> 0`); err != nil {
+			deactivateSQL); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx,
@@ -325,8 +348,7 @@ func (c *Configs) Adopt(ctx context.Context, r Revision) error {
 
 // Active returns the currently-active revision, and whether there is one.
 func (c *Configs) Active(ctx context.Context) (Revision, bool, error) {
-	return c.one(ctx,
-		`SELECT `+revisionColumns+` FROM company_config WHERE is_active <> 0 LIMIT 1`)
+	return c.one(ctx, activeSQL)
 }
 
 // Get returns a revision by id, and whether it exists.

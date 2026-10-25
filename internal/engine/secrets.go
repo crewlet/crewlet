@@ -2,10 +2,13 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -119,18 +122,16 @@ func (e *Engine) installSecrets(values map[string]string) {
 // It does NOT fall back to the environment. Falling back is the stale-.env
 // shadowing this whole mechanism exists to prevent, and it would happen at
 // the worst moment — a store blip during an apply — silently swapping every
-// rotated credential for whatever the process was booted with.
+// rotated credential for whatever the process was booted with. There IS a
+// previous snapshot on every engine [New] returns, because the boot does not
+// go on without one ([Engine.bootSecrets]), and an apply refuses to build on
+// an engine that holds a store and none ([Engine.Apply]).
+//
 // Reports whether a snapshot was installed, so a caller — and the suite —
 // can tell "this node has no secret store" from "the store answered with
 // nothing in it", which the resolver renders identically.
 func (e *Engine) refreshSecrets(ctx context.Context) bool {
-	// SERIALISED WITH EVERY OTHER REFRESH: the store is read under the
-	// same lock the snapshot is installed under, so whichever of two runs
-	// later read the store later, and neither installs a snapshot older
-	// than the other's.
-	e.secretsMu.Lock()
-	defer e.secretsMu.Unlock()
-	values, err := e.secretSnapshot(ctx)
+	installed, err := e.loadSecrets(ctx)
 	if err != nil {
 		// NO KEYRING IS NOT A QUIET CASE ANY MORE. It was a supported
 		// deployment, logged at debug; [openCipher] now refuses to build
@@ -140,20 +141,106 @@ func (e *Engine) refreshSecrets(ctx context.Context) bool {
 		log.ErrorContext(ctx, "secret_store_unreadable", "error", err,
 			"detail", "the previous snapshot keeps serving; rotated secrets "+
 				"will not be picked up until the store is readable")
-		return false
+	}
+	return installed
+}
+
+// loadSecrets reads the secret store once and installs what it read as this
+// node's snapshot, or reports why it could not. A false with no error is an
+// engine holding no store at all, which installs nothing.
+func (e *Engine) loadSecrets(ctx context.Context) (bool, error) {
+	// SERIALISED WITH EVERY OTHER REFRESH: the store is read under the
+	// same lock the snapshot is installed under, so whichever of two runs
+	// later read the store later, and neither installs a snapshot older
+	// than the other's.
+	e.secretsMu.Lock()
+	defer e.secretsMu.Unlock()
+	values, err := e.secretSnapshot(ctx)
+	if err != nil {
+		return false, err
 	}
 	if values == nil {
 		// NO STORE AT ALL, which is not an empty one: installing a
 		// snapshot here would log secret_snapshot_loaded on a node that
 		// has nowhere to load one from, and an operator reading that
 		// line would conclude the store is wired when it is not.
-		return false
+		return false, nil
 	}
 	e.installSecrets(values)
 	// NAMES ONLY. This is the one log line that could put a company's whole
 	// credential set into a file, so it counts them instead.
 	log.InfoContext(ctx, "secret_snapshot_loaded", "secrets", len(values))
-	return true
+	return true, nil
+}
+
+// bootSecretsFirstWait is how long a boot waits before it asks a secret store
+// that did not answer again, doubling from here to [configplane.ReconcileInterval]:
+// what a boot meets is a coordination group still electing its leader or a
+// leaf link a moment from up, which clear in seconds, and past that the store
+// is asked as often as the control plane asks for the activation pointer.
+const bootSecretsFirstWait = time.Second
+
+// bootSecrets takes the snapshot a booting node resolves its company from, and
+// does not return without one.
+//
+// NO EPOCH IS BUILT FROM THE ENVIRONMENT ALONE on a node that holds a secret
+// store. A failed read keeps the previous snapshot standing
+// ([Engine.refreshSecrets]), and at boot there is no previous snapshot: a boot
+// whose read failed went on to build its company from whatever the process was
+// started with, so a provider whose `model` is a ${VAR} only the store held
+// refused the boot, and one whose key was such a reference ran without it.
+// The first apply did not heal it either, since its own read could fail the
+// same way and it recorded the environment-only epoch as applied. So the boot
+// holds a snapshot before it builds anything, every engine [New] returns holds
+// one, and the previous-snapshot rule is true on every read after it.
+//
+// TWO KINDS OF FAILURE, told apart because only one of them clears by waiting:
+//   - A value this node's keyring cannot open ([secrets.ErrDecrypt]), or no
+//     keyring at all, fails the boot, naming the secret. Every node runs the
+//     same Tier A keyring, so it is a key dropped from it, and only a restart
+//     with that key back, or the value set again, changes the answer.
+//   - Anything else is a store that did not answer, asked again from
+//     [bootSecretsFirstWait] doubling to the reconcile interval for as long as
+//     the boot's context lives. The node is past its boundary by then: its
+//     probes answer, /ready says it is starting, and it holds no seat.
+func (e *Engine) bootSecrets(ctx context.Context) error {
+	for attempt := 1; ; attempt++ {
+		_, err := e.loadSecrets(ctx)
+		if err == nil {
+			return nil
+		}
+		if errors.Is(err, secrets.ErrDecrypt) || errors.Is(err, secrets.ErrNoKeyring) {
+			return fmt.Errorf("engine: the secret store holds a value this node "+
+				"cannot open, so its company's ${VAR} references cannot be "+
+				"resolved: put the key that sealed it back in secrets.keys, or set "+
+				"the value again with `crewlet secrets set`: with this engine "+
+				"stopped it writes the fleet's store itself, or, on a cluster "+
+				"member or a seats node, through a running node named with "+
+				"-api: %w", err)
+		}
+		wait := backoff.Jitter(backoff.Doubling(attempt, bootSecretsFirstWait,
+			configplane.ReconcileInterval), configplane.ReconcileJitter)
+		log.WarnContext(ctx, "secret_store_unreadable", "error", err,
+			"attempt", attempt, "retry_in", wait,
+			"detail", "no company is built until the secret store answers, so "+
+				"none resolves its references from the environment alone; "+
+				"/ready answers starting meanwhile")
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("engine: the boot stopped before the secret store "+
+				"answered: %w", context.Cause(ctx))
+		case <-timer.C:
+		}
+	}
+}
+
+// holdsSecretStore reports whether this engine has a store its snapshot is
+// read from — every engine [New] builds, and a hand-built one only when it was
+// handed one.
+func (e *Engine) holdsSecretStore() bool {
+	return e.backends != nil && e.backends.Fleet != nil
 }
 
 // secretSnapshot reads and unseals every stored secret, or reports why not.

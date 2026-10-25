@@ -154,11 +154,11 @@ func (m Models) Chain(context.Context, iam.Principal, auxspend.Use) (llm.Provide
 
 // Unready implements [assistant.Models] the engine's way: the chain's verdict
 // over its one member, so a model that knows it would fail says so.
-func (m Models) Unready(context.Context) error {
+func (m Models) Unready(ctx context.Context) error {
 	if m.Model == nil {
 		return nil
 	}
-	return chain.Unready([]llm.Provider{m.Model})
+	return chain.Unready(ctx, []llm.Provider{m.Model})
 }
 
 // Budget hands every turn one meter, or none.

@@ -48,7 +48,7 @@ func runAssistant(environ config.Source, args []string, stdout, stderr io.Writer
 	}
 }
 
-const assistantUsage = `usage: crewlet assistant eval -suite DIR [-model KEY -paid] [-trials N] [-company PATH] [-config PATH]
+const assistantUsage = `usage: crewlet assistant eval -suite DIR [-model KEY -paid] [-trials N] [-company PATH] [-config PATH] [-api URL]
 
   eval   Run a directory of evaluation cases through the Dashboard Assistant's
          own orchestrator and tool catalogue, in this process. Each case plays
@@ -68,8 +68,7 @@ func runAssistantEval(environ config.Source, args []string, stdout, stderr io.Wr
 	trials := fs.Int("trials", 1, "how many times each case runs; it passes only if every run does")
 	companyPath := fs.String("company", defaultCompanyPath,
 		"Tier B, read with -model for the entry to ask")
-	bootstrapPath := fs.String("config", defaultBootstrapPath,
-		"Tier A, read with -model to resolve the entry's ${VAR} references")
+	storeAt := addStoreFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -97,8 +96,7 @@ func runAssistantEval(environ config.Source, args []string, stdout, stderr io.Wr
 		return err
 	}
 	ctx := context.Background()
-	provider, closeModel, err := evalModel(ctx, environ, *companyPath, *bootstrapPath, *model,
-		stderr)
+	provider, closeModel, err := evalModel(ctx, environ, *companyPath, storeAt, *model, stderr)
 	if err != nil {
 		return err
 	}
@@ -128,28 +126,34 @@ func runAssistantEval(environ config.Source, args []string, stdout, stderr io.Wr
 	return nil
 }
 
-// evalModel is the providers.llm entry key names, resolved for the assistant,
-// and the closer of the resolver it was read through. An empty key is no model
-// (each case plays its own script): a nil provider and a closer with nothing
-// to close.
-func evalModel(ctx context.Context, environ config.Source, companyPath, bootstrapPath, key string,
-	stderr io.Writer) (*cliagent.Provider, func(), error) {
+// evalModel is the providers.llm entry key names, resolved for the assistant
+// through the run's route to the company's secret store ([companyStore], the
+// one `crewlet llm` reads through), and the closer of that route. An empty key
+// is no model (each case plays its own script): a nil provider and a closer
+// with nothing to close.
+func evalModel(ctx context.Context, environ config.Source, companyPath string, storeAt storeFlags,
+	key string, stderr io.Writer) (*cliagent.Provider, func(), error) {
 
 	if key == "" {
 		return nil, func() {}, nil
 	}
-	company, keys, resolver, closeResolver, err := loadLLMConfig(ctx, environ, companyPath,
-		bootstrapPath, "", "eval", key, stderr)
+	companySecrets, err := openCompanyStore(environ, storeAt, "crewlet assistant eval")
 	if err != nil {
+		return nil, nil, err
+	}
+	company, keys, resolver, err := loadLLMConfig(ctx, companyPath, companySecrets, "eval", key,
+		stderr)
+	if err != nil {
+		companySecrets.Close()
 		return nil, nil, err
 	}
 	provider, err := assistantProvider(company, keys, resolver, key)
 	if err != nil {
-		closeResolver()
+		companySecrets.Close()
 		return nil, nil, err
 	}
 	restoreConfiguredBundle(ctx, provider, stderr)
-	return provider, closeResolver, nil
+	return provider, companySecrets.Close, nil
 }
 
 // assistantProvider is the CLI agent entry key names, refused when the

@@ -234,7 +234,7 @@ func (e *Error) Unwrap() error { return e.Err }
 // unready is a member that can say, without a call, that its next call would
 // fail (cliagent's Provider).
 type unready interface {
-	Unready() error
+	Unready(ctx context.Context) error
 }
 
 // Unready is the failure a call through these members would meet as far as
@@ -245,7 +245,7 @@ type unready interface {
 // that clears first: a spent plan, which ends at a known reset (the earliest
 // of them, an unnamed reset after every named one), over a login somebody has
 // to mend, over a CLI that cannot start.
-func Unready(members []llm.Provider) error {
+func Unready(ctx context.Context, members []llm.Provider) error {
 	if len(members) == 0 {
 		return nil
 	}
@@ -255,7 +255,7 @@ func Unready(members []llm.Provider) error {
 		if !ok {
 			return nil
 		}
-		err := u.Unready()
+		err := u.Unready(ctx)
 		if err == nil {
 			return nil
 		}

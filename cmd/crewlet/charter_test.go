@@ -50,8 +50,8 @@ func TestACompanyFileWithAFaultyCharterImportsWithWarnings(t *testing.T) {
 		"an empty store": seedStore,
 		"a store holding another company": func(t *testing.T) *store.DB {
 			db := seedStore(t)
-			if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil,
-				seedOf(parse(t, companyYAML)), fixtureCipher, testNode, quiet()); err != nil {
+			if err := bootSeed(t, db, coordmemory.NewFleet(),
+				seedOf(parse(t, companyYAML)), fixtureCipher); err != nil {
 				t.Fatal(err)
 			}
 			return db
@@ -65,8 +65,7 @@ func TestACompanyFileWithAFaultyCharterImportsWithWarnings(t *testing.T) {
 			return out.String(), err
 		},
 		"the boot seed": func(t *testing.T, db *store.DB) (string, error) {
-			return "", seedCompany(t.Context(), db, coordmemory.NewFleet(), nil,
-				overrideOf(faulty), fixtureCipher, testNode, quiet())
+			return "", bootSeed(t, db, coordmemory.NewFleet(), overrideOf(faulty), fixtureCipher)
 		},
 	}
 	for storeName, open := range stores {

@@ -93,8 +93,8 @@ var routeExposures = slices.Concat(
 		"GET /iam/node-tokens", "GET /iam/audit"),
 
 	nevers("the credential store: a listing alone says which credentials a company holds",
-		"GET /secrets", "POST /secrets/rekey", "GET /secrets/{name}", "PUT /secrets/{name}",
-		"DELETE /secrets/{name}"),
+		"GET /secrets", "POST /secrets/rekey", "POST /secrets/reveal", "GET /secrets/{name}",
+		"PUT /secrets/{name}", "DELETE /secrets/{name}"),
 	nevers("connecting an integration enters credentials and creates vendor apps",
 		"GET /setup/integrations", "GET /setup/integrations/{kind}",
 		"POST /setup/integrations/{kind}/inputs", "DELETE /setup/integrations/{kind}",

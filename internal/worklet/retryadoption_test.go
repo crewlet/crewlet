@@ -146,7 +146,7 @@ func adoptFrom(t *testing.T, donor *roundTrip) *roundTrip {
 		Need: func(context.Context) (statelog.OfferRequest, error) {
 			return statelog.OfferRequest{Need: map[string]uint64{"tracker": at.Seq}}, nil
 		},
-		Hold: func(context.Context, map[string]uint64) (func(), error) {
+		Hold: func(context.Context, map[string]statelog.DomainPosition) (func(), error) {
 			return func() {}, nil
 		},
 		Close: func(context.Context) error { return joinerNode.CloseReplicated() },

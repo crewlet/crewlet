@@ -42,8 +42,9 @@ import (
 // recursively, once per case.
 const helperEnv = "CREWLET_CLIAGENT_FAKE"
 
-// TestMain runs the fake CLI when this binary was re-executed as one, and the
-// suite otherwise.
+// TestMain runs the fake CLI when this binary was re-executed as one, a writer
+// of the shared login when it was re-executed as one of those
+// ([runLoginWriter]), and the suite otherwise.
 //
 // THE DISPATCH IS HERE rather than in a test function, and that is what stops
 // the fake being REPORTED as a skipped test. It was `TestCLIAgentFakeCLI` with
@@ -57,6 +58,10 @@ const helperEnv = "CREWLET_CLIAGENT_FAKE"
 func TestMain(m *testing.M) {
 	if os.Getenv(helperEnv) == "1" {
 		runFakeCLI()
+		os.Exit(0)
+	}
+	if op := os.Getenv(loginWriterEnv); op != "" {
+		runLoginWriter(op)
 		os.Exit(0)
 	}
 	os.Exit(m.Run())

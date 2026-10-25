@@ -79,7 +79,7 @@ func (m assistantModels) Chain(_ context.Context, person iam.Principal,
 // members know without a call ([chain.Unready] over the entries
 // `assistant.llm` names, as this node built them), or nil when any may answer
 // or the chain does not resolve.
-func (m assistantModels) Unready(context.Context) error {
+func (m assistantModels) Unready(ctx context.Context) error {
 	_, _, providers, err := m.entries()
 	if err != nil {
 		// A chain that does not resolve is the turn's own refusal
@@ -87,7 +87,7 @@ func (m assistantModels) Unready(context.Context) error {
 		// of a model's.
 		return nil //nolint:nilerr // see above: not a model's state
 	}
-	return chain.Unready(providers)
+	return chain.Unready(ctx, providers)
 }
 
 // entries resolves `assistant.llm` through the ONE accessor that hands it out

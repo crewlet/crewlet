@@ -22,13 +22,16 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// maxLoginBody bounds what a sign-in will read.
+// MaxLoginBodyBytes bounds what a sign-in will read.
 //
 // FOUR KILOBYTES, which is a login, a password and a six-digit code with room
 // to spare — and it is deliberately small because this route is UNGUARDED:
 // whoever can reach the port can post to it, so the body limit is one of the
 // few things bounding what an anonymous caller can make this node allocate.
-const maxLoginBody = 4 << 10
+//
+// EXPORTED because it also bounds the longest password anybody can sign in to
+// this engine with, so the CLI reads a password piped to it no further.
+const MaxLoginBodyBytes = 4 << 10
 
 // loginRequest is what a sign-in presents.
 type loginRequest struct {
@@ -122,7 +125,7 @@ const (
 func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	source := s.sourceOf(r)
 
-	body, err := httpjson.ReadBody(w, r, maxLoginBody)
+	body, err := httpjson.ReadBody(w, r, MaxLoginBodyBytes)
 	if err != nil {
 		httpjson.Refuse(w, err)
 		return

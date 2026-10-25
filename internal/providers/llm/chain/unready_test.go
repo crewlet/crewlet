@@ -21,7 +21,7 @@ func (k knowing) Complete(context.Context, llm.Request) (*llm.Completion, error)
 	return nil, errors.New("knowing: a readiness case must not call a member")
 }
 
-func (k knowing) Unready() error { return k.unready }
+func (k knowing) Unready(context.Context) error { return k.unready }
 
 func spent(at time.Time) error {
 	return &llm.Error{Kind: llm.KindRateLimit, RetryAt: at, Err: errors.New("plan spent")}
@@ -64,7 +64,7 @@ func TestAChainIsUnreadyOnlyWhenEveryMemberIs(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			err := Unready(tc.members)
+			err := Unready(t.Context(), tc.members)
 			if tc.ready {
 				if err != nil {
 					t.Fatalf("Unready = %v, want nil", err)

@@ -61,6 +61,16 @@ type Result struct {
 	Disabled []DisabledSetting
 
 	Notes []string
+
+	// Recorded counts the tokens this run wrote to the sink.
+	//
+	// A COUNT rather than the names, as GitLab's is: the names are the
+	// variables holding live credentials, and this number's only job is
+	// deciding whether the report tells the operator what still has to
+	// happen for those values to reach a running engine. Zero is a re-run
+	// that minted nothing, and telling that operator to reload anything is
+	// noise they learn to skip past.
+	Recorded int
 }
 
 // Options are one reconcile's inputs.
@@ -403,6 +413,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 				fmt.Errorf("mattermost: %s: record %s: %w",
 					seat.Handle, seat.TokenVar, err))
 		}
+		res.Recorded++
 		res.Rotated = append(res.Rotated, seat.Handle)
 		if created {
 			continue
@@ -422,7 +433,8 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			res.Notes = append(res.Notes, fmt.Sprintf(
 				"%s: the bot held a working token but %s did not, so a fresh "+
 					"one was minted and the old one retired — a running engine "+
-					"holding the old value has to be restarted",
+					"holding the old value is refused until it reads the new "+
+					"one, at the step this run's Next: line names",
 				seat.Handle, seat.TokenVar))
 		}
 	}

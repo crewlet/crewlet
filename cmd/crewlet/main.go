@@ -88,28 +88,50 @@ func main() {
 // run is main's testable body: it takes its arguments and streams rather
 // than reaching for globals, so the CLI surface can be exercised in tests —
 // and it runs the invocation against THIS PROCESS'S environment, which is
-// where an operator's credential comes from ([runIn]).
+// where an operator's credential comes from, and Slack's own Web API
+// ([runIn]).
 func run(args []string, stdout, stderr io.Writer) error {
-	return runIn(config.EnvSource{}, args, stdout, stderr)
+	return runIn(invocation{environ: config.EnvSource{}}, args, stdout, stderr)
 }
 
-// runIn is [run] against an environment it is HANDED: where every command
-// that talks to a running node reads its credential ([nodeTokenOrEmpty]).
+// invocation is what one run of a command is HANDED rather than reads from
+// the process it runs in ([runIn]).
+type invocation struct {
+	// environ is where a command that talks to a running node reads its
+	// credential ([nodeTokenOrEmpty]), and where a provisioning command
+	// reads the operator's own ([operatorCredential]).
+	environ config.Source
+
+	// slack is the client `crewlet slack provision` reaches Slack's Web API
+	// through, nil for the default one. Slack is the one vendor no document
+	// addresses — every other vendor command reaches the instance its
+	// company file names — so this is the only way a run reaches anything
+	// but slack.com.
+	slack *http.Client
+}
+
+// runIn is [run] against an invocation it is HANDED: the environment every
+// command that talks to a running node reads its credential from
+// ([nodeTokenOrEmpty]), and a provisioning command the operator's own, and the
+// client Slack's Web API is reached through.
 //
-// The process's own for every run of the binary, so the rule the credential
-// follows — `CREWLET_API_TOKEN` and nothing else — is unchanged. It is a
-// parameter because the process's environment is shared by everything running
-// in it: a suite running its commands side by side could only hand each one a
-// credential by setting the process's variable, which Go refuses to a parallel
-// test, and which would hand every concurrent command whichever case set it
-// last. The engine is handed its environment for the same reason
-// ([engine.Options.Environment]).
+// The process's own environment and the default client for every run of the
+// binary, so the rule the credential follows — `CREWLET_API_TOKEN` and
+// nothing else — is unchanged. They are parameters because the process is
+// shared by everything running in it: a suite running its commands side by
+// side could only hand each one a credential by setting the process's
+// variable, which Go refuses to a parallel test and which would hand every
+// concurrent command whichever case set it last; and a case that read the
+// process's would read whatever the machine running the suite exports — an
+// operator's own Slack refresh token among them, which a run that reached
+// slack.com would spend. The engine is handed its environment for the same
+// reason ([engine.Options.Environment]).
 //
-// THE CREDENTIAL, AND NOT THE LOGGING KNOBS: `CREWLET_LOG_LEVEL`,
+// THE CREDENTIALS, AND NOT THE LOGGING KNOBS: `CREWLET_LOG_LEVEL`,
 // `CREWLET_LOG_FORMAT` and `CREWLET_LOG_FILE` configure the process's one
 // logger, which is the process's state rather than the invocation's, so they
 // are read from the process.
-func runIn(environ config.Source, args []string, stdout, stderr io.Writer) (err error) {
+func runIn(inv invocation, args []string, stdout, stderr io.Writer) (err error) {
 	// A READ OF A STORED VALUE THAT FAILED PART WAY THROUGH A COMMAND stops
 	// it with a panic, because the lookup that made it has no error to return
 	// and its only other answer, unset, is the one that mints over a working
@@ -130,6 +152,7 @@ func runIn(environ config.Source, args []string, stdout, stderr io.Writer) (err 
 	}
 
 	cmd, rest := args[0], args[1:]
+	environ := inv.environ
 
 	// THE OPERATOR COMMANDS ARE QUIET BY DEFAULT. They open a store, which
 	// logs a migration line per schema file and an open line per call —
@@ -231,7 +254,7 @@ func runIn(environ config.Source, args []string, stdout, stderr io.Writer) (err 
 	case "assistant":
 		return runAssistant(environ, rest, stdout, stderr)
 	case "gitlab", "github", "jira", "slack", "confluence", "mattermost":
-		return runIntegration(environ, cmd, rest, stdout, stderr)
+		return runIntegration(inv, cmd, rest, stdout, stderr)
 	default:
 		usage(stderr)
 		return fmt.Errorf("unknown command %q", cmd)
@@ -289,12 +312,15 @@ Usage:
 Config:
   -config   Tier A, this NODE: where its broker, store and API are (default %q)
   -company  Tier B, the COMPANY: its org, providers and integrations (default %q).
-            A BOOTSTRAP seed: imported only when the store holds no company
-            yet. Once one exists the node serves the store and this file is
-            ignored, so a restart never reverts a live change.
+            A BOOTSTRAP seed: imported only where no company exists yet —
+            none in this node's store and none the fleet runs. Otherwise it
+            is ignored, loudly, and the node runs the company that exists,
+            so a restart never reverts a live change. Not read at all where
+            Tier A sets api.auth.company_writers.
   -import-company
             Tier B to make active NOW, over whatever the fleet is running.
             The deliberate "this file is the company again" gesture.
+            Refused where Tier A sets api.auth.company_writers.
             To change a RUNNING fleet with no restart at all, use
             "crewlet config import" — it goes through the node's API.
 
@@ -325,9 +351,10 @@ Environment:
 // document INTO that store, and there are two quite different reasons to want
 // that:
 //
-//	-company        BOOTSTRAP. Imported only when the store holds no active
-//	                revision. Once the company exists, this file is ignored
-//	                and the node boots on what the fleet is running.
+//	-company        BOOTSTRAP. Imported only where no company exists yet:
+//	                none in this node's store and none the fleet runs. Once
+//	                the company exists, this file is ignored and the node
+//	                boots on what the fleet is running.
 //
 //	-import-company OVERRIDE. Make this file the active revision now, over
 //	                whatever the fleet is running.
@@ -363,26 +390,27 @@ func addConfigFlags(fs *flag.FlagSet) configFlags {
 	}
 }
 
-// companyName is what the boot line calls the company, including when there
-// is not one yet.
-func companyName(c *config.Company) string {
-	if c == nil {
-		return "(unconfigured — no active revision and no Tier B file)"
-	}
-	return c.Name
-}
-
 // tierBSeed is the Tier B document a `crewlet run` invocation carries, and
 // what it is FOR.
 //
 // The store is authoritative at runtime, so a file on the command line is only
 // ever a way of getting a document INTO it. Override says which of the two
-// reasons this one is: bootstrap an empty store, or replace what the fleet is
-// running. Company is nil when there is no file to seed from at all.
+// reasons this one is: bootstrap a company that does not exist yet, or replace
+// what the fleet is running. Company is nil when there is no file to seed from
+// at all.
+//
+// It is the seed as the command line RESOLVED it, and not yet what it does:
+// that is [decideSeed]'s, whose [seedPlan] is the only thing the engine's boot
+// and the import accept.
 type tierBSeed struct {
 	Path     string
 	Override bool
 	Company  *config.Company
+
+	// Managed is a -company seed this deployment's Tier A rules out
+	// (`api.auth.company_writers`, ADR-0030): Path names the file, which
+	// was never read, and Company is nil. See [managedSeed].
+	Managed bool
 }
 
 // loadForRun reads Tier A, and Tier B as the seed `run` will reconcile.
@@ -405,18 +433,33 @@ func (c configFlags) loadForRun(ctx context.Context, set *flag.FlagSet, importPa
 	// over that revision, so it is restored against it as `crewlet config
 	// import` restores one ([config.LoadCompanyToRun]). Read only for a file
 	// with a mask in it, and never from a scratch store, which holds the
-	// previous run's rows and is deleted as the engine opens it.
+	// previous run's rows and is deleted as the engine opens it. Read as the
+	// STORED form, as the import's is ([activeRevision]): a newer peer may
+	// have written it.
 	var prior config.PriorRevision
 	if bootErr == nil && !boot.Store.Scratch {
+		stored := storeAt(*c.bootstrap)
 		prior = func() (*config.Company, error) {
-			company, _, err := companyFromStore(ctx, *c.bootstrap)
-			return company, err
+			active, found, err := stored(ctx)
+			if err != nil || !found {
+				return nil, err
+			}
+			company, err := config.DecodeCompany(active.document)
+			if err != nil {
+				return nil, fmt.Errorf("parse the active revision %s: %w", active.revision.ID, err)
+			}
+			return company, nil
 		}
 	}
-	seed, seedErr := c.resolveSeed(set, importPath, prior)
-	if bootErr == nil && seedErr == nil && seed.Override {
-		seedErr = refuseManagedOverride(boot, seed.Path)
+	// THE SEED IS RESOLVED AGAINST THE TIER A IT RUNS UNDER, when that
+	// loaded: a managed deployment reads no seed at all ([managedSeed]).
+	// When Tier A failed the run fails anyway, and the seed is resolved on
+	// its own so that both documents' problems are reported at once.
+	seedBoot := boot
+	if bootErr != nil {
+		seedBoot = nil
 	}
+	seed, seedErr := c.resolveSeed(set, importPath, seedBoot, prior)
 	// TIER A COMES BACK EVEN WHEN THE SEED DID NOT. The two documents fail
 	// independently, and a caller holding a valid Tier A can do something
 	// with it before reporting the other one's error — `crewlet run` opens
@@ -431,8 +474,12 @@ func (c configFlags) loadForRun(ctx context.Context, set *flag.FlagSet, importPa
 
 // resolveSeed decides which Tier B file this invocation carries and why, the
 // file restored against prior where it is a redacted read.
+//
+// boot is the Tier A the run loaded, or nil when that failed: a managed
+// deployment's seed is resolved without reading the file ([managedSeed]).
 func (c configFlags) resolveSeed(set *flag.FlagSet, importPath string,
-	prior config.PriorRevision) (tierBSeed, error) {
+	boot *config.Bootstrap, prior config.PriorRevision) (tierBSeed, error) {
+
 	named := strings.TrimSpace(importPath)
 	if named != "" && isFlagSet(set, "company") {
 		// REFUSED rather than resolved by precedence. The two flags ask
@@ -442,13 +489,16 @@ func (c configFlags) resolveSeed(set *flag.FlagSet, importPath string,
 		// running company.
 		return tierBSeed{}, errors.New(
 			"-company and -import-company both name a Tier B document, and " +
-				"they mean opposite things: -company bootstraps an empty " +
-				"store, -import-company replaces what the fleet is running. " +
-				"Pass one")
+				"they mean opposite things: -company bootstraps a company " +
+				"that does not exist yet, -import-company replaces what the " +
+				"fleet is running. Pass one")
 	}
-	// THE RUNNABLE RULES ONLY. The node is about to run this file, and most
-	// boots import nothing from it: see [config.LoadCompanyToRun]. Where the
-	// file IS imported, seedCompany holds it to the admission rules first.
+	if boot != nil && boot.API.Auth.CompanyManaged() {
+		return managedSeed(boot, *c.company, isFlagSet(set, "company"), named)
+	}
+	// THE RUNNABLE RULES ONLY. Most boots import nothing from this file: see
+	// [config.LoadCompanyToRun]. Where the file IS imported, seedCompany
+	// holds it to the admission rules first.
 	if named != "" {
 		company, err := config.LoadCompanyToRun(named, prior)
 		if err != nil {
@@ -987,7 +1037,8 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	// cured of.
 	importCompany := fs.String("import-company", "",
 		"Tier B config to make the active revision NOW, over whatever the "+
-			"fleet is running; -company only bootstraps an empty store")
+			"fleet is running; -company only bootstraps a company that does "+
+			"not exist yet")
 	// A FLAG AND NEVER A CONFIG FIELD, for the reason -mode is one and for
 	// a sharper one: `api.auth.disabled` was a field, and a field reaches
 	// production by being copied into an image. See auth.NewDevPrincipal
@@ -1113,7 +1164,6 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	if loadErr != nil {
 		return loadErr
 	}
-	company := seed.Company
 	// THE FLAGS OVERRIDE THE FILE, and are applied AFTER it loads so a
 	// validation failure names the file's own value rather than one the
 	// command line put there. Each is applied only when it was actually
@@ -1189,7 +1239,7 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 		return err
 	}
 	// THE LISTENERS, BOUND NOW: before the first step of the boot that can
-	// take time, which is everything from [bootOptions] on. What they answer
+	// take time, which is everything from [decideSeed] on. What they answer
 	// until the node hands them its own surface is internal/api's boot
 	// surface ([api.Boot]): /health 503 while the node recovers what it holds
 	// and 200 once it has — so a startup probe bounds the recovery exactly as
@@ -1257,10 +1307,20 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 		}
 	}()
 
-	// THE EPOCH THIS NODE STARTS ON: see [bootOptions], which is where it
-	// is decided and what its test holds. The options go to the engine
-	// WHOLE, so no field of them can be decided there and dropped here.
-	opts, err := bootOptions(ctx, *cfg.bootstrap, boot, company)
+	// WHAT THE TIER B FILE IS FOR, AND WHAT THE ENGINE STARTS ON: one
+	// decision, taken here and handed to both the engine's boot and the
+	// import below, so the two cannot disagree about one file. See
+	// [decideSeed]. After the log file and Tier A's last refusals, so an
+	// ignored seed's warning is in the durable record and never beside those
+	// refusals — nor beside the decision's own, being said only once it
+	// holds; and after the listeners, because it opens the store.
+	plan, err := decideSeed(ctx, boot, seed, storeAt(*cfg.bootstrap), log)
+	if err != nil {
+		return err
+	}
+	// The options go to the engine WHOLE, so no field of them can be
+	// decided there and dropped here.
+	opts, err := bootOptions(boot, plan)
 	if err != nil {
 		return err
 	}
@@ -1270,7 +1330,7 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	opts.Recovered = listeners.recovered
 
 	log.InfoContext(ctx, "engine_starting", "version", version.String(),
-		"company", companyName(opts.Company))
+		"company", plan.startsOn(), "seed", string(plan.act), "seed_file", plan.file.Path)
 	e, err := engine.New(ctx, opts)
 	if err != nil {
 		return err
@@ -1289,8 +1349,9 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	// a PUT /config on one node would be invisible to every other.
 	//
 	// Converged BEFORE Start, so seats are claimed under the epoch this
-	// node will actually serve rather than under the file's and then moved.
-	reconciler, err := startReconciler(ctx, e, boot, seed, cipher, log)
+	// node will actually serve — on a node the plan booted unconfigured to
+	// import its file, the first reconcile is what builds that company.
+	reconciler, err := startReconciler(ctx, e, boot, plan, cipher, log)
 	if err != nil {
 		e.Stop(context.WithoutCancel(ctx))
 		return err
@@ -3252,7 +3313,7 @@ func overrideNode(boot *config.Bootstrap, fs *flag.FlagSet,
 // the flags given and comes first.
 //
 // AND BEFORE ANYTHING ACTS ON IT: the listeners bind on its addresses soon
-// after ([bindListeners]) and [bootOptions] opens and migrates the node's
+// after ([bindListeners]) and [decideSeed] opens and migrates the node's
 // store, so a document a flag broke is refused as the rule it broke rather
 // than as a bind error about an address, and before a store is opened for a
 // configuration the engine would refuse.

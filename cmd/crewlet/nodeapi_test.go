@@ -189,14 +189,15 @@ func TestTheBootSaysWhereTheFirstPersonIsInvited(t *testing.T) {
 	}{
 		{"no company", nobody, func() ([]session.Seat, bool) { return nil, false }, free,
 			true, []string{"has no company yet", "kind: human", "crewlet config import",
-				"-seat <handle>"}, []string{"founder"}},
+				"Org chart › Edit org", "-seat <handle>"}, []string{"founder", "Agents ›"}},
 		{"no human seat", nobody, func() ([]session.Seat, bool) { return nil, true }, free,
 			true, []string{"has no human seats", "kind: human", "-seat <handle>"},
 			[]string{"has no company yet"}},
 		{"human seats", nobody, both, free,
-			true, []string{"vacant human seat (founder, ops-lead)", "Agents › Org chart",
+			true, []string{"vacant human seat (founder, ops-lead)",
+				"Company › Org chart › the seat › Invite",
 				"crewlet iam invite <address> -seat <handle>"},
-			[]string{"has no human seats", "has no company yet"}},
+			[]string{"has no human seats", "has no company yet", "Agents ›"}},
 		// A SERVICE ACCOUNT ON A SEAT is not a vacancy: an invitation onto
 		// it is refused.
 		{"a seat a service account holds", nobody, both,
@@ -223,8 +224,9 @@ func TestTheBootSaysWhereTheFirstPersonIsInvited(t *testing.T) {
 			func(context.Context, time.Time) (iamdomain.SeatClaims, error) {
 				return iamdomain.SeatClaims{}, errors.New("not caught up")
 			},
-			true, []string{"crewlet iam seats -unheld", "-seat <handle>"},
-			[]string{"founder", "ops-lead"}},
+			true, []string{"crewlet iam seats -unheld", "Company › Org chart",
+				"-seat <handle>"},
+			[]string{"founder", "ops-lead", "Agents ›"}},
 		{"somebody is in", func(context.Context) (bool, error) { return true, nil },
 			func() ([]session.Seat, bool) { return []session.Seat{founder}, true }, free,
 			false, nil, nil},

@@ -99,7 +99,7 @@ func (s *Service) ViewReset(w http.ResponseWriter, r *http.Request) {
 // in ONE record, which ends every session the person held and signs nobody in.
 func (s *Service) SpendReset(w http.ResponseWriter, r *http.Request) {
 	adm := s.uncounted(r)
-	body, err := httpjson.ReadBody(w, r, maxLoginBody)
+	body, err := httpjson.ReadBody(w, r, MaxLoginBodyBytes)
 	if err != nil {
 		httpjson.Refuse(w, err)
 		return

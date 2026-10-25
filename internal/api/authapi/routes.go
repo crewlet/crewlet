@@ -302,7 +302,7 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := httpjson.ReadBody(w, r, maxLoginBody)
+	body, err := httpjson.ReadBody(w, r, MaxLoginBodyBytes)
 	if err != nil {
 		httpjson.Refuse(w, err)
 		return

@@ -1,6 +1,7 @@
 package cliagent
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -73,12 +74,12 @@ type readiness struct {
 // reported expired or missing, or nothing that signs the CLI in
 // ([llm.KindAuth]), or a CLI that could not be started ([llm.KindFatal]
 // wrapping [llm.ErrNotRunnable]). See readiness.go for what lifts each.
-func (p *Provider) Unready() error {
+func (p *Provider) Unready(ctx context.Context) error {
 	if err := p.benched(); err != nil {
 		return err
 	}
 	stamp := p.loginStamp()
-	missing := p.missingSignIn()
+	missing := p.missingSignIn(ctx)
 	now := p.now()
 
 	p.ready.mu.Lock()
@@ -123,10 +124,17 @@ func (p *Provider) remember(err error) {
 // signs in), and one that reads its provider's key from the environment
 // ([cliprofile.Profile.EnvSignIn]) with nothing configured, which may front an
 // endpoint that takes no key.
-func (p *Provider) missingSignIn() error {
-	s := p.signIn()
-	if len(s.sources) > 0 {
+func (p *Provider) missingSignIn(ctx context.Context) error {
+	s := p.signIn(ctx)
+	switch {
+	case len(s.sources) > 0:
 		return nil
+	case s.unreadable != nil:
+		// A shared login that cannot be read is not judged either: whether
+		// its files sign the CLI in is unknown rather than no
+		// ([signIn.unreadable]), and the call itself reports why it was
+		// refused.
+		return nil //nolint:nilerr // unknown is not a verdict, see above
 	}
 	if len(s.unresolved) == 0 && (p.profile.EnvSignIn || !p.declaresSignIn()) {
 		return nil
@@ -143,12 +151,14 @@ func (p *Provider) declaresSignIn() bool {
 		prof.TokenEnv != "" || prof.APIKeyEnv != ""
 }
 
-// loginStamp identifies the entry's login files as they are now: each one's
-// name, size and modification time, so a login written or removed by another
+// loginStamp identifies the entry's login files as they are now: each file the
+// shared login may hold ([Workspace.loginNames]) that is there, by its name,
+// size and modification time, so a login written or removed by another
 // process reads as a change without reading a credential.
 func (p *Provider) loginStamp() string {
 	var b strings.Builder
-	for _, path := range p.ws.LoginFiles() {
+	for _, name := range p.ws.loginNames() {
+		path := p.ws.sharedPath(name)
 		info, err := os.Stat(path)
 		if err != nil {
 			continue

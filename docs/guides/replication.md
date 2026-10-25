@@ -303,12 +303,22 @@ that can is already one the trim waits for. Only a data node runs the logs and
 writes to them — a node without the `data` role holds no estate and reaches it
 through a data node
 ([how a request reaches the estate](../concepts/scaling.md#how-a-request-reaches-the-estate))
-— and every live data node is in every log's
-[counted set](retention.md#the-six-terms) from the moment it starts, at
-position zero until its first heartbeat reports one. So the trim never removes
-a record that a node which may still write has not applied, and the one way
-out of that set while a node is still running — an eviction — is the eviction
-gate's.
+— and every data node is in every log's
+[counted set](retention.md#the-six-terms) by the position its heartbeat
+publishes, from the first one, which it writes as its logs start; a running
+node whose position has not landed is counted at position zero by its presence
+lease. So the trim never removes a record that a node which may still write has
+not applied, and the one way out of that set while a node is still running — an
+eviction — is the eviction gate's.
+
+One interval is not covered: a node's own boot, before its first position lands
+— a few milliseconds, longer if that write is refused — when it holds no
+presence lease yet and is counted only by the position an earlier run of it
+left, or not at all if it never ran. A node fetching a snapshot in that
+interval keeps the tail it needs with a pin of its own. A write the node makes
+there is still fenced by the floor it reads, so a purge that passes it is
+refused rather than overwritten; what the interval gives up is the counted
+set's cover for a floor that was read stale.
 
 ### Who a refusal names
 

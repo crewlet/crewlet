@@ -8,27 +8,37 @@
 #
 # Bring the pair up end to end:
 #
+#     # 0. What this file reads from the environment, which every command
+#     #    given -config below needs: the keyring every node needs — see
+#     #    `secrets:` below; `crewlet secrets keygen -key-id 2026-01` prints
+#     #    the export line + snippet — and this node's own API token.
+#     export CREWLET_SECRET_KEY_2026_01="<base64 key from `crewlet secrets keygen`>"
+#     export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
+#
 #     # 1. Chat: the server, an admin, the team, the channels, the bots.
 #     docker compose --profile mattermost up -d --wait
 #     COMPANY=examples/nimbus-claude-cli.company.yaml scripts/mattermost-dev-bootstrap.sh
 #
 #     # 2. The model: authenticate the `claude` CLI inside Crewlet's own
-#     #    directory, then prove it end to end BEFORE the first turn.
-#     crewlet llm login default -from-host      # or -capture-token
-#     crewlet llm doctor default
+#     #    directory (-capture-token in place of -from-host mints a headless
+#     #    token instead), then prove it end to end BEFORE the first turn.
+#     #    With this node's engine stopped both reach the fleet's secret
+#     #    store themselves, through the node's own broker on
+#     #    ./nimbus-data/stream (which nimbus.config.yaml shares); once the
+#     #    engine runs, they go through it, with
+#     #    CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER".
+#     crewlet llm login  default -from-host -company examples/nimbus-claude-cli.company.yaml \
+#                                           -config  examples/nimbus-claude-cli.config.yaml
+#     crewlet llm doctor default            -company examples/nimbus-claude-cli.company.yaml \
+#                                           -config  examples/nimbus-claude-cli.config.yaml
 #
-#     # 3. This node's own API token, the tool bridge the engineers'
-#     #    agent-mode runs dial back on, and go.
-#     export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
+#     # 3. The tool bridge the engineers' agent-mode runs dial back on,
+#     #    and go.
 #     export CREWLET_MCP_BRIDGE_URL="http://127.0.0.1:8000"   # = api.port below
 #     set -a; . ./.env; set +a          # MATTERMOST_URL + the bot tokens
 #                                       #   the bootstrap wrote
 #     crewlet run -config examples/nimbus-claude-cli.config.yaml \
 #                 -company examples/nimbus-claude-cli.company.yaml
-#
-#     # The keyring every node needs — see `secrets:` below.
-#     # `crewlet secrets keygen -key-id 2026-01` prints the export line + snippet:
-#     export CREWLET_SECRET_KEY_2026_01="<base64 key from `crewlet secrets keygen`>"
 #
 # THERE ARE NO EXTERNAL SERVICES HERE apart from the chat server the
 # compose file starts.  The stream is a NATS JetStream server embedded in

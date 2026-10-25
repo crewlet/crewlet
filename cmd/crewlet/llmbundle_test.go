@@ -88,7 +88,7 @@ func llmBundle(t *testing.T, body string) string {
 	if err := os.WriteFile(login, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	blob, err := p.ExportBundle()
+	blob, err := p.ExportBundle(t.Context())
 	if err != nil {
 		t.Fatalf("ExportBundle: %v", err)
 	}
@@ -112,7 +112,7 @@ func codexBundle(t *testing.T, body string) string {
 	if err := os.WriteFile(login, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	blob, err := p.ExportBundle()
+	blob, err := p.ExportBundle(t.Context())
 	if err != nil {
 		t.Fatalf("ExportBundle: %v", err)
 	}

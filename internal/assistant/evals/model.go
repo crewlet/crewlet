@@ -107,7 +107,7 @@ func (m *Model) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 // Unready is what the model says, without a call, its next call would meet:
 // nil until a suite sets it ([Model.SetUnready]), as a CLI entry that is
 // signed out or spent would.
-func (m *Model) Unready() error {
+func (m *Model) Unready(context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.unready
