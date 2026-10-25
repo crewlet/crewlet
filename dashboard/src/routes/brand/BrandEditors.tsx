@@ -183,7 +183,7 @@ export function LogoFields({
           label={purposes && spec.slot === "primary" ? "Primary logo" : spec.label}
           description={
             purposes
-              ? `${spec.description}: ${spec.purpose.toLowerCase()}. ${spec.required ? "Required" : "Recommended"}.`
+              ? `${spec.purpose} ${spec.required ? "Required" : "Recommended"}.`
               : spec.description
           }
           ground={spec.ground}

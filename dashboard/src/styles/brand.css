@@ -33,6 +33,7 @@
 .brand-voice,
 .brand-editor,
 .brand-adopt,
+.brand-setup-body,
 .brand-setup-step {
   display: flex;
   flex-direction: column;

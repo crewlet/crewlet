@@ -108,7 +108,7 @@ export interface BrandLogoSpec {
   shape: "wide" | "square";
   /** Said under the slot while it is empty, for a reader who cannot fill it. */
   emptyNote: string;
-  /** Where the logo appears, as the setup says it. */
+  /** Where the logo appears, as the setup says it: one sentence. */
   purpose: string;
   /** Whether an adoption needs it (the primary), or it is only recommended. */
   required: boolean;
@@ -124,7 +124,7 @@ export const BRAND_LOGO_SLOTS: readonly BrandLogoSpec[] = [
     ground: "light",
     shape: "wide",
     emptyNote: "No logo yet.",
-    purpose: "Doc headers, light slides and pages",
+    purpose: "Used on doc headers, light slides and pages.",
     required: true,
   },
   {
@@ -137,7 +137,7 @@ export const BRAND_LOGO_SLOTS: readonly BrandLogoSpec[] = [
     shape: "wide",
     emptyNote:
       "Add a version for dark grounds. Until then, dark slides show the primary logo on a light plate.",
-    purpose: "Dark slides and dark mode",
+    purpose: "Used on dark slides and in dark mode.",
     required: false,
   },
   {
@@ -149,7 +149,7 @@ export const BRAND_LOGO_SLOTS: readonly BrandLogoSpec[] = [
     ground: "light",
     shape: "square",
     emptyNote: "Nothing is drawn where a mark would go until one is added.",
-    purpose: "Chips, slide corners and the brand chip",
+    purpose: "A square used on chips, slide corners and the brand chip.",
     required: false,
   },
 ];

@@ -388,7 +388,13 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
             })}
         footer={footer}
       >
-        <div ref={body} onKeyDown={onKeyDown}>
+        <div ref={body} onKeyDown={onKeyDown} className="brand-setup-body">
+          {/* WHY THE STEP IS HELD, over its fields, where it is read first. */}
+          {said ? (
+            <p className="brand-refusal" role="alert">
+              {said}
+            </p>
+          ) : null}
           {step === "identity" ? (
             <IdentityStep edit={edit} onEdit={setEdit} />
           ) : step === "logos" ? (
@@ -415,11 +421,6 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
               }
             />
           )}
-          {said ? (
-            <p className="brand-refusal" role="alert">
-              {said}
-            </p>
-          ) : null}
           {step === "review" && finishHold ? (
             <p className="brand-setup-hold">{finishHold}</p>
           ) : null}
