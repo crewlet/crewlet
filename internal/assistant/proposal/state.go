@@ -126,8 +126,11 @@ func Expired(expires, now time.Time) bool { return !now.Before(expires) }
 
 // StateNow is the state a stored proposal is in at now, with the two states
 // nobody records the instant they become true decided here: a proposed
-// proposal past its expiry is expired, and an approved or executing one with
-// no settlement [UnknownAfter] after its last move is unknown.
+// proposal past its expiry is expired, and an approved or executing SERVER
+// write with no settlement [UnknownAfter] after its last move is unknown. A
+// page action is never unknown: nothing durable was sent, so an approved one
+// nobody claimed is still the page's to apply, and its turn ends with its own
+// expiry.
 //
 // THE ONE READING every surface renders a proposal card by, so a reload, a
 // stream attach and an approval all agree on what a card offers.
@@ -138,6 +141,9 @@ func StateNow(p assistantdomain.Proposal, now time.Time) wire.ProposalState {
 			return wire.ProposalExpired
 		}
 	case wire.ProposalApproved, wire.ProposalExecuting:
+		if p.Scope != wire.ScopeServer {
+			break
+		}
 		since := p.DecidedAt
 		if since.IsZero() {
 			since = p.CreatedAt
