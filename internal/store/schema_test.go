@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
@@ -26,13 +27,13 @@ import (
 //
 // # Why this lives in internal/store rather than beside each domain
 //
-// Six of the seven registered domains reach it through [statelogtest.Run],
+// Seven of the eight registered domains reach it through [statelogtest.Run],
 // which runs the same check as one of its four suites. The IAM domain cannot:
 // that suite also runs the apply cases, and a domain has no applier on the
 // change that declares it — the engine's boot check refuses a register entry
 // with a nil applier, so a registration cannot land before its applier. The
 // check itself needs only a migrated estate and a declaration, and the
-// migrated estate is this package's. Running all seven here also makes
+// migrated estate is this package's. Running all eight here also makes
 // the walk two-sided: a domain whose tables stopped being created at all would
 // fail here rather than quietly stop being certified — the two COMPACTED
 // domains (the vectors and each node's usage) included, whose ledgerless
@@ -43,6 +44,7 @@ func TestTheShippedSchemaAcceptsTheFrameworksOwnStatements(t *testing.T) {
 	for _, domain := range []statelog.Domain{
 		tracker.Domain{}, pages.Domain{}, iamdomain.Domain{},
 		search.Domain{}, usage.Domain{}, artifactsdomain.Domain{}, artifactdata.Domain{},
+		assistantdomain.Domain{},
 	} {
 		t.Run(domain.Name(), func(t *testing.T) {
 			t.Parallel()
