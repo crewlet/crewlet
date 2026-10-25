@@ -87,3 +87,37 @@ func (p Principal) Assisted() (uuid.UUID, bool) {
 	}
 	return grant, true
 }
+
+// Assistable is why p may not use the Dashboard Assistant, or "" when it may.
+//
+// THE ONE PREDICATE every end asks: internal/api/auth of the principal it
+// derives a grant for and of the principal it re-composes one into, and
+// internal/assistant of the person whose question it answers and whose
+// `/viewer` says whether the Ask pill is lit. Written once here, in the leaf
+// both import, so a person the pill invites is never a person the guard then
+// refuses a grant (decision D04).
+//
+// A PERSON, active, holding the human seat every person holds (ADR-0032), and
+// acting through a whole browser session: never a machine token, a service
+// account, a Tier A token or a session exchanged from one, and never a request
+// already riding a grant, so the assistant cannot mint itself a fresher one.
+func Assistable(p Principal) string {
+	switch {
+	case p.Kind != KindPerson:
+		return "only a person may use the assistant"
+	case p.Stage != StageActive:
+		return "the person is not active"
+	case p.Seat == "":
+		// EVERY PERSON HOLDS A HUMAN SEAT (ADR-0032), so a person composed
+		// with none is one the guard refused their seat: resolved for the
+		// credential surface alone, and never for the assistant.
+		return "the person holds no seat this company serves"
+	case !ValidSessionName(p.Via):
+		return "the request acts through no browser session"
+	case strings.HasPrefix(p.Login, TokenLoginPrefix):
+		return "the session was exchanged from a Tier A token"
+	case p.ID == uuid.Nil:
+		return "the person has no id"
+	}
+	return ""
+}

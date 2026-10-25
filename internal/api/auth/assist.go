@@ -411,31 +411,11 @@ func (r AssistRequest) check() error {
 	return nil
 }
 
-// assistable is why p may not ride an assistant grant, or "".
-//
-// THE ONE PREDICATE both ends ask: the minter of the principal it derives for,
-// and the guard of the principal it re-composes, so a grant derived for
-// somebody who may hold one is never served to somebody who may not.
-func assistable(p iam.Principal) string {
-	switch {
-	case p.Kind != iam.KindPerson:
-		return "only a person may use the assistant"
-	case p.Stage != iam.StageActive:
-		return "the person is not active"
-	case p.Seat == "":
-		// EVERY PERSON HOLDS A HUMAN SEAT (ADR-0032), so a person composed
-		// with none is one the guard refused their seat: resolved for the
-		// credential surface alone, and never for the assistant.
-		return "the person holds no seat this company serves"
-	case !iam.ValidSessionName(p.Via):
-		return "the request acts through no browser session"
-	case strings.HasPrefix(p.Login, iam.TokenLoginPrefix):
-		return "the session was exchanged from a Tier A token"
-	case p.ID == uuid.Nil:
-		return "the person has no id"
-	}
-	return ""
-}
+// assistable is why p may not ride an assistant grant, or "": [iam.Assistable],
+// asked both of the principal a grant is derived for and of the principal it
+// is re-composed into, so a grant derived for somebody who may hold one is
+// never served to somebody who may not.
+func assistable(p iam.Principal) string { return iam.Assistable(p) }
 
 // Revoke ends one grant: a turn stopped, ended or parked, a conversation sent
 // to the trash. Revoking a grant this node does not hold is nothing.
