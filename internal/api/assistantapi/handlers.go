@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/assistant"
@@ -31,7 +32,11 @@ func (s *Surface) list(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = n
 	}
-	list, err := s.svc.Conversations(r.Context(), principal(r), r.URL.Query().Get("cursor"), limit)
+	caller, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
+	list, err := s.svc.Conversations(r.Context(), caller, r.URL.Query().Get("cursor"), limit)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -50,7 +55,11 @@ func (s *Surface) create(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	created, err := s.svc.Create(r.Context(), principal(r), key)
+	caller, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
+	created, err := s.svc.Create(r.Context(), caller, key)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -64,7 +73,11 @@ func (s *Surface) transcript(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	t, err := s.svc.Transcript(r.Context(), principal(r), id)
+	caller, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
+	t, err := s.svc.Transcript(r.Context(), caller, id)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -82,7 +95,11 @@ func (s *Surface) clear(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	answer, err := s.svc.Clear(r.Context(), principal(r), id, key)
+	caller, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
+	answer, err := s.svc.Clear(r.Context(), caller, id, key)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -105,7 +122,10 @@ func (s *Surface) ask(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	p := principal(r)
+	p, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
 	if !s.eligible(w, r, p) {
 		return
 	}
@@ -139,7 +159,10 @@ func (s *Surface) stop(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	p := principal(r)
+	p, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
 	if !s.eligible(w, r, p) {
 		return
 	}
@@ -174,7 +197,10 @@ func (s *Surface) stream(w http.ResponseWriter, r *http.Request) {
 		}
 		after = seq
 	}
-	p := principal(r)
+	p, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
 	if !s.eligible(w, r, p) {
 		return
 	}
@@ -208,7 +234,11 @@ func (s *Surface) export(w http.ResponseWriter, r *http.Request, ext, contentTyp
 	if !ok {
 		return
 	}
-	table, err := s.svc.Table(r.Context(), principal(r), id)
+	caller, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
+	table, err := s.svc.Table(r.Context(), caller, id)
 	if err != nil {
 		s.fail(w, r, err)
 		return

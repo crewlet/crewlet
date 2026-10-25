@@ -417,11 +417,12 @@ func (a *assistApp) deriveWith(t *testing.T, present func(*http.Request),
 	t.Helper()
 	var g exec.Grant
 	var p iam.Principal
+	var how iam.Resolution
 	var err error
 	reached := false
 	h := a.app.Guard().Middleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		reached = true
-		p, _ = iam.From(r.Context())
+		p, how = iam.From(r.Context())
 		g, err = a.d.Derive(r.Context(), req)
 	}))
 	r := httptest.NewRequest(http.MethodPost, "/assistant/conversations", nil)
@@ -430,6 +431,8 @@ func (a *assistApp) deriveWith(t *testing.T, present func(*http.Request),
 	switch {
 	case !reached:
 		t.Fatal("the guard refused the credential before Derive was asked")
+	case how != iam.Resolved:
+		t.Fatalf("the guard passed the request with its principal %v, not resolved", how)
 	case err != nil && !errors.Is(err, auth.ErrAssistRefused):
 		t.Fatalf("Derive: %v", err)
 	}
