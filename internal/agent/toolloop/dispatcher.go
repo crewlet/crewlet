@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"slices"
 	"sync"
 	"time"
 
@@ -50,23 +49,23 @@ type dstate int
 const (
 	// stateOpen is a phase still working.
 	stateOpen dstate = iota
-	// stateFinished is a phase a terminator ended.
-	stateFinished
-	// stateParked is a phase a detached tool suspended, its call unanswered.
-	stateParked
+	// statePausing is a run ended for a person's note, which the next run
+	// reads as a user message.
+	statePausing
+	// stateRelist is a run ended over an activation its CLI would never see.
+	stateRelist
 	// stateLocalPark is a run ended over a call too long to hold the CLI
 	// for: the call goes on, and the next run is handed its result.
 	stateLocalPark
 	// stateExhausted is a phase whose round budget is spent with the model
 	// still asking for tools.
 	stateExhausted
-	// statePausing is a run ended for a person's note, which the next run
-	// reads as a user message.
-	statePausing
-	// stateRelist is a run ended over an activation its CLI would never see.
-	stateRelist
+	// stateFinished is a phase a terminator ended.
+	stateFinished
+	// stateParked is a phase a detached tool suspended, its call unanswered.
+	stateParked
 	// stateCut is a phase stopped by its fence, a person, its budget or a
-	// panic — [dispatcher.cut] says which.
+	// panic — [dispatcher.cutErr] says which.
 	stateCut
 )
 
@@ -77,14 +76,18 @@ func (s dstate) ended() bool {
 }
 
 // joinWait is how long a call waits for the CLI's own record of the response
-// that issued it.
+// that issued it, and a call that ends or parks the phase for the response's
+// other calls to arrive.
 //
 // The call and the record race: the record is read off the CLI's stream or a
 // file it writes, and the call arrives over a socket, and either can be first
 // by milliseconds. Two seconds is three orders of magnitude over that race and
 // still short against the model's own latency; a call whose response the
-// record never shows within it is placed by the rule for an unobserved one
-// (see [dispatcher.place]) rather than held for nothing.
+// record never shows within it is placed by the rule for one it did not show
+// (see [dispatcher.placeLocked]) rather than held for nothing.
+// Calls a CLI issues at once arrive within the same milliseconds, so the same
+// bound serves the barrier: a sibling that has not come by then is one the CLI
+// will make only once this call is answered.
 const joinWait = 2 * time.Second
 
 // parkMargin is how far ahead of a CLI's own tool timeout a running call is
@@ -111,13 +114,25 @@ const pausingNote = "Stop here and end your turn: you will be resumed."
 // endedNote is what a call is answered once the phase has ended.
 const endedNote = "This phase has ended; this call was not run."
 
-// callRec is one call the dispatcher admitted.
+// refusalLocked is what a call is answered once the run is no longer open.
+func (d *dispatcher) refusalLocked() string {
+	if d.state.ended() {
+		return endedNote
+	}
+	return pausingNote
+}
+
+// callRec is one call that reached the dispatcher.
 type callRec struct {
 	seq   int
 	id    string
 	name  string
 	args  map[string]any
 	round int
+	run   *run
+
+	// exclusive marks a call that ends or parks the phase: it runs alone.
+	exclusive bool
 
 	// argsErr is why the arguments could not be read; the call is answered
 	// with it and never run.
@@ -131,9 +146,9 @@ type callRec struct {
 	refused bool
 	// admitted marks a call counted in flight, which its settling uncounts.
 	admitted bool
-
-	// done is closed when the call has settled.
-	done chan struct{}
+	// answered marks a call the CLI was answered "still running" while it
+	// goes on: done, as far as its response is concerned.
+	answered bool
 
 	// turn and slot are the observed response this call is, and which of
 	// its calls — nil where the CLI's record never showed it.
@@ -143,16 +158,31 @@ type callRec struct {
 
 // observedTurn is one model request as the CLI's record showed it.
 type observedTurn struct {
-	id     string
-	round  int
-	text   string
-	calls  []llm.TurnCall
+	id    string
+	round int
+	text  string
+	calls []llm.TurnCall
+	// joined marks a call that reached the host as this slot.
 	joined []bool
 	model  string
 	stop   llm.StopReason
 	usage  *llm.Usage
 	at     time.Time
 	start  time.Time
+}
+
+// awaiting reports a call of the response the CLI has yet to make.
+func (t *observedTurn) awaiting(except int, skip func(name string) bool) bool {
+	for i, tc := range t.calls {
+		if i == except || !tc.Host || t.joined[i] {
+			continue
+		}
+		if skip != nil && skip(tc.Name) {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // run is one CLI run on the dispatcher: one [llm.ToolHost.Serve].
@@ -181,9 +211,10 @@ type dispatcher struct {
 	cond *sync.Cond
 
 	// --- the phase, across every run of this loop invocation ---
-	state     dstate
-	cutErr    error
-	done      chan struct{}
+	state  dstate
+	cutErr error
+	done   chan struct{}
+
 	turns     []*observedTurn
 	calls     []*callRec
 	runs      []*run
@@ -192,17 +223,15 @@ type dispatcher struct {
 	spent     llm.Usage
 	suspended *callRec
 	payload   map[string]any
-	parked    []*callRec // calls answered "still running"
 	lastBusy  bool
-	// invCalls is where the current CLI run's calls start in calls.
-	invCalls int
-	// began is when the loop's current run was started, and active a run
-	// in progress — between [dispatcher.reopen] and [dispatcher.finish].
-	began  time.Time
+
+	// active is a run in progress — between [dispatcher.reopen] and
+	// [dispatcher.finish] — and began when it was started.
 	active bool
-	// invRuns and invTurns are where the current run's CLI runs and
-	// responses start in runs and turns.
-	invRuns, invTurns int
+	began  time.Time
+	// invCalls, invRuns and invTurns are where the current run's calls, CLI
+	// runs and responses start in calls, runs and turns.
+	invCalls, invRuns, invTurns int
 
 	// folded is how much of turns and calls the loop has already turned
 	// into conversation, so [dispatcher.Pending] and the next fold start
@@ -284,50 +313,52 @@ const ServerName = "crewlet"
 func (d *dispatcher) Observe(t llm.Turn) {
 	d.mu.Lock()
 	now := time.Now()
-	if seen := d.turnByID(t.ID); seen != nil {
+	turn := d.turnByID(t.ID)
+	if turn != nil {
 		// The same request read again, further along: take what is new.
-		if len(t.Calls) > len(seen.calls) {
-			grown := nativeJoined(t.Calls)
-			copy(grown, seen.joined)
-			seen.calls, seen.joined = t.Calls, grown
+		if len(t.Calls) > len(turn.calls) {
+			grown := &observedTurn{calls: t.Calls}
+			d.expectLocked(grown)
+			copy(grown.joined, turn.joined)
+			turn.calls, turn.joined = t.Calls, grown.joined
 		}
 		if t.Text != "" {
-			seen.text = t.Text
+			turn.text = t.Text
 		}
 		if t.Usage != nil {
-			seen.usage = t.Usage
+			turn.usage = t.Usage
 		}
 		if t.Model != "" {
-			seen.model = t.Model
+			turn.model = t.Model
 		}
 		if t.Stop != "" {
-			seen.stop = t.Stop
+			turn.stop = t.Stop
 		}
 	} else {
 		d.rounds++
-		d.turns = append(d.turns, &observedTurn{
-			id: t.ID, round: d.rounds, text: t.Text, calls: t.Calls,
-			joined: nativeJoined(t.Calls), model: t.Model, stop: t.Stop,
-			usage: t.Usage, at: now, start: d.modelStartLocked(now),
-		})
-		// THE LAST ROUND THE BUDGET ALLOWS asked for tools: once they have
-		// all run, the run ends before the CLI can make another request.
-		// Checked here too, for a response whose calls the CLI never makes
-		// (it refused them itself) — see [dispatcher.settleRound].
+		turn = &observedTurn{
+			id: t.ID, round: d.rounds, text: t.Text, calls: t.Calls, model: t.Model,
+			stop: t.Stop, usage: t.Usage, at: now, start: d.modelStartLocked(now),
+		}
+		d.expectLocked(turn)
+		d.turns = append(d.turns, turn)
 	}
 	d.cond.Broadcast()
 	d.mu.Unlock()
 	d.frame()
 }
 
+// expectLocked readies a response's record of which of its calls have come.
+func (d *dispatcher) expectLocked(t *observedTurn) {
+	t.joined = make([]bool, len(t.calls))
+}
+
 // modelStartLocked is when the model began the response observed at now: the
 // latest of the current run's start, the previous response and the last call
-// that returned — the moment the CLI had everything it needed to ask. Never
-// before the run's own start: a run's first request is not dated from the
-// last thing the run before it did.
+// that returned — the moment the CLI had everything it needed to ask.
 func (d *dispatcher) modelStartLocked(now time.Time) time.Time {
 	start := d.began
-	if r := d.lastRunLocked(); r != nil && r.start.After(start) {
+	if r := d.currentRunLocked(); r != nil && r.start.After(start) {
 		start = r.start
 	}
 	if n := len(d.turns); n > 0 && d.turns[n-1].at.After(start) {
@@ -342,17 +373,6 @@ func (d *dispatcher) modelStartLocked(now time.Time) time.Time {
 		return now
 	}
 	return start
-}
-
-// nativeJoined marks, for a response's calls, the ones that will never reach
-// the host: the CLI's own tools (its web search, its fetch), which it runs
-// itself. Nothing waits for those.
-func nativeJoined(calls []llm.TurnCall) []bool {
-	out := make([]bool, len(calls))
-	for i, c := range calls {
-		out[i] = !c.Host
-	}
-	return out
 }
 
 func (d *dispatcher) turnByID(id string) *observedTurn {
@@ -383,18 +403,16 @@ func (d *dispatcher) Spent(u llm.Usage) {
 	}
 }
 
-// Done is closed when the run must end. Read under the lock because the loop
-// replaces it between runs ([dispatcher.reopen]), while a backend may still be
-// reading it.
+// Done is closed when the run must end.
 func (d *dispatcher) Done() <-chan struct{} {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.done
 }
 
-// Halted reports a run no other member of a chain may continue: any state but
-// open is one the loop answers itself — the phase ended, or the run was ended
-// for a reason the next run of the loop answers.
+// Halted reports a run no other member of a chain may continue: any end the
+// run has reached is one the loop answers itself — the phase ended, or the run
+// was ended for a reason the next run of the loop answers.
 func (d *dispatcher) Halted() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -424,13 +442,17 @@ func (d *dispatcher) Offered() []toolsession.Tool {
 func (d *dispatcher) Revision() uint64 { return d.cfg.Surface.Revision() }
 
 // Call decides and runs one call the CLI made.
+//
+// The MCP request's context is not this call's: a CLI that gives up on the
+// call, or dies, abandons only the delivery of its answer. The call runs under
+// the phase's context to its end and is recorded, and the session's release
+// waits for it.
 func (d *dispatcher) Call(_ context.Context, in toolsession.Call) toolsession.Result {
 	c, refusal := d.admit(in)
 	if refusal != "" {
 		return toolsession.Result{Output: refusal, Failed: true}
 	}
-	exclusive := d.exclusive(c)
-	if exclusive {
+	if c.exclusive {
 		d.awaitSiblings(c)
 		d.gate.Lock()
 	} else {
@@ -438,33 +460,24 @@ func (d *dispatcher) Call(_ context.Context, in toolsession.Call) toolsession.Re
 	}
 	// ADMITTED AGAIN UNDER THE GATE: the phase may have ended while this
 	// call waited for an exclusive one to run.
-	if why := d.stillOpen(); why != "" {
-		d.unlockGate(exclusive)
-		d.settle(c, ToolResult{Output: why, Failed: true}, true)
+	if why := d.recheck(c); why != "" {
+		d.unlockGate(c.exclusive)
 		return toolsession.Result{Output: why, Failed: true}
 	}
-	if c.argsErr != "" {
-		d.unlockGate(exclusive)
-		out := unparsedArguments(c.name, c.argsErr)
-		d.settle(c, ToolResult{Output: out, Failed: true}, true)
-		return toolsession.Result{Output: out, Failed: true}
-	}
-
-	d.mu.Lock()
-	r := d.lastRunLocked()
-	d.mu.Unlock()
 
 	// The revision BEFORE the call, so an activation it made is told from a
 	// surface that did not move.
 	before := d.cfg.Surface.Revision()
 	result := make(chan ToolResult, 1)
 	go func() {
-		defer d.unlockGate(exclusive)
+		defer d.unlockGate(c.exclusive)
 		res := d.honour(d.execute(c))
-		// SETTLED HERE, on the call's own goroutine, whoever is still
-		// waiting for it: a call answered "still running" is recorded when
-		// it returns, and the loop reads it from the record.
-		d.settle(c, res, false)
+		// CONCLUDED HERE, on the call's own goroutine and UNDER THE GATE:
+		// a call answered "still running" is recorded when it returns,
+		// whoever is still waiting for it, and what a call decides — a
+		// submission that finished the phase, a park — is decided before
+		// the next call can take the gate and run as if it had not.
+		d.conclude(c, res, before)
 		result <- res
 	}()
 
@@ -473,17 +486,18 @@ func (d *dispatcher) Call(_ context.Context, in toolsession.Call) toolsession.Re
 		// the run at once: the CLI would hold its slot, and its memory,
 		// idle for as long as they take.
 		d.parkLocally(c)
-		return d.withheld(r, toolsession.Result{Output: stillRunning})
+		return d.withheld(c.run, toolsession.Result{Output: stillRunning})
 	}
 	var timeout <-chan time.Time
-	if r != nil && r.opts.ToolTimeout > 0 {
+	if r := c.run; r != nil && r.opts.ToolTimeout > 0 {
 		timer := time.NewTimer(r.opts.ToolTimeout - parkMargin(r.opts.ToolTimeout))
 		defer timer.Stop()
 		timeout = timer.C
 	}
 	select {
 	case res := <-result:
-		return d.deliver(c, res, r, before)
+		d.frame()
+		return d.withheld(c.run, toolsession.Result{Output: res.Output, Failed: res.Failed})
 	case <-timeout:
 		d.parkLocally(c)
 		return toolsession.Result{Output: stillRunning}
@@ -504,21 +518,24 @@ func (d *dispatcher) admit(in toolsession.Call) (*callRec, string) {
 	defer d.mu.Unlock()
 	c := &callRec{
 		seq: len(d.calls) + 1, name: in.Name, args: in.Arguments,
-		argsErr: in.ArgumentsError, done: make(chan struct{}),
+		argsErr: in.ArgumentsError, run: d.currentRunLocked(), exclusive: d.exclusive(in.Name),
 	}
 	if c.args == nil {
 		c.args = map[string]any{}
 	}
 	c.id = callIDFromMeta(in.Meta)
-	c.round = d.placeLocked(c)
+	d.placeLocked(c)
 	if c.id == "" {
 		c.id = fmt.Sprintf("call_%d", c.seq)
 	}
 	d.calls = append(d.calls, c)
 
-	if why := d.stillOpenLocked(); why != "" {
-		d.refuseLocked(c, why)
+	refuse := func(why string) (*callRec, string) {
+		d.settleLocked(c, ToolResult{Output: why, Failed: true}, true)
 		return c, why
+	}
+	if d.state != stateOpen {
+		return refuse(d.refusalLocked())
 	}
 	// THE FENCE, BEFORE ANY CALL, and the budget's standing refusal:
 	// a node whose lease moved stops at the next call, not the next
@@ -526,22 +543,24 @@ func (d *dispatcher) admit(in toolsession.Call) (*callRec, string) {
 	if d.cfg.Fence != nil {
 		if err := d.cfg.Fence(); err != nil {
 			d.cutLocked(err)
-			d.refuseLocked(c, endedNote)
-			return c, endedNote
+			return refuse(endedNote)
 		}
 	}
 	if err := Refusal(d.ctx, d.cfg.Budget); err != nil {
 		d.cutLocked(err)
-		d.refuseLocked(c, endedNote)
-		return c, endedNote
+		return refuse(endedNote)
 	}
 	// PAST THE ROUND BUDGET: the CLI made a request the budget did not
 	// allow — its record reached the engine after the request's calls did,
 	// or it records none. Nothing of it runs.
 	if c.round > d.cfg.MaxRounds {
 		d.exhaustLocked()
-		d.refuseLocked(c, pausingNote)
-		return c, pausingNote
+		return refuse(pausingNote)
+	}
+	if c.argsErr != "" {
+		// ARGUMENTS THAT DID NOT PARSE ARE ANSWERED, NOT RUN: running the
+		// call on an empty object is a write the model never asked for.
+		return refuse(unparsedArguments(c.name, c.argsErr))
 	}
 	c.admitted = true
 	d.inflight++
@@ -549,6 +568,19 @@ func (d *dispatcher) admit(in toolsession.Call) (*callRec, string) {
 		d.busyLocked(true)
 	}
 	return c, ""
+}
+
+// recheck is admit's verdict again, for a call that waited for the gate: the
+// phase may have ended in the meantime.
+func (d *dispatcher) recheck(c *callRec) string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.state == stateOpen {
+		return ""
+	}
+	why := d.refusalLocked()
+	d.settleLocked(c, ToolResult{Output: why, Failed: true}, true)
+	return why
 }
 
 // callIDFromMeta is the CLI's id for a call, where it sent one with it.
@@ -565,28 +597,26 @@ func callIDFromMeta(meta map[string]any) string {
 	return ""
 }
 
-// placeLocked joins a call to the response that asked for it and returns the
-// round that response is, waiting a moment for the CLI's record where it has
-// not shown the response yet.
-func (d *dispatcher) placeLocked(c *callRec) int {
-	r := d.lastRunLocked()
+// placeLocked joins a call to the response that asked for it and sets its
+// round, waiting a moment for the CLI's record where it has not shown the
+// response yet.
+func (d *dispatcher) placeLocked(c *callRec) {
+	r := c.run
 	if r != nil && !r.opts.ObservesRequests {
 		// A CLI WHOSE RECORD SHOWS NO REQUESTS: the whole run is one round.
 		if r.synthetic == 0 {
 			d.rounds++
 			r.synthetic = d.rounds
 		}
-		return r.synthetic
+		c.round = r.synthetic
+		return
 	}
 	deadline := time.Now().Add(joinWait)
 	for {
-		if t, i := d.joinLocked(c); t != nil {
-			t.joined[i] = true
-			c.turn, c.slot = t, i
-			if c.id == "" {
-				c.id = t.calls[i].ID
-			}
-			return t.round
+		if t, i, ok := d.findLocked(c); ok {
+			d.joinLocked(c, t, i)
+			c.round = t.round
+			return
 		}
 		if !time.Now().Before(deadline) {
 			break
@@ -596,34 +626,51 @@ func (d *dispatcher) placeLocked(c *callRec) int {
 	// THE RECORD NEVER SHOWED IT: the call belongs to the latest response,
 	// or to the next one if that response's calls have all arrived.
 	if n := len(d.turns); n > 0 {
-		last := d.turns[n-1]
-		if slices.Contains(last.joined, false) {
-			return last.round
+		if last := d.turns[n-1]; last.awaiting(-1, nil) {
+			c.round = last.round
+			return
 		}
 	}
 	d.rounds++
-	return d.rounds
+	c.round = d.rounds
 }
 
-// joinLocked finds the unjoined call of an observed response this call is.
-func (d *dispatcher) joinLocked(c *callRec) (*observedTurn, int) {
+// findLocked is the response's call this call is, in the CLI's record: by the
+// CLI's own id where it sent one, else by name and arguments.
+func (d *dispatcher) findLocked(c *callRec) (*observedTurn, int, bool) {
 	for _, t := range d.turns {
-		for i, tc := range t.calls {
-			if t.joined[i] {
-				continue
-			}
-			if c.id != "" {
-				if tc.ID == c.id {
-					return t, i
-				}
-				continue
-			}
-			if tc.Name == c.name && sameArgs(tc.Arguments, c.args) {
-				return t, i
-			}
+		if i, ok := d.matchLocked(t, c); ok {
+			return t, i, true
 		}
 	}
-	return nil, 0
+	return nil, 0, false
+}
+
+func (d *dispatcher) matchLocked(t *observedTurn, c *callRec) (int, bool) {
+	for i, tc := range t.calls {
+		if t.joined[i] || !tc.Host {
+			continue
+		}
+		if c.id != "" && tc.ID != "" {
+			if tc.ID == c.id {
+				return i, true
+			}
+			continue
+		}
+		if tc.Name == c.name && sameArgs(tc.Arguments, c.args) {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// joinLocked makes c the slot'th call of t.
+func (d *dispatcher) joinLocked(c *callRec, t *observedTurn, slot int) {
+	t.joined[slot] = true
+	c.turn, c.slot = t, slot
+	if c.id == "" {
+		c.id = t.calls[slot].ID
+	}
 }
 
 // sameArgs compares two argument objects by their canonical JSON.
@@ -657,37 +704,45 @@ func (d *dispatcher) currentRunLocked() *run {
 	return nil
 }
 
-func (d *dispatcher) lastRunLocked() *run {
-	if n := len(d.runs); n > 0 {
-		return d.runs[n-1]
-	}
-	return nil
-}
-
 // exclusive reports a call that ends or parks the phase: it runs alone.
-func (d *dispatcher) exclusive(c *callRec) bool {
-	if _, ok := d.terminators[c.name]; ok {
+func (d *dispatcher) exclusive(name string) bool {
+	if _, ok := d.terminators[name]; ok {
 		return true
 	}
-	return d.cfg.Surface.Detached(c.name)
+	return d.cfg.Surface.Detached(name)
 }
 
-// awaitSiblings holds an exclusive call until every other call its response
-// declared has arrived, so they run — and are recorded — before it. Bounded:
-// a sibling the CLI refused itself never arrives.
+// awaitSiblings holds an exclusive call until every other ordinary call of its
+// response has RUN — every one that arrived settled, and every one the record
+// shows the CLI making arrived — so a delivery is recorded before the
+// submission beside it is judged. Settled, not merely arrived: a sibling that
+// has arrived and not yet taken its share of the gate would otherwise queue
+// behind this call. The wait for arrivals is bounded — a CLI that runs a
+// response's calls one after another sends the next only once this one is
+// answered — and the wait for running calls is not, since they hold the gate
+// this call needs anyway.
 func (d *dispatcher) awaitSiblings(c *callRec) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	deadline := time.Now().Add(joinWait)
-	for {
-		t := d.turnOfRoundLocked(c.round)
-		if t == nil || !slices.Contains(t.joined, false) {
+	for d.state == stateOpen {
+		running := false
+		for _, other := range d.calls[d.invCalls:] {
+			if other != c && other.round == c.round && other.admitted && !other.settled &&
+				!other.answered && !other.exclusive {
+				running = true
+				break
+			}
+		}
+		arriving := c.turn != nil && time.Now().Before(deadline) && c.turn.awaiting(c.slot, d.exclusive)
+		switch {
+		case running:
+			d.cond.Wait()
+		case arriving:
+			d.waitLocked(time.Until(deadline))
+		default:
 			return
 		}
-		if !time.Now().Before(deadline) {
-			return
-		}
-		d.waitLocked(time.Until(deadline))
 	}
 }
 
@@ -700,29 +755,9 @@ func (d *dispatcher) turnOfRoundLocked(round int) *observedTurn {
 	return nil
 }
 
-// stillOpen is why a call may not run now, or "".
-func (d *dispatcher) stillOpen() string {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.stillOpenLocked()
-}
-
-func (d *dispatcher) stillOpenLocked() string {
-	switch d.state {
-	case stateOpen:
-		return ""
-	case stateFinished, stateParked, stateCut:
-		return endedNote
-	default:
-		return pausingNote
-	}
-}
-
 // execute runs one admitted call under the PHASE's context, never the MCP
 // request's, and turns a panic into the phase's end.
 func (d *dispatcher) execute(c *callRec) (res ToolResult) {
-	// The call's clock is read by a live frame another call's goroutine
-	// publishes, so it is written under the lock that frame reads it under.
 	d.mu.Lock()
 	c.started = time.Now()
 	d.mu.Unlock()
@@ -763,9 +798,8 @@ func (d *dispatcher) honour(res ToolResult) ToolResult {
 	return res
 }
 
-// deliver answers the CLI with a call's result — or withholds the answer,
-// when the phase or the run is over.
-func (d *dispatcher) deliver(c *callRec, res ToolResult, r *run, before uint64) toolsession.Result {
+// conclude records a call's result and decides what it means for the run.
+func (d *dispatcher) conclude(c *callRec, res ToolResult, before uint64) {
 	// THE FENCE AND THE BUDGET AGAIN, once the tool has returned: what used
 	// to be the next round's check, before the model reads the result.
 	if d.cfg.Fence != nil {
@@ -778,27 +812,27 @@ func (d *dispatcher) deliver(c *callRec, res ToolResult, r *run, before uint64) 
 	}
 
 	d.mu.Lock()
+	d.settleLocked(c, res, false)
 	_, terminator := d.terminators[c.name]
 	switch {
 	case d.state != stateOpen:
 	case res.Suspend:
+		// THE PARK IS AT ONCE: its call stays unanswered, so nothing more
+		// of its response can come.
 		d.state, d.suspended, d.payload = stateParked, c, res.SuspendPayload
 		d.closeDoneLocked()
 	case terminator && !res.Failed:
-		d.state = stateFinished
-		d.closeDoneLocked()
+		d.decideLocked(stateFinished, c.round)
 	default:
-		d.afterCallLocked(c, r, before)
+		d.afterCallLocked(c, before)
 	}
 	d.mu.Unlock()
-	d.frame()
-	return d.withheld(r, toolsession.Result{Output: res.Output, Failed: res.Failed})
 }
 
 // withheld is answer, unless the run is ending: then the answer waits until
 // the CLI is stopped, so it does not read it and ask its model again — a
-// request it would be billed for, made after the phase was decided. The loop
-// folds the real result into the conversation itself.
+// request it would be billed for, made after the run's end was decided. The
+// loop folds the real result into the conversation itself.
 func (d *dispatcher) withheld(r *run, answer toolsession.Result) toolsession.Result {
 	d.mu.Lock()
 	ending := d.state != stateOpen
@@ -814,21 +848,27 @@ func (d *dispatcher) withheld(r *run, answer toolsession.Result) toolsession.Res
 }
 
 // afterCallLocked decides what an ordinary call's completion means for the
-// run: a note waiting, an activation the CLI will not see, the last round.
-func (d *dispatcher) afterCallLocked(c *callRec, r *run, before uint64) {
-	if d.cfg.Steer != nil && d.cfg.Steer.Waiting() {
-		d.state = statePausing
-		d.closeDoneLocked()
-		return
-	}
-	if r != nil && !r.opts.Relists && d.cfg.Surface.Revision() != before {
-		d.state = stateRelist
-		d.closeDoneLocked()
-		return
-	}
-	if r != nil && r.opts.ObservesRequests {
+// run: the budget's last round, a note waiting, an activation the CLI will
+// not see.
+func (d *dispatcher) afterCallLocked(c *callRec, before uint64) {
+	if r := c.run; r != nil && r.opts.ObservesRequests {
 		d.settleRoundLocked(c.round)
 	}
+	if d.cfg.Steer != nil && d.cfg.Steer.Waiting() {
+		d.decideLocked(statePausing, c.round)
+	}
+	if r := c.run; r != nil && !r.opts.Relists && d.cfg.Surface.Revision() != before {
+		d.decideLocked(stateRelist, c.round)
+	}
+}
+
+// decideLocked ends the run in st, over the response of round.
+func (d *dispatcher) decideLocked(st dstate, _ int) {
+	if d.state != stateOpen {
+		return
+	}
+	d.state = st
+	d.closeDoneLocked()
 }
 
 // settleRoundLocked ends the run once the LAST round the budget allows has
@@ -842,7 +882,7 @@ func (d *dispatcher) settleRoundLocked(round int) {
 			return
 		}
 	}
-	if t := d.turnOfRoundLocked(round); t != nil && slices.Contains(t.joined, false) {
+	if t := d.turnOfRoundLocked(round); t != nil && t.awaiting(-1, nil) {
 		return
 	}
 	d.exhaustLocked()
@@ -855,16 +895,14 @@ func (d *dispatcher) exhaustLocked() {
 	}
 }
 
-// settle records a call's result, once: a call answered "still running" is
-// settled by its own goroutine, and every other path is idempotent beside it.
-func (d *dispatcher) settle(c *callRec, res ToolResult, refused bool) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+// settleLocked records a call's result, once: a call answered "still running"
+// is settled by its own goroutine, and every other path is idempotent beside
+// it.
+func (d *dispatcher) settleLocked(c *callRec, res ToolResult, refused bool) {
 	if c.settled {
 		return
 	}
 	c.result, c.settled, c.refused = res, true, refused
-	close(c.done)
 	if c.admitted {
 		d.inflight--
 		if d.inflight == 0 {
@@ -874,25 +912,13 @@ func (d *dispatcher) settle(c *callRec, res ToolResult, refused bool) {
 	d.cond.Broadcast()
 }
 
-// refuseLocked answers a call that was never admitted.
-func (d *dispatcher) refuseLocked(c *callRec, why string) {
-	if c.settled {
-		return
-	}
-	c.result, c.settled, c.refused = ToolResult{Output: why, Failed: true}, true, true
-	close(c.done)
-	d.cond.Broadcast()
-}
-
 // parkLocally answers a call "still running" and ends the run; the call goes
 // on, and the loop folds its result into the next run.
 func (d *dispatcher) parkLocally(c *callRec) {
 	d.mu.Lock()
-	d.parked = append(d.parked, c)
-	if d.state == stateOpen {
-		d.state = stateLocalPark
-		d.closeDoneLocked()
-	}
+	c.answered = true
+	d.decideLocked(stateLocalPark, c.round)
+	d.cond.Broadcast()
 	d.mu.Unlock()
 	d.frame()
 }
@@ -904,7 +930,7 @@ func (d *dispatcher) busyLocked(busy bool) {
 		return
 	}
 	d.lastBusy = busy
-	if r := d.lastRunLocked(); r != nil && r.opts.OnCall != nil {
+	if r := d.currentRunLocked(); r != nil && r.opts.OnCall != nil {
 		r.opts.OnCall(busy)
 	}
 }
