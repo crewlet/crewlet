@@ -99,7 +99,7 @@ beforeEach(() => {
   applied = [];
   shown = null;
   setFramePage(PAGE);
-  registerPage({ actions: { "work.filter.apply": spec as unknown as PageActionSpec<never> } });
+  registerPage({ actions: { "work.filter.apply": spec } });
 });
 
 afterEach(() => {

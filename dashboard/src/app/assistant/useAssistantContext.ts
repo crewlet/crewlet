@@ -29,11 +29,11 @@ export function useAssistantContext(registration: AssistantPageRegistration): vo
     Object.keys(registration.actions ?? {}).sort(),
   ]);
   useEffect(() => {
-    const actions: Record<string, PageActionSpec<never>> = {};
+    const actions: Record<string, PageActionSpec<unknown>> = {};
     for (const id of Object.keys(latest.current.actions ?? {})) {
       // EVERY HALF THROUGH THE LATEST RENDER, so a setter that closes over
       // newer state is the one that applies.
-      const at = () => latest.current.actions?.[id] as PageActionSpec<unknown> | undefined;
+      const at = () => latest.current.actions?.[id];
       const first = at()!;
       actions[id] = {
         scope: first.scope,
@@ -45,7 +45,7 @@ export function useAssistantContext(registration: AssistantPageRegistration): vo
         ...(first.undo === undefined
           ? {}
           : { undo: (value: unknown) => at()?.undo?.(value) ?? (() => false) }),
-      } as PageActionSpec<never>;
+      };
     }
     return registerPage({ ...latest.current, actions });
     // The dependency is the CONTENT; see the module doc.

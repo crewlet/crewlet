@@ -49,6 +49,7 @@ import {
 import { pageContextFits } from "~/protocol/assistantWire.ts";
 import { resolve } from "../routes.ts";
 import type { Crumb } from "../crumbs.ts";
+import { parseRef, type ObjectKind, type ObjectRef } from "../frame/objects.ts";
 import { emit, on, type AssistantBusEvents, type AssistantInvalidateReason } from "./bus.ts";
 
 /** A resource or a selection, as the wire names it. */
@@ -60,24 +61,60 @@ type ResourceKind = AssistantPageContext["resources"][number]["kind"];
  */
 export type PageResource = AssistantPageContext["resources"][number];
 
+/**
+ * A frame object's kind as the wire names it, or null for a kind the wire
+ * has no name for (an event, a node, a credential): a screen's object is
+ * named once, here, rather than each screen spelling the wire's word.
+ */
+const WIRE_KIND: Record<ObjectKind, ResourceKind | null> = {
+  item: "task",
+  project: "project",
+  seat: "seat",
+  unit: "unit",
+  page: "page",
+  container: "container",
+  turn: "turn",
+  run: "run",
+  schedule: "schedule",
+  event: null,
+  node: null,
+  channel: null,
+  tool: null,
+  integration: null,
+  credential: null,
+  revision: null,
+  person: null,
+  notice: null,
+};
+
+/** A frame object as a page resource, or null where the wire has no name for its kind. */
+export function resourceOf(ref: ObjectRef | null | undefined): PageResource | null {
+  const kind = ref ? WIRE_KIND[ref.kind] : null;
+  return ref && kind ? { kind, id: ref.id } : null;
+}
+
 /** What a page action's parser answers: a typed value, or why it is refused. */
 export type PageActionParse<P> = { ok: true; value: P } | { ok: false; reason: string };
 
 /**
  * One action a screen takes from the assistant. Every half is the screen's:
  * see the file's doc.
+ *
+ * DECLARED AS METHODS, so a screen's typed action (`PageActionSpec<UrlPatch>`)
+ * registers beside every other as `PageActionSpec<unknown>`: the registry
+ * only ever hands a value back to the spec whose own parser produced it.
  */
 export interface PageActionSpec<P> {
   /** What the action touches, as the person reads it: "Work list filters (not saved)". */
   scope: string;
   /** Turn what the model proposed into a typed value, or refuse it. */
-  parse: (raw: unknown) => PageActionParse<P>;
+  parse(raw: unknown): PageActionParse<P>;
   /** Each field the action changes: its name, the new value and the current one. */
-  preview: (value: P) => readonly { field: string; next: string; current: string | null }[];
+  preview(value: P): readonly { field: string; next: string; current: string | null }[];
   /** The screen's own gate, as its control applies it: a sentence, or null where it may. */
-  blocked: (value: P) => string | null;
+  blocked(value: P): string | null;
   /** Apply it with the setters the screen already has. */
-  apply: (value: P) => void;
+  apply(value: P): void;
   /**
    * What puts the page back, taken BEFORE it applies: a function that undoes
    * this one change and says whether it did. It answers false, and changes
@@ -85,7 +122,7 @@ export interface PageActionSpec<P> {
    * undo never reverts something the person changed since. A pure view change
    * offers it, so its receipt can say Undo (D11).
    */
-  undo?: (value: P) => () => boolean;
+  undo?(value: P): () => boolean;
   /** Whether the person approves it first (D11): a pure view change may say `none`. */
   confirm?: "approve" | "none";
 }
@@ -94,12 +131,15 @@ export interface PageActionSpec<P> {
 export interface AssistantPageRegistration {
   /** The records in view, by kind and id. */
   resources?: readonly PageResource[];
-  /** What is selected, if one thing is. */
+  /**
+   * What is selected, if one thing is. Unset, it is the frame's peek, so a
+   * screen that registers nothing still says which row is open beside it.
+   */
   selection?: { kind: ResourceKind; id: string } | null;
   /** The version of the data the screen drew, so a change prepared against it can be judged stale. */
   dataVersion?: string;
   /** The actions this screen takes, by id (`work.filters.apply`). */
-  actions?: Readonly<Record<string, PageActionSpec<never>>>;
+  actions?: Readonly<Record<string, PageActionSpec<unknown>>>;
 }
 
 /** What the frame publishes about every page. */
@@ -244,9 +284,11 @@ export function buildPageContext(
     .filter((r) => r.version === undefined || plain(r.version, ID_MAX_BYTES))
     .slice(0, ASSISTANT_PAGE_CONTEXT_MAX_RESOURCES)
     .map((r) => (r.version === undefined ? { kind: r.kind, id: r.id } : { ...r }));
+  const chosen =
+    reg?.selection !== undefined ? reg.selection : resourceOf(parseRef(page.query.peek));
   const selection =
-    reg?.selection && reg.selection.id !== "" && plain(reg.selection.id, ID_MAX_BYTES)
-      ? { kind: reg.selection.kind, id: reg.selection.id }
+    chosen && chosen.id !== "" && plain(chosen.id, ID_MAX_BYTES)
+      ? { kind: chosen.kind, id: chosen.id }
       : null;
   // AN ACTION ID IS DOTTED LOWERCASE SEGMENTS, and never the one the engine
   // reserves for itself (`context.invalidate`), as `wire.ValidActionID` holds.
@@ -363,7 +405,7 @@ export function applyPageAction(
     revision: snapshot?.context.source_revision ?? "",
     ...extra,
   });
-  const spec = registration?.actions?.[request.action] as PageActionSpec<unknown> | undefined;
+  const spec = registration?.actions?.[request.action];
   if (!spec) return result("no_handler", { reason: "This page does not take that change." });
   // A FRESH REVISION, read at the moment of applying: what the page shows
   // now, never what it showed when the change was prepared or approved.
