@@ -242,6 +242,7 @@ func shareTools() []Tool {
 	// their rows derive (DeriveTier gives R2): who will see the result is a
 	// consequence the person reads before approving.
 	share.Tier, unshare.Tier = TierConsequential, TierConsequential
+	share.ChangesVisibility, unshare.ChangesVisibility = true, true
 	share.Apps, unshare.Apps = appsOf(authz.ActionArtifactShare), appsOf(authz.ActionArtifactUnshare)
 	return []Tool{share, unshare}
 }
