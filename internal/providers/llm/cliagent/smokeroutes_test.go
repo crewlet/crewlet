@@ -27,6 +27,7 @@ func TestTheSmokeTestCertifiesEveryShippedToolRoute(t *testing.T) {
 		"pi":         "joined to its record by name and arguments",
 		"kimi-code":  "joined to its record by name and arguments",
 		"muse-code":  "joined to its record by the id it sends in _meta idempotencyKey",
+		"hermes":     "joined to its record by name and arguments",
 	} {
 		t.Run(agent, func(t *testing.T) {
 			t.Parallel()

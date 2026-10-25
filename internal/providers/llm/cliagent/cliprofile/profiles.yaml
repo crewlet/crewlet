@@ -3327,6 +3327,29 @@ hermes:
   #     share a generation and the prune runs only between generations, so the
   #     setting is what keeps memory out of every call.
   #
+  # AND THE TOOL ROUTE'S HALF OF IT (see mcp and requests below), here because
+  # this file is the only place the CLI reads either from:
+  #
+  #   - mcp_servers.crewlet, the seat's server: its relay command and socket
+  #     are `${…}`, which the CLI fills from its environment — a run with
+  #     tools sets both — and its timeout is the CLI's per-call one, in
+  #     seconds (300 unset; 4 gave a 10 s call up at 4.0 s). A literal, since
+  #     the file is every call's: tool_timeout_seconds below is the same
+  #     number. Only a run whose -t list names it starts it; a text function's
+  #     names `web` alone.
+  #   - tools.tool_search.enabled "off". On, the CLI put the server's tools
+  #     behind three tools of its own (tool_search, tool_describe,
+  #     tool_call) rather than offering them by name; off, the model was
+  #     offered mcp__crewlet__<name> and the two web tools, on both kinds of
+  #     call, and nothing else.
+  #   - hooks.post_api_request, with hooks_auto_accept: every response the
+  #     CLI receives is handed to the hook on stdin, as JSON on one line,
+  #     before the CLI acts on it, and the hook appends it to a file in the
+  #     call's directory — the run's record (requests, below). Auto-accepted
+  #     because the file is the profile's own and a headless run cannot be
+  #     asked; a text function's record is written beside its own call and
+  #     removed with it.
+  #
   # NO `model` SECTION, so the file chooses no provider. A login keeps its
   # choice in auth.json (`hermes auth add` sets `active_provider` there) and
   # its keys in .env, both credential files that travel to every seat; a
@@ -3346,6 +3369,19 @@ hermes:
         memory:
           memory_enabled: false
           user_profile_enabled: false
+        tools:
+          tool_search:
+            enabled: "off"
+        hooks_auto_accept: true
+        hooks:
+          post_api_request:
+            - command: 'sh -c "cat >> .crewlet-hermes-requests.jsonl && echo >> .crewlet-hermes-requests.jsonl"'
+              timeout: 10
+        mcp_servers:
+          crewlet:
+            command: "${CREWLET_RELAY_COMMAND}"
+            args: ["mcp-relay", "${CREWLET_RELAY_SOCKET}"]
+            timeout: 600
   # NO SYSTEM-PROMPT CHANNEL, so the seat's text rides the transcript under
   # the vendor's own prompt, which stays in force (about 5.5K characters on
   # 0.21.5 with the settings above, opening "You are Hermes Agent, built by
@@ -3425,6 +3461,86 @@ hermes:
   # API keys and bot tokens, auth.json holds the OAuth credential pool that
   # `hermes auth add --type oauth` writes, and the provider a login chose. An
   # entry may use either or both.
+  # THE SEAT'S TOOLS: the server the seeded config.yaml declares, started by
+  # naming it in the -t list beside `web` — the CLI starts only the servers
+  # that list names, and a run without one starts every server its config and
+  # its enabled plugins name (measured: a server planted in config.yaml started
+  # on a text function without -t, and on neither kind of call with it). The
+  # file is rewritten every generation, a plugin runs only where that file
+  # enables it, and the CLI reads no project's config; measured on 0.21.5
+  # through the engine's own code path against a local stand-in, with a
+  # checkout above the call holding a .hermes/config.yaml and every other
+  # CLI's files at each level, nothing of it reached a request and no other
+  # server started. The relay command and socket reach the config through
+  # the environment, and HERMES_PLUGIN_PAYLOAD_MAX_CHARS lets the hook's
+  # payload carry a response whole up to 8 MiB (50,000 characters unset, past
+  # which it is cut to a preview the record cannot read); the payload repeats
+  # it once, which stays inside the 32 MiB a record line may take.
+  #
+  # The CLI makes a response's calls one after another (whatever the server's
+  # supports_parallel_tool_calls says, measured in -z), does not re-read the
+  # list when told it changed, and refuses a name it cannot place — but one
+  # close to a listed name (difflib, a ratio of 0.7 or more) it REWRITES to
+  # that tool and runs it with the model's arguments: a model asking for
+  # mcp__crewlet__echoo had echo called. The record names what the model
+  # asked (below), so the tool loop's host refuses the rewritten call rather
+  # than run a tool the model never asked for. On arguments that are not JSON
+  # it asks its model again, unrecorded — five requests in all — and then
+  # exits 2.
+  #
+  # `-z` HAS NO TURN CAP: a stand-in that always called a tool drew 948
+  # requests in two minutes. The record shows every request as it is made,
+  # so the phase's round budget counts them and the host ends the run when it
+  # is spent (measured: ended after five requests, the CLI was stopped).
+  #
+  # A failure is on stdout, as the vendor's sentence, in place of the answer,
+  # and exits non-zero — 2 for a request the provider refused: the run's
+  # limit and sign-in markers read it there; its error names the exit
+  # status, since a run's stdout is never quoted.
+  mcp:
+    complete_args: ["--toolsets", "web,crewlet"]
+    env:
+      CREWLET_RELAY_COMMAND: "{relay_command}"
+      CREWLET_RELAY_SOCKET: "{socket}"
+      HERMES_PLUGIN_PAYLOAD_MAX_CHARS: "8388608"
+    tool_timeout_seconds: 600
+    relists: false
+    concurrency: in_turn
+  # EACH REQUEST, FROM THE RECORD THE post_api_request HOOK WRITES (see the
+  # seeded config.yaml): one line per response, as the CLI normalised it —
+  # its prose, its calls as {id, name, arguments} with the names the MODEL
+  # wrote, why it stopped, and its counts, `input_tokens` WITHOUT the cached
+  # part and `output_tokens` with the reasoning in it (measured with a
+  # stand-in reporting 40 cached and 7 reasoning tokens of a 107-token
+  # prompt: 67 + 40, 12 out). The hook runs before the CLI repairs a name or
+  # makes a call, so each request was on file within 0.1 s of its first call
+  # reaching the server. Neither of the CLI's own records will do: its
+  # stream-json events and its session store (state.db) both name a call as
+  # repaired, and the store is SQLite. The CLI sends no id with a call; calls
+  # are joined by name and arguments. The --usage-file report settles the
+  # run's total.
+  requests:
+    source: file
+    in: work
+    file: ".crewlet-hermes-requests.jsonl"
+    host_prefix: "mcp__crewlet__"
+    stops: {tool_calls: tool_use, stop: end}
+    events:
+      - match: [{path: ["hook_event_name"], equals: "post_api_request"}]
+        opens: true
+        id: ["extra", "api_request_id"]
+        model: ["extra", "response", "model"]
+        stop: ["extra", "finish_reason"]
+        text: ["extra", "response", "assistant_message", "content"]
+        blocks:
+          path: ["extra", "response", "assistant_message", "tool_calls"]
+          each:
+            - call: {id: ["id"], name: ["name"], args: ["arguments"]}
+        usage:
+          input: [["extra", "usage", "input_tokens"]]
+          output: [["extra", "usage", "output_tokens"]]
+          cache_read: [["extra", "usage", "cache_read_tokens"]]
+          cache_write: [["extra", "usage", "cache_write_tokens"]]
   credential_paths:
     - ".hermes/.env"
     - ".hermes/auth.json"
