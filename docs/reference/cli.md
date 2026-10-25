@@ -2131,7 +2131,7 @@ One case per file:
 ```yaml
 name: spend-by-agent              # default: the file's name
 person:
-  apps: [tracker]                 # admin, tracker, knowledge, artifacts
+  apps: [worklet]                 # admin, worklet, doclet, artifacts
   acts: [create_work_item]        # the act tools they may propose; default none
 page:                             # optional: the page chip, as the dashboard sends it
   screen: spend

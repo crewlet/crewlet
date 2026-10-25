@@ -1,7 +1,7 @@
 # A change: the assistant prepares the task and stops for the person's
 # approval. Nothing is filed by the turn itself.
 person:
-  apps: [tracker]
+  apps: [worklet]
   acts: [create_work_item]
 page:
   screen: work-tasks

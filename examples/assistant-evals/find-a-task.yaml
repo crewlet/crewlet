@@ -1,7 +1,7 @@
-# A lookup: the assistant searches the tracker as the person and answers
+# A lookup: the assistant searches Worklet as the person and answers
 # from what the search returned.
 person:
-  apps: [tracker]
+  apps: [worklet]
 question: Is anybody working on the release checklist?
 answers:
   - route: GET /worklet/search
