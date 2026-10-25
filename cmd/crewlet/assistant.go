@@ -63,7 +63,7 @@ func mountAssistant(ctx context.Context, boot *config.Bootstrap, e *engine.Engin
 		Acts:        acts,
 		Models:      engine.AssistantModels(e),
 		Budget:      engine.AssistantBudget(e),
-		Catalogue:   offeredCatalogue{},
+		Catalogue:   catalog.Curated{},
 		Transcripts: e.AssistantReader(),
 		Records:     engine.AssistantRecords(e),
 		Dispatcher:  dispatcher,
@@ -140,14 +140,6 @@ type assistantNode struct {
 // noActs is the verdict on a node with no operator surface: no write is
 // offered, so every turn there reads.
 func noActs(context.Context, iam.Principal) ([]string, error) { return nil, nil }
-
-// offeredCatalogue is the catalogue a turn is offered: the tools the
-// person's apps and the operator surface's verdict admit (catalog.Offered).
-type offeredCatalogue struct{}
-
-func (offeredCatalogue) Offered(p iam.Principal, acts []string) []catalog.Tool {
-	return catalog.Offered(p, acts)
-}
 
 // closeAssistant stops every turn the service runs, within the API's shutdown
 // grace, saying so when one did not record its end in time, and then
