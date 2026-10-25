@@ -31,6 +31,14 @@ type Round struct {
 	Err   error
 	// Input and Output are the tokens the round reports spending.
 	Input, Output int
+	// Deltas are sent, in order, to a request that asked to be streamed,
+	// before the round answers: the fragments a streaming CLI would send.
+	Deltas []llm.Delta
+	// Streamed, when set, is closed once the deltas are sent, and Hold,
+	// when set, is waited on after that, so a suite can read the stream
+	// while the round is still being written.
+	Streamed chan struct{}
+	Hold     chan struct{}
 }
 
 // Say is a round that answers in prose.
@@ -69,6 +77,19 @@ func (m *Model) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 	next := m.script[0]
 	m.script = m.script[1:]
 	m.mu.Unlock()
+	for _, d := range next.Deltas {
+		req.Send(d)
+	}
+	if next.Streamed != nil {
+		close(next.Streamed)
+	}
+	if next.Hold != nil {
+		select {
+		case <-next.Hold:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	if next.Err != nil {
 		return nil, next.Err
 	}
