@@ -127,9 +127,10 @@ func TestARunsCallsReachTheHostAndAreJoinedToTheirRequests(t *testing.T) {
 	opts := host.opts[0]
 	host.mu.Unlock()
 	if !opts.Relists || opts.ToolTimeout != 10*time.Minute || !opts.ObservesRequests ||
-		opts.Concurrency != llm.CallsReadOnlyAtOnce {
+		opts.Concurrency != llm.CallsReadOnlyAtOnce || opts.CallIDMeta != "claudecode/toolUseId" {
 		t.Errorf("the host was told %+v, want the profile's relisting, its 600s tool timeout, "+
-			"a record of requests and calls made beside each other only when read-only", opts)
+			"a record of requests, calls made beside each other only when read-only, and "+
+			"call ids under claudecode/toolUseId", opts)
 	}
 }
 

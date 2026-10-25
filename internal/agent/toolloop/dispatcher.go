@@ -703,7 +703,7 @@ func (d *dispatcher) admit(in toolsession.Call) (*callRec, string) {
 	if c.args == nil {
 		c.args = map[string]any{}
 	}
-	c.id = callIDFromMeta(in.Meta)
+	c.id = callIDFromMeta(in.Meta, c.run)
 	d.placeLocked(c)
 	if c.id == "" {
 		c.id = fmt.Sprintf("call_%d", c.seq)
@@ -794,18 +794,16 @@ func (d *dispatcher) recheck(c *callRec) string {
 	return why
 }
 
-// callIDFromMeta is the CLI's id for a call, where it sent one with it.
-//
-// The keys are the ones the measured CLIs use: Claude Code names its own
-// tool_use id, Codex and Muse Code the model's call id. Every other CLI sends
-// none, and its calls are joined to their responses by name and arguments.
-func callIDFromMeta(meta map[string]any) string {
-	for _, key := range []string{"claudecode/toolUseId", "callId"} {
-		if id, ok := meta[key].(string); ok && id != "" {
-			return id
-		}
+// callIDFromMeta is the CLI's id for a call, where it sent one with it — under
+// the key its run declared ([llm.ServeOptions.CallIDMeta]) and no other. A CLI
+// that sends none has its calls joined to their responses by name and
+// arguments.
+func callIDFromMeta(meta map[string]any, r *run) string {
+	if r == nil || r.opts.CallIDMeta == "" {
+		return ""
 	}
-	return ""
+	id, _ := meta[r.opts.CallIDMeta].(string)
+	return id
 }
 
 // placeLocked joins a call to the response that asked for it and sets its

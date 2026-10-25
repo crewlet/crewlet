@@ -91,6 +91,7 @@ func (p *Provider) serveTools(
 		ObservesRequests: t.reader.observes(),
 		OnCall:           t.onCall,
 		Concurrency:      callConcurrency(m.Concurrency),
+		CallIDMeta:       callIDMeta(p.profile.Requests),
 	})
 	if err != nil {
 		t.carry.stop()
@@ -310,4 +311,13 @@ func (k *carrier) stop() {
 		close(k.done)
 		<-k.stopped
 	})
+}
+
+// callIDMeta is the `_meta` key the CLI sends its call ids under, where its
+// profile reads its requests and names one.
+func callIDMeta(r *cliprofile.Requests) string {
+	if r == nil {
+		return ""
+	}
+	return r.CallIDMeta
 }

@@ -90,6 +90,20 @@ type Run struct {
 	Stop llm.StopReason
 }
 
+// CallIDKey is the `_meta` key the script sends a call's id under, as Codex
+// does.
+const CallIDKey = "callId"
+
+func (s *Script) callIDMeta() string {
+	switch {
+	case s.NoCallIDs:
+		return ""
+	case s.CallIDMeta != "":
+		return s.CallIDMeta
+	}
+	return CallIDKey
+}
+
 // KillLatency is how long the script takes to be stopped once the host ends
 // its run: far longer than an answer takes to cross the session, as a real
 // CLI's signal, grace and exit are.
@@ -126,6 +140,11 @@ type Script struct {
 	// to one of the CLI's own tools included, which then takes as long as
 	// Before does; a case uses it to act between a response and its calls.
 	Before func(name string)
+
+	// CallIDMeta is the `_meta` key the script tells the host it sends call
+	// ids under; empty takes [CallIDKey], the key it always sends them
+	// under. A case names another to play a CLI the host must not read.
+	CallIDMeta string
 
 	// NoCallIDs makes the CLI one that sends no id of its own with a call,
 	// as most do: the host joins each call to the response that asked for it
@@ -239,7 +258,7 @@ func (s *Script) play(ctx context.Context, req llm.Request, run Run, n int) (*ll
 	host := req.Tools
 	served, err := host.Serve(ctx, llm.ServeOptions{
 		Relists: !s.NoRelist, ToolTimeout: s.ToolTimeout, ObservesRequests: !s.Unobserved,
-		Concurrency: s.Concurrency,
+		Concurrency: s.Concurrency, CallIDMeta: s.callIDMeta(),
 	})
 	if err != nil {
 		return nil, err
@@ -403,7 +422,7 @@ func (s *Script) call(ctx context.Context, cs *mcp.ClientSession, conn net.Conn,
 		}
 		params := &mcp.CallToolParams{Name: name, Arguments: json.RawMessage(raw)}
 		if !s.NoCallIDs {
-			params.Meta = mcp.Meta{"callId": c.ID}
+			params.Meta = mcp.Meta{CallIDKey: c.ID}
 		}
 		res, err := s.callOne(ctx, cs, conn, c, params)
 		if c.Exit && c.GiveUp > 0 {

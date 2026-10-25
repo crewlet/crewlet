@@ -728,6 +728,42 @@ func TestACallThatRunsAloneWaitsOnlyForCallsThatCanArriveBesideIt(t *testing.T) 
 	}
 }
 
+// A CALL'S ID IS READ UNDER THE KEY ITS CLI DECLARED AND NO OTHER: a CLI that
+// puts something else in `_meta` under a key another CLI uses for ids is not
+// read as naming a call. Played on a CLI whose record shows no requests, so the
+// `_meta` is the only place an id could come from — one joined to a record
+// takes the record's.
+func TestACallsIDIsReadOnlyUnderTheKeyItsCLIDeclared(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, declared string
+		read           bool
+	}{
+		{"declared", llmtest.CallIDKey, true},
+		{"another key declared", "some/otherKey", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			surf := newSurface("post")
+			prov := &llmtest.Script{CallIDMeta: tc.declared, Unobserved: true, Runs: []llmtest.Run{{Responses: []llmtest.Response{
+				{Calls: []llmtest.Call{{ID: "cli-7", Name: "post"}}},
+				{Text: "done"},
+			}}}}
+			res, err := run(t, toolloop.Config{Provider: prov, Surface: surf})
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if len(res.Executions) != 1 {
+				t.Fatalf("executions %+v, want the one call", res.Executions)
+			}
+			if got := res.Executions[0].CallID == "cli-7"; got != tc.read {
+				t.Errorf("the call is recorded as %q; read the CLI's id = %v, want %v",
+					res.Executions[0].CallID, got, tc.read)
+			}
+		})
+	}
+}
+
 // A CONCURRENCY NOTHING CAN WAIT ON IS REFUSED, rather than read as one of the
 // three: a profile the backend should have refused reaches no session.
 func TestAnUnknownCallConcurrencyIsRefused(t *testing.T) {

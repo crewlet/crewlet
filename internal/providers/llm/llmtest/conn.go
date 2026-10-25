@@ -102,6 +102,7 @@ func Connect(ctx context.Context, req llm.Request, opts ConnOptions) (*Conn, err
 	}
 	served, err := c.host.Serve(ctx, llm.ServeOptions{
 		Relists: !opts.NoRelist, ToolTimeout: opts.ToolTimeout, ObservesRequests: !opts.Unobserved,
+		CallIDMeta: CallIDKey,
 	})
 	if err != nil {
 		return nil, err
@@ -322,7 +323,7 @@ func (c *Conn) call(ctx context.Context, call Call) Result {
 		raw = "{}"
 	}
 	res, err := c.cs.CallTool(ctx, &mcp.CallToolParams{
-		Name: call.Name, Arguments: json.RawMessage(raw), Meta: mcp.Meta{"callId": call.ID},
+		Name: call.Name, Arguments: json.RawMessage(raw), Meta: mcp.Meta{CallIDKey: call.ID},
 	})
 	got := Result{Name: call.Name, Err: err}
 	if res != nil {

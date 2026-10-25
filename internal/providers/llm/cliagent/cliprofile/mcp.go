@@ -774,6 +774,14 @@ type Requests struct {
 	// A reason not named is reported as none.
 	Stops map[string]string `yaml:"stops,omitempty"`
 
+	// CallIDMeta is the key of a `tools/call` request's `_meta` the CLI
+	// hands the server its own id for the call under — the id the record's
+	// call paths read — so the engine joins a call to the request that asked
+	// for it by id: `claudecode/toolUseId` for Claude Code, `callId` for
+	// Codex and Muse Code. Empty: the CLI sends none, and a call is joined
+	// by its name and arguments.
+	CallIDMeta string `yaml:"call_id_meta,omitempty"`
+
 	// HostPrefix is how the CLI spells one of the server's tools to its
 	// model — `mcp__crewlet__` for `mcp__crewlet__search`. A call so named is
 	// the host's, reported by its own name; any other is one of the CLI's own

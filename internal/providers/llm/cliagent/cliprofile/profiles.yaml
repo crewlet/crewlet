@@ -252,6 +252,7 @@ claude-code:
   requests:
     source: stdout
     host_prefix: "mcp__crewlet__"
+    call_id_meta: "claudecode/toolUseId"
     stops: {end_turn: end, stop_sequence: end, tool_use: tool_use}
     events:
       - match: [{path: ["type"], equals: "system"}, {path: ["subtype"], equals: "init"}]

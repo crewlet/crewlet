@@ -75,6 +75,14 @@ type ServeOptions struct {
 	// is still running sends the model to do it again.
 	ToolTimeout time.Duration
 
+	// CallIDMeta is the key of a call's `_meta` the CLI hands the server
+	// its own id for the call under — the id its record names the call by
+	// ([TurnCall.ID]), which is how the host joins a call to the request
+	// that asked for it. Empty: the CLI sends none, and a call is joined by
+	// its name and arguments. Read under this key alone, so a CLI that puts
+	// something else in `_meta` is never read as naming a call.
+	CallIDMeta string
+
 	// ObservesRequests says the backend will report the run's model
 	// requests ([ToolHost.Observe]) as they happen. Without it the host
 	// counts the whole run as one request.
