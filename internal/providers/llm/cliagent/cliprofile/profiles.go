@@ -178,6 +178,17 @@ func (p Profile) Clone() Profile {
 			SeedFiles:    slices.Clone(p.WebDenial.SeedFiles),
 		}
 	}
+	out.DeltaPaths = clonePaths(p.DeltaPaths)
+	out.DeltaEvents = append([]string(nil), p.DeltaEvents...)
+	if p.Stream != nil {
+		out.Stream = &Stream{
+			Args:          append([]string(nil), p.Stream.Args...),
+			EventTypePath: append(Path(nil), p.Stream.EventTypePath...),
+			TextEvents:    append([]string(nil), p.Stream.TextEvents...),
+			DeltaPaths:    clonePaths(p.Stream.DeltaPaths),
+			DeltaEvents:   append([]string(nil), p.Stream.DeltaEvents...),
+		}
+	}
 	if p.CredentialStore != nil {
 		out.CredentialStore = &CredentialStore{
 			ExportArgs: append([]string(nil), p.CredentialStore.ExportArgs...),

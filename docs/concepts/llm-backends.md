@@ -1825,13 +1825,27 @@ order. `text_paths` is a **list** so a vendor that moved the field
 between releases needs no override — the first path that resolves to a
 non-empty string wins, and an empty one falls through to the next.
 
-**Only a `jsonl` profile streams.** A caller that asks to watch an answer being
-written — the dashboard's live view of a round — gets each event's text as it
-arrives from a CLI that prints JSON lines (Codex, OpenCode, Qwen Code, Kimi
-Code, Muse Code). A `json` or `text` profile is read from the whole of what the CLI printed
-— one document, a fenced block — so there is no faithful view of it in
-progress, and its answer arrives at the end in one piece. Claude Code's is
-`json`.
+**A call that asks to be watched streams.** A caller watching an answer being
+written (the dashboard's live view of a round, a Dashboard Assistant answer)
+gets the text as it arrives from a CLI that prints JSON lines: Codex, OpenCode,
+Qwen Code, Kimi Code and Muse Code always do, and Claude Code does for exactly those calls,
+through its profile's `stream` variant (`--output-format stream-json --verbose
+--include-partial-messages` appended to the call's argv, measured against
+2.1.310). A call nobody watches runs the profile as written. A `json` or `text`
+profile with no variant is read from the whole of what the CLI printed, so its
+answer arrives at the end in one piece.
+
+**What streams is the prose, never the envelope.** A call that offers tools asks
+the model for an envelope (see the response contract above), so its raw tokens
+are JSON. The backend reads them through an incremental scanner that reveals
+only the decoded characters of the envelope's `message` string, nothing of its
+`tool_calls`, and nothing at all once the reply takes a shape it does not follow
+(prose before the object, a syntax error). The parser above stays the
+authority: once the call ends, what was shown is reconciled with the answer it
+read, and where the two differ (a second fenced block the parser prefers, a
+reply that turned out not to be an envelope) the stream is retracted and the
+answer replaces it. So the text a watcher was shown always ends as the answer,
+exactly.
 
 **An enveloped stream needs one more thing than paths.** Muse Code wraps
 every event in a single envelope shape and puts the kind in
@@ -2808,7 +2822,7 @@ Every field a profile has, and therefore every key `overrides` accepts.
 A key not in this table is refused by name. Every mapping field
 (`config_env`, `work_config_env`, `isolation_env`, `env`, `usage`,
 `stdin_login`, `system_prompt`, `append_system_prompt` and their `file`,
-`credential_store`) merges key by key; lists and single values replace
+`credential_store`, `stream`) merges key by key; lists and single values replace
 wholesale.
 
 A built-in profile may differ by platform. Its entry in the shipped table can
@@ -2832,10 +2846,12 @@ it runs on.
 | `system_prompt` | `{args, env, file}`: the channel on which the engine's system prompt **replaces** the CLI's own — taken by the auxiliary passes, and by a seat when the CLI has no `append_system_prompt`. `args` carries `{file}` (preferred) or `{system}`; `env` names a variable the CLI reads a file path from, exclusive with `args`; `file` is `{name, template, discovered}`: the file the channel writes and the text around `{system}`. `discovered: selected` is a file the CLI finds by its location in the per-call directory (`name` may then carry a directory, and must name a file inside it) and `args` selects without `{file}` or `{system}`; `discovered: always` is one the CLI reads on every run, which declares the channel by itself. See [The system prompt](#the-system-prompt-in-text-mode). |
 | `append_system_prompt` | The same shape, for the channel on which the CLI's own system prompt stays in force and the engine's is **added** — taken by a seat's phases, and by an auxiliary pass when the CLI has no `system_prompt`. With neither, the system prompt rides the transcript. |
 | `prompt_args` | The flag introducing the prompt in `argv` mode, or carrying `{file}` in `file` mode. |
-| `output` | How stdout is encoded: `json` (default), `jsonl` or `text`. Only `jsonl` streams. |
+| `output` | How stdout is encoded: `json` (default), `jsonl` or `text`. A `jsonl` profile streams every call; a `json` one streams a call that asks to, through its `stream` variant. |
 | `text_paths` | Where the answer is in a `json`/`jsonl` document. |
 | `event_type_path` | Where a `jsonl` line names its event kind. |
 | `text_events` | The event kinds whose text is the answer. |
+| `delta_paths` | Where a `jsonl` line carries a fragment of the answer as it is written, for a CLI that streams its tokens apart from the event holding the whole answer. Fragments are concatenated for the live view only; the answer is still read from `text_paths`. Empty draws the live view from `text_paths`, event by event. `jsonl` only. |
+| `delta_events` | The event kinds `delta_paths` is read in. Needs `event_type_path` and `delta_paths`. |
 | `error_paths` | A boolean the CLI sets when it failed despite exiting zero. |
 | `usage` | `{input, output, cache_read, cache_write, reasoning, tool_prompt, input_includes_cache}`: where the token counts are, each a list of paths tried in order. `reasoning` is added to output and `tool_prompt` to input, for a CLI that reports them apart. `input_includes_cache: true` says the input count already holds the cache reads and writes, which are then not added to it. A step spelled `*` sums over every member of the object or array there — usage paths only ([Token accounting](#token-accounting)). |
 | `usage_file_args` | The flag asking the CLI to write its counts to a file, with `{usage_file}`. |
@@ -2872,6 +2888,7 @@ it runs on.
 | `web_tools` | The entry's stance on the CLI's own web tools: `allowed` (the default, and every seat's) or `denied`. `denied` runs the CLI through `web_denial`, and is refused on a profile that has none. |
 | `web_tools_note` | How the profile's web denial was measured, or why it has none. |
 | `web_denial` | `{complete_args, seed_files}`: what the run uses instead when `web_tools` is `denied`. Each field set replaces the profile field of that name whole; a field left unset keeps it. Overriding `complete_args` (or `seed_files`) beside `web_tools: denied` is refused where the denial replaces it: override `web_denial.complete_args` instead. |
+| `stream` | `{args, event_type_path, text_events, delta_paths, delta_events}`: how a `json` profile streams a call that asks to be streamed. `args` is appended to the argv the call already runs (after `web_denial`, so every isolation and denial flag stays in place), output becomes `jsonl`, and the other four fields replace the profile's for that call. Chosen per call, never per entry; refused on a profile whose output is already `jsonl`, and the profile it makes is validated like any other. |
 | `seed_files` | `{path, in, content}` (`in` is `home` or `work`): settings files written before a call. `path` must name a file inside its scope, and never one another field needs: a login file, a system prompt file, a `config_env` or `work_config_env` directory, the call's `.git` project-root marker, or a directory above any of them. |
 
 ---

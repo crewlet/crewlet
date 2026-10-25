@@ -186,6 +186,22 @@ claude-code:
     output: [["usage", "output_tokens"]]
     cache_read: [["usage", "cache_read_input_tokens"]]
     cache_write: [["usage", "cache_creation_input_tokens"]]
+  # STREAMED, for a call that asked to be: a seat's round on the live view, a
+  # Dashboard Assistant answer. MEASURED against 2.1.310. The last
+  # --output-format on argv wins: a run with no login, which reaches no model,
+  # answered in stream-json with the json flag before it. Print mode refuses
+  # stream-json without --verbose. --include-partial-messages adds one
+  # `stream_event` per fragment, a `content_block_delta` whose `text_delta`
+  # sits at event.delta.text; without it the stream carries no fragments. The
+  # stream ends with a `result` event shaped as the json document above
+  # (result, is_error, usage), so the answer, the failure flag and the token
+  # counts are read exactly as before, from that event alone.
+  stream:
+    args: ["--output-format", "stream-json", "--verbose", "--include-partial-messages"]
+    event_type_path: ["type"]
+    text_events: ["result"]
+    delta_events: ["stream_event"]
+    delta_paths: [["event", "delta", "text"]]
   config_env:
     CLAUDE_CONFIG_DIR: ".claude"
   env:
