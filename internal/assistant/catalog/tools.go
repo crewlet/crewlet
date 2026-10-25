@@ -94,6 +94,13 @@ func Offered(p iam.Principal, acts []string) []Tool {
 	return out
 }
 
+// Curated is the curated table as the orchestrator asks it: [Offered], for
+// the internal/assistant Catalogue seam a node and every harness fill alike.
+type Curated struct{}
+
+// Offered is [Offered].
+func (Curated) Offered(p iam.Principal, acts []string) []Tool { return Offered(p, acts) }
+
 // validate reports what is wrong with one tool as declared.
 func (t Tool) validate() error {
 	switch {
