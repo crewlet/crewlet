@@ -22,7 +22,7 @@
 //   - NO TOOL CHANNEL. The tool loop needs tool calls back, and a CLI prints
 //     prose. The catalogue and a response contract ride in the prompt, and
 //     the reply is parsed by a deliberately forgiving parser that never
-//     errors — see prompt.go and envelope.go. A call that is watched
+//     errors (see prompt.go and envelope.go). A call that is watched
 //     streams only the decoded prose of the envelope's message as it
 //     arrives, and settles that view against the parser's reading once the
 //     call ends, retracting it where the two disagree; see
