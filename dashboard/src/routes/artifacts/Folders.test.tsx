@@ -13,6 +13,7 @@ import type { ReactNode } from "react";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
+import { AppAnnouncer } from "~/app/announcer.tsx";
 import { Router } from "~/app/router.tsx";
 import { crumbsFor, folderUpKey } from "~/app/crumbs.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -169,6 +170,7 @@ function mount(node: ReactNode, hash: string) {
       <LayerHost>
         <ToastProvider>{node}</ToastProvider>
       </LayerHost>
+      <AppAnnouncer />
     </Router>,
   );
 }

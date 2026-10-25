@@ -1,6 +1,7 @@
 /**
- * What jsdom does not provide, and the component suites need — and how long
- * a wait in one may take before it is called hung.
+ * What jsdom does not provide, and the component suites need — how long a
+ * wait in one may take before it is called hung, and the gate that holds
+ * every case to what it writes to the console.
  *
  * Kept to the genuine gaps. A polyfill that changes behaviour rather than
  * supplying a missing API would make the suite agree with a browser nobody
@@ -8,13 +9,30 @@
  */
 
 import { configure } from "@testing-library/react";
+import { afterAll, afterEach, expect } from "vitest";
 import { WAIT_BOUND_MS } from "./bounds.ts";
+import { installConsoleGate, verdict } from "./console.ts";
 
 // Every `findBy…` and `waitFor` in the suite, rather than a figure per call:
 // the one-second default is a wall-clock budget on rendering work, and the
 // cases that had already outgrown it each carried an override of their own.
 // `bounds.ts` says what the figure is anchored to.
 configure({ asyncUtilTimeout: WAIT_BOUND_MS });
+
+// THE CONSOLE IS PART OF EVERY CASE'S RESULT: whatever a case writes to
+// `console.error` or `console.warn` fails it unless it declared it — see
+// `console.ts`. Judged AFTER every other `afterEach` of the case (Vitest runs
+// after-hooks last-registered first, its `sequence.hooks` default of
+// "stack", and this file's are registered before any suite's), so what an
+// unmount says in a suite's `cleanup()` is the case's too, and once more
+// after the file, for what was said after its last case ended.
+installConsoleGate(() => expect.getState().currentTestName);
+const judge = () => {
+  const problems = verdict();
+  if (problems.length > 0) throw new Error(problems.join("\n"));
+};
+afterEach(judge);
+afterAll(judge);
 
 // jsdom implements neither. Both are read at module scope by layout-aware
 // components, so their absence is a throw rather than a wrong answer.

@@ -18,6 +18,7 @@ import { CHUNKS, ChunkLoadError, loadChunk, overrideChunkForTest } from "./lazyS
 import { LayerBoundary } from "./boundaries.tsx";
 import { refToken } from "./frame/objects.ts";
 import { resetForTest as resetStarsForTest } from "~/lib/starred.ts";
+import { expectConsole } from "~/test/console.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -32,6 +33,13 @@ class InertWebSocket {
 function Throws(): never {
   throw new Error("model is an object, not a string");
 }
+
+// WHAT THESE CASES PROVOKE ON PURPOSE: React reports every error a boundary
+// catches to `console.error`, and the console gate (`~/test/console.ts`) fails
+// a case that writes there unasked. Each case declares the report its failure
+// makes, and the gate fails it if the report never comes.
+const THROWN = /model is an object, not a string/;
+const expectCaught = (pattern: RegExp) => expectConsole("error", pattern);
 
 let undo: (() => void)[] = [];
 
@@ -99,6 +107,7 @@ afterEach(async () => {
 
 describe("a screen that throws", () => {
   test("leaves the sidebar and ⌘K working", async () => {
+    expectCaught(THROWN);
     breakExport("spend", "Spend", Throws);
     location.hash = "#/settings/spend";
     await mount();
@@ -114,6 +123,7 @@ describe("a screen that throws", () => {
   });
 
   test("is drawn afresh when the reader goes somewhere else", async () => {
+    expectCaught(THROWN);
     breakExport("spend", "Spend", Throws);
     location.hash = "#/settings/spend";
     await mount();
@@ -123,6 +133,7 @@ describe("a screen that throws", () => {
   });
 
   test("but not by a query string alone, which is the same screen", async () => {
+    expectCaught(THROWN);
     breakExport("spend", "Spend", Throws);
     location.hash = "#/settings/spend";
     await mount();
@@ -134,6 +145,7 @@ describe("a screen that throws", () => {
 
 describe("a chunk that never arrives", () => {
   test("has its own sentence, a Reload, and a Try again that really asks again", async () => {
+    expectCaught(/The Spend and Budgets screens could not be loaded/);
     let fail = true;
     let asks = 0;
     undo.push(
@@ -166,6 +178,7 @@ describe("a chunk that never arrives", () => {
   // shell, through the routed screen's boundary all the same: so a reader
   // signing in from a tab an upgrade outdated is told once, and asks again.
   test("outside the frame, on the sign-in screen, is told once and asked again", async () => {
+    expectCaught(/The sign-in screens could not be loaded/);
     let fail = true;
     let asks = 0;
     undo.push(
@@ -191,6 +204,7 @@ describe("a chunk that never arrives", () => {
 
 describe("a peek that throws", () => {
   test("takes its body down and leaves the rail's close and the screen behind", async () => {
+    expectCaught(THROWN);
     breakExport("work", "ItemPeek", Throws);
     location.hash = `#/settings/spend?peek=${refToken({ kind: "item", id: "ENG-42" })}`;
     await mount();
@@ -209,6 +223,7 @@ describe("a sidebar section that throws", () => {
   // A pinned view whose name arrived as an object is a React child React
   // refuses: the same shape of failure as the per-phase model mapping.
   test("costs its own list and never the navigation above it", async () => {
+    expectCaught(/Objects are not valid as a React child/);
     location.hash = "#/live";
     await mount({
       // A READER WITH A RECORD AND TRACKER: the pinned views are theirs, read
@@ -250,6 +265,7 @@ describe("a sidebar section that throws", () => {
 
 describe("a layer's boundary", () => {
   test("is a dialog that says so and closes the way the layer does", () => {
+    expectCaught(THROWN);
     let closed = 0;
     render(
       <LayerBoundary title="Search" onClose={() => closed++}>
@@ -266,6 +282,7 @@ describe("a layer's boundary", () => {
   // tab an upgrade outdated is a chunk that never arrives — and that is the
   // chunk's own sentence and a Reload, not the raw rejection.
   test("a layer whose chunk never came says to reload", () => {
+    expectCaught(/The Work screens could not be loaded/);
     function ChunkGone(): never {
       throw new ChunkLoadError("work", new Error("Failed to fetch"));
     }

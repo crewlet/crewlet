@@ -14,6 +14,7 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { AppAnnouncer } from "~/app/announcer.tsx";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider, parseMarkdown } from "@crewlethq/ui";
 
@@ -170,6 +171,7 @@ function mount() {
   }) as typeof socket.query;
   render(
     <ToastProvider>
+      <AppAnnouncer />
       <LayerHost>
         <ClientContext.Provider value={{ store, socket }}>
           <FrameReadings>

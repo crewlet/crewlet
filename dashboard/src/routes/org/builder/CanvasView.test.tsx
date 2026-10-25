@@ -1508,8 +1508,8 @@ describe("the chart's chrome", () => {
     mount();
     // The bar, and the region the way out of fullscreen is said in, which is
     // empty until there is something to say and drawn as nothing while it is.
-    expect([...group().children]).toEqual([bar(), screen.getByRole("status")]);
-    expect(screen.getByRole("status").textContent).toBe("");
+    expect([...group().children]).toEqual([bar(), within(group()).getByRole("status")]);
+    expect(within(group()).getByRole("status").textContent).toBe("");
   });
 
   /*
@@ -1522,7 +1522,7 @@ describe("the chart's chrome", () => {
     const { container } = mount();
     // The region is there and says nothing, which is what makes what it says
     // next an announcement rather than a surface appearing.
-    expect(screen.getByRole("status").textContent).toBe("");
+    expect(within(group()).getByRole("status").textContent).toBe("");
 
     const element = container.querySelector("div")!;
     Object.defineProperty(document, "fullscreenElement", {
@@ -1532,17 +1532,21 @@ describe("the chart's chrome", () => {
     act(() => {
       document.dispatchEvent(new Event("fullscreenchange"));
     });
-    const note = screen.getByRole("status");
+    const note = within(group()).getByRole("status");
     // The key twice, which is `Kbd`: the glyph a reader sees and the word a
     // screen reader is given for it.
     expect(note.textContent).toBe("PressEscEscto leave fullscreen");
-    expect(group().contains(note)).toBe(true);
+    // Said in the chart's own region and nowhere else: the application's one
+    // live region (the harness mounts it, as the frame does) says nothing of it.
+    expect(
+      screen.getAllByRole("status").filter((s) => s.textContent?.includes("leave fullscreen")),
+    ).toEqual([note]);
 
     Object.defineProperty(document, "fullscreenElement", { configurable: true, value: null });
     act(() => {
       document.dispatchEvent(new Event("fullscreenchange"));
     });
-    expect(screen.getByRole("status").textContent).toBe("");
+    expect(within(group()).getByRole("status").textContent).toBe("");
   });
 });
 

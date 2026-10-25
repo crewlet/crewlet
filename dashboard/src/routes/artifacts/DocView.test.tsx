@@ -5,6 +5,7 @@
  */
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { AppAnnouncer } from "~/app/announcer.tsx";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
@@ -141,6 +142,7 @@ afterEach(() => {
 function show(onPublished = vi.fn()) {
   render(
     <ToastProvider>
+      <AppAnnouncer />
       <LayerHost>
         <Router>
           <WithKindBar>

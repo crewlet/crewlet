@@ -11,6 +11,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { BrandSetup } from "./BrandSetup.tsx";
+import { AppAnnouncer } from "~/app/announcer.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
@@ -166,6 +167,7 @@ function mount(
         <ViewerProvider>
           <Router>
             <BrandSetup />
+            <AppAnnouncer />
           </Router>
         </ViewerProvider>
       </SessionReading>

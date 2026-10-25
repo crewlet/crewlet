@@ -440,9 +440,11 @@ test("an agent's profile has six tabs, and Work counts the engine's total rather
   mount("#/company/org/seats/swe", {
     answers: {
       work_items: {
+        // EACH WITH ITS ID, as the engine sends every task: the list is keyed
+        // by it, and rows without one drew React's missing-key warning.
         items: [
-          { key: "ENG-412", title: "Retry PXE boot", status: "in_progress" },
-          { key: "ENG-401", title: "Migrate scheduler state", status: "todo" },
+          { id: "t-412", key: "ENG-412", title: "Retry PXE boot", status: "in_progress" },
+          { id: "t-401", key: "ENG-401", title: "Migrate scheduler state", status: "todo" },
         ],
         total_hint: 7,
       },
@@ -503,7 +505,10 @@ test("a reader who may not act sees every action held, with the reason", async (
 // asked once there is a hand-off for it to be the reason for. The hand-off is
 // conditional on the version a read of the chosen task returned.
 test("Assign task finds a task, then asks why, and hands it over against the version read", async () => {
+  // Each hit with its id, as the engine sends one: the picker's options are
+  // keyed by it.
   const hits = Array.from({ length: 8 }, (_, i) => ({
+    id: `t-${20 + i}`,
     key: `ENG-${20 + i}`,
     title: `PXE task ${i}`,
     assignee: i === 0 ? "cto" : "",
@@ -512,10 +517,15 @@ test("Assign task finds a task, then asks why, and hands it over against the ver
     answers: {
       viewer: { ...OPERATOR, acts: EVERY_ACT },
       work_search: { hits, available: true, mode: "hybrid" },
-      work_item: (p: Record<string, unknown>) => ({
-        task: { key: p.id, version: 4, title: "PXE task 0", assignee: "cto" },
-        complete: true,
-      }),
+      // THE TASK ASKED FOR, by the id a native task is asked by, answered as
+      // the engine answers it: its id and key both.
+      work_item: (p: Record<string, unknown>) => {
+        const hit = hits.find((h) => h.id === p.id || h.key === p.id)!;
+        return {
+          task: { id: hit.id, key: hit.key, version: 4, title: hit.title, assignee: "cto" },
+          complete: true,
+        };
+      },
     },
     agents: [WORKING],
   });
@@ -555,14 +565,16 @@ test("Assign task finds a task, then asks why, and hands it over against the ver
 // why, and the search asks for a page wide enough that eight movable tasks
 // still fill the list.
 test("Assign task lists the tasks it can hand over first, and the seat's own as disabled", async () => {
+  // Each with its id, as the engine sends one: the options are keyed by it.
   const hits = [
     ...Array.from({ length: 7 }, (_, i) => ({
+      id: `t-${10 + i}`,
       key: `ENG-${10 + i}`,
       title: `retry ${i}`,
       assignee: "swe",
     })),
-    { key: "ENG-30", title: "retry elsewhere", assignee: "cto" },
-    { key: "ENG-31", title: "retry unowned", assignee: "" },
+    { id: "t-30", key: "ENG-30", title: "retry elsewhere", assignee: "cto" },
+    { id: "t-31", key: "ENG-31", title: "retry unowned", assignee: "" },
   ];
   mount("#/company/org/seats/swe", {
     answers: {
@@ -1138,7 +1150,7 @@ test("the current turn names its round against the granted cap, its calls and th
       // asked of the seat, with no priority. Its title comes from reading the
       // turn's own item, never from that list.
       work_items: {
-        items: [{ key: "ENG-7", title: "Something else entirely", status: "todo" }],
+        items: [{ id: "t-7", key: "ENG-7", title: "Something else entirely", status: "todo" }],
         total_hint: 1,
       },
       // A NATIVE TASK IS ASKED FOR BY ITS ID: its key may be one another task

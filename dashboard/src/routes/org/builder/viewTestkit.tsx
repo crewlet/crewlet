@@ -23,6 +23,7 @@ import { OrgNodeLabel } from "@crewlethq/ui";
 import { treeCanvasParts } from "~/testing.tsx";
 import { useCallback, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import { vi } from "vitest";
+import { AppAnnouncer } from "~/app/announcer.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider, type Viewer } from "~/lib/viewer.ts";
@@ -200,6 +201,11 @@ export function BuilderHarness({
         <ViewerProvider>
           <BuilderContext.Provider value={api}>{children}</BuilderContext.Provider>
         </ViewerProvider>
+        {/* THE ONE LIVE REGION, as the application mounts it beside the frame
+            (`app/announcer.tsx`): the editor's tag and list controls say
+            every add, remove and reorder into it, and with none mounted each
+            sentence went to the console instead. */}
+        <AppAnnouncer />
       </ClientContext.Provider>
     </Router>
   );

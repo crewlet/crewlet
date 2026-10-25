@@ -40,16 +40,26 @@ class InertWebSocket {
   close(): void {}
 }
 
-function mount(hash: string) {
+/**
+ * The application at `hash`, RENDERED UNDER AN AWAITED ACT: a screen reads
+ * its chunk through `use` (`app/lazyScreen.ts`), and a render under a
+ * synchronous act that leaves React work still queued draws its warning that
+ * a component "suspended inside an `act` scope" — a line the harness causes,
+ * not the page, which the console gate (`~/test/console.ts`) fails the case
+ * for.
+ */
+async function mount(hash: string) {
   location.hash = hash;
   const store = new Store();
-  render(
-    <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
-      <Router>
-        <App />
-      </Router>
-    </ClientContext.Provider>,
-  );
+  await act(async () => {
+    render(
+      <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
+        <Router>
+          <App />
+        </Router>
+      </ClientContext.Provider>,
+    );
+  });
 }
 
 const loginFor = (from: string) => `#/login?next=${encodeURIComponent(from)}`;
@@ -120,7 +130,7 @@ describe("the socket", () => {
         return new Response(JSON.stringify({ error: "invalid_token" }), { status: 401 });
       }),
     );
-    mount(hash);
+    await mount(hash);
     if (dials > 0) await waitFor(() => expect(dialled).toHaveLength(dials));
     else {
       await act(async () => {
@@ -169,11 +179,7 @@ describe("the socket", () => {
     );
     const consoleLines = [vi.spyOn(console, "error"), vi.spyOn(console, "warn")];
     try {
-      // RENDERED UNDER AN AWAITED ACT: a screen reads its chunk through `use`
-      // (`app/lazyScreen.ts`), and under a synchronous one React warns on the
-      // console that it suspended — a line the harness causes, not the page,
-      // which would fail this case for the wrong reason.
-      await act(async () => mount(hash));
+      await mount(hash);
       await waitFor(() => expect(location.hash.startsWith("#/login")).toBe(true));
       await screen.findByRole("heading", { name: "Sign in to Crewlet" });
       await act(async () => {
@@ -191,7 +197,7 @@ describe("the socket", () => {
 
 describe("a session the engine does not accept", () => {
   test("sends the reader to sign in, carrying where they were", async () => {
-    mount("#/work?view=board");
+    await mount("#/work?view=board");
     const depth = history.length;
     act(() => needSession("sign_in"));
     await waitFor(() => expect(location.hash).toBe(loginFor("#/work?view=board")));
@@ -204,13 +210,13 @@ describe("a session the engine does not accept", () => {
   // and an invitation routed to sign-in would lose the link.
   test("leaves the sign-in screens where they are", async () => {
     const at = loginFor("#/settings/spend");
-    mount(at);
+    await mount(at);
     act(() => needSession("sign_in"));
     await screen.findByRole("heading", { name: "Sign in to Crewlet" });
     expect(location.hash).toBe(at);
 
     cleanup();
-    mount("#/invite/abc");
+    await mount("#/invite/abc");
     act(() => needSession("sign_in"));
     expect(location.hash).toBe("#/invite/abc");
   });
@@ -218,12 +224,26 @@ describe("a session the engine does not accept", () => {
   test("a need recorded before anything mounted is followed when it does", async () => {
     // A REFUSAL CAN ANSWER BEFORE THE ROUTE'S FOLLOWER HAS MOUNTED.
     needSession("sign_in");
-    mount("#/inbox");
+    await mount("#/inbox");
     await waitFor(() => expect(location.hash).toBe(loginFor("#/inbox")));
   });
 
   test("a session that may only enrol goes to the enrolment instead", async () => {
-    mount("#/settings/nodes");
+    // AS THE ENGINE ANSWERS SUCH A SESSION: `403
+    // second_factor_enrolment_required` to every request but the enrolment's,
+    // not the `401` of a browser signed in as nobody, which answering the
+    // screen's own request under the awaited mount would send it to sign in
+    // before the case says anything.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: "second_factor_enrolment_required" }), {
+            status: 403,
+          }),
+      ),
+    );
+    await mount("#/settings/nodes");
     act(() => needSession("second_factor"));
     await waitFor(() =>
       expect(location.hash).toBe(`#/enrol?next=${encodeURIComponent("#/settings/nodes")}`),
@@ -231,7 +251,7 @@ describe("a session the engine does not accept", () => {
   });
 
   test("an enrolment that loses its session signs in toward where it was going", async () => {
-    mount(`#/enrol?next=${encodeURIComponent("#/settings/spend")}`);
+    await mount(`#/enrol?next=${encodeURIComponent("#/settings/spend")}`);
     act(() => needSession("sign_in"));
     await waitFor(() => expect(location.hash).toBe(loginFor("#/settings/spend")));
   });
@@ -240,7 +260,7 @@ describe("a session the engine does not accept", () => {
   // session itself, so the one path that matters is a REST 401 reaching the
   // router without the screen saying a word.
   test("a REST 401 on any screen is enough", async () => {
-    mount("#/settings/secrets");
+    await mount("#/settings/secrets");
     await waitFor(() => expect(location.hash).toBe(loginFor("#/settings/secrets")));
   });
 });
@@ -280,7 +300,7 @@ describe("a sign-in answered with a session that may only enrol", () => {
       }),
     );
     needSession("sign_in");
-    mount(loginFor("#/work/ENG-42"));
+    await mount(loginFor("#/work/ENG-42"));
     fireEvent.change(await screen.findByLabelText(/login or email/i), {
       target: { value: "jane.doe" },
     });

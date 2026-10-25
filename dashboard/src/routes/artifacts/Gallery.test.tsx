@@ -15,6 +15,7 @@ import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import { ArtifactGallery } from "./Gallery.tsx";
 import { noMatch } from "./listing.tsx";
+import { AppAnnouncer } from "~/app/announcer.tsx";
 import { Router } from "~/app/router.tsx";
 import type { ArtifactSection } from "~/app/routes.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -111,6 +112,7 @@ function mount(section: ArtifactSection, hash = "#/artifacts") {
           <ArtifactGallery section={section} />
         </ToastProvider>
       </LayerHost>
+      <AppAnnouncer />
     </Router>,
   );
 }

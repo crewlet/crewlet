@@ -5,6 +5,7 @@
  */
 
 import { TestClient } from "~/test/client.tsx";
+import { AppAnnouncer } from "~/app/announcer.tsx";
 import { installWindow } from "~/testing.tsx";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -93,6 +94,7 @@ function mount(hash = "#/artifacts/new/design") {
       <Router>
         <LayerHost>
           <ToastProvider>
+            <AppAnnouncer />
             <DesignCreate />
           </ToastProvider>
         </LayerHost>

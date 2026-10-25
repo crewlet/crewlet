@@ -180,6 +180,19 @@ embedded broker sizes its storage from. Both scripts run Vitest through
 creates and removes; `src/test/ownedTmpdir.test.ts` fails a run that was
 started without it.
 
+A dashboard case also fails on what it writes to `console.error` or
+`console.warn` (`dashboard/src/test/console.ts`, judged after every case by
+`src/test/setup.ts`). React reports a broken contract there and carries on —
+a list child with no key, two children under one key, a paragraph inside a
+paragraph, an `act` nobody awaited — and the dashboard reports there an
+announcement no live region was mounted to say; Vitest's default reporter
+prints nothing a passing case wrote, so dozens of such lines once sat behind
+a green run. A harness that stands in for the application mounts what the
+application mounts around a screen (its live region, `AppAnnouncer`); a case
+that provokes a line on purpose, as a boundary's case does when React
+reports the error it caught, declares it with `expectConsole(level,
+pattern)`, and a declaration nothing meets fails the case too.
+
 The race detector is not optional here: the engine's concurrency model is
 real parallelism, and every "atomic because it is single-threaded" assumption
 is a data race until proven otherwise — so every package runs under it, in

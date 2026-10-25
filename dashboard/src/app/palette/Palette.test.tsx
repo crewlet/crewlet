@@ -718,7 +718,9 @@ describe("the knowledge answer", () => {
       answers: {
         work_search: async () => ({
           ...OUTCOME,
-          hits: [HIT, { ...HIT, key: "ENG-421" }, { ...HIT, key: "ENG-422" }],
+          // EACH TASK ITS OWN ID, as the engine sends one: the rows are keyed
+          // by it, and three hits sharing HIT's drew three rows under one key.
+          hits: [HIT, { ...HIT, id: "t2", key: "ENG-421" }, { ...HIT, id: "t3", key: "ENG-422" }],
           available: true,
         }),
         knowledge: async () => ({

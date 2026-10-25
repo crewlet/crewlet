@@ -14,6 +14,7 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { AppAnnouncer } from "~/app/announcer.tsx";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ToastProvider } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
@@ -69,6 +70,7 @@ function mount(grants: string[] = ["admin"], org: Record<string, unknown> = ACME
       <SessionReading>
         <ViewerProvider>
           <ToastProvider>
+            <AppAnnouncer />
             <Router>
               <Principles />
             </Router>
