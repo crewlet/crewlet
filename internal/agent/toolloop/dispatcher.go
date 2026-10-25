@@ -74,6 +74,12 @@ const (
 	// stateExhausted is a phase whose round budget is spent with the model
 	// still asking for tools.
 	stateExhausted
+	// stateRefused is a run its token budget refuses to let go on: an end
+	// only ever DECIDED ([dispatcher.pend]), and taken as [stateCut] with
+	// [dispatcher.pendErr]. Ranked under a finish and a park because what it
+	// refuses is the CLI's next request, and a phase a call finished or
+	// parked makes none.
+	stateRefused
 	// stateFinished is a phase a terminator ended.
 	stateFinished
 	// stateParked is a phase a detached tool suspended, its call unanswered.
@@ -256,6 +262,8 @@ type dispatcher struct {
 	// --- the phase, across every run of this loop invocation ---
 	state  dstate
 	cutErr error
+	// pendErr is the refusal a decided [stateRefused] end is taken with.
+	pendErr error
 	done   chan struct{}
 
 	// pend is an end the run has reached and not yet taken — waiting for the
@@ -670,18 +678,24 @@ func (d *dispatcher) admit(in toolsession.Call) (*callRec, string) {
 	if d.state != stateOpen {
 		return refuse(notRun(c.recorded()))
 	}
-	// THE FENCE, BEFORE ANY CALL, and the budget's standing refusal:
-	// a node whose lease moved stops at the next call, not the next
-	// model request, because the calls are what reach outside the engine.
+	// THE FENCE, BEFORE ANY CALL: a node whose lease moved stops at the
+	// next call, not the next model request, because the calls are what
+	// reach outside the engine.
+	//
+	// NOT THE BUDGET. A call spends no model tokens, and its request was
+	// charged when the CLI's record showed it — a charge the meter refused
+	// cut the run then, and none of its calls runs. A refusal that became
+	// certain since — a sibling's spend on a shared slice, or this
+	// request's own exact fill — refuses the request the CLI would make
+	// NEXT, which is asked where that request is decided, as a call's
+	// answer goes back ([dispatcher.conclude]). Asked here, it cut a
+	// request's calls the meter had already paid for, and recorded a
+	// refusal of a model call nobody was about to make.
 	if d.cfg.Fence != nil {
 		if err := d.cfg.Fence(); err != nil {
 			d.cutLocked(err)
 			return refuse(notRun(c.recorded()))
 		}
-	}
-	if err := Refusal(d.ctx, d.cfg.Budget); err != nil {
-		d.cutLocked(err)
-		return refuse(notRun(c.recorded()))
 	}
 	// PAST THE ROUND BUDGET: the CLI made a request the budget did not
 	// allow — its record reached the engine after the request's calls did,
@@ -997,15 +1011,12 @@ func (d *dispatcher) honour(res ToolResult) ToolResult {
 
 // conclude records a call's result and decides what it means for the run.
 func (d *dispatcher) conclude(c *callRec, res ToolResult, before uint64) {
-	// THE FENCE AND THE BUDGET AGAIN, once the tool has returned: what used
-	// to be the next round's check, before the model reads the result.
+	// THE FENCE AGAIN, once the tool has returned: what used to be the next
+	// round's check, before the model reads the result.
 	if d.cfg.Fence != nil {
 		if err := d.cfg.Fence(); err != nil {
 			d.cut(err)
 		}
-	}
-	if err := Refusal(d.ctx, d.cfg.Budget); err != nil {
-		d.cut(err)
 	}
 
 	d.mu.Lock()
@@ -1029,6 +1040,27 @@ func (d *dispatcher) conclude(c *callRec, res ToolResult, before uint64) {
 		}
 	case d.state == stateOpen:
 		d.afterCallLocked(c, before)
+	}
+	continues := d.state == stateOpen && d.pend == stateOpen
+	d.mu.Unlock()
+
+	// THE BUDGET, ONLY WHERE THE CLI GOES ON: the answers to its response
+	// are what let it ask its model again, so a refusal already certain
+	// refuses that request — and is asked only then, since [Refusal]
+	// records the refusal of the call its caller was about to make. A call
+	// that finished, parked or ended the run is followed by no request, and
+	// the phase it decided stands.
+	//
+	// DECIDED, NOT TAKEN: the CLI asks again only once every call of the
+	// response is answered, so the response's other calls — paid for with
+	// it — still run, and a submission among them still finishes the phase.
+	var refused error
+	if continues {
+		refused = Refusal(d.ctx, d.cfg.Budget)
+	}
+	d.mu.Lock()
+	if refused != nil && d.state == stateOpen && stateRefused > d.pend {
+		d.pend, d.pendRound, d.pendErr = stateRefused, c.round, refused
 	}
 	d.endIfCompleteLocked()
 	d.mu.Unlock()
@@ -1100,6 +1132,9 @@ func (d *dispatcher) endLocked() {
 		return
 	}
 	d.state, d.pend = d.pend, stateOpen
+	if d.state == stateRefused {
+		d.state, d.cutErr = stateCut, d.pendErr
+	}
 	d.closeDoneLocked()
 }
 

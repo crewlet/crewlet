@@ -1207,16 +1207,20 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 				return nil, err
 			}
 		}
+		// NO ROUND LEFT: nothing may ask the model again. Before the budget,
+		// because no run is about to be made — a window the last round
+		// filled exactly is a phase that ran out of rounds, not one the
+		// budget refused, and asking [Refusal] would record the refusal of
+		// a run nobody was going to start.
+		if d.roundsUsed() >= cfg.MaxRounds {
+			exhausted = lastAskedForTools(msgs)
+			break
+		}
 		// A REFUSAL ALREADY CERTAIN ends the loop before the run it would
 		// refuse is started — the first included, since the refusal may
 		// have been answered to another caller on the turn's meter.
 		if err := Refusal(ctx, cfg.Budget); err != nil {
 			return nil, err
-		}
-		// NO ROUND LEFT: nothing may ask the model again.
-		if d.roundsUsed() >= cfg.MaxRounds {
-			exhausted = lastAskedForTools(msgs)
-			break
 		}
 		// A PERSON'S NOTES, as user messages, before the run that is the
 		// first to read them.

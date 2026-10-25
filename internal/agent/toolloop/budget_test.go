@@ -357,3 +357,71 @@ func TestARunIsChargedFromItsAnswerOnlyWhenNothingWasReported(t *testing.T) {
 		}
 	})
 }
+
+// A REQUEST THE METER PAID FOR RUNS ALL ITS CALLS, even when its own charge
+// filled the window exactly: the refusal that is now certain refuses the
+// request the CLI would make NEXT, as their answers go back — not the calls of
+// one already paid for, which is where the irreversible things it decided
+// happen. And a submission among them still finishes the phase, since nothing
+// follows it for the refusal to refuse.
+func TestARequestThatFillsTheWindowRunsItsCallsAndASubmissionStands(t *testing.T) {
+	t.Parallel()
+	t.Run("ordinary calls run, the next request is refused", func(t *testing.T) {
+		t.Parallel()
+		m := &weekMeter{refuseAt: 100}
+		surf := newSurface("post", "note")
+		prov := script(runOf(
+			llmtest.Response{Parallel: true, Calls: []llmtest.Call{{Name: "post"}, {Name: "note"}},
+				Usage: llm.Usage{Input: 100}},
+			says("never asked"),
+		))
+		_, err := run(t, toolloop.Config{Provider: prov, Surface: surf, MaxRounds: 5, Budget: m})
+		if !errors.Is(err, toolloop.ErrBudgetExhausted) {
+			t.Fatalf("err = %v, want the refusal of the request after the window filled", err)
+		}
+		if got := surf.calls(); len(got) != 2 {
+			t.Errorf("tools ran %v, want both calls of the request the meter paid for", got)
+		}
+		if late := prov.Late(); late != 0 {
+			t.Errorf("the CLI asked its model %d time(s) after the refusal", late)
+		}
+	})
+	t.Run("a submission finishes the phase", func(t *testing.T) {
+		t.Parallel()
+		m := &weekMeter{refuseAt: 100}
+		surf := newSurface("submit_work")
+		prov := script(runOf(
+			llmtest.Response{Calls: []llmtest.Call{{Name: "submit_work"}}, Usage: llm.Usage{Input: 100}},
+			says("never asked"),
+		))
+		res, err := run(t, toolloop.Config{Provider: prov, Surface: surf, MaxRounds: 5, Budget: m,
+			TerminateAfter: []string{"submit_work"}})
+		if err != nil {
+			t.Fatalf("Run: %v — the submission the meter paid for was refused", err)
+		}
+		if res.ExhaustedRounds || len(res.Executions) != 1 || res.Executions[0].Failed {
+			t.Errorf("result %+v, want the submission run and the phase finished", res)
+		}
+	})
+}
+
+// A WINDOW THE LAST ROUND FILLED IS A PHASE OUT OF ROUNDS, NOT ONE THE BUDGET
+// REFUSED: no request is about to be made, so there is nothing for the budget
+// to refuse — and the caller's extension judge, not a budget error, is what
+// decides whether the phase goes on.
+func TestAWindowTheLastRoundFilledIsExhaustion(t *testing.T) {
+	t.Parallel()
+	m := &weekMeter{refuseAt: 100}
+	surf := newSurface("post")
+	prov := script(runOf(
+		llmtest.Response{Calls: []llmtest.Call{{Name: "post"}}, Usage: llm.Usage{Input: 100}},
+		says("never asked"),
+	))
+	res, err := run(t, toolloop.Config{Provider: prov, Surface: surf, MaxRounds: 1, Budget: m})
+	if err != nil {
+		t.Fatalf("Run: %v, want the phase out of rounds", err)
+	}
+	if !res.ExhaustedRounds {
+		t.Errorf("result %+v, want ExhaustedRounds", res)
+	}
+}
