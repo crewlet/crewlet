@@ -58,6 +58,9 @@ import {
   type RefObject,
 } from "react";
 import { href, useLeaveGuard, useNavigator, useParam, useUnloadGuard } from "~/app/router.tsx";
+import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
+import type { PageActionSpec } from "~/app/assistant/context.ts";
+import { parseOrgOps, type OrgDraftChange } from "./assistantActions.ts";
 import { useFillScreen } from "~/app/fill.tsx";
 import { useUndoKeys } from "~/lib/useUndoKeys.ts";
 import { useClickOnNothing } from "~/ui/clickOnNothing.ts";
@@ -1017,6 +1020,39 @@ function BuilderScreen({
     },
     [readOnlyReason, announce],
   );
+
+  // --- assistant page actions (WP12) ---
+  // INTO THE DRAFT ONLY, through the one door every edit takes
+  // ([parseOrgOps]): the operation log, undo, the dry run and the review run
+  // as they do for a person's own edits, and saving stays the person's. The
+  // draft's generation is the page's data, so a change prepared against an
+  // older draft is stale.
+  useAssistantContext({
+    dataVersion: `org:${state.base.revision ?? "new"}:${state.generation}`,
+    actions: {
+      "org.draft.apply_ops": {
+        scope: "This org chart draft (not saved)",
+        parse: (raw) => parseOrgOps(raw, state, keys),
+        preview: (change) =>
+          change.words.map((words, i) => ({
+            field: `Change ${i + 1}`,
+            next: words,
+            current: null,
+          })),
+        blocked: () =>
+          readOnlyReason !== null
+            ? `Editing is paused. ${readOnlyReason}`
+            : loaded
+              ? null
+              : "The company has not loaded yet.",
+        apply: (change) => {
+          for (const intent of change.intents) dispatch({ type: "record", intent });
+        },
+        confirm: "approve",
+      } satisfies PageActionSpec<OrgDraftChange>,
+    },
+  });
+  // --- end assistant page actions (WP12) ---
 
   // Say what the last operation did, and put focus where it leads.
   const viewHandle = useRef<BuilderViewHandle | null>(null);
