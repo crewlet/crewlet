@@ -120,12 +120,12 @@ type Diagnosis struct {
 	// Web is whether the CLI's own fetch tool reached the web, measured.
 	Web string
 
-	// AgentRuntime is what an AGENT-MODE entry needs beyond a login, and
-	// is empty for a text-mode one. Each half of it fails at a seat's
+	// BoxRuntime is what a BOX-MODE entry needs beyond a login, and is
+	// empty for a host-mode one. Each half of it fails at a seat's
 	// first turn and nowhere earlier: a CLI with no coding-agent runner
 	// has nothing to drive, and a box with no bridge to dial gets none of
 	// the seat's tools.
-	AgentRuntime []string
+	BoxRuntime []string
 
 	Problems []string
 }
@@ -133,19 +133,19 @@ type Diagnosis struct {
 // DiagnoseOptions are the facts a provider cannot see about itself.
 //
 // Both belong to the PROCESS rather than to the provider — which runners this
-// build registers, and what a sandbox can dial — and both decide whether agent
+// build registers, and what a sandbox can dial — and both decide whether box
 // mode works. Passed in rather than read here, so `doctor` reports the engine's
 // own answers instead of this package's guess at them.
 type DiagnoseOptions struct {
 	// Smoke runs the real completion and the two tool probes.
 	Smoke bool
 
-	// AgentRunners are the coding-agent runner names this build has. An
-	// agent-mode entry naming a CLI outside them cannot run at all.
+	// AgentRunners are the coding-agent runner names this build has. A
+	// box-mode entry naming a CLI outside them cannot run at all.
 	AgentRunners []string
 
 	// BridgeURL is CREWLET_MCP_BRIDGE_URL as this process sees it. Empty
-	// means agent mode is refused at launch.
+	// means box mode is refused at launch.
 	BridgeURL string
 }
 
@@ -161,7 +161,7 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 		Binary: p.profile.Binary, WrittenFor: p.profile.WrittenFor,
 		StateDir: p.ws.StateDir(),
 	}
-	d.AgentRuntime, d.Problems = p.agentRuntime(opts)
+	d.BoxRuntime, d.Problems = p.boxRuntime(opts)
 
 	path, err := exec.LookPath(p.profile.Binary)
 	switch {
@@ -383,24 +383,24 @@ func (p *Provider) keyRemedy() string {
 // modeName is how this entry runs, for the report.
 func (p *Provider) modeName() string {
 	if p.box {
-		return "agent (the CLI runs the executor)"
+		return "box (the CLI runs the executor in a box)"
 	}
-	return "text (a model behind the engine's tool loop)"
+	return "host (the CLI runs on this host, turn by turn)"
 }
 
-// agentRuntime measures what an agent-mode entry needs beyond a login.
+// boxRuntime measures what a box-mode entry needs beyond a login.
 //
 // BOTH HALVES FAIL AT A SEAT'S FIRST TURN AND NOWHERE EARLIER, which is the
 // whole reason they are here: an entry naming a CLI this build has no runner
 // for validates cleanly and reports a configured provider, and an engine with
-// no reachable bridge URL refuses every agent-mode launch at the moment a seat
+// no reachable bridge URL refuses every box-mode launch at the moment a seat
 // finally has work. `doctor` is what a deploy script gates on, so it is the
 // last place either can be caught before an agent is waiting.
 //
-// A TEXT-MODE ENTRY REPORTS NOTHING HERE, rather than reporting that it would
+// A HOST-MODE ENTRY REPORTS NOTHING HERE, rather than reporting that it would
 // not work in a mode it is not in. It runs as a subprocess of this engine and
 // needs neither.
-func (p *Provider) agentRuntime(opts DiagnoseOptions) (lines, problems []string) {
+func (p *Provider) boxRuntime(opts DiagnoseOptions) (lines, problems []string) {
 	if !p.box {
 		return nil, nil
 	}
@@ -409,8 +409,8 @@ func (p *Provider) agentRuntime(opts DiagnoseOptions) (lines, problems []string)
 	} else {
 		lines = append(lines, fmt.Sprintf("runner: none for %q", p.agent))
 		problems = append(problems, fmt.Sprintf(
-			"agent mode drives %q through a coding-agent runner and this build "+
-				"registers none for it (has: %s) — set `mode: text` on "+
+			"box mode drives %q through a coding-agent runner and this build "+
+				"registers none for it (has: %s) — set `mode: host` on "+
 				"providers.llm.%s, or point it at a CLI that has one",
 			p.agent, strings.Join(opts.AgentRunners, ", "), p.key))
 	}
@@ -419,7 +419,7 @@ func (p *Provider) agentRuntime(opts DiagnoseOptions) (lines, problems []string)
 	} else {
 		lines = append(lines, "tool bridge: unset")
 		problems = append(problems, fmt.Sprintf(
-			"agent mode hands the seat's tools to the box over an MCP bridge and "+
+			"box mode hands the seat's tools to the box over an MCP bridge and "+
 				"%s is unset, so every launch is refused — a coding agent with "+
 				"none of the seat's tools cannot answer anybody or submit its "+
 				"work. Set it to a URL a sandbox can reach",
@@ -729,10 +729,10 @@ func (d Diagnosis) Render(w io.Writer) {
 	line("smoke test", d.Smoke)
 	line("local tools", d.LocalTools)
 	line("web", d.Web)
-	for i, entry := range d.AgentRuntime {
+	for i, entry := range d.BoxRuntime {
 		label := ""
 		if i == 0 {
-			label = "agent runtime"
+			label = "box runtime"
 		}
 		line(label, entry)
 	}

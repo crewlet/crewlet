@@ -3300,7 +3300,7 @@ check something that fails at a seat's *first turn* and nowhere earlier:
 
 ```
 mode          : box (the CLI runs the executor in a box)
-agent runtime : runner: "claude-code" is registered
+box runtime   : runner: "claude-code" is registered
               : tool bridge: https://engine.example.com
 ```
 
