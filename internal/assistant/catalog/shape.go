@@ -45,7 +45,7 @@ func (r Result) Failed() bool { return r.Refusal != nil }
 //     when it does not, so no field of any answer can open or close a fence.
 func Shape(t Tool, args Args, resp exec.Response, b provenance.Boundary, now time.Time) (Result, error) {
 	if !cards.Permitted(resp.Status) {
-		refusal := cards.Refusal(resp.Status, resp.Body)
+		refusal := exec.RefusalOf(resp)
 		refusal.Message = redact.Secrets(refusal.Message)
 		model, err := json.Marshal(map[string]any{"refused": refusal})
 		if err != nil {

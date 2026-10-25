@@ -1,7 +1,6 @@
 package cards
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/crewlet/crewlet/internal/assistant/wire"
@@ -23,24 +22,6 @@ const (
 	// longer holds.
 	WithheldText = "This result is hidden because it needs access you no longer have."
 )
-
-// Refusal reads the API's refusal envelope from an answer that was not a
-// success: its code, its sentence and the grants that would admit the person.
-// An answer that carries no envelope (a proxy's page, an empty body) is named
-// by its status alone, in words a person reads.
-func Refusal(status int, body []byte) wire.Refusal {
-	var envelope struct {
-		Error   string   `json:"error"`
-		Message string   `json:"message"`
-		Grants  []string `json:"grants"`
-	}
-	if json.Unmarshal(body, &envelope) == nil && envelope.Error != "" {
-		return wire.Refusal{Code: envelope.Error, Message: envelope.Message,
-			Grants: envelope.Grants}
-	}
-	return wire.Refusal{Code: "unavailable", Message: "The engine answered " +
-		http.StatusText(status) + " and said nothing more."}
-}
 
 // Error is the error card for a refusal, in the engine's own words: phrase is
 // the tool's action phrase, so "You do not have permission to file tasks." is
