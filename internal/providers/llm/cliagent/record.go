@@ -47,6 +47,10 @@ type recordReader struct {
 	// perRequestUsage says the record carries each request's counts, so no
 	// request is estimated while the run goes.
 	perRequestUsage bool
+	// reopens says the record's rules close requests, so an event that
+	// reads into the request open now begins the next one while none is
+	// open ([cliprofile.Requests]).
+	reopens bool
 
 	mu       sync.Mutex
 	requests []*request
@@ -83,9 +87,19 @@ type request struct {
 	streamed strings.Builder
 
 	// figures are the record's raw counts, by figure — the last value read
-	// for each — and has says which were read at all.
-	figures map[string]int
-	has     map[string]bool
+	// for each — and has says which were read at all. inputHoldsCache is the
+	// arithmetic of the rule that read them ([cliprofile.UsagePaths]): a
+	// record's counts need not be in the arithmetic of the CLI's final report
+	// (Gemini CLI's chat records each request's whole prompt, its final
+	// report the prompt less the cached part).
+	figures         map[string]int
+	has             map[string]bool
+	inputHoldsCache bool
+
+	// settled says the record has moved past the request — a rule closed
+	// it, or a later one began — so a record whose calls show only once
+	// they have run ([cliprofile.Requests.LateCalls]) shows all of its.
+	settled bool
 
 	// reported is what the host was told this request cost.
 	reported llm.Usage
@@ -119,6 +133,9 @@ func newRecordReader(p cliprofile.Profile, req llm.Request, sent string) *record
 			}
 			if usageDeclared(e.Usage) {
 				r.perRequestUsage = true
+			}
+			if e.Closes {
+				r.reopens = true
 			}
 		}
 	}
@@ -283,30 +300,83 @@ func (r *recordReader) event(doc map[string]any) {
 				deltas = append(deltas, s)
 			}
 		}
-		if len(e.Text) > 0 {
-			if s, ok := stringAt(doc, e.Text); ok && s != "" {
-				req.text, req.dirty = append(req.text, s), true
-				if !r.streams {
-					deltas = append(deltas, s)
-				}
-			}
-		}
-		if e.Call != nil {
-			req.calls, req.dirty = append(req.calls, r.callOf(doc, e.Call)), true
-		}
-		if e.Blocks != nil {
-			deltas = append(deltas, r.blocksLocked(doc, e.Blocks, req)...)
+		if e.Whole {
+			deltas = append(deltas, r.wholeLocked(doc, e, req)...)
+		} else {
+			deltas = append(deltas, r.readLocked(doc, e, req)...)
 		}
 		r.figuresLocked(doc, e.Usage, req)
+		if e.Closes {
+			r.closeLocked()
+		}
 	}
 	turns, spends := r.flushLocked(touched, false)
 	r.mu.Unlock()
 	r.tell(deltas, turns, spends)
 }
 
+// readLocked reads an event's prose and calls into req, by the rule's text,
+// call and blocks, and returns the prose to stream.
+func (r *recordReader) readLocked(doc map[string]any, e cliprofile.RequestEvent, req *request) []string {
+	var deltas []string
+	if len(e.Text) > 0 {
+		if s, ok := stringAt(doc, e.Text); ok && s != "" {
+			req.text, req.dirty = append(req.text, s), true
+			if !r.streams {
+				deltas = append(deltas, s)
+			}
+		}
+	}
+	if e.Call != nil {
+		req.calls, req.dirty = append(req.calls, r.callOf(doc, e.Call)), true
+	}
+	if e.Blocks != nil {
+		deltas = append(deltas, r.blocksLocked(doc, e.Blocks, req)...)
+	}
+	return deltas
+}
+
+// wholeLocked reads an event that carries its request whole: what it reads of
+// the request's prose and calls replaces what earlier events read, and only
+// prose that extends what was streamed is streamed — an entry written again as
+// it grows repeats everything it held before.
+func (r *recordReader) wholeLocked(doc map[string]any, e cliprofile.RequestEvent, req *request) []string {
+	now := &request{}
+	r.readLocked(doc, e, now)
+	before, after := strings.Join(req.text, "\n"), strings.Join(now.text, "\n")
+	var deltas []string
+	if !r.streams && len(after) > len(before) && strings.HasPrefix(after, before) {
+		deltas = append(deltas, after[len(before):])
+	}
+	if before != after || !sameCalls(req.calls, now.calls) {
+		req.text, req.calls, req.dirty = now.text, now.calls, true
+	}
+	return deltas
+}
+
+// sameCalls reports whether two readings of a request's calls are the same
+// calls: by id, name and canonical arguments, in order.
+func sameCalls(a, b []llm.TurnCall) bool {
+	return slices.EqualFunc(a, b, func(x, y llm.TurnCall) bool {
+		ax, _ := json.Marshal(x.Arguments)
+		ay, _ := json.Marshal(y.Arguments)
+		return x.ID == y.ID && x.Name == y.Name && x.Host == y.Host && string(ax) == string(ay)
+	})
+}
+
+// closeLocked ends the request open now: the record has moved past it.
+func (r *recordReader) closeLocked() {
+	if r.current != nil {
+		r.current.settled = true
+	}
+	r.current = nil
+}
+
 // requestForLocked is the request an event belongs to: a new one where the
 // rule opens one; the one of its id, opened by it if none is; else the one
-// open now. Nil for an event that names none while none is open.
+// open now — or, in a record whose rules close requests, a new one where none
+// is open and the rule reads into one. Nil for an event that names none while
+// none is open.
 func (r *recordReader) requestForLocked(doc map[string]any, e cliprofile.RequestEvent) *request {
 	id := ""
 	if len(e.ID) > 0 {
@@ -319,7 +389,7 @@ func (r *recordReader) requestForLocked(doc map[string]any, e cliprofile.Request
 				return req
 			}
 		}
-	} else if !e.Opens {
+	} else if !e.Opens && (r.current != nil || !r.reopens || !e.ReadsRequest()) {
 		return r.current
 	}
 	req := &request{id: id, figures: map[string]int{}, has: map[string]bool{}}
@@ -327,6 +397,11 @@ func (r *recordReader) requestForLocked(doc map[string]any, e cliprofile.Request
 		// A request the record names no id for is still keyed apart from
 		// every other: the host keys requests by id.
 		req.id = fmt.Sprintf("request-%d", len(r.requests)+1)
+	}
+	// A REQUEST BEGINNING SETTLES EVERY ONE BEFORE IT: the CLI asked its
+	// model again, so the calls those asked for have all run.
+	for _, earlier := range r.requests {
+		earlier.settled = true
 	}
 	r.requests = append(r.requests, req)
 	r.current = req
@@ -416,17 +491,25 @@ func (r *recordReader) blocksLocked(doc map[string]any, b *cliprofile.Blocks, re
 	return deltas
 }
 
-// callOf reads one call. A tool named with the host's prefix is the host's,
-// reported by the host's own name; any other is one of the CLI's own.
+// callOf reads one call. A tool filed in the host's namespace, or named with
+// the host's prefix, is the host's, reported by the host's own name; any other
+// is one of the CLI's own.
 func (r *recordReader) callOf(doc map[string]any, paths *cliprofile.CallPaths) llm.TurnCall {
 	var call llm.TurnCall
 	if len(paths.ID) > 0 {
 		call.ID, _ = stringAt(doc, paths.ID)
 	}
 	name, _ := stringAt(doc, paths.Name)
-	if prefix := r.rule.HostPrefix; prefix != "" && strings.HasPrefix(name, prefix) {
+	namespace := ""
+	if len(paths.Namespace) > 0 {
+		namespace, _ = stringAt(doc, paths.Namespace)
+	}
+	switch prefix := r.rule.HostPrefix; {
+	case r.rule.HostNamespace != "" && namespace == r.rule.HostNamespace:
+		call.Name, call.Host = name, true
+	case prefix != "" && strings.HasPrefix(name, prefix):
 		call.Name, call.Host = strings.TrimPrefix(name, prefix), true
-	} else {
+	default:
 		call.Name = name
 	}
 	call.Arguments = map[string]any{}
@@ -470,16 +553,21 @@ func (r *recordReader) figuresLocked(doc map[string]any, u cliprofile.UsagePaths
 			}
 			req.has[f.name] = true
 			req.dirty = true
+			if f.name == figInput {
+				// What the input count holds is said by the rule that read it.
+				req.inputHoldsCache = u.InputIncludesCache
+			}
 		}
 	}
 }
 
 // usageOf is what the record says a request cost, on the contract's rule: the
-// whole prompt as Input, by the vendor's arithmetic.
+// whole prompt as Input, by the arithmetic of the rule that read the counts.
 func (r *recordReader) usageOf(req *request) llm.Usage {
 	f := req.figures
+	arithmetic := cliprofile.UsagePaths{InputIncludesCache: req.inputHoldsCache}
 	return llm.Usage{
-		Input:      r.p.Usage.PromptTokens(f[figInput], f[figCacheRead], f[figCacheWrite]) + f[figToolPrompt],
+		Input:      arithmetic.PromptTokens(f[figInput], f[figCacheRead], f[figCacheWrite]) + f[figToolPrompt],
 		Output:     f[figOutput] + f[figReasoning],
 		CacheRead:  f[figCacheRead],
 		CacheWrite: f[figCacheWrite],
@@ -500,18 +588,22 @@ func (r *recordReader) stopOf(s string) llm.StopReason {
 }
 
 // flushLocked collects what the host must be told: each touched request worth
-// observing — one with prose or calls, or every one when the run is over —
-// and the spend no report has carried yet.
+// observing — one with prose or calls, or every one when the run is over; in a
+// record whose calls show late, each one the record has moved past — and the
+// spend no report has carried yet.
 func (r *recordReader) flushLocked(touched map[*request]bool, final bool) ([]llm.Turn, []llm.Usage) {
 	var turns []llm.Turn
 	spends := r.pending
 	r.pending = nil
+	late := r.rule.LateCalls
 	for _, req := range r.requests {
-		if !touched[req] && !final {
+		due := late && req.settled && !req.observed
+		if !touched[req] && !final && !due {
 			continue
 		}
 		// THE COUNTS FIRST: an increment over what was reported, figure by
-		// figure, never a refund.
+		// figure, never a refund — as they are read, however late the
+		// request itself is told.
 		if got := r.usageOf(req); req.has[figInput] || req.has[figOutput] {
 			inc := llm.Usage{
 				Input:      max(0, got.Input-req.reported.Input),
@@ -523,6 +615,12 @@ func (r *recordReader) flushLocked(touched map[*request]bool, final bool) ([]llm
 				req.reported = addUsage(req.reported, inc)
 				spends = append(spends, inc)
 			}
+		}
+		if late && !req.settled && !final {
+			// ITS CALLS MAY NOT ALL HAVE SHOWN: told now, the host would
+			// hold a call it is about to run for a request it was told
+			// asked for none.
+			continue
 		}
 		if !req.dirty && !(final && !req.observed) {
 			continue
