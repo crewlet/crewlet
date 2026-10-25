@@ -1522,3 +1522,20 @@ test("a typed question can be asked of the assistant, where the reader may ask",
   await q.type("why did spend go up");
   expect(screen.queryByText("Ask the assistant: “why did spend go up”")).toBeNull();
 });
+
+// THE LAST ANSWER, NEVER ENTER'S BY DEFAULT: the assistant's row closes the
+// list (05-ux-design, "Keyboard"), and with nothing found the row Enter takes
+// is not the artifacts scope either, which only moves the reader to another
+// scope.
+test("the assistant's row is last, and the artifacts scope is not what Enter takes", async () => {
+  const ask = vi.fn();
+  mount({ assistant: { open: false, unavailable: null, toggle: () => {}, ask } });
+  const box = screen.getByRole("combobox");
+  await act(async () => {
+    fireEvent.change(box, { target: { value: "why did spend go up" } });
+  });
+  const options = screen.getAllByRole("option");
+  expect(options.at(-1)?.textContent).toContain("Ask the assistant: “why did spend go up”");
+  const id = box.getAttribute("aria-activedescendant") ?? "";
+  expect(document.getElementById(id)?.textContent ?? "").not.toContain("in artifacts");
+});

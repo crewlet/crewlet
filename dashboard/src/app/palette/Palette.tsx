@@ -539,26 +539,32 @@ export function CommandPalette({
     );
   };
 
+  // --- assistant page actions (WP12) ---
+  // THE QUESTION, ASKED OF THE ASSISTANT, beside the page it was typed on, as
+  // the LAST answer for any typed text (05-ux-design, "Keyboard"): a row the
+  // reader goes to, never the one Enter takes in place of a match. Offered
+  // only where this reader may ask, and asked as the panel would ask it
+  // (`control.ts`).
+  const assistantRows = (): CommandPaletteItem[] =>
+    term && !picking && (scope === "all" || scope === "actions") && assistant.unavailable === null
+      ? [
+          {
+            id: "act-assistant",
+            icon: <ProductMark product="assistant" size="sm" />,
+            label: `Ask the assistant: “${term}”`,
+            hint: "answers in the panel, with this page attached",
+            onSelect: () => assistant.ask(term),
+          },
+        ]
+      : [];
+  // --- end assistant page actions (WP12) ---
+
   // ---- the three action rows -----------------------------------------------
   const answeredMd = answer.kind === "answered" ? answer.answer : null;
 
   const actionRows = (): CommandPaletteItem[] => {
     if (picking) return [];
     const rows: CommandPaletteItem[] = [];
-    // --- assistant page actions (WP12) ---
-    // THE QUESTION, ASKED OF THE ASSISTANT, beside the page it was typed on:
-    // offered only where this reader may ask, and asked as the panel would
-    // ask it (`control.ts`).
-    if (term && (scope === "all" || scope === "actions") && assistant.unavailable === null) {
-      rows.push({
-        id: "act-assistant",
-        icon: <ProductMark product="assistant" size="sm" />,
-        label: `Ask the assistant: “${term}”`,
-        hint: "answers in the panel, with this page attached",
-        onSelect: () => assistant.ask(term),
-      });
-    }
-    // --- end assistant page actions (WP12) ---
     if (!runs.tracker) return rows;
     const blockedRow = (reason: string) => () => {
       stay();
@@ -1003,6 +1009,17 @@ export function CommandPalette({
       push("tasks", "Tasks", taskRows(allRows));
       push("pages", "Pages", pageRows(allRows));
       for (const g of agentGroups(ALL_ROWS, true)) push(g.id, g.label, g.items);
+      push("tools", "Tools", asItems(toolHits(tools, lower, nav, ALL_ROWS)));
+      push("actions", "Actions", actionRows());
+      const drawn = new Set([
+        ...(taskAnswer.data?.hits ?? []).slice(0, allRows).map((h) => `task:${h.key}`),
+        ...(pageAnswer.data?.hits ?? []).slice(0, allRows).map((p) => `page:${p.id}`),
+      ]);
+      push("sources", "Sources of the answer", sourceRows(drawn));
+      push("search", "Search", asItems(searchHits(term, nav, runs)));
+      // A SCOPE TO GO ON IN, NOT A MATCH: with nothing found above it, a row
+      // first in the list is the one Enter takes, and Enter on a question then
+      // left the reader in the artifacts scope rather than at an answer.
       if (term.length >= SEARCH_MIN && tooLong === null) {
         push("artifacts", "Artifacts", [
           {
@@ -1017,14 +1034,7 @@ export function CommandPalette({
           },
         ]);
       }
-      push("tools", "Tools", asItems(toolHits(tools, lower, nav, ALL_ROWS)));
-      push("actions", "Actions", actionRows());
-      const drawn = new Set([
-        ...(taskAnswer.data?.hits ?? []).slice(0, allRows).map((h) => `task:${h.key}`),
-        ...(pageAnswer.data?.hits ?? []).slice(0, allRows).map((p) => `page:${p.id}`),
-      ]);
-      push("sources", "Sources of the answer", sourceRows(drawn));
-      push("search", "Search", asItems(searchHits(term, nav, runs)));
+      push("assistant", "Assistant", assistantRows());
     }
   } else if (scope === "tasks") {
     const rows = taskRows(TASK_HITS);
@@ -1078,6 +1088,7 @@ export function CommandPalette({
       ),
     );
     push("actions", "Actions", actionRows());
+    push("assistant", "Assistant", assistantRows());
   }
 
   // ---- what the list says when it has no rows ------------------------------
