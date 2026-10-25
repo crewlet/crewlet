@@ -21,6 +21,21 @@
 // D06), a separate verb that is audited as its own event naming the reader and
 // the reason, recorded beside the conversation so its owner sees it.
 //
+// # Subjects
+//
+// The subject is the arbitration unit ([Subject]). A conversation's subject
+// orders its create, its title, its purge and the OPENING OF EACH TURN, so one
+// turn runs or waits on an approval per conversation whichever node opens it;
+// a turn's subject orders its park, resume and close, and carries its
+// messages, steps and cards as additive records under ids derived from the
+// turn ([MessageID], [StepID], [CardID]), so a duplicate publish writes one
+// row; a proposal's subject orders its moves, each decided from the state it
+// names ([ProposalMove]), so two approvals arbitrate to one. A turn's and a
+// proposal's subject id leads with its conversation's, so a conversation's
+// purge gates every record about it from the subject alone. An owner's
+// subject carries their erasure. Which proposal moves are legal is
+// internal/assistant/proposal's state machine; this package records them.
+//
 // # Sealed, bounded, and gone in thirty days
 //
 // The estate is not encrypted at rest, so every message, card, preview and
@@ -31,6 +46,12 @@
 // never a raw tool result (outside the bounded parked turn), a grant, a
 // request header or a rendered prompt. A conversation untouched for its
 // retention (thirty days by default) is purged through its own purge record by
-// the trash reaper, a purge installs a gate so nothing later recreates it, and
-// a person's erasure takes their conversations in the same pass.
+// the trash reaper, decided again at the apply against activity the
+// conversation's arbitration cannot see; a purge installs a gate so nothing
+// later recreates it; and a person's erasure is ONE record that takes every
+// conversation they own, published by the engine when the identity applier
+// reports the removal and by the reaper's next pass as the backstop
+// ([Writer.EraseOwner]). Every bound on what is stored is this package's
+// ([CardMaxBytes], [ParkedMaxBytes] and the rest), and the largest record they
+// admit is held under the domain's declaration (spike S4).
 package assistantdomain

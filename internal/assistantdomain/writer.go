@@ -148,11 +148,18 @@ func decision(stamp statelog.Stamp, by iam.Actor, subject Subject, op OpKind,
 	return statelog.Decision{Payload: encoded}, nil
 }
 
+// publish appends one write through the writer's publisher.
+func (w *Writer) publish(ctx context.Context, req statelog.Request) (statelog.Result, error) {
+	return publish(ctx, w.publisher, req)
+}
+
 // publish appends one write, translating the framework's answers into this
 // package's: exhausted rounds are a conflict, and a record a deletion marker
 // drops is a write to a purged conversation.
-func (w *Writer) publish(ctx context.Context, req statelog.Request) (statelog.Result, error) {
-	res, err := w.publisher.Publish(ctx, req)
+func publish(ctx context.Context, publisher *statelog.Publisher,
+	req statelog.Request) (statelog.Result, error) {
+
+	res, err := publisher.Publish(ctx, req)
 	if errors.Is(err, statelog.ErrConflict) {
 		return res, fmt.Errorf("%w: %s: %w", ErrConflict, req.Subject, err)
 	}
@@ -441,76 +448,4 @@ var AuditNamespace = uuid.MustParse("4b6c0f3a-9d21-5e8f-a7c4-1e2d3f4a5b6c")
 // auditRecordID is the id a compliance read's sealed reason is bound to.
 func auditRecordID(opID string) uuid.UUID {
 	return uuid.NewSHA1(AuditNamespace, []byte(opID))
-}
-
-// ---- node gates --------------------------------------------------------- //
-
-// EvictNode installs the gate that drops a node's records on this log, AS the
-// actor who ran the gesture, under the operation id the engine's node gate
-// derived. UNJUDGED HERE: whether the node may be evicted is asked once, by the
-// node gate, before the first log is written.
-func (w *Writer) EvictNode(ctx context.Context, by iam.Actor, opID, node string) (statelog.Result, error) {
-	return w.gateNode(ctx, by, opID, node, false)
-}
-
-// ReadmitNode is the eviction's INVERSE COMMIT rather than a delete.
-func (w *Writer) ReadmitNode(ctx context.Context, by iam.Actor, opID, node string) (statelog.Result, error) {
-	return w.gateNode(ctx, by, opID, node, true)
-}
-
-// gateNode publishes one eviction record on the node's own subject. A retry is
-// answered by the framework from this node's ledger, judged by whether the
-// record its operation landed is still in force ([statelog.GateStanding]).
-func (w *Writer) gateNode(ctx context.Context, by iam.Actor, opID, node string,
-	readmit bool) (statelog.Result, error) {
-
-	switch {
-	case node == "":
-		return statelog.Result{}, invalid("an eviction names no node")
-	case opID == "":
-		return statelog.Result{}, invalid("the eviction of %s has no operation id: a "+
-			"retry under a fresh one would write the gate twice", node)
-	case strings.TrimSpace(by.Name) == "" || !by.Kind.Valid():
-		return statelog.Result{}, invalid("an eviction names who ran it")
-	}
-	subject, scope := EvictionSubject(node), ScopeSet{Subject: true}
-	at := w.now()
-	return w.publish(ctx, statelog.Request{
-		Subject: subject.framework(), Scope: scope.Resolve(subject), OpID: opID,
-		Pattern: statelog.PatternArbitrated, NodeGate: true,
-		Standing: func(tx *sql.Tx, held statelog.Position) error {
-			row, found, err := standingIn(ctx, tx, node)
-			if err != nil {
-				return err
-			}
-			return statelog.GateStanding(opID, node, readmit, held, row, found)
-		},
-		Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			return decision(stamp, by, subject, OpEviction, scope, opID, Eviction{
-				V: GateRecordVersion, NodeID: node, EvictedBy: by.Name, EvictedAt: at,
-				Readmitted: readmit,
-			}, at)
-		},
-	})
-}
-
-// standingIn is node's eviction row on this log, read in the transaction the
-// caller holds.
-func standingIn(ctx context.Context, tx *sql.Tx, node string) (statelog.EvictionRow, bool, error) {
-	var from int64
-	var readmitted sql.NullInt64
-	err := tx.QueryRowContext(ctx, `
-		SELECT from_position, readmitted_position FROM assistant_evictions
-		WHERE node_id = ?`, node).Scan(&from, &readmitted)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return statelog.EvictionRow{}, false, nil
-	case err != nil:
-		return statelog.EvictionRow{}, false, fmt.Errorf("assistantdomain: read %s's "+
-			"eviction row: %w", node, err)
-	}
-	return statelog.EvictionRow{
-		NodeID: node, From: uint64(from), Readmitted: uint64(readmitted.Int64),
-		Back: readmitted.Valid && readmitted.Int64 > from,
-	}, true, nil
 }

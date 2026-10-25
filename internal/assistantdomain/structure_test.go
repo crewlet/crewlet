@@ -60,9 +60,9 @@ func TestTheLargestRecordFitsItsDeclaration(t *testing.T) {
 			assistantdomain.OpProposalCreated, assistantdomain.ProposalCreated{
 				V: 1, Turn: uuid.NewString(), Owner: uuid.NewString(), Tool: long, Act: long,
 				Scope: wire.ScopeServer, Method: "PATCH",
-				Path:        "/" + strings.Repeat("p", assistantdomain.QueryMaxBytes-1),
-				QuerySealed: seal(assistantdomain.QueryMaxBytes, assistantdomain.ColumnQuery),
-				BodySealed:  seal(assistantdomain.ProposalBodyMaxBytes, assistantdomain.ColumnBody),
+				Path:          "/" + strings.Repeat("p", assistantdomain.QueryMaxBytes-1),
+				QuerySealed:   seal(assistantdomain.QueryMaxBytes, assistantdomain.ColumnQuery),
+				BodySealed:    seal(assistantdomain.ProposalBodyMaxBytes, assistantdomain.ColumnBody),
 				RequestDigest: hex64("a"), Digest: "sha256:" + hex64("d"), OpKey: op("approve"),
 				SourceRevision: long, StepUp: true,
 				CardSealed: seal(assistantdomain.CardMaxBytes, assistantdomain.ColumnCard),

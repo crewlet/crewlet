@@ -62,6 +62,12 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// transaction).
 		"artifactdata_anchors",
 		"artifactdata_ops",
+		// THE ASSISTANT LOG'S TWO, for the same reason. Its conversations
+		// are NOT here: they are Replicated, so their retention rides a
+		// record (the trash reaper's retention purge) rather than a local
+		// delete.
+		"assistant_anchors",
+		"assistant_ops",
 		// THE ARTIFACTS LOG'S TWO, for the same reason. The artifacts' own
 		// history and their trashed rows are NOT here: both are Replicated,
 		// so their retention rides a record (the history's term in the
