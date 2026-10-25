@@ -807,8 +807,9 @@ func rawBundle(t *testing.T, entries ...bundleFile) string {
 
 // credentialEntries names everything in the entry's credential directory,
 // whatever it is — nil where the directory holds nothing or does not exist.
-// Read from the directory rather than through LoginFiles, which sees only the
-// names the profile keeps: a manifest written there would be invisible to it.
+// Read from the directory rather than through [Workspace.Login], which reads
+// only the names the profile keeps: a manifest written there would be
+// invisible to it.
 func credentialEntries(t *testing.T, p *Provider) []string {
 	t.Helper()
 	entries, err := os.ReadDir(p.ws.CredentialsDir())
