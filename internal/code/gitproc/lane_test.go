@@ -65,7 +65,7 @@ func startReceivePack(t *testing.T, p *gitproc.Pool, options []string, indexed <
 	r := receive{holder: holder{started: filepath.Join(dir, "env"), release: filepath.Join(dir, "release")}}
 	r.env = r.started
 	args := append(append([]string{"receive-pack"}, options...), r.env, r.release)
-	r.done = start(t.Context(), p, gitproc.Cmd{Args: args, Class: gitproc.ClassTransfer, Deadline: time.Minute, Indexed: indexed})
+	r.done = start(t.Context(), p, gitproc.Cmd{Args: args, Class: gitproc.ClassTransfer, Share: suiteShare, Deadline: time.Minute, Indexed: indexed})
 	deadline := time.Now().Add(hang)
 	for {
 		if _, err := os.Stat(r.env); err == nil {
@@ -252,7 +252,7 @@ func TestALoanNeverMakesAReadWait(t *testing.T) {
 	var barrier sync.WaitGroup
 	barrier.Add(2)
 	hook := &nested{p: hookPool, ctx: t.Context(), barrier: &barrier}
-	push := start(t.Context(), hookPool, gitproc.Cmd{Args: []string{"receive-pack"}, Stdin: hook, Class: gitproc.ClassTransfer, Deadline: time.Minute, Indexed: toExit()})
+	push := start(t.Context(), hookPool, gitproc.Cmd{Args: []string{"receive-pack"}, Stdin: hook, Class: gitproc.ClassTransfer, Share: suiteShare, Deadline: time.Minute, Indexed: toExit()})
 	awaitLent(t, hookPool, 1)
 	other := hold(t, hookPool, gitproc.ClassRead)
 	barrier.Done() // the hook's read now runs, beside the loan and the other read
@@ -346,14 +346,14 @@ func TestOnlyAReceivePackIsLent(t *testing.T) {
 		cmd  gitproc.Cmd
 		want int
 	}{
-		{cmd: gitproc.Cmd{Args: []string{"upload-pack"}, Class: gitproc.ClassTransfer}, want: 1},
-		{cmd: gitproc.Cmd{Args: []string{"receive-pack", "--stateless-rpc", "--advertise-refs", "/r"}, Class: gitproc.ClassTransfer}, want: 1},
-		{cmd: gitproc.Cmd{Args: []string{"receive-pack", "--stateless-rpc", "--http-backend-info-refs", "/r"}, Class: gitproc.ClassTransfer}, want: 1},
-		{cmd: gitproc.Cmd{Args: []string{"receive-pack", "/r", "--advertise-refs"}, Class: gitproc.ClassTransfer}, want: 1},
+		{cmd: gitproc.Cmd{Args: []string{"upload-pack"}, Class: gitproc.ClassTransfer, Share: suiteShare}, want: 1},
+		{cmd: gitproc.Cmd{Args: []string{"receive-pack", "--stateless-rpc", "--advertise-refs", "/r"}, Class: gitproc.ClassTransfer, Share: suiteShare}, want: 1},
+		{cmd: gitproc.Cmd{Args: []string{"receive-pack", "--stateless-rpc", "--http-backend-info-refs", "/r"}, Class: gitproc.ClassTransfer, Share: suiteShare}, want: 1},
+		{cmd: gitproc.Cmd{Args: []string{"receive-pack", "/r", "--advertise-refs"}, Class: gitproc.ClassTransfer, Share: suiteShare}, want: 1},
 		{cmd: gitproc.Cmd{Args: []string{"receive-pack"}, Class: gitproc.ClassRead}, want: 1},
 		{cmd: gitproc.Cmd{Args: []string{"receive-pack"}, Class: gitproc.ClassMaintenance}, want: 1},
 		{cmd: gitproc.Cmd{Args: []string{"index-pack"}, Class: gitproc.ClassRead}, want: 1},
-		{cmd: gitproc.Cmd{Args: []string{"receive-pack", "--stateless-rpc", "/r"}, Class: gitproc.ClassTransfer, Indexed: toExit()},
+		{cmd: gitproc.Cmd{Args: []string{"receive-pack", "--stateless-rpc", "/r"}, Class: gitproc.ClassTransfer, Share: suiteShare, Indexed: toExit()},
 			want: 1 + gitproc.MaxLentCores},
 	} {
 		tc.cmd.Deadline = time.Minute
@@ -420,7 +420,7 @@ func receivePackReadOn(t *testing.T, git string) {
 		{"--advertise-refs", repo},
 	} {
 		res, err := p.Run(t.Context(), gitproc.Cmd{Dir: repo, Args: append([]string{"receive-pack"}, args...),
-			Class: gitproc.ClassTransfer, Deadline: time.Minute})
+			Class: gitproc.ClassTransfer, Share: suiteShare, Deadline: time.Minute})
 		if err != nil || !strings.Contains(string(res.Stdout), "capabilities^{}") {
 			t.Errorf("git receive-pack %v, taken for an advertisement: %q, stderr %q, %v; want the refs advertised",
 				args, res.Stdout, res.Stderr, err)
@@ -431,7 +431,7 @@ func receivePackReadOn(t *testing.T, git string) {
 		{repo, "--stateless-rpc"},
 	} {
 		res, err := p.Run(t.Context(), gitproc.Cmd{Dir: repo, Args: append([]string{"receive-pack"}, args...),
-			Class: gitproc.ClassTransfer, Deadline: time.Minute, Indexed: toExit(), Answers: []int{128}})
+			Class: gitproc.ClassTransfer, Share: suiteShare, Deadline: time.Minute, Indexed: toExit(), Answers: []int{128}})
 		if err != nil || len(res.Stdout) != 0 || !strings.Contains(res.Stderr, "the remote end hung up") {
 			t.Errorf("git receive-pack %v, taken for a push: %q, stderr %q, %v; want it waiting for a push's commands, advertising nothing",
 				args, res.Stdout, res.Stderr, err)
@@ -465,7 +465,7 @@ func TestEveryLoanIsRepaid(t *testing.T) {
 		"its deadline": {
 			body: "sleep 600",
 			cmd: func(context.Context) gitproc.Cmd {
-				return gitproc.Cmd{Args: []string{"receive-pack"}, Class: gitproc.ClassTransfer, Deadline: 200 * time.Millisecond, Indexed: toExit()}
+				return gitproc.Cmd{Args: []string{"receive-pack"}, Class: gitproc.ClassTransfer, Share: suiteShare, Deadline: 200 * time.Millisecond, Indexed: toExit()}
 			},
 			want: func(err error) bool { return errors.Is(err, gitproc.ErrDeadline) },
 		},
@@ -477,14 +477,14 @@ func TestEveryLoanIsRepaid(t *testing.T) {
 		"its input": {
 			body: "cat >/dev/null",
 			cmd: func(context.Context) gitproc.Cmd {
-				return gitproc.Cmd{Args: []string{"receive-pack"}, Stdin: &failingReader{}, Class: gitproc.ClassTransfer, Deadline: time.Minute, Indexed: toExit()}
+				return gitproc.Cmd{Args: []string{"receive-pack"}, Stdin: &failingReader{}, Class: gitproc.ClassTransfer, Share: suiteShare, Deadline: time.Minute, Indexed: toExit()}
 			},
 			want: func(err error) bool { return errors.Is(err, gitproc.ErrInput) },
 		},
 		"its output": {
 			body: "yes",
 			cmd: func(context.Context) gitproc.Cmd {
-				return gitproc.Cmd{Args: []string{"receive-pack"}, Stdout: failingWriter{}, Class: gitproc.ClassTransfer, Deadline: time.Minute, Indexed: toExit()}
+				return gitproc.Cmd{Args: []string{"receive-pack"}, Stdout: failingWriter{}, Class: gitproc.ClassTransfer, Share: suiteShare, Deadline: time.Minute, Indexed: toExit()}
 			},
 			want: func(err error) bool { return errors.Is(err, gitproc.ErrOutput) },
 		},
@@ -495,7 +495,7 @@ func TestEveryLoanIsRepaid(t *testing.T) {
 			p := fakePool(t, tc.body, gitproc.Options{MaxProcesses: 4, Metrics: rec})
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			c := gitproc.Cmd{Args: []string{"receive-pack"}, Class: gitproc.ClassTransfer, Deadline: time.Minute, Indexed: toExit()}
+			c := gitproc.Cmd{Args: []string{"receive-pack"}, Class: gitproc.ClassTransfer, Share: suiteShare, Deadline: time.Minute, Indexed: toExit()}
 			if tc.cmd != nil {
 				c = tc.cmd(ctx)
 			}
@@ -518,7 +518,7 @@ func TestEveryLoanIsRepaid(t *testing.T) {
 		if err := os.Remove(fake); err != nil {
 			t.Fatal(err)
 		}
-		_, err := p.Run(t.Context(), gitproc.Cmd{Args: []string{"receive-pack"}, Class: gitproc.ClassTransfer, Deadline: time.Minute, Indexed: toExit()})
+		_, err := p.Run(t.Context(), gitproc.Cmd{Args: []string{"receive-pack"}, Class: gitproc.ClassTransfer, Share: suiteShare, Deadline: time.Minute, Indexed: toExit()})
 		// The START's failure, and only that: a refusal (ErrInvalid) comes
 		// before any loan, and would prove nothing about repaying one.
 		if !errors.Is(err, fs.ErrNotExist) || errors.Is(err, gitproc.ErrInvalid) || !strings.Contains(err.Error(), "starting git receive-pack") {

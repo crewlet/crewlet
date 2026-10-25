@@ -912,10 +912,15 @@ func packBytes(b *testing.B, dir string) int64 {
 // requestCounter is a reverse proxy in front of a git node that counts what
 // every upload-pack request it forwards carried, decoded — the bytes a
 // request is held to on the node (the spool's threshold and the repository's
-// bound are on decoded bytes), whatever compression git sent them under.
+// bound are on decoded bytes), whatever compression git sent them under —
+// and the requests the node SERVED: each upload-pack POST, and each fetch's
+// advertisement (GET info/refs?service=git-upload-pack), each of them an
+// upload-pack the node ran in its transfer lane.
 type requestCounter struct {
 	srv     *httptest.Server
 	decoded atomic.Int64
+	posts   atomic.Int64
+	adverts atomic.Int64
 }
 
 // countRequests starts a counter in front of node, until b ends.
@@ -929,6 +934,22 @@ func countRequests(b *testing.B, node codetest.Node) *requestCounter {
 	proxy := &httputil.ReverseProxy{
 		Rewrite:   func(r *httputil.ProxyRequest) { r.SetURL(target) },
 		Transport: node.Client().Transport,
+		// COUNTED AS THE NODE ANSWERS THEM, never as they arrive: git
+		// asks every new connection's first request without credentials
+		// and again with them once it is challenged, and the guard's 401
+		// runs no git.
+		ModifyResponse: func(resp *http.Response) error {
+			if resp.StatusCode != http.StatusOK {
+				return nil
+			}
+			switch r := resp.Request; {
+			case strings.HasSuffix(r.URL.Path, "/info/refs") && r.URL.Query().Get("service") == "git-upload-pack":
+				c.adverts.Add(1)
+			case strings.HasSuffix(r.URL.Path, "/git-upload-pack"):
+				c.posts.Add(1)
+			}
+			return nil
+		},
 	}
 	c.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/git-upload-pack") {
@@ -1248,6 +1269,95 @@ func lazyBlobs(b *testing.B, f *codetest.SoloFleet, p *codetest.Person, tip stri
 	if firstByte >= 0 {
 		b.ReportMetric(firstByte, "first-byte-ms")
 	}
+}
+
+// blameFile is the file BenchmarkLazyBlame's history rewrites, blameLines its
+// length in lines and blameCommits the commits that rewrite it.
+const (
+	blameFile    = "blame.txt"
+	blameLines   = 200
+	blameCommits = 1000
+)
+
+// blameHistory is a bare repository whose main holds blameCommits commits of
+// blameFile, each rewriting one of its blameLines lines in turn, built by one
+// fast-import through p's git.
+func blameHistory(b *testing.B, p *codetest.Person) string {
+	b.Helper()
+	src := gittest.Empty(b)
+	lines := make([]string, blameLines)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line %03d as first written", i)
+	}
+	gittest.FastImport(b, p.Git(), src, func(w *bufio.Writer) error {
+		for c := range blameCommits {
+			lines[c%blameLines] = fmt.Sprintf("line %03d as commit %04d left it", c%blameLines, c)
+			body := strings.Join(lines, "\n") + "\n"
+			msg := fmt.Sprintf("commit %04d\n", c)
+			fmt.Fprintf(w, "commit refs/heads/main\ncommitter Crewlet Bench <bench@example.com> %d +0000\ndata %d\n%s",
+				1_767_225_600+c, len(msg), msg)
+			fmt.Fprintf(w, "M 100644 inline %s\ndata %d\n%s\n", blameFile, len(body), body)
+		}
+		return nil
+	})
+	return src
+}
+
+// BenchmarkLazyBlame is ONE `git blame` IN A BLOBLESS CLONE of a file
+// blameCommits commits rewrote, by a token bound to nobody — a CI job's, or a
+// box's answering a history question with its own git — and what it costs
+// the git node it lazily fetches from: each fetch is an advertisement and an
+// upload-pack, both runs of the transfer lane charged to the token's share
+// (gitproc's fair share), and the figures are what the share bounds in place
+// of a lazy-fetch limiter of the host's own (code-host.md, "Fair share"):
+// fetches and advertisements a blame, the bytes they bring, and the server
+// CPU they spend. Each operation is a fresh clone made with the timer
+// stopped, from a warm node whose maintainer has written the repository's
+// bitmap (warmBitmap), through a proxy that counts the requests
+// (requestCounter).
+func BenchmarkLazyBlame(b *testing.B) {
+	f, p := benchFleet(b, memobj.New(), 1)
+	node := f.Nodes()[0]
+	mustPush(b, p, blameHistory(b, p), repoURL(node), "main")
+	rows, err := f.Rows(b.Context(), codetest.RepoName, codetest.Linearizable)
+	if err != nil {
+		b.Fatal(err)
+	}
+	warmBitmap(b, node, rows.Repo.ID)
+	ci := codetest.NewPerson(b, f, "")
+	counter := countRequests(b, node)
+	url := counter.srv.URL + "/git/" + codetest.RepoName
+	var (
+		fetches, adverts, brought int64
+		cpu                       float64
+	)
+	for b.Loop() {
+		b.StopTimer()
+		dir := filepath.Join(b.TempDir(), "blobless")
+		ci.Git().Run(b, "", "-c", "protocol.version=2", "clone", "--quiet", "--filter=blob:none", "--no-checkout",
+			url, dir)
+		posts0, adverts0, bytes0, cpu0 := counter.posts.Load(), counter.adverts.Load(), packBytes(b, dir),
+			serverCPU(node.Metrics())
+		b.StartTimer()
+		out := ci.Git().Run(b, dir, "-c", "protocol.version=2", "blame", "--porcelain", "main", "--", blameFile)
+		b.StopTimer()
+		if got := strings.Count(out, "\n\t"); got != blameLines {
+			b.Fatalf("git blame named %d lines of a %d-line file", got, blameLines)
+		}
+		fetches += counter.posts.Load() - posts0
+		adverts += counter.adverts.Load() - adverts0
+		brought += packBytes(b, dir) - bytes0
+		cpu += serverCPU(node.Metrics()) - cpu0
+		if err := os.RemoveAll(dir); err != nil {
+			b.Fatal(err)
+		}
+		b.StartTimer()
+	}
+	n := float64(b.N)
+	b.ReportMetric(float64(fetches)/n, "fetches/blame")
+	b.ReportMetric(float64(adverts)/n, "advertisements/blame")
+	b.ReportMetric(float64(brought)/n/1024, "KiB/blame")
+	b.ReportMetric(cpu/n, "server-cpu-ms/blame")
 }
 
 // BenchmarkCloneWarm is IDENTICAL CLONES OF ONE SHA AT ONCE FROM A WARM

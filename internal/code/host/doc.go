@@ -252,6 +252,28 @@
 // read for it, since its remedy is a binding in the identity directory rather
 // than a grant.
 //
+// # Every transfer is charged to the credential that asked for it
+//
+// The same admission says whose TRANSFER every git process of the request is
+// (admission.share, gitproc.Cmd.Share): both advertisements, upload-pack and
+// receive-pack. The holder of a human seat is a PERSON, by the seat's handle —
+// a person through any credential of theirs, so their laptop, scripts and
+// browser are one principal, as their grant is one; or a Tier A token or
+// service account the identity directory binds to a seat nobody else holds —
+// and a credential acting as nobody is a MACHINE, by the credential's name
+// (`token:<id>`, a service account's `pat:<id>`), never by the account behind
+// it, so a token per CI runner is a turn per runner. When the node's transfer
+// slots are all held, gitproc's fair share hands a released one to the class
+// furthest below its weighted share of what the lane has spent lately (a
+// person 4, a machine 2), then to the principal that spent least, each run
+// charged the greater of its CPU and the slot-time it held: so a CI
+// credential's storm of clones or lazy fetches waits behind itself, and a
+// person's clone takes the next slot released. That is also the whole answer
+// to a blobless clone's lazy fetches: a blame of a file of a thousand commits
+// is two hundred and one of them (BenchmarkLazyBlame), each an advertisement
+// and an upload-pack charged to the credential that asked, with no limiter of
+// the host's own beside the share.
+//
 // # The hook relay cannot end the process
 //
 // The relay's accept loop and its connections run outside net/http's
@@ -448,4 +470,14 @@
 // quarter of it, which is why it is the value (cache's BenchmarkPackReuse
 // holds the two side by side over the cache's own layout, and cache/serve.go
 // says why).
+//
+// A LAZY BLAME (BenchmarkLazyBlame) — `git blame` in a blobless clone of a
+// 200-line file that 1 000 commits rewrote a line at a time, by a token bound
+// to nobody, from a node holding the bitmap, the pools and the client on the
+// node pin (2.56.0), one count of three blames on four E-cores of an Intel
+// Core Ultra 7 265U — is 201 lazy fetches, a version of the file each and
+// each an advertisement and an upload-pack (402 transfer-lane runs), bringing
+// 412.5 KiB and costing the node 1.1 s of CPU, about 5.5 ms a fetch, in 7.2 s
+// of the client's wall clock. Every one is charged to the token's share,
+// which is the whole bound on what such a storm costs anybody else.
 package host

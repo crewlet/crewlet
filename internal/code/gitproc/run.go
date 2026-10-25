@@ -34,16 +34,22 @@ func (p *Pool) Run(ctx context.Context, c Cmd) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	release, waited, err := p.admit(ctx, c.Class)
+	release, waited, err := p.admit(ctx, c.Class, c.Share)
 	if p.metrics != nil {
 		p.metrics.Observe(metrics.CodeGitWait, waited, metrics.Attrs{"class": string(c.Class)})
+		if c.Class == ClassTransfer {
+			p.metrics.Observe(metrics.CodeGitShareWait, waited, metrics.Attrs{"share": string(c.Share.Class)})
+		}
 	}
 	if err != nil {
 		return Result{Waited: waited}, err
 	}
-	// Deferred first, so it runs last: the slot is released only once the
-	// process is reaped and its group swept.
-	defer release()
+	var res Result
+	// Deferred first, so it runs last: the slot is released — and a
+	// transfer's charge settled from the Result this returns, its CPU
+	// included — only once the process is reaped and its group swept. A run
+	// whose process never started settles its occupancy alone.
+	defer release(&res)
 	lent := p.lend(c)
 	if lent != nil {
 		// Repaid at the latest here, on every way a run ends; at the
@@ -51,7 +57,7 @@ func (p *Pool) Run(ctx context.Context, c Cmd) (Result, error) {
 		defer lent.repay()
 		prep.env[prep.threads] = threadsValue(1 + lent.cores)
 	}
-	res, err := p.run(ctx, c, prep, lent)
+	res, err = p.run(ctx, c, prep, lent)
 	res.Waited = waited
 	p.report(c, res)
 	return res, err
@@ -66,26 +72,41 @@ func (p *Pool) Run(ctx context.Context, c Cmd) (Result, error) {
 // nesting; reads wait on nothing while they hold a slot, so a transfer waiting
 // on reads can never deadlock — where one pool for both would deadlock N
 // concurrent pushes, each waiting for an N+1th slot.
-func (p *Pool) admit(ctx context.Context, c Class) (release func(), waited time.Duration, err error) {
+//
+// A TRANSFER waits for the slot its share is granted (share.go) — never
+// longer than SlotWait either — and its release settles the run from the
+// Result it is handed: the CPU its process tree spent, none for a nil one.
+// The other lanes ignore the share and the Result.
+func (p *Pool) admit(ctx context.Context, c Class, s Share) (release func(*Result), waited time.Duration, err error) {
 	start := time.Now()
 	l := p.lane(c)
 	if ctx.Err() != nil {
 		return nil, 0, fmt.Errorf("gitproc: git was not started: its caller had already gone: %w", context.Cause(ctx))
 	}
 	if c == ClassMaintenance {
-		release, err := p.tryMaintenance()
-		return release, time.Since(start), err
+		free, refused := p.tryMaintenance()
+		if refused != nil {
+			return nil, time.Since(start), refused
+		}
+		return func(*Result) { free() }, time.Since(start), nil
 	}
 	wait, cancel := context.WithTimeout(ctx, p.slotWait)
 	defer cancel()
-	if err := l.acquire(wait); err != nil {
+	r, err := l.acquire(wait, s)
+	if err != nil {
 		waited = time.Since(start)
 		if ctx.Err() != nil {
 			return nil, waited, fmt.Errorf("gitproc: waiting for a %s slot: its caller went away: %w", c, context.Cause(ctx))
 		}
 		return nil, waited, fmt.Errorf("%w: all %d %s slots on this node stayed busy for %v", ErrBusy, l.size, c, p.slotWait)
 	}
-	return l.release, time.Since(start), nil
+	return func(res *Result) {
+		var cpu time.Duration
+		if res != nil {
+			cpu = res.CPU
+		}
+		l.release(r, cpu)
+	}, time.Since(start), nil
 }
 
 // run starts the process and sees it, its group and its pipes to their end.

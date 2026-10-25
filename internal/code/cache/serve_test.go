@@ -59,7 +59,7 @@ func TestTheServeConfigIsWhatTheHostRuns(t *testing.T) {
 
 	res, err := w.pool.Run(t.Context(), gitproc.Cmd{
 		Dir: s.Dir, Args: []string{"upload-pack", "--stateless-rpc", "--advertise-refs", s.Dir},
-		Config: got, Class: gitproc.ClassTransfer, Deadline: time.Minute,
+		Config: got, Class: gitproc.ClassTransfer, Share: suiteShare, Deadline: time.Minute,
 	})
 	if err != nil {
 		t.Fatalf("upload-pack with the serve configuration: %v", err)
@@ -77,7 +77,7 @@ func advertise(t testing.TB, pool *gitproc.Pool, dir, alternate string, config [
 	var out bytes.Buffer
 	_, err := pool.Run(t.Context(), gitproc.Cmd{
 		Dir: dir, Alternate: alternate, Args: []string{"receive-pack", "--stateless-rpc", "--advertise-refs", dir},
-		Config: config, Stdout: &out, Class: gitproc.ClassTransfer, Deadline: time.Minute,
+		Config: config, Stdout: &out, Class: gitproc.ClassTransfer, Share: suiteShare, Deadline: time.Minute,
 	})
 	if err != nil {
 		t.Fatalf("receive-pack --advertise-refs in %s: %v", dir, err)

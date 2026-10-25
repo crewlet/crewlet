@@ -39,6 +39,8 @@ const (
 	CodeGitCPU                       = "crewlet.code.git.cpu"
 	CodeGitLentCores                 = "crewlet.code.git.lent_cores"
 	CodeGitProcesses                 = "crewlet.code.git.processes"
+	CodeGitShare                     = "crewlet.code.git.share"
+	CodeGitShareWait                 = "crewlet.code.git.share_wait"
 	CodeGitWait                      = "crewlet.code.git.wait"
 	CodeHostSpoolWait                = "crewlet.code.host.spool.wait"
 	CodeHostSpoolWaits               = "crewlet.code.host.spool.waits"

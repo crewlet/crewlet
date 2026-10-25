@@ -244,7 +244,7 @@ func TestAnAdvertisementViewIsASnapshotOfTheRefs(t *testing.T) {
 	}
 	res, err := w.pool.Run(t.Context(), gitproc.Cmd{
 		Dir: view.Dir, Alternate: view.Alternate, Args: []string{"receive-pack", "--stateless-rpc", "--advertise-refs", view.Dir},
-		Class: gitproc.ClassTransfer, Deadline: time.Minute,
+		Class: gitproc.ClassTransfer, Share: suiteShare, Deadline: time.Minute,
 	})
 	if err != nil {
 		t.Fatalf("receive-pack's advertisement in the view: %v", err)

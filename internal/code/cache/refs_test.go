@@ -56,7 +56,7 @@ func TestPackedRefsCarryPeeledTags(t *testing.T) {
 
 	res, err := w.pool.Run(t.Context(), gitproc.Cmd{
 		Dir: s.Dir, Args: []string{"upload-pack", "--stateless-rpc", "--advertise-refs", s.Dir},
-		Config: c.ServeConfig(), Class: gitproc.ClassTransfer, Deadline: time.Minute,
+		Config: c.ServeConfig(), Class: gitproc.ClassTransfer, Share: suiteShare, Deadline: time.Minute,
 	})
 	if err != nil {
 		t.Fatal(err)

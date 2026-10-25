@@ -390,7 +390,8 @@ func (s *Server) receiveOver(ctx context.Context, w http.ResponseWriter, r *http
 			{Key: gitproc.EnvHookSocket, Value: s.relay.path},
 			{Key: gitproc.EnvHookToken, Value: sess.token},
 		},
-		Stdin: io.MultiReader(bytes.NewReader(sec.Raw), p.body), Stdout: p.out, Class: gitproc.ClassTransfer,
+		Stdin: io.MultiReader(bytes.NewReader(sec.Raw), p.body), Stdout: p.out,
+		Class: gitproc.ClassTransfer, Share: adm.share(),
 		Deadline: receivePackDeadline(p.limits, synced.Repo, sec.Commands, s.o.Timing),
 		Stall:    s.o.Timing.Stall, Indexed: sess.indexed,
 	})

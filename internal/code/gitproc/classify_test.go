@@ -112,7 +112,7 @@ func fetchV2(dir, want string) gitproc.Cmd {
 		Dir: dir, Args: []string{"upload-pack", "--stateless-rpc", dir}, Protocol: "version=2",
 		Config: serveConfig,
 		Stdin:  strings.NewReader(pkt("command=fetch\n") + "0001" + pkt("thin-pack\n") + pkt("want "+want+"\n") + pkt("done\n") + "0000"),
-		Class:  gitproc.ClassTransfer, Deadline: gitproc.ReadDeadline,
+		Class:  gitproc.ClassTransfer, Share: suiteShare, Deadline: gitproc.ReadDeadline,
 	}
 }
 
@@ -792,7 +792,7 @@ func receiveCut(_ *testing.T, d *damaged) gitproc.Cmd {
 	indexed := make(chan struct{})
 	close(indexed)
 	return gitproc.Cmd{Dir: d.dir, Args: []string{"receive-pack", "--stateless-rpc", d.dir},
-		Stdin: bytes.NewReader(d.stdin), Class: gitproc.ClassTransfer, Deadline: gitproc.ReadDeadline, Indexed: indexed}
+		Stdin: bytes.NewReader(d.stdin), Class: gitproc.ClassTransfer, Share: suiteShare, Deadline: gitproc.ReadDeadline, Indexed: indexed}
 }
 
 // packedRow is the row naming a corrupt packed object: a pack's damage,
@@ -1166,7 +1166,7 @@ func resultNamesTheDamageOn(t *testing.T, git string) {
 			return gitproc.Cmd{
 				Dir: dir, Args: []string{"upload-pack", "--stateless-rpc", dir},
 				Stdin: strings.NewReader(pkt("want 0123456789012345678901234567890123456789\n") + "0000" + pkt("done\n")),
-				Class: gitproc.ClassTransfer, Deadline: gitproc.ReadDeadline,
+				Class: gitproc.ClassTransfer, Share: suiteShare, Deadline: gitproc.ReadDeadline,
 			}
 		}, "", nil, gitproc.ErrNotOurRef},
 		{"an absent ref, failed", func(*testing.T, string) {}, func(dir string) gitproc.Cmd {

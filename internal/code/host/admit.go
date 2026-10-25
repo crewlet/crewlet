@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -76,8 +77,7 @@ func (s *Server) admit(ctx context.Context, w http.ResponseWriter, r *http.Reque
 		s.identityUnknown(w, r, name, iam.Reason(ctx))
 		return admission{}, false
 	}
-	actor := iam.ActorFor(p)
-	adm := admission{name: name, actor: actor, operatorID: actor.OperatorID, seat: p.Seat}
+	adm := admitted(name, p)
 	ref, err := s.o.Estate.Resolve(ctx, code.ResolveQuery{Name: name,
 		Fresh: statelog.Freshness{Level: statelog.ReadStale}})
 	if errors.Is(err, code.ErrRepoNotFound) || (err == nil && refuses(ref.Status, op)) {
@@ -97,12 +97,44 @@ func (s *Server) admit(ctx context.Context, w http.ResponseWriter, r *http.Reque
 	return adm, true
 }
 
+// admitted is the admission of a request for repository name by the resolved
+// principal p, before its repository is resolved: who it is as every record
+// names it (iam.ActorFor), the credential it came through and the human seat
+// it acts as. The ONE derivation of an admission's identity from the guard's
+// principal, so what a push records, what its grant reads and whose turn its
+// transfers take are read off the same fields.
+func admitted(name string, p iam.Principal) admission {
+	actor := iam.ActorFor(p)
+	return admission{name: name, actor: actor, operatorID: actor.OperatorID, seat: p.Seat}
+}
+
 // principal is who the admitted request acts as: the operator credential and
 // the person it is bound to — "" for nobody. The ONE construction of it, so a
 // push's proposal, its session and its grant can never name two different
 // principals.
 func (a admission) principal() code.Principal {
 	return code.Principal{Kind: code.PrincipalOperator, OperatorID: a.operatorID, Seat: a.seat}
+}
+
+// share is whose transfer the admitted request is (gitproc.Cmd.Share), what
+// the transfer lane decides a contended slot by and charges the run's spend
+// to. A PERSON is the holder of a human seat, keyed by the seat's handle:
+// a person through any credential of theirs — their own machine tokens and
+// their sessions all name their seat — so their laptop and their scripts are
+// one principal, as the grant reads them as one; or a Tier A token or a
+// service account the identity directory binds to a human seat nobody else
+// holds, since a bind is a claim on the seat itself and that seat therefore
+// has one holder. A MACHINE is a credential acting as nobody — a Tier A
+// token bound to no seat (`token:<id>`) or a service account's machine token
+// (`pat:<id>`) — keyed by that credential's name, never by the account that
+// owns it (iam.RecordOwner): a service account with a token per CI runner
+// gives each runner its own turn, as the fetch spool keys a request by the
+// credential too.
+func (a admission) share() gitproc.Share {
+	if a.seat != "" {
+		return gitproc.Share{Class: gitproc.SharePerson, Principal: a.seat}
+	}
+	return gitproc.Share{Class: gitproc.ShareMachine, Principal: a.operatorID}
 }
 
 // grant is the admitted principal's standing on repo (ADR-0058): a PERSON'S,

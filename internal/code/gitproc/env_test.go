@@ -188,7 +188,7 @@ func homeCannotConfigureOn(t *testing.T, git string) {
 	_, err := p.Run(t.Context(), gitproc.Cmd{
 		Dir: bare, Args: []string{"upload-pack", "--stateless-rpc", bare},
 		Stdin: strings.NewReader(pkt("want "+side+"\n") + "0000" + pkt("done\n")),
-		Class: gitproc.ClassTransfer, Deadline: gitproc.ReadDeadline,
+		Class: gitproc.ClassTransfer, Share: suiteShare, Deadline: gitproc.ReadDeadline,
 	})
 	if !errors.Is(err, gitproc.ErrNotOurRef) {
 		t.Fatalf("a v0 want of an unreachable commit = %v, want ErrNotOurRef", err)
@@ -778,7 +778,7 @@ func TestAMalformedCommandIsRefused(t *testing.T) {
 	// given args after its subcommand and indexed as its Cmd.Indexed.
 	receivePack := func(indexed <-chan struct{}, args ...string) func(*gitproc.Cmd) {
 		return func(c *gitproc.Cmd) {
-			c.Args, c.Class, c.Indexed = append([]string{"receive-pack"}, args...), gitproc.ClassTransfer, indexed
+			c.Args, c.Class, c.Share, c.Indexed = append([]string{"receive-pack"}, args...), gitproc.ClassTransfer, suiteShare, indexed
 		}
 	}
 	for name, spoil := range map[string]func(*gitproc.Cmd){
@@ -796,8 +796,23 @@ func TestAMalformedCommandIsRefused(t *testing.T) {
 		"a relative Hooks":  func(c *gitproc.Cmd) { c.Hooks = "hooks" },
 		"a missing Hooks":   func(c *gitproc.Cmd) { c.Hooks = filepath.Join(t.TempDir(), "absent") },
 		"Indexed on a read": func(c *gitproc.Cmd) { c.Indexed = make(chan struct{}) },
+		"a transfer with no Share": func(c *gitproc.Cmd) {
+			c.Args, c.Class = []string{"upload-pack"}, gitproc.ClassTransfer
+		},
+		// A principal no identity is given: past every name the bound
+		// leaves room for, or holding a NUL — a caller handing the share
+		// the wrong string.
+		"a transfer whose principal is over-long": func(c *gitproc.Cmd) {
+			c.Args, c.Class = []string{"upload-pack"}, gitproc.ClassTransfer
+			c.Share = gitproc.Share{Class: gitproc.ShareMachine, Principal: strings.Repeat("p", 256)}
+		},
+		"a transfer whose principal holds a NUL": func(c *gitproc.Cmd) {
+			c.Args, c.Class = []string{"upload-pack"}, gitproc.ClassTransfer
+			c.Share = gitproc.Share{Class: gitproc.ShareMachine, Principal: "token:ci\x00"}
+		},
+		"a Share on a read": func(c *gitproc.Cmd) { c.Share = suiteShare },
 		"Indexed on an upload-pack": func(c *gitproc.Cmd) {
-			c.Args, c.Class, c.Indexed = []string{"upload-pack"}, gitproc.ClassTransfer, make(chan struct{})
+			c.Args, c.Class, c.Share, c.Indexed = []string{"upload-pack"}, gitproc.ClassTransfer, suiteShare, make(chan struct{})
 		},
 		// A push's receive-pack, as the host runs it, without the Indexed
 		// that repays its loan once its pack is indexed: its loan would be

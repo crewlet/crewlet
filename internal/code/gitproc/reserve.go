@@ -59,7 +59,7 @@ func (p *Pool) tryMaintenance() (func(), error) {
 		return nil, fmt.Errorf("%w: this node runs at most %d maintenance processes at once (half its %d process slots)",
 			ErrBusy, p.maint.size, p.read.size)
 	}
-	return p.maint.release, nil
+	return func() { p.maint.release(nil, 0) }, nil
 }
 
 // Run runs one maintenance process in the reserved slot, exactly as
@@ -124,13 +124,13 @@ func (r *Reserved) Release() {
 // queued read waits behind while nothing runs — Reserve's reason for
 // reserving only the maintenance lane.
 func (p *Pool) HoldRead(ctx context.Context) (release func(), err error) {
-	free, _, err := p.admit(ctx, ClassRead)
+	free, _, err := p.admit(ctx, ClassRead, Share{})
 	if err != nil {
 		return nil, err
 	}
 	p.track(ClassRead, +1)
 	return sync.OnceFunc(func() {
 		p.track(ClassRead, -1)
-		free()
+		free(nil)
 	}), nil
 }

@@ -1336,6 +1336,81 @@ and their deadlines.
 
 ---
 
+## Fair share
+
+Every clone, fetch and push runs its git in one of the node's **transfer
+slots** — four a core, and no more than its memory backs — and a slot is held
+for as long as the client takes, so one credential can hold every slot: a CI
+system checking out behind one token, a mirror catching up, a blobless
+clone's lazy fetches one blob at a time. In arrival order, a person's clone
+behind sixty-four of them would wait for sixty-four of them. So when every
+slot is held, the node hands the next one released by **share**:
+
+| Who asked | Class | Weight | One principal is |
+|---|---|---|---|
+| A person, through any credential of theirs — their own machine token, a session — or a Tier A token or service account the identity directory binds to a human seat nobody else holds | `person` | 4 | the human seat, by its handle: a person's laptop, scripts and browser are one |
+| A credential bound to no seat — a Tier A token (`token:<id>`) or a service account's machine token (`pat:<id>`) | `machine` | 2 | the credential: each of a service account's tokens is one, so a token per CI runner is a turn per runner |
+
+The released slot goes to the class furthest below its weighted share of what
+the lane has spent lately — with both waiting, people take two thirds — and
+within that class to the principal that has spent least, the oldest request
+first on a tie. A pipeline that pushes acts as the human seat the directory
+binds it to — one nobody else holds — so it is a `person`, but one principal
+among the people, and the one that spent most goes last: its burst still
+waits behind everyone who has asked less lately. A run is charged the greater
+of the CPU its git spent and the time it held its slot at a quarter of a core
+a second, so a slow clone holding a slot for an hour is charged for the hour,
+and a storm of short, CPU-heavy fetches for the CPU; what a principal has
+spent fades over **a minute** (a burst still counts while it lasts, and a
+twentieth of it is left three minutes on), so a person's clone this morning
+does not slow their fetch now.
+
+The share decides only **who goes next**. A slot is never left free while
+anybody waits, so a class alone — a CI system on a quiet node — has every
+slot; and nobody waits longer than they would in arrival order: a request
+still waiting for a slot after ten seconds is answered `503` with
+`Retry-After`, as it always was. The weights are the same on every node, so
+which node a balancer picks never decides who waits.
+
+`crewlet.code.git.share_wait` is how long transfers waited for their slot, by
+class: `machine` climbing while `person` stays flat is the share doing its job
+— CI waiting behind CI — and both climbing is a lane too narrow for its
+traffic (more memory and `git.max_transfers`, or more git nodes).
+`crewlet.code.git.share` is what each class has spent lately, as the next
+grant reads it ([Metrics](../reference/metrics.md)).
+
+**Lazy fetches.** A blobless clone (`--filter=blob:none`) fetches each blob
+it lacks when a command first needs it, and `git blame` needs every version
+of a file the lines it explains passed through. Measured on a file of 200
+lines rewritten by 1 000 commits, one line a commit
+(`internal/code/host`'s `BenchmarkLazyBlame`, by a credential bound to nobody,
+git 2.56.0 on both ends, one count of three blames on four E-cores of an
+Intel Core Ultra 7 265U): one blame was 201 lazy fetches — a version of the
+file each, each an advertisement and an upload-pack, so 402 runs of the
+node's git — bringing 412.5 KiB, costing the node 1.1 s of CPU (about 5.5 ms
+a fetch) and taking 7.2 s. Every one of those fetches is charged to the
+credential that made it, so a CI job blaming its way through history slows
+its own class and its own credential, never a person's clone, and the node
+keeps no limiter of lazy fetches beside the share.
+
+**Measured** on four E-cores of an Intel Core Ultra 7 265U with the transfer
+lane as wide as the cores (`internal/code/gitproc`'s `BenchmarkTransferShare`,
+git 2.56.0, real upload-packs of an 18.2 MiB pack to a reader that never
+waits, one count of twenty clones an arm, so the 99th percentile is the
+slowest of the twenty): a person's clone alone took 56 ms at the median and
+62 ms at the 99th percentile; beside sixty-four clones at once by one CI
+token, 87 ms and 125 ms, of which the wait for a slot was 60 ms at the 99th
+percentile — one release's turn, the rest the clone sharing the cores with
+the clones beside it, which no order of granting changes. Granted in arrival
+order instead, the same clone took 1.19 s at the median and 1.54 s at the
+99th percentile, 1.46 s of it waiting behind the sixty-four. The CI token
+alone ran 56 clones a second with the share and 55 without it. A person whose
+own burst of sixty-four clones was a minute old waited 203 ms at the 99th
+percentile behind the token's sixty-four, and three minutes old 71 ms, about
+as someone who had spent nothing does.
+
+---
+
 ## What git prints, and what it means
 
 git shows a refusal at the advertisement as `fatal: remote error: …` and a

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -158,57 +159,74 @@ func threadsValue(n int64) string {
 	return configValue(threadsBase, strconv.FormatInt(n, 10))
 }
 
-// lane is one of the pool's admission queues: size slots, granted one at a
-// time in arrival order.
+// lane is one of the pool's admission queues: size slots, each released to a
+// waiter rather than freed while anybody waits.
 //
 // The pool's own rather than golang.org/x/sync/semaphore's, because the READ
 // lane needs one number the semaphore does not expose — how many slots are free
 // right now — and needs it EXACT: read through a second counter beside the
 // semaphore, a slot handed straight from a release to a queued waiter reads as
 // free for an instant, and a loan sized in that instant claims a core twice.
+// And because the TRANSFER lane chooses WHICH waiter a released slot goes to
+// (share.go), which no semaphore lets a caller decide.
 //
 // INVARIANT: a waiter is queued only while every slot is held. release hands a
-// slot straight to the oldest waiter rather than freeing it, and acquire
-// queues only when none is free — so no slot is ever free while somebody
-// waits, and a newcomer can never take a slot ahead of the queue.
+// slot straight to a waiter rather than freeing it, and an arrival queues only
+// when none is free — so no slot is ever free while somebody waits, and a
+// newcomer can never take a slot ahead of the queue. The READ and MAINTENANCE
+// lanes hand it to the oldest waiter; the TRANSFER lane to the waiter its
+// share book names, and keeps the invariant all the same.
 type lane struct {
 	class Class
 	size  int64
 
 	mu      sync.Mutex
 	held    int64
-	waiters list.List // of *waiter, oldest first
-	lent    int64     // READ lane only: threads lent to receive-packs
+	waiters list.List  // an arrival-order lane's waiters, oldest first
+	waiting int64      // waiters queued, in either kind of lane
+	lent    int64      // READ lane only: threads lent to receive-packs
+	book    *shareBook // TRANSFER lane only: who has spent what; nil elsewhere
 }
 
-// waiter is one queued acquire. granted is set under the lane's mutex before
-// ready closes, so a waiter whose context ended can tell whether a slot
-// reached it first.
+// waiter is one queued acquire. granted — and, in the transfer lane, the run
+// the grant started — is set under the lane's mutex before ready closes, so a
+// waiter whose context ended can tell whether a slot reached it first.
 type waiter struct {
 	ready   chan struct{}
 	granted bool
+	elem    *list.Element // where it is queued: the lane's list, or its account's
+
+	// The transfer lane's: whose turn it waits for, its place in arrival
+	// order, and the run its grant started.
+	acct *account
+	seq  uint64
+	run  *run
 }
 
 func newLane(class Class, size int64) *lane {
 	return &lane{class: class, size: size}
 }
 
-// acquire takes a slot, waiting in arrival order until one is free or ctx
-// ends. It returns ctx's error when ctx ended first, and holds nothing then.
-func (l *lane) acquire(ctx context.Context) error {
+// newShareLane is a lane of size slots granted by book (share.go).
+func newShareLane(size int64, book *shareBook) *lane {
+	return &lane{class: ClassTransfer, size: size, book: book}
+}
+
+// acquire takes a slot for s's run, waiting until one is free or ctx ends:
+// in arrival order, or in a share lane in the order its book decides. It
+// returns ctx's error when ctx ended first, and holds nothing then. The run is
+// the share lane's — what release settles — and nil in the other lanes.
+func (l *lane) acquire(ctx context.Context, s Share) (*run, error) {
 	l.mu.Lock()
-	if l.held < l.size && l.waiters.Len() == 0 {
-		l.held++
-		l.mu.Unlock()
-		return nil
-	}
-	w := &waiter{ready: make(chan struct{})}
-	elem := l.waiters.PushBack(w)
+	r, w := l.arrive(s)
 	l.mu.Unlock()
+	if w == nil {
+		return r, nil
+	}
 
 	select {
 	case <-w.ready:
-		return nil
+		return w.run, nil
 	case <-ctx.Done():
 		l.mu.Lock()
 		if w.granted {
@@ -216,38 +234,91 @@ func (l *lane) acquire(ctx context.Context) error {
 			// before the lock was taken: pass it on rather than keep a
 			// slot nobody will use.
 			l.mu.Unlock()
-			l.release()
-			return ctx.Err()
+			l.release(w.run, 0)
+			return nil, ctx.Err()
 		}
-		l.waiters.Remove(elem)
+		l.leave(w)
 		l.mu.Unlock()
-		return ctx.Err()
+		return nil, ctx.Err()
 	}
 }
 
+// arrive is one acquire's arrival, under l.mu: a free slot at once when
+// nobody waits — whatever the arrival's share, so a lane never holds a slot
+// free while it could be used — or a waiter queued for one.
+func (l *lane) arrive(s Share) (*run, *waiter) {
+	var now time.Time
+	if l.book != nil {
+		now = l.book.now()
+		l.book.sweep(now)
+		defer l.book.report(now)
+	}
+	if l.held < l.size && l.waiting == 0 {
+		l.held++
+		if l.book == nil {
+			return nil, nil
+		}
+		return l.book.start(l.book.account(s, now), now), nil
+	}
+	w := &waiter{ready: make(chan struct{})}
+	l.waiting++
+	if l.book == nil {
+		w.elem = l.waiters.PushBack(w)
+	} else {
+		l.book.enqueue(w, s, now)
+	}
+	return nil, w
+}
+
+// leave takes a waiter that was never granted out of its queue, under l.mu.
+func (l *lane) leave(w *waiter) {
+	l.waiting--
+	if l.book == nil {
+		l.waiters.Remove(w.elem)
+		return
+	}
+	now := l.book.now()
+	l.book.leave(w, now)
+	l.book.report(now)
+}
+
 // tryAcquire takes a free slot or reports that there is none, never waiting.
+// An arrival-order lane's: the maintenance lane's admission.
 func (l *lane) tryAcquire() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.held < l.size && l.waiters.Len() == 0 {
+	if l.held < l.size && l.waiting == 0 {
 		l.held++
 		return true
 	}
 	return false
 }
 
-// release returns a slot: straight to the oldest waiter if there is one, so
-// the invariant holds, else to the lane.
-func (l *lane) release() {
+// release returns a slot — and, in a share lane, settles r given the CPU its
+// process tree spent: straight to the next waiter if there is one, so the
+// invariant holds, else to the lane.
+func (l *lane) release(r *run, cpu time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if front := l.waiters.Front(); front != nil {
-		w, _ := l.waiters.Remove(front).(*waiter)
-		w.granted = true
-		close(w.ready)
+	var now time.Time
+	if l.book != nil {
+		now = l.book.now()
+		l.book.settle(r, cpu, now)
+		defer l.book.report(now)
+	}
+	if l.waiting == 0 {
+		l.held--
 		return
 	}
-	l.held--
+	var w *waiter
+	if l.book == nil {
+		w, _ = l.waiters.Remove(l.waiters.Front()).(*waiter)
+	} else {
+		w = l.book.grant(now)
+	}
+	l.waiting--
+	w.granted = true
+	close(w.ready)
 }
 
 // lend lends up to n of the lane's cores that neither a held slot nor an
@@ -280,7 +351,7 @@ func (l *lane) repay(k int64) (out int64) {
 func (l *lane) free() int64 {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.waiters.Len() > 0 {
+	if l.waiting > 0 {
 		return 0
 	}
 	return max(l.size-l.held-l.lent, 0)

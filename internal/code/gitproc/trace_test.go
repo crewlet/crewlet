@@ -393,7 +393,7 @@ func requestCannotNameTheDamageOn(t *testing.T, git string) {
 				res, err := p.Run(t.Context(), gitproc.Cmd{
 					Dir: dir, Args: []string{"upload-pack", "--stateless-rpc", dir}, Protocol: form.protocol,
 					Config: serveConfig, Stdin: strings.NewReader(form.body(payload)), Stdout: io.Discard,
-					Class: gitproc.ClassTransfer, Deadline: gitproc.ReadDeadline,
+					Class: gitproc.ClassTransfer, Share: suiteShare, Deadline: gitproc.ReadDeadline,
 				})
 				for _, c := range res.Trace.Formats {
 					met[c] = true

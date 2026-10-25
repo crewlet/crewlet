@@ -62,7 +62,7 @@ func TestARunTheNodeEndsCountsWhatItsGroupSpent(t *testing.T) {
 		pkt("want "+tip+"\n") + pkt("done\n") + "0000"
 	done := start(ctx, p, gitproc.Cmd{
 		Dir: dir, Args: []string{"upload-pack", "--stateless-rpc", dir}, Protocol: "version=2",
-		Stdin: strings.NewReader(request), Stdout: client, Class: gitproc.ClassTransfer, Deadline: time.Minute,
+		Stdin: strings.NewReader(request), Stdout: client, Class: gitproc.ClassTransfer, Share: suiteShare, Deadline: time.Minute,
 	})
 	select {
 	case <-client.halted:

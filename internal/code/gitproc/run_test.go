@@ -53,7 +53,7 @@ func hold(t *testing.T, p *gitproc.Pool, c gitproc.Class) holder {
 	t.Helper()
 	dir := t.TempDir()
 	h := holder{started: filepath.Join(dir, "started"), release: filepath.Join(dir, "release")}
-	h.done = start(t.Context(), p, gitproc.Cmd{Args: []string{"hold", h.started, h.release}, Class: c, Deadline: time.Minute})
+	h.done = start(t.Context(), p, gitproc.Cmd{Args: []string{"hold", h.started, h.release}, Class: c, Share: shareOf(c), Deadline: time.Minute})
 	deadline := time.Now().Add(hang)
 	for {
 		if _, err := os.Stat(h.started); err == nil {
@@ -82,7 +82,17 @@ func (h holder) end(t *testing.T) outcome {
 
 // quick is a run that ends at once.
 func quick(c gitproc.Class) gitproc.Cmd {
-	return gitproc.Cmd{Args: []string{"quick"}, Class: c, Deadline: time.Minute}
+	return gitproc.Cmd{Args: []string{"quick"}, Class: c, Share: shareOf(c), Deadline: time.Minute}
+}
+
+// shareOf is the share a case's run of class c carries: the suite's for a
+// transfer, which requires one, and none for any other class, which refuses
+// one.
+func shareOf(c gitproc.Class) gitproc.Share {
+	if c == gitproc.ClassTransfer {
+		return suiteShare
+	}
+	return gitproc.Share{}
 }
 
 // SLOTS BOUND CONCURRENT GIT, in each waiting lane: a run past the lane waits,
@@ -213,7 +223,7 @@ func TestATransferWaitingOnAReadNeverDeadlocks(t *testing.T) {
 	for range 2 {
 		n := &nested{p: p, ctx: t.Context(), barrier: &barrier}
 		readers = append(readers, n)
-		runs = append(runs, start(t.Context(), p, gitproc.Cmd{Args: []string{"x"}, Stdin: n, Class: gitproc.ClassTransfer, Deadline: time.Minute}))
+		runs = append(runs, start(t.Context(), p, gitproc.Cmd{Args: []string{"x"}, Stdin: n, Class: gitproc.ClassTransfer, Share: suiteShare, Deadline: time.Minute}))
 	}
 	for i, run := range runs {
 		if o := await(t, run, "a transfer whose input runs a read"); o.err != nil || readers[i].err != nil {
@@ -432,7 +442,7 @@ func TestAStalledTransferIsKilled(t *testing.T) {
 	t.Run("a silent process", func(t *testing.T) {
 		t.Parallel()
 		p := fakePool(t, "sleep 600", gitproc.Options{})
-		o := await(t, start(t.Context(), p, gitproc.Cmd{Args: []string{"x"}, Class: gitproc.ClassTransfer,
+		o := await(t, start(t.Context(), p, gitproc.Cmd{Args: []string{"x"}, Class: gitproc.ClassTransfer, Share: suiteShare,
 			Deadline: time.Minute, Stall: 300 * time.Millisecond}), "a silent run")
 		if !errors.Is(o.err, gitproc.ErrStalled) {
 			t.Fatalf("a silent run: %v, want ErrStalled", o.err)
@@ -445,7 +455,7 @@ func TestAStalledTransferIsKilled(t *testing.T) {
 		w := &blockingWriter{blocked: make(chan struct{}), release: make(chan struct{})}
 		in := &keepalive{until: w.blocked, interval: 10 * time.Millisecond}
 		done := start(t.Context(), p, gitproc.Cmd{Args: []string{"x"}, Stdin: in, Stdout: w,
-			Class: gitproc.ClassTransfer, Deadline: time.Minute, Stall: 300 * time.Millisecond})
+			Class: gitproc.ClassTransfer, Share: suiteShare, Deadline: time.Minute, Stall: 300 * time.Millisecond})
 		pid := pids.read(t)
 		select {
 		case <-w.blocked:
@@ -504,7 +514,7 @@ func TestAMovingTransferIsNotStalled(t *testing.T) {
 			p := fakePool(t, tc.body, gitproc.Options{})
 			var out bytes.Buffer
 			o := await(t, start(t.Context(), p, gitproc.Cmd{Args: []string{"x"}, Stdin: tc.stdin, Stdout: &out,
-				Class: gitproc.ClassTransfer, Deadline: time.Minute, Stall: 2 * time.Second}), "a moving run")
+				Class: gitproc.ClassTransfer, Share: suiteShare, Deadline: time.Minute, Stall: 2 * time.Second}), "a moving run")
 			if o.err != nil {
 				t.Fatalf("a run moving on %s every 100ms with a 2s stall: %v", name, o.err)
 			}
@@ -576,7 +586,7 @@ func TestASlowReaderReceivesEveryByte(t *testing.T) {
 	p := fakePool(t, "head -c 1048576 /dev/zero; exit 0", gitproc.Options{})
 	gitproc.SetTimings(p, 10*time.Second, 300*time.Millisecond)
 	w := &slowWriter{delay: 500 * time.Millisecond}
-	o := await(t, start(t.Context(), p, gitproc.Cmd{Args: []string{"x"}, Stdout: w, Class: gitproc.ClassTransfer, Deadline: time.Minute}), "a run with a slow reader")
+	o := await(t, start(t.Context(), p, gitproc.Cmd{Args: []string{"x"}, Stdout: w, Class: gitproc.ClassTransfer, Share: suiteShare, Deadline: time.Minute}), "a run with a slow reader")
 	if o.err != nil || w.n != 1<<20 {
 		t.Fatalf("a slow reader got %d of %d bytes: %v", w.n, 1<<20, o.err)
 	}
@@ -627,7 +637,7 @@ func TestRunReturnsOnlyAfterItsInputEnds(t *testing.T) {
 	in := &blockedReader{release: make(chan struct{})}
 	began := time.Now()
 	time.AfterFunc(3*time.Second, func() { close(in.release) })
-	o := await(t, start(t.Context(), p, gitproc.Cmd{Args: []string{"x"}, Stdin: in, Class: gitproc.ClassTransfer,
+	o := await(t, start(t.Context(), p, gitproc.Cmd{Args: []string{"x"}, Stdin: in, Class: gitproc.ClassTransfer, Share: suiteShare,
 		Deadline: time.Minute, Stall: 200 * time.Millisecond}), "a run whose input blocks")
 	returned := time.Since(began)
 	if !errors.Is(o.err, gitproc.ErrStalled) {
@@ -683,12 +693,12 @@ func TestTheCallerSeesItsOwnInputError(t *testing.T) {
 		"a wrapped end of file":   {stdin: &failingReader{err: fmt.Errorf("the client hung up: %w", io.EOF)}, want: io.EOF},
 		"a reader giving nothing": {stdin: silentReader{}, want: io.ErrNoProgress},
 	} {
-		_, err := p.Run(t.Context(), gitproc.Cmd{Args: []string{"x"}, Stdin: tc.stdin, Class: gitproc.ClassTransfer, Deadline: time.Minute})
+		_, err := p.Run(t.Context(), gitproc.Cmd{Args: []string{"x"}, Stdin: tc.stdin, Class: gitproc.ClassTransfer, Share: suiteShare, Deadline: time.Minute})
 		if !errors.Is(err, gitproc.ErrInput) || !errors.Is(err, tc.want) {
 			t.Errorf("%s: %v, want ErrInput wrapping %v", name, err, tc.want)
 		}
 	}
-	if _, err := p.Run(t.Context(), gitproc.Cmd{Args: []string{"x"}, Stdin: strings.NewReader("0123456789"), Class: gitproc.ClassTransfer, Deadline: time.Minute}); err != nil {
+	if _, err := p.Run(t.Context(), gitproc.Cmd{Args: []string{"x"}, Stdin: strings.NewReader("0123456789"), Class: gitproc.ClassTransfer, Share: suiteShare, Deadline: time.Minute}); err != nil {
 		t.Fatalf("a reader ending in io.EOF itself: %v, want the whole input given", err)
 	}
 }
@@ -703,7 +713,7 @@ func (failingWriter) Write([]byte) (int, error) { return 0, errBoom }
 func TestTheCallerSeesItsOwnOutputError(t *testing.T) {
 	t.Parallel()
 	p := fakePool(t, "yes", gitproc.Options{})
-	o := await(t, start(t.Context(), p, gitproc.Cmd{Args: []string{"x"}, Stdout: failingWriter{}, Class: gitproc.ClassTransfer, Deadline: time.Minute}),
+	o := await(t, start(t.Context(), p, gitproc.Cmd{Args: []string{"x"}, Stdout: failingWriter{}, Class: gitproc.ClassTransfer, Share: suiteShare, Deadline: time.Minute}),
 		"a run whose output failed")
 	if !errors.Is(o.err, gitproc.ErrOutput) || !errors.Is(o.err, errBoom) {
 		t.Fatalf("a run whose output failed: %v, want ErrOutput wrapping the writer's error", o.err)
@@ -828,7 +838,7 @@ func TestARunCountsTheCPUOfItsProcessTree(t *testing.T) {
 		pkt("want "+tip+"\n") + pkt("done\n") + "0000"
 	served, err := p.Run(t.Context(), gitproc.Cmd{
 		Dir: dir, Args: []string{"upload-pack", "--stateless-rpc", dir}, Protocol: "version=2",
-		Stdin: strings.NewReader(request), Stdout: io.Discard, Class: gitproc.ClassTransfer, Deadline: time.Minute,
+		Stdin: strings.NewReader(request), Stdout: io.Discard, Class: gitproc.ClassTransfer, Share: suiteShare, Deadline: time.Minute,
 	})
 	if err != nil {
 		t.Fatalf("upload-pack serving a clone: %v", err)
@@ -1046,7 +1056,7 @@ func TestACrashIsASignalThePoolDidNotSend(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			p := fakePool(t, c.body, gitproc.Options{})
-			res, _ := p.Run(t.Context(), gitproc.Cmd{Args: []string{"x"}, Stdout: c.stdout, Class: gitproc.ClassTransfer,
+			res, _ := p.Run(t.Context(), gitproc.Cmd{Args: []string{"x"}, Stdout: c.stdout, Class: gitproc.ClassTransfer, Share: suiteShare,
 				Deadline: time.Minute})
 			if res.Exit >= 0 {
 				t.Fatalf("exit %d, want the leader dead of a signal", res.Exit)

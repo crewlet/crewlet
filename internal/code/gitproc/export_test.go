@@ -1,6 +1,9 @@
 package gitproc
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // SetTimings scales SlotWait and KillGrace for a pool a test then uses (call
 // before any Run).
@@ -20,6 +23,116 @@ func SetCaptureMax(p *Pool, n int) { p.captureMax = n }
 // ReadLane is the READ lane's held slots and outstanding loans, for the lane
 // accounting cases.
 func ReadLane(p *Pool) (held, lent int64) { return p.read.counts() }
+
+// ShareForget is the decayed charge below which an idle account is forgotten.
+const ShareForget = shareForget
+
+// SetArrivalOrder replaces p's transfer lane with one of the same width that
+// grants in ARRIVAL ORDER and keeps no book — the lane before the share, which
+// BenchmarkTransferShare's control runs. Call before any Run.
+func SetArrivalOrder(p *Pool) { p.transfer = newLane(ClassTransfer, p.transfer.size) }
+
+// SetShareClock sets the clock p's transfer lane reads its book by — what a
+// benchmark moves minutes on without waiting them. Call before any Run.
+func SetShareClock(p *Pool, now func() time.Time) {
+	p.transfer.book.now = now
+	p.transfer.book.swept = now()
+}
+
+// ShareLane is the transfer lane's scheduler alone (share.go), driven by a
+// case on a clock of its own: arrivals, settles and leaves, with no git
+// process and no goroutine.
+type ShareLane struct{ l *lane }
+
+// NewShareLane is a share lane of size slots on the clock now.
+func NewShareLane(size int, now func() time.Time) *ShareLane {
+	return &ShareLane{l: newShareLane(int64(size), newShareBook(now, nil))}
+}
+
+// Turn is one arrival at a ShareLane: granted at once, or queued until a
+// settle hands it a slot.
+type Turn struct {
+	s *ShareLane
+	r *run
+	w *waiter
+}
+
+// Arrive is sh's arrival.
+func (s *ShareLane) Arrive(sh Share) *Turn {
+	s.l.mu.Lock()
+	defer s.l.mu.Unlock()
+	r, w := s.l.arrive(sh)
+	return &Turn{s: s, r: r, w: w}
+}
+
+// Granted reports whether the turn holds a slot.
+func (t *Turn) Granted() bool {
+	t.s.l.mu.Lock()
+	defer t.s.l.mu.Unlock()
+	return t.r != nil || t.w.granted
+}
+
+// Settle ends a granted turn, given the CPU its process spent; its slot goes
+// to whoever the lane names next.
+func (t *Turn) Settle(cpu time.Duration) {
+	r := t.r
+	if r == nil {
+		t.s.l.mu.Lock()
+		r = t.w.run
+		t.s.l.mu.Unlock()
+	}
+	t.s.l.release(r, cpu)
+}
+
+// Leave takes a turn still waiting out of its queue, as a waiter whose
+// context ended does.
+func (t *Turn) Leave() {
+	t.s.l.mu.Lock()
+	defer t.s.l.mu.Unlock()
+	t.s.l.leave(t.w)
+}
+
+// Acquire is a waiting acquire of the lane, as the pool's admission makes
+// one; release with Release.
+func (s *ShareLane) Acquire(ctx context.Context, sh Share) (*Turn, error) {
+	r, err := s.l.acquire(ctx, sh)
+	if err != nil {
+		return nil, err
+	}
+	return &Turn{s: s, r: r}, nil
+}
+
+// Counts is the lane's held slots and queued waiters.
+func (s *ShareLane) Counts() (held, waiting int64) {
+	s.l.mu.Lock()
+	defer s.l.mu.Unlock()
+	return s.l.held, s.l.waiting
+}
+
+// Usage is class c's standing now, as the next grant reads it.
+func (s *ShareLane) Usage(c ShareClass) float64 {
+	s.l.mu.Lock()
+	defer s.l.mu.Unlock()
+	return s.l.book.classes[c].value(s.l.book.now())
+}
+
+// Charge is sh's standing now, and false when the book has forgotten it.
+func (s *ShareLane) Charge(sh Share) (float64, bool) {
+	s.l.mu.Lock()
+	defer s.l.mu.Unlock()
+	a := s.l.book.byKey[sh]
+	if a == nil {
+		return 0, false
+	}
+	return a.value(s.l.book.now()), true
+}
+
+// Principals is how many accounts the book holds.
+func (s *ShareLane) Principals() int {
+	s.l.mu.Lock()
+	defer s.l.mu.Unlock()
+	return len(s.l.book.byKey)
+}
 
 // FormatRow is what one of git's report formats classifies as.
 type FormatRow struct {

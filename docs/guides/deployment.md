@@ -1788,12 +1788,16 @@ cache on its own disk. What such a node needs from its host:
   take a core each, `git.max_processes` of them. `crewlet.code.git.wait` by
   `class` is the signal: a `transfer` wait climbing is a node serving as many
   transfers as its memory backs, a `read` wait one out of cores
-  ([Metrics](../reference/metrics.md)). `crewlet.code.git.cpu` by `class` is
-  what each lane's work costs — every git process's CPU, its children's
-  included, counted whole as the process ends. A clone can run for hours and
-  a background index for a quarter of an hour, each landing in the minute it
-  ends in, so read its sum over hours, as the cost of a lane's work, and
-  never as how busy the node is now: that is the container's own CPU usage.
+  ([Metrics](../reference/metrics.md)). `crewlet.code.git.share_wait` by
+  `share` says whose transfers wait: `machine` climbing while `person` stays
+  flat is CI waiting behind CI, which the node's
+  [fair share](../concepts/code-host.md#fair-share) does on purpose, and both
+  climbing is a lane too narrow for its traffic. `crewlet.code.git.cpu` by
+  `class` is what each lane's work costs — every git process's CPU, its
+  children's included, counted whole as the process ends. A clone can run for
+  hours and a background index for a quarter of an hour, each landing in the
+  minute it ends in, so read its sum over hours, as the cost of a lane's work,
+  and never as how busy the node is now: that is the container's own CPU usage.
   A transfer lane full while the node's CPU is low is transfers waiting on
   something other than cores — clients slow to read, pushes waiting on the
   code log or the object store — and one full with the CPU high is a node

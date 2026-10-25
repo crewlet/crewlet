@@ -187,7 +187,17 @@ lately — a cold sync of a minute or two — the ones waiting past the quarter
 fail: thirteen lazy fetches of 20 MB fill a four-core node's quarter, and the
 fourteenth and every later one fail their checkouts. A token per runner lifts
 that to the node's whole room, and routing each repository to the nodes that
-hold it keeps the syncs warm ([Deployment](deployment.md)).
+hold it keeps the syncs warm ([Deployment](deployment.md)). A runner's token
+is also its own turn when the node's transfer slots are all busy: a credential
+bound to no seat — a Tier A token, or a service account's machine token — is a
+`machine` in the node's [fair share](../concepts/code-host.md#fair-share),
+one principal per credential, so a burst of CI clones or lazy fetches waits
+behind people's clones and behind the runners that have asked less lately,
+never the other way round — and a token shared by every runner is one
+principal whose whole burst waits behind itself. A pipeline that pushes acts
+as the human seat it is bound to — one nobody else holds — so the share
+counts it as that seat, among the people: its burst still waits behind
+everyone who has asked less lately.
 
 Hand the token over without a prompt. The same helper, for one command,
 through `-c`:

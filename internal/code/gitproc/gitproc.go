@@ -115,6 +115,19 @@
 // more than the node's memory backs: one for every [TransferShare] of it,
 // read at New (memory.go).
 //
+// The transfer lane is SHARED BY WHO ASKED (share.go), where the other lanes
+// grant in arrival order: every transfer carries [Cmd.Share] — its
+// credential's class and principal — and when every slot is held, a released
+// one goes to the class furthest below its weighted share of what the lane
+// has spent over the last [ShareWindow] (a person 4, a machine 2), within it
+// to the principal that spent least, each run charged the greater of its CPU
+// and the slot-time it held. So a CI system's storm of clones or lazy
+// fetches waits behind itself, and a person's clone takes the next slot
+// released rather than the sixty-fifth. Work-conserving — a slot is never
+// free while anybody waits, so a class alone has the whole lane — and never
+// a longer wait than arrival order's: [SlotWait] bounds a waiter whichever
+// order it is granted in.
+//
 // The lanes are separate for a second reason that no sizing could fix: one
 // process waits on others. A push's receive-pack holds its transfer slot
 // while its proc-receive hook runs the receive pipeline's reads; in one pool,
@@ -179,7 +192,10 @@
 // One observation is one run's whole cost, recorded when it ends: the cost
 // a request or a lane is charged, never a share of the node over a window —
 // a run's CPU lands in whichever window it ends in, all at once, however
-// long it ran.
+// long it ran. (The transfer lane's share does read a window, from the same
+// figure: a transfer's CPU is charged to its principal at its reap, and the
+// slot-time it holds accrues while it runs, so a share reads a principal
+// holding every slot with hour-long clones as spending all along.)
 //
 // # What went wrong is classified from git's own format strings
 //
@@ -297,6 +313,27 @@
 // and the copy path each moved less than its own run-to-run spread (a single
 // arm's six runs span 0.3–1.3 ms of a 2–3 ms process here). What it costs a
 // request is the code host's (internal/code/host, its warm fetch).
+//
+// The transfer lane's share (BenchmarkTransferShare: real upload-packs of the
+// same 18.2 MiB pack to a reader that never waits, the lane as wide as the
+// cores so its slots and not the CPU they share are what a clone waits for;
+// four E-cores of an Intel Core Ultra 7 265U shared with other builds, git
+// 2.56.0, one count of twenty clones an arm, so a p99 is the slowest of the
+// twenty): a person's clone alone takes 56 ms at the median and 62 ms at the
+// p99; beside sixty-four clones at once of ONE machine token, 87 ms and
+// 125 ms, of which the wait for its slot is 60 ms at the p99 — one release's
+// turn, the rest its run sharing the cores with the three clones beside it,
+// which no order of granting changes — where the same lane granting in
+// ARRIVAL ORDER makes it 1.19 s and 1.54 s, 1.46 s of it waiting behind the
+// sixty-four. The machine token alone runs the lane at 56 clones a second
+// with the share and 55 without it: a weight decides who goes next, never
+// whether a slot is used. A person whose own burst of sixty-four clones is a
+// minute old waits 203 ms at the p99 behind the token's sixty-four, and three
+// minutes old 71 ms, about as one who spent nothing does — what [ShareWindow]
+// is for. One grant of a lane 10 000 waiters deep over 1 000 principals costs
+// 34 µs (BenchmarkTransferGrant, one count of 10 000 grants), so the scan
+// over the waiting principals stays a scan: under a grant's 100 µs budget,
+// where a heap would be owed past it.
 //
 // # Two floors, one pin (ADR-0057)
 //
@@ -648,13 +685,15 @@ func New(ctx context.Context, o Options) (*Pool, error) {
 		fixedMemory: o.Memory > 0,
 		read:        newLane(ClassRead, cpuSlots),
 		maint:       newLane(ClassMaintenance, (cpuSlots+1)/2),
-		transfer:    newLane(ClassTransfer, transferSlots),
-		slotWait:    SlotWait,
-		killGrace:   KillGrace,
-		captureMax:  CaptureMax,
-		running:     make(map[Class]int64, len(Classes)),
-		log:         logger,
-		metrics:     o.Metrics,
+		// THE TRANSFER LANE GRANTS BY SHARE (share.go), on the pool's own
+		// clock, recording each class's standing into the pool's recorder.
+		transfer:   newShareLane(transferSlots, newShareBook(time.Now, o.Metrics)),
+		slotWait:   SlotWait,
+		killGrace:  KillGrace,
+		captureMax: CaptureMax,
+		running:    make(map[Class]int64, len(Classes)),
+		log:        logger,
+		metrics:    o.Metrics,
 	}
 	for _, c := range Classes {
 		p.running[c] = 0

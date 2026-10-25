@@ -147,6 +147,15 @@ type Cmd struct {
 	// Class picks the lane.
 	Class Class
 
+	// Share is whose transfer this is: the class and principal of the
+	// credential that asked for it, by which the transfer lane decides who is
+	// granted a released slot and charges what the run spent (share.go).
+	// REQUIRED on every ClassTransfer Cmd and refused on every other, as
+	// Indexed is: a transfer without one would be scheduled as nobody's, and
+	// a read or a maintenance run carrying one would claim a share no lane
+	// reads.
+	Share Share
+
 	// Deadline bounds the run from start to reap; 0 or negative is
 	// ErrNoDeadline. Pick one from deadlines.go.
 	Deadline time.Duration
@@ -420,6 +429,15 @@ func (p *Pool) prepare(c Cmd) (prepared, error) {
 		if a < 1 || a > 255 {
 			return prepared{}, fmt.Errorf("%w: git %s lists %d among its answers: an answer is an exit status from 1 to 255 (0 always is one)", ErrInvalid, c.Args[0], a)
 		}
+	}
+	if c.Class == ClassTransfer && !c.Share.Valid() {
+		return prepared{}, fmt.Errorf("%w: git %s in the transfer lane carries no valid Cmd.Share (class %q, a principal of %d bytes): "+
+			"every transfer is charged to the credential that asked for it, one of the classes %v with a principal of 1 to %d bytes and no NUL",
+			ErrInvalid, c.Args[0], textcut.Ellipsis(string(c.Share.Class), 64), len(c.Share.Principal), ShareClasses(), maxSharePrincipal)
+	}
+	if c.Class != ClassTransfer && c.Share != (Share{}) {
+		return prepared{}, fmt.Errorf("%w: git %s in the %s lane carries a Cmd.Share: only a transfer is scheduled by share",
+			ErrInvalid, c.Args[0], c.Class)
 	}
 	if c.Indexed != nil && !lendsCores(c) {
 		what := "git " + c.Args[0] + " in the " + string(c.Class) + " lane"

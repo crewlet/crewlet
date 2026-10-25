@@ -708,15 +708,18 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 # and the applier's drain (internal/statelog), the store's own drain
 # (internal/store), the company's token counter charged by many nodes at
 # once, each a leaf of its own, and a gated lease claim (internal/coord/kv),
-# a git process through the pool end to end and
-# receive-pack's index-pack at one thread (internal/code/gitproc), the git
+# a git process through the pool end to end,
+# receive-pack's index-pack at one thread, and a person's clone on a transfer
+# lane one CI token has filled, with the fair share and without it, and one
+# grant of a lane ten thousand waiters deep (internal/code/gitproc), the git
 # cache's cold and delta syncs and a bundle's own file work, its index
 # maintenance and what a request pays across many packs, a node's boot of its
 # cache and what a directory sync costs a file (internal/code/cache), the code
 # domain's applier, decide, reconcile and snapshot reads and what a push's
 # history costs every data node's disk (internal/code), the code host's
 # commit chain on one and three members (internal/code/codecluster), a push,
-# a warm fetch, and cold and warm clones end to end (internal/code/host), the
+# a warm fetch, cold and warm clones and a blobless clone's lazy blame end to
+# end (internal/code/host), the
 # pace a client's connection is held to, on a real connection
 # (internal/api/paced), and what every push pays to start its proc-receive
 # hook (cmd/crewlet). Each package's doc records what it measured, and on what

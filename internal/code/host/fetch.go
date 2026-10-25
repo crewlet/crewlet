@@ -134,7 +134,7 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request) {
 			Dir: in.Dir, Repairer: in.Repairer,
 			Args:   []string{"upload-pack", "--stateless-rpc", in.Dir},
 			Config: s.o.Cache.ServeConfig(), Protocol: r.Header.Get("Git-Protocol"),
-			Stdin: body.feed(), Stdout: out, Class: gitproc.ClassTransfer,
+			Stdin: body.feed(), Stdout: out, Class: gitproc.ClassTransfer, Share: adm.share(),
 			Deadline: gitproc.UploadPackDeadline(in.Repo.LiveBytes), Stall: s.o.Timing.Stall,
 		})
 		return gerr

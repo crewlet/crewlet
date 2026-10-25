@@ -94,7 +94,7 @@ func (s *Server) infoRefs(w http.ResponseWriter, r *http.Request) {
 			// THE CACHE'S ONE SERVE CONFIGURATION, so the advertisement
 			// offers exactly what the fetch after it honours.
 			Config: s.o.Cache.ServeConfig(), Protocol: r.Header.Get("Git-Protocol"),
-			Stdout: out, Class: gitproc.ClassTransfer,
+			Stdout: out, Class: gitproc.ClassTransfer, Share: adm.share(),
 			Deadline: gitproc.UploadPackDeadline(advertBytes(in.Repo.Refs)), Stall: s.o.Timing.Stall,
 		})
 		return gerr
@@ -128,7 +128,7 @@ func (s *Server) advertisePush(ctx context.Context, w http.ResponseWriter, r *ht
 			Dir: view.Dir, Alternate: view.Alternate,
 			Args:   []string{"receive-pack", "--stateless-rpc", "--advertise-refs", view.Dir},
 			Config: append(receiveConfig(s.limits()), s.o.Cache.AdvertiseConfig()...),
-			Stdout: out, Class: gitproc.ClassTransfer,
+			Stdout: out, Class: gitproc.ClassTransfer, Share: adm.share(),
 			Deadline: gitproc.UploadPackDeadline(advertBytes(in.Repo.Refs)), Stall: s.o.Timing.Stall,
 		})
 		return err

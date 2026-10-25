@@ -187,7 +187,7 @@ func transfer(b *testing.B, p *gitproc.Pool, c gitproc.Cmd, packBytes int64) int
 	b.Helper()
 	var sent counter
 	c.Stdout = &sent
-	c.Class, c.Deadline, c.Stall = gitproc.ClassTransfer, gitproc.UploadPackDeadline(packBytes), gitproc.TransferStall
+	c.Class, c.Share, c.Deadline, c.Stall = gitproc.ClassTransfer, suiteShare, gitproc.UploadPackDeadline(packBytes), gitproc.TransferStall
 	if _, err := p.Run(b.Context(), c); err != nil {
 		b.Fatal(err)
 	}

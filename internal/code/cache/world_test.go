@@ -29,6 +29,11 @@ import (
 // repos/ and hands the reading to Open, so what a case writes there before it
 // opens is what the boot finds.
 
+// suiteShare is whose every transfer a case runs through a world's pool is
+// (gitproc.Cmd.Share, which a transfer requires): a machine token's, since no
+// case here is about who waits for a transfer slot.
+var suiteShare = gitproc.Share{Class: gitproc.ShareMachine, Principal: "suite"}
+
 // world is one cache directory and the pool that serves it.
 type world struct {
 	layout cache.Layout

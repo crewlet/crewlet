@@ -1161,6 +1161,37 @@ func Catalogue() []Instrument {
 				"`read` sits low is slow uploads holding loans, and the reason " +
 				"a later push on this node indexes on one core.",
 		},
+		{
+			Name: CodeGitShareWait, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"share"},
+			Shows: "How long a clone, fetch or push waited for its transfer " +
+				"slot on this node, by the `share` it waited in (`person`: the " +
+				"holder of a human seat — a person through any credential of " +
+				"theirs, or a Tier A token or service account the identity " +
+				"directory binds to a human seat nobody else holds; " +
+				"`machine`: a credential acting as nobody, a Tier A token or a " +
+				"service account's machine token bound to no seat). " +
+				"When every slot is held a released one goes to the class " +
+				"furthest below its weighted share of what the lane spent " +
+				"lately (person 4 : machine 2), so `machine` climbing while " +
+				"`person` stays flat is the share doing its job — CI waiting " +
+				"behind CI, not people behind CI — and both climbing is a lane " +
+				"too narrow for its traffic: more memory and a wider " +
+				"`git.max_transfers`, or more git nodes.",
+		},
+		{
+			Name: CodeGitShare, Kind: KindGauge, Unit: UnitSeconds,
+			Attributes: []string{"share"},
+			Shows: "What each `share` of this node's transfer lane has spent " +
+				"lately, as the scheduler reads it: core-seconds, every run " +
+				"charged the greater of the CPU it spent and a quarter of a " +
+				"core for the time it held its slot, decayed over a minute — " +
+				"the figure the next contended slot is granted by. Set at each " +
+				"admission and release, so a lane idle since holds its last " +
+				"reading. One class's reading far above its weight's share of " +
+				"the total while the other's waits are short is a class alone " +
+				"on the lane, which runs it at full width.",
+		},
 		// ---- the code host ---------------------------------------------
 		{
 			Name: CodePushDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
