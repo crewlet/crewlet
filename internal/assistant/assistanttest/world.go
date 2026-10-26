@@ -52,7 +52,20 @@ func World() map[string]any {
 			"head_number": 5},
 		"/config/charter": Charter(WorldMission, "Settling up takes seconds.",
 			"Miles is the final authority.", "Money is an integer number of cents."),
+		"/config/roles/qa": Entity(`"rev-4"`, map[string]any{"handle": "qa",
+			"name": "QA Engineer", "goal": "Review the tests.",
+			"token_budget": map[string]any{"day": 1000000}}),
+		"/config": Entity(`"rev-4"`, map[string]any{"name": "FairSplit",
+			"token_budget": map[string]any{"day": 10000000, "month": 120000000}}),
 	}
+}
+
+// Entity is a configuration read's answer: the record as JSON under the
+// strong entity tag tag, as `GET /config` and `GET /config/{kind}/{id}`
+// answer one.
+func Entity(tag string, record map[string]any) exec.Response {
+	raw, _ := json.Marshal(record)
+	return exec.Response{Status: http.StatusOK, Header: http.Header{"Etag": {tag}}, Body: raw}
 }
 
 // WorldMission is the mission [World]'s principles state, with the stray word
@@ -94,6 +107,7 @@ var ProposalArgs = map[string]map[string]any{
 	"unshare_artifact":          {"artifact": RecordID, "from": "unit:platform"},
 	"propose_page_change":       {"action": "work.filter.apply", "args": map[string]any{"status": "blocked"}},
 	"update_company_principles": {"mission": "Help friends share costs fairly."},
+	"set_token_budget":          {"seat": "qa", "window": "day", "tokens": float64(1500000)},
 }
 
 // Answer is what a route answers world's record at r's path: 200 with it, or

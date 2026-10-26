@@ -97,6 +97,10 @@ var routeExposures = []Exposure{
 	routeProposed(UnshareRoute, "unshare_artifact"),
 	routed(PrinciplesRoute, "get_company_principles"),
 	routeProposed(PrinciplesWriteRoute, "update_company_principles"),
+	// A CEILING IS WRITTEN AS BUDGETS WRITES IT: a seat's through the seat,
+	// the company's as a merge patch of the document.
+	routeProposed(seatWriteRoute, "set_token_budget"),
+	routeProposed(companyWriteRoute, "set_token_budget"),
 }
 
 // Exposures are every exposure row, questions first, then tools, then routes.
