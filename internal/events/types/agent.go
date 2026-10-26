@@ -806,7 +806,9 @@ type AgentPhaseCompleted struct {
 	// DeliveredRefs lists: refs are read from the whole report with no count
 	// to them — its `Delivered:` lines, or its pull-request URLs where it
 	// named none — and the record lists them up to a bound, deduplicated,
-	// counting the rest here rather than dropping them unsaid.
+	// counting the rest here rather than dropping them unsaid. A ref that is
+	// not valid UTF-8 is counted here too and never listed: this record is
+	// JSON, which would replace its bytes and list another ref in its place.
 	// Zero on a record that lists them all.
 	DeliveredRefsElided int `json:"delivered_refs_elided,omitempty"`
 	// ActivityTranscript is a coding run's own account of what it did —

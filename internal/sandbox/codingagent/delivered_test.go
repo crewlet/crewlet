@@ -132,6 +132,41 @@ func TestADeliveredLineIsReadWhateverItsMarkup(t *testing.T) {
 	}
 }
 
+// A REF IS HANDED ON AS THE ACCOUNT WROTE IT, a URL that is not UTF-8
+// included — on a `Delivered:` line, or in the host a scrape reads — because
+// whether the run's record can carry a ref is the coordinator's to judge, for
+// every runner alike, and it can judge only the bytes it is handed: mended
+// into UTF-8 here, as a decode mends one, the ref would reach the record as a
+// URL nobody delivered, with nothing left to tell it from one somebody did.
+//
+// The two paths that read an account raw: the report, and OpenCode's plain
+// output. Claude Code's result and OpenCode's event stream are JSON decoded
+// before any ref is read from them, and JSON is UTF-8 throughout.
+func TestADeliveredRefIsHandedOnAsTheAccountWroteIt(t *testing.T) {
+	t.Parallel()
+	for text, want := range map[string]string{
+		"Delivered: https://h/a/b/pull/1\xff":         "https://h/a/b/pull/1\xff",
+		"Opened https://h\xff/a/b/pull/2 for review.": "https://h\xff/a/b/pull/2",
+	} {
+		runner := codingagent.NewClaudeCode()
+		b := box(t, runner)
+		b.Put(paths(b).Findings(), "Outcome: succeeded\n"+text)
+		b.Put(paths(b).ExitCode(), "0")
+		collected, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+		if err != nil {
+			t.Fatalf("Collect: %v", err)
+		}
+		for path, got := range map[string][]string{
+			"the report":              collected.DeliveredRefs,
+			"opencode's plain output": codingagent.OpenCode{}.Parse(text).DeliveredRefs,
+		} {
+			if !slices.Equal(got, []string{want}) {
+				t.Errorf("%s: %q: refs = %q, want %q", path, text, got, []string{want})
+			}
+		}
+	}
+}
+
 // The report is the account of record, so ITS named refs win over the result
 // message's — and a message that names refs on lines of its own beats a
 // report that only mentions a pull request, since a named ref is the run's

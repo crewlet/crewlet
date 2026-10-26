@@ -41,6 +41,14 @@ var log = logging.Get("sandbox.coding_agent")
 // the first text holding a pull request's URL gives every one it holds. A
 // named ref outranks a scraped one wherever each is found, because a scrape
 // cannot tell a pull request the run opened from one it only read.
+//
+// EACH REF AS THE TEXT HOLDS IT, BYTE FOR BYTE, a URL that is not UTF-8
+// included — on a `Delivered:` line, or in the host a scrape reads. Whether
+// the run's record can carry a ref is the coordinator's to judge, for every
+// runner alike ([sandbox.Result.DeliveredRefs]), and it can judge only the
+// bytes it is handed: mended into UTF-8 here, as a decode mends one, a ref
+// would reach the record as a URL nobody delivered, with nothing left to
+// tell it from one somebody did.
 func deliveredRefs(texts ...string) []string {
 	for _, text := range texts {
 		if refs := namedRefs(text); len(refs) > 0 {
@@ -73,11 +81,12 @@ func namedRefs(text string) []string {
 }
 
 // namedRef is the ref a `Delivered:` line holds after its label, if it holds
-// one: a URL, or a branch name the engine's one grammar takes
-// ([gitref.ValidBranch]: a name git accepts, valid UTF-8 and at most
-// [gitref.MaxBranchBytes], since the ref rides the run's phase record, which
-// is JSON), unwrapped from the backticks, emphasis or angle brackets a report
-// puts around it and from the full stop a sentence puts after it.
+// one: a URL, whatever bytes it holds ([deliveredRefs] says why), or a branch
+// name the engine's one grammar takes ([gitref.ValidBranch]: a name git
+// accepts, valid UTF-8 and at most [gitref.MaxBranchBytes], what a ref under
+// refs/heads can be), unwrapped from the backticks, emphasis or angle
+// brackets a report puts around it and from the full stop a sentence puts
+// after it.
 //
 // ALONE ON ITS LINE, because the label is not proof of a ref: "Delivered: the
 // fix for the flake" is a sentence, and its first word is no branch anybody

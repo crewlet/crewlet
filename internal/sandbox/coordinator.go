@@ -144,8 +144,8 @@ type ResumeRequest struct {
 	DeliveredRefs []string
 
 	// DeliveredRefsElided is how many more refs the run reported than
-	// DeliveredRefs lists ([MaxDeliveredRefBytes]), for the resumed phase's
-	// record to say so too.
+	// DeliveredRefs lists ([Result.DeliveredRefsElided]), for the resumed
+	// phase's record to say so too.
 	DeliveredRefsElided int
 
 	// InputTokens and OutputTokens are what the job this resume collected
@@ -1042,7 +1042,7 @@ func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause e
 type runOutcome struct {
 	DeliveredRefs []string
 	// DeliveredRefsElided is how many more the run reported than its
-	// record lists — see [MaxDeliveredRefBytes].
+	// record lists — see [Result.DeliveredRefsElided].
 	DeliveredRefsElided int
 	InputTokens         int
 	OutputTokens        int
@@ -1247,7 +1247,7 @@ func runPhase(run PendingRun, facts LaunchRecord, result Result, collected time.
 		CostUSD:                       result.CostUSD,
 		DeliveredRefs:                 result.DeliveredRefs,
 		// How many more it reported than the record lists, said rather
-		// than dropped — see [MaxDeliveredRefBytes].
+		// than dropped — see [Result.DeliveredRefsElided].
 		DeliveredRefsElided: result.DeliveredRefsElided,
 		ConversationKey:     run.ConversationKey,
 	}
@@ -3669,10 +3669,11 @@ func resumeText(result Result) string {
 	case result.DeliveredRefsElided > 0:
 		// SAID WHERE NONE IS LISTED TOO, which the record can come to: a
 		// ref longer than [MaxDeliveredRefBytes] is past the bound on its
-		// own. The record still counts it, and so does the dashboard's
-		// line; here it was dropped unsaid, and the executor was told of no
-		// ref at all — a run that seems to have delivered nothing, when the
-		// report it reads below names what it did.
+		// own, and one that is not UTF-8 is never listed ([boundRefs]). The
+		// record still counts it, and so does the dashboard's line; here it
+		// was dropped unsaid, and the executor was told of no ref at all — a
+		// run that seems to have delivered nothing, when the report it reads
+		// below names what it did.
 		lines = append(lines, fmt.Sprintf("Delivered: %d ref(s) its report names, not listed here",
 			result.DeliveredRefsElided))
 	}

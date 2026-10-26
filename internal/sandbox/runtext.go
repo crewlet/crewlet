@@ -398,9 +398,9 @@ func questionRefusal(bytes int) string {
 		"was asked it", kib(bytes), MaxQuestionBytes>>10)
 }
 
-// boundRefs is a run's delivered refs, redacted, deduplicated in the order
-// they were found and held to [MaxDeliveredRefBytes], with how many did not
-// fit.
+// boundRefs is a run's delivered refs as its record carries them — redacted,
+// deduplicated in the order they were found, each valid UTF-8, and held to
+// [MaxDeliveredRefBytes] — with how many more the run named than are listed.
 //
 // WHOLE REFS ONLY: a ref is an identifier, and a shortened URL names nothing.
 //
@@ -409,6 +409,20 @@ func questionRefusal(bytes int) string {
 // report put on its `Delivered:` line, which a box can make a credential, and
 // every reader of the record — its event, the resumed executor's text — reads
 // these. First, so the bound measures what is carried.
+//
+// NEVER ONE THAT IS NOT UTF-8, because every one of those readers reads the
+// refs through JSON, which replaces each byte that is not UTF-8 with U+FFFD:
+// listed, such a ref arrived as another — a URL the run never delivered —
+// and refs that differ only there arrived as one, past the deduplication
+// above. A branch is held to UTF-8 by its grammar ([gitref.ValidBranch]), but
+// a URL holds whatever bytes a report puts in it, and so does the host a
+// scrape of one reads; so the rule is HERE, where every runner's refs pass,
+// rather than in each runner's reading of an account, which hands on the
+// bytes it read. Judged as carried, after the redaction, as [fitBranch]
+// judges a branch, and DROPPED RATHER THAN MENDED, as it drops one: a mended
+// ref names what nobody delivered. And COUNTED with the refs past the bound,
+// because the run named it and the record does not list it: the reader is
+// told the list is short rather than shown a ref nobody delivered.
 func boundRefs(refs []string) ([]string, int) {
 	seen := make(map[string]bool, len(refs))
 	var kept []string
@@ -419,7 +433,7 @@ func boundRefs(refs []string) ([]string, int) {
 			continue
 		}
 		seen[ref] = true
-		if size+len(ref) > MaxDeliveredRefBytes {
+		if !utf8.ValidString(ref) || size+len(ref) > MaxDeliveredRefBytes {
 			left++
 			continue
 		}

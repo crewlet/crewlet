@@ -4,10 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
@@ -178,6 +181,62 @@ func TestTheResumedExecutorIsToldOfRefsTheRecordListsNoneOf(t *testing.T) {
 	// A run that named no ref is told of none.
 	if text := resumeText(Result{Success: true, Text: "Outcome: succeeded"}); strings.Contains(text, "Delivered:") {
 		t.Errorf("a run that named no ref is told of one: %q", text)
+	}
+}
+
+// A REF THE RECORD WOULD RENAME IS COUNTED, NEVER LISTED. Every reader of the
+// refs reads them through JSON — the run's phase record, the resumed
+// executor's text — where a byte that is not UTF-8 is replaced: listed, such
+// a ref arrived as another, a URL the run never delivered, and refs that
+// differ only there arrived as one. A URL holds whatever bytes a report puts
+// in it, on a `Delivered:` line or in the host a scrape reads, so it is
+// judged here, where every runner's refs pass.
+func TestADeliveredRefThatIsNotUTF8IsCountedNeverListed(t *testing.T) {
+	t.Parallel()
+	refs := []string{
+		"https://h/a/b/pull/1\xff", // a `Delivered:` line's, as the report wrote it
+		"wip/t1",
+		"https://h\xff/a/b/pull/2",   // a host the scrape read
+		"https://h/a/b/pull/1\xfe",   // another ref, which JSON would make the first: U+FFFD for either byte
+		"https://h/a/b/pull/1\xff",   // the first, named again: still one ref
+		"https://h/a/b/pull/1\uFFFD", // what JSON makes of both, written as UTF-8: a ref of its own
+	}
+	want := []string{"wip/t1", "https://h/a/b/pull/1\uFFFD"}
+	got := (&Coordinator{}).fitResult(t.Context(), PendingRun{}, Result{Success: true, DeliveredRefs: refs})
+	if !slices.Equal(got.DeliveredRefs, want) || got.DeliveredRefsElided != 3 {
+		t.Errorf("listed %q and counted %d more; want %q and the 3 distinct refs that are not UTF-8",
+			got.DeliveredRefs, got.DeliveredRefsElided, want)
+	}
+
+	// WHAT IS LISTED ARRIVES AS ITSELF, on the record a reader decodes.
+	raw, err := json.Marshal(runPhase(PendingRun{}, LaunchRecord{}, got, time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rec types.AgentPhaseCompleted
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(rec.DeliveredRefs, want) || rec.DeliveredRefsElided != 3 {
+		t.Errorf("the record arrives listing %q and counting %d; want %q and 3",
+			rec.DeliveredRefs, rec.DeliveredRefsElided, want)
+	}
+
+	// And the resumed executor is told the list is short, not handed a ref
+	// nobody delivered.
+	if text := resumeText(got); !utf8.ValidString(text) ||
+		!strings.Contains(text, "Delivered: wip/t1, https://h/a/b/pull/1\uFFFD (and 3 more its report names") {
+		t.Errorf("the resumed executor reads %q", text)
+	}
+
+	// A RUN WHOSE ONLY REF IS ONE lists none, and the executor is still told
+	// it delivered one.
+	alone := (&Coordinator{}).fitResult(t.Context(), PendingRun{},
+		Result{Success: true, DeliveredRefs: []string{"https://h/a/b/pull/1\xff"}})
+	if text := resumeText(alone); len(alone.DeliveredRefs) != 0 || alone.DeliveredRefsElided != 1 ||
+		!strings.Contains(text, "Delivered: 1 ref(s) its report names, not listed here") {
+		t.Errorf("a run whose only ref is not UTF-8: listed %q, counted %d, the executor reads %q",
+			alone.DeliveredRefs, alone.DeliveredRefsElided, text)
 	}
 }
 

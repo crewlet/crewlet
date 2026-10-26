@@ -263,10 +263,17 @@ type Result struct {
 	// resumed executor's text carry them — and nothing judges a turn on
 	// them: whether a turn reached anybody is the tool loop's own record of
 	// what ran ([github.com/crewlet/crewlet/internal/agent/turn]).
+	//
+	// A runner hands them on AS THE ACCOUNT WROTE THEM, byte for byte: the
+	// coordinator holds them to what the record can carry, for every runner
+	// alike — redacted, deduplicated, valid UTF-8 and within
+	// [MaxDeliveredRefBytes] — and it can only judge the bytes it is given.
 	DeliveredRefs []string
 
 	// DeliveredRefsElided is how many more refs the run reported than its
-	// record lists ([MaxDeliveredRefBytes]). Set by the coordinator.
+	// record lists: the refs past [MaxDeliveredRefBytes], and any that is not
+	// valid UTF-8, which the record's JSON would turn into another ref. Set
+	// by the coordinator.
 	DeliveredRefsElided int
 
 	Error string
