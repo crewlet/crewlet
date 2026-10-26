@@ -232,9 +232,19 @@ func (b *directBox) childEnv(extra map[string]string) map[string]string {
 	return env
 }
 
-// workdir resolves a command's cwd, defaulting to the box's checkout, and
-// makes it — through the box's home, as every write into the box is
-// ([boxLayout.mkdirHome]).
+// workdir resolves a command's cwd, defaulting to the box's checkout, makes it
+// — through the box's home, as every write into the box is
+// ([boxLayout.mkdirHome]) — and answers it relative to the home.
+//
+// THE ENGINE NEVER ENTERS IT. A command starts in the box's home, a directory
+// the engine made and the box cannot rename, and its own shell enters the
+// working directory, by its name relative to the home ([inWorkdir]). Entered
+// by its joined host path, the directory was walked on the engine's side by
+// name after it was made, and a box that put a link in place of one on the way
+// between the two moved where its command started; walked by the box's own
+// process, it is the box's walk, under whatever confines the box. And it is
+// the one way every confinement starts the command where it was asked to:
+// bubblewrap enters the home whatever directory the process was handed.
 func (b *directBox) workdir(cwd string) (string, error) {
 	named, rel := b.layout.workspace(), WorkspaceSubdir
 	if cwd != "" {
@@ -248,21 +258,31 @@ func (b *directBox) workdir(cwd string) (string, error) {
 		return "", b.explain(named, rel, localErrorf("local sandbox %s could not create %s: %v",
 			b.layout.id, filepath.Join(b.layout.home(), rel), err))
 	}
-	return filepath.Join(b.layout.home(), rel), nil
+	return rel, nil
+}
+
+// inWorkdir is cmd run in rel, the working directory relative to the box's
+// home that the command's shell enters first ([directBox.workdir]): a shell
+// that cannot enter it runs nothing and fails as the command.
+func inWorkdir(rel, cmd string) string {
+	if rel == "" || rel == "." {
+		return cmd
+	}
+	return "cd -- '" + strings.ReplaceAll(rel, "'", `'\''`) + "' || exit 1\n" + cmd
 }
 
 func (b *directBox) Exec(ctx context.Context, cmd string, opts ExecOptions) (ExecResult, error) {
-	dir, err := b.workdir(opts.Cwd)
+	rel, err := b.workdir(opts.Cwd)
 	if err != nil {
 		return ExecResult{}, err
 	}
-	argv, err := b.argv(cmd)
+	argv, err := b.argv(inWorkdir(rel, cmd))
 	if err != nil {
 		return ExecResult{}, err
 	}
 	return runHost(ctx, hostCommand{
 		argv:    argv,
-		cwd:     dir,
+		cwd:     b.layout.home(),
 		env:     b.childEnv(opts.Env),
 		timeout: time.Duration(opts.TimeoutSec * float64(time.Second)),
 	})
@@ -288,19 +308,19 @@ func (b *directBox) Exec(ctx context.Context, cmd string, opts ExecOptions) (Exe
 // Its stdio is /dev/null: the runner's script already redirects the agent's
 // output into the box's result and error files.
 func (b *directBox) StartBackground(ctx context.Context, cmd string, opts ExecOptions) (string, error) {
-	dir, err := b.workdir(opts.Cwd)
+	rel, err := b.workdir(opts.Cwd)
 	if err != nil {
 		return "", err
 	}
 	// Not exec.CommandContext: the job must outlive the turn that starts it,
 	// so binding it to the caller's context would kill it at the first
 	// return.
-	argv, err := b.argv(cmd)
+	argv, err := b.argv(inWorkdir(rel, cmd))
 	if err != nil {
 		return "", err
 	}
 	proc := exec.Command(argv[0], argv[1:]...) //nolint:noctx // deliberate; see above
-	proc.Dir = dir
+	proc.Dir = b.layout.home()
 	proc.Env = hostbox.Environ(b.childEnv(opts.Env))
 	procgroup.Detach(proc)
 	// nil stdio is os/exec's /dev/null, which is what we want: nothing reads

@@ -181,6 +181,60 @@ func TestADirectBoxMakesACommandsDirectoryOnlyBeneathItsHome(t *testing.T) {
 	}
 }
 
+// A COMMAND STARTS IN ITS BOX'S HOME AND ENTERS ITS WORKING DIRECTORY ITSELF.
+// The engine makes the directory through the home's root and never walks into
+// it by name: the command's own shell does, relative to the home, so where it
+// starts is the box's own walk, made in the box's own process — and every
+// confinement starts it where it was asked to, bubblewrap included, which
+// enters the home whatever directory it was handed. A name the shell must
+// quote, a quote in it included, is entered whole.
+//
+// Mutation: hand the joined directory to the process rather than to its
+// shell, and the command starts in it with no home behind it to have left;
+// quote the name loosely, and the shell enters another directory or none.
+func TestADirectBoxCommandEntersItsWorkingDirectoryFromItsHome(t *testing.T) {
+	t.Parallel()
+	box := mustCreate(t, newDirect(t), Spec{})
+	home := box.Home()
+	cwd := home + "/it's a dir"
+	want := func(t *testing.T, got string) {
+		t.Helper()
+		resolvedHome, err := filepath.EvalSymlinks(home)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(strings.TrimSpace(got), "\n")
+		if len(lines) != 2 || lines[0] != home || lines[1] != filepath.Join(resolvedHome, "it's a dir") {
+			t.Fatalf("the command started in and ran in %q; want it started in the home %s and run in "+
+				"its working directory beneath it", lines, home)
+		}
+	}
+	report := `printf '%s\n%s\n' "$OLDPWD" "$(pwd -P)"`
+
+	res, err := box.Exec(t.Context(), report, ExecOptions{Cwd: cwd})
+	if err != nil || res.ExitCode != 0 {
+		t.Fatalf("Exec = %+v, %v", res, err)
+	}
+	want(t, res.Stdout)
+
+	out := filepath.Join(home, "started")
+	if _, err := box.StartBackground(t.Context(), report+" > "+out+".tmp && mv "+out+".tmp "+out,
+		ExecOptions{Cwd: cwd}); err != nil {
+		t.Fatalf("StartBackground: %v", err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if raw, err := os.ReadFile(out); err == nil {
+			want(t, string(raw))
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the background job wrote nothing in 10s")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // A LINK THAT STAYS IN THE HOME IS FOLLOWED: a box may arrange its own home as
 // it likes, and the root refuses only what leads out of it. A write through a
 // link to a sibling directory lands there, and reads back.
