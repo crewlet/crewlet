@@ -129,6 +129,8 @@ import {
   nameOfIn,
   statusOf,
   stateLine,
+  shownStateOf,
+  stateGroupWord,
   stateWord,
   toneOf,
   unitByKey,
@@ -1003,7 +1005,7 @@ function SeatNode({
   onOpen: () => void;
 }) {
   const human = seat.kind === "human";
-  const state = human ? undefined : activityOf(agent);
+  const state = human ? undefined : shownStateOf(agent);
   const line = cardLine(seat, agent, now, nameOf, holding);
   const handle = handleLabel(seat.handle);
   const item = card.item(seat.key);
@@ -1156,7 +1158,7 @@ export function OrgLegend({ counts, inline = false }: { counts: StateCounts; inl
       {LEGEND.map((state) => (
         <span key={state} className="oc-legend-item">
           <StatusDot tone={toneOf(state)} />
-          {stateWord(state)} <span className="t-num">{counts[state]}</span>
+          {stateGroupWord(state)} <span className="t-num">{counts[state]}</span>
         </span>
       ))}
     </div>

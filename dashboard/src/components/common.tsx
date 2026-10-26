@@ -33,6 +33,7 @@ import { goSignIn } from "~/lib/session.ts";
 import { needsWords } from "~/lib/access.ts";
 import {
   activityOf,
+  shownStateOf,
   stateWord,
   handleLabel,
   statusOf,
@@ -106,7 +107,8 @@ export function SeatChip({
  * seat is the neutral pill — a green one read as activity.
  */
 export function StateBadge({ agent }: { agent: AgentRow | null | undefined }) {
-  const state = activityOf(agent);
+  // A PAUSED SEAT READS "Paused", as its own page, the chart and the Inbox say.
+  const state = shownStateOf(agent);
   return (
     // SENTENCE CASE, as the seat's own page and the chart write the state
     // (`stateWord`): the roster's "idle" beside the seat page's "Idle" was one

@@ -122,6 +122,8 @@ import {
   statusOf,
   seatPath,
   seatResolvers,
+  seatWord,
+  shownStateOf,
   stoppedLine,
   toneOf,
   useSeatSetup,
@@ -149,7 +151,6 @@ import {
   findSeat,
   liveRow,
   mayReadTrail,
-  pillWord,
   seatRun,
   sentence,
   type SeatTab,
@@ -520,7 +521,7 @@ export function SeatScreen({ handle }: { handle: string }) {
 /** The badge, the name, the kind and state, and the line that places the seat. */
 function SeatHead({ seat, agent }: { seat: Seat; agent: AgentRow | undefined }) {
   const human = seat.kind === "human";
-  const state = human ? undefined : activityOf(agent);
+  const state = human ? undefined : shownStateOf(agent);
   const status = human ? undefined : statusOf(state);
   const place = unitPath(seat.unit);
   return (
@@ -544,7 +545,7 @@ function SeatHead({ seat, agent }: { seat: Seat; agent: AgentRow | undefined }) 
               read as two states. */}
           {!human && (
             <Tag variant={toneOf(state)} dot>
-              {pillWord(agent)}
+              {seatWord(agent)}
             </Tag>
           )}
         </div>

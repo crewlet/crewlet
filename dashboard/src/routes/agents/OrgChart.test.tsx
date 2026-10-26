@@ -222,7 +222,9 @@ test("every seat of the applied chart is a node with its state word and state li
   expect(card("SWE").getAttribute("data-state")).toBe("working");
   expect(caption("FE")).toBe("Needs you");
   expect(caption("PM")).toBe("Stopped");
-  expect(card("PM").getAttribute("title")).toBe("Stopped · budget · @pm");
+  expect(card("PM").getAttribute("title")).toBe(
+    "Stopped: its token budget is spent until the window resets · @pm",
+  );
   expect(caption("Jane Founder")).toBe("Human seat");
   expect(card("Jane Founder").getAttribute("title")).toBe("Human · reviews releases · @jane");
 });
@@ -439,7 +441,9 @@ test("the legend's figures are the activity counts", async () => {
   const counts = stateCounts(indexOrg(CHART_ORG), AGENTS);
   const legend = screen.getByRole("group", { name: "Seats by what they are doing" });
   expect(legend.textContent).toBe(
-    `Working ${counts.working}Needs you ${counts.needs}Stopped ${counts.stopped}Idle ${counts.idle}`,
+    // A GROUP keyed on the engine's `stopped` holds the paused seats as well
+    // as the ones a fault stopped, and its word says both.
+    `Working ${counts.working}Needs you ${counts.needs}Paused or stopped ${counts.stopped}Idle ${counts.idle}`,
   );
   expect(counts).toEqual({ working: 2, needs: 1, stopped: 1, idle: 2 });
 });
