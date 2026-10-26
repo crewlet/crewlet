@@ -66,7 +66,8 @@ var PageActions = []PageAction{
 // DraftSet is the page action that sets fields of the draft a screen has
 // open: `{"values": {"<path>": "<value>"}}`, each path one the page context's
 // draft lists as editable, a list's value an array of strings or one item per
-// line.
+// line, and a file's the file's id, which the engine resolves into the whole
+// reference ([SetDraftFile]).
 const DraftSet = "draft.set"
 
 // PageActionOf is the page action named id.
@@ -118,8 +119,10 @@ func interactionTools() []Tool {
 			"a range, a grouping, a tab, or the draft open in an editor. Only an action the page " +
 			"context lists in accepts is valid. For the open draft, use draft.set with args " +
 			"{\"values\": {\"<path>\": \"<value>\"}}, each path an editable field of the page " +
-			"context's draft and each value in its hint's form. Nothing is saved: the person " +
-			"approves, and saves the draft themselves.",
+			"context's draft and each value in its hint's form. A file field takes the file id " +
+			"of a file delivered or attached in this conversation, as a string; the engine " +
+			"fills in the rest of the reference. Nothing is saved: the person approves, and " +
+			"saves the draft themselves.",
 		// THE PAYLOAD IS THE SCREEN'S TO READ: its shape is declared by
 		// the screen that mounts the action, so the engine checks only
 		// that it is one bounded object naming nobody, and the page

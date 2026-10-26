@@ -160,7 +160,15 @@ describe("draft.set", () => {
         next: { ...FORM, title: "On call", tags: ["ops", "pager"] },
         rows: [
           { field: "Title", next: "On call", current: "Runbook" },
-          { field: "Tags", next: "ops; pager", current: "ops" },
+          // A LIST IS DRAWN AS ITS ITEMS, beside the one line a reader that
+          // draws one shows.
+          {
+            field: "Tags",
+            next: "ops; pager",
+            current: "ops",
+            items: ["ops", "pager"],
+            currentItems: ["ops"],
+          },
         ],
       },
     });

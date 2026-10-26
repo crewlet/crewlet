@@ -635,6 +635,31 @@ describe("a reloaded transcript", () => {
       ["Two?", "working", null],
     ]);
     expect(view.turns[1]!.seq).toBe(7);
+    // ANSWERED WHEN ITS LAST REPLY WAS WRITTEN, and not yet for a turn with none.
+    expect(view.turns.map((t) => t.answeredAt)).toEqual(["2026-10-24T09:00:01Z", null]);
+  });
+});
+
+// A TURN'S FOOT SAYS WHEN IT ANSWERED, not when it was asked: a turn that
+// waited minutes on an approval read "7m ago" the moment it finished.
+// Mutation: leave answeredAt to the question's time, or ignore the done frame.
+describe("when a turn answered", () => {
+  test("is its done frame's time", () => {
+    const view = after(...SENT, {
+      type: "frame",
+      frame: {
+        v: 1,
+        conversation_id: CONV,
+        turn_id: TURN,
+        seq: 9,
+        at: "2026-10-24T09:48:00Z",
+        kind: "done",
+        done: { state: "completed", duration_ms: 420_000, steps: 3 },
+      } as unknown as AssistantNarrowFrame,
+    });
+    const turn = view.turns[0]!;
+    expect(turn.answeredAt).toBe("2026-10-24T09:48:00Z");
+    expect(turn.answeredAt).not.toBe(turn.askedAt);
   });
 });
 

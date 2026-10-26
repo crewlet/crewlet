@@ -481,14 +481,11 @@ func TestTheBrandRedesignDeliversAssetsAndProposesThemIntoTheDraft(t *testing.T)
 	key := evals.Key("brand")
 	turn := assistant.TurnID(key)
 	logoID := assistant.DeliveredFileID(turn, "assistant-"+turn.String()+"-1-0", "logo.svg")
-	conversation := evals.ID("conversation/one")
 	f := assistanttest.NewRig(t, evals.RigOptions{Company: deepCompany(t), Deep: script, Files: files,
 		Tools: []catalog.Tool{assistanttest.Tool(t, "propose_page_change")},
 		Rounds: []evals.Round{startDeep("Redesign the brand assets"),
 			evals.Call("c-draft", "propose_page_change", map[string]any{"action": catalog.DraftSet,
-				"args": map[string]any{"values": map[string]any{"logos.primary": map[string]any{
-					"kind": "file", "file_id": logoID.String(), "conversation_id": conversation.String(),
-					"name": "logo.svg", "media_type": "image/svg+xml"}}}}),
+				"args": map[string]any{"values": map[string]any{"logos.primary": logoID.String()}}}),
 			evals.Say("The new logo is ready for your approval.")}})
 	shot, err := files.Attach(f.Person.ID, f.Conversation, "screenshot.png",
 		append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 64)...))
@@ -532,8 +529,63 @@ func TestTheBrandRedesignDeliversAssetsAndProposesThemIntoTheDraft(t *testing.T)
 	}
 	proposals := f.Store.Proposals()
 	if len(proposals) != 1 || proposals[0].Tool != "propose_page_change" ||
-		!strings.Contains(string(proposals[0].Body), logoID.String()) {
-		t.Fatalf("the logo was proposed as %+v", proposals)
+		!strings.Contains(string(proposals[0].Body), logoID.String()) ||
+		!strings.Contains(string(proposals[0].Body), f.Conversation.String()) {
+		t.Fatalf("the logo was proposed as %+v, want its reference resolved in this "+
+			"conversation (%s)", proposals, f.Conversation)
+	}
+}
+
+// A RUN'S OWN DRAFT CHANGE NAMES A FILE BY ITS ID ALONE TOO: the bridge reaches
+// the turn's surface, so a file the person attached in this conversation is
+// resolved into the whole reference the page takes, and one of another
+// conversation is refused before any card. Mutation: resolve files only for
+// the quick-mode model and the run's change carries a bare id.
+func TestARunsDraftChangeResolvesItsFileOnTheBridge(t *testing.T) {
+	t.Parallel()
+	set := func(id, file string) llm.ToolCall {
+		return llm.ToolCall{ID: id, Name: "propose_page_change", Arguments: map[string]any{
+			"action": catalog.DraftSet, "args": map[string]any{"values": map[string]any{
+				"logos.primary": file}}}}
+	}
+	for name, c := range map[string]struct {
+		file     func(shot uuid.UUID) string
+		proposed bool
+	}{
+		"a file of this conversation": {file: func(shot uuid.UUID) string { return shot.String() },
+			proposed: true},
+		"a file nobody holds here": {file: func(uuid.UUID) string { return uuid.NewString() }},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			files := evals.NewFiles(evals.NewClock().Now)
+			shot, err := files.Attach(grace, conversation, "logo.png",
+				append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 64)...))
+			if err != nil {
+				t.Fatal(err)
+			}
+			script := evals.NewDeepScript(evals.DeepRunScript{Report: "Proposed the logo.",
+				Calls: []llm.ToolCall{set("p1", c.file(shot.FileID))}})
+			f := assistanttest.NewRig(t, evals.RigOptions{Company: deepCompany(t), Deep: script,
+				Files: files, Tools: []catalog.Tool{assistanttest.Tool(t, "propose_page_change")},
+				Rounds: []evals.Round{startDeep("Set the logo"), evals.Say("Done.")}})
+			if f.Person.ID != grace || f.Conversation != conversation {
+				t.Fatalf("the rig's person or conversation moved: %v %v", f.Person.ID, f.Conversation)
+			}
+			accepted, err := f.Ask("logo", "Use the logo I attached", draftPage())
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.Follow(accepted.TurnID, 0)
+			proposals := f.Store.Proposals()
+			if c.proposed != (len(proposals) == 1) {
+				t.Fatalf("recorded %d proposals, want proposed %v", len(proposals), c.proposed)
+			}
+			if c.proposed && !strings.Contains(string(proposals[0].Body), f.Conversation.String()) {
+				t.Errorf("the run's change carries %s, not the resolved reference",
+					proposals[0].Body)
+			}
+		})
 	}
 }
 

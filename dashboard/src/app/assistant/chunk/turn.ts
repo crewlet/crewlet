@@ -144,6 +144,13 @@ export interface TurnView {
   attachments: AssistantFileRef[];
   /** When the person asked, RFC 3339. */
   askedAt: string;
+  /**
+   * When the turn last answered, RFC 3339: its done frame, or, in a reloaded
+   * transcript, its last reply. Null until it has. What the turn's foot says,
+   * since a turn that waited minutes on an approval was answered long after
+   * it was asked.
+   */
+  answeredAt: string | null;
   /** The engine's step count while a segment runs. */
   stepsDone: number;
   steps: AssistantStepEvent[];
@@ -338,9 +345,20 @@ function applyFrame(turn: TurnView, frame: AssistantNarrowFrame): TurnView {
       return { ...next, actions, phase: applies ? "applying" : next.phase };
     }
     case "done":
-      return { ...next, done: frame.done, phase: phaseOf(frame.done.state), stopping: false };
+      return {
+        ...next,
+        done: frame.done,
+        phase: phaseOf(frame.done.state),
+        stopping: false,
+        answeredAt: frame.at,
+      };
     case "error":
-      return { ...next, error: frame.error, phase: open ? "failed" : next.phase };
+      return {
+        ...next,
+        error: frame.error,
+        phase: open ? "failed" : next.phase,
+        answeredAt: open ? frame.at : next.answeredAt,
+      };
     case "snapshot": {
       const { messages, steps, cards } = frame.snapshot;
       const asked = messages.find((m) => m.role === "user");
@@ -386,6 +404,7 @@ function fromTranscript(transcript: AssistantTranscript): TurnView[] {
         page: null,
         attachments: [],
         askedAt: message.created_at,
+        answeredAt: null,
         stepsDone: 0,
         steps: [],
         replies: [],
@@ -413,6 +432,7 @@ function fromTranscript(transcript: AssistantTranscript): TurnView[] {
       turns.set(message.turn_id, {
         ...turn,
         replies: [...turn.replies, { id: message.id, text: message.text }],
+        answeredAt: message.created_at,
       });
     }
   }
@@ -458,6 +478,7 @@ export function reduce(view: ConversationView, event: TurnEvent): ConversationVi
             page: event.page,
             attachments: event.attachments,
             askedAt: event.at,
+            answeredAt: null,
             stepsDone: 0,
             steps: [],
             replies: [],

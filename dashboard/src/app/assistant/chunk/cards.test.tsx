@@ -161,6 +161,7 @@ const base: TurnView = {
   page: null,
   attachments: [],
   askedAt: "2026-10-24T09:41:00Z",
+  answeredAt: null,
   stepsDone: 0,
   steps: [],
   replies: [],

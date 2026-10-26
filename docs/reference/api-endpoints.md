@@ -6988,11 +6988,15 @@ The page action `draft.set` (`{"values": {"<path>": "<value>"}}`) changes the
 editable fields through the screen's own setters, after the person approves.
 The engine holds it to the turn's draft before any card is drawn: a path the
 draft does not list as editable, or a value not of its field's kind, is
-refused. A `file` field takes a reference, never markup:
-`{"kind": "file", "file_id", "conversation_id", "name", "media_type"}`, a file
-of the person's own in this conversation, which the screen fetches through
+refused. A `file` field takes a file, never markup: the model names it by its
+`file_id` alone (a file of the person's own in this conversation, attached or
+delivered by deep work), and the engine resolves the rest from its own record
+and writes the whole reference into the proposal,
+`{"kind": "file", "file_id", "conversation_id", "name", "media_type"}`. A file
+of another conversation or another person is refused before any card. The
+screen fetches the file through
 `GET /assistant/conversations/{conversation}/files/{file}` once approved and
-keeps through its own save.
+keeps it through its own save.
 
 **Before anything is spent.** A question is refused, recording nothing, when the
 company's token budget, or the person's own `assistant.token_budget`, has no

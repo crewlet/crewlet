@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -252,6 +253,30 @@ func TestAPageChangeReadsAsWords(t *testing.T) {
 	}
 	if rows["Assignee"] != "Backend engineer (engineer)" || rows["Due before"] != "2031-04-30" {
 		t.Errorf("the page change reads %v", rows)
+	}
+}
+
+// A PAGE CHANGE'S ROW IS NEVER LABELLED WITH A RAW PATH: a dotted key reads
+// as its words, and a list as its items. The turn's open draft names a
+// draft.set row with the screen's own label (internal/assistant's
+// draftRows); this is what a row says where nothing does. Mutation: label a
+// row with its key as written, or join a list into one line.
+func TestAPageChangeIsNeverLabelledWithARawPath(t *testing.T) {
+	t.Parallel()
+	change, _ := catalog.Lookup("propose_page_change")
+	p, err := change.Preview(t.Context(), reader(assistanttest.World()), wednesday,
+		map[string]any{"action": catalog.DraftSet, "args": map[string]any{"values": map[string]any{
+			"colors.dark_ground": "#090019", "voice.write_like": []any{"Short", "Plain"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range p.Changes {
+		if strings.Contains(c.Label, ".") || strings.Contains(c.Label, "_") {
+			t.Errorf("row %s is labelled %q", c.Field, c.Label)
+		}
+		if c.Field == "voice.write_like" && !slices.Equal(c.Items, []string{"Short", "Plain"}) {
+			t.Errorf("the list row carries the items %q", c.Items)
+		}
 	}
 }
 

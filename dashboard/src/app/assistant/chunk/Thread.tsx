@@ -251,7 +251,7 @@ function Turn({
         <Inline gap={2} align="center">
           {/* THE FOOT IS METADATA, set at the caption step beside Copy. */}
           <Text as="span" variant="caption" tone="secondary">
-            <RelativeTime value={turn.askedAt} now={now} />
+            <RelativeTime value={turn.answeredAt ?? turn.askedAt} now={now} />
           </Text>
           {turn.replies.length > 0 ? (
             <CopyButton size="small" variant="ghost" text={() => answerText(turn)} />
