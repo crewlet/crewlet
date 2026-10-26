@@ -76,6 +76,70 @@ func TestHeatDecaysOutOfItsWindow(t *testing.T) {
 	}
 }
 
+// A READING OLDER THAN A COUNT LOSES NOTHING: whatever slot a caller's
+// reading of the clock names, the heat is counted, judged and read at the
+// latest slot it has acted at. A caller whose reading was a second short of a
+// slot's turn when it read it, and who took the heat's lock only after
+// another counted a repository in the new slot — preempted between the two,
+// or barged — judges that repository at the new slot: neither its hot list,
+// nor its count of another repository (whose sweep it runs), drops the
+// repository with its counts, and its read answers them.
+//
+// The case replays that order on a clock set back a second, at the turn of
+// the day's sixth slot: the count at the turn, then each caller's reading a
+// second short of it, and the count read again at the turn.
+//
+// Mutation: read the clock outside the heat's lock and as it reads, keeping
+// no latest slot (heatNow), and the hot list and the count drop the
+// repository — the day judged idle at its fifth slot — and the read answers
+// nothing.
+func TestAReadingOlderThanACountLosesNothing(t *testing.T) {
+	t.Parallel()
+	const repo = "0190f3c4-5b6a-7c8d-9e0f-0123456789ab"
+	used := cache.Use{Fetches: 1, Clones: 1, BytesOut: 4000}
+	for _, caller := range []struct {
+		name string
+		// judge is what the caller does with the heat at its older reading,
+		// and the repository's heat as the caller read it.
+		judge func(h *cache.Heat) cache.RepoHeat
+	}{
+		{"a hot list", func(h *cache.Heat) cache.RepoHeat {
+			for _, r := range h.Hot(cache.HotRepos) {
+				if r.ID == repo {
+					return r
+				}
+			}
+			return cache.RepoHeat{ID: repo}
+		}},
+		{"a count of another repository", func(h *cache.Heat) cache.RepoHeat {
+			h.Add("0190f3c4-5b6a-7c8d-9e0f-ffffffffffff", "docs", cache.Use{Fetches: 1})
+			return h.Of(repo)
+		}},
+		{"a read of the repository", func(h *cache.Heat) cache.RepoHeat { return h.Of(repo) }},
+	} {
+		t.Run(caller.name, func(t *testing.T) {
+			t.Parallel()
+			clk := newClock()
+			// THE TURN of the day's sixth slot, which is the hour's 121st.
+			turn := clk.Now().Add(5 * cache.HeatDay / 24)
+			h := cache.NewHeat(clk.Now)
+			clk.Set(turn)
+			h.Add(repo, "web", used)
+
+			clk.Set(turn.Add(-time.Second))
+			if got := caller.judge(h); got.Name != "web" || got.Hour != used || got.Day != used {
+				t.Errorf("%s on a reading a second short of the turn read the repository counted at it as %+v, "+
+					"want %+v in both windows, named web", caller.name, got, used)
+			}
+			clk.Set(turn)
+			if got := h.Of(repo); got.Name != "web" || got.Hour != used || got.Day != used {
+				t.Fatalf("after %s on a reading a second short of the turn, the repository counted at it reads "+
+					"%+v, want %+v in both windows, named web", caller.name, got, used)
+			}
+		})
+	}
+}
+
 // THE HOT LIST HOLDS EACH WINDOW'S HOTTEST, in one list read either way: the
 // n hottest of the hour and the n hottest of the day, a window's heat its git
 // operations — fetches and pushes — with its bytes out breaking a tie and the
@@ -167,7 +231,9 @@ func TestAHeatCountNeverWrapsOrGoesBelowNothing(t *testing.T) {
 // Mutation: count no eviction in evict, or count a repair into the counter
 // alone (rebuilt), and the status's windows read nothing; keep a churn
 // bucket's count when a later slot comes round to it (churnWindow.add), and
-// the hour counts the first evictions with the later one.
+// the hour counts the first evictions with the later one; read the churn's
+// clock as it reads, keeping no latest slot (heatNow), and a status a second
+// short of the eviction an hour on misses it.
 func TestAStatusCountsWhatTheCacheSpentOnItsOwnAccount(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -234,6 +300,15 @@ func TestAStatusCountsWhatTheCacheSpentOnItsOwnAccount(t *testing.T) {
 	if st = c.Status(); st.Hour != (cache.Churn{Evictions: 1}) || st.Day != (cache.Churn{Evictions: 3, Rebuilds: 1}) {
 		t.Fatalf("an eviction an hour on reads hour %+v, day %+v; want it alone in the hour and beside the "+
 			"first ones in the day", st.Hour, st.Day)
+	}
+	// A READING OLDER THAN THE EVICTION reads it all the same: a status whose
+	// reading of the clock is a second short of the slot the eviction was
+	// counted in reads what the cache spent at that slot, the latest it has
+	// counted.
+	clk.Set(start.Add(cache.HeatHour - time.Second))
+	if st = c.Status(); st.Hour != (cache.Churn{Evictions: 1}) || st.Day != (cache.Churn{Evictions: 3, Rebuilds: 1}) {
+		t.Fatalf("a status a second short of the eviction an hour on reads hour %+v, day %+v; want the "+
+			"eviction in both windows, as at the slot it was counted in", st.Hour, st.Day)
 	}
 	clk.Set(start.Add(cache.HeatDay))
 	if st = c.Status(); st.Day != (cache.Churn{Evictions: 1}) {

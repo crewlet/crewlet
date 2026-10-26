@@ -46,6 +46,15 @@ import (
 // nothing used within the day holds no bucket a sum reads, and is dropped: by
 // the first count of each slot of the day's window, or by a read that finds
 // it so.
+//
+// EACH WINDOW'S NOW IS READ UNDER ITS LOCK, AND NEVER RUNS BACK (heatNow): a
+// count, a sweep and a read act at the slots the clock reads once they hold
+// the lock, or at the latest slots a holder of that lock already acted at
+// where the clock reads earlier. So no window is counted, summed or judged at
+// a slot older than one it was counted at, and no caller whose reading went
+// stale while it waited for the lock judges a repository idle that a later
+// caller had just counted — which deleted the repository with every count it
+// held, at an hour's turn under contention.
 
 // heatBuckets is how many buckets each of heat's windows is kept in.
 //
@@ -277,10 +286,40 @@ func newHeatClock(now func() time.Time) heatClock { return heatClock{now: now, o
 // at is the slots now falls in. Slot zero is no slot — a bucket never written
 // names it, and a sum passes it over — so the first slot is one, and an
 // instant before the origin (a clock with no monotonic reading, set back)
-// falls in it.
+// falls in it. A window reads it only through its heatNow.
 func (k heatClock) at() slots {
 	since := max(k.now().Sub(k.origin), 0)
 	return slots{hour: int64(since/(HeatHour/heatBuckets)) + 1, day: int64(since/(HeatDay/heatBuckets)) + 1}
+}
+
+// heatNow is the now one lock's holder counts, sums and judges its windows
+// at: the slots heat's clock reads, or the latest slots a holder of the same
+// lock acted at where the clock reads earlier. Each of heat's two structures
+// keeps one beside its windows, under the lock they are counted and read
+// under (Heat.mu, cacheChurn.mu), and reads it only there.
+//
+// READ UNDER THE LOCK, so the slots a window is acted at follow the order its
+// callers took the lock in. Read before the lock, a caller that read the
+// clock just before a slot's turn and took the lock only after another had
+// counted a repository in the new slot judged that repository at the older
+// slot — nothing in the day's span that ends there — and deleted it with all
+// its counts; a count's sweep moved the slot it had swept in back.
+//
+// NEVER EARLIER THAN THE LATEST, so the same holds whatever the clock reads:
+// a clock with no monotonic reading, set back, or a case's own. No bucket is
+// ever newer than the slot that sums or judges it, so the span a sum reads
+// (ring.live) is the one rule a judgement of idleness needs too, and a sweep
+// only ever moves forward.
+type heatNow struct {
+	clock  heatClock
+	latest slots
+}
+
+// at is the slots its lock's holder acts at now; the lock is held.
+func (n *heatNow) at() slots {
+	at := n.clock.at()
+	n.latest = slots{hour: max(n.latest.hour, at.hour), day: max(n.latest.day, at.day)}
+	return n.latest
 }
 
 // RepoHeat is one repository's heat on this node.
@@ -297,16 +336,19 @@ type RepoHeat struct {
 }
 
 // Heat is what this node served of each repository, over the last hour and
-// the last day. Safe for concurrent use: one lock, held for a few additions a
-// count and for one walk of the repositories a read.
+// the last day. Safe for concurrent use: one lock, held for a reading of the
+// clock and a few additions a count, and for one walk of the repositories a
+// read.
 type Heat struct {
-	clock heatClock
-
-	mu    sync.Mutex
+	mu sync.Mutex
+	// now is the slots the heat is counted, read and swept at, read under
+	// mu (heatNow).
+	now   heatNow
 	repos map[string]*repoHeat
 	// swept is the day's slot the last sweep of repositories nothing used
 	// within the day ran in: one sweep a slot of the day's window, an hour,
-	// on the first count of the slot.
+	// on the first count of the slot, and never one at a slot older than
+	// the last.
 	swept int64
 }
 
@@ -317,7 +359,9 @@ type repoHeat struct {
 }
 
 // newHeat is a Heat counting on clock.
-func newHeat(clock heatClock) *Heat { return &Heat{clock: clock, repos: map[string]*repoHeat{}} }
+func newHeat(clock heatClock) *Heat {
+	return &Heat{now: heatNow{clock: clock}, repos: map[string]*repoHeat{}}
+}
 
 // Add counts u, one request's use of the repository whose id is repo and
 // which the request named name, into its heat now. A use that counts nothing
@@ -328,10 +372,10 @@ func (h *Heat) Add(repo, name string, u Use) {
 	if repo == "" || s == (served{}) {
 		return
 	}
-	at := h.clock.at()
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if at.day != h.swept {
+	at := h.now.at()
+	if at.day > h.swept {
 		h.sweep(at.day)
 		h.swept = at.day
 	}
@@ -367,8 +411,8 @@ func (h *Heat) Hot(n int) []RepoHeat {
 	if n <= 0 {
 		return nil
 	}
-	at := h.clock.at()
 	h.mu.Lock()
+	at := h.now.at()
 	all := make([]RepoHeat, 0, len(h.repos))
 	for id, r := range h.repos {
 		if r.day.ring.idle(at.day) {
@@ -405,9 +449,9 @@ func hotter(a, b Use, aID, bID string) int {
 // Of is the heat of the repository whose id is repo: what the node served of
 // it in each window, nothing at all where nothing used it within the day.
 func (h *Heat) Of(repo string) RepoHeat {
-	at := h.clock.at()
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	at := h.now.at()
 	r := h.repos[repo]
 	if r == nil || r.day.ring.idle(at.day) {
 		return RepoHeat{ID: repo}
@@ -422,24 +466,28 @@ func (r *repoHeat) heat(id string, at slots) RepoHeat {
 
 // cacheChurn is what the cache spent on its own account, over both windows.
 type cacheChurn struct {
-	mu        sync.Mutex
+	mu sync.Mutex
+	// now is the slots the windows are counted and summed at, read under mu
+	// (heatNow): a status that takes the lock after an eviction was counted
+	// reads that eviction, whichever of the two read the clock first.
+	now       heatNow
 	hour, day churnWindow
 }
 
 // churned counts d into what the cache spent, now.
 func (c *Cache) churned(d churned) {
-	at := c.clock.at()
 	c.churn.mu.Lock()
 	defer c.churn.mu.Unlock()
+	at := c.churn.now.at()
 	c.churn.hour.add(at.hour, d)
 	c.churn.day.add(at.day, d)
 }
 
 // spent is what the cache spent over each window.
 func (c *Cache) spent() (hour, day Churn) {
-	at := c.clock.at()
 	c.churn.mu.Lock()
 	defer c.churn.mu.Unlock()
+	at := c.churn.now.at()
 	return c.churn.hour.sum(at.hour), c.churn.day.sum(at.day)
 }
 

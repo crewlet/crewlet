@@ -233,8 +233,12 @@
 // window is heatBuckets buckets of a twenty-fourth of it, counted from the
 // cache's opening on the monotonic clock, so a count is short of its window by
 // at most a twenty-fourth and an NTP step moves nothing; a repository nothing
-// used within the day is dropped. Not a metric, since a repository's id is no
-// closed set: the status reports the [HotRepos] hottest of each window.
+// used within the day is dropped. The clock is read under the lock a window
+// is counted under, and never behind the latest slot it was acted at
+// (heatNow), so a caller whose reading went stale waiting for that lock
+// judges no repository idle that a later caller had just counted. Not a
+// metric, since a repository's id is no closed set: the status reports the
+// [HotRepos] hottest of each window.
 //
 // # Derived files
 //
