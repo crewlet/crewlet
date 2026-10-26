@@ -41,6 +41,7 @@
 
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { ClientContext } from "./store-hooks.ts";
+import { EVERY_QUESTION, session } from "~/protocol/session.ts";
 import {
   isAbort,
   RestError,
@@ -266,6 +267,17 @@ export function useRest<T>(
     document.addEventListener("visibilitychange", wake);
     return () => document.removeEventListener("visibilitychange", wake);
   }, [key, refetchOnFocus, run]);
+
+  // A WRITE WHOSE REACH NOBODY CAN NAME re-reads every answer, quietly: a
+  // change the assistant applied for the person (`protocol/session.ts`'s
+  // EVERY_QUESTION). A REST read has no question kind for a narrower write
+  // to name, so this is the one write it hears.
+  useEffect(() => {
+    if (key === null) return;
+    return session.onWritten((_, refreshes) => {
+      if (refreshes.includes(EVERY_QUESTION)) void run(true);
+    });
+  }, [key, run]);
 
   // THE CONTEXT, NOT `useClient`: a dialog or a screen rendered outside the
   // shell (its own tests among them) has no socket, and a loader that threw

@@ -106,7 +106,16 @@ describe("relative time", () => {
 
   test("a future stamp reads forwards rather than as a negative age", () => {
     expect(relTime("2026-01-01T12:30:00Z", now)).toBe("in 30m");
+    expect(relTime("2026-01-01T12:00:05Z", now)).toBe("in 5s");
     expect(inTime("2026-01-01T11:00:00Z", now)).toBe("due");
+  });
+
+  // A STAMP A FEW SECONDS AHEAD HAS JUST HAPPENED: written a moment after the
+  // tab's clock last ticked, or on an engine whose clock runs a little ahead.
+  // Mutation: send every negative age to inTime and these read "in 1s".
+  test("a stamp under five seconds ahead reads just now", () => {
+    expect(relTime("2026-01-01T12:00:01Z", now)).toBe("just now");
+    expect(relTime("2026-01-01T12:00:04Z", now)).toBe("just now");
   });
 
   test("a missing stamp is an em dash, not the epoch", () => {

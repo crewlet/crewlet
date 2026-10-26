@@ -206,6 +206,8 @@ export type AssistantStreamFault =
 export interface AssistantStreamHandlers {
   frame: (frame: AssistantNarrowFrame) => void;
   fault: (fault: AssistantStreamFault) => void;
+  /** The engine's keepalive comment arrived: the turn is still running there. */
+  keepalive?: () => void;
 }
 
 /**
@@ -228,7 +230,11 @@ export function createAssistantStreamParser(handlers: AssistantStreamHandlers): 
     let name = "";
     let data = "";
     for (const line of block.split("\n")) {
-      if (line === "" || line.startsWith(":")) continue;
+      if (line.startsWith(":")) {
+        handlers.keepalive?.();
+        continue;
+      }
+      if (line === "") continue;
       if (line.startsWith("id: ")) id = line.slice(4);
       else if (line.startsWith("event: ")) name = line.slice(7);
       else if (line.startsWith("data: ")) {

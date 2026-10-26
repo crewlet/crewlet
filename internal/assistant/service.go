@@ -855,8 +855,9 @@ func (s *Service) stopRunner(ctx context.Context, t *turn) wire.TurnState {
 const stopWait = 5 * time.Second
 
 // Stream writes one of the owner's turns of conversation to w from after seq
-// after, until the
-// segment ends, the subscriber falls behind or ctx ends.
+// after, until the segment ends, the subscriber falls behind or ctx ends. A
+// segment that has ended with nothing after seq after answers [ErrCaughtUp],
+// having written nothing: the client holds all of it.
 //
 // A turn this node runs (or ran in the last [live.EndedRetention]) is served
 // from its frame log; frames the log no longer holds are answered with a
@@ -911,6 +912,12 @@ func (s *Service) follow(ctx context.Context, owner uuid.UUID, row assistantdoma
 			return err
 		}
 	}
+	// WHETHER THIS STREAM HAS SAID ANYTHING: a subscription the ended log
+	// closed before a single write is a client that already holds the whole
+	// segment (it resumed after the `done`), told so rather than answered an
+	// empty stream it would read as a drop ([live.ErrCaughtUp]). One closed
+	// for falling behind is not: its client resumes from where it is.
+	wrote := len(replay) > 0
 	keepalive := time.NewTicker(wire.KeepaliveSeconds * time.Second)
 	defer keepalive.Stop()
 	for {
@@ -921,13 +928,18 @@ func (s *Service) follow(ctx context.Context, owner uuid.UUID, row assistantdoma
 			if err := w.Keepalive(); err != nil {
 				return err
 			}
+			wrote = true
 		case f, open := <-sub.C():
 			if !open {
+				if !wrote && !sub.Overflowed() {
+					return live.ErrCaughtUp
+				}
 				return nil
 			}
 			if err := w.Frame(f); err != nil {
 				return err
 			}
+			wrote = true
 		}
 	}
 }

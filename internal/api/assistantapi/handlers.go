@@ -1,6 +1,7 @@
 package assistantapi
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -232,13 +233,20 @@ func (s *Surface) stream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := &sseWriter{w: w, rc: http.NewResponseController(w)}
-	if err := s.svc.Stream(r.Context(), p.ID, conversation, turn, after, out); err != nil {
-		if out.started {
-			s.log.InfoContext(r.Context(), "assistant_stream_ended", "turn", turn,
-				"error", err)
-			return
-		}
-		s.fail(w, r, err)
+	streamErr := s.svc.Stream(r.Context(), p.ID, conversation, turn, after, out)
+	switch {
+	case streamErr == nil:
+	case out.started:
+		s.log.InfoContext(r.Context(), "assistant_stream_ended", "turn", turn,
+			"error", streamErr)
+	case errors.Is(streamErr, assistant.ErrCaughtUp):
+		// NOTHING FOLLOWS, AND NOTHING WILL: the client already holds the
+		// segment's `done`. 204 is the event-stream answer that says so, and
+		// the one a client does not dial again after.
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		s.fail(w, r, streamErr)
 	}
 }
 

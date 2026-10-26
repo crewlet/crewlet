@@ -145,6 +145,12 @@ type Deps struct {
 	// internal/assistant imports the state log.
 	StepOp func(opID string, steps ...string) string
 
+	// DomainOf names the state-log domain whose records live on a stream,
+	// or "" for a stream no domain owns: how a write's landing position
+	// (`<stream>@<generation>:<seq>`) names the log a screen's read waits on
+	// (internal/engine.LogDomain). Injected for StepOp's reason.
+	DomainOf func(stream string) string
+
 	// Now is the clock; nil is the wall clock in UTC.
 	Now func() time.Time
 }
@@ -172,6 +178,9 @@ func New(d Deps) (*Approver, error) {
 		return nil, errors.New("approval: the step-up rule is required")
 	case d.StepOp == nil:
 		return nil, errors.New("approval: the step operation id derivation is required")
+	case d.DomainOf == nil:
+		return nil, errors.New("approval: the stream's domain is required: an applied " +
+			"write tells open screens which log moved")
 	}
 	if d.Now == nil {
 		d.Now = func() time.Time { return time.Now().UTC() }

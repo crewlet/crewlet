@@ -38,6 +38,18 @@ const (
 // ErrEnded reports a frame appended to a log whose turn segment has ended.
 var ErrEnded = errors.New("live: the turn's frame log has ended")
 
+// ErrCaughtUp reports a stream with nothing to send: the turn's segment has
+// ended, and the client resumed after its last frame, so it already holds
+// every frame the segment told, its `done` included.
+//
+// NOT AN EMPTY SUCCESS: a stream that closes having said nothing reads to a
+// client as a connection that dropped before the turn ended, and it dials
+// again, into the same answer, for as long as the log is retained. The HTTP
+// surface answers this `204 No Content`, the server-sent events convention for
+// "do not reconnect" (internal/api/assistantapi).
+var ErrCaughtUp = errors.New("live: nothing follows the frame the stream resumed after, " +
+	"and the turn's segment has ended")
+
 // Log is one turn's frames on the node running it: numbered, retained within
 // [FrameLogFrames] and [FrameLogBytes], and fanned out to every stream
 // following it.

@@ -378,12 +378,12 @@ func (a assistantRecords) RecordCard(ctx context.Context, w assistant.Write,
 }
 
 func (a assistantRecords) ParkTurn(ctx context.Context, w assistant.Write,
-	turn uuid.UUID, parked []byte) error {
+	turn uuid.UUID, parked []byte, steps int) error {
 	c, err := a.call(w)
 	if err != nil {
 		return err
 	}
-	return settled(a.w.ParkTurn(ctx, c, turn, parked))
+	return settled(a.w.ParkTurn(ctx, c, turn, parked, steps))
 }
 
 func (a assistantRecords) ResumeTurn(ctx context.Context, w assistant.Write,

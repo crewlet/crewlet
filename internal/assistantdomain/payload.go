@@ -129,6 +129,11 @@ type TurnOpened struct {
 type TurnParked struct {
 	V              int    `json:"v"`
 	MessagesSealed string `json:"messages_sealed"`
+	// Steps is how many steps the turn has taken so far: what its `done` and
+	// `status` frames say whenever the turn is told from its record rather
+	// than its frame log. A record without it (an older writer's) parks the
+	// turn at zero, as every turn was parked before it was counted.
+	Steps int `json:"steps,omitempty"`
 }
 
 // TurnResumed hands a parked turn to the runner on Node.

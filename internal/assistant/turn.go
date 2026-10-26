@@ -703,7 +703,7 @@ func (t *turn) park(ctx context.Context, res *toolloop.Result) error {
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
 	defer cancel()
-	return t.svc.records.ParkTurn(ctx, t.write().Step("park"), t.id, raw)
+	return t.svc.records.ParkTurn(ctx, t.write().Step("park"), t.id, raw, keep.Steps)
 }
 
 // publishAudit leaves the segment's runtime audit record: who, which steps on

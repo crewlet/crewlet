@@ -459,7 +459,8 @@ func (f *Fleet) openFrame(ctx context.Context, payload []byte, turn uuid.UUID) (
 // until its segment ends, the runner stops answering or ctx ends. It answers
 // [ReachServed] once the runner has answered (whatever happens after: a
 // stream that ends early is resumed by its client), and otherwise what asking
-// found, having written nothing.
+// found, having written nothing. A segment that had already ended with nothing
+// after seq after answers [ErrCaughtUp], having written nothing.
 func (f *Fleet) Follow(ctx context.Context, owner, turn uuid.UUID, node string, after uint64,
 	w Writer) (Reach, error) {
 
@@ -493,8 +494,13 @@ func (f *Fleet) Follow(ctx context.Context, owner, turn uuid.UUID, node string, 
 
 	last := after
 	reach, ended, err := f.catchUp(ctx, owner, turn, node, &last, w)
-	if err != nil || reach != ReachServed || ended {
+	switch {
+	case err != nil || reach != ReachServed:
 		return reach, err
+	case ended && last == after:
+		return ReachServed, ErrCaughtUp
+	case ended:
+		return ReachServed, nil
 	}
 	keepalive := time.NewTicker(wire.KeepaliveSeconds * time.Second)
 	defer keepalive.Stop()

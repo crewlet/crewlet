@@ -781,6 +781,19 @@ func registeredNames() []string {
 // because the answer is this build's and no running engine's.
 func Domains() []statelog.Domain { return registeredDomains() }
 
+// LogDomain is the name of the registered domain whose records live on
+// stream, or "" for a stream no registered domain owns: how a write's landing
+// position (`<stream>@<generation>:<seq>`) names the domain a screen's read
+// floor is kept under. Read off the register, so a domain is declared once.
+func LogDomain(stream string) string {
+	for _, d := range registeredDomains() {
+		if d.Stream().Name == stream {
+			return d.Name()
+		}
+	}
+	return ""
+}
+
 // signerFor and verifierFor are one domain's halves of the record signature.
 //
 // PER DOMAIN, because the derivation binds the domain's own name in: a record

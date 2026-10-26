@@ -458,6 +458,12 @@ func (f *Fleet) Node(t testing.TB) *approval.Approver {
 			}
 			return op
 		},
+		DomainOf: func(stream string) string {
+			if stream == "CREWLET_TRACKER_LOG" {
+				return "tracker"
+			}
+			return ""
+		},
 		Now: f.Now,
 	})
 	if err != nil {

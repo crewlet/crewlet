@@ -389,15 +389,18 @@ func (s *Store) move(owner, turn uuid.UUID, to wire.TurnState, from ...wire.Turn
 }
 
 // ParkTurn implements [assistant.Records].
-func (s *Store) ParkTurn(_ context.Context, w assistant.Write, turn uuid.UUID, parked []byte) error {
+func (s *Store) ParkTurn(_ context.Context, w assistant.Write, turn uuid.UUID, parked []byte,
+	steps int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.keep(w, "turn_parked", string(parked)); err != nil {
 		return err
 	}
-	if _, _, err := s.move(w.Owner, turn, wire.TurnWaitingForApproval, wire.TurnRunning); err != nil {
+	_, t, err := s.move(w.Owner, turn, wire.TurnWaitingForApproval, wire.TurnRunning)
+	if err != nil {
 		return err
 	}
+	t.Steps = steps
 	s.parked[turn] = slices.Clone(parked)
 	return nil
 }

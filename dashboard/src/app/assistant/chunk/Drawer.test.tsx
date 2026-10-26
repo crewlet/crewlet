@@ -394,9 +394,11 @@ test("the history marks the open conversation and shows when each was last used"
     id: OPEN_ID,
     title: "Payroll",
     created_at: at(90),
-    // RETITLED JUST NOW, used three hours ago: the menu shows the use.
+    // RETITLED JUST NOW, used two and a half hours ago: the menu shows the
+    // use. Half an hour from any boundary, so the shell's clock (which reads
+    // up to a tick behind this case's `now`) says the same "2h ago".
     updated_at: at(0),
-    last_activity_at: at(180),
+    last_activity_at: at(150),
   };
   const other = {
     id: OTHER_ID,
@@ -457,4 +459,75 @@ test("the history marks the open conversation and shows when each was last used"
   expect(answers[1]!.textContent).not.toContain(relTime(open.updated_at, now));
   const clear = screen.getByRole("menuitem", { name: /Clear this conversation/ });
   expect(clear.closest("[role='group']")).toBeNull();
+});
+
+// AN ANSWER THAT ENDS BETWEEN TWO TICKS HAS JUST HAPPENED. The drawer kept a
+// clock of its own that slowed to once a minute when the turn ended, without
+// reading the time again, so the turn's foot said "in 1s" beside Copy for up
+// to a minute. It reads the shell's one clock now, which ticks every second.
+// Mutation: give the drawer back a clock that slows when no turn runs, and the
+// foot still reads the instant before the answer ended.
+test("an answer that ended between the clock's ticks never reads as in the future", async () => {
+  const interrupted = "75099765-5fa3-5aa4-b185-7d8dd69869bd";
+  const frames = GOLDEN.split("\n\n")
+    .filter((block) => block.includes(`${interrupted}.`))
+    .map((block) => `${block}\n\n`)
+    .join("");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init: RequestInit) => {
+      const path = new URL(url).pathname;
+      if (path === "/assistant/conversations" && init.method === "POST") {
+        return json(
+          {
+            conversation: {
+              id: "403212ed-5a4a-586d-8af6-c62411a17c2f",
+              title: "",
+              created_at: "2026-10-24T09:40:58Z",
+              updated_at: "2026-10-24T09:40:58Z",
+              last_activity_at: "2026-10-24T09:40:58Z",
+            },
+          },
+          201,
+        );
+      }
+      if (path.endsWith("/turns")) {
+        return json(
+          {
+            turn_id: interrupted,
+            stream_url: `/assistant/conversations/403212ed-5a4a-586d-8af6-c62411a17c2f/stream?turn=${interrupted}`,
+            after_seq: 0,
+          },
+          202,
+        );
+      }
+      if (path.endsWith("/stream")) {
+        return new Response(frames, {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      }
+      return json({ error: "not_found" }, 404);
+    }),
+  );
+  // The answer ends at 09:41:00.4, a second and a half after the last tick.
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+  try {
+    vi.setSystemTime(Date.parse("2026-10-24T09:40:58.9Z"));
+    mount();
+    const box = screen.getByRole("textbox", { name: "Ask the assistant" });
+    fireEvent.change(box, { target: { value: "Is the deploy done?" } });
+    await act(async () => {
+      fireEvent.keyDown(box, { key: "Enter" });
+    });
+    await waitFor(() => expect(conversation().turns[0]?.phase).toBe("interrupted"));
+    act(() => {
+      vi.advanceTimersByTime(2_000);
+    });
+    const foot = document.querySelector("time.crewlet-relative-time");
+    expect(foot?.getAttribute("datetime")).toBe("2026-10-24T09:41:00.400Z");
+    expect(foot?.textContent).toBe("just now");
+  } finally {
+    vi.useRealTimers();
+  }
 });
