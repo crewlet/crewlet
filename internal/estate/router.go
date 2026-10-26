@@ -69,6 +69,20 @@ type RouterOptions struct {
 	Queue     Asker
 	Placement Placement
 
+	// Git is who serves GIT: every live node with the `git` role, the
+	// engine's from the same watched presence view as Placement, and its
+	// error UNKNOWN, never "no git node". Asked by every operation on a
+	// repository's git objects ([op.keyedOnGit], ADR-0059). Required: a
+	// router built without one would answer every git read as a fleet with
+	// no git node in it, a wiring mistake that reads as a deployment fact.
+	Git Placement
+
+	// LocalGit is this node's own git half, resolved PER REQUEST ([LocalGit]:
+	// the code host is built at boot or at the first apply that sets
+	// code.native, after the router) — nil on a node without the `git`
+	// role, which serves none.
+	LocalGit LocalGit
+
 	// Local is this node's own copy, nil on a node without the `data`
 	// role, which holds none.
 	Local LocalBackends
@@ -97,8 +111,8 @@ type RouterOptions struct {
 }
 
 // Timing is every duration the router waits on that a test must be able to
-// scale: one attempt's budget on one data node for a read and for a write, and
-// the admission question's whole budget.
+// scale: one attempt's budget on one data node for a read and for a write, one
+// git read's on one git node, and the admission question's whole budget.
 //
 // [Production] is the value every node runs, and nothing in the engine builds
 // another. A suite that drives the router from outside this package builds its
@@ -134,7 +148,8 @@ type RouterOptions struct {
 //
 //   - A read attempt no longer than [minReadAttempt], the reply's margin: the
 //     serving node would have no time left in it to wait for anything or to
-//     run a query, so every read it is asked comes back refused or late.
+//     run a query, so every read it is asked comes back refused or late. The
+//     same holds for a git read's attempt on a git node.
 //   - A write attempt no longer than [minWriteAttempt]: the serving node's
 //     floor wait at its whole budget, then a whole code.CommitBudget and
 //     code.ReplyMargin. The attempt's end travels to a repository's committer
@@ -169,12 +184,17 @@ type Timing struct {
 	// AdmissionAsk bounds the remote half of the admission question as a
 	// whole — see admissionAsk. Positive.
 	AdmissionAsk time.Duration
+	// GitReadAttempt bounds one git read's wait on one git node — see
+	// [GitReadAttempt]. Longer than [minReadAttempt].
+	GitReadAttempt time.Duration
 }
 
-// Production is the timing every node runs: [ReadAttempt], writeAttempt and
-// admissionAsk, whose reasons are written at their definitions.
+// Production is the timing every node runs: [ReadAttempt], writeAttempt,
+// admissionAsk and [GitReadAttempt], whose reasons are written at their
+// definitions.
 func Production() Timing {
-	return Timing{ReadAttempt: ReadAttempt, WriteAttempt: writeAttempt, AdmissionAsk: admissionAsk}
+	return Timing{ReadAttempt: ReadAttempt, WriteAttempt: writeAttempt, AdmissionAsk: admissionAsk,
+		GitReadAttempt: GitReadAttempt}
 }
 
 // minReadAttempt is what every read attempt must be longer than: the reply's
@@ -219,6 +239,11 @@ func (t Timing) refusal() error {
 		return fmt.Errorf("estate: a router's Timing.AdmissionAsk is %v, and it must be a "+
 			"positive duration — a zero or negative budget is a deadline already past, which "+
 			"withholds every seat's claim; %s", t.AdmissionAsk, production)
+	case t.GitReadAttempt <= minReadAttempt:
+		return fmt.Errorf("estate: a router's Timing.GitReadAttempt is %v, and it must be longer "+
+			"than %v — the answer's trip back (code.ReplyMargin), which a git node leaves between "+
+			"the end of its waits and its asker's deadline, so an attempt no longer leaves it no "+
+			"time to sync its copy or run the read; %s", t.GitReadAttempt, minReadAttempt, production)
 	}
 	return nil
 }
@@ -268,6 +293,11 @@ func (t Timing) refusal() error {
 // walk's last resort, after every copy that only lags, told at once to answer
 // anyway ([Router.markBehindConfig]), for every operation but admission's
 // ungated ping.
+//
+// A GIT operation ([op.keyedOnGit]) is asked of the GIT nodes instead, in the
+// keyed order over [RouterOptions.Git] — the repository's home first, this
+// node at its place where its git half is built — with the keyed order's
+// demotions and none of the data walk's preferences ([Router.routeGit]).
 type Router struct {
 	self      string
 	queue     Asker
@@ -277,6 +307,12 @@ type Router struct {
 	seams     ServerSeams
 	env       *Envelopes
 	now       func() time.Time
+
+	// gitPlacement is who serves git ([RouterOptions.Git]), and localGit
+	// this node's own git half, nil on a node without the git role
+	// ([RouterOptions.LocalGit]).
+	gitPlacement Placement
+	localGit     LocalGit
 
 	// timing is how long each attempt waits ([RouterOptions.Timing]).
 	timing Timing
@@ -326,6 +362,10 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 		return nil, errors.New("estate: a router needs the queue it asks over")
 	case opts.Placement == nil:
 		return nil, errors.New("estate: a router needs the placement it routes by")
+	case opts.Git == nil:
+		return nil, errors.New("estate: a router needs the git placement it asks a repository's git " +
+			"reads by — every live node with the git role; one with none to name answers an empty " +
+			"list, never a missing placement")
 	case opts.Session == nil:
 		return nil, errors.New("estate: a router needs this node's session floors — " +
 			"one per node, shared by everything that observes a write")
@@ -345,6 +385,7 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 	return &Router{
 		self: opts.Self, queue: opts.Queue, placement: opts.Placement,
 		local: opts.Local, session: opts.Session, seams: opts.Seams, env: opts.Envelopes, now: now,
+		gitPlacement: opts.Git, localGit: opts.LocalGit,
 		timing: opts.Timing,
 		sticky: map[string]string{}, suspect: map[string]time.Time{},
 		passedOver: map[nodeCopy]time.Time{}, declined: map[nodeOp]time.Time{},
@@ -480,9 +521,15 @@ type exchange struct {
 	written tracker.WriteLog
 
 	// key is the arguments' routing key for a KEYED operation
-	// ([op.keyedBy]), and empty for every other: the walk asks the data
-	// nodes in its rendezvous order rather than this node first.
+	// ([op.keyedBy], [op.keyedOnGit]), and empty for every other: the walk
+	// asks the nodes in its rendezvous order rather than this node first.
 	key string
+
+	// home is the same operation with its arguments stamped as asked of the
+	// walk's effective home ([op.keyedOnGit]) — the one attempt of a git walk
+	// that may fill a copy — while this exchange's own are stamped not: nil
+	// for every operation but a git one.
+	home *exchange
 }
 
 // call runs one operation on a data node whose copy serves.
@@ -509,15 +556,49 @@ func call[A, R any](ctx context.Context, r *Router, o op[A, R], actor *Actor, ar
 	var key string
 	if o.key != nil {
 		if key = o.key(args); key == "" {
-			return zero, fmt.Errorf("estate: %s is asked of the data node its key prefers, and "+
+			return zero, fmt.Errorf("estate: %s is asked of the node its key prefers, and "+
 				"its arguments name no key", spec.name)
 		}
 	}
+	var (
+		x   exchange
+		err error
+	)
+	if o.home == nil {
+		if x, err = exchangeOf(spec, o, actor, args, written, key); err != nil {
+			return zero, err
+		}
+	} else {
+		// A GIT OPERATION IS STAMPED ON EVERY ATTEMPT: home for the walk's
+		// effective home, not for every node after it — whatever the
+		// caller set, since only the walk knows which node it asks first.
+		home, homeErr := exchangeOf(spec, o, actor, o.home(args, true), written, key)
+		if homeErr != nil {
+			return zero, homeErr
+		}
+		if x, err = exchangeOf(spec, o, actor, o.home(args, false), written, key); err != nil {
+			return zero, err
+		}
+		x.home = &home
+	}
+	answer, err := r.route(ctx, spec, actor, x)
+	if out, ok := answer.(R); ok {
+		return out, err
+	}
+	return zero, err
+}
+
+// exchangeOf is one operation's two halves over args, in its caller's types:
+// run in-process on a backend, or encoded once to be asked of another node and
+// its answer decoded.
+func exchangeOf[A, R any](spec *opSpec, o op[A, R], actor *Actor, args A, written tracker.WriteLog,
+	key string) (exchange, error) {
+
 	encoded, err := json.Marshal(args)
 	if err != nil {
-		return zero, fmt.Errorf("estate: %s: encode the arguments: %w", spec.name, err)
+		return exchange{}, fmt.Errorf("estate: %s: encode the arguments: %w", spec.name, err)
 	}
-	x := exchange{
+	return exchange{
 		key: key,
 		local: func(ctx context.Context, b Backend) (any, error) {
 			return o.serve(ctx, b, actor, args)
@@ -532,18 +613,14 @@ func call[A, R any](ctx context.Context, r *Router, o op[A, R], actor *Actor, ar
 			return out, decodeErr
 		},
 		written: written,
-	}
-	answer, err := r.route(ctx, spec, actor, x)
-	if out, ok := answer.(R); ok {
-		return out, err
-	}
-	return zero, err
+	}, nil
 }
 
 // ErrUnserved is an operation no data node ran: every node the asker's view
 // named — this node among them where it holds the estate — answered that its
 // copy of the operation's domain is out of service, could not run it, was
-// behind, or did not answer at all.
+// behind, or did not answer at all. For a GIT operation ([op.keyedOnGit]) it
+// is the same of the git nodes: none ran it.
 //
 // NEVER A FALSE "NOT FOUND". An operation nobody answered for is refused
 // saying so, because a read reported as empty would say the company has none
@@ -558,6 +635,13 @@ type ErrUnserved struct {
 	// the refusal: an estate nobody served on the far side of a second hop
 	// says the same of its own walk.
 	NodeSilent bool
+
+	// Git records that the walk asked the GIT nodes ([Router.routeGit]), not
+	// the data nodes, so the refusal names the nodes it asked: worded as
+	// every data walk's, a git read the git nodes could not answer — its
+	// home filling a copy, the rest holding none — sent whoever read it to
+	// the data nodes, which were serving.
+	Git bool
 }
 
 // Silent reports whether a node the walk asked went silent rather than
@@ -575,10 +659,14 @@ type ErrUnserved struct {
 func (e *ErrUnserved) Silent() bool { return e.NodeSilent }
 
 func (e *ErrUnserved) Error() string {
-	if e.Detail == "" {
-		return "estate: no data node serves the estate right now"
+	what := "estate: no data node serves the estate right now"
+	if e.Git {
+		what = "estate: no git node serves the repository's git work right now"
 	}
-	return "estate: no data node serves the estate right now: " + e.Detail
+	if e.Detail == "" {
+		return what
+	}
+	return what + ": " + e.Detail
 }
 
 // held is an answer the router keeps while it asks another node: one a node
@@ -694,6 +782,9 @@ func (w *walk) note(format string, args ...any) {
 // verdict of the operation's own domain, the class rule for a node that may
 // have run it, the lagging last resort — is the one above.
 func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchange) (any, error) {
+	if spec.git {
+		return r.routeGit(ctx, spec, actor, x)
+	}
 	w := &walk{}
 	// THIS NODE FIRST, where its copy serves — in-process, with the node's
 	// floors enforced exactly as a remote node enforces them — for an
@@ -1071,12 +1162,16 @@ func (r *Router) budgetFor(ctx context.Context, spec *opSpec) time.Duration {
 	return r.wholeAttempt(spec)
 }
 
-// wholeAttempt is the router's own attempt on one data node for spec's class:
-// [Timing.ReadAttempt] for a read and [Timing.WriteAttempt] for a write — what
-// a request waits where nothing shorter bounds it, and what a node's silence
-// must last to be evidence it is gone rather than slow ([Router.ask]).
+// wholeAttempt is the router's own attempt on one node for spec's class:
+// [Timing.ReadAttempt] for a read, [Timing.GitReadAttempt] for a git read on a
+// git node and [Timing.WriteAttempt] for a write — what a request waits where
+// nothing shorter bounds it, and what a node's silence must last to be
+// evidence it is gone rather than slow ([Router.ask]).
 func (r *Router) wholeAttempt(spec *opSpec) time.Duration {
-	if spec.class == opRead {
+	switch {
+	case spec.class == opRead && spec.git:
+		return r.timing.GitReadAttempt
+	case spec.class == opRead:
 		return r.timing.ReadAttempt
 	}
 	return r.timing.WriteAttempt
@@ -1102,6 +1197,10 @@ func (r *Router) runLocal(ctx context.Context, spec *opSpec, b Backend, x exchan
 	case errors.Is(err, errNotAdmitting):
 		return nil, unservedNotEstablished, fmt.Sprintf("%s's copy admits no seat yet",
 			r.self), nil
+	case errors.Is(err, errDecidesNoGrant):
+		// THE HARD ARM, answered as a peer answers it — even on the last
+		// resort's run, told to answer anyway ([op.judgesGrant]).
+		return nil, unservedBehindConfig, decidesNoGrant(r.self), nil
 	}
 	return value, "", "", err
 }
@@ -1211,24 +1310,27 @@ func (r *Router) order(spec *opSpec, nodes []string) []string {
 // orderFor is the order the data nodes are asked in for one request:
 // [Router.order] for an operation any copy answers equally — this node
 // excluded, since it was asked first — and [Router.keyedOrder] for a keyed
-// one.
+// one, this node at its place where it holds the estate.
 func (r *Router) orderFor(spec *opSpec, key string, nodes []string) []string {
 	if key == "" {
 		return r.order(spec, nodes)
 	}
-	return r.keyedOrder(spec, key, nodes)
+	return r.keyedOrder(spec, key, nodes, r.local != nil)
 }
 
-// keyedOrder is the order a KEYED operation, spec, asks the data nodes in:
-// [rendezvous.Order] on the KEY over every data node — THIS ONE INCLUDED where
-// it holds the estate, since the node the key prefers may be this one, and an
+// keyedOrder is the order a KEYED operation, spec, asks nodes in:
+// [rendezvous.Order] on the KEY over nodes — THIS ONE INCLUDED where self says
+// it answers the operation (it holds the estate, or for a git operation its
+// git half is built), since the node the key prefers may be this one, and an
 // empty id never — with every node that answered `out_of_service` for the
 // operation's copies or ran nothing for it inside [suspectFor] after the rest
 // and every node that went silent inside it last, the key's order kept within
 // each by a STABLE sort. A node the router remembers behind the company's
 // configuration keeps its place in the key's order, from which the walk hands
 // it to the last resort unasked, so every asker's last resort meets the nodes
-// behind the configuration in the key's order ([Router.classes]).
+// behind the configuration in the key's order ([Router.classes]). ONE order
+// for a push's data nodes and a repository's git nodes, so the compactor's
+// home and the reads' first node can never be computed two ways.
 //
 // NO STICKY NODE: which node answered last says nothing about where a
 // repository's pushes should meet, and every node computing the same order
@@ -1236,11 +1338,11 @@ func (r *Router) orderFor(spec *opSpec, key string, nodes []string) []string {
 // whole burst commits it in a few records, where two committers each holding
 // part of it contend on its one subject and each round one loses costs it a
 // re-decide and a re-append of its whole batch.
-func (r *Router) keyedOrder(spec *opSpec, key string, nodes []string) []string {
+func (r *Router) keyedOrder(spec *opSpec, key string, nodes []string, self bool) []string {
 	candidates := slices.DeleteFunc(slices.Clone(nodes), func(n string) bool {
 		return n == "" || n == r.self
 	})
-	if r.local != nil {
+	if self {
 		candidates = append(candidates, r.self)
 	}
 	// rendezvous.Order keeps duplicates, adjacent: a placement listing a
@@ -1348,9 +1450,16 @@ func (r *Router) markSuspect(node string) {
 		}
 	}
 	r.mu.Unlock()
-	// OUTSIDE THE LOCK: the placement is somebody else's, and a request
-	// path must not hold this router's mutex across it.
+	// OUTSIDE THE LOCK: the placements are somebody else's, and a request
+	// path must not hold this router's mutex across them. BOTH OF THEM,
+	// because a suspicion is the node's and never one placement's — a node
+	// silent to a git read is as likely gone from the data nodes it may be
+	// one of — and a placement that names it lists again only when told: a
+	// git placement never told kept a dead git node in every repository's
+	// order, asked last of each walk nobody else answered, until its own
+	// view caught up.
 	r.placement.Unanswered(node)
+	r.gitPlacement.Unanswered(node)
 }
 
 // markOutOfService asks node last for [suspectFor] for the operations that read

@@ -24,7 +24,9 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -316,6 +318,67 @@ func TestAPersonPushesThroughTheEnginesHost(t *testing.T) {
 		acted.Outcome != types.AuditApplied || acted.Repo != "web" ||
 		acted.OperatorID != iam.TokenLogin("ops") {
 		t.Fatalf("the push was audited as %+v, want the founder's applied git_push to web", acted)
+	}
+}
+
+// A GIT READ IS SERVED ONCE AN APPLY BUILDS THE CODE HOST, with no restart
+// (M3-O17). A git node booted with no company has built no code host, so a
+// read of a repository by object id through its own router is unserved, the
+// node saying it runs none; the first apply that sets code.native builds the
+// code host and the git reads beside it, and the next read — of the commit the
+// founder pushed through that host — is answered by this node's own git half.
+// The router and the estate server ask for that half per request: either one
+// built before the runtime existed, and holding what it found then, would
+// answer "no code host" until the node restarted.
+//
+// Mutation: resolve the git half once, when the router is built — the read
+// after the apply is still unserved, red.
+func TestAGitReadIsServedOnceAnApplyBuildsTheCodeHost(t *testing.T) {
+	t.Parallel()
+	gittest.RequireNode(t)
+	b := gitNodeBootstrap(t, nil)
+	e, err := engine.New(t.Context(), engine.Options{Bootstrap: b, GitHook: codetest.HookCommand(t)})
+	if err != nil {
+		t.Fatalf("an engine with no company was refused: %v", err)
+	}
+	t.Cleanup(func() { e.Stop(context.WithoutCancel(t.Context())) })
+	founder := code.Principal{Kind: code.PrincipalOperator, OperatorID: iam.TokenLogin("ops"), Seat: "founder"}
+	read := code.GitQuery{Kind: code.GitTree, RepoID: "019a0c2e-0000-7000-8000-0000000000a1", Asker: founder,
+		Tree: &code.TreeQuery{Rev: "1111111111111111111111111111111111111111"}}
+	_, err = engine.GitReadForTest(t.Context(), e, read)
+	var unserved *estate.ErrUnserved
+	if !errors.As(err, &unserved) || !strings.Contains(unserved.Detail, "runs no code host") {
+		t.Fatalf("a git read on a git node with no company = %v, want it unserved, the node running no "+
+			"code host", err)
+	}
+
+	if status, _, err := e.Apply(t.Context(), parsedCompany(t, gitCompany), time.Now()); err != nil ||
+		status != configplane.StatusOK {
+		t.Fatalf("the first apply, which hosts code = (%s, %v)", status, err)
+	}
+	url := serveWeb(t, b, e)
+	person := codetest.PersonWithToken(t, opsToken)
+	dir := person.Clone(url)
+	commit := person.Commit(dir, map[string]string{"README.md": "# web\n"}, "first")
+	if pushed := person.Push(t.Context(), dir, url, "HEAD:refs/heads/main"); !pushed.OK("refs/heads/main") {
+		t.Fatalf("the founder's push did not land:\n%s", pushed)
+	}
+	seam, ok := engine.OperatorCode(e)
+	if !ok {
+		t.Fatal("the node serves no code operations after the apply")
+	}
+	repo, err := seam.Read(t.Context(), code.ReadQuery{Asker: founder, Kind: code.ReadRepo, Repo: "web",
+		Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}})
+	if err != nil || repo.Repo == nil {
+		t.Fatalf("the repository's detail: %+v, %v", repo.Repo, err)
+	}
+	read.RepoID, read.Tree.Rev = repo.Repo.ID, commit
+	a, err := engine.GitReadForTest(t.Context(), e, read)
+	if err != nil || a.Tree == nil || !slices.ContainsFunc(a.Tree.Entries, func(entry code.TreeEntry) bool {
+		return entry.Path == "README.md"
+	}) {
+		t.Fatalf("a git read once the apply built the code host = (%+v, %v), want web's root listing "+
+			"README.md, answered by this node", a.Tree, err)
 	}
 }
 

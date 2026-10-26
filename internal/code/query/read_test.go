@@ -426,6 +426,80 @@ func TestAColdRepositoryAnswersUnreadyAndKeepsSyncing(t *testing.T) {
 	}
 }
 
+// A NODE THAT HOLDS NO COPY FILLS ONLY AS HOME (ADR-0059). A git node that has
+// never held a repository, asked a read that is NOT its walk's effective
+// home's, answers ErrGitUnready{not_held} at once and starts nothing — no
+// round, no GET of the object store — because a round, once begun, runs on
+// under the cache's own lifetime after its read stops waiting: with every node
+// free to fill, one read of a repository nobody held downloaded it on every
+// git node the walk reached. Asked as the home, the same node fills: the cold
+// round starts, the read is answered syncing while the download waits, and
+// once it lands the copy serves. And a copy the node HOLDS answers whatever
+// the stamp says — behind the asker's floor, brought there by a delta.
+//
+// Mutation: drop the check — the unstamped read starts the download, a GET
+// counted and the copy held, red.
+func TestANodeThatHoldsNoCopyFillsOnlyAsHome(t *testing.T) {
+	t.Parallel()
+	objects := &gatedObjects{Backend: memobj.New()}
+	x := newFixture(t, codetest.SoloOptions{Shape: codetest.Shape{GitNodes: 2}, Objects: objects},
+		codetest.Settings())
+	head := x.commit(map[string]string{"f": "1\n"}, "one")
+	repo := x.repo(codetest.RepoName)
+	node := x.f.Nodes()[1]
+	s := x.server(1, query.Options{})
+	query.SetSyncWait(s, 50*time.Millisecond)
+	away := func(q code.GitQuery) code.GitQuery {
+		q.Home = false
+		return q
+	}
+
+	objects.shut()
+	_, err := s.Read(t.Context(), away(treeQ(repo, code.TreeQuery{Rev: head})))
+	if !unready(err, code.UnreadyNotHeld) {
+		t.Fatalf("a read not stamped home, of a repository the node holds no copy of = %v, want "+
+			"ErrGitUnready{not_held}", err)
+	}
+	if got := objects.gets.Load(); got != 0 {
+		t.Errorf("the node read %d objects for a read it was not asked to fill, want none", got)
+	}
+	if node.Cache().Holds(repo) {
+		t.Error("the node began a copy for a read it was not asked to fill")
+	}
+
+	_, err = s.Read(t.Context(), treeQ(repo, code.TreeQuery{Rev: head}))
+	if !unready(err, code.UnreadySyncing) {
+		t.Fatalf("the same read asked of the node as home, its download held = %v, want "+
+			"ErrGitUnready{syncing}", err)
+	}
+	if !node.Cache().Holds(repo) {
+		t.Error("asked as home, the node holds no copy and is filling none")
+	}
+	objects.open()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		_, err = s.Read(t.Context(), away(treeQ(repo, code.TreeQuery{Rev: head})))
+		if err == nil || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("a read not stamped home of the copy the home's read filled = %v, want it served", err)
+	}
+
+	second := x.commit(map[string]string{"f": "2\n"}, "two")
+	rows, err := x.f.Rows(t.Context(), codetest.RepoName, codetest.Linearizable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := away(treeQ(repo, code.TreeQuery{Rev: second}))
+	q.Fresh = statelog.Freshness{Level: statelog.ReadSession, MinPosition: rows.Position}
+	if a := mustRead(t, s, q); a.Rev != second {
+		t.Errorf("a held copy behind the asker's floor, asked not as home, answered %s, want %s", a.Rev, second)
+	}
+}
+
 // A UNIT REPOSITORY REFUSES A SEAT OUTSIDE IT, on the chart of the node that
 // answers (ADR-0058): a seat of another unit is refused naming the
 // visibility, and nothing of the repository is read for it; a seat of the

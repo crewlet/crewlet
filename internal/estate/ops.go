@@ -251,6 +251,12 @@ type Backend struct {
 	// operation is then answered "no backend here".
 	Code CodeServer
 
+	// Git is this node's git half — its query server — set by the
+	// dispatcher for a GIT operation alone ([GitCopy]: the router's
+	// in-process run and the server's git arm) and nil on every backend a
+	// copy hands out: a git operation reads no domain's copy.
+	Git GitServer
+
 	// Identity is the identity directory, which every data node holds from
 	// boot whatever its company keeps — nil only where the node's core
 	// runtime is not up yet, which is answered like any half it does not

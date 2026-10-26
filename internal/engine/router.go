@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/usage"
 )
@@ -31,7 +32,9 @@ import (
 // Every live data node, as this node's WATCHED presence view names them
 // ([wholeEstate] over [coord.LeaseView]) — the view the fleet's other
 // per-request questions read, never a second one, and never a listing of the
-// fleet per call.
+// fleet per call. Who serves a repository's GIT work is read off the same
+// view — every live node with the git role ([wholeGit], ADR-0059) — and this
+// node's own git half is asked per request ([engineGit]).
 //
 // # What this node answers
 //
@@ -84,13 +87,19 @@ func (e *Engine) newRouter(q estate.Asker, nodeID string,
 	envelopes *estate.Envelopes) (*estate.Router, error) {
 
 	opts := estate.RouterOptions{
-		Self: nodeID, Queue: q, Placement: e.estatePlacement(),
+		Self: nodeID, Queue: q, Placement: e.estatePlacement(), Git: e.gitPlacement(),
 		Session: estate.NewSession(), Seams: e.serverSeams(),
 		Timing:    estate.Production(),
 		Envelopes: envelopes,
 	}
 	if e.local != nil {
 		opts.Local = e.local
+	}
+	// THIS NODE'S OWN GIT HALF, where it has the git role: asked per request
+	// ([engineGit]), since the code host is built at boot or at the first
+	// apply that hosts code — after this router exists.
+	if e.profile.Roles.Has(placement.RoleGit) {
+		opts.LocalGit = e.localGit()
 	}
 	r, err := estate.NewRouter(opts)
 	if err != nil {
@@ -141,6 +150,72 @@ func (w wholeEstate) Holders() ([]string, error) {
 // Unanswered asks the roster to list again, because a node it named went
 // silent.
 func (w wholeEstate) Unanswered(string) { w.roster.Invalidate() }
+
+// gitPlacement is who serves git as this node routes a repository's git work
+// (ADR-0059): every live node whose presence profile names the git role, from
+// the same watched view as the estate's placement.
+func (e *Engine) gitPlacement() estate.Placement {
+	return wholeGit{roster: presenceRoster{view: e.dataView}}
+}
+
+// wholeGit is the router's git placement: every live node with the git role,
+// as this node's watched presence view names them — [wholeEstate]'s twin over
+// the git role, for its reasons: answered from memory on every git read, and
+// listed again at once when a node it named went silent.
+type wholeGit struct {
+	// roster is every live git node, from memory.
+	roster gitRoster
+}
+
+// gitRoster is every live git node, as the router's git placement reads them.
+type gitRoster interface {
+	// LiveGitNodes is every live git node; an error is UNKNOWN.
+	LiveGitNodes() ([]string, error)
+
+	// Invalidate asks for the nodes to be listed again: one it named went
+	// silent.
+	Invalidate()
+}
+
+// Holders is every live git node, sorted. An error from the roster is
+// UNKNOWN, never "no git node".
+func (w wholeGit) Holders() ([]string, error) {
+	nodes, err := w.roster.LiveGitNodes()
+	if err != nil {
+		return nil, fmt.Errorf("engine: who serves git: %w", err)
+	}
+	out := slices.Clone(nodes)
+	slices.Sort(out)
+	return out, nil
+}
+
+// Unanswered asks the roster to list again, because a node it named went
+// silent.
+func (w wholeGit) Unanswered(string) { w.roster.Invalidate() }
+
+// localGit is this node's git half as the router and the estate server ask for
+// it: resolved on every request ([engineGit]), never once.
+func (e *Engine) localGit() estate.LocalGit { return engineGit{e: e} }
+
+// engineGit is [estate.LocalGit] over the PUBLISHED native runtime: its git
+// reads, the query server [Engine.buildCodeHost] built beside the code host.
+//
+// LOADED ON EVERY CALL, never captured when the router or the server is built,
+// because the code host — and the query server with it — is built at boot or
+// at the first apply that sets code.native, after both exist: captured, a git
+// node that applied its company after boot would answer "no code host" to
+// every git read until it restarted.
+type engineGit struct{ e *Engine }
+
+// Git is the runtime's query server, or false where no runtime is published or
+// it built no code host.
+func (g engineGit) Git() (estate.GitServer, bool) {
+	n := g.e.native.Load()
+	if n == nil || n.gitReads == nil {
+		return nil, false
+	}
+	return n.gitReads, true
+}
 
 // estateEnvelopes is how this node signs and verifies every envelope the
 // estate's router and server exchange — under the fleet keyring every state-log
@@ -514,8 +589,9 @@ func (e *Engine) serverSeams() estate.ServerSeams {
 	return seams
 }
 
-// presenceRoster is the fleet's presence view as the router's placement reads
-// it: every live data node, from memory.
+// presenceRoster is the fleet's presence view as the router's placements read
+// it: every live data node, and every live git node, from memory — one view
+// for both, so the two placements can never disagree about who is live.
 type presenceRoster struct{ view *coord.LeaseView }
 
 // LiveDataNodes is every live data node. A node with no view has no
@@ -530,6 +606,21 @@ func (r presenceRoster) LiveDataNodes() ([]string, error) {
 		return nil, fmt.Errorf("engine: which nodes hold the estate: %w", err)
 	}
 	return dataNodesOf(leases), nil
+}
+
+// LiveGitNodes is every live node with the git role. A node with no view has
+// no coordination and so no fleet: nobody else to ask, which is an answer
+// rather than an unknown — its own git half, where it has one, is asked in
+// process ([estate.RouterOptions.LocalGit]).
+func (r presenceRoster) LiveGitNodes() ([]string, error) {
+	if r.view == nil {
+		return nil, nil
+	}
+	leases, _, err := r.view.Leases()
+	if err != nil {
+		return nil, fmt.Errorf("engine: which nodes serve git: %w", err)
+	}
+	return gitNodesOf(leases), nil
 }
 
 // Invalidate lists again: a node the view named went silent,

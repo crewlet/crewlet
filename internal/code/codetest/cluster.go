@@ -58,6 +58,11 @@ type Cluster interface {
 	// for a write: what a push asked of a node that never answers costs
 	// before the runner-up is asked.
 	WriteAttempt() time.Duration
+	// GitReadThrough is a read of a repository by object id asked through
+	// member node's own router, as a seat's tool on that member asks it —
+	// the repository's home git node first, the member's own git half at its
+	// place in the order (ADR-0059).
+	GitReadThrough(ctx context.Context, node string, q code.GitQuery) (code.GitAnswer, error)
 	// Settle is the cluster as a case finds it: every member running —
 	// one that is not is an error naming it — each one's applier level with
 	// the code log, and every router's memory of a member that refused or
@@ -143,6 +148,7 @@ func fleetCases() []fleetCase {
 		{"F23_AFilterABitmapCannotAnswerIsRefused", aFilterABitmapCannotAnswerIsRefusedOnAFleet},
 		{"F4_TwoPushesToOneRefLandOnce", twoPushesThroughTwoMembersLandOnce},
 		{"F19_PushesThroughEveryNodeMeetAtOneCommitter", pushesThroughEveryNodeMeetAtOneCommitter},
+		{"F27_AHomesDeathFillsOneCopy", aHomesDeathFillsOneCopy},
 		{"F1_ACommitterThatDiesAfterAppendingStillAnswersOk", aCommitterThatDiesAfterAppendingStillAnswersOk},
 		{"F3_AGateDroppedPushIsNotApplied", aGateDroppedPushIsNotApplied},
 		{"F20_AStoppingCommitterHandsItsRepositoriesOn", aStoppingCommitterHandsItsRepositoriesOn},

@@ -34,6 +34,13 @@ type ServerOptions struct {
 	// Local is this node's own copy of the estate.
 	Local LocalBackends
 
+	// Git is this node's git half, resolved per request ([LocalGit]), on a
+	// node with the `git` role — every one of which holds data in this
+	// release — and nil on every other. Where it is set the node registers
+	// the git lane too ([gitLanes]), from boot: until its code host is built
+	// the lane answers `no_backend`.
+	Git LocalGit
+
 	// Seams are this node's own: supplied to every operation it answers.
 	Seams ServerSeams
 
@@ -61,7 +68,9 @@ type ServerOptions struct {
 // EVERY LANE OR NONE: a lane that cannot be registered withdraws the ones
 // before it, because a node that answered its reads and no proposal would be
 // asked first for every push to the repositories it commits for, and cost
-// each one a whole write attempt before the runner-up.
+// each one a whole write attempt before the runner-up — and a git node that
+// answered no git read would be every repository's silent home. A node
+// serving git ([ServerOptions.Git]) registers the git lane beside the others.
 func Serve(ctx context.Context, q Server, opts ServerOptions) (queue.Unsubscribe, error) {
 	switch {
 	case q == nil || opts.Local == nil:
@@ -78,9 +87,13 @@ func Serve(ctx context.Context, q Server, opts ServerOptions) (queue.Unsubscribe
 	// ONE SERVER FOR EVERY LANE, so one guard remembers every request id
 	// the node has taken whichever lane it arrived on: a replay sent to
 	// another lane's subject is the same replay.
-	srv := server{self: opts.Self, local: opts.Local, seams: opts.Seams,
+	srv := server{self: opts.Self, local: opts.Local, git: opts.Git, seams: opts.Seams,
 		env: opts.Envelopes, now: now, seen: signedask.NewGuard()}
-	stops := make([]queue.Unsubscribe, 0, len(lanes))
+	registered := lanes
+	if opts.Git != nil {
+		registered = slices.Concat(lanes, gitLanes)
+	}
+	stops := make([]queue.Unsubscribe, 0, len(registered))
 	withdraw := func(ctx context.Context) error {
 		var errs []error
 		for _, stop := range slices.Backward(stops) {
@@ -88,7 +101,7 @@ func Serve(ctx context.Context, q Server, opts ServerOptions) (queue.Unsubscribe
 		}
 		return errors.Join(errs...)
 	}
-	for _, l := range lanes {
+	for _, l := range registered {
 		stop, err := q.Serve(ctx, l.subject(opts.Self), l.answers(),
 			func(ctx context.Context, raw []byte) ([]byte, error) {
 				return srv.answer(ctx, l, raw), nil
@@ -111,6 +124,7 @@ func Serve(ctx context.Context, q Server, opts ServerOptions) (queue.Unsubscribe
 type server struct {
 	self  string
 	local LocalBackends
+	git   LocalGit
 	seams ServerSeams
 	env   *Envelopes
 	now   func() time.Time
@@ -182,6 +196,12 @@ func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 			spec.lane.subject(s.self), l)
 		return s.encodeReply(out)
 	}
+	if spec.git {
+		// THE GIT ARM, after the envelope's admission and the lane check
+		// and before the copy's verdict and the readiness gates, none of
+		// which applies to a git operation ([GitCopy]).
+		return s.answerGit(ctx, spec, req, out)
+	}
 	// AN ADMITTED REQUEST ALWAYS CARRIES ITS DEADLINE, under the signature
 	// ([signedask.Channel.Admit] refuses one without), so it is the bound
 	// on everything run for it.
@@ -238,14 +258,27 @@ func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 		out.Unserved, out.Detail = unservedNotEstablished, fmt.Sprintf(
 			"%s's copy admits no seat yet — the same gate that withholds seats from it", s.self)
 		return s.encodeReply(out)
-	case err != nil:
+	case errors.Is(err, errDecidesNoGrant):
+		// THE HARD ARM, answered whether or not the asker said to answer
+		// anyway ([op.judgesGrant]): nothing ran, and the node decides no
+		// grant from the chart the fleet replaced.
+		out.Unserved, out.Detail = unservedBehindConfig, decidesNoGrant(s.self)
+		return s.encodeReply(out)
+	}
+	return s.answered(out, req.Op, result, err)
+}
+
+// answered is out carrying what an operation answered: its failure, crossing
+// as itself ([encodeError]), or its result encoded.
+func (s server) answered(out reply, op string, result any, err error) []byte {
+	if err != nil {
 		out.Err = encodeError(err)
 		return s.encodeReply(out)
 	}
 	encoded, err := encodeResult(result)
 	if err != nil {
 		out.Err = encodeError(fmt.Errorf("estate: %s could not encode the answer to %s: %w",
-			s.self, req.Op, err))
+			s.self, op, err))
 		return s.encodeReply(out)
 	}
 	out.Result = encoded
@@ -345,7 +378,12 @@ func ready(ctx context.Context, self string, spec *opSpec, b Backend, floors []s
 // meets when a revision changes it. So each sends the walk to every other data
 // node first, and is asked again, told to answer anyway, when none of them
 // takes the request — never refused, which on a fleet whose only data node
-// lags or failed an apply would refuse every call its seats make.
+// lags or failed an apply would refuse every call its seats make. The one
+// exception is no preference: an operation that JUDGES A GRANT from the chart
+// ([op.judgesGrant]) is refused by a node behind the configuration however it
+// is asked, by the hard arm the operation's own declaration runs, since an
+// answer under the chart the fleet replaced is the one thing being asked last
+// cannot make sound.
 //
 // TWO REASON CODES, because the asker does one thing with either answer — asks
 // the node last — and two more with the second: it asks it after every node

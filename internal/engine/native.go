@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/host"
+	"github.com/crewlet/crewlet/internal/code/query"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
@@ -143,6 +144,14 @@ type native struct {
 	// ([Engine.hostsGit]), nil otherwise. Read per request through
 	// [Engine.CodeHost], never captured.
 	codeHost *host.Server
+
+	// gitReads is this node's server-side reads of a repository by object id
+	// (internal/code/query), built beside codeHost over the same cache and
+	// pool and nil where it is: what the estate's router and server ask of
+	// this node as a repository's home git node, through [Engine.localGit],
+	// per request. It holds no goroutine, so the code host's stop is its
+	// stop: its reads end with their contexts and the cache's.
+	gitReads *query.Server
 
 	// gitCache is the cache codeHost serves from, built and stopped with it
 	// and nil where it is: held only to be READ, at each alarm evaluation
@@ -381,7 +390,8 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			if parts, err = e.buildCodeHost(ctx, nodeID, boot); err != nil {
 				return err
 			}
-			n.codeHost, n.gitCache, n.gitCacheSize = parts.host, parts.cache, parts.size
+			n.codeHost, n.gitReads, n.gitCache, n.gitCacheSize = parts.host, parts.reads, parts.cache,
+				parts.size
 		}
 	}
 	// THE LEXICAL INDEX COVERS BOTH CORPORA, so it is built under EITHER

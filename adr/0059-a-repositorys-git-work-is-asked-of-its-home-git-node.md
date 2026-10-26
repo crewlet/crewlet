@@ -1,0 +1,58 @@
+# ADR-0059: A repository's git work is asked of its home git node
+
+- **Status:** accepted
+- **Authority:** `internal/estate`
+- **Enforced-by:** `internal/estate.TestAGitOperationIsAskedOfItsRepositorysHome`, `internal/estate.TestAGitNodeThatIsSyncingSendsTheAskerToTheRunnerUp`, `internal/estate.TestOnlyTheEffectiveHomeIsAskedToFill`, `internal/estate.TestANodeWithNoCodeHostRunsNoGitRead`, `internal/estate.TestEveryOperationNamesTheCopyItReads`, `internal/code/query.TestANodeThatHoldsNoCopyFillsOnlyAsHome`, `internal/code/cache.TestACacheHoldsACopyOnlyOnceItHasOneOrIsFillingOne`, `internal/code/codecluster.TestEveryMemberRoutesAGitReadToOneHome`, `internal/engine.TestAGitReadIsServedOnceAnApplyBuildsTheCodeHost`, `internal/rendezvous.TestNoPackageOrdersByAHashOfItsOwn`
+- **Measured:** `BenchmarkCodeRead` (`internal/code/query`), once over a 32 MB history of 13 000 commits on git 2.56.0: every kind a warm home answers in 5–75 ms, two orders of magnitude inside its 10 s read deadline, and a node holding no copy, asked as the home, syncs the repository whole and answers in 104 ms — so the 17 s attempt a router gives a git read is a sum of whole budgets, never a figure a healthy home approaches
+- **Cost-when-tried:** not tried here: before this record no seat read a repository server-side at all. The cost it avoids is the one the cold sync measures — 1.4 s for a repository of two hundred pushes and 13.4–13.8 s for one of two thousand against an object store answering every request 100 ms late — paid on whichever git node a read landed on, and on every one of them over time
+- **Tag-status:** unreleased
+
+## The decision
+
+An operation on a repository's git OBJECTS — a server-side read by object id today, in the estate's
+`code.git_read` — is answered by a node with the `git` role from its own cache, never by a data node's copy.
+The estate's router asks it of the GIT nodes (`RouterOptions.Git`, every live node with the role) in
+`rendezvous.Order(repository id, every live git node)`: the repository's HOME first, then its runner-up, with
+the demotions every keyed order has — a node that ran nothing for it (`no_backend`: its code host not built)
+asked last for thirty seconds, a silent one last of all — no sticky node, and this node at its place, in
+process, where its git half is built (`LocalGit`, resolved per request, since a node builds its code host at
+boot or at the first apply that hosts code, after its router exists). The home is a PREFERENCE, never
+ownership: no lease and no epoch, and two nodes that both believe they are home answer the same immutable
+read.
+
+A git node that cannot answer inside its budget for a reason about ITSELF — its copy still syncing, its share
+of the read lane full, no chart or a configuration behind the fleet's to judge a seat by — answers `behind`
+and is not demoted, so its askers move on and come back once it is warm. ONE node a walk FILLS a copy: the
+walk stamps the attempt it makes of its effective home (its first node after the demotions,
+`code.GitQuery.Home`), and every other git node that holds no copy answers at once that it holds none
+(`not_held`) having started nothing — so a read of a repository nobody holds costs the fleet one download,
+never one a git node. Such an operation names the git half rather than a domain's copy (`GitCopy`), so no
+copy verdict, no dispatch floor and no lag gate holds it back: its floor travels in its arguments and is the
+cache's sync level. It is answered on a lane of its own, which a git node registers from boot and answers
+`no_backend` on until its code host is built, and every request on it is a signed estate request like any
+other.
+
+## Why the obvious alternative is wrong
+
+Any data node, as every other operation is asked: seats run on nodes without the git role, and a read asked
+of whichever node the ordinary walk prefers would have every git node cache every repository a seat ever
+read, a cold sync paid per node per repository and each node's cache budget evicting warm repositories to
+make the room. Every git node free to fill whatever it was asked: a cold round runs on after its read stops
+waiting, so one read of a repository no git node held — the first after its home's death — began a whole
+download of it on every git node the walk reached, at the default `repo_max_bytes` up to 20 GiB a node, for a
+read one node answers. A per-repository lease — an owner: ownership needs an epoch, a fence and a handover,
+for work that is idempotent or arbitrated anyway.
+
+## Amendments to earlier records
+
+[ADR-0025](0025-a-node-without-data-reaches-the-estate-through-one-that-holds-it.md): the router's walk has a
+second placement beside the data nodes — the git nodes, keyed by repository, for an operation on a
+repository's git objects — whose operations read no domain's copy and so take no copy verdict, no dispatch
+floor and no lag gate.
+
+## What this does not decide
+
+Who compacts a repository, engine-built writes, git nodes that hold no data, and whether a load balancer
+hashes `/git/` by repository — recommended for a cache's locality, never required for correctness. Nor who
+may read: the git node that answers judges the asker's grant from its own chart
+([ADR-0058](0058-a-repository-grant-is-derived-from-the-chart.md)).

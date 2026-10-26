@@ -531,6 +531,20 @@ type GitQuery struct {
 	// Opaque to the asker, and refused [ErrBadCursor] where it is not one the
 	// kind issues.
 	Cursor string `json:"cursor,omitempty"`
+	// Home is set on the one attempt of a walk asked of its EFFECTIVE HOME —
+	// the first git node of the repository's order once the walk's demotions
+	// are applied (ADR-0059) — and on no other: the one node a walk lets FILL
+	// a copy it does not hold. A git node holding no copy of the repository
+	// answers a read without it [ErrGitUnready]{[UnreadyNotHeld]} at once,
+	// having started nothing, because a cold round runs on under the cache's
+	// own lifetime after its read stops waiting: with every node free to
+	// fill, one read of a repository nobody held — the first after its
+	// home's death — began a whole download of it on every git node the walk
+	// reached. Stamped by the walk on every attempt it makes, over whatever
+	// its caller set, so no caller chooses it. An estate request, not a
+	// record: a build that knows no `home` reads every read as one it may
+	// fill, which is this build's answer without the rule.
+	Home bool `json:"home,omitempty"`
 
 	Tree    *TreeQuery    `json:"tree,omitempty"`
 	Blob    *BlobQuery    `json:"blob,omitempty"`

@@ -666,6 +666,78 @@ func TestARepositoryNoRowHoldsCostsNoDirectory(t *testing.T) {
 	}
 }
 
+// A CACHE HOLDS A COPY ONLY ONCE IT HAS ONE OR IS FILLING ONE — what a git node
+// asks before a read it was not asked to fill (ADR-0059), so that one node a
+// walk fills a repository nobody holds. Not one it never synced, nor one whose
+// only round ended before any copy (its estate read refused); one whose round
+// is filling it now, before the round has made its copy; one it synced; one a
+// restarted process finds on its disk before any round has run on it; and
+// never one purged.
+//
+// Mutations: answer from the entry alone (any entry not purged) — the round
+// that ended with no copy leaves the repository held, red; leave the running
+// round out — the cache filling the repository holds nothing, red.
+func TestACacheHoldsACopyOnlyOnceItHasOneOrIsFillingOne(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t)
+	if c.Holds(repo) {
+		t.Fatal("a cache that never synced the repository holds it")
+	}
+
+	refused := errors.New("the estate is out of reach")
+	w.log.set(func(l *fakeLog) { l.hook = func(fakeCall) error { return refused } })
+	if _, err := c.Sync(ctx, repo, linearizable); err == nil {
+		t.Fatal("a sync whose estate read is refused answered a copy")
+	}
+	if c.Holds(repo) {
+		t.Error("a round that ended before any copy left the repository held")
+	}
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	w.log.set(func(l *fakeLog) {
+		l.hook = func(fakeCall) error {
+			once.Do(func() { close(entered) })
+			<-release
+			return nil
+		}
+	})
+	filled := make(chan error, 1)
+	go func() {
+		s, err := c.Sync(ctx, repo, linearizable)
+		s.Release()
+		filled <- err
+	}()
+	<-entered
+	if !c.Holds(repo) {
+		t.Error("a cache whose round is filling the repository does not hold it")
+	}
+	close(release)
+	if err := <-filled; err != nil {
+		t.Fatalf("the filling round: %v", err)
+	}
+	w.log.set(func(l *fakeLog) { l.hook = nil })
+	if !c.Holds(repo) {
+		t.Error("a cache that synced the repository does not hold it")
+	}
+
+	c = w.reopen(t, c)
+	if !c.Holds(repo) {
+		t.Error("a restarted cache does not hold the copy its disk keeps")
+	}
+	w.log.purge(repo)
+	if _, err := c.Sync(ctx, repo, linearizable); !errors.Is(err, code.ErrRepoNotFound) {
+		t.Fatalf("a sync of a purged repository: %v, want code.ErrRepoNotFound", err)
+	}
+	if c.Holds(repo) {
+		t.Error("a cache holds a purged repository")
+	}
+}
+
 // A PURGED REPOSITORY IS REMOVED ONCE UNPINNED: the rows are gone, so the
 // cache's entry is too and every sync is told so — but a reader already in the
 // directory finishes on it, and only its release moves it into trash/.

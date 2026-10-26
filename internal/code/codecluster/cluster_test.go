@@ -55,10 +55,15 @@ const members = 3
 // crash a quarter of a minute more of waiting on a dead member.
 //
 // THE ADMISSION BUDGET is the read attempt's: no case asks it.
+//
+// THE GIT READ ATTEMPT is production's (estate.GitReadAttempt): no case wedges
+// a git node, and a member that is killed or stopped costs a git read no wait
+// at all — nothing serves its subjects, and the broker's ask ends at once.
 var clusterTiming = estate.Timing{
-	ReadAttempt:  2 * time.Second,
-	WriteAttempt: statelog.ReadBudget + code.CommitBudget + code.ReplyMargin + 12*time.Second,
-	AdmissionAsk: 2 * time.Second,
+	ReadAttempt:    2 * time.Second,
+	WriteAttempt:   statelog.ReadBudget + code.CommitBudget + code.ReplyMargin + 12*time.Second,
+	AdmissionAsk:   2 * time.Second,
+	GitReadAttempt: estate.GitReadAttempt,
 }
 
 // clusterEnvelopes are every member's estate envelopes ([estate.Envelopes]):
@@ -134,6 +139,11 @@ type member struct {
 	// every restart, and read by every request its git node serves.
 	router atomic.Pointer[estate.Router]
 
+	// gitAnswered is how many reads by object id this member's git half has
+	// answered — its router's in process and its git lane's alike
+	// (memberGit): which member a read was served by.
+	gitAnswered atomic.Int64
+
 	mu       sync.Mutex
 	q        *js.Queue
 	objects  objstore.Backend
@@ -192,11 +202,17 @@ func startClusterOf(t testing.TB, backend string, broker js.Config) *cluster {
 		m.running = true
 	}
 	for _, m := range c.members {
-		m.git = codetest.StartGitNode(t, codetest.GitOptions{
+		g := codetest.StartGitNode(t, codetest.GitOptions{
 			ID: m.id, Dir: filepath.Join(m.dir, "git"), Estate: memberEstate{m}, Reads: m.read,
 			Objects: m.backend, Faults: c.faults, Credentials: c.creds, Audit: c.record,
 			MaxTransfers: transfers,
 		})
+		// UNDER THE MEMBER'S LOCK, since its serving registration — made
+		// before its git node — reads it from the broker's goroutines
+		// (memberGit).
+		m.mu.Lock()
+		m.git = g
+		m.mu.Unlock()
 	}
 	if err := c.drained(t.Context()); err != nil {
 		t.Fatalf("codecluster: %v", err)
@@ -244,12 +260,15 @@ func (c *cluster) record(_ context.Context, e types.OperatorActed) {
 }
 
 // route builds the member's router and makes it answer the fleet on its
-// subjects — the engine's estate wiring, over this incarnation's client.
+// subjects — the engine's estate wiring, over this incarnation's client: every
+// member is a git node too, so its router asks a repository's git reads of
+// the members (the same placement) with its own git half in process, and its
+// registration serves the git lane over that half.
 func (m *member) route(t testing.TB) {
 	t.Helper()
 	r, err := estate.NewRouter(estate.RouterOptions{Self: m.id, Queue: m.q, Placement: m.c.placement,
-		Local: memberCopy{m}, Session: estate.NewSession(), Timing: clusterTiming,
-		Envelopes: clusterEnvelopes, Now: m.c.now})
+		Git: m.c.placement, LocalGit: memberGit{m}, Local: memberCopy{m}, Session: estate.NewSession(),
+		Timing: clusterTiming, Envelopes: clusterEnvelopes, Now: m.c.now})
 	if err != nil {
 		t.Fatalf("codecluster: %s's router: %v", m.id, err)
 	}
@@ -257,11 +276,51 @@ func (m *member) route(t testing.TB) {
 	// ON THE CLUSTER'S CONTEXT: the registration outlives the case that
 	// restarted the member.
 	withdraw, err := estate.Serve(m.c.life.Context(), m.q, estate.ServerOptions{
-		Self: m.id, Local: memberCopy{m}, Envelopes: clusterEnvelopes})
+		Self: m.id, Local: memberCopy{m}, Git: memberGit{m}, Envelopes: clusterEnvelopes})
 	if err != nil {
 		t.Fatalf("codecluster: %s serves the estate: %v", m.id, err)
 	}
 	m.withdraw = withdraw
+}
+
+// gitNode is the member's git node, nil before it is started.
+func (m *member) gitNode() *codetest.GitNode {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.git
+}
+
+// memberGit is the member's git half as its router and its serving
+// registration ask for it (estate.LocalGit): its git node's query server, read
+// again at every request — the git node is started after the registration,
+// and a restart builds a new query server — and counted, so a case can tell
+// which member answered a read (member.gitAnswered).
+type memberGit struct{ m *member }
+
+func (g memberGit) Git() (estate.GitServer, bool) {
+	n := g.m.gitNode()
+	if n == nil {
+		return nil, false
+	}
+	s, ok := n.Git()
+	if !ok {
+		return nil, false
+	}
+	return countedGit{m: g.m, inner: s}, true
+}
+
+// countedGit is a member's query server, counting every read it answers.
+type countedGit struct {
+	m     *member
+	inner estate.GitServer
+}
+
+func (c countedGit) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
+	a, err := c.inner.Read(ctx, q)
+	if err == nil {
+		c.m.gitAnswered.Add(1)
+	}
+	return a, err
 }
 
 // read is a read of the code host through the member's router, as its API's
@@ -518,6 +577,34 @@ func (c *cluster) Appends(node string) int {
 }
 
 func (c *cluster) WriteAttempt() time.Duration { return clusterTiming.WriteAttempt }
+
+// GitRead is a read of a repository by object id through the first running
+// member's router (codetest.Fleet).
+func (c *cluster) GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
+	m, err := c.first()
+	if err != nil {
+		return code.GitAnswer{}, err
+	}
+	return m.router.Load().Code().GitRead(ctx, q)
+}
+
+// GitReadThrough is a read of a repository by object id through member node's
+// own router (codetest.Cluster).
+func (c *cluster) GitReadThrough(ctx context.Context, node string, q code.GitQuery) (code.GitAnswer, error) {
+	for _, m := range c.members {
+		if m.id == node && m.isRunning() {
+			return m.router.Load().Code().GitRead(ctx, q)
+		}
+	}
+	return code.GitAnswer{}, fmt.Errorf("codecluster: no running member called %q", node)
+}
+
+// gitAnswered is how many reads by object id member node's git half has
+// answered.
+func (c *cluster) gitAnswered(t testing.TB, node string) int64 {
+	t.Helper()
+	return c.member(t, node).gitAnswered.Load()
+}
 
 func (c *cluster) Unanswered(node string) int { return c.placement.reported(node) }
 

@@ -65,7 +65,9 @@
 // here (syncing); its share or its read lane full past their waits (share); a
 // seat's read on a node holding no chart yet (no_chart) or confirmed behind
 // the company's configuration (behind_config), where the grant is not judged
-// at all — "this node cannot judge" is never "not permitted". Every other
+// at all — "this node cannot judge" is never "not permitted"; and a read of a
+// repository this node holds no copy of, which it was not asked to fill
+// (not_held). Every other
 // refusal is about the read or the repository, and is the answer anywhere: a
 // read the deadline ended is code.ErrSliceTooLarge naming the narrowing, since
 // another node would take as long.

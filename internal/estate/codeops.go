@@ -7,12 +7,17 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 )
 
-// The code host's operations: a push's proposal, and the four reads the
-// host's admission, a cache's sync and the REST routes make. Every one names
-// the CODE domain, so the code copy's own verdict — never the tracker's —
-// decides whether a node answers it (ADR-0049), and its floor is on the code
-// log. A push is the one KEYED operation: see the package doc's "A push is
-// asked of its repository's committer".
+// The code host's operations: a push's proposal, the reads the host's
+// admission, a cache's sync, the REST routes and a seat's tools make of the
+// rows — each naming the CODE domain, so the code copy's own verdict — never
+// the tracker's — decides whether a node answers it (ADR-0049), and its floor
+// is on the code log — and a read of a repository's CONTENT by object id,
+// which names no domain's copy and is asked of the repository's home GIT node
+// ([GitCopy], ADR-0059). A push is keyed on its repository's data nodes: see
+// the package doc's "A push is asked of its repository's committer". A read
+// that JUDGES A GRANT from the serving node's chart — one a seat asks — says
+// so ([op.judgesGrant]), and a node behind the company's configuration answers
+// none of it.
 
 // CodeServer is the code half a data node serves, declared here by its
 // consumer with exactly the methods the operations below call. [code.Served]
@@ -23,6 +28,7 @@ type CodeServer interface {
 	Snapshot(ctx context.Context, q code.StateQuery) (code.RepoSnapshot, error)
 	PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.PushOutcome, error)
 	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
+	ResolveRef(ctx context.Context, q code.RefQuery) (code.RefAnswer, error)
 }
 
 // ranNothing is a code half's error as the walk reads it: a half that refused
@@ -121,6 +127,12 @@ var opCodePushOutcome = define("code.push_outcome", opRead, codeDomain, false,
 // log order, which a git node's index of which push introduced each commit
 // is built from. A seat's read on a node that holds no chart is that node's
 // code.ErrNotServing — it ran nothing — so the walk asks the next.
+//
+// A SEAT'S READ JUDGES ITS GRANT from the serving node's chart (which
+// repositories it lists, and whether it reads one: code.GrantOf), so a node
+// behind the company's configuration answers none of it ([op.judgesGrant]); a
+// person's or a token's consults no chart, and an `introduced` page names no
+// asker at all, so both are answered there as a last resort.
 var opCodeRead = define("code.read", opRead, codeDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q code.ReadQuery) (code.ReadAnswer, error) {
 		if b.Code == nil {
@@ -128,4 +140,41 @@ var opCodeRead = define("code.read", opRead, codeDomain, false,
 		}
 		answer, err := b.Code.Read(ctx, q)
 		return answer, ranNothing(err)
-	})
+	}).judgesGrant(func(q code.ReadQuery) bool { return q.Asker.Kind == code.PrincipalAgent })
+
+// opCodeResolveRef is one ref of one repository, asked of any data node whose
+// code copy serves, at the level the query names — the read a seat's tool
+// turns a branch or a tag into the object id every read by oid takes. A
+// seat's resolve judges its grant on the repository as a read of it does, so
+// it is declared to ([op.judgesGrant]).
+var opCodeResolveRef = define("code.resolve_ref", opRead, codeDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, q code.RefQuery) (code.RefAnswer, error) {
+		if b.Code == nil {
+			return code.RefAnswer{}, errNoHalf
+		}
+		answer, err := b.Code.ResolveRef(ctx, q)
+		return answer, ranNothing(err)
+	}).judgesGrant(func(q code.RefQuery) bool { return q.Asker.Kind == code.PrincipalAgent })
+
+// opCodeGitRead is one server-side read of a repository by object id — a tree,
+// a file's lines, a diff, a comparison — asked of the repository's HOME git
+// node first, then its runner-up (ADR-0059), on the git lane, each attempt
+// stamped with whether the node asked is the walk's effective home
+// (code.GitQuery.Home), the one node a walk lets fill a copy. A git node that
+// cannot answer for a reason about itself (code.ErrGitUnready) ran nothing
+// about the repository's content, and the walk asks the next without demoting
+// it ([gitUnready]). The git node judges a seat's grant itself, and refuses a
+// seat where it is behind its configuration, so the operation declares no
+// grant here.
+var opCodeGitRead = define("code.git_read", opRead, GitCopy, false,
+	func(ctx context.Context, b Backend, _ *Actor, q code.GitQuery) (code.GitAnswer, error) {
+		if b.Git == nil {
+			return code.GitAnswer{}, errNoHalf
+		}
+		answer, err := b.Git.Read(ctx, q)
+		return answer, gitUnready(err)
+	}).keyedOnGit(func(q code.GitQuery) string { return q.RepoID },
+	func(q code.GitQuery, home bool) code.GitQuery {
+		q.Home = home
+		return q
+	}).answeredOn(laneGitReads)

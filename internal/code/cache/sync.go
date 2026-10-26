@@ -180,6 +180,36 @@ func (c *Cache) Sync(ctx context.Context, repoID string, fresh statelog.Freshnes
 	return s, err
 }
 
+// Holds reports whether this cache holds a copy of repoID or is filling one:
+// an incarnation of it — converged in this process, or found on the disk it
+// booted over — or a round running on it now. It reads memory alone and
+// starts nothing.
+//
+// It is what a git node asks before a read it was not asked to FILL a copy
+// for (code.GitQuery.Home, ADR-0059): a node that answers false starts
+// nothing for such a read (code.UnreadyNotHeld), so one read of a repository
+// no git node holds costs the fleet one download, by the walk's effective
+// home, rather than one by every git node the walk reaches — a round, once
+// begun, runs on under the cache's own lifetime after its caller stops
+// waiting. A round already running is held: a read that joins it adds no
+// download of its own.
+//
+// An answer of the moment, and either way it turns is sound: a copy evicted
+// just after a true is filled again by the read's own sync, as any sync of an
+// evicted repository is, and a fill that starts just after a false is
+// answered by another node meanwhile.
+func (c *Cache) Holds(repoID string) bool {
+	c.mu.Lock()
+	e := c.entries[repoID]
+	c.mu.Unlock()
+	if e == nil {
+		return false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return !e.dead && (e.current != nil || e.running != nil)
+}
+
 // sync is Sync, and for a CHECK of the copy (checks; Verification.Run) also
 // the damage a round's own git met in the incarnation it answers pinned
 // (waiter.checks, damagedRound) — nil when it met none — and what the

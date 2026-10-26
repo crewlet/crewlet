@@ -113,3 +113,17 @@ a lagging copy last rather than never.
 `internal/estate` states the rules; the authority and the gate are unchanged.
 
 A copy goes out of service one DOMAIN at a time — ADR-0049.
+
+## Amendment — a repository's git work is asked of its home git node
+
+The router has a second placement beside the data nodes:
+[ADR-0059](0059-a-repositorys-git-work-is-asked-of-its-home-git-node.md). An
+operation on a repository's git OBJECTS — a read of its content by object id —
+is asked of the nodes with the `git` role rather than of the data nodes, in the
+repository's rendezvous order over them, its home first, and answered from the
+git node's own cache. It reads no domain's copy, so it takes no copy verdict,
+no dispatch floor and no lag gate: its floor travels in its arguments, as the
+cache's sync level. The decision above holds through it unchanged — a
+per-node subject (the git reads on a lane of their own beside the shared one
+and the proposals'), the asker's choice of node, the failover rule stated for
+the operation, and every request and reply signed.

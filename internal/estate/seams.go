@@ -777,3 +777,31 @@ func (c CodeSeam) PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.Pu
 func (c CodeSeam) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
 	return call(ctx, c.r, opCodeRead, nil, q)
 }
+
+// ResolveRef answers one ref of one repository at the level the query names.
+// It never raises this node's floor: a read's position is somebody else's
+// writes.
+func (c CodeSeam) ResolveRef(ctx context.Context, q code.RefQuery) (code.RefAnswer, error) {
+	return call(ctx, c.r, opCodeResolveRef, nil, q)
+}
+
+// GitRead asks the repository's home git node for one read of its content by
+// object id, and its runner-up when the home cannot answer (ADR-0059). Its
+// floor is the query's own (code.GitQuery.Fresh), which [CodeSeam.Floor]
+// supplies where the reader's own writes must be in the copy it reads.
+func (c CodeSeam) GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
+	return call(ctx, c.r, opCodeGitRead, nil, q)
+}
+
+// Floor is this node's session floor on the code log — the furthest of its own
+// writes there it has been told landed — or the zero position where it holds
+// none: what a reader hands a read by object id as its Fresh, so the home's
+// copy is brought to this node's own pushes before it is read, since a git
+// operation carries no floor of the router's ([GitCopy]).
+func (c CodeSeam) Floor() statelog.Position {
+	floors := c.r.session.Floors([]string{floorStreams[codeDomain]})
+	if len(floors) == 0 {
+		return statelog.Position{}
+	}
+	return floors[0]
+}

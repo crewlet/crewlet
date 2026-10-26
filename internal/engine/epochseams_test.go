@@ -33,12 +33,12 @@ const (
 	// code.ReaderOptions.Roster, a read of the rows, and query.Options.Roster,
 	// a read by object id on a git node. The git node's own gate,
 	// query.Options.Current, refuses a seat's read there itself (unready,
-	// behind_config) rather than judging it; nothing in this build asks a
-	// read of the rows as a seat yet — every principal a REST route or the
-	// code host's git carries is a person, whom no chart judges
-	// ([code.GrantOf]) — so the refusal a data node owes such a read is the
-	// first seat reader's to bring (M3-O8). The tracker's own permission
-	// checks read an authority the ASKING node forms from its own.
+	// behind_config) rather than judging it; a data node refuses a seat's
+	// read of the rows by the operation's own declaration (the estate's
+	// op.judgesGrant on code.read and code.resolve_ref, held by
+	// estate.TestEveryOperationThatJudgesAGrantIsDeclared), even asked last
+	// (M3-O8's hard arm). The tracker's own permission checks read an
+	// authority the ASKING node forms from its own.
 	seamGrant seamClass = "grant"
 
 	// seamValue is a value or a routing read from the serving node's
@@ -137,6 +137,8 @@ var classified = map[string]struct {
 	"estate.Backend.Usage":     {seamNone, "the usage rows"},
 	"estate.Backend.Code": {seamNone, "the committer and the reader, built over " +
 		"code.CommitterOptions and code.ReaderOptions"},
+	"estate.Backend.Git": {seamNone, "the git half a git operation is answered from; what it reads " +
+		"is classified on query.Options, which it is built over"},
 	"estate.Backend.Identity": {seamNone, "the identity directory's reader, built over " +
 		"iamdomain.ReaderOptions: who holds a login and each human seat, read from the copy's " +
 		"rows; the chart and the Tier A token list an answer is judged against are the ASKING " +

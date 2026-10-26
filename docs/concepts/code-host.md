@@ -1083,8 +1083,14 @@ activations may decide one command differently while one of them has not yet
 applied the other's. A node that holds no chart yet, from its start until it
 installs its first company configuration, judges no seat: it refuses a seat's
 read as a node that cannot answer it, and the read is asked of another data
-node — never answered that the seat may read nothing. In this release no seat
-pushes or reads a repository yet
+node — never answered that the seat may read nothing. Nor does a node
+[confirmed behind the company's configuration](control-plane.md#where-the-gate-sits)
+— shed or stuck, about a minute after an activation it failed to apply, at
+worst — judge a seat: it answers a seat's listing, read or ref `behind_config`
+even when it is the last data node left to ask, because the revision it failed
+to apply may be the one that revoked the seat's grant, so the read is answered
+by a current node or by nobody; a person's read it answers as before, asked
+last. In this release no seat pushes or reads a repository yet
 ([What it does not do yet](#what-it-does-not-do-yet)), so every read is a
 person's.
 
@@ -1143,8 +1149,10 @@ from such an answer:
 | `share` | the node's seats' git work holds its whole share of the read lane (below), and none came free within two seconds |
 | `no_chart` | a seat's read on a node holding no chart yet — at boot, before its first apply — which cannot judge a seat, as opposed to judging it has no access |
 | `behind_config` | a seat's read on a node confirmed behind the company's configuration (shed or stuck), which judges no seat's grant from the chart the fleet replaced |
+| `not_held` | the node holds no copy of the repository and the read did not name it the one node of its walk that may fill one ([The home git node](#the-home-git-node)), so it started nothing |
 
-A person's read reads no chart, so neither of the last two applies to one.
+A person's read reads no chart, so neither `no_chart` nor `behind_config`
+applies to one.
 
 **Fresh enough by construction.** A read is answered from the copy as it
 stands, or brought to the reader's floor where it holds one; an object the copy
@@ -1167,6 +1175,42 @@ A read's git process that reports damage to the copy is never answered from,
 even where git answered anyway — it reads around a damaged index from the
 packs and exits as if it had not — and the cache repairs what it reported
 while other nodes answer.
+
+### The home git node
+
+Every node asks a read of the same git node first: the repository's **home**,
+the first of the repository's rendezvous order over every live node with the
+`git` role, keyed by the repository's id — an order each node computes alike
+from the same set — and then its runner-up
+([ADR-0059](https://github.com/crewlet/crewlet/blob/main/adr/0059-a-repositorys-git-work-is-asked-of-its-home-git-node.md)).
+So one repository's reads meet on one git node's cache whichever node they are
+asked from, and a repository its readers keep warm costs the fleet one copy
+for them rather than one on every git node a read went through. A git node
+asks its own copy in process at its place in that order, never ahead of it.
+The home is a preference, never an owner: nothing is leased, and two nodes
+that each take themselves for the home answer the same read alike, since an
+object id names the same object on both.
+
+A home that cannot answer in time — its copy still syncing, its share full —
+says so, and the read goes on to the runner-up at once; the next read asks the
+home first again, since a node warming a copy is the right node a moment
+later. A git node whose code host is not built — a company that does not host
+code, or one whose first apply has not reached it — answers that it runs none
+and is asked last for thirty seconds, and a node that went silent is asked
+last of all. The reads travel on a lane of their own on each git node, so a
+read waiting on its copy's sync never holds a slot the node answers its other
+estate requests through, and each is a signed estate request like any other.
+
+**One node fills a copy.** A git node that holds no copy of the repository
+starts a download of one only for the read that names it its walk's home —
+the first node of the order once those demotions are applied — and answers
+every other `not_held` at once, having started nothing, because a download
+once begun runs on after the read that started it stops waiting. So a read of
+a repository no git node holds costs the fleet one download, by its home,
+never one by every git node the read was asked of. When a home dies, its
+runner-up becomes the first node every walk asks and fills the one copy; a
+read in the seconds that takes is answered unavailable, as it would be by a
+cold home, and the copy serves every read after.
 
 ---
 

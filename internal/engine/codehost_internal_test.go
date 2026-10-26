@@ -145,9 +145,11 @@ func TestAMaintenanceModeNodeRefusesAProposal(t *testing.T) {
 
 // THE CODE LOG'S CENSUS COUNTS ITS GIT CLIENTS, WHATEVER THIS NODE HOSTS.
 //
-// Every linearizable read of the code log is a person's or their CI's, so held
-// to the seats' term alone a five-seat company's code log fires census_drift at
-// 1 300 git reads a day — a few developers and one CI. The census adds the git
+// The code log's linearizable reads are a person's or their CI's beyond the
+// seats' own (a ref resolved for a seat, a read by object id's one re-sync,
+// which the seats' term counts), so held to the seats' term alone a five-seat
+// company's code log fires census_drift at 1 300 git reads a day — a few
+// developers and one CI. The census adds the git
 // reads the ceiling the log's stream HOLDS was sized for — never the Tier A
 // figure this node would create it with ([stateLog.specOf]), which the census
 // was handed here once and which nothing applies to a stream that exists — and

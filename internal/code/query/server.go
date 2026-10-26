@@ -15,6 +15,10 @@ import (
 // Cache is what the reads need of the node's git cache. *cache.Cache
 // satisfies it.
 type Cache interface {
+	// Holds reports whether the cache holds a copy of a repository or is
+	// filling one, from memory and starting nothing: what a read that is not
+	// its walk's effective home's asks before anything else (step 3).
+	Holds(repoID string) bool
 	// Sync hands out a repository's directory pinned, holding every row up
 	// to a position at least as fresh as fresh asks.
 	Sync(ctx context.Context, repoID string, fresh statelog.Freshness) (cache.Synced, error)
@@ -94,21 +98,26 @@ func New(o Options) (*Server, error) {
 //     company's configuration (behind_config) or holds no chart (no_chart):
 //     judged before the sync, so a node that cannot judge starts nothing. A
 //     person's or a token's read reads no chart and skips both.
-//  3. The node's copy is synced to the asker's floor, or read as it stands
+//  3. A node holding no copy of the repository, nor filling one
+//     (Cache.Holds), answers a read that is not its walk's effective home's
+//     (code.GitQuery.Home) unready (not_held) at once, having started
+//     nothing: ONE node a walk fills a copy (ADR-0059), and every other
+//     either holds one already or sends the read on.
+//  4. The node's copy is synced to the asker's floor, or read as it stands
 //     where the asker holds none, the wait bounded by statelog.ReadBudget: a
 //     copy that cannot be brought there in time — a cold one downloading the
 //     repository, which goes on after the read stops waiting — or a sync that
 //     failed here is unready (syncing).
-//  4. A deleted or purging repository answers code.ErrRepoNotFound with the
+//  5. A deleted or purging repository answers code.ErrRepoNotFound with the
 //     domain's own sentence for it; the asker's grant is judged from the
 //     repository's row and this node's chart (code.GrantOf), and a read below
 //     read is code.ErrNotPermitted.
-//  5. Every abbreviated id is expanded from the objects alone, and every id
+//  6. Every abbreviated id is expanded from the objects alone, and every id
 //     and path checked present with one batch (objects.go); an id the copy
-//     lacks is code.ErrObjectNotFound. No refusal of steps 4 and 5 is
+//     lacks is code.ErrObjectNotFound. No refusal of steps 5 and 6 is
 //     concluded from a copy not read at the log's head: it is synced there
 //     once, and judged again.
-//  6. The kind's own git runs under ONE unit of the node's seat git-work
+//  7. The kind's own git runs under ONE unit of the node's seat git-work
 //     share, released the moment it ends — never across a sync or a check,
 //     which hold no read-lane slot (code.GitShare).
 func (s *Server) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
@@ -121,6 +130,9 @@ func (s *Server) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, err
 	}
 	r := &read{s: s, q: q}
 	if err := r.judgeable(); err != nil {
+		return code.GitAnswer{}, err
+	}
+	if err := r.held(); err != nil {
 		return code.GitAnswer{}, err
 	}
 	// THE PIN IS THE READ'S, released whatever it answers: every Synced a
@@ -175,6 +187,21 @@ func (r *read) judgeable() error {
 			"a git node holding one answers", r.s.o.NodeID, r.q.Asker.Seat))
 	}
 	return nil
+}
+
+// held refuses a read this node may not fill a copy for (step 3): it holds
+// none, and the read is not its walk's effective home's. Asked before the
+// sync, which is what would start the download: a cold round runs on under
+// the cache's own lifetime after the read stops waiting, so a node that
+// started one for a read another node answers would download the whole
+// repository for nobody.
+func (r *read) held() error {
+	if r.q.Home || r.s.o.Cache.Holds(r.q.RepoID) {
+		return nil
+	}
+	return r.unready(code.UnreadyNotHeld, fmt.Sprintf("%s holds no copy of repository %s and the read is "+
+		"not its walk's home's, which is the one node that fills a copy; a git node holding one answers "+
+		"meanwhile", r.s.o.NodeID, r.q.RepoID))
 }
 
 // fresh is what the first sync asks: the asker's floor where it names one —

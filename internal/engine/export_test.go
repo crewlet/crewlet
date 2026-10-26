@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -18,6 +19,13 @@ import (
 // Reflects reports whether e has built its reflect dispatcher, for a test
 // outside the package that drives an engine through its public surface.
 func Reflects(e *Engine) bool { return e.reflector.Load() != nil }
+
+// GitReadForTest is a read of a repository by object id through e's own estate
+// router — the repository's home git node first, this node at its place — for
+// a test outside the package that drives the git walk through a running engine.
+func GitReadForTest(ctx context.Context, e *Engine, q code.GitQuery) (code.GitAnswer, error) {
+	return e.router.Code().GitRead(ctx, q)
+}
 
 // ItemRanker is the ranker the tracker's item search is built with, so the
 // serving-seams audit outside the package reflects over the fields it reads

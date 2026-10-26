@@ -100,6 +100,7 @@ func cases() []suiteCase {
 		{"F22_ABloblessCloneChecksOut", aBloblessCloneChecksOut},
 		{"F23_AFilterABitmapCannotAnswerIsRefused", aFilterABitmapCannotAnswerIsRefused},
 		{"F24_AShallowCloneChecksOut", aShallowCloneChecksOut},
+		{"F26_AReadIsAnsweredByTheHome", aReadIsAnsweredByTheHome},
 		{"F14_APushOverTheBlobLimitIsRefusedWhole", aPushOverTheBlobLimitIsRefusedWhole},
 		{"F15_ProtectionRulesRefuseByName", protectionRulesRefuseByName},
 		{"F16_AnAtomicPushLandsWholeOrNotAtAll", anAtomicPushLandsWholeOrNotAtAll},

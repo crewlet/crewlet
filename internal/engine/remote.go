@@ -196,20 +196,43 @@ func dataNodesOf(held []coord.Lease) []string {
 	return out
 }
 
+// gitNodesOf is the nodes with the git role among a listing of presence
+// leases: the git nodes a repository's git work is asked of (ADR-0059). Read
+// as every role reads off a peer's row — one this build cannot read is every
+// role — so a peer whose row is unreadable is asked as a git node too, and
+// answers `no_backend` where it is none, which the walk asks last for half a
+// minute.
+func gitNodesOf(held []coord.Lease) []string {
+	out := make([]string, 0, len(held))
+	for _, lease := range held {
+		if profile, ok := placement.FromLease(lease); ok && profile.Roles.Has(placement.RoleGit) {
+			out = append(out, profile.ID)
+		}
+	}
+	return out
+}
+
 // serveEstate makes this data node answer the fleet from its copy of the
-// estate.
+// estate — and, where it has the git role, from its git half on the git lane.
 //
 // EVERY DATA NODE SERVES, whether or not another node asks yet — one joins
 // without anybody reconfiguring the others — and from BEFORE its native runtime
 // is up: the backend is resolved per request, so a request arriving first is
-// answered "not here" rather than refused.
+// answered "not here" rather than refused. So is the git half ([engineGit]),
+// and every git node holds data in this release (git needs ingress, and
+// ingress needs data), so every git node serves here: its git lane answers
+// `no_backend` until its code host is built.
 func (e *Engine) serveEstate(ctx context.Context) error {
 	if e.local == nil || e.router == nil || e.backends == nil || e.backends.Queue == nil {
 		return nil
 	}
-	stop, err := estate.Serve(ctx, e.backends.Queue, estate.ServerOptions{
+	opts := estate.ServerOptions{
 		Self: e.id, Local: e.local, Seams: e.serverSeams(), Envelopes: e.envelopes,
-	})
+	}
+	if e.profile.Roles.Has(placement.RoleGit) {
+		opts.Git = e.localGit()
+	}
+	stop, err := estate.Serve(ctx, e.backends.Queue, opts)
 	if err != nil {
 		return fmt.Errorf("engine: serve the estate: %w", err)
 	}

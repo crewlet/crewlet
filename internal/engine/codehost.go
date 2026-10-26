@@ -11,9 +11,11 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/operator"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/host"
+	"github.com/crewlet/crewlet/internal/code/query"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
@@ -191,9 +193,10 @@ func (e *Engine) gitHook() ([]string, error) {
 }
 
 // buildCodeHost builds this node's code host for the runtime being started —
-// the cache's directory, the git pool, the cache's budget, the cache and the
-// host, in the order each needs the last — and starts it, answering the host,
-// the cache it serves from and the budget it sized that cache to. Called by
+// the cache's directory, the git pool, the cache's budget, the cache, the git
+// reads and the host, in the order each needs the last — and starts it,
+// answering the host, the git reads, the cache they serve from and the budget
+// it sized that cache to. Called by
 // startNative only where [Engine.hostsGit]. An error fails the boot, or the
 // apply that reached [Engine.startNativeFor], which is retried like every
 // start of the runtime: a company that asked for native code on a node that
@@ -265,7 +268,24 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 		return codeHostParts{}, fmt.Errorf("engine: open the code cache at %s: %w", layout.Dir, err)
 	}
 
-	// 7. THE HOST, over the engine's own seams: the router for the rows and
+	// 7. THE GIT READS, the server-side reads of a repository by object id a
+	// seat asks of this node as a repository's home (ADR-0059): over the
+	// cache and the pool, under ONE seat git-work share of the pool's read
+	// lane, judging a seat's grant by the current epoch's chart and refusing
+	// one while this node is behind the company's configuration — both read
+	// per read, never captured. It holds no goroutine of its own, so nothing
+	// stops it but the cache's stop.
+	reads, err := query.New(query.Options{
+		NodeID: nodeID, Cache: c, Git: pool,
+		Share:  code.NewGitShare(nodeID, pool.Slots(gitproc.ClassRead), e.metrics),
+		Roster: e.codeRoster, Current: e.admits,
+	})
+	if err != nil {
+		c.Stop(context.WithoutCancel(ctx))
+		return codeHostParts{}, fmt.Errorf("engine: build the git reads: %w", err)
+	}
+
+	// 8. THE HOST, over the engine's own seams: the router for the rows and
 	// the committer, the operator audit for every push, and the current
 	// epoch's limits and retention. Who is pushing is the API guard's answer
 	// on each request, the seat the identity directory binds its credential
@@ -286,15 +306,17 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 		h.Stop(context.WithoutCancel(ctx))
 		return codeHostParts{}, fmt.Errorf("engine: start the code host: %w", err)
 	}
-	return codeHostParts{host: h, cache: c, size: size}, nil
+	return codeHostParts{host: h, reads: reads, cache: c, size: size}, nil
 }
 
-// codeHostParts is what [Engine.buildCodeHost] built: the host, the cache it
-// serves from — which the host stops with itself, and which the engine holds
-// only to READ, for what no request asks (the alarm reading's code half,
-// [Engine.codeReading]) — and the budget it sized that cache to.
+// codeHostParts is what [Engine.buildCodeHost] built: the host, the git reads
+// beside it over the same cache and pool, the cache they serve from — which
+// the host stops with itself, and which the engine holds only to READ, for
+// what no request asks (the alarm reading's code half, [Engine.codeReading])
+// — and the budget it sized that cache to.
 type codeHostParts struct {
 	host  *host.Server
+	reads *query.Server
 	cache *cache.Cache
 	size  codeCacheSize
 }

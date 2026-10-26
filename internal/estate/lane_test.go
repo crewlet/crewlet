@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -112,38 +113,53 @@ func TestAQueuedPushHoldsNoSlotAReadIsAnsweredThrough(t *testing.T) {
 // bound is the committer's queue: a burst to one repository must meet the
 // committer's own bounds — busy at once past its count, its bytes or the
 // node's — never the registration's, past which a push waits unseen in the
-// broker's buffer for a slot.
+// broker's buffer for a slot. A node serving git registers the git lane too,
+// as wide as the shared one (the node's seat git-work share, not the lane,
+// bounds the git work running), and a node serving none registers no git lane.
 func TestEachLaneIsServedOnItsOwnSubjectWithItsOwnBound(t *testing.T) {
 	t.Parallel()
-	srv := newLaneServer(t, "", nil)
-	stop, err := Serve(t.Context(), srv, ServerOptions{Self: "data.a",
-		Local: &fakeNode{name: "data.a"}, Envelopes: fleetEnvelopes})
-	if err != nil {
-		t.Fatalf("serve: %v", err)
-	}
-	want := map[string]int{
+	shared := map[string]int{
 		Subject("data.a"):         queue.ConcurrentAnswers,
 		ProposalSubject("data.a"): proposalAnswers,
 	}
-	if got := srv.registered(); !maps.Equal(got, want) {
-		t.Fatalf("the node registered %v, want %v", got, want)
+	withGit := maps.Clone(shared)
+	withGit[laneGitReads.subject("data.a")] = queue.ConcurrentAnswers
+	for _, tc := range []struct {
+		name string
+		git  LocalGit
+		want map[string]int
+	}{
+		{"a node serving no git", nil, shared},
+		{"a git node", gitHalf{node: &fakeGit{name: "data.a"}}, withGit},
+	} {
+		srv := newLaneServer(t, "", nil)
+		stop, err := Serve(t.Context(), srv, ServerOptions{Self: "data.a",
+			Local: &fakeNode{name: "data.a"}, Git: tc.git, Envelopes: fleetEnvelopes})
+		if err != nil {
+			t.Fatalf("%s: serve: %v", tc.name, err)
+		}
+		if got := srv.registered(); !maps.Equal(got, tc.want) {
+			t.Fatalf("%s registered %v, want %v", tc.name, got, tc.want)
+		}
+		if err := stop(t.Context()); err != nil {
+			t.Fatalf("%s: withdraw: %v", tc.name, err)
+		}
+		if got := srv.withdrawals(); len(got) != len(tc.want) {
+			t.Errorf("%s: the withdrawal ended %v, want every lane", tc.name, got)
+		}
 	}
 	// ONE TOKEN MORE, never a subject another node's id spells: an
 	// escaped id is one token, so a dotted id stays inside its own.
-	if p := ProposalSubject("data.a"); p == Subject("data.a.proposals") ||
-		!strings.HasPrefix(p, Subject("data.a")+".") {
-		t.Errorf("the proposal subject %q is not data.a's own", p)
+	for _, l := range []lane{laneProposals, laneGitReads} {
+		if s := l.subject("data.a"); s == Subject("data.a."+string(l)) ||
+			!strings.HasPrefix(s, Subject("data.a")+".") {
+			t.Errorf("the %s subject %q is not data.a's own", l, s)
+		}
 	}
 	if proposalAnswers < code.CommitterInbox+code.MaxPushesPerRecord {
 		t.Errorf("the proposal lane answers %d at once, under one repository's full queue and the "+
 			"batch ahead of it (%d): a burst would wait for a slot before the committer could "+
 			"answer it busy", proposalAnswers, code.CommitterInbox+code.MaxPushesPerRecord)
-	}
-	if err := stop(t.Context()); err != nil {
-		t.Fatalf("withdraw: %v", err)
-	}
-	if got := srv.withdrawals(); len(got) != len(want) {
-		t.Errorf("the withdrawal ended %v, want every lane", got)
 	}
 }
 
@@ -178,8 +194,9 @@ func TestALaneAnswersOnlyItsOwnOperations(t *testing.T) {
 
 // EVERY LANE OR NONE: a node that answered its reads and no proposal would be
 // asked first for every push to the repositories it commits for and cost each
-// a whole write attempt, so a lane that cannot be registered withdraws the
-// ones registered before it.
+// a whole write attempt — and a git node that answered no git read would be a
+// silent home to every repository it is first for — so a lane that cannot be
+// registered withdraws the ones registered before it.
 func TestAServeThatCannotRegisterALaneWithdrawsTheOthers(t *testing.T) {
 	t.Parallel()
 	refused := errors.New("this broker registers no answerer there")
@@ -191,6 +208,16 @@ func TestAServeThatCannotRegisterALaneWithdrawsTheOthers(t *testing.T) {
 	if got := srv.withdrawals(); len(got) != 1 || got[0] != Subject("data-a") {
 		t.Errorf("after a lane was refused the node withdrew %v, want the shared lane it had "+
 			"registered", got)
+	}
+	gitNode := newLaneServer(t, laneGitReads.subject("data-a"), refused)
+	if _, err := Serve(t.Context(), gitNode, ServerOptions{Self: "data-a",
+		Local: &fakeNode{name: "data-a"}, Git: gitHalf{node: &fakeGit{name: "data-a"}},
+		Envelopes: fleetEnvelopes}); !errors.Is(err, refused) {
+		t.Fatalf("serve with a git lane the broker refuses = %v, want the refusal", err)
+	}
+	if got := gitNode.withdrawals(); !slices.Equal(got, []string{ProposalSubject("data-a"), Subject("data-a")}) {
+		t.Errorf("after the git lane was refused the node withdrew %v, want the proposals' and the "+
+			"shared lanes it had registered", got)
 	}
 }
 

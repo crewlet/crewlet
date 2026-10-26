@@ -34,7 +34,8 @@
 // operation's domain last, then the order [internal/rendezvous] gives this
 // node's own id, with a node whose copy of that domain said it is out of
 // service after the rest and a node that went silent last; a push alone is
-// asked in its repository's order instead (below) — and the failover rule is
+// asked in its repository's order instead, and a read of a repository's git
+// objects in its order over the git nodes (below) — and the failover rule is
 // stated per operation (see [opClass]).
 //
 // # What makes a retry safe, per operation
@@ -78,8 +79,9 @@
 // round and push ids collapse duplicates — only less efficiently, until their
 // views agree.
 //
-// This is the one KEYED operation today; [op.keyedBy] is the declaration, and
-// the walk is the ordinary one in every other respect — the floors, the
+// This is the one operation keyed on the DATA nodes (a read of a repository's
+// git objects is keyed on the git nodes: below); [op.keyedBy] is the
+// declaration, and the walk is the ordinary one in every other respect — the floors, the
 // verdict of the operation's own domain, the lagging last resort, and the
 // class rule for a node that may have run it. A data node asks its own copy at
 // its place in the key's order, in-process, never ahead of the node the key
@@ -220,13 +222,47 @@
 // requests — and every push to a repository such a node commits for sent it
 // the whole proposal before the runner-up was asked.
 //
-// A GRANT judged from the chart would
-// be different — answered anyway by the last resort, it would be decided by
-// the revision that may have revoked it — and no serving decide judges one:
-// the engine's TestEveryEpochSeamAServingDecideReadsIsClassified holds every
-// seam a serving decide reads to a class. Admission's ping is held back by
-// neither preference, nor by an asker's memory of the second ([op.ungated]):
-// it asks the copy's own seat admission and routes no later operation.
+// A GRANT judged from the chart is different — answered anyway by the last
+// resort, it would be decided by the revision that may have revoked it — so
+// an operation that judges one DECLARES it ([op.judgesGrant]: a code read or
+// a ref resolve a seat asks, whose grant on a repository is the chart's), and
+// a node behind the configuration refuses it even asked last, `behind_config`
+// saying it decides no grant: the soft arm sends the walk to every current
+// data node first, the last resort asks this node again, it refuses again,
+// and the walk ends unserved. That is the HARD ARM, and the bound on the
+// window a stale grant is judged in is the control plane's confirmation —
+// about a minute. TestEveryOperationThatJudgesAGrantIsDeclared holds every
+// operation whose arguments carry an asker to the declaration, and the
+// engine's TestEveryEpochSeamAServingDecideReadsIsClassified holds every seam
+// a serving decide reads to a class, so no grant reaches a decide unseen.
+// Admission's ping is held back by neither preference, nor by an asker's
+// memory of the second ([op.ungated]): it asks the copy's own seat admission
+// and routes no later operation.
+//
+// # A repository's git work is asked of its home git node
+//
+// An operation on a repository's git OBJECTS — a read by object id of a tree,
+// a file, a diff — is answered by a node with the `git` role from its own
+// cache, never by a data node's copy. That is ADR-0059, amending ADR-0025:
+// the router's walk has a second placement beside the data nodes, every live
+// git node ([RouterOptions.Git]), keyed by repository ([op.keyedOnGit]), and
+// such an operation names the git half rather than a domain's copy
+// ([GitCopy]), so no copy verdict, no dispatch floor and no lag gate holds it
+// back — its floor travels in its arguments and is the git node's cache's
+// sync level. It is asked in rendezvous.Order(repository, every live git
+// node) — the repository's HOME first, its runner-up next, the keyed order's
+// demotions and no sticky node, this node at its place where its git half is
+// built ([LocalGit], resolved per request, since the code host is built at
+// boot or at the first apply that hosts code) — on a lane of its own
+// ([laneGitReads]) a git node registers from boot. The home is a preference,
+// never ownership: no lease, no epoch. A git node that cannot answer inside
+// its budget — its copy still syncing, its share full — answers `behind` and
+// is not demoted, so its askers come back once it is warm; and ONE node a
+// walk FILLS a copy: the walk stamps its effective home's attempt
+// (code.GitQuery.Home), and every other git node holding no copy answers at
+// once that it holds none, so a repository nobody holds costs the fleet one
+// download rather than one a git node. Every git request is a signed estate
+// request like any other.
 //
 // # Which data nodes to ask is answered from memory
 //

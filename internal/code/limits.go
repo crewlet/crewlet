@@ -86,14 +86,18 @@ const GitReadsShare = 10
 // allows: the census term of its git clients (statelog.Census.Clients) — the
 // barriers that fill 1/GitReadsShare of ceiling over the trim's min_age.
 //
-// EVERY linearizable read of the code log in this release is a person's or
-// their CI's — an advertisement, a push's sync, a fetch whose want a cache
-// lacks, a `/code/` read at that level — and none is a seat's, so the census's
-// 125 a day per agent seat says nothing about them: a five-seat company's code
-// log alarmed past 1 300 git reads a day, which one CI polling ten repositories
-// a minute exceeds tenfold. At the 1 GiB floor and the default seven days this
-// is 87 154 a day — about 60 a minute fleet-wide: that CI, thirty developers
-// fetching every three minutes and 3 000 pushes a day, three times over.
+// THIS TERM IS THE READERS NO SEAT COUNT PREDICTS: a person's or their CI's —
+// an advertisement, a push's sync, a fetch whose want a cache lacks, a `/code/`
+// read at that level. Held to the census's 125 a day per agent seat, a
+// five-seat company's code log alarmed past 1 300 git reads a day, which one
+// CI polling ten repositories a minute exceeds tenfold. A SEAT's reads of the
+// code log — a ref resolved (the estate's code.resolve_ref) and a read by
+// object id's one re-sync at the head, when its home's copy lacks an id it
+// names (code.git_read) — are the seats' term instead, which the census gives
+// every log whole, so this term does not count them. At the 1 GiB floor and the
+// default seven days it is 87 154 a day — about 60 a minute fleet-wide: that
+// CI, thirty developers fetching every three minutes and 3 000 pushes a day,
+// three times over.
 //
 // IT FOLLOWS THE CEILING THE STREAM HOLDS, which the caller reads off the
 // broker: the one every node reads alike, and the one a resize moves. Never

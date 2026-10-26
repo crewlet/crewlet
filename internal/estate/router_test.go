@@ -459,6 +459,10 @@ type fleet struct {
 	// placement is what the routers route by.
 	placement *fakePlacement
 
+	// git is who serves git as the routers ask a git read of: no node,
+	// unless a case names some.
+	git *fakePlacement
+
 	client *Router
 }
 
@@ -466,7 +470,7 @@ func newFleet(t *testing.T, names ...string) *fleet {
 	t.Helper()
 	sorted := slices.Sorted(slices.Values(names))
 	f := &fleet{broker: memory.NewBroker(), nodes: map[string]*fakeNode{},
-		placement: &fakePlacement{nodes: sorted}}
+		placement: &fakePlacement{nodes: sorted}, git: &fakePlacement{}}
 	for _, name := range names {
 		node := &fakeNode{name: name, units: chartOf(name)}
 		f.nodes[name] = node
@@ -516,7 +520,7 @@ func (f *fleet) router(t *testing.T, self string, local *fakeNode) *Router {
 // routerTimed is [fleet.router] waiting timing rather than the fleet's.
 func (f *fleet) routerTimed(t *testing.T, self string, local *fakeNode, timing Timing) *Router {
 	t.Helper()
-	opts := RouterOptions{Queue: f.start(t), Self: self, Placement: f.placement,
+	opts := RouterOptions{Queue: f.start(t), Self: self, Placement: f.placement, Git: f.git,
 		Session: NewSession(), Timing: timing, Envelopes: fleetEnvelopes}
 	if local != nil {
 		opts.Local, opts.Seams = local, local.seams()
@@ -815,7 +819,7 @@ func TestAWritesSilenceThroughAWholeAttemptIsEvidence(t *testing.T) {
 			f := newFleet(t, "data-a", "data-b")
 			var clock atomic.Int64
 			clock.Store(time.Now().UnixNano())
-			opts := RouterOptions{Queue: f.start(t), Self: "agent-2", Placement: f.placement,
+			opts := RouterOptions{Queue: f.start(t), Self: "agent-2", Placement: f.placement, Git: f.git,
 				Session: NewSession(), Timing: Production(), Envelopes: fleetEnvelopes,
 				Now: func() time.Time { return time.Unix(0, clock.Load()) }}
 			r, err := NewRouter(opts)
@@ -862,7 +866,7 @@ func TestARouterRefusesAZeroTiming(t *testing.T) {
 	t.Parallel()
 	build := func(timing Timing) error {
 		_, err := NewRouter(RouterOptions{Self: "agent-1", Queue: &recordingAsker{},
-			Placement: &fakePlacement{}, Session: NewSession(), Timing: timing,
+			Placement: &fakePlacement{}, Git: &fakePlacement{}, Session: NewSession(), Timing: timing,
 			Envelopes: fleetEnvelopes})
 		return err
 	}
@@ -870,9 +874,10 @@ func TestARouterRefusesAZeroTiming(t *testing.T) {
 		t.Fatalf("a router refused the timing every node runs: %v", err)
 	}
 	unset := map[string]func(*Timing, time.Duration){
-		"ReadAttempt":  func(tm *Timing, d time.Duration) { tm.ReadAttempt = d },
-		"WriteAttempt": func(tm *Timing, d time.Duration) { tm.WriteAttempt = d },
-		"AdmissionAsk": func(tm *Timing, d time.Duration) { tm.AdmissionAsk = d },
+		"ReadAttempt":    func(tm *Timing, d time.Duration) { tm.ReadAttempt = d },
+		"WriteAttempt":   func(tm *Timing, d time.Duration) { tm.WriteAttempt = d },
+		"AdmissionAsk":   func(tm *Timing, d time.Duration) { tm.AdmissionAsk = d },
+		"GitReadAttempt": func(tm *Timing, d time.Duration) { tm.GitReadAttempt = d },
 	}
 	// EVERY FIELD, so a field added to Timing and to nothing here fails
 	// rather than going unchecked.
@@ -911,7 +916,7 @@ func TestAReadAttemptLongerThanTheReplysMarginIsAnsweredInside(t *testing.T) {
 	timing := Production()
 	timing.ReadAttempt = code.ReplyMargin
 	if _, err := NewRouter(RouterOptions{Self: "agent-2", Queue: f.start(t),
-		Placement: f.placement, Session: NewSession(), Timing: timing,
+		Placement: f.placement, Git: f.git, Session: NewSession(), Timing: timing,
 		Envelopes: fleetEnvelopes}); err == nil ||
 		!strings.Contains(err.Error(), "Timing.ReadAttempt") {
 		t.Fatalf("a router whose read attempt is the reply's margin (%v) answered %v, want a "+
@@ -1011,7 +1016,7 @@ func TestAWedgedNodeCostsAReadTheRoutersOwnReadAttempt(t *testing.T) {
 	timing.ReadAttempt = minReadAttempt + time.Second
 	still := time.Now()
 	r, err := NewRouter(RouterOptions{Queue: f.start(t), Self: "agent-2", Placement: f.placement,
-		Session: NewSession(), Timing: timing, Envelopes: fleetEnvelopes,
+		Git: f.git, Session: NewSession(), Timing: timing, Envelopes: fleetEnvelopes,
 		Now: func() time.Time { return still }})
 	if err != nil {
 		t.Fatal(err)
@@ -3282,7 +3287,7 @@ func TestAKeyedOpWithNoKeyIsRefused(t *testing.T) {
 func TestTheCodeOpsCarryTheCodeFloor(t *testing.T) {
 	t.Parallel()
 	ops := []*opSpec{opCodePropose.spec, opCodeResolve.spec, opCodeRepoState.spec,
-		opCodePushOutcome.spec, opCodeRead.spec}
+		opCodePushOutcome.spec, opCodeRead.spec, opCodeResolveRef.spec}
 	for _, spec := range ops {
 		if spec.domain != "code" || spec.floorStream != (code.Domain{}).Stream().Name ||
 			spec.copies != "code" {
@@ -3307,6 +3312,10 @@ func TestTheCodeOpsCarryTheCodeFloor(t *testing.T) {
 	}
 	if _, err := seam.Read(ctx, code.ReadQuery{Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}, Kind: code.ReadRepos}); err != nil {
 		t.Fatalf("read: %v", err)
+	}
+	if _, err := seam.ResolveRef(ctx, code.RefQuery{Repo: "app", Ref: "main",
+		Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}}); err != nil {
+		t.Fatalf("resolve ref: %v", err)
 	}
 	if _, err := seam.Propose(ctx, proposalTo("repo-1", "push-floor")); err != nil {
 		t.Fatalf("propose: %v", err)

@@ -113,16 +113,20 @@ func TestATypedRefusalCrossesWithItsFieldsAndItsCause(t *testing.T) {
 
 // THE ROUTER'S OWN WORDS CROSS TOO, and so does every answer the router's
 // failover turns on. An estate nobody served says who was asked on the far
-// side of a second hop; and an unvouched step rebuilt from the wire must still
-// read as one another node's ledger may answer, or a router that met it on
-// another node would stop at it rather than ask the next, under its operation
-// id.
+// side of a second hop, and whether they were data nodes or git nodes; and an
+// unvouched step rebuilt from the wire must still read as one another node's
+// ledger may answer, or a router that met it on another node would stop at it
+// rather than ask the next, under its operation id.
 func TestTheRouterReadsARefusalTheWayItWasSent(t *testing.T) {
 	t.Parallel()
 	var unserved *ErrUnserved
 	if !errors.As(throughWire(t, &ErrUnserved{Detail: "data-a: no answer", NodeSilent: true}), &unserved) ||
-		unserved.Detail != "data-a: no answer" || !unserved.Silent() {
+		unserved.Detail != "data-a: no answer" || !unserved.Silent() || unserved.Git {
 		t.Fatalf("an unserved estate crossed as %+v", unserved)
+	}
+	if !errors.As(throughWire(t, &ErrUnserved{Detail: "git-a: no answer", Git: true}), &unserved) ||
+		!unserved.Git || !strings.Contains(unserved.Error(), "no git node") {
+		t.Fatalf("an unserved git walk crossed as %+v", unserved)
 	}
 	unvouchedStep := throughWire(t, fmt.Errorf("walk: %w", tracker.ErrStepUnvouched))
 	if !unvouched(opCreateTask.spec, nil, unvouchedStep) {

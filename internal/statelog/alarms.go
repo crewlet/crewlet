@@ -232,10 +232,13 @@ type Census struct {
 	// every node's over the alarm's day, which outlives a switch and spans
 	// a rolling restart.
 	//
-	// It exists for Background's reason, worse: every linearizable read of
-	// the code log is a person's or a pipeline's, so held to the seats'
-	// term a five-seat company's code log alarmed past 1 300 git reads a
-	// day, which one CI polling ten repositories a minute exceeds tenfold.
+	// It exists for Background's reason, worse: the code log's linearizable
+	// reads are mostly a person's or a pipeline's, so held to the seats'
+	// term alone a five-seat company's code log alarmed past 1 300 git reads
+	// a day, which one CI polling ten repositories a minute exceeds tenfold.
+	// A seat's own reads of that log — a ref resolved for it, a read by
+	// object id's one re-sync at the head — are the seats' term, which every
+	// log is given whole, and are no part of this one.
 	Clients int
 }
 

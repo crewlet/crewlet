@@ -134,8 +134,8 @@ var (
 // answer inside its budget, for a reason about the node rather than about the
 // repository's content — so another git node may answer it, and a walk asking
 // git nodes in turn moves on from this one without holding it against the
-// node: a node that is syncing, at its share or holding no chart now is the
-// right node a moment later. Every other refusal of a read is about the
+// node: a node that is syncing, at its share, holding no chart or holding no
+// copy now is the right node a moment later. Every other refusal of a read is about the
 // request or the repository (ErrNotPermitted, ErrObjectNotFound, …) and is the
 // answer wherever it is asked.
 type ErrGitUnready struct {
@@ -175,11 +175,17 @@ const (
 	// grant from the chart the fleet replaced, which may be the revision that
 	// revoked it.
 	UnreadyBehindConfig UnreadyReason = "behind_config"
+	// UnreadyNotHeld: the node holds no copy of the repository and the read
+	// is not its walk's effective home's ([GitQuery.Home]), the one node a
+	// walk lets fill a copy — so it starts nothing and the walk asks the
+	// next node, rather than every node the walk reaches downloading the
+	// repository for a read one node answers.
+	UnreadyNotHeld UnreadyReason = "not_held"
 )
 
 // UnreadyReasons is the closed set.
 func UnreadyReasons() []UnreadyReason {
-	return []UnreadyReason{UnreadySyncing, UnreadyShare, UnreadyNoChart, UnreadyBehindConfig}
+	return []UnreadyReason{UnreadySyncing, UnreadyShare, UnreadyNoChart, UnreadyBehindConfig, UnreadyNotHeld}
 }
 
 // Valid reports a reason this build knows.

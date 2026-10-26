@@ -107,21 +107,25 @@ func seat(handle string) code.Principal {
 	return code.Principal{Kind: code.PrincipalAgent, Seat: handle}
 }
 
-// treeQ, blobQ, diffQ and compareQ are a person's reads of repo.
+// treeQ, blobQ, diffQ and compareQ are a person's reads of repo, each asked of
+// the node it is handed as its walk's effective home (code.GitQuery.Home), the
+// one node a walk lets fill a copy: a case here asks one node directly, as the
+// walk asks its first, and a read not stamped so is the case of
+// TestANodeThatHoldsNoCopyFillsOnlyAsHome alone.
 func treeQ(repo string, t code.TreeQuery) code.GitQuery {
-	return code.GitQuery{Kind: code.GitTree, RepoID: repo, Asker: person, Tree: &t}
+	return code.GitQuery{Kind: code.GitTree, RepoID: repo, Asker: person, Home: true, Tree: &t}
 }
 
 func blobQ(repo string, b code.BlobQuery) code.GitQuery {
-	return code.GitQuery{Kind: code.GitBlob, RepoID: repo, Asker: person, Blob: &b}
+	return code.GitQuery{Kind: code.GitBlob, RepoID: repo, Asker: person, Home: true, Blob: &b}
 }
 
 func diffQ(repo string, d code.DiffQuery) code.GitQuery {
-	return code.GitQuery{Kind: code.GitDiff, RepoID: repo, Asker: person, Diff: &d}
+	return code.GitQuery{Kind: code.GitDiff, RepoID: repo, Asker: person, Home: true, Diff: &d}
 }
 
 func compareQ(repo, base, head string) code.GitQuery {
-	return code.GitQuery{Kind: code.GitCompare, RepoID: repo, Asker: person,
+	return code.GitQuery{Kind: code.GitCompare, RepoID: repo, Asker: person, Home: true,
 		Compare: &code.CompareQuery{Base: base, Head: head}}
 }
 

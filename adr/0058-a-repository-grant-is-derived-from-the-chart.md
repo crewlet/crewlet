@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/code`
-- **Enforced-by:** `internal/code.TestGrantsFollowTheChart`, `internal/code.TestAPersonsGrantAsksNoRoster`, `internal/code.TestRefRuleTable`, `internal/code.TestASeatsNamespaceIsUnderTheSeatsRoot`, `internal/gitref.TestOnlyTheRootAndASeatsNamespaceAreReservedBranches`, `internal/config.TestRoleCodeAccessIsTheOneVocabulary`, `internal/code/host.TestAnUnboundTokenCannotPush`, `internal/code/query.TestAUnitRepositoryRefusesASeatOutsideIt`
+- **Enforced-by:** `internal/code.TestGrantsFollowTheChart`, `internal/code.TestAPersonsGrantAsksNoRoster`, `internal/code.TestRefRuleTable`, `internal/code.TestASeatsNamespaceIsUnderTheSeatsRoot`, `internal/gitref.TestOnlyTheRootAndASeatsNamespaceAreReservedBranches`, `internal/config.TestRoleCodeAccessIsTheOneVocabulary`, `internal/code/host.TestAnUnboundTokenCannotPush`, `internal/code/query.TestAUnitRepositoryRefusesASeatOutsideIt`, `internal/estate.TestANodeBehindTheConfigurationDecidesNoGrant`, `internal/estate.TestEveryOperationThatJudgesAGrantIsDeclared`, `internal/code/query.TestAGitNodeBehindItsConfigurationServesNoSeat`
 - **Measured:** nothing a figure decides: the grant is a pure function of the chart and the repository row
 - **Cost-when-tried:** not tried here. The alternative — access rows per repository — was rejected on paper: a list of who may push is a second chart that drifts from the first the day a seat moves units
 - **Tag-status:** unreleased
@@ -22,7 +22,13 @@ beside a directory of its own name (`ref_conflict`: no clone can hold a file and
 branch named `seats` would block every seat's namespace and one named `seats/<x>` the namespace of the seat `x`.
 Both shapes are `gitref`'s (`SeatsRoot`, `ReservedSeatBranch`), the one grammar the decide and the configuration
 read (ADR-0008). The grant is judged by the node that answers or decides, from ITS epoch's chart, through one
-function (`code.GrantOf`); M2's protection rules are judged after it and are never skipped for a grant.
+function (`code.GrantOf`); M2's protection rules are judged after it and are never skipped for a grant. A node
+CONFIRMED behind the company's configuration — shed or stuck, never lag alone — judges no seat's grant at all,
+even as the last node left to ask, since the revision it failed to apply may be the one that revoked it: a data
+node answers such a read `behind_config` (the estate's `judgesGrant` declaration, on every operation whose asker
+is a seat) and a git node answers it unready, so a current node answers instead, or nobody does, while a
+person's read consults no chart and is answered there as before. The window in which a stale chart can still
+judge is the control plane's confirmation of the lag: about a minute after an activation at worst.
 
 ## Why the obvious alternative is wrong
 

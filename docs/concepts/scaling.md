@@ -179,6 +179,19 @@ and a push's own sync adopting the pack its node received rather than
 downloading the packs other nodes did; it is a cost decision, never a
 correctness one ([Deployment](../guides/deployment.md#the-code-host)).
 
+**A read of a repository's content goes to its home.** A server-side read by
+object id — a tree's listing, a file's lines, a diff — is asked of the git
+nodes rather than of whichever node asks it: the repository's home first, the
+first of its rendezvous order over the live git nodes, then its runner-up
+([The home git node](code-host.md#the-home-git-node)). So the reads of one
+repository meet on one git node's cache wherever they come from, with no
+balancer to configure, and only the walk's home ever starts a download of a
+repository it holds no copy of: a home's death costs the fleet one download of
+each repository read meanwhile, by its runner-up, rather than one on every git
+node a read reached. On each git node those reads hold at most half its read
+lane, so the other half stays the one a person's push scans in
+([Server-side reads](code-host.md#server-side-reads)).
+
 **What a request on a cold node costs.** A request on a node that holds no copy
 of its repository — one that just joined, or whose budget evicted it — waits for
 a cold sync before its first byte, since git's protocol has nothing to send

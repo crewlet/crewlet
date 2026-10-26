@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/code/query"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
@@ -325,6 +326,20 @@ func (g *GitNode) start(t testing.TB) *gitIncarnation {
 	n.srv.Config.ErrorLog = log.New(serverLog{t: g.life}, "", 0)
 	n.srv.Start()
 	return n
+}
+
+// Git is the node's git half as the estate's router and server ask for it
+// (estate.LocalGit): its running incarnation's query server, read again at
+// every request so a restarted node's is the one asked, and none while the
+// node is killed or stopped — which the serving side answers `no_backend`, as
+// a git node whose code host is not built answers.
+func (g *GitNode) Git() (estate.GitServer, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.cur == nil {
+		return nil, false
+	}
+	return g.cur.query, true
 }
 
 // Node is the git node as a case reads it — nil while it is killed or stopped.

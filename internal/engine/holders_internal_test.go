@@ -114,6 +114,46 @@ func TestTheRoutedDataNodesAreTheRoutersPlacement(t *testing.T) {
 	}
 }
 
+// THE GIT PLACEMENT IS THE LIVE GIT NODES: every node the router's WATCHED view
+// names whose profile has the git role, sorted — the set a repository's git
+// order is computed over (ADR-0059) — a node that declares no roles among
+// them, since such a node has every role, and never a data node that lists its
+// roles without git or a node with seats alone; off the same view as the data
+// placement, so the two cannot disagree about who is live, and UNKNOWN before
+// the view has listed, never a fleet of no git node.
+//
+// Mutation: read the data role for the git one — the data node listing no git
+// role is named a git node, red.
+func TestTheGitPlacementIsTheLiveGitNodes(t *testing.T) {
+	t.Parallel()
+	backend := coordmem.New()
+	claimPresences(t, backend, map[string][]string{
+		"git-b": {"data", "git", "ingress"}, "every-a": nil, "data-c": {"data", "ingress"},
+		"agent-1": {"seats"},
+	})
+	view, err := coord.NewLeaseView(backend, coord.ClassNode,
+		coord.ViewOptions{Every: time.Hour, Trust: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := &Engine{dataView: view}
+	if nodes, err := e.gitPlacement().Holders(); !errors.Is(err, coord.ErrUnavailable) {
+		t.Errorf("a view that has never listed names the git nodes %v (%v), want unknown", nodes, err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { defer close(done); _ = view.Run(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	waitUntil(t, 5*time.Second, "the view to list", func() bool { return !view.ListedAt().IsZero() })
+	nodes, err := e.gitPlacement().Holders()
+	if err != nil {
+		t.Fatalf("the git placement: %v", err)
+	}
+	if want := []string{"every-a", "git-b"}; !slices.Equal(nodes, want) {
+		t.Errorf("the git placement names %v, want every live node with the git role %v", nodes, want)
+	}
+}
+
 // claimPresences claims a presence lease for every node, with its roles.
 func claimPresences(t testing.TB, backend coord.Backend, roles map[string][]string) {
 	t.Helper()

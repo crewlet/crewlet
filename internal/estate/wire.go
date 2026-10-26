@@ -3,6 +3,7 @@ package estate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"slices"
@@ -37,11 +38,11 @@ func ProposalSubject(nodeID string) string { return laneProposals.subject(nodeID
 // lane is one of a serving node's registrations ([Serve]): the subject it
 // answers on, and how many of its requests it answers at once.
 //
-// TWO, because an answer that WAITS must never hold a slot an answer that does
-// not is waiting for — a registration's slots are its own, and a request past
-// them waits behind every answer holding one ([queue.EventQueue.Serve]). A
-// push's proposal waits: queued behind its repository's earlier pushes, then
-// for its batch, for as long as its asker's whole attempt. Every other
+// SEPARATE, because an answer that WAITS must never hold a slot an answer that
+// does not is waiting for — a registration's slots are its own, and a request
+// past them waits behind every answer holding one ([queue.EventQueue.Serve]).
+// A push's proposal waits: queued behind its repository's earlier pushes,
+// then for its batch, for as long as its asker's whole attempt. Every other
 // operation is a read or a write done now. On one registration, sixty-four
 // queued pushes held every slot the node had — it answered no tracker read,
 // no page write and no git fetch's code.resolve until a batch ended; a reader
@@ -51,19 +52,38 @@ func ProposalSubject(nodeID string) string { return laneProposals.subject(nodeID
 // committer's queue, sized to take a burst whole, could never fill. So
 // proposals have a lane of their own, as wide as the committer's queue
 // ([proposalAnswers]), and a lane answers only the operations declared on it
-// ([op.answeredOn]).
+// ([op.answeredOn]). A git node's reads of a repository by object id wait
+// too — on a sync of the node's copy and a git process of up to
+// [GitReadAttempt] — so they have a third lane, registered only where the
+// node serves git ([gitLanes]).
 type lane string
 
 const (
-	// laneShared answers every operation but a proposal, on [Subject].
+	// laneShared answers every operation but a proposal and a git read, on
+	// [Subject].
 	laneShared lane = ""
 
 	// laneProposals answers push proposals alone, on [ProposalSubject].
 	laneProposals lane = "proposals"
+
+	// laneGitReads answers a repository's git reads alone ([GitCopy]) — on
+	// the node's subject with one more token, as the proposals' lane is —
+	// and only on a node that serves git ([ServerOptions.Git]).
+	laneGitReads lane = "git"
 )
 
-// lanes is every registration a serving node makes, the shared one first.
+// lanes is every registration EVERY serving node makes, the shared one first.
 var lanes = []lane{laneShared, laneProposals}
+
+// gitLanes is every registration a node that serves GIT makes beside [lanes]
+// ([ServerOptions.Git]), and no other node: a node without the git role has no
+// git half, and a lane it answered only `no_backend` on would still cost each
+// of its slots a goroutine for nothing a git walk could not learn from the
+// presence view. A git node registers it from boot, before its code host is
+// built, so its askers hear `no_backend` rather than the silence of an
+// unregistered subject, which they would read as a node gone and suspect for
+// every operation.
+var gitLanes = []lane{laneGitReads}
 
 // subject is the subject node answers this lane on.
 func (l lane) subject(node string) string {
@@ -74,6 +94,14 @@ func (l lane) subject(node string) string {
 }
 
 // answers is how many of this lane's requests a node answers at once.
+//
+// The git lane is as wide as the shared one, queue.ConcurrentAnswers: the lane
+// SEPARATES git reads from the slots the node answers its replicated reads and
+// pushes' resolves through, and what bounds the git work RUNNING is the node's
+// seat git-work share (code.GitShare, half its read lane), which holds this
+// node's own seats' in-process reads too — a lane bound would hold only the
+// remote askers, and a narrower one would only leave reads waiting unseen in
+// the broker's buffer where the share answers them `share` at once.
 func (l lane) answers() int {
 	if l == laneProposals {
 		return proposalAnswers
@@ -172,7 +200,10 @@ type request struct {
 	// worse one to ask has run nothing, so this one runs the operation
 	// although its copy lags its logs or the node is behind the company's
 	// configuration ([unservedLagging]) — held to the floors above and to the
-	// read's own level, which are what make its answer sound.
+	// read's own level, which are what make its answer sound. Never an
+	// operation that JUDGES A GRANT ([op.judgesGrant]): a node behind the
+	// configuration refuses one whatever the asker says, since being asked
+	// last makes no grant judged from the chart the fleet replaced sound.
 	AcceptLagging bool `json:"accept_lagging,omitempty"`
 
 	// Spent is what the request already paid for on the nodes the asker
@@ -231,10 +262,20 @@ const (
 	// last resort meanwhile. Folded into `lagging`, which nobody remembers,
 	// every request any router made sent it a refusal's round trip first —
 	// a push its whole proposal — for as long as it stayed behind.
+	//
+	// AND IT IS THE HARD ARM'S ANSWER TOO: an operation that judges a grant
+	// from the chart ([op.judgesGrant]) is answered `behind_config` by such a
+	// node even when it is asked last, told to answer anyway — the Detail
+	// then says it decides no grant ([decidesNoGrant]) — so the last resort
+	// meets the refusal again and the walk ends unserved.
 	unservedBehindConfig unservedReason = "behind_config"
 
 	// unservedBehind: this node could not reach the caller's floor within
-	// the read budget.
+	// the read budget — or, for a git read ([GitCopy]), its git half could
+	// not answer inside its budget for a reason about the node
+	// (code.ErrGitUnready: its copy still syncing, its share full, no chart
+	// or no configuration to judge a seat by, or no copy held and no fill
+	// asked of it), which another git node may answer.
 	unservedBehind unservedReason = "behind"
 
 	// unservedOutOfService: this data node's copy of the operation's domain
@@ -345,6 +386,19 @@ type opSpec struct {
 	// they ask the copy's own gate themselves ([opPing]).
 	ungated bool
 
+	// git is an operation asked of the GIT nodes ([op.keyedOnGit]): its
+	// domain is [GitCopy], so it reads no domain's copy, carries no floor
+	// and meets no lag gate; the router walks the repository's git order for
+	// it ([Router.routeGit]) and a serving node answers it from its git half.
+	git bool
+
+	// judges is the predicate an operation that JUDGES A GRANT from the
+	// serving node's chart declared over its decoded arguments
+	// ([op.judgesGrant]), nil for every other: where it holds on a node
+	// behind the company's configuration, the operation is answered
+	// [errDecidesNoGrant] before it runs, however it was asked.
+	judges func(args any) bool
+
 	// lane is the registration a serving node answers the operation on —
 	// the shared one, the zero lane, unless it is declared on another
 	// ([op.answeredOn]) — and the one subject the router asks it on.
@@ -374,6 +428,10 @@ type op[A, R any] struct {
 	// every operation any data node answers equally, which is asked of this
 	// node first and of the node that answered last. See [op.keyedBy].
 	key func(A) string
+
+	// home stamps a GIT operation's arguments with whether the node asked
+	// is its walk's effective home ([op.keyedOnGit]), nil for every other.
+	home func(A, bool) A
 }
 
 // registry is every operation this build serves, keyed by name.
@@ -386,10 +444,12 @@ var registry = map[string]*opSpec{}
 
 // define declares an operation, with the domain whose copy it reads — and
 // whose log its floor is on, unless it is declared [op.floorless] — or
-// [SeatCopy] for one that asks about the copy a seat is served by.
-// Package-level, at init: a duplicate name is a build that cannot serve, so it
-// panics rather than silently shadowing, and so does a domain this package
-// knows no log for, whose copy no verdict judges and whose floor no log holds.
+// [SeatCopy] for one that asks about the copy a seat is served by, or
+// [GitCopy] for one a git node answers from its git half, which carries no
+// floor at all ([op.keyedOnGit]). Package-level, at init: a duplicate name is
+// a build that cannot serve, so it panics rather than silently shadowing, and
+// so does a domain this package knows no log for, whose copy no verdict
+// judges and whose floor no log holds.
 func define[A, R any](name string, class opClass, domain string, actor bool,
 	serve func(ctx context.Context, b Backend, actor *Actor, args A) (R, error),
 ) op[A, R] {
@@ -400,7 +460,7 @@ func define[A, R any](name string, class opClass, domain string, actor bool,
 		name: name, class: class, actor: actor, domain: domain, copies: domain,
 		args: reflect.TypeFor[A](), result: reflect.TypeFor[R](),
 	}
-	if domain != SeatCopy {
+	if domain != SeatCopy && domain != GitCopy {
 		stream, known := floorStreams[domain]
 		if !known {
 			panic(fmt.Sprintf("estate: operation %q reads the %q domain's copy, "+
@@ -418,11 +478,18 @@ func define[A, R any](name string, class opClass, domain string, actor bool,
 		return args, nil
 	}
 	checked := func(ctx context.Context, b Backend, who *Actor, args A) (R, error) {
+		var zero R
 		if spec.actor && (who == nil || who.Handle == "") {
-			var zero R
 			return zero, fmt.Errorf("estate: %s acts as somebody and the request "+
 				"names nobody — a write whose author was not stated is not an "+
 				"audit trail", name)
+		}
+		// THE HARD ARM, after the arguments are decoded and before anything
+		// runs, on the in-process path and the wire's alike: a node behind
+		// the company's configuration judges no grant from its chart,
+		// whatever the asker said ([op.judgesGrant]).
+		if spec.judges != nil && b.Current != nil && !b.Current() && spec.judges(args) {
+			return zero, errDecidesNoGrant
 		}
 		return serve(ctx, b, who, args)
 	}
@@ -488,8 +555,17 @@ func unservedCopy(ctx context.Context, local LocalBackends, spec *opSpec) (Backe
 // on a queue of its own is answered on a lane of its own, so its slots are
 // never the ones every other operation waits for. Package-level, at init.
 func (o op[A, R]) answeredOn(l lane) op[A, R] {
-	if !slices.Contains(lanes, l) {
+	switch {
+	case !slices.Contains(lanes, l) && !slices.Contains(gitLanes, l):
 		panic(fmt.Sprintf("estate: %s is answered on %s, which no node serves", o.spec.name, l))
+	case slices.Contains(gitLanes, l) != o.spec.git:
+		// A GIT LANE ANSWERS GIT OPERATIONS AND NOTHING ELSE, since only a
+		// node serving git registers one: a data operation declared on it
+		// would be asked of a subject no data node without the git role
+		// answers, and a git operation on another lane would hold a slot
+		// that lane's answers wait for.
+		panic(fmt.Sprintf("estate: %s is answered on %s, and a git lane answers git operations alone",
+			o.spec.name, l))
 	}
 	o.spec.lane = l
 	return o
@@ -534,4 +610,80 @@ func (o op[A, R]) repeatableWhen(keyed func(A) bool) op[A, R] {
 func (o op[A, R]) keyedBy(key func(A) string) op[A, R] {
 	o.key = key
 	return o
+}
+
+// keyedOnGit declares an operation on a repository's GIT OBJECTS, asked of the
+// git nodes rather than the data nodes (ADR-0059): in [rendezvous.Order] of
+// key(args) over every live git node — the repository's HOME first, its
+// runner-up next — with a node that ran nothing for it asked last for
+// [suspectFor] and one that went silent last of all, no sticky node, and this
+// node at its place, in process, where it is a git node ([Router.routeGit]).
+//
+// home stamps each attempt's arguments with whether the node asked is the
+// walk's EFFECTIVE HOME — the first node of the order once its demotions are
+// applied — the one node of the walk that may FILL a copy it does not hold:
+// every other git node holding none answers at once that it holds none, so a
+// read of a repository nobody holds costs the fleet one download rather than
+// one a git node. The walk calls it on every attempt, over whatever the caller
+// set, so no caller chooses it.
+//
+// The operation must be defined on [GitCopy], which it reads instead of a
+// domain's copy: no copy verdict holds it back, no floor is waited for at
+// dispatch — its floor travels in its arguments, as code.GitQuery.Fresh, and
+// is the git node's cache's sync level — and no lag gate applies, since a git
+// node syncs its copy through the router from whichever data node serves.
+// Package-level, at init, before [op.answeredOn] names its lane.
+func (o op[A, R]) keyedOnGit(key func(A) string, home func(A, bool) A) op[A, R] {
+	if o.spec.domain != GitCopy {
+		panic(fmt.Sprintf("estate: %s is keyed on the git nodes, and reads the %q copy rather than %q",
+			o.spec.name, o.spec.domain, GitCopy))
+	}
+	o.spec.git = true
+	o.key = key
+	o.home = home
+	return o
+}
+
+// judgesGrant declares an operation that JUDGES A GRANT from the serving
+// node's chart wherever pred holds of its decoded arguments — a read whose
+// asker is a seat, whose grant on a repository is the chart's (ADR-0058). On
+// a node CONFIRMED behind the company's configuration ([Backend.Current]
+// false: shed or stuck, never lag alone) such an operation is answered
+// [errDecidesNoGrant] before it runs — `behind_config`, saying it decides no
+// grant ([decidesNoGrant]) — EVEN WHEN IT IS ASKED LAST, told to answer
+// anyway: a revision the node failed to apply may be the one that revoked the
+// grant, and being asked last makes no answer judged by the chart the fleet
+// replaced sound. So the soft arm sends the walk to every current data node
+// first, the last resort asks this node again, it refuses again, and the walk
+// ends [ErrUnserved] — the safe answer where the only data node may be
+// judging by a revoked grant.
+//
+// A DECLARATION, NOT A LIST: every operation on a domain's copy whose
+// arguments carry a code.Principal named Asker must declare whether it judges
+// one, which TestEveryOperationThatJudgesAGrantIsDeclared holds over the
+// registry. A git operation is outside it: its node judges the grant and
+// refuses a seat itself when behind its configuration (code.ErrGitUnready,
+// `behind_config`), and the walk moves on from that as from any node that ran
+// nothing.
+func (o op[A, R]) judgesGrant(pred func(A) bool) op[A, R] {
+	o.spec.judges = func(args any) bool {
+		a, ok := args.(A)
+		return ok && pred(a)
+	}
+	return o
+}
+
+// errDecidesNoGrant is an operation that judges a grant ([op.judgesGrant]),
+// asked of a node confirmed behind the company's configuration: nothing ran.
+// It never crosses the wire — the server and the router's own in-process run
+// answer it `behind_config` with the hard arm's detail ([decidesNoGrant]) —
+// so it is no sentinel of the wire's.
+var errDecidesNoGrant = errors.New("estate: this node is behind the company's configuration and decides no grant")
+
+// decidesNoGrant is what a node behind the company's configuration answers an
+// operation that judges a grant with, naming itself.
+func decidesNoGrant(self string) string {
+	return fmt.Sprintf("%s is behind the company's configuration and decides no grant from the chart "+
+		"the fleet replaced — the revision it failed to apply may be the one that revoked it — so it "+
+		"runs none of it, even asked last", self)
 }

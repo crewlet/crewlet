@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/codetest"
+	"github.com/crewlet/crewlet/internal/rendezvous"
 )
 
 // Not t.Parallel(): two three-member clusters at once on one runner is the
@@ -79,6 +81,86 @@ func TestEveryMemberRoutesARepositoryToOneCommitter(t *testing.T) {
 					committer)
 			}
 		}
+	}
+}
+
+// EVERY MEMBER ROUTES A GIT READ TO ONE HOME (ADR-0059): a read of a
+// repository by object id through any member's router is answered by the
+// repository's home — the first of its rendezvous order over the running
+// members, which every member computes alike — and by no other member, the
+// home's own router answering in process; and with the home KILLED, it is
+// answered by the home's runner-up, whichever survivor asked. A router that
+// asked its own member first would warm a copy of every repository on every
+// member its seats read through.
+func TestEveryMemberRoutesAGitReadToOneHome(t *testing.T) {
+	c := startCluster(t, "nats")
+	c.Declare(t, code.Declared{Name: "read-home", Settings: codetest.Settings()})
+	if err := c.Settle(t.Context()); err != nil {
+		t.Fatalf("settle the fleet: %v", err)
+	}
+	rows, err := c.Rows(t.Context(), "read-home", codetest.Linearizable)
+	if err != nil {
+		t.Fatalf("the rows of read-home: %v", err)
+	}
+	members := c.DataNodes()
+	order := rendezvous.Order(rows.Repo.ID, members)
+	home, runnerUp := order[0], order[1]
+	p := codetest.NewPerson(t, c, "ceo")
+	work := p.Init()
+	head := p.Commit(work, map[string]string{"README.md": "home\n"}, "home")
+	if res := p.Push(t.Context(), work, urlOf(t, c, home, "read-home"), "HEAD:refs/heads/main"); res.Err != nil {
+		t.Fatalf("the push through the home %s: %s", home, res)
+	}
+	q := code.GitQuery{Kind: code.GitTree, RepoID: rows.Repo.ID, Asker: codetest.Reader,
+		Tree: &code.TreeQuery{Rev: head}}
+	answered := func() map[string]int64 {
+		out := map[string]int64{}
+		for _, m := range members {
+			out[m] = c.gitAnswered(t, m)
+		}
+		return out
+	}
+	for _, via := range members {
+		before := answered()
+		if a, err := c.GitReadThrough(t.Context(), via, q); err != nil || a.Tree == nil {
+			t.Fatalf("the read through %s = (%+v, %v), want the repository's root listing", via, a.Tree, err)
+		}
+		after := answered()
+		for _, m := range members {
+			want := before[m]
+			if m == home {
+				want++
+			}
+			if after[m] != want {
+				t.Errorf("the read through %s was answered %d times by %s, want it answered by the home %s "+
+					"alone", via, after[m]-before[m], m, home)
+			}
+		}
+	}
+
+	c.Kill(t, home)
+	defer c.Restart(t, home)
+	before := answered()
+	deadline := time.Now().Add(time.Minute)
+	for served := false; !served; {
+		for _, via := range order[1:] {
+			if _, err := c.GitReadThrough(t.Context(), via, q); err == nil {
+				served = true
+				break
+			}
+		}
+		if !served && time.Now().After(deadline) {
+			t.Fatalf("no read was served within a minute of the home %s's death", home)
+		}
+		if !served {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	after := answered()
+	if after[runnerUp] <= before[runnerUp] || after[order[2]] != before[order[2]] {
+		t.Errorf("with the home %s dead, the reads were answered %d times by its runner-up %s and %d times "+
+			"by %s, want the runner-up alone", home, after[runnerUp]-before[runnerUp], runnerUp,
+			after[order[2]]-before[order[2]], order[2])
 	}
 }
 

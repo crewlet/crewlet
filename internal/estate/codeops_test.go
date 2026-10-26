@@ -103,6 +103,19 @@ func (f *fakeNode) Read(context.Context, code.ReadQuery) (code.ReadAnswer, error
 		Seq: f.codeSeq + 1_000}}, nil
 }
 
+// ResolveRef answers the ref named for the query at the next position past
+// every one this node committed at — or refuses with codeErr.
+func (f *fakeNode) ResolveRef(_ context.Context, q code.RefQuery) (code.RefAnswer, error) {
+	f.note("code.resolve_ref")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.codeErr != nil {
+		return code.RefAnswer{}, f.codeErr
+	}
+	return code.RefAnswer{Repo: code.RepoRef{ID: "repo-on-" + f.name, Name: q.Repo}, Ref: q.Ref,
+		Position: statelog.Position{Stream: codeStream, Generation: 1, Seq: f.codeSeq + 1_000}}, nil
+}
+
 // codeReads is every read the code host makes through the seam, by the name
 // of its operation — so a case that holds each read to a rule names the one a
 // later commit adds as missing ([requireEveryCodeRead]).
@@ -129,6 +142,11 @@ func codeReads(ctx context.Context, seam CodeSeam) []struct {
 		}},
 		{opCodeRead.spec.name, func() error {
 			_, err := seam.Read(ctx, code.ReadQuery{Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}, Kind: code.ReadRepos})
+			return err
+		}},
+		{opCodeResolveRef.spec.name, func() error {
+			_, err := seam.ResolveRef(ctx, code.RefQuery{Repo: "app", Ref: "main",
+				Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}})
 			return err
 		}},
 	}
@@ -219,11 +237,13 @@ type codeDesk struct {
 
 // codeAnswers is what a desk answers each operation with.
 type codeAnswers struct {
-	read code.ReadAnswer
-	snap code.RepoSnapshot
-	ref  code.RepoRef
-	out  code.PushOutcome
-	pos  statelog.Position
+	read     code.ReadAnswer
+	snap     code.RepoSnapshot
+	ref      code.RepoRef
+	out      code.PushOutcome
+	pos      statelog.Position
+	resolved code.RefAnswer
+	git      code.GitAnswer
 }
 
 func (d *codeDesk) For(context.Context, string) (Backend, bool) { return Backend{Code: d}, true }
@@ -276,26 +296,45 @@ func (d *codeDesk) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, e
 	return held.read, err
 }
 
-// serveDesk serves d as data-d, the one data node the fleet's placement names.
+func (d *codeDesk) ResolveRef(_ context.Context, q code.RefQuery) (code.RefAnswer, error) {
+	held, err := d.took(q)
+	return held.resolved, err
+}
+
+// deskGit is a desk as a git node's git half: what it reads by object id is
+// recorded and answered as the desk's code half is, the desk's err included.
+type deskGit struct{ d *codeDesk }
+
+func (g deskGit) Git() (GitServer, bool) { return g, true }
+
+func (g deskGit) Read(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
+	held, err := g.d.took(q)
+	return held.git, err
+}
+
+// serveDesk serves d as data-d, the one data node — and the one git node — the
+// fleet's placements name.
 func serveDesk(t *testing.T, f *fleet, d *codeDesk) {
 	t.Helper()
 	stop, err := Serve(t.Context(), f.start(t), ServerOptions{Self: "data-d", Local: d,
-		Envelopes: fleetEnvelopes})
+		Git: deskGit{d: d}, Envelopes: fleetEnvelopes})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = stop(context.Background()) })
 	f.placement.set(func(p *fakePlacement) { p.nodes = []string{"data-d"} })
+	f.git.set(func(p *fakePlacement) { p.nodes = []string{"data-d"} })
 }
 
 // EVERY CODE OPERATION CROSSES WHOLE: a push's proposal, the admission's
 // resolve, a cache's snapshot page, the receiver's pending wait, the REST
-// routes' listing, a seat's refs listing and a git node's introduced pages
-// reach a data node from a node that holds no data with their arguments as
-// they were sent, their answers come back as they were given — a snapshot's
-// packs, refs, pushes, retirements and cursor, a repository's detail and its
-// limits, the refs and the introducing pushes — and a refusal keeps the
-// identity the host and the cache branch on.
+// routes' listing, a seat's refs listing, a git node's introduced pages and a
+// seat's resolve of a ref reach a data node from a node that holds no data —
+// and a read by object id the git node — with their arguments as they were
+// sent, their answers come back as they were given — a snapshot's packs,
+// refs, pushes, retirements and cursor, a repository's detail and its limits,
+// the refs and the introducing pushes, a resolved ref, a page of a diff — and
+// a refusal keeps the identity the host and the cache branch on.
 func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -415,6 +454,41 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		}
 	}
 
+	// A REF RESOLVED, and a READ BY OBJECT ID asked of the git node: each
+	// query whole — the git read's floor, cursor, paths given as bytes and
+	// its sub-query — and each answer whole, the git read's page with its
+	// next cursor and the position its copy was read at. The walk stamps
+	// the git read's attempt itself (home, asked of its one git node first),
+	// so that is the one field it adds to what the caller sent.
+	d.mu.Lock()
+	d.resolved = code.RefAnswer{Repo: ref, Ref: "refs/heads/main",
+		OID: "6666666666666666666666666666666666666666", Position: at}
+	d.git = code.GitAnswer{Kind: code.GitDiff, RepoID: ref.ID, Position: at, Next: "page-2",
+		Diff: &code.DiffAnswer{Base: "6666666666666666666666666666666666666666",
+			Head: "7777777777777777777777777777777777777777", Files: []code.DiffFile{{Path: "a.go",
+				Status: "M", Added: 3, Deleted: 1}}, Total: 1, Added: 3, Deleted: 1}}
+	d.mu.Unlock()
+	refQ := code.RefQuery{Repo: "app", Ref: "main", Fresh: statelog.Freshness{Level: statelog.ReadLinearizable},
+		Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}}
+	if got, err := seam.ResolveRef(ctx, refQ); err != nil || !reflect.DeepEqual(got, d.resolved) {
+		t.Errorf("resolve ref = (%+v, %v), want %+v", got, err, d.resolved)
+	}
+	if got := d.last(); !reflect.DeepEqual(got, refQ) {
+		t.Errorf("resolve ref asked %+v, want %+v", got, refQ)
+	}
+	gitQ := code.GitQuery{Kind: code.GitDiff, RepoID: ref.ID, Asker: code.Principal{Kind: code.PrincipalAgent,
+		Seat: "dev"}, Fresh: statelog.Freshness{Level: statelog.ReadSession, MinPosition: at}, Cursor: "page-1",
+		Diff: &code.DiffQuery{Base: "6666666666", Head: "7777777777777777777777777777777777777777",
+			FileB64: "YS5nbw==", Renames: true}}
+	if got, err := seam.GitRead(ctx, gitQ); err != nil || !reflect.DeepEqual(got, d.git) {
+		t.Errorf("git read = (%+v, %v), want %+v", got, err, d.git)
+	}
+	stamped := gitQ
+	stamped.Home = true
+	if got := d.last(); !reflect.DeepEqual(got, stamped) {
+		t.Errorf("git read asked %+v, want %+v", got, stamped)
+	}
+
 	// A REFUSAL KEEPS ITS IDENTITY: the admission answers a missing
 	// repository 404, a cache reads a moved snapshot from its first page,
 	// and a newer build's record is a version this one cannot read.
@@ -466,6 +540,11 @@ func TestAProposalRaisesTheFloorAndAReadDoesNot(t *testing.T) {
 	if got := f.client.Session().Floors([]string{codeStream}); !slices.Equal(got,
 		[]statelog.Position{pushed}) {
 		t.Fatalf("after a push applied at %v the code floor is %v", pushed, got)
+	}
+	// AND IT IS WHAT THE SEAM HANDS A READ BY OBJECT ID AS ITS FLOOR, which
+	// the git operation carries in its arguments rather than the router's.
+	if got := f.client.Code().Floor(); got != pushed {
+		t.Fatalf("after a push applied at %v the code seam's floor is %v", pushed, got)
 	}
 	covered := map[string]bool{}
 	for _, r := range codeReads(t.Context(), f.client.Code()) {
@@ -580,7 +659,7 @@ func TestARoutedPushCanBeDecidedInsideItsAttempt(t *testing.T) {
 		timing := Production()
 		timing.WriteAttempt = write
 		_, err := NewRouter(RouterOptions{Self: "agent-1", Queue: &recordingAsker{},
-			Placement: &fakePlacement{}, Session: NewSession(), Timing: timing,
+			Placement: &fakePlacement{}, Git: &fakePlacement{}, Session: NewSession(), Timing: timing,
 			Envelopes: fleetEnvelopes})
 		return err
 	}

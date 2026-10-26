@@ -553,7 +553,7 @@ func dataNodeOver(t *testing.T, view *coord.LeaseView, now func() time.Time,
 	e.native.Store(&native{trackerReader: &tracker.Reader{}})
 	e.local = localWith(e, now, read)
 	router, err := estate.NewRouter(estate.RouterOptions{
-		Self: "data-self", Queue: silentAsker{}, Placement: e.estatePlacement(),
+		Self: "data-self", Queue: silentAsker{}, Placement: e.estatePlacement(), Git: e.gitPlacement(),
 		Local: e.local, Session: estate.NewSession(), Timing: estate.Production(),
 		Envelopes: routerEnvelopes(t),
 	})
@@ -714,7 +714,7 @@ func statelessOver(t *testing.T) (*Engine, func(tracker, pages bool)) {
 	}
 	t.Cleanup(func() { _ = stop(context.WithoutCancel(t.Context())) })
 	router, err := estate.NewRouter(estate.RouterOptions{
-		Self: "agent-1", Queue: started(), Placement: oneDataNode{},
+		Self: "agent-1", Queue: started(), Placement: oneDataNode{}, Git: noGitNodes{},
 		Session: estate.NewSession(), Timing: estate.Production(), Envelopes: envelopes,
 		Now: func() time.Time { return time.Unix(0, clock.Load()) },
 	})
@@ -732,6 +732,15 @@ type oneDataNode struct{}
 
 func (oneDataNode) Holders() ([]string, error) { return []string{"data-1"}, nil }
 func (oneDataNode) Unanswered(string)          {}
+
+// noGitNodes is the git placement of a fleet with no node with the git role in
+// it: what a router built for a case that asks no repository's git reads is
+// handed, since a router requires one and an empty one is how a fleet says it
+// has none.
+type noGitNodes struct{}
+
+func (noGitNodes) Holders() ([]string, error) { return nil, nil }
+func (noGitNodes) Unanswered(string)          {}
 
 // servedHalves is a data node's copy serving the halves it is told it runs,
 // admitting a seat — what admission's ping reads of it.

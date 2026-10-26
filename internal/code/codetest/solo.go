@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/code/query"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
@@ -51,7 +53,11 @@ type Node interface {
 	// Read is a read of the code host's rows, as the API's code reads ask.
 	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
 	// GitRead is a read of a repository by object id, answered by THIS
-	// node's own query server over its cache.
+	// node's own query server over its cache, as the query names it — its
+	// Home stamp included: a node holding no copy fills one only for a read
+	// stamped its walk's home (code.GitQuery.Home), so a case asking one
+	// node directly as the walk asks its first stamps it. [Fleet.GitRead] is
+	// the read through the fleet's routing.
 	GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error)
 	// Share is the node's seat git-work share, which its query server's
 	// reads take their units of.
@@ -103,6 +109,12 @@ type Fleet interface {
 	// code.ErrRepoNotFound when no active or archived repository has the
 	// name.
 	Rows(ctx context.Context, name string, fresh statelog.Freshness) (Rows, error)
+	// GitRead is a read of a repository by object id through the fleet's
+	// routing, as a seat's tool asks one: the production estate router,
+	// asking the git nodes — each serving its git lane on the broker, as the
+	// engine serves one — in the repository's rendezvous order, its home
+	// first (ADR-0059), and stamping the walk's first attempt home itself.
+	GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error)
 }
 
 // Shape is what a case asks of the fleet it is run on.
@@ -217,7 +229,7 @@ func SoloNode(t testing.TB, o SoloOptions) *SoloFleet {
 	if o.ClientGit == "" {
 		o.ClientGit = gittest.Require(t)
 	}
-	f := &SoloFleet{o: o, dir: t.TempDir(), creds: NewCredentials(o.People),
+	f := &SoloFleet{o: o, dir: t.TempDir(), creds: NewCredentials(o.People), life: t,
 		// AN HOUR AGO, so an activation a case mints — a second apart, in
 		// order — is never in the future: a deletion is dated by its
 		// activation, and the purge judges its age on the wall clock.
@@ -244,7 +256,93 @@ func SoloNode(t testing.TB, o SoloOptions) *SoloFleet {
 			GitPath: o.GitPath, Logger: o.Logger, Roster: o.Roster, Current: o.Current, QueryPool: o.QueryPool,
 		}))
 	}
+	f.route(t)
 	return f
+}
+
+// soloEnvelopes are the estate envelopes every git node of a solo fleet signs
+// and verifies under, and its router: one fleet, one keyring, as every node's
+// estate envelopes are (estate.Envelopes).
+var soloEnvelopes = func() *estate.Envelopes {
+	env, err := estate.NewEnvelopes(fleetRing)
+	if err != nil {
+		panic(err)
+	}
+	return env
+}()
+
+// soloRouter is the id the fleet's router asks as: a node holding nothing,
+// as a seats-only node's router is.
+const soloRouter = "solo-router"
+
+// route makes every git node answer the fleet on the running broker as the
+// engine's serveEstate makes a git node answer — its estate service, its git
+// lane over its own git half (GitNode.Git) among its lanes — and builds the
+// router [SoloFleet.GitRead] asks through, holding nothing of its own. Every
+// git node holds the estate in this release, and a solo fleet's git nodes
+// reach its one data node's copy in process, so each serves that copy
+// (soloCopy). A Kill takes every registration with the broker; a Restart
+// routes again over the new one.
+func (f *SoloFleet) route(t testing.TB) {
+	t.Helper()
+	q := f.broker()
+	ids := make([]string, len(f.git))
+	for i, g := range f.git {
+		ids[i] = g.o.ID
+		// ON THE FLEET'S BROKER, whose stop ends the registration: a
+		// process's death takes its subjects with it.
+		if _, err := estate.Serve(f.life.Context(), q, estate.ServerOptions{Self: g.o.ID,
+			Local: soloCopy{data: f.data}, Git: g, Envelopes: soloEnvelopes}); err != nil {
+			t.Fatalf("codetest: %s serves the estate: %v", g.o.ID, err)
+		}
+	}
+	nodes := soloPlacement(ids)
+	r, err := estate.NewRouter(estate.RouterOptions{Self: soloRouter, Queue: q, Placement: nodes, Git: nodes,
+		Session: estate.NewSession(), Timing: estate.Production(), Envelopes: soloEnvelopes})
+	if err != nil {
+		t.Fatalf("codetest: the fleet's router: %v", err)
+	}
+	f.router.Store(r)
+}
+
+// GitRead is a read of a repository by object id through the fleet's routing
+// (Fleet).
+func (f *SoloFleet) GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
+	r := f.router.Load()
+	if r == nil {
+		return code.GitAnswer{}, errors.New("codetest: the solo fleet routes nothing while it is killed")
+	}
+	return r.Code().GitRead(ctx, q)
+}
+
+// soloPlacement is a solo fleet's git nodes as its router's placements read
+// them: every one live for as long as the fleet runs, since a solo fleet's
+// nodes live and die together.
+type soloPlacement []string
+
+func (p soloPlacement) Holders() ([]string, error) { return slices.Clone(p), nil }
+func (p soloPlacement) Unanswered(string)          {}
+
+// soloCopy is the data node's copy as a git node's estate service answers from
+// it: its code half (code.Served), its applier's wait, and whether the copy
+// answers — the state log's own judgement — read again at every request, so a
+// restarted data node's is the one served.
+type soloCopy struct{ data *DataNode }
+
+func (c soloCopy) For(context.Context, string) (estate.Backend, bool) {
+	d := c.data
+	return estate.Backend{
+		Code:      d.Served(),
+		Committed: d.WaitApplied,
+		Answers: func(ctx context.Context) bool {
+			h, err := d.Health(ctx)
+			if err != nil {
+				return false
+			}
+			ok, _ := h.Answers()
+			return ok
+		},
+	}, true
 }
 
 // GitNode is the fleet's i-th git node, for a benchmark that stops it and
@@ -268,9 +366,16 @@ type SoloFleet struct {
 	dir   string
 	creds *Credentials
 	base  time.Time
+	// life is the test that started the fleet: what its git nodes' estate
+	// services are registered under, however often a case restarts it.
+	life testing.TB
 
 	data *DataNode
 	git  []*GitNode
+
+	// router is the running broker's router, holding nothing of its own,
+	// which [SoloFleet.GitRead] asks through (route); nil while killed.
+	router atomic.Pointer[estate.Router]
 
 	mu sync.Mutex
 	// brokers is every incarnation's embedded broker, the running one last.
@@ -463,6 +568,7 @@ func (f *SoloFleet) Kill(t testing.TB, _ string) {
 		g.Kill()
 	}
 	f.data.Kill()
+	f.router.Store(nil)
 	if err := f.broker().Stop(context.Background()); err != nil {
 		t.Errorf("codetest: stop the killed node's broker: %v", err)
 	}
@@ -480,6 +586,7 @@ func (f *SoloFleet) Restart(t testing.TB, _ string) {
 	for _, g := range f.git {
 		g.Restart(t)
 	}
+	f.route(t)
 }
 
 // PauseApplier stops the data node's applier until resume (Fleet).

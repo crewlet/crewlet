@@ -193,6 +193,9 @@ var floorless = map[string]string{
 		"bodies it has read, which no log position describes",
 	"estate.ping": "asks whether the seat copy admits a seat, its own stricter " +
 		"gate, not whether it has reached the asker's writes",
+	"code.git_read": "reads a git node's cache, not a domain's copy (GitCopy): the asker's " +
+		"floor travels in the query, as the cache's sync level, and an object id names " +
+		"the same object at every position",
 
 	"usage.spend": "reads the usage domain, whose log no write of the asker's lands " +
 		"on: every node publishes its own days, so there is no position to see",
@@ -263,7 +266,10 @@ var seatCopyOps = map[string]string{
 // wrong runs none of that domain's operations and every other domain's
 // (ADR-0049). An operation naming no domain — the search ops once did, since
 // they carry no floor — would be asked of no domain's verdict at all: run from
-// a copy out of service, or held to one it does not read.
+// a copy out of service, or held to one it does not read. The one copy that
+// is no domain's is a git node's git half ([GitCopy]), which a git operation
+// alone names — one keyed on the git nodes and answered on a git lane — and no
+// data operation may.
 func TestEveryOperationNamesTheCopyItReads(t *testing.T) {
 	t.Parallel()
 	domains := []string{trackerDomain, pagesDomain, usageDomain, codeDomain,
@@ -278,6 +284,10 @@ func TestEveryOperationNamesTheCopyItReads(t *testing.T) {
 		case spec.domain == SeatCopy:
 			t.Errorf("%s names the seat copy: declare the domain whose copy it reads, "+
 				"or name why it asks about the seat's in seatCopyOps", name)
+		case spec.domain == GitCopy && (!spec.git || !slices.Contains(gitLanes, spec.lane)):
+			t.Errorf("%s names the git copy and is no git operation answered on a git lane: "+
+				"declare it keyedOnGit and answeredOn the git lane, or name a domain", name)
+		case spec.domain == GitCopy:
 		case !slices.Contains(domains, spec.domain):
 			t.Errorf("%s reads the %q domain's copy, want one of %v", name, spec.domain, domains)
 		}
@@ -416,7 +426,7 @@ func TestAdmissionsPingIsTheOneTheEnvelopePins(t *testing.T) {
 		Result: json.RawMessage(`{"Tracker":true,"Pages":true}`)}}
 	r, err := NewRouter(RouterOptions{
 		Self: "agent-1", Queue: asker, Placement: &fakePlacement{nodes: []string{"data-a"}},
-		Session: NewSession(), Timing: Production(), Envelopes: fleetEnvelopes,
+		Git: &fakePlacement{}, Session: NewSession(), Timing: Production(), Envelopes: fleetEnvelopes,
 	})
 	if err != nil {
 		t.Fatal(err)
