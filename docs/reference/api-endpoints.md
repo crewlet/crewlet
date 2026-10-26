@@ -6955,7 +6955,7 @@ written against; a version this engine does not speak is
 
 | Method | Path | Body | Answer |
 |---|---|---|---|
-| `GET` | `/assistant/conversations?cursor=&limit=` | | `200 {conversations, next_cursor?}`, the most recently used first, `limit` 1 to 50 |
+| `GET` | `/assistant/conversations?cursor=&limit=` | | `200 {conversations, next_cursor?}`, the most recently used first, `limit` 1 to 50. Each is `{id, title, created_at, updated_at, last_activity_at, last_turn_state?}`: the order is `last_activity_at`'s (the last turn, message, step, card or proposal), which a client shows as the time a conversation was last used; `updated_at` also moves on a new title |
 | `POST` | `/assistant/conversations` | `{protocol_version}` | `201 {conversation}`. An `Idempotency-Key`, when sent, names the conversation, so a retried create is one conversation |
 | `GET` | `/assistant/conversations/{id}` | | `200` the transcript: `{conversation, messages, steps, cards, open_turn, audit_reads}`. A card built from an app the caller no longer holds is replaced by a notice, and so is a message written after its turn read through one (each message records the apps its turn had read through); every step names its `turn_id` |
 | `DELETE` | `/assistant/conversations/{id}` | | `200 {outcome, position}`: the conversation is purged at once, a turn of it running here is stopped and every grant of its open turn is ended |

@@ -124,7 +124,7 @@ func (s *Store) Conversations(_ context.Context, owner uuid.UUID, _ string, _ in
 		}
 	}
 	slices.SortFunc(out.Conversations, func(a, b wire.ConversationSummary) int {
-		return b.UpdatedAt.Compare(a.UpdatedAt)
+		return b.LastActivityAt.Compare(a.LastActivityAt)
 	})
 	return out, nil
 }

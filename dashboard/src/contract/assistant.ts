@@ -660,6 +660,8 @@ interface AssistantConversationSummary {
   title: string;
   created_at: string;
   updated_at: string;
+  /** When it was last used: the moment the list is ordered by, and the one to show. */
+  last_activity_at: string;
   last_turn_state?: AssistantTurnState;
 }
 

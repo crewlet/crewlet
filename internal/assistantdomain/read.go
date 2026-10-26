@@ -140,7 +140,7 @@ type Conversation struct {
 func (c Conversation) Summary() wire.ConversationSummary {
 	return wire.ConversationSummary{
 		ID: c.ID, Title: c.Title, CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
-		LastTurnState: c.LastTurnState,
+		LastActivityAt: c.LastActivityAt, LastTurnState: c.LastTurnState,
 	}
 }
 

@@ -100,7 +100,10 @@ func readTools() []Tool {
 				return get("GET /worklet/search", nil,
 					query(a).str("q", "q").num("limit", "limit", 10).values())
 			},
-			Cards: one(cards.Spec{Table: &cards.Table{Title: "Matching tasks", Rows: "hits",
+			// A SEARCH THAT COULD NOT RUN SAYS WHY in its own `note` (an index
+			// still building), as search_knowledge's does, rather than reading
+			// to the model as "nothing matched".
+			Cards: one(cards.Spec{Note: "note", Table: &cards.Table{Title: "Matching tasks", Rows: "hits",
 				Brief: []string{"title", "status", "assignee"},
 				Columns: []cards.Column{col("key", "Key", "key", tText),
 					prose("title", "Title", "title"), col("status", "Status", "status", tLabel),
@@ -475,7 +478,11 @@ func readTools() []Tool {
 			Cards: one(cards.Spec{Table: &cards.Table{Title: "Coding runs", Rows: "runs",
 				Brief: []string{"agent", "status", "task", "started"},
 				Columns: []cards.Column{col("agent", "Seat", "agent_handle", tText),
-					col("status", "Status", "status", tLabel), col("task", "Task", "work_key", tText),
+					// THE TASK IS THE ITEM THE LAUNCHING TURN WAS CHARGED TO
+					// (`work_item`); `work_key` is the turn's delivery identity
+					// (internal/workkey), which no person reads as a task.
+					col("status", "Status", "status", tLabel),
+					col("task", "Task", "work_item.key", tText),
 					col("coding_agent", "Agent", "coding_agent", tText),
 					col("started", "Started", "started_at", tDatetime),
 					col("updated", "Updated", "updated_at", tDatetime),
@@ -656,11 +663,13 @@ func readTools() []Tool {
 				"limit": positive("How many, at most.", 50),
 			}),
 			Routes: []string{"GET /artifacts"}, Fence: true,
+			// THE LISTING SPEAKS S3'S ListObjectsV2 (artifactsapi.ListPage): its
+			// page size is `max-keys` and its rows are `contents`.
 			Build: func(a map[string]any) (exec.Request, error) {
 				return get("GET /artifacts", nil, query(a).str("q", "q").str("kind", "kind").
-					num("limit", "limit", 25).values())
+					num("limit", "max-keys", 25).values())
 			},
-			Cards: one(cards.Spec{Table: &cards.Table{Title: "Artifacts", Rows: "items",
+			Cards: one(cards.Spec{Table: &cards.Table{Title: "Artifacts", Rows: "contents",
 				Brief: []string{"title", "kind", "owner", "updated"},
 				Columns: []cards.Column{prose("title", "Title", "title"),
 					col("kind", "Kind", "kind", tLabel), col("owner", "Owner", "owner", tText),

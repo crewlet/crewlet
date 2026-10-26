@@ -992,8 +992,10 @@ describe("the board being arranged, for the assistant", () => {
     const widgets = draft.fields.find((f) => f.path === "widgets")!;
     expect(widgets).toMatchObject({ kind: "list" });
     expect(widgets.value.split("\n").length).toBeGreaterThan(1);
-    // NOTHING ON THE BOARD IS THE ASSISTANT'S TO SET.
+    // NOTHING ON THE BOARD IS THE ASSISTANT'S TO SET, so the page takes no
+    // draft.set at all.
     expect(draft.fields.some((f) => f.editable)).toBe(false);
+    expect(pageSnapshot()!.context.accepts).not.toContain("draft.set");
     expect(
       applyPageAction({
         correlation_id: "c1",
@@ -1001,6 +1003,6 @@ describe("the board being arranged, for the assistant", () => {
         payload: { values: { widgets: ["Note"] } },
         source_revision: pageSnapshot()!.context.source_revision,
       }),
-    ).toMatchObject({ outcome: "invalid" });
+    ).toMatchObject({ outcome: "no_handler" });
   });
 });

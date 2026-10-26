@@ -134,8 +134,13 @@ export interface AssistantDraftSpec<D> {
   /** The draft now. */
   value: D;
   fields: readonly DraftFieldSpec<D>[];
-  /** Set the screen's draft, through its own setter. */
-  apply(next: D): void;
+  /**
+   * Set the screen's draft, through its own setter. Absent for a draft the
+   * screen shows and does not edit (a saved draft whose editor is another
+   * screen), which declares no `draft.set` and so is read and never changed
+   * here; its help says where it is changed.
+   */
+  apply?(next: D): void;
   /** Why the draft may not be changed now (a save in flight), or null. */
   blocked?(): string | null;
 }
@@ -436,13 +441,14 @@ export function draftSetAction<D>(
       const spec = latest();
       return spec ? (spec.blocked?.() ?? null) : CLOSED;
     },
-    apply: (change) => latest()?.apply(change.next),
+    apply: (change) => latest()?.apply?.(change.next),
     undo: (change) => {
       const before = latest()?.value;
       return () => {
         const spec = latest();
         if (!spec || before === undefined) return false;
         if (fingerprint(spec, spec.value) !== fingerprint(spec, change.next)) return false;
+        if (!spec.apply) return false;
         spec.apply(before);
         return true;
       };
@@ -454,8 +460,10 @@ export function draftSetAction<D>(
  * Declare the draft a screen has open, while it is mounted: its snapshot
  * reaches every question the person asks here, and `draft.set` changes it
  * through `apply` once they approve. Null where the screen has nothing open
- * now (a card not in edit), which declares no draft and no action. See the
- * module doc.
+ * now (a card not in edit), which declares no draft and no action. A draft
+ * with no `apply`, or no field the assistant may set, is declared without
+ * `draft.set`: the page does not accept a change it could only refuse. See
+ * the module doc.
  */
 export function useAssistantDraft<D>(spec: AssistantDraftSpec<D> | null): void {
   const latest = useRef(spec);
@@ -465,6 +473,8 @@ export function useAssistantDraft<D>(spec: AssistantDraftSpec<D> | null): void {
   const draft = spec ? draftSnapshot(spec) : null;
   const read = useCallback(() => latest.current, []);
   const action = useMemo(() => draftSetAction(read), [read]);
+  const changeable =
+    spec?.apply !== undefined && draft !== null && draft.fields.some((f) => f.editable === true);
   useAssistantContext(
     draft
       ? {
@@ -474,7 +484,7 @@ export function useAssistantDraft<D>(spec: AssistantDraftSpec<D> | null): void {
           // The registration is keyed on this content, so a render that
           // changed nothing registers nothing.
           dataVersion: `draft:${hashOf(JSON.stringify(draft))}`,
-          actions: { "draft.set": action as PageActionSpec<unknown> },
+          actions: changeable ? { "draft.set": action as PageActionSpec<unknown> } : {},
         }
       : {},
   );

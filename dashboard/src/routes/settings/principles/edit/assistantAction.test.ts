@@ -54,7 +54,7 @@ describe("the principles draft", () => {
       ok: true,
       value: { rows: [{ next: "A new vision.", current: "Old vision" }] },
     });
-    if (parsed.ok) draft.apply(parsed.value.next);
+    if (parsed.ok) draft.apply!(parsed.value.next);
     expect(change).toHaveBeenCalledWith("vision", "A new vision.");
   });
 

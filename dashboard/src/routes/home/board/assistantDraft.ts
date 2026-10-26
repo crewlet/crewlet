@@ -47,7 +47,7 @@ export function homeBoardDraft(args: {
       { path: "settings", label: "Settings open for", read: () => settings ?? "None" },
       { path: "unsaved", label: "Unsaved changes", read: () => (changed ? "Yes" : "No") },
     ],
-    // NOTHING HERE IS SET (see the file's doc), so nothing is ever applied.
-    apply: () => {},
+    // NOTHING HERE IS SET (see the file's doc): no apply, so the page takes
+    // no draft.set at all.
   };
 }
