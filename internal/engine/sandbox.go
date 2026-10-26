@@ -1073,15 +1073,19 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 // of work, the rebase its operation ids are minted under, the counter its
 // spend is held to, the seat's registry, skills and fence, and the reply it
 // owes.
+//
+// The results are named so a failure answers their zero values without
+// building a RunnerInput: every literal of one is held to carrying the seat's
+// fence (internal/seat's TestEveryConfigThatCanCarryTheSeatFenceDoes).
 func (e *Engine) parkedTurnRunner(ctx context.Context, company *Company, in resumeInput,
-) (RunnerInput, turnTelemetry, error) {
+) (input RunnerInput, tel turnTelemetry, err error) {
 	resumedReply, err := resumeReply(in.Run)
 	if err != nil {
-		return RunnerInput{}, turnTelemetry{}, err
+		return input, tel, err
 	}
-	tel, err := e.describeResume(ctx, company, in)
+	tel, err = e.describeResume(ctx, company, in)
 	if err != nil {
-		return RunnerInput{}, turnTelemetry{}, err
+		return input, tel, err
 	}
 	// THE COUNTER AS THE RUN LEFT IT, read once before anything is sent:
 	// the run was post-charged a moment ago, and a window it took past its
