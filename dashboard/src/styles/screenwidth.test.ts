@@ -1,6 +1,6 @@
 // @vitest-environment node
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 
@@ -16,6 +16,7 @@ import { expect, test } from "vitest";
  * `useScreenBelow`. jsdom lays nothing out, so these rules are read.
  */
 
+const SRC = fileURLToPath(new URL("..", import.meta.url));
 const STYLES = fileURLToPath(new URL(".", import.meta.url));
 const strip = (css: string) => css.replace(/\/\*[\s\S]*?\*\//g, "");
 const screens = strip(readFileSync(join(STYLES, "screens.css"), "utf8"));
@@ -71,4 +72,51 @@ test("Home's figures undo every wider span under the phone's width", () => {
   // weight loses, and the span it failed to undo grows implicit tracks.
   const reset = resets.map(specificity).sort(weighs).at(-1)!;
   for (const span of spans) expect(weighs(reset, specificity(span))).toBeGreaterThanOrEqual(0);
+});
+
+test("the split screens choose their panes by the screen's width", () => {
+  const phone = blocks(screens, /@media \(width < 640px\)/g).join("\n");
+  // The window's own rules may let a page scroll as a whole; they never pick
+  // a pane, which is the screen's width's to decide.
+  for (const selector of [".inbox-panes", ".int-back"]) {
+    expect(phone.includes(selector), `${selector} under a window media query`).toBe(false);
+  }
+  const page = blocks(screens, /@container page \(width < 640px\)/g).join("\n");
+  expect(page).toMatch(/\.inbox-panes\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/);
+  expect(page).toMatch(/\.int-back\s*\{[^}]*display:\s*inline-flex/);
+});
+
+/**
+ * The screens that still ask the WINDOW at the phone's width, each for a
+ * reason that is the window's: whether the whole page scrolls (a phone) or a
+ * canvas is legible. A new screen that changes shape for a narrow width asks
+ * `useScreenBelow` instead, or adds itself here with its reason.
+ */
+const ASKS_THE_WINDOW: Record<string, string> = {
+  "routes/inbox/Inbox.tsx": "whether the page fills the window or scrolls as a whole",
+  "routes/worklet/WorkItem.tsx": "whether the page fills the window or scrolls as a whole",
+  "routes/settings/integrations/Directory.tsx":
+    "whether the page fills the window or scrolls as a whole",
+  "routes/agents/OrgChart.tsx":
+    "the canvas is legible at any screen width above a phone (LEGIBLE_ZOOM)",
+  "routes/artifacts/new/SlidesCreate.tsx":
+    "a phone's touch arrangement; it measures its own width otherwise",
+};
+
+function sources(dir: string): string[] {
+  return readdirSync(dir).flatMap((name) => {
+    const path = join(dir, name);
+    if (statSync(path).isDirectory()) return sources(path);
+    return /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name) ? [path] : [];
+  });
+}
+
+test("no screen asks the window at the phone's width without a reason", () => {
+  const asking = [...sources(join(SRC, "routes")), ...sources(join(SRC, "components"))]
+    .filter((path) =>
+      /useMediaMatch\(\s*`\(width < \$\{PHONE_BREAKPOINT\}px\)`/.test(readFileSync(path, "utf8")),
+    )
+    .map((path) => relative(SRC, path))
+    .sort();
+  expect(asking).toEqual(Object.keys(ASKS_THE_WINDOW).sort());
 });

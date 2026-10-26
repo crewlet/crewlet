@@ -1318,9 +1318,12 @@ describe("the Spend overview's rows", () => {
   test("the company's budget row takes the seats' columns and the cell's inset", () => {
     expect(block(css, ".budget-row")).toMatch(/grid-template-columns:\s*var\(--budget-tracks\);/);
     expect(block(css, ".budget-row > *")).toMatch(/padding:\s*var\(--spacing-3\);/);
-    expect(block(kitSheet(), ".crewlet-data-grid__cell")).toMatch(
-      /padding:\s*var\(--spacing-1\) var\(--spacing-3\);/,
-    );
+    // The kit sets a cell's inline inset through its own properties, so a
+    // grid's first column can meet its edge; a body column's is
+    // the 12px this row matches.
+    const cell = block(kitSheet(), ".crewlet-data-grid__cell");
+    expect(cell).toMatch(/--crewlet-data-grid-cell-start:\s*var\(--spacing-3\);/);
+    expect(cell).toMatch(/--crewlet-data-grid-cell-end:\s*var\(--spacing-3\);/);
     expect(block(css, ".budget-tile")).not.toMatch(/background/);
   });
 

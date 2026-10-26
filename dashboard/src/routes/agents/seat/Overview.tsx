@@ -44,7 +44,7 @@ import {
   StatusDot,
   Stepper,
   Tag,
-  useMediaMatch,
+  useScreenBelow,
 } from "@crewlethq/ui";
 import { BrainGlyph, ClockGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
@@ -359,7 +359,7 @@ function CurrentTurn({
   const runs = useServicesRun();
   const ask = useServicesAsk();
   const sandboxes = useSandboxes();
-  const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
+  const phone = useScreenBelow(PHONE_BREAKPOINT);
   const turn = agent?.turn ?? null;
   const call = agent?.live_call ?? null;
   const turnId = turnIdOf(agent);

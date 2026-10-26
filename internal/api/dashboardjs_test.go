@@ -1112,8 +1112,12 @@ const (
 	// 341 KiB, still under two seconds on that link. One vocabulary for seat
 	// states and the plain sentence for each failure kind, which the frame's
 	// shared seat words carry into the entry, took it to 341.1 KiB. 342 KiB,
+	// still under two seconds on that link. uilet 0.66.0 and choosing screen
+	// shapes by the screen's width took it to 345.6 KiB, the one sheet (the
+	// 0.64.1 alignment and spacing pass across every component family, the
+	// stacking grid and the screen width hooks) 115.5 KiB of it. 346 KiB,
 	// still under two seconds on that link.
-	initialBudget = 342 << 10
+	initialBudget = 346 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1217,8 +1221,13 @@ const (
 	// seat states, the plain sentence for each failure kind with the engine's
 	// message behind a disclosure, the assistant's credit in every history and
 	// the org chart's reveal of a new seat took it to 4513.6 KiB. 4514 KiB,
-	// which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 418<<10
+	// which still refuses a doubled baseline. uilet 0.66.0 (the 0.64.1
+	// alignment and spacing pass across every component family, the stacking
+	// grid and the screen width hooks, a card title registered once,
+	// ProposalCard's danger tone and details, the thread's jumps and
+	// near-future times) and choosing screen shapes by the screen's width took
+	// it to 4545.4 KiB. 4546 KiB, which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 450<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

@@ -51,7 +51,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Callout, InlineCode, useMediaMatch } from "@crewlethq/ui";
+import { Callout, InlineCode, useMediaMatch, useScreenBelow } from "@crewlethq/ui";
 import { CheckGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -139,9 +139,14 @@ export function Inbox() {
   const index = useMemo(() => indexOrg(org), [org]);
   const zone = org?.timezone;
   const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
+  // ONE PANE WHERE THE SCREEN IS NARROW, the list or the open row with Back:
+  // on a phone, and beside an assistant the reader opened, which can leave a
+  // desktop window's screen a phone's width. The SCREEN'S width, as the
+  // stylesheet's `@container page` rule reads it, never the window's.
+  const single = useScreenBelow(PHONE_BREAKPOINT);
   // THE LIST AND THE PANE EACH SCROLL ON THEIR OWN, so the screen takes the
   // window's height rather than growing the page, above a phone, where the
-  // two are one column and the page scrolls as any other.
+  // page scrolls as any other.
   useFillScreen(!phone);
 
   // THE OPEN ROW IS IN THE URL; what the quiet links opened is this visit's.
@@ -226,8 +231,8 @@ export function Inbox() {
     ...(earlierRows ?? []),
   ];
 
-  // THE OPEN ROW: the one the URL names, or, beside the list (never on a phone,
-  // where the pane replaces it), the first one not yet dealt with, so the pane
+  // THE OPEN ROW: the one the URL names, or, beside the list (never in one
+  // pane, where the pane replaces it), the first one not yet dealt with, so the pane
   // is never an empty box beside a list with something in it. A row the URL
   // names that has just LEFT the list (an update read a moment ago) stays open
   // until the next one opens: what happened to it is what the pane shows.
@@ -235,7 +240,7 @@ export function Inbox() {
   const named =
     order.find((r) => r.key === open) ?? (open && held.current?.key === open ? held.current : null);
   const selected =
-    named ?? (phone ? null : (order.find((r) => !settled.has(r.key)) ?? order[0] ?? null));
+    named ?? (single ? null : (order.find((r) => !settled.has(r.key)) ?? order[0] ?? null));
   useEffect(() => {
     if (selected) held.current = selected;
   }, [selected]);
@@ -329,15 +334,15 @@ export function Inbox() {
     shown: needs.length + rows.updates.length,
     watched: watchedIn("seat"),
   });
-  const showList = !phone || !named;
-  const showPane = !phone || named !== null;
+  const showList = !single || !named;
+  const showPane = !single || named !== null;
   const settledLabels = useMemo(
     () => new Map([...settled].map(([key, s]) => [key, s.label] as const)),
     [settled],
   );
 
   return (
-    <div className="inbox-frame" data-phone-pane={phone && named ? "true" : undefined}>
+    <div className="inbox-frame" data-phone-pane={single && named ? "true" : undefined}>
       {/* MARK ALL READ IS WORKLET'S: hidden where the company runs none,
           and otherwise drawn for every reader, held with its reason where
           there is nothing of theirs to mark. */}
@@ -444,7 +449,7 @@ export function Inbox() {
             title={
               selected ? (titleOf(titles, rowItem(selected)) ?? taskTitleOf(selected)) : undefined
             }
-            onBack={phone ? () => nav.filter({ row: null }) : undefined}
+            onBack={single ? () => nav.filter({ row: null }) : undefined}
             onSettled={(label) => selected && settle(selected, label)}
           />
         )}

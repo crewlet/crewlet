@@ -96,7 +96,7 @@ import {
   Callout,
   EmptyState,
   Skeleton,
-  useMediaMatch,
+  useScreenBelow,
   type AvatarStatus,
 } from "@crewlethq/ui";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
@@ -802,9 +802,10 @@ export function ItemsView({
   };
 
   // WHICH WORK, GROUP BY AND SORT: at the bar's far end on a wide screen, and
-  // in the Display popover on a phone, where the bar's one line cut Group by
+  // in the Display popover where the SCREEN is narrow (a phone, or a desktop
+  // beside the assistant), where the bar's one line cut Group by
   // at the edge and put Sort past it. The bar holds the chips and the count.
-  const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
+  const phone = useScreenBelow(PHONE_BREAKPOINT);
   const arrange = (
     <>
       <ScopeControl scope={scope} onScope={setScope} />
