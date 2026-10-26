@@ -32,8 +32,12 @@ func TestASyncLeavesHalfTheNodesFetches(t *testing.T) {
 // FOUR COLD NODES HOLD AT MOST HALF OF A DATA NODE'S ANSWERS: every page of a
 // full read holds one of the answers the data node it reads gives its shared
 // lane (queue.ConcurrentAnswers, estate's laneShared), which every read of
-// the fleet shares, so the node's full reads at once (MaxFullRounds) are set
-// for four nodes joining together to leave half the lane to everything else.
+// the fleet shares, as well as one of its readers. The node's full reads at
+// once (MaxFullRounds) are the smallest data node's readers, so it is the
+// readers that fill first, never the lane, while four nodes join together;
+// a reader floor (store.MinReaderConns) raised past eight fails here, to be
+// measured again — BenchmarkColdJoin's other reads broke the rule at sixteen
+// a node.
 func TestFourColdNodesHoldAtMostHalfADataNodesAnswers(t *testing.T) {
 	t.Parallel()
 	if 4*cache.MaxFullRounds > queue.ConcurrentAnswers/2 {

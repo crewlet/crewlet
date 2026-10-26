@@ -21,15 +21,15 @@ import (
 func TestTheReaderPoolIsDerivedFromTheMachineAndKeepsItsFloor(t *testing.T) {
 	t.Parallel()
 	got := defaultReaderConns()
-	if want := max(minReaderConns, runtime.GOMAXPROCS(0)); got != want {
+	if want := max(MinReaderConns, runtime.GOMAXPROCS(0)); got != want {
 		t.Errorf("defaultReaderConns() = %d, want max(%d, GOMAXPROCS=%d) = %d",
-			got, minReaderConns, runtime.GOMAXPROCS(0), want)
+			got, MinReaderConns, runtime.GOMAXPROCS(0), want)
 	}
 	// THE FLOOR IS LOAD-BEARING and not decoration: two full dashboards is
 	// eight concurrent queries, and a one-core host would otherwise size
 	// its pool at one and make a single tab queue against itself.
-	if got < minReaderConns {
-		t.Errorf("the derived bound %d fell below the floor of %d", got, minReaderConns)
+	if got < MinReaderConns {
+		t.Errorf("the derived bound %d fell below the floor of %d", got, MinReaderConns)
 	}
 	// And the pool built from it carries the identity reserve, or the
 	// reserve would be taken out of the readers rather than kept beside

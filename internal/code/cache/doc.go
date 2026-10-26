@@ -172,21 +172,24 @@
 // Every page of a FULL READ of a repository's rows — a full round's (every
 // repository's first round in a process, a rebuild, the log recreated or gone
 // back under the cache), and a check's or a hint's read of the same pages —
-// is served out of one of the queue.ConcurrentAnswers answers a data node
-// gives the whole fleet's reads at once on its shared lane (a seat's tracker
-// read, a page write, the code.resolve every git request is admitted by) or,
-// on a git node that holds the data, out of the store that serves them. So a
-// node has at most [MaxFullRounds] full reads in flight, each holding its slot
-// from its first page to its last and the rest in line, first come, first
-// served: a node joining with hundreds of repositories asked of it holds
-// eight of a data node's sixty-four answers, never every one of them while
-// the fleet's reads wait behind its pages — and an asker that waits a whole
-// read attempt behind them takes the data node for gone. A DELTA holds no
-// slot: it is the round every node runs after every push, usually one page,
-// and never waits behind a joining node. A delta the log answers in full
-// holds one from its second page, page 1 having decided. A round waits for its
-// slot under the cache's lifetime, and its callers under their own bounds:
-// the wait is part of the sync each asked for, never a budget of its own.
+// is one read transaction on a data node: served out of one of the
+// queue.ConcurrentAnswers answers its shared lane gives the whole fleet's
+// reads at once (a seat's tracker read, a page write, the code.resolve every
+// git request is admitted by), and scanned on one of the reader connections
+// every one of those reads takes too, eight on the smallest data node — or,
+// on a git node that holds the data, on its own store's. So a node has at
+// most [MaxFullRounds] full reads in flight, the smallest data node's readers,
+// each holding its slot from its first page to its last and the rest in line,
+// first come, first served: a node coming up with hundreds of repositories
+// asked of it asks no more of a data node than that node scans at once, never
+// every page at once while the fleet's reads draw for a reader against them —
+// and an asker that waits a whole read attempt behind them takes the data
+// node for gone. A DELTA holds no slot: it is the round every node runs after
+// every push, usually one page, and never waits behind a node coming up. A
+// delta the log answers in full holds one from its second page, page 1 having
+// decided. A round waits for its slot under the cache's lifetime, and its
+// callers under their own bounds: the wait is part of the sync each asked
+// for, never a budget of its own.
 //
 // # Kept while there is room
 //
@@ -953,19 +956,25 @@
 // taken out, about 7 ms and 46–48 ms whatever the pack count, the second
 // packed-refs rewritten whole.
 //
-// A COLD JOIN (BenchmarkColdJoin, one run at -benchtime 1x, git 2.56.0 on four
-// cores of a Core Ultra 7 265U): four nodes asked for 500 repositories each at
-// once, every repository's read one page, against ONE data node's lane
-// modeled as its sixty-four answers, each page holding one for 60 ms — a full
-// page of refs to serve and the estate's crossing — beside two hundred other
-// reads a second. With the node's full reads capped at four, eight and
-// sixteen, the other reads waited 0, 0 and 60 ms at the 99th percentile (at
-// most 6 µs, 2 µs and 74 ms) while the 2 000 reads took 9.1, 4.9 and 2.7 s;
-// uncapped they waited 1 904 ms (at most 1 929 ms), for 2.2 s. Sixteen is the
-// four nodes holding every answer the lane has, which puts the other reads a
-// page behind; what a cap leaves in line is the nodes times the cap, where no
-// cap's is every repository every node was asked for: the figures
-// MaxFullRounds is set from.
+// MANY REPOSITORIES AT ONCE (BenchmarkColdJoin, one run at -benchtime 1x, git
+// 2.56.0 on four cores of a Core Ultra 7 265U), every repository's read one
+// page, against ONE data node modeled as the smallest — its sixty-four
+// answers and its eight readers, each page holding one of each for 60 ms, a
+// full page of refs to scan and the estate's crossing, and a reader given
+// back to a waiting read drawn at random, as database/sql's pool does —
+// beside two hundred other reads a second. ONE NODE RESTARTED over the cache
+// it kept, asked for its 500 repositories at once, downloads nothing: it came
+// up in 7.6 s with its full reads capped at four and in 3.9 to 4.3 s at eight
+// and every cap above it, the readers' own rate, while the other reads
+// waited 0, 105, 323, 842 and 1 030 ms at the 99th percentile at caps of four,
+// eight, sixteen, thirty-two and sixty-four (at most 1 µs, 128 ms, 563 ms,
+// 1.1 s and 1.5 s), and 3.6 s uncapped. FOUR NODES JOINING together with
+// fresh caches, 500 repositories each: the 2 000 reads took about 16 s at
+// every cap, while the other reads waited 352, 792, 1 030 and 1 556 ms at
+// four, eight, sixteen and thirty-two (at most 0.6, 1.6, 2.5 and 2.5 s), and
+// 15 s uncapped. The other reads' wait follows the full pages in flight per
+// reader, whichever nodes hold them, and a cap past the readers brings no read
+// sooner: the figures MaxFullRounds is set from.
 //
 // The INDEX OF PUSHES (BenchmarkProvenance, five operations of each arm, on
 // the cold join's machine: four cores of a Core Ultra 7 265U, git 2.56.0). A

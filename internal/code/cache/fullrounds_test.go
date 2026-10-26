@@ -16,9 +16,10 @@ import (
 )
 
 // THE NODE'S FULL READS, BOUNDED (MaxFullRounds): every page of a full read is
-// served out of one of the answers a data node gives the whole fleet's reads
-// at once, so a node joining with hundreds of repositories asked of it reads
-// at most MaxFullRounds of them whole at once, and the rest wait their turn.
+// one read on a data node — one of the answers its lane gives the whole
+// fleet's reads at once, and one of the reader connections they all take —
+// so a node coming up with hundreds of repositories asked of it reads at most
+// MaxFullRounds of them whole at once, and the rest wait their turn.
 
 // emptyRepo makes the n'th repository of a series no other helper's ids meet:
 // in the log, with no refs and no packs — a repository whose first round on a

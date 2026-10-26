@@ -597,6 +597,63 @@ func (w *syncWorld) coldCache(b *testing.B, root string, n, fetch int, mutate ..
 
 	b.Helper()
 	dir := filepath.Join(root, strconv.Itoa(n))
+	c, stop := w.bootCache(b, dir, fetch, mutate...)
+	return c, func() {
+		stop()
+		if err := os.RemoveAll(dir); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// keptCache is a node RESTARTED OVER THE CACHE IT KEPT, in a directory of its
+// own under root: a first boot syncs every repository of ids, linearizably and
+// all at once with no cap on its full reads, and stops; a second boots over
+// the same directory (each mutate applied to it) — every repository's copy
+// and state where the last process left them, and none converged in this
+// one, so each one's first round reads its rows whole and has nothing to
+// download (cache.Options.Objects is the caller's to hold to that). drop
+// stops it and removes its directory.
+func (w *syncWorld) keptCache(b *testing.B, root string, n int, ids []string, mutate ...func(*cache.Options)) (
+	_ *cache.Cache, drop func()) {
+
+	b.Helper()
+	dir := filepath.Join(root, strconv.Itoa(n))
+	first, stop := w.bootCache(b, dir, cache.FetchConcurrency)
+	cache.SetMaxFullRounds(first, int64(len(ids)))
+	var g errgroup.Group
+	for _, id := range ids {
+		g.Go(func() error {
+			s, err := first.Sync(b.Context(), id, linearizable)
+			if err != nil {
+				return err
+			}
+			s.Release()
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		b.Fatalf("the kept cache's first boot: %v", err)
+	}
+	stop()
+	c, stopAgain := w.bootCache(b, dir, cache.FetchConcurrency, mutate...)
+	return c, func() {
+		stopAgain()
+		if err := os.RemoveAll(dir); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// bootCache prepares and opens a cache over dir as it finds it — a node's
+// boot — reading w's rows, store and recorder (each mutate applied after),
+// its pool a slot a core as a node's is, a round fetching fetch bundles at
+// once. stop stops it and lets the directory go with everything it holds: a
+// node going down, its cache's volume kept.
+func (w *syncWorld) bootCache(b *testing.B, dir string, fetch int, mutate ...func(*cache.Options)) (
+	_ *cache.Cache, stop func()) {
+
+	b.Helper()
 	layout, err := cache.Prepare(b.Context(), dir)
 	if err != nil {
 		b.Fatalf("Prepare: %v", err)
@@ -617,9 +674,6 @@ func (w *syncWorld) coldCache(b *testing.B, root string, n, fetch int, mutate ..
 	return c, func() {
 		c.Stop(context.Background())
 		layout.Release()
-		if err := os.RemoveAll(dir); err != nil {
-			b.Fatal(err)
-		}
 	}
 }
 
@@ -819,34 +873,48 @@ func processCPU(b *testing.B) time.Duration {
 	return time.Duration(ru.Utime.Nano() + ru.Stime.Nano())
 }
 
-// BenchmarkColdJoin is git nodes JOINING A FLEET together, every repository
-// asked of each at the same moment — a balancer moving traffic onto new
-// nodes, CI fetching through them, the first fetches after a restart —
-// against ONE data node's shared lane (coldLane): the queue.ConcurrentAnswers
-// answers it gives code.repo_state beside every other read of the fleet
-// (estate's laneShared), a request past them waiting its turn in arrival
-// order. Four fresh caches, each asked for 500 repositories of one pack and
-// one ref, read their rows through the lane with their full reads capped at
-// rounds — MaxFullRounds' candidates 4, 8 and 16, and 500, a cap no node asked
-// for 500 repositories meets: the node without one — while the lane's OTHER
-// traffic (a seat's tracker read, a page write, the code.resolve every git
-// request is admitted by) arrives every coldOtherEvery and holds its answer
-// coldOtherServe.
+// BenchmarkColdJoin is git nodes BRINGING UP MANY REPOSITORIES AT ONCE, every
+// repository asked of each at the same moment — a balancer moving traffic
+// onto them, CI fetching through them — against ONE data node (coldLane):
+// the queue.ConcurrentAnswers answers its shared lane gives code.repo_state
+// beside every other read of the fleet (estate's laneShared), a request past
+// them waiting its turn in arrival order, and inside each answer one of the
+// coldReaderConns reader connections its store scans a page on. Each node is
+// asked for 500 repositories of one pack and one ref and reads their rows
+// through the data node with its full reads capped at rounds, while the
+// lane's OTHER traffic (a seat's tracker read, a page write, the
+// code.resolve every git request is admitted by) arrives every
+// coldOtherEvery and holds its answer and its reader coldOtherServe. Two
+// events, each the cap's cost shown another way:
 //
-// THE LANE IS A MODEL: every page holds its answer coldPageServe, a full
-// page's cost, whatever the fake log's page holds — so each repository's read
-// is one page at that cost, and the cache's own work (the pack's GET from a
-// store in the process, its files, packed-refs and the state) is real.
-// wait-p99-ms and wait-max-ms are the other traffic's wait for an answer —
-// what the cap is for; join-s is how long the last of the four nodes' 2 000
-// syncs took, the estate's share of a cold join, its downloads coming on top
-// at NodeFetches a node.
+//   - cache=fresh, FOUR NODES JOINING a fleet together with caches that have
+//     never served a repository: every round downloads its pack beside its
+//     read, so the reads' time is hidden behind the downloads of repositories
+//     of more than a handful of packs (NodeFetches a node) — and what the cap
+//     is for, the other traffic's wait behind four nodes' full reads, shows.
+//     rounds is MaxFullRounds' candidates 4 to 32, and 500, a cap no node
+//     asked for 500 repositories meets: the node without one.
+//   - cache=kept, ONE NODE RESTARTED over the cache it kept — a rolling
+//     restart of a git node whose git.cache_dir is on a volume the restart
+//     keeps (keptCache): every repository's first round in the new process
+//     is a full read, and it has nothing to download, so the reads ARE how
+//     long the node takes to come up. rounds is 4 to 32, 64 — the lane's
+//     every answer — and 500.
+//
+// THE DATA NODE IS A MODEL: every page holds its answer and its reader
+// coldPageServe, a full page's cost, whatever the fake log's page holds — so
+// each repository's read is one page at that cost — and a reader given back
+// goes to a waiting read drawn at random, as database/sql's pool hands one
+// out (coldReaders); the cache's own work (the pack's GET from a store in the
+// process, its files, packed-refs and the state, and on a restart the
+// hashing of every index file a previous process left) is real. wait-p99-ms
+// and wait-max-ms are the other traffic's wait for its answer and its reader
+// — what the cap is for; up-s is how long the last of the nodes' syncs took:
+// on a join the estate's share of it, its downloads coming on top; on a
+// restart the whole of it.
 func BenchmarkColdJoin(b *testing.B) {
 	quiet(b)
-	const (
-		nodes = 4
-		repos = 500
-	)
+	const repos = 500
 	w := newSyncWorld(b, onMemory)
 	src := w.repo(b, 1)
 	tip, row := w.commit(b, src, nil, "")
@@ -859,88 +927,131 @@ func BenchmarkColdJoin(b *testing.B) {
 		row.PackID = uuid.Must(uuid.NewV7()).String()
 		w.log.write(ids[i], []code.PackRow{row}, map[string]string{"refs/heads/main": tip})
 	}
+	type event struct {
+		nodes  int
+		kept   bool
+		rounds []int64
+	}
+	events := []event{
+		{nodes: 4, rounds: []int64{4, 8, 16, 32, repos}},
+		{nodes: 1, kept: true, rounds: []int64{4, 8, 16, 32, queue.ConcurrentAnswers, repos}},
+	}
 	root := b.TempDir()
 	n := 0
-	for _, rounds := range []int64{4, 8, 16, repos} {
-		b.Run(fmt.Sprintf("nodes=%d/repos=%d/rounds=%d", nodes, repos, rounds), func(b *testing.B) {
-			var (
-				waits []time.Duration
-				join  time.Duration
-			)
-			for b.Loop() {
-				b.StopTimer()
-				lane := &coldLane{inner: silent{w.log}, answers: semaphore.NewWeighted(queue.ConcurrentAnswers)}
-				caches := make([]*cache.Cache, nodes)
-				drops := make([]func(), nodes)
-				for i := range caches {
-					caches[i], drops[i] = w.coldCache(b, root, n, cache.FetchConcurrency,
-						func(o *cache.Options) { o.Fetch = lane })
-					n++
-					cache.SetMaxFullRounds(caches[i], rounds)
-				}
-				stop := lane.traffic()
-				b.StartTimer()
-				began := time.Now()
-				var g errgroup.Group
-				for _, c := range caches {
-					for _, id := range ids {
-						g.Go(func() error {
-							s, err := c.Sync(b.Context(), id, linearizable)
-							if err != nil {
-								return err
-							}
-							s.Release()
-							if s.Kind != cache.SyncFull {
-								return fmt.Errorf("a cold node's first sync of %s was a %s round", id, s.Kind)
-							}
-							return nil
-						})
+	for _, ev := range events {
+		state := "fresh"
+		if ev.kept {
+			state = "kept"
+		}
+		for _, rounds := range ev.rounds {
+			b.Run(fmt.Sprintf("nodes=%d/repos=%d/cache=%s/rounds=%d", ev.nodes, repos, state, rounds), func(b *testing.B) {
+				var (
+					waits []time.Duration
+					up    time.Duration
+				)
+				for b.Loop() {
+					b.StopTimer()
+					lane := newColdLane(silent{w.log})
+					caches := make([]*cache.Cache, ev.nodes)
+					drops := make([]func(), ev.nodes)
+					for i := range caches {
+						if ev.kept {
+							// A restart downloads nothing: a read of the
+							// store fails the arm (noObjects).
+							caches[i], drops[i] = w.keptCache(b, root, n, ids, func(o *cache.Options) {
+								o.Fetch, o.Objects = lane, noObjects{t: b}
+							})
+						} else {
+							caches[i], drops[i] = w.coldCache(b, root, n, cache.FetchConcurrency,
+								func(o *cache.Options) { o.Fetch = lane })
+						}
+						n++
+						cache.SetMaxFullRounds(caches[i], rounds)
 					}
+					stop := lane.traffic()
+					b.StartTimer()
+					began := time.Now()
+					var g errgroup.Group
+					for _, c := range caches {
+						for _, id := range ids {
+							g.Go(func() error {
+								s, err := c.Sync(b.Context(), id, linearizable)
+								if err != nil {
+									return err
+								}
+								s.Release()
+								if s.Kind != cache.SyncFull {
+									return fmt.Errorf("%s's first sync on a node just up (cache=%s) was a %s round, "+
+										"want a full one", id, state, s.Kind)
+								}
+								return nil
+							})
+						}
+					}
+					err := g.Wait()
+					up += time.Since(began)
+					b.StopTimer()
+					waits = append(waits, stop()...)
+					if err != nil {
+						b.Fatalf("%d nodes coming up (cache=%s): %v", ev.nodes, state, err)
+					}
+					for _, drop := range drops {
+						drop()
+					}
+					b.StartTimer()
 				}
-				err := g.Wait()
-				join += time.Since(began)
-				b.StopTimer()
-				waits = append(waits, stop()...)
-				if err != nil {
-					b.Fatalf("a cold join: %v", err)
+				slices.Sort(waits)
+				at := func(q float64) float64 {
+					return float64(waits[int(q*float64(len(waits)-1))].Microseconds()) / 1e3
 				}
-				for _, drop := range drops {
-					drop()
-				}
-				b.StartTimer()
-			}
-			slices.Sort(waits)
-			at := func(q float64) float64 {
-				return float64(waits[int(q*float64(len(waits)-1))].Microseconds()) / 1e3
-			}
-			b.ReportMetric(at(0.99), "wait-p99-ms")
-			b.ReportMetric(at(1), "wait-max-ms")
-			b.ReportMetric(join.Seconds()/float64(b.N), "join-s")
-		})
+				b.ReportMetric(at(0.99), "wait-p99-ms")
+				b.ReportMetric(at(1), "wait-max-ms")
+				b.ReportMetric(up.Seconds()/float64(b.N), "up-s")
+			})
+		}
 	}
 }
 
-// The lane BenchmarkColdJoin models. coldPageServe is how long a page holds
-// its answer: 59 ms, what code's BenchmarkServeASnapshotPage measured a full
-// page of refs to take to serve (code.MaxSnapshotItems of a repository of
-// code.MaxRefsPerRepo), and a millisecond for the estate's crossing — what a
-// push proposed through another member pays over one proposed at its
-// committer (internal/code/codecluster's package doc). coldOtherEvery and
-// coldOtherServe are the lane's other traffic: two hundred reads a second,
-// each a millisecond's crossing and a millisecond's read.
+// The data node BenchmarkColdJoin models. coldPageServe is how long a page
+// holds its answer and its reader: 59 ms, what code's
+// BenchmarkServeASnapshotPage measured a full page of refs to take to serve
+// (code.MaxSnapshotItems of a repository of code.MaxRefsPerRepo, nearly all
+// of it the driver's scan), and a millisecond for the estate's crossing —
+// what a push proposed through another member pays over one proposed at its
+// committer (internal/code/codecluster's package doc). coldReaderConns is the
+// ordinary reader connections its store opens: max(8, GOMAXPROCS) (store's
+// defaultReaderConns), so eight on a data node of eight cores or fewer — the
+// fewest any data node has, and the most full pages such a node scans at
+// once. coldOtherEvery and coldOtherServe are the lane's other traffic: two
+// hundred reads a second, each a millisecond's crossing and a millisecond's
+// read.
 const (
-	coldPageServe  = 60 * time.Millisecond
-	coldOtherEvery = 5 * time.Millisecond
-	coldOtherServe = 2 * time.Millisecond
+	coldPageServe   = 60 * time.Millisecond
+	coldReaderConns = 8
+	coldOtherEvery  = 5 * time.Millisecond
+	coldOtherServe  = 2 * time.Millisecond
 )
 
-// coldLane is ONE DATA NODE'S SHARED LANE in front of the rows: the answers it
-// gives at once, each page holding one for coldPageServe, and a request past
-// them waiting its turn first come, first served, as a registration's
-// requests wait in the broker's order for a slot (queue.EventQueue.Serve).
+// coldLane is ONE DATA NODE in front of the rows, as a read reaches it: its
+// shared lane's answers, a request past them waiting its turn first come,
+// first served, as a registration's requests wait in the broker's order for
+// a slot (queue.EventQueue.Serve); then, inside the answer, one of the node's
+// reader connections, since every page is ONE read transaction
+// (statelog.Reader.Read) and every other read of the lane is too — so a page
+// holds both for coldPageServe, and the node scans at most coldReaderConns
+// pages at once, however many answers it gives.
 type coldLane struct {
 	inner   cache.Fetcher
 	answers *semaphore.Weighted
+	readers *coldReaders
+}
+
+// newColdLane is one data node answering pages from inner.
+func newColdLane(inner cache.Fetcher) *coldLane {
+	return &coldLane{
+		inner: inner, answers: semaphore.NewWeighted(queue.ConcurrentAnswers),
+		readers: &coldReaders{free: coldReaderConns},
+	}
 }
 
 func (l *coldLane) RepoState(ctx context.Context, q code.StateQuery) (code.RepoSnapshot, error) {
@@ -948,6 +1059,8 @@ func (l *coldLane) RepoState(ctx context.Context, q code.StateQuery) (code.RepoS
 		return code.RepoSnapshot{}, err
 	}
 	defer l.answers.Release(1)
+	l.readers.take()
+	defer l.readers.give()
 	time.Sleep(coldPageServe)
 	return l.inner.RepoState(ctx, q)
 }
@@ -968,7 +1081,7 @@ func (l *coldLane) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer,
 
 // traffic starts the lane's other traffic, a read every coldOtherEvery, and
 // answers what stops it — which answers how long each read waited for its
-// answer, once every one has had it.
+// answer and its reader, once every one has had both.
 func (l *coldLane) traffic() (stop func() []time.Duration) {
 	var (
 		mu    sync.Mutex
@@ -990,8 +1103,10 @@ func (l *coldLane) traffic() (stop func() []time.Duration) {
 				if err := l.answers.Acquire(context.Background(), 1); err != nil {
 					return
 				}
+				l.readers.take()
 				waited := time.Since(began)
 				time.Sleep(coldOtherServe)
+				l.readers.give()
 				l.answers.Release(1)
 				mu.Lock()
 				waits = append(waits, waited)
@@ -1004,6 +1119,50 @@ func (l *coldLane) traffic() (stop func() []time.Duration) {
 		wg.Wait()
 		return waits
 	}
+}
+
+// coldReaders is the modeled data node's reader connections, handed out as
+// database/sql hands out its pool's: a read past them waits, and a
+// connection given back goes to a waiting read CHOSEN AT RANDOM
+// (connRequestSet.TakeRandom), never the one that has waited longest — so
+// once full pages queue for a node's readers, every other read's wait is a
+// draw among them, and its tail is many pages long.
+type coldReaders struct {
+	mu      sync.Mutex
+	free    int
+	waiting []chan struct{}
+}
+
+// take waits for a connection. No modeled read gives up waiting: every one
+// is the benchmark's own, and each arm waits for all of them.
+func (r *coldReaders) take() {
+	r.mu.Lock()
+	if r.free > 0 {
+		r.free--
+		r.mu.Unlock()
+		return
+	}
+	turn := make(chan struct{})
+	r.waiting = append(r.waiting, turn)
+	r.mu.Unlock()
+	<-turn
+}
+
+// give hands a connection to a waiting read drawn at random, or back to the
+// free ones when nobody waits.
+func (r *coldReaders) give() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := len(r.waiting)
+	if n == 0 {
+		r.free++
+		return
+	}
+	i := rand.IntN(n)
+	turn := r.waiting[i]
+	r.waiting[i] = r.waiting[n-1]
+	r.waiting = r.waiting[:n-1]
+	close(turn)
 }
 
 // timedLog is a Fetcher that keeps how long its log took to answer, so a

@@ -179,12 +179,13 @@ func (c *Cache) read(ctx context.Context, id string, at statelog.Position, strea
 }
 
 // fullRounds is the node's slots for FULL READS of a repository's rows
-// against the estate (MaxFullRounds): every page of a full read is served
-// out of one of the answers a data node gives the whole fleet's reads at
-// once, so a node joining with hundreds of repositories asked of it holds at
-// most this many of them, however many it was asked for. Granted first
-// come, first served (semaphore.Weighted), so no repository's read waits
-// behind one that asked after it.
+// against the estate (MaxFullRounds): every page of a full read is one read
+// transaction on a data node — one of the answers its lane gives the whole
+// fleet's reads at once, and one of the reader connections every one of
+// those reads takes too — so a node coming up with hundreds of repositories
+// asked of it holds at most this many of them, however many it was asked
+// for. Granted first come, first served (semaphore.Weighted), so no
+// repository's read waits behind one that asked after it.
 type fullRounds struct {
 	slots *semaphore.Weighted
 	size  int64

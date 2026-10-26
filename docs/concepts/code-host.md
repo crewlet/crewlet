@@ -605,27 +605,38 @@ node notices, reading every repository whole at its next sync.
 
 **Many repositories at once.** A full read — a repository's first fetch on a
 node that just started or joined, a rebuild — reads the repository's rows from
-a data node a page at a time, and every page is served out of what that data
-node gives the whole fleet's reads at once: the 64 answers of the lane every
-other node asks it through — a seat's tracker read, a page write, the check
-every git request is admitted by — or, on a git node that holds the data
-itself, its own store, which serves those answers too. So a node
-reads **at most eight repositories' rows whole at once**, the rest waiting
-their turn, first come, first served: a node joining with hundreds of
-repositories asked of it holds at most eight of a data node's answers — four
-nodes joining together half of them — rather than all 64 while the fleet's
-reads wait behind its pages. A sync after a push reads only what moved and
-never waits for one of the eight. The wait is part of the request's own: a
-clone waits for its repository's turn as it waits for the sync, and a seat's
-read that has no answer within two seconds is sent to another git node while
-the sync goes on. Against a model of the data node — four nodes of 500
-repositories each, every page held as long as a full page of refs takes to
-serve — the fleet's other reads waited nothing for an answer with eight a node
-and about 1.9 seconds with no limit, and the four nodes read their rows in
-about five seconds: in that time a node downloads fewer than three packs for
-each of its 500 repositories from S3, so for repositories of any history it is
-the downloads, not the reads, that set how long a join takes.
-`crewlet.code.cache.full_rounds` shows a node's full reads running and waiting.
+a data node a page at a time, and every page is one read on that data node:
+one of the 64 answers its lane gives the whole fleet's reads at once — a seat's
+tracker read, a page write, the check every git request is admitted by — and
+one of the connections its database scans every one of those reads on, of
+which the smallest data node has eight (or, on a git node that holds the data
+itself, its own database's, which serves those reads too). So a node reads
+**at most eight repositories' rows whole at once**, the rest waiting their
+turn, first come, first served: a node coming up with hundreds of repositories
+asked of it asks no more of a data node than the smallest scans at once,
+rather than every page while the fleet's reads wait behind them. A sync after
+a push reads only what moved and never waits for one of the eight. The wait is
+part of the request's own: a clone waits for its repository's turn as it waits
+for the sync, and a seat's read that has no answer within two seconds is sent
+to another git node while the sync goes on.
+
+Against a model of a data node of eight cores, every page as long as a full
+page of refs takes to scan — about 60 ms, the dearest a page is — a node
+**restarted** over the cache it kept, which downloads nothing, brought 500
+repositories up in about four seconds, the data node's own rate, while the
+fleet's other reads waited about a tenth of a second for a connection (p99).
+Allowed more at once, it came up no sooner and those reads waited longer — a
+third of a second at sixteen, a second at sixty-four, 3.6 seconds with no
+limit — and allowed four, it took 7.6 seconds. Four nodes **joining** together
+read their 2 000 repositories' rows in about 16 seconds whatever the limit,
+while the other reads waited about 0.8 seconds at eight, a second at sixteen
+and 15 seconds with no limit; in those 16 seconds each node downloads five to
+nine packs for each of its repositories from S3, so for repositories of more
+history the downloads, not the reads, set how long a join takes. A repository
+of a few hundred refs is one page of a few milliseconds, which holds its turn
+a twentieth as long. `crewlet.code.cache.full_rounds` shows a node's full reads
+running and waiting, and `crewlet.code.cache.read.page.duration` how long the
+data nodes take to answer each page.
 
 **The budget.** A node holds its caches to a byte budget —
 `git.cache_max_bytes`, or a share of the cache's volume derived at every boot

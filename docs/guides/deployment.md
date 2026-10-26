@@ -1748,8 +1748,12 @@ cache on its own disk. What such a node needs from its host:
   hundreds of repositories at once it first waits its repository's turn to
   read the rows, eight a node at a time
   ([many repositories at once](../concepts/code-host.md#the-cache-on-a-git-node)):
-  a few seconds at 500 repositories, a data node serving a full page of rows
-  in about 60 ms. The first sync of each
+  on a node joining with fresh caches the downloads outlast it once its
+  repositories hold more than a handful of packs, and on a node restarted over
+  the cache it kept, which downloads nothing, it is the whole sync — about four
+  seconds for 500 repositories asked at once, each a full page of refs from a
+  data node of eight cores, which scans a full page in about 60 ms. The first
+  sync of each
   repository after the node restarts also holds that repository's index files
   — about a quarter of its pack bytes — to their checksums before it answers:
   0.2 s a gigabyte of packs from the page cache, and at the volume's own

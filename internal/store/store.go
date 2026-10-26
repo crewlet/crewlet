@@ -156,7 +156,7 @@ const driverName = "turso"
 
 // Defaults for Options.
 const (
-	// minReaderConns is the floor under the derived reader budget, and it
+	// MinReaderConns is the floor under the derived reader budget, and it
 	// is anchored to the ONE component that reads this store concurrently
 	// with the engine writing it.
 	//
@@ -173,7 +173,13 @@ const (
 	// The floor exists for the small host, where GOMAXPROCS is 1 or 2 and
 	// the derivation below would otherwise size the pool for the CPU and
 	// leave a single dashboard queueing against itself.
-	minReaderConns = 8
+	//
+	// EXPORTED because it is also the most pages the smallest data node
+	// scans at once — every read the estate serves is one transaction on
+	// one of these connections — and a git node holds its full reads of
+	// repositories' rows to it (code/cache.MaxFullRounds), so a change here
+	// moves that cap.
+	MinReaderConns = 8
 
 	// identityReserve is how many of this pool's connections ordinary work
 	// may NEVER occupy, kept for identity work: resolving who is acting
@@ -261,7 +267,7 @@ const (
 // nothing else may take, so each is ADDED rather than taken out. See
 // [Options.poolSize] for the arithmetic.
 func defaultReaderConns() int {
-	return max(minReaderConns, runtime.GOMAXPROCS(0))
+	return max(MinReaderConns, runtime.GOMAXPROCS(0))
 }
 
 // Options configures [OpenNode]. The zero value is valid.

@@ -1176,15 +1176,19 @@ func Catalogue() []Instrument {
 				"code log was recreated or went back under the cache, and a " +
 				"check's or a hint's read of the same rows; a sync after a " +
 				"push reads only what moved and takes no slot. Every page of " +
-				"a full read holds one of the 64 answers a data node gives " +
-				"the whole fleet's reads at once (on a node that holds the " +
-				"data, it reads the store that serves them), so the slots " +
-				"keep a node joining with hundreds of repositories from " +
-				"holding all of them: four nodes joining at once hold half. " +
-				"`running` at " +
-				"eight while `waiting` climbs is a node bringing up more " +
-				"repositories than it reads at once: each waits inside its " +
-				"own request's time, and they come up eight reads at a time.",
+				"a full read is one read on a data node — one of the 64 " +
+				"answers its lane gives the whole fleet's reads at once, and " +
+				"one of the reader connections every one of those reads " +
+				"takes, eight on the smallest data node (on a node that holds " +
+				"the data, its own store's) — so the slots keep a node coming " +
+				"up with hundreds of repositories to what the smallest data " +
+				"node scans at once, rather than every page while the " +
+				"fleet's reads wait behind them. `running` at eight while " +
+				"`waiting` climbs is a node bringing up more repositories " +
+				"than it reads at once: each waits inside its own request's " +
+				"time, and they come up eight reads at a time — about four " +
+				"seconds for 500 repositories of a full page of refs each, " +
+				"from a data node of eight cores.",
 		},
 		{
 			Name: CodeCacheReadPageDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
