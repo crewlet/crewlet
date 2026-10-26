@@ -48,11 +48,21 @@
 // THE PUBLIC-ADDRESS RULE ([Public]) is here for the same ADR-0008 reason. A
 // dial to a host the engine did not choose (a CDN URL a page wrote) must never
 // reach the network the engine runs in, and which addresses are on the public
-// internet is one list of ranges: kept by each dialer that refuses an address,
-// the copies would drift and nothing would compare them. Only the rule is
-// here. Each dialer stays with its caller, since what it trusts beside the
-// rule is the caller's to say: the CDN fetch's dialer dials an operator's
-// proxy as itself.
+// internet is one rule: kept by each dialer that refuses an address, the
+// copies would drift and nothing would compare them. Only the rule is here.
+// Each dialer stays with its caller, since what it trusts beside the rule is
+// the caller's to say: the CDN fetch's dialer dials an operator's proxy as
+// itself.
+//
+// The rule holds IPv4 to the blocks IANA's special-purpose registry reserves,
+// and IPv6 to an ALLOWLIST: global unicast (2000::/3), less the blocks in it
+// that are not on the internet. A list of reserved IPv6 blocks cannot be
+// completed. IANA keeps reserving more of a space that is mostly unallocated,
+// and the forms that carry an IPv4 address (NAT64, 6to4, Teredo,
+// IPv4-compatible) are each a way to reach a private IPv4 address through an
+// IPv6 one, which such a list calls public until somebody writes the row. IPv4
+// has no unallocated remainder, so its registry is the complete answer there.
+// [Public] holds the blocks and the reason for each.
 package httpx
 
 import (

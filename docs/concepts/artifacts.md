@@ -445,7 +445,11 @@ sequenceDiagram
   references on the allowed CDNs, as a script or link element, a module import
   or an import map entry, are copied into the version when it is published,
   integrity-checked, so viewing works without the CDN and the CDN never sees a
-  viewer. Any other remote script a page states is refused. What the linter
+  viewer. The node fetches each file itself and dials only an address on the
+  public internet: none in a block IANA reserves for a special purpose, and an
+  IPv6 one only in global unicast (`2000::/3`), so a CDN name that resolves
+  into the network the engine runs in is refused rather than fetched. Any
+  other remote script a page states is refused. What the linter
   cannot read is a script the page's own script builds at run time:
   `'strict-dynamic'` trusts it from any host, so a page whose author means to
   can send what a viewer may read to another site. Only an `editor` publishes,
