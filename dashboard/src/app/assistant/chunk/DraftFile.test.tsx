@@ -61,3 +61,26 @@ test("a file that is not an image is its name and type, and nothing is fetched",
   expect(screen.getByText("brief.pdf (application/pdf)")).toBeTruthy();
   expect(fetch).not.toHaveBeenCalled();
 });
+
+test("a file proposed for a dark-ground field is drawn on that ground, in the brand's colour", () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response("<svg/>")),
+  );
+  const { container } = render(
+    <DraftFile file={REF} ground={{ tone: "dark", color: "#0d1717" }} />,
+  );
+  const stage = container.querySelector(".crewlet-logo-slot__stage--dark") as HTMLElement | null;
+  expect(stage).not.toBeNull();
+  expect(stage?.style.getPropertyValue("--crewlet-logo-slot-ground")).toBe("#0d1717");
+  expect(container.querySelector(".crewlet-logo-slot__stage--light")).toBeNull();
+});
+
+test("a file with no declared ground is drawn on the light ground", () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response("<svg/>")),
+  );
+  const { container } = render(<DraftFile file={REF} />);
+  expect(container.querySelector(".crewlet-logo-slot__stage--light")).not.toBeNull();
+});

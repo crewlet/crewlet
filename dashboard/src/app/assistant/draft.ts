@@ -51,6 +51,12 @@ import {
 } from "./context.ts";
 import { useAssistantContext } from "./useAssistantContext.ts";
 
+/** The ground a proposed file is previewed on, and its colour where the draft names one. */
+export interface FileGround {
+  tone: "light" | "dark";
+  color?: string;
+}
+
 /** A field's value: text, or a list of items. A file field reads as its file's name. */
 export type DraftValue = string | readonly string[];
 
@@ -82,6 +88,12 @@ export interface DraftFieldSpec<D> {
     accepts: readonly string[];
     /** The draft with this file proposed for the field, or [refuse] with why not. */
     write(draft: D, ref: AssistantDraftFileRef): D | DraftRefusal;
+    /**
+     * The ground the field's file is shown on, read from the draft it lands
+     * in: a logo for dark grounds is previewed on the brand's dark ground, so
+     * a light wordmark reads on the card as it will in use. Absent: light.
+     */
+    ground?(draft: D): FileGround;
   };
   /** What a value must be, in a few words ("a #RRGGBB colour"). */
   hint?: string;
@@ -322,10 +334,14 @@ function written<D>(
     if (next instanceof DraftRefusal) return next.reason;
     // A FILE IS SHOWN BY ITS NAME AND TYPE, and drawn by the card from the
     // owner's route as an image, never inlined.
-    return {
-      next,
-      row: { field: field.label, next: `${ref.name} (${ref.media_type})`, current, file: ref },
+    const row: PageActionRow = {
+      field: field.label,
+      next: `${ref.name} (${ref.media_type})`,
+      current,
+      file: ref,
     };
+    if (field.file.ground) row.fileGround = field.file.ground(next);
+    return { next, row };
   }
   const list = typeof field.read(now) !== "string";
   const typed = proposed(value, list);

@@ -114,6 +114,8 @@ export interface PageActionRow {
   /** `current` as its items, likewise. */
   currentItems?: readonly string[];
   file?: AssistantDraftFileRef;
+  /** The ground `file` is previewed on, as the screen declares it; light where absent. */
+  fileGround?: { tone: "light" | "dark"; color?: string };
 }
 
 /** What a page action's parser answers: a typed value, or why it is refused. */

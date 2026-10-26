@@ -201,6 +201,11 @@ export function brandDraftFields(settable: ReadonlySet<BrandPart>): DraftFieldSp
       read: (e) => e.document.logos[logo.slot] ?? "",
       file: {
         accepts: LOGO_TYPES,
+        ground: (e) => ({
+          tone: logo.ground,
+          color:
+            logo.ground === "dark" ? e.document.colors.dark_ground : e.document.colors.light_ground,
+        }),
         write: (e, ref) => {
           // THE PATH THE FILE IS SAVED AT, from its type as the store holds
           // it; the bytes follow once the change is approved ([applyBrandDraft]).

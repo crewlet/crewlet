@@ -597,7 +597,7 @@ export function ActionReceipt({
 function previewRow(row: PageActionPreview["rows"][number]): ChangeListRow {
   // A PROPOSED FILE IS DRAWN, by its name, its type and a thumbnail.
   const next = row.file
-    ? { node: <DraftFile file={row.file} />, block: false }
+    ? { node: <DraftFile file={row.file} ground={row.fileGround} />, block: false }
     : drawValue(row.next, row.items);
   if (row.current === null || (row.file && row.current === "(empty)")) {
     return { kind: "added", label: row.field, to: next.node, isNew: false, block: next.block };

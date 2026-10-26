@@ -88,3 +88,26 @@ describe("a proposed logo", () => {
     expect(parseDraftChange(spec, { values: { "logos.mark": REF } }).ok).toBe(false);
   });
 });
+
+describe("a proposed logo's card row", () => {
+  test("is previewed on the ground its slot is made for, in the draft's own colour", () => {
+    const doc = {
+      ...DOC,
+      colors: { ...DOC.colors, dark_ground: "#0d1717", light_ground: "#f7faf9" },
+    };
+    const spec = {
+      kind: "client" as const,
+      scope: "s",
+      value: { document: doc, files: new Map() } as BrandDraft,
+      fields: brandDraftFields(new Set(["logos"] as const)),
+      apply: () => {},
+    };
+    const parsed = parseDraftChange(spec, {
+      values: { "logos.on_dark": REF, "logos.primary": REF },
+    });
+    if (!parsed.ok) throw new Error(parsed.reason);
+    const [dark, light] = parsed.value.rows;
+    expect(dark?.fileGround).toEqual({ tone: "dark", color: "#0d1717" });
+    expect(light?.fileGround).toEqual({ tone: "light", color: "#f7faf9" });
+  });
+});
