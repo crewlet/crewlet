@@ -1039,7 +1039,8 @@ check goes to the git nodes that serve the repository.
 
 **What to watch.** `crewlet.code.cache.bytes` against the budget,
 `crewlet.code.cache.repos`, `crewlet.code.cache.sync.duration` by `kind` (full
-syncs dominating is a cache too small to stay warm),
+syncs dominating is a cache too small to stay warm; a full sync's time counts
+its wait for one of the eight full reads),
 `crewlet.code.cache.full_rounds` by `state` — `waiting` climbing is a node
 bringing up more repositories at once than it reads whole —
 `crewlet.code.cache.rebuilds` by `reason`,

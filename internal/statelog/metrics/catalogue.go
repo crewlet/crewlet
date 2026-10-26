@@ -1151,9 +1151,18 @@ func Catalogue() []Instrument {
 			Shows: "How long a completed cache sync took, by `kind` (`delta`: " +
 				"the rows moved since the cache's position; `full`: the whole " +
 				"repository — a cold cache, the first sync of a repository " +
-				"after a restart, a log recreated under it). A delta p95 " +
-				"climbing is a node falling behind its pushes; a full sync's " +
-				"time is mostly its downloads, sixteen at once.",
+				"after a restart, a log recreated under it), from its round's " +
+				"start: the read of its rows, its downloads and its writes, " +
+				"and for a `full` sync its wait for one of the eight " +
+				"full reads the node runs at once " +
+				"(`crewlet.code.cache.full_rounds`). A delta p95 climbing is a " +
+				"node falling behind its pushes. A full sync's time is mostly " +
+				"its downloads, sixteen at once, on a cache that never held " +
+				"the repository — but on a node bringing up many " +
+				"repositories at once, above all one restarted over the cache " +
+				"it kept, which downloads nothing, it is mostly that wait: " +
+				"`full_rounds` `waiting` climbing says so, not the object " +
+				"store.",
 		},
 		{
 			Name: CodeCacheFullRounds, Kind: KindGauge, Unit: UnitCount,
