@@ -157,6 +157,30 @@ func TestDeliveredRefsAreDedupedAndBoundedWithTheRestCounted(t *testing.T) {
 	}
 }
 
+// REFS THE RECORD LISTS NONE OF ARE STILL SAID. A ref longer than the bound is
+// past it on its own, so a record can list nothing and count what the run
+// named; the resumed executor's text then said nothing of it at all, and the
+// run read to the executor as one that delivered nothing, while the record and
+// the dashboard both counted the ref.
+func TestTheResumedExecutorIsToldOfRefsTheRecordListsNoneOf(t *testing.T) {
+	t.Parallel()
+	long := "https://h/a/b/pull/1?x=" + strings.Repeat("y", MaxDeliveredRefBytes)
+	got := (&Coordinator{}).fitResult(t.Context(), PendingRun{},
+		Result{Success: true, DeliveredRefs: []string{long}})
+	if len(got.DeliveredRefs) != 0 || got.DeliveredRefsElided != 1 {
+		t.Fatalf("listed %d and counted %d more; want none listed and the one ref counted",
+			len(got.DeliveredRefs), got.DeliveredRefsElided)
+	}
+	if text := resumeText(got); !strings.Contains(text, "Delivered: 1 ref(s) its report names, not listed here") {
+		t.Errorf("the resumed executor is not told of the ref it is not shown: %q", text)
+	}
+
+	// A run that named no ref is told of none.
+	if text := resumeText(Result{Success: true, Text: "Outcome: succeeded"}); strings.Contains(text, "Delivered:") {
+		t.Errorf("a run that named no ref is told of one: %q", text)
+	}
+}
+
 // THE WHOLE RECORD FITS. Every piece of text a box wrote that rides the run's
 // phase record is at its bound, in the worst bytes JSON can be handed — each
 // one escaped six-fold — and the record still clears the queue's ceiling, so

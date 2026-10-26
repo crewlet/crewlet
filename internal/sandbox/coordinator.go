@@ -3656,7 +3656,8 @@ func resumeText(result Result) string {
 		status = "succeeded"
 	}
 	lines := []string{"The sandbox coding run " + status + "."}
-	if len(result.DeliveredRefs) > 0 {
+	switch {
+	case len(result.DeliveredRefs) > 0:
 		delivered := "Delivered: " + strings.Join(result.DeliveredRefs, ", ")
 		if result.DeliveredRefsElided > 0 {
 			// SAID, so the executor does not report a short list as all of
@@ -3665,6 +3666,15 @@ func resumeText(result Result) string {
 				result.DeliveredRefsElided)
 		}
 		lines = append(lines, delivered)
+	case result.DeliveredRefsElided > 0:
+		// SAID WHERE NONE IS LISTED TOO, which the record can come to: a
+		// ref longer than [MaxDeliveredRefBytes] is past the bound on its
+		// own. The record still counts it, and so does the dashboard's
+		// line; here it was dropped unsaid, and the executor was told of no
+		// ref at all — a run that seems to have delivered nothing, when the
+		// report it reads below names what it did.
+		lines = append(lines, fmt.Sprintf("Delivered: %d ref(s) its report names, not listed here",
+			result.DeliveredRefsElided))
 	}
 	switch {
 	case result.Text != "":
