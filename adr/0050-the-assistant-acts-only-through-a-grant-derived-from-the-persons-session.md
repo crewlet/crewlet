@@ -52,12 +52,25 @@ the MCP bridge, the agent turn context or the credential owner.
 **Its model has no tool of its own.** A coding CLI's own shell or file reader
 runs on the engine host as the engine user, so it would read the engine's data
 directory and keys, a read no request of the person's made. The assistant's
-chain therefore admits only an entry whose every call's argv (web denied, as
-written and streamed) leaves the CLI with no tool at all, checked off that
-argv by `cliprofile.Profile.ToolsOffProblem` rather than taken from the
+chain therefore admits only an entry whose argv (web denied) leaves the CLI with
+no built-in tool at all and no tool server but the engine's own, checked off
+that argv by `cliprofile.Profile.ToolsOffProblem` rather than taken from the
 profile's `local_tools` claim, since a deny list is always a release behind the
 tools a vendor adds. Codex keeps `apply_patch`, which has no switch and whose
 patch check answers whether a host file holds given lines, so Codex is refused.
+
+**Its tools reach it as the engine's one MCP server** (ADR-0049, which the
+assistant adopted when it reached main). The turn's catalogue is served to the
+CLI as the `crewlet` server, the model calls it natively, and every call is
+decided by the turn's own loop under this grant: no tool rides the prompt and
+no call is read out of the model's prose. The guarantee above is restated for
+it: the call's own arguments turn every built-in tool off and load no server
+of their own (`--tools ""`, `--strict-mcp-config`, `--setting-sources ""`),
+and the profile's mcp block may allow the engine's tools alone
+(`mcp__crewlet__*`), which `ToolsOffProblem` checks and
+`TestTheAssistantsQuickModeArgvIsUnchanged` pins. A web denial covers a run
+with tools too, where a profile's mcp block runs an argv or writes settings of
+its own.
 
 **Amended by ADR-0054, for deep work alone.** A turn may hand its task to a
 deep-work run, whose CLI does have tools of its own: it runs only in a box, or
