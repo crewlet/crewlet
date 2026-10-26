@@ -135,15 +135,28 @@ func ResolvePublic(ctx context.Context, r Resolver, host string) ([]netip.Addr, 
 //
 // An IPv4 address is public unless it is in a block IANA reserves
 // ([notGlobal4]); one written in IPv6 form (::ffff:a.b.c.d) is judged as the
-// IPv4 address it is. An IPv6 address in a NAT64 prefix is judged by the IPv4
-// address it carries, and by nothing else. Any other IPv6 address is public
-// only inside global unicast, 2000::/3, and outside the four blocks there that
-// are not on the internet ([notGlobal6]): 2001::/23, the two documentation
-// blocks and 6to4. Every other IPv6 address is not public, whatever block it
-// is in: unique-local, link-local, site-local, multicast, IPv4-compatible
-// (::/96), the local-use NAT64 block 64:ff9b:1::/48 where the network names no
-// prefix in it, and every block the IETF still holds in reserve. So is an
-// address scoped to one link by a zone.
+// IPv4 address it is. An IPv6 address that carries a zone is never public. An
+// IPv6 address in a NAT64 prefix is judged by the IPv4 address it carries, and
+// by nothing else. Any other IPv6 address is public only inside global
+// unicast, 2000::/3, and outside the four blocks there that are not on the
+// internet ([notGlobal6]): 2001::/23, the two documentation blocks and 6to4.
+// Every other IPv6 address is not public, whatever block it is in:
+// unique-local, link-local, site-local, multicast, IPv4-compatible (::/96),
+// the local-use NAT64 block 64:ff9b:1::/48 where the network names no prefix
+// in it, and every block the IETF still holds in reserve.
+//
+// AN IPv6 ADDRESS THAT CARRIES A ZONE (fe80::1%eth0) IS REFUSED BEFORE ANY
+// BLOCK IS ASKED, the NAT64 prefixes included. A zone tells apart the links of
+// this host that one non-global address can be on (RFC 4007, section 6), so no
+// host on the internet is named with one. A block never contains a zoned
+// address (netip.Prefix.Contains answers false), so the blocks would refuse
+// one anyway, but only by that accident: netip's own predicates
+// (IsGlobalUnicast among them) judge a zoned address as they judge it without
+// the zone, and so does carried, so a rule reshaped around either would call
+// 2606:4700::1%eth0 or 64:ff9b::6810:1%eth0 public. Refused first, a zone
+// steps around no block whatever shape the rule takes next. An IPv4 address in
+// IPv6 form loses its zone when it is unmapped, and is judged as the IPv4
+// address it is.
 //
 // IPv6 IS AN ALLOWLIST because a list of what is reserved cannot be completed.
 // IANA keeps carving blocks out of the unallocated space (5f00::/16 in 2024,
@@ -167,11 +180,13 @@ func public(ip netip.Addr, nat64 []netip.Prefix) bool {
 	case ip.Is4():
 		return !inAny(notGlobal4, ip)
 	case ip.Is6():
+		if ip.Zone() != "" {
+			// Before any block is asked: none contains a zoned address.
+			return false
+		}
 		if in, carriesPublic := translated(ip, nat64); in {
 			return carriesPublic
 		}
-		// A zoned address is in no prefix, so it falls out here: a zone
-		// scopes it to one link of this host.
 		return global6.Contains(ip) && !inAny(notGlobal6, ip)
 	}
 	return false

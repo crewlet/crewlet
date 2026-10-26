@@ -226,6 +226,39 @@ func TestEveryReservedRangeIsNotPublic(t *testing.T) {
 	}
 }
 
+// AN IPv6 ADDRESS THAT CARRIES A ZONE IS NEVER PUBLIC, whatever block it is in
+// and whatever it carries. No host on the internet is named with a zone, and
+// netip's own predicates judge a zoned address as if it had none, so a rule
+// that judged one by its bits alone would step around every block it lists.
+// The rows sit in listed IPv6 blocks (a numeric zone among them), in the
+// NAT64 and 6to4 forms of 10.0.0.5, and on three addresses that are public
+// but for their zone: a global one, 104.16.0.1 under the well-known NAT64
+// prefix, and 104.16.0.1 under a prefix the network names. Each is judged on a
+// network with no DNS64 and on one naming that prefix. An IPv4 address in IPv6
+// form loses its zone with the form, and is judged as the IPv4 address it is.
+func TestAnIPv6AddressWithAZoneIsNeverPublic(t *testing.T) {
+	t.Parallel()
+	networks := []*network{{}, dns64("3ffe:64:64:96::c000:aa", "3ffe:64:64:96::c000:ab")}
+	for _, c := range []struct{ addr, what string }{
+		{"2001:db8::1%eth0", "documentation"},
+		{"2001:db8::1%1", "documentation, a numeric zone"},
+		{"100::1%eth0", "discard"},
+		{"64:ff9b:1::a00:5%eth0", "local-use IPv4/IPv6 translation"},
+		{"64:ff9b::a00:5%eth0", "10.0.0.5 through NAT64's well-known prefix"},
+		{"2002:a00:5::1%eth0", "10.0.0.5 through 6to4"},
+		{"2606:4700::1%eth0", "public but for its zone"},
+		{"64:ff9b::6810:1%eth0", "104.16.0.1 through NAT64's well-known prefix, public but for its zone"},
+		{"3ffe:64:64:96::6810:1%eth0", "104.16.0.1 under the named prefix, public there but for its zone"},
+		{"::ffff:100.64.0.1%eth0", "carrier-grade NAT, in IPv6 form"},
+	} {
+		for _, n := range networks {
+			if publicOn(t, n, netip.MustParseAddr(c.addr)) {
+				t.Errorf("%s (%s) is judged public (prefixes named: %v)", c.addr, c.what, n.answers)
+			}
+		}
+	}
+}
+
 // A BLOCK IANA MARKS GLOBALLY REACHABLE IS PUBLIC, from its first address to
 // its last, unless it sits inside a block the rule refuses whole (the rows
 // above give each one's reason): the rule refuses what is special-purpose,
