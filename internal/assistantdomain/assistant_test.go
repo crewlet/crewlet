@@ -191,8 +191,14 @@ func TestASecondTurnIsRefusedWhileOneIsOpen(t *testing.T) {
 	}); !errors.Is(err, assistantdomain.ErrTurnRunning) {
 		t.Fatalf("a second turn opened beside a running one answers %v", err)
 	}
-	if _, err := n.writer.ParkTurn(t.Context(), fresh(c), first, []byte(`[{"role":"user"}]`)); err != nil {
+	if _, err := n.writer.ParkTurn(t.Context(), fresh(c), first, []byte(`[{"role":"user"}]`), 3); err != nil {
 		t.Fatalf("park the turn: %v", err)
+	}
+	// A PARKED TURN COUNTS ITS STEPS: a stream told from the record says how
+	// many it took, never zero.
+	if row, err := n.reader.Turn(t.Context(), c.Owner, first); err != nil || row.Steps != 3 ||
+		row.State != wire.TurnWaitingForApproval {
+		t.Fatalf("the parked turn reads %+v, %v; want waiting with 3 steps", row, err)
 	}
 	if _, _, err := n.writer.OpenTurn(t.Context(), fresh(c), assistantdomain.NewTurn{
 		Conversation: conversation, Turn: uuid.New(),
@@ -247,7 +253,7 @@ func TestOnlyAParkedTurnExpiresAndTheBackstopNominatesItPastItsProposals(t *test
 		t.Fatalf("a running turn closed expired answers %v, want the turn moved naming running", err)
 	}
 	n.propose(c, turn)
-	if _, err := n.writer.ParkTurn(t.Context(), fresh(c), turn, []byte(`[{"role":"user"}]`)); err != nil {
+	if _, err := n.writer.ParkTurn(t.Context(), fresh(c), turn, []byte(`[{"role":"user"}]`), 0); err != nil {
 		t.Fatalf("park the turn: %v", err)
 	}
 	due, err := n.reader.ParkedPast(t.Context(), monday, 10)

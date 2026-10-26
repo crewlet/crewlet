@@ -28,11 +28,19 @@
  *  - a quiet stream is STALLED after two missed keepalives
  *    (`ASSISTANT_STALL_MS`) and dialled again from the last frame it read;
  *  - a dropped connection or a 5xx is dialled again with a backoff, and the
- *    caller is told it is reconnecting, so the drawer can say so;
+ *    caller is told it is reconnecting, so the drawer can say so. The backoff
+ *    and the outage it measures end only when a connection makes PROGRESS (a
+ *    frame that moves the turn, or a keepalive from a turn still running), not
+ *    when one is merely answered: a connection answered and closed with
+ *    nothing new is the same outage, and redialling it at the first step of
+ *    the backoff every time is a loop on the engine;
  *  - a frame of another protocol version stops the stream for good with
  *    `protocol_mismatch`, which the drawer answers by asking for a reload,
  *    and a refusal (a 4xx) stops it with the refusal;
- *  - the stream ends when the engine closes it after the turn's `done`.
+ *  - the stream ends when the engine closes it after the turn's `done`, or
+ *    answers `204 No Content`: the segment has ended and the caller already
+ *    holds all of it (a turn parked on an approval, resumed at its last
+ *    frame), so nothing will follow until a decision opens the next one.
  *
  * The frames' order and their duplicates are the reducer's to judge
  * (`app/assistant/chunk/turn.ts` drops a frame at or below the seq it has).
@@ -260,24 +268,33 @@ export function openTurnStream(
       stall = setTimeout(() => own.abort(), stallMs);
     };
     let fault: AssistantStreamFault | null = null;
+    // THE OUTAGE ENDS ON PROGRESS. A snapshot alone is the engine saying
+    // what it can while it cannot follow the turn, and asking to be asked
+    // again: that is not the turn moving, so it backs off like a drop.
+    const progressed = () => {
+      outageSince = null;
+      wait = backoffMs;
+    };
     const parser = createAssistantStreamParser({
       frame: (frame) => {
         last = assistantEventId(frame.turn_id, frame.seq);
         if (frame.kind === "done") ended = true;
+        if (frame.kind !== "snapshot") progressed();
         handlers.frame(frame);
       },
       fault: (f) => {
         fault = f;
       },
+      keepalive: progressed,
     });
     try {
       const body = await rest.stream(`/assistant/${streamUrl.slice(ASSISTANT_PREFIX.length)}`, {
         headers: last === "" ? {} : { "Last-Event-ID": last },
         signal: own.signal,
       });
-      // A CONNECTION THAT WAS ANSWERED starts the next outage's backoff over.
-      outageSince = null;
-      wait = backoffMs;
+      // NOTHING FOLLOWS, AND NOTHING WILL: the engine says the segment has
+      // ended and this stream already holds all of it.
+      if (body.noContent) return true;
       setState("live");
       arm();
       for (;;) {

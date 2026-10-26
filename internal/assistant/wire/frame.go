@@ -165,8 +165,10 @@ type ActionEvent struct {
 	Invalidate     *Invalidate     `json:"invalidate,omitempty"`
 }
 
-// Invalidate tells open screens a write landed at Position on Domain's log,
-// so the next read they make includes it.
+// Invalidate tells open screens a write landed: at Position on the log of the
+// state-log domain named Domain (`tracker`, never its stream's name), so the
+// next read they make includes it. Both are empty for a write whose answer
+// named no position; the screens read again all the same.
 type Invalidate struct {
 	Domain   string `json:"domain"`
 	Position string `json:"position"`
