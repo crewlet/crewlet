@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
@@ -61,6 +62,18 @@ type surface struct {
 	t      *turn
 	byName map[string]catalog.Tool
 	defs   []llm.ToolDef
+	// names resolves the arguments a tool declares as naming a seat, a
+	// unit, a project or a space ([catalog.Tool.Names]), through the turn's
+	// own grant, before a read is sent or a write is previewed.
+	names *catalog.Resolver
+
+	mu sync.Mutex
+	// reads are the answers this segment's reads were given, by the call
+	// ([readKey]): THE SAME READ IS NEVER SENT OR DRAWN TWICE IN ONE
+	// SEGMENT. A model that asks again is handed what it was told, and the
+	// person is not shown the same card a second time. A segment is one run
+	// of the loop, so a turn resumed after an approval reads afresh.
+	reads map[string]string
 }
 
 var (
@@ -70,7 +83,10 @@ var (
 
 // newSurface offers tools in the catalogue's order.
 func newSurface(t *turn, tools []catalog.Tool) *surface {
-	s := &surface{t: t, byName: map[string]catalog.Tool{}}
+	s := &surface{t: t, byName: map[string]catalog.Tool{}, reads: map[string]string{},
+		names: catalog.NewResolver(func(ctx context.Context, r exec.Request) (exec.Response, error) {
+			return t.svc.dispatcher.Do(ctx, t.read, r)
+		})}
 	for _, tool := range tools {
 		if _, dup := s.byName[tool.Name]; dup {
 			continue
@@ -182,9 +198,18 @@ func (s *surface) recordRefusal(ctx context.Context, tool catalog.Tool, args map
 
 // read sends one read tool's request and shapes its answer.
 func (s *surface) read(ctx context.Context, tool catalog.Tool, args map[string]any) (toolloop.ToolResult, error) {
+	resolved, err := s.names.Resolve(ctx, tool, args)
+	if err != nil {
+		return s.refuseBefore(ctx, tool, args, "Not sent", err), nil
+	}
+	args = resolved
 	req, err := tool.Request(args)
 	if err != nil {
 		return s.refuseBefore(ctx, tool, args, "Not sent", err), nil
+	}
+	key := readKey(tool, req)
+	if earlier, done := s.answered(key); done {
+		return toolloop.ToolResult{Output: alreadyRead + earlier}, nil
 	}
 	route, _ := tool.RouteOf(req)
 	shown, _ := tool.StepRequest(req)
@@ -197,7 +222,7 @@ func (s *surface) read(ctx context.Context, tool catalog.Tool, args map[string]a
 		s.t.stepEnd(ctx, step, wire.StepFailed, "Signed out", nil, resp.Status, len(resp.Body))
 		return toolloop.ToolResult{}, errGrantEnded
 	}
-	shaped, err := catalog.Shape(tool, args, resp, s.t.boundary, s.t.svc.now())
+	shaped, err := catalog.Shape(tool, args, resp, s.t.boundary, s.t.svc.now(), s.cardOptions(ctx))
 	if err != nil {
 		s.t.stepEnd(ctx, step, wire.StepFailed, "Could not be read", nil, resp.Status, len(resp.Body))
 		s.t.svc.log.ErrorContext(ctx, "assistant_step_unreadable", "turn", s.t.id,
@@ -227,7 +252,45 @@ func (s *surface) read(ctx context.Context, tool catalog.Tool, args map[string]a
 	if shaped.Refusal != nil {
 		return failed(routeClass(resp.Status, shaped.Refusal.Code), shaped.Model), nil
 	}
+	s.remember(key, shaped.Model)
 	return toolloop.ToolResult{Output: shaped.Model}, nil
+}
+
+// alreadyRead leads the answer to a read the segment has made already.
+const alreadyRead = "You already made this exact read in this turn, and its card is " +
+	"shown to the person above, so it was not sent or drawn again. What it answered: "
+
+// readKey is a read's identity within a segment: its tool and the request it
+// sends, which the tool built from the resolved arguments, so two spellings
+// of one call (a seat's name and its handle) are one read.
+func readKey(tool catalog.Tool, req exec.Request) string {
+	return tool.Name + " " + req.Method + " " + req.Path + "?" + req.Query.Encode()
+}
+
+// answered is what an earlier read with key answered, and whether there was
+// one.
+func (s *surface) answered(key string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	model, ok := s.reads[key]
+	return model, ok
+}
+
+// remember keeps a read's answer for the rest of the segment. Only an
+// answer: a refusal or a failure may be asked again.
+func (s *surface) remember(key, model string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reads[key] = model
+}
+
+// cardOptions are what a read's card is told beyond its answer: each seat's
+// name, from the seat directory the turn reads through its own grant, read
+// only when a card has a seat to name.
+func (s *surface) cardOptions(ctx context.Context) cards.Options {
+	return cards.Options{SeatName: func(handle string) (string, bool) {
+		return s.names.SeatName(ctx, handle)
+	}}
 }
 
 // docs answers a [catalog.KindDocs] call: nothing is sent, and the step says
@@ -282,6 +345,11 @@ func (s *surface) propose(ctx context.Context, tool catalog.Tool, args map[strin
 		}
 		immediate = action.Confirm == wire.ConfirmNone
 	}
+	resolved, err := s.names.Resolve(ctx, tool, args)
+	if err != nil {
+		return s.refuseBefore(ctx, tool, args, "Not proposed", err), nil
+	}
+	args = resolved
 	if err := tool.Check(args); err != nil {
 		return s.refuseBefore(ctx, tool, args, "Not proposed", err), nil
 	}
@@ -432,6 +500,11 @@ func (t *turn) draft(tool catalog.Tool, scope wire.ProposalScope, preview propos
 // and a refusal and an absence are both "not permitted", never told apart), or
 // by their grants for a screen that names no record.
 func (s *surface) navigate(ctx context.Context, tool catalog.Tool, args map[string]any) (toolloop.ToolResult, error) {
+	resolved, err := s.names.Resolve(ctx, tool, args)
+	if err != nil {
+		return s.refuseBefore(ctx, tool, args, "Not opened", err), nil
+	}
+	args = resolved
 	if err := tool.Check(args); err != nil {
 		return s.refuseBefore(ctx, tool, args, "Not opened", err), nil
 	}
@@ -475,7 +548,12 @@ func (s *surface) navigate(ctx context.Context, tool catalog.Tool, args map[stri
 		return toolloop.ToolResult{Output: "The person may not open that, or it does not " +
 			"exist. Say you cannot open it for them."}, nil
 	}
-	return toolloop.ToolResult{Output: "A link to " + link.Label + " is shown to the person."}, nil
+	// A LINK IS NOT AN ANSWER: the model is told so where it reads that the
+	// link was shown, since "I've added a link above" was once a whole reply
+	// to a question the turn had read the facts for.
+	return toolloop.ToolResult{Output: "A link to " + link.Label + " is shown to the " +
+		"person. It does not answer their question: still state in your reply the facts " +
+		"they asked for."}, nil
 }
 
 // failed is a call that failed, as the model reads it, carrying its class in

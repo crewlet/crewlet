@@ -78,9 +78,30 @@ units).
 | Area | Examples |
 |---|---|
 | Worklet (needs `worklet`) | Search and list tasks, read a task and its thread, a task's cost, your inbox and queue, projects, workload, open decisions |
-| Doclet (needs `doclet`) | Search pages and read a page |
-| Everyone | Agents and their activity, the org chart, turns you may read, coding runs, token spend and budgets, the company feed, artifacts shared with you |
+| Doclet (needs `doclet`) | Search pages, read a page, and list the spaces by name and key |
+| Everyone | Agents and their activity, the org chart, turns you may read (with why a failed one failed), coding runs, token spend and budgets, the company feed, artifacts shared with you |
 | Administrators (needs `admin`) | Integrations, fleet health, and the history of configuration changes |
+
+**Answer in words.** Every part of a question is answered with the facts it
+asks for (who is doing what, why a turn failed, which tasks are due), and the
+tables and cards beside the answer support it rather than replace it. Each
+card's title says what its read was narrowed to ("Spend by agent, last 14
+days", "Tasks, urgent, due in the next 7 days"), and a read made twice in one
+answer is drawn once.
+
+**Use the names you use.** Ask about "the QA Engineer", "the Company space" or
+"the Marketing project": the assistant resolves a seat, unit, project or space
+by its name or its key, through your own reads of the chart, the projects and
+the spaces, and cards name seats by their names. A change that names something
+that is not there, or a name two records share, is refused before any card,
+listing the choices, rather than after you approve it; the assistant never says
+something does not exist without having looked.
+
+**Ask or plan when the request is open.** A clear request is acted on at once.
+When what to change, or for whom, is genuinely open, or the request is a matter
+of taste ("make it friendlier"), the assistant reads what is there, then asks
+one short question with the options it found, or sets out an ordered plan and
+proposes its first step. It says what each proposal does before its card.
 
 **Prepare changes for you to approve:** filing, changing and commenting on
 tasks, answering a decision, setting your priorities, marking your inbox,
@@ -90,7 +111,10 @@ an artifact. It only offers the changes your permissions allow.
 
 **Change what is on your screen**, on screens that accept it: apply a filter,
 fill in a draft in an editor, or select records. These are proposals too, and
-nothing is saved until you save it on that screen as usual.
+nothing is saved until you save it on that screen as usual. The screen you are
+on never limits what you may ask: from any screen the assistant gathers what it
+needs and prepares each change where it lives, and for a change that can only
+be made in another screen's editor it offers that screen to open.
 
 **Work on what you have open.** Every screen with a draft or a form (the brand
 setup, the Brand page's cards, the principles, a page or a doc being written,
@@ -156,6 +180,11 @@ model's description of it.
   instead) is never shown as a card. The step
   says why, and the assistant is told the same reason, so it can prepare a
   change that can apply.
+- A task card handed to someone says what happens next, and only what the
+  engine can stand behind: a person is notified; an agent that is taking work
+  picks it up on its next turn; an agent that is paused, out of budget, not
+  running on any node or whose model is down is said to wait, and for what;
+  and one whose last turn failed is flagged so you check it first.
 - Some changes ask you to **confirm your identity** first (a step-up), the
   same as making the change on its own screen would. Sharing an artifact with
   the whole company always does.

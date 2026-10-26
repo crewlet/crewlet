@@ -52,11 +52,16 @@ func (r Result) Failed() bool { return r.Refusal != nil }
 //     The model is handed the call's own arguments, that nothing matched
 //     and the answer's own reason where it gave one ([cards.EmptySummary]).
 //     THE ONE PLACE this is decided, for every read the catalogue holds.
+//     THE CARD'S TITLE CARRIES THE CALL'S SCOPE ([Tool.Scope]), so two reads
+//     of one tool with different arguments are two different cards to the
+//     person and to the model, and a seat column is drawn by the seat's
+//     name where o says it ([cards.Options]).
 //  5. The model's summary is the card's, every row or item whole, and is
 //     fenced under the turn's boundary when the tool reads text a person or
 //     an agent wrote (ADR-0040), or has every fence marker in it defused
 //     when it does not, so no field of any answer can open or close a fence.
-func Shape(t Tool, args Args, resp exec.Response, b provenance.Boundary, now time.Time) (Result, error) {
+func Shape(t Tool, args Args, resp exec.Response, b provenance.Boundary, now time.Time,
+	o cards.Options) (Result, error) {
 	if !cards.Permitted(resp.Status) {
 		refusal := exec.RefusalOf(resp)
 		refusal.Message = redact.Secrets(refusal.Message)
@@ -82,7 +87,7 @@ func Shape(t Tool, args Args, resp exec.Response, b provenance.Boundary, now tim
 	if err != nil {
 		return Result{}, err
 	}
-	built, err := cards.Build(spec, body, now)
+	built, err := cards.BuildWith(scoped(spec, t.ScopeOf(args)), body, now, o)
 	if err != nil {
 		return Result{}, fmt.Errorf("catalog: card %s's answer: %w", t.Name, err)
 	}
@@ -106,6 +111,18 @@ func Shape(t Tool, args Args, resp exec.Response, b provenance.Boundary, now tim
 		return Result{}, err
 	}
 	return Result{Cards: built.Cards(), Model: model, Trust: trust}, nil
+}
+
+// scoped is spec with its table's title carrying scope, the one spelling a
+// step's label shares ([withScope]). An entity names its own record.
+func scoped(spec cards.Spec, scope string) cards.Spec {
+	if spec.Table == nil || scope == "" {
+		return spec
+	}
+	table := *spec.Table
+	table.Title = withScope(table.Title, scope)
+	spec.Table = &table
+	return spec
 }
 
 // modelText is a summary as the model reads it: fenced whole, with the

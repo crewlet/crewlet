@@ -43,6 +43,7 @@ var questionExposures = []Exposure{
 	asked("budgets", "list_budgets"),
 	asked("integrations", "list_integrations"),
 	asked("knowledge", "search_knowledge"),
+	asked("containers", "list_spaces"),
 	asked("sandbox_runs", "list_coding_runs"),
 	asked("work_items", "list_tasks"),
 	asked("work_item", "get_task"),

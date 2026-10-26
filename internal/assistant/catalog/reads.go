@@ -39,6 +39,11 @@ func prose(key, label, path string) cards.Column {
 	return cards.Column{Key: key, Label: label, Path: path, Type: tText, Prose: true}
 }
 
+// seat is a column of seat handles, drawn by each seat's name ([cards.Column.Seat]).
+func seat(key, label, path string) cards.Column {
+	return cards.Column{Key: key, Label: label, Path: path, Type: tText, Seat: true}
+}
+
 func fact(label, path string, typ wire.ColumnType) cards.Fact {
 	return cards.Fact{Label: label, Path: path, Type: typ}
 }
@@ -62,14 +67,17 @@ var taskColumns = []cards.Column{
 	prose("title", "Title", "title"),
 	col("status", "Status", "status", tLabel),
 	col("priority", "Priority", "priority", tLabel),
-	col("assignee", "Assignee", "assignee", tText),
+	seat("assignee", "Assignee", "assignee"),
 	col("due", "Due", "due", tDatetime),
 	col("project", "Project", "project", tText),
 }
 
 func taskTable(title, rows string) cards.Spec {
 	return cards.Spec{Table: &cards.Table{Title: title, Rows: rows, Columns: taskColumns,
-		Brief: []string{"title", "status", "assignee"},
+		// THE KEY IS DRAWN: it is what the answer and the person name a task
+		// by, and every other column stays on the card for the downloads and
+		// the model.
+		Brief: []string{"key", "title", "status", "assignee"},
 		Open:  &cards.Open{Screen: "worklet-tasks"}}}
 }
 
@@ -104,14 +112,15 @@ func readTools() []Tool {
 			// still building), as search_knowledge's does, rather than reading
 			// to the model as "nothing matched".
 			Cards: one(cards.Spec{Note: "note", Table: &cards.Table{Title: "Matching tasks", Rows: "hits",
-				Brief: []string{"title", "status", "assignee"},
+				Brief: []string{"key", "title", "status", "assignee"},
 				Columns: []cards.Column{col("key", "Key", "key", tText),
 					prose("title", "Title", "title"), col("status", "Status", "status", tLabel),
-					col("assignee", "Assignee", "assignee", tText),
+					seat("assignee", "Assignee", "assignee"),
 					col("project", "Project", "project", tText),
 					prose("snippet", "Matched", "snippet")},
 				Open: &cards.Open{Screen: "worklet-search"}}}),
 			Label: func(map[string]any) string { return "Searching tasks" },
+			Scope: func(a Args) string { return quoted(a, "q") },
 		},
 		{
 			Name: "list_tasks", Phrase: "list tasks",
@@ -119,8 +128,8 @@ func readTools() []Tool {
 				"somebody, in a status, of a priority or a type, in a project. Lists are filtered " +
 				"to what the person may see.",
 			schema: object(nil, map[string]*schema{
-				"project":     text("A project key, ENG for example.", nameBytes),
-				"assignee":    text("A seat's handle.", nameBytes),
+				"project":     text("A project's key or name, ENG for example.", nameBytes),
+				"assignee":    text("A seat's handle or name.", nameBytes),
 				"status":      {kind: "array", description: "Statuses to keep.", maxItems: len(statuses), items: oneOf("", statuses...)},
 				"priority":    oneOf("A priority to keep.", priorities...),
 				"type":        text("A task type from the workspace's catalogue.", nameBytes),
@@ -144,6 +153,8 @@ func readTools() []Tool {
 			},
 			Cards: one(taskTable("Tasks", "items")),
 			Label: func(map[string]any) string { return "Listing tasks" },
+			Scope: taskScope,
+			Names: map[string]Directory{"project": DirProject, "assignee": DirSeat},
 		},
 		{
 			Name: "get_task", Phrase: "read this task",
@@ -239,7 +250,7 @@ func readTools() []Tool {
 					Brief: []string{"title", "asked_by", "asked_at"},
 					Columns: []cards.Column{col("key", "Key", "key", tText),
 						prose("title", "Title", "title"),
-						col("asked_by", "Asked by", "asked_by", tText),
+						seat("asked_by", "Asked by", "asked_by"),
 						col("asked_at", "Asked", "asked_at", tDatetime),
 						prose("question", "Question", "body")},
 					Open: &cards.Open{Screen: "me"}}},
@@ -247,19 +258,25 @@ func readTools() []Tool {
 					Brief: []string{"excerpt", "reason", "at"},
 					Columns: []cards.Column{col("subject", "Item", "subject_key", tText),
 						col("reason", "Why", "reason", tLabel),
-						col("actor", "By", "actor", tText), prose("excerpt", "What", "excerpt"),
+						seat("actor", "By", "actor"), prose("excerpt", "What", "excerpt"),
 						col("at", "When", "at", tDatetime), col("read", "Read", "read", tText),
 						col("record", "Record", "record_id", tText)},
 					Open: &cards.Open{Screen: "inbox"}}},
 			},
 			Label: func(map[string]any) string { return "Reading your work" },
+			Scope: func(a Args) string {
+				if a.String("section") == "inbox" && a.Bool("unread") {
+					return "unread only"
+				}
+				return ""
+			},
 		},
 		{
 			Name: "list_projects", Phrase: "list projects",
 			Description: "The projects: each one's lead, unit, target date and open counts, or " +
 				"one project with its key.",
 			schema: object(nil, map[string]*schema{
-				"key": text("One project's key, for that project alone.", nameBytes),
+				"key": text("One project's key or name, for that project alone.", nameBytes),
 			}),
 			Routes: []string{"GET /worklet/projects", "GET /worklet/projects/{key}"}, Apps: workletApp,
 			Fence: true,
@@ -279,7 +296,7 @@ func readTools() []Tool {
 				"": {Table: &cards.Table{Title: "Projects", Rows: "projects",
 					Brief: []string{"name", "active", "todo", "done"},
 					Columns: []cards.Column{col("key", "Key", "key", tText),
-						prose("name", "Name", "name"), col("lead", "Lead", "lead.handle", tText),
+						prose("name", "Name", "name"), seat("lead", "Lead", "lead.handle"),
 						col("unit", "Unit", "unit.name", tText),
 						col("target", "Target", "target_date", tText),
 						col("todo", "To do", "task_counts.todo", tNumber),
@@ -296,6 +313,7 @@ func readTools() []Tool {
 					Open: &cards.Open{Screen: "project", Params: map[string]string{"key": "key"}}}},
 			},
 			Label: func(map[string]any) string { return "Listing projects" },
+			Names: map[string]Directory{"key": DirProject},
 		},
 		{
 			Name: "get_workload", Phrase: "read the workload",
@@ -310,13 +328,15 @@ func readTools() []Tool {
 			},
 			Cards: one(cards.Spec{Table: &cards.Table{Title: "Workload", Rows: "rows",
 				Brief: []string{"handle", "open", "blocked", "overdue"},
-				Columns: []cards.Column{col("handle", "Assignee", "handle", tText),
+				Columns: []cards.Column{seat("handle", "Assignee", "handle"),
 					col("open", "Open", "open", tNumber), col("blocked", "Blocked", "blocked", tNumber),
 					col("overdue", "Overdue", "overdue", tNumber),
 					col("points", "Points", "points", tNumber),
 					col("unscheduled", "Unscheduled", "unscheduled", tNumber)},
 				Open: &cards.Open{Screen: "roster"}}}),
 			Label: func(map[string]any) string { return "Reading the workload" },
+			Scope: func(a Args) string { return labelled(a, "unit", "for") },
+			Names: map[string]Directory{"unit": DirUnit},
 		},
 		{
 			Name: "list_decisions", Phrase: "list what waits on you",
@@ -335,8 +355,8 @@ func readTools() []Tool {
 				Columns: []cards.Column{col("kind", "Kind", "kind", tLabel),
 					col("at", "Since", "at", tDatetime), col("key", "Task", "ask.key", tText),
 					prose("title", "Title", "ask.title"), prose("question", "Question", "ask.body"),
-					col("asked_by", "Asked by", "ask.asked_by", tText),
-					col("agent", "Coding run", "run.agent_handle", tText),
+					seat("asked_by", "Asked by", "ask.asked_by"),
+					seat("agent", "Coding run", "run.agent_handle"),
 					prose("run_question", "Run question", "run.question")},
 				Open: &cards.Open{Screen: "inbox"}}}),
 			Label: func(map[string]any) string { return "Reading what waits on you" },
@@ -366,7 +386,7 @@ func readTools() []Tool {
 			Description: "One seat now (its activity, phase and last turn), or every seat's turns " +
 				"per day over a window.",
 			schema: object(nil, map[string]*schema{
-				"handle": text("The seat's handle. Required for the seat's detail.", nameBytes),
+				"handle": text("The seat's handle or name. Required for the seat's detail.", nameBytes),
 				"view":   oneOf("detail (the default) or activity.", "detail", "activity"),
 				"days":   positive("Activity only: the window in days.", 90),
 			}),
@@ -401,7 +421,19 @@ func readTools() []Tool {
 						col("tokens", "Tokens", "tokens", tTokens)},
 					Open: &cards.Open{Screen: "roster"}}},
 			},
-			Label: func(a map[string]any) string { return "Reading " + Args(a).String("handle") },
+			Label: func(a map[string]any) string {
+				if Args(a).String("view") == "activity" {
+					return "Reading turns per seat"
+				}
+				return "Reading " + Args(a).String("handle")
+			},
+			Scope: func(a Args) string {
+				if a.String("view") != "activity" {
+					return ""
+				}
+				return scopeOf(lastDays(a, "days", 7), labelled(a, "handle", "for"))
+			},
+			Names: map[string]Directory{"handle": DirSeat},
 		},
 		{
 			Name: "get_org_chart", Phrase: "read the org chart",
@@ -438,9 +470,10 @@ func readTools() []Tool {
 		{
 			Name: "list_turns", Phrase: "list this seat's turns",
 			Description: "One seat's recent turns: outcome, model, tokens and duration, newest " +
-				"first. Rows the person may not read are left out.",
+				"first, and for a failed turn why it failed. Rows the person may not read are " +
+				"left out.",
 			schema: object([]string{"handle"}, map[string]*schema{
-				"handle": text("The seat's handle.", nameBytes),
+				"handle": text("The seat's handle or name.", nameBytes),
 				"failed": flag("Only the turns that failed."),
 				"days":   positive("The window in days.", 30),
 				"limit":  positive("How many turns, at most.", 50),
@@ -451,17 +484,30 @@ func readTools() []Tool {
 					truth("failed", "failed").num("days", "days", 0).num("limit", "limit", 25).values())
 			},
 			Cards: one(cards.Spec{Table: &cards.Table{Title: "Turns", Rows: "turns",
-				Brief: []string{"task", "started", "duration", "tokens"},
+				Brief: []string{"started", "task", "tokens", "error"},
 				Columns: []cards.Column{col("role", "Seat", "role", tText),
 					col("started", "Started", "started_at", tDatetime),
 					col("duration", "Duration", "duration_ms", tDuration),
 					col("tokens", "Tokens", "total_tokens", tTokens),
-					col("failed", "Failed", "failed", tText), col("models", "Models", "models", tText),
+					col("failed", "Failed", "failed", tText),
+					// WHY IT FAILED, off the row (store.Turn.Error): the one
+					// fact a question about a failed turn is asking.
+					prose("error", "Why it failed", "error"),
+					col("error_kind", "Failure kind", "error_kind", tLabel),
+					col("models", "Models", "models", tText),
 					col("task", "Task", "work_item.key", tText),
 					prose("summary", "Summary", "summary"),
 					col("turn", "Turn", "turn_id", tText)},
 				Open: &cards.Open{Screen: "turns"}}}),
 			Label: func(a map[string]any) string { return "Listing " + Args(a).String("handle") + "'s turns" },
+			Scope: func(a Args) string {
+				failedOnly := ""
+				if a.Bool("failed") {
+					failedOnly = "failed only"
+				}
+				return scopeOf(failedOnly, lastDays(a, "days", 0))
+			},
+			Names: map[string]Directory{"handle": DirSeat},
 		},
 		{
 			Name: "list_coding_runs", Phrase: "list coding runs",
@@ -477,7 +523,7 @@ func readTools() []Tool {
 			},
 			Cards: one(cards.Spec{Table: &cards.Table{Title: "Coding runs", Rows: "runs",
 				Brief: []string{"agent", "status", "task", "started"},
-				Columns: []cards.Column{col("agent", "Seat", "agent_handle", tText),
+				Columns: []cards.Column{seat("agent", "Seat", "agent_handle"),
 					// THE TASK IS THE ITEM THE LAUNCHING TURN WAS CHARGED TO
 					// (`work_item`); `work_key` is the turn's delivery identity
 					// (internal/workkey), which no person reads as a task.
@@ -497,7 +543,7 @@ func readTools() []Tool {
 			schema: object(nil, map[string]*schema{
 				"days":   positive("The window in company days. Default 7.", 90),
 				"by":     oneOf("How to break it down. Default agent.", "agent", "model", "phase"),
-				"handle": text("One seat's handle, for that seat alone.", nameBytes),
+				"handle": text("One seat's handle or name, for that seat alone.", nameBytes),
 			}),
 			Routes: []string{"GET /tokens/breakdown"},
 			Build: func(a map[string]any) (exec.Request, error) {
@@ -512,11 +558,15 @@ func readTools() []Tool {
 				"phase": spendTable("Spend by phase", "by_phase", col("phase", "Phase", "phase", tLabel)),
 			},
 			Label: func(map[string]any) string { return "Reading token spend" },
+			Scope: func(a Args) string {
+				return scopeOf(lastDays(a, "days", 7), labelled(a, "handle", "for"))
+			},
+			Names: map[string]Directory{"handle": DirSeat},
 		},
 		{
 			Name: "get_spend_series", Phrase: "read spend over time",
 			Description: "Token spend per day or week over a window, the company's whole, or its " +
-				"largest groups.",
+				"largest groups. Use bucket week to compare this week with last week in one read.",
 			schema: object(nil, map[string]*schema{
 				"days":   positive("The window in company days. Default 30.", 90),
 				"bucket": oneOf("day (the default) or week.", "day", "week"),
@@ -547,6 +597,17 @@ func readTools() []Tool {
 					Open: &cards.Open{Screen: "spend"}}},
 			},
 			Label: func(map[string]any) string { return "Reading spend over time" },
+			Scope: func(a Args) string {
+				bucket := ""
+				if a.String("bucket") == "week" {
+					bucket = "by week"
+				}
+				group := ""
+				if a.String("view") == "by_group" {
+					group = labelled(a, "group", "by")
+				}
+				return scopeOf(lastDays(a, "days", 30), bucket, group)
+			},
 		},
 		{
 			Name: "list_budgets", Phrase: "read the budgets",
@@ -607,6 +668,23 @@ func readTools() []Tool {
 					prose("snippet", "Matched", "snippet"), col("id", "Page", "id", tText)},
 				Open: &cards.Open{Screen: "doclet"}}}),
 			Label: func(map[string]any) string { return "Searching the knowledge base" },
+			Scope: func(a Args) string { return quoted(a, "q") },
+		},
+		{
+			Name: "list_spaces", Phrase: "list the knowledge spaces",
+			Description: "The knowledge base's spaces, each with its key and its name. A page " +
+				"lives in one; create_page takes either.",
+			schema: object(nil, map[string]*schema{}),
+			Routes: []string{"GET /containers"}, Apps: docletApp, Fence: true,
+			Build: func(map[string]any) (exec.Request, error) {
+				return get("GET /containers", nil, nil)
+			},
+			Cards: one(cards.Spec{Table: &cards.Table{Title: "Spaces", Rows: "containers",
+				Brief: []string{"name", "key", "purpose"},
+				Columns: []cards.Column{prose("name", "Name", "name"),
+					col("key", "Key", "key", tText), prose("purpose", "Purpose", "purpose")},
+				Open: &cards.Open{Screen: "doclet"}}}),
+			Label: func(map[string]any) string { return "Listing the knowledge spaces" },
 		},
 		{
 			Name: "get_page", Phrase: "read this page",
@@ -646,8 +724,8 @@ func readTools() []Tool {
 				Brief: []string{"kind", "title", "page", "at"},
 				Columns: []cards.Column{col("kind", "Kind", "kind", tLabel),
 					col("at", "When", "at", tDatetime), col("task", "Task", "work.key", tText),
-					prose("title", "Task title", "work.title"), col("by", "By", "work.actor", tText),
-					prose("page", "Page", "page.title"), col("page_by", "Page by", "page.actor", tText),
+					prose("title", "Task title", "work.title"), seat("by", "By", "work.actor"),
+					prose("page", "Page", "page.title"), seat("page_by", "Page by", "page.actor"),
 					col("schedule", "Schedule", "schedule.name", tText),
 					col("outcome", "Outcome", "schedule.outcome", tLabel)},
 				Open: &cards.Open{Screen: "home"}}}),
@@ -677,6 +755,7 @@ func readTools() []Tool {
 					col("updated", "Updated", "updated_at", tDatetime), col("id", "Artifact", "id", tText)},
 				Open: &cards.Open{Screen: "artifacts"}}}),
 			Label: func(map[string]any) string { return "Listing artifacts" },
+			Scope: func(a Args) string { return scopeOf(a.String("kind"), quoted(a, "q")) },
 		},
 		{
 			Name: "get_artifact", Phrase: "read this artifact",

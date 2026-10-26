@@ -93,7 +93,10 @@ func PageActionFor(args Args, accepts []string) (PageAction, error) {
 		return PageAction{}, fmt.Errorf("%w: %q is not a page action this build knows",
 			ErrInvalidArguments, id)
 	case !slices.Contains(accepts, id):
-		return PageAction{}, fmt.Errorf("%w: %q", ErrNotAccepted, id)
+		return PageAction{}, fmt.Errorf("%w: %q. A page action changes only the screen the "+
+			"person has open. Make a saved change with its write tool or propose_api_change "+
+			"from here, or offer the screen that edits it with open_in_app and say what to "+
+			"do there", ErrNotAccepted, id)
 	}
 	return action, nil
 }
@@ -149,14 +152,17 @@ func interactionTools() []Tool {
 		"screen": oneOf("The screen to open.", cards.Screens()...),
 		"label":  text("The link's text, a few words.", 80),
 	}
-	for _, name := range []string{"key", "id", "handle", "unit"} {
+	for _, name := range []string{"key", "id"} {
 		params[name] = text("The screen's "+name+", where it takes one.", nameBytes)
 	}
+	params["handle"] = text("The seat's handle or name, for a seat's screen.", nameBytes)
+	params["unit"] = text("The unit's key or name, for a unit's screen.", nameBytes)
 	open := Tool{
 		Name: "open_in_app", Kind: KindNavigate, Tier: TierRead, Phrase: "open this in the app",
 		Description: "Offer the person a link to a screen or a record, which the engine builds " +
 			"and checks they may open. Never write a link yourself.",
 		schema: object([]string{"screen"}, params),
+		Names:  map[string]Directory{"handle": DirSeat, "unit": DirUnit},
 		Routes: ProbeRoutes(),
 		Build: func(a map[string]any) (exec.Request, error) {
 			_, probe, err := Open(Args(a))

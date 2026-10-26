@@ -41,7 +41,8 @@ func World() map[string]any {
 			"units": []any{map[string]any{"name": "Platform", "roles": []any{
 				map[string]any{"handle": "ada", "name": "Ada Lovelace", "kind": "human"}},
 				"children": []any{map[string]any{"name": "Backend", "roles": []any{
-					map[string]any{"handle": "engineer", "name": "Backend engineer", "kind": "agent"}}}}}}},
+					map[string]any{"handle": "engineer", "name": "Backend engineer", "kind": "agent"},
+					map[string]any{"handle": "dev", "name": "Developer", "kind": "agent"}}}}}}},
 		"/agents/pm": map[string]any{"handle": "pm", "role": "Product manager",
 			"live": map[string]any{"activity": "working"}},
 		"/sandbox-runs": map[string]any{"runs": []any{map[string]any{"turn_id": RecordID,
