@@ -1595,6 +1595,20 @@ func dialOptions(cfg Config) ([]nats.Option, error) {
 	return opts, nil
 }
 
+// ephemeralInactive is how long the broker keeps an ephemeral consumer whose
+// client has stopped asking it for anything: the live feed's
+// ([Queue.SubscribeStream]) and a domain log's watch ([DomainLog.Watch]).
+//
+// A MINUTE, and one number for both, because both strike the same bargain.
+// Long enough that a client whose connection blipped — it dials again every
+// second ([dialOptions]) — finds its consumer where it left it. Short enough
+// that one whose client went for good (a closed browser tab, a stopped node, a
+// watch that replaced a consumer it had given up on) stops costing the member
+// holding it memory, and the matching of every record its stream stores,
+// within a minute — with nothing having to delete it, which a client that
+// crashed never does.
+const ephemeralInactive = time.Minute
+
 // SubscribeStream creates an ephemeral per-caller broadcast subscription.
 //
 // Unlike a durable group subscription, EVERY stream subscriber receives
@@ -1636,7 +1650,7 @@ func (q *Queue) SubscribeStream(ctx context.Context, pattern string, h queue.Str
 		AckPolicy: jetstream.AckNonePolicy,
 		// Ephemeral — cleaned up by the server shortly after the client
 		// goes away, even if the caller never invokes Unsubscribe.
-		InactiveThreshold: time.Minute,
+		InactiveThreshold: ephemeralInactive,
 	})
 	if err != nil {
 		cancel()

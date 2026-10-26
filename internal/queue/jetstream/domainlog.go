@@ -4,11 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strconv"
+	"sync"
 	"time"
 
+	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/nats-io/nuid"
 
+	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/jsinflight"
 	"github.com/crewlet/crewlet/internal/jsprovision"
@@ -18,7 +24,9 @@ import (
 
 // DomainLog is one state-log domain's append surface: a conditional publish
 // that returns the acknowledgement the ordinary publish path discards, and
-// the last-message query a rejection is discriminated with.
+// the last-message query a rejection is discriminated with — and the WATCH
+// ([DomainLog.Watch]) a reader takes when what it needs from the log is which
+// objects moved, never what the records say.
 //
 // # Why this is not Queue.Publish
 //
@@ -83,6 +91,15 @@ type DomainLog struct {
 	// the log's ends from memory, refreshed from here at most once a
 	// second whatever the read rate.
 	info func(ctx context.Context) (*jetstream.StreamInfo, error)
+
+	// watchTiming is every duration a watch on this log waits on, and the
+	// ZERO VALUE IS PRODUCTION: [DomainLog.watching] answers the constants
+	// beside [DomainLog.Watch] whenever it is unset, which is always
+	// outside this package's own tests — for [Queue.timing]'s reason: the
+	// branches worth proving are a reconnect noticed and a create asked
+	// again, and at the production numbers a case proving one waits them
+	// out. Set only before the log's first Watch.
+	watchTiming watchTiming
 }
 
 // DomainLog opens the append surface for a stream this node has provisioned.
@@ -543,4 +560,611 @@ func (l *DomainLog) SetMaxBytes(ctx context.Context, maxBytes uint64) error {
 			l.name, maxBytes, err)
 	}
 	return nil
+}
+
+// WatchHandler is what a [DomainWatch] tells its caller: the subject of each
+// record appended under its filter, and every moment it may have missed one.
+//
+// The two are called ONE AT A TIME, never concurrently, and never once
+// [DomainWatch.Stop] has returned, so a caller keeps what the two share without
+// a lock of its own. They run on the delivery path of the queue's connection,
+// so each returns promptly — a nudge schedules work and does not do it — and
+// neither may call Stop.
+type WatchHandler struct {
+	// Subject is called once for each record appended under the watch's
+	// filter after the watch began, in log order, with the record's subject
+	// and its sequence on the log.
+	//
+	// THE SEQUENCE TRAVELS WITH THE SUBJECT because the watch hears of a
+	// record when the broker stores it, which is before any applier has
+	// applied it: a reader about to read the rows the record wrote waits for
+	// its copy to reach that position first, or it reads the rows from
+	// before the record and finds nothing to do.
+	Subject func(subject string, seq uint64)
+
+	// Gap is called whenever the watch may have missed a record: it lost its
+	// consumer and began again at the log's end, a delivery its consumer
+	// counted never reached it, or the queue's connection to the broker went
+	// away and came back. What the watch did not deliver before a Gap, the
+	// caller finds by reading its rows.
+	Gap func()
+}
+
+// Watch tells h the subject of every record appended to the log under filter
+// from now on, without taking the records: the nudge a reader that keeps its
+// work in rows takes as "look at this object now", where its own periodic
+// pass over the rows would find the record a cadence later. filter is a
+// subject pattern that meets the log's own subject space; one that meets none
+// of it is refused ([DomainLog.carries]).
+//
+// It returns once the watch has begun — every record appended after it
+// returns is delivered or followed by a Gap — and the watch is its caller's
+// to end with [DomainWatch.Stop]. A watch that could not begin is an error
+// and leaves nothing running. One that has begun outlives its consumer and
+// its connection's reconnects on its own, saying so through h.Gap, until it
+// is stopped or the queue's connection is closed for good, which takes the
+// node down with it ([Queue.Lost]).
+//
+// # Subjects and never records
+//
+// The consumer is HEADERS ONLY: the broker sends each record's subject, its
+// headers and its position, and never its body. The records a watch looks at
+// are a domain's own — the code log's as large as the transport's whole
+// [statelog.MaxTransportRecordBytes], 8 MiB less 4 KiB — and a watcher wants
+// to know WHICH object moved, which it reads from the rows its own copy
+// derives. Carrying every record to every watching node as well would cost
+// each of them the log's whole volume a second time, over a leaf's link as
+// much as over a member's routes.
+//
+// # From the log's end, and acknowledging nothing
+//
+// It begins at the log's END (DeliverNew): what the log held before the watch
+// began is what the caller's rows already say, read by the pass the caller
+// makes once the watch has begun. And it acknowledges NOTHING (AckNone), so
+// no delivery is ever held, redelivered or counted against anybody: a nudge
+// is worth something only while it is early, and the rows decide every
+// question it raises.
+//
+// # One replica, in memory, replaced rather than repaired
+//
+// The consumer is ONE replica held IN MEMORY by one member of the stream's
+// group: its whole state is how far it has delivered, which nothing needs to
+// survive. A replicated consumer would be a raft group per watching node and
+// a proposal per delivery, for state a new consumer at the log's end replaces
+// for the price of one create. So a consumer that goes — the member holding it
+// stopped or was cut off, the broker reaped it while this node was away
+// ([ephemeralInactive]), somebody deleted it — is not waited for: the watch
+// creates another at the log's end, under a name of its own, and calls h.Gap,
+// and the caller reads its rows for what the gap held.
+//
+// # How a loss is known
+//
+// The broker sends an idle heartbeat to a standing pull every
+// [watchHeartbeat] while it has nothing to deliver, so silence for two of
+// them is a consumer that is not serving this watch whatever the reason — and
+// so is a pull nobody serves (no responders: no member holds the consumer),
+// and the broker's word that it deleted the consumer or that the member
+// holding it is shutting down ([lostConsumer]). Each is a loss, answered with
+// a new consumer. Two things are not, and each is a Gap with the consumer
+// kept: a delivery the consumer counted and this node never received — every
+// delivery carries the consumer's own count, which must rise by one each
+// time — and a reconnect of the queue's connection, across which a delivery
+// may have gone to an inbox nobody held; the connection's reconnect count is
+// read every heartbeat, so the caller hears of one within one.
+func (l *DomainLog) Watch(ctx context.Context, filter string, h WatchHandler) (*DomainWatch, error) {
+	if l.q.isClosed() {
+		return nil, ErrClosed
+	}
+	if filter == "" {
+		return nil, fmt.Errorf("jetstream: a watch on %q names no subjects — "+
+			"an empty filter is every record the log carries, which no "+
+			"watcher means; name the subjects, or the log's own wildcard", l.name)
+	}
+	if h.Subject == nil || h.Gap == nil {
+		return nil, fmt.Errorf("jetstream: a watch on %q under %s needs both "+
+			"handlers — a watch without Gap would miss records and say nothing",
+			l.name, filter)
+	}
+	// REFUSED HERE, because the broker does not: it makes a consumer under
+	// any filter at all (the subset check its error 10093 names is gone
+	// from it), and one outside the stream's subjects delivers nothing, for
+	// ever, with nothing saying why. A filter that is not a subject pattern
+	// at all the client library and the broker both refuse, so its syntax
+	// stays theirs.
+	if server.IsValidSubject(filter) && !l.carries(filter) {
+		return nil, fmt.Errorf("jetstream: a watch on %q under %s would hear "+
+			"nothing — the log carries %v, and no subject there matches it; "+
+			"name subjects inside them", l.name, filter, l.subjects())
+	}
+	// DETACHED from the call that begins the watch, as the live feed's
+	// consumer is: ctx bounds the first create, and the watch lives until
+	// Stop.
+	life, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	w := &DomainWatch{
+		l: l, filter: filter, h: h, timing: l.watching(), logger: l.q.log,
+		prefix: "watch_" + nuid.Next() + "_",
+		life:   life, cancel: cancel,
+		wake: make(chan struct{}, 1), done: make(chan struct{}),
+		// READ BEFORE THE FIRST CONSUMER EXISTS, so a reconnect while it is
+		// made is one the watch notices rather than one it starts past.
+		reconnects: l.js.Conn().Stats().Reconnects,
+	}
+	if err := w.begin(ctx, 1); err != nil {
+		cancel()
+		return nil, fmt.Errorf("jetstream: watch %q under %s: %w", l.name, filter, err)
+	}
+	go w.supervise()
+	return w, nil
+}
+
+// watchHeartbeat is how often the broker tells an idle watch that its
+// consumer is still serving it — and so, at two of them missed, how long a
+// consumer that stopped is still taken to be serving.
+//
+// FIVE SECONDS, the client library's own heartbeat for its ordered consumer,
+// the one other reader it builds to replace a consumer it lost rather than
+// wait for it (nats.go's jetstream/pull.go): a watch notices a member that
+// went within ten seconds, for one heartbeat every five to a watch with
+// nothing to deliver, where the library's default for a plain pull, fifteen,
+// left a watch deaf for thirty. The pull's other two settings are the
+// library's defaults and hold here: a request that stands thirty seconds and
+// is asked again as it ends, and five hundred records a request, which as
+// headers is a few hundred kilobytes in flight at most.
+const watchHeartbeat = 5 * time.Second
+
+// watchRetry and watchRetryCeiling space the attempts to replace a lost
+// consumer — the first at once, then a second later, doubling to ten seconds
+// between attempts — spread by watchRetryJitter so the watching nodes of a
+// fleet that lost a member together do not ask its metadata group in step.
+//
+// THE CLIENT LIBRARY'S NUMBERS for replacing its ordered consumer (nats.go's
+// jetstream/ordered.go), for the same kind of reader. A member's re-election
+// or restart takes seconds, so the first attempts meet its return; a broker
+// that stays away is asked every ten seconds, one metadata proposal a
+// watching node, which a recovering group can afford. And a watch that cannot
+// begin again costs its caller latency and nothing else, since the caller's
+// rows are its record.
+const (
+	watchRetry        = time.Second
+	watchRetryCeiling = 10 * time.Second
+	watchRetryJitter  = 0.2
+)
+
+// watchTiming is every duration a watch waits on — see
+// [DomainLog.watchTiming].
+type watchTiming struct {
+	// heartbeat is the broker's idle heartbeat to the watch's pull.
+	heartbeat time.Duration
+	// recheck is how often the watch reads its connection's reconnect
+	// count: every heartbeat, in production.
+	recheck time.Duration
+	// attempt bounds one create of a replacement consumer: in production
+	// the client's own default for a request with no deadline, the five
+	// seconds every request this node sends without one is given. The
+	// reply to a create comes once the metadata group has committed it and
+	// the consumer's one member leads it — milliseconds on a healthy
+	// fleet — and an attempt that outlasts it, its request lost with a
+	// member going down, is asked again under the SAME name, which the
+	// broker answers with the consumer an earlier attempt made rather than
+	// a second one. Not the provisioning's write term ([jsprovision.AskTerm],
+	// fifteen seconds clustered and thirty solo): that is sized for a
+	// replicated group's election, which a one-member consumer has none of,
+	// and a create lost to a restarting member would hold the watch deaf
+	// for all of it.
+	attempt time.Duration
+	// retry and retryCeiling space the attempts to replace a lost consumer.
+	retry, retryCeiling time.Duration
+}
+
+// carries reports whether filter can match a subject the log carries.
+//
+// OVERLAP, not containment: a filter wider than the log (the code log's
+// `crewlet.code.>`, say) watches every record the log holds, which is a
+// watch its caller can mean; one that meets none of its subjects can only be
+// a mistake. The subjects are the handle's, read at open: a safety field no
+// node changes on a running stream ([Queue.observeStream]).
+func (l *DomainLog) carries(filter string) bool {
+	for _, subject := range l.subjects() {
+		if server.SubjectsCollide(filter, subject) {
+			return true
+		}
+	}
+	return false
+}
+
+// subjects is the log's subject space, as its stream declared it when the log
+// was opened.
+func (l *DomainLog) subjects() []string {
+	info := l.stream.CachedInfo()
+	if info == nil {
+		return nil
+	}
+	return info.Config.Subjects
+}
+
+// watching is the timing a watch on this log runs at: production unless this
+// package's tests set [DomainLog.watchTiming].
+func (l *DomainLog) watching() watchTiming {
+	if l.watchTiming != (watchTiming{}) {
+		return l.watchTiming
+	}
+	return watchTiming{heartbeat: watchHeartbeat, recheck: watchHeartbeat,
+		attempt: l.js.Options().DefaultTimeout,
+		retry:   watchRetry, retryCeiling: watchRetryCeiling}
+}
+
+// errWatchStopped is a create or a pull that finished after its watch was
+// stopped, which the watch drops rather than reports.
+var errWatchStopped = errors.New("jetstream: the watch was stopped")
+
+// DomainWatch is one running [DomainLog.Watch].
+//
+// ONE GOROUTINE OF ITS OWN, the supervisor, which replaces a lost consumer
+// and reads the connection's reconnect count, and which [DomainWatch.Stop]
+// ends and waits for. Deliveries and the client's reports about its pull
+// arrive on the client's own goroutines; all three meet under mu, where every
+// call to the handler is made, which is what makes the calls one at a time
+// and none after Stop.
+type DomainWatch struct {
+	l      *DomainLog
+	filter string
+	h      WatchHandler
+	timing watchTiming
+	logger *slog.Logger
+
+	// prefix begins the name of each of this watch's consumers, one a
+	// GENERATION, the generation's number after it — so a create asked
+	// again after a reply that never came is the same create, which the
+	// broker answers with the consumer it already made, rather than a second
+	// consumer beside it.
+	prefix string
+
+	// life is the watch's own context, cancelled by Stop: every create the
+	// supervisor asks runs under it.
+	life   context.Context
+	cancel context.CancelFunc
+	// wake tells the supervisor a loss was reported. Capacity one, so a
+	// report is never lost and its sender never blocks.
+	wake chan struct{}
+	// done is closed when the supervisor has returned.
+	done chan struct{}
+	stop sync.Once
+
+	mu sync.Mutex
+	// stopped is Stop having begun: nothing calls the handler after it.
+	stopped bool
+	// gen is the generation whose deliveries are taken, and live whether
+	// it still serves: between a loss and the consumer replacing it,
+	// none does.
+	gen  uint64
+	live bool
+	// name and consume are gen's consumer and its standing pull.
+	name    string
+	consume jetstream.ConsumeContext
+	// delivered is the consumer's own count of the last delivery taken.
+	delivered uint64
+	// gapPending is the Gap a loss owes, called once its replacement has
+	// begun — by the replacement's first delivery or by the supervisor,
+	// whichever comes first — and never before, or the records appended
+	// between the call and the new consumer would be covered by nothing.
+	gapPending bool
+	// lost is what the client reported when gen stopped serving; closed is
+	// the queue's connection closed for good, which ends the watch.
+	lost   error
+	closed bool
+	// reconnects is the connection's reconnect count as last read.
+	reconnects uint64
+}
+
+// config is the consumer one generation reads through — see [DomainLog.Watch]
+// for why each setting is what it is.
+func (w *DomainWatch) config(name string) jetstream.ConsumerConfig {
+	description := "a watch on " + w.filter
+	if node := w.l.q.contract.Node; node != "" {
+		description = "node " + node + "'s watch on " + w.filter
+	}
+	return jetstream.ConsumerConfig{
+		Name:              name,
+		Description:       description,
+		FilterSubject:     w.filter,
+		DeliverPolicy:     jetstream.DeliverNewPolicy,
+		AckPolicy:         jetstream.AckNonePolicy,
+		HeadersOnly:       true,
+		Replicas:          1,
+		MemoryStorage:     true,
+		InactiveThreshold: ephemeralInactive,
+	}
+}
+
+// begin creates generation gen's consumer at the log's end, under ctx, and
+// starts its standing pull.
+func (w *DomainWatch) begin(ctx context.Context, gen uint64) error {
+	name := w.prefix + strconv.FormatUint(gen, 10)
+	w.l.q.noteConsumerProposal()
+	cons, err := w.l.js.CreateConsumer(ctx, w.l.name, w.config(name))
+	if err != nil {
+		return fmt.Errorf("create the consumer %s: %w", name, err)
+	}
+	w.mu.Lock()
+	if w.stopped {
+		// The consumer stays behind, and the broker reaps it within
+		// [ephemeralInactive]: nothing will ever pull from it.
+		w.mu.Unlock()
+		return errWatchStopped
+	}
+	w.gen, w.live, w.name, w.delivered = gen, true, name, 0
+	w.mu.Unlock()
+
+	cc, err := cons.Consume(
+		func(msg jetstream.Msg) {
+			meta, err := msg.Metadata()
+			w.take(gen, msg.Subject(), meta, err)
+		},
+		jetstream.PullHeartbeat(w.timing.heartbeat),
+		jetstream.ConsumeErrHandler(func(_ jetstream.ConsumeContext, err error) {
+			w.failed(gen, err)
+		}))
+	if err != nil {
+		w.mu.Lock()
+		if w.gen == gen {
+			w.live = false
+		}
+		w.mu.Unlock()
+		return fmt.Errorf("pull from the consumer %s: %w", name, err)
+	}
+	w.mu.Lock()
+	stopped := w.stopped
+	if !stopped {
+		w.consume = cc
+	}
+	w.mu.Unlock()
+	if stopped {
+		// STOPPED WHILE THE PULL WAS STARTING: Stop saw no pull to end, so
+		// this one is ended here.
+		cc.Stop()
+		return errWatchStopped
+	}
+	return nil
+}
+
+// take hands one delivery of generation gen to the handler — its subject and
+// its sequence on the log, after the Gap anything before it owes.
+func (w *DomainWatch) take(gen uint64, subject string, meta *jetstream.MsgMetadata, metaErr error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.stopped || !w.live || gen != w.gen {
+		return
+	}
+	w.flushGap()
+	if metaErr != nil {
+		// NO COUNT, so nothing says whether a delivery went missing before
+		// this one, and no position to wait for: a Gap, which tells the
+		// caller everything this subject would have.
+		w.logger.Warn("jetstream_watch_unreadable", "stream", w.l.name,
+			"filter", w.filter, "consumer", w.name, "subject", subject,
+			"error", metaErr.Error(),
+			"detail", "a delivery carried no position this build can read; "+
+				"its caller is told to read its rows instead")
+		w.h.Gap()
+		return
+	}
+	if count := meta.Sequence.Consumer; count != w.delivered+1 {
+		w.logger.Info("jetstream_watch_missed", "stream", w.l.name,
+			"filter", w.filter, "consumer", w.name, "last_taken", w.delivered,
+			"delivered", count,
+			"detail", "the consumer counted deliveries this node never "+
+				"received — sent to an inbox nobody held; its caller is told "+
+				"to read its rows")
+		w.h.Gap()
+	}
+	w.delivered = meta.Sequence.Consumer
+	w.h.Subject(subject, meta.Sequence.Stream)
+}
+
+// flushGap calls the Gap a loss owes, once. Under mu.
+func (w *DomainWatch) flushGap() {
+	if w.gapPending {
+		w.gapPending = false
+		w.h.Gap()
+	}
+}
+
+// failed is the client's report about generation gen's standing pull. A loss
+// stops the generation serving and wakes the supervisor to replace it; the
+// queue's connection closed for good ends the watch; anything else the client
+// recovers from by itself.
+func (w *DomainWatch) failed(gen uint64, err error) {
+	closed := connectionClosed(err)
+	if !closed && !lostConsumer(err) {
+		return
+	}
+	w.mu.Lock()
+	if w.stopped || !w.live || gen != w.gen {
+		w.mu.Unlock()
+		return
+	}
+	// NOT SERVING FROM HERE, before the supervisor has done anything: a
+	// delivery still in flight from the lost consumer would otherwise take
+	// the owed Gap ahead of the replacement it has to follow.
+	w.live, w.gapPending = false, true
+	w.lost, w.closed = err, closed
+	w.mu.Unlock()
+	select {
+	case w.wake <- struct{}{}:
+	default:
+	}
+}
+
+// lostConsumer reports whether err, which the client reported about a watch's
+// standing pull, says the broker no longer serves that consumer: two
+// heartbeats of silence, a pull nobody serves, the broker's word that it
+// deleted the consumer or that the member holding it is shutting down, or a
+// request the broker refused, after which the client stops pulling.
+func lostConsumer(err error) bool {
+	for _, lost := range []error{
+		jetstream.ErrNoHeartbeat,
+		nats.ErrNoResponders,
+		jetstream.ErrConsumerDeleted,
+		jetstream.ErrServerShutdown,
+		jetstream.ErrBadRequest,
+	} {
+		if errors.Is(err, lost) {
+			return true
+		}
+	}
+	return false
+}
+
+// connectionClosed reports whether err is the queue's connection closed for
+// good, in either of the client's two spellings: its pull's, and a request's.
+func connectionClosed(err error) bool {
+	return errors.Is(err, jetstream.ErrConnectionClosed) ||
+		errors.Is(err, nats.ErrConnectionClosed)
+}
+
+// supervise replaces a lost consumer and reads the connection's reconnect
+// count every recheck, until the watch is stopped or its connection closed for
+// good.
+func (w *DomainWatch) supervise() {
+	defer close(w.done)
+	recheck := time.NewTicker(w.timing.recheck)
+	defer recheck.Stop()
+	for {
+		select {
+		case <-w.life.Done():
+			return
+		case <-recheck.C:
+			w.recheckConnection()
+		case <-w.wake:
+			if !w.replace() {
+				return
+			}
+		}
+	}
+}
+
+// recheckConnection calls a Gap when the queue's connection reconnected since
+// it was last read: a delivery made while it was away may have gone to an
+// inbox nobody held, and nothing would say so until the next one.
+func (w *DomainWatch) recheckConnection() {
+	reconnects := w.l.js.Conn().Stats().Reconnects
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if reconnects == w.reconnects {
+		return
+	}
+	w.reconnects = reconnects
+	if w.stopped || !w.live {
+		// A LOSS ALREADY OWES ONE, called once its replacement has begun.
+		return
+	}
+	w.logger.Info("jetstream_watch_reconnected", "stream", w.l.name,
+		"filter", w.filter, "consumer", w.name,
+		"detail", "the connection to the broker went away and came back, and a "+
+			"delivery made meanwhile may have gone to nobody; the consumer is "+
+			"kept and its caller is told to read its rows")
+	w.h.Gap()
+}
+
+// replace begins a generation in place of one that stopped serving, asking at
+// once and then again, spaced, until a consumer begins or the watch ends,
+// and reports whether the watch goes on.
+func (w *DomainWatch) replace() bool {
+	w.mu.Lock()
+	if w.stopped || w.closed {
+		// CLOSED FOR GOOD: the queue's connection is gone and the node
+		// stops with it ([Queue.Lost]), so there is nothing to begin again
+		// on and no caller left to tell.
+		w.mu.Unlock()
+		return false
+	}
+	if w.live {
+		w.mu.Unlock()
+		return true
+	}
+	gen, name, cause, cc := w.gen, w.name, w.lost, w.consume
+	w.consume = nil
+	w.mu.Unlock()
+	if cc != nil {
+		cc.Stop()
+	}
+	w.logger.Info("jetstream_watch_lost", "stream", w.l.name, "filter", w.filter,
+		"consumer", name, "error", fmt.Sprint(cause),
+		"detail", "the consumer is not serving this watch; it begins again at "+
+			"the log's end with a consumer of its own, and its caller is told "+
+			"to read its rows for what it missed")
+	for attempt := 1; ; attempt++ {
+		ctx, cancel := context.WithTimeout(w.life, w.timing.attempt)
+		err := w.begin(ctx, gen+1)
+		cancel()
+		if err == nil {
+			w.mu.Lock()
+			// ONLY WHILE THE NEW CONSUMER STILL SERVES: one lost the moment
+			// it began owes its own Gap, after ITS replacement, and calling
+			// it here would leave that replacement owing none.
+			if w.live && w.gen == gen+1 {
+				w.flushGap()
+			}
+			// THE GAP JUST CALLED COVERS ANY RECONNECT BEFORE IT, which is
+			// often what lost the consumer: one more for it says nothing.
+			w.reconnects = w.l.js.Conn().Stats().Reconnects
+			name := w.name
+			w.mu.Unlock()
+			w.logger.Info("jetstream_watch_resumed", "stream", w.l.name,
+				"filter", w.filter, "consumer", name, "attempts", attempt)
+			return true
+		}
+		if errors.Is(err, errWatchStopped) || w.life.Err() != nil {
+			return false
+		}
+		if connectionClosed(err) {
+			return false
+		}
+		wait := backoff.Jitter(backoff.Doubling(attempt, w.timing.retry,
+			w.timing.retryCeiling), watchRetryJitter)
+		w.logger.Warn("jetstream_watch_resume_failed", "stream", w.l.name,
+			"filter", w.filter, "attempt", attempt, "error", err.Error(),
+			"retry_in", wait.String(),
+			"detail", "the broker refused or did not answer the create of the "+
+				"watch's next consumer; it asks again, and its caller's reads "+
+				"of its rows carry its work meanwhile")
+		timer := time.NewTimer(wait)
+		select {
+		case <-w.life.Done():
+			timer.Stop()
+			return false
+		case <-timer.C:
+		}
+	}
+}
+
+// Stop ends the watch: when it returns, the handler is not being called and
+// never will be again. Safe to call more than once and from more than one
+// goroutine.
+//
+// THE CONSUMER IS LEFT for the broker to reap ([ephemeralInactive]) rather
+// than deleted: a delete is a metadata proposal on the stopping path, which
+// is where a node is least able to wait for one, and a consumer nothing pulls
+// from costs its member nothing a minute does not end.
+func (w *DomainWatch) Stop() {
+	w.stop.Do(func() {
+		w.mu.Lock()
+		w.stopped = true
+		cc := w.consume
+		w.consume = nil
+		w.mu.Unlock()
+		w.cancel()
+		if cc != nil {
+			cc.Stop()
+		}
+		<-w.done
+	})
+}
+
+// consumer is the watch's current consumer and whether it serves the watch
+// with no Gap still owed, for this package's tests.
+func (w *DomainWatch) consumer() (name string, serving bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.name, w.live && !w.gapPending
 }
