@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/assistantdomain"
 )
 
 // A FILE'S TYPE IS READ FROM ITS BYTES, never taken from a browser's claim or
@@ -24,9 +25,6 @@ import (
 // ErrFileRefused is a file that may not be kept: past [wire.FileMaxBytes], of
 // a type the caller does not allow, or named in a way no download can carry.
 var ErrFileRefused = errors.New("assistant: the file is refused")
-
-// FileNameMaxBytes is the longest name a kept file carries.
-const FileNameMaxBytes = 120
 
 // SniffFile is the media type of content, named name, if it is one of allowed,
 // and the name as it is kept: its last path element, with nothing a
@@ -61,9 +59,9 @@ func fileName(name string) (string, error) {
 	if base == "." || base == "/" || base == ".." || base == "" {
 		return "", fmt.Errorf("%w: a file needs a name", ErrFileRefused)
 	}
-	if !utf8.ValidString(base) || len(base) > FileNameMaxBytes {
+	if !utf8.ValidString(base) || len(base) > assistantdomain.FileNameMaxBytes {
 		return "", fmt.Errorf("%w: a file's name must be UTF-8 of at most %d bytes",
-			ErrFileRefused, FileNameMaxBytes)
+			ErrFileRefused, assistantdomain.FileNameMaxBytes)
 	}
 	for _, r := range base {
 		if r < 0x20 || r == 0x7f || r == '"' || r == ';' {

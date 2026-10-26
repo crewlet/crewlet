@@ -424,6 +424,13 @@ func TestTheBrandRedesignDeliversAssetsAndProposesThemIntoTheDraft(t *testing.T)
 		t.Fatal(err)
 	}
 	frames := f.Follow(accepted.TurnID, 0)
+	transcript, err := f.Store.Transcript(t.Context(), f.Person.ID, f.Conversation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if asked := transcript.Messages[0]; len(asked.Attachments) != 1 || asked.Attachments[0].FileID != shot.FileID {
+		t.Fatalf("the question was recorded with attachments %+v", asked.Attachments)
+	}
 	run := script.Runs()[0]
 	if !strings.Contains(run.Brief, "logos.primary") || !strings.Contains(run.Brief, "screenshot.png") {
 		t.Fatalf("the run's brief does not carry the draft and the attachment:\n%s", run.Brief)

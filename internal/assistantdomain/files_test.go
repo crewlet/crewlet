@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/assistant"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -553,16 +552,6 @@ func TestAFileTheDomainCannotKeepIsRefused(t *testing.T) {
 	}
 	if f.listed(t) != 0 {
 		t.Error("a refused file was uploaded")
-	}
-}
-
-// THE DOMAIN'S NAME BOUND IS THE ONE THE SNIFFER KEEPS NAMES TO: a bound
-// written twice is one the two sides disagree about.
-func TestTheFileNameBoundIsTheSniffersOwn(t *testing.T) {
-	t.Parallel()
-	if assistantdomain.FileNameMaxBytes != assistant.FileNameMaxBytes {
-		t.Errorf("the domain keeps names to %d bytes and the sniffer to %d",
-			assistantdomain.FileNameMaxBytes, assistant.FileNameMaxBytes)
 	}
 }
 

@@ -441,7 +441,7 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	t.messages = 1
 	if err := s.records.RecordMessage(ctx, t.write().Step("message", "question"), id,
 		assistantdomain.NewMessage{ID: assistantdomain.MessageID(id, 1), Role: wire.RoleUser,
-			Text: input, Page: chip}); err != nil {
+			Text: input, Page: chip, Attachments: refsOf(attached)}); err != nil {
 		s.log.WarnContext(ctx, "assistant_record_failed", "turn", id, "record", "question",
 			"error", redact.Secrets(err.Error()))
 	}
