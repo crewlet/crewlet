@@ -16,8 +16,8 @@
  *    (`work_activity`, `page_activity`). No delivery count, because a
  *    built-in service has no inbound edge to count.
  *  - THE SETTINGS. The company document's `tracker` and `knowledge` blocks,
- *    with the engine's own defaults where a key is unset, read only by an
- *    Admin, as the `config` question is.
+ *    and its top-level `inbox` horizon, with the engine's own defaults where a
+ *    key is unset, read only by an Admin, as the `config` question is.
  *
  * A service the company runs elsewhere says what replaces it and what
  * running it here would mean, with no control: switching is not offered yet.
@@ -99,7 +99,7 @@ function homeOf(
 
 function block(
   doc: CompanyDocument | null | undefined,
-  key: "tracker" | "knowledge",
+  key: "tracker" | "knowledge" | "inbox",
 ): Record<string, unknown> {
   const value = (doc as Record<string, unknown> | null | undefined)?.[key];
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
@@ -284,12 +284,15 @@ function WorksPane({ service, head }: { service: BuiltInService; head: Head }) {
   const keys = feed.data?.keys ?? {};
   const nameOf = (handle: string | undefined) =>
     agents.find((a) => a.handle === handle)?.name ?? handle ?? "Someone";
-  const tracker = block(config.data, "tracker");
-  // AN UNSET KEY IS THE ENGINE'S DEFAULT, said as such: a copy of the
-  // engine's constant here would be a second answer that drifts.
+  // THE COMPANY'S HORIZON, at the top of its document (`inbox.retention_days`)
+  // and not under `tracker`: a person's inbox is every native domain's
+  // notices, and this pane says how long the tracker's are kept. AN UNSET KEY
+  // IS THE ENGINE'S DEFAULT, said as such: a copy of the engine's constant here
+  // would be a second answer that drifts.
+  const inbox = block(config.data, "inbox");
   const retention =
-    typeof tracker.inbox_retention_days === "number" && tracker.inbox_retention_days > 0
-      ? `${tracker.inbox_retention_days} days`
+    typeof inbox.retention_days === "number" && inbox.retention_days > 0
+      ? `${inbox.retention_days} days`
       : DEFAULT;
 
   if (!enabled) {
@@ -424,7 +427,7 @@ function WorksPane({ service, head }: { service: BuiltInService; head: Head }) {
             items={[
               ["Work tracker", "Crewlet Works"],
               [
-                "Inbox keeps a row for",
+                "Inbox keeps a notice for",
                 viewer.admin ? retention : <EmptyValue label="Admins see this" />,
               ],
               [

@@ -335,7 +335,11 @@ func (a *Applier) stampStatusEntered(ctx context.Context, tx *sql.Tx, taskID str
 	return 1, nil
 }
 
-// InboxRetentionDefaultDays is how long a person's inbox rows are kept.
+// InboxRetentionDefaultDays is how long a person's inbox rows are kept on a
+// node that has not been handed a company, whose epoch states no horizon: a
+// published company's always does ([inbox.RetentionKey]), with the company's
+// own default applied, so this is the horizon of a replay that runs before
+// any company has.
 //
 // THE ONE HORIZON THAT DELETES A ROW DERIVED FROM A RECORD, and it is a
 // MAILBOX rather than a record: the history those rows were derived from is
@@ -480,7 +484,8 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 }
 
 // inboxHorizon reads the retention days out of the epoch the framework passed
-// in.
+// in: the company's `inbox.retention_days`, under the one key every domain
+// that keeps an inbox reads ([inbox.RetentionKey]).
 //
 // FROM THE EPOCH RATHER THAN FROM CONFIG, because the applier reads no
 // configuration at all: two nodes briefly on different epochs may write
@@ -488,7 +493,7 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 // diverging rather than compared by the identity claim.
 func inboxHorizon(epoch map[string]any) time.Duration {
 	days := InboxRetentionDefaultDays
-	if raw, held := epoch["tracker.native.inbox_retention_days"]; held {
+	if raw, held := epoch[inbox.RetentionKey]; held {
 		switch v := raw.(type) {
 		case int:
 			days = v

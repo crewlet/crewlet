@@ -75,6 +75,11 @@ type Company struct {
 	// Artifacts is the company's artifacts policy. See [CompanyArtifacts].
 	Artifacts CompanyArtifacts `yaml:"artifacts,omitempty" json:"artifacts,omitzero"`
 
+	// Inbox is the company's policy over a person's inbox — the notices
+	// every domain that keeps one writes to the people its changes
+	// concern. See [Inbox].
+	Inbox Inbox `yaml:"inbox,omitempty" json:"inbox,omitzero"`
+
 	// SkillVariables is an operator-defined name -> value map substituted
 	// into tool-skill text wherever a skill writes ${name}.
 	//
@@ -621,21 +626,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	for i := range c.Units {
 		p.wrap(c.Units[i].validate(idx(field("units"), i)))
 	}
-	p.wrap(c.Tracker.Native.validate(field("tracker.native")))
-	// A NATIVE BLOCK ON A COMPANY THAT IS NOT NATIVE describes nothing,
-	// and the failure that produces is silence: an operator sets an inbox
-	// horizon for inbox rows somebody else's tracker will never write.
-	//
-	// The check is against the DERIVED backend rather than the literal
-	// field, because an empty `backend` with no Jira integration IS
-	// native — refusing the default configuration would be the opposite of
-	// the intent.
-	if c.Tracker.Native != nil && c.TrackerBackendFor() != TrackerNative {
-		p.add(field("tracker.native"), ErrConflict,
-			"this company's tracker is %q, and `tracker.native` is the engine's "+
-				"own tracker's policy — nothing would read it. Remove the block, "+
-				"or run the native tracker", c.TrackerBackendFor())
-	}
+	p.wrap(c.Inbox.validate(field("inbox")))
 
 	// The hierarchy's own rules (duplicate handles, human seats carrying
 	// runtime fields, schedules with no runner) are the org model's, and
@@ -841,39 +832,34 @@ type Tracker struct {
 	// Backend is which tracker this company runs. Empty derives: `jira`
 	// when integrations.jira is declared, `native` otherwise.
 	Backend TrackerBackend `yaml:"backend,omitempty" json:"backend,omitempty" js:"enum=native|jira|none" desc:"Which work tracker: native, jira, or none. Empty derives from integrations.jira."`
-
-	// Native is the engine's own tracker's policy — the settings that
-	// exist because the company owns the tracker rather than renting one.
-	//
-	// PRESENT ONLY ON A NATIVE COMPANY, and refused otherwise: an inbox
-	// horizon on a company running Jira is config that describes nothing,
-	// and the failure it produces is silence.
-	Native *TrackerNativeConfig `yaml:"native,omitempty" json:"native,omitempty"`
 }
 
-// TrackerNativeConfig is the founder's policy over the engine's own tracker.
+// Inbox is the founder's policy over a person's inbox: the notices every
+// domain that keeps one — the native tracker — writes to each person its
+// changes concern.
 //
-// # Why this and nothing else
+// # Why at the top of the company, and not under the tracker
 //
-// Everything else a tracker could be told is either a fact about the operator
-// (which is Tier A, under `stream.`), a fact about the whole company rather
-// than its tracker, or a decision the engine makes once for everybody. What is
-// left is genuinely the tracker's own: how long a person's inbox keeps a row.
-//
-// The clock its dates mean USED to be here, and it is the company's top-level
-// `timezone` now (ADR-0018): the tracker's "today" and the scheduler's 09:00
-// are one company's calendar, and a clock held by one subsystem left every
-// other day boundary cut on UTC.
-type TrackerNativeConfig struct {
-	// InboxRetentionDays is how long a person's inbox keeps a row.
+// A person's inbox is not one domain's. The tracker's notices are one source
+// of it, and every domain whose changes are a person's news keeps its own
+// under the same rules (internal/inbox) — so a horizon held by one domain's
+// block left every other source's notices with a horizon of their own, or of
+// nobody's, and one person's inbox aging out on as many clocks as it has
+// sources. It is the split ADR-0018 ended for the company's clock, which also
+// started as the tracker's own setting; the tracker's block keeps nothing of
+// a person's inbox at all.
+type Inbox struct {
+	// RetentionDays is how long a person's inbox keeps a notice.
 	//
 	// THE ONE HORIZON HERE THAT DELETES ANYTHING, and it deletes a row
 	// DERIVED from a record rather than the record: the history those rows
 	// point at is untouched and answers for ever. A year because it is a
 	// MAILBOX rather than an archive — the vendors' own defaults are a
 	// quarter of that — and because the question "what was I told about in
-	// 2024" is answered by the history, not by the inbox.
-	InboxRetentionDays int `yaml:"inbox_retention_days,omitempty" json:"inbox_retention_days,omitempty" js:"min=0;max=3650" desc:"How long a person's inbox keeps a row (default 365, 30..3650). The history it points at is untouched."`
+	// 2024" is answered by the history, not by the inbox. ZERO IS UNSET,
+	// which [Inbox.Retention] reads as the default: no retention below a
+	// month is one, so the zero value says nothing a setting could mean.
+	RetentionDays int `yaml:"retention_days,omitempty" json:"retention_days,omitempty" js:"min=0;max=3650" desc:"How long a person's inbox keeps a notice (default 365, 30..3650). The history it points at is untouched."`
 }
 
 // The inbox horizon's default and bounds.
@@ -890,22 +876,24 @@ const (
 	MaxInboxRetentionDays = 3650
 )
 
-// InboxRetention is how long an inbox row lives, with the default applied.
-func (t *TrackerNativeConfig) InboxRetention() time.Duration {
-	days := DefaultInboxRetentionDays
-	if t != nil && t.InboxRetentionDays > 0 {
-		days = t.InboxRetentionDays
+// Days is how many days an inbox notice lives, with the default applied: what
+// the company states, and the epoch every applier writing a notice reads.
+func (i Inbox) Days() int {
+	if i.RetentionDays > 0 {
+		return i.RetentionDays
 	}
-	return time.Duration(days) * 24 * time.Hour
+	return DefaultInboxRetentionDays
 }
 
-func (t *TrackerNativeConfig) validate(path Path) error {
+// Retention is how long an inbox notice lives, with the default applied.
+func (i Inbox) Retention() time.Duration {
+	return time.Duration(i.Days()) * 24 * time.Hour
+}
+
+func (i Inbox) validate(path Path) error {
 	var p problems
-	if t == nil {
-		return nil
-	}
-	if d := t.InboxRetentionDays; d != 0 && (d < MinInboxRetentionDays || d > MaxInboxRetentionDays) {
-		p.add(at(path, "inbox_retention_days"), ErrOutOfRange,
+	if d := i.RetentionDays; d != 0 && (d < MinInboxRetentionDays || d > MaxInboxRetentionDays) {
+		p.add(at(path, "retention_days"), ErrOutOfRange,
 			"%d is outside %d..%d — below a month an inbox stops being one, and "+
 				"past ten years it is a second copy of the history it points at",
 			d, MinInboxRetentionDays, MaxInboxRetentionDays)

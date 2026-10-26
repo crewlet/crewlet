@@ -58,10 +58,10 @@ import (
 // `notified`, the notification rows it found, and the caller's horizon.
 //
 // They are separated by the HORIZON, which the caller states: a change older
-// than `tracker.native.inbox_retention_days` is one whose rows the sweep is
-// entitled to have taken and the applier is entitled never to have written, so
-// their absence is not evidence. A change newer than it would still have its
-// rows, so their absence IS evidence — nobody was reached.
+// than `inbox.retention_days` is one whose rows the sweep is entitled to have
+// taken and the applier is entitled never to have written, so their absence
+// is not evidence. A change newer than it would still have its rows, so their
+// absence IS evidence — nobody was reached.
 //
 // The horizon travels on the QUERY rather than on the reader, for the reason
 // `now` does: it is a company setting, the epoch moves under a reader that
@@ -191,10 +191,10 @@ type RoutingQuery struct {
 	// carry it.
 	RecordID string
 
-	// Retention is the company's `tracker.native.inbox_retention_days` as
-	// the caller is currently running it — see the file head. Zero states
-	// none, and an absent recipient set is then `unknown` rather than
-	// dated against a horizon nobody is keeping.
+	// Retention is the company's `inbox.retention_days` as the caller is
+	// currently running it — see the file head. Zero states none, and an
+	// absent recipient set is then `unknown` rather than dated against a
+	// horizon nobody is keeping.
 	Retention time.Duration
 
 	Level       statelog.ReadLevel

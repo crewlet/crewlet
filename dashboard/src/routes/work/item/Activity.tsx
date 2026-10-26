@@ -987,7 +987,7 @@ function NobodyWoken({ answer }: { answer: WorkRoutingAnswer }) {
   if (answer.delivery === "swept") {
     // THE WINDOW AS A LENGTH. The answer carries the instant the horizon falls
     // on, which the engine sets to its own clock less the company's
-    // `inbox_retention_days`, so the whole days between that instant and now
+    // `inbox.retention_days`, so the whole days between that instant and now
     // are the setting itself.
     const days = answer.retained_from
       ? Math.round((Date.now() - Date.parse(answer.retained_from)) / 86_400_000)

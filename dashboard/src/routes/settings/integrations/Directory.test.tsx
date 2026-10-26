@@ -159,6 +159,8 @@ function mount(
   /** What the company runs, or null for a node running no company. */
   services: OrgServices | null = NATIVE,
   setup: { status: number; body: unknown } = { status: 200, body: listing },
+  /** The company document the `config` question answers, or none answered. */
+  document?: unknown,
 ): Mounted {
   const fetched: string[] = [];
   vi.stubGlobal(
@@ -184,6 +186,7 @@ function mount(
     if (what === "work_projects") {
       return Promise.resolve({ projects: [], total: 0, census: { active: 0 } });
     }
+    if (what === "config" && document !== undefined) return Promise.resolve(document);
     return new Promise(() => {});
   };
   render(
@@ -504,6 +507,19 @@ test("a service run elsewhere says what replaces it and asks nothing of it", asy
   );
   expect((await line(/Crewlet Works/)).textContent).toContain("Not in use");
   expect(asked).not.toContain("work_projects");
+});
+
+// THE INBOX HORIZON IS THE COMPANY'S, read where its document keeps it — at the
+// top level, `inbox.retention_days` — with the engine's default where it is
+// unset. It was read off the `tracker` block, under a key no document wrote
+// there, so the pane said the default whatever a company set. Mutation: read
+// it under `tracker` again, and a company keeping ninety days is told the
+// engine's default.
+test("the Works settings say how long the company's inbox keeps a notice", async () => {
+  mount(ADMIN, "works", NATIVE, undefined, { name: "Acme", inbox: { retention_days: 90 } });
+  fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
+  const row = (await screen.findByText("Inbox keeps a notice for")).parentElement as HTMLElement;
+  await waitFor(() => expect(row.textContent).toContain("90 days"));
 });
 
 test("a service the company runs none of says so, with no product to open", async () => {

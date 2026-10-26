@@ -2535,8 +2535,14 @@ func (s *stateLog) applierFor(domain statelog.Domain) (statelog.Applier, error) 
 // per apply-loop generation and hands it in — which is also why the one table
 // whose contents depend on it is classed as DIVERGING rather than compared.
 //
-// Keys are qualified by the domain that reads them, so a second domain adding
-// one cannot collide with the first's.
+// Keys are the company settings' own paths, so every domain that reads one
+// setting reads one key — a person's inbox horizon is every inbox-keeping
+// domain's ([inbox.RetentionKey]) — and two settings cannot collide.
+//
+// THE HORIZON IS STATED WITH ITS DEFAULT APPLIED ([config.Inbox.Days]), so the
+// applier that declines to write a notice past it and the sweep that deletes
+// one past it ([Engine.inboxRetention]) read the company's horizon from one
+// function rather than each its own default.
 //
 // A nil company — a node that has not been handed one — declares none, and
 // every applier then applies its own default.
@@ -2544,11 +2550,7 @@ func (c *Company) Epoch() map[string]any {
 	if c == nil || c.Config == nil {
 		return nil
 	}
-	epoch := map[string]any{}
-	if native := c.Config.Tracker.Native; native != nil && native.InboxRetentionDays > 0 {
-		epoch["tracker.native.inbox_retention_days"] = native.InboxRetentionDays
-	}
-	return epoch
+	return map[string]any{inbox.RetentionKey: c.Config.Inbox.Days()}
 }
 
 // applyEpoch is what every domain's applier reads per batch: the epoch of the

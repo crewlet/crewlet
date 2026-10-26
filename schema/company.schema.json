@@ -1205,6 +1205,24 @@
         "null"
       ]
     },
+    "Inbox": {
+      "additionalProperties": false,
+      "properties": {
+        "retention_days": {
+          "description": "How long a person's inbox keeps a notice (default 365, 30..3650). The history it points at is untouched.",
+          "maximum": 3650,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "Integrations": {
       "additionalProperties": false,
       "properties": {
@@ -3640,27 +3658,6 @@
             "",
             null
           ]
-        },
-        "native": {
-          "$ref": "#/$defs/TrackerNativeConfig"
-        }
-      },
-      "type": [
-        "object",
-        "null"
-      ]
-    },
-    "TrackerNativeConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "inbox_retention_days": {
-          "description": "How long a person's inbox keeps a row (default 365, 30..3650). The history it points at is untouched.",
-          "maximum": 3650,
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
         }
       },
       "type": [
@@ -4011,6 +4008,9 @@
     },
     "code": {
       "$ref": "#/$defs/Code"
+    },
+    "inbox": {
+      "$ref": "#/$defs/Inbox"
     },
     "integrations": {
       "$ref": "#/$defs/Integrations"

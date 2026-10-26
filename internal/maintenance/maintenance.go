@@ -195,8 +195,8 @@ type Job struct {
 // A FUNCTION RATHER THAN A DURATION, because two of the horizons are the
 // COMPANY's — the conversation ledger's
 // `turn_engine.conversation_session.retention_days` and the inbox's
-// `tracker.native.inbox_retention_days` — and every apply replaces the company
-// under a running engine. Read once when the sweep was built, they held it to
+// `inbox.retention_days` — and every apply replaces the company under a
+// running engine. Read once when the sweep was built, they held it to
 // the revision the node booted on: a revision shortening either was honoured
 // by everything else at once and by the sweep only after a restart, so rows the
 // company had asked to forget were kept for as long as the node stayed up, and

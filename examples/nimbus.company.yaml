@@ -552,12 +552,17 @@ integrations:
 tracker:
   backend: native
 
-  # The engine's own tracker's policy is one setting, and it is left at
-  # its default here: ``native: {inbox_retention_days: 365}`` — a year.
-  # It is the one horizon that deletes anything, and what it deletes is a
-  # DERIVED inbox row rather than the history it points at, which answers
-  # for ever.  The clock the tracker's dates mean is the company's own
-  # ``timezone`` at the top of this file.
+  # The clock the tracker's dates mean is the company's own ``timezone``
+  # at the top of this file, and how long a person's inbox keeps the
+  # tracker's notices is the company's too: ``inbox``, below.
+
+# How long a person's inbox keeps a notice.  A person's inbox is every
+# native domain's notices — the tracker's — under one set of rules, so the
+# horizon that ages it is the company's rather than any one domain's, and
+# it is left at its default here: ``inbox: {retention_days: 365}``, a year
+# (30..3650).  It is the one horizon that deletes anything, and what it
+# deletes is a DERIVED inbox row rather than the history it points at,
+# which answers for ever.
 
 knowledge:
   backend: native

@@ -77,6 +77,10 @@ units: [...]                            # optional — org structure tree (see b
 
 code: {...}                             # optional — the engine's own git host (see "Code" below)
 
+inbox:                                  # optional — a person's inbox, every native domain's notices
+  retention_days: 365                   #   how long it keeps one (default 365, 30..3650). See
+                                        #   "A person's inbox" under "Tracker" below.
+
 turn_engine:                            # optional — executor/reviewer turn config
   max_iterations: 3                     # hard cap on self_iterate loops per turn
   max_tool_rounds: 24                   # max tool-call rounds within one executor run
@@ -1963,15 +1967,11 @@ The two axes are **separate** on purpose. A company running a native tracker aga
 
 The backend each axis resolves to, and nothing else of either block, is published to every signed-in reader as [`services` on the org answer](../reference/api-endpoints.md#get-org), because it decides which of the dashboard's own surfaces exist: a company that does not run the native tracker has no Work or My work there, and one that does not run the native knowledge base has no Knowledge.
 
-### The native tracker's own policy
+### A person's inbox
 
 ```yaml
-tracker:
-  backend: native
-  native:                                # ONLY on a native company — an inbox
-                                         #   horizon on a company running Jira
-                                         #   describes nothing, and is refused
-    inbox_retention_days: 365            # how long a person's inbox keeps a row
+inbox:
+  retention_days: 365                    # how long a person's inbox keeps a notice
                                          #   (default 365, 30..3650). THE HISTORY IT
                                          #   POINTS AT IS UNTOUCHED — this is a
                                          #   mailbox horizon, not an archive one, and
@@ -1979,7 +1979,9 @@ tracker:
                                          #   answered by the history either way
 ```
 
-Everything else a tracker could be told is either a fact about the **operator** — how they back up, how long their disk holds a replay window — which lives in Tier A under [`stream.tracker_retention`](#tier-a), a fact about the whole **company** — the clock its dates mean is the top-level [`timezone`](#the-companys-clock) — or a decision the engine makes once for everybody.
+How long a person's inbox keeps a notice is a setting of the **whole company**, at the top of its document, and not of the tracker: a person's inbox is every native domain's notices — the native tracker's — kept by each under one set of rules, so the horizon that ages them is one horizon for all of them, as the company's one [`timezone`](#the-companys-clock) is one clock. The tracker block carries none of it. Below a month an inbox stops being one — somebody away for four weeks would come back to nothing — and past ten years it is a second copy of the history it points at, so both are refused at `inbox.retention_days`.
+
+Everything else a tracker could be told is either a fact about the **operator** — how they back up, how long their disk holds a replay window — which lives in Tier A under [`stream.tracker_retention`](#tier-a), a fact about the whole **company** — the clock its dates mean, and how long a person's inbox keeps what it was told — or a decision the engine makes once for everybody.
 
 **Every broker member needs a stream that survives a restart.** A state-log domain's write-ahead log lives on the stream, and an embedded member with no `stream.store_dir` — a single node included — keeps its streams in memory, so a restart recreates them empty, and a node whose durable tables are ahead of a stream that restarted from nothing refuses to serve permanently, with no snapshot that helps. `crewlet validate` refuses it from the Tier A file alone, and so does the engine at boot. A node without `data` is no member: it joins the members' broker as a leaf and keeps no stream of its own, so it is refused a `store_dir` instead, and a node dialling an external cluster keeps nothing either — that cluster's storage is its operator's.
 

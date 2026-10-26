@@ -1153,7 +1153,7 @@ test("the Woke answers keep their four empty sentences", async () => {
 
 // THE RETENTION WINDOW IS SAID AS A LENGTH. The answer carries the instant the
 // horizon falls on, which the engine sets to its own clock less
-// `inbox_retention_days`, so the whole days between it and now are the setting.
+// `inbox.retention_days`, so the whole days between it and now are the setting.
 // An answer that names no horizon falls back to the inbox horizon by name.
 test("a swept answer says how long recipients are kept", async () => {
   const swept = (retained_from?: string): WorkRoutingAnswer => ({

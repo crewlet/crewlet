@@ -2050,14 +2050,16 @@ names the duty a node armed and its interval — the only way to tell a duty
 that is running and finding nothing from one that was never armed.
 
 A person's **inbox** — one row per routed change per recipient — is swept at
-`tracker.native.inbox_retention_days`, **365 days** by default and settable
+the company's `inbox.retention_days`, **365 days** by default and settable
 between 30 and 3650, and changed live: the sweep reads it off the running
-company at every tick, as the applier does at every batch. It is the one
-horizon here that deletes something a person reads, and it deletes a *pointer* rather than the thing pointed at: the history
-row behind every notice is never swept, so "what was I told about in 2024" is
-still a `work_activity` question at any age. A month is the floor because below
-it an inbox stops being one — somebody away for four weeks would come back to
-nothing.
+company at every tick, as the applier does at every batch. It is the company's
+setting rather than the tracker's because a person's inbox is every native
+domain's notices under one horizon. It is the one horizon here that deletes
+something a person reads, and it deletes a *pointer* rather than the thing
+pointed at: the history row behind every notice is never swept, so "what was I
+told about in 2024" is still a `work_activity` question at any age. A month is
+the floor because below it an inbox stops being one — somebody away for four
+weeks would come back to nothing.
 
 ## The storage forecast
 

@@ -16,11 +16,12 @@ import (
 //
 // `tracker_notifications` ships `tracker_notifications_swept_idx ON
 // (created_at)`, whose migration comment names "the per-node inbox retention
-// sweep, which is a range delete". `tracker.native.inbox_retention_days` is a
-// validated company setting with a default, a floor and a ceiling, and its
-// package doc says it is "the one horizon here that deletes anything". Nothing
-// deleted anything: the horizon was read at APPLY time, where it stops a whole-
-// log replay rebuilding an expired inbox, and no row ever aged out afterwards.
+// sweep, which is a range delete". The inbox horizon — the company's
+// `inbox.retention_days` now — is a validated company setting with a default,
+// a floor and a ceiling, and its doc says it is "the one horizon here that
+// deletes anything". Nothing deleted anything: the horizon was read at APPLY
+// time, where it stops a whole-log replay rebuilding an expired inbox, and no
+// row ever aged out afterwards.
 //
 // So every routed change wrote a row per recipient and kept it for the life of
 // the deployment — on every node, since each applies the same log. That is the
@@ -53,10 +54,9 @@ import (
 // horizon, reading it off the epoch at every batch, and [purgeInbox] deletes
 // exactly the rows a replay would decline to write — the two must hold ONE
 // horizon, or an inbox grows back on every reanchor by the width of their
-// disagreement. The horizon is the company's
-// `tracker.native.inbox_retention_days` and an apply moves it under a running
-// node; the applier follows an activation from its next batch, so the sweep
-// follows it from its next tick — handed a value, it kept the horizon the
+// disagreement. The horizon is the company's `inbox.retention_days` and an
+// apply moves it under a running node; the applier follows an activation from
+// its next batch, so the sweep follows it from its next tick — handed a value, it kept the horizon the
 // node's first company stated for the life of the process while the applier
 // moved on. So it is the job's [maintenance.Job.Horizon], which the worker
 // asks afresh on every sweep and derives the cutoff from — and a horizon of

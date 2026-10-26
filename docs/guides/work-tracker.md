@@ -2336,8 +2336,10 @@ tell these apart: it says the commit *carried* a notification, never that
 anybody was woken — the applier deliberately holds no roster, because two nodes
 briefly on different epochs would then write different rows for one record.
 
-**Inbox rows age out; the history does not.** `tracker.native.inbox_retention_days`
-(default 365, 30..3650) is how long an entry lives. A sweep on every node
+**Inbox rows age out; the history does not.** The company's
+`inbox.retention_days` (default 365, 30..3650) is how long an entry lives — a
+setting at the top of the company document rather than the tracker's, because
+a person's inbox is every native domain's notices under one horizon. A sweep on every node
 deletes what is past the horizon — per data node rather than once across the fleet,
 because each data node applies the log into its own copy. It is **live**: a
 revision that changes it reaches every data node's applier at its next batch and its

@@ -12,9 +12,8 @@ import (
 func retentionDoc(conversationDays, inboxDays int) string {
 	return fmt.Sprintf(`
 name: Nimbus
-tracker:
-  native:
-    inbox_retention_days: %d
+inbox:
+  retention_days: %d
 turn_engine:
   conversation_session:
     retention_days: %d
