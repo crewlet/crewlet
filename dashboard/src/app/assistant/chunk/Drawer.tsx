@@ -49,7 +49,6 @@ import {
   Button,
   Callout,
   ChatThread,
-  Composer,
   ConfirmModal,
   EmptyState,
   FileDrop,
@@ -111,6 +110,7 @@ import {
   useConversation,
   conversation,
 } from "./session.ts";
+import { AskComposer, useDraftBox } from "./AskComposer.tsx";
 import { ATTACH_ACCEPT, ATTACH_HINT, useAttachments } from "./attachments.ts";
 import { prepareAgainQuestion } from "./blocks.tsx";
 import { Home } from "./Home.tsx";
@@ -165,7 +165,9 @@ export function Drawer({
   const page = usePageSnapshot();
   const toast = useToast();
   const composer = useRef<HTMLTextAreaElement>(null);
-  const [draft, setDraft] = useState("");
+  // THE DRAFT IS NOT THIS PANEL'S STATE: a keystroke renders the composer
+  // alone, never the thread under it (`AskComposer.tsx` says why).
+  const draft = useDraftBox();
   const [removed, setRemoved] = useState<string | null>(null);
   const [recents, setRecents] = useState<Recent[] | null>(null);
   const [confirming, setConfirming] = useState(false);
@@ -233,8 +235,8 @@ export function Drawer({
   const bounced =
     last?.phase === "refused" && last.refusal?.code === "assistant_busy" ? last : null;
   useEffect(() => {
-    if (bounced) setDraft((d) => (d === "" ? bounced.question : d));
-  }, [bounced]);
+    if (bounced && draft.read() === "") draft.write(bounced.question);
+  }, [bounced, draft]);
 
   const busyUntil =
     bounced && bounced.refusal?.retryAfterSeconds
@@ -275,11 +277,11 @@ export function Drawer({
     (text: string, again?: readonly AssistantFileRef[]) => {
       const question = text.trim();
       if (question === "" || !questionFits(question)) return;
-      setDraft("");
+      draft.write("");
       setAsked((n) => n + 1);
       void send(question, attached, again ?? take());
     },
-    [attached, take],
+    [attached, take, draft],
   );
 
   const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
@@ -309,7 +311,7 @@ export function Drawer({
   }, [queued, running, disabledReason, ask]);
 
   const fill = (text: string) => {
-    setDraft(text);
+    draft.write(text);
     requestAnimationFrame(() => {
       const field = composer.current;
       if (!field) return;
@@ -334,9 +336,9 @@ export function Drawer({
       return;
     }
     // UP IN AN EMPTY BOX brings back the last question to edit.
-    if (event.key === "ArrowUp" && draft === "" && last) {
+    if (event.key === "ArrowUp" && draft.read() === "" && last) {
       event.preventDefault();
-      setDraft(last.question);
+      draft.write(last.question);
     }
   };
 
@@ -485,14 +487,13 @@ export function Drawer({
                 disabled={disabledReason !== undefined}
                 onFiles={(dropped) => attachments.add(dropped.map((d) => d.file))}
               >
-                <Composer
+                <AskComposer
                   ref={composer}
+                  box={draft}
                   id={ASSISTANT_COMPOSER_ID}
                   label="Ask the assistant"
-                  value={draft}
-                  onChange={setDraft}
-                  onSubmit={() => {
-                    if (!attachments.uploading) ask(draft);
+                  onSubmit={(text) => {
+                    if (!attachments.uploading) ask(text);
                   }}
                   onKeyDown={onKeyDown}
                   onPaste={disabledReason === undefined ? onPaste : undefined}
@@ -555,26 +556,26 @@ export function Drawer({
                       Attach image
                     </FilePickButton>
                   }
-                  trailing={
+                  trailing={(text) => (
                     <SendButton
                       mode={stoppable ? "stop" : "send"}
                       labels={SEND_LABELS}
                       title={stoppable ? stopTitle : undefined}
-                      onPress={stoppable ? () => void stop() : () => ask(draft)}
+                      onPress={stoppable ? () => void stop() : () => ask(text)}
                       disabledReason={
                         stoppable
                           ? running?.stopping
                             ? "Stopping"
                             : undefined
                           : (disabledReason ??
-                            (draft.trim() === ""
+                            (text.trim() === ""
                               ? "Type a question first"
                               : attachments.uploading
                                 ? "Images are still uploading"
                                 : undefined))
                       }
                     />
-                  }
+                  )}
                 />
               </FileDrop>
               <Text as="p" variant="caption" tone="tertiary" className="assistant-disclaimer">
