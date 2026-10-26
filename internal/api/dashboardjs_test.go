@@ -1198,13 +1198,17 @@ const (
 	// activity and telling the assistant of a brand draft in progress took it
 	// to 4504.1 KiB: the menu's checked answers and the summary's member in
 	// the panel's chunk, and the Brand page's read-only draft and its help in
-	// that page's. 4505 KiB, which still refuses a doubled baseline. Running
-	// every seat's executor as its coding CLI's own run took it to 4505.4 KiB:
-	// the Models screen's executor tile and "Runs as" column in place of the
-	// mode, the seat's executor box words, and the runs board's launching
-	// member and its run's empty tool-call state. 4506 KiB, which still
-	// refuses a doubled baseline.
-	treeBudget = 4<<20 + 410<<10
+	// that page's. 4505 KiB, which still refuses a doubled baseline. Telling
+	// the assistant what each page action takes, built from each screen's
+	// own declaration (the address keys' schema in the entry's registry, the
+	// org builder's operation vocabulary, an open draft's fields), and each
+	// action's own revision took it to 4509.5 KiB. 4510 KiB, which still
+	// refuses a doubled baseline. Running every seat's executor as its coding
+	// CLI's own run took it to 4510.7 KiB: the Models screen's executor tile
+	// and "Runs as" column in place of the mode, the seat's executor box
+	// words, and the runs board's launching member and its run's empty
+	// tool-call state. 4511 KiB, which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 415<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

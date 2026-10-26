@@ -404,7 +404,7 @@ node means nothing was done.
 | `POST` | `/operator/act/{tool}` | The same catalogue's writes, one tool per request, **as the principal your request resolves to**: the dashboard's write surface. Any credential the guard resolved; every tool is decided by the authority table, as on every other surface, and the `Idempotency-Key` header is required (see [below](#operatoract--the-dashboards-write-surface)). Answers as `/operator/mcp` does before the first company and on a company that runs neither Worklet nor Doclet |
 | `POST` | `/assistant/proposals/{id}/approve` | Approve one of **your own** Dashboard Assistant proposals. A proposal whose turn read through an app you no longer hold is not sent: it settles `failed` with the refusal `access_withdrawn`, and the turn ends rather than carrying on with what it read. Your session cookie and a matching `Origin` only (an assistant grant is refused before routing), `Content-Type: application/json`, the `Idempotency-Key` header, and `{"protocol_version": 1, "digest": "sha256:..."}` echoing the digest the card showed, with an optional `page_context`: the screen you decided from, as it is now, which the resumed turn runs on (the actions it accepts, the draft as the change left it). A turn you asked without a page never gains one this way, and a `page_context` the screen's own rules refuse is `400 invalid_body` before anything is decided. Refusals: `404 not_found` (not yours, or no such proposal), `409 proposal_already_decided` (with its `state`), `410 proposal_expired`, `409 proposal_digest_mismatch` (nothing sent), `409 proposal_stale` (the record moved since it was shown), `403 step_up_required` (nothing recorded; confirm it is you and send the same request again), `503 unavailable` with the `op_id` to retry under. A server write is sent in process as you, once, under the proposal's own operation key, and `202` answers its state (`applied`, `failed` or `unknown`), the turn and where its continuation streams. An `unknown` proposal is retried by approving it again: the same write, never a second one |
 | `POST` | `/assistant/proposals/{id}/decline` | Decline one of your proposals: the same body, header and refusals as the approval; nothing is sent, and the assistant is told. `200` with the proposal's state |
-| `PUT` | `/assistant/actions/{id}` | A page claiming (`{"state": "applying"}`), then reporting, a page action you approved (the report may carry `page_context`, the screen as the action left it, read as the approval's is), or a view change (`confirm: none`: a filter, a range, a lens) the turn sent to the page at once, recorded as a proposal it approved itself; the report of a view change settles it and resumes nothing, since its turn never waited for it. The claim succeeds once across your tabs; another tab is `409 action_already_claimed`. A claim must name the revision the screen is at: one whose screen moved since the action was prepared is `409 proposal_stale`, and nothing is applied. The report (`applied`, `stale`, `blocked`, `invalid`, `no_handler`, with the page's `revision`) is the page's own statement, which the assistant reads as client-reported. `Idempotency-Key` is optional: a claim sent again under its key is the same claim |
+| `PUT` | `/assistant/actions/{id}` | A page claiming (`{"state": "applying"}`), then reporting, a page action you approved (the report may carry `page_context`, the screen as the action left it, read as the approval's is), or a view change (`confirm: none`: a filter, a range, a lens) the turn sent to the page at once, recorded as a proposal it approved itself; the report of a view change settles it and resumes nothing, since its turn never waited for it. The claim succeeds once across your tabs; another tab is `409 action_already_claimed`. A claim must name the revision the screen is at for that action (its `action_revisions` entry, else `source_revision`): one whose screen moved since the action was prepared is `409 proposal_stale`, and nothing is applied. The report (`applied`, `stale`, `blocked`, `invalid`, `no_handler`, with the page's `revision`) is the page's own statement, which the assistant reads as client-reported. `Idempotency-Key` is optional: a claim sent again under its key is the same claim |
 | `POST` | `/assistant/audit/conversations/{id}/read` | An administrator's **compliance read** of somebody else's assistant conversation (`assistant.conversation.audit_read`: admin, a recent proof, a person present, never the assistant). `{"protocol_version": 1, "reason": "..."}`, the reason required and at most 500 characters. The read is recorded first, beside your name and reason, and the conversation's owner is shown it; then `200` answers the transcript and an `assistant_conversation_read` audit record names you, the owner and the reason |
 | `POST` | `/assistant/audit/conversations/{id}/files/{file}/read` | The same **compliance read** of one file the conversation keeps, on the same verb and with the same body: the read is recorded beside the conversation first, the `assistant_conversation_read` audit record names the file as well (`file_id`), and `200` answers the file with every header of [the owner's download](#the-dashboard-assistant). A file the conversation does not keep is `404 not_found`, and the read stays on its record. Absent on a node with no object store |
 
@@ -2017,7 +2017,7 @@ Four collections, `GET` and `PUT`:
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/config/{kind}/{id}` | One entity, redacted, with an `ETag`. **The body is the entity itself**, so it goes straight back into the `PUT` |
+| `GET` | `/config/{kind}/{id}` | One entity, redacted, with the entity's own `ETag` (a digest of what it serves, not the document's revision). **The body is the entity itself**, so it goes straight back into the `PUT` |
 | `PUT` | `/config/roles/{handle}` | Replace one seat, wherever it lives — root-level or inside a unit, at any depth. Every entity `PUT` takes `?dry_run=true`, see [Dry runs](#dry-runs) |
 | `PUT` | `/config/units/{id}` | Replace one org unit, by its key |
 | `PUT` | `/config/llm-providers/{key}` | Replace one named LLM provider; with `If-None-Match: *`, add one under that key |
@@ -2042,6 +2042,19 @@ invites, because the caller never sees the rest of the document. The
 [seat-holder check](#what-a-write-answers) applies here too: a unit `PUT` that
 drops a human seat somebody holds, or an open invitation holds, is
 `409 seat_held`.
+
+**The precondition is the entity's.** An entity `PUT` takes `If-Match` with
+the `ETag` its `GET` answered (or `*`), judged against the entity as it stands
+in the revision active when the write lands, never against the whole
+document. A revision that moved for another reason (another seat added, a
+ceiling patched, a credential sealed) is no conflict: the write is spliced into
+the revision active then, up to three times while other writes keep landing,
+and `409 revision_advanced` only after that. An entity that itself changed
+since it was read is `412 version_moved`, carrying the entity as it stands
+(`current`) and its `etag`, so the caller can show its change beside what
+replaced it and send it again with that tag. `If-None-Match: *` is the
+create-only write, never beside `If-Match`, and any other `If-None-Match` is
+`400 bad_if_match`.
 
 Four rules follow from that:
 
@@ -2209,7 +2222,7 @@ On a `409`, re-read `/config` and send the edit again.
 - `404 Not Found`: a revision that is not there, `no_active_revision` on a read before the first write, `no_such_entity` on a per-entity read or write naming an id the active revision does not carry (of a seat or a unit, told only to `admin`, and anybody else is refused `403` as for one outside their team), or `no_route` for a path under `/config` this surface does not serve
 - `405 Method Not Allowed`: `method_not_allowed` for a `/config` path under a method it does not take, with `Allow`
 - `409 Conflict`: `revision_advanced` (a stale `If-Match`, or a race with a concurrent writer) or `no_active_revision` (a `PATCH`, a charter write or a per-entity write on an unconfigured node, or a reload)
-- `412 Precondition Failed`: `already_configured` when `If-None-Match: *` meets an active revision, `no_active_revision` when `If-Match` names a revision and none is active, or `version_moved` when a charter write's `If-Match` names a charter that has changed, carrying the charter now as `current` and its `etag`
+- `412 Precondition Failed`: `already_configured` when `If-None-Match: *` meets an active revision, `no_active_revision` when `If-Match` names a revision and none is active, or `version_moved` when a charter write's or a per-entity write's `If-Match` names a charter or an entity that has changed, carrying it now as `current` and its `etag`
 - `428 Precondition Required`: `bad_if_match` for a charter write with no `If-Match`
 - `415 Unsupported Media Type`: `unsupported_patch_media_type` when a `PATCH` body is a patch format other than a JSON Merge Patch, with `Accept-Patch`
 - `503 Service Unavailable`: `draining` when the node has been told to stop, with a `Retry-After` — see [During a drain](#during-a-drain)
@@ -6974,6 +6987,31 @@ written against; a version this engine does not speak is
 as the dashboard describes it (at most 16 KiB, 50 resources and 32 page actions)
 or `null` when the person removed the page chip. The model reads the page
 context fenced as somebody else's words: it is a hint and never an authority.
+
+Beside `accepts`, the page context carries `action_args`: what each accepted
+page action takes on that screen now, by action id, as a closed subset of JSON
+Schema (`type`, `description`, `enum`, `const`, `minLength`, `maxLength`,
+`minItems`, `maxItems`, `items`, `properties`, `required`,
+`patternProperties`, `additionalProperties`, `oneOf`, and top-level
+`examples`). The screen builds it from the same declaration its parser reads
+(the address keys a view change writes, the seats and windows a screen draws,
+the org builder's operations), so the model is told the members to send rather
+than guessing them. Every accepted action declares it (`draft.set` may go
+without, since the draft's editable fields declare what it takes). The engine
+reads it strictly: an unknown keyword, a pattern RE2 cannot compile, a schema
+past 6 KiB, 8 levels or 160 parts, or an example its own schema refuses is
+`400 invalid_body`. Before a `propose_page_change` call is previewed or
+recorded, its `args` are held to that schema, and one that does not match is
+the model's refused step, naming the members the screen takes, never a card.
+An action the screen declares no arguments for is never proposed.
+
+`action_revisions` gives each accepted action its own revision: the screen and
+its path, and only the parts of the page the action depends on (its address,
+its selection, its data). A page action's proposal is bound to its action's
+revision, and its claim names the revision of that action, so a change goes
+stale only when what it depends on moved, never because the person opened a
+row's peek or another editor beside it. An action without one is bound to
+`source_revision`.
 
 A screen with a draft or a form open adds `draft`: `{kind, id?, revision?,
 step?, help?, fields, more}`, where `kind` is `client` (the values live in the

@@ -613,8 +613,8 @@ export function undoAction(actionId: string): void {
 }
 
 /** Tell the conversation the page under the drawer moved, so a prepared page change is stale. */
-export function pageMoved(revision: string): void {
-  dispatch({ type: "page_moved", revision });
+export function pageMoved(revision: string, revisions: Readonly<Record<string, string>>): void {
+  dispatch({ type: "page_moved", revision, revisions });
 }
 
 /** Test seam: a fresh store, as a fresh page has. */

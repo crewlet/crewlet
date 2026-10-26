@@ -706,6 +706,25 @@ func TestTheDispatcherSendsOnlyWhatItBuilds(t *testing.T) {
 	if resp := r.do(read, get("/agents")); !resp.Truncated || len(resp.Body) != exec.MaxResponseBytes {
 		t.Errorf("a long answer came back %d bytes, truncated %v", len(resp.Body), resp.Truncated)
 	}
+	// A PREVIEW'S READ keeps its larger bound, and never more than it: an
+	// agent record past a step's bound is read whole for a pause's preview,
+	// and a caller asking past the preview's bound is held to it.
+	r.answerOf = func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("x", 4*exec.MaxResponseBytes)))
+	}
+	preview := get("/agents")
+	preview.ReadLimit = exec.PreviewMaxResponseBytes
+	if resp := r.do(read, preview); resp.Truncated || len(resp.Body) != 4*exec.MaxResponseBytes {
+		t.Errorf("a preview's read came back %d bytes, truncated %v", len(resp.Body), resp.Truncated)
+	}
+	r.answerOf = func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("x", exec.PreviewMaxResponseBytes+10)))
+	}
+	preview.ReadLimit = 8 * exec.PreviewMaxResponseBytes
+	if resp := r.do(read, preview); !resp.Truncated || len(resp.Body) != exec.PreviewMaxResponseBytes {
+		t.Errorf("a read asking past the preview's bound came back %d bytes, truncated %v",
+			len(resp.Body), resp.Truncated)
+	}
 	r.answerOf = func(http.ResponseWriter, *http.Request) { panic("a broken handler") }
 	if _, err := r.disp.Do(t.Context(), read, get("/agents")); err == nil {
 		t.Error("a panicking handler answered no error")
