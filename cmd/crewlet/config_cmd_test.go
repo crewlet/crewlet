@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
@@ -67,8 +68,47 @@ var fixtureCipher = func() secrets.Cipher {
 // embedded stream persisting under dir, because one held in memory is refused
 // on every node ([config.Stream.Durable]) and a fixture short of it would be
 // refused for that before its case was judged.
+//
+// SIZED AT [brokertest.StoreMaxBytes] beside its directory, because the block
+// is a node's: a node booted from it reserves several gibibytes of its broker
+// ([brokertest.StoreIn] has why that is never left to the runner's free
+// disk). The commands that read the document with the engine stopped
+// ([openFleetStore]) start a broker on the same directory that reserves
+// nothing today, and one block for every caller keeps any document from naming
+// the directory without the size.
 func fixtureStream(dir string) string {
-	return "stream:\n  store_dir: " + filepath.Join(dir, "stream") + "\n"
+	return fmt.Sprintf("stream:\n  store_dir: %s\n  store_max_bytes: %d\n",
+		filepath.Join(dir, "stream"), brokertest.StoreMaxBytes)
+}
+
+// THE CLI FIXTURES' BROKER IS SIZED BY DECLARATION, never by the runner's disk.
+//
+// Every Tier A a case here hands a node or a command comes from one of two
+// builders — the YAML block and the struct a node's flags fold into — so a
+// builder that dropped the size would pass on any roomy runner and fail every
+// boot on a small one (#343). Read back through Tier A's own parser, as the
+// node reads it.
+//
+// Mutation: write store_dir alone in fixtureStream and the YAML row goes red;
+// set StoreDir by hand in bootstrapFor and the struct row does.
+func TestTheCLIFixturesBrokerIsSizedByDeclaration(t *testing.T) {
+	t.Parallel()
+	parsed, err := config.ParseBootstrap([]byte("store:\n  path: "+
+		filepath.Join(t.TempDir(), "crewlet.db")+"\n"+
+		fixtureStream(t.TempDir())+fixtureKeyring), nil)
+	if err != nil {
+		t.Fatalf("parse the fixture's Tier A: %v", err)
+	}
+	for name, stream := range map[string]config.Stream{
+		"fixtureStream": parsed.Stream,
+		"bootstrapFor":  bootstrapFor(t, 0).Stream,
+	} {
+		if stream.StoreDir == "" || stream.StoreMaxBytes != brokertest.StoreMaxBytes {
+			t.Errorf("%s gives the broker store_dir %q and store_max_bytes %d, "+
+				"want a directory and %d (brokertest.StoreMaxBytes)", name,
+				stream.StoreDir, stream.StoreMaxBytes, brokertest.StoreMaxBytes)
+		}
+	}
 }
 
 // runnableTierA is a Tier A document carrying what every node requires —

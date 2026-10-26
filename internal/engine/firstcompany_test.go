@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -122,7 +123,7 @@ func TestAFirstCompanysSeatsAreClaimedWithoutWaitingForTheSweep(t *testing.T) {
 	t.Parallel()
 	e, err := engine.New(t.Context(), engine.WithSweepEvery(engine.Options{
 		Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
-			b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+			brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 		}),
 	}, time.Hour))
 	if err != nil {

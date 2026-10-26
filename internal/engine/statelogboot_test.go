@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -116,13 +117,12 @@ func TestANodeWithTheWholeLogAheadOfItDoesNotAsk(t *testing.T) {
 		// AT THE FLOOR A BOOT SIZES A LOG TO, not at the ceiling the
 		// domain declares. A ceiling is a reservation the broker grants
 		// in full, and a stream that already exists keeps its own: the
-		// declared sixteen gibibytes is nearly all of a test machine's
-		// broker (three quarters of the volume's free space), so the
-		// boot that follows had a few hundred megabytes left and was
-		// refused the vectors log's reservation — a failure of this
-		// staging, not of the join. The floor is the least the engine
-		// itself creates a log at, so this is a log a peer could have
-		// made on a small disk.
+		// domain's declared ceiling and a fresh node's floor together
+		// are more than a test broker holds (brokertest.StoreMaxBytes),
+		// so the boot that follows would be refused one of the logs it
+		// creates — a failure of this staging, not of the join.
+		// The floor is the least the engine itself creates a log at, so
+		// this is a log a peer could have made on a small disk.
 		MaxBytes:      engine.MinDomainCeiling,
 		MaxPerSubject: spec.MaxPerSubject, MaxAge: spec.MaxAge,
 		Duplicates: spec.Duplicates,
@@ -216,7 +216,7 @@ func TestANodeTheFleetHasMovedPastAsksForASnapshotAtBoot(t *testing.T) {
 func joinBackends(t *testing.T) (*config.Bootstrap, *config.Company, *engine.Backends) {
 	t.Helper()
 	boot := bootstrap(t, func(b *config.Bootstrap) {
-		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	})
 	company := parsedCompany(t, companyDoc)
 	backends, err := engine.OpenBackends(t.Context(), boot, company)

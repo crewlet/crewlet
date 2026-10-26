@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -89,7 +90,7 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {
@@ -292,7 +293,7 @@ func TestTheRecoveryPathDrawsItsLineAtTheNextRecord(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {

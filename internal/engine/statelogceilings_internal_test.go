@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -723,14 +724,23 @@ func TestAnInterruptedFirstBootLeavesLogsARestartReportsAsMade(t *testing.T) {
 // brokerWithHeadroom is an embedded file-store broker with exactly headroom
 // bytes left to reserve.
 //
-// The broker's own cap is three quarters of this machine's free disk, which a
-// test cannot choose; what it can choose is how much of that is already
-// reserved, and a reservation is all the cap counts. A machine whose disk
-// cannot hold the scenario at all is skipped, loudly, rather than failed for
-// a reason that is not the code's.
+// ITS CAP IS DECLARED, at [brokertest.StoreMaxBytes], never left to the broker:
+// an undeclared one is three quarters of this machine's free disk, which made
+// every scenario here a fact about the runner and skipped it on a disk too
+// small to hold it. A declared cap is accounting, which nats-server never
+// checks against the disk, so the same arithmetic runs on every machine.
+//
+// AND THE REST OF IT RESERVED, rather than the cap declared at the headroom
+// itself: a cap with nothing reserved beside the logs is the same number as
+// what is left of it, and a sizing that divided the cap instead of what is
+// left would pass every case here. A scenario that asks for more headroom
+// than the fixed cap leaves room to spend around is a fault in the case, so
+// it fails naming both figures rather than reserving a negative remainder.
 func brokerWithHeadroom(t *testing.T, headroom int64) *jetstream.Queue {
 	t.Helper()
-	q, err := jetstream.Open(t.Context(), jetstream.Config{StoreDir: t.TempDir()})
+	q, err := jetstream.Open(t.Context(), jetstream.Config{
+		StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes,
+	})
 	if err != nil {
 		t.Fatalf("open the broker: %v", err)
 	}
@@ -740,9 +750,10 @@ func brokerWithHeadroom(t *testing.T, headroom int64) *jetstream.Queue {
 		t.Fatalf("StreamBudget: %v", err)
 	}
 	if budget.Available() < headroom+gib {
-		t.Skipf("this machine's broker can reserve %d bytes, and the scenario "+
-			"needs %d of headroom plus a gibibyte to spend around it",
-			budget.Available(), headroom)
+		t.Fatalf("the test broker's %d-byte cap leaves %d bytes to reserve, and "+
+			"the scenario needs %d of headroom plus a gibibyte to spend around "+
+			"it: shrink the scenario, or raise brokertest.StoreMaxBytes",
+			brokertest.StoreMaxBytes, budget.Available(), headroom)
 	}
 	if err := q.EnsureDomainStream(t.Context(), jetstream.DomainStream{
 		Name:       "CREWLET_TEST_ELSEWHERE",

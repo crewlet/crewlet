@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // freshFits reports whether a fresh node of stream boots on a stream volume
@@ -230,5 +231,31 @@ func TestTheAssistantLogCountsOnlyItsFloorTowardAFreshNode(t *testing.T) {
 	if grew := BrokerFloorFor(&explicit).Logs - floor.Logs; grew != config.DefaultAssistantLogMaxBytes-config.AssistantLogMaxBytesFloor {
 		t.Errorf("an explicit 512 MiB moved the logs' floor by %d, want %d", grew,
 			config.DefaultAssistantLogMaxBytes-config.AssistantLogMaxBytesFloor)
+	}
+}
+
+// THE SIZE A TEST BROKER DECLARES BOOTS A FRESH NODE OF THE FIXTURES.
+//
+// The suites size their brokers from brokertest.StoreMaxBytes rather than from
+// the runner's free disk, so that a boot passes or fails on the code and not on
+// the machine. That holds only while the figure is above the floor of the
+// fixtures' own Tier A, and the floor grows whenever a log joins the register:
+// past it, every node boot in every suite is refused on every machine. This
+// case fails beside them, as the one that names the cause, both figures and
+// the constant to raise — and through Tier A's own validation, so the figure
+// is one an operator could write.
+func TestTheTestBrokerSizeHoldsAFreshNode(t *testing.T) {
+	t.Parallel()
+	boot := testBootstrap(t)
+	brokertest.StoreIn(&boot.Stream, filepath.Join(t.TempDir(), "stream"))
+	if err := boot.Validate(); err != nil {
+		t.Fatalf("Tier A refuses the fixtures' broker size of %d bytes: %v",
+			brokertest.StoreMaxBytes, err)
+	}
+	floor := BrokerFloorFor(&boot)
+	if floor.Limit > brokertest.StoreMaxBytes {
+		t.Fatalf("brokertest.StoreMaxBytes is %d bytes and %s: raise it, or every "+
+			"suite booting a node is refused at whichever state log no longer fits",
+			brokertest.StoreMaxBytes, floor.Sentence())
 	}
 }

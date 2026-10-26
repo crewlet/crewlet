@@ -9,6 +9,7 @@ import (
 	"time"
 
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/usage"
 )
@@ -22,7 +23,11 @@ import (
 // is.
 func TestAFullUsageLogRefusesTheAppendAndAlarms(t *testing.T) {
 	t.Parallel()
-	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
+	// THE BROKER'S OWN LIMIT DECLARED ([brokertest.StoreMaxBytes]): the case
+	// fills the log's ceiling, never the broker's, so the broker's limit is
+	// not read off the runner's free disk either.
+	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir(),
+		StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open a broker: %v", err)
 	}

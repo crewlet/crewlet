@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
@@ -87,7 +88,11 @@ type node struct {
 // openLog stands up a broker and the assistant log on it.
 func openLog(t *testing.T) *js.DomainLog {
 	t.Helper()
-	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
+	// THE BROKER DECLARES ITS SIZE, for brokertest's reason: left to derive
+	// its cap from the runner's free space it takes three quarters of it, a
+	// fact about the machine rather than about the case.
+	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir(),
+		StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open a broker: %v", err)
 	}

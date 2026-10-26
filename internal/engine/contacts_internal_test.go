@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -157,7 +158,7 @@ roles:
 	}
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	SeedStore(t, &b)
 	e, err := New(t.Context(), Options{Bootstrap: &b, Company: cfg,
 		Environment: config.MapSource{slack: "U0HANDED"}})

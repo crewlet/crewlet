@@ -28,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore/natsobj"
 	"github.com/crewlet/crewlet/internal/objstore/objstoretest"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // suite is what the broker's object store promises the suite: messages of
@@ -1225,7 +1226,8 @@ func open(t *testing.T, client jetstream.JetStream) *natsobj.Backend {
 
 func memberClient(t *testing.T) jetstream.JetStream {
 	t.Helper()
-	srv, err := js.StartServer(t.Context(), js.Config{ServerName: "member", StoreDir: t.TempDir()})
+	srv, err := js.StartServer(t.Context(), js.Config{ServerName: "member",
+		StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("start the member: %v", err)
 	}
@@ -1247,7 +1249,8 @@ func memberClient(t *testing.T) jetstream.JetStream {
 func leafClient(t *testing.T) jetstream.JetStream {
 	t.Helper()
 	member, err := js.StartServer(t.Context(), js.Config{ServerName: "member",
-		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: t.TempDir()})
+		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: t.TempDir(),
+		StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("start the member: %v", err)
 	}
@@ -1326,7 +1329,8 @@ func TestOpeningOnALeafWaitsOutItsLink(t *testing.T) {
 	case <-time.After(300 * time.Millisecond):
 	}
 	member, err := js.StartServer(t.Context(), js.Config{ServerName: "member",
-		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: t.TempDir()})
+		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: t.TempDir(),
+		StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("start the member: %v", err)
 	}
@@ -1462,9 +1466,10 @@ func (g *gate) pipe(in net.Conn, target string) {
 
 // testCeiling is the reservation every case here opens the bucket with:
 // eight mebibytes, thirty times the largest object any case stores (the
-// suite's two pieces and a tail), and small enough that a test machine's
-// brokers, which reserve against three quarters of its free disk, grant one
-// to every case running at once. The engine never derives one this small
+// suite's two pieces and a tail), on a member whose own limit is declared
+// ([brokertest.StoreMaxBytes]) rather than read off the runner's free disk,
+// so whether it is granted does not depend on the machine. The engine never
+// derives one this small
 // (store.objects.nats_max_bytes takes a gibibyte at least); the package
 // itself takes any positive reservation.
 const testCeiling = 8 << 20

@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/seat"
 )
@@ -56,7 +57,7 @@ import (
 func TestAStopAgainstAnUnreachableStoreSpendsOneAllowance(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 		b.Coordination.LeaseTTLSeconds = 3
 	})
 	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc))
@@ -224,11 +225,7 @@ func (f stallingFleet) ForgetAdmission(ctx context.Context, nodeID, incarnation 
 func TestAStopOnAStreamThatWillNotAcknowledgeLeavesNothingHeld(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
-		// THE BROKER'S RESERVATIONS FROM A FIXED SIZE rather than from
-		// whatever this machine's disk has free, which is a fact about
-		// the machine and not about the stop.
-		b.Stream.StoreMaxBytes = 16 << 30
+		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 		b.Coordination.LeaseTTLSeconds = 15
 	})
 	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc))

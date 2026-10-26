@@ -4,11 +4,10 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
-	"time"
-
-	"github.com/nats-io/nats-server/v2/server"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
 )
 
 // A SEAT'S MEMORY TRAVELS ON AN EXTERNAL BROKER TOO.
@@ -21,24 +20,16 @@ import (
 // learned each time placement moved it, with nothing logged.
 func TestSeatMemoryTravelsOnAnExternalBroker(t *testing.T) {
 	t.Parallel()
-	broker, err := server.NewServer(&server.Options{
-		ServerName: "external", JetStream: true, Port: -1, Host: "127.0.0.1",
-		StoreDir: filepath.Join(t.TempDir(), "external"), NoSigs: true,
-		MaxPayload: 8 << 20,
-	})
-	if err != nil {
-		t.Fatalf("start an external broker: %v", err)
-	}
-	go broker.Start()
-	t.Cleanup(broker.Shutdown)
-	if !broker.ReadyForConnections(30 * time.Second) {
-		t.Fatal("the external broker never became ready")
-	}
+	// THROUGH externaltest, whose server's account states a limit: a server
+	// started here with none made the node stand this machine's free disk in
+	// for its broker's limit, and a fresh node's reservations refused the boot
+	// on a runner short of them.
+	broker := externaltest.Start(t, queue.MaxPayloadBytes)
 
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.Type = config.StreamNATS
-	b.Stream.URL = broker.ClientURL()
+	b.Stream.URL = broker.URL()
 	b.Coordination.Type = config.CoordinationEmbeddedKV
 	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))

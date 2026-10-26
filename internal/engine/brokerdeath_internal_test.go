@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/seat"
 )
 
@@ -160,7 +161,7 @@ func runBrokerDeathChild(t *testing.T, mode, dir string) {
 	}
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(dir, "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(dir, "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(dir, "stream"))
 	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {
