@@ -1203,8 +1203,12 @@ const (
 	// own declaration (the address keys' schema in the entry's registry, the
 	// org builder's operation vocabulary, an open draft's fields), and each
 	// action's own revision took it to 4509.5 KiB. 4510 KiB, which still
-	// refuses a doubled baseline.
-	treeBudget = 4<<20 + 414<<10
+	// refuses a doubled baseline. Telling the assistant what the Inbox's
+	// "Needs you" holds, from the model the page draws it with, and reading
+	// dates on the company clock took it to 4510.4 KiB, in the Inbox's chunk
+	// and the shared format module. 4511 KiB, which still refuses a doubled
+	// baseline.
+	treeBudget = 4<<20 + 415<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
