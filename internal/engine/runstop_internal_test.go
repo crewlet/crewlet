@@ -273,6 +273,13 @@ func TestALaunchStoppedBeforeItsParkClosesItsOwnTurnAsStopped(t *testing.T) {
 		t.Fatalf("the task was charged %+v under %v; want the park and a stopped close of its own "+
 			"counting no second turn", turns, ops)
 	}
+	// CHARGED ONCE: the park paid for the segment, and the close, which ran
+	// nothing, pays nothing of it again — no tokens, no auxiliary calls, no
+	// wall time. Built from the parking segment's telemetry, it charged that
+	// segment's calls and span a second time.
+	if spent := turns[1].Spend; spent.Tokens() != 0 || spent.WallMs != 0 || spent.Rounds != 0 {
+		t.Fatalf("the stopped close charged %+v; the park already paid for the segment", spent)
+	}
 }
 
 // A SEAT TAKEN WHILE A PERSON'S STOP IS ON IT ENDS THE RUNS ITS LAST HOLDER LEFT

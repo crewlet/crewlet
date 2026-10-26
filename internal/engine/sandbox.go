@@ -1155,10 +1155,9 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		parked, parkErr := e.persistSuspension(ctx, r, in.Run.TurnID, tel, charge)
 		if turn.Stopped(parkErr) {
 			// A PERSON STOPPED THE RUN IT RELAUNCHED, between the launch and
-			// the park: closed here as the dispatch path closes it, and
-			// settled as a stopped resumed turn is (above).
+			// the park: closed by the park it refused, as on the dispatch
+			// path, and settled as a stopped resumed turn is (above).
 			working = false
-			e.closeStopped(ctx, tel, parkErr, time.Now().UTC())
 			pause, _ := stopOf(parkErr)
 			role, agentID := seatIdentity(company, in.Turn.Handle())
 			e.observe(ctx, turnStoppedEvent(in.Turn.Handle(), role, agentID,
@@ -1484,12 +1483,15 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 	if errors.Is(err, sandbox.ErrRunEnding) || (err == nil && !suspended) {
 		// THE RUN WAS ENDED UNDER ITS LAUNCH. Where a person's stop ended
 		// it, the turn is stopped, not a suspension that failed: the stop
-		// has already reclaimed the box and announced the run, and this
-		// frame closes the turn — see [Engine.stoppedAtPark].
+		// has already reclaimed the box and announced the run, and the turn
+		// is closed here, for whichever frame was parking it, from what
+		// this segment's charge left unpaid ([Engine.closeStoppedAtPark]) —
+		// see [Engine.stoppedAtPark].
 		if stop := e.stoppedAtPark(ctx, rt, turnID, tel.handle); stop != nil {
 			log.InfoContext(ctx, "sandbox_park_stopped", "turn_id", turnID, "seat", tel.handle,
 				"detail", "a person stopped the seat's running work between the run's launch "+
 					"and its park; the run is ended and its turn closed as stopped")
+			e.closeStoppedAtPark(ctx, tel, charge, stop)
 			return false, stop
 		}
 		// ANY OTHER ENDING decided under the launch is one the settle

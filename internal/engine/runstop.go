@@ -87,15 +87,39 @@ func pauseOfStop(s sandbox.RunStop) coord.SeatPause {
 		Reason: s.Reason, StopRunning: true}
 }
 
+// closeStoppedAtPark closes a turn whose park a person's stop refused, for the
+// frame that was parking it — a dispatch, or a resume that relaunched — from
+// the refused park itself ([Engine.persistSuspension]): the segment that would
+// have parked has already ended and charged ([Engine.endSegment]), and the
+// close is the turn's end after it.
+//
+// CHARGED FROM WHAT THE PARK LEFT UNPAID, never from the parking segment's own
+// telemetry, which that segment's charge has already paid out of: the close's
+// is fresh ([turnTelemetry.closingAfter]) — no job of its own, no auxiliary
+// call, no span — and carries only what the parking segment handed on, charged
+// to nothing, to the segment that ends the turn: its carry, which only the park
+// the stop refused would have written, and its measurement of the turn. Closed
+// with the parking segment's telemetry instead, the close charged the item that
+// segment's job, bridged spend, auxiliary calls and wall time a second time,
+// under the stop's own segment id, and a turn the park charged to nothing lost
+// that segment's spend outright.
+func (e *Engine) closeStoppedAtPark(ctx context.Context, tel turnTelemetry, parked segmentCharge,
+	stop error,
+) {
+	at := time.Now().UTC()
+	e.closeStopped(ctx, tel.closingAfter(parked, at), stop, at)
+}
+
 // closeStopped publishes the completion that ends a turn a person stopped while
 // it was parked on its run: a segment that ran no phase, ended on the stop.
 //
 // ITS OWN SEGMENT, after the one that parked: that segment's completion said
 // `suspended`, and this one is the turn's end — `stopped`, never `failed`
 // ([Engine.publishTurnCompleted]) — charged to the turn's work item with
-// whatever tel says the segment pays: nothing of its own, and for a closing
-// the run's ending made, the run's collected spend and what the segments
-// before it handed on ([turnTelemetry.chargeFor]).
+// whatever tel says the segment pays: nothing of its own, and what the segments
+// before it handed on — for a closing the run's ending made, the run's
+// collected spend too ([turnTelemetry.chargeFor]). tel is the close's own,
+// never a segment's that has charged: see [Engine.closeStoppedAtPark].
 func (e *Engine) closeStopped(ctx context.Context, tel turnTelemetry, stop error, at time.Time) {
 	tel.closesStop = true
 	var spend runner.Spend

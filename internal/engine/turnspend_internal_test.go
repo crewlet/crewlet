@@ -746,3 +746,93 @@ func TestTheRecordThatEndsATurnStatesTheWholeTurn(t *testing.T) {
 		}
 	})
 }
+
+// A STOP THAT CLOSES A TURN AT ITS PARK CHARGES ONLY WHAT THE PARK LEFT UNPAID.
+//
+// A person's stop can land between a launch and its park: the segment that
+// would have parked has ended and charged, and the frame then closes the turn
+// as stopped with a segment of its own. Built from the parking segment's
+// telemetry, that close charged the item the segment's job, its bridged spend,
+// its auxiliary calls and its wall time a second time, under the stop's own
+// operation id, which the tracker's ledger does not collapse; and a turn the
+// park charged to nothing lost the segment's whole spend, since only the park
+// the stop refused would have carried it on. Across the park and the close, the
+// item is charged everything the turn spent, once, and its turn counted once.
+//
+// Mutation: close with the parking segment's telemetry, and the two charges add
+// up to more than the turn spent on an item, and to none of the park's spend on
+// a turn that charged nothing at its park.
+func TestAStopAtTheParkChargesOnlyWhatTheParkLeftUnpaid(t *testing.T) {
+	t.Parallel()
+	ended := time.Unix(1_700_000_060, 0).UTC()
+	closedAt := ended.Add(time.Minute)
+	stop := &stopError{handle: "dev"}
+	sole := turnctx.WrittenFrom([]types.WorkItem{workletItem}, false)
+	carried := &execstate.Uncharged{Turns: 1, Rounds: 2, Input: 900, Output: 90, WallMs: 4000}
+
+	for _, tc := range []struct {
+		name string
+		// parking is the segment that would have parked; rollup is what it
+		// and the segments before it spent, which the item is owed once, and
+		// turns how many turns it counts across the park and the close.
+		parking func() turnTelemetry
+		rollup  int
+		turns   int
+	}{
+		{"a dispatch on an item", func() turnTelemetry { return dispatchTel(&workletItem) },
+			rollupOf(segmentSpend(1), segmentAux(1), 0, 0), 1},
+		{"a resume on an item", func() turnTelemetry {
+			tel := resumeTel(&workletItem, nil, 4000, 700)
+			tel.jobEngine = jobEngineSpend
+			return tel
+		}, rollupOf(segmentSpend(1), segmentAux(1), 4000, 700) + engineTokens(jobEngineSpend), 0},
+		{"a dispatch on nothing that wrote one item", func() turnTelemetry {
+			tel := dispatchTel(nil)
+			tel.written = sole
+			return tel
+		}, rollupOf(segmentSpend(1), segmentAux(1), 0, 0), 1},
+		{"a resume on nothing that wrote one item", func() turnTelemetry {
+			tel := resumeTel(nil, carried, 4000, 700)
+			tel.jobEngine = jobEngineSpend
+			tel.written = sole
+			return tel
+		}, rollupOf(segmentSpend(1), segmentAux(1), 4000, 700) + engineTokens(jobEngineSpend) +
+			carried.Input + carried.Output, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tel := tc.parking()
+			tel.auxSpent.Add(segmentAux(1))
+			parked := tel.chargeFor(segmentSpend(1), turn.Result{Suspended: true}, nil, ended)
+			closing := tel.closingAfter(parked, closedAt).chargeFor(runner.Spend{}, turn.Result{}, stop,
+				closedAt)
+
+			if !closing.onWorklet() {
+				t.Fatal("the close charged nothing, so the item never hears the turn ended")
+			}
+			if closing.opID == parked.opID {
+				t.Fatal("the close shares the park's operation id, and the ledger collapses it into the park")
+			}
+			if closing.record.Outcome != segmentStopped {
+				t.Fatalf("the close's outcome is %q, want %q", closing.record.Outcome, segmentStopped)
+			}
+			charged, turns := 0, 0
+			for _, c := range []segmentCharge{parked, closing} {
+				if c.onWorklet() {
+					charged += c.record.Spend.Tokens()
+					turns += c.record.Spend.Turns
+				}
+			}
+			if charged != tc.rollup || turns != tc.turns {
+				t.Fatalf("the item was charged %d tokens and %d turns across the park and the close, "+
+					"for a turn that spent %d and counts %d", charged, turns, tc.rollup, tc.turns)
+			}
+			// AND NOTHING OF ITS OWN: the close ran no phase, called no
+			// model and took no time, so it pays what the park handed on.
+			if want := addUncharged(worklet.TurnSpend{}, parked.carry); closing.record.Spend != want {
+				t.Fatalf("the close charged %+v, want only what the park handed on, %+v",
+					closing.record.Spend, want)
+			}
+		})
+	}
+}

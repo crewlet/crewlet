@@ -3152,13 +3152,12 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		parked, parkErr := e.persistSuspension(ctx, r, req.RunID, tel, charge)
 		if turn.Stopped(parkErr) {
 			// A PERSON STOPPED THE RUN BETWEEN ITS LAUNCH AND ITS PARK:
-			// the run is ended and announced, and this frame closes the
-			// turn as stopped — the completion after the park, and the
+			// the run is ended and announced, the refused park closed the
+			// turn as stopped ([Engine.closeStoppedAtPark]), and this frame
+			// ends as a turn stopped at its next round does — the
 			// dispatcher's own record of who stopped it and that the
-			// trigger is worked ([Dispatcher.stopped]) — as a turn stopped
-			// at its next round is.
+			// trigger is worked ([Dispatcher.stopped]).
 			res.Suspended, err = false, parkErr
-			e.closeStopped(ctx, tel, parkErr, time.Now().UTC())
 		} else {
 			working = stillWorking(parked, parkErr)
 		}

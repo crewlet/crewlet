@@ -246,6 +246,24 @@ func (t turnTelemetry) chargeFor(spend runner.Spend, res turn.Result, err error,
 	return charge
 }
 
+// closingAfter is the telemetry of the segment that CLOSES a turn on the frame
+// whose park a person's stop refused ([Engine.closeStoppedAtPark]): the turn's
+// identity and what it is on, with nothing of the parking segment's own spend —
+// no collected job, no engine spend on one, a fresh auxiliary tally and a span
+// that starts at the close — and what that segment handed on to the segment
+// that ends the turn: its carry, where its charge went to nothing, and its
+// measurement of the turn.
+func (t turnTelemetry) closingAfter(parked segmentCharge, at time.Time) turnTelemetry {
+	t.jobInput, t.jobOutput, t.jobCacheRead, t.jobCacheWrite = 0, 0, 0, 0
+	t.jobEngine = sandbox.EngineSpend{}
+	t.auxSpent = auxspend.NewTally()
+	t.startedAt = at
+	t.uncharged = parked.carry
+	t.soFar = parked.soFar
+	t.closesStop = true
+	return t
+}
+
 // segmentOutcome is how a segment ended, in the vocabulary a task's turn list
 // reads: parked on a coding run, stopped by a person, failed, or the turn's own
 // decision.
