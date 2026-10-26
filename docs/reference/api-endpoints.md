@@ -7639,7 +7639,7 @@ own `alarm_raised` log line.
   "nodes": [
     {
       "id": "core-1", "roles": ["data", "ingress", "seats", "workers"], "broker": "member", "labels": {},
-      "owner": "core-1:8f2a", "protocol": 1, "seats": 4, "expires_in": 41.2,
+      "owner": "core-1:8f2a", "protocol": 1, "seats": 4, "expires_in": 41,
       "config_epoch": 7, "config_status": "ok", "config_error": "",
       "in_flight": 1, "draining": false, "started_at": "2026-09-23T07:31:40Z",
       "alarms": [{"kind": "backup_age", "since": "2026-09-23T07:40:02Z"}]
@@ -7647,9 +7647,9 @@ own `alarm_raised` log line.
   ],
   "seats": [
     {"handle": "ceo", "node": "core-1", "owner": "core-1:8f2a",
-     "epoch": 4, "expires_in": 41.2, "acquired_at": "2026-09-23T08:02:11.482Z"}
+     "epoch": 4, "expires_in": 41, "acquired_at": "2026-09-23T08:02:11.482Z"}
   ],
-  "duties": [{"duty": "maintenance", "node": "core-1", "expires_in": 41.2}],
+  "duties": [{"duty": "maintenance", "node": "core-1", "expires_in": 41}],
   "unplaceable": [{"handle": "gpu-eng", "placement": "labels=gpu=true"}],
   "unmanned_roles": [],
   "this_node": "core-1",
