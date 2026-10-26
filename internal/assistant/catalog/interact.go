@@ -83,17 +83,41 @@ func PageActionOf(id string) (PageAction, bool) {
 var ErrNotAccepted = errors.New("catalog: the screen does not accept that page action")
 
 // PageActionFor is the page action a propose_page_change call names, held to
-// the turn's page context: one this build knows and one the screen mounted now
-// (its `accepts`). A turn whose page chip was removed accepts none.
-func PageActionFor(args Args, accepts []string) (PageAction, error) {
+// the turn's page context BEFORE anything is previewed or recorded: one this
+// build knows, one the screen mounted now (its `accepts`), and arguments the
+// screen takes (its `action_args`), so a proposal the screen could only
+// refuse is the model's refused step and never a card in front of the person.
+// A turn whose page chip was removed accepts none.
+//
+// Every action's arguments are the schema the screen declares, and an action
+// it declares none for is refused rather than taken on trust; draft.set alone
+// may go without, because the open draft's editable fields already declare
+// what it takes, and [DraftValues] holds a call to them either way.
+func PageActionFor(args Args, page *wire.PageContext) (PageAction, error) {
 	id := args.String("action")
 	action, known := PageActionOf(id)
+	var accepts []string
+	if page != nil {
+		accepts = page.Accepts
+	}
 	switch {
 	case !known:
 		return PageAction{}, fmt.Errorf("%w: %q is not a page action this build knows",
 			ErrInvalidArguments, id)
 	case !slices.Contains(accepts, id):
 		return PageAction{}, fmt.Errorf("%w: %q", ErrNotAccepted, id)
+	}
+	declared := page.ActionArgs[id]
+	switch {
+	case declared == nil && id == DraftSet:
+		return action, nil
+	case declared == nil:
+		return PageAction{}, fmt.Errorf("%w: the screen does not say what %q takes, so it "+
+			"cannot be proposed", ErrInvalidArguments, id)
+	}
+	if err := declared.Check(args["args"]); err != nil {
+		return PageAction{}, fmt.Errorf("%w: %s takes what the page context's action_args "+
+			"declares for it: %w", ErrInvalidArguments, id, err)
 	}
 	return action, nil
 }
@@ -117,16 +141,18 @@ func interactionTools() []Tool {
 		Phrase: "change this screen",
 		Description: "Propose a change to what the person's current screen shows: a filter, " +
 			"a range, a grouping, a tab, or the draft open in an editor. Only an action the page " +
-			"context lists in accepts is valid. For the open draft, use draft.set with args " +
+			"context lists in accepts is valid, and its args are exactly what the page " +
+			"context's action_args declares for it: its members, its values, and its examples " +
+			"to copy the shape from. Never guess a key. For the open draft, use draft.set with args " +
 			"{\"values\": {\"<path>\": \"<value>\"}}, each path an editable field of the page " +
 			"context's draft and each value in its hint's form. A file field takes the file id " +
 			"of a file delivered or attached in this conversation, as a string; the engine " +
 			"fills in the rest of the reference. Nothing is saved: the person approves, and " +
 			"saves the draft themselves.",
-		// THE PAYLOAD IS THE SCREEN'S TO READ: its shape is declared by
-		// the screen that mounts the action, so the engine checks only
-		// that it is one bounded object naming nobody, and the page
-		// refuses one it cannot apply.
+		// THE PAYLOAD'S SHAPE IS THE SCREEN'S, declared in the page
+		// context's `action_args` and held there ([PageActionFor]) before
+		// this schema's own check, which only bounds it to one object
+		// naming nobody.
 		schema: object([]string{"action"}, map[string]*schema{
 			"action": text("One of the page context's accepts.", 64),
 			"args":   {kind: "object", description: "The action's arguments.", freeform: true},

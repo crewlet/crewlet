@@ -216,6 +216,7 @@ describe("one row per move of the state machine", () => {
     const view = after(...SENT, frame("card", 1, proposal("proposed", "page")), {
       type: "page_moved",
       revision: "worklet-tasks@00000002",
+      revisions: {},
     });
     expect(phase(view)).toBe("awaiting_approval");
     expect(view.turns[0]!.proposals[PROPOSAL_ID]?.pageMoved).toBe(true);
@@ -225,6 +226,7 @@ describe("one row per move of the state machine", () => {
     const view = after(...SENT, frame("card", 1, proposal("proposed", "server")), {
       type: "page_moved",
       revision: "worklet-tasks@00000002",
+      revisions: {},
     });
     expect(view.turns[0]!.proposals[PROPOSAL_ID]).toBeUndefined();
   });

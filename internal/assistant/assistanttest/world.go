@@ -125,5 +125,16 @@ func FilterPage() *wire.PageContext {
 	return &wire.PageContext{Screen: "worklet-tasks", Title: "Worklet › Tasks",
 		Params: map[string]string{}, Query: map[string]string{},
 		Resources:      []wire.Resource{{Kind: wire.ResourceProject, ID: "ENG"}},
-		SourceRevision: "url:3f9c1a0e", Accepts: []string{"work.filter.apply"}}
+		SourceRevision: "url:3f9c1a0e", Accepts: []string{"work.filter.apply"},
+		ActionArgs: map[string]*wire.ActionArgs{"work.filter.apply": StatusFilterArgs()}}
+}
+
+// StatusFilterArgs are the arguments a task list's filter takes, as the
+// screen declares them: a status, by one of its values, or null to clear it.
+func StatusFilterArgs() *wire.ActionArgs {
+	closed := false
+	return &wire.ActionArgs{Type: wire.ArgTypes{wire.ArgObject}, AdditionalProperties: &closed,
+		Properties: map[string]*wire.ActionArgs{"status": {
+			Type: wire.ArgTypes{wire.ArgString, wire.ArgNull}, Description: "Status",
+			Enum: []string{"todo", "in_progress", "in_review", "done", "blocked"}}}}
 }

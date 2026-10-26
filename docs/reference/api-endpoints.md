@@ -404,7 +404,7 @@ node means nothing was done.
 | `POST` | `/operator/act/{tool}` | The same catalogue's writes, one tool per request, **as the principal your request resolves to**: the dashboard's write surface. Any credential the guard resolved; every tool is decided by the authority table, as on every other surface, and the `Idempotency-Key` header is required (see [below](#operatoract--the-dashboards-write-surface)). Answers as `/operator/mcp` does before the first company and on a company that runs neither Worklet nor Doclet |
 | `POST` | `/assistant/proposals/{id}/approve` | Approve one of **your own** Dashboard Assistant proposals. A proposal whose turn read through an app you no longer hold is not sent: it settles `failed` with the refusal `access_withdrawn`, and the turn ends rather than carrying on with what it read. Your session cookie and a matching `Origin` only (an assistant grant is refused before routing), `Content-Type: application/json`, the `Idempotency-Key` header, and `{"protocol_version": 1, "digest": "sha256:..."}` echoing the digest the card showed, with an optional `page_context`: the screen you decided from, as it is now, which the resumed turn runs on (the actions it accepts, the draft as the change left it). A turn you asked without a page never gains one this way, and a `page_context` the screen's own rules refuse is `400 invalid_body` before anything is decided. Refusals: `404 not_found` (not yours, or no such proposal), `409 proposal_already_decided` (with its `state`), `410 proposal_expired`, `409 proposal_digest_mismatch` (nothing sent), `409 proposal_stale` (the record moved since it was shown), `403 step_up_required` (nothing recorded; confirm it is you and send the same request again), `503 unavailable` with the `op_id` to retry under. A server write is sent in process as you, once, under the proposal's own operation key, and `202` answers its state (`applied`, `failed` or `unknown`), the turn and where its continuation streams. An `unknown` proposal is retried by approving it again: the same write, never a second one |
 | `POST` | `/assistant/proposals/{id}/decline` | Decline one of your proposals: the same body, header and refusals as the approval; nothing is sent, and the assistant is told. `200` with the proposal's state |
-| `PUT` | `/assistant/actions/{id}` | A page claiming (`{"state": "applying"}`), then reporting, a page action you approved (the report may carry `page_context`, the screen as the action left it, read as the approval's is), or a view change (`confirm: none`: a filter, a range, a lens) the turn sent to the page at once, recorded as a proposal it approved itself; the report of a view change settles it and resumes nothing, since its turn never waited for it. The claim succeeds once across your tabs; another tab is `409 action_already_claimed`. A claim must name the revision the screen is at: one whose screen moved since the action was prepared is `409 proposal_stale`, and nothing is applied. The report (`applied`, `stale`, `blocked`, `invalid`, `no_handler`, with the page's `revision`) is the page's own statement, which the assistant reads as client-reported. `Idempotency-Key` is optional: a claim sent again under its key is the same claim |
+| `PUT` | `/assistant/actions/{id}` | A page claiming (`{"state": "applying"}`), then reporting, a page action you approved (the report may carry `page_context`, the screen as the action left it, read as the approval's is), or a view change (`confirm: none`: a filter, a range, a lens) the turn sent to the page at once, recorded as a proposal it approved itself; the report of a view change settles it and resumes nothing, since its turn never waited for it. The claim succeeds once across your tabs; another tab is `409 action_already_claimed`. A claim must name the revision the screen is at for that action (its `action_revisions` entry, else `source_revision`): one whose screen moved since the action was prepared is `409 proposal_stale`, and nothing is applied. The report (`applied`, `stale`, `blocked`, `invalid`, `no_handler`, with the page's `revision`) is the page's own statement, which the assistant reads as client-reported. `Idempotency-Key` is optional: a claim sent again under its key is the same claim |
 | `POST` | `/assistant/audit/conversations/{id}/read` | An administrator's **compliance read** of somebody else's assistant conversation (`assistant.conversation.audit_read`: admin, a recent proof, a person present, never the assistant). `{"protocol_version": 1, "reason": "..."}`, the reason required and at most 500 characters. The read is recorded first, beside your name and reason, and the conversation's owner is shown it; then `200` answers the transcript and an `assistant_conversation_read` audit record names you, the owner and the reason |
 | `POST` | `/assistant/audit/conversations/{id}/files/{file}/read` | The same **compliance read** of one file the conversation keeps, on the same verb and with the same body: the read is recorded beside the conversation first, the `assistant_conversation_read` audit record names the file as well (`file_id`), and `200` answers the file with every header of [the owner's download](#the-dashboard-assistant). A file the conversation does not keep is `404 not_found`, and the read stays on its record. Absent on a node with no object store |
 
@@ -6971,6 +6971,31 @@ written against; a version this engine does not speak is
 as the dashboard describes it (at most 16 KiB, 50 resources and 32 page actions)
 or `null` when the person removed the page chip. The model reads the page
 context fenced as somebody else's words: it is a hint and never an authority.
+
+Beside `accepts`, the page context carries `action_args`: what each accepted
+page action takes on that screen now, by action id, as a closed subset of JSON
+Schema (`type`, `description`, `enum`, `const`, `minLength`, `maxLength`,
+`minItems`, `maxItems`, `items`, `properties`, `required`,
+`patternProperties`, `additionalProperties`, `oneOf`, and top-level
+`examples`). The screen builds it from the same declaration its parser reads
+(the address keys a view change writes, the seats and windows a screen draws,
+the org builder's operations), so the model is told the members to send rather
+than guessing them. Every accepted action declares it (`draft.set` may go
+without, since the draft's editable fields declare what it takes). The engine
+reads it strictly: an unknown keyword, a pattern RE2 cannot compile, a schema
+past 6 KiB, 8 levels or 160 parts, or an example its own schema refuses is
+`400 invalid_body`. Before a `propose_page_change` call is previewed or
+recorded, its `args` are held to that schema, and one that does not match is
+the model's refused step, naming the members the screen takes, never a card.
+An action the screen declares no arguments for is never proposed.
+
+`action_revisions` gives each accepted action its own revision: the screen and
+its path, and only the parts of the page the action depends on (its address,
+its selection, its data). A page action's proposal is bound to its action's
+revision, and its claim names the revision of that action, so a change goes
+stale only when what it depends on moved, never because the person opened a
+row's peek or another editor beside it. An action without one is bound to
+`source_revision`.
 
 A screen with a draft or a form open adds `draft`: `{kind, id?, revision?,
 step?, help?, fields, more}`, where `kind` is `client` (the values live in the

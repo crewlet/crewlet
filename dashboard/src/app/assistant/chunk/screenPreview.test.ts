@@ -24,6 +24,7 @@ const seen: unknown[] = [];
 /** The work list's filter, as a screen declares it: it takes `{status}` and refuses `assignee`. */
 const spec: PageActionSpec<{ status?: string; assignee?: string }> = {
   scope: "Worklet list filters",
+  args: { type: "object" },
   parse: (raw) => {
     seen.push(raw);
     return raw && typeof raw === "object" && !Array.isArray(raw)
