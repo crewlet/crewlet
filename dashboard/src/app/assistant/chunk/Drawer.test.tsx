@@ -29,6 +29,23 @@ import type { AssistantModelProblem, AssistantUnavailable } from "../availabilit
 import { Drawer } from "./Drawer.tsx";
 import { conversation, resetSessionForTest } from "./session.ts";
 
+/*
+ * THE THREAD, COUNTED. A keystroke must render the composer alone: the case
+ * that types a follow-up asserts the thread under it was not rendered at all.
+ * The real component draws everything; the wrapper only counts.
+ */
+const threadRenders = vi.hoisted(() => ({ count: 0 }));
+vi.mock("./Thread.tsx", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./Thread.tsx")>();
+  return {
+    ...real,
+    Thread: (props: Parameters<typeof real.Thread>[0]) => {
+      threadRenders.count += 1;
+      return real.Thread(props);
+    },
+  };
+});
+
 const GOLDEN = readFileSync(
   join(repoRoot(), "internal/assistant/wire/testdata/frames.sse"),
   "utf8",
@@ -169,6 +186,59 @@ test("a question is sent with its page, streamed, and drawn with every card the 
   expect(screen.getAllByText("No open task covers it yet.").length).toBeGreaterThan(0);
   // A CHANGE WAITS ON THE PERSON, and the Ask button would say so.
   expect(assistantActivity()).toBe("waiting");
+});
+
+test("a follow-up typed fast under a turn with cards keeps every keystroke and renders only the composer", async () => {
+  engine();
+  setFramePage({
+    screen: "worklet-tasks",
+    title: "Worklet › Tasks",
+    path: ["worklet", "tasks"],
+    params: {},
+    query: {},
+  });
+  mount();
+  const box = screen.getByRole("textbox", { name: "Ask the assistant" }) as HTMLTextAreaElement;
+  fireEvent.change(box, { target: { value: "Fix the flaky sign-in test" } });
+  await act(async () => {
+    fireEvent.keyDown(box, { key: "Enter" });
+  });
+  await waitFor(() => expect(conversation().turns[0]?.phase).toBe("awaiting_approval"));
+  expect(screen.getAllByText("Matching tasks").length).toBeGreaterThan(0);
+
+  // KEYSTROKES AS A BROWSER DELIVERS THEM WHEN THEY QUEUE UP: one native
+  // input event after another, each flushed by React on its own, outside
+  // `act`. `act` drains every update before the next keystroke and would hide
+  // the chain that threw a keystroke away (React error #185) once a turn's
+  // cards were rendered by every keystroke.
+  const environment = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean | undefined };
+  const wasActEnvironment = environment.IS_REACT_ACT_ENVIRONMENT;
+  const errors: unknown[] = [];
+  const onError = (event: ErrorEvent) => errors.push(event.error ?? event.message);
+  const logged = vi.spyOn(console, "error").mockImplementation((...args) => errors.push(args));
+  const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+  const typed =
+    "Why did FAIR-3 fail, and is the QA Engineer right to pick up FAIR-10 next? ".repeat(3);
+  threadRenders.count = 0;
+  window.addEventListener("error", onError);
+  environment.IS_REACT_ACT_ENVIRONMENT = false;
+  try {
+    for (const key of typed) {
+      setValue.call(box, box.value + key);
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  } finally {
+    environment.IS_REACT_ACT_ENVIRONMENT = wasActEnvironment;
+    window.removeEventListener("error", onError);
+    logged.mockRestore();
+  }
+
+  expect(errors).toEqual([]);
+  expect(box.value).toBe(typed);
+  expect(threadRenders.count).toBe(0);
+  expect(screen.getByRole("button", { name: "Send" }).getAttribute("aria-disabled")).not.toBe(
+    "true",
+  );
 });
 
 test("a question past the length a turn takes is not sent", async () => {
