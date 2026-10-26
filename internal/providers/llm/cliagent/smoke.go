@@ -110,7 +110,7 @@ func (h *smokeHost) Offered() []toolsession.Tool {
 	}}
 }
 
-func (h *smokeHost) Call(_ context.Context, call toolsession.Call) toolsession.Result {
+func (h *smokeHost) Call(call toolsession.Call) toolsession.Result {
 	h.mu.Lock()
 	h.calls = append(h.calls, hostCallRecord{name: call.Name, args: call.Arguments, meta: call.Meta})
 	opts := h.opts

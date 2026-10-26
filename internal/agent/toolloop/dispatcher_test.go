@@ -194,7 +194,7 @@ func TestACallTheCLIGaveUpOnRunsOutUnderThePhase(t *testing.T) {
 	surf := newSurface("slow")
 	surf.holdTool, surf.hold, surf.entered = "slow", make(chan struct{}), make(chan struct{})
 	var mu sync.Mutex
-	var ctxErr error = errors.New("never read")
+	ctxErr := errors.New("never read")
 	surf.hook = func(ctx context.Context, call llm.ToolCall) {
 		go func() {
 			<-surf.entered
@@ -243,7 +243,7 @@ func TestACallTheCLIDiedUnderRunsOutAndIsRecorded(t *testing.T) {
 	surf := newSurface("slow")
 	surf.holdTool, surf.hold, surf.entered = "slow", make(chan struct{}), make(chan struct{})
 	var mu sync.Mutex
-	var ctxErr error = errors.New("never read")
+	ctxErr := errors.New("never read")
 	surf.hook = func(ctx context.Context, call llm.ToolCall) {
 		go func() {
 			<-surf.entered
