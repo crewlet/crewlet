@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/codeindex"
 )
 
 // A FILE is `git cat-file blob <id>` streamed through a page cutter that keeps
@@ -21,12 +22,9 @@ import (
 // first reads everything before it.
 //
 // BINARY is git's own test (buffer_is_binary): a NUL in the first 8 000
-// bytes. Such a file is answered by its size, with no text, and its stream is
-// ended there.
-
-// binaryProbe is how much of a file git reads to call it binary: its
-// FIRST_FEW_BYTES.
-const binaryProbe = 8000
+// bytes, which codeindex.Binary holds — the one copy of the rule, by which the
+// code index skips the same files `git grep -I` does. Such a file is answered
+// by its size, with no text, and its stream is ended there.
 
 // blobRead answers a file read: a blob by its own id, or the file a path names
 // in a commit — or, where the path names a directory or none is given of a
@@ -174,10 +172,10 @@ func (b *blobPage) Write(p []byte) (int, error) {
 		b.last = p[n-1]
 	}
 	if !b.decided {
-		take := min(len(p), binaryProbe-len(b.sniff))
+		take := min(len(p), codeindex.BinaryProbeBytes-len(b.sniff))
 		b.sniff = append(b.sniff, p[:take]...)
 		p = p[take:]
-		if len(b.sniff) < binaryProbe {
+		if len(b.sniff) < codeindex.BinaryProbeBytes {
 			return n, nil
 		}
 		if b.decide() {
@@ -192,7 +190,7 @@ func (b *blobPage) Write(p []byte) (int, error) {
 // stream is ended there.
 func (b *blobPage) decide() bool {
 	b.decided = true
-	if bytes.IndexByte(b.sniff, 0) >= 0 {
+	if codeindex.Binary(b.sniff) {
 		b.binary = true
 		return true
 	}

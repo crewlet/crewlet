@@ -68,7 +68,8 @@
 // first BinaryProbeBytes), is SKIPPED: recorded in its segment, so its next
 // tip does not read it again, but never read for trigrams and never a
 // candidate. It is the rule `git grep -I` falls back to, so the index and the
-// grep path skip the same files.
+// grep path skip the same files, and the one code/query's file reads call a
+// file binary by.
 //
 // # The files
 //

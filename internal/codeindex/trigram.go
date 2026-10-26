@@ -77,9 +77,10 @@ const BinaryProbeBytes = 8000
 // the blob's first BinaryProbeBytes, or all of a shorter blob; past them it
 // is not read.
 //
-// The index skips a binary blob by it, as `git grep -I` skips the same one.
-// A gitattributes `binary` or `-diff` is git's other half of the rule, which
-// a reader holding only the blob cannot see.
+// The ONE copy of the rule: the index skips a binary blob by it, `git grep
+// -I` skips the same one, and code/query answers a file read of one by its
+// size alone. A gitattributes `binary` or `-diff` is git's other half of the
+// rule, which a reader holding only the blob cannot see.
 func Binary(head []byte) bool {
 	return bytes.IndexByte(head[:min(len(head), BinaryProbeBytes)], 0) >= 0
 }
