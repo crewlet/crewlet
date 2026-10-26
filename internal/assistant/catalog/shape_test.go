@@ -171,7 +171,7 @@ func TestEveryAssistantToolResultIsFenced(t *testing.T) {
 			for _, rows := range []int{1, 600} {
 				name := fmt.Sprintf("%s/%s/%d", tool.Name, variant, rows)
 				res, err := catalog.Shape(tool, args, exec.Response{Status: 200,
-					Body: hostileAnswer(spec, b, rows)}, b, evals.Epoch)
+					Body: hostileAnswer(spec, b, rows)}, b, evals.Epoch, cards.Options{})
 				if err != nil {
 					t.Errorf("%s: %v", name, err)
 					continue
@@ -233,7 +233,7 @@ func TestARefusalAndATruncatedAnswerAreNeverCardedAsData(t *testing.T) {
 	tool, _ := catalog.Lookup("list_tasks")
 	res, err := catalog.Shape(tool, nil, exec.Response{Status: 403,
 		Body: []byte(`{"error":"unauthorized","message":"You may not.","grants":["worklet"]}`)},
-		b, evals.Epoch)
+		b, evals.Epoch, cards.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,7 @@ func TestARefusalAndATruncatedAnswerAreNeverCardedAsData(t *testing.T) {
 		t.Errorf("a refusal shaped as %+v", res)
 	}
 	res, err = catalog.Shape(tool, nil, exec.Response{Status: 200, Body: []byte(`{"items":[`),
-		Truncated: true}, b, evals.Epoch)
+		Truncated: true}, b, evals.Epoch, cards.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +283,7 @@ func TestAnAnswerIsFencedAtTheTrustItsTextEarns(t *testing.T) {
 		tool := mustTool(t, tc.tool)
 		args := assistanttest.ExampleArgs(t, tool.Parameters)
 		res, err := catalog.Shape(tool, args, exec.Response{Status: 200, Body: []byte(tc.body)},
-			b, evals.Epoch)
+			b, evals.Epoch, cards.Options{})
 		if err != nil {
 			t.Fatalf("%s: %v", tc.tool, err)
 		}
@@ -316,7 +316,7 @@ func TestNoReadEverDrawsAnEmptyCard(t *testing.T) {
 			args := argsFor(t, tool, variant)
 			for _, body := range []string{`{}`, `{"hits":[],"items":[],"rows":[]}`} {
 				res, err := catalog.Shape(tool, args, exec.Response{Status: 200,
-					Body: []byte(body)}, b, evals.Epoch)
+					Body: []byte(body)}, b, evals.Epoch, cards.Options{})
 				if err != nil {
 					t.Errorf("%s: %v", name, err)
 					continue
@@ -336,7 +336,7 @@ func TestNoReadEverDrawsAnEmptyCard(t *testing.T) {
 				}
 			}
 			res, err := catalog.Shape(tool, args, exec.Response{Status: 200,
-				Body: hostileAnswer(spec, b, 1)}, b, evals.Epoch)
+				Body: hostileAnswer(spec, b, 1)}, b, evals.Epoch, cards.Options{})
 			if err != nil {
 				t.Fatalf("%s: %v", name, err)
 			}
@@ -372,7 +372,7 @@ func TestAnEmptySearchSaysWhatItAskedAndWhy(t *testing.T) {
 		tool, _ := catalog.Lookup(name)
 		res, err := catalog.Shape(tool, args, exec.Response{Status: 200, Body: []byte(
 			`{"available":false,"reason":"building","note":"` + note + `","hits":[]}`)},
-			b, evals.Epoch)
+			b, evals.Epoch, cards.Options{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -385,7 +385,7 @@ func TestAnEmptySearchSaysWhatItAskedAndWhy(t *testing.T) {
 	tool, _ := catalog.Lookup("search_knowledge")
 	res, err := catalog.Shape(tool, args, exec.Response{Status: 200, Body: []byte(
 		`{"available":true,"hits":[{"id":"p1","title":"Our mission","container":"FAIR",` +
-			`"snippet":"share costs fairly"}]}`)}, b, evals.Epoch)
+			`"snippet":"share costs fairly"}]}`)}, b, evals.Epoch, cards.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

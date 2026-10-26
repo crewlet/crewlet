@@ -217,7 +217,7 @@ func register(mux *http.ServeMux, route string, status int, body []byte) (err er
 func judge(e Expect, frames []wire.Frame) Trial {
 	var t Trial
 	seen := map[string]bool{}
-	var answer strings.Builder
+	var answer, shown strings.Builder
 	for _, f := range frames {
 		switch f.Kind {
 		case wire.EventStep:
@@ -228,6 +228,12 @@ func judge(e Expect, frames []wire.Frame) Trial {
 		case wire.EventCard:
 			if f.Card.Card.Proposal != nil {
 				t.Proposals++
+			}
+			// THE CARD AS ITS WIRE CARRIES IT, every title, cell, row and
+			// note, which is what the person was shown.
+			if raw, err := json.Marshal(f.Card.Card); err == nil {
+				shown.Write(raw)
+				shown.WriteByte('\n')
 			}
 		case wire.EventDelta:
 			answer.WriteString(f.Delta.Text)
@@ -266,6 +272,12 @@ func judge(e Expect, frames []wire.Frame) Trial {
 	for _, s := range e.NeverSays {
 		if strings.Contains(lower, strings.ToLower(s)) {
 			fail("never_says: %q in the answer", s)
+		}
+	}
+	cardText := strings.ToLower(shown.String())
+	for _, s := range e.Shows {
+		if !strings.Contains(cardText, strings.ToLower(s)) {
+			fail("shows: %q on no card", s)
 		}
 	}
 	return t

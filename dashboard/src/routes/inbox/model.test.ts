@@ -12,6 +12,7 @@ import {
   earlierOf,
   firstSentence,
   inboxQuiet,
+  inboxResources,
   inboxRows,
   nextAfter,
   noticeNote,
@@ -316,4 +317,35 @@ test("a notice whose key another task claimed is addressed by its task's id", ()
   };
   const item = rowItem(r);
   expect(item && itemAddress(item)).toBe("t-dup");
+});
+
+describe("what Needs you names for the assistant", () => {
+  test("each question's task, each waiting run and each stopped seat, once each", () => {
+    const ask = { kind: "ask", at: "2026-10-26T08:00:00Z", ask: { id: "t1", key: "FAIR-10" } };
+    const collided = {
+      kind: "ask",
+      at: "2026-10-26T08:00:00Z",
+      ask: { id: "t9", key: "FAIR-1", key_collision: true },
+    };
+    const run = { kind: "run", at: "2026-10-26T08:00:00Z", run: { turn_id: "turn-1" } };
+    const budget = { kind: "seat", seat: { row: { handle: "pm" }, window: undefined } };
+    const needs = [
+      { kind: "decision", key: "a", subject: ask, notices: [] },
+      { kind: "decision", key: "b", subject: collided, notices: [] },
+      { kind: "decision", key: "c", subject: run, notices: [] },
+      { kind: "decision", key: "d", subject: budget, notices: [] },
+      { kind: "condition", key: "e", item: { id: "error-x", subject: "seat", who: "qa" } },
+      { kind: "condition", key: "f", item: { id: "stopped-y", subject: "seat", who: "qa" } },
+      { kind: "condition", key: "g", item: { id: "sandbox-turn-2", subject: "run" } },
+      { kind: "condition", key: "h", item: { id: "posture-draining", subject: "engine" } },
+    ] as unknown as InboxRow[];
+    expect(inboxResources(needs)).toEqual([
+      { kind: "task", id: "FAIR-10" },
+      { kind: "task", id: "t9" },
+      { kind: "run", id: "turn-1" },
+      { kind: "seat", id: "pm" },
+      { kind: "seat", id: "qa" },
+      { kind: "run", id: "turn-2" },
+    ]);
+  });
 });

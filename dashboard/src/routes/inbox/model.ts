@@ -56,6 +56,50 @@ export type InboxRow =
   | { kind: "condition"; key: string; at?: string; item: Attention }
   | { kind: "notice"; key: string; at: string; notice: WorkInboxNotice };
 
+/** One record the Inbox shows, as the assistant's page context names it. */
+export interface InboxResource {
+  kind: "task" | "run" | "seat";
+  id: string;
+}
+
+/**
+ * The records Needs you is about, for the assistant's page context: the task
+ * each question was asked on, each coding run waiting on an answer, and each
+ * seat stopped, paused or out of budget, each once, in the list's order.
+ *
+ * THE INBOX THE PERSON SEES IS THIS LIST, built here from the roster, the runs
+ * and the questions, and no route answers it whole. Without it a person asking
+ * "why did my agents stop" from this screen was told their inbox was empty,
+ * because the assistant read the task notices behind Updates and nothing else.
+ * Naming the records lets it read each one where it lives.
+ */
+export function inboxResources(needs: readonly InboxRow[]): InboxResource[] {
+  const out: InboxResource[] = [];
+  const seen = new Set<string>();
+  const add = (kind: InboxResource["kind"], id: string | undefined) => {
+    if (!id || seen.has(`${kind}:${id}`)) return;
+    seen.add(`${kind}:${id}`);
+    out.push({ kind, id });
+  };
+  for (const row of needs) {
+    if (row.kind === "decision") {
+      const s = row.subject;
+      if (s.kind === "ask") add("task", s.ask.key_collision ? s.ask.id : s.ask.key);
+      else if (s.kind === "run") add("run", s.run.turn_id);
+      else add("seat", s.seat.row.handle ? String(s.seat.row.handle) : undefined);
+    } else if (row.kind === "condition" && row.item.subject === "seat") {
+      add("seat", row.item.who);
+    } else if (
+      row.kind === "condition" &&
+      row.item.subject === "run" &&
+      row.item.id.startsWith("sandbox-")
+    ) {
+      add("run", row.item.id.slice("sandbox-".length));
+    }
+  }
+  return out;
+}
+
 /** The two groups the list always draws. */
 export interface InboxRows {
   needs: InboxRow[];

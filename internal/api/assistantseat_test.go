@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
+	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
@@ -104,7 +105,7 @@ func prepareSeat(t *testing.T, fx *assistApp, read exec.Grant) (proposal.Preview
 	if err != nil || resp.Status != http.StatusOK {
 		t.Fatalf("api_request read the unit: %d %s, %v", resp.Status, resp.Body, err)
 	}
-	shaped, err := catalog.Shape(reader, args, resp, provenance.NewBoundary(), time.Now())
+	shaped, err := catalog.Shape(reader, args, resp, provenance.NewBoundary(), time.Now(), cards.Options{})
 	if err != nil || !strings.Contains(shaped.Model, "cto") {
 		t.Fatalf("the model was handed %q, %v, not the unit", shaped.Model, err)
 	}

@@ -948,6 +948,18 @@ describe("the head", () => {
     expect(greeting(at, "")).toBe("Good evening");
   });
 
+  test("the small hours name no part of the day", () => {
+    pinZoneForTest("UTC");
+    reloadForTest();
+    expect(greeting(Date.parse("2026-10-26T01:11:00Z"), "Miles Rae")).toBe("Hello, Miles");
+    expect(greeting(Date.parse("2026-10-26T04:59:00Z"), "")).toBe("Hello");
+    expect(greeting(Date.parse("2026-10-26T05:00:00Z"), "Miles")).toBe("Good morning, Miles");
+    expect(greeting(Date.parse("2026-10-26T12:00:00Z"), "Miles")).toBe("Good afternoon, Miles");
+    expect(greeting(Date.parse("2026-10-26T18:00:00Z"), "Miles")).toBe("Good evening, Miles");
+    pinZoneForTest("");
+    reloadForTest();
+  });
+
   test("a condition that needs a look links to where it is listed", async () => {
     mount({
       agents: [

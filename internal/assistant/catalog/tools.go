@@ -111,6 +111,14 @@ func (Curated) Offered(p iam.Principal, acts []string) []Tool { return Offered(p
 
 // validate reports what is wrong with one tool as declared.
 func (t Tool) validate() error {
+	// A NAMED ARGUMENT IS ONE THE SCHEMA DECLARES, read against a directory
+	// this build knows, so a misspelt entry cannot silently resolve nothing.
+	for arg, dir := range t.Names {
+		if _, declared := t.schema.properties[arg]; !declared || !dir.Valid() {
+			return fmt.Errorf("catalog: %s resolves %q against %q, which is not an argument "+
+				"it declares or not a directory", t.Name, arg, dir)
+		}
+	}
 	switch {
 	case t.Name == "" || t.Description == "" || t.Phrase == "":
 		return fmt.Errorf("catalog: %q needs a name, a description and a phrase", t.Name)

@@ -907,7 +907,15 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 	// configured and never spawned is exactly that, and a 404 there would
 	// make a healthy new company look broken. Its history is answered the
 	// same way.
-	history, next, coverage := s.phaseHistory(ctx, agentID, p)
+	//
+	// `history=false` ASKS FOR THE SEAT ALONE, its status without the calls
+	// it finished: their payloads are whole transcripts, so a caller asking
+	// what a seat is doing (the assistant's step, held to a step's read)
+	// was handed a body too large to read and lost the status with it.
+	history, next, coverage := []store.EventRecord{}, "", (*eventfan.Coverage)(nil)
+	if p.Bool("history", true) {
+		history, next, coverage = s.phaseHistory(ctx, agentID, p)
+	}
 	// WHAT THIS READER MAY SEE OF THE SEAT: its status, everybody's; its
 	// body — the live call's transcript and every finished call's payload
 	// — the seat trail's readers' ([Sources.reach]). See livestate's

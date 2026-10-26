@@ -153,10 +153,15 @@ var heldElsewhere = map[string]bool{
 // writes with `omitempty` that this company leaves zero.
 var answerTypes = map[string]assistanttest.ValueTypes{
 	"list_agents/": {
-		"row.turn":      reflect.TypeFor[livestate.LiveTurn](),
-		"row.last_turn": reflect.TypeFor[livestate.LastTurn](),
+		"row.turn":       reflect.TypeFor[livestate.LiveTurn](),
+		"row.last_turn":  reflect.TypeFor[livestate.LastTurn](),
+		"row.paused":     reflect.TypeFor[livestate.Paused](),
+		"row.last_error": reflect.TypeFor[livestate.ErrorInfo](),
 	},
-	"get_agent/detail": {"record.live.last_turn": reflect.TypeFor[livestate.LastTurn]()},
+	"get_agent/detail": {
+		"record.live.last_turn":  reflect.TypeFor[livestate.LastTurn](),
+		"record.live.last_error": reflect.TypeFor[livestate.ErrorInfo](),
+	},
 	// A ROW OF THE FEED IS ONE SOURCE'S, and a schedule's is the usage
 	// estate's, which only a running fleet writes.
 	"get_company_feed/":         {"row": reflect.TypeFor[queries.FeedEntry]()},

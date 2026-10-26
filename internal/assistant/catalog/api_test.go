@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
@@ -351,7 +352,7 @@ func TestAGenericReadIsHandedToTheModelWhole(t *testing.T) {
 	}})
 	args := catalog.Args{"route": "GET /worklet/{id}", "path": map[string]any{"id": "ENG"}}
 	b := provenance.NewBoundary()
-	shaped, err := catalog.Shape(read, args, exec.Response{Status: 200, Body: answer}, b, wednesday)
+	shaped, err := catalog.Shape(read, args, exec.Response{Status: 200, Body: answer}, b, wednesday, cards.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +368,7 @@ func TestAGenericReadIsHandedToTheModelWhole(t *testing.T) {
 	}
 	big := `{"text":"` + strings.Repeat("a", 64<<10) + `"}`
 	shaped, err = catalog.Shape(read, args, exec.Response{Status: 200, Body: []byte(big)}, b,
-		wednesday)
+		wednesday, cards.Options{})
 	if err != nil || len(shaped.Model) > 16<<10 || !strings.Contains(shaped.Model, "cut here") {
 		t.Errorf("a long answer was handed as %d bytes (%v)", len(shaped.Model), err)
 	}

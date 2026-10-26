@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
@@ -183,7 +184,7 @@ func TestAGenericReadIsCardedAsTheThingItReads(t *testing.T) {
 				args["path"] = c.path
 			}
 			res, err := catalog.Shape(read, args, exec.Response{Status: 200, Body: body},
-				provenance.NewBoundary(), time.Now())
+				provenance.NewBoundary(), time.Now(), cards.Options{})
 			if err != nil {
 				t.Fatal(err)
 			}
