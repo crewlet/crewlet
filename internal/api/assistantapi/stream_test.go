@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/live"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
 // parkedSite is a turn that read once, then proposed a task and parked on it,
@@ -114,3 +115,45 @@ func TestAParkedTurnsEndToldFromTheRecordCountsItsSteps(t *testing.T) {
 
 // pastRetention is past the time an ended segment's frames are kept.
 const pastRetention = live.EndedRetention + time.Second
+
+// THE STEP COUNT ONLY GROWS, and never past what has ended: every status
+// frame says how many steps have ENDED. It said the index of the step that
+// ended last, which a CLI calling tools in parallel ends out of order, and the
+// run chip counted 2, then 1. The scripted CLI here calls its tools in turn,
+// so this holds the invariant every frame must keep rather than replaying the
+// parallel order itself.
+func TestTheStatusStepCountOnlyGrows(t *testing.T) {
+	t.Parallel()
+	s := newSite(t, evals.RigOptions{
+		Tools: []catalog.Tool{assistanttest.Tool(t, "get_task")},
+		Handler: assistanttest.Routes(map[string]exec.Response{
+			"GET /worklet/ENG-7": assistanttest.Task("ENG-7", "Rotate keys", "Before Friday."),
+			"GET /worklet/ENG-8": assistanttest.Task("ENG-8", "Audit access", "This week."),
+		}),
+		Rounds: []evals.Round{
+			{Calls: []llm.ToolCall{
+				{ID: "c1", Name: "get_task", Arguments: map[string]any{"item": "ENG-7"}},
+				{ID: "c2", Name: "get_task", Arguments: map[string]any{"item": "ENG-8"}},
+			}, Input: 100, Output: 10},
+			evals.Say("Both are due this week.")}})
+	accepted := s.ask(t, "What is due?")
+	drawn := frames(t, s.stream(t, accepted, ""))
+	started, ended, last := 0, 0, 0
+	for _, f := range drawn {
+		switch {
+		case f.Step != nil && f.Step.State == wire.StepRunning:
+			started++
+		case f.Step != nil:
+			ended++
+		case f.Status != nil:
+			if f.Status.StepsDone < last || f.Status.StepsDone > ended {
+				t.Fatalf("a status said %d steps done after %d, with %d of %d started ended",
+					f.Status.StepsDone, last, ended, started)
+			}
+			last = f.Status.StepsDone
+		}
+	}
+	if started != 2 || last != 2 {
+		t.Fatalf("the turn started %d steps and counted %d done, want 2 and 2", started, last)
+	}
+}
