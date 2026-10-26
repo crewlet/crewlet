@@ -335,7 +335,9 @@ func leavesObject(c Command) bool {
 // tombstones once did (HorizonDeletesPerRecord); and a share bounds no lane
 // time a full budget does not, since a record touches MaxRecordRows at most
 // either way, and deleting a drop moves one index entry, its key's, where
-// the tombstones a sweep may take as many of move three.
+// the tombstones a sweep may take as many of move three — measured, 22 ms
+// for a record forgetting 3 996 drops against 40 ms for one sweeping 3 995
+// tombstones (doc.go's measured section).
 //
 // # Where it falls behind, and how it catches up
 //

@@ -227,7 +227,14 @@ func fullest(tb testing.TB, prefix string, i int, command func(p, c int) Command
 //     the record writes its deletions as removals and the objects they left
 //     as 3 000 ref drops — a record no committer of this build forms (it
 //     counts each deletion three times, and two such pushes never share a
-//     record), whose cost the applier still bounds.
+//     record), whose cost the applier still bounds;
+//   - expiry: one push of one command at a repository holding MaxRecordRows
+//     ref drops past their grace, whose record forgets every one its row
+//     budget leaves room for — 3 996, the drops' counterpart of sweep;
+//   - forced: one push of MaxCommandsPerPush forced updates at a repository
+//     holding MaxRecordRows ref drops past their grace, so the record writes
+//     a thousand refs and as many drops and forgets the 1 997 its rows leave
+//     — the most drops a record both writes and forgets.
 //
 // Each is held against statelog.ApplyTxTimeBudget (250 ms), which a record
 // is checked against only at its boundary; doc.go's measured section records
@@ -259,6 +266,15 @@ func BenchmarkApplyAPushRecord(b *testing.B) {
 	}
 	one := func(i int) []PushEntry {
 		return []PushEntry{pushEntry(fmt.Sprint("one-", i), move("refs/heads/main", ZeroOID, oid("main")))}
+	}
+	// THE FORCED UPDATES OF e.seed's refs, one maximal push of them.
+	forcing := func(i int) []PushEntry {
+		var cmds []Command
+		for c := range MaxCommandsPerPush {
+			cmds = append(cmds, forced(fmt.Sprintf("refs/heads/r%06d", c), oid("seeded"),
+				oid(fmt.Sprint("forced", c))))
+		}
+		return []PushEntry{pushEntry(fmt.Sprint("forced-", i), cmds...)}
 	}
 	// THE DELETIONS OF e.seed's refs, three maximal pushes of them, which no
 	// committer of this build puts in one record.
@@ -313,6 +329,14 @@ func BenchmarkApplyAPushRecord(b *testing.B) {
 			e.seed(repo, 0, 3*MaxCommandsPerPush, 0)
 			e.seedTombstones(repo, MaxTombstonesPerRepo, applyClock.Add(-time.Hour))
 		}, false, 3 * (1 + 2*MaxCommandsPerPush + 1)},
+		// EVERY ROW OF THE BUDGET TOUCHED BY THE DROPS: the record's own rows
+		// and the expiry forgetting what they leave.
+		{"expiry", one, func(e *estate, repo string) { e.seedDrops(repo, 1, expired, MaxRecordRows) },
+			false, MaxRecordRows},
+		{"forced", forcing, func(e *estate, repo string) {
+			e.seed(repo, 0, MaxCommandsPerPush, 0)
+			e.seedDrops(repo, 1, expired, MaxRecordRows)
+		}, false, MaxRecordRows},
 	} {
 		removal := shape.name == "removal"
 		b.Run(shape.name, func(b *testing.B) {

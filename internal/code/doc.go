@@ -595,29 +595,44 @@
 // for one small push whose record sweeps a whole row budget of expired
 // tombstones (3 995).
 //
-// THE DELETIONS, since each records the object it left (code_ref_drops) and
-// the committer counts it three times in its bound — its tombstone, the
-// sweep's room for one and its drop — measured once more, on four E-cores of
-// a Core Ultra 7 265U while another session's builds held the other four
-// (one count of five iterations each, -benchtime 5x), where the sweep of
-// 3 995 tombstones above took 49 ms against the Xeon's 53–61: 65 ms for the
-// most deletions a record the committer forms carries (1 310 in two pushes)
-// at a repository holding [MaxTombstonesPerRepo] expired tombstones, which
-// writes its 1 310 tombstones and as many drops and sweeps the 1 374 its
-// rows leave — every row of MaxRecordRows touched, as the earlier shape of
-// 1 965 deletions counted twice did in 96–105 ms on the Xeon; 163 ms with the
-// widest expired push rows waiting as well, the longest shape a record the
-// committer forms has, under statelog.ApplyTxTimeBudget even in that run;
-// and 299 ms for a record whose deletions are REMOVALS — three pushes of
-// [MaxCommandsPerPush] deletions at a repository already holding
-// [MaxTombstonesPerRepo] fresh tombstones, which writes the 3 000 objects
-// they left as drops beside removing their refs — a record no committer of
-// this build forms, whose cost grows with what it carries, and which passes
-// statelog.ApplyTxTimeBudget as a record of that many deletions may (65–69 ms
-// on the Xeon before it wrote its drops). The last two are each one run
-// beside the other session's disk traffic, and the history's removal of
-// three widest push rows added nothing past the noise in the earlier
-// shape's arms, so they bound the shapes from above rather than state them.
+// THE DELETIONS, since each records the object it left (code_ref_drops,
+// keyed by its record's instant since replicated 0061) and the committer
+// counts it three times in its bound — its tombstone, the sweep's room for
+// one and its drop — measured in one bounded run (-benchtime 5x, one count:
+// five iterations an arm) on four E-cores of a Core Ultra 7 265U at a load
+// average of 0.8–1.1, each arm interleaved with the build before the drops
+// and the build that gave them a second index, where the sweep of 3 995
+// tombstones above took 40 ms in all three against the Xeon's 53–61: 57 ms
+// for the most deletions a record the committer forms carries (1 310 in two
+// pushes) at a repository holding [MaxTombstonesPerRepo] expired tombstones,
+// which writes its 1 310 tombstones and as many drops and sweeps the 1 374
+// its rows leave — every row of MaxRecordRows touched, as the build before's
+// shape of 1 965 deletions counted twice did in 67 ms in the same run (96–105
+// ms on the Xeon); 73 ms with the widest expired push rows waiting as well,
+// the longest shape a record the committer forms has, under half of
+// statelog.ApplyTxTimeBudget; and 79 ms for a record whose deletions are
+// REMOVALS — three pushes of [MaxCommandsPerPush] deletions at a repository
+// already holding [MaxTombstonesPerRepo] fresh tombstones, which writes the
+// 3 000 objects they left as drops beside removing their refs — a record no
+// committer of this build forms, whose cost grows with what it carries, and
+// which stays under the budget. What its 3 000 drops add: 29 ms in one
+// bounded run of both builds on the same machine (the review of the change
+// that added them) — 56 ms for the build before the drops, 85 for the one
+// that wrote them beside their second index, some 10 µs a drop — and the run
+// above put that build at 86 ms and this one, which writes each drop into one
+// b-tree fewer, at 79. One count of five bounds a shape from above rather
+// than states it: a stall in one iteration moves the mean by a fifth of the
+// stall, and the build before's own removal took 116 ms in the run above,
+// against the 56 the review's run measured.
+//
+// THE DROPS' EXPIRY (the expiry and forced arms, the same run): 22 ms for one
+// small push whose record forgets a whole row budget of drops past their
+// grace (3 996), against 40 ms for the sweep of 3 995 tombstones, since a
+// drop is one index entry and a tombstone three; and 67 ms for one push of
+// [MaxCommandsPerPush] forced updates at a repository holding as many expired
+// drops, which writes its thousand refs and drops and forgets the 1 997 its
+// rows leave — every row of MaxRecordRows touched, the most drops a record
+// both writes and forgets.
 //
 // THE PUSH INDEX IN LOG ORDER (code_pushes_repo_idx reordered by replicated
 // 0056) moved none of it past the noise: interleaved with the build before
