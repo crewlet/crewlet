@@ -334,14 +334,17 @@
 // server's read answered as the repository's home — each page read at a
 // session floor the index has already seen, so a data node behind the log
 // never answers a range in part, and paced by BackfillIdle times the fleet's
-// git nodes for each data node ([Options.Fleet]). Runs never overlap, and one
-// record — the state's — names them, changed only by a compare-and-set
-// against the incarnation's index generation, so a round under the write lock
-// and the backfill under a pin never undo each other's work. A run this
-// process did not write is held to its SHA-256 trailer before it is mapped,
-// the scrub holds every run again, and one that fails drops the index: the
-// full round that repairs the copy makes it again at its own position, and
-// the backfill reads back below it what is wanted there. A run is read
+// git nodes for each data node ([Options.Fleet]); its next step is picked
+// from a SCHEDULE every change to a copy's work keeps (schedule.go), never
+// found by a walk of every copy under the lock every sync takes. Runs never
+// overlap, and one record — the state's — names them, changed only by a
+// compare-and-set against the incarnation's index generation, so a round
+// under the write lock and the backfill under a pin never undo each other's
+// work. A run this process did not write is held to its SHA-256 trailer
+// before it is mapped, the scrub holds every run again, and one that fails
+// drops the index: the full round that repairs the copy makes it again at
+// its own position, and the backfill reads back below it what is wanted
+// there. A run is read
 // through a MAPPING of the process (unix.Mmap), and the kernel counts every
 // mapping of the process against one node-wide sysctl, vm.max_map_count,
 // past which every mapping fails, the Go heap's growth among them: so the
@@ -1028,6 +1031,14 @@
 // its own, allocating 294 KB either way — the writer's buffer and one key's
 // ordinals — where the merge that held both runs' refs by name took 2.1 µs a
 // push and 519 bytes a ref (its review's measure, 198 MB for 400 000 refs).
+// The backfill's pick of its next step among 10 000 copies
+// (BenchmarkBackfillPick, a thousand operations on the same two E-cores)
+// takes 0.73 µs where one copy has a step due and 2.5 µs where every one has
+// — the warm-up after a restart — and a request's lookup of its copy beside
+// picks run back to back waited 0.35 µs at the 99th percentile: the walk the
+// schedule replaced held the cache-wide lock 56 to 127 ms a step at 10 000
+// copies, and a request up to 280 ms behind walks run back to back (its
+// review's measure).
 //
 // The MULTI-PACK-INDEX, over a source repository's composition — every commit
 // four files of one directory, so commits are a seventh of the objects

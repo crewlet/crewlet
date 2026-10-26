@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"slices"
 	"strconv"
 	"sync/atomic"
 	"testing"
@@ -19,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -69,6 +71,80 @@ func BenchmarkProvenance(b *testing.B) {
 			}
 			benchBackfill(b, pushes)
 		})
+	}
+}
+
+// BenchmarkBackfillPick is what the backfill's pick of its next step costs a
+// node holding copies=N copies of repositories (schedule.go) — N at
+// config.CodeMaxRepos, every repository a company may hold — each operation
+// one pick and its step taken as done, the copies synthetic and holding no
+// file:
+//
+//   - due=one: one copy with a step due among N, due again after each step,
+//     as a busy repository's folds keep it — the steady state, where a pick
+//     walking every copy cost them all on every push;
+//   - due=all: every copy due, each picked once and its gap closed — the
+//     warm-up after a restart, when every copy's first round opens a gap.
+//
+// ns/op is a pick. Beside the picks, run back to back, lookup-p99-ns and
+// lookup-max-ns are what a request's lookup of its copy (Holds, which takes
+// the lock every request's sync takes to find its copy) waited meanwhile.
+func BenchmarkBackfillPick(b *testing.B) {
+	quiet(b)
+	for _, due := range []string{"one", "all"} {
+		b.Run(fmt.Sprintf("copies=%d/due=%s", pickCopies, due), func(b *testing.B) {
+			benchPick(b, due == "all")
+		})
+	}
+}
+
+// pickCopies is BenchmarkBackfillPick's copies: config.CodeMaxRepos.
+const pickCopies = config.CodeMaxRepos
+
+// benchPick is BenchmarkBackfillPick with every copy due where all.
+func benchPick(b *testing.B, all bool) {
+	w := newWorld(b)
+	c := w.open(b)
+	due := 1
+	if all {
+		due = pickCopies
+	}
+	ids := cache.SyntheticCopies(c, pickCopies, due)
+	// The schedule's first placing of every copy, not a pick's own cost.
+	if cache.PickAndSettle(c, true) == "" {
+		b.Fatal("no copy was due")
+	}
+	stop := make(chan struct{})
+	waited := make(chan []time.Duration, 1)
+	go func() {
+		var lookups []time.Duration
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				waited <- lookups
+				return
+			default:
+			}
+			began := time.Now()
+			c.Holds(ids[i%len(ids)])
+			lookups = append(lookups, time.Since(began))
+		}
+	}()
+	picked := 0
+	for b.Loop() {
+		if cache.PickAndSettle(c, !all) != "" {
+			picked++
+		}
+	}
+	close(stop)
+	lookups := <-waited
+	if picked != b.N {
+		b.Fatalf("%d of %d picks found a copy due", picked, b.N)
+	}
+	slices.Sort(lookups)
+	if len(lookups) > 0 {
+		b.ReportMetric(float64(lookups[len(lookups)*99/100].Nanoseconds()), "lookup-p99-ns")
+		b.ReportMetric(float64(lookups[len(lookups)-1].Nanoseconds()), "lookup-max-ns")
 	}
 }
 

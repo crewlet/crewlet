@@ -755,7 +755,7 @@ func MarkWhole(c *Cache, repoID string, reason RebuildReason, drops gitproc.Part
 	e := lookup(c, repoID)
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	c.markWhole(e.current, Failure{Reason: reason, Drops: drops}, dropRequest)
+	c.markWhole(e, e.current, Failure{Reason: reason, Drops: drops}, dropRequest)
 }
 
 // Reread marks every current incarnation to be read whole for reason, as a
@@ -1177,37 +1177,24 @@ func BackfillStep(c *Cache) (string, error) {
 		return "", ErrStopped
 	}
 	defer c.leave()
-	for range 3 {
-		t, _, moved := c.nextBackfill()
-		if moved {
-			continue
-		}
-		if t == nil {
-			return "", nil
-		}
-		work := map[backfillWork]string{workCheck: "check", workMerge: "merge", workGap: "gap",
-			workHistory: "history", workHorizon: "horizon"}[t.work]
-		// backfillStep pins again what it picks: this walk's pin goes back.
-		t.e.mu.Lock()
-		gone := c.unpin(t.e, t.inc)
-		t.e.mu.Unlock()
-		c.trash(gone)
-		done := c.backfillStep(c.life)
-		return work, done.err
-	}
-	return "", errors.New("cache: the backfill's pick moved under three walks")
+	done := c.backfillStep(c.life)
+	return workNames[done.work], done.err
 }
 
+// workNames is each kind of step as BackfillStep answers it; "" for none.
+var workNames = map[backfillWork]string{workCheck: "check", workMerge: "merge", workGap: "gap",
+	workHistory: "history", workHorizon: "horizon"}
+
 // BackfillPick is the backfill's choice of its next step — the repository it
-// would take, "" for none — made and let go with the step not taken: the walk
+// would take, "" for none — made and let go with the step not taken: the pick
 // alone, which a case runs beside the cache's readers so the two meet.
 func BackfillPick(c *Cache) (string, error) {
 	if !c.enter() {
 		return "", ErrStopped
 	}
 	defer c.leave()
-	t, _, moved := c.nextBackfill()
-	if moved || t == nil {
+	t, _ := c.nextBackfill()
+	if t == nil {
 		return "", nil
 	}
 	t.e.mu.Lock()
@@ -1215,6 +1202,146 @@ func BackfillPick(c *Cache) (string, error) {
 	t.e.mu.Unlock()
 	c.trash(gone)
 	return t.e.id, nil
+}
+
+// SyntheticCopies adds n copies to c that hold no file — each a converged
+// incarnation whose index holds five vouched runs too far apart in size to
+// merge and whose next horizon is a day off, the first due of them with a gap
+// for the backfill to read — and marks each for the backfill's schedule, the
+// copy used most recently first: what BenchmarkBackfillPick picks among. It
+// answers their ids.
+func SyntheticCopies(c *Cache, n, due int) []string {
+	now := c.now()
+	base := statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 1}.Packed()
+	ids := make([]string, n)
+	for i := range n {
+		id := fmt.Sprintf("synthetic-%06d", i)
+		e := newEntry(id)
+		rec := &provenanceState{From: base, Through: base + 2_500, OldestAt: now, Next: 6}
+		inc := &incarnation{n: 1, dir: filepath.Join(c.dir, reposDir, id+".1.git"), converged: true,
+			lastUsed: now.Add(-time.Duration(i) * time.Second),
+			vouched:  vouches{derived: map[string]fileStamp{}}}
+		if i < due {
+			rec.GapFrom, rec.GapThrough, rec.Through = base+2_500, base+2_510, base+2_510
+		}
+		for k, pushes := range []int64{500, 200, 80, 30, 10} {
+			r := provenanceRun{N: uint64(k + 1), Bytes: 64 * pushes, From: base + int64(k)*500,
+				Through: base + int64(k)*500 + pushes, Pushes: pushes}
+			rec.Runs = append(rec.Runs, r)
+			inc.vouched.derived[runRel(r.N)] = fileStamp{dev: 1, ino: r.N, size: r.Bytes}
+		}
+		inc.derived = map[DerivedName]derivedState{DerivedProvenance: {Step: StepProvenance, Provenance: rec}}
+		e.current = inc
+		c.mu.Lock()
+		c.entries[id] = e
+		c.mu.Unlock()
+		c.backfillDirty(e)
+		ids[i] = id
+	}
+	return ids
+}
+
+// PickAndSettle is one pick of c's backfill among synthetic copies
+// (SyntheticCopies) and its step taken as done: the copy's gap closed — or
+// left open where keep, so the copy is due again, as a busy repository's
+// folds keep it — and the copy marked, as a step's end marks it. It answers
+// the copy picked, "" for none.
+func PickAndSettle(c *Cache, keep bool) string {
+	t, _ := c.nextBackfill()
+	if t == nil {
+		return ""
+	}
+	t.e.mu.Lock()
+	t.inc.pins--
+	if !keep {
+		next := t.inc.record().clone()
+		next.GapFrom, next.GapThrough = 0, 0
+		t.inc.derived[DerivedProvenance] = derivedState{Step: StepProvenance, Provenance: next}
+	}
+	t.e.mu.Unlock()
+	c.backfillDirty(t.e)
+	return t.e.id
+}
+
+// BackfillAudit is every copy c's backfill schedule holds otherwise than a
+// look at it now says (backfillDue): in another queue than its first step
+// due, under another key, or counted otherwise as behind — leaving out the
+// copies marked since the last pick and those whose time in the later queue
+// has come, which the next pick looks at again. None for a schedule every
+// change to a copy's work has reached: a change no mark follows is one the
+// backfill never takes up, or takes up in the wrong order.
+func BackfillAudit(c *Cache) []string {
+	s := &c.sched
+	s.pick.Lock()
+	defer s.pick.Unlock()
+	now := c.now()
+	c.mu.Lock()
+	entries := slices.Collect(maps.Values(c.entries))
+	c.mu.Unlock()
+	var problems []string
+	held := map[*entry]bool{}
+	for _, e := range entries {
+		held[e] = true
+	}
+	// Every copy a queue holds is one the cache holds, or one marked since
+	// it left — evicted or purged — which the next pick takes out; and the
+	// copies counted behind are those.
+	behind := 0
+	s.mu.Lock()
+	pending := map[*entry]bool{}
+	for _, e := range s.dirty {
+		if !pending[e] && !held[e] && e.bf.behind {
+			behind++
+		}
+		pending[e] = true
+	}
+	queued := slices.Clone(s.later)
+	for k := range s.due {
+		queued = append(queued, s.due[k]...)
+	}
+	s.mu.Unlock()
+	for _, e := range queued {
+		if !held[e] && !pending[e] {
+			problems = append(problems, fmt.Sprintf("%s is queued, and the cache holds it no more", e.id))
+		}
+	}
+	for _, e := range entries {
+		e.mu.Lock()
+		d := c.backfillDue(e, now)
+		e.mu.Unlock()
+		s.mu.Lock()
+		got := e.bf
+		queued := e.bfQueued.Load()
+		s.mu.Unlock()
+		if got.behind {
+			behind++
+		}
+		switch {
+		case got.dirty, got.kind == 0 && !got.when.IsZero() && !got.when.After(now):
+		case got.kind != d.work:
+			problems = append(problems, fmt.Sprintf("%s is queued for %q, and a look says %q is due", e.id,
+				workNames[got.kind], workNames[d.work]))
+		case d.work != 0 && !got.used.Equal(d.used):
+			problems = append(problems, fmt.Sprintf("%s is queued as used at %s, and was last used at %s", e.id,
+				got.used, d.used))
+		case d.work == 0 && !got.when.Equal(d.when):
+			problems = append(problems, fmt.Sprintf("%s waits for %s, and a look says its next step is due at %s",
+				e.id, got.when, d.when))
+		case got.behind != d.behind:
+			problems = append(problems, fmt.Sprintf("%s counts as behind %t, and a look says %t", e.id, got.behind,
+				d.behind))
+		case queued != (got.kind != 0):
+			problems = append(problems, fmt.Sprintf("%s is queued %t and says %t", e.id, got.kind != 0, queued))
+		}
+	}
+	s.mu.Lock()
+	if s.behind != behind {
+		problems = append(problems, fmt.Sprintf("the schedule counts %d copies behind, and its copies %d",
+			s.behind, behind))
+	}
+	s.mu.Unlock()
+	slices.Sort(problems)
+	return problems
 }
 
 // BackfillPass takes backfill steps until none is due, and answers every step

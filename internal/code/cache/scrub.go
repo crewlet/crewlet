@@ -501,6 +501,9 @@ func (c *Cache) runScrub(sctx context.Context, e *entry, inc *incarnation, trigg
 			c.repairRound(e)
 		}
 	}
+	// What it vouched for and found is what the backfill's look at the copy
+	// reads of its runs (schedule.go), however the scrub ended.
+	c.backfillDirty(e)
 	gone := c.unpin(e, inc)
 	e.mu.Unlock()
 	c.trash(gone)

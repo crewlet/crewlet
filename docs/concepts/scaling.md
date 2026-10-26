@@ -332,7 +332,11 @@ waits twelve times its own time; the worst case is one cold git node that is
 the home of every repository it caches, every one of them asked about, reading
 the whole 181 days of a company pushing 250 000 a day: about 6 000 pages and
 24 GB over the router, about 45 minutes at one git node to each data node,
-beside that node's cold syncs of the same repositories. These are figures,
+beside that node's cold syncs of the same repositories. Choosing each of
+those steps costs the node microseconds however many repositories it holds —
+2.5 µs among 10 000 with a step due for every one of them, after a restart,
+and 0.7 µs where one has — so the pages' own pace is all those 45 minutes
+are, and a request finding its copy never waits on the choice. These are figures,
 not promises: until a node's index is complete, an answer about an older
 commit says which range it does not hold rather than naming a push.
 

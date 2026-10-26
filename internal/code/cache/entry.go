@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/semaphore"
@@ -183,6 +184,13 @@ type entry struct {
 	// repository's rather than an incarnation's: a rebuild's product wants
 	// what its predecessor wanted, and the index's Complete is what persists.
 	wantHistory bool
+	// bf is the repository's place in the backfill's schedule
+	// (schedule.go), under the schedule's own mu; bfQueued says it is in a
+	// due queue there — what a use reads holding this mu alone, so a use of
+	// a copy the backfill has no step of due takes no lock of the
+	// schedule's.
+	bf       slot
+	bfQueued atomic.Bool
 
 	// stateMu serialises persisting the state.
 	stateMu sync.Mutex
@@ -190,7 +198,7 @@ type entry struct {
 
 // newEntry is repository id's place in the cache, with no incarnation yet.
 func newEntry(id string) *entry {
-	return &entry{id: id, write: semaphore.NewWeighted(writeExclusive)}
+	return &entry{id: id, write: semaphore.NewWeighted(writeExclusive), bf: slot{at: -1}}
 }
 
 // incarnation is one directory of a repository: repos/<id>.<n>.git. A
@@ -541,12 +549,17 @@ func (inc *incarnation) graphed() bool { return inc.derived[DerivedGraph].Step =
 // RELEASE of a reader held across the scrub's end — a clone of a large
 // repository, one long request at a time — was not either, since every
 // reader taken after that release found the copy used already. Either way its
-// next scrub waited for something unrelated to wake the scrubber.
-func (c *Cache) used(inc *incarnation) {
+// next scrub waited for something unrelated to wake the scrubber. And a use
+// of e's current copy while the backfill has a step of it due moves the copy
+// in its queue (touch): the backfill takes the most recently used first.
+func (c *Cache) used(e *entry, inc *incarnation) {
 	if !inc.scrubBase.IsZero() && !inc.lastUsed.After(inc.scrubBase) {
 		c.kickScrubber()
 	}
 	inc.lastUsed = c.now()
+	if e.current == inc && e.bfQueued.Load() {
+		c.touch(e, inc.lastUsed)
+	}
 }
 
 // noReader is the name of a pin that is no reader's — a push's scratch or an
@@ -574,7 +587,7 @@ func (c *Cache) reader(inc *incarnation) gitproc.Repairer {
 // held.
 func (c *Cache) pin(e *entry, inc *incarnation, kind SyncKind) Synced {
 	inc.pins++
-	c.used(inc)
+	c.used(e, inc)
 	by := c.reader(inc)
 	return Synced{
 		Dir:      inc.dir,
@@ -599,7 +612,7 @@ func (c *Cache) pin(e *entry, inc *incarnation, kind SyncKind) Synced {
 // does rather than at the next tick. Safe after Stop.
 func (c *Cache) release(e *entry, inc *incarnation, by gitproc.Repairer) {
 	e.mu.Lock()
-	c.used(inc)
+	c.used(e, inc)
 	c.handOn(e, inc, by)
 	c.releaseRuns(inc, by)
 	gone := c.unpin(e, inc)
@@ -647,6 +660,8 @@ func (c *Cache) retire(e *entry, inc *incarnation) string {
 	if e.current == inc {
 		e.current = nil
 		c.heldRepos.Add(-1)
+		// The backfill takes no more steps of it (schedule.go).
+		c.backfillDirty(e)
 	}
 	if inc.pins > 0 {
 		e.retiring = append(e.retiring, inc)

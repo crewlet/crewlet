@@ -1579,7 +1579,10 @@ backfill reads the data node's push rows in pages of about 7 500 pushes — the
 4 MB a page answers at most — each about 115 ms of the data node's read and
 150 ms in all, so a history of 18 million pushes, a large company's monorepo
 over 181 days, is read back in about 18 minutes with one git node for each
-data node ([Scaling Out](scaling.md#git-nodes) for a larger fleet). A
+data node ([Scaling Out](scaling.md#git-nodes) for a larger fleet). Choosing
+the backfill's next step costs microseconds however many copies a node
+holds — under 3 µs at 10 000 — since the node keeps which copies have work
+due as their work changes, rather than looking at every copy for it. A
 `landed_in` over a branch of 2 000 moves through 14 000 commits took 32 ms and
 11 checks where the branch was never forced, 56 ms and 17 checks with three
 forced moves since the landing, and 284 ms for all 64 checks with 66, answered

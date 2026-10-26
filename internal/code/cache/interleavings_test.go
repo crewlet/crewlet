@@ -235,6 +235,7 @@ func interleave(t *testing.T, seed uint64) map[string]bool {
 		in.noteChecks()
 		in.noteReports()
 		in.remember()
+		in.audit()
 		if step%checkEvery == 0 || step == interleavingSteps {
 			in.check(step)
 		}
@@ -308,6 +309,19 @@ func (in *interleaving) remember() {
 		at.tips[repo], at.heads[repo] = slices.Clone(f.tips), f.head
 	}
 	in.history = append(in.history, at)
+}
+
+// audit holds the backfill's schedule to a look at every copy after each
+// step (cache.BackfillAudit): every change the step made to a copy's work —
+// its index, its runs' vouches and checks, its convergence, its eviction, its
+// rebuild — reached the schedule as a mark, or the backfill would never take
+// it up.
+func (in *interleaving) audit() {
+	in.t.Helper()
+	if problems := cache.BackfillAudit(in.c); len(problems) > 0 {
+		in.fatalf("the backfill's schedule holds what no look at its copies says:\n\t%s",
+			strings.Join(problems, "\n\t"))
+	}
 }
 
 // fatalf fails the run at the operation it is in.

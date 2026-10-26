@@ -118,7 +118,7 @@ func (c *Cache) newScratch(ctx context.Context, s Synced, name string, view bool
 			ErrInvalid, s.Dir)
 	}
 	inc.pins++
-	c.used(inc)
+	c.used(e, inc)
 	e.mu.Unlock()
 
 	dir := filepath.Join(c.dir, scratchDir, name)

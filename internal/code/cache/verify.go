@@ -503,7 +503,7 @@ func (c *Cache) repairInPlace(ctx context.Context, s Synced) (Synced, *damaged, 
 		e.mu.Unlock()
 		return c.sync(ctx, e.id, linearizable, true)
 	}
-	c.markWhole(s.inc, Failure{Reason: RebuildVerify}, dropRequest)
+	c.markWhole(e, s.inc, Failure{Reason: RebuildVerify}, dropRequest)
 	w := newWaiter(linearizable)
 	w.checks = true
 	c.join(e, w)

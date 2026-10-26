@@ -931,8 +931,12 @@ func (c *Cache) dropFor(e *entry, inc *incarnation, ev Event, named derivedSet) 
 		}
 	})
 	// The runs of an index of pushes dropped stay mapped only while their
-	// readers hold them (provenance.go).
+	// readers hold them (provenance.go), and the backfill has nothing of the
+	// index to do (schedule.go).
 	c.forgetRuns(inc)
+	if drop&c.image.set(DerivedProvenance) != 0 {
+		c.backfillDirty(e)
+	}
 	e.mu.Unlock()
 	return drop, nil
 }

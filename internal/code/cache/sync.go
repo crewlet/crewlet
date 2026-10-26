@@ -677,7 +677,7 @@ func (c *Cache) damagedRound(e *entry, r *round, d *damaged) roundRepair {
 		return roundRepair{}
 	case d.reason == RebuildShape && !d.swept,
 		d.reason == RebuildDerived && c.image.reported(d.drops)&c.image.dropping(EventReported)&^d.dropped != 0:
-		c.markWhole(d.inc, Failure{Reason: d.reason, Drops: d.drops, Began: d.began}, dropRound)
+		c.markWhole(e, d.inc, Failure{Reason: d.reason, Drops: d.drops, Began: d.began}, dropRound)
 		for _, w := range asking {
 			c.queue(e, w)
 		}
@@ -798,7 +798,7 @@ func (c *Cache) repairDamaged(e *entry, d *damaged, reason RebuildReason, asking
 		}
 	}
 	if len(inPlace) > 0 {
-		c.markWhole(inc, Failure{Reason: RebuildStored}, dropRound)
+		c.markWhole(e, inc, Failure{Reason: RebuildStored}, dropRound)
 		inc.repair.forces++
 		c.reinstallHinted(inc, d.packs)
 		for _, w := range inPlace {
@@ -844,8 +844,9 @@ func (c *Cache) repairDamaged(e *entry, d *damaged, reason RebuildReason, asking
 // that would move nothing), whatever reason the read is counted under, each
 // with f.Began, which the round's drop is guarded by (dropDamaged), and by,
 // what asked it.
-func (c *Cache) markWhole(inc *incarnation, f Failure, by string) {
+func (c *Cache) markWhole(e *entry, inc *incarnation, f Failure, by string) {
 	inc.converged = false
+	c.backfillDirty(e) // no step of the backfill is taken of a copy until its round converges it
 	inc.marks++
 	if f.Reason == RebuildDerived {
 		inc.drop.addSet(c.image, c.image.reported(f.Drops)&c.image.dropping(EventReported), f.Began, by)
@@ -1155,6 +1156,12 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 			e.mu.Unlock()
 		}
 		res, err = c.apply(ctx, e, inc, snap, epoch, marks, reader.by)
+		// AN APPLY CHANGES WHAT THE BACKFILL MAY DO OF THE COPY, however it
+		// ends (schedule.go): a full one's check vouched for runs or found
+		// them failing, its repairs settled what checks had found, and its
+		// end converged the copy or did not; a delta's fold changed the index
+		// (which setRecord marks as well).
+		c.backfillDirty(e)
 		if res.checked.forced {
 			forcedCheck, forcedOn = res.checked, inc
 		}
@@ -1281,8 +1288,10 @@ func (c *Cache) reread(reason RebuildReason, which func(*incarnation) bool) uint
 				inc.reread = reason
 			}
 			// Every position its index of pushes recorded may name another
-			// record now: its next full round drops it (EventHistoryGone).
+			// record now: its next full round drops it (EventHistoryGone),
+			// and the backfill takes no step of it until then.
 			inc.historyGone = true
+			c.backfillDirty(e)
 		}
 		e.mu.Unlock()
 	}

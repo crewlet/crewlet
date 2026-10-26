@@ -150,6 +150,9 @@ type Cache struct {
 	// maps is the node's runs of its indexes of pushes mapped into memory,
 	// held to a bound under the process's count of mappings (runmaps.go).
 	maps *runMaps
+	// sched is the backfill's schedule: which copies have a step due, kept
+	// as their work changes (schedule.go).
+	sched schedule
 	// repairers mints the name each reader is handed under (pin;
 	// Synced.Repairer): one counter for the cache, since the pool reports to
 	// one observer and a name must say which reader of which copy it is.

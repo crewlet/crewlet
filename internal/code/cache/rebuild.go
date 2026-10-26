@@ -501,7 +501,7 @@ func (c *Cache) repairRequest(ctx context.Context, failed Synced, f Failure) (Sy
 		go c.escalate(e, inc, []*waiter{w})
 		return c.awaitRequest(ctx, e, w, failed)
 	}
-	c.markWhole(inc, Failure{Reason: RebuildStored}, dropRequest)
+	c.markWhole(e, inc, Failure{Reason: RebuildStored}, dropRequest)
 	inc.repair.forces++
 	c.reinstallHinted(inc, f.Packs)
 	c.join(e, w)
@@ -839,7 +839,7 @@ func (c *Cache) rebuild(ctx context.Context, failed Synced, f Failure, refuse bo
 		// derived case dropping the damaged files so the round or the
 		// maintainer rewrites them, with no download and no new incarnation
 		// (apply).
-		c.markWhole(failed.inc, f, dropRequest)
+		c.markWhole(e, failed.inc, f, dropRequest)
 		w := newWaiter(linearizable)
 		c.join(e, w)
 		e.mu.Unlock()
@@ -1149,6 +1149,8 @@ func (c *Cache) promote(e *entry, old, inc *incarnation, reason RebuildReason, t
 		c.heldRepos.Add(1)
 	}
 	e.current = inc
+	// The backfill's work is the new copy's now (schedule.go).
+	c.backfillDirty(e)
 	e.mu.Unlock()
 	c.trash(gone)
 	c.rebuilt(reason)

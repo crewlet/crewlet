@@ -152,12 +152,19 @@ func mustIndex(t testing.TB, c *cache.Cache, repo string) cache.IndexState {
 }
 
 // backfill takes every backfill step due, failing t on a page the log did not
-// serve, and answers them.
+// serve, and answers them — once its schedule is held to a look at every copy
+// (cache.BackfillAudit), before the pass and after it.
 func backfill(t testing.TB, c *cache.Cache) []string {
 	t.Helper()
+	if problems := cache.BackfillAudit(c); len(problems) > 0 {
+		t.Fatalf("before the backfill, its schedule:\n\t%s", strings.Join(problems, "\n\t"))
+	}
 	steps, err := cache.BackfillPass(c)
 	if err != nil {
 		t.Fatalf("the backfill: %v", err)
+	}
+	if problems := cache.BackfillAudit(c); len(problems) > 0 {
+		t.Fatalf("after the backfill, its schedule:\n\t%s", strings.Join(problems, "\n\t"))
 	}
 	return steps
 }
@@ -802,6 +809,105 @@ func TestACacheNeverStartedBackfillsNothing(t *testing.T) {
 			t.Fatal("a started cache's backfill never closed the gap")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// THE BEHIND GAUGE COUNTS WHAT THE BACKFILL OWES. crewlet.code.cache.
+// provenance.behind is the copies whose index has a gap, or whose history is
+// wanted and not read to its start — counted by the schedule as it places
+// each copy, never by a walk of them all: the three copies a restart left
+// gaps in, the log having moved under each; none once the backfill has read
+// the gaps; one once a seat's read wants a copy's history; none again once
+// that history is read.
+//
+// Mutation: count a copy behind once and never again (place leaving the count
+// where a copy stops being behind) — the gauge stays at three.
+func TestTheBehindGaugeCountsWhatTheBackfillOwes(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repos := []string{w.repo(t, 1), w.repo(t, 2), w.repo(t, 3)}
+	for _, repo := range repos {
+		w.push(t, repo, "refs/heads/main", nil)
+	}
+	c := w.open(t)
+	for _, repo := range repos {
+		w.sync(t, c, repo)
+	}
+	for _, repo := range repos {
+		w.push(t, repo, "refs/heads/main", nil)
+	}
+	c = w.reopen(t, c)
+	for _, repo := range repos {
+		w.sync(t, c, repo)
+	}
+	behind := func(want float64, when string) {
+		t.Helper()
+		if _, err := cache.BackfillPick(c); err != nil {
+			t.Fatal(err)
+		}
+		if got := gauge(t, w.rec, metrics.CodeCacheProvenanceBehind); got != want {
+			t.Errorf("%s, crewlet.code.cache.provenance.behind is %v, want %v", when, got, want)
+		}
+	}
+	behind(3, "with the three copies a restart left gaps in")
+	backfill(t, c)
+	behind(0, "once the backfill has read the gaps")
+	c.WantHistory(repos[2])
+	behind(1, "with a copy's history wanted")
+	backfill(t, c)
+	behind(0, "once that history is read")
+}
+
+// THE BACKFILL TAKES THE COPY USED LAST FIRST. Among the copies with a step
+// of one kind due, the backfill takes the one a reader used most recently —
+// the repositories people are asking about — and a read of a copy whose step
+// is due moves it to the front of its queue as it is made (touch), however it
+// is answered: a read answered from the copy as it stands, with no round
+// behind it, is a use like any other.
+//
+// Mutation: leave the queue's key at the use its copy was placed with (used
+// moving no queued copy) — the copy read last is not the one taken.
+func TestTheBackfillTakesTheCopyUsedLastFirst(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	repos := []string{w.repo(t, 1), w.repo(t, 2)}
+	for _, repo := range repos {
+		w.push(t, repo, "refs/heads/main", nil)
+	}
+	c := w.open(t, clk.on)
+	for _, repo := range repos {
+		w.sync(t, c, repo)
+	}
+	// A restart with a push of each meanwhile: each copy's first round
+	// leaves a gap, a step of the same kind due for both.
+	for _, repo := range repos {
+		w.push(t, repo, "refs/heads/main", nil)
+	}
+	c = w.reopen(t, c, clk.on)
+	for _, repo := range repos {
+		w.sync(t, c, repo)
+		if idx := mustIndex(t, c, repo); idx.GapThrough == 0 {
+			t.Fatalf("%s's index has no gap: %+v", repo, idx)
+		}
+	}
+	for _, read := range []string{repos[0], repos[1], repos[0]} {
+		clk.Add(time.Second)
+		s, err := c.Sync(t.Context(), read, stale)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s.Kind != cache.SyncNone {
+			t.Fatalf("a stale read of a converged copy was a %s round, want one answered as it stands", s.Kind)
+		}
+		s.Release()
+		got, err := cache.BackfillPick(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != read {
+			t.Errorf("with %s read last, the backfill takes %s first", read, got)
+		}
 	}
 }
 

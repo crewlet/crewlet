@@ -271,10 +271,13 @@ func (s *provenanceState) widened(to int64) *provenanceState {
 // record is inc's index, nil for none; e.mu is held.
 func (inc *incarnation) record() *provenanceState { return inc.derived[DerivedProvenance].Provenance }
 
-// setRecord stores rec as inc's index — nil drops it — and lets go of the
-// mappings of every run it no longer names; e.mu is held. EVERY CHANGE TO THE
-// INDEX GOES THROUGH HERE, so its bytes are the runs' and the budget's.
-func (c *Cache) setRecord(inc *incarnation, rec *provenanceState) {
+// setRecord stores rec as inc's index — nil drops it — lets go of the
+// mappings of every run it no longer names, and marks e for the backfill's
+// schedule (backfillDirty); e.mu is held. EVERY CHANGE TO THE INDEX GOES
+// THROUGH HERE but a drop of its files (dropFor, which marks e too), so its
+// bytes are the runs' and the budget's, and the backfill looks again at
+// whatever it changed.
+func (c *Cache) setRecord(e *entry, inc *incarnation, rec *provenanceState) {
 	if rec == nil {
 		c.setDerived(inc, DerivedProvenance, derivedState{}, false)
 	} else {
@@ -282,6 +285,7 @@ func (c *Cache) setRecord(inc *incarnation, rec *provenanceState) {
 			true)
 	}
 	c.forgetRuns(inc)
+	c.backfillDirty(e)
 }
 
 // newIndex is inc's index made anew, empty at position at of the log made at
@@ -307,7 +311,22 @@ func (inc *incarnation) allocRun() uint64 {
 
 // runRel is run n's path relative to its incarnation.
 func runRel(n uint64) string {
-	return filepath.Join(engineRoot, "provenance."+strconv.FormatUint(n, 10))
+	var buf [runRelBytes]byte
+	return string(appendRunRel(buf[:0], n))
+}
+
+// runRelBytes holds the longest run path: crewlet/provenance. and twenty
+// digits.
+const runRelBytes = len(engineRoot) + len("/provenance.") + 20
+
+// appendRunRel appends run n's path relative to its incarnation to buf: a
+// map read by string(appendRunRel(…)) of a buffer on the caller's stack
+// allocates nothing (runMarks).
+func appendRunRel(buf []byte, n uint64) []byte {
+	buf = append(buf, engineRoot...)
+	buf = append(buf, filepath.Separator)
+	buf = append(buf, "provenance."...)
+	return strconv.AppendUint(buf, n, 10)
 }
 
 // runNumber is the number a run's file name carries, or false for a name
@@ -340,7 +359,7 @@ func (c *Cache) commitIndex(e *entry, inc *incarnation, gen uint64, change func(
 		return false
 	}
 	next.Next = max(next.Next, inc.provNext)
-	c.setRecord(inc, next)
+	c.setRecord(e, inc, next)
 	retireRuns(inc, cur, next)
 	return true
 }
@@ -355,7 +374,7 @@ func (c *Cache) dropIndex(e *entry, inc *incarnation, gen uint64) bool {
 	if cur == nil || inc.provGen != gen || inc.discarded {
 		return false
 	}
-	c.setRecord(inc, nil)
+	c.setRecord(e, inc, nil)
 	retireRuns(inc, cur, nil)
 	return true
 }
@@ -499,9 +518,8 @@ func (c *Cache) Provenance(s Synced) (Provenance, error) {
 			m, err := c.mapRun(e, inc, r)
 			if err != nil {
 				letGo(fresh)
-				if errors.Is(err, errUnchecked) {
-					c.kickBackfill()
-				}
+				// An unchecked run has marked the copy for the backfill
+				// already (mapRun), which wakes it to check the run.
 				return Provenance{}, err
 			}
 			fresh[r.N] = m
@@ -579,6 +597,7 @@ func (c *Cache) mapRun(e *entry, inc *incarnation, r provenanceRun) (*mappedRun,
 		// A vouch for another identity is no vouch: forgotten, the run is
 		// one the backfill's next pass holds to its trailer (checkRuns).
 		unvouch(inc, rel)
+		c.backfillDirty(e)
 	}
 	e.mu.Unlock()
 	if !ok {
@@ -830,7 +849,7 @@ func (c *Cache) WantHistory(repoID string) {
 	e.wantHistory = true
 	e.mu.Unlock()
 	if !was {
-		c.kickBackfill()
+		c.backfillDirty(e)
 	}
 }
 
@@ -910,7 +929,7 @@ func (c *Cache) foldPushes(ctx context.Context, e *entry, inc *incarnation, snap
 		// index below it while it runs, so this is the index of a node whose
 		// backfill lags a burst of deltas: its two cheapest adjacent runs
 		// merged, from their mapped files, before the round's run is placed.
-		i := cheapestPair(rec, func(r provenanceRun) bool { return c.vouchedRun(e, inc, r) }, nil)
+		i := cheapestPair(rec, func(i int) bool { return c.vouchedRun(e, inc, rec.Runs[i]) }, nil)
 		if i < 0 {
 			return gap(fmt.Errorf("%w: no two adjacent runs of its %d are this process's own or checked yet",
 				errUnchecked, len(rec.Runs)))
@@ -947,18 +966,17 @@ func (c *Cache) foldPushes(ctx context.Context, e *entry, inc *incarnation, snap
 		// next round makes the index again at its own position.
 		return false
 	}
-	c.kickBackfill()
 	return true
 }
 
 // cheapestPair is the adjacent pair of rec's runs, by the first's index, on
-// one side of its gap, each of them ok to read and the pair one also admits
-// (nil admits every pair), that hold the fewest pushes between them; -1 for
-// none.
-func cheapestPair(rec *provenanceState, ok func(provenanceRun) bool, also func(i int) bool) int {
+// one side of its gap, each of them ok to read (by its index) and the pair
+// one also admits (nil admits every pair), that hold the fewest pushes
+// between them; -1 for none.
+func cheapestPair(rec *provenanceState, ok func(i int) bool, also func(i int) bool) int {
 	best := -1
 	for i := 0; i+1 < len(rec.Runs); i++ {
-		if !rec.adjacent(i) || !ok(rec.Runs[i]) || !ok(rec.Runs[i+1]) || also != nil && !also(i) {
+		if !rec.adjacent(i) || !ok(i) || !ok(i+1) || also != nil && !also(i) {
 			continue
 		}
 		if best < 0 || rec.Runs[i].Pushes+rec.Runs[i+1].Pushes < rec.Runs[best].Pushes+rec.Runs[best+1].Pushes {
@@ -1227,7 +1245,7 @@ func (c *Cache) indexFull(e *entry, inc *incarnation, snap snapshot) {
 		next = cur.widened(p)
 	}
 	if next != cur {
-		c.setRecord(inc, next)
+		c.setRecord(e, inc, next)
 	}
 	retireRuns(inc, cur, next)
 	for n := range onDisk {
@@ -1241,7 +1259,6 @@ func (c *Cache) indexFull(e *entry, inc *incarnation, snap snapshot) {
 		c.log.Warn("code_cache_provenance_lost", "repo", e.id, "incarnation", inc.n,
 			"why", "a run the index names is not on disk at its size: the index is made anew")
 	}
-	c.kickBackfill()
 }
 
 // seedIndex is a rebuild's seeding of its index (seedRebuild): every run of
@@ -1301,7 +1318,7 @@ func (c *Cache) seedIndex(e *entry, replaced, inc *incarnation) {
 	}
 	inc.provGen++
 	inc.provNext = max(inc.provNext, next, rec.Next)
-	c.setRecord(inc, rec)
+	c.setRecord(e, inc, rec)
 	if len(rec.Runs) > 0 {
 		c.log.Info("code_cache_provenance_seeded", "repo", e.id, "incarnation", inc.n, "runs", len(rec.Runs))
 	}

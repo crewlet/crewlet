@@ -43,7 +43,12 @@ import (
 //     push history the rows do and never grows past it.
 //
 // Within a kind of step, the most recently used repository first: the ones
-// people are asking about.
+// people are asking about. The step is taken from the backfill's SCHEDULE
+// (schedule.go), which every change to a copy's work keeps — never from a
+// walk of every copy under the lock every request takes, which at 10 000
+// copies held it up to 127 ms a step, on every push of every repository: a
+// pick costs the copies whose work changed since the last, and O(log n) in
+// the rest.
 //
 // # Every read is at a floor the index has already seen
 //
@@ -110,11 +115,12 @@ type backfillTask struct {
 	unchecked []provenanceRun
 }
 
-// backfillDone is what one step did: anything (did); a page read in page —
-// what the loop then owes a pace; a read that failed (err), which the loop
-// waits on; or nothing due, and when the next horizon falls due (next, zero
-// for none).
+// backfillDone is what one step did: its kind (work) and anything at all
+// (did); a page read in page — what the loop then owes a pace; a read that
+// failed (err), which the loop waits on; or nothing due, and when the next
+// step falls due by time (next, zero for none).
 type backfillDone struct {
+	work backfillWork
 	did  bool
 	page time.Duration
 	next time.Time
@@ -240,14 +246,12 @@ func (c *Cache) backfillWait(ctx context.Context, d time.Duration, kickable bool
 }
 
 // backfillStep takes the next step due and does it — under ctx and the
-// cache's lifetime, which Stop ends — and answers what it did.
-func (c *Cache) backfillStep(ctx context.Context) backfillDone {
-	t, next, moved := c.nextBackfill()
-	switch {
-	case moved:
-		// What the walk picked moved before it was pinned: walk again.
-		return backfillDone{did: true}
-	case t == nil:
+// cache's lifetime, which Stop ends — and answers what it did. Whatever it
+// did, its copy is marked once it has (backfillDirty): a step is a change to
+// the copy's work.
+func (c *Cache) backfillStep(ctx context.Context) (done backfillDone) {
+	t, next := c.nextBackfill()
+	if t == nil {
 		return backfillDone{next: next}
 	}
 	sctx, cancel := context.WithCancel(ctx)
@@ -260,6 +264,8 @@ func (c *Cache) backfillStep(ctx context.Context) backfillDone {
 		gone := c.unpin(t.e, t.inc)
 		t.e.mu.Unlock()
 		c.trash(gone)
+		c.backfillDirty(t.e)
+		done.work = t.work
 	}()
 	switch t.work {
 	case workCheck:
@@ -307,109 +313,140 @@ func (c *Cache) backfillStored(ctx context.Context, t *backfillTask) {
 	c.setGauges()
 }
 
-// nextBackfill picks the next step due — the first kind of step any current
-// incarnation has due, and among those the most recently used — pinned as no
-// use; or nil, and when the next horizon falls due (zero for none) — or moved,
-// where what it picked changed before it could pin it. It sets
-// crewlet.code.cache.provenance.behind from the same walk.
-func (c *Cache) nextBackfill() (*backfillTask, time.Time, bool) {
+// nextBackfill picks the next step due — the first kind of step any copy has
+// due, and among those the most recently used, from the schedule's queues
+// (schedule.go) once every copy marked since the last pick is placed again —
+// pinned as no use; or nil, and when the next step falls due by time alone
+// (zero for none). The copy the queues put first is looked at once more
+// under its own lock, and that look, never the queue, is what it pins.
+func (c *Cache) nextBackfill() (*backfillTask, time.Time) {
+	s := &c.sched
+	s.pick.Lock()
+	defer s.pick.Unlock()
 	now := c.now()
-	var (
-		best   *backfillTask
-		bestAt time.Time
-		next   time.Time
-		behind int
-	)
-	c.mu.Lock()
-	for _, e := range c.entries {
+	c.placeDue(now)
+	for {
+		s.mu.Lock()
+		e, work, next := s.top()
+		s.mu.Unlock()
+		if e == nil {
+			return nil, next
+		}
 		e.mu.Lock()
-		inc := e.current
-		if e.dead || inc == nil || inc.retired || !inc.converged || inc.record() == nil {
+		d := c.backfillDue(e, now)
+		if d.work == work {
+			t := d.task(e)
+			t.inc.pins++
 			e.mu.Unlock()
-			continue
+			return t, time.Time{}
 		}
-		rec := inc.record()
-		if rec.gapped() || (e.wantHistory && !rec.Complete) {
-			behind++
-		}
-		t, due := c.backfillDue(e, inc, rec, now)
-		// The copy's last use is read before its lock goes, as the janitor's
-		// eviction reads it: every reader's pin and release writes it under
-		// e.mu (used), so a read after the unlock races each request.
-		used := inc.lastUsed
+		// Its work moved since it was placed, and a mark of it is on its
+		// way or already here: placed as this look says, or left to the
+		// next pick's look at the mark.
+		s.mu.Lock()
+		s.placeLooked(e, d)
+		s.mu.Unlock()
 		e.mu.Unlock()
-		switch {
-		case t == nil:
-			if !due.IsZero() && (next.IsZero() || due.Before(next)) {
-				next = due
-			}
-		case best == nil || t.work < best.work ||
-			t.work == best.work && (used.After(bestAt) ||
-				used.Equal(bestAt) && strings.Compare(e.id, best.e.id) < 0):
-			best, bestAt = t, used
-		}
 	}
-	c.mu.Unlock()
-	if c.metrics != nil {
-		c.metrics.Set(metrics.CodeCacheProvenanceBehind, float64(behind), nil)
-	}
-	if best == nil {
-		return nil, next, false
-	}
-	e := best.e
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.dead || e.current != best.inc || best.inc.retired || best.inc.record() != best.rec ||
-		best.inc.provGen != best.gen {
-		return nil, time.Time{}, true
-	}
-	best.inc.pins++
-	return best, time.Time{}, false
 }
 
-// backfillDue is the step of inc's index rec the backfill takes first, or
-// nil and when its horizon falls due; e.mu is held. Nothing here reads the
-// disk: a run is unchecked when no vouch is held for its name — a vouch held
-// for another identity than the file has is forgotten by the reader that meets
-// it (mapRun), which makes it unchecked here.
-func (c *Cache) backfillDue(e *entry, inc *incarnation, rec *provenanceState, now time.Time) (*backfillTask,
-	time.Time) {
+// dueWork is a look at one copy's backfill (backfillDue): the first kind of
+// step it has due, or none and when its next falls due by time alone (zero
+// for never), with its last use, whether it counts as behind, and what a step
+// of it takes.
+type dueWork struct {
+	work   backfillWork
+	when   time.Time
+	used   time.Time
+	behind bool
+	inc    *incarnation
+	gen    uint64
+	rec    *provenanceState
+	// pair is a merge's first run, by its index in rec.Runs; unchecked a
+	// check's runs, one bit each by their index there.
+	pair      int
+	unchecked uint64
+}
 
-	t := &backfillTask{e: e, inc: inc, gen: inc.provGen, rec: rec}
-	vouched := func(r provenanceRun) bool {
-		_, ok := inc.vouched.derived[runRel(r.N)]
-		return ok
+// The look marks a record's runs in one machine word each, so a record holds
+// at most 64: a compile error past it.
+const _ uint64 = 1 << (MaxProvenanceRuns - 1)
+
+// backfillDue looks at e's backfill: the first step its current index has due
+// — a check of the runs no vouch is held for, a merge, a page of its gap, a
+// page of its history where it is wanted, its horizon — or none and when its
+// horizon falls due; nothing at all for a copy the backfill does not work on
+// (dead, with no converged current incarnation, keeping no index). e.mu is
+// held. It reads no disk and allocates nothing: a run is unchecked when no
+// vouch is held for its name — a vouch held for another identity than the
+// file has is forgotten by the reader that meets it (mapRun), which marks the
+// copy.
+func (c *Cache) backfillDue(e *entry, now time.Time) dueWork {
+	inc := e.current
+	if e.dead || inc == nil || inc.retired || !inc.converged || inc.record() == nil {
+		return dueWork{}
 	}
-	for _, r := range rec.Runs {
-		// A run its check found failing waits for the repair round that
-		// drops the index, and is not checked again meanwhile.
-		if _, failed := inc.repair.found[runRel(r.N)]; !vouched(r) && !failed {
+	rec := inc.record()
+	d := dueWork{used: inc.lastUsed, behind: rec.gapped() || e.wantHistory && !rec.Complete, inc: inc,
+		gen: inc.provGen, rec: rec}
+	vouched, unchecked := runMarks(inc, rec)
+	horizon := rec.OldestAt.Add(HorizonEvery)
+	switch pair := mergeDue(rec, vouched); {
+	case unchecked != 0:
+		d.work, d.unchecked = workCheck, unchecked
+	case pair >= 0:
+		d.work, d.pair = workMerge, pair
+	case rec.gapped():
+		d.work = workGap
+	case e.wantHistory && !rec.Complete:
+		d.work = workHistory
+	case rec.OldestAt.IsZero() || !now.Before(horizon):
+		d.work = workHorizon
+	default:
+		d.when = horizon
+	}
+	return d
+}
+
+// task is the step d looked at, of e.
+func (d dueWork) task(e *entry) *backfillTask {
+	t := &backfillTask{e: e, inc: d.inc, gen: d.gen, rec: d.rec, work: d.work, pair: d.pair}
+	for i, r := range d.rec.Runs {
+		if d.unchecked&(1<<i) != 0 {
 			t.unchecked = append(t.unchecked, r)
 		}
 	}
-	horizon := rec.OldestAt.Add(HorizonEvery)
-	switch {
-	case len(t.unchecked) > 0:
-		t.work = workCheck
-	case mergeDue(rec, vouched) >= 0:
-		t.work, t.pair = workMerge, mergeDue(rec, vouched)
-	case rec.gapped():
-		t.work = workGap
-	case e.wantHistory && !rec.Complete:
-		t.work = workHistory
-	case rec.OldestAt.IsZero() || !now.Before(horizon):
-		t.work = workHorizon
-	default:
-		return nil, horizon
+	return t
+}
+
+// runMarks is which of rec's runs inc holds a vouch for, and which none and
+// no failed check either — those a check reads (a run whose check failed
+// waits for the repair round that drops the index, and is not checked again
+// meanwhile) — one bit each by their index in rec.Runs; e.mu is held. Each
+// run's name is spelled into a buffer of the stack, so the look allocates
+// nothing.
+func runMarks(inc *incarnation, rec *provenanceState) (vouched, unchecked uint64) {
+	var buf [runRelBytes]byte
+	for i, r := range rec.Runs {
+		rel := appendRunRel(buf[:0], r.N)
+		if _, ok := inc.vouched.derived[string(rel)]; ok {
+			vouched |= 1 << i
+			continue
+		}
+		if _, failed := inc.repair.found[string(rel)]; !failed {
+			unchecked |= 1 << i
+		}
 	}
-	return t, time.Time{}
+	return vouched, unchecked
 }
 
 // mergeDue is the pair of rec's runs, by the first's index, the backfill
-// merges next — each run ok to read: the cheapest adjacent pair whose pushes
-// are within ProvenanceMergeFactor of each other, or, with rec at
-// MaxProvenanceRuns, the cheapest adjacent pair whatever their sizes — or -1.
-func mergeDue(rec *provenanceState, ok func(provenanceRun) bool) int {
+// merges next — each one vouched holds a bit for: the cheapest adjacent pair
+// whose pushes are within ProvenanceMergeFactor of each other, or, with rec
+// at MaxProvenanceRuns, the cheapest adjacent pair whatever their sizes — or
+// -1.
+func mergeDue(rec *provenanceState, vouched uint64) int {
+	ok := func(i int) bool { return vouched&(1<<i) != 0 }
 	if len(rec.Runs) >= MaxProvenanceRuns {
 		return cheapestPair(rec, ok, nil)
 	}
