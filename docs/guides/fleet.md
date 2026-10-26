@@ -677,6 +677,23 @@ The consequences worth stating plainly:
   only ever looks down, so a lower-protocol build is never refused and
   takes over a higher node's expired leases unchecked. Nothing in the table
   can stop it.
+- **A company revision an older node cannot run leaves it running.** A
+  revision written on a newer node may carry something the older build
+  refuses. The older node reports the refusal (`config_status: error`) and
+  goes on running the revision it served before. A node starts on the last
+  revision its own engine applied, never one it refused, so restarting it —
+  onto the new build or not — brings it back on that one rather than failing
+  on the refused one, and once it runs a build that takes the fleet's
+  revision, it applies it. While its peers on the newer build run the
+  revision, the older node sheds — it refuses new work and fails `/ready`,
+  so its work goes to them — and once its three attempts are spent it
+  reports `stuck` and stops retrying (see
+  [Posture](../concepts/control-plane.md#posture-what-a-lagging-node-does)). Meanwhile every config read and
+  write through it answers the fleet's revision like any other node's.
+  **Settings › Nodes**
+  counts it as behind on config and names the revision it runs, which
+  [`GET /fleet`](../reference/api-endpoints.md#get-fleet) gives as
+  `config_serving_revision_id`.
 - **A node that leaves takes its turn-level history with it.** Every node's
   event store holds the events it published, and the dashboard's turns,
   traces and event log are read from every live node at query time. A node
@@ -727,18 +744,40 @@ again before you start restoring, rebuilding or adding nodes.
 - **`history_partial`** — history reads are coming back without a node: it
   did not answer inside the fleet read budget. Every such answer names the
   node in its `coverage`.
+- **`offline_revision_not_published`** — at warn, from the node that logs
+  it: a `crewlet config import`, `activate` or `rekey` made there while it
+  was stopped, built on a revision the fleet has since moved on from. It is
+  withheld rather than published over the fleet's newer company; the node
+  starts on it, says so on every start for as long as it stands, and moves
+  to the fleet's revision once it applies it, which it says once more. The
+  change stays in the node's history under the `revision` the line names.
+  The line's hint names what to do with it: put up as it stands, it would undo
+  what the fleet changed since, so read the change itself with
+  `GET /config/revisions/<revision>/diff?against=<built_on>` on that node and
+  make it again on the fleet's document (through the dashboard, or
+  `crewlet config import -api`); `POST /config/revisions/<revision>/revert`
+  there puts it up as it stands, for an operator who means that (see [What a
+  booting node publishes](../concepts/control-plane.md#what-a-booting-node-publishes)).
 - **`/health`** carries this node's seats, its in-flight count and its
   config posture; the dashboard's **Settings › Nodes** screen puts every node's
-  side by side, with seat ownership and per-node config epoch.
+  side by side, with seat ownership, the config epoch each last attempted and
+  the revision each runs. It counts as behind on config every node that does
+  not run the activated revision: one on an older epoch, one that refused it
+  or applied it only in part, one on another revision, and one that has
+  reported nothing.
 - **Each node's heartbeat** also carries how each of its MCP servers
   started — one row per server, counting the
   instances that started and failed, with one failure's reason. See
   [What a node says about itself](../concepts/coordination.md#what-a-node-says-about-itself).
 
-A node whose applied config epoch lags the fleet's is not an error on its
+A node whose reported config epoch lags the fleet's is not an error on its
 own — every rollout produces lag. See
 [the control plane](../concepts/control-plane.md) for when lag becomes a
-posture change.
+posture change. A node that reports the fleet's epoch with `config_status:
+error` has refused the revision rather than lagged it: it runs the revision
+its `config_serving_revision_id` names, and
+[Reading a stuck node](../concepts/control-plane.md#reading-a-stuck-node)
+tells the revision's fault from the node's.
 
 ## How a node that fell behind catches up
 

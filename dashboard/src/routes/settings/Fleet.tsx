@@ -75,8 +75,10 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { usePublishFleet } from "~/app/Shell.tsx";
 import { useEngineHealth } from "~/lib/store-hooks.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
-import { plural, fmtCount, fmtDuration } from "~/lib/format.ts";
+import { fmtCount, fmtDuration } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
+import { configStanding, offRevision, type ConfigStanding } from "~/lib/configStanding.ts";
+import { standingCaption, standingWords } from "./standingWords.ts";
 import type { FleetAnswer, FleetDutyLease, FleetNode, FleetSeatLease } from "~/protocol/index.ts";
 import { BrokerKindTag, BrokerMembership } from "./FleetBroker.tsx";
 
@@ -138,10 +140,13 @@ function FleetScreen() {
   // to follow a sequence it cannot see.
   usePeekNeighbours(useMemo(() => nodes.map((n) => ({ kind: "node", id: n.id })), [nodes]));
 
-  // A node is behind when it has APPLIED an older epoch than the one the
-  // activation pointer names. Epoch 0 means it has not reported at all, which
-  // is a different thing from being behind and is called out on the row.
-  const behind = nodes.filter((n) => data && (n.config_epoch ?? 0) < data.target_epoch);
+  // A NODE IS BEHIND WHEN IT DOES NOT RUN THE ACTIVATED REVISION, which its
+  // epoch alone does not say: the epoch is the one it ATTEMPTED, so a node
+  // that refused the target reports the target's epoch while it runs the one
+  // before (`configStanding`). A node that has reported nothing is counted —
+  // nothing says it runs the fleet's revision — and its row says it is silent
+  // rather than behind.
+  const behind = nodes.filter((n) => data && offRevision(data, n));
 
   return (
     <>
@@ -198,7 +203,7 @@ function FleetScreen() {
               icon={<SlidersVerticalGlyph size="xs" />}
               label="Behind on config"
               value={behind.length}
-              sub={data?.target_epoch ? `target epoch ${data.target_epoch}` : "no target epoch"}
+              sub={data?.activation ? `target epoch ${data.activation.epoch}` : "no target epoch"}
             />
           </StatGroup>
         </Card>
@@ -357,21 +362,22 @@ function FleetScreen() {
                   header: "Config",
                   shrink: true,
                   sortValue: (n) => n.config_status ?? "",
-                  cell: (n) => (
-                    <span className="row gap-1">
-                      <Tag variant={STATUS_TONE[n.config_status ?? ""] ?? "neutral"}>
-                        {n.config_status || "unknown"}
-                      </Tag>
-                      {data && (n.config_epoch ?? 0) < data.target_epoch && (
-                        <span
-                          className="t-caption"
-                          title={`applied epoch ${n.config_epoch ?? 0}, target ${data.target_epoch}`}
-                        >
-                          behind
-                        </span>
-                      )}
-                    </span>
-                  ),
+                  cell: (n) => {
+                    const standing = configStanding(data, n);
+                    const caption = standingCaption(standing);
+                    return (
+                      <span className="row gap-1">
+                        <Tag variant={STATUS_TONE[n.config_status ?? ""] ?? "neutral"}>
+                          {n.config_status || "unknown"}
+                        </Tag>
+                        {caption && (
+                          <span className="t-caption" title={standingTitle(n, data)}>
+                            {caption}
+                          </span>
+                        )}
+                      </span>
+                    );
+                  },
                 },
                 {
                   key: "lease",
@@ -705,7 +711,7 @@ export function NodeScreen({ id }: { id: string }) {
                 // saying one thing.
                 title={node.id}
                 status={nodeFlags(node, data.this_node)}
-                facts={nodeFacts({ node, target: data.target_epoch, version })}
+                facts={nodeFacts({ node, answer: data, version })}
               />
               <NodePanels node={node} answer={data} now={now} />
               <Card>
@@ -776,7 +782,7 @@ export function NodePeek({ id }: { id: string }) {
                 icon="server"
                 title={node.id}
                 status={nodeFlags(node, data.this_node)}
-                facts={nodeFacts({ node, target: data.target_epoch, version })}
+                facts={nodeFacts({ node, answer: data, version })}
               />
               <div className="col gap-3">
                 <NodePanels node={node} answer={data} now={now} />
@@ -814,17 +820,18 @@ function useNodeVersion(id: string, thisNode?: string): string | undefined {
  */
 export function nodeFacts({
   node,
-  target,
+  answer,
   version,
 }: {
   node: FleetNode;
-  /** The epoch the whole fleet is converging on. */
-  target: number;
+  /** The activation the whole fleet is converging on. */
+  answer: Pick<FleetAnswer, "activation">;
   /** The engine build — known only for the node that served this socket. */
   version?: string;
 }): Fact[] {
-  const applied = node.config_epoch ?? 0;
-  const behind = target - applied;
+  const attempted = node.config_epoch ?? 0;
+  const target = answer.activation?.epoch ?? 0;
+  const standing = configStanding(answer, node);
   return [
     {
       label: "Posture",
@@ -837,13 +844,18 @@ export function nodeFacts({
       // all, and "0 of 41" would read as a node forty-one revisions behind
       // rather than as one that has not spoken.
       //
-      // The epoch rather than the revision id it stands for: the id is on the
-      // apply record and not in this answer's declared shape, and a header
-      // that named a revision it had to guess at would be worse than one that
-      // names the number every row here is compared against.
+      // THE EPOCH IT ATTEMPTED, not the one it runs: a node that refused the
+      // target reports the target's epoch. Whether it runs the fleet's
+      // revision is the Lag fact below, which reads the revision ids beside
+      // the number — the number alone cannot say, and can even name another
+      // revision once a rebuilt coordination store has restarted its count.
       value:
-        applied > 0 ? (
-          `${applied} of ${target}`
+        attempted > 0 ? (
+          target > 0 ? (
+            `${attempted} of ${target}`
+          ) : (
+            `${attempted}`
+          )
         ) : (
           <EmptyValue label="This node has reported no config apply" />
         ),
@@ -868,15 +880,11 @@ export function nodeFacts({
           : "",
     },
     {
+      // WHERE IT STANDS, in words rather than a subtraction: a refusal of the
+      // target is at the target's epoch, and "0 epochs behind" would call it
+      // current.
       label: "Lag",
-      value:
-        applied === 0 ? (
-          <EmptyValue label="No configuration applied yet" />
-        ) : behind > 0 ? (
-          `${plural(behind, "epoch")} behind`
-        ) : (
-          "current"
-        ),
+      value: lagValue(standing),
     },
     // ZERO SEATS IS A REAL ANSWER — an ingress-only node runs none — and it is
     // the node an operator is most often looking for here, so it must not be
@@ -922,19 +930,60 @@ export function nodeFacts({
   ];
 }
 
+/** The Lag fact's value: the standing in words, or a worded empty for none. */
+function lagValue(standing: ConfigStanding) {
+  switch (standing.kind) {
+    case "unreported":
+      return <EmptyValue label="No configuration applied yet" />;
+    case "no-target":
+      return <EmptyValue label="No revision activated yet" />;
+    case "current":
+      return "current";
+    default:
+      return standingWords(standing);
+  }
+}
+
 /**
- * What a node is doing, on its page and in the rail alike: whether it has
- * applied the revision the fleet activated, the leases it holds, and the
- * fleet-wide duties that landed on it.
+ * What a standing is read off, for a reader who hovers it: the epoch and
+ * revision the node attempted, the one it runs, and the fleet's.
+ */
+function standingTitle(node: FleetNode, answer: Pick<FleetAnswer, "activation">): string {
+  const target = answer.activation;
+  const attempted = `attempted epoch ${node.config_epoch ?? 0}${
+    node.config_revision_id ? ` (${node.config_revision_id})` : ""
+  }`;
+  const runs = node.config_serving_revision_id
+    ? `runs ${node.config_serving_revision_id}`
+    : "runs no revision";
+  const fleet = target
+    ? `the fleet activated epoch ${target.epoch} (${target.revision_id})`
+    : "the fleet has activated nothing";
+  return `${attempted}, ${runs}; ${fleet}`;
+}
+
+/** The Running panel's tone for a standing: a failed apply is critical. */
+const STANDING_TONE: Record<ConfigStanding["kind"], "critical" | "positive" | "caution"> = {
+  "no-target": "caution",
+  unreported: "caution",
+  current: "positive",
+  behind: "caution",
+  refused: "critical",
+  degraded: "critical",
+  elsewhere: "caution",
+};
+
+/**
+ * What a node is doing, on its page and in the rail alike: whether it runs
+ * the revision the fleet activated, the leases it holds, and the fleet-wide
+ * duties that landed on it.
  */
 function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswer; now: number }) {
   const seatBadge = useSeatBadgeOf();
   const { open: openPeek } = usePeekControls();
   const seats = answer.seats.filter((s) => s.node === node.id);
   const duties = answer.duties.filter((d) => d.node === node.id);
-  const applied = node.config_epoch ?? 0;
-  const behind = answer.target_epoch - applied;
-  const current = applied > 0 && behind <= 0;
+  const standing = configStanding(answer, node);
 
   return (
     <>
@@ -952,20 +1001,13 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
             {/* THE ONE QUESTION THIS PANEL EXISTS FOR, as a state rather than
                 as two numbers to subtract. `config_status` beside it is a
                 different fact: a node can report `ok` about a revision two
-                activations old. */}
+                activations old, and `error` about the active one while it
+                runs the one before — which this line names. */}
             <TableStatusCell
-              glyph={current ? "●" : "○"}
-              label={
-                current
-                  ? "running the active revision"
-                  : applied > 0
-                    ? `${plural(behind, "epoch")} behind`
-                    : "no apply reported"
-              }
-              title={`applied epoch ${applied}, the fleet has activated ${answer.target_epoch}`}
-              tone={uiletTone(
-                node.config_status === "error" ? "critical" : current ? "positive" : "caution",
-              )}
+              glyph={standing.kind === "current" ? "●" : "○"}
+              label={standingWords(standing)}
+              title={standingTitle(node, answer)}
+              tone={uiletTone(STANDING_TONE[standing.kind])}
             />
             <Tag variant={STATUS_TONE[node.config_status ?? ""] ?? "neutral"}>
               {node.config_status || "unknown"}

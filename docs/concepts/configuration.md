@@ -312,15 +312,38 @@ The engine boots in this order:
 6. Decide, once, what the Tier B file on the command line is for and what the
    engine starts on. The engine's start and the import in step 12 both take
    this one decision, so the engine can never start on a file the import then
-   ignores. On a data node, read the revision its own store marks active
-   (`SELECT payload FROM company_config WHERE is_active <> 0`), which opens and
-   migrates that store and closes it again: the engine opens its own. That
-   revision is what the engine starts on, with the instant it was activated
-   at; a `-company` file beside it is either that revision byte for byte or
-   one the store's company outranks, which is logged as `company_seed_ignored`.
-   With no active revision, or with `-import-company`, the engine starts with
-   no company and the file is considered for import in step 12, once the
-   fleet's pointer can be read. `-import-company` reads
+   ignores. On a data node, read the revision its own store boots on
+   (`is_active`) and the fleet's revision as the node last saw it
+   (`is_fleets`), which opens and migrates that store and closes it again: the
+   engine opens its own. The process **keeps the store's lock** from this read
+   until the engine has opened the same file in step 8, so nothing can change
+   what the engine starts on in between. From here on a command that opens
+   this node's store meets the starting node exactly as it meets a running
+   one: `crewlet config activate`, `rekey` or `show`, `crewlet migrate` and
+   the rest are refused, naming it; `crewlet config import` and the commands
+   that reach the fleet's secret store (`crewlet secrets`, `crewlet llm`, the
+   provisioners) go to its API instead, which answers `503 starting` until
+   step 13 — run them again once the node serves. A start with
+   `-import-company` reads no store here and takes no lock until step 8. The
+   revision it boots on is the last one its engine
+   applied, or a change an offline command made on it (see [Versioned
+   Revisions](#versioned-revisions)), and that is what the engine starts on —
+   at the instant of the activation it applied, or at no instant for an
+   offline change the fleet has not taken yet, which the first apply of the
+   activation that publishes it stamps. So a node that refused the fleet's
+   revision starts on what its boot row names — the one it was serving,
+   unless the write moving the row to that one was still being retried when
+   the node stopped, which leaves the one before — and never on the one it
+   refused. A
+   `-company` file beside it is either that revision byte for byte or one the
+   store's company outranks, which is logged as `company_seed_ignored`. A node
+   that boots on nothing but has seen the fleet run a company — it joined and
+   refused that company's revision, or never finished applying it — starts
+   with no company, and a `-company` file is not a bootstrap there either: it
+   is ignored the same way, since a company exists. With neither, or with
+   `-import-company`, the engine starts with no company and the file is
+   considered for import in step 12, once the fleet's pointer can be read.
+   `-import-company` reads
    nothing from the store, so a stored revision this build cannot run does not
    refuse the boot that replaces it. A node without `data` reads nothing here,
    since its store is scratch, and starts with no company. On a
@@ -342,7 +365,7 @@ The engine boots in this order:
    recovers its file store, which takes as long as the store is large. A node
    without `data` opens a scratch store, deleted at every boot, and joins the
    members' broker as a leaf
-9. Run migrations — every file, in one pass. There is no lock and no phase ordering to serialize: this process owns its file, so nothing can be racing it, and no DDL depends on a value only the config knows. Embedding columns are declared as plain blobs and the vector width is validated in Go against the active revision at write time, so a schema step never has to read the config first (see [`crewlet migrate`](../reference/cli.md#crewlet-migrate)).
+9. Run migrations — every file, in one pass. There is no lock and no phase ordering to serialize: this process owns its file, so nothing can be racing it, and no DDL depends on a value only the config knows. Embedding columns are declared as plain blobs and the vector width is validated in Go against the company the engine runs at write time, so a schema step never has to read the config first (see [`crewlet migrate`](../reference/cli.md#crewlet-migrate)).
 10. Start the **core runtime** — on every data node, with a company or without one: the [state log](../guides/consistency.md) for **every** registered domain, the node gate over every identity-claiming log, the [identity estate](identity-and-access.md) with the loops that keep this node's view of it, and — on a node that publishes — the log's own trim and the identity duties. None of it depends on a company, and a node with none is exactly the one that has to sign a Tier A token's session in — `ingress` requires `data`, so the node anybody signs in on always has it — because that session is what the dashboard creates the company through; the company's first person is invited or created once it declares the human seat they will hold. It is **every** domain rather than the identity estate alone because a join replaces the whole replicated file and a snapshot names every registered domain, and because the trim counts nodes per log: a node that applied part of the register could neither adopt nor donate, and would pin the rest of the logs' trims for as long as it was up. A node without `data` starts none of it: it applies no log, and reaches the estate — the identity directory included — through a node that holds it ([A node that holds no data](scaling.md#a-node-that-holds-no-data))
 11. **The node has recovered what it holds.** It logs `engine_recovered`, and
     `/health` turns `200` with `"phase": "preparing"`: everything above is the
@@ -359,7 +382,7 @@ The engine boots in this order:
     step 6 decided to start on:
     - **A company**: apply it, which spawns the full company: the sandbox backends it configures, the **Worklet and Doclet halves** it declares (their writers and readers over the logs step 10 already applies, their lexical index, change feeds and embedding duty), and its seats' tools, the shared MCP servers among them, each within its own `startup_timeout_seconds`
     - **No company**: the engine stays in the **unconfigured** state — the API serves from step 13 so an operator can push the first revision via `PUT /config` or `crewlet config import`, and a Tier A token's session signs in — which is how the dashboard creates the company. Nobody can be invited or created yet: every person holds a human seat the company declares, so that waits for the first revision. A node whose file step 6 decided to import builds that company in step 12, before any seat is claimed
-12. Start the [control plane](control-plane.md): import the Tier B file where step 6 decided to — `-company` only where the fleet runs no company either, create-only, so of two nodes starting a fleet's first company one wins and the other defers to it; `-import-company` where it differs from the revision the fleet runs — or otherwise publish this node's own active revision where the fleet has none or an older one. A file about to be imported is first held to every rule a written document meets and **built as this node's apply would build it** (the company over this node's `${VAR}` chain, and the sandbox catalogue it configures), because nothing else builds it before the whole fleet has been pointed at it: a file this node cannot build — a `${VAR}` that resolves to nothing where a backend refuses an empty value, a coding CLI whose profile cannot be loaded, a sandbox cell this host cannot run — refuses the boot with nothing stored or activated. Then one reconcile against the activation pointer — on a node that booted with no company and finds one active, the file it has just imported included, this is where the company of step 11 is built — before the loop that polls the pointer, and a broadcast `crewlet.config.revision_activated` nudge that wakes it early, run from step 14 on. That reconcile failing does not fail the boot: `initial_reconcile_failed` says whether the node is still serving the company it started on or, having started on none, serves no company until a later tick applies the fleet's revision — a part of the apply that could not start (the inbound edge, the native halves) is started again by that tick
+12. Start the [control plane](control-plane.md): import the Tier B file where step 6 decided to — `-company` only where the fleet runs no company either, create-only, so of two nodes starting a fleet's first company one wins and the other defers to it; `-import-company` where it differs from the revision the fleet runs, unconditionally, the one activation that expects nothing of the pointer — or otherwise publish what this node knows, by a compare-and-set against what it was built on: a change an offline command made on this node, only while the fleet still runs the revision that change was built on (or the earlier offline change it replaced, where a start published that one and could not confirm it); the company this node knows, create-only, where the fleet's pointer is gone; and the fleet's revision this node last saw, where the pointer is a **restore** — put back by a node after the coordination store lost it — of a revision this node holds that was activated before it: a pointer recreated over a fleet that had moved on. A pointer somebody chose is the company, however old its instant reads. A change the fleet moved on from is not published, and every boot says so at warn as `offline_revision_not_published`, for as long as the node boots on it (see [Control Plane § What a booting node publishes](control-plane.md#what-a-booting-node-publishes)). A file about to be imported is first held to every rule a written document meets and **built as this node's apply would build it** (the company over this node's `${VAR}` chain, and the sandbox catalogue it configures), because nothing else builds it before the whole fleet has been pointed at it: a file this node cannot build — a `${VAR}` that resolves to nothing where a backend refuses an empty value, a coding CLI whose profile cannot be loaded, a sandbox cell this host cannot run — refuses the boot with nothing stored or activated. Then one reconcile against the activation pointer — on a node that booted with no company and finds one active, the file it has just imported included, this is where the company of step 11 is built — before the loop that polls the pointer, and a broadcast `crewlet.config.revision_activated` nudge that wakes it early, run from step 14 on. That reconcile failing does not fail the boot: `initial_reconcile_failed` says whether the node is still serving the company it started on or, having started on none, serves no company until a later tick applies the fleet's revision — a part of the apply that could not start (the inbound edge, the native halves) is started again by that tick
 13. Hand the listeners the API inside this process — auth middleware, the `/config/*` routes and the rest — and, when `api.public.port` is set, the routes outside parties call (`/webhooks/*`, `/otlp/{token}`, `/mcp/{token}`) on that second listener instead (see [Deployment → Exposing webhooks without the admin API](../guides/deployment.md#exposing-webhooks-without-the-admin-api)). A node without the `ingress` role serves only its `/health` and `/ready` probes on `api.port`: its seats' executor runs reach their tools through an `ingress` node's bridge, which relays each call over the broker. Logged as `api_listening` (`api_probes_listening`)
 14. Start the engine — claim this node's seats, each with its per-role MCP children — and the reconcile loop
 
@@ -406,15 +429,16 @@ curl -X PUT https://crewlet.example.com/config \
 This is also how you change a company that is **already running**: the same
 command, against a node that already has one.
 
-`crewlet run` defaults `-config` to `./crewlet.yaml` and `-company` to `./company.yaml` in the working directory; naming a path is only needed when a file lives elsewhere. **A missing `./company.yaml` is not an error** — the store is authoritative, so a node with no Tier B file boots on whatever the store holds, or unconfigured when it holds nothing.
+`crewlet run` defaults `-config` to `./crewlet.yaml` and `-company` to `./company.yaml` in the working directory; naming a path is only needed when a file lives elsewhere. **A missing `./company.yaml` is not an error** — what a node starts on is its store's to say, never the file's, so a node with no Tier B file boots on the revision its store boots on, or unconfigured when it holds none.
 
-`-company` only ever **bootstraps a company that does not exist yet**: none in the node's store, and none the fleet runs. Once a company exists the file is ignored, with a `company_seed_ignored` warning naming it and the revision that outranks it, and the node starts on the company that exists — its store's revision, or with none until its first reconcile applies the fleet's — so a restart cannot revert a change made live, not even for the moments before that reconcile. An empty store is not a company with none: a fresh node joining a running fleet has one, and so does every node without `data` at every boot, and each defers to the fleet's company (silently, when the file is the very revision the fleet runs). Two flags cover the other intents:
+`-company` only ever **bootstraps a company that does not exist yet**: none the node's store boots on or has seen the fleet run, and none the fleet runs. Once a company exists the file is ignored, with a `company_seed_ignored` warning naming it and the revision that outranks it, and the node starts on the company that exists — the revision its store boots on, or with none until its first reconcile applies the fleet's — so a restart cannot revert a change made live, not even for the moments before that reconcile. An empty store is not a company with none: a fresh node joining a running fleet has one, and so does every node without `data` at every boot, and each defers to the fleet's company (silently, when the file is the very revision the fleet runs). The warning's hint names the other intents, which the table gives:
 
 | I want to… | Use |
 |---|---|
 | start a company at its first boot | `crewlet run -company company.yaml` (the default) |
-| change a **running** fleet, no restart | `crewlet config import company.yaml` |
-| make a file the company again on restart | `crewlet run -import-company company.yaml` |
+| change a **running** fleet, no restart | `crewlet config import company.yaml` while this node's engine is up, or with `-api` naming any node that is: it goes through that node's `PUT /config` |
+| change the company from a **stopped** node | `crewlet config import company.yaml`, then start the node: it boots on the import and publishes it only while the fleet still runs the revision the import was built on ([below](#offline-commands-make-an-offer)) |
+| make a file the company again on restart, whatever the fleet runs | `crewlet run -import-company company.yaml` |
 
 `-company` and `-import-company` together are refused: they ask for opposite things, and picking a winner silently would be picking it about the flag that overwrites a running company.
 
@@ -422,7 +446,7 @@ command, against a node that already has one.
 
 ## Unconfigured State
 
-Until the first active row exists, the engine holds an empty `Organization` (no name, no roles, no units), an empty provider map, no running MCP processes, no integration clients, no notification transports, and no Worklet or Doclet halves.
+Until a node's engine has a company — none in its store to boot on, and none applied since it started — the engine holds an empty `Organization` (no name, no roles, no units), an empty provider map, no running MCP processes, no integration clients, no notification transports, and no Worklet or Doclet halves.
 
 **What stays running:**
 
@@ -437,11 +461,11 @@ Until the first active row exists, the engine holds an empty `Organization` (no 
 |-------|------------------------------|
 | `GET /health` | `200 {"status": "unconfigured", "node": "node-0", "configured": false, ...}` — 200 because the status code is liveness; read `configured` for readiness |
 | `GET /ready` | `503 {"ready": false, "configured": false, "reason": "unconfigured", ...}` — an unconfigured node cannot verify a webhook signature, so it stays out of rotation. `reason` names what took it out — `unconfigured` here; every reason `/ready` can name, in its order of precedence, is in [the routes table](../reference/api-endpoints.md#routes) |
-| `GET /config` | `404 {"error": "no_active_revision"}` with a hint |
-| `GET /config/revisions` | `200 []` |
-| `PUT /config` | Accepted, and creates the first active revision, as long as the FLEET has no activation either: a node that has not caught up with its fleet answers `412 already_configured` (with `If-None-Match: *`) or `409 revision_advanced`, naming the revision the fleet is on. Send no precondition, or `If-None-Match: *` to insist nothing is configured yet; an `If-Match` names a revision to match, so it answers `412 no_active_revision` |
+| `GET /config` | `404 {"error": "no_active_revision"}` with a hint, while the fleet has no activation pointer and this node has never seen one name a revision. Every `/config` answer is the fleet's ([Live Propagation](#live-propagation)), so a node that is unconfigured beside a fleet that runs one — it joined and has not applied it yet, or refused it — answers that company like every other node, and one that cannot read the coordination store answers `503 unavailable` with a `Retry-After` |
+| `GET /config/revisions` | `200 []` from a store that holds no revision |
+| `PUT /config` | Accepted, and creates the first revision, as long as the FLEET has no company either: the write is create-only at the pointer, so if another node's first company lands first it is refused `409 revision_advanced` naming that company (`412 already_configured` with `If-None-Match: *`), its own revision kept as history. Where the fleet runs a company, this node answers it, so a write is built on it like any other and `If-None-Match: *` answers `412 already_configured` naming it. Send no precondition, or `If-None-Match: *` to insist nothing is configured yet; an `If-Match` names a revision to match, so with no company it answers `412 no_active_revision` |
 | `POST /config/revisions/{id}/revert` | `404` — no revisions exist yet |
-| Per-entity routes (`PUT /config/roles/{handle}`, `/config/units/{id}`, `/config/llm-providers/{key}`, `/config/mcp-servers/{name}`) and `PATCH /config` | `409 Conflict` — they edit a document, and there is none; initialise via `PUT /config` first |
+| Per-entity routes (`PUT /config/roles/{handle}`, `/config/units/{id}`, `/config/llm-providers/{key}`, `/config/mcp-servers/{name}`) and `PATCH /config` | `409 Conflict` while the fleet runs no company — they edit a document, and there is none; initialise via `PUT /config` first. Beside a fleet that runs one, they edit that company's document |
 | `GET /agents`, `GET /tokens/breakdown` | `200` with empty lists / zero counters |
 | `/auth/*`, `/iam/*` | Served exactly as on a configured node — they are the core runtime's. What names a seat answers `409 no_active_revision`, because the running company's human seats are what it is checked against and there are none: `GET /iam/seats`, an invitation, a person's create, and a bind |
 | `/worklet/*`, `/doclet/pages/*`, `/operator/mcp`, and the work, page and search questions | `503 no_active_revision` with a 15-second `Retry-After`; over the socket, an `unavailable` frame naming the same `refusal` with the same `retry_after` and words: the routes are **mounted** and say why they cannot serve rather than answering the `404` of a route that does not exist. They read Worklet's and Doclet's halves **per request**, so the first company's apply brings them up under the same API with no restart; a company that keeps its tracker or wiki on a vendor answers the `404` a route with nothing behind it answers from then on |
@@ -496,11 +520,13 @@ retried pointlessly and then lost.
 
 ## Live Propagation
 
-When a new revision is activated (via `PUT /config`, `PATCH /config`, a per-entity write, a revert, or `crewlet config import`), the revision is stored and the fleet's **activation pointer** is then moved to it; the pointer's own KV sequence *is* the epoch, so the append and the flip cannot come apart. Every node polls that pointer and converges onto it; a broadcast `crewlet.config.revision_activated` event wakes the poll early but carries no work.
+When a new revision is activated (via `PUT /config`, `PATCH /config`, a per-entity write, a revert, or `crewlet config import` through a running node), the revision is stored and the fleet's **activation pointer** is then moved to it; the pointer's own KV sequence *is* the epoch, so the append and the flip cannot come apart. Every node polls that pointer and converges onto it; a broadcast `crewlet.config.revision_activated` event wakes the poll early but carries no work. A `crewlet config` command run while the engine is stopped cannot move the pointer, and what it writes is an [offer](#offline-commands-make-an-offer) the node's next start publishes.
 
-The two steps are **not one transaction**, and they span two stores: the node's own database and the coordination KV. That ordering is deliberate: a crash between them leaves a revision nothing points at, which is inert and replaced by the next activation, where the other order would point the fleet at bytes no node had stored. The revision is stored as history and becomes the writing node's own active revision only after the pointer has moved, so a write the fleet refused is never what that node serves or republishes; see [Control Plane](control-plane.md#the-design).
+The two steps are **not one transaction**, and they span two stores: the node's own database and the coordination KV. That ordering is deliberate: a crash between them leaves a revision nothing points at, which is inert and replaced by the next activation, where the other order would point the fleet at bytes no node had stored. The revision is stored as history, and it becomes what a node boots on — the writing node included — only once that node's engine has applied it: a write that lost its compare-and-set stays inert history, and a revision a node refused to apply is never what that node starts on. See [Control Plane § The company, and what each node keeps of it](control-plane.md#the-company-and-what-each-node-keeps-of-it).
 
 There is **no leader**, so any node's API may write. What keeps two operators from silently overwriting each other is that the flip is a **compare-and-set** against the revision the write was derived from: the loser gets a `409` naming what won, rather than a `201` for a change the fleet never took. See [Concurrent writes](../reference/api-endpoints.md#concurrent-writes).
+
+**That revision is the fleet's, on whichever node serves the write.** The company is the pointer, so `GET /config` and its entity-tag, the revision list's `is_active`, a diff against `active` and the base every write is built on all answer the revision the pointer names, never the one the serving node happens to run. Every node answers the same: one that has not reconciled since the pointer moved answers from the body the pointer carries, and one that refused the fleet's revision still answers it, so the read after a write answers the write and an `If-Match` taken from one node's entity-tag lands on any other. What each node runs is a separate fact, which [`GET /fleet`](../reference/api-endpoints.md#get-fleet) gives per node. When the coordination store cannot be read, a `/config` request that needs the fleet's revision — every read above, and every write — answers `503 unavailable` with `Retry-After: 2` rather than a guess, since "the fleet has no company" is the guess that sends a create-only write to replace the company it has. See [Control Plane § Every config answer is the pointer's](control-plane.md#every-config-answer-is-the-pointers).
 
 **The nudge carries no work, and that is the load-bearing part.** A group subscription is a *work queue* — the contract says exactly one member of a group receives each message — so a revision delivered that way would be applied by whichever process won the message while every other node kept serving the previous company indefinitely. Polling a pointer inverts that: every node reads the same value and converges on it, and a lost nudge costs a poll interval rather than a revision. The full mechanism — the activation pointer and its epoch, what a lagging node does about its own traffic, and the operator surface — is [Control Plane](control-plane.md); what follows is the apply itself.
 
@@ -538,10 +564,18 @@ returned list is the stages that *did* complete, in the order they completed,
 so "secrets, company" names both what was rebuilt and where the refusal landed.
 It travels on `config_revision_applied` into the audit event log, where it
 outlives the fleet view's one-minute bucket. The fleet view carries each node's
-epoch, revision, status and failure text but *not* the stage list, so that
-detail lives on the event rather than on the operator surfaces reading the
-bucket. The active row stays active either way; the control plane records
-the outcome so peers can see it (see [Control Plane](control-plane.md)).
+epoch, the revision that epoch named, the status and failure text, the epoch
+the node last applied (`config_applied_epoch`), the revision it serves
+(`config_serving_revision_id`) and the one it would boot on
+(`config_boot_revision_id`), but *not* the stage list, so that detail lives on
+the event rather than on the operator surfaces reading the bucket. A refusal
+moves nothing in the node's own store but its record of the fleet's revision:
+the node goes on serving the revision it ran before, and if it restarts comes
+back on the revision its boot row names — that same one, except while a write
+to the boot row is being retried, and none on a node whose own database is
+discarded at every start — never on the revision it refused. The control plane records the outcome — the revision refused and the
+one still served — so peers and operators can see it (see [Control
+Plane](control-plane.md#a-nodes-own-store-keeps-three-facts-apart)).
 
 **Read that list by name, never by number.** Five of the nineteen names are
 conditional — `native`, `sandbox_runtime` and `maintenance` only on the apply
@@ -805,14 +839,30 @@ CREATE TABLE company_config (
     summary            TEXT    NOT NULL,          -- short human-readable change note
     payload            TEXT    NOT NULL,          -- the whole document, sealed under
                                                   -- the keyring every node holds
-    is_active          INTEGER NOT NULL DEFAULT 0,
-    activated_at       INTEGER
+    is_active          INTEGER NOT NULL DEFAULT 0, -- this node BOOTS on it
+    activated_at       INTEGER,                    -- an activation instant: see below
+    is_fleets          INTEGER NOT NULL DEFAULT 0, -- the fleet's revision as this
+                                                   -- node last saw it
+    offered            INTEGER NOT NULL DEFAULT 0, -- the boot row is an offline
+                                                   -- offer the fleet has not taken
+    offered_over       TEXT,                       -- the revision the offer was built
+                                                   -- on; NULL for none
+    offered_unconfirmed TEXT,                      -- the offer this one replaced, which
+                                                   -- a start published and could not
+                                                   -- confirm; NULL for none
+    offered_at         INTEGER,                    -- the instant the boot publish
+                                                   -- planned for the offer
+    served_at          INTEGER                     -- the boot row's: the activation
+                                                   -- this node applied
 );
 
--- At most one active revision, enforced by the database rather than by the
--- application remembering to.
+-- At most one row this node boots on, and at most one it records as the
+-- fleet's, each enforced by the database rather than by the application
+-- remembering to.
 CREATE UNIQUE INDEX company_config_one_active_idx
     ON company_config (is_active) WHERE is_active <> 0;
+CREATE UNIQUE INDEX company_config_one_fleets_idx
+    ON company_config (is_fleets) WHERE is_fleets <> 0;
 ```
 
 The types here are the four SQLite has (`TEXT`, `INTEGER`, `REAL`, `BLOB`)
@@ -824,17 +874,130 @@ retired and the types are unchanged, because they were never the narrow part.
 
 A revert creates a *new* revision whose payload equals a prior one — the audit chain stays intact via `parent_revision_id`.
 
+**Which revision is the company is not a column here.** It is the fleet's
+activation pointer, in the coordination store, and every node answers it
+([Live Propagation](#live-propagation)). What the table marks are three facts
+only this node can know:
+
+- **`is_active` is the revision this node boots on.** Online, only the
+  reconciler moves it, and only to the revision its engine has just applied,
+  so a node never starts on a revision it refused, and an engine's reconcile
+  ticks move it in the order they read the pointer. Offline, a `crewlet
+  config` command chooses it ([below](#offline-commands-make-an-offer)).
+- **`is_fleets` is the fleet's revision as this node last saw it**, recorded by
+  the reconciler for every pointer revision whose seal opens under the node's
+  keyring, before validating it — refused here or not.
+- **`offered`, `offered_over`, `offered_unconfirmed` and `offered_at` mark an
+  offer**: a boot row an offline command chose that the fleet has not taken,
+  the revision it was built on, the earlier offer it replaced where a start
+  published that one and could not confirm it, and the instant the boot
+  publish planned for it.
+
+With no pointer — one lost under a running fleet — the company is the one this
+node knows: an offer built on the fleet's revision it last saw, or built while
+it had seen none; otherwise that fleet revision, even one this build refused,
+because every node that could run it does and the older revision this node
+runs would roll them back; otherwise the revision it boots on. That is what
+`GET /config` answers while the pointer is gone, what the next boot restores,
+and what an offline command builds on.
+
+Two instants stay apart. **`activated_at`**, on every row the boot row's
+included, is the latest instant this node knows the fleet activated that
+revision at, raised and never lowered: what a node restoring a lost pointer
+asks for, and what the sweep below dates a re-activated revision by.
+**`served_at`** is the boot row's alone: the instant of the activation this
+node applied, what the engine stamps the org chart and the knowledge spaces
+with when it boots on the revision, and it moves only when the node applies an
+activation. An offer has none, and starts the engine at no instant, because the
+fleet has not taken it yet. They were one column, and a re-activation of the
+running revision that this node refused — the [rotation](#rotation) gesture on
+a node that lost the credential — could raise neither: the boot row's instant
+had to stay the one it applied, so the fleet's newer activation was lost.
+
+These used to be one flag, `is_active`, and each reader took it for the fact it
+needed: a node marked the fleet's revision active as it fetched it, before
+validating it, and was refused at its next start; a write marked its revision
+active as the pointer moved, and a reconciler a moment behind walked it back;
+and an offline command marked its revision active "now", which the next start
+published over whatever the fleet had moved on to. See [Control Plane § A
+node's own store keeps three facts
+apart](control-plane.md#a-nodes-own-store-keeps-three-facts-apart).
+
+### Offline commands make an offer
+
+`crewlet config import`, `activate` and `rekey` run while the engine is stopped
+do not open the coordination store — on an embedded broker it lives inside the
+running engine — so they cannot move the pointer. What each writes is an
+**offer**: the revision this node boots on at its next start, built on the
+company this node knows (above), which each command names. "Stopped" means
+not starting either: a start holds the store from the read it decides on
+(step 6 of the [Bootstrap Sequence](#bootstrap-sequence)), so the offer it
+publishes is the one it read, and a command run while it starts is refused
+or sent to its API as it would be beside the running engine.
+
+- `import` writes the file as a new revision built on that company, with a
+  redacted file's masks restored from it. A file equal to it imports nothing.
+- `activate <id>` makes a stored revision the offer, holding it to the
+  runnable rules first, because the next start boots on it: a revision this
+  build cannot run is refused with nothing written. Activating the fleet's own
+  revision is the offline [rotation](#rotation) gesture: it is published over
+  itself, as a new epoch.
+- `rekey` re-seals the revision this node boots on — the one its next start
+  must open, which on a node that refused the fleet's revision is not the
+  fleet's — and offers the re-sealed copy over that revision, or, where the
+  revision it re-seals is itself an offer, over the revision that offer was
+  built on. On a node that refused the fleet's revision the copy is therefore
+  withheld, as below, and the fleet's own document is re-sealed through a
+  running node with `POST /config/reload`.
+
+The next start publishes the offer by a compare-and-set against its base: only
+while the pointer still names the revision it was built on — expecting the very
+activation of it the start read, so a publish planned at one instant lands at
+exactly that instant or not at all — at an instant later than the pointer's, so
+it always mints a new epoch. Where the company this node knew was itself an
+offer an earlier start published and could not confirm, because it crashed
+between the publish and the record of it, whether the fleet took that one is
+not known offline: the new offer is built on both it and the revision under
+it, and is published over whichever the pointer names. Where the pointer is gone,
+it is published create-only if its base is the fleet's revision this node last
+saw, or if this node saw none; built on no company, it is published only while
+the fleet has none. **An offer the fleet moved on from is
+withheld, never published over the fleet.** The node boots on it, says
+`offline_revision_not_published` at warn on every boot — naming the offer, what
+it was built on and what the fleet runs — and runs it until it applies the
+fleet's revision, which then becomes what it boots on, with the offline change
+left in its history. Making such a change the company as it stands would undo
+what the fleet changed since, so the warning's hint names the change instead:
+`GET /config/revisions/<revision>/diff?against=<built_on>` on that node shows
+what it did, to make the same change on the fleet's document (through the
+dashboard, or `crewlet config import -api`), and
+`POST /config/revisions/<revision>/revert` on that node puts it up as it
+stands, for an operator who means that.
+`crewlet run -import-company` is the one way to replace the company
+unconditionally. The whole decision, restoring a lost pointer included, is
+[What a booting node publishes](control-plane.md#what-a-booting-node-publishes).
+
+`crewlet config revisions` says which row is which in its STATE column:
+`boots`, `fleet's`, and `offered over <id>`, or `offered over <id> or the
+unconfirmed <offer>` (see [the CLI
+reference](../reference/cli.md#crewlet-config-revisions)).
+
 ### A revision is immutable as a configuration, not as an archive of people
 
 One thing narrows "append-only", and it is deliberate.
 
 **It is swept.** Every node keeps its own copy of every revision it has ever
 met, and nothing deleted from it — one row per config write, per node, each
-holding the whole document. The ordinary maintenance tick now keeps everything
-inside **400 days** plus the **active revision and its whole parent chain
-whatever their age**, and it runs on every node rather than under the fleet
-singleton, because each node owns its own copy. The chain is kept by id rather
-than by date: a revert re-activates an older revision and `crewlet config diff`
+holding the whole document. The ordinary maintenance tick now keeps every
+revision created or activated inside **400 days** — a row is dated by the later
+of the two, so an old revision the fleet re-activated yesterday stays — plus,
+whatever their age, **the revision this node boots on, the fleet's revision as
+it last saw it, and the whole parent chain behind each**, and it runs on every
+node rather than under the fleet singleton, because each node owns its own
+copy. The two marked rows are often different revisions: a node that refused
+the fleet's revision boots on an older one, and needs both — one to start on,
+the other to restore a lost pointer from. The chain is kept by id rather than
+by date: a revert re-activates an older revision and `crewlet config diff`
 walks it, so a swept ancestor turns both into an error naming a row that used
 to exist. See [Retention](../guides/retention.md#the-configuration-archive-and-the-one-thing-a-purge-cannot-reach)
 for where 400 days comes from and what its floor is.
@@ -850,7 +1013,7 @@ their revision, and a backup when the backup is deleted.
 A stored revision is not a document somebody just submitted. It passed the validation of the build that wrote it, which is not necessarily the build reading it: during a rolling upgrade a newer peer can store a document this build's rules would refuse. So reading a revision and running one are held to different standards.
 
 - **Reading holds a revision to no rule.** `GET /config`, a revision read, the diff, the reference index, the entity reads, `crewlet config show`, `export` and `diff`, and the prior a write restores its masks from or merges onto all decode the stored document as it is. A revision this build would refuse is exactly the one an operator needs to see and replace, so none of these may refuse it.
-- **Applying holds a revision to the runnable rules.** A node's reconcile tick validates a revision before anything on the node changes, so a refused revision leaves the previous epoch serving untouched. Booting from the store validates the active revision and names it when it cannot run, with `crewlet config import` as the way out because the node's API is not up yet — and `-import-company` with the file, when a different `-company` file is on the command line. The way out has to reach this node's own store: the boot reads nothing else, and a revision written through another node reaches that store only through the node's reconciler, which a refused boot never starts — so a corrected revision written through another node fixes the fleet and leaves this node refused on every restart, however many nodes are serving. What writes the store directly is an offline `crewlet config import`. On a [managed](#managed-configuration) deployment the offline import and `-import-company` are both refused, so the refusal names the way that reaches the store: take the document back on this node for one start — remove `api.auth.company_writers` from its Tier A, import a corrected document with `crewlet config import` (the one the managing system wrote, if it has corrected the fleet already), and start the node, which publishes the import to a fleet running nothing newer — then restore `api.auth.company_writers` and restart. A company file named with `-company` or `-import-company` is held to the runnable rules as it is read, and to the rest only where it is written, because most boots write nothing from it: it is already the active revision, or a bootstrap a company that exists outranks — the store's own, or the fleet's. `POST /config/reload` and a revert validate what they re-activate.
+- **Applying holds a revision to the runnable rules.** A node's reconcile tick validates a revision before anything on the node changes, so a refused revision leaves the previous epoch serving untouched — and leaves it what the node boots on: the tick records the refused revision only as the fleet's, so the node's next start runs what it ran before rather than being refused before its engine starts. Booting from the store validates the revision the node boots on and names it when it cannot run. Online that cannot happen, because a node boots only on a revision its engine applied or one an offline command of the same build held to these rules; a boot row this build refuses was written by another build or another store — a binary downgraded after the node applied it, an offline command run with a newer build's CLI, or a store restored, copied or edited by hand — so the refusal names the build that wrote it first. Its other way out has to reach this node's own store: the boot reads nothing else, and a correction written through another node fixes the fleet but reaches this store only through a reconciler a refused boot never starts. What writes the store directly is an offline `crewlet config import` of a corrected document, which the next start boots on and [publishes](#offline-commands-make-an-offer) only while the fleet still runs the revision it was built on (or, built on no company, only if the fleet has none), so it never replaces a revision the fleet has moved on to; where the fleet has, the import is this node's alone until it applies the fleet's revision. The refusal does not name `-import-company`, which would replace whatever the fleet runs — a newer company included — to start one node. On a [managed](#managed-configuration) deployment the offline import is refused, so the refusal names the way that reaches the store: take the document back on this node for one start — remove `api.auth.company_writers` from its Tier A, import the managing system's current document with `crewlet config import`, and start the node, which publishes the import only while the fleet still runs the revision it was built on and so never replaces a newer one — then restore `api.auth.company_writers` and restart. A company file named with `-company` or `-import-company` is held to the runnable rules as it is read, and to the rest only where it is written, because most boots write nothing from it: it is already the revision the node boots on (for `-import-company`, the one the fleet runs), or a bootstrap a company that exists outranks — one this node boots on or has seen the fleet run, or the fleet's. `POST /config/reload` and a revert validate what they re-activate.
 - **A written document is held to every rule.** `PUT`, `PATCH`, a per-entity write, a `/setup` submission that changes the document, `crewlet config import`, `crewlet validate` and a company file `crewlet run` imports as a new revision (`-company` where no company exists yet, `-import-company` over a different company) validate the entire document the write produces, after its masks are restored. A write over a revision this build refuses therefore succeeds exactly when it corrects it. The company file `crewlet run` imports is also **built** as the node's apply would build it before anything is stored, because nothing else builds it before the fleet is pointed at it (see [Bootstrap Sequence](#bootstrap-sequence) step 12).
 
 The difference between the last two is the **admission rules**: authoring hygiene that nothing about running a company depends on, and the part of the rule set a later build may add to or relax. A revision that breaks one still runs, so an apply does not refuse it: during a rolling upgrade a newer peer may activate a revision it admitted under rules this build does not share, and refusing it would split the fleet's epoch. Today they are [unique unit keys](organization-model.md#handles-and-keys-are-unique-names-are-not) — a display name, a seat's or a unit's, is prose and never held unique — and unique sandbox setup step names within one `setup` list (`providers.sandbox.setup`, or one seat's `sandbox.setup`): a step's `env` and `files` are credentials restored by the step's name, so two steps of one name would leave every write carrying that list refused on masks nobody edited. So is a `unit:` reference on a seat declared inside a unit it does not name: the reference places only a root seat, so there it moves nothing and reads as a placement (see [the organization model](organization-model.md#a-seats-unit-reference)). A seat's own GitHub App (`integrations.github`) on a [human seat](humans-in-the-org.md) is one too: an app is the identity an agent acts as on GitHub, a person acts as their own `contact.github_login`, and nothing creates or reconciles an app for a person, so the block would read as a setting and do nothing. So is a schedule's `cron` that has five fields and still breaks the [cron grammar](scheduling.md#cron-syntax) (`61 * * * *`): a company carrying one runs with that schedule never firing and every other schedule untouched. So is a seat's `avatar` naming a character or a colour this build does not draw, or written on a human seat: nothing that runs a seat reads it, and the set of characters will grow, so a revision a newer peer admitted with a character this build does not know still applies here, and the dashboard draws that seat as the original Crewlet until it is upgraded. So is a sandbox setup step writing a file a box some seat runs in would refuse — `/usr/local/bin/…` for a seat that runs `direct`, say, or the home itself in any cell: the company runs, and only the boxes that step reaches fail at setup (see [Code Sandbox](code-sandbox.md#setup-steps--provisioning-the-box)). A `providers.llm` entry's credential configured where its CLI never reads it, or handed over under a variable name no store can hold (an `overrides.token_env` or `overrides.api_key_env` outside the reference grammar), is the same kind of rule, and so is an `opencode` entry's `model` with no provider segment (see [LLM Backends](llm-backends.md#configuration-reference)). So is a coding run's `optional_keys` entry — on a seat's `sandbox` or on a setup step — that leaves nothing out: a key or path its block does not write, a variable's name where its key belongs, or a key whose values reference nothing, each leaving the key it was meant for required and `run_sandbox` refused wherever its value resolves to nothing (see [Code Sandbox](code-sandbox.md#credentials-and-the-run-environment)). Five more are **whole-document** rules: each compares one part of the document against another, or one seat against every other seat.
@@ -912,7 +1075,7 @@ So revision history carries meaningful attribution rather than generic strings,
 and a revision somebody's token wrote is theirs and is never mistaken for one
 they wrote themselves. Every node's copy says the same: the three travel on the
 activation pointer — as `author`, `author_kind` and `operator_id`, beside the
-revision's `source` and `created_at` — so a node adopting the revision from its fleet records the
+revision's `source` and `created_at` — so a node keeping the revision from its fleet records the
 writer rather than `peer`. A revision the engine wrote itself — the boot seed,
 the reconcile loop — carries the kind `system` and no credential, which no
 token's name could say. See [the API
@@ -1186,7 +1349,7 @@ See the [API endpoints reference](../reference/api-endpoints.md#config--live-con
 Some deployments do not edit the company document by hand at all: a GitOps
 pipeline applies it from a repository, or external tooling such as a
 Kubernetes operator renders it from custom resources and writes it on every
-reconcile. Such a system replaces the active revision with its own each time
+reconcile. Such a system replaces the fleet's revision with its own each time
 it runs, so an edit a person makes through the dashboard or the API lasts only
 until then — and nothing tells them. Naming the system's token as the
 document's only writer turns that silent loss into a refusal at the moment of
@@ -1214,9 +1377,9 @@ administrator still reads `/config`, its history and its diffs.
 
 | Refused for a credential not listed | Still open to whoever the authority table admits |
 |---|---|
-| `PUT` and `PATCH /config`, every per-entity `PUT /config/{kind}/{id}`, `POST /config/revisions/{id}/revert`, and the `?dry_run=true` check of each — a check answers what the write would, and the write would be refused | `POST /config/reload`, which re-publishes the active document's own bytes |
+| `PUT` and `PATCH /config`, every per-entity `PUT /config/{kind}/{id}`, `POST /config/revisions/{id}/revert`, and the `?dry_run=true` check of each — a check answers what the write would, and the write would be refused | `POST /config/reload`, which re-publishes the fleet's document's own bytes |
 | A `/setup` connect that writes a pointer, a disconnect, and an agent's GitHub App — each refused **before** anything is sealed, queued or created at the vendor | A `/setup` submission that only rotates a value the document already names, and the provisioning pass and its check |
-| An offline `crewlet config import`, an offline `crewlet config activate` of any revision but the active one, and `crewlet run -import-company`; a `-company` bootstrap seed is not read at all — neither imported nor run, so a stray `./company.yaml` neither becomes the company nor fails the boot — and a `company_seed_ignored` warning names it | `/secrets`, `crewlet secrets` and `crewlet config rekey`, and `crewlet config activate` of the active revision |
+| An offline `crewlet config import`, an offline `crewlet config activate` of any revision but the company's own, and `crewlet run -import-company`; a `-company` bootstrap seed is not read at all — neither imported nor run, so a stray `./company.yaml` neither becomes the company nor fails the boot — and a `company_seed_ignored` warning names it | `/secrets`, `crewlet secrets` and `crewlet config rekey`, and `crewlet config activate` of the company's own revision (the one `crewlet config show` prints), the offline re-publish a rotated credential needs |
 
 **Why the secret store and a rotation stay open.** A leaked credential has to
 be replaced now, by whoever holds the new one, and the managing system cannot
@@ -1230,7 +1393,7 @@ the value at its source as well.
 **The engine's own writes are not judged by the list.** A reconcile pass that
 records what it discovered at a vendor writes as the engine itself (kind
 `system`), not as a credential; a managing system that re-renders the document should carry those
-values (they are in the active revision it reads back) or set them itself.
+values (they are in the revision `GET /config` answers) or set them itself.
 That includes a provisioning pass any operator starts on demand from `/setup`
 or Company › Integrations: where `integrations.jira` or
 `integrations.confluence` has no `cloud_id`, the Atlassian pass records the
@@ -1295,7 +1458,7 @@ The whole document is stored as `{"__encrypted__": "enc:v1:<key_id>:<base64>"}` 
 - **Encrypt on write.** Every write path (`PUT /config`, per-entity `PUT`, `crewlet config import`, `crewlet run -company` / `-import-company`) encrypts the whole document before the payload reaches the DB.
 - **Decrypt at the read boundary.** The engine and the API it serves, migrations, and the CLI each decrypt the blob (`secrets.Open`, then `config.DecodeCompany`) into the plaintext structure before use, so the Tier A key is required for **every** config read. `${VAR}` references *inside* the config are kept verbatim in the blob and still resolve from the environment at construction time.
 - **Fail closed.** A revision sealed under a key this node's keyring does not hold is refused rather than run as an opaque blob it can't read.
-- **Authenticated, not only hidden.** The document a node fetches from its peers comes through the coordination store, which anything reaching the broker can write, so the seal is also what proves a node of this fleet wrote it. A revision stored **unsealed** is refused — never applied, adopted, shown or reverted to — with an error naming the way to have its document back: importing it again from your own copy (`crewlet config import` or `PUT /config`), which stores it sealed. See [Control Plane § The design](control-plane.md#the-design).
+- **Authenticated, not only hidden.** The document a node fetches from its peers comes through the coordination store, which anything reaching the broker can write, so the seal is also what proves a node of this fleet wrote it. A revision stored **unsealed** is refused — never applied, kept, shown or reverted to — with an error naming the way to have its document back: importing it again from your own copy (`crewlet config import` or `PUT /config`), which stores it sealed. See [Control Plane § The design](control-plane.md#the-design).
 - **One key, not N env vars.** After encrypting, the engine needs only the Tier A key in its environment — not a per-secret env var for every LLM key, MCP token, and webhook secret.
 
 Because the key gates every read, keep it as available as the database itself: the API, dashboard, migrations, and CLI all fail closed without it.
@@ -1318,7 +1481,7 @@ curl -X POST "$CREWLET_URL/config/reload" \
 # 4. drop the old key only once the runbook's conditions hold
 ```
 
-**Both re-seals are required.** The company document, the secret store (the engine's own blind-index key included, once anybody has been added) and every person's name, address and second factor in the identity estate are all sealed under this keyring, so a key dropped while any of them is still under it leaves that thing unreadable. A reload stores the active document again under the node's active key; on a stopped node, `crewlet config rekey` does the same offline, and `crewlet config rekey -dry-run` reports whether it would re-encrypt without writing. The document's envelope carries the id of the key that sealed it, so either way it is decrypted under whichever key sealed it and re-encrypted under the active key. `crewlet secrets rekey` moves every person's sealed values only through a running node, whose engine holds the identity estate: run with the node's engine stopped, it reaches the fleet's store itself and re-seals that store's rows — the engine's own keys among them — and says to run it again through a running node for the rest.
+**Both re-seals are required.** The company document, the secret store (the engine's own blind-index key included, once anybody has been added) and every person's name, address and second factor in the identity estate are all sealed under this keyring, so a key dropped while any of them is still under it leaves that thing unreadable. A reload stores the fleet's document again under the node's active key and activates it. On a stopped node, `crewlet config rekey` re-seals the revision that node boots on — the one its next start must open — and its next start publishes the re-sealed copy only while the fleet still runs the revision it was built on ([offline commands make an offer](#offline-commands-make-an-offer)); `crewlet config rekey -dry-run` reports whether it would re-encrypt without writing. The document's envelope carries the id of the key that sealed it, so either way it is decrypted under whichever key sealed it and re-encrypted under the active key. `crewlet secrets rekey` moves every person's sealed values only through a running node, whose engine holds the identity estate: run with the node's engine stopped, it reaches the fleet's store itself and re-seals that store's rows — the engine's own keys among them — and says to run it again through a running node for the rest.
 
 On a single node, steps 1 and 2 can be one restart. On a fleet they cannot: a node that flips first signs records, cookies and requests under a key its peers do not hold yet.
 
@@ -1347,6 +1510,6 @@ The untyped maps (`mcp_servers[].env` and `.headers`, a `providers.llm` entry's 
 
 ## One company per engine
 
-An engine runs exactly one company. It opens one store file, that file holds one `company_config` table, and that table has **at most one** `is_active=TRUE` row (zero in the unconfigured boot state; otherwise one). There is no tenant column and no row-level scoping: the revision you activate is simply the company the engine runs. The same rule governs the [secret store](secret-store.md): one company per coordination estate, so a variable name alone is the key.
+An engine runs exactly one company. It opens one store file, that file holds one `company_config` table, and that table marks **at most one** row the node boots on (`is_active`; none in the unconfigured boot state) and at most one as the fleet's revision (`is_fleets`). There is no tenant column and no row-level scoping: the revision the fleet's pointer names is simply the company, and each engine runs it once it has applied it. The same rule governs the [secret store](secret-store.md): one company per coordination estate, so a variable name alone is the key.
 
 To run a second company, run a second engine with its own database.

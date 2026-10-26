@@ -372,7 +372,7 @@ func TestAnAnswerThePostureHeldBackResumesOnTheTickThatAdmitsWork(t *testing.T) 
 		t.Fatalf("%d resumes ran on a node refusing new work", n)
 	}
 
-	r, err := e.NewReconciler(ReconcilerOptions{Store: e.backends.Store, Fleet: e.backends.Fleet,
+	r, err := e.NewReconciler(t.Context(), ReconcilerOptions{Store: e.backends.Store, Fleet: e.backends.Fleet,
 		Queue: e.backends.Queue, NodeID: "node-posture"})
 	if err != nil {
 		t.Fatalf("NewReconciler: %v", err)

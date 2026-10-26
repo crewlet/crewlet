@@ -141,6 +141,7 @@ func TestAProbeNodesHealthIsTheNodesHalfOfTheEnvelope(t *testing.T) {
 			state: api.RuntimeState{
 				ShuttingDown: true, Posture: "serve", AppliedEpoch: 41,
 				InFlight: 2, Seats: []string{"eu-support"}, StartedAt: "2026-10-09T08:00:00Z",
+				ConfigAttempt: &api.ConfigAttempt{Epoch: 41, RevisionID: "rev-41", Status: "ok"},
 			},
 			fleet: api.FleetState{LiveNodes: &nodes, Alarms: []statelog.Kind{}},
 		},
@@ -155,6 +156,8 @@ func TestAProbeNodesHealthIsTheNodesHalfOfTheEnvelope(t *testing.T) {
 		"status": api.StatusShuttingDown, "node": "sat-eu-1", "roles": []any{"seats"},
 		"configured": true, "queue": "jetstream-embedded", "in_flight": float64(2),
 		"shutting_down": true, "posture": "serve", "applied_epoch": float64(41),
+		"config_attempt": map[string]any{"epoch": float64(41), "revision_id": "rev-41",
+			"status": "ok"},
 		"seats": []any{"eu-support"}, "started_at": "2026-10-09T08:00:00Z",
 		"nodes": float64(3), "alarms": map[string]any{"count": float64(0)},
 		// AN OBJECT EVEN WHERE NOTHING WAS ARMED, as on the full surface.

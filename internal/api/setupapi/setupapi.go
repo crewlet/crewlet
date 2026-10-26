@@ -47,6 +47,22 @@
 // rotation of a value the document already names changes no byte of it and
 // stays open.
 //
+// # It describes the fleet's company, never what this node runs
+//
+// Every route reads the company the fleet's activation pointer names, with the
+// revision it is, from one read (configapi's FleetCompany): what each field
+// holds decides a write — a fresh `${VAR}`, a write through the one there, a
+// refusal over a literal — and the write lands on the fleet's revision. Read
+// from the company this node's engine runs, an answer on a node that refused
+// the fleet's revision, or one mid-apply, described one document and named
+// another as its `if_match`, and a write decided on the first patched the
+// second. A submission with no `if_match` is held to the revision its own read
+// returned, for the same reason — the patch and a rotation's reload alike, each
+// to its compare-and-set, since a reload of a revision whose slot no longer
+// names the rotated `${VAR}` delivers nothing. What IS this node's is said as
+// such: whether a `${VAR}` resolves here, and what its own passes last
+// reported.
+//
 // # It never returns a value
 //
 // A requirement says whether a value is present and whether it resolved. It
@@ -75,6 +91,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/datadog"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
@@ -134,17 +151,8 @@ const RetryBusy = disconnectRetryFor
 // `resolved: null`, every disconnect or GitHub App refused) would present the
 // mistake as a deliberate answer.
 type Options struct {
-	// Company reads the ACTIVE company: the document a revision stores,
-	// and the ORG this node built from it. Both are nil while no revision
-	// is active, which every route answers as such.
-	//
-	// ONE FUNCTION RETURNING BOTH, never two accessors: two reads can
-	// straddle an activation, and a screen that took the integrations from
-	// one revision and the roster from the next would describe a company
-	// that never existed.
-	Company func() (*config.Company, *org.Organization)
-
-	// Config is the write path, the same one PATCH /config drives.
+	// Config is the write path, the same one PATCH /config drives, and the
+	// read of the company every route describes ([Service.fleetCompany]).
 	Config *configapi.Service
 
 	// Secrets seals a submitted credential, under the keyring every node
@@ -248,7 +256,6 @@ type Options struct {
 
 // Service serves /setup.
 type Service struct {
-	company func() (*config.Company, *org.Organization)
 	config  *configapi.Service
 	writer  setup.Writer
 	resolve func(string) (string, bool)
@@ -279,7 +286,6 @@ func New(opts Options) (*Service, error) {
 		name   string
 		absent bool
 	}{
-		{"Company", opts.Company == nil},
 		{"Config", opts.Config == nil},
 		{"Secrets", opts.Secrets == nil},
 		{"Resolve", opts.Resolve == nil},
@@ -316,7 +322,6 @@ func New(opts Options) (*Service, error) {
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	s := &Service{
-		company:        opts.Company,
 		config:         opts.Config,
 		resolve:        opts.Resolve,
 		webhookBase:    opts.WebhookBase,
@@ -428,12 +433,17 @@ func (c configWriter) Authorize(by iam.Actor) error {
 	return c.svc.Authorize(by)
 }
 
+// Current is the fleet's revision ([configapi.Service.ActiveRevision]).
 func (c configWriter) Current(ctx context.Context) (string, error) {
 	return c.svc.ActiveRevision(ctx)
 }
 
-func (c configWriter) Reload(ctx context.Context, summary string, by iam.Actor) (string, int64, error) {
-	applied, err := c.svc.Reload(ctx, summary, by)
+// Reload is the config surface's ([configapi.Service.Reload]), held to the
+// revision the submission was read from, as Apply is.
+func (c configWriter) Reload(ctx context.Context, summary string, by iam.Actor,
+	expect string) (string, int64, error) {
+
+	applied, err := c.svc.Reload(ctx, summary, by, expect)
 	return applied.RevisionID, applied.Epoch, err
 }
 
@@ -676,18 +686,82 @@ const (
 	StepInstallApp = "install_app"
 )
 
+// fleetCompany is what this surface describes and writes: the fleet's company,
+// the org it derives and the revision it is, from ONE read
+// ([configapi.Service.FleetCompany]).
+//
+// THE FLEET'S, NEVER WHAT THIS NODE RUNS. Every write here is built on the
+// fleet's revision and checked against it, and each requirement carries what
+// the document holds ([setup.Requirement.Stored]), which decides whether a
+// credential mints a pointer, writes through one, or is refused over a literal.
+// Read from the company this node's engine runs, the answer described one
+// revision and named another as its `if_match`: on a node that refused the
+// fleet's revision, or one mid-apply, a write decided against a slot the
+// running document left empty minted a pointer over the literal the fleet's
+// document held there — the very write `literal_in_config` exists to refuse.
+//
+// ONE READ FOR ALL THREE, because reads apart can straddle an activation: the
+// integrations from one revision and the roster or the revision id from the
+// next describe a company that never existed.
+type fleetCompany struct {
+	company  *config.Company
+	roster   *org.Organization
+	revision string
+}
+
+// readCompany reads the fleet's company ([fleetCompany]).
+//
+// ITS ORG AS THE ENGINE BUILDS IT from the revision it applies, and refused as
+// an error where it cannot be built: that revision is one no node of this
+// build runs either, and an answer about its seats would be a guess.
+func (s *Service) readCompany(ctx context.Context) (fleetCompany, error) {
+	company, revision, err := s.config.FleetCompany(ctx)
+	if err != nil {
+		return fleetCompany{}, err
+	}
+	roster, err := company.Organization()
+	if err != nil {
+		return fleetCompany{}, fmt.Errorf("setupapi: the fleet's revision %s derives no "+
+			"organization: %w", revision, err)
+	}
+	return fleetCompany{company: company, roster: roster, revision: revision}, nil
+}
+
+// companyFor is [Service.readCompany] for a request, answering it itself when
+// there is no company to describe: none activated (409, with hint), one this
+// node's keyring does not open, or a pointer the coordination store could not
+// answer for (503). ok is false when it answered.
+func (s *Service) companyFor(w http.ResponseWriter, r *http.Request, hint string) (fleetCompany, bool) {
+	fc, err := s.readCompany(r.Context())
+	switch {
+	case err == nil:
+		return fc, true
+	case errors.Is(err, configapi.ErrNoActiveRevision):
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision,
+			map[string]string{"hint": hint})
+	case configapi.RefuseUnreadable(w, err):
+	case errors.Is(err, coord.ErrUnavailable):
+		log.WarnContext(r.Context(), "setup_company_unavailable", "error", err.Error())
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, authz.RetryUndecidedSeconds,
+			httpjson.Detail{"reason": "the fleet's activation could not be read " +
+				"from the coordination store"})
+	default:
+		log.ErrorContext(r.Context(), "setup_company_unread", "error", err.Error())
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+	}
+	return fleetCompany{}, false
+}
+
 // list serves GET /setup/integrations.
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
-	company, roster := s.company()
-	if company == nil {
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision, map[string]string{
-			"hint": "no company configuration is active; import one before connecting an integration",
-		})
+	fc, ok := s.companyFor(w, r,
+		"no company configuration is active; import one before connecting an integration")
+	if !ok {
 		return
 	}
 	tools := make([]ToolState, 0, len(integration.Kinds))
 	for _, kind := range integration.Kinds {
-		state, ok := s.state(company, roster, kind)
+		state, ok := s.state(fc.company, fc.roster, kind)
 		if !ok {
 			continue
 		}
@@ -696,7 +770,8 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, map[string]any{
 		"tools": tools,
 		// THE REVISION THIS ANSWER DESCRIBES, so a caller can send it back
-		// as `if_match` on the write.
+		// as `if_match` on the write — the one its requirements were read
+		// from ([fleetCompany]).
 		//
 		// Every write here takes that precondition and `setup.ErrStaleBase`
 		// exists to refuse a submission built on a revision that has moved
@@ -704,7 +779,7 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 		// could not use either. The guard was unreachable from the surface
 		// it guards, which made the whole stale-base path dead code that
 		// looked like protection.
-		"revision_id": s.activeRevision(r.Context()),
+		"revision_id": fc.revision,
 		// THE ADDRESS EVERY INBOUND VENDOR IS BUILT ON, answered once
 		// rather than repeated in each tool: it is one setting, and a
 		// screen that asked for it seven times would be asking the
@@ -725,39 +800,14 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// activeRevision is the revision this node is serving, or empty when it
-// cannot say.
-//
-// EMPTY RATHER THAN AN ERROR, because it is a courtesy on a read: a caller
-// that gets one can hold the surface still with `if_match`, and one that does
-// not is exactly where every caller was before — writing unconditionally.
-// Failing the whole read over it would trade a working screen for a
-// precondition nobody asked for.
-func (s *Service) activeRevision(ctx context.Context) string {
-	if s.writer.Config == nil {
-		return ""
-	}
-	id, err := s.writer.Config.Current(ctx)
-	if err != nil {
-		log.WarnContext(ctx, "setup_revision_unreadable", "error", err,
-			"detail", "this answer carries no revision, so a client cannot "+
-				"send if_match with its write")
-		return ""
-	}
-	return id
-}
-
 // one serves GET /setup/integrations/{kind}.
 func (s *Service) one(w http.ResponseWriter, r *http.Request) {
 	kind := integration.Kind(r.PathValue("kind"))
-	company, roster := s.company()
-	if company == nil {
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision, map[string]string{
-			"hint": "no company configuration is active",
-		})
+	fc, ok := s.companyFor(w, r, "no company configuration is active")
+	if !ok {
 		return
 	}
-	state, ok := s.stateFor(r.Context(), company, roster, kind)
+	state, ok := s.stateFor(r.Context(), fc.company, fc.roster, kind)
 	if !ok {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownKind, map[string]string{
 			"detail": "this build serves no setup for " + string(kind),
@@ -1985,14 +2035,12 @@ func kindList() string {
 // inputs serves POST /setup/integrations/{kind}/inputs.
 func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	kind := integration.Kind(r.PathValue("kind"))
-	company, roster := s.company()
-	if company == nil {
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision, map[string]string{
-			"hint": "no company configuration is active",
-		})
+	fc, ok := s.companyFor(w, r, "no company configuration is active")
+	if !ok {
 		return
 	}
-	state, ok := s.stateFor(r.Context(), company, roster, kind)
+	company := fc.company
+	state, ok := s.stateFor(r.Context(), company, fc.roster, kind)
 	if !ok {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownKind, map[string]string{
 			"hint": "one of " + kindList(),
@@ -2101,9 +2149,17 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	summary := auditSummary(kind, req.Summary)
+	// ON THE REVISION THE REQUIREMENTS WERE READ FROM, where the caller named
+	// none: what each field holds decided the write, so it lands on that
+	// document or is refused as stale — never on one the pointer moved to
+	// between this read and the write.
+	expect := req.IfMatch
+	if expect == "" {
+		expect = fc.revision
+	}
 	result, err := s.writer.Write(r.Context(), against, setup.Submission{
 		Kind: kind, Values: values, Seat: req.Seat,
-		Summary: summary, By: attributionOf(r), Expect: req.IfMatch,
+		Summary: summary, By: attributionOf(r), Expect: expect,
 	})
 	if err != nil {
 		s.refuse(w, r, err, result)
@@ -2118,7 +2174,7 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 		"secrets", strings.Join(result.Secrets, ","), "reloaded", result.Reloaded,
 		"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
 
-	after, afterRoster := s.company()
+	after, afterErr := s.readCompany(r.Context())
 	// THE ADDRESS THIS SURFACE WAS SET UP AGAINST, for the surfaces whose
 	// address only a person can move.
 	//
@@ -2134,14 +2190,21 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	// no write API behind it, so it holds whatever address a person last
 	// typed, however much of Slack's provisioning a pass does converge. See
 	// [integration.Kind.Ingress].
-	if after != nil && kind.Ingress() == integration.IngressOperator {
+	if kind.Ingress() == integration.IngressOperator {
 		s.recordEndpoint(r.Context(), kind, s.webhookBase)
 	}
+	// THE STATE THE WRITE LEFT, read back as the fleet's company; where that
+	// read fails the write has still landed, so the answer carries the state
+	// it was decided on rather than refusing a write that happened.
 	fresh := state
-	if after != nil {
-		if refreshed, ok := s.state(after, afterRoster, kind); ok {
+	if afterErr == nil {
+		if refreshed, ok := s.state(after.company, after.roster, kind); ok {
 			fresh = withLoopFindings(refreshed, s.loopFindings(r.Context(), kind))
 		}
+	} else {
+		log.WarnContext(r.Context(), "setup_state_unread", "kind", kind,
+			"revision", result.RevisionID, "error", afterErr.Error(),
+			"detail", "the write landed; its answer carries the state read before it")
 	}
 	httpjson.Write(w, http.StatusCreated, map[string]any{
 		"revision_id": result.RevisionID, "epoch": result.Epoch,
@@ -2159,14 +2222,12 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 // unset` is the deliberate path, and the setup answer names what is orphaned.
 func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	kind := integration.Kind(r.PathValue("kind"))
-	company, roster := s.company()
-	if company == nil {
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision, map[string]string{
-			"hint": "no company configuration is active",
-		})
+	fc, ok := s.companyFor(w, r, "no company configuration is active")
+	if !ok {
 		return
 	}
-	state, ok := s.stateFor(r.Context(), company, roster, kind)
+	company := fc.company
+	state, ok := s.stateFor(r.Context(), company, fc.roster, kind)
 	if !ok {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownKind, map[string]string{
 			"hint": "one of " + kindList(),
@@ -2208,7 +2269,7 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	// request, the 202 path minutes later when the teardown finishes. See
 	// [Service.orphanedSecrets].
 	orphaned := orphanedSecrets(kind, state)
-	orphaned = slices.DeleteFunc(orphaned, s.stillUsedBySibling(r.Context(), kind, company, roster))
+	orphaned = slices.DeleteFunc(orphaned, s.stillUsedBySibling(r.Context(), kind, company, fc.roster))
 
 	// ASKED FOR, NOT DONE HERE. The block stays in the document until the
 	// third-party app teardown has run, because that block carries the credential
@@ -2293,6 +2354,25 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 	var invalid *configapi.ValidationError
 	var patchErr *configapi.PatchError
 	var managed *configapi.ManagedError
+	var unanswered *configapi.ActivationUnknownError
+	var seal *setup.SealError
+	// THE NAMES SEALED BEFORE THE WRITE FAILED, on every answer to a write
+	// that failed after its first credential was sealed — a lost race, a
+	// document the sealed values leave invalid, an unanswered store, a reload
+	// that could not read the pointer, a later credential the store did not
+	// take — and so on every arm below, empty for a refusal before anything
+	// was written ([setup.Result] carries them on each): the values are in the
+	// fleet's store whatever became of the document, a retry overwrites them
+	// by name, and the names are an operator's only record of values nothing
+	// may point at yet. Names, never values.
+	sealed := httpjson.Detail{}
+	if len(partial.Secrets) > 0 {
+		sealed["wrote_secrets"] = partial.Secrets
+	}
+	with := func(detail httpjson.Detail) httpjson.Detail {
+		maps.Copy(detail, sealed)
+		return detail
+	}
 	switch {
 	case errors.As(err, &managed):
 		configapi.RefuseManaged(w, managed)
@@ -2313,24 +2393,25 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 				"setup state and submit again",
 		})
 	case errors.As(err, &raced):
-		extra := map[string]string{
+		extra := with(httpjson.Detail{
 			"your_base": raced.Base,
 			"hint": "another write activated first; re-read the setup state and " +
 				"submit again",
-		}
+		})
 		if raced.Current != "" {
 			extra["current_revision_id"] = raced.Current
 		}
-		if raced.Stored != "" {
-			extra["stored_revision_id"] = raced.Stored
-		}
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeRevisionAdvanced, extra)
+		// THE REVISION IT KEPT AND THE NODE HOLDING IT, both or neither, as
+		// the config surface names them: a revision that lost its activation
+		// is in the history of the node that stored it and of no other.
+		maps.Copy(extra, configapi.KeptRevision(raced))
+		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeRevisionAdvanced, extra)
 	case errors.As(err, &invalid):
 		// THE CONFIG SURFACE'S OWN STRUCTURE, located problems and the
 		// derived hierarchy, so a screen placing a refusal on the field it
 		// is about reads one shape whichever surface refused. The words
 		// around it are this surface's.
-		fields := configapi.RefusalFields(err)
+		fields := with(configapi.RefusalFields(err))
 		fields["detail"] = invalid.Err.Error()
 		fields["hint"] = "the values are checked as the whole company document they " +
 			"produce, so a field that is fine on its own is still refused " +
@@ -2340,20 +2421,73 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 		// validation_error rather than the config surface's invalid_patch:
 		// the caller here submitted values, not a patch, and this surface
 		// built the patch they became.
-		fields := configapi.RefusalFields(err)
+		fields := with(configapi.RefusalFields(err))
 		fields["detail"] = patchErr.Err.Error()
 		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeValidationError, fields)
 	case errors.Is(err, configapi.ErrNoActiveRevision):
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision, map[string]string{
+		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeNoActiveRevision, with(httpjson.Detail{
 			"hint": "import a company configuration first",
-		})
+		}))
+	case errors.As(err, &unanswered):
+		// STORED, AND THE ACTIVATION UNANSWERED: the config surface's own
+		// unknown outcome, never "nothing was written" — the document may
+		// already be the company.
+		log.WarnContext(r.Context(), "setup_write_unknown", "revision", unanswered.Stored,
+			"error", err.Error(), "secrets", strings.Join(partial.Secrets, ","))
+		configapi.RefuseActivationUnknown(w, unanswered, sealed)
+	case errors.As(err, &seal) && errors.Is(seal.Err, coord.ErrUnavailable):
+		// A CREDENTIAL'S OWN WRITE UNANSWERED, ahead of the arm below, which
+		// it would otherwise reach: the fleet's secret store is a
+		// coordination write, so it fails with the error a pointer read
+		// fails with, and that arm said "the fleet's activation could not
+		// be read" about a write that may have landed. The document was not
+		// touched — nothing after a failed seal runs — so the submission sent
+		// again writes every credential again by name, this one included,
+		// and is retryable within the same election.
+		//
+		// NAMED AS A FIELD, `unanswered_secret`, beside `wrote_secrets`, and
+		// not only in the reason: a client branches on fields, and a 503
+		// without `outcome` otherwise reads as one that wrote nothing — a
+		// rotation recorded as dropped while the store may hold the new
+		// value, which every node then reads at its next activation. No
+		// `outcome`, because the remedy is the plain 503's, sending it again:
+		// the one write whose outcome is unknown is a credential's, which the
+		// resend overwrites by name.
+		log.WarnContext(r.Context(), "setup_seal_unknown", "secret", seal.Name,
+			"error", err.Error(), "secrets", strings.Join(partial.Secrets, ","))
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, authz.RetryUndecidedSeconds,
+			with(httpjson.Detail{
+				"unanswered_secret": seal.Name,
+				"reason": "the credential " + seal.Name + " was written to the fleet's " +
+					"secret store and the store did not answer, so whether it holds " +
+					"the new value is unknown",
+				"hint": "the company document was not changed; send the submission " +
+					"again once the store answers, which writes every credential in " +
+					"it again by name",
+			}))
+	case errors.Is(err, coord.ErrUnavailable):
+		// THE FLEET'S POINTER COULD NOT BE READ, which every write here is
+		// built on and checked against: the document was not changed, and it
+		// is retryable within a raft election — the config surface's own 503,
+		// so a screen reads one answer for one state whichever surface it
+		// wrote through, rather than a 500 here.
+		//
+		// NOT "NOTHING WAS WRITTEN": a read that failed after the credentials
+		// were sealed leaves them in the store, which the answer and the log
+		// name, as they are named on a write that lands.
+		log.WarnContext(r.Context(), "setup_write_unavailable", "error", err.Error(),
+			"secrets", strings.Join(partial.Secrets, ","))
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, authz.RetryUndecidedSeconds,
+			with(httpjson.Detail{"reason": "the fleet's activation could not be read " +
+				"from the coordination store"}))
 	default:
 		// THE DETAIL GOES TO THE LOG, never to the caller: a third-party app's own
 		// refusal can quote the config value it was given, which on a
 		// company holding a literal would echo the credential.
 		log.ErrorContext(r.Context(), "setup_write_failed",
 			"error", err.Error(), "secrets", strings.Join(partial.Secrets, ","))
-		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+		httpjson.FailWithFields(w, http.StatusInternalServerError, httpjson.CodeInternalError,
+			with(httpjson.Detail{}))
 	}
 }
 

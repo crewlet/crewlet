@@ -131,7 +131,8 @@ one JSON object, and it always has the same three parts in the same places:
   under, on every surface that writes through a state log (`/worklet`,
   `/doclet/pages`, `/iam`, `/auth`); a `503` without `outcome` is a refusal, and
   what it refused was not written — a gesture refused partway lists what did
-  land before it as `landed`. The two send a client opposite ways — the
+  land before it as `landed`, and a `/setup` submission the credentials it
+  sealed first (below). The two send a client opposite ways — the
   unknown is retried under the **same** `op_id`, never a fresh one, which
   would make the change twice if the first landed — so branch on the field
   rather than on the sentence. The routes that read no `Idempotency-Key` — a
@@ -143,6 +144,17 @@ one JSON object, and it always has the same three parts in the same places:
   the same way until the change reaches this node, so send it, with the same
   `op_id`, through another node. `outcome`, `op_id` and `unvouched` are the
   answer's own on that `503` and are never displaced by a route's detail.
+  The config surface and a [`/setup`](#supplying-them) submission carry no
+  operation, so their unknown has no `op_id`: it names the revision the write
+  stored and the `node` whose history alone holds it, and the pointer says
+  whether it landed — it is not sent again either (see [`/config`'s status
+  codes](#status-codes)). A `/setup` submission's `503` **without** `outcome`
+  left the company document as it was, and is still not a write that wrote
+  nothing: it names the credentials it sealed before the refusal as
+  `wrote_secrets`, and the one whose own write the store did not answer — which
+  may have landed — as `unanswered_secret`. Its remedy is the plain `503`'s all
+  the same, sending the submission again as it stands, because that writes every
+  credential in it again by name.
 - **A `500 internal_error` carries no reason.** Its sentence says the reason
   is in this node's log, and that is where it is: a fault's own words are a
   store's or a driver's — a database path, a connection string — and holding
@@ -205,7 +217,7 @@ refused `400 non_canonical_path` as always.
 | `phase` | `/health` | What the node is doing |
 |---|---|---|
 | `recovering` | `503` | Opening and recovering what it holds itself: its own store and that release's schema migrations, the embedded broker's file store and listeners, JetStream catching up with its peers — or, on a node without `data`, its leaf link to a member — the streams and buckets it provisions, the batches of a stateless node's events its own event log left unsettled, the replicated estate and its state logs, and a joining node's snapshot. It takes as long as the store is large — and, on a data node of a fleet whose rows the logs can no longer bring level, as long as fetching a peer's snapshot of the whole replicated estate takes, which `stream.tracker_retention.rejoin_window` budgets and `crewlet retention status` projects; a lone data node never fetches one. The deployment bounds it with a startup probe: see [Sizing the startup probe](../guides/deployment.md#sizing-the-startup-probe). A join logs `statelog_join_progress` every ten seconds while it transfers. It ends with `engine_recovered` in the log. Applying the state logs is not part of it: that catches up in the background from then on, and what waits for it is the node's first seat, never `/health`. |
-| `preparing` | `200` | Bringing up what its company configures: the snapshot of the company's secrets its `${VAR}` references resolve from, the company built from its document, its shared MCP servers, its sandboxes, Worklet and Doclet, its coding CLIs' credential bundles, the first apply of its active revision, and the dashboard's projection. None of it holds a probe. A part that waits on something else is bounded by its own setting (a tool server by its `startup_timeout_seconds`), but the first apply has no deadline beyond its parts', so a part that never returns leaves the node here, with `/ready` naming `starting`, and nothing restarts it: watch for a node that stays unready (see [Sizing the startup probe](../guides/deployment.md#sizing-the-startup-probe)). So does a secret store that does not answer: the node builds no company from the environment alone, and asks again, logging `secret_store_unreadable`, until the store answers. A value its keyring cannot open ends the boot instead, naming the secret, since no wait changes that answer. |
+| `preparing` | `200` | Bringing up what its company configures: the snapshot of the company's secrets its `${VAR}` references resolve from, the company built from its document, its shared MCP servers, its sandboxes, Worklet and Doclet, its coding CLIs' credential bundles, the first apply of the revision it boots on, and the dashboard's projection. None of it holds a probe. A part that waits on something else is bounded by its own setting (a tool server by its `startup_timeout_seconds`), but the first apply has no deadline beyond its parts', so a part that never returns leaves the node here, with `/ready` naming `starting`, and nothing restarts it: watch for a node that stays unready (see [Sizing the startup probe](../guides/deployment.md#sizing-the-startup-probe)). So does a secret store that does not answer: the node builds no company from the environment alone, and asks again, logging `secret_store_unreadable`, until the store answers. A value its keyring cannot open ends the boot instead, naming the secret, since no wait changes that answer. |
 
 Every field of that body is a field of [the health envelope](#the-health-envelope)
 under the same name, so a script reading `/health` reads one shape whichever
@@ -322,7 +334,7 @@ node means nothing was done.
 | `GET` | `/tokens/series` | The same spend **with a time axis** — one bucket per company day or ISO week, split into bands (see [below](#get-tokensseries)) |
 | `GET` | `/agents/activity` | Every seat's turns over a window of company days — counts, the first-pass rate over reviewed turns, turn-duration quantiles and a day-by-day series (see [`seat_activity`](#queries)) |
 | `GET` | `/schedules` | Configured role/unit schedules + next-run + recent dispatch ledger |
-| `GET` | `/fleet` | Every live node, its roles and labels, seat ownership, singleton duties, per-node config epoch, and where the company's files are kept with what the object store's collector last found. **Always needs a credential carrying `admin`** — a signed-in session or a bearer, like every route here — because it describes the deployment rather than the company, and the dashboard locks the screen that draws it (see [below](#get-fleet)) |
+| `GET` | `/fleet` | Every live node, its roles and labels, seat ownership, singleton duties, the fleet's activation and each node's config record — the revision it last attempted, how that went and the revision it runs — and where the company's files are kept with what the object store's collector last found. **Always needs a credential carrying `admin`** — a signed-in session or a bearer, like every route here — because it describes the deployment rather than the company, and the dashboard locks the screen that draws it (see [below](#get-fleet)) |
 | `GET` | `/sandbox-runs` | Every detached [sandbox](../concepts/code-sandbox.md) run the engine still holds, read from the durable run record in the [coordination store](../concepts/coordination.md) (see [below](#get-sandbox-runs)) |
 | `GET` | `/budgets` | Token caps, the durable shared counter they are enforced against — per calendar window — and which scopes are being refused (see [below](#get-budgets)) |
 | `POST` | `/backup` | Copy this node's store and stream estate into `?dir=` **on the engine's host**. **Takes `admin`** — it writes every credential the company holds to a path the caller names (see [below](#post-backup)) |
@@ -1600,12 +1612,40 @@ manages the document and what to do:
 one is the managing system's to hold, not the caller's to retry with. See
 [Managed configuration](../concepts/configuration.md#managed-configuration).
 
+**The active revision is the fleet's, on every node.** Every answer here —
+`GET /config` and its `ETag`, the revision list's `is_active`, a diff against
+`active`, the references, the charter and the entity reads — and the base every
+write is built on is the revision the fleet's activation pointer names. That is
+what this section calls the **active revision**, and every node answers it
+alike, whatever that node runs: one still applying it, or one that refused it
+and runs the revision before, answers the fleet's revision all the same. So the
+read after a write answers the write on every node, and a write sent to any node
+is built on what the fleet runs. What each node runs is a separate fact, which
+[`GET /fleet`](#get-fleet) reports per node as `config_serving_revision_id`. A
+node that has not reconciled since the pointer moved holds no copy of the
+revision yet and answers it from the body the pointer carries: no read writes
+anything, and the node's next reconcile keeps the copy. With no pointer at all —
+on a new fleet, or one whose pointer was lost — the active revision is the
+company this node knows (see [Concurrent writes](#concurrent-writes)).
+
+**A coordination store that cannot be read is `503 unavailable`.** Every write,
+and every read but a diff between two revisions this node holds, both named by
+id, reads the pointer, so while it cannot be read the request answers `503
+unavailable` with `Retry-After: 2` and a `reason` saying the fleet's activation
+could not be read — never an answer from this node's own store, whose `ETag`
+every write would refuse, and never "nothing is configured", which would send a
+create-only write to replace the running company. A coordination store electing
+a leader is out for a few seconds; send the request again. That holds for a
+`503` **without** an `outcome` field only: a write that had already stored its
+revision when the store stopped answering is `503` with `"outcome": "unknown"`,
+which is not sent again — see [Status codes](#status-codes).
+
 **Read-only:**
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/config` | Active revision, redacted (full JSON; `?format=yaml` for YAML) |
-| `GET` | `/config/revisions` | Paginated history (newest first), metadata only |
+| `GET` | `/config` | The active revision — the fleet's — redacted (full JSON; `?format=yaml` for YAML) |
+| `GET` | `/config/revisions` | Paginated history of the revisions this node holds (newest first), metadata only; the fleet's revision is marked `is_active` |
 | `GET` | `/config/revisions/{id}` | Single revision including its payload |
 | `GET` | `/config/revisions/{id}/diff?against=<uuid\|active>` | Structural diff |
 | `GET` | `/config/references` | Every `${VAR}` the active document names, and every variable it reads without naming it, each with the config path of the field that reads it, plus the `revision` they were read from |
@@ -1652,7 +1692,7 @@ exactly when the revision does.
 | `PUT` | `/config` | Replace the active revision. The body is JSON or YAML, read the same way whatever `Content-Type` says. Requires a revision summary: an `X-Summary` header, **or** a top-level `_summary` key in the body. Conditional via `If-Match` / `If-None-Match`, see [below](#conditional-requests). `?dry_run=true` checks it and stores nothing, see [Dry runs](#dry-runs). `?import=true` writes it as an import of a restored file, see [The charter](#the-charter-mission-vision-and-policies) |
 | `OPTIONS` | `/config` | `204` with `Allow` and `Accept-Patch: application/merge-patch+json` |
 | `PATCH` | `/config` | Merge one or more sections into the active revision, see [below](#patch-config--the-narrower-write). `?dry_run=true` checks it and stores nothing |
-| `POST` | `/config/reload` | Re-publish the active document unchanged, so every node re-applies and re-reads the secret store. See [below](#post-configreload-after-a-secret-changes) |
+| `POST` | `/config/reload` | Re-publish the fleet's document unchanged, so every node re-applies and re-reads the secret store. See [below](#post-configreload-after-a-secret-changes) |
 | `POST` | `/config/revisions/{id}/revert` | Create a new active revision whose payload equals revision `{id}` |
 | `PUT` | `/config/charter` | Replace the mission, vision and policies, as a new revision of the whole document. Requires `If-Match`. See [The charter](#the-charter-mission-vision-and-policies) |
 
@@ -1836,7 +1876,7 @@ A valid check answers `200`:
 
 - **`dry_run` is read before anything else**, and takes exactly `true` or `false`, or nothing. Any other value (`1`, `yes`, an empty value, the parameter twice) is `400 invalid_query`: the two readings of a guess differ by whether the fleet's configuration changes.
 - **No summary is needed**, because nothing is stored to record one on. A `_summary` key in the body is still lifted out, so the document checked is the one the write reads.
-- **`base_revision_id`** is the revision the check was built on, and `""` when nothing is active. A client whose draft was built on a different revision learns that the configuration moved without a second request.
+- **`base_revision_id`** is the fleet's revision the check was built on, and `""` when nothing is active. A client whose draft was built on a different revision learns that the configuration moved without a second request.
 - **Each warning says whether this write introduces it.** A check's `warnings` are the [write's](#what-a-write-answers), judged on the whole document it would store, so they include every advisory the active revision already carries. Each also has `"introduced": true` when the active revision does not carry it (compared by its kind, seat, unit, reference and message, never by its `path`, which a write moves by adding a seat ahead of it), and `false` when it does. Every warning of a check made with nothing active is introduced. The Dashboard Assistant shows a change's introduced warnings on its proposal card and leaves the rest off, because a warning the company already had is not news about the change.
 - **Every other refusal is the write's, in the write's order**: `409 no_active_revision` for a patch with nothing to patch, `409 revision_advanced` for a stale `If-Match`, `412 already_configured` for `If-None-Match: *` on a configured company, and `400` with [problems](#refusals-carry-located-problems) for a document the write would refuse.
 - **A dry run is decided as the write, without the step-up** (ADR-0055): the same permission, a [lead's](#a-lead-edits-their-own-team) included, but not the recent proof, because it changes nothing. A person whose sign-in is old checks a change and is asked to confirm it is them only to make it. The Dashboard Assistant's read access sends a dry run to these routes, and to no other, which is how it checks a change before the person is shown it.
@@ -1879,19 +1919,19 @@ The [`/setup`](#setting-an-integration-up) submissions that change the document 
 
 #### Conditional requests
 
-`GET /config` and every entity `GET` return an **`ETag`** — the active revision id, quoted. It is the token the write side takes, so a read-modify-write needs no second request to find it.
+`GET /config` and every entity `GET` return an **`ETag`** — the fleet's revision id, quoted, the same on every node while the fleet has an activation. It is the token the write side takes, so a read-modify-write needs no second request to find it, and a tag read from one node is good on any other, one that refused the fleet's revision included.
 
 | Header | On | Meaning |
 |--------|-----|---------|
-| `If-None-Match: <etag>` | `GET` | `304 Not Modified` when the document has not moved |
-| `If-Match: <etag>` | writes | Proceed only against that revision; `409 revision_advanced` otherwise |
-| `If-Match: *` | writes | Proceed only if *something* is active; `412` on an unconfigured node |
-| `If-None-Match: *` | `/config` writes | Proceed only if **nothing** is configured, on this node **or anywhere in the fleet**; `412 already_configured` otherwise, naming the revision it lost to |
+| `If-None-Match: <etag>` | `GET` | `304 Not Modified` when the fleet's revision has not moved |
+| `If-Match: <etag>` | writes | Proceed only against that revision; `409 revision_advanced` otherwise, naming the active one as `current_revision_id` beside `your_base` |
+| `If-Match: *` | writes | Proceed only if *something* is active; `412 no_active_revision` when nothing is configured |
+| `If-None-Match: *` | `/config` writes | Proceed only if **nothing** is configured: the fleet has no activation, and this node knows no company either. `412 already_configured` otherwise, naming the revision it lost to — on a node that joined the fleet and has not reconciled yet too, since it answers the pointer like every other |
 | `If-None-Match: *` | entity `PUT` | Proceed only if **that entity** does not exist: the create-only write that adds an MCP server or an LLM provider. `412 entity_exists` when one does; `400 conflicting_preconditions` beside an `If-Match` |
 
-The bare revision id is accepted wherever an `ETag` is, unquoted, because this surface shipped that form before it had entity tags. `If-None-Match: *` is the only create-only precondition — about the company at `/config`, about the entity at an entity's own address — and every `If-Match` value other than `*` is an entity tag, matched against the active revision and nothing else.
+The bare revision id is accepted wherever an `ETag` is, unquoted, because this surface shipped that form before it had entity tags. `If-None-Match: *` is the only create-only precondition — about the company at `/config`, about the entity at an entity's own address — and every `If-Match` value other than `*` is an entity tag, matched against the fleet's revision and nothing else.
 
-Independently of any header, every write names the revision it derived from as the new revision's parent, and the activation is a compare-and-set on that parent — so a lost update is refused **whether or not** the caller sent a precondition. See [Concurrent writes](#concurrent-writes).
+Independently of any header, every write names the revision it derived from as the new revision's parent, and the activation is a compare-and-set on that parent — or, with no pointer, a create-only one — so a lost update is refused **whether or not** the caller sent a precondition. See [Concurrent writes](#concurrent-writes).
 
 **Nothing under `/config` is cacheable.** Every response the surface writes carries `Cache-Control: no-store`: reads, `304`s, writes, refusals and error bodies, and the `404` and `405` it answers for a path or method it does not serve. A body here is the company's settings: which integrations are wired and where, and the `${VAR}` name behind every credential, and a stored copy would outlive the session and the token that read it. Revalidation still works, because it never depended on a cache: a client that wants a `304` sends `If-None-Match` with the `ETag` it kept.
 
@@ -2093,8 +2133,8 @@ Four rules follow from that:
   changing a seat's display name is an ordinary edit. A seat's handle and a
   unit's key are permanent: a different one is a removal and a creation, made
   through `PUT /config`, where what has to move with it is visible.
-- **The same summary and `If-Match` rules apply**, and a node with no
-  active revision answers `409 no_active_revision` — there is nothing to splice
+- **The same summary and `If-Match` rules apply**, and with nothing
+  configured the write answers `409 no_active_revision` — there is nothing to splice
   into, and building a company out of one seat is not what this route is for.
 
 ### `/secrets/*` — the company's credentials (auth-gated)
@@ -2201,15 +2241,14 @@ command's own `source`.
 
 ### Concurrent writes
 
-**There is no leader** — any node's API can write the config, and the coordination KV is the shared truth. Writes are **not** serialized by a lock, but a concurrent one is *detected*: the activation is a compare-and-set.
+**There is no leader** — any node's API can write the config, and the activation pointer in the coordination KV is the shared truth. Writes are **not** serialized by a lock, but a concurrent one is *detected*: the activation is a compare-and-set.
 
-- Every write on this surface reads the active revision, derives from it, and names it as the new revision's parent. That parent is what the flip compares against, so a write that lost is refused with **`409 revision_advanced`** — **whether or not the caller sent `If-Match`**, because the server knows what it read.
+- Every write on this surface reads the fleet's revision from the pointer, derives from it, and names it as the new revision's parent. The activation lands only while the pointer still names that parent, so a write that lost is refused with **`409 revision_advanced`** — **whether or not the caller sent `If-Match`**, because the server knows what it read. A pointer removed since the read — deleted, or lost with a rebuilt coordination store — refuses it the same way: what the write was built on is gone, so read `/config` again and rebuild the edit.
 - `If-Match: <revision_id>` is still worth sending: it is checked before any work is done, so a caller editing a revision that has already moved is told so without a document being built, validated and stored first.
-- A losing write's revision **is kept**, and the `409` (or `412`) names it as `stored_revision_id`. It is stored in the history, valid and inert, so the operator's work survives as history they can revert to. Inert means on the node that served the write too: a revision becomes that node's active one only once the fleet has taken it, so the node goes on serving what it served, never offers the loser to the fleet at a restart, and adopts whichever revision actually won. Unwinding it instead would mean a second write that can itself fail, on the path where something has already gone wrong.
-- **A node's active revision follows the fleet.** Once a node applies the fleet's epoch, the fleet's revision is its active one, which is what its `GET /config` serves and what it boots on; its reconciler checks that on every tick and corrects a copy that says otherwise.
-- **An unset pointer is not a race.** A node's own store can hold an active revision while the coordination store holds no pointer — one lost under the running node, such as an external NATS cluster rebuilt or its bucket removed, which the node's next boot publishes again from its own copy. Every write on that node names its revision as the parent, and refusing there would fail each of them until that boot, on a deployment that had done nothing wrong.
-- **A write built on nothing is a create.** A node whose own store is empty answers `404 no_active_revision` on `GET /config`, and it reaches that state while its fleet runs a company: it joined and has not reconciled yet, or its best-effort copy of the fleet's pointer failed. A write there was derived from nothing, so its activation is a **create-only compare-and-set**: it lands only while the fleet has no activation. `If-None-Match: *` also consults the fleet's pointer before anything is built, and answers `412 already_configured` naming the revision the fleet is on. Without both, the dashboard's create flow on such a node replaced the running company outright, which renames it, changes every seat id derived from the name and orphans all of their memory.
-- The **boot publish** is deliberately unconditional. Two nodes starting at once may both offer the revision they hold; both are legitimate, last-write-wins is the right answer, and every node converges. It is the *edit* path that must not lose a write.
+- A losing write's revision **is kept**, and the `409` (or `412`) names it as `stored_revision_id`, beside the **`node`** that served the write. It is stored in that node's history alone, valid and inert, so the operator's work survives as history they can revert to — on that node: only an activation naming it would have carried it to the others, so `GET /config/revisions/{id}/diff` and `POST /config/revisions/{id}/revert` reach it there, by its own address where a load balancer or a shared Service fronts several, and any other node answers `404` for it. Inert on every node: a write stores its revision as history and moves the pointer, and no node boots on a revision until its own engine has applied it, so nothing offers the loser to the fleet at a restart. Unwinding it instead would mean a second write that can itself fail, on the path where something has already gone wrong.
+- **What `/config` answers and what a node runs are two facts.** `/config` answers the fleet's revision on every node. A node runs the revision its engine last applied, which trails the pointer by an apply and stays behind it on a node that refused the fleet's revision — a missing environment variable, an MCP binary its image lacks. Such a node keeps running the revision it served, and if it restarts comes back on the revision its boot row names; its row in [`GET /fleet`](#get-fleet) names the revision it refused, the epoch it last applied (`config_applied_epoch`), the revision it runs (`config_serving_revision_id`) and the one it would boot on (`config_boot_revision_id`) — the same revision as the one it runs, except while a write to its boot row is being retried, and absent on a node whose own database is discarded at every start (`store.scratch`, so every node without the `data` role), which comes back on nothing and applies the fleet's revision from scratch. Every write through it is still built on the fleet's revision and lands, so the write that corrects the refused revision can be sent to any node, that one included.
+- **With no pointer, every write is a create.** When the coordination store holds no activation — a new fleet, or one whose pointer was lost under it, such as an external NATS cluster rebuilt or its bucket removed — `/config` answers the company this node knows: a change an offline command made on the fleet's revision as this node last saw it, or else that revision, refused here or not, or else the revision it boots on (see [Control Plane](../concepts/control-plane.md#a-nodes-own-store-keeps-three-facts-apart)); `404 no_active_revision` when it knows none. Every write is then a **create-only compare-and-set**: it lands only while the fleet still has no activation, and the first to land is the fleet's pointer again. A node that joined a running fleet and has not reconciled yet reads the same pointer every node does, so it answers the fleet's company, and `If-None-Match: *` there is `412 already_configured`. A write that replaced a running company would rename it, change every seat id derived from the name and orphan all of their memory.
+- **The boot publish is a compare-and-set too.** A starting node publishes at most one revision: a change an offline command made on it (`crewlet config import`, `activate` or `rekey` while its engine was stopped) only while the fleet still runs the revision that change was built on, expecting the very activation of it the start read — or the earlier offline change it replaced, where a start published that one and could not confirm it — or, with no pointer, when that is the revision this node last saw the fleet run; otherwise, over a lost pointer, or a pointer another node **restored** naming a revision this node holds that was activated before the one it last saw, the fleet's revision it last saw (having seen none, the one it boots on). A pointer somebody chose is the company however old its instant reads, and no boot replaces it. One that loses re-reads the pointer and decides again, so a write that lands while a node starts is never replaced. An offline change the fleet has moved on from is withheld — never published over the fleet — and the node logs `offline_revision_not_published` at warn: at every start while the change is what it boots on, and once more when it applies the fleet's revision, which replaces the change as what it boots on and keeps it as history. Its hint names the change rather than the document: `GET /config/revisions/{id}/diff?against=<built_on>` on that node shows what the offline change did, to make again on the fleet's document; `POST /config/revisions/{id}/revert` there puts it up as it stands, undoing what the fleet changed since. See [What a booting node publishes](../concepts/control-plane.md#what-a-booting-node-publishes). The one unconditional activation is `crewlet run -import-company`, which replaces whatever the fleet runs with its file.
 
 On a `409`, re-read `/config` and send the edit again.
 
@@ -2220,13 +2259,13 @@ On a `409`, re-read `/config` and send the edit again.
 - `400 Bad Request`: `invalid_body`, `invalid_patch` or `validation_error`, each with `detail` (the field path and what to change) and [`problems`](#refusals-carry-located-problems); `summary_required` when a write has neither an `X-Summary` header nor a `_summary` body key — asked last, once the write is admitted and its document checked, so a caller who may not make the change is answered the `403` first; `invalid_query` when `dry_run` is anything but `true` or `false`; `identity_mismatch` when a per-entity body renames what the path addresses
 - `401 Unauthorized`: missing or invalid bearer token — `invalid_token`, in the same [refusal envelope](#every-refusal-is-one-envelope) every route answers with, written by the guard itself before any route runs
 - `403 Forbidden`: `unauthorized` when the credential holds neither the grant nor, on the org chart, the lead relation — with a `refused` list for [a lead's write](#a-lead-edits-their-own-team) — and `step_up_required` for a write whose proof of identity is older than `step_up`; and `config_managed` when `api.auth.company_writers` names the document's writers and this credential is not one of them — a person's session, a machine token and a lead's write among them — with `managed_by`, `detail` and `hint`, a write and its dry run alike, never a read or a reload, and asked before the body is read (see [Managed configuration](../concepts/configuration.md#managed-configuration))
-- `404 Not Found`: a revision that is not there, `no_active_revision` on a read before the first write, `no_such_entity` on a per-entity read or write naming an id the active revision does not carry (of a seat or a unit, told only to `admin`, and anybody else is refused `403` as for one outside their team), or `no_route` for a path under `/config` this surface does not serve
+- `404 Not Found`: a revision that is not there, `no_active_revision` on a read when nothing is configured (the fleet has no activation and this node knows no company), `no_such_entity` on a per-entity read or write naming an id the active revision does not carry (of a seat or a unit, told only to `admin`, and anybody else is refused `403` as for one outside their team), or `no_route` for a path under `/config` this surface does not serve
 - `405 Method Not Allowed`: `method_not_allowed` for a `/config` path under a method it does not take, with `Allow`
-- `409 Conflict`: `revision_advanced` (a stale `If-Match`, or a race with a concurrent writer) or `no_active_revision` (a `PATCH`, a charter write or a per-entity write on an unconfigured node, or a reload)
-- `412 Precondition Failed`: `already_configured` when `If-None-Match: *` meets an active revision, `no_active_revision` when `If-Match` names a revision and none is active, or `version_moved` when a charter write's or a per-entity write's `If-Match` names a charter or an entity that has changed, carrying it now as `current` and its `etag`
+- `409 Conflict`: `revision_advanced` (a stale `If-Match`, or a race with a concurrent writer or with the pointer's removal) or `no_active_revision` (a `PATCH`, a charter write, a per-entity write or a reload when nothing is configured). A `revision_advanced` from a write that lost at its activation names the revision it kept as `stored_revision_id` and the node holding it as `node` — see [Concurrent writes](#concurrent-writes)
+- `412 Precondition Failed`: `already_configured` when `If-None-Match: *` meets an active revision — naming, for a create-only write that lost at its activation, the revision it kept and its `node` as the `409` does — `no_active_revision` when `If-Match` names a revision and none is active, or `version_moved` when a charter write's or a per-entity write's `If-Match` names a charter or an entity that has changed, carrying it now as `current` and its `etag`
 - `428 Precondition Required`: `bad_if_match` for a charter write with no `If-Match`
 - `415 Unsupported Media Type`: `unsupported_patch_media_type` when a `PATCH` body is a patch format other than a JSON Merge Patch, with `Accept-Patch`
-- `503 Service Unavailable`: `draining` when the node has been told to stop, with a `Retry-After` — see [During a drain](#during-a-drain)
+- `503 Service Unavailable`: `unavailable` when the coordination store cannot be read, so the fleet's revision cannot be either — on every write and on every read that needs it — with `Retry-After: 2` and a `reason`; and `unavailable` with **`"outcome": "unknown"`** when a write stored its revision and the coordination store did not answer the activation, which may have landed: the body names the stored revision as `stored_revision_id`, the revision the write was built on as `your_base` and the node that stored it as `node`, and carries no `op_id`, because what says whether it landed is the pointer — `GET /config` names the stored revision or not once the store answers. Sending the write again makes another revision, over this one if it landed. If it did not, the stored revision is in the history of that node alone — only an activation naming it carries it to the others — so `GET /config/revisions/{id}/diff` shows it and `POST /config/revisions/{id}/revert` makes it the company **on that node**, reached by its own address where a load balancer or a shared Service fronts several; any other node answers `404` for it. Every write here can answer it — `PUT`, `PATCH`, a per-entity or charter write, a reload and a revert — and so can a [`/setup`](#supplying-them) submission. `draining` when the node has been told to stop, with a `Retry-After` — see [During a drain](#during-a-drain)
 
 ### The `config_audit` query
 
@@ -2261,6 +2300,29 @@ Response (`200 OK`):
 
 Payloads are NOT included — fetch a specific revision via `GET /config/revisions/{id}` for the full JSON.
 
+The records are the revisions **this node** holds, and two fields are about the
+fleet rather than about the revision:
+
+- **`is_active`** marks the fleet's revision, the one the activation pointer
+  names — the same row on every node that holds it, whatever the node answering
+  runs. A node that refused the fleet's revision marks the fleet's, not the one
+  it still runs; what each node runs is [`GET /fleet`](#get-fleet)'s.
+- **`activated_at`** is the latest activation of the revision this node has
+  met, on every row alike, the revision it boots on included: raised by each
+  activation of it this node's reconciler sees on the pointer and by each the
+  node publishes itself, and never lowered. It is what the [retention
+  sweep](../guides/retention.md#the-configuration-archive-and-the-one-thing-a-purge-cannot-reach)
+  dates an old revision activated again by. It is **not** the activation a node
+  applied: a node that refused a re-activation of the revision it runs — the
+  [rotation](../concepts/control-plane.md#rotation) gesture, on a node that lost
+  the credential — reports the fleet's newer instant all the same. What each
+  node runs is [`GET /fleet`](#get-fleet)'s, and the instant its engine applied
+  is the store's `served_at`, which this answer does not carry (see [A node's
+  own store keeps three facts
+  apart](../concepts/control-plane.md#a-nodes-own-store-keeps-three-facts-apart)).
+  Absent on a revision nothing has activated, such as one that lost a race or
+  an offline import not yet published.
+
 `created_by` is the revision's author, `created_by_kind` its kind and
 `operator_id` the credential it was written through — see [who a write is
 attributed to](#who-a-write-is-attributed-to) — on this answer, on
@@ -2278,15 +2340,15 @@ one vocabulary across every trail the engine keeps (`agent`, `human`,
 revision and every host-side CLI write. Read the kind rather than inferring
 it from the label: the name spaces overlap. A revision reads the same on every
 node: the fleet's activation pointer carries its author, kind and credential
-beside its source and creation instant, so a node adopting it records the
-origin's rather than its own (see [Control Plane](../concepts/control-plane.md#the-design)).
+beside its source and creation instant, so a node keeping a copy of it records
+the origin's rather than its own (see [Control Plane](../concepts/control-plane.md#the-design)).
 A kind a newer engine adds arrives as itself.
 
 ### `GET /config/revisions/{id}/diff`
 
 A **structural** diff of two revisions — one entry per path that moved, with
 the value on each side. `?against=` names the other side and defaults to the
-active revision; the direction reads as "what `against` became", so a bare
+fleet's revision (`active`); the direction reads as "what `against` became", so a bare
 call answers "what would reverting to this change". The same answer serves the
 dashboard as the `config_diff` query.
 
@@ -2326,8 +2388,10 @@ and prints every change.
 #### `POST /config/reload`: after a secret changes
 
 Takes no body and changes nothing. It stores a **new revision carrying the
-same document** and activates it, which advances the epoch and makes every
-node apply again.
+fleet's document** and activates it over the fleet's revision, which advances
+the epoch and makes every node apply again. Whichever node it is sent to, it
+re-publishes the fleet's revision — on a node that refused that revision too,
+never the one the node still runs.
 
 That is the gesture a rotated credential needs, and no other route performs
 it. A secret lives in the company config as a `${VAR}` pointer, resolved when
@@ -2345,8 +2409,9 @@ records `reload configuration`.
 
 Answers `201` with the revision, its epoch and its warnings (see
 [What a write answers](#what-a-write-answers)),
-`409 no_active_revision` when nothing is configured, and
-`400 validation_error` when the active document breaks a
+`409 no_active_revision` when nothing is configured, `409 revision_advanced`
+when another write moved the pointer between the reload's read and its
+activation, and `400 validation_error` when the active document breaks a
 runnable rule of this build (a reload is an apply, so it re-publishes only a
 company every node can run; correct it with `PUT` or `PATCH`). A document that
 breaks only an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to),
@@ -2356,9 +2421,17 @@ answer lists each violation as an `admission` warning.
 
 On a **stopped** node the same gesture is
 [`crewlet config activate <UUID>`](cli.md#crewlet-config-activate) naming the
-revision that is already current. It opens the node's own store, so it cannot
-run beside that node's engine, and the node publishes the activation at its
-next start; a running fleet takes this route.
+company's own revision, the one [`crewlet config revisions`](cli.md#crewlet-config-revisions)
+marks `fleet's`. It opens the node's own store, so it cannot run beside that
+node's engine, and makes an offer: the node publishes it at its next start as a
+new activation of the same revision, but only while the fleet still runs the
+revision the offer was built on (or, with no pointer, while that is the
+revision this node last saw the fleet run). If the fleet has moved on
+meanwhile, the offer is withheld and the node says so at warn, as
+`offline_revision_not_published`; once it applies the fleet's revision it runs
+that one, and boots on it once its boot row has moved, and the offer stays in
+its history. A running fleet
+takes this route.
 
 **Open on a managed document.** A reload changes no byte of the company, so
 [`api.auth.company_writers`](../concepts/configuration.md#managed-configuration)
@@ -2641,9 +2714,15 @@ a credential and is sealed under the field's own name, a composite included.
 What the route does, in this order:
 
 1. **Refuses a stale base.** `if_match` names the revision the requirement
-   list was read against. A submission built on an older one is refused
+   list was read against — the fleet's, which `GET /setup/integrations` answers
+   as `revision_id` on every node, whatever that node runs. A submission built on an older one is refused
    *before anything is sealed*, so a caller working from a stale page does not
-   end up with a credential in the store that nothing points at.
+   end up with a credential in the store that nothing points at. Without
+   `if_match`, the submission is built on the revision this request read the
+   fields from, in the same read: what each field holds — empty, a `${VAR}`, a
+   literal — decides the write, so it lands on that revision or is refused
+   `409 revision_advanced`, never applied to a document a write landing in
+   between changed.
 2. **Seals every credential**, under the name the third-party app declared or
    one derived as `VENDOR_FIELD[_HANDLE]`. The row records `source: "setup"`.
 3. **Patches the document** with the non-secret values and, for a credential
@@ -2658,11 +2737,34 @@ What the route does, in this order:
    it [reloads](#post-configreload-after-a-secret-changes) instead, because a
    value written into the store after the last apply is invisible to every
    running seat until something activates. The answer says `"reloaded": true`
-   when that is what happened.
+   when that is what happened. The reload is held to the base of step 1 as
+   the patch is, up to its own compare-and-set: a write that lands between
+   the read and the reload — one that put a literal in the slot, or the
+   company from before the integration was connected — is `409
+   revision_advanced`, never a reload of a document that does not read the
+   value just sealed.
 
 Answers `201 {"revision_id", "epoch", "wrote_secrets", "reloaded", "state"}`.
 Refusals: `400 invalid_input`, `400 validation_error`, `404 unknown_kind`,
-`409 revision_advanced`, `409 literal_in_config`, `409 no_active_revision`.
+`409 revision_advanced`, `409 literal_in_config`, `409 no_active_revision`;
+`503 unavailable` with a `Retry-After` when the coordination store cannot be
+read, or did not answer a credential's own write in step 2 — the body then
+names that credential as **`unanswered_secret`**, since its write may have
+landed — and with `"outcome": "unknown"`, `stored_revision_id` and `node` when
+the document was stored and its activation went unanswered, as on [the config
+surface](#status-codes). A `409 revision_advanced` from a write that lost at its
+activation names the revision it kept, inert, as `stored_revision_id`, beside
+the `node` whose history alone holds it.
+**A refusal after the first credential is sealed names what it sealed** as
+`wrote_secrets` — a lost race, an unanswered activation, an unreadable pointer
+and a later credential's failed write alike, a rotation's reload included:
+the credentials are in the store whatever became of the document, nothing may
+point at them yet, and a submission sent again overwrites them by name. So a
+`503` **without** `outcome` is sent again as it stands, whatever
+`wrote_secrets` and `unanswered_secret` it names: the document was not
+changed, and the resend writes every credential in it again, the unanswered
+one included. Only the `503` with `"outcome": "unknown"` is not, because its
+document may already be the company.
 
 ### Checking a credential before it is stored
 
@@ -3251,7 +3353,7 @@ opens — before a single turn has run:
 |---|---|
 | `agents` | The company's agent seats, each merged with its live overlay. Every seat in the company, not the ones this node runs, because the dashboard is a view of the company. Human seats are excluded — they have no turn, no phase and no spend; they appear in `org` with `"kind": "human"` |
 | `org` | The same projection [`GET /org`](#get-org) answers, built for the socket's audience: the charter, the company's resolved `timezone`, its `token_budget` and the `services` it runs, root-level `roles` and `units` nesting to any depth, with only the fields that projection declares for each, a seat's resolved `llm` chain and `tool_sources` only to an audience holding `admin` |
-| `tools` | The catalogue this node serves, each entry tagged with the `source` that registered it — `builtin` or the MCP server's name. Empty on a node with no active revision, which has no catalogue yet |
+| `tools` | The catalogue this node serves, each entry tagged with the `source` that registered it — `builtin` or the MCP server's name. Empty on a node that runs no company yet, which has no catalogue |
 | `events`, `sandboxes`, `tokens`, `budget`, `health` | The live projection: what has happened |
 
 Every seat carries **one seat-state vocabulary**, computed by the engine and
@@ -3544,6 +3646,7 @@ is the `admin` [`fleet`](#get-fleet) answer, and what each alarm measured is
   "shutting_down": false,
   "posture": "serve",
   "applied_epoch": 41,
+  "config_attempt": {"epoch": 41, "revision_id": "01JA8Q2W5H5S1Q9P0N1C7K3M2D", "status": "ok"},
   "seats": ["ceo", "cto"],
   "identity_duty_seconds": {"iam_sweep": 3600},
   "unproven_seconds": {"eng": 312.5},
@@ -3577,9 +3680,9 @@ exists](../concepts/identity-and-access.md#how-the-first-person-exists)):
 
 | Field | Meaning |
 |-------|---------|
-| `status` | `shutting_down`, `unconfigured`, a diverged posture (`shed`, `stuck` or `isolated`), or `ok`, in that order of precedence — and `starting` on the shorter body a node answers before it serves ([While a node is starting](#while-a-node-is-starting)), which never appears in this envelope. A draining engine is draining first, whatever else is true of it, and a node with no active revision is that before it is anything else. The two ordinary postures, `serve` and `wait`, read as `ok`. A node applying its first company reads `unconfigured` until that apply completes and `ok` from then on; a later apply reads `ok` throughout. |
+| `status` | `shutting_down`, `unconfigured`, a diverged posture (`shed`, `stuck` or `isolated`), or `ok`, in that order of precedence — and `starting` on the shorter body a node answers before it serves ([While a node is starting](#while-a-node-is-starting)), which never appears in this envelope. A draining engine is draining first, whatever else is true of it, and a node running no company is that before it is anything else. The two ordinary postures, `serve` and `wait`, read as `ok`. A node applying its first company reads `unconfigured` until that apply completes and `ok` from then on; a later apply reads `ok` throughout. |
 | `node` | The name this node's engine runs under — `node.id`, else `CREWLET_NODE_ID`, else `node-0` — which is what its presence lease carries and the only way a caller can tell which node a load balancer sent it to. |
-| `configured` | Whether a company revision is active. Read off the engine's live epoch on every call, so an apply that brings this node its first revision flips it. When `false` the node **refuses** every inbound webhook with `503`, so an operator watching empty screens needs to be told this rather than left to infer it. |
+| `configured` | Whether this node's engine runs a company revision. Read off the engine's live epoch on every call, so an apply that brings this node its first revision flips it. When `false` the node **refuses** every inbound webhook with `503`, so an operator watching empty screens needs to be told this rather than left to infer it. |
 | `version` | The `crewlet` version this process is running. |
 | `started_at` | When this node's **engine** started, which is when the node started: the API is served inside the engine's process. The fleet view reports the same instant for this node. |
 | `queue` | The event queue's backend — `jetstream-embedded` (a NATS server inside this process), `jetstream` (an external NATS cluster this node dialled), or `memory`. Read off the `EventQueue` contract's own `Backend()`, never sniffed from a type name. Display only; nothing may branch on it. |
@@ -3590,7 +3693,8 @@ exists](../concepts/identity-and-access.md#how-the-first-person-exists)):
 | `shutting_down` | `true` from the first moment of a drain, so a dashboard shows the drain while it happens: the listener keeps serving until the drain has completed. See [During a drain](#during-a-drain). |
 | `posture` | The node's [config posture](../concepts/control-plane.md#posture-what-a-lagging-node-does): `serve`, `wait`, `shed`, `isolated` or `stuck`. The only place an operator can see *why* a node left rotation, since `/ready` answers a bare `503` either way. A node applying a revision reads `wait` until the apply ends — `serve` once it succeeds — so a client polling across a `PUT /config` sees no diverged posture from a write that applies, a corrected revision written after a failed one included; `shed`, `isolated` and `stuck` follow only an attempt at that epoch that concluded in failure, or (`shed`) a lag on that epoch past 45 s while a peer has it. |
 | `identity_duty_seconds` | Each [identity duty](../guides/retention.md#the-identity-duties) **this node** armed, mapped to the interval it runs at, in seconds, whenever it holds that duty's lease. `{}` on a node that armed none — one running no `workers` role, since every one of them is a worker singleton, or one in a maintenance mode, which publishes nothing. A node with no company arms them like any other: the identity estate runs from boot on every data node. A duty that was never armed looks from every other vantage point exactly like one quietly finding nothing to do, so this is where you read that the retention sweep is running at all. Which node holds each lease right now is the coordination store's answer, not this node's. |
-| `applied_epoch` | The activation epoch this node last applied. |
+| `applied_epoch` | The activation epoch this node last applied, `0` until its first apply since it started: a node that booted on one revision and then refused the fleet's answers `0` while it runs the one it booted on. Which revision a node runs is [`GET /fleet`](#get-fleet)'s `config_serving_revision_id`. |
+| `config_attempt` | `{epoch, revision_id, status}`: this node's last concluded apply attempt — the epoch, the revision it tried at that epoch, and `ok`, `error` (refused, still running the epoch before) or `degraded` (refused after part of the company had already been rebuilt). **Absent** until this process has concluded one. It is what tells a refusal from an apply still running, which `applied_epoch` cannot: a failed attempt leaves that where it was. Never the reason, which can quote the config value it was given: why a node refused is [`GET /fleet`](#get-fleet)'s `config_error`, an admin's. The revision rides beside the epoch because one epoch number names two revisions once a rebuilt coordination store has restarted the count. |
 | `seats` | The handles of the seats this node holds, `[]` on a node holding none. |
 | `stall_lag_seconds` | Present only when the node's watched duty is behind: when its last beat is older than the beat interval it keeps (a second at the shipped lease TTL, which is how often a turning duty beats), and then how long since that beat, in seconds. It climbs towards the seat lease TTL, at which the watchdog ends the process. Absent on a node whose duty is on its beat, so its presence is what to alert on. |
 | `identity` | Whether this company has its **first person**: `ready` once a person is enrolled, `unclaimed` while nobody is — a service account alone signs nobody in with a password, so it does not count — a fresh install waiting for [its first person](../concepts/identity-and-access.md#how-the-first-person-exists) to be invited into, or created on, a human seat its company declares, under a Tier A token. A person an administrator creates makes it `ready` the moment the create lands, before they have spent the first password link it handed back: it says somebody exists, not that they have chosen a password yet. It is `unknown` where this node cannot read its identity estate **or has not applied all of it** — a node that has just joined a fleet holds empty rows until its applier catches up, so "nobody" is proved against the identity log's end — which is never reported as `unclaimed`, because a dashboard told nobody is in would tell an operator to put a first person into a company that may have started. Every node answers it, one with no company included: the identity estate runs from boot, so such a node answers for the fleet's. `/health` is the one surface an unclaimed company can reach — it is never guarded, and before the first person there is no credential to present anywhere else — which is why this is here. It does **not** move `status`. |
@@ -3670,7 +3774,7 @@ order of precedence:
 | `starting` | It has not started yet, and its probes are still the boot's: see [While a node is starting](#while-a-node-is-starting). |
 | `draining` | It is stopping. |
 | `broker_unlinked` | It cannot reach the fleet's broker: a leaf whose link to every member is down, or a connection to an external cluster that is reconnecting. `detail` carries the cause. Ahead of what follows, because each of those is what a lost broker looks like. |
-| `unconfigured` | No company revision is active here. |
+| `unconfigured` | This node's engine runs no company revision. |
 | `shed`, `stuck` | Its [config posture](../concepts/control-plane.md#operator-surface) is diverged. `wait` and `isolated` stay ready, as they do on an ingress node. |
 | `no_presence` | It does not hold its presence lease — its last renew is older than the lease's TTL — so no peer counts it and nothing routes to it. |
 | `admission_withheld` | It runs seats, and its latest placement pass was not admitted to claim: no data node has yet answered that a copy of the estate admits a seat (a stateless node), its own copy is behind (a data node), or it cannot serve the seats it holds. A node that runs no seats, or one started in a [maintenance mode](../guides/retention.md#the-three-modes), is not judged on this. |
@@ -3997,7 +4101,7 @@ Two refusals, both **400** rather than a smaller answer:
 enforces them: for the company and for every seat whose `token_budget` caps a
 window, **one entry per capped calendar window** — the day, the ISO week and the
 month on the company's clock — with that window's spend, its ceiling (the
-company's and a seat's, from the active revision), the gate's refusal stamp and the engine's judgement of it. It
+company's and a seat's, from the revision this node runs), the gate's refusal stamp and the engine's judgement of it. It
 is the only figure that can honestly be divided into a configured ceiling,
 because both cover the same span. The dashboard's other token figures are spend
 rollups over a window of time the reader chose; dividing one of those into a
@@ -7377,7 +7481,7 @@ heartbeat carried no status (its status hook overran the beat) is
 read as "started nothing". A node that reports and started nothing is
 `reported: true` with no rows.
 
-`servers` lists every server this node's active configuration declares, then
+`servers` lists every server the configuration this node runs declares, then
 any a node reports that the configuration does not carry (`configured: false`
 — a node still on an older revision mid-rollout). The launch is the parts
 that are not credentials — `transport`, `command`, `args`, `url`; `env` and
@@ -7458,7 +7562,7 @@ balancer sends the next refresh somewhere else.
 
 Read from the lease table, so every node gives the same answer: node
 presence carries each node's `node.roles` and `node.labels`, seat and
-worker leases name their holder, and the per-node config epoch comes from
+worker leases name their holder, and each node's config record comes from
 the control plane's apply status.
 
 **It needs a credential carrying `admin`, reads included** — a
@@ -7502,7 +7606,11 @@ a takeover, and on the same node re-claiming after its own lease lapsed.
     {
       "id": "core-1", "roles": ["data", "ingress", "seats", "workers"], "broker": "member", "labels": {},
       "owner": "core-1:8f2a", "protocol": 1, "seats": 4, "expires_in": 41.2,
-      "config_epoch": 7, "config_status": "ok", "config_error": ""
+      "config_epoch": 7, "config_revision_id": "3f1c0f0e-8a52-4d3b-9d7e-2b6f3f0c9a41",
+      "config_status": "ok", "config_error": "", "config_applied_epoch": 7,
+      "config_serving_revision_id": "3f1c0f0e-8a52-4d3b-9d7e-2b6f3f0c9a41",
+      "config_boot_revision_id": "3f1c0f0e-8a52-4d3b-9d7e-2b6f3f0c9a41",
+      "config_reported_at": "2026-09-23T08:14:02.118Z"
     }
   ],
   "seats": [
@@ -7513,6 +7621,9 @@ a takeover, and on the same node re-claiming after its own lease lapsed.
   "unplaceable": [{"handle": "gpu-eng", "placement": "labels=gpu=true"}],
   "unmanned_roles": [],
   "this_node": "core-1",
+  "target_epoch": 7,
+  "activation": {"epoch": 7, "revision_id": "3f1c0f0e-8a52-4d3b-9d7e-2b6f3f0c9a41",
+                 "at": "2026-09-23T08:13:40.552Z", "summary": "raise the executor round cap"},
   "objects": {
     "state": "reported",
     "backend": "s3:https://s3.example.com/files/acme/",
@@ -7575,6 +7686,33 @@ fleet's — `member` (embedded, a voter in the JetStream cluster), `leaf`
 this build does not know (a newer build's). It is derived from the node's own `stream` block, never from
 its roles; [`GET /fleet/broker`](#the-brokers-membership) holds it against what
 the broker itself counts.
+
+**Each node row carries its config record**, which the node's reconciler writes
+to the control plane's apply status and renews on every tick, and the answer
+carries the activation every row is compared against:
+
+| Field | What it is |
+|---|---|
+| `target_epoch`, `activation` | The fleet's activation pointer, read once for both: its `epoch`, the `revision_id` it names, when it was activated (`at`) and the `summary` its writer gave. `0` and `null` when nothing is activated or the pointer could not be read |
+| `config_epoch`, `config_revision_id` | The activation this node last **attempted**: its epoch and the revision it named. `0` and `""` on a node that has reported nothing |
+| `config_status`, `config_error` | How that attempt went — `ok`, `error` (refused and rolled back, so the node runs what it ran before) or `degraded` (failed after a part that cannot be rolled back, such as a restarted MCP server, had already changed, so it is never counted as converged) — and the error it failed with, cut at 2 000 bytes |
+| `config_applied_epoch` | The activation epoch this node last **applied** — the `applied_epoch` its own [health envelope](#the-health-envelope) carries. It differs from `config_epoch` exactly when `config_status` says that attempt failed: a node that applied 5 and refused 6 reports `config_epoch` 6 and this 5, and only this says the epoch it runs, so a writer judging whether a save reached a node compares the saved epoch with this. **Absent** on a node that has applied nothing since it started — it runs what it booted on, or nothing — and from a build older than the field, never `0` |
+| `config_serving_revision_id` | The revision this node's engine **runs**: the one its last successful apply installed, or the one it booted on. Empty while it runs none, and from a build older than the field |
+| `config_boot_revision_id` | The revision this node would **come back on** if it restarted now — what its boot row names, read before the node's first record and after every write to the row, so a read of the row that fails leaves the last answer standing rather than naming none. It equals `config_serving_revision_id` except while a write to that row is being retried (the node runs a revision it would not start on until the next tick repairs it), and is **absent** on a node that boots on nothing: one whose own database is discarded at every start (`store.scratch`, so a node without the `data` role), one that has never applied a revision and holds no offline change, and a build older than the field. Whatever a node needs in order to start — a revision's credentials among them — is kept against this one, never against the revision it happens to be running |
+| `config_reported_at` | When the node last wrote its record. A record nobody renews ages out after four reconcile intervals, about a minute, and the row then carries none |
+
+**A node runs the fleet's company only when** it reports the activation's
+epoch and revision with `ok` and serves that revision. A node that refused the
+fleet's revision reports the activation's epoch and revision with `error`, and
+its `config_serving_revision_id` names the revision before, which it goes on
+running until it can apply the fleet's — and `config_boot_revision_id` the one
+it would come back on, the same revision unless a write to its boot row is
+still being retried, and absent on a node whose own database is discarded at
+every start; a
+comparison of `config_epoch` with `target_epoch` alone reads it as current.
+Every dashboard figure that counts nodes behind on config uses this rule, and the
+**Settings › Nodes** screen names the revision each such node runs. See [Reading
+a stuck node](../concepts/control-plane.md#reading-a-stuck-node).
 
 ### The broker's membership
 
@@ -8707,7 +8845,7 @@ A refusal on every `/webhooks/*` route is the engine's one [refusal envelope](#e
 | Status | `error` | When | `Retry-After` |
 |---|---|---|---|
 | `401` | `invalid_signature` | The delivery's credential did not verify — an HMAC signature, a shared token or a Forge invocation token, missing or wrong — or a per-seat Slack delivery names a seat that has no Slack app here while other seats have one. The log says which check failed; the body never does, because that is what somebody probing the route would read, and a code of its own for the seat with no app would be a list of which handles have one | none |
-| `503` | `no_active_revision` | This node has no active company revision, so it has no secrets and nothing to route by. Answered **before** the signature check, because verifying first would answer every delivery with the no-secret `503` and its five-minute wait | `15` — the reconcile poll that brings a node a missed activation |
+| `503` | `no_active_revision` | This node runs no company yet, so it has no secrets and nothing to route by. Answered **before** the signature check, because verifying first would answer every delivery with the no-secret `503` and its five-minute wait | `15` — the reconcile poll that brings a node a missed activation |
 | `503` | `no_webhook_secret` | The route has no secret configured to verify against | `300` — a person editing the configuration |
 | `503` | `unusable_webhook_secret` | The configured secret cannot do the check it is for: a shared token shorter than 26 characters on a route whose provider signs nothing, or a GitLab `signing_secret` that is not a `whsec_` key | `300` |
 | `503` | `unavailable` | The delivery verified and the broker would not take it; its claim is released so the retry is not refused as a duplicate | `4` — the broker's own minimum election timeout, the hint every surface gives for a broker it cannot reach: a refused publish waits on a reconnection or an election, and nothing changes sooner |
@@ -8793,6 +8931,6 @@ The body is read **whole even when the request will be refused**, and bounded at
 crewlet run -config crewlet.yaml -roles data,ingress -api-host 0.0.0.0 -api-port 8000
 ```
 
-The API is served inside the engine's own process, over the engine's own store, broker and coordination plane. Its reads answer from that node's store and projection. Its writes are few and each is named above: the operator surface (`/operator/mcp`, `/operator/act`) writes to Worklet and Doclet through the tools a seat holds, `/config`, `/secrets` and `/setup` write the company's configuration and credentials, `/backup` and the `/worklet/retention` gestures act on the node and the log, and the webhook edge publishes inbound deliveries onto `crewlet.notifications.inbound`. It runs no agent itself: a seat's turn is the engine's.
+The API is served inside the engine's own process, over the engine's own store, broker and coordination plane. Its reads answer from that node's store and projection, and `/config`'s from the fleet's activation pointer, which every node answers alike. Its writes are few and each is named above: the operator surface (`/operator/mcp`, `/operator/act`) writes to Worklet and Doclet through the tools a seat holds, `/config`, `/secrets` and `/setup` write the company's configuration and credentials, `/backup` and the `/worklet/retention` gestures act on the node and the log, and the webhook edge publishes inbound deliveries onto `crewlet.notifications.inbound`. It runs no agent itself: a seat's turn is the engine's.
 
 See [Deployment](../guides/deployment.md) for how the API and engine run together, and the integration docs ([Slack](../integrations/slack.md), [Jira](../integrations/jira.md)) for webhook setup.

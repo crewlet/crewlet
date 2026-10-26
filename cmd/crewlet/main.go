@@ -449,27 +449,35 @@ func (c configFlags) loadForRun(ctx context.Context, set *flag.FlagSet, importPa
 	boot, bootErr := config.LoadBootstrap(*c.bootstrap, config.EnvOnly())
 	bootErr = nameTheNeighbour(*c.bootstrap, bootErr)
 
-	// THE REVISION A REDACTED FILE WAS READ FROM is this node's active one,
-	// which its own store holds: a company.yaml kept in sync from Copy as
-	// YAML or `GET /config` carries a mask for every inline credential, and
-	// the file starts the node — which boots on it — and may be imported
-	// over that revision, so it is restored against it as `crewlet config
-	// import` restores one ([config.LoadCompanyToRun]). Read only for a file
-	// with a mask in it, and never from a scratch store, which holds the
-	// previous run's rows and is deleted as the engine opens it. Read as the
-	// STORED form, as the import's is ([activeRevision]): a newer peer may
-	// have written it.
+	// THE REVISION A REDACTED FILE WAS READ FROM is the company, which this
+	// node's own store knows as the fleet's revision it last saw: a
+	// company.yaml kept in sync from Copy as YAML or `GET /config` carries a
+	// mask for every inline credential, and the file may start the node and
+	// be imported over that company, so it is restored against it as
+	// `crewlet config import` restores one ([config.LoadCompanyToRun],
+	// [knownRevision]). Read only for a file with a mask in it, and never
+	// from a scratch store, which holds the previous run's rows and is
+	// deleted as the engine opens it. Read as the STORED form: a newer peer
+	// may have written it.
 	var prior config.PriorRevision
 	if bootErr == nil && !boot.Store.Scratch {
 		stored := storeAt(*c.bootstrap)
 		prior = func() (*config.Company, error) {
-			active, found, err := stored(ctx)
-			if err != nil || !found {
+			state, held, err := stored(ctx)
+			// THE CLAIM GOES BACK AT ONCE: this read restores a redacted
+			// file's masks, and the decision the engine boots on is the
+			// one that holds the store across its own gap ([heldStore]).
+			defer held.release()
+			if err != nil || state.known == nil {
 				return nil, err
 			}
-			company, err := config.DecodeCompany(active.document)
+			if state.known.unopened != nil {
+				return nil, state.known.unopened
+			}
+			company, err := config.DecodeCompany(state.known.document)
 			if err != nil {
-				return nil, fmt.Errorf("parse the active revision %s: %w", active.revision.ID, err)
+				return nil, fmt.Errorf("parse revision %s, the company this node knows: %w",
+					state.known.revision.ID, err)
 			}
 			return company, nil
 		}
@@ -1334,27 +1342,24 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	// ignored seed's warning is in the durable record and never beside those
 	// refusals — nor beside the decision's own, being said only once it
 	// holds; and after the listeners, because it opens the store.
-	plan, err := decideSeed(ctx, boot, seed, storeAt(*cfg.bootstrap), log)
-	if err != nil {
-		return err
-	}
-	// The options go to the engine WHOLE, so no field of them can be
-	// decided there and dropped here.
-	opts, err := bootOptions(boot, plan)
-	if err != nil {
-		return err
-	}
-	opts.Metrics, opts.Mode = recorder, nodeMode
-	// AND THE MOMENT /health TURNS 200: the engine says when it has
-	// recovered what this node holds — see [engine.Options.Recovered].
-	opts.Recovered = listeners.recovered
-	// AND WHERE A DIRECT BOX DIALS THE BRIDGE: the listener this process
-	// bound for it, on loopback — see [engine.Options.BridgeHostURL].
-	opts.BridgeHostURL = listeners.bridgeHostURL(boot, nodeID)
-
-	log.InfoContext(ctx, "engine_starting", "version", version.String(),
-		"company", plan.startsOn(), "seed", string(plan.act), "seed_file", plan.file.Path)
-	e, err := engine.New(ctx, opts)
+	//
+	// AND THE DECISION HOLDS THE STORE until the engine has opened it, so
+	// that no offline command can replace what the engine is about to boot
+	// on in between: the decision and the open are one step, which gives the
+	// claim back on every way out ([bootEngine]).
+	e, plan, err := bootEngine(ctx, boot, seed, storeAt(*cfg.bootstrap),
+		func(ctx context.Context, opts engine.Options) (*engine.Engine, error) {
+			opts.Metrics, opts.Mode = recorder, nodeMode
+			// AND THE MOMENT /health TURNS 200: the engine says when it
+			// has recovered what this node holds — see
+			// [engine.Options.Recovered].
+			opts.Recovered = listeners.recovered
+			// AND WHERE A DIRECT BOX DIALS THE BRIDGE: the listener this
+			// process bound for it, on loopback — see
+			// [engine.Options.BridgeHostURL].
+			opts.BridgeHostURL = listeners.bridgeHostURL(boot, nodeID)
+			return engine.New(ctx, opts)
+		}, log)
 	if err != nil {
 		return err
 	}
@@ -1939,6 +1944,11 @@ func companySurface(e *engine.Engine, boot *config.Bootstrap,
 		// reads. Left out, every node served a managed company's document
 		// to every credential the authority table admits.
 		CompanyWriters: boot.API.Auth.CompanyWriters,
+		// THE ENGINE'S OWN NAME FOR THIS NODE, never boot.Node.ID, which is
+		// empty on a node named through CREWLET_NODE_ID: a write whose
+		// activation goes unanswered names it as the one node holding the
+		// revision it stored, the way /health and the fleet answer name it.
+		Node: e.Node().ID(),
 	})
 }
 
@@ -2098,8 +2108,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// and the pointer to it lands through the same merge, validation and
 	// activation PATCH /config performs.
 	setupSurface, err := setupapi.New(setupapi.Options{
-		Company: func() (*config.Company, *org.Organization) { return companyConfig(e) },
-		Config:  configSurface,
+		Config: configSurface,
 		// The fleet's own store, sealed with the same keyring — the one
 		// every node holds, since Tier A refuses a file without it.
 		Secrets: fleetsecrets.New(e.Backends().Fleet, cipher),
@@ -3443,8 +3452,14 @@ func (w engineConfigWriter) Apply(ctx context.Context, patch []byte, summary str
 
 // Reload re-activates the current document, which is how a pass that sealed a
 // credential gets everything built at apply time rebuilt against it.
+//
+// ON WHATEVER THE FLEET RUNS, expecting no revision: what it is for is every
+// node rebuilding against the store as the pass left it, and a revision
+// written since the pass read the company needs that rebuild as much as the
+// one it read — unlike a /setup rotation, whose answer says the value it
+// sealed reached the seats.
 func (w engineConfigWriter) Reload(ctx context.Context, summary string, by iam.Actor) error {
-	_, err := w.surface.Reload(ctx, summary, by)
+	_, err := w.surface.Reload(ctx, summary, by, "")
 	return err
 }
 

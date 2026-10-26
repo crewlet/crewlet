@@ -49,7 +49,8 @@ import {
 import { ConfirmModal, useToast } from "@crewlethq/ui";
 import { useLeaveGuard, useNavigator, useRoute, useUnloadGuard } from "~/app/router.tsx";
 import { resolve } from "~/app/routes.ts";
-import { useEngineHealth } from "~/lib/store-hooks.ts";
+import type { EngineHealth } from "~/contract/health.ts";
+import { useLastHealth } from "~/lib/useLastHealth.ts";
 import { useConfigWriteAccess, type ConfigWriteAccess } from "~/lib/useWriteAccess.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { isAbort } from "~/protocol/rest.ts";
@@ -75,8 +76,8 @@ import { readCharter, savePart } from "./save.ts";
 import {
   INITIAL,
   effective,
-  hasSettled,
   isDirty,
+  landedView,
   reducer,
   type EditingState,
   type Origin,
@@ -104,8 +105,12 @@ export interface Editing {
   readonly mayEdit: boolean;
   /** Whether a control may be pressed now, and why not. */
   readonly access: ConfigWriteAccess;
-  /** The epoch this node has applied, which settles a landed save. */
-  readonly appliedEpoch: number;
+  /**
+   * This node's last health push (`useLastHealth`, kept through a dropped
+   * socket): the epoch it applied and its last apply attempt, which say where
+   * it stands on a landed save (`state.ts`, [landedView]).
+   */
+  readonly health: EngineHealth | null;
   /** Open the part; `focus` false opens it without taking the focus (a second part an address names). */
   readonly open: (part: CharterPart, origin: Origin, focus?: boolean) => void;
   readonly change: (part: CharterPart, draft: PartValue) => void;
@@ -142,7 +147,7 @@ export function useCharterEditing(org: OrgProjection): {
   const viewer = useViewer();
   const mayEdit = mayWriteCharter(viewer);
   const access = useConfigWriteAccess();
-  const appliedEpoch = useEngineHealth()?.applied_epoch ?? 0;
+  const health = useLastHealth();
   const toast = useToast();
   const charter = useMemo(() => charterOf(org), [org]);
   const charterRef = useRef(charter);
@@ -300,7 +305,7 @@ export function useCharterEditing(org: OrgProjection): {
                 type: "saved",
                 part,
                 value: normalized(draft),
-                epoch: outcome.epoch,
+                activated: outcome.activated,
                 shownWas: partOf(charterRef.current, part),
               });
               focusAfterRender(part, "return");
@@ -311,7 +316,7 @@ export function useCharterEditing(org: OrgProjection): {
                 type: "saved",
                 part,
                 value: normalized(draft),
-                epoch: null,
+                activated: null,
                 shownWas: partOf(charterRef.current, part),
               });
               focusAfterRender(part, "return");
@@ -397,16 +402,18 @@ export function useCharterEditing(org: OrgProjection): {
     [focusAfterRender],
   );
 
-  // A LANDED SAVE IS DROPPED once the page reads it back, so the card shows
-  // the projection again, and with it any later change.
+  // A LANDED SAVE IS DROPPED once the page reads it back, or this node is
+  // done with its revision, so the card shows the projection again, and with
+  // it any later change. A refused one is kept, for the card to say so beside
+  // the projection, until either happens.
   useEffect(() => {
     for (const part of CHARTER_PARTS) {
       const landed = state.landed[part];
-      if (landed && hasSettled(landed, partOf(charter, part), appliedEpoch)) {
+      if (landed && landedView(landed, partOf(charter, part), health) === "settled") {
         dispatch({ type: "settle", part });
       }
     }
-  }, [state.landed, charter, appliedEpoch]);
+  }, [state.landed, charter, health]);
 
   // ---- unsaved work ------------------------------------------------------
 
@@ -473,7 +480,7 @@ export function useCharterEditing(org: OrgProjection): {
       state,
       mayEdit,
       access,
-      appliedEpoch,
+      health,
       open,
       change,
       pending,
@@ -489,7 +496,7 @@ export function useCharterEditing(org: OrgProjection): {
       state,
       mayEdit,
       access,
-      appliedEpoch,
+      health,
       open,
       change,
       pending,

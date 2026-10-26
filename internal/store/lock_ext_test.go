@@ -116,6 +116,74 @@ func TestTwoHandlesInOneProcessShareTheLock(t *testing.T) {
 	}
 }
 
+// HOLD KEEPS THE CLAIM WHILE THIS PROCESS HAS NO HANDLE, and the engine's
+// later open shares it rather than taking a second.
+//
+// This is what `crewlet run` does across the gap between reading the store to
+// decide what to boot on and opening it for the engine seconds later: an
+// offline command landing in that gap — another OS process opening the same
+// file — would replace the very row the boot already decided on, and the fix
+// is for the boot to keep the claim the whole way. So the claim excludes a
+// second process even with no handle open here (the boot's window), a handle
+// opened here afterwards shares it (the engine's own open), and only the last
+// of claim-and-handle releasing frees it (the engine running).
+//
+// Mutations, each run red: make [store.Hold] give the claim back before it
+// returns, and the second process opens the file the boot holds; return the
+// bare release rather than its [sync.OnceFunc], and the second release frees
+// the file under the engine's open handle.
+func TestHoldKeepsTheClaimForABootWithNoHandle(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "index.db")
+
+	// THE BOOT'S CLAIM, with no handle of this process's own open on it.
+	release, err := store.Hold(path)
+	if err != nil {
+		t.Fatalf("hold the claim: %v", err)
+	}
+	out, err := openInSubprocess(t, path)
+	if err == nil {
+		t.Fatalf("a second process opened the file the boot holds: %s", out)
+	}
+	if !strings.Contains(out, lockedMarker) {
+		t.Fatalf("the second process was refused by something other than the lock: %s", out)
+	}
+	if !strings.Contains(out, path) {
+		t.Errorf("the refusal does not name the file: %s", out)
+	}
+
+	// THE ENGINE'S OWN OPEN SHARES THE CLAIM rather than meeting it.
+	db, err := store.OpenNode(t.Context(), path, store.Options{})
+	if err != nil {
+		t.Fatalf("the engine's open was refused the file the boot holds: %v", err)
+	}
+	// The boot gives its share back now, as `crewlet run` does once the
+	// engine has opened the file. The engine's handle still holds it.
+	release()
+	if out, err := openInSubprocess(t, path); err == nil {
+		t.Fatalf("releasing the boot's claim freed the file the engine holds: %s", out)
+	} else if !strings.Contains(out, lockedMarker) {
+		t.Fatalf("the second process was refused for the wrong reason: %s", out)
+	}
+	// RELEASING TWICE IS RELEASING ONCE ([store.Hold]): a second release that
+	// gave back another share would take the engine's, and free the file under
+	// a handle that is still writing to it.
+	release()
+	if out, err := openInSubprocess(t, path); err == nil {
+		t.Fatalf("releasing the boot's claim a second time freed the file the engine holds: %s", out)
+	} else if !strings.Contains(out, lockedMarker) {
+		t.Fatalf("the second process was refused for the wrong reason: %s", out)
+	}
+
+	// The engine running is the last holder; its close frees the file.
+	if err := db.Close(); err != nil {
+		t.Fatalf("close the engine's handle: %v", err)
+	}
+	if out, err := openInSubprocess(t, path); err != nil {
+		t.Fatalf("the engine's close did not free the file: %v: %s", err, out)
+	}
+}
+
 // --- the subprocess harness ------------------------------------------- //
 //
 // Re-execing the test binary is the only way to get a second OS process, and

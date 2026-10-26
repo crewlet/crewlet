@@ -24,22 +24,22 @@ import (
 // wrapped around the real store and plane so everything else a request does is
 // exactly what production runs.
 
-// countingRevisions counts every revision stored, and every one this node
-// marked as its active revision.
+// countingRevisions counts every revision stored, and every activation this
+// node noted in its history.
 type countingRevisions struct {
 	configapi.RevisionStore
-	inserts      atomic.Int32
-	markedActive atomic.Int32
+	inserts atomic.Int32
+	noted   atomic.Int32
 }
 
-func (c *countingRevisions) Insert(ctx context.Context, r store.Revision) (string, error) {
+func (c *countingRevisions) InsertOn(ctx context.Context, base, r store.Revision) (string, error) {
 	c.inserts.Add(1)
-	return c.RevisionStore.Insert(ctx, r)
+	return c.RevisionStore.InsertOn(ctx, base, r)
 }
 
-func (c *countingRevisions) Activate(ctx context.Context, revisionID string, at time.Time) (string, error) {
-	c.markedActive.Add(1)
-	return c.RevisionStore.Activate(ctx, revisionID, at)
+func (c *countingRevisions) NoteActivation(ctx context.Context, revisionID string, at time.Time) error {
+	c.noted.Add(1)
+	return c.RevisionStore.NoteActivation(ctx, revisionID, at)
 }
 
 // countingPlane counts every activation.
@@ -90,14 +90,23 @@ func newCountedSurface(t *testing.T) *counted {
 // the same plane it counts.
 func (c *counted) forget() {
 	c.revisions.inserts.Store(0)
-	c.revisions.markedActive.Store(0)
+	c.revisions.noted.Store(0)
 	c.plane.activations.Store(0)
 	c.queue.publishes.Store(0)
 }
 
-// writeCounts is what a surface has written: revisions stored, revisions this
-// node marked active, fleet activations, and events published.
-type writeCounts struct{ stored, markedActive, activated, published int32 }
+// seed is the surface's seed, uncounted: the fleet a case starts from is set
+// up through the plane the case counts, and is not a write the case makes.
+func (c *counted) seed(t *testing.T, doc string) string {
+	t.Helper()
+	id := c.surface.seed(t, doc)
+	c.forget()
+	return id
+}
+
+// writeCounts is what a surface has written: revisions stored, activations
+// this node noted in its history, fleet activations, and events published.
+type writeCounts struct{ stored, noted, activated, published int32 }
 
 // oneWrite is exactly what a write that lands makes.
 var oneWrite = writeCounts{1, 1, 1, 1}
@@ -105,7 +114,7 @@ var oneWrite = writeCounts{1, 1, 1, 1}
 // writes is how many of each the surface has made.
 func (c *counted) writes() writeCounts {
 	return writeCounts{
-		c.revisions.inserts.Load(), c.revisions.markedActive.Load(),
+		c.revisions.inserts.Load(), c.revisions.noted.Load(),
 		c.plane.activations.Load(), c.queue.publishes.Load(),
 	}
 }
@@ -152,6 +161,10 @@ func TestADryRunStoresActivatesAndPublishesNothing(t *testing.T) {
 				s.seed(t, companyDoc)
 			}
 			before := s.do(t, http.MethodGet, "/config/revisions", "", nil).Body.String()
+			pointer, _, err := s.plane.Target(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
 
 			res := s.do(t, tc.method, "/config?dry_run=true", tc.body, nil)
 			if res.Code != tc.want {
@@ -163,8 +176,10 @@ func TestADryRunStoresActivatesAndPublishesNothing(t *testing.T) {
 			if after := s.do(t, http.MethodGet, "/config/revisions", "", nil).Body.String(); after != before {
 				t.Errorf("a dry run changed the history:\nbefore %s\nafter  %s", before, after)
 			}
-			if _, found, err := s.plane.Target(t.Context()); err != nil || found {
-				t.Errorf("a dry run moved the fleet pointer (found=%v err=%v)", found, err)
+			if after, _, err := s.plane.Target(t.Context()); err != nil ||
+				after.Epoch != pointer.Epoch || after.RevisionID != pointer.RevisionID {
+				t.Errorf("a dry run moved the fleet pointer from %+v to %+v (err=%v)",
+					pointer, after, err)
 			}
 		})
 	}

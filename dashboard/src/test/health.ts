@@ -2,8 +2,8 @@
  * A whole `health` frame for a suite to override — every member the engine
  * always sends, so a frame a test builds is one `api.Health` could have sent.
  * The members it omits when empty (`nodes`, `alarms`, `stall_lag_seconds`,
- * `unproven_seconds`, `seeded_from`, `identity`) stay absent unless a case sets
- * them.
+ * `unproven_seconds`, `seeded_from`, `identity`, `config_attempt`) stay absent
+ * unless a case sets them.
  */
 
 import type { EngineHealth } from "~/contract/health.ts";

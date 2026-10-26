@@ -27,6 +27,32 @@
 // fleet — the failure the control plane exists to remove was a config change
 // that only the process handling the request ever saw.
 //
+// EVERY ANSWER IS THE FLEET'S, never this node's. GET /config and its
+// entity-tag, the revision list's `is_active`, a diff against `active` and
+// the base every write is built on are all the revision the activation
+// pointer names ([Service.current]), the same on every node whatever that
+// node runs: a node behind the pointer, or one that refused its revision,
+// still answers the company, so a write it serves lands, and the read after a
+// write answers the write. What a node boots on and what it serves are the
+// reconciler's facts (configplane's package doc, ADR-0057), and the fleet
+// view says them per node. A coordination store that cannot be read answers
+// 503 with Retry-After rather than a guess, because "the fleet has no
+// company" sends a write to replace it. NO READ WRITES: a revision this node
+// holds no row for yet is answered from the body the pointer carries, and the
+// reconciler keeps it.
+//
+// A WRITE STORED AND THEN UNANSWERED IS AN UNKNOWN OUTCOME. The revision is
+// stored before the pointer moves, so an activation the coordination store
+// did not answer may have landed: it is 503 with `outcome: unknown` naming the
+// stored revision and the node whose history alone holds it
+// ([ActivationUnknownError], [RefuseActivationUnknown]), whichever surface the
+// write came through, never the plain 503 that says nothing was written and
+// sends a client to write a second revision over one that may already be the
+// company. A write that lost its activation keeps its revision too, inert, and
+// its 409 or 412 names that node beside it the same way ([KeptRevision]):
+// every answer naming a stored revision names the one node it can be diffed and
+// reverted on.
+//
 // A DEPLOYMENT MAY NAME WHO WRITES IT. When Tier A lists
 // `api.auth.company_writers`, the document is managed by the system holding
 // those tokens and every other credential is refused a change to it, here,
@@ -37,6 +63,7 @@ package configapi
 import (
 	"context"
 	"errors"
+	"maps"
 	"net/http"
 	"slices"
 	"strconv"
@@ -80,12 +107,19 @@ const (
 
 // revisionStore is the node's revision history, as this surface reads and
 // writes it.
+//
+// NOTHING HERE READS OR MOVES WHAT THIS NODE BOOTS ON, and the interface is
+// what holds that: the company this surface answers for is the fleet's pointer
+// ([Service.current]), and the boot row is the reconciler's alone to move,
+// once its engine has applied a revision. A write here stores its revision as
+// history and moves the pointer; the reconciler makes it what each node boots
+// on as each applies it.
 type revisionStore interface {
-	Active(ctx context.Context) (store.Revision, bool, error)
 	Get(ctx context.Context, revisionID string) (store.Revision, bool, error)
 	List(ctx context.Context, limit, offset int) ([]store.Revision, error)
-	Insert(ctx context.Context, r store.Revision) (string, error)
-	Activate(ctx context.Context, revisionID string, at time.Time) (string, error)
+	InsertOn(ctx context.Context, base, r store.Revision) (string, error)
+	NoteActivation(ctx context.Context, revisionID string, at time.Time) error
+	Restorable(ctx context.Context) (store.Revision, bool, error)
 }
 
 // Service is the /config surface.
@@ -99,11 +133,25 @@ type Service struct {
 	// of Tier A's `api.auth` this surface reads, through
 	// [config.APIAuth.MayWriteCompany], the one reading of it.
 	writers config.APIAuth
-	now     func() time.Time
+	// node is this node's id ([Options.Node]), which an unknown outcome and a
+	// lost race name as the one node holding the revision they stored.
+	node string
+	now  func() time.Time
 }
 
 // Options wire the service.
 type Options struct {
+	// Node is this node's id, the engine's own name for it — the one its
+	// presence lease and `/health` carry. Required: a write stores its
+	// revision in this node's history alone, so an answer that cannot say
+	// whether the activation landed ([ActivationUnknownError]), and one whose
+	// activation lost to another write ([RacedError]), names this node as the
+	// one to diff or revert the stored revision on. Behind a
+	// shared address a client sent there by "the node that answered" reaches
+	// another, which holds no copy and answers 404, and concludes the write
+	// is lost.
+	Node string
+
 	// Store holds the revisions. Required: every node that serves this
 	// surface opens one, and [New] refuses to build without it.
 	Store *store.DB
@@ -179,6 +227,10 @@ func New(opts Options) (*Service, error) {
 			"that removes a human seat is refused while the identity directory " +
 			"binds somebody to it or an open invitation holds it, and that " +
 			"needs the directory")
+	case strings.TrimSpace(opts.Node) == "":
+		return nil, errors.New("configapi: Options.Node is required: a write whose " +
+			"activation goes unanswered names the node whose history alone holds " +
+			"the revision it stored, and the engine's node id is that name")
 	}
 	now := opts.Now
 	if now == nil {
@@ -188,6 +240,7 @@ func New(opts Options) (*Service, error) {
 		configs: opts.Store.Configs(), plane: opts.Plane,
 		cipher: opts.Cipher, holders: opts.Holders, queue: opts.Queue, now: now,
 		writers: config.APIAuth{CompanyWriters: slices.Clone(opts.CompanyWriters)},
+		node:    opts.Node,
 	}, nil
 }
 
@@ -558,7 +611,12 @@ func (s *Service) getRevision(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "open revision", err)
 		return
 	}
-	body := meta(revision)
+	cur, _, err := s.current(r.Context())
+	if err != nil {
+		s.fail(w, "read the fleet's revision", err)
+		return
+	}
+	body := meta(revision, cur.revision.ID)
 	body["payload"] = company.Redact()
 	writeJSON(w, http.StatusOK, body)
 }
@@ -693,18 +751,18 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	active, found, err := s.configs.Active(r.Context())
+	cur, found, err := s.current(r.Context())
 	if err != nil {
-		s.fail(w, "read the active revision", err)
+		s.fail(w, "read the fleet's revision", err)
 		return
 	}
-	createOnly, ok := s.checkPrecondition(w, r, active, found)
+	createOnly, ok := s.checkPrecondition(w, r, cur.revision, found)
 	if !ok {
 		return
 	}
 	built := ""
 	if found {
-		built = active.ID
+		built = cur.revision.ID
 	}
 	d := replaceDraft(incoming, built, attributionOf(r))
 	if importing {
@@ -775,9 +833,9 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	active, found, err := s.configs.Active(r.Context())
+	cur, found, err := s.current(r.Context())
 	if err != nil {
-		s.fail(w, "read the active revision", err)
+		s.fail(w, "read the fleet's revision", err)
 		return
 	}
 	if !found {
@@ -788,12 +846,12 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 			})
 		return
 	}
-	if _, ok = s.checkPrecondition(w, r, active, found); !ok {
+	if _, ok = s.checkPrecondition(w, r, cur.revision, found); !ok {
 		return
 	}
 
 	d := patchDraft(ApplyRequest{
-		Patch: sent.text, Summary: summary, By: attributionOf(r), Expect: active.ID,
+		Patch: sent.text, Summary: summary, By: attributionOf(r), Expect: cur.revision.ID,
 	}, sent.doc)
 	if d.principal, ok = principalOf(w, r); !ok {
 		return
@@ -831,7 +889,7 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 // without a second request.
 func writeChecked(w http.ResponseWriter, p *prepared) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"valid": true, "base_revision_id": p.base,
+		"valid": true, "base_revision_id": p.base.ID,
 		"warnings": checkedWarnings(p), "derived": p.derived,
 	})
 }
@@ -853,10 +911,13 @@ func writeApplied(w http.ResponseWriter, applied Applied) {
 func (s *Service) refuseWrite(w http.ResponseWriter, err error, createOnly bool) {
 	var raced *RacedError
 	if createOnly && errors.As(err, &raced) {
-		body := httpjson.Detail{
-			"hint": "If-None-Match asked for this write to land only on a " +
-				"config that is not there; one was activated first",
+		hint := "If-None-Match asked for this write to land only on a " +
+			"config that is not there; one was activated first"
+		if raced.Stored != "" {
+			hint += "; " + keptSentence(raced)
 		}
+		body := KeptRevision(raced)
+		body["hint"] = hint
 		// NAMED ONLY WHEN KNOWN, as on every other refusal here: the
 		// pointer is re-read after a lost activation, and a read that
 		// failed has no revision to name. An empty id is not "none", and a
@@ -864,9 +925,6 @@ func (s *Service) refuseWrite(w http.ResponseWriter, err error, createOnly bool)
 		// sent to a route that is not there.
 		if raced.Current != "" {
 			body["current_revision_id"] = raced.Current
-		}
-		if raced.Stored != "" {
-			body["stored_revision_id"] = raced.Stored
 		}
 		httpjson.FailWithFields(w, http.StatusPreconditionFailed,
 			httpjson.CodeAlreadyConfigured, body)
@@ -885,6 +943,7 @@ func (s *Service) refuseApply(w http.ResponseWriter, err error) {
 	var invalid *ValidationError
 	var held *SeatHeldError
 	var unknown *HoldersUnavailableError
+	var unanswered *ActivationUnknownError
 	var refused *AdmissionError
 	var managed *ManagedError
 	switch {
@@ -910,9 +969,9 @@ func (s *Service) refuseApply(w http.ResponseWriter, err error) {
 			body["your_base"] = raced.Base
 		}
 		if raced.Stored != "" {
-			body["stored_revision_id"] = raced.Stored
-			body["hint"] = "another write activated first; this revision was " +
-				"stored but not activated. Re-read /config and send the edit again"
+			maps.Copy(body, KeptRevision(raced))
+			body["hint"] = "another write activated first; " + keptSentence(raced) +
+				". Re-read /config and send the edit again"
 		}
 		if raced.Current != "" {
 			body["current_revision_id"] = raced.Current
@@ -943,6 +1002,8 @@ func (s *Service) refuseApply(w http.ResponseWriter, err error) {
 					"cancel an open invitation (DELETE /iam/invitations/{id}) — " +
 					"each an admin's gesture — then send the write again",
 			})
+	case errors.As(err, &unanswered):
+		RefuseActivationUnknown(w, unanswered, nil)
 	case errors.As(err, &unknown):
 		log.Warn("config_seat_holders_unreadable",
 			"seats", unknown.Seats, "error", unknown.Err)
@@ -956,6 +1017,80 @@ func (s *Service) refuseApply(w http.ResponseWriter, err error) {
 	default:
 		s.fail(w, "apply the config", err)
 	}
+}
+
+// RefuseActivationUnknown answers a write that was stored and whose activation
+// was not answered: an unknown outcome ([httpjson.UnknownOutcome]) naming the
+// stored revision, never "nothing was written", whichever surface the write
+// came through.
+//
+// NO OPERATION ID, because a config write carries none: what tells the caller
+// whether it landed is the pointer, which `GET /config` reads, naming the
+// stored revision or not. Sending the write again makes another revision —
+// over this one, if it landed — so the hint says how to look first, and how
+// to make the stored revision the company if it did not land.
+//
+// AND THE NODE, because that remedy is one node's. The revision is stored in
+// the history of the node that took the write and nowhere else, and only an
+// activation naming it carries it to the others: if it did not land, its diff
+// and its revert answer on that node alone, and every other answers 404. A
+// client behind a shared address told only to revert it reached another node,
+// was told the revision does not exist, and concluded the write was lost. So
+// the body names the node (`node`) and the hint sends both requests there —
+// what the command line's own unknown answer and a withheld offline change's
+// remedy already said.
+//
+// extra is a surface's own detail beside it — the setup surface's names of the
+// credentials it sealed first — and never wins over the revision, the node or
+// the hint.
+func RefuseActivationUnknown(w http.ResponseWriter, e *ActivationUnknownError, extra httpjson.Detail) {
+	body := make(httpjson.Detail, len(extra)+4)
+	maps.Copy(body, extra)
+	maps.Copy(body, httpjson.Detail{
+		"stored_revision_id": e.Stored,
+		"node":               e.Node,
+		"hint": "revision " + e.Stored + " was stored on node " + e.Node + ", and the " +
+			"coordination store did not answer its activation, so whether the fleet runs " +
+			"it is unknown. GET /config names the active revision once the store answers " +
+			"again. If it is not " + e.Stored + ", the revision is in node " + e.Node +
+			"'s history alone: send GET /config/revisions/" + e.Stored + "/diff, and POST " +
+			"/config/revisions/" + e.Stored + "/revert to make it the company, to that " +
+			"node — by its own address where a shared one fronts several, since any other " +
+			"node holds no copy and answers 404. Sending the write again makes another " +
+			"revision",
+	})
+	if e.Base != "" {
+		body["your_base"] = e.Base
+	}
+	httpjson.UnknownOutcome(w, authz.RetryUndecidedSeconds, "", false, body)
+}
+
+// KeptRevision is what an answer to a write that lost its activation says of
+// the revision the write left behind: its id, `stored_revision_id`, and the node
+// that stored it, `node` — both, or neither when the race was caught before
+// anything was stored. The config surface's 409 and 412 carry it, and so does
+// the setup surface's 409, from the one place.
+//
+// THE NODE BESIDE THE ID, for [RefuseActivationUnknown]'s reason: the kept
+// revision is a row of that node's history alone, since only an activation
+// naming it would have carried it to the others, and this one lost. A client
+// behind a shared address that went to revert to it, as the answer invites,
+// reached another node, was told it does not exist, and concluded the work was
+// gone.
+func KeptRevision(e *RacedError) httpjson.Detail {
+	if e.Stored == "" {
+		return httpjson.Detail{}
+	}
+	return httpjson.Detail{"stored_revision_id": e.Stored, "node": e.Node}
+}
+
+// keptSentence is the hint's account of a kept revision: where it is, and that
+// it is reached there alone.
+func keptSentence(e *RacedError) string {
+	return "this write was kept, inert, as revision " + e.Stored + " in node " + e.Node +
+		"'s history alone: GET /config/revisions/" + e.Stored + "/diff and POST " +
+		"/config/revisions/" + e.Stored + "/revert reach it on that node — by its own " +
+		"address where a shared one fronts several — and any other node answers 404"
 }
 
 // refuseDocument answers a refused document with its detail, its hint, and the
@@ -979,7 +1114,8 @@ func (s *Service) reload(w http.ResponseWriter, r *http.Request) {
 	// HEADER ONLY, like revert: this route reads no body, and it already
 	// knows what it did, so an unset summary defaults rather than
 	// answering 400.
-	applied, err := s.Reload(r.Context(), strings.TrimSpace(r.Header.Get("X-Summary")), attributionOf(r))
+	applied, err := s.Reload(r.Context(), strings.TrimSpace(r.Header.Get("X-Summary")),
+		attributionOf(r), "")
 	if err != nil {
 		s.refuseApply(w, err)
 		return
@@ -1004,10 +1140,10 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 	// OPENED, not copied. A revision this node cannot open cannot be
 	// reverted to, and finding that out now beats activating a document
 	// every node will fail to read. The refusal is the one every reader of
-	// a revision answers ([refuseUnreadable]).
+	// a revision answers ([RefuseUnreadable]).
 	document, company, err := s.openDocument(target)
 	if err != nil {
-		if !refuseUnreadable(w, err) {
+		if !RefuseUnreadable(w, err) {
 			s.fail(w, "open the revision to revert to", err)
 		}
 		return
@@ -1149,7 +1285,8 @@ func (s *Service) nudge(ctx context.Context, revisionID, summary, source string,
 	}
 }
 
-// checkPrecondition enforces If-Match, the optimistic-concurrency guard.
+// checkPrecondition enforces If-Match, the optimistic-concurrency guard,
+// against the fleet's revision ([Service.current]).
 //
 // Two operators editing one company through a full-document PUT is a
 // last-writer-wins race that silently discards the other's change. If-Match
@@ -1168,15 +1305,13 @@ func (s *Service) checkPrecondition(w http.ResponseWriter, r *http.Request, acti
 	if none := r.Header.Get("If-None-Match"); none != "" {
 		createOnly = strings.TrimSpace(none) == "*"
 		if !found {
-			// THE FLEET'S POINTER TOO, not just this node's store. A node
-			// that has joined a fleet and not reconciled yet, or whose
-			// best-effort copy of the pointer failed, has an empty store
-			// while the fleet runs a company. "Only if nothing is
-			// configured" asked of the local store alone would let the
-			// dashboard's create flow replace that company outright:
-			// renaming it changes every seat id derived from the name, and
-			// orphans all of their memory.
-			return createOnly, !createOnly || s.checkFleetAbsent(w, r)
+			// NOTHING IS CONFIGURED, asked of the fleet's pointer first —
+			// [Service.current] reads it, so a node that joined a fleet and
+			// has not reconciled yet answers the company the fleet runs. A
+			// pointer published after this read refuses the write at the
+			// compare-and-set, which is create-only for a write built on
+			// nothing, and answers as this would have.
+			return createOnly, true
 		}
 		if matchesTag(none, etagOf(active)) {
 			httpjson.FailWithFields(w, http.StatusPreconditionFailed,
@@ -1193,9 +1328,13 @@ func (s *Service) checkPrecondition(w http.ResponseWriter, r *http.Request, acti
 	expected := strings.TrimSpace(r.Header.Get("If-Match"))
 	switch {
 	case expected == "":
-		// Unconditional, and permitted: a first import has nothing to
-		// match against, and a script that owns the config outright has
-		// no race to lose.
+		// NO PRECONDITION, and permitted: a first import has nothing to
+		// match against, and a script that owns the config outright need
+		// not read before it writes. The activation is a compare-and-set
+		// all the same — built on the revision current() answers, expecting
+		// it (or expecting none) — so a write that lands between that read
+		// and the activation is answered 409 revision_advanced, never
+		// replaced: only the HTTP precondition is waived, not the race.
 		return false, true
 	case !found:
 		httpjson.FailWith(w, http.StatusPreconditionFailed, httpjson.CodeNoActiveRevision,
@@ -1211,37 +1350,6 @@ func (s *Service) checkPrecondition(w http.ResponseWriter, r *http.Request, acti
 	default:
 		return false, true
 	}
-}
-
-// checkFleetAbsent reports whether the FLEET has no activation, answering the
-// refusal itself when it has one.
-//
-// A plane that is not there is not an answer: this process cannot activate
-// anything, so the write is refused with 503 further on, where that is what
-// the caller needs to hear. A plane that cannot be READ is three-valued and
-// the third value is refused rather than guessed: "the fleet has nothing" and
-// "I could not ask" send a create-only write to opposite outcomes, and
-// guessing the first is the one that overwrites a running company.
-func (s *Service) checkFleetAbsent(w http.ResponseWriter, r *http.Request) bool {
-	if s.plane == nil {
-		return true
-	}
-	target, found, err := s.plane.Target(r.Context())
-	switch {
-	case err != nil:
-		s.fail(w, "read the fleet's activation", err)
-		return false
-	case !found:
-		return true
-	}
-	httpjson.FailWithFields(w, http.StatusPreconditionFailed, httpjson.CodeAlreadyConfigured, httpjson.Detail{
-		"current_revision_id": target.RevisionID,
-		"hint": "If-None-Match asked for this write to land only on a config " +
-			"that is not there; the fleet is running revision " + target.RevisionID +
-			", which this node has not caught up with yet. Read /config again " +
-			"once it has, and edit that",
-	})
-	return false
 }
 
 // --- plumbing --------------------------------------------------------------
@@ -1283,7 +1391,7 @@ func (s *Service) lookup(w http.ResponseWriter, r *http.Request, id string,
 		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeInvalidRevisionID)
 		return store.Revision{}, false
 	}
-	revision, found, err := s.configs.Get(r.Context(), id)
+	revision, found, err := s.revision(r.Context(), id)
 	if err != nil {
 		s.fail(w, "read revision", err)
 		return store.Revision{}, false
@@ -1295,8 +1403,14 @@ func (s *Service) lookup(w http.ResponseWriter, r *http.Request, id string,
 	return revision, true
 }
 
-// meta is a revision without its payload.
-func meta(revision store.Revision) map[string]any {
+// meta is a revision without its payload, `is_active` when it is the fleet's
+// revision, whose id is fleets.
+//
+// THE FLEET'S, not the one this node boots on: the listing marks the company,
+// which is what every other answer here calls active, and a node that refused
+// the fleet's revision would otherwise mark the one it still runs — telling an
+// operator the fleet is on a company it left.
+func meta(revision store.Revision, fleets string) map[string]any {
 	body := map[string]any{
 		"revision_id": revision.ID,
 		"created_at":  revision.CreatedAt.Format(time.RFC3339Nano),
@@ -1309,7 +1423,7 @@ func meta(revision store.Revision) map[string]any {
 		"operator_id":     revision.OperatorID,
 		"source":          revision.Source,
 		"summary":         revision.Summary,
-		"is_active":       revision.Active,
+		"is_active":       fleets != "" && revision.ID == fleets,
 	}
 	if revision.ParentID != "" {
 		body["parent_revision_id"] = revision.ParentID
@@ -1365,7 +1479,23 @@ func (s *Service) fail(w http.ResponseWriter, what string, err error) {
 	// references, an entity, and a write whose prior is the active
 	// revision. It was a 500 on all of them, which said nothing about a
 	// state an operator can fix and whose fix depends on the revision.
-	if refuseUnreadable(w, err) {
+	if RefuseUnreadable(w, err) {
+		return
+	}
+	// THE FLEET'S POINTER COULD NOT BE READ, which every answer here is
+	// about: not a fault of this node's, and retryable within a raft
+	// election, so a client comes back rather than reading a 500 as a
+	// broken install. Retried at the authorizer's own interval, which is
+	// the one every undecided request on this node is answered with.
+	//
+	// A READ, before anything was stored: a write whose activation went
+	// unanswered after it was stored is [RefuseActivationUnknown]'s, which
+	// [Service.refuseApply] answers before it gets here.
+	if errors.Is(err, coord.ErrUnavailable) {
+		log.Warn("config_request_unavailable", "what", what, "error", err)
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, authz.RetryUndecidedSeconds,
+			httpjson.Detail{"reason": "the fleet's activation could not be read " +
+				"from the coordination store"})
 		return
 	}
 	log.Error("config_request_failed", "what", what, "error", err)
@@ -1404,15 +1534,16 @@ func (e *UnreadableRevisionError) Remedy() string {
 		"import`, which stores it sealed"
 }
 
-// refuseUnreadable answers a revision this node cannot open, and reports
-// whether err was one.
+// RefuseUnreadable answers a revision this node cannot open, and reports
+// whether err was one: on this surface, and on a surface built on it that
+// reads the fleet's revision through [Service.FleetCompany].
 //
 // 409 with the code the cause names — [httpjson.CodeUnsealedRevision] or
 // [httpjson.CodeUnreadableRevision] — and the remedy as the hint. Two codes
 // and not one with two hints, because an envelope's message is the table's
 // sentence and always wins: under one code, an unsealed revision was answered
 // with a message telling the caller to put a key back that was never involved.
-func refuseUnreadable(w http.ResponseWriter, err error) bool {
+func RefuseUnreadable(w http.ResponseWriter, err error) bool {
 	var unreadable *UnreadableRevisionError
 	if !errors.As(err, &unreadable) {
 		return false

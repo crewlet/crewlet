@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -136,7 +137,7 @@ func (nobodyHolds) HolderRecord(_ context.Context, login string) (string, error)
 type noAppFlow struct{}
 
 func (noAppFlow) Complete(context.Context, string, string) (string, error) { return "", nil }
-func (noAppFlow) InstallURL(string) string                                 { return "" }
+func (noAppFlow) InstallURL(context.Context, string) string                { return "" }
 
 // active is a company revision that is active, for the cases about a
 // configured node.
@@ -434,6 +435,11 @@ func TestAnIdleNodeReportsItsZerosRatherThanOmittingThem(t *testing.T) {
 	if seats, ok := body["seats"].([]any); !ok || len(seats) != 0 {
 		t.Errorf("seats = %#v, want an empty list", body["seats"])
 	}
+	// THE ONE ENGINE FIELD WHOSE ABSENCE IS ITS ANSWER: no apply attempt has
+	// concluded in this process, and a zero epoch would claim one did.
+	if attempt, present := body["config_attempt"]; present {
+		t.Errorf("config_attempt = %v before any attempt, want it absent", attempt)
+	}
 }
 
 func TestANodeReportsWhatOnlyTheEngineCanKnow(t *testing.T) {
@@ -443,12 +449,19 @@ func TestANodeReportsWhatOnlyTheEngineCanKnow(t *testing.T) {
 		Runtime: &fakeRuntime{state: api.RuntimeState{
 			InFlight: 3, Posture: "serve", AppliedEpoch: 41,
 			StartedAt: "2026-06-14T11:00:00Z", Seats: []string{"ceo", "cto"},
+			ConfigAttempt: &api.ConfigAttempt{Epoch: 42, RevisionID: "rev-42", Status: "error"},
 		}},
 	})
 	_, body := get(t, a, "/health")
 
 	if body["in_flight"] != float64(3) || body["applied_epoch"] != float64(41) {
 		t.Errorf("body = %v", body)
+	}
+	// A REFUSAL THE APPLIED EPOCH CANNOT SAY: still 41, and epoch 42's
+	// revision refused here.
+	want := map[string]any{"epoch": float64(42), "revision_id": "rev-42", "status": "error"}
+	if !reflect.DeepEqual(body["config_attempt"], want) {
+		t.Errorf("config_attempt = %v, want %v", body["config_attempt"], want)
 	}
 	seats, _ := body["seats"].([]any)
 	if len(seats) != 2 {

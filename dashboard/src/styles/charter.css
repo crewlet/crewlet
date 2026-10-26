@@ -11,8 +11,3 @@
   flex-direction: column;
   gap: var(--spacing-2);
 }
-
-/* The line under a part just saved, a step under its words. */
-.charter-edit__note {
-  margin: var(--spacing-2) 0 0;
-}

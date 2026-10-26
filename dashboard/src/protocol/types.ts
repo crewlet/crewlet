@@ -1748,19 +1748,68 @@ export interface FleetNode {
   seats: number;
   /** Seconds until this node's own lease expires. */
   expires_in?: number;
+  /**
+   * The epoch this node last ATTEMPTED, with `config_status` saying how that
+   * went and `config_error` why it failed — never, by itself, the epoch it
+   * runs: a node that refused the fleet's revision reports that revision's
+   * epoch beside `error`, and goes on serving the one before it. Which revision
+   * it runs is `config_serving_revision_id`; whether that is the fleet's is
+   * `configStanding`'s question (`lib/configStanding.ts`).
+   */
   config_epoch?: number;
   config_status?: string;
   config_error?: string;
   /**
-   * WHICH revision this node is on, which the epoch does not say.
+   * WHICH revision this node last attempted, at `config_epoch` — which the
+   * epoch does not say.
    *
    * Carried on the apply record for exactly this reason: a fleet view is read
    * while nodes are mid-transition, and a node still on the previous revision
-   * is what an operator is looking for. `internal/api/queries/fleet.go` has
-   * written it on every row since it was added; this type simply never
-   * declared it, so the one screen that compares them read it through a cast.
+   * is what an operator is looking for. Whether the attempt took is
+   * `config_status`; what the node runs is `config_serving_revision_id`.
    */
   config_revision_id?: string;
+  /**
+   * The revision this node's engine RUNS: the one its last successful apply
+   * installed, or the one it booted on; empty while it runs none. A node that
+   * refused the fleet's revision goes on serving the one before, and this is
+   * the field an operator reads to see which.
+   *
+   * NOT "IT DIFFERS FROM `config_revision_id`" AS THE TEST FOR A REFUSAL: a
+   * refused re-activation of the revision a node already runs — the
+   * credential-rotation gesture — names one revision in both, and read that
+   * way a refused rotation is a node that converged. `config_status` (`error`
+   * or `degraded`) is what says the attempt was refused; this says what runs
+   * regardless (`coord.NodeApply.Serving`).
+   */
+  config_serving_revision_id?: string;
+  /**
+   * The revision this node would COME BACK ON if it restarted now: its boot
+   * row's, as its reconciler last read or wrote it. Absent from a node that
+   * boots on nothing — one whose own database is discarded at every start, one
+   * that has never applied a revision and holds no offline choice, and a build
+   * older than the field — and never absent because the row could not be read.
+   *
+   * A THIRD FACT, not a reading of `config_serving_revision_id`: what a node
+   * boots on moves only once an apply has SUCCEEDED, and that write is local
+   * and best effort, so while a failed one is retried the node runs a revision
+   * it would not start on and the two names differ (`coord.NodeApply.Boots`).
+   */
+  config_boot_revision_id?: string;
+  /**
+   * The epoch this node last APPLIED — its reconciler's own progress, the
+   * fleet view's copy of the `applied_epoch` its health push carries — beside
+   * `config_epoch`, the one it last ATTEMPTED. The two differ exactly when
+   * `config_status` says that attempt failed: a node that applied 5 and
+   * refused 6 reports `config_epoch` 6 and this 5, and only this says the
+   * epoch it runs. A save is judged on a node by comparing the saved epoch
+   * with this, as the node's own push is judged (`coord.NodeApply.Applied`).
+   *
+   * ABSENT, never 0, from a node that has applied nothing since it started —
+   * it runs what it booted on, or nothing — and from a build older than the
+   * field: a 0 is an epoch a comparison would read.
+   */
+  config_applied_epoch?: number;
   config_reported_at?: string;
   /**
    * How far this node's own derived copies have come up — `ready` of `total`.
@@ -2205,6 +2254,15 @@ export interface FleetDutyLease {
   expires_in?: number;
 }
 
+/** The fleet's activation pointer as the fleet answer renders it. */
+export interface FleetActivation {
+  epoch: number;
+  revision_id: string;
+  /** RFC 3339, or empty where the pointer carried no instant. */
+  at: string;
+  summary: string;
+}
+
 export interface FleetAnswer {
   nodes: FleetNode[];
   seats: FleetSeatLease[];
@@ -2212,8 +2270,20 @@ export interface FleetAnswer {
   unplaceable: { handle: string; placement?: string; reason?: string }[];
   unmanned_roles: string[];
   this_node: string;
-  /** The epoch every node is meant to converge on. A number, not an id. */
+  /**
+   * The epoch every node is meant to converge on. A number, not an id: which
+   * revision it stands for is `activation`. 0 when there is no activation or
+   * it could not be read.
+   */
   target_epoch: number;
+  /**
+   * The activation `target_epoch` is — which revision, activated when, with
+   * the summary whoever activated it wrote. Read in the same read as the
+   * epoch, so the two never describe different activations. NULL when nothing
+   * has been activated or the pointer could not be read: there is then no
+   * target, and no node is behind one.
+   */
+  activation?: FleetActivation | null;
   /** Where the company's files are kept; absent where the node reads no record. */
   objects?: FleetObjects;
 }

@@ -2936,6 +2936,115 @@ func TestTheFleetNamesTheRevisionAndNotJustTheEpoch(t *testing.T) {
 	}
 }
 
+// WHICH REVISION A NODE ATTEMPTED IS NOT WHICH ONE IT RUNS, and the fleet view
+// says both (#324).
+//
+// A node that refused the fleet's revision reports the failed attempt at the
+// target — that revision, status error — and goes on serving the one before
+// it. With only the attempt on the row, "the active revision failed on
+// node-b" was all a screen could say, never "node-b is still serving P", and
+// whether node-b was taking traffic on the old company or on nothing at all
+// was a question for its logs.
+//
+// NOR IS EITHER OF THEM WHAT IT WOULD COME BACK ON: the boot row moves only
+// after an apply succeeds, and a write to it that failed leaves a node running
+// a revision it would not restart on. node-b is that node here, and whoever
+// keeps what a node needs in order to start reads `config_boot_revision_id`.
+// It is ABSENT rather than empty from a node that boots on nothing — a node
+// whose database is discarded at every start, and a build older than the
+// field — which node-a is.
+//
+// AND THE EPOCH EACH LAST APPLIED, which the attempted one does not say for
+// the node that refused it: node-b attempted the fleet's epoch and still runs
+// what it applied at the epoch before, and a screen judging whether a save
+// reached it compares the saved epoch with `config_applied_epoch`, as a node's
+// own health push compares it with its live epoch. ABSENT from a node that has
+// applied nothing — node-c, which booted on what it holds and refused the
+// first epoch it met — rather than a 0 a client would compare.
+//
+// Mutations: answer config_boot_revision_id from the record's Serving and
+// node-b's row names the revision it runs, which is not the one it would boot;
+// answer config_applied_epoch from the record's Epoch and node-b reads as
+// running the epoch it refused.
+func TestTheFleetViewSaysWhichRevisionEachNodeServes(t *testing.T) {
+	t.Parallel()
+	pinned := time.Date(2026, 5, 4, 9, 30, 0, 0, time.UTC)
+	backend := coordmemory.New()
+	for _, node := range []string{"node-a", "node-b", "node-c"} {
+		if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource(node),
+			coord.AcquireOptions{Owner: node + ":1", TTL: time.Minute}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plane := coordmemory.NewFleet()
+	// THE EPOCH node-b still runs: rev-1, activated before the fleet moved.
+	before, err := plane.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: "rev-1", Payload: []byte("{}"), At: pinned.Add(-time.Hour),
+		Summary: "the company before", Origin: coord.RevisionOrigin{Author: "maya",
+			AuthorKind: "operator", Source: "api", CreatedAt: pinned.Add(-time.Hour)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, err := plane.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: "rev-2", Payload: []byte("{}"), At: pinned, Summary: "add a provider",
+		Origin: coord.RevisionOrigin{Author: "maya", AuthorKind: "operator", Source: "api",
+			CreatedAt: pinned},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range []coord.NodeApply{
+		{NodeID: "node-a", Epoch: published.Epoch, RevisionID: "rev-2",
+			Applied: published.Epoch, Serving: "rev-2",
+			Status: string(configplane.StatusOK), UpdatedAt: pinned},
+		{NodeID: "node-b", Epoch: published.Epoch, RevisionID: "rev-2",
+			Applied: before.Epoch, Serving: "rev-1",
+			Boots: "rev-0", Status: string(configplane.StatusError),
+			Error: "no profile for the provider", UpdatedAt: pinned},
+		{NodeID: "node-c", Epoch: published.Epoch, RevisionID: "rev-2", Serving: "rev-1",
+			Boots: "rev-1", Status: string(configplane.StatusError),
+			Error: "no profile for the provider", UpdatedAt: pinned},
+	} {
+		if err := plane.RecordApply(t.Context(), record); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	body := asMap(t, answer(t, queries.Sources{
+		Coord: backend, Plane: plane, NodeID: "node-a",
+	}, "fleet", nil))
+	byID := map[string]map[string]any{}
+	for _, row := range rows(t, body["nodes"]) {
+		byID[fmt.Sprint(row["id"])] = row
+	}
+	for node, want := range map[string]string{"node-a": "rev-2", "node-b": "rev-1",
+		"node-c": "rev-1"} {
+		if got := byID[node]["config_serving_revision_id"]; got != want {
+			t.Errorf("%s serves %v, want %s", node, got, want)
+		}
+		if got := byID[node]["config_revision_id"]; got != "rev-2" {
+			t.Errorf("%s attempted %v, want the fleet's rev-2", node, got)
+		}
+	}
+	if got := byID["node-b"]["config_boot_revision_id"]; got != "rev-0" {
+		t.Errorf("node-b boots on %v, want rev-0 — the revision its boot row still "+
+			"names while it runs rev-1", got)
+	}
+	if got, named := byID["node-a"]["config_boot_revision_id"]; named {
+		t.Errorf("node-a, which reported no boot revision, boots on %v", got)
+	}
+	for node, want := range map[string]int64{"node-a": published.Epoch,
+		"node-b": before.Epoch} {
+		if got := byID[node]["config_applied_epoch"]; got != float64(want) {
+			t.Errorf("%s applied epoch %v, want %d", node, got, want)
+		}
+	}
+	if got, named := byID["node-c"]["config_applied_epoch"]; named {
+		t.Errorf("node-c, which has applied nothing, applied epoch %v", got)
+	}
+}
+
 // A FLEET WITH NO ACTIVATION CARRIES NO ACTIVATION RECORD, rather than an
 // object of empty strings: a screen given one would render a revision named ""
 // activated at the zero time, which is a worse answer than none.

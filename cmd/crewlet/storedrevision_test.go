@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -31,9 +33,25 @@ const storedRevisionDoc = `{"name":"Nimbus",` +
 	`"workers":{"researcher":{"description":"reads sources and reports findings",` +
 	`"system_prompt":"You research.","model":"nonexistent"}}}`
 
-// activateStored marks raw bytes active in the node's store, the way a peer's
-// revision lands there, and returns its id.
-func activateStored(t *testing.T, cfg, payload string) string {
+// serveStored stores raw bytes as the revision this node boots on, the way one
+// its reconciler applied lands there, and returns its id.
+//
+// A REVISION THIS BUILD CANNOT RUN may be served this way too: online a node
+// serves only what its engine applied, so a boot row this build refuses was
+// served by another build — the binary was downgraded, or the store restored —
+// and that is the state those cases stand for.
+func serveStored(t *testing.T, cfg, payload string) string {
+	t.Helper()
+	return serveStoredAt(t, cfg, payload, time.Now().UTC())
+}
+
+// runnableRevisionDoc is a company document this build runs.
+const runnableRevisionDoc = `{"name":"Nimbus",` +
+	`"providers":{"sandbox":{"fake":true},"llm":{"main":{"model":"claude-sonnet-5"}}}}`
+
+// serveStoredAt is [serveStored] at an activation instant the case chooses,
+// which the store records as the activation this node applied.
+func serveStoredAt(t *testing.T, cfg, payload string, activated time.Time) string {
 	t.Helper()
 	cs, closeStore, err := openConfigStore(t.Context(), cfg, "")
 	if err != nil {
@@ -42,59 +60,43 @@ func activateStored(t *testing.T, cfg, payload string) string {
 	defer closeStore()
 	// SEALED, as every revision a node holding a keyring keeps is: the node
 	// this stands in for fetched it from its peers, and a plaintext one would
-	// have been refused before it was ever adopted.
+	// have been refused before it was ever applied.
 	sealed, err := secrets.Seal(cs.cipher, []byte(payload))
 	if err != nil {
 		t.Fatalf("seal the revision: %v", err)
 	}
-	id, err := cs.configs.InsertActive(t.Context(), store.Revision{
-		Source: "fleet", CreatedBy: "peer", CreatedByKind: iam.ActorOperator,
-		Summary: "from a peer", Payload: sealed, CreatedAt: time.Now().UTC(),
-	})
-	if err != nil {
-		t.Fatalf("store the revision: %v", err)
+	served := store.Revision{
+		ID: uuid.NewString(), Source: "fleet", CreatedBy: "peer",
+		CreatedByKind: iam.ActorOperator, Summary: "from a peer", Payload: sealed,
+		CreatedAt: activated, ActivatedAt: activated,
 	}
-	return id
+	// The reconciler's two verbs, in its order: the tick records the fleet's
+	// revision it opened, and serves it once the engine applied it.
+	if err := cs.configs.SawFleet(t.Context(), served); err != nil {
+		t.Fatalf("record the fleet's revision: %v", err)
+	}
+	if err := cs.configs.Serve(t.Context(), served); err != nil {
+		t.Fatalf("serve the revision: %v", err)
+	}
+	return served.ID
 }
 
-// runnableRevisionDoc is a company document this build runs.
-const runnableRevisionDoc = `{"name":"Nimbus",` +
-	`"providers":{"sandbox":{"fake":true},"llm":{"main":{"model":"claude-sonnet-5"}}}}`
-
-// activateStoredAt is [activateStored] at an activation instant the case
-// chooses, which the store records as the revision's activation.
-func activateStoredAt(t *testing.T, cfg, payload string, activated time.Time) {
+// bootActivation is the instant of the activation the revision this node boots
+// on was applied from — [store.Revision.ServedAt], which is what the boot
+// stamps the chart with, and NOT ActivatedAt, which a re-activation this node
+// refused raises without having applied it here.
+func bootActivation(t *testing.T, cfg string) time.Time {
 	t.Helper()
 	cs, closeStore, err := openConfigStore(t.Context(), cfg, "")
 	if err != nil {
 		t.Fatalf("open the store: %v", err)
 	}
 	defer closeStore()
-	sealed, err := secrets.Seal(cs.cipher, []byte(payload))
-	if err != nil {
-		t.Fatalf("seal the revision: %v", err)
-	}
-	if _, err := cs.configs.InsertActive(t.Context(), store.Revision{
-		Source: "fleet", CreatedBy: "peer", CreatedByKind: iam.ActorSystem,
-		Summary: "from a peer", Payload: sealed, CreatedAt: activated,
-	}); err != nil {
-		t.Fatalf("store the revision: %v", err)
-	}
-}
-
-// activeActivation is the instant the store recorded with its active copy.
-func activeActivation(t *testing.T, cfg string) time.Time {
-	t.Helper()
-	cs, closeStore, err := openConfigStore(t.Context(), cfg, "")
-	if err != nil {
-		t.Fatalf("open the store: %v", err)
-	}
-	defer closeStore()
-	active, found, err := cs.configs.Active(t.Context())
+	boot, found, err := cs.configs.Boot(t.Context())
 	if err != nil || !found {
-		t.Fatalf("read the active revision: found=%v err=%v", found, err)
+		t.Fatalf("read the revision this node boots on: found=%v err=%v", found, err)
 	}
-	return active.ActivatedAt
+	return boot.ServedAt
 }
 
 // companyLabel is what a case's failure calls a company: its name, or that
@@ -110,7 +112,24 @@ func companyLabel(c *config.Company) string {
 // cfg names, with seed on its command line.
 func bootOn(t *testing.T, cfg string, seed tierBSeed, log *slog.Logger) (seedPlan, error) {
 	t.Helper()
-	return decideSeed(t.Context(), &config.Bootstrap{}, seed, storeAt(cfg), log)
+	return decideOn(t, &config.Bootstrap{}, seed, cfg, log)
+}
+
+// decideOn is [decideSeed] over the store cfg names, for a case that starts no
+// engine on the plan: the claim the decision takes on that store ([heldStore])
+// goes back at once, as `crewlet run` gives it back once its engine has opened
+// the file ([bootEngine]). Kept, it would outlast the case on a path a later
+// step may hand another process — an offline command, a holder standing in
+// for the engine ([holdTheStore]) — and refuse it in the name of a boot that
+// never started.
+func decideOn(t *testing.T, boot *config.Bootstrap, seed tierBSeed, cfg string,
+	log *slog.Logger) (seedPlan, error) {
+
+	t.Helper()
+	plan, err := decideSeed(t.Context(), boot, seed, storeAt(cfg), log)
+	plan.held.release()
+	plan.held = heldStore{}
+	return plan, err
 }
 
 // A BOOT FROM THE STORE CARRIES THE INSTANT ITS REVISION WAS ACTIVATED, which
@@ -127,7 +146,7 @@ func TestABootFromTheStoreCarriesItsRevisionsActivation(t *testing.T) {
 	}
 
 	activated := time.Date(2026, 4, 1, 9, 30, 0, 123_456_000, time.UTC)
-	activateStoredAt(t, cfg, duplicateKeysRevision, activated)
+	serveStoredAt(t, cfg, duplicateKeysRevision, activated)
 
 	plan, err := bootOn(t, cfg, tierBSeed{}, quiet())
 	if err != nil || plan.company == nil {
@@ -170,7 +189,7 @@ func TestRunBootsTheEngineOnTheRevisionItsStoreActivated(t *testing.T) {
 		t.Error("the engine is not handed the Tier A the run loaded")
 	}
 
-	activateStored(t, cfg, runnableRevisionDoc)
+	serveStored(t, cfg, runnableRevisionDoc)
 	if plan, err = bootOn(t, cfg, tierBSeed{}, quiet()); err != nil {
 		t.Fatal(err)
 	}
@@ -179,13 +198,13 @@ func TestRunBootsTheEngineOnTheRevisionItsStoreActivated(t *testing.T) {
 		t.Fatalf("the options from the store = (%+v, %v), want its company",
 			companyLabel(opts.Company), err)
 	}
-	if stored := activeActivation(t, cfg); opts.ActivatedAt.IsZero() ||
+	if stored := bootActivation(t, cfg); opts.ActivatedAt.IsZero() ||
 		!opts.ActivatedAt.Equal(stored) {
 		t.Errorf("the engine is handed activation %s, want the stored revision's %s",
 			opts.ActivatedAt, stored)
 	}
 
-	id := activateStored(t, cfg, storedRevisionDoc)
+	id := serveStored(t, cfg, storedRevisionDoc)
 	if _, err = bootOn(t, cfg, tierBSeed{}, quiet()); err == nil ||
 		!strings.Contains(err.Error(), id) {
 		t.Errorf("a store holding a revision this build cannot run booted "+
@@ -230,7 +249,7 @@ func TestAFileTheBootWillImportIsNotWhatTheEngineBootsOn(t *testing.T) {
 	t.Run("-import-company over a runnable revision", func(t *testing.T) {
 		t.Parallel()
 		cfg := bootstrapForStore(t, t.TempDir())
-		activateStored(t, cfg, runnableRevisionDoc)
+		serveStored(t, cfg, runnableRevisionDoc)
 		plan, err := bootOn(t, cfg, overrideOf(file), quiet())
 		if err != nil {
 			t.Fatal(err)
@@ -244,7 +263,7 @@ func TestAFileTheBootWillImportIsNotWhatTheEngineBootsOn(t *testing.T) {
 	t.Run("-import-company over a revision this build cannot run", func(t *testing.T) {
 		t.Parallel()
 		cfg := bootstrapForStore(t, t.TempDir())
-		activateStored(t, cfg, storedRevisionDoc)
+		serveStored(t, cfg, storedRevisionDoc)
 		plan, err := bootOn(t, cfg, overrideOf(file), quiet())
 		if err != nil || plan.company != nil || plan.act != seedImport {
 			t.Errorf("-import-company over a revision this build refuses = (%v, %q, %v), "+
@@ -255,9 +274,9 @@ func TestAFileTheBootWillImportIsNotWhatTheEngineBootsOn(t *testing.T) {
 	t.Run("a scratch store", func(t *testing.T) {
 		t.Parallel()
 		scratch := &config.Bootstrap{Store: config.Store{Scratch: true}}
-		unread := func(context.Context) (storedActive, bool, error) {
+		unread := func(context.Context) (storedState, heldStore, error) {
 			t.Error("a scratch store was read to decide the boot")
-			return storedActive{}, false, nil
+			return storedState{}, heldStore{}, nil
 		}
 		for _, seed := range []tierBSeed{seedOf(file), {Path: "company.yaml"}} {
 			plan, err := decideSeed(t.Context(), scratch, seed, unread, quiet())
@@ -287,8 +306,8 @@ func TestAFileTheBootWillImportIsNotWhatTheEngineBootsOn(t *testing.T) {
 // nothing.
 //
 // A STORED REVISION THIS BUILD CANNOT RUN still refuses the boot, as it does
-// with no file — and the file on the command line is named as the override
-// that would replace it.
+// with no file, and with the same remedy
+// ([TestABootOnARevisionThisBuildCannotRunNamesNoOfflineActivation]).
 func TestABootstrapSeedTheStoreOutranksBootsTheStoredRevision(t *testing.T) {
 	t.Parallel()
 	file := parse(t, companyYAML)
@@ -296,7 +315,7 @@ func TestABootstrapSeedTheStoreOutranksBootsTheStoredRevision(t *testing.T) {
 	t.Run("a different file", func(t *testing.T) {
 		t.Parallel()
 		cfg := bootstrapForStore(t, t.TempDir())
-		id := activateStored(t, cfg, runnableRevisionDoc)
+		id := serveStored(t, cfg, runnableRevisionDoc)
 		var logged bytes.Buffer
 		plan, err := bootOn(t, cfg, seedOf(file), slog.New(slog.NewTextHandler(&logged, nil)))
 		if err != nil {
@@ -306,7 +325,7 @@ func TestABootstrapSeedTheStoreOutranksBootsTheStoredRevision(t *testing.T) {
 			t.Fatalf("a stale -company file boots on %v to %q, want the stored "+
 				"Nimbus and nothing imported", companyLabel(plan.company), plan.act)
 		}
-		if stored := activeActivation(t, cfg); !plan.activatedAt.Equal(stored) {
+		if stored := bootActivation(t, cfg); !plan.activatedAt.Equal(stored) {
 			t.Errorf("the boot carries activation %s, want the stored revision's %s",
 				plan.activatedAt, stored)
 		}
@@ -324,7 +343,7 @@ func TestABootstrapSeedTheStoreOutranksBootsTheStoredRevision(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		activateStored(t, cfg, string(document))
+		serveStored(t, cfg, string(document))
 		var logged bytes.Buffer
 		plan, err := bootOn(t, cfg, seedOf(file), slog.New(slog.NewTextHandler(&logged, nil)))
 		if err != nil {
@@ -342,12 +361,12 @@ func TestABootstrapSeedTheStoreOutranksBootsTheStoredRevision(t *testing.T) {
 	t.Run("over a revision this build cannot run", func(t *testing.T) {
 		t.Parallel()
 		cfg := bootstrapForStore(t, t.TempDir())
-		id := activateStored(t, cfg, storedRevisionDoc)
+		id := serveStored(t, cfg, storedRevisionDoc)
 		_, err := bootOn(t, cfg, seedOf(file), quiet())
 		if err == nil {
 			t.Fatal("a boot over a stored revision this build cannot run was accepted")
 		}
-		for _, want := range []string{id, "-import-company company.yaml", "crewlet config import"} {
+		for _, want := range []string{id, "crewlet config import"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("the refusal does not mention %q: %v", want, err)
 			}
@@ -384,8 +403,8 @@ func TestARevisionThisBuildRefusesIsStillShownExportedAndDiffed(t *testing.T) {
 	if _, errs, err := configCmd(t, cfg, "import", companyFile(t, dir, "company.yaml", nil)); err != nil {
 		t.Fatalf("import: %v (%s)", err, errs)
 	}
-	firstID := activeRevisionID(t, cfg)
-	activateStored(t, cfg, storedRevisionDoc)
+	firstID := bootRevisionID(t, cfg)
+	serveStored(t, cfg, storedRevisionDoc)
 
 	for _, args := range [][]string{
 		{"show"},
@@ -449,7 +468,7 @@ func TestADuplicateUnitKeyBootsFromTheStoreAndIsRefusedFromAFile(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
-	activateStored(t, cfg, duplicateKeysRevision)
+	serveStored(t, cfg, duplicateKeysRevision)
 
 	plan, err := bootOn(t, cfg, tierBSeed{}, quiet())
 	if err != nil {
@@ -490,8 +509,8 @@ func TestAStoredCompanyBootsWithTheInstantItWasActivated(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
-	activateStored(t, cfg, duplicateKeysRevision)
-	stored := activeActivation(t, cfg)
+	serveStored(t, cfg, duplicateKeysRevision)
+	stored := bootActivation(t, cfg)
 
 	plan, err := bootOn(t, cfg, tierBSeed{}, quiet())
 	if err != nil {
@@ -504,25 +523,80 @@ func TestAStoredCompanyBootsWithTheInstantItWasActivated(t *testing.T) {
 	}
 }
 
-// BOOTING IS APPLYING, AND THE REFUSAL NAMES THE REVISION AND THE WAY OUT.
-//
-// The node is not serving its API yet, so an offline import is the repair,
-// and an error that did not say which revision failed would leave the
-// operator reading the store by hand.
-func TestBootingOnARevisionThisBuildCannotRunNamesTheRevision(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	cfg := bootstrapForStore(t, dir)
-	id := activateStored(t, cfg, storedRevisionDoc)
+// undecodableRevisionDoc is a document no build of this one's decodes: a name
+// that is not a string.
+const undecodableRevisionDoc = `{"name":["not","a","name"]}`
 
-	plan, err := bootOn(t, cfg, tierBSeed{}, quiet())
-	if err == nil {
-		t.Fatalf("a node booted onto a revision this build cannot run: %s", companyLabel(plan.company))
-	}
-	for _, want := range []string{id, "crewlet config import", "nonexistent"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the boot refusal does not mention %q: %v", want, err)
+// BOOTING IS APPLYING, AND THE REFUSAL NAMES THE REVISION AND THE WAY OUT —
+// and no way out that is not one.
+//
+// A node's store names only a revision it applied or one an offline command of
+// this build held to the same rules, so a boot row this build cannot run was
+// written by another build or another store, and the first way out is that
+// build. The other is an offline import, which the next start publishes only
+// over the revision it is built on. The refusal used to offer `crewlet config
+// activate`, which boots on a stored revision this same check refuses, and
+// -import-company, which replaces whatever the fleet runs — a newer company
+// included — to start one node. A document that does not decode is refused the
+// same way as one that does not validate.
+//
+// Mutation: restore either old remedy, or leave the base out of the publish
+// clause, and the case fails.
+func TestABootOnARevisionThisBuildCannotRunNamesNoOfflineActivation(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, document, cause string
+		seed                  tierBSeed
+	}{
+		{"a revision that does not validate", storedRevisionDoc, "nonexistent", tierBSeed{}},
+		{"a revision that does not decode", undecodableRevisionDoc, "cannot unmarshal", tierBSeed{}},
+		{"with a -company file beside it", storedRevisionDoc, "nonexistent",
+			seedOf(parse(t, companyYAML))},
+	} {
+		cfg := bootstrapForStore(t, t.TempDir())
+		id := serveStored(t, cfg, tc.document)
+
+		plan, err := bootOn(t, cfg, tc.seed, quiet())
+		if err == nil {
+			t.Errorf("%s: a node booted onto a revision this build cannot run: %s",
+				tc.name, companyLabel(plan.company))
+			continue
 		}
+		for _, want := range []string{id, tc.cause, "start the build that wrote it",
+			"crewlet config import", "only while the fleet still runs " + id} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: the boot refusal does not mention %q: %v", tc.name, want, err)
+			}
+		}
+		for _, never := range []string{"-import-company", "config activate"} {
+			if strings.Contains(err.Error(), never) {
+				t.Errorf("%s: the boot refusal offers %q: %v", tc.name, never, err)
+			}
+		}
+	}
+
+	// AN OFFER BUILT ON NO COMPANY — a newer build's offline import on a node
+	// that knew none — is published only where the fleet has none.
+	cfg := bootstrapForStore(t, t.TempDir())
+	cs, closeStore, err := openConfigStore(t.Context(), cfg, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := secrets.Seal(cs.cipher, []byte(storedRevisionDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cs.configs.Offer(t.Context(), store.Offer{}, store.Revision{
+		Source: "file", CreatedBy: "ops", CreatedByKind: iam.ActorOperator,
+		Summary: "a newer build's import", Payload: sealed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	closeStore()
+	if _, err := bootOn(t, cfg, tierBSeed{}, quiet()); err == nil ||
+		!strings.Contains(err.Error(), "only if the fleet has no company yet") {
+		t.Errorf("a boot over an offer built on no company = %v, want the publish "+
+			"clause for a fleet with none", err)
 	}
 }
 
@@ -571,8 +645,8 @@ func TestACompanyFileWithADuplicateUnitKeyRunsAndIsRefusedOnlyOnImport(t *testin
 			!strings.Contains(err.Error(), file) {
 			t.Fatalf("seed into an empty store = %v, want a refusal naming the file and the rule", err)
 		}
-		if _, found, _ := db.Configs().Active(t.Context()); found {
-			t.Error("a refused seed stored a revision")
+		if revisions, err := db.Configs().List(t.Context(), 0, 0); err != nil || len(revisions) != 0 {
+			t.Errorf("a refused seed stored %d revisions (%v), want none", len(revisions), err)
 		}
 		if _, found, _ := fleet.Target(t.Context()); found {
 			t.Error("a refused seed moved the activation pointer")
@@ -585,9 +659,11 @@ func TestACompanyFileWithADuplicateUnitKeyRunsAndIsRefusedOnlyOnImport(t *testin
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.Configs().InsertActive(t.Context(), store.Revision{
-			Source: "file", CreatedBy: testNode, CreatedByKind: iam.ActorSystem,
-			Summary: "admitted under other rules", Payload: sealed, CreatedAt: time.Now().UTC(),
+		applied := time.Now().UTC()
+		if err := db.Configs().Serve(t.Context(), store.Revision{
+			ID: uuid.NewString(), Source: "file", CreatedBy: testNode,
+			CreatedByKind: iam.ActorSystem, Summary: "admitted under other rules",
+			Payload: sealed, CreatedAt: applied, ActivatedAt: applied,
 		}); err != nil {
 			t.Fatal(err)
 		}

@@ -219,6 +219,10 @@ func (r engineRuntime) Snapshot(ctx context.Context) RuntimeState {
 		Posture:      string(r.reconciler.Posture(ctx)),
 		AppliedEpoch: r.reconciler.Applied(),
 	}
+	if attempt, ok := r.reconciler.Attempt(); ok {
+		state.ConfigAttempt = &ConfigAttempt{Epoch: attempt.Epoch,
+			RevisionID: attempt.RevisionID, Status: attempt.Status}
+	}
 	return state
 }
 

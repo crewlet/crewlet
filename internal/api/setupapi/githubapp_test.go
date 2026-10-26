@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/setupapi"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -31,17 +30,14 @@ import (
 // the one that happened to be found.
 func TestTheServiceAlwaysHasAClock(t *testing.T) {
 	t.Parallel()
-	s := newService(t, setupapi.Options{
-		WebhookBase: fixtureWebhookBase,
-		Company:     companySource(t, &config.Company{}),
-	})
+	s := newService(t, setupapi.Options{WebhookBase: fixtureWebhookBase})
 	// The flow mints a state, which reads the clock. A nil one panics
 	// here rather than in a request nobody can retry.
 	flow := s.AppFlow()
 	if flow == nil {
 		t.Fatal("no app flow")
 	}
-	if got := flow.InstallURL("nobody"); got != "" {
+	if got := flow.InstallURL(t.Context(), "nobody"); got != "" {
 		t.Errorf("a seat that does not exist has an install URL: %q", got)
 	}
 }

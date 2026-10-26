@@ -30,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -355,8 +356,9 @@ func parityWorldOf(t *testing.T, source string) paritySources {
 	if err != nil {
 		t.Fatalf("NewCipher: %v", err)
 	}
-	configs, err := configapi.New(configapi.Options{Store: db, Plane: coordmemory.NewFleet(),
-		Cipher: cipher, Holders: func(context.Context, []string, time.Time) (
+	plane := coordmemory.NewFleet()
+	configs, err := configapi.New(configapi.Options{Store: db, Plane: plane,
+		Cipher: cipher, Node: "core-1", Holders: func(context.Context, []string, time.Time) (
 			map[string]configapi.SeatHolder, error) {
 			return nil, nil
 		}})
@@ -366,6 +368,7 @@ func parityWorldOf(t *testing.T, source string) paritySources {
 	// AN ACTIVE REVISION, with principles, so the company document's routes
 	// the catalogue reads (the principles) answer as the authority decides
 	// rather than 404 for everybody, which no principal could be compared on.
+	// Stored, and activated on the fleet: the company is the pointer.
 	company.Mission = "Make every invoice add up."
 	company.Policies = []string{"Money is an integer number of cents."}
 	document, err := json.Marshal(company)
@@ -376,9 +379,19 @@ func parityWorldOf(t *testing.T, source string) paritySources {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Configs().InsertActive(t.Context(), store.Revision{
+	revision := store.Revision{
 		CreatedByKind: iam.ActorOperator, Source: "test", CreatedBy: "operator",
 		Summary: "the parity company", Payload: payload, CreatedAt: clock,
+	}
+	id, err := db.Configs().Insert(t.Context(), revision)
+	if err != nil {
+		t.Fatalf("store the parity company: %v", err)
+	}
+	if _, err := plane.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: id, Summary: revision.Summary, Payload: payload, At: clock,
+		Origin: coord.RevisionOrigin{Author: revision.CreatedBy,
+			AuthorKind: revision.CreatedByKind, Source: revision.Source, CreatedAt: clock},
+		ExpectAbsent: true,
 	}); err != nil {
 		t.Fatalf("activate the parity company: %v", err)
 	}

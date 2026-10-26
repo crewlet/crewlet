@@ -587,7 +587,7 @@ func TestANodeAdmissionDoesNotApplyToIsReadyOnItsPresence(t *testing.T) {
 func serveProbes(t *testing.T, n *node, boot *config.Bootstrap) (*httptest.Server, api.ProbeRuntime) {
 	t.Helper()
 	backends := n.engine.Backends()
-	reconciler, err := n.engine.NewReconciler(engine.ReconcilerOptions{
+	reconciler, err := n.engine.NewReconciler(t.Context(), engine.ReconcilerOptions{
 		Store: backends.Store, Fleet: backends.Fleet, Queue: backends.Queue,
 		NodeID: n.engine.Node().ID(),
 	})

@@ -275,7 +275,7 @@ type AppCompleter interface {
 
 	// InstallURL is where the operator installs the app a seat now has,
 	// or empty when it has none yet.
-	InstallURL(seat string) string
+	InstallURL(ctx context.Context, seat string) string
 }
 
 // GitHubRechecker asks the reconcile loop to look at GitHub NOW.
@@ -416,7 +416,7 @@ func (r *Receiver) githubAppLanding(w http.ResponseWriter, req *http.Request) {
 			log.Warn("github_app_create_failed", "seat", seat, "error", err.Error())
 		default:
 			view.Seat = seat
-			view.InstallURL = r.appFlow.InstallURL(seat)
+			view.InstallURL = r.appFlow.InstallURL(req.Context(), seat)
 			view.Done = view.InstallURL == ""
 			if view.InstallURL != "" {
 				view.InstallDelay = installCountdownSeconds

@@ -202,10 +202,7 @@ func TestAGitHubAppIsRecordedAsTheOperatorWhoBeganIt(t *testing.T) {
 	if _, err := s.setup.AppFlow().Complete(t.Context(), "one-time-code", state); err != nil {
 		t.Fatalf("the writer's callback: %v", err)
 	}
-	active, found, err := s.configs.Active(t.Context())
-	if err != nil || !found {
-		t.Fatalf("active: %v %v", found, err)
-	}
+	active := s.active(t)
 	by := iam.ActorFor(writer)
 	if active.CreatedBy != by.Name || active.OperatorID != by.OperatorID ||
 		!strings.Contains(active.Summary, "GitHub App") {

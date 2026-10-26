@@ -103,6 +103,9 @@ type ProbeHealth struct {
 	AppliedEpoch int64    `json:"applied_epoch"`
 	Seats        []string `json:"seats"`
 
+	// ConfigAttempt is [Health]'s, absent on the same terms.
+	ConfigAttempt *ConfigAttempt `json:"config_attempt,omitempty"`
+
 	// IdentityDutySeconds is [Health]'s, always an object on the same
 	// terms: a node without the ingress role may still hold the workers
 	// role that arms the identity estate's duties, and this is where an
@@ -194,18 +197,19 @@ func (p *probes) health(ctx context.Context) ProbeHealth {
 	configured := p.runtime.Configured()
 	state, fleet := readNode(ctx, p.runtime)
 	body := ProbeHealth{
-		Status:       healthStatus(state, configured),
-		Node:         p.nodeID,
-		Roles:        p.roles,
-		Configured:   configured,
-		Version:      version.String(),
-		StartedAt:    state.StartedAt,
-		Queue:        p.queueBackend,
-		InFlight:     state.InFlight,
-		ShuttingDown: state.ShuttingDown,
-		Posture:      state.Posture,
-		AppliedEpoch: state.AppliedEpoch,
-		Seats:        heldSeats(state),
+		Status:        healthStatus(state, configured),
+		Node:          p.nodeID,
+		Roles:         p.roles,
+		Configured:    configured,
+		Version:       version.String(),
+		StartedAt:     state.StartedAt,
+		Queue:         p.queueBackend,
+		InFlight:      state.InFlight,
+		ShuttingDown:  state.ShuttingDown,
+		Posture:       state.Posture,
+		AppliedEpoch:  state.AppliedEpoch,
+		ConfigAttempt: state.ConfigAttempt,
+		Seats:         heldSeats(state),
 
 		IdentityDutySeconds: identityDutySeconds(state),
 	}

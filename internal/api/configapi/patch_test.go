@@ -1,6 +1,7 @@
 package configapi_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -8,12 +9,10 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
-
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
-	"github.com/crewlet/crewlet/internal/store"
 )
 
 // summaryHeader is what every write on this surface needs.
@@ -287,21 +286,31 @@ func TestAPatchAcceptsYAML(t *testing.T) {
 // success in the loser's hand and nothing anywhere to find it by.
 //
 // Driven by moving the pointer out from under a write the way a second node
-// would, which is the only thing a single-process test can do honestly: the
+// would — between this surface's read of the pointer and its compare-and-set —
+// which is the only thing a single-process test can do honestly: the
 // conformance suite proves the store's half on both backends.
 func TestAWriteThatLostTheRaceIsRefused(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t)
+	plane := &interleavedPlane{}
+	s := newSurfaceWith(t, func(o *configapi.Options) {
+		plane.Plane = o.Plane
+		o.Plane = plane
+	})
 	base := s.seed(t, companyDoc)
-
+	peer, err := secrets.Seal(s.cipher, companyJSON(t, companyDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
 	// A peer activates something else, expecting the same base this
-	// surface is about to build on.
-	if _, err := s.plane.Activate(t.Context(), coord.ActivationRequest{
-		RevisionID: "from-a-peer", Summary: "a peer got there first",
-		Payload: []byte("{}"), At: pinned, Expect: base,
-		Origin: coord.RevisionOrigin{Author: "maya", AuthorKind: "operator", Source: "api", CreatedAt: pinned},
-	}); err != nil {
-		t.Fatalf("peer activate: %v", err)
+	// surface built on.
+	plane.other = func(ctx context.Context) {
+		if _, err := plane.Plane.Activate(ctx, coord.ActivationRequest{
+			RevisionID: "from-a-peer", Summary: "a peer got there first",
+			Payload: peer, At: pinned, Expect: base,
+			Origin: coord.RevisionOrigin{Author: "maya", AuthorKind: "operator", Source: "api", CreatedAt: pinned},
+		}); err != nil {
+			t.Errorf("peer activate: %v", err)
+		}
 	}
 
 	res := s.do(t, http.MethodPatch, "/config", `{"mission": "mine"}`, summaryHeader)
@@ -317,12 +326,14 @@ func TestAWriteThatLostTheRaceIsRefused(t *testing.T) {
 			t.Errorf("the conflict omits %q: %s", want, res.Body.String())
 		}
 	}
-	// AS HISTORY, and nothing more: this node goes on serving the revision
-	// it served, which its reconciler moves on to whatever won.
+	// AS HISTORY, and nothing more: the write activated nothing.
 	s.assertKeptInert(t, decode(t, res))
-	if got := s.do(t, http.MethodGet, "/config", "", nil); got.Header().Get("ETag") != `"`+base+`"` {
-		t.Errorf("GET /config after the refusal serves %s, want the base %s it served before",
-			got.Header().Get("ETag"), base)
+	// And the company is what WON, on this node as on every other, before
+	// any tick here has kept it: the re-read the refusal sends the operator
+	// to answers the revision it names.
+	if got := s.do(t, http.MethodGet, "/config", "", nil); got.Header().Get("ETag") != `"from-a-peer"` {
+		t.Errorf("GET /config after the refusal answers %s, want the revision that won, "+
+			`"from-a-peer"`, got.Header().Get("ETag"))
 	}
 }
 
@@ -439,15 +450,7 @@ func (s *surface) seedStored(t *testing.T, doc string, mutate func(map[string]an
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, err := s.configs.InsertActive(t.Context(), store.Revision{
-		CreatedByKind: iam.ActorOperator,
-		Source:        "peer", CreatedBy: "another node", Summary: "seed",
-		Payload: payload, CreatedAt: pinned,
-	})
-	if err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	return id
+	return s.seedPayload(t, payload)
 }
 
 // A QUOTED ENTITY-TAG IS THE STANDARD SPELLING, and it has to work.
@@ -471,7 +474,7 @@ func TestAnExpectAcceptsEitherSpellingOfThePrecondition(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			// Serially, because each write advances the revision: the
 			// point is the SPELLING, so each case starts from its own.
-			current, found, err := s.configs.Active(t.Context())
+			current, found, err := s.active(t.Context())
 			if err != nil || !found {
 				t.Fatalf("active: %v", err)
 			}

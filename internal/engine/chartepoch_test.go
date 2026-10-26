@@ -218,7 +218,7 @@ func TestTheReconcilerAppliesTheChartAtThePointersInstant(t *testing.T) {
 	// mistaken for each other.
 	activated := pinnedNow.Add(-time.Hour)
 	document := p.seal(t, yamlToJSON(t, chartCompany("ships it")))
-	id, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
+	id, err := p.store.Configs().Insert(t.Context(), store.Revision{
 		Source: "test", CreatedBy: "operator", CreatedByKind: iam.ActorOperator,
 		Summary: "revision", Payload: document, CreatedAt: activated,
 	})

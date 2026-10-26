@@ -443,6 +443,11 @@ type Activation struct {
 	// Origin is who wrote the revision, as the node that stored it first
 	// recorded it. See [RevisionOrigin].
 	Origin RevisionOrigin
+
+	// Restored is whether the write that set the pointer put back a company
+	// the fleet had lost rather than choosing one ([ActivationRequest.Restore]).
+	// It describes this activation alone: the next write sets it again.
+	Restored bool
 }
 
 // RevisionOrigin is the record a revision was WRITTEN with, travelling with
@@ -561,13 +566,14 @@ const MaxApplyErrorLength = 2000
 //     newer one's values back. An activation whose instant was no later than
 //     the stamps already on those rows was applied to neither, silently,
 //     until some later activation happened to carry a later clock.
-//   - THE CONTROL PLANE'S OWN BOOKKEEPING: a booting node republishes its
-//     locally active revision only when that revision's `activated_at` is
-//     LATER than the pointer's, and the reconciler holds a node's own copy to
-//     the pointer by revision and instant together (re-activating an
-//     unchanged revision is the credential-rotation gesture). A node holding
-//     the replaced revision read its own copy as the newer and published it
-//     back over the fleet's.
+//   - THE CONTROL PLANE'S OWN BOOKKEEPING: a booting node republishes the
+//     fleet's revision it last saw over a recreated pointer only when that
+//     revision's instant is LATER than the pointer's, and the reconciler
+//     tells the activation it applied from a new one by revision and instant
+//     together (re-activating an unchanged revision is the
+//     credential-rotation gesture). A node that had seen the replaced
+//     revision read its own copy as the newer and published it back over the
+//     fleet's.
 //
 // Decided INSIDE the compare-and-set that replaces the pointer, against the
 // pointer it replaces, so two activations racing each other cannot both be
@@ -607,11 +613,53 @@ func TruncateApplyError(detail string) string {
 type NodeApply struct {
 	NodeID string
 	Epoch  int64
-	// RevisionID is which revision this node applied at that epoch. It is
-	// carried alongside the epoch rather than derived from it because the
-	// fleet view is read while nodes are mid-transition, and a node still
-	// on the previous revision is exactly what an operator is looking for.
+	// RevisionID is which revision this node ATTEMPTED at that epoch —
+	// applied or not, as Status says. It is carried alongside the epoch
+	// rather than derived from it because the fleet view is read while
+	// nodes are mid-transition, and a node still on the previous revision
+	// is exactly what an operator is looking for.
 	RevisionID string
+	// Applied is the epoch this node last APPLIED — its reconciler's own
+	// progress — or 0 before its first apply succeeds. Epoch is the one it
+	// last ATTEMPTED, and the two differ exactly when Status says the
+	// attempt failed: a node that applied 5 and refused 6 says Epoch 6,
+	// Applied 5.
+	//
+	// ITS OWN FIELD rather than inferred from Epoch and Status, because the
+	// inference is wrong in the case a reader is asking about: a refusal
+	// says the node did not reach Epoch, never which epoch it did reach. A
+	// writer that saved epoch 6 learns from this whether a node runs it —
+	// the comparison a node's own health push makes with its live epoch —
+	// without reading the node's own /health.
+	Applied int64
+	// Serving is the revision this node's engine RUNS: the one its last
+	// successful apply installed, or the one it booted on; empty while it
+	// runs none. A node that refused the epoch's revision goes on serving
+	// the one before, and this is the row an operator reads to see it.
+	//
+	// NOT "SERVING DIFFERS FROM RevisionID" as the test for a refusal: a
+	// refused re-activation of the revision a node already runs — the
+	// credential-rotation gesture — names one revision in both. Status is
+	// what says the attempt failed; Serving says what runs regardless.
+	Serving string
+	// Boots is the revision this node would START ON if it restarted now:
+	// its boot row's, as its reconciler last read or wrote it. Empty on a
+	// node that boots on nothing — one whose own database is discarded at
+	// every start (a node without the `data` role), and one whose row names
+	// no revision yet because it has never applied one. Never empty for a
+	// row its reconciler could not read: the reconciler reads it before it
+	// writes its first record, and a read that fails later leaves the last
+	// answer standing.
+	//
+	// A FACT OF ITS OWN, never derived from Serving. The boot row moves
+	// only once an apply has SUCCEEDED, and that write is local and best
+	// effort: while a failed one is being retried, this node runs a
+	// revision it would not come back on, and the two names differ. A
+	// reader that took Serving for what a restart lands on — the
+	// Kubernetes operator keeps a revision's secrets while some node still
+	// names it — would drop what that node actually needs to boot, and the
+	// first restart would crash-loop on a revision it can no longer build.
+	Boots string
 	// Status is the apply outcome as a plain string. Not
 	// configplane.ApplyStatus: the coordination contract is where the
 	// engine's layers meet, and giving it a dependency on the posture
@@ -659,47 +707,71 @@ type ActivationRequest struct {
 	// origin fails [RevisionOrigin.Check] is refused.
 	Origin RevisionOrigin
 
-	// Expect is the revision the caller read before building this one.
+	// Expect is the revision the caller read before building this one: the
+	// activation lands ONLY WHILE THE POINTER NAMES IT.
 	//
-	// EMPTY IS UNCONDITIONAL, and that is a real posture rather than a
-	// missing value: a node publishing its own locally-active revision at
-	// boot is ASSERTING, not editing — it has nothing to have raced with
-	// and no earlier state to compare against. An editor always has one,
-	// and passing it is what makes a concurrent edit visible.
+	// A POINTER THAT IS NOT THERE is [ErrActivationRaced] too — never set,
+	// deleted, or removed by a purge — because what the caller built on is
+	// gone, and the write it built is an edit of a company the fleet no
+	// longer runs. Every editor reads the pointer first and passes what it
+	// read: Expect when it read one, ExpectAbsent when it read none. So a
+	// write cannot pass an expectation it never saw the pointer hold, and the
+	// race it reports is real: the fix is to read again and rebuild.
 	//
-	// # An UNSET pointer is not a race, whatever Expect says
-	//
-	// The comparison is "if a pointer exists, it must still name this".
-	// With no pointer at all there is nothing to have lost a race to, and
-	// refusing would break a state a node reaches without doing anything
-	// wrong: its own store holds an active revision, which every config
-	// write on it names here, while the coordination store holds no pointer
-	// — one lost under the running node (an external cluster rebuilt, its
-	// bucket removed), which the node's next boot publishes again from its
-	// own copy. Every config write on it would fail until that boot. The
-	// lost-update this exists to catch needs a winner, and an empty pointer
-	// has none.
+	// EMPTY IS UNCONDITIONAL, and only one caller passes it: `crewlet run
+	// -import-company`, an operator replacing the company outright from a
+	// file, which asserts rather than edits and has nothing to have raced
+	// with. Everything else built on a pointer it read, or on its absence.
 	Expect string
 
 	// ExpectAbsent is the create-only compare-and-set: publish this only
 	// if the fleet has no activation at all.
 	//
-	// It is what Expect cannot say. An empty Expect is unconditional, and
-	// an Expect naming a revision passes when there is no pointer, so
-	// neither refuses the write that matters here: a node whose OWN store
-	// is empty, writing the company it believes is the first, while the
-	// fleet is already running one. A node reaches that state
-	// legitimately, by joining a fleet and not having reconciled yet, or
-	// by failing the best-effort copy of the pointer into its own store,
-	// and its write would replace a running company outright: the company
-	// name changes, so every seat id derived from it changes, and all of
-	// their memory is orphaned.
+	// It is what a write built WITH NO POINTER passes: a config write on a
+	// node that read none, a booting node restoring the company after the
+	// pointer was lost, and the bootstrap seed of a fleet's first company.
+	// An empty Expect would replace whatever another node published in the
+	// meantime, and the one case that matters is a company the fleet is
+	// already running: a node reaches "no pointer as far as it knows"
+	// legitimately, by joining a fleet before its first read, and its write
+	// would replace that company outright — the company name changes, so
+	// every seat id derived from it changes, and all of their memory is
+	// orphaned.
 	//
 	// Refused with [ErrActivationRaced], like any other lost race, leaving
 	// nothing behind. Set together with Expect it is a programming error
 	// rather than a posture, because a write cannot have been built on a
 	// revision and on nothing at once.
 	ExpectAbsent bool
+
+	// ExpectEpoch narrows Expect to the very activation the caller read: the
+	// write lands only while the pointer is AT this epoch, not merely naming
+	// the revision. Zero leaves Expect as it is; set without Expect it is a
+	// programming error.
+	//
+	// The boot publish of an offline offer is the caller that needs it. It
+	// records, before it publishes, the instant it will land at, so that a
+	// node which crashed before recording the landing tells it by the pointer
+	// carrying exactly that instant. The instant is decided against the
+	// activation the write replaces ([ActivationAt]), and with Expect alone
+	// another writer re-activating the same revision in between lets the
+	// write land a millisecond after that one — at an instant nothing
+	// recorded, so the landed publish reads as never made.
+	ExpectEpoch int64
+
+	// Restore marks a write that puts back a company the fleet lost rather
+	// than choosing one: a booting node republishing what it knew after the
+	// pointer was gone. The pointer says so ([Activation.Restored]) until the
+	// next write replaces it.
+	//
+	// A peer answers the two differently. A restore is one node's memory of
+	// the company, and a node that remembers the fleet having moved on to a
+	// newer revision replaces it with that one. A choice — an offline change
+	// published, an override, an API write — is the company, and nothing
+	// replaces it but another write, whatever the instants say: they come
+	// from the writers' clocks, and a deliberate choice made on a node whose
+	// clock runs behind another's would otherwise read as stale.
+	Restore bool
 }
 
 // ErrPayloadNotDocument reports an activation whose payload is not a JSON

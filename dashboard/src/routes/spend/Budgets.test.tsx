@@ -15,7 +15,7 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import { Budgets } from "./Budgets.tsx";
@@ -302,6 +302,112 @@ test("a seat's ceiling is checked before it is saved, as the seat itself", async
   // Saved, and applying until this node reports the epoch.
   expect(screen.getByText("of 2.5M")).toBeTruthy();
   expect(screen.getByText("applying…")).toBeTruthy();
+});
+
+describe("a saved ceiling, followed by this node", () => {
+  const PM_DAY = /Change PM's daily token ceiling/;
+  /** The PM's daily ceiling, its figure and its mark. */
+  const cell = () => screen.getByRole("button", { name: PM_DAY }).closest<HTMLElement>(".ceiling")!;
+
+  /** Saves 2.5M as PM's daily ceiling: revision r2, activated at epoch 5. */
+  async function saveDay() {
+    stubConfig((call) => {
+      if (call.method === "GET") return json(PM_SEAT, 200, { ETag: '"r1"' });
+      if (call.url.includes("dry_run=true")) return valid();
+      return saved();
+    });
+    const store = mount(answer());
+    await settle();
+    await edit(PM_DAY, "2.5M");
+    expect(within(cell()).getByText("of 2.5M")).toBeTruthy();
+    expect(within(cell()).getByText("applying…")).toBeTruthy();
+    return store;
+  }
+
+  // A REFUSAL LEAVES THE APPLIED EPOCH WHERE IT WAS, so read alone it said
+  // "applying…" beside the saved ceiling for the life of the page while the
+  // gate went on enforcing the one before. Mutation: follow the save by the
+  // applied epoch alone and the cell keeps "of 2.5M" and "applying…".
+  test("refused by this node, it draws the ceiling still enforced and says so", async () => {
+    const store = await saveDay();
+    const asks = budgetAsks;
+    act(() =>
+      store.applyHealth(
+        healthFrame({
+          applied_epoch: 4,
+          config_attempt: { epoch: 5, revision_id: "r2", status: "error" },
+        }),
+      ),
+    );
+    await settle();
+    expect(within(cell()).getByText("of 1,000")).toBeTruthy();
+    expect(within(cell()).getByText("refused by this node")).toBeTruthy();
+    expect(within(cell()).queryByText("applying…")).toBeNull();
+    // Nothing moved here, so nothing is read again.
+    expect(budgetAsks).toBe(asks);
+  });
+
+  // A DROPPED SOCKET CLEARS THE HEALTH SLICE, and says nothing about the
+  // save: read as this node's standing, the missing push was "applying", and
+  // the refused ceiling went back to the saved figure marked applying until
+  // the socket came back. Mutation: follow the save by the live slice
+  // (`useEngineHealth`) and read its absence as applying, as
+  // `nodeStanding(null)` did, and this reads "of 2.5M" and "applying…".
+  test("refused by this node, it stays so through a dropped socket", async () => {
+    const store = await saveDay();
+    act(() =>
+      store.applyHealth(
+        healthFrame({
+          applied_epoch: 4,
+          config_attempt: { epoch: 5, revision_id: "r2", status: "error" },
+        }),
+      ),
+    );
+    await settle();
+    expect(within(cell()).getByText("refused by this node")).toBeTruthy();
+    act(() => store.setConnected(false));
+    await settle();
+    expect(within(cell()).getByText("of 1,000")).toBeTruthy();
+    expect(within(cell()).getByText("refused by this node")).toBeTruthy();
+    expect(within(cell()).queryByText("applying…")).toBeNull();
+  });
+
+  test("applied by this node, it says so and reads the budgets again", async () => {
+    const store = await saveDay();
+    const asks = budgetAsks;
+    act(() =>
+      store.applyHealth(
+        healthFrame({
+          applied_epoch: 5,
+          config_attempt: { epoch: 5, revision_id: "r2", status: "ok" },
+        }),
+      ),
+    );
+    await settle();
+    expect(budgetAsks).toBeGreaterThan(asks);
+    expect(within(cell()).getByText("applied")).toBeTruthy();
+  });
+
+  // A LATER ACTIVATION THIS NODE TRIED FIRST, and refused: it will not come
+  // back to this save, so the cell settles on the answer read again rather
+  // than applying for ever. Mutation: drop `passed` from the settling
+  // standings and the cell says "applying…" for good.
+  test("passed by a later activation, it settles on the ceiling read again", async () => {
+    const store = await saveDay();
+    const asks = budgetAsks;
+    act(() =>
+      store.applyHealth(
+        healthFrame({
+          applied_epoch: 4,
+          config_attempt: { epoch: 6, revision_id: "r3", status: "error" },
+        }),
+      ),
+    );
+    await settle();
+    expect(budgetAsks).toBeGreaterThan(asks);
+    expect(within(cell()).getByText("of 1,000")).toBeTruthy();
+    expect(within(cell()).queryByRole("status")).toBeNull();
+  });
 });
 
 // THE COMPANY'S CEILINGS ARE A MERGE PATCH naming only the window changed —

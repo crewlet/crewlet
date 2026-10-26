@@ -1230,15 +1230,23 @@ const (
 	// Drawing a brand draft in its own cards with one next step, who last
 	// changed it and a confirmed discard, in the Brand page's chunk less the
 	// kit view's copy of the cards, which now shares the page's board, took it
-	// to 4547.1 KiB. 4548 KiB, which still refuses a doubled baseline. The
-	// merges of main since took it to 4548.0 KiB, and saying that a person's
-	// stop ended a seat's coding run took it to 4548.4 KiB: a stopped turn's
-	// tag and a stopped run's span drawn closed rather than failed in the
-	// live view's chunk and the runs board's, a seat whose last turn "was
-	// stopped" in the profile's, the task's "stopped by a person" pill in the
-	// worklet's, and the pause dialog's words in the writes chunk. 4549 KiB,
-	// which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 453<<10
+	// to 4547.1 KiB. 4548 KiB, which still refuses a doubled baseline. Saying
+	// which revision each node runs, a refusal included, took it to 4553.1
+	// KiB: the one rule a node's standing is read by (the sidebar's Nodes
+	// figure counts by it, so it is in the frame), its words beside the
+	// Settings screens that say them, the Nodes screen's Running panel and
+	// Lag fact, the Configuration screen's revision states, the after-save
+	// strip and the ceiling and charter followers settling on a refusal
+	// rather than "applying…", and the tab's last push kept through a
+	// dropped socket. 4554 KiB, which still refuses a doubled baseline.
+	// Saying that a person's stop ended a seat's coding run, merged beside
+	// it, took it to 4554.4 KiB: a stopped turn's tag and a stopped run's
+	// span drawn closed rather than failed in the live view's chunk and the
+	// runs board's, a seat whose last turn "was stopped" in the profile's,
+	// the task's "stopped by a person" pill in the worklet's, and the pause
+	// dialog's words in the writes chunk. 4555 KiB, which still refuses a
+	// doubled baseline.
+	treeBudget = 4<<20 + 459<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

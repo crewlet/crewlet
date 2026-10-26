@@ -121,17 +121,49 @@ curl -X PUT $CREWLET_URL/config \
   --data-binary @nimbus.company.json
 ```
 
-If anything else has touched `/config` since you last read it, supply `If-Match`:
+**The active revision is the fleet's.** `GET /config` and its `ETag`, the
+revision list's `is_active`, and the base every write is built on are the
+revision the fleet's activation pointer names — the same on every node,
+whatever that node runs. A node still applying the last write, or one that
+refused it and goes on running the revision before, answers the last write all
+the same, so an `ETag` read from one node is a good `If-Match` on any other.
+What each node runs is a separate fact, which
+[`GET /fleet`](../reference/api-endpoints.md#get-fleet) reports per node as
+`config_serving_revision_id`. While the coordination store cannot be read,
+these requests answer `503 unavailable` with a `Retry-After` rather than
+anything from the node's own store; send them again — **unless the body
+carries `"outcome": "unknown"`**. That is a write that stored its revision and
+got no answer to its activation, which may have landed: the body names the
+revision as `stored_revision_id`, the one it was built on as `your_base` and the
+node that stored it as `node`. Sent again, it makes a second revision over the
+first if that one landed. Instead, once the store answers, read `GET /config`:
+if its `ETag` names `stored_revision_id`, the write landed; if not,
+`POST /config/revisions/{stored_revision_id}/revert` makes it the company —
+sent to that node, by its own address where several share one, because the
+revision is in that node's history alone and any other answers `404`. See
+[Status codes](../reference/api-endpoints.md#status-codes) and [Control
+Plane](../concepts/control-plane.md#every-config-answer-is-the-pointers).
+
+To have the write refused if anything else has touched `/config` since you
+read it, supply that read's `ETag` as `If-Match`:
 
 ```bash
-REV=$(curl -s $CREWLET_URL/config/revisions -H "$AUTH" | jq -r '.[0].revision_id')
+REV=$(curl -s -o /dev/null -D - $CREWLET_URL/config -H "$AUTH" | awk -F'"' '/^[Ee][Tt]ag:/ {print $2}')
 curl -X PUT $CREWLET_URL/config \
   -H "$AUTH" -H "If-Match: $REV" \
   -H "Content-Type: application/yaml" \
   -H "X-Summary: bootstrap Nimbus" \
   --data-binary @examples/nimbus.company.yaml
-# 409 revision_advanced if the active revision moved past $REV between read + write
+# 409 revision_advanced if the fleet's revision moved past $REV between read + write
 ```
+
+Take the tag from `GET /config`, not from the top of `/config/revisions`: that
+list is this node's history, newest first, and its newest row need not be the
+fleet's — a write that lost a race is kept there, inert. Without `If-Match` a
+write is still built on the fleet's revision as the node reads it, and still
+refused `409 revision_advanced` if another write lands between that read and
+its activation; `If-Match` also refuses an edit of a revision that had moved
+before you sent it, before anything is built.
 
 ---
 
@@ -262,7 +294,8 @@ survive on every seat, unit and MCP server matched by its identity. See
 Both work exactly as they do on the full PUT, and `X-Summary` is **required**:
 the revision history is what someone reads at 3am to find the change that
 broke something, and a per-entity write is the one most likely to be made in a
-hurry. A node with no active revision answers `409 no_active_revision` — there
+hurry. Before the company exists — the fleet has no activation and the node
+knows no company — a per-entity write answers `409 no_active_revision`: there
 is nothing to splice into.
 
 ---
@@ -341,7 +374,7 @@ a lead's edit is refused `403 config_managed` like everybody else's.
 ## Read paths
 
 ```bash
-# Active revision (JSON or YAML)
+# The active revision, the fleet's on every node (JSON or YAML)
 curl -s $CREWLET_URL/config -H "$AUTH" | jq
 curl -s "$CREWLET_URL/config?format=yaml" -H "$AUTH"
 
@@ -404,10 +437,14 @@ asked only once that permission has admitted it.
 The pipeline keeps writing as above, with `Authorization: Bearer
 $CREWLET_API_TOKEN_GITOPS` and an `If-Match` on the revision it last wrote, so a
 person's reload in between is a `409` it re-reads rather than one it
-overwrites. Everyone else still reads — `GET /config`, the history, the diffs —
-and is refused a change. That is every credential the list does not name, the
-ones holding `admin` included: a person signed in to the dashboard, a
-machine token acting as its owner, and a [lead editing their own
+overwrites. The revision a write is checked against is the fleet's on every
+node, so the pipeline's next write lands on whichever node it reaches — one
+still applying the last write, or one that refused it, included — unless
+somebody else changed the document. Everyone else still reads — `GET
+/config`, the history, the diffs — and is refused a change. That is every
+credential the list does not name, the ones holding `admin` included: a
+person signed in to the dashboard, a machine token acting as its owner, and a
+[lead editing their own
 team](#a-lead-editing-their-own-team), whose edit is exactly the one the
 pipeline's next reconcile would overwrite:
 
@@ -453,18 +490,20 @@ classified, beside the `detail` that renders them.
 | `403` | `unauthorized` | The credential holds neither `admin`, which the route takes, nor, on the org chart, the lead relation. A lead's write that reaches outside their team names every part under `refused` |
 | `403` | `config_managed` | The document is [managed by another system](#when-another-system-manages-the-document) and this credential is not one of the Tier A tokens `api.auth.company_writers` lists; `managed_by` names the writers. A write and its dry run alike, asked once the grant has admitted the caller and before the body is read |
 | `403` | `step_up_required` | A write whose proof of identity is older than `step_up`: confirm who you are and send it again |
-| `404` | `no_active_revision` | Reading `/config` before the first PUT |
+| `404` | `no_active_revision` | Reading `/config` before the company exists: the fleet has no activation, and this node knows no company |
 | `404` | `no_such_entity` | A per-entity `PUT` naming an id the active revision does not carry — a plain `PUT` never creates; send `If-None-Match: *` to add an MCP server or an LLM provider. Of a seat or a unit, only `admin` is told: a lead is refused `403` as for one outside their team |
 | `404` | `no_route` | A path under `/config` this surface does not serve |
 | `405` | `method_not_allowed` | A `/config` path under a method it does not take; `Allow` names the ones it does |
-| `409` | `no_active_revision` | A per-entity write before the first PUT: there is nothing to splice into |
-| `409` | `revision_advanced` | Stale `If-Match`, a concurrent writer won the race, or the write was built on an empty store while the fleet is running a company |
+| `409` | `no_active_revision` | A per-entity write before the company exists: there is nothing to splice into |
+| `409` | `revision_advanced` | Stale `If-Match`, or the fleet's activation moved between the write's read of it and its own activation, `If-Match` or not: a concurrent writer won the race, the activation was removed under it, or a write built while the fleet had none lost to one published meanwhile. A write that lost at its activation keeps the revision it stored, inert, and names it as `stored_revision_id` and the node holding it as `node`: it is in that node's history alone, so its diff and its revert go to that node, by its own address where several share one — any other answers `404` for it. Re-read `/config` and send the edit again |
 | `409` | `seat_held` | A write that removes a human seat, or makes it an agent's, while the identity directory binds somebody to it or an open invitation names it; `held` names the one thing holding each seat. Move or remove a person, unbind a service account, or cancel the invitation first |
-| `412` | `no_active_revision` | `If-Match: <revision>` sent while the node has no active revision; retry without `If-Match`, or send `If-None-Match: *` |
-| `412` | `already_configured` | `If-None-Match: *` on `PUT /config` sent while a revision is active on this node or anywhere in the fleet |
+| `412` | `no_active_revision` | `If-Match: <revision>` sent before the company exists; retry without `If-Match`, or send `If-None-Match: *` |
+| `412` | `already_configured` | `If-None-Match: *` on `PUT /config` sent while the fleet runs a company — on every node alike, one that has not applied it yet included — or, with no activation, while this node knows one. Also a create-only write that read no activation and lost to one published before its own landed: it keeps the revision it stored, inert, as `stored_revision_id`, in the history of the node named `node` alone, as a `409` does |
 | `412` | `entity_exists` | A per-entity create (`If-None-Match: *`) naming an MCP server or LLM provider the active revision already has |
 | `415` | `unsupported_patch_media_type` | A `PATCH` in a patch format other than a JSON Merge Patch, such as `application/json-patch+json` |
 | `503` | `draining` | The node has been told to stop. Nothing was written; `Retry-After` says when to try again, against a peer or against this node once it has restarted — see [During a drain](../reference/api-endpoints.md#during-a-drain) |
 | `503` | `identity_unavailable` | A write that removes a human seat, on a node that could not read the identity directory to see whether anybody holds it. Nothing was written; retry after `Retry-After` |
+| `503` | `unavailable` | With no `outcome` field: the node could not read the fleet's activation from the coordination store, so it cannot say which revision is the company: any write, and any read that answers or compares with the active revision — `GET /config`, the revision list and a single revision (each marked `is_active` against it), the reference index and a diff against `active`. Nothing was written, and nothing is answered from the node's own store instead; send it again after `Retry-After` (2 seconds — a coordination store electing a leader is out for a few). A [`/setup`](../reference/api-endpoints.md#supplying-them) submission's is the exception to "nothing was written": its company document was not changed, but it names the credentials it sealed first as `wrote_secrets`, and one whose own write the store did not answer, which may have landed, as `unanswered_secret`. Send it again all the same — that writes every credential in it again by name |
+| `503` | `unavailable`, `"outcome": "unknown"` | A write — `PUT`, `PATCH`, a per-entity or charter write, a reload, a revert, or a [`/setup`](../reference/api-endpoints.md#supplying-them) submission — stored its revision as `stored_revision_id`, built on `your_base`, on the node named `node`, and the coordination store did not answer its activation, so it may have landed. **Do not send it again**: once the store answers, `GET /config`; if the `ETag` names `stored_revision_id` the write landed, and otherwise `POST /config/revisions/{stored_revision_id}/revert` makes it the company, sent to that node — the revision is in its history alone, and any other node answers `404` |
 
 The full reference is in [API endpoints](../reference/api-endpoints.md).

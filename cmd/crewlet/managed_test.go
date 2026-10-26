@@ -181,7 +181,7 @@ func TestABootstrapSeedIsNeitherImportedNorRunOnAManagedDeployment(t *testing.T)
 				"named and never read", named, seed)
 		}
 		var logged bytes.Buffer
-		plan, err := decideSeed(t.Context(), boot, seed, storeAt(managed),
+		plan, err := decideOn(t, boot, seed, managed,
 			slog.New(slog.NewTextHandler(&logged, nil)))
 		if err != nil {
 			t.Fatal(err)
@@ -208,7 +208,7 @@ func TestABootstrapSeedIsNeitherImportedNorRunOnAManagedDeployment(t *testing.T)
 		t.Errorf("an absent default on a managed node resolved to %+v, want no seed", seed)
 	}
 	var logged bytes.Buffer
-	if _, err := decideSeed(t.Context(), boot, seed, storeAt(managed),
+	if _, err := decideOn(t, boot, seed, managed,
 		slog.New(slog.NewTextHandler(&logged, nil))); err != nil {
 		t.Fatal(err)
 	}
@@ -217,9 +217,9 @@ func TestABootstrapSeedIsNeitherImportedNorRunOnAManagedDeployment(t *testing.T)
 	}
 
 	// AND A STORE THAT HOLDS A COMPANY BOOTS ON IT, as with no file at all.
-	activateStored(t, managed, runnableRevisionDoc)
+	serveStored(t, managed, runnableRevisionDoc)
 	boot, seed = resolve(t, stray, false)
-	plan, err := decideSeed(t.Context(), boot, seed, storeAt(managed), quiet())
+	plan, err := decideOn(t, boot, seed, managed, quiet())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ func TestAManagedNodeOverARevisionItCannotRunNamesTheManagedRemedy(t *testing.T)
 	t.Parallel()
 	dir := t.TempDir()
 	managed := managedBootstrap(t, dir)
-	id := activateStored(t, managed, storedRevisionDoc)
+	id := serveStored(t, managed, storedRevisionDoc)
 	boot, err := config.LoadBootstrap(managed, config.EnvOnly())
 	if err != nil {
 		t.Fatal(err)
@@ -264,19 +264,20 @@ func TestAManagedNodeOverARevisionItCannotRunNamesTheManagedRemedy(t *testing.T)
 	}
 
 	var logged bytes.Buffer
-	_, err = decideSeed(t.Context(), boot, seed, storeAt(managed),
+	_, err = decideOn(t, boot, seed, managed,
 		slog.New(slog.NewTextHandler(&logged, nil)))
 	if err == nil {
 		t.Fatal("a managed node booted onto a revision this build cannot run")
 	}
-	for _, want := range []string{id, "company_writers", "operator", "own store",
-		"remove api.auth.company_writers", "`crewlet config import`",
+	for _, want := range []string{id, "company_writers", "operator",
+		"start the build that wrote it", "remove api.auth.company_writers",
+		"`crewlet config import`", "only while the fleet still runs " + id,
 		"restore api.auth.company_writers", "nonexistent"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal does not say %q: %v", want, err)
 		}
 	}
-	for _, dead := range []string{"-import-company", "-api <node>"} {
+	for _, dead := range []string{"-import-company", "-api <node>", "config activate"} {
 		if strings.Contains(err.Error(), dead) {
 			t.Errorf("the refusal names %s, which does not clear it: %v", dead, err)
 		}
@@ -299,13 +300,13 @@ func TestAManagedNodeOverARevisionItCannotRunNamesTheManagedRemedy(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := decideSeed(t.Context(), takenBoot, tierBSeed{}, storeAt(taken), quiet())
+	plan, err := decideOn(t, takenBoot, tierBSeed{}, taken, quiet())
 	if err != nil || plan.company == nil || plan.company.Name != "Nimbus Corrected" {
 		t.Fatalf("a start after the remedy decided (%v, %v), want the corrected company",
 			companyLabel(plan.company), err)
 	}
 	// ... and with the writers restored it starts on it again.
-	plan, err = decideSeed(t.Context(), boot, seed, storeAt(managed), quiet())
+	plan, err = decideOn(t, boot, seed, managed, quiet())
 	if err != nil || plan.company == nil || plan.company.Name != "Nimbus Corrected" {
 		t.Errorf("a managed restart after the remedy decided (%v, %v), want the "+
 			"corrected company", companyLabel(plan.company), err)

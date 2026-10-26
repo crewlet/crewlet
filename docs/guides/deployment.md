@@ -1114,11 +1114,23 @@ observable step rather than a side effect of startup.
 
 Both take the **Tier A** bootstrap file (`crewlet.yaml`) — the founder-owned company YAML is seeded separately (`crewlet config import`, or `crewlet run -company`).
 
-`crewlet config import` writes that file as a new active revision. Against a
-running node it goes through `PUT /config`, and every node converges with no
-restart. Against a **stopped** one it writes this node's store, and the node
-publishes the activation when it next starts. Either way the file is one
-gesture; only the timing differs.
+`crewlet config import` writes that file as a new revision. Against a
+running node it goes through `PUT /config`, which builds it on the fleet's
+revision and activates it, and every node converges with no restart. Against
+a **stopped** one it cannot move the fleet's activation pointer, which lives
+in the coordination store: it writes an **offer** to this node's store,
+built on the company the node knows, and the node boots on it and publishes
+it when it next starts — but only while the fleet still runs the revision
+the offer was built on. On a fleet that moved on in the meantime the offer is
+withheld rather than published over the newer company, and the node logs
+`offline_revision_not_published` at warn on every start until it applies the
+fleet's revision (see [Offline commands make an
+offer](../concepts/configuration.md#offline-commands-make-an-offer)). A solo
+node's fleet cannot move while it is stopped, so there the two differ only in
+timing — the one exception being a node stopped in the moment between an API
+write landing and its own reconciler recording it, whose offline change is then
+built on the revision before that write and withheld, with the warning naming
+both.
 
 - **`data`** holds the company's durable state — a copy of the replicated estate, the identity directory's included, and the node's own event log; `ingress` and `workers` need it, and a node without it is [stateless](fleet.md#nodes-that-hold-no-data)
 - **`seats`** runs the agents — claims seat leases, boots the instances, processes their turns
@@ -1250,7 +1262,7 @@ company built from its document, its shared MCP servers (each bounded by its
 own [`startup_timeout_seconds`](../getting-started/configuration.md#mcp-servers),
 for its start and again for its first tool listing, with no ceiling on the
 setting), its sandboxes, Worklet's and Doclet's halves, its coding CLIs' credential bundles,
-the first apply of its active revision, and the dashboard's projection. A probe
+the first apply of the revision it boots on, and the dashboard's projection. A probe
 sized by the store knows
 nothing about any of them, so none of them is allowed to hold it: the startup
 probe passes, the liveness probe takes over and is answered `200`, and
@@ -1592,7 +1604,7 @@ The load-bearing tables:
 - **`crewlet_events`** — the observability event store. A phase completion's token counts are promoted out of its payload into columns, so the spend rollup reads nine narrow values a row instead of hauling every prompt and response across the driver — which is what lets it fold the whole window rather than a capped prefix of it.
 - **`crewlet_event_parties`** — which agents each event involves, one row per pair. It is an *index* of the table above rather than state of its own: the dashboard's per-seat activity filter matches on it, and it exists because the engine's planner does no OR-optimization, so the same predicate spread across five columns would scan the log instead of seeking. Swept on the same horizon as the events it points at.
 - **`conversation_sessions`** — the [conversation ledger](../concepts/conversation-sessions.md): what this seat already said in one thread, rendered back into that conversation's next turn.
-- **`company_config`** — the revision payloads. Which one is *current* is the fleet's business, and lives in coordination; see the [control plane](../concepts/control-plane.md).
+- **`company_config`** — the revision payloads this node has met, and its own three facts about them: the revision it boots on (`is_active`: the last one its engine applied, or an offline command's choice, with the activation it applied, `served_at`), the fleet's revision as it last saw it (`is_fleets`), and an offline change not yet published, with what it was built on (`offered`, `offered_over`, `offered_unconfirmed`, `offered_at`). Every row keeps the fleet's latest activation of its revision that this node knows of (`activated_at`). Which one is the *company* is the fleet's business — the activation pointer, in coordination — and every config read answers that; see [A node's own store keeps three facts apart](../concepts/control-plane.md#a-nodes-own-store-keeps-three-facts-apart).
 
 Migrations are **forward-only**: each file in `internal/store/schema/` is applied once and recorded by filename, and there are no downgrade scripts. Downgrading the binary below the schema it already migrated is not supported; restore a [backup](backup.md) instead. There is no migration lock and no advisory-lock protocol, because one process owns the file — the whole idiom disappears.
 

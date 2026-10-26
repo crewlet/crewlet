@@ -688,8 +688,12 @@ func TestEveryStoreOpenerAnswersALockedStore(t *testing.T) {
 		// one route every secret-store run takes ROUTES it through the node.
 		"openFleetStore":  {"routeSecretStore"},
 		"openConfigStore": {"openConfigStore"},
-		"runMigrate":      {"runMigrate"},
-		"runSearchEval":   {"runSearchEval"},
+		// The boot's claim ([store.Hold]) is taken while the handle
+		// openConfigStore opened still holds the file, so the lock it could
+		// meet is the one that open already answered.
+		"storeAt":       {"openConfigStore"},
+		"runMigrate":    {"runMigrate"},
+		"runSearchEval": {"runSearchEval"},
 	}
 	handlers := []string{"throughTheRunningNode", "engineHoldsTheStore"}
 

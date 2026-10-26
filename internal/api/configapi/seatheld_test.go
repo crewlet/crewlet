@@ -125,7 +125,7 @@ func heldEntry(t *testing.T, s *surface, before string, code int, body,
 // activeID is the revision this surface's node is running.
 func (s *surface) activeID(t *testing.T) string {
 	t.Helper()
-	revision, found, err := s.configs.Active(t.Context())
+	revision, found, err := s.active(t.Context())
 	if err != nil || !found {
 		t.Fatalf("active revision: %v (found=%v)", err, found)
 	}
