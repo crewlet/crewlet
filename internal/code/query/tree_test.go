@@ -117,6 +117,52 @@ func TestATreeIsListedByItsOid(t *testing.T) {
 	})
 }
 
+// A LISTING'S PAGE ENDS BEFORE AN ENTRY TOO LONG FOR ANY PAGE, as it ends
+// before one too wide for its room: the entries before it are a page whose
+// Next names it, and only a read asking from it is refused, naming the
+// narrowing. An entry whose record is past what a listing's record holds
+// (gitproc.MaxLine beside code.MaxGitPathBytes) is past a page too — here a
+// file 24 directories of 3 000-byte names deep — and a read refused at it
+// whatever its page held left every entry before it unreadable by any page.
+//
+// Mutation: refuse the read at an entry past a record's bound whatever its
+// page holds — the first page is refused.
+func TestAListingPageEndsBeforeAnEntryTooLongForAnyPage(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, codetest.SoloOptions{}, codetest.Settings())
+	base := x.commit(map[string]string{"a.txt": "a\n"}, "base")
+	run := func(stdin string, args ...string) string {
+		t.Helper()
+		out, errOut, err := x.p.Git().Try(t, x.work, strings.NewReader(stdin), args...)
+		if err != nil {
+			t.Fatalf("git %s: %v: %s", args[0], err, errOut)
+		}
+		return strings.TrimSpace(out)
+	}
+	tree := run(fmt.Sprintf("100644 blob %s\tf.txt\n", run("deep\n", "hash-object", "-w", "--stdin")), "mktree")
+	name := strings.Repeat("d", 3000)
+	for i := range 24 {
+		tree = run(fmt.Sprintf("040000 tree %s\t%s%02d\n", tree, name, i), "mktree")
+	}
+	root := run(fmt.Sprintf("100644 blob %s\ta.txt\n040000 tree %s\tz\n", run("", "rev-parse", base+":a.txt"),
+		tree), "mktree")
+	head := run("", "commit-tree", root, "-p", base, "-m", "deep")
+	x.push(codetest.RepoName, head+":refs/heads/main")
+	repo := x.repo(codetest.RepoName)
+	s := x.server(0, query.Options{})
+
+	q := treeQ(repo, code.TreeQuery{Rev: head, Recursive: true})
+	a := mustRead(t, s, q)
+	if len(a.Tree.Entries) != 1 || a.Tree.Entries[0].Path != "a.txt" || a.Next != "e:1" || a.Tree.Total != 2 {
+		t.Fatalf("the first page = %d entries, next %q, total %d; want a.txt alone, ending before the deep "+
+			"file, of a listing of two", len(a.Tree.Entries), a.Next, a.Tree.Total)
+	}
+	q.Cursor = a.Next
+	if _, err := s.Read(t.Context(), q); !errors.Is(err, code.ErrSliceTooLarge) {
+		t.Errorf("a read from the deep file = %v, want ErrSliceTooLarge naming the narrowing", err)
+	}
+}
+
 // lsTree is the person's git's own listing of args, the paths made the
 // repository's under dir.
 func lsTree(t *testing.T, x *fixture, dir string, args ...string) []code.TreeEntry {

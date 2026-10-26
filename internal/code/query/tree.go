@@ -65,7 +65,16 @@ func (r *read) list(ctx context.Context, rev, dir, tree string, recursive bool, 
 		}
 		if long {
 			// AN ENTRY PAST A RECORD'S BOUND is past a page too: its path
-			// alone is longer than an answer holds.
+			// alone is longer than an answer holds. The page ends before it,
+			// as before one too wide for the room, so the entries ahead of it
+			// are a page whose Next names it — only a read asking from it is
+			// refused, where refusing whatever the page held left them
+			// unreadable by any page.
+			if len(a.Tree.Entries) > 0 {
+				full = true
+				a.Next = formatCursor(cursor{letter: 'e', a: i})
+				return nil
+			}
 			tooLarge = fmt.Errorf("%w: entry %d of the listing of %q is longer than one answer holds: "+
 				"read the directory above it", code.ErrSliceTooLarge, i, dir)
 			return errStop
