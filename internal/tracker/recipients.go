@@ -70,6 +70,13 @@ const (
 // role was about to claim: behind `assignee` they were shadowed on the one
 // person most likely to be the subject, and `blocking` — whose only handle IS
 // the blocker's assignee — could never name anybody at all.
+//
+// THE PRECEDENCE IS WRITTEN TWICE, then — here for the surfaces that print and
+// filter by reason, and as the offer order in [Candidates], which is the one
+// the routing obeys — so a test holds the two together:
+// TestEveryKindOffersItsReasonsInTheDeclaredPrecedence walks every kind with
+// a different handle in every field and requires the candidates to come back
+// in this order, so a reordered arm and a reordered list both fail it.
 var Reasons = []Reason{
 	ReasonMention, ReasonPrioritised, ReasonBlocking, ReasonAsked,
 	ReasonAnswered, ReasonAssignee, ReasonUnassigned, ReasonReporter,

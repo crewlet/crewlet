@@ -384,6 +384,85 @@ func TestNoReasonIsShadowedByAnEarlierArm(t *testing.T) {
 	}
 }
 
+// THE DECLARED PRECEDENCE IS THE ORDER CANDIDATES OFFERS, ALL OF IT.
+//
+// [tracker.Reasons] writes the precedence a second time — for the surfaces
+// that print and filter by reason in that order — beside the one function
+// whose offer order IS the precedence: internal/routing's add-once rule hears
+// each handle under the first reason offered for it. Holding only the first
+// reason to that function, as the shadowing case above does, let the other
+// seventeen drift: an arm moved in Candidates, or a reason moved in the list,
+// changed who hears under what, or left the list misdescribing it, and
+// nothing failed.
+//
+// So every kind is walked with a DIFFERENT handle in every routing field, so
+// that no arm's offer is lost to another's, and the reasons that come back
+// must appear in the list's order. That holds every precedence there is: two
+// reasons no kind offers on one record never compete for a handle, so
+// between them the list's order is only the order a surface prints them in.
+func TestEveryKindOffersItsReasonsInTheDeclaredPrecedence(t *testing.T) {
+	t.Parallel()
+	place := make(map[tracker.Reason]int, len(tracker.Reasons))
+	for i, reason := range tracker.Reasons {
+		place[reason] = i
+	}
+	offered := map[tracker.Reason]bool{}
+	for _, kind := range tracker.ChangeKinds {
+		got := tracker.Candidates(everyRoutingField(kind), false)
+		for i, c := range got {
+			offered[c.Reason] = true
+			if i > 0 && place[c.Reason] < place[got[i-1].Reason] {
+				t.Errorf("a %s change offers %q after %q, and tracker.Reasons "+
+					"puts %q first — the list and Candidates disagree about "+
+					"who hears under what", kind, c.Reason, got[i-1].Reason,
+					c.Reason)
+			}
+		}
+	}
+	// AND THE WALK OFFERED EVERY REASON, so none keeps its place in the list
+	// only because no kind ever put it beside another: a reason an earlier
+	// arm's handle always claims first — `blocking` behind `assignee` — is
+	// offered by nothing at all.
+	for _, reason := range tracker.Reasons {
+		if !offered[reason] {
+			t.Errorf("no kind offers %q with a handle of its own in every "+
+				"field, so its place in the precedence is held by nothing", reason)
+		}
+	}
+}
+
+// everyRoutingField is a notification of kind naming a different handle in
+// every field [tracker.Candidates] routes from, across the finished edge, so
+// that each arm the kind opens offers a handle no other arm offers.
+func everyRoutingField(kind tracker.ChangeKind) *tracker.Notify {
+	return &tracker.Notify{
+		Kind:     kind,
+		Mentions: []string{"mentioned"},
+		Snapshot: tracker.Snapshot{
+			Key: "ENG-1", Project: "ENG",
+			PrevStatusGroup:    tracker.GroupActive,
+			StatusGroup:        tracker.GroupDone,
+			Person:             "person",
+			Assignee:           "assignee",
+			Dependents:         []tracker.TaskParty{{Task: "d", Assignee: "dependent"}},
+			CommentAsk:         "asked",
+			AnsweredAuthor:     "answerer",
+			PrevAssignee:       "previous-assignee",
+			Reporter:           "reporter",
+			ThreadParticipants: []string{"participant"},
+			Unblocked:          []tracker.TaskParty{{Task: "u", Assignee: "unblocked"}},
+			RoutedTo:           "new-unit-lead",
+			ParentAssignee:     "parent-assignee",
+			ChecklistAssignees: []string{"checklist-owner"},
+			Collaborators:      []string{"collaborator"},
+			Watchers:           []string{"watcher"},
+			RemovedWatchers:    []string{"unwatched"},
+			ProjectLead:        "project-lead",
+			RoutingUnitLead:    "unit-lead",
+		},
+	}
+}
+
 // reasonAlone is a notification whose ONLY candidate should be this reason, or
 // nil for the reasons that cannot be isolated.
 //
