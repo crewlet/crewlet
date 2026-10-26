@@ -22,7 +22,7 @@
  */
 
 import { civilAt, civilKey, readerDay } from "./format.ts";
-import { dateTimeFormat } from "./formatters.ts";
+import { dateTimeFormat, type DateShape } from "./formatters.ts";
 import type { WorkSummary } from "~/protocol/index.ts";
 
 /** The reader's day an instant falls on, or empty when it is unreadable. */
@@ -336,8 +336,10 @@ export function monthDay(day: string): string {
   if (at === null) return day;
   // A CIVIL DATE, spelled in UTC so no zone west of Greenwich names the day
   // before — see `lib/format.ts`'s [civilAt].
-  return dateTimeFormat(undefined, "UTC", { day: "numeric", month: "short" }).format(at);
+  return dateTimeFormat(undefined, "UTC", DAY_MONTH).format(at);
 }
+
+const DAY_MONTH: DateShape = Object.freeze({ day: "numeric", month: "short" });
 
 /**
  * What a bar's dates say, as a sentence.

@@ -2909,8 +2909,10 @@ function civilLabel(at: number, opts: DateShape): string {
 
 export function monthLabel(month: string): string {
   const [y, m] = month.split("-").map(Number);
-  return civilLabel(Date.UTC(y ?? 1970, (m ?? 1) - 1, 1), { month: "long", year: "numeric" });
+  return civilLabel(Date.UTC(y ?? 1970, (m ?? 1) - 1, 1), MONTH_YEAR);
 }
+
+const MONTH_YEAR: DateShape = Object.freeze({ month: "long", year: "numeric" });
 
 /**
  * One cell's full date, for a reader the colour never reaches.
@@ -2928,13 +2930,15 @@ export function monthLabel(month: string): string {
  * would name a different day from the numeral beside it.
  */
 export function dayLabel(key: string): string {
-  return civilLabel(civilAt(key) ?? 0, {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  });
+  return civilLabel(civilAt(key) ?? 0, FULL_DAY);
 }
+
+const FULL_DAY: DateShape = Object.freeze({
+  weekday: "long",
+  day: "numeric",
+  month: "long",
+  year: "numeric",
+});
 
 /** Monday first, because the engine's own relative week tokens start there. */
 export const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -3055,5 +3059,7 @@ export function unfinished(counts: WorkTaskCounts): number {
 export function targetLabel(day: string): string {
   const [y, m, d] = day.split("-").map(Number);
   if (!y || !m || !d) return day;
-  return civilLabel(Date.UTC(y, m - 1, d), { day: "numeric", month: "short", year: "numeric" });
+  return civilLabel(Date.UTC(y, m - 1, d), TARGET_DAY);
 }
+
+const TARGET_DAY: DateShape = Object.freeze({ day: "numeric", month: "short", year: "numeric" });

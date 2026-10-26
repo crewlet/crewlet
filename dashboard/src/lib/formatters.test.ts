@@ -3,10 +3,10 @@
  *
  * What these protect: a formatter is built once per locale, zone and shape and
  * handed out after, a different zone or shape is a different formatter (never
- * one built for another zone), a zone `Intl` cannot read keeps no formatter
- * and is asked about once, so a page on it builds nothing a row, and the one
- * input no key holds — the browser's language — drops every formatter when it
- * changes.
+ * one built for another zone), a frozen shape's key is read once and any
+ * other's on every ask, a zone `Intl` cannot read keeps no formatter and is
+ * asked about once, so a page on it builds nothing a row, and the one input no
+ * key holds — the browser's language — drops every formatter when it changes.
  */
 
 import { afterEach, expect, test, vi } from "vitest";
@@ -17,6 +17,7 @@ import {
   keptFormattersForTest,
   knownZone,
   numberFormat,
+  type DateShape,
 } from "./formatters.ts";
 import {
   companyDateLabel,
@@ -83,6 +84,46 @@ test("a collation is built once, kept apart from the formatters, and orders a wh
   expect(collator(undefined, { numeric: true })).not.toBe(collator(undefined, order));
   expect(built).toHaveBeenCalledTimes(2);
   expect(keptFormattersForTest()).toBe(2);
+});
+
+// A FROZEN SHAPE'S KEY IS READ ONCE. Deriving the key on every ask was most of
+// what handing out a kept formatter cost, so a shape that cannot change is
+// read once and kept by the object — every module spells its shapes frozen —
+// while a literal built for the call is read on each ask, and still finds the
+// formatter its shape names.
+test("a frozen shape's key is read from it once, and any other's on every ask", () => {
+  const shape: DateShape = Object.freeze({ month: "short", day: "numeric" });
+  const digits: Intl.NumberFormatOptions = Object.freeze({ maximumFractionDigits: 2 });
+  const order: Intl.CollatorOptions = Object.freeze({ numeric: true });
+  const kept = dateTimeFormat(undefined, "UTC", shape);
+  numberFormat(undefined, digits);
+  collator(undefined, order);
+  const read = vi.spyOn(JSON, "stringify");
+  for (let n = 0; n < 100; n++) {
+    expect(dateTimeFormat(undefined, "UTC", shape)).toBe(kept);
+    numberFormat(undefined, digits);
+    collator(undefined, order);
+  }
+  expect(read).not.toHaveBeenCalled();
+  for (let n = 0; n < 100; n++) {
+    expect(dateTimeFormat(undefined, "UTC", { month: "short", day: "numeric" })).toBe(kept);
+  }
+  expect(read).toHaveBeenCalledTimes(100);
+});
+
+// AND ONLY A FROZEN ONE: a shape that can change is read again on every ask,
+// so one changed after an ask is the new shape it spells, never the formatter
+// its old key named.
+test("a shape that is not frozen is read on every ask, so a changed one is a new shape", () => {
+  const shape: { month: "short"; day: "numeric"; year?: "numeric" } = {
+    month: "short",
+    day: "numeric",
+  };
+  const before = dateTimeFormat(undefined, "UTC", shape);
+  shape.year = "numeric";
+  const after = dateTimeFormat(undefined, "UTC", shape);
+  expect(after).not.toBe(before);
+  expect(after.format(Date.parse("2026-03-10T12:00:00Z"))).toBe("Mar 10, 2026");
 });
 
 // A ZONE OFF THE WIRE — a company's — can be one this runtime cannot read: the
@@ -181,7 +222,8 @@ function row(at: number, now: number): string[] {
 // zone a date is written in built one more each time. The rows span both
 // shapes a date can take (this year's and an older one's) and both of a
 // relative time's (within a week and past it), so the first row of each shape
-// builds what the page needs, and the hundred after build nothing.
+// builds what the page needs, and the hundred after build nothing — nor read
+// a key: every shape a row asks with is frozen, so none is read again.
 test("a page of rows builds each formatter once, not once a row", () => {
   const now = Date.parse("2026-10-20T12:00:00Z");
   // Five days apart, so a hundred rows reach back past the turn of the year.
@@ -191,8 +233,10 @@ test("a page of rows builds each formatter once, not once a row", () => {
   row(at(99), now);
   const kept = keptFormattersForTest();
   const built = countFormatterBuilds();
+  const read = vi.spyOn(JSON, "stringify");
   for (let n = 0; n < 100; n++) row(at(n), now);
   expect(built()).toBe(0);
+  expect(read).not.toHaveBeenCalled();
   // AND THE CACHE HOLDS SHAPES, NOT ROWS: the hundred rows added nothing.
   expect(keptFormattersForTest()).toBe(kept);
   expect(kept).toBeLessThan(40);
@@ -234,6 +278,8 @@ test("a page of rows on a clock this runtime cannot read builds nothing a row", 
   const at = (n: number) => now - n * 3_600_000;
   rowOnItsClock(UNREADABLE, at(0), now);
   const built = countFormatterBuilds();
+  const read = vi.spyOn(JSON, "stringify");
   for (let n = 0; n < 100; n++) rowOnItsClock(UNREADABLE, at(n), now);
   expect(built()).toBe(0);
+  expect(read).not.toHaveBeenCalled();
 });

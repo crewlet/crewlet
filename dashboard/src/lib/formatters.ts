@@ -32,6 +32,17 @@
  * page meets (the reader's, the company's, UTC for a civil day), never by how
  * many values are formatted.
  *
+ * READ ONCE A SHAPE, AND BUILT INTO NO STRING. Deriving the key was most of
+ * what handing out a kept formatter cost: `JSON.stringify` of the options and
+ * one string of every part, built and hashed on every ask, made a kept clock
+ * cost twice what `range.ts`'s own per-zone map had. So a FROZEN options
+ * object's part of the key is read from it once and kept by the object — it
+ * cannot change, so the part read from it holds for good — and every module
+ * spells its shapes as frozen constants; an object that is not frozen, a
+ * literal built for one call, is read on every ask, as it must be. And each
+ * part is a level of the map, looked up by a string the caller already holds,
+ * so an ask builds nothing.
+ *
  * THE ZONE IS REQUIRED, and is its own argument. A formatter built without
  * one takes the runtime's zone AT CONSTRUCTION and keeps it: kept for the
  * page's life, it would go on writing dates in the zone the page opened in
@@ -63,14 +74,42 @@
  * threw it away on every call, which a list paid once a row.
  */
 
-/** A date formatter's options, the zone apart: it is [dateTimeFormat]'s own argument. */
-export type DateShape = Omit<Intl.DateTimeFormatOptions, "timeZone">;
+/**
+ * A date formatter's options, the zone apart: it is [dateTimeFormat]'s own
+ * argument. Read-only, as the frozen constant a module spells one as is.
+ */
+export type DateShape = Readonly<Omit<Intl.DateTimeFormatOptions, "timeZone">>;
 
-const dates = new Map<string, Intl.DateTimeFormat>();
-const numbers = new Map<string, Intl.NumberFormat>();
-const collators = new Map<string, Intl.Collator>();
+/** The kept date formatters: by the options' key, then the zone, then the locale ("" for none). */
+const dates = new Map<string, Map<string, Map<string, Intl.DateTimeFormat>>>();
+/** The kept number formatters and collators: by the options' key, then the locale. */
+const numbers = new Map<string, Map<string, Intl.NumberFormat>>();
+const collators = new Map<string, Map<string, Intl.Collator>>();
 /** Every zone [knownZone] was asked about, and whether this runtime reads it. */
 const zones = new Map<string, boolean>();
+/** Each frozen options object's part of a key, read from it once. */
+const optionKeys = new WeakMap<object, string>();
+
+/** The options' part of a key: kept by a frozen object, read from any other on every ask. */
+function optionsKey(options: object): string {
+  if (!Object.isFrozen(options)) return JSON.stringify(options);
+  let key = optionKeys.get(options);
+  if (key === undefined) {
+    key = JSON.stringify(options);
+    optionKeys.set(options, key);
+  }
+  return key;
+}
+
+/** The level under `key`, made the first time something is kept there. */
+function level<V>(outer: Map<string, Map<string, V>>, key: string): Map<string, V> {
+  let inner = outer.get(key);
+  if (!inner) {
+    inner = new Map();
+    outer.set(key, inner);
+  }
+  return inner;
+}
 
 /**
  * The formatter writing `shape` in `zone` for `locale` (the browser's
@@ -82,12 +121,12 @@ export function dateTimeFormat(
   zone: string,
   shape: DateShape,
 ): Intl.DateTimeFormat {
-  const key = `${locale ?? ""}\u0000${zone}\u0000${JSON.stringify(shape)}`;
-  let built = dates.get(key);
-  if (!built) {
-    built = new Intl.DateTimeFormat(locale, { ...shape, timeZone: zone });
-    dates.set(key, built);
-  }
+  const key = optionsKey(shape);
+  const name = locale ?? "";
+  const kept = dates.get(key)?.get(zone)?.get(name);
+  if (kept) return kept;
+  const built = new Intl.DateTimeFormat(locale, { ...shape, timeZone: zone });
+  level(level(dates, key), zone).set(name, built);
   return built;
 }
 
@@ -115,30 +154,33 @@ export function knownZone(zone: string): string | null {
 }
 
 /** The default shape, which every zone `Intl` knows can be written in. */
-const ANY: DateShape = {};
+const ANY: DateShape = Object.freeze({});
 
 /** The formatter writing a number in `options` for `locale` (the browser's language when undefined). */
 export function numberFormat(
   locale: string | undefined,
-  options: Intl.NumberFormatOptions,
+  options: Readonly<Intl.NumberFormatOptions>,
 ): Intl.NumberFormat {
-  const key = `${locale ?? ""}\u0000${JSON.stringify(options)}`;
-  let built = numbers.get(key);
-  if (!built) {
-    built = new Intl.NumberFormat(locale, options);
-    numbers.set(key, built);
-  }
+  const key = optionsKey(options);
+  const name = locale ?? "";
+  const kept = numbers.get(key)?.get(name);
+  if (kept) return kept;
+  const built = new Intl.NumberFormat(locale, options);
+  level(numbers, key).set(name, built);
   return built;
 }
 
 /** The collator ordering strings by `options` for `locale` (the browser's language when undefined). */
-export function collator(locale: string | undefined, options: Intl.CollatorOptions): Intl.Collator {
-  const key = `${locale ?? ""}\u0000${JSON.stringify(options)}`;
-  let built = collators.get(key);
-  if (!built) {
-    built = new Intl.Collator(locale, options);
-    collators.set(key, built);
-  }
+export function collator(
+  locale: string | undefined,
+  options: Readonly<Intl.CollatorOptions>,
+): Intl.Collator {
+  const key = optionsKey(options);
+  const name = locale ?? "";
+  const kept = collators.get(key)?.get(name);
+  if (kept) return kept;
+  const built = new Intl.Collator(locale, options);
+  level(collators, key).set(name, built);
   return built;
 }
 
@@ -146,6 +188,8 @@ export function collator(locale: string | undefined, options: Intl.CollatorOptio
  * Drop every kept formatter and collator, so the next ask builds it afresh,
  * and every answer [knownZone] kept: one call puts the module back as it
  * loaded, which a suite's `afterEach` relies on to count what a case builds.
+ * The options' keys stay with their objects: each is what a frozen object
+ * spells, which nothing here can change.
  */
 export function forgetFormatters(): void {
   dates.clear();
@@ -156,7 +200,13 @@ export function forgetFormatters(): void {
 
 /** How many formatters and collators are kept — for a suite holding the cache to its bound. */
 export function keptFormattersForTest(): number {
-  return dates.size + numbers.size + collators.size;
+  let kept = 0;
+  for (const byZone of dates.values()) {
+    for (const byLocale of byZone.values()) kept += byLocale.size;
+  }
+  for (const byLocale of numbers.values()) kept += byLocale.size;
+  for (const byLocale of collators.values()) kept += byLocale.size;
+  return kept;
 }
 
 // A suite in the node environment has no window.

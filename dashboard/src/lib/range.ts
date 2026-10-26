@@ -603,7 +603,7 @@ export function clockIn(at: number, zone: string | undefined): string {
   return dateTimeFormat(undefined, companyZone(zone), CLOCK).format(at);
 }
 
-const CLOCK: DateShape = { hour: "2-digit", minute: "2-digit", hourCycle: "h23" };
+const CLOCK: DateShape = Object.freeze({ hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 
 /**
  * The zone this runtime reads the company's clock in: `zone` itself, or UTC
@@ -681,7 +681,7 @@ export function daysInterval(
 }
 
 /** `en-CA` writes a date in this shape as `YYYY-MM-DD`, which sorts as the date does. */
-const YMD: DateShape = { year: "numeric", month: "2-digit", day: "2-digit" };
+const YMD: DateShape = Object.freeze({ year: "numeric", month: "2-digit", day: "2-digit" });
 
 /** A function reading the `YYYY-MM-DD` an instant falls on in `zone`. */
 function dateIn(zone: string | undefined): (at: number) => string {

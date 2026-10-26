@@ -180,7 +180,7 @@ function weekday(at: string, zone: string | undefined): string {
   return dateTimeFormat(undefined, companyZone(zone), WEEKDAY).format(t);
 }
 
-const WEEKDAY: DateShape = { weekday: "short" };
+const WEEKDAY: DateShape = Object.freeze({ weekday: "short" });
 
 /** What waits on the reader: the engine's count, whether it is a floor, and
  *  when the longest one began. Null while it is not known (nobody signed in,

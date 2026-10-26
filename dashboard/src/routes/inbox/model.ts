@@ -431,9 +431,12 @@ export function shortWhen(at: string | undefined, now: number): string {
   if (hours < 24) return `${hours}h`;
   // IN THE READER'S ZONE, as every other time on the screen: a formatter with
   // no zone writes in the runtime's, which a suite pinning one does not move.
-  if (hours < 24 * 7) return dateTimeFormat(undefined, zone(), { weekday: "short" }).format(t);
-  return dateTimeFormat(undefined, zone(), { month: "short", day: "numeric" }).format(t);
+  if (hours < 24 * 7) return dateTimeFormat(undefined, zone(), WEEKDAY).format(t);
+  return dateTimeFormat(undefined, zone(), MONTH_DAY).format(t);
 }
+
+const WEEKDAY: DateShape = Object.freeze({ weekday: "short" });
+const MONTH_DAY: DateShape = Object.freeze({ month: "short", day: "numeric" });
 
 /**
  * A moment on the READER's own clock, to the minute: the time alone today and
@@ -556,7 +559,7 @@ interface Civil {
   d: number;
 }
 
-const CIVIL: DateShape = { year: "numeric", month: "2-digit", day: "2-digit" };
+const CIVIL: DateShape = Object.freeze({ year: "numeric", month: "2-digit", day: "2-digit" });
 
 /** The civil date an instant falls on in `tz`, a zone this runtime reads ([companyZone]). */
 function civilDate(at: number, tz: string): Civil {
@@ -567,12 +570,10 @@ function civilDate(at: number, tz: string): Civil {
 
 /** A civil date as a reader names it: "Mon, Sep 28". */
 function dayIn(c: Civil): string {
-  return dateTimeFormat("en-US", "UTC", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-  }).format(Date.UTC(c.y, c.m - 1, c.d));
+  return dateTimeFormat("en-US", "UTC", DAY).format(Date.UTC(c.y, c.m - 1, c.d));
 }
+
+const DAY: DateShape = Object.freeze({ weekday: "short", month: "short", day: "numeric" });
 
 function addDays(c: Civil, days: number): Civil {
   const t = new Date(Date.UTC(c.y, c.m - 1, c.d + days));

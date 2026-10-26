@@ -82,8 +82,8 @@ export function formatDay(at: number, now = Date.now()): string {
   ).format(day);
 }
 
-const DAY_MONTH: DateShape = { day: "numeric", month: "short" };
-const DAY_MONTH_YEAR: DateShape = { ...DAY_MONTH, year: "numeric" };
+const DAY_MONTH: DateShape = Object.freeze({ day: "numeric", month: "short" });
+const DAY_MONTH_YEAR: DateShape = Object.freeze({ ...DAY_MONTH, year: "numeric" });
 
 /**
  * A value in its column's own words: a tracker status, status group or
@@ -127,13 +127,13 @@ export function cellText(column: DashboardColumn | undefined, v: DashboardValue)
   if (column?.type === "date" && typeof v === "string") {
     const at = chartTimeOf(v);
     if (!Number.isNaN(at)) {
-      return DAY.test(v)
-        ? formatDay(at)
-        : dateTimeFormat(undefined, zone(), { dateStyle: "medium", timeStyle: "short" }).format(at);
+      return DAY.test(v) ? formatDay(at) : dateTimeFormat(undefined, zone(), INSTANT).format(at);
     }
   }
   return wordsOf(column, v);
 }
+
+const INSTANT: DateShape = Object.freeze({ dateStyle: "medium", timeStyle: "short" });
 
 /**
  * Orders two values of one column type: none before every value, numbers
@@ -230,16 +230,19 @@ export function formatNumber(
       text = fmtExact(Math.round(v));
       break;
     case "percent":
-      text = `${numberFormat(undefined, { maximumFractionDigits: 1 }).format(v * 100)}%`;
+      text = `${numberFormat(undefined, ONE_PLACE).format(v * 100)}%`;
       break;
     case "compact":
       text = fmtCount(v);
       break;
     default:
-      text = numberFormat(undefined, { maximumFractionDigits: 2 }).format(v);
+      text = numberFormat(undefined, TWO_PLACES).format(v);
   }
   return unit ? `${text} ${unit}` : text;
 }
+
+const ONE_PLACE: Intl.NumberFormatOptions = Object.freeze({ maximumFractionDigits: 1 });
+const TWO_PLACES: Intl.NumberFormatOptions = Object.freeze({ maximumFractionDigits: 2 });
 
 /**
  * The format a figure's headline number is written in: the author's, else
@@ -263,14 +266,14 @@ export function scaleFormat(w: Pick<DashboardWidget, "format">): (v: number) => 
   if (w.format === "percent") return (v) => formatNumber(v, "percent");
   return (v) => {
     const abs = Math.abs(v);
-    if (abs < 1000) return numberFormat(undefined, { maximumFractionDigits: 2 }).format(v);
+    if (abs < 1000) return numberFormat(undefined, TWO_PLACES).format(v);
     const [n, suffix] =
       abs < 1_000_000
         ? [v / 1000, "k"]
         : abs < 1_000_000_000
           ? [v / 1_000_000, "M"]
           : [v / 1e9, "B"];
-    return `${numberFormat(undefined, { maximumFractionDigits: 1 }).format(n)}${suffix}`;
+    return `${numberFormat(undefined, ONE_PLACE).format(n)}${suffix}`;
   };
 }
 

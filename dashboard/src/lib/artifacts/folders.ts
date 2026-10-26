@@ -178,7 +178,7 @@ export function indexFolders(folders: readonly ArtifactFolderItem[]): FolderInde
  * How siblings are ordered — A to Z, as the engine orders them, by the
  * reader's own collation, case apart and numbers by value.
  */
-const NAME_ORDER: Intl.CollatorOptions = { sensitivity: "base", numeric: true };
+const NAME_ORDER: Intl.CollatorOptions = Object.freeze({ sensitivity: "base", numeric: true });
 
 /**
  * A listing's `folder_path` (`Marketing/Q4/`) in words (`Marketing › Q4`), or

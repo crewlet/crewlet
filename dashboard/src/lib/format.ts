@@ -83,13 +83,24 @@ export function oldestFirst(
  *
  * EVERY FORMATTER COMES FROM `formatters.ts`, built once per shape and zone:
  * a `toLocaleString` with options built one on every call, so a list built
- * one or two a row on every render.
+ * one or two a row on every render. Every shape here is a frozen constant,
+ * which the cache reads its key from once rather than on every ask.
  */
-const DATE_PARTS: DateShape = { year: "numeric", month: "short", day: "2-digit" };
+const DATE_PARTS: DateShape = Object.freeze({ year: "numeric", month: "short", day: "2-digit" });
 
-const TIME: DateShape = { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false };
-const DATE_TIME: DateShape = { ...DATE_PARTS, ...TIME };
-const DATE_MINUTE: DateShape = { ...DATE_PARTS, hour: "2-digit", minute: "2-digit", hour12: false };
+const TIME: DateShape = Object.freeze({
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+});
+const DATE_TIME: DateShape = Object.freeze({ ...DATE_PARTS, ...TIME });
+const DATE_MINUTE: DateShape = Object.freeze({
+  ...DATE_PARTS,
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
 
 export function fmtTime(ts: string | null | undefined): string {
   const d = parseUTC(ts);
@@ -153,8 +164,8 @@ export function fmtDateCompact(ts: string | null | undefined, now: number): stri
   ).format(d);
 }
 
-const MONTH_DAY: DateShape = { month: "short", day: "2-digit" };
-const MONTH_DAY_YEAR: DateShape = { ...MONTH_DAY, year: "numeric" };
+const MONTH_DAY: DateShape = Object.freeze({ month: "short", day: "2-digit" });
+const MONTH_DAY_YEAR: DateShape = Object.freeze({ ...MONTH_DAY, year: "numeric" });
 
 /**
  * "Sep 9", from a COMPANY DATE LABEL (`2026-09-09`) — a day the engine cut on
@@ -170,8 +181,10 @@ const MONTH_DAY_YEAR: DateShape = { ...MONTH_DAY, year: "numeric" };
 export function companyDateLabel(date: string): string {
   const at = Date.parse(`${date}T12:00:00Z`);
   if (!Number.isFinite(at)) return date;
-  return dateTimeFormat(undefined, "UTC", { month: "short", day: "numeric" }).format(at);
+  return dateTimeFormat(undefined, "UTC", COMPANY_DAY).format(at);
 }
+
+const COMPANY_DAY: DateShape = Object.freeze({ month: "short", day: "numeric" });
 
 /**
  * "September", from a COMPANY MONTH LABEL (`2026-09`) — a month the engine cut
@@ -190,12 +203,14 @@ export function companyMonthLabel(month: string): string {
   return dateTimeFormat(undefined, "UTC", MONTH).format(at);
 }
 
-const MONTH: DateShape = { month: "long" };
+const MONTH: DateShape = Object.freeze({ month: "long" });
 
 /** Which calendar year an instant falls in, IN THE VIEWER'S ZONE. */
 function calendarYear(at: Date): string {
-  return dateTimeFormat("en-US", zone(), { year: "numeric" }).format(at);
+  return dateTimeFormat("en-US", zone(), YEAR).format(at);
 }
+
+const YEAR: DateShape = Object.freeze({ year: "numeric" });
 
 /**
  * "4m ago", "2h ago", "just now".
@@ -726,7 +741,7 @@ function wallFormatter(tz: string): Intl.DateTimeFormat {
   return dateTimeFormat("en-US", tz, WALL);
 }
 
-const WALL: DateShape = {
+const WALL: DateShape = Object.freeze({
   // `hourCycle: "h23"` RATHER THAN `hour12: false`, which is the legacy
   // spelling and selects h24 in some engines: midnight comes back as "24", the
   // previous day's twenty-fourth hour, and fed to Date.UTC it rolls the day
@@ -740,7 +755,7 @@ const WALL: DateShape = {
   hour: "2-digit",
   minute: "2-digit",
   second: "2-digit",
-};
+});
 
 // ---------------------------------------------------------------------------
 // Values read out of the company document
