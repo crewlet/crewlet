@@ -180,7 +180,7 @@ func (r Record) InTurn() bool { return r.Stage == "" || r.Stage == StageTurn }
 
 // PhaseCalls is a phase record's provider calls, from the two counts the record
 // carries: its `rounds` list's length — one entry per provider call — where it
-// recorded one, its `rounds_used` where it lists no rounds (an agent-mode
+// recorded one, its `rounds_used` where it lists no rounds (a box-mode
 // executor, whose rounds are the CLI's), and one where neither says (a judge's
 // single call, a coding run collected whole, whose own calls happened inside a
 // CLI the engine does not see).

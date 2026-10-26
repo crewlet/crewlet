@@ -439,7 +439,7 @@ func (p *Provider) boxRuntime(opts DiagnoseOptions) (lines, problems []string) {
 	return lines, problems
 }
 
-// bridgeURLVar is the variable an agent-mode box dials the engine on.
+// bridgeURLVar is the variable a box-mode run's box dials the engine on.
 //
 // SPELLED HERE RATHER THAN IMPORTED, because importing the API package into a
 // provider would be a dependency from a leaf onto an edge for one string —
@@ -832,7 +832,7 @@ func (p *Provider) SandboxCredentialDocument() string {
 // doctor reported the entry healthy.
 //
 // Read off [childEnv] like [Provider.signIn], so a run carries exactly the
-// credentials a text-mode call is given: what the auth mode removes from the
+// credentials a host-mode run is given: what the auth mode removes from the
 // child it removes from the box.
 func (p *Provider) SandboxEnv() map[string]string {
 	env := childEnv(p.profile, &Checkout{}, p.env, p.auth)

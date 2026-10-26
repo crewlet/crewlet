@@ -27,7 +27,7 @@
 # through this node's own broker; once the engine runs, they go through
 # it, with CREWLET_API_TOKEN set to $CREWLET_API_TOKEN_FOUNDER.  Then run
 # the pair, with
-# the tool bridge the engineers' agent-mode runs dial back on and the .env
+# the tool bridge the engineers' box-mode runs dial back on and the .env
 # the bootstrap wrote:
 #
 #     export CREWLET_MCP_BRIDGE_URL="http://127.0.0.1:8000"   # = api.port

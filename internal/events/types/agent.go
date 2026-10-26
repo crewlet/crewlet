@@ -801,7 +801,7 @@ type AgentPhaseCompleted struct {
 	// done where the clock is.
 	//
 	// Zero means this record measures no loop of its own rather than a
-	// phase that took no time: an agent-mode executor's rounds happen
+	// phase that took no time: a box-mode executor's rounds happen
 	// inside the CLI's own loop, in another process, and the engine's
 	// re-entry replays what that run already did. The detached run's own
 	// wall clock is on sandbox_run_started / sandbox_run_completed, which

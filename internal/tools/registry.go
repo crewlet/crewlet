@@ -487,8 +487,8 @@ func (v *OriginView) Unregister() []string { return v.reg.UnregisterOrigin(v.ori
 // only — in registration order, or "" when there is nothing to discover.
 //
 // ONLY WHAT IS NOT ACTIVE, because an active tool's whole definition already
-// reaches the model with every request — as the tool catalogue of a text-mode
-// prompt, or over an agent-mode CLI's tool bridge — and a second copy of its
+// reaches the model with every request — as a tool of the CLI's `crewlet` MCP
+// server, in either mode — and a second copy of its
 // description in the system prompt is the same words paid for twice. On the
 // executor, which holds every first-party tool from its first round, that copy
 // was most of its system prompt. What is left is what the model can learn

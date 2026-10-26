@@ -3,7 +3,7 @@ package store
 import "testing"
 
 // A SPEND ROW COUNTS ITS PROVIDER CALLS: a phase its rounds where it lists
-// them, its rounds_used where it does not (an agent-mode executor, whose
+// them, its rounds_used where it does not (a box-mode executor, whose
 // rounds are the CLI's), and one where neither says — and an auxiliary record
 // counts the calls it coalesced, filed as the auxiliary phase with its purpose
 // as the worker and its stage beside it.
@@ -17,7 +17,7 @@ func TestASpendRowCountsItsProviderCalls(t *testing.T) {
 		payload: `{"phase":"execute","rounds":[{},{},{}],"rounds_used":9,"total_tokens":10}`,
 		want:    Spend{Phase: "execute", TotalTokens: 10, Calls: 3},
 	}, {
-		name: "an agent-mode phase's rounds_used", eventType: "agent_phase_completed",
+		name: "a box-mode phase's rounds_used", eventType: "agent_phase_completed",
 		payload: `{"phase":"execute","rounds_used":5}`,
 		want:    Spend{Phase: "execute", Calls: 5},
 	}, {
