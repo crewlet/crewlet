@@ -1134,6 +1134,16 @@ func ProjectOfSeat(o *org.Organization, handle string) string {
 		func(r *org.Role) string { return r.Project })
 }
 
+// SpaceOfSeat is one seat's home space, from a chart: the container a page it
+// writes naming none lands in. Exported for the reason [ProjectOfSeat] is: the
+// page tools default to it ([LiveSeatSpace]) and `GET /viewer` says it, so the
+// Dashboard Assistant's preview names the space the write will use.
+func SpaceOfSeat(o *org.Organization, handle string) string {
+	return scopeOfSeat(o, handle,
+		func(u *org.Unit) string { return u.Space },
+		func(r *org.Role) string { return r.Space })
+}
+
 // scopeOfSeat is the project or container a seat files into: its own, else
 // its unit's, else its nearest ancestor's.
 //
@@ -1793,9 +1803,7 @@ func LiveSeatSpace(e *Engine) func(handle string) string {
 		if c == nil || handle == "" {
 			return ""
 		}
-		return scopeOfSeat(c.Org, handle,
-			func(u *org.Unit) string { return u.Space },
-			func(r *org.Role) string { return r.Space })
+		return SpaceOfSeat(c.Org, handle)
 	}
 }
 

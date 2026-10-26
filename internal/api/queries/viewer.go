@@ -168,6 +168,9 @@ func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 	// (`engine.ProjectOfSeat`), so the project promised here is the project
 	// the create files into.
 	out["project"] = engine.ProjectOfSeat(organization, seat.Handle())
+	// AND THE SPACE a page of theirs that names no container lands in, by the
+	// derivation the page write applies ([engine.SpaceOfSeat]).
+	out["space"] = engine.SpaceOfSeat(organization, seat.Handle())
 	return out, nil
 }
 

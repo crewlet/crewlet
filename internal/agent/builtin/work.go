@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -1648,9 +1649,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	if task.Project == "" {
 		task.Project = t.deps.defaultProject(actor)
 		if task.Project == "" {
-			return failed("create_work_item needs a `project`: your team owns " +
-				"none, so there is no default. Ask which project this belongs " +
-				"in rather than guessing."), nil
+			return failed(org.NoHomeProject("create_work_item")), nil
 		}
 	}
 	// THE OPERATION, AND THE TASK'S ID FROM IT — see [createdTaskID]. Its

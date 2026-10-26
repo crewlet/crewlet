@@ -2,6 +2,8 @@ package api_test
 
 import (
 	"encoding/json"
+	"errors"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -330,5 +332,78 @@ func TestATurnProposesTheSeatAndChangesNothing(t *testing.T) {
 	}
 	if seated(unitNamed(t, fx, "engineering"), "crewlet-swe") {
 		t.Error("the seat landed before anybody approved it")
+	}
+}
+
+// A SEAT THE UNIT WOULD REFUSE IS REFUSED BEFORE THE PERSON SEES IT, AND ONE IT
+// TAKES LANDS WITH THE HISTORY LINE THE PERSON APPROVED (ADR-0054).
+//
+// The case the browser found: a turn copied `GET /org`'s resolved seat fields
+// (`tool_sources`, an `llm` block of purposes) into the unit it proposed, the
+// person approved it and confirmed it was them, and only then did the route
+// refuse the fields, and next the missing summary. Now the preview asks the
+// route's own check through the read grant: the unknown fields are the step's
+// refusal in the route's words and nothing is proposed; the corrected seat,
+// whose call names no `_summary`, is previewed with its history line on the
+// card and in the body, and the approved write lands with that line as the
+// revision's summary. Mutation: skip the check, or carry the summary in a
+// header, and a case here fails.
+func TestASeatTheUnitWouldRefuseIsRefusedBeforeThePersonSeesIt(t *testing.T) {
+	t.Parallel()
+	fx, read := principlesApp(t)
+	tools := genericTools(t, fx)
+	change := tools[catalog.ProposeAPIChangeTool]
+	doc, err := tools[catalog.DescribeAPITool].Docs(catalog.Args{"route": unitRoute})
+	if err != nil || !strings.Contains(doc, "checked by the route before the person sees it") ||
+		!strings.Contains(doc, "your `summary` argument") {
+		t.Errorf("describe_api does not tell the model the route is checked and its "+
+			"summary is the call's: %v\n%s", err, doc)
+	}
+	propose := func(seat map[string]any, summary string) (proposal.Preview, error) {
+		unit := unitNamed(t, fx, "engineering")
+		roles, _ := unit["roles"].([]any)
+		unit["roles"] = append(roles, seat)
+		args := map[string]any{"route": unitRoute,
+			"path": map[string]any{"id": "engineering"}, "body": unit}
+		if summary != "" {
+			args["summary"] = summary
+		}
+		return change.Preview(t.Context(), readOver(fx, read), time.Now(), args)
+	}
+
+	resolved := maps.Clone(newSeat)
+	resolved["tool_sources"] = []any{"builtin"}
+	_, err = propose(resolved, "")
+	var refused *catalog.PreviewRefusal
+	if !errors.As(err, &refused) || refused.Status != http.StatusBadRequest ||
+		!strings.Contains(refused.Refusal.Message, "tool_sources") {
+		t.Fatalf("a seat with fields the unit does not take previewed %v, want the "+
+			"route's refusal naming them", err)
+	}
+	if seated(unitNamed(t, fx, "engineering"), "crewlet-swe") {
+		t.Fatal("the check added the seat")
+	}
+
+	const line = "Add crewlet-swe, a senior software engineer, to Engineering"
+	p, err := propose(newSeat, line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(p.Changes, func(c wire.Change) bool {
+		return c.Field == "request.summary" && c.To == line
+	}) {
+		t.Errorf("the card does not show the history line: %+v", p.Changes)
+	}
+	req := proposal.RequestOf(assistantdomain.Proposal{Method: p.Request.Method,
+		Path: p.Request.Path, Query: p.Request.Query, Body: p.Request.Body,
+		SourceRevision: p.SourceRevision})
+	resp, err := fx.disp.Do(t.Context(), fx.derive(t, approvedFor(req, authz.ActionOrgWrite)), req)
+	if err != nil || resp.Status != http.StatusCreated {
+		t.Fatalf("the approved seat answered %d %s, %v", resp.Status, resp.Body, err)
+	}
+	status, body := fx.asPerson(t, exec.Request{Method: http.MethodGet,
+		Path: "/config/revisions"})
+	if status != http.StatusOK || !strings.Contains(string(body), line) {
+		t.Errorf("the revisions answer %d and do not record %q: %s", status, line, body)
 	}
 }

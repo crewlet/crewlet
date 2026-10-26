@@ -76,6 +76,12 @@ func (d *Dispatcher) Do(ctx context.Context, g exec.Grant, r exec.Request) (exec
 		// reads its clock and its seat names from.
 		return JSON(map[string]any{"timezone": "UTC"}), nil
 	}
+	if resp.Status == http.StatusNotFound && r.Method == http.MethodGet && r.Path == "/viewer" {
+		// AND THE PERSON EVERY RIG ASKS AS, for a handler that names none:
+		// a seat whose team owns the RIG project and space, which is where a
+		// create's preview resolves a project or container its call omits.
+		return JSON(map[string]any{"handle": "rig", "project": "RIG", "space": "RIG"}), nil
+	}
 	return resp, nil
 }
 

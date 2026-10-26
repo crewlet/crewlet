@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/eventfan"
@@ -545,7 +546,12 @@ func (d *recordingDispatcher) writes() []exec.Request {
 	defer d.mu.Unlock()
 	var out []exec.Request
 	for _, e := range d.sent {
-		if e.request.Method != http.MethodGet && e.request.Method != http.MethodHead {
+		// A CHECK STORES NOTHING (ADR-0054): a read grant sends one only to
+		// a route declaring it reads the flag (internal/authz's guard,
+		// configapi's TestEveryWriteThatReadsDryRunDeclaresIt), so it is the
+		// one request with a write's method that is not a write.
+		check := e.request.Query.Get(authz.DryRunQuery) == "true"
+		if e.request.Method != http.MethodGet && e.request.Method != http.MethodHead && !check {
 			out = append(out, e.request)
 		}
 	}

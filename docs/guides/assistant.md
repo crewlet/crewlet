@@ -53,7 +53,15 @@ reads it with the person's own access, and proposes any change on it: the card
 shows the request, its body with secrets masked, and the resource as it is now
 beside what the change makes of it, field by field (a seat added to a unit is
 one added seat with its role and responsibilities). A change prepared against
-a resource that has moved since is refused rather than overwritten. Adding a
+a resource that has moved since is refused rather than overwritten. Before any
+card is drawn, a route that can check a change without making it (every write
+of the company document, `?dry_run=true`) is asked to, as the person: a change
+the route would refuse goes back to the assistant to correct, and never reaches
+the person to approve, and the check's warnings are on the card. A write the
+history records carries a one-line summary of what it does, shown on the card
+and stored with the revision. A task or a page that names no project or space
+is shown, and sent, with the one it will land in, or refused when the person's
+team owns none (ADR-0054). Adding a
 seat to the org chart, editing a person's permissions, purging a task or
 adopting a brand are all proposals the person approves, at the same step-up
 the screen would ask.

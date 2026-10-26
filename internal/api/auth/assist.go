@@ -670,7 +670,11 @@ func (g *Guard) assist(r *http.Request, candidate string) (*http.Request, *Refus
 
 	switch claims.Scope {
 	case iam.AssistScopeRead:
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		// A WRITE'S METHOD ONLY AS A CHECK (ADR-0054): `dry_run=true`, which
+		// the route's guard then holds to a route that declares it reads
+		// the flag ([authz.IsCheck]), so nothing a read grant sends stores
+		// anything.
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && !authz.AsksCheck(r) {
 			return assisted(r, p, claims), assistRefusal(authz.ReasonAssistScope,
 				"The assistant's read access can't send a "+r.Method+" request.")
 		}

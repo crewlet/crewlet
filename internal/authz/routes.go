@@ -40,6 +40,16 @@ type Policy struct {
 	// holds nothing: it creates it, or it is refused and the member is added
 	// elsewhere. Nil for every other route. See [Absent].
 	Absent *Absent
+
+	// DryRun says the write answers `?dry_run=true` as a check: the same
+	// request, judged in the same order, that stores, activates and publishes
+	// nothing. See [Policy.Checked].
+	DryRun bool
+
+	// Summary says the write records a revision summary for the history, which
+	// it reads from the `X-Summary` header or a top-level `_summary` key in its
+	// JSON body, and refuses a write without one. See [Policy.Summarised].
+	Summary bool
 }
 
 // Absent is a PUT route's answer to an address that holds nothing, DECLARED
@@ -78,6 +88,66 @@ func AddedElsewhere(where string) *Absent { return &Absent{Elsewhere: where} }
 func (p Policy) WhenAbsent(a *Absent) Policy {
 	p.Absent = a
 	return p
+}
+
+// Checked is p declaring that its write answers `?dry_run=true` as a check
+// (ADR-0054).
+//
+// DECLARED WHERE THE ROUTE IS MOUNTED, beside [Absent], for the same reader:
+// the Dashboard Assistant's preview of a generic change runs the route's own
+// check before it draws a card, so a body the route would refuse (a field it
+// does not know, a document the company would not validate) is told to the
+// model at once, never found by the person after they approved and confirmed
+// it was them. A route that says nothing is never asked, because only a route
+// that reads the flag stores nothing for it.
+//
+// A CHECK IS DECIDED AS THE WRITE, at the read's proof ([IsCheck]): the same
+// verb, class, app and assistant column, without the step-up, because it
+// changes nothing. So the person's assistant checks exactly what the person's
+// own session could.
+func (p Policy) Checked() Policy {
+	p.DryRun = true
+	return p
+}
+
+// Summarised is p declaring that its write requires a revision summary, read
+// from `X-Summary` or a top-level `_summary` key in its JSON body. The
+// assistant's generic change carries one in the body, which the proposal's
+// digest binds, so the history line is the one the person approved.
+func (p Policy) Summarised() Policy {
+	p.Summary = true
+	return p
+}
+
+// DryRunQuery is the query parameter a [Policy.Checked] route reads.
+const DryRunQuery = "dry_run"
+
+// IsCheck reports a request that asks a check of a route declaring one:
+// `dry_run` given exactly once, as exactly `true`, on a [Policy.Checked]
+// route. Any other spelling is the route's own refusal, never a check.
+func IsCheck(r *http.Request, p Policy) bool {
+	return p.DryRun && AsksCheck(r)
+}
+
+// AsksCheck reports a request whose query asks a check, whatever route it
+// reaches: `dry_run` given exactly once, as exactly `true`.
+func AsksCheck(r *http.Request) bool {
+	values, given := r.URL.Query()[DryRunQuery]
+	return given && len(values) == 1 && values[0] == "true"
+}
+
+// writeFormProblem says why a route's [Policy.DryRun] or [Policy.Summary]
+// cannot be mounted, or "".
+func writeFormProblem(pattern string, p Policy) string {
+	method, _, _ := strings.Cut(pattern, " ")
+	switch method {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		return ""
+	}
+	if p.DryRun || p.Summary {
+		return "declares a check or a revision summary, which only a write has"
+	}
+	return ""
 }
 
 // absentProblem says why a route's [Absent] cannot be mounted, or "".
@@ -121,6 +191,16 @@ func ContextGuard(chart Chart) Guard {
 		if how == iam.Unknown {
 			return Decision{Err: iam.Reason(r.Context())}
 		}
+		check := Checking(r.Context()) || IsCheck(r, p)
+		// A READ GRANT SENDS A WRITE'S METHOD ONLY AS A CHECK of a route
+		// that declares one (ADR-0054). The edge admits such a grant's
+		// write method only with `dry_run=true`, which says nothing about
+		// whether the route reads it; this is where the route's own
+		// declaration is asked, so a route that would ignore the flag and
+		// write is never reached.
+		if assistedRead(principal) && !readMethod(r.Method) && !check {
+			return Decision{Reason: ReasonAssistScope}
+		}
 		var object Object
 		if p.Object != nil {
 			object = p.Object(r)
@@ -128,7 +208,7 @@ func ContextGuard(chart Chart) Guard {
 		// NOW, at the request: how recently the caller proved who they
 		// are is judged at the instant they ask, against the deadlines
 		// the guard composed for this very request.
-		return Decide(r.Context(), principal, p.Action, object, chart, time.Now())
+		return decide(r.Context(), principal, p.Action, object, chart, time.Now(), check)
 	}
 }
 
@@ -331,6 +411,9 @@ func (t *Router) Handle(pattern string, p Policy, h http.Handler) error {
 	if problem := absentProblem(pattern, p.Absent); problem != "" {
 		return newPolicyError(pattern, problem)
 	}
+	if problem := writeFormProblem(pattern, p); problem != "" {
+		return newPolicyError(pattern, problem)
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if _, dup := t.policies[pattern]; dup {
@@ -367,6 +450,11 @@ func (t *Router) PolicyFor(pattern string) (Policy, bool) {
 // wrap is the guard around one route's handler.
 func (t *Router) wrap(p Policy, h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if IsCheck(r, p) {
+			// A CHECK FOR THE WHOLE REQUEST, so the handler's own decisions
+			// are asked as the route's was ([WithCheck]).
+			r = r.WithContext(WithCheck(r.Context()))
+		}
 		d := t.guard(r, p)
 		if d.Unknown() || !d.Allowed {
 			t.refuse(w, r, p, d)

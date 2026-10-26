@@ -219,6 +219,12 @@ func (d worldThenApp) Do(ctx context.Context, g exec.Grant, r exec.Request) (exe
 	if r.Method == http.MethodGet {
 		return assistanttest.Answer(d.world, r), nil
 	}
+	if r.Query.Get(authz.DryRunQuery) == "true" {
+		// A PREVIEW'S CHECK of the world's own object (ADR-0054), which the
+		// world admits: the app holds another company, so its check would
+		// judge a revision this world never had.
+		return evals.JSON(map[string]any{"valid": true, "warnings": []any{}}), nil
+	}
 	return d.app.Do(ctx, g, r)
 }
 

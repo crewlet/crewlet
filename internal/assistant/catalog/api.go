@@ -79,6 +79,13 @@ type Route struct {
 	// route, and for a PUT that declares nothing, which then creates
 	// nothing a preview would propose.
 	Absent *authz.Absent
+	// DryRun is a write that answers `?dry_run=true` as a check
+	// ([authz.Policy.Checked]): the preview runs it before any card is drawn.
+	DryRun bool
+	// Summary is a write that requires a revision summary
+	// ([authz.Policy.Summarised]): the change carries one as `_summary` in
+	// its body, which the digest binds.
+	Summary bool
 }
 
 // createsWhenAbsent reports a route that creates what an empty address names.
@@ -268,7 +275,16 @@ var (
 		"parameters, each a string or a list of strings: {\"limit\": \"20\"}."}
 	bodyArgument = &schema{kind: "object", payload: true, description: "The JSON request " +
 		"body the route takes, exactly as its documentation states it."}
+	summaryArgument = text("One line for the configuration's history saying what the "+
+		"change does, in plain words: \"Add a QA Engineer seat to Product and "+
+		"Engineering\". A route that keeps a history gets it as its revision summary "+
+		"(you never send X-Summary or _summary yourself), and the person sees it on the "+
+		"card.", lineBytes)
 )
+
+// SummaryKey is the body key a [Route.Summary] write reads its revision summary
+// from (internal/api/configapi), the one channel the request digest binds.
+const SummaryKey = "_summary"
 
 func (g generic) describe() Tool {
 	return Tool{
@@ -337,7 +353,7 @@ func (g generic) change() Tool {
 			"where the route replaces it (a PUT). The body is at most 64 KiB.",
 		schema: object([]string{"route"}, map[string]*schema{
 			"route": routeArgument, "path": pathArgument, "query": queryArgument,
-			"body": bodyArgument,
+			"body": bodyArgument, "summary": summaryArgument,
 		}),
 		Routes: g.table.patterns(func(r Route) bool { return !r.reads() }),
 		Build: func(a map[string]any) (exec.Request, error) {
@@ -398,6 +414,14 @@ func (g generic) request(args Args, reading bool) (exec.Request, Route, error) {
 	if err != nil {
 		return exec.Request{}, Route{}, err
 	}
+	if _, asked := query[authz.DryRunQuery]; asked && !reading {
+		// A CHANGE IS THE WRITE: the preview asks the route's own check
+		// before the person sees it, so a proposal carrying the flag would
+		// be a write that stores nothing, approved as though it did.
+		return exec.Request{}, Route{}, fmt.Errorf("leave %s out: a change is checked "+
+			"for you before the person sees it, and what they approve is the write",
+			authz.DryRunQuery)
+	}
 	req, err := fill(pattern, path, query)
 	if err != nil {
 		return exec.Request{}, Route{}, err
@@ -435,7 +459,47 @@ func (g generic) request(args Args, reading bool) (exec.Request, Route, error) {
 		}
 		req.Body = encoded
 	}
+	if !reading && route.Summary {
+		body, summaryErr := summarised(req.Body, args)
+		if summaryErr != nil {
+			return exec.Request{}, Route{}, summaryErr
+		}
+		req.Body = body
+	}
 	return req, route, nil
+}
+
+// summarised is a [Route.Summary] write's body with its revision summary in
+// it: the one the body already states, else the call's `summary`, else one
+// naming the change from its route. IN THE BODY, never a header, because the
+// body is what the request digest binds: the history line the route records
+// is the one the person approved on the card (ADR-0054). A body that is not
+// one JSON object is left as it is, for the route's own check to refuse.
+func summarised(body []byte, args Args) ([]byte, error) {
+	var doc map[string]any
+	if len(body) == 0 {
+		doc = map[string]any{}
+	} else if err := json.Unmarshal(body, &doc); err != nil || doc == nil {
+		return body, nil //nolint:nilerr // The route's check refuses it in its own words.
+	}
+	if stated, _ := doc[SummaryKey].(string); strings.TrimSpace(stated) != "" {
+		return body, nil
+	}
+	summary := strings.Join(strings.Fields(args.String("summary")), " ")
+	if summary == "" {
+		summary = "Change " + lowerFirst(callTitle(args)) + " through the Dashboard Assistant"
+	}
+	doc[SummaryKey] = summary
+	encoded, err := json.Marshal(doc)
+	if err != nil {
+		return nil, fmt.Errorf("the body does not encode: %w", err)
+	}
+	if len(encoded) > GenericBodyBytes {
+		return nil, fmt.Errorf("the body and its summary are %d bytes and the most a "+
+			"change through the API carries is %d; send a narrower change", len(encoded),
+			GenericBodyBytes)
+	}
+	return encoded, nil
 }
 
 // fill is the request on pattern with its wildcards filled from path, each

@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -579,8 +580,7 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 			in.Container = t.deps.DefaultContainer(actor.Handle)
 		}
 		if in.Container == "" {
-			return failed("write_page needs a `container`: your team owns none, " +
-				"so there is no default. Ask where this belongs rather than guessing."), nil
+			return failed(org.NoHomeSpace(WritePageTool)), nil
 		}
 	}
 	// A NEW TOOL SKILL IS CONFIGURATION, and the container is known only

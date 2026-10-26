@@ -102,13 +102,13 @@ func TestAPresenceRowRefusesAReadGrantAndAdmitsAnApprovedOne(t *testing.T) {
 		for scope, want := range map[iam.AssistScope]Reason{
 			iam.AssistScopeRead: c.read, iam.AssistScopeExec: c.exec,
 		} {
-			bar, barred := assistBar(through(scope), c.verb, c.row)
+			bar, barred := assistBar(through(scope), c.verb, c.row, false)
 			if barred != (want != "") || bar.Reason != want {
 				t.Errorf("%s under a %s grant answered %q (barred %v), want %q",
 					c.name, scope, bar.Reason, barred, want)
 			}
 		}
-		if _, barred := assistBar(keyboard, c.verb, c.row); barred {
+		if _, barred := assistBar(keyboard, c.verb, c.row, false); barred {
 			t.Errorf("%s barred the person at their keyboard", c.name)
 		}
 	}

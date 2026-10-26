@@ -220,11 +220,23 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// seat — before the body is read, and what the write changes is then
 	// decided place by place against the two documents (admission.go), a
 	// read against where the seat or unit sits.
-	org := func(pattern string, a authz.Action, h http.HandlerFunc) {
-		policy := authz.Policy{Action: a, Object: func(*http.Request) authz.Object {
+	orgPolicy := func(a authz.Action) authz.Policy {
+		return authz.Policy{Action: a, Object: func(*http.Request) authz.Object {
 			return authz.Object{Kind: authz.KindUnit, Unresolved: true}
 		}}
-		if err := router.Handle(pattern, policy, h); err != nil {
+	}
+	org := func(pattern string, a authz.Action, h http.HandlerFunc) {
+		if err := router.Handle(pattern, orgPolicy(a), h); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	// A DOCUMENT WRITE ANSWERS `dry_run=true` AND REQUIRES A SUMMARY, which
+	// its route declares (ADR-0054): [dryRunOf] and [requireSummary] are
+	// what such a handler reads, and the declaration is what a caller (the
+	// assistant's preview) reads instead of the handler.
+	documentWrite := func(pattern string, h http.HandlerFunc) {
+		if err := router.Handle(pattern, orgPolicy(authz.ActionOrgWrite).Checked().Summarised(),
+			h); err != nil {
 			failures = append(failures, err)
 		}
 	}
@@ -237,7 +249,7 @@ func (s *Service) Routes(mux authz.Mux) error {
 				return authz.Object{Kind: authz.KindUnit, Unresolved: true}
 			}
 		}
-		return p.WhenAbsent(EntityAbsent(kind))
+		return p.WhenAbsent(EntityAbsent(kind)).Checked().Summarised()
 	}
 	entity := func(pattern string, p authz.Policy, h http.HandlerFunc) {
 		if err := router.Handle(pattern, p, h); err != nil {
@@ -245,14 +257,14 @@ func (s *Service) Routes(mux authz.Mux) error {
 		}
 	}
 	read("GET /config", s.getActive)
-	org("PUT /config", authz.ActionOrgWrite, s.put)
+	documentWrite("PUT /config", s.put)
 	// WHAT THIS RESOURCE TAKES, asked rather than guessed. RFC 5789 §3.1:
 	// a patch format is negotiated, not assumed, and Accept-Patch is where
 	// a server says which ones it speaks.
 	read("OPTIONS /config", s.optionsDocument)
 	// THE NARROWER WRITE. See merge.go for why one patch route covers
 	// every section rather than one route per section.
-	org("PATCH /config", authz.ActionOrgWrite, s.patch)
+	documentWrite("PATCH /config", s.patch)
 	// RE-PUBLISH THE ACTIVE DOCUMENT UNCHANGED, which is the gesture a
 	// rotated SECRET needs and the one thing no other route on this
 	// surface performs: the pointer in the config is already correct, so
@@ -266,7 +278,12 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// edits in place. See charter.go for why it is not PATCH /config, and
 	// for why it is decided on verbs of its own.
 	mount("GET /config/charter", authz.ActionPrinciplesRead, s.getCharter)
-	mount("PUT /config/charter", authz.ActionPrinciplesWrite, s.putCharter)
+	// A CHARTER WRITE CHECKS ON `dry_run=true` and names its own summary
+	// when it is sent none ([charterSummary]), so it declares only the check.
+	if err := router.Handle("PUT /config/charter",
+		authz.Policy{Action: authz.ActionPrinciplesWrite}.Checked(), http.HandlerFunc(s.putCharter)); err != nil {
+		failures = append(failures, err)
+	}
 	read("GET /config/revisions", s.listRevisions)
 	read("GET /config/revisions/{id}", s.getRevision)
 	read("GET /config/revisions/{id}/diff", s.diff)

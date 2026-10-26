@@ -25,6 +25,12 @@
 // [Decide] holds every grant to the row's class wherever the verb is asked,
 // a verb asked from inside a tool included, which no route sees.
 //
+// A CHECK IS THE WRITE AT THE READ'S PROOF: ADR-0054, whose authority this
+// package is. A route declaring [Policy.Checked] answers `dry_run=true` as its
+// verb decided without the step-up, and that check is the one request with a
+// write's method a read grant may send, so the assistant's preview asks the
+// route before the person is shown a change.
+//
 // # What it replaces, and what each of those got wrong
 //
 // Three structs carried authority into the tracker as BOOLS the caller had

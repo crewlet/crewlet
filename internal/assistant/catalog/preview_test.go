@@ -113,6 +113,11 @@ func TestEveryWriteIsPreviewedFromTheObjectAsItIsNow(t *testing.T) {
 // whole: [assistanttest.ProposalArgs]' principles change with the parts it
 // leaves out as [assistanttest.World] states them.
 var completedArgs = map[string]map[string]any{
+	// A CREATE THAT NAMES NO PROJECT OR CONTAINER carries the person's own,
+	// as GET /viewer answers it.
+	"create_task": {"title": "File the report", "assignee": "pm", "body": "Details.",
+		"project": "ENG"},
+	"create_page": {"title": "Onboarding", "body": "Welcome.", "container": "ENG"},
 	"update_company_principles": {"mission": "Help friends share costs fairly.",
 		"vision": "Settling up takes seconds.", "policies": []any{"Miles is the final " +
 			"authority.", "Money is an integer number of cents."}},

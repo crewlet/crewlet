@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
@@ -102,6 +103,35 @@ var previews = map[string]func(t Tool) proposal.Previewer{
 	"propose_page_change":       pageActionPreview,
 }
 
+// withHome is args with arg named: as the call names it, else the person's own
+// home the write would default to, read from `GET /viewer` (field), which
+// answers it through the one derivation the write applies
+// (internal/engine.ProjectOfSeat, SpaceOfSeat) (ADR-0054).
+//
+// THE RESOLVED VALUE IS PINNED INTO THE REQUEST, so the card names the place
+// the approved write lands, never a placeholder, and a chart that moves before
+// the approval does not move the write. A person with no home is refused here,
+// in the write's own words (refusal), rather than shown a card the write would
+// refuse once approved.
+func withHome(ctx context.Context, read proposal.Read, args map[string]any, arg, field,
+	refusal string) (map[string]any, error) {
+
+	if strings.TrimSpace(Args(args).String(arg)) != "" {
+		return args, nil
+	}
+	viewer, err := readGet(ctx, read, "GET /viewer", nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	home := strings.TrimSpace(value(viewer, field))
+	if home == "" {
+		return nil, fmt.Errorf("%w: %s", ErrInvalidArguments, refusal)
+	}
+	out := maps.Clone(args)
+	out[arg] = home
+	return out, nil
+}
+
 // readGet builds a read on route and sends it through [readOne].
 func readGet(ctx context.Context, read proposal.Read, route string, path map[string]string,
 	q url.Values) (any, error) {
@@ -168,13 +198,17 @@ func createTaskPreview(t Tool) proposal.Previewer {
 		if err != nil {
 			return proposal.Preview{}, err
 		}
+		if args, err = withHome(ctx, read, args, "project", "project",
+			org.NoHomeProject(t.Act)); err != nil {
+			return proposal.Preview{}, err
+		}
 		req, err := built(t, args)
 		if err != nil {
 			return proposal.Preview{}, err
 		}
 		a := Args(args)
 		var c changes
-		c.fact("project", "Project", orDefault(a.String("project"), "Your team's project"))
+		c.fact("project", "Project", a.String("project"))
 		c.add("title", "Title", a.String("title"))
 		c.add("assignee", "Assignee", company.seatName(a.String("assignee")))
 		c.add("ask", "Asks", company.seatName(a.String("ask")))
@@ -701,14 +735,18 @@ func runAnswerPreview(t Tool) proposal.Previewer {
 }
 
 func createPagePreview(t Tool) proposal.Previewer {
-	return func(_ context.Context, _ proposal.Read, _ time.Time, args map[string]any) (proposal.Preview, error) {
+	return func(ctx context.Context, read proposal.Read, _ time.Time, args map[string]any) (proposal.Preview, error) {
+		args, err := withHome(ctx, read, args, "container", "space", org.NoHomeSpace(t.Act))
+		if err != nil {
+			return proposal.Preview{}, err
+		}
 		req, err := built(t, args)
 		if err != nil {
 			return proposal.Preview{}, err
 		}
 		a := Args(args)
 		var c changes
-		c.fact("container", "Space", orDefault(a.String("container"), "Your team's space"))
+		c.fact("container", "Space", a.String("container"))
 		c.add("title", "Title", a.String("title"))
 		c.add("status", "Status", a.String("status"))
 		c.add("parent", "Under", a.String("parent"))

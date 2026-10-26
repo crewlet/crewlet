@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -47,6 +48,15 @@ import (
 //     [proposal.Revision.Precondition] is the one rule from the revision to
 //     the headers.
 //  6. The verb's own step-up is asked of the approver, shown on the card.
+//  7. A route that answers `?dry_run=true` ([Route.DryRun]) is asked it, with
+//     the exact request and precondition the approval would send, before any
+//     card is drawn (ADR-0054): a body the route would refuse is the step's
+//     refusal in the route's own words, so the model corrects it within the
+//     turn, and the check's warnings are rows on the card. The route's check
+//     is the one source of what it accepts; no rule of it is copied here.
+//  8. A route that records a revision summary ([Route.Summary]) carries it as
+//     `_summary` in the body ([summarised]), shown on the card as the history
+//     line and kept out of the field rows.
 
 // diffRows bounds how many field rows one card carries: past it, the rest is
 // counted in one row, and the whole change is still the request the card
@@ -79,6 +89,15 @@ func (g generic) preview(ctx context.Context, read proposal.Read, _ time.Time,
 		if body, err = cards.Decode(req.Body); err != nil {
 			return proposal.Preview{}, fmt.Errorf("%w: %w", ErrInvalidArguments, err)
 		}
+	}
+	// THE HISTORY LINE IS NOT A FIELD of the resource: the route lifts it
+	// out before it reads the document, so the rows are drawn without it.
+	changed, summary := body, ""
+	if record, ok := body.(map[string]any); ok && route.Summary {
+		summary = strings.TrimSpace(cards.Text(record[SummaryKey]))
+		without := clone(record).(map[string]any)
+		delete(without, SummaryKey)
+		changed = without
 	}
 
 	var before any
@@ -115,6 +134,15 @@ func (g generic) preview(ctx context.Context, read proposal.Read, _ time.Time,
 		}
 	}
 
+	var warnings []string
+	if route.DryRun {
+		found, checkErr := checked(ctx, read, req, revision)
+		if checkErr != nil {
+			return proposal.Preview{}, checkErr
+		}
+		warnings = found
+	}
+
 	c := changes{}
 	c.fact("request", "Request", req.Method+" "+shownPath(req))
 	switch req.Method {
@@ -125,13 +153,13 @@ func (g generic) preview(ctx context.Context, read proposal.Read, _ time.Time,
 			leaves(&c, "", before, proposal.Removed)
 		}
 	case http.MethodPost:
-		leaves(&c, "", body, func(field, label, v string) wire.Change {
+		leaves(&c, "", changed, func(field, label, v string) wire.Change {
 			return proposal.Added(field, label, v, false)
 		})
 	default:
-		after := body
+		after := changed
 		if req.Method == http.MethodPatch {
-			after = mergePatch(clone(before), body)
+			after = mergePatch(clone(before), changed)
 		}
 		if before == nil {
 			leaves(&c, "", after, func(field, label, v string) wire.Change {
@@ -146,6 +174,10 @@ func (g generic) preview(ctx context.Context, read proposal.Read, _ time.Time,
 			ErrInvalidArguments, req.Path)
 	}
 	c = bounded(c)
+	for i, warning := range warnings {
+		c.fact("check.warning."+strconv.Itoa(i+1), "Warning", warning)
+	}
+	c.fact("request.summary", "History note", redact.Secrets(summary))
 	if body != nil {
 		c.fact("request.body", "Request body", prettyBody(body))
 	}
@@ -164,6 +196,58 @@ func (g generic) preview(ctx context.Context, read proposal.Read, _ time.Time,
 		Request:        req,
 		Act:            act,
 	}, nil
+}
+
+// checked asks a [Route.DryRun] route to check req: the same request, under
+// the precondition the proposal will be sent with, with `dry_run=true`, through
+// the turn's read grant (which carries a write's method only as such a check,
+// ADR-0054). A refusal is the step's, in the route's words ([PreviewRefusal]);
+// an admitted check answers the warnings it raised, each one line.
+func checked(ctx context.Context, read proposal.Read, req exec.Request,
+	revision string) ([]string, error) {
+
+	check := req
+	check.Query = maps.Clone(req.Query)
+	if check.Query == nil {
+		check.Query = url.Values{}
+	}
+	check.Query.Set(authz.DryRunQuery, "true")
+	if r, err := proposal.ParseRevision(revision); err == nil {
+		check.IfMatch, check.IfNoneMatch = r.Precondition()
+	}
+	resp, err := read(ctx, check)
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("%w: the route's check could not be asked: %w",
+			ErrPreviewRead, err)
+	case !cards.Permitted(resp.Status):
+		return nil, &PreviewRefusal{Status: resp.Status, Refusal: exec.RefusalOf(resp)}
+	}
+	return checkWarnings(resp.Body), nil
+}
+
+// checkWarnings are a check's `warnings`, each its `message` (or the value
+// itself), as single redacted lines.
+func checkWarnings(body []byte) []string {
+	var answer struct {
+		Warnings []any `json:"warnings"`
+	}
+	if json.Unmarshal(body, &answer) != nil {
+		return nil
+	}
+	var out []string
+	for _, w := range answer.Warnings {
+		var line string
+		if record, ok := w.(map[string]any); ok {
+			line = cards.Text(record["message"])
+		} else {
+			line = cards.Text(w)
+		}
+		if line = strings.Join(strings.Fields(redact.Secrets(line)), " "); line != "" {
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 // ActPrefix is the act route's path ahead of the tool's name.

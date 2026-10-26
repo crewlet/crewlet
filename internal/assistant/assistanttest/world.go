@@ -29,6 +29,9 @@ func World() map[string]any {
 				"decision": map[string]any{"question": "Which day?", "options": []any{
 					map[string]any{"id": "a", "label": "Monday"}}}}}},
 		"/worklet/my-work": map[string]any{"handle": "pm"},
+		// WHO IS ASKING, and where a create of theirs that names no project or
+		// container lands: what a create's preview resolves its default from.
+		"/viewer": map[string]any{"handle": "pm", "project": "ENG", "space": "ENG"},
 		"/worklet/inbox": map[string]any{"handle": "pm", "notices": []any{
 			map[string]any{"record_id": "r1", "subject_key": "ENG-42", "excerpt": "Ship it moved to review."},
 			map[string]any{"record_id": "r2", "subject_key": "SEC-7", "excerpt": "Rotate the signing key."}}},

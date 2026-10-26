@@ -170,6 +170,18 @@ func principlesPreview(t Tool) proposal.Previewer {
 			return proposal.Preview{}, fmt.Errorf("%w: the change leaves the principles "+
 				"exactly as they are", ErrInvalidArguments)
 		}
+		revision := proposal.Revision{Kind: proposal.RevisionCharter,
+			ID: proposal.CharterID, Version: version}.String()
+		// THE ROUTE'S OWN CHECK, as every route declaring one is asked
+		// (ADR-0054): a policy the charter refuses is the step's refusal,
+		// never a card, and its warnings are rows.
+		warnings, err := checked(ctx, read, req, revision)
+		if err != nil {
+			return proposal.Preview{}, err
+		}
+		for i, warning := range warnings {
+			c.fact("check.warning."+strconv.Itoa(i+1), "Warning", warning)
+		}
 		recency, _ := authz.RecencyOf(authz.Action(t.Act))
 		return proposal.Preview{Title: "Update the company's principles",
 			Target: "Company principles",
@@ -178,9 +190,8 @@ func principlesPreview(t Tool) proposal.Previewer {
 			ApproveLabel: "Approve and save", Changes: c.rows(), Request: req,
 			// THE ROW'S OWN STEP-UP, shown on the card: the approval asks it
 			// either way (authz.RecencyOf), and the card says so beforehand.
-			StepUp: recency == iam.RecencyStepUp,
-			SourceRevision: proposal.Revision{Kind: proposal.RevisionCharter,
-				ID: proposal.CharterID, Version: version}.String()}, nil
+			StepUp:         recency == iam.RecencyStepUp,
+			SourceRevision: revision}, nil
 	}
 }
 

@@ -295,6 +295,16 @@ func (g generic) facts(route Route) string {
 	if recency, _ := authz.RecencyOf(route.Action); recency == iam.RecencyStepUp {
 		parts = append(parts, "asks the person to confirm it is them")
 	}
+	// WHAT THE PREVIEW DOES FOR THE MODEL (ADR-0054), so it neither sends the
+	// check itself nor writes a summary the route would read twice.
+	if route.DryRun {
+		parts = append(parts, "checked by the route before the person sees it (a "+
+			"refusal comes back to you to correct; never send dry_run)")
+	}
+	if route.Summary {
+		parts = append(parts, "its history line is your `summary` argument (never "+
+			"send X-Summary or _summary)")
+	}
 	return strings.Join(parts, ", ")
 }
 
