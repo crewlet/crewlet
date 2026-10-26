@@ -1226,6 +1226,13 @@ async function stream(path, options = {}) {
 		clearTimeout(timer);
 	}
 	answeredAt = Date.now();
+	if (response.status === 204) {
+		release();
+		return {
+			next: async () => null,
+			noContent: true
+		};
+	}
 	if (!response.ok || response.body === null) {
 		let body;
 		try {
@@ -1244,22 +1251,25 @@ async function stream(path, options = {}) {
 		reader.cancel(controller.signal.reason).catch(() => {});
 	}, { once: true });
 	const decoder = new TextDecoder();
-	return { async next() {
-		let chunk;
-		try {
-			chunk = await reader.read();
-		} catch (err) {
-			release();
-			throw unanswered(err);
+	return {
+		noContent: false,
+		async next() {
+			let chunk;
+			try {
+				chunk = await reader.read();
+			} catch (err) {
+				release();
+				throw unanswered(err);
+			}
+			if (chunk.done) {
+				release();
+				const tail = decoder.decode();
+				return tail === "" ? null : tail;
+			}
+			answeredAt = Date.now();
+			return decoder.decode(chunk.value, { stream: true });
 		}
-		if (chunk.done) {
-			release();
-			const tail = decoder.decode();
-			return tail === "" ? null : tail;
-		}
-		answeredAt = Date.now();
-		return decoder.decode(chunk.value, { stream: true });
-	} };
+	};
 }
 var rest = {
 	/**
@@ -3053,7 +3063,7 @@ var SessionFloors = class {
 	* moving beside it.
 	*/
 	static moves(kind, domain, refreshes) {
-		return domain !== null && domainOf(kind) === domain || refreshes.includes(kind);
+		return domain !== null && domainOf(kind) === domain || refreshes.includes(kind) || refreshes.includes("*");
 	}
 	/**
 	* The freshness a read of `kind` names, or null when it names none: the
