@@ -54,6 +54,21 @@ func (f *fakeNode) Propose(ctx context.Context, p code.Proposal) (code.ProposeRe
 	}, nil
 }
 
+// ProposeCompaction is a committer that commits every compaction it is given
+// at the next position on the code log — or refuses every one with codeErr.
+func (f *fakeNode) ProposeCompaction(_ context.Context, p code.CompactionProposal) (code.CompactResult, error) {
+	f.note("code.compact")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.compactions = append(f.compactions, p)
+	if f.codeErr != nil {
+		return code.CompactResult{}, f.codeErr
+	}
+	f.codeSeq++
+	return code.CompactResult{Outcome: statelog.OutcomeApplied,
+		Position: statelog.Position{Stream: codeStream, Generation: 1, Seq: f.codeSeq}}, nil
+}
+
 // codeRefusal is what this node's code half refuses every operation with, or
 // nil.
 func (f *fakeNode) codeRefusal() error {
@@ -237,13 +252,14 @@ type codeDesk struct {
 
 // codeAnswers is what a desk answers each operation with.
 type codeAnswers struct {
-	read     code.ReadAnswer
-	snap     code.RepoSnapshot
-	ref      code.RepoRef
-	out      code.PushOutcome
-	pos      statelog.Position
-	resolved code.RefAnswer
-	git      code.GitAnswer
+	read      code.ReadAnswer
+	snap      code.RepoSnapshot
+	ref       code.RepoRef
+	out       code.PushOutcome
+	pos       statelog.Position
+	resolved  code.RefAnswer
+	git       code.GitAnswer
+	compacted code.CompactResult
 }
 
 func (d *codeDesk) For(context.Context, string) (Backend, bool) { return Backend{Code: d}, true }
@@ -274,6 +290,11 @@ func (d *codeDesk) Propose(ctx context.Context, p code.Proposal) (code.ProposeRe
 	held, err := d.took(p)
 	return code.ProposeResult{Outcome: statelog.OutcomeApplied, Position: held.pos, OpID: "op-batch",
 		Answer: code.PushAnswer{PushID: p.PushID, Commands: p.Commands}}, err
+}
+
+func (d *codeDesk) ProposeCompaction(_ context.Context, p code.CompactionProposal) (code.CompactResult, error) {
+	held, err := d.took(p)
+	return held.compacted, err
 }
 
 func (d *codeDesk) Resolve(_ context.Context, q code.ResolveQuery) (code.RepoRef, error) {
@@ -326,10 +347,11 @@ func serveDesk(t *testing.T, f *fleet, d *codeDesk) {
 	f.git.set(func(p *fakePlacement) { p.nodes = []string{"data-d"} })
 }
 
-// EVERY CODE OPERATION CROSSES WHOLE: a push's proposal, the admission's
-// resolve, a cache's snapshot page, the receiver's pending wait, the REST
-// routes' listing, a seat's refs listing, a git node's introduced pages and a
-// seat's resolve of a ref reach a data node from a node that holds no data —
+// EVERY CODE OPERATION CROSSES WHOLE: a push's proposal and a compaction's,
+// the admission's resolve, a cache's snapshot page, the receiver's pending
+// wait, the REST routes' listing, a seat's refs listing, a git node's
+// introduced pages and its compactor's due listing, and a seat's resolve of a
+// ref reach a data node from a node that holds no data —
 // and a read by object id the git node — with their arguments as they were
 // sent, their answers come back as they were given — a snapshot's packs,
 // refs, pushes, retirements and cursor, a repository's detail and its limits,
@@ -385,6 +407,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			Limits: code.Limits{MaxPushBytes: 1 << 20, MaxBlobBytes: 1 << 10, RepoMaxBytes: 1 << 30},
 		}, Refs: []code.RefRow{{Ref: "refs/heads/main", OID: "6666666666666666666666666666666666666666",
 			Position: at}}, Introduced: []code.IntroducedRow{introduced},
+			Due:  []code.CompactionCandidate{{ID: ref.ID, Name: "app", LivePacks: 40, Version: at}},
 			Next: "c-2", Position: at, Level: statelog.ReadSession},
 	}}
 	serveDesk(t, f, d)
@@ -401,6 +424,25 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	}
 	if got := d.last(); !reflect.DeepEqual(got, proposal) {
 		t.Errorf("the committer was proposed %+v, want %+v", got, proposal)
+	}
+
+	// A COMPACTION'S PROPOSAL, every field of it and of its answer.
+	compaction := code.CompactionProposal{Compaction: code.Compaction{
+		RepoID: ref.ID, CompactionID: "019a0c2e-0000-7000-8000-0000000000c1", Node: "git-a", Seen: at,
+		Retire: []string{"push-0", "push-1"},
+		Add: []code.PackRef{{PackID: "019a0c2e-0000-7000-8000-0000000000c2", Object: objstore.KeyAt(created),
+			Hash: objstore.HashOf([]byte("c2")), Size: 1_300, IndexBytes: 1_100, ReverseBytes: 60,
+			GitChecksum: "8888888888888888888888888888888888888888", Objects: 2}},
+	}}
+	d.mu.Lock()
+	d.compacted = code.CompactResult{Outcome: statelog.OutcomePending, Refusal: code.RefusalStale,
+		Detail: "pack push-0 is full; the next pass plans again", Position: at}
+	d.mu.Unlock()
+	if got, err := seam.Compact(ctx, compaction); err != nil || !reflect.DeepEqual(got, d.compacted) {
+		t.Errorf("compact = (%+v, %v), want %+v", got, err, d.compacted)
+	}
+	if got := d.last(); !reflect.DeepEqual(got, compaction) {
+		t.Errorf("the committer was proposed the compaction %+v, want %+v", got, compaction)
 	}
 
 	resolveQ := code.ResolveQuery{Name: "app", Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}}
@@ -445,6 +487,8 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			Limit: 1, Fresh: statelog.Freshness{Level: statelog.ReadSession, MinPosition: at}},
 		{Kind: code.ReadIntroduced, Introduced: &code.IntroducedQuery{RepoID: ref.ID, Descending: true,
 			Before: at}, Fresh: statelog.Freshness{Level: statelog.ReadStale}},
+		{Kind: code.ReadCompactionDue, MinPacks: 8, Cursor: "40/" + ref.ID,
+			Fresh: statelog.Freshness{Level: statelog.ReadStale}},
 	} {
 		if got, err := seam.Read(ctx, q); err != nil || !reflect.DeepEqual(got, d.read) {
 			t.Errorf("read %s = (%+v, %v), want %+v", q.Kind, got, err, d.read)
@@ -574,6 +618,30 @@ func TestAProposalRaisesTheFloorAndAReadDoesNot(t *testing.T) {
 	if got := f.client.Session().Floors([]string{codeStream}); !slices.Equal(got,
 		[]statelog.Position{landed}) {
 		t.Fatalf("after a push found landed at %v the code floor is %v", landed, got)
+	}
+
+	// AND A COMPACTION THIS NODE PROPOSED raises it to the compaction's
+	// record, which its builder's next listing and sync must see — where it
+	// landed, and never where it was refused with no record.
+	compacted := statelog.Position{Stream: codeStream, Generation: 1, Seq: 70}
+	for _, tc := range []struct {
+		answer code.CompactResult
+		want   statelog.Position
+	}{
+		{code.CompactResult{Refusal: code.RefusalStale, Detail: "pack push-0 is full"}, landed},
+		{code.CompactResult{Outcome: statelog.OutcomeApplied, Position: compacted}, compacted},
+	} {
+		d.mu.Lock()
+		d.compacted = tc.answer
+		d.mu.Unlock()
+		if _, err := f.client.Code().Compact(t.Context(), code.CompactionProposal{
+			Compaction: code.Compaction{RepoID: "repo-floor"}}); err != nil {
+			t.Fatalf("compact: %v", err)
+		}
+		if got := f.client.Session().Floors([]string{codeStream}); !slices.Equal(got,
+			[]statelog.Position{tc.want}) {
+			t.Fatalf("after a compaction answered %+v the code floor is %v, want %v", tc.answer, got, tc.want)
+		}
 	}
 }
 

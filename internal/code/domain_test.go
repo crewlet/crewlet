@@ -306,6 +306,8 @@ func TestOnlyTheGateKindsStopTheApplier(t *testing.T) {
 			Op: string(code.OpDelete)}, false},
 		"a retire sweep, which removes only rows past their grace": {statelog.Envelope{
 			Kind: string(code.KindRepo), Op: string(code.OpRetireSweep)}, false},
+		"a compaction, which moves packs its outputs replace": {statelog.Envelope{
+			Kind: string(code.KindRepo), Op: string(code.OpCompact)}, false},
 		"a create": {statelog.Envelope{Kind: string(code.KindName), Op: string(code.OpCreate)}, false},
 		"a kind this build has never heard of": {statelog.Envelope{Kind: "something-new",
 			Op: "something-new"}, false},

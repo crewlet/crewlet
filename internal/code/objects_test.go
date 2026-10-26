@@ -3,6 +3,7 @@ package code_test
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/code"
@@ -81,10 +82,11 @@ func TestThePackReferencesAreReadThroughTheCodeEstate(t *testing.T) {
 }
 
 // A RECORD'S PACK REFERENCES ARE WHAT ITS APPLY WRITES: a push names the row
-// the applier writes for its pack, spelled as the walk spells it; every other
-// record this build reads — a sweep of retired packs among them — names none;
-// and a record this build cannot read that may reach a repository refuses —
-// the backup's ADR-0052 contract.
+// the applier writes for its pack, spelled as the walk spells it; a compaction
+// names each output's row and tells each input's removed; every other record
+// this build reads — a sweep of retired packs among them — names none; and a
+// record this build cannot read that may reach a repository refuses — the
+// backup's ADR-0052 contract.
 func TestARecordNamesThePackRowsItsApplyWrites(t *testing.T) {
 	t.Parallel()
 	records := code.PackReferences.Records
@@ -120,6 +122,37 @@ func TestARecordNamesThePackRowsItsApplyWrites(t *testing.T) {
 	}, Mutation: through})
 	if got, err := records(sweep); err != nil || len(got) != 0 {
 		t.Errorf("a sweep's references = %+v, %v; want none", got, err)
+	}
+
+	// A COMPACTION writes a row for each output, which names its bundle, and
+	// removes its inputs' rows, which then name nothing: a backup's walk
+	// carries every output a compaction made live and reads the inputs as
+	// gone from code_packs.
+	cid := statelog.NewOpID(harnessAt, "")
+	outputs := []code.PackRef{compactOutput(cid, 0, 2, harnessAt), compactOutput(cid, 1, 1, harnessAt)}
+	compaction, err := json.Marshal(code.Compaction{RepoID: "repo-a", CompactionID: cid, Node: "node-a",
+		Seen:   statelog.Position{Stream: code.Domain{}.Stream().Name, Generation: 1, Seq: 4},
+		Retire: []string{"push-a", "push-b", "push-c"}, Add: outputs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = records(mustEncode(t, code.MutationRecord{RecordEnvelope: code.RecordEnvelope{
+		OpID: cid, Subject: code.RepoSubject("repo-a"), Op: code.OpCompact, Gen: 1,
+		Scope: code.Scope{code.RepoPath("repo-a")},
+	}, Mutation: compaction}))
+	if err != nil {
+		t.Fatalf("a compaction's references: %v", err)
+	}
+	compacted := []objstore.RecordReference{
+		{NamedBy: objstore.JoinOwner("repo-a", outputs[0].PackID, "pack"), Object: outputs[0].Content(), Names: true},
+		{NamedBy: objstore.JoinOwner("repo-a", outputs[1].PackID, "pack"), Object: outputs[1].Content(), Names: true},
+		{NamedBy: objstore.JoinOwner("repo-a", "push-a", "pack")},
+		{NamedBy: objstore.JoinOwner("repo-a", "push-b", "pack")},
+		{NamedBy: objstore.JoinOwner("repo-a", "push-c", "pack")},
+	}
+	if !slices.Equal(got, compacted) {
+		t.Errorf("a compaction's references = %+v, want its outputs named and its inputs removed: %+v", got,
+			compacted)
 	}
 
 	// A NEWER BUILD'S PUSH: it may name a pack, and this build cannot say

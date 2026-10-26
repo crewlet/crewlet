@@ -99,7 +99,8 @@ func AwaitAnsweredAndGone(c *Committer, err error) (ProposeResult, error) {
 	q.answer <- answered{err: err}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	return c.await(ctx, q)
+	a := c.await(ctx, q)
+	return a.res, a.err
 }
 
 // CommitterQueued is how many proposals wait in repoID's queue on c.

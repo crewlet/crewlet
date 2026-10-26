@@ -1340,6 +1340,19 @@ func (r *Router) orderFor(spec *opSpec, key string, nodes []string) []string {
 // part of it contend on its one subject and each round one loses costs it a
 // re-decide and a re-append of its whole batch.
 func (r *Router) keyedOrder(spec *opSpec, key string, nodes []string, self bool) []string {
+	ordered := r.keyed(key, nodes, self)
+	class := r.classes(spec, true)
+	slices.SortStableFunc(ordered, func(a, b string) int { return class(a) - class(b) })
+	return ordered
+}
+
+// keyed is the rendezvous half of every keyed order, before any memory of the
+// router's demotes a node: [rendezvous.Order] on key over nodes — this one
+// included where self says it answers, an empty id never, a node listed twice
+// named once. ONE FUNCTION for [Router.keyedOrder] and [Router.Home], so the
+// node a repository's git reads ask first on a quiet fleet and the node its own
+// git work falls to are one computation and can never be two.
+func (r *Router) keyed(key string, nodes []string, self bool) []string {
 	candidates := slices.DeleteFunc(slices.Clone(nodes), func(n string) bool {
 		return n == "" || n == r.self
 	})
@@ -1348,10 +1361,7 @@ func (r *Router) keyedOrder(spec *opSpec, key string, nodes []string, self bool)
 	}
 	// rendezvous.Order keeps duplicates, adjacent: a placement listing a
 	// node twice names it once here.
-	ordered := slices.Compact(rendezvous.Order(key, candidates))
-	class := r.classes(spec, true)
-	slices.SortStableFunc(ordered, func(a, b string) int { return class(a) - class(b) })
-	return ordered
+	return slices.Compact(rendezvous.Order(key, candidates))
 }
 
 // classes is how the router's memory ranks each node for spec, lowest asked

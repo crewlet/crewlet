@@ -753,3 +753,112 @@ const (
 	// TestTheBoundsFitTheReadAndPurgeBudgets holds both inequalities.
 	MaxPackBytes = config.CodeMaxPushBytesCeiling + config.CodeMaxPushBytesCeiling/4
 )
+
+// THE COMPACTION'S BOUNDS: how many packs a repository may hold, which of them
+// a compaction merges, and how large one compaction's record may be. A
+// compaction is a record of its own on the repository's subject (OpCompact,
+// [Compaction]); its committer is the one its pushes meet, and the git node
+// that builds it is the repository's home.
+const (
+	// MaxPacksPerRepo is the most LIVE packs a repository holds: a push that
+	// would carry one more is answered compaction_behind, undecided, until
+	// its home's compaction has caught up.
+	//
+	// 2 048, from a cold sync of every live pack at ONE sync's width (the
+	// cache's FetchConcurrency, sixteen GETs in flight) at S3's slow first
+	// byte (200 ms: 76 bundles a second, measured on the S3 fake by M2's
+	// BenchmarkColdSync): 27 s, half of the code host's spool wait (55 s, a
+	// minute of the balancer's quiet less a keepalive), which leaves the
+	// other half for the round's index and its peel before the first byte of
+	// the request that waited for them. PROVISIONAL: BenchmarkColdSync's
+	// packs=2048 arm at that first byte and width confirms it — its downloads
+	// within 27 s and its whole round within the spool wait — or makes it
+	// the largest count the measured rate downloads in 27 s.
+	MaxPacksPerRepo = 2_048
+
+	// CompactFactor is the geometric progression a home keeps a repository's
+	// packs in: every pack at least twice the objects of all the lighter
+	// ones together, git's own `repack --geometric=2` (gc's), so each object
+	// is rewritten O(log n) times over a repository's life.
+	CompactFactor = 2
+
+	// CompactMinMerge is the fewest packs a compaction merges while the
+	// repository holds no more than CompactTargetPacks. A merge costs one PUT
+	// of its output and one GET on every git node that holds the repository,
+	// and saves each later cold sync k−1 GETs and each request k−1 pack
+	// lookups: below eight small packs the saving is a cold sync's seven GETs,
+	// under the eight one compaction costs a fleet of eight git nodes. A
+	// JUDGMENT CALL, kept unless BenchmarkCompact's min-merge arms find a
+	// value that saves more than a tenth of the GETs and PUTs a thousand
+	// pushes cost.
+	CompactMinMerge = 8
+
+	// CompactTargetPacks is the live packs a repository is held near: git's
+	// gc.autoPackLimit, and the approved design's "about fifty". Past it the
+	// home compacts whatever its roll merges, two packs at the least, so a
+	// repository past the target shrinks at every poll.
+	CompactTargetPacks = 50
+
+	// CompactPackBytes is the --max-pack-size every compaction output is cut
+	// at: the largest pack a push may send (config.CodeMaxPushBytesCeiling,
+	// 1 GiB), so a full pack is as large as any pack a push makes, and under
+	// MaxPackBytes with the room a bundle's two indexes take beside it.
+	CompactPackBytes = config.CodeMaxPushBytesCeiling
+
+	// FullPackBytes is the pack section past which a pack is FULL — merged by
+	// no later compaction ([PackRow.Full]). pack-objects closes an output
+	// before the object that would take it past --max-pack-size, so every
+	// output but the last of a cut is within an object's size of the cut:
+	// seven eighths marks those, and no pack a push of ordinary size makes.
+	// It holds while an object is smaller than an eighth of the cut —
+	// code.limits.max_blob_bytes' default (50 MiB) is; its ceiling (1 GiB) is
+	// not, and a repository whose blobs approach the cut writes outputs short
+	// of seven eighths that are the last of their cut, read as not full and
+	// merged again: a pack rewritten once more than it needed, never a pack
+	// that is wrong.
+	FullPackBytes = CompactPackBytes / 8 * 7
+
+	// FullBundleBytes is the BUNDLE past which a pack is full, beside its pack
+	// section: FullPackBytes. An output of a cut the builder scales down for
+	// a dense roll — one of many small objects, whose indexes, at 32 bytes an
+	// object, would take its bundle past MaxPackBytes at the nominal cut —
+	// has a pack section under seven eighths of the nominal cut and a bundle
+	// near CompactPackBytes, so it is full by its bundle; a threshold it never
+	// reaches would roll it again at every poll.
+	FullBundleBytes = FullPackBytes
+
+	// MaxCompactInputs is the most packs one compaction merges. Its record's
+	// apply writes two rows an input — its retired row and its deletion from
+	// code_packs — and one an output, so a compaction of MaxCompactInputs
+	// packs into MaxCompactOutputs is compactDecidedRows of them, 2 065, about
+	// half of MaxRecordRows; the record itself is about 45 bytes an input and
+	// 330 an output, some 52 KiB at the most, far under MaxRecordBytes.
+	// MEASURED, on one machine: BenchmarkApplyACompaction's inputs=1024 arm
+	// applies in 70 ms against a repository of MaxPacksPerRepo packs, under
+	// the third of statelog.ApplyTxTimeBudget (83 ms) a compaction's apply
+	// is held to (doc.go's measured section); a measurement past that third
+	// halves this until one is under. It bounds what this build's committer
+	// takes ([CompactionProposal.Validate]); the apply takes whatever a
+	// record carries, as a push's does.
+	MaxCompactInputs = 1_024
+
+	// MaxCompactOutputs is the most outputs one compaction writes, all of
+	// them uploaded AT ONCE: each output's key is minted as its upload
+	// begins, so the last lands at most objstore.ReadBase +
+	// objstore.PaceFor(MaxPackBytes), 10 h 41 min, after the first at the
+	// store's pacing floor — every output a bundle of at most MaxPackBytes —
+	// under objstore.RecordWithin (12 h) however many there are, where outputs
+	// uploaded one after another aged the first key by every later upload,
+	// and two of 1 GiB at the floor passed it. Sixteen bounds the uploads'
+	// transient memory too: sixteen PUTs, each holding one first buffer of an
+	// S3 part (8 MiB), 128 MiB. A proposal of more is refused
+	// ([CompactionProposal.Validate]), and never more outputs than inputs: a
+	// merge that wrote more packs than it replaced would undo itself.
+	MaxCompactOutputs = 16
+)
+
+// compactDecidedRows is the most rows a compaction of n inputs into m outputs
+// makes its record's apply touch: each input's retired row and its deletion,
+// each output's row, and the repository's counters — the bound the committer
+// holds a compaction's decision to, as [withinRecord] holds a push batch's.
+func compactDecidedRows(n, m int) int { return 2*n + m + 1 }

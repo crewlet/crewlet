@@ -199,8 +199,8 @@ type RepoGone struct {
 	Purged bool
 }
 
-// Detail is the sentence of a push refused repo_deleted for g: what became of
-// the repository and what, if anything, brings it back.
+// Detail is the sentence of a push or a compaction refused repo_deleted for g:
+// what became of the repository and what, if anything, brings it back.
 //
 // A deleted repository's sentence names the instant its purge may begin — the
 // deletion plus the deciding node's retention: the earliest the code-retention

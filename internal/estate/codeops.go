@@ -7,23 +7,25 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 )
 
-// The code host's operations: a push's proposal, the reads the host's
-// admission, a cache's sync, the REST routes and a seat's tools make of the
-// rows — each naming the CODE domain, so the code copy's own verdict — never
-// the tracker's — decides whether a node answers it (ADR-0049), and its floor
-// is on the code log — and a read of a repository's CONTENT by object id,
-// which names no domain's copy and is asked of the repository's home GIT node
-// ([GitCopy], ADR-0059). A push is keyed on its repository's data nodes: see
-// the package doc's "A push is asked of its repository's committer". A read
-// that JUDGES A GRANT from the serving node's chart — one a seat asks — says
-// so ([op.judgesGrant]), and a node behind the company's configuration answers
-// none of it.
+// The code host's operations: a push's proposal and a compaction's, the reads
+// the host's admission, a cache's sync, the REST routes and a seat's tools make
+// of the rows, and the listing a git node finds the repositories a compaction
+// may be due in by — each naming the CODE domain, so the code copy's own
+// verdict — never the tracker's — decides whether a node answers it
+// (ADR-0049), and its floor is on the code log — and a read of a repository's
+// CONTENT by object id, which names no domain's copy and is asked of the
+// repository's home GIT node ([GitCopy], ADR-0059). A push and a compaction
+// are keyed on their repository's data nodes: see the package doc's "A push is
+// asked of its repository's committer". A read that JUDGES A GRANT from the
+// serving node's chart — one a seat asks — says so ([op.judgesGrant]), and a
+// node behind the company's configuration answers none of it.
 
 // CodeServer is the code half a data node serves, declared here by its
 // consumer with exactly the methods the operations below call. [code.Served]
 // satisfies it.
 type CodeServer interface {
 	Propose(ctx context.Context, p code.Proposal) (code.ProposeResult, error)
+	ProposeCompaction(ctx context.Context, p code.CompactionProposal) (code.CompactResult, error)
 	Resolve(ctx context.Context, q code.ResolveQuery) (code.RepoRef, error)
 	Snapshot(ctx context.Context, q code.StateQuery) (code.RepoSnapshot, error)
 	PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.PushOutcome, error)
@@ -62,18 +64,37 @@ var opCodePropose = define("code.propose", opIdempotentWrite, codeDomain, false,
 		return res, ranNothing(err)
 	}).keyedBy(func(p code.Proposal) string { return p.RepoID }).answeredOn(laneProposals)
 
+// opCodeCompact is a compaction's proposal, asked of the repository's
+// COMMITTER exactly as a push's is — an IDEMPOTENT write keyed by its
+// compaction id, a bare UUIDv7 the node that built it minted once, which the
+// domain's operation ledger collapses — so an unanswered one is asked of the
+// repository's runner-up with the same id. On the proposals lane, because a
+// compaction waits in the repository's one queue beside its pushes and holds
+// its answer slot as a push's proposal does. No actor: a compaction is the
+// engine's own, recorded as the deciding node's system work.
+var opCodeCompact = define("code.compact", opIdempotentWrite, codeDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, p code.CompactionProposal) (code.CompactResult, error) {
+		if b.Code == nil {
+			return code.CompactResult{}, errNoHalf
+		}
+		res, err := b.Code.ProposeCompaction(ctx, p)
+		return res, ranNothing(err)
+	}).keyedBy(func(p code.CompactionProposal) string { return p.Compaction.RepoID }).answeredOn(laneProposals)
+
 // proposalAnswers is how many proposals a data node answers at once, on the
 // lane they have to themselves ([laneProposals]): 1 088, THE MOST ONE
 // REPOSITORY'S COMMITTER HOLDS — a full queue (code.CommitterInbox) and the
-// batch in flight ahead of it (code.MaxPushesPerRecord). A proposal holds its
-// slot while it waits in its repository's queue and its batch runs, so a
-// lane as narrow as [queue.ConcurrentAnswers] would cut a burst to one
-// repository off at sixty-four, the rest waiting unseen in the broker's
-// buffer behind them; as wide as a whole queue, the bound a burst meets is
-// the committer's own, which answers at once — busy past a repository's count
-// or bytes or the node's (code.CommitterNodeBytes), and busy the moment a
-// queued push's attempt runs short — so a slot is held for long only by a
-// push the committer is deciding or will decide inside its asker's attempt.
+// batch in flight ahead of it (code.MaxPushesPerRecord); a compaction's
+// proposal takes a place of that same queue, so the figure counts it already.
+// A proposal holds its slot while it waits in its repository's queue and its
+// batch runs, so a lane as narrow as [queue.ConcurrentAnswers] would cut a
+// burst to one repository off at sixty-four, the rest waiting unseen in the
+// broker's buffer behind them; as wide as a whole queue, the bound a burst
+// meets is the committer's own, which answers at once — busy past a
+// repository's count or bytes or the node's (code.CommitterNodeBytes), and
+// busy the moment a queued push's attempt runs short — so a slot is held for
+// long only by a push the committer is deciding or will decide inside its
+// asker's attempt.
 //
 // What a slot costs is a goroutine and the proposal it carries, a kilobyte or
 // two for an ordinary push: a full lane of them is a few megabytes. The
@@ -123,16 +144,19 @@ var opCodePushOutcome = define("code.push_outcome", opRead, codeDomain, false,
 
 // opCodeRead is a read of the code host by its kind (code.ReadKinds): the REST
 // routes' repository listing, one repository's detail and its push history,
-// which the operator's CLI reads too; a repository's refs; and its pushes in
-// log order, which a git node's index of which push introduced each commit
-// is built from. A seat's read on a node that holds no chart is that node's
-// code.ErrNotServing — it ran nothing — so the walk asks the next.
+// which the operator's CLI reads too; a repository's refs; its pushes in log
+// order, which a git node's index of which push introduced each commit is
+// built from; and the repositories a compaction may be due in, most live packs
+// first, which a git node polls for the ones it is home for. A seat's read on
+// a node that holds no chart is that node's code.ErrNotServing — it ran
+// nothing — so the walk asks the next.
 //
 // A SEAT'S READ JUDGES ITS GRANT from the serving node's chart (which
 // repositories it lists, and whether it reads one: code.GrantOf), so a node
 // behind the company's configuration answers none of it ([op.judgesGrant]); a
-// person's or a token's consults no chart, and an `introduced` page names no
-// asker at all, so both are answered there as a last resort.
+// person's or a token's consults no chart, and an `introduced` page and a
+// `compaction_due` listing name no asker at all, so each is answered there as a
+// last resort.
 var opCodeRead = define("code.read", opRead, codeDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q code.ReadQuery) (code.ReadAnswer, error) {
 		if b.Code == nil {

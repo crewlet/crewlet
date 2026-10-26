@@ -6,14 +6,15 @@ import (
 )
 
 // Served is a data node's code half as the estate serves it: the committer's
-// write and the reader's reads, so the engine and the multi-node suite hand
+// writes and the reader's reads, so the engine and the multi-node suite hand
 // the router ONE adapter rather than each writing its own (ADR-0008).
 //
 // Committer is nil on a node that does not publish — a node in a maintenance
-// mode, which may append nothing — and a proposal is then refused
-// [ErrNotServing], which the router reads as a node that ran nothing and asks
-// the repository's runner-up with the same push id. Handing a maintenance-mode
-// node's committer to peers would be the publish the mode exists to rule out.
+// mode, which may append nothing — and a proposal, a push's or a
+// compaction's, is then refused [ErrNotServing], which the router reads as a
+// node that ran nothing and asks the repository's runner-up with the same push
+// or compaction id. Handing a maintenance-mode node's committer to peers would
+// be the publish the mode exists to rule out.
 //
 // Reader is what every read is answered from. A Served with none — its zero
 // value — runs NOTHING rather than panicking on the goroutine that serves the
@@ -31,6 +32,18 @@ func (s Served) Propose(ctx context.Context, p Proposal) (ProposeResult, error) 
 			"no push", ErrNotServing)
 	}
 	return s.Committer.Propose(ctx, p)
+}
+
+// ProposeCompaction decides one compaction on this node's committer — see
+// [Committer.ProposeCompaction] — and, on a node that publishes nothing,
+// refuses it as a push is refused there: the router asks the repository's
+// runner-up with the same compaction id.
+func (s Served) ProposeCompaction(ctx context.Context, p CompactionProposal) (CompactResult, error) {
+	if s.Committer == nil {
+		return CompactResult{}, fmt.Errorf("%w: this node publishes nothing, so it decides "+
+			"no compaction", ErrNotServing)
+	}
+	return s.Committer.ProposeCompaction(ctx, p)
 }
 
 // Resolve answers a repository by name — see [Reader.Resolve].

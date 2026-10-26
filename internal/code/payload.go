@@ -425,6 +425,50 @@ type Purge struct {
 	Reason string `json:"reason"`
 }
 
+// Compaction is one compaction of one repository's packs: the packs it
+// replaces and the bundles that replace them, decided by the repository's
+// committer ([Committer.ProposeCompaction]) and applied as ONE record that adds
+// the outputs' rows and moves the inputs' into code_packs_retired.
+//
+// A MERGE MAKES NO REACHABILITY JUDGEMENT: its outputs hold every object its
+// inputs held, so no push decided against the inputs can land a ref whose
+// closure a compaction removed, and no fence is needed beside the decide's own
+// check that every input is still live. The outputs are built over the inputs
+// with no pack excluded — an object an input shares with a pack that is not
+// an input is written again rather than left to that pack, because two
+// compactions decided from different snapshots may each retire the pack the
+// other relied on. Expunge, which drops objects, is the one rewrite that needs
+// a fence, and it is not this record.
+//
+// Every field is in the base format, under the condition [OpCompact] states.
+type Compaction struct {
+	RepoID string `json:"repo_id"`
+	// CompactionID is minted ONCE by the node that builds the compaction — a
+	// bare UUIDv7 (statelog.NewOpID with no name) — and is the record's
+	// operation id: a proposal asked again of the repository's runner-up
+	// after a committer went silent is the same compaction, collapsed by the
+	// operation ledger, and its instant is what the ledger judges a late
+	// retry by and what each output's id is derived at
+	// ([DeriveCompactionPackID]).
+	CompactionID string `json:"compaction_id"`
+	// Node is the git node that built it, for whoever reads the log.
+	Node string `json:"node"`
+	// Seen is the code log's position the builder planned at — the sync
+	// its cache answered the inputs from. The committer decides at or past
+	// it (the publish's session floor), and the record keeps it, so a
+	// compaction says what its author read without a lookup. ONE FIELD: the
+	// proposal carries no second copy, and nothing stamps it again.
+	Seen statelog.Position `json:"seen"`
+	// Retire are the pack ids the outputs replace, sorted and distinct,
+	// each live and not full ([PackRow.Full]) when the committer decides.
+	Retire []string `json:"retire"`
+	// Add are the outputs, each one bundle in the stored format at most
+	// MaxPackBytes WHOLE — the pack and both its indexes ([PackRef.Check])
+	// — the n-th's pack id [DeriveCompactionPackID] of CompactionID and n,
+	// in the order the build wrote them.
+	Add []PackRef `json:"add"`
+}
+
 // RetireSweep removes a repository's retired pack rows at or below Through,
 // oldest first — the code-retention duty's sweep of what a record retired,
 // once its grace has passed ([Store.RetireSweep]).
@@ -505,6 +549,8 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[PurgePart](rec)
 	case kind == KindRepo && op == OpPurge:
 		return decodePayload[Purge](rec)
+	case kind == KindRepo && op == OpCompact:
+		return decodePayload[Compaction](rec)
 	case kind == KindRepo && op == OpRetireSweep:
 		return decodePayload[RetireSweep](rec)
 	case kind == KindCompany && op == OpActivate:

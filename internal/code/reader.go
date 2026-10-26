@@ -1093,6 +1093,13 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		// backfill asks again.
 		query = fresh.Query(statelog.ScopeSet{Paths: []string{RepoPath(q.Introduced.RepoID)}}, false)
 		serve = func(tx *sql.Tx, cp statelog.Position) error { return r.introduced(ctx, tx, q, cp, &out) }
+	case ReadCompactionDue:
+		// A SET READ OF THE DOMAIN, as a listing of repositories is: a
+		// repository a deferred record holds back is listed as its rows
+		// stand, and the compaction that follows is decided again from
+		// the committer's own snapshot, which holds every input to them.
+		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
+		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.compactionDue(ctx, tx, q, &out) }
 	}
 	answer, err := r.log.Read(ctx, query, func(tx *sql.Tx) error {
 		out = ReadAnswer{}
@@ -1114,13 +1121,17 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 // principal can be, a repository that cannot be one, a limit past its bound —
 // refused naming it, never clamped — or a field outside the kind that reads
 // it: a status filter outside a listing of repositories, a prefix outside a
-// refs listing, a range outside an `introduced` read.
+// refs listing, a range outside an `introduced` read, a floor of live packs
+// outside a `compaction_due` read.
 func (q ReadQuery) validate() error {
 	if !q.Kind.Valid() {
 		return fmt.Errorf("%w: kind: %q is not one of %v", ErrInvalid, q.Kind, ReadKinds())
 	}
-	if q.Kind == ReadIntroduced {
+	switch q.Kind {
+	case ReadIntroduced:
 		return q.validateIntroduced()
+	case ReadCompactionDue:
+		return q.validateCompactionDue()
 	}
 	// WHO ASKS IS NAMED, or nothing is read: an answer is held to the
 	// asker's grant, and an absent asker would be judged as somebody nobody
@@ -1131,6 +1142,8 @@ func (q ReadQuery) validate() error {
 	switch {
 	case q.Introduced != nil:
 		return fmt.Errorf("%w: introduced: only an introduced read names a range of pushes", ErrInvalid)
+	case q.MinPacks != 0:
+		return fmt.Errorf("%w: min_packs: only a compaction_due read names a floor of live packs", ErrInvalid)
 	case q.Prefix != "" && q.Kind != ReadRefs:
 		return fmt.Errorf("%w: prefix: only a refs listing names a prefix", ErrInvalid)
 	case q.Prefix != "" && !validRefPrefix(q.Prefix):
@@ -1182,6 +1195,8 @@ func (q ReadQuery) validateIntroduced() error {
 		return refused("introduced.repo_id", "an introduced read names its repository by id")
 	case q.Repo != "" || len(q.Status) > 0 || q.Prefix != "":
 		return refused("repo", "an introduced read names its repository in its range and filters nothing")
+	case q.MinPacks != 0:
+		return refused("min_packs", "only a compaction_due read names a floor of live packs")
 	case !onLog(in.After) || !onLog(in.Through) || !onLog(in.Before):
 		return refused("introduced", "every position it names is on the code log")
 	case in.Descending && in.Before.IsZero():
@@ -1201,11 +1216,44 @@ func (q ReadQuery) validateIntroduced() error {
 	return nil
 }
 
+// validateCompactionDue is [ReadQuery.validate] for a `compaction_due` read:
+// the engine's own — a git node's compactor polling for the repositories a
+// compaction may be due in — so it names NO asker, as an `introduced` read
+// does: a principal's read of the duty listing would be held to nothing,
+// and every surface a principal reads the code host through names its asker,
+// so the one place they all meet refuses it here. It names its floor of live
+// packs, at least one, and nothing else: no repository, no filter, no range
+// and no limit, since a page is MaxSnapshotItems repositories.
+func (q ReadQuery) validateCompactionDue() error {
+	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	if q.Asker != (Principal{}) {
+		return refused("asker", "a compaction_due read is the engine's own, which no principal makes")
+	}
+	for _, f := range []struct {
+		field string
+		set   bool
+	}{
+		{"repo", q.Repo != ""}, {"status", len(q.Status) > 0}, {"prefix", q.Prefix != ""},
+		{"introduced", q.Introduced != nil}, {"limit", q.Limit != 0},
+	} {
+		if f.set {
+			return refused(f.field, "a compaction_due read lists every repository at its floor of live "+
+				"packs, a page of MaxSnapshotItems at a time, and names nothing else")
+		}
+	}
+	if q.MinPacks < 1 {
+		return refused("min_packs", fmt.Sprintf("%d; a compaction_due read names the fewest live packs a "+
+			"repository it lists holds, at least 1", q.MinPacks))
+	}
+	return nil
+}
+
 // freshness is the level a read is served at: for every kind a principal
-// reads, one of [ReadLevels], stale unless asked; for the engine's own
-// `introduced`, any level a point read serves ([pointLevel]) — named, since
-// whoever builds an index names the level its pages must be read at, and a
-// session read with the position it must include.
+// reads, and for the duty listing `compaction_due`, one of [ReadLevels], stale
+// unless asked; for the engine's own `introduced`, any level a point read
+// serves ([pointLevel]) — named, since whoever builds an index names the level
+// its pages must be read at, and a session read with the position it must
+// include.
 func (q ReadQuery) freshness() (statelog.Freshness, error) {
 	fresh := q.Fresh
 	switch {
@@ -1579,6 +1627,79 @@ func (r *Reader) introduced(ctx context.Context, tx *sql.Tx, q ReadQuery, cp sta
 		}
 	}
 	return rows.Err()
+}
+
+// compactionDue serves one page of a `compaction_due` read: the active and
+// archived repositories holding at least q.MinPacks live packs, MOST LIVE PACKS
+// FIRST and then by id, each with the version its row holds — one ranged walk
+// of code_repos_packs_idx (replicated 0058) from its top, keyset on (live
+// packs, id) after a cursor, the index's partial predicate repeated verbatim
+// so the planner may use it at all.
+//
+// MOST FIRST, because a compactor takes them in this order: a repository near
+// MaxPacksPerRepo, whose pushes are about to be refused compaction_behind, must
+// never wait behind a thousand barely due. ACTIVE AND ARCHIVED, because an
+// archived repository is still read, and every cold sync of it pays a GET for
+// every pack it holds. THE VERSION, because it is what a compactor keys its
+// memory of a plan found not due by, so a repository whose row has not moved
+// since costs it a lookup, never a sync.
+//
+// A FULL LISTING, never a delta from the last poll's: a delta would need an
+// index on code_repos.version, which every record about a repository rewrites,
+// where this index moves only with a repository's live packs.
+func (r *Reader) compactionDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	switch packs, id, keyed := cutDueCursor(q.Cursor); {
+	case q.Cursor != "" && !keyed:
+		return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
+	case q.Cursor == "":
+		rows, err = tx.QueryContext(ctx, compactionDueFirstSQL, q.MinPacks, r.pageRows)
+	default:
+		rows, err = tx.QueryContext(ctx, compactionDueAfterSQL, q.MinPacks, packs, packs, id, r.pageRows)
+	}
+	if err != nil {
+		return fmt.Errorf("code: list the repositories a compaction may be due in: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	pg := page{maxRows: r.pageRows, maxB: r.pageBytes}
+	for rows.Next() {
+		var (
+			c       CompactionCandidate
+			version int64
+		)
+		if err := rows.Scan(&c.ID, &c.Name, &c.LivePacks, &version); err != nil {
+			return fmt.Errorf("code: list the repositories a compaction may be due in: %w", err)
+		}
+		c.Version = unpacked(version)
+		out.Due = append(out.Due, c)
+		if pg.add(c.encodedBytes()) {
+			out.Next = dueCursor(c)
+			break
+		}
+	}
+	return rows.Err()
+}
+
+// dueCursor is "<live packs>/<id>": a repository's place in a `compaction_due`
+// listing's order.
+func dueCursor(c CompactionCandidate) string {
+	return strconv.FormatInt(c.LivePacks, 10) + "/" + c.ID
+}
+
+// cutDueCursor reads a [dueCursor].
+func cutDueCursor(s string) (int64, string, bool) {
+	at, id, ok := strings.Cut(s, "/")
+	if !ok || id == "" {
+		return 0, "", false
+	}
+	packs, err := strconv.ParseInt(at, 10, 64)
+	if err != nil || packs < 0 {
+		return 0, "", false
+	}
+	return packs, id, true
 }
 
 // ResolveRef answers one ref of one repository at the level the query names,
@@ -2030,4 +2151,17 @@ const (
 	purgeStateSQL = `SELECT
 		(SELECT COUNT(*) FROM code_repos WHERE id = ?),
 		(SELECT COUNT(*) FROM code_deletions WHERE repo_id = ?)`
+	// THE COMPACTOR'S DUE LISTING, most live packs first and then by id, over
+	// code_repos_packs_idx walked from its top — its partial predicate
+	// repeated verbatim — and after a cursor with the <= beside the OR that
+	// keeps the range seek (planner.go).
+	compactionDueFirstSQL = `SELECT id, name, live_packs, version FROM code_repos
+		INDEXED BY code_repos_packs_idx
+		WHERE status IN ('active', 'archived') AND live_packs >= ?
+		ORDER BY live_packs DESC, id DESC LIMIT ?`
+	compactionDueAfterSQL = `SELECT id, name, live_packs, version FROM code_repos
+		INDEXED BY code_repos_packs_idx
+		WHERE status IN ('active', 'archived') AND live_packs >= ? AND live_packs <= ?
+			AND (live_packs < ? OR id < ?)
+		ORDER BY live_packs DESC, id DESC LIMIT ?`
 )

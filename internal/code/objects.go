@@ -48,14 +48,18 @@ var RetiredPackReferences = objstore.ReferenceTable{
 // writes, and the object each names once the record applies —
 // [objstore.ReferenceTable.Records] for [PackReferences].
 //
-// A RECORD THIS BUILD READS is answered by the applier's own decoder: only a
-// push writes the table, one row per entry carrying a pack. Every entry is
-// answered whether or not this node's applier would skip it as already
-// applied — a backup reads a superset of what a restore's rows name, never a
-// subset. A purge REMOVES rows the record does not list (a part takes the
-// oldest rows the applier finds), so it answers none: a backup that carries
-// an object a purge later removed carries one more object than a restore
-// names, which the collector deletes, and never one fewer.
+// A RECORD THIS BUILD READS is answered by the applier's own decoder: a push
+// writes the table, one row per entry carrying a pack, and a COMPACTION writes
+// a row per output it adds and removes the rows of the packs it retires,
+// which it answers as rows that name nothing once it applies (their objects
+// are kept for a grace by code_packs_retired, which no backup carries). Every
+// entry and output is answered whether or not this node's applier would skip
+// it as already applied — a backup reads a superset of what a restore's rows
+// name, never a subset. A purge REMOVES rows the record does not list (a part
+// takes the oldest rows the applier finds), so it answers none: a backup that
+// carries an object a purge later removed carries one more object than a
+// restore names, which the collector deletes, and never one fewer. A sweep of
+// retired packs writes nothing of code_packs and answers none either.
 //
 // A RECORD THIS BUILD CANNOT READ — a newer version, or a kind it has never
 // heard of — is answered from what EVERY build reads of it ([mayWritePacks]),
@@ -80,7 +84,7 @@ func packRecordReferences(payload []byte) ([]objstore.RecordReference, error) {
 			objstore.ErrRecordUnreadable, env.Subject, env.V, knownOrNot(env.Subject.Kind),
 			RecordVersion)
 	}
-	if env.Subject.Kind != KindRepo || env.Op != OpPush {
+	if env.Subject.Kind != KindRepo || (env.Op != OpPush && env.Op != OpCompact) {
 		return nil, nil
 	}
 	rec, err := Decode(payload)
@@ -91,19 +95,36 @@ func packRecordReferences(payload []byte) ([]objstore.RecordReference, error) {
 	if err != nil {
 		return nil, err
 	}
-	batch, ok := payloadAny.(PushBatch)
-	if !ok {
-		return nil, fmt.Errorf("code: the push on %s carries a %T", env.Subject, payloadAny)
-	}
 	var out []objstore.RecordReference
-	for _, e := range batch.Pushes {
-		if e.Pack == nil {
-			continue
+	switch p := payloadAny.(type) {
+	case PushBatch:
+		for _, e := range p.Pushes {
+			if e.Pack == nil {
+				continue
+			}
+			out = append(out, objstore.RecordReference{
+				NamedBy: objstore.JoinOwner(p.RepoID, e.Pack.PackID, "pack"),
+				Object:  e.Pack.Content(), Names: true,
+			})
 		}
-		out = append(out, objstore.RecordReference{
-			NamedBy: objstore.JoinOwner(batch.RepoID, e.Pack.PackID, "pack"),
-			Object:  e.Pack.Content(), Names: true,
-		})
+	case Compaction:
+		for _, a := range p.Add {
+			out = append(out, objstore.RecordReference{
+				NamedBy: objstore.JoinOwner(p.RepoID, a.PackID, "pack"),
+				Object:  a.Content(), Names: true,
+			})
+		}
+		// THE INPUTS' ROWS LEAVE code_packs: told as removals, so a
+		// backup's walk past its copy reads the restore's rows as naming
+		// nothing there — each by `pack`, the one part every pack this
+		// build stores is.
+		for _, id := range p.Retire {
+			out = append(out, objstore.RecordReference{
+				NamedBy: objstore.JoinOwner(p.RepoID, id, "pack"),
+			})
+		}
+	default:
+		return nil, fmt.Errorf("code: the %s on %s carries a %T", env.Op, env.Subject, payloadAny)
 	}
 	return out, nil
 }

@@ -42,8 +42,8 @@
 // # The subject is the arbitration unit
 //
 // Everything that moves a repository's refs or its pack set, or governs them —
-// a push, a settings change, a deletion, a restore, a purge — is a record on
-// repo.<id>, ONE SUBJECT A REPOSITORY. Two pushes to one repository therefore
+// a push, a compaction, a settings change, a deletion, a restore, a purge — is
+// a record on repo.<id>, ONE SUBJECT A REPOSITORY. Two pushes to one repository therefore
 // contend at the broker and exactly one record lands per round, and the loser
 // re-decides against the winner's rows. One subject a repository rather than
 // one a ref, because every write on a repository updates its row too (its ref
@@ -387,7 +387,8 @@
 // # What this package does not do
 //
 // It runs no git and serves no HTTP. It decides and applies records, commits
-// pushes a receiving node proposes, answers reads of the rows, and holds a
+// the pushes a receiving node proposes and the compactions a git node
+// proposes, answers reads of the rows, and holds a
 // bundle's bytes to the row that names them when a caller tees them through a
 // [SealWriter]. It moves object bytes in ONE place: [StoreBundle], the upload
 // of a pack bundle [LayBundle] laid out from the files a git wrote, sealed on
@@ -496,6 +497,68 @@
 //     the mark is the one past which a delta is no longer complete, so a
 //     delta from below it is answered in full, as below the tombstone mark.
 //
+// # A compaction merges packs, decided alone
+//
+// Every push stores a pack, so a busy repository's pack count grows with its
+// pushes, and every cold sync pays a GET a pack and every request a lookup a
+// pack. A COMPACTION merges some of them into fewer: a git node builds the
+// outputs, stores each as one bundle and proposes ONE record — OpCompact on
+// the repository's subject ([Compaction]), naming the packs it retires and
+// the rows of the outputs it adds — which the repository's committer decides
+// ([Committer.ProposeCompaction]).
+//
+// IN THE PUSHES' QUEUE, DECIDED ALONE: a compaction waits in the repository's
+// one committer queue in its arrival order, held to a push's bounds there —
+// the queue's count and bytes, the node's bytes, its asker's deadline — and
+// answered busy past them the same way (crewlet.code.commit.busy, kind
+// compaction); but no batch carries it beside a push, or beside another, so
+// its decision is its own and its refusal refuses nothing else. Its OPERATION
+// ID IS THE COMPACTION'S ID, minted once by the node that built it, so a
+// compaction asked again of the repository's runner-up after a failover is
+// collapsed by the ledger onto the record that landed rather than decided
+// again — which would find its inputs retired and answer it stale; its
+// SESSION is the code log's position the builder planned at
+// ([Compaction.Seen]), so it is decided from rows at least as new as the
+// plan's — a committer that cannot reach them in time decides nothing, and
+// the estate router asks the runner-up. Its rules, in
+// their order, are compaction.go's: the repository not gone (archived is
+// decided); every input one live row of part pack, and not full
+// ([PackRow.Full]) — else stale; every output a bundle [PackRef.Check] admits
+// — else pack_too_large — whose key was minted within objstore.RecordWithin —
+// else upload_expired, the push's own rule; and no more objects out than the
+// inputs' rows hold, else a builder's bug ([ErrInvalidProposal]), refused
+// before any record. It is answered applied only from the outputs' rows at
+// its record's position.
+//
+// THE APPLY MOVES ROWS, NEVER BYTES: every row of an input leaves code_packs
+// for code_packs_retired, stamped with the record's position and broker
+// instant; each output joins code_packs, a live pack of kind compact; and the
+// repository's counters move by the rows the apply found and wrote, never by
+// the record's lists, so a replay moves nothing. A retired pack keeps its
+// object for [RetireGrace] (the fourth horizon above), so a reader that began
+// on it before the compaction finishes it.
+//
+// A MERGE MAKES NO REACHABILITY JUDGEMENT: every object of the inputs is in
+// the outputs, so a push decided against the inputs never lands a ref whose
+// closure a compaction removed, and two compactions planned from different
+// snapshots never each drop what the other relied on. Removing what no ref
+// reaches is no compaction's to do.
+//
+// ITS BOUNDS, each with its reason where it is defined: at most
+// [MaxCompactInputs] (1 024) inputs and [MaxCompactOutputs] (16) outputs, so
+// a record writes at most 2 065 rows (compactDecidedRows), about half of
+// [MaxRecordRows], and every output can be uploaded at once within
+// RecordWithin; outputs cut at [CompactPackBytes], the 1 GiB push ceiling, and
+// a pack FULL — merged by no later compaction — past [FullPackBytes] of pack
+// or [FullBundleBytes] of bundle; and the plan's own, [CompactFactor],
+// [CompactMinMerge], [CompactTargetPacks] and [MaxPacksPerRepo].
+//
+// A git node finds the repositories a compaction may be due in by the
+// [ReadCompactionDue] listing: the active and archived repositories holding
+// at least MinPacks live packs, MOST FIRST, each with its row's version, one
+// backward walk of code_repos_packs_idx (replicated 0058) — the engine's own
+// read, which names no asker.
+//
 // # Measured
 //
 // On four vCPUs of a 2.1 GHz Xeon shared with other builds, with Go 1.27 and
@@ -600,6 +663,16 @@
 // under the other session's disk load, averaged 378 ms). A sweep of a few
 // rows is a seventeenth of a purge part, and [RetentionPassBudget] states
 // what the sweeps take of a pass before the purges have the rest.
+//
+// A COMPACTION RECORD (BenchmarkApplyACompaction, the record applied and
+// committed against a repository of [MaxPacksPerRepo] live packs, each arm
+// writing the most outputs its inputs allow, so the most rows its input count
+// can touch; on four E-cores of a Core Ultra 7 265U, one count of five
+// iterations): 2.7 ms for eight inputs, 5.3 ms for sixty-four, and 70 ms for
+// [MaxCompactInputs] — 2 065 rows — under the third of
+// statelog.ApplyTxTimeBudget (83 ms) that bound is held to, by a sixth: an
+// arm past the third on a slower machine halves MaxCompactInputs until it is
+// under.
 //
 // A RECONCILE (BenchmarkAnUnchangedActivation): an activation that changes
 // nothing, over ten thousand declared repositories — the most a configuration

@@ -773,16 +773,17 @@ func (u Usage) ReadsElided(ctx context.Context, from, to string) (int64, error) 
 }
 
 // CodeSeam is the code host's reach into the estate, from every node: a push's
-// proposal to its repository's committer, and the reads the host's admission,
-// a cache's sync and the REST routes make — each answered by a data node whose
-// copy of the code log serves, this one where it does. Its consumers declare
-// what they call of it.
+// proposal and a compaction's to their repository's committer, and the reads
+// the host's admission, a cache's sync and the REST routes make — each
+// answered by a data node whose copy of the code log serves, this one where it
+// does. Its consumers declare what they call of it.
 //
-// ONLY THIS NODE'S OWN WRITES RAISE ITS FLOOR: a proposal that landed, and a
-// push this node proposed found landed. A read's position is somebody else's
-// writes, and observing it would hold every later read this node routes — a
-// `stale` one included — behind the newest linearizable read anybody on the
-// node made, which is the tracker's and the knowledge base's rule too.
+// ONLY THIS NODE'S OWN WRITES RAISE ITS FLOOR: a proposal that landed — a
+// push's or a compaction's — and a push this node proposed found landed. A
+// read's position is somebody else's writes, and observing it would hold
+// every later read this node routes — a `stale` one included — behind the
+// newest linearizable read anybody on the node made, which is the tracker's
+// and the knowledge base's rule too.
 type CodeSeam struct{ r *Router }
 
 // Code answers the code host.
@@ -793,6 +794,18 @@ func (r *Router) Code() CodeSeam { return CodeSeam{r: r} }
 // which its next read of the repository must see on whichever node answers.
 func (c CodeSeam) Propose(ctx context.Context, p code.Proposal) (code.ProposeResult, error) {
 	out, err := call(ctx, c.r, opCodePropose, nil, p)
+	if out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending {
+		c.r.Observe(out.Position)
+	}
+	return out, err
+}
+
+// Compact asks the repository's committer to decide a compaction, and raises
+// this node's session floor past the record it landed in — this node's own
+// write, which the compactor's next listing and the cache's sync after it must
+// see on whichever data node answers them.
+func (c CodeSeam) Compact(ctx context.Context, p code.CompactionProposal) (code.CompactResult, error) {
+	out, err := call(ctx, c.r, opCodeCompact, nil, p)
 	if out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending {
 		c.r.Observe(out.Position)
 	}

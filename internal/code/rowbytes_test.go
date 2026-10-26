@@ -59,6 +59,10 @@ func TestARowsComputedSizeIsItsEncodingsLength(t *testing.T) {
 		var retired RetiredRow
 		fill(rng, reflect.ValueOf(&retired).Elem())
 		check("retirement", retired, retired.encodedBytes())
+
+		var candidate CompactionCandidate
+		fill(rng, reflect.ValueOf(&candidate).Elem())
+		check("compaction candidate", candidate, candidate.encodedBytes())
 	}
 }
 

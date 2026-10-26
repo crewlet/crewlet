@@ -80,10 +80,14 @@ func (n *node) retiredThrough(repoID string) int {
 // RetireGrace, after which nothing names the object and the collector takes
 // it as it takes anything no row names.
 //
+// The rows are seeded first, at the instant the case is about, and then
+// retired by a real compaction's record, whose instant is the broker's own.
+//
 // Mutation: declare RetiredPackReferences over code_packs, and the retired
 // objects read as nobody's while their rows stand; let the sweep's apply
 // delete nothing, and they stay named past it; drop the decide's cutoff, and
-// the sweep a second inside the grace removes them.
+// the sweep a second inside the grace removes them; let a compaction's apply
+// skip the retired rows, and the packs it replaced read as nobody's at once.
 func TestARetiredPackKeepsItsObjectForTheGrace(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -133,6 +137,74 @@ func TestARetiredPackKeepsItsObjectForTheGrace(t *testing.T) {
 	if through := n.retiredThrough(id); through != 1 {
 		t.Fatalf("the repository's retired mark is %d after the sweep through position 1", through)
 	}
+
+	// AND RETIRED BY A COMPACTION'S OWN RECORD: the packs its output replaces
+	// keep their objects named until a sweep past the grace — judged against
+	// the instant the broker stamped the compaction's record with — and a
+	// sweep a second short of it leaves them named.
+	repo, ids := packedRepo(t, n, "web", 2)
+	inputs := n.packObjects(repo)
+	c, _ := committerOn(t, n, n.pub)
+	compacted, err := c.ProposeCompaction(t.Context(), compactionOf(n, repo, ids, 2, harnessAt))
+	requireApplied(t, compacted, err)
+	retiredBy := func() int {
+		t.Helper()
+		got, complete, err := src.Referenced(t.Context(), inputs, n.waiter.Committed())
+		if err != nil || !complete {
+			t.Fatalf("Referenced = %v (complete %v)", err, complete)
+		}
+		return len(got)
+	}
+	if got := retiredBy(); got != len(inputs) {
+		t.Fatalf("the collector reads %d of the %d packs a compaction retired as named, want all", got,
+			len(inputs))
+	}
+	var stamped int64
+	if err := n.db.Reader().Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), `SELECT MAX(retired_at) FROM code_packs_retired WHERE repo_id = ?`,
+			repo).Scan(&stamped)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := n.store.RetireSweep(t.Context(), repo,
+		store.DecodeTime(stamped).Add(code.RetireGrace-time.Second)); err != nil || res.Rows != 0 {
+		t.Fatalf("a sweep a second inside the compaction's grace = %+v, %v; want nothing", res, err)
+	}
+	if res, err := n.store.RetireSweep(t.Context(), repo,
+		store.DecodeTime(stamped).Add(code.RetireGrace)); err != nil || res.Rows != len(inputs) {
+		t.Fatalf("the sweep at the compaction's grace = %+v, %v; want its %d retirements", res, err, len(inputs))
+	}
+	if got := retiredBy(); got != 0 {
+		t.Fatalf("after the sweep %d packs the compaction retired are still named", got)
+	}
+}
+
+// packObjects is the object every live pack of repo names on n.
+func (n *node) packObjects(repo string) []objstore.Key {
+	n.t.Helper()
+	var out []objstore.Key
+	if err := n.db.Reader().Read(n.t.Context(), func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(n.t.Context(), `SELECT object FROM code_packs WHERE repo_id = ?`, repo)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var object string
+			if err := rows.Scan(&object); err != nil {
+				return err
+			}
+			k, err := objstore.ParseKey(object)
+			if err != nil {
+				return err
+			}
+			out = append(out, k)
+		}
+		return rows.Err()
+	}); err != nil {
+		n.t.Fatalf("read %s's pack objects: %v", repo, err)
+	}
+	return out
 }
 
 // A SWEEP DECIDES NO ROW STILL INSIDE THE GRACE. Its walk takes a repository's

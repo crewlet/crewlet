@@ -27,7 +27,8 @@ import (
 // their first and keyset forms — a snapshot's retired phase among them — and
 // its bounded counts, the purge's bounded count, its parts and its statements
 // over a repository's changes, a sweep's decide, apply and listing over the
-// retired packs, the trim's listing of who was evicted from the log, and every
+// retired packs, a compaction's decide, apply and answer, the compactor's due
+// listing, the trim's listing of who was evicted from the log, and every
 // statement the object store builds over code_packs and code_packs_retired
 // ([planShapes]) — and holds each to the EXACT seek it names: the index and
 // every column of it the statement bounds. Seeking an index is not enough — a
@@ -281,7 +282,6 @@ const (
 	pushKey       = "sqlite_autoindex_code_pushes_1"
 	protectionKey = "sqlite_autoindex_code_protections_1"
 	deletionKey   = "sqlite_autoindex_code_deletions_1"
-	retiredKey    = "sqlite_autoindex_code_packs_retired_1"
 	changeKey     = "sqlite_autoindex_code_changes_1"
 	authorKey     = "sqlite_autoindex_code_change_authors_1"
 	revisionKey   = "sqlite_autoindex_code_revisions_1"
@@ -305,6 +305,12 @@ func registeredStatements() map[string]statement {
 	sweep := "[" + strings.Join(stones, ",") + "]"
 	ids := `["repo-1-push-000001","repo-1-push-000002"]`
 	changeIDs := `["repo-1-change-000001","repo-1-change-000002"]`
+	// A COMPACTION'S INPUTS AT THEIR MOST, which is still one seek a pack.
+	inputs := make([]string, MaxCompactInputs)
+	for i := range inputs {
+		inputs[i] = fmt.Sprintf("%q", fmt.Sprintf("pack-%06d", i))
+	}
+	compactInputs := "[" + strings.Join(inputs, ",") + "]"
 	out := map[string]statement{
 		"guard repo":          {guardRepoSQL, []any{"repo-1", "repo-1"}, []string{deletionKey + " (repo_id=?)", repoKey + " (id=?)"}},
 		"guard name":          {guardNameSQL, []any{"token"}, []string{nameKey + " (token=?)"}},
@@ -425,6 +431,16 @@ func registeredStatements() map[string]statement {
 		// nodes the fleet has evicted rather than by anything a repository
 		// holds.
 		"evictions": {evictionsSQL, nil, []string{"SCAN code_evictions USING INDEX " + evictionKey}},
+		// A COMPACTION'S: the rows of the packs a list names, a decide's
+		// inputs, an apply's inputs and outputs and an answer's outputs, at
+		// the most inputs one compaction names; the retired rows of the
+		// outputs an answer did not find live; the counters its apply
+		// moves; and the compactor's due listing, most live packs first.
+		"named packs":          {namedPacksSQL, []any{"repo-1", compactInputs}, []string{"SCAN json_each AS j", packsKey + " (repo_id=? AND pack_id=?)"}},
+		"retired added":        {retiredAddedSQL, []any{"repo-1", `["retired-000001","retired-000002"]`}, []string{"SCAN json_each AS j", retiredKey + " (repo_id=? AND pack_id=?)"}},
+		"compact counters":     {compactCountersSQL, []any{1, 1, 1, 1, 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"compaction due first": {compactionDueFirstSQL, []any{CompactMinMerge, MaxSnapshotItems}, []string{"code_repos_packs_idx (live_packs>=?)"}},
+		"compaction due after": {compactionDueAfterSQL, []any{CompactMinMerge, 30, 30, "repo-2", MaxSnapshotItems}, []string{"code_repos_packs_idx (live_packs<=? AND live_packs>=?)"}},
 	}
 	return out
 }

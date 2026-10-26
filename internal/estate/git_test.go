@@ -185,6 +185,83 @@ func TestAGitOperationIsAskedOfItsRepositorysHome(t *testing.T) {
 	}
 }
 
+// HOME IS THE READS' FIRST GIT NODE: for two hundred repositories over five
+// git nodes, the home every router names — one on a node that holds nothing,
+// and one on a git node whose own half is built, asked in process — is the git
+// node the walk asks a read of the repository first on a quiet fleet, the one
+// that answers it stamped home, and a git node is home (IsHome) for exactly the
+// repositories that name it. With no demotion: a home that answered nothing is
+// still the home. A placement that cannot say who serves git is an error —
+// unknown, never "this node" — and a fleet with no git node is ErrNoGitNode.
+//
+// Mutations: key Home on the asking node's id rather than the repository's —
+// most homes are not the node the reads ask first, red; order Home with the
+// walk's demotions — the suspect home is no longer named, red.
+func TestHomeIsTheReadsFirstGitNode(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	holders := []string{"git-a", "git-b", "git-c", "git-d", "git-e"}
+	halves := f.gitNodes(t, holders)
+	ownHalf := f.gitRouter(t, "git-c", gitHalf{node: halves["git-c"]})
+	homes := map[string]int{}
+	for i := range 200 {
+		repo := repoID(i)
+		before := asks(halves)
+		read, err := f.client.Code().GitRead(t.Context(), treeOf(repo))
+		if err != nil {
+			t.Fatalf("the read of %s: %v", repo, err)
+		}
+		for name, r := range map[string]*Router{"a node that holds nothing": f.client,
+			"a git node, its half in process": ownHalf} {
+			home, err := r.Home(repo)
+			if err != nil || home != read.Rev {
+				t.Fatalf("%s: Home(%s) = (%s, %v), and the read's first git node, which answered it, is %s",
+					name, repo, home, err, read.Rev)
+			}
+		}
+		after := asks(halves)
+		if q := halves[read.Rev].reads(); after[read.Rev] != before[read.Rev]+1 || !q[len(q)-1].Home {
+			t.Fatalf("the home %s of %s was not the one node asked, stamped home", read.Rev, repo)
+		}
+		isHome, err := ownHalf.IsHome(repo)
+		if err != nil || isHome != (read.Rev == "git-c") {
+			t.Fatalf("git-c's IsHome(%s) = (%v, %v), and the home is %s", repo, isHome, err, read.Rev)
+		}
+		homes[read.Rev]++
+	}
+	if len(homes) != len(holders) {
+		t.Fatalf("two hundred repositories are homed on %v, want every git node home to some", homes)
+	}
+
+	// NO DEMOTION: a home the router remembers silent keeps its
+	// repositories, where the walk asks it last.
+	repo := repoID(3)
+	home, err := f.client.Home(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.client.markSuspect(home)
+	if order := f.client.keyedOrder(opCodeGitRead.spec, repo, holders, false); order[0] == home {
+		t.Fatalf("the premise: the walk still asks the suspect home %s first: %v", home, order)
+	}
+	if again, err := f.client.Home(repo); err != nil || again != home {
+		t.Fatalf("Home(%s) once its home %s went silent = (%s, %v), want the home still", repo, home, again, err)
+	}
+
+	// UNKNOWN IS NOT AN ANSWER.
+	f.git.set(func(p *fakePlacement) { p.err = errors.New("the presence view answers unknown") })
+	if home, err := ownHalf.Home(repo); err == nil || errors.Is(err, ErrNoGitNode) {
+		t.Fatalf("Home with the git placement unknown = (%s, %v), want the placement's error", home, err)
+	}
+	if isHome, err := ownHalf.IsHome(repo); err == nil || isHome {
+		t.Fatalf("IsHome with the git placement unknown = (%v, %v), want (false, an error)", isHome, err)
+	}
+	none := newFleet(t)
+	if home, err := none.client.Home(repo); !errors.Is(err, ErrNoGitNode) {
+		t.Fatalf("Home on a fleet with no git node = (%s, %v), want ErrNoGitNode", home, err)
+	}
+}
+
 // A GIT NODE THAT IS SYNCING SENDS THE ASKER TO THE RUNNER-UP, and is not held
 // against it: a home whose copy cannot answer inside its budget — still
 // downloading the repository — says `behind`, the walk asks the repository's

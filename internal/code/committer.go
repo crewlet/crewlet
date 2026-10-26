@@ -117,6 +117,20 @@ import (
 // and so does an eviction found at another operation's record, and none of
 // them is a record of the push.
 //
+// # A compaction waits in the same queue, and is decided alone
+//
+// A repository's COMPACTION — proposed by the git node that built one
+// ([Committer.ProposeCompaction]) — waits in the repository's ONE queue beside
+// its pushes, in the order they arrived, held to its bounds and the node's like
+// any proposal and to the same deadline rules, and is decided as a batch of its
+// own: one record of its own op, whose operation id is the compaction's own
+// id, so a compaction asked again of the runner-up after a committer went
+// silent is the same compaction, collapsed by the ledger. Its applied answer
+// is read from the rows too — the outputs' rows the record wrote — never from
+// the decision. A committer runs ONE writer a repository, so a compaction and
+// the pushes queued around it can never contend on the repository's subject
+// from the same node.
+//
 // # Bounded in count and in bytes
 //
 // A repository's queue holds at most CommitterInbox proposals and
@@ -212,11 +226,16 @@ type repoCommitter struct {
 	queued int
 }
 
-// queued is one proposal waiting for its batch.
+// queued is one proposal waiting for its batch: a push's, or a compaction's,
+// which waits in the same queue in the same arrival order and is decided as a
+// batch of its own ([Committer.ProposeCompaction]).
 type queued struct {
-	p     Proposal
-	bytes int // entryBound(p)
-	rows  int // rowBound(p)
+	// p is the push this proposal is; compaction, where it is set, is the
+	// compaction it is instead, and p then its zero value.
+	p          Proposal
+	compaction *CompactionProposal
+	bytes      int // entryBound(p), or a compaction's encoded length
+	rows       int // rowBound(p), or compactDecidedRows of a compaction
 	// arrived is when the proposal was queued, by the committer's clock;
 	// deadline is its caller's — the end of its asker's attempt, zero for a
 	// caller with none; gone is its caller's context ending — nil for a
@@ -241,6 +260,38 @@ const (
 	pushWithdrawn
 )
 
+// repoID is the repository q's queue is.
+func (q *queued) repoID() string {
+	if q.compaction != nil {
+		return q.compaction.Compaction.RepoID
+	}
+	return q.p.RepoID
+}
+
+// The committer's work, as the busy count's `kind` attribute names it.
+const (
+	kindPush       = "push"
+	kindCompaction = "compaction"
+)
+
+// kind is what q is, as the busy count names it.
+func (q *queued) kind() string {
+	if q.compaction != nil {
+		return kindCompaction
+	}
+	return kindPush
+}
+
+// again is what q's asker does after a refusal that decided nothing: a person
+// runs git push again, and a compactor's next pass plans the repository again
+// from its rows.
+func (q *queued) again() string {
+	if q.compaction != nil {
+		return "the next pass plans again"
+	}
+	return "run git push again"
+}
+
 // take hands q to the batch about to start, reporting false for a push its
 // caller withdrew. A push already taken is the batch's still: a carry that
 // did not fit the last record, leading the next.
@@ -258,7 +309,7 @@ func (q *queued) withdraw() bool { return q.state.CompareAndSwap(pushWaiting, pu
 func (q *queued) late(now time.Time) string {
 	if !q.deadline.IsZero() {
 		if left := q.deadline.Sub(now); left <= CommitBudget+ReplyMargin {
-			return shortOfTime(left)
+			return q.shortOfTime(left)
 		}
 		return ""
 	}
@@ -266,25 +317,26 @@ func (q *queued) late(now time.Time) string {
 	if waited < CommitBudget {
 		return ""
 	}
-	return fmt.Sprintf("the push waited %s behind this repository's earlier pushes on this node, "+
-		"and a push waits at most %s before its own record is written; run git push again",
-		waited.Round(time.Millisecond), CommitBudget)
+	return fmt.Sprintf("the %s waited %s behind this repository's earlier pushes on this node, "+
+		"and a %s waits at most %s before its own record is written; %s", q.kind(),
+		waited.Round(time.Millisecond), q.kind(), CommitBudget, q.again())
 }
 
-// shortOfTime is the refusal of a push whose asker stops waiting in left —
+// shortOfTime is the refusal of a proposal whose asker stops waiting in left —
 // no more than a batch and its answer may take, which is the only time it is
 // formed.
-func shortOfTime(left time.Duration) string {
+func (q *queued) shortOfTime(left time.Duration) string {
 	left = min(max(left, 0), CommitBudget+ReplyMargin)
-	return fmt.Sprintf("the push's asker stops waiting in %s, and a batch started now may take %s "+
-		"and its answer %s more; run git push again", left.Round(time.Millisecond), CommitBudget,
-		ReplyMargin)
+	return fmt.Sprintf("the %s's asker stops waiting in %s, and a batch started now may take %s "+
+		"and its answer %s more; %s", q.kind(), left.Round(time.Millisecond), CommitBudget,
+		ReplyMargin, q.again())
 }
 
-// answered is one proposal's answer.
+// answered is one proposal's answer: res a push's, compact a compaction's.
 type answered struct {
-	res ProposeResult
-	err error
+	res     ProposeResult
+	compact CompactResult
+	err     error
 }
 
 // NewCommitter builds a committer, refusing what it cannot work without.
@@ -339,21 +391,27 @@ func (c *Committer) Propose(ctx context.Context, p Proposal) (ProposeResult, err
 		return ProposeResult{}, err
 	}
 	deadline, _ := ctx.Deadline()
-	q := &queued{p: p, bytes: bytes, rows: rowBound(p), arrived: c.clock(), deadline: deadline,
-		gone: ctx.Done(), answer: make(chan answered, 1)}
+	a := c.queue(ctx, &queued{p: p, bytes: bytes, rows: rowBound(p), arrived: c.clock(),
+		deadline: deadline, gone: ctx.Done(), answer: make(chan answered, 1)})
+	return a.res, a.err
+}
+
+// queue puts q on its repository's queue and waits for its answer — the one
+// path every proposal's caller takes, a push's and a compaction's alike.
+func (c *Committer) queue(ctx context.Context, q *queued) answered {
 	if refusal := q.late(q.arrived); refusal != "" {
 		// TOO LATE BEFORE IT IS QUEUED: answered without taking the place
-		// in the queue a push that can still be decided needs.
-		return c.busy(q, refusal), nil
+		// in the queue a proposal that can still be decided needs.
+		return c.busy(q, refusal)
 	}
 	//nolint:contextcheck // The batch is the committer's, not this caller's: it runs under the committer's own lifetime so a caller that hangs up never cancels the batch other callers are in.
 	if refused, full := c.enqueue(q); full {
-		return c.busy(q, refused), nil
+		return c.busy(q, refused)
 	} else if refused != "" {
-		return ProposeResult{}, fmt.Errorf("%w: %s", ErrNotServing, refused)
+		return answered{err: fmt.Errorf("%w: %s", ErrNotServing, refused)}
 	}
 	// HELD UNTIL THIS CALLER HAS ITS ANSWER, whichever way it leaves — the
-	// one place every queued push's caller passes through.
+	// one place every queued proposal's caller passes through.
 	defer c.release(q)
 	return c.await(ctx, q)
 }
@@ -376,7 +434,7 @@ func (c *Committer) Propose(ctx context.Context, p Proposal) (ProposeResult, err
 // push id became `context canceled` — a final failure for a push nothing
 // decided — or, sent as the serving node's broker went down, no answer at
 // all, which its asker waited out for a whole write attempt.
-func (c *Committer) await(ctx context.Context, q *queued) (ProposeResult, error) {
+func (c *Committer) await(ctx context.Context, q *queued) answered {
 	var expire <-chan time.Time
 	if !q.deadline.IsZero() {
 		timer := time.NewTimer(q.deadline.Sub(q.arrived) - CommitBudget - ReplyMargin)
@@ -386,32 +444,43 @@ func (c *Committer) await(ctx context.Context, q *queued) (ProposeResult, error)
 	for {
 		select {
 		case a := <-q.answer:
-			return a.res, a.err
+			return a
 		case <-expire:
 			expire = nil
 			if q.withdraw() {
-				return c.busy(q, shortOfTime(q.deadline.Sub(c.clock()))), nil
+				return c.busy(q, q.shortOfTime(q.deadline.Sub(c.clock())))
 			}
 			// A BATCH TOOK IT FIRST, with a whole budget and the margin
 			// still in hand: its answer comes inside the attempt.
 		case <-ctx.Done():
 			select {
 			case a := <-q.answer:
-				return a.res, a.err
+				return a
 			default:
 			}
 			q.withdraw()
-			return ProposeResult{}, ctx.Err()
+			return answered{err: ctx.Err()}
 		}
 	}
 }
 
-// busy counts q refused busy and answers it so, undecided.
-func (c *Committer) busy(q *queued, refusal string) ProposeResult {
-	if c.metrics != nil {
-		c.metrics.Add(metrics.CodeCommitBusy, 1, nil)
+// busy counts q refused busy and answers it so, undecided: a push with every
+// command it carries refused, a compaction refused whole.
+func (c *Committer) busy(q *queued, refusal string) answered {
+	c.countBusy(q.kind(), 1)
+	if q.compaction != nil {
+		return answered{compact: CompactResult{Refusal: RefusalBusy, Detail: refusal}}
 	}
-	return ProposeResult{Answer: refuseAll(q.p, RefusalBusy, refusal)}
+	return answered{res: ProposeResult{Answer: refuseAll(q.p, RefusalBusy, refusal)}}
+}
+
+// countBusy counts n proposals of kind refused busy — under the `kind` the
+// instrument names, so a repository's pushes refused for a backlog read apart
+// from a compaction that met one.
+func (c *Committer) countBusy(kind string, n int) {
+	if c.metrics != nil {
+		c.metrics.Add(metrics.CodeCommitBusy, uint64(n), metrics.Attrs{"kind": kind})
+	}
 }
 
 // enqueue puts q on its repository's queue, starting the repository's
@@ -434,9 +503,9 @@ func (c *Committer) enqueue(q *queued) (string, bool) {
 		return fmt.Sprintf("%d bytes of pushes are held across this node's repositories, and %d "+
 			"more would pass the %d it holds", c.held, q.bytes, c.nodeBytes), true
 	}
-	rc := c.repos[q.p.RepoID]
+	rc := c.repos[q.repoID()]
 	if rc == nil {
-		rc = &repoCommitter{repoID: q.p.RepoID, inbox: make(chan *queued, CommitterInbox)}
+		rc = &repoCommitter{repoID: q.repoID(), inbox: make(chan *queued, CommitterInbox)}
 		c.repos[rc.repoID] = rc
 		c.wg.Add(1)
 		go c.run(rc)
@@ -521,9 +590,13 @@ func (c *Committer) run(rc *repoCommitter) {
 		if !c.admit(first) {
 			continue
 		}
-		var batch []*queued
-		batch, carry = c.gather(rc, first)
-		c.commit(rc.repoID, batch)
+		if first.compaction != nil {
+			c.compact(rc.repoID, first)
+		} else {
+			var batch []*queued
+			batch, carry = c.gather(rc, first)
+			c.commit(rc.repoID, batch)
+		}
 		if !idle.Stop() {
 			select {
 			case <-idle.C:
@@ -534,11 +607,16 @@ func (c *Committer) run(rc *repoCommitter) {
 	}
 }
 
-// gather is first and every proposal already queued behind it that fits the
-// record — WITHOUT LINGER: a batch is what was waiting, never what might
+// gather is first — a push — and every push already queued behind it that fits
+// the record — WITHOUT LINGER: a batch is what was waiting, never what might
 // come. A proposal [Committer.admit] turns away is answered and left out; the
 // first that does not fit is carried to lead the next batch, and admitted
 // again then, since that batch is the one it would start in.
+//
+// A COMPACTION IS NEVER GATHERED: a record carries one op, and a compaction is
+// a record of its own (OpCompact). Met behind pushes, it ends the batch and is
+// carried to be decided alone, after them and before anything queued behind
+// it, so a repository's proposals still land in the order they arrived.
 func (c *Committer) gather(rc *repoCommitter, first *queued) ([]*queued, *queued) {
 	batch := []*queued{first}
 	bytes, rows := recordOverheadBytes+first.bytes, first.rows
@@ -549,7 +627,8 @@ func (c *Committer) gather(rc *repoCommitter, first *queued) ([]*queued, *queued
 			if !c.admit(q) {
 				continue
 			}
-			if bytes+q.bytes > MaxRecordBytes || recordRows(rows+q.rows) > MaxRecordRows {
+			if q.compaction != nil || bytes+q.bytes > MaxRecordBytes ||
+				recordRows(rows+q.rows) > MaxRecordRows {
 				return batch, q
 			}
 			batch = append(batch, q)
@@ -585,7 +664,7 @@ func (c *Committer) admit(q *queued) bool {
 	default:
 	}
 	if refusal := q.late(c.clock()); refusal != "" {
-		q.answer <- answered{res: c.busy(q, refusal)}
+		q.answer <- c.busy(q, refusal)
 		return false
 	}
 	return true
@@ -611,15 +690,17 @@ func (c *Committer) dequeued(rc *repoCommitter, q *queued) {
 // under mu only while the committer is not stopped, and this runs only once
 // Stop has said it is.
 func (c *Committer) refuseQueued(rc *repoCommitter, carry *queued) {
-	refusal := answered{err: fmt.Errorf("%w: the committer stopped before deciding the push",
-		ErrNotServing)}
+	refuse := func(q *queued) {
+		q.answer <- answered{err: fmt.Errorf("%w: the committer stopped before deciding the %s",
+			ErrNotServing, q.kind())}
+	}
 	if carry != nil {
-		carry.answer <- refusal
+		refuse(carry)
 	}
 	for {
 		select {
 		case q := <-rc.inbox:
-			q.answer <- refusal
+			refuse(q)
 		default:
 			c.mu.Lock()
 			delete(c.repos, rc.repoID)
@@ -783,7 +864,8 @@ func (c *Committer) answers(ctx context.Context, repoID string, batch []Proposal
 		if readErr != nil {
 			failed := fmt.Errorf("code: the record of operation %s applied at %s and its push rows "+
 				"could not be read: %w", opID, res.Position, readErr)
-			c.log.WarnContext(ctx, "code_commit_failed", "repo", repoID, "op_id", opID, "error", failed)
+			c.log.WarnContext(ctx, "code_commit_failed", "kind", kindPush, "repo", repoID, "op_id", opID,
+				"error", failed)
 			for i := range out {
 				out[i].err = failed
 			}
@@ -929,9 +1011,7 @@ func (c *Committer) refused(ctx context.Context, repoID string, batch []Proposal
 	var refusal *statelog.Unavailable
 	switch {
 	case errors.Is(err, statelog.ErrConflict):
-		if c.metrics != nil {
-			c.metrics.Add(metrics.CodeCommitBusy, uint64(len(batch)), nil)
-		}
+		c.countBusy(kindPush, len(batch))
 		for i, p := range batch {
 			out[i].res.Answer = refuseAll(p, RefusalBusy, "the repository kept changing for every "+
 				"round the write may take; run git push again")
@@ -979,7 +1059,8 @@ func (c *Committer) refused(ctx context.Context, repoID string, batch []Proposal
 		}
 	default:
 		failed := fmt.Errorf("code: the batch of operation %s: %w", opID, err)
-		c.log.WarnContext(ctx, "code_commit_failed", "repo", repoID, "op_id", opID, "error", err)
+		c.log.WarnContext(ctx, "code_commit_failed", "kind", kindPush, "repo", repoID, "op_id", opID,
+			"error", err)
 		for i := range out {
 			out[i].err = failed
 		}

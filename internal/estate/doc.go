@@ -81,13 +81,20 @@
 // round and push ids collapse duplicates — only less efficiently, until their
 // views agree.
 //
-// This is the one operation keyed on the DATA nodes (a read of a repository's
+// A COMPACTION'S PROPOSAL (`code.compact`) is asked of the same committer in
+// the same order, keyed by the same repository: it waits in the repository's
+// one queue beside the pushes and is decided there as a record of its own, so
+// everything that moves a repository's packs meets on one node, and an
+// unanswered one is asked of the runner-up under its own compaction id, which
+// the domain's ledger collapses as it does a push id.
+//
+// These are the operations keyed on the DATA nodes (a read of a repository's
 // git objects is keyed on the git nodes: below); [op.keyedBy] is the
-// declaration, and the walk is the ordinary one in every other respect — the floors, the
-// verdict of the operation's own domain, the lagging last resort, and the
-// class rule for a node that may have run it. A data node asks its own copy at
-// its place in the key's order, in-process, never ahead of the node the key
-// prefers; and a committer that refuses before it appends anything — stopping,
+// declaration, and the walk is the ordinary one in every other respect — the
+// floors, the verdict of the operation's own domain, the lagging last resort,
+// and the class rule for a node that may have run it. A data node asks its
+// own copy at its place in the key's order, in-process, never ahead of the
+// node the key prefers; and a committer that refuses before it appends anything — stopping,
 // a node in a maintenance mode, a refusal about this node — ran nothing, so
 // the runner-up is asked with the same push id, and the refusing node is asked
 // LAST for pushes for the next [suspectFor]: a keyed order has no sticky node
@@ -98,19 +105,19 @@
 // answers it busy, undecided, the moment they do not — so an asker never hands
 // a push to the runner-up while the first committer is still deciding it.
 //
-// And a data node answers proposals on a LANE OF THEIR OWN — its own subject,
-// `crewlet.estate.<node>.proposals`, and its own answer slots — because a
-// proposal WAITS: queued behind its repository's earlier pushes, then for its
-// batch, it holds the slot it was answered through for as long as its asker's
-// attempt, and a registration's requests wait behind every answer holding one
-// of its slots. On the one registration every other operation is answered
-// through, sixty-four queued pushes held every slot the node had: it answered
-// no read, no other write and no git fetch's resolve until a batch ended, its
-// readers marked it suspect for every domain, and an election that stalled
-// the code log spread that across every committer with pushes in flight. The
-// lane is as wide as one repository's committer holds (its queue and the batch
-// ahead of it), so a burst meets the committer's own bounds — busy at once —
-// never the lane's. A lane answers only the operations declared on it
+// And a data node answers proposals, a push's and a compaction's, on a LANE OF
+// THEIR OWN — its own subject, `crewlet.estate.<node>.proposals`, and its own
+// answer slots — because a proposal WAITS: queued behind its repository's
+// earlier pushes, then for its batch, it holds the slot it was answered
+// through for as long as its asker's attempt, and a registration's requests
+// wait behind every answer holding one of its slots. On the one registration
+// every other operation is answered through, sixty-four queued pushes held
+// every slot the node had: it answered no read, no other write and no git
+// fetch's resolve until a batch ended, its readers marked it suspect for every
+// domain, and an election that stalled the code log spread that across every
+// committer with pushes in flight. The lane is as wide as one repository's
+// committer holds (its queue and the batch ahead of it), so a burst meets the
+// committer's own bounds — busy at once — never the lane's. A lane answers only the operations declared on it
 // ([op.answeredOn]) and says so to any other, so the separation does not
 // depend on every asker keeping it.
 //
@@ -265,6 +272,15 @@
 // once that it holds none, so a repository nobody holds costs the fleet one
 // download rather than one a git node. Every git request is a signed estate
 // request like any other.
+//
+// [Router.Home] names that home itself, for work that is a repository's home's
+// own rather than a read the walk routes: the first node of the same
+// rendezvous order with NO demotion — one function builds both, so on a quiet
+// fleet a repository's reads and its own git work meet on one git node — and
+// UNKNOWN, never a guess, where who serves git cannot be read ([Router.IsHome]
+// is three-valued). A home that went quiet is still the home; work two homes
+// of a split presence view both do is work its repository's committer takes
+// once.
 //
 // # Which data nodes to ask is answered from memory
 //

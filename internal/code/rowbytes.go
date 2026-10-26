@@ -204,6 +204,14 @@ func (r PackRow) encodedBytes() int {
 		field("added", positionBytes(r.Added), false)
 }
 
+// encodedBytes is the length of the candidate's JSON encoding.
+func (c CompactionCandidate) encodedBytes() int {
+	return 2 + field("id", stringBytes(c.ID), true) +
+		field("name", stringBytes(c.Name), false) +
+		field("live_packs", intBytes(c.LivePacks), false) +
+		field("version", positionBytes(c.Version), false)
+}
+
 // encodedBytes is the length of the retirement's JSON encoding.
 func (r RetiredRow) encodedBytes() int {
 	return 2 + field("pack_id", stringBytes(r.PackID), true) +

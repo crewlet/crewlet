@@ -1,0 +1,605 @@
+package code_test
+
+import (
+	"bufio"
+	"bytes"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"maps"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/store"
+)
+
+// COMPACTIONS THROUGH THE WHOLE PATH: proposed to a committer, decided in one
+// snapshot, published as one record on a real embedded broker, applied by the
+// shipped applier and answered from the rows it wrote.
+
+// packedRepo is a fresh repository on n named name holding count live packs,
+// each the one-object pack of a push of its own, and their ids, sorted.
+func packedRepo(t *testing.T, n *node, name string, count int) (string, []string) {
+	t.Helper()
+	repo := n.ensure(name, suiteSettings(), t1).RepoID
+	return repo, pushPacks(t, n, repo, count)
+}
+
+// pushPacks lands count pushes on repo, each carrying a one-object pack of its
+// own, and answers the packs' ids, sorted.
+func pushPacks(t *testing.T, n *node, repo string, count int) []string {
+	t.Helper()
+	ids := make([]string, count)
+	for i := range count {
+		e := entry(uuid.Must(uuid.NewV7()).String(),
+			set(fmt.Sprintf("refs/heads/%s", uuid.NewString()), code.ZeroOID, oidOf(uuid.NewString())))
+		ids[i] = e.Pack.PackID
+		n.push(repo, e)
+	}
+	slices.Sort(ids)
+	return ids
+}
+
+// compactionOf is a compaction of repo's packs retire into ONE output holding
+// objects objects, planned at n's own position, its id minted now and its
+// output's key at minted — every field as a builder sets it.
+func compactionOf(n *node, repo string, retire []string, objects int64, minted time.Time) code.CompactionProposal {
+	cid := statelog.NewOpID(time.Now(), "")
+	return code.CompactionProposal{Compaction: code.Compaction{
+		RepoID: repo, CompactionID: cid, Node: n.id, Seen: n.waiter.Committed(),
+		Retire: slices.Clone(retire), Add: []code.PackRef{compactOutput(cid, 0, objects, minted)},
+	}}
+}
+
+// compactOutput is output i of compaction cid, a bundle of objects objects
+// whose key was minted at minted.
+func compactOutput(cid string, i int, objects int64, minted time.Time) code.PackRef {
+	return code.PackRef{
+		PackID: code.DeriveCompactionPackID(cid, i), Object: objstore.KeyAt(minted),
+		Hash:         objstore.HashOf([]byte(fmt.Sprint(cid, i))),
+		Size:         32*objects + code.IndexBytesFor(objects) + code.ReverseBytesFor(objects),
+		IndexBytes:   code.IndexBytesFor(objects),
+		ReverseBytes: code.ReverseBytesFor(objects),
+		GitChecksum:  oidOf(fmt.Sprint("compacted", cid, i)), Objects: objects,
+	}
+}
+
+// requireApplied fails t unless res is a compaction applied at a position.
+func requireApplied(t *testing.T, res code.CompactResult, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("ProposeCompaction: %v", err)
+	}
+	if res.Outcome != statelog.OutcomeApplied || res.Position.IsZero() || res.Refusal != "" {
+		t.Fatalf("the compaction answered %+v, want applied at a position", res)
+	}
+}
+
+// livePacks is repo's live pack ids on n, sorted.
+func (n *node) livePacks(repo string) []string {
+	n.t.Helper()
+	var out []string
+	if err := n.db.Reader().Read(n.t.Context(), func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(n.t.Context(),
+			`SELECT pack_id FROM code_packs WHERE repo_id = ? ORDER BY pack_id`, repo)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			out = append(out, id)
+		}
+		return rows.Err()
+	}); err != nil {
+		n.t.Fatalf("read %s's packs: %v", repo, err)
+	}
+	return out
+}
+
+// A COMPACTION ASKED TWICE IS ONE COMPACTION: proposed again after it landed —
+// as its builder's router asks the repository's runner-up after a committer
+// went silent — it is answered applied at the record it landed in, from the
+// rows, and no second record is appended. Its operation id is the
+// compaction's own, so the ledger collapses the second asking onto the first.
+//
+// Mutation: publish a compaction under an operation id minted for its batch,
+// and the second asking is decided again — its inputs gone — and answered
+// stale.
+func TestACompactionAskedTwiceIsOneCompaction(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo, ids := packedRepo(t, n, "web", 3)
+	c, _ := committerOn(t, n, n.pub)
+	p := compactionOf(n, repo, ids, 3, harnessAt)
+	first, err := c.ProposeCompaction(t.Context(), p)
+	requireApplied(t, first, err)
+	before := n.end()
+	again, err := c.ProposeCompaction(t.Context(), p)
+	requireApplied(t, again, err)
+	if again.Position != first.Position {
+		t.Fatalf("asked again it answered at %v, and the first at %v — one compaction, one record",
+			again.Position, first.Position)
+	}
+	if got := n.end(); got != before {
+		t.Fatalf("asking again appended %d records, want none", got-before)
+	}
+	if got, want := n.livePacks(repo), []string{p.Compaction.Add[0].PackID}; !slices.Equal(got, want) {
+		t.Fatalf("the repository's live packs are %v, want only the output %v", got, want)
+	}
+	if n := n.count(`SELECT COUNT(*) FROM code_packs_retired WHERE repo_id = ?`, repo); n != len(ids) {
+		t.Fatalf("%d retired rows, want the %d inputs", n, len(ids))
+	}
+}
+
+// A COMPACTION OF A PACK NO LONGER LIVE IS STALE, and so is one of a pack that
+// is full or split into parts: every input is held to the rows of the
+// committer's snapshot — one row, of part `pack`, live and not full
+// (code.PackRow.Full) — and the first that is not is named, the compaction
+// refused undecided, nothing appended, and the next pass plans again.
+//
+// Mutation: drop the full check, and a compaction retiring a full pack is
+// applied — and merged again at every pass.
+func TestACompactionOfAPackNoLongerLiveIsStale(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		// settle readies the repository's rows and answers the inputs a
+		// compaction then names, and the one of them that is refused.
+		settle func(t *testing.T, n *node, c *code.Committer, repo string, ids []string) ([]string, string)
+		why    string
+	}{
+		"retired by a compaction first": {func(t *testing.T, n *node, c *code.Committer, repo string,
+			ids []string) ([]string, string) {
+			res, err := c.ProposeCompaction(t.Context(), compactionOf(n, repo, ids[:2], 2, harnessAt))
+			requireApplied(t, res, err)
+			return []string{ids[1], ids[2]}, ids[1]
+		}, "is no longer live"},
+		"full by its bundle": {func(t *testing.T, n *node, _ *code.Committer, repo string,
+			ids []string) ([]string, string) {
+			id := uuid.Must(uuid.NewV7()).String()
+			e := entry(id, set("refs/heads/full", code.ZeroOID, oidOf("full")))
+			e.Pack.Size = code.FullBundleBytes
+			n.push(repo, e)
+			return sorted(ids[0], e.Pack.PackID), e.Pack.PackID
+		}, "is full"},
+		"split into parts": {func(t *testing.T, n *node, _ *code.Committer, repo string,
+			ids []string) ([]string, string) {
+			n.exec(`INSERT INTO code_packs (repo_id, pack_id, part, object, hash, size, index_bytes,
+				reverse_bytes, git_checksum, objects, kind, state, added_position)
+				SELECT repo_id, pack_id, 'part-2', object, hash, size, index_bytes, reverse_bytes,
+					git_checksum, objects, kind, state, added_position
+				FROM code_packs WHERE repo_id = ? AND pack_id = ?`, repo, ids[0])
+			return ids[:2], ids[0]
+		}, "is split into parts"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			n := newNode(t)
+			repo, ids := packedRepo(t, n, "web", 3)
+			c, _ := committerOn(t, n, n.pub)
+			retire, refused := tc.settle(t, n, c, repo, ids)
+			before := n.end()
+			res, err := c.ProposeCompaction(t.Context(), compactionOf(n, repo, retire, 1, harnessAt))
+			if err != nil {
+				t.Fatalf("ProposeCompaction: %v", err)
+			}
+			if res.Refusal != code.RefusalStale || res.Outcome != "" ||
+				!strings.Contains(res.Detail, "pack "+refused+" "+tc.why) {
+				t.Fatalf("the compaction answered %+v, want stale saying pack %s %s", res, refused, tc.why)
+			}
+			if got := n.end(); got != before {
+				t.Fatalf("a stale compaction appended %d records, want none", got-before)
+			}
+		})
+	}
+}
+
+// sorted is ids in order.
+func sorted(ids ...string) []string {
+	out := slices.Clone(ids)
+	slices.Sort(out)
+	return out
+}
+
+// A COMPACTION IS REFUSED FOR WHAT ITS REPOSITORY IS: a deleted one is
+// repo_deleted, told — through the committer's own retention — when its
+// purge may begin, as a push to it is; an ARCHIVED one is compacted, since it
+// is still read and every cold sync of it pays for every pack it holds.
+//
+// Mutation: refuse an archived repository's compaction as a push to it is
+// refused, and an archived repository is never compacted.
+func TestACompactionIsRefusedForWhatItsRepositoryIs(t *testing.T) {
+	t.Parallel()
+	const retention = 11 * 24 * time.Hour
+	t.Run("deleted", func(t *testing.T) {
+		t.Parallel()
+		n := newNode(t)
+		repo, ids := packedRepo(t, n, "web", 2)
+		if _, err := n.store.DeleteRepo(t.Context(), n.activate(t2), repo); err != nil {
+			t.Fatal(err)
+		}
+		n.drain()
+		c, _ := committerOn(t, n, n.pub, func(o *code.CommitterOptions) {
+			o.Retention = func() time.Duration { return retention }
+		})
+		before := n.end()
+		res, err := c.ProposeCompaction(t.Context(), compactionOf(n, repo, ids, 2, harnessAt))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var deleted int64
+		if err := n.db.Reader().Read(t.Context(), func(tx *sql.Tx) error {
+			return tx.QueryRowContext(t.Context(), `SELECT deleted_at FROM code_repos WHERE id = ?`,
+				repo).Scan(&deleted)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		want := "may begin from " + store.DecodeTime(deleted).Add(retention).UTC().Format(time.RFC3339)
+		if res.Refusal != code.RefusalRepoDeleted || !strings.Contains(res.Detail, want) {
+			t.Fatalf("the compaction answered %+v, want repo_deleted saying %q", res, want)
+		}
+		if got := n.end(); got != before {
+			t.Fatalf("a refused compaction appended %d records, want none", got-before)
+		}
+	})
+	t.Run("archived", func(t *testing.T) {
+		t.Parallel()
+		n := newNode(t)
+		repo, ids := packedRepo(t, n, "web", 2)
+		s := suiteSettings()
+		s.Archived = true
+		n.ensure("web", s, t2)
+		c, _ := committerOn(t, n, n.pub)
+		res, err := c.ProposeCompaction(t.Context(), compactionOf(n, repo, ids, 2, harnessAt))
+		requireApplied(t, res, err)
+	})
+}
+
+// A COMPACTION THAT INVENTS OBJECTS IS REFUSED BEFORE ITS RECORD: outputs that
+// hold more objects than the rows of the packs they replace count are a
+// builder's bug — a merge writes no object its inputs did not hold — so the
+// decide refuses it ErrInvalidProposal, nothing is appended, and the node logs
+// it at ERROR where an operator reads it. No lower bound: outputs that hold
+// FEWER are inputs that shared objects, merged once.
+//
+// Mutation: drop the arithmetic, and the compaction lands.
+func TestACompactionThatInventsObjectsIsRefusedBeforeItsRecord(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo, ids := packedRepo(t, n, "web", 3)
+	logs := &lineLog{}
+	c, _ := committerOn(t, n, n.pub, func(o *code.CommitterOptions) {
+		o.Logger = slog.New(slog.NewJSONHandler(logs, nil))
+	})
+	before := n.end()
+	res, err := c.ProposeCompaction(t.Context(), compactionOf(n, repo, ids, 4, harnessAt))
+	if !errors.Is(err, code.ErrInvalidProposal) || res != (code.CompactResult{}) {
+		t.Fatalf("a compaction whose outputs hold 4 objects of the inputs' 3 answered %+v, %v; want "+
+			"ErrInvalidProposal", res, err)
+	}
+	if got := n.end(); got != before {
+		t.Fatalf("an invented object appended %d records, want none", got-before)
+	}
+	if lines := logs.lines("code_compaction_invalid"); len(lines) != 1 || lines[0]["level"] != "ERROR" {
+		t.Fatalf("the refusal was logged %v, want code_compaction_invalid once at ERROR", lines)
+	}
+	res, err = c.ProposeCompaction(t.Context(), compactionOf(n, repo, ids, 2, harnessAt))
+	requireApplied(t, res, err)
+}
+
+// A COMPACTION IS NEVER BATCHED WITH PUSHES: queued between two pushes behind
+// a batch in flight, it is decided as a record of its own, after the push
+// before it and before the push after it — a record carries one op, and the
+// repository's proposals land in the order they arrived.
+//
+// Mutation: let a batch gather a compaction behind its pushes, and the three
+// are decided as one push record.
+func TestACompactionIsNeverBatchedWithPushes(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo, ids := packedRepo(t, n, "web", 2)
+	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set("refs/heads/main", code.ZeroOID, oidOf("A"))))
+	gate := newGate(n.pub)
+	c, _ := committerOn(t, n, gate)
+	lead := proposeAsync(t.Context(), c, proposal(repo, update("refs/heads/lead", code.ZeroOID, oidOf("L"))))
+	eventually(t, "the first publish reaching the gate", func() bool { return gate.calls.Load() == 1 })
+	before := n.end()
+
+	ahead := proposeAsync(t.Context(), c, proposal(repo, update("refs/heads/main", oidOf("A"), oidOf("B"))))
+	eventually(t, "the push ahead queued", func() bool { return code.CommitterQueued(c, repo) == 1 })
+	compacted := make(chan struct {
+		res code.CompactResult
+		err error
+	}, 1)
+	go func() {
+		res, err := c.ProposeCompaction(t.Context(), compactionOf(n, repo, ids, 2, harnessAt))
+		compacted <- struct {
+			res code.CompactResult
+			err error
+		}{res, err}
+	}()
+	eventually(t, "the compaction queued", func() bool { return code.CommitterQueued(c, repo) == 2 })
+	behind := proposeAsync(t.Context(), c, proposal(repo, update("refs/heads/main", oidOf("B"), oidOf("C"))))
+	eventually(t, "the push behind queued", func() bool { return code.CommitterQueued(c, repo) == 3 })
+	gate.open()
+
+	requireOK(t, await(t, lead))
+	first, second := await(t, ahead), await(t, behind)
+	requireOK(t, first)
+	requireOK(t, second)
+	var got struct {
+		res code.CompactResult
+		err error
+	}
+	select {
+	case got = <-compacted:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the compaction was not answered in 30 s")
+	}
+	requireApplied(t, got.res, got.err)
+	positions := []uint64{first.res.Position.Seq, got.res.Position.Seq, second.res.Position.Seq}
+	if !slices.IsSorted(positions) || positions[0] == positions[1] || positions[1] == positions[2] {
+		t.Fatalf("the push ahead, the compaction and the push behind landed at %v, want three records "+
+			"in that order", positions)
+	}
+	if appended := n.end() - before; appended != 4 {
+		t.Fatalf("%d records appended, want 4: the lead's, then the push, the compaction and the push "+
+			"each alone", appended)
+	}
+}
+
+// A COMPACTION BEHIND WHAT ITS BUILDER SAW IS ASKED OF ANOTHER NODE: decided
+// from a snapshot at or past its Seen — the rows the builder planned from — or,
+// where the committer's node cannot reach that position in time, refused about
+// that node (ErrNotServing), which the router reads as a node that ran nothing
+// and asks the repository's runner-up under the same compaction id. Nothing is
+// appended.
+//
+// Mutation: publish with no session floor, and the node behind decides the
+// compaction from rows that do not hold the inputs — stale, for ever, from the
+// node that would be asked first.
+func TestACompactionIsDecidedPastWhatItsBuilderSaw(t *testing.T) {
+	t.Parallel()
+	a, b := newTwoNodes(t)
+	repo, ids := packedRepo(t, a, "web", 2)
+	b.hold()
+	c, _ := committerOn(t, b, b.pub)
+	before := b.end()
+	res, err := c.ProposeCompaction(t.Context(), compactionOf(a, repo, ids, 2, harnessAt))
+	if !errors.Is(err, code.ErrNotServing) {
+		t.Fatalf("a committer behind the compaction's Seen answered %+v, %v; want ErrNotServing", res, err)
+	}
+	if got := b.end(); got != before {
+		t.Fatalf("%d records appended, want none", got-before)
+	}
+	b.release()
+	res, err = c.ProposeCompaction(t.Context(), compactionOf(a, repo, ids, 2, harnessAt))
+	requireApplied(t, res, err)
+}
+
+// A COMPACTION IS ANSWERED ONLY FROM ITS OUTPUTS' ROWS: a publish that answers
+// applied for a record that wrote no row is answered unknown, never applied —
+// which would hand its builder outputs to adopt that no row names — and logged
+// at ERROR, since no committer of this domain forms such a record.
+//
+// Mutation: answer applied from the publish's word, and the compaction is
+// applied with no output in the rows.
+func TestACompactionIsAnsweredOnlyFromItsOutputsRows(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo, ids := packedRepo(t, n, "web", 2)
+	logs := &lineLog{}
+	c, _ := committerOn(t, n, decideOnly{n}, func(o *code.CommitterOptions) {
+		o.Logger = slog.New(slog.NewJSONHandler(logs, nil))
+	})
+	res, err := c.ProposeCompaction(t.Context(), compactionOf(n, repo, ids, 2, harnessAt))
+	if err != nil || res.Outcome != statelog.OutcomeUnknown || !strings.Contains(res.Detail, "not in the rows") {
+		t.Fatalf("a compaction whose record wrote no row answered %+v, %v; want unknown", res, err)
+	}
+	if lines := logs.lines("code_compaction_unanswerable"); len(lines) != 1 || lines[0]["level"] != "ERROR" {
+		t.Fatalf("logged %v, want code_compaction_unanswerable once at ERROR", lines)
+	}
+}
+
+// A BUSY COMPACTION IS COUNTED APART FROM A BUSY PUSH: both meet the same
+// queue and the same node's bounds, and both are refused busy undecided past
+// them — a push's commands each refused, a compaction whole, told its next
+// pass plans again — each counted under its own `kind`, so an operator tells
+// pushes refused for a backlog from a compaction that met one.
+//
+// Mutation: count every busy refusal without its kind, and neither series
+// names whose proposal it was.
+func TestABusyCompactionIsCountedApartFromABusyPush(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo, ids := packedRepo(t, n, "web", 2)
+	c, rec := committerOn(t, n, n.pub)
+	code.SetCommitterNodeBytes(c, 1)
+	before := n.end()
+	push, err := c.Propose(t.Context(), proposal(repo, update("refs/heads/main", code.ZeroOID, oidOf("A"))))
+	if err != nil || push.Answer.Refused != code.RefusalBusy {
+		t.Fatalf("a push past the node's bytes answered %+v, %v; want busy", push.Answer, err)
+	}
+	compaction, err := c.ProposeCompaction(t.Context(), compactionOf(n, repo, ids, 2, harnessAt))
+	if err != nil || compaction.Refusal != code.RefusalBusy || compaction.Outcome != "" ||
+		!strings.Contains(compaction.Detail, "across this node's repositories") {
+		t.Fatalf("a compaction past the node's bytes answered %+v, %v; want busy, the node full", compaction, err)
+	}
+	for _, kind := range []string{"push", "compaction"} {
+		if got := readingOf(rec, metrics.CodeCommitBusy, metrics.Attrs{"kind": kind}).Total; got != 1 {
+			t.Errorf("the busy counter reads %d of kind %s, want 1", got, kind)
+		}
+	}
+	if got := n.end(); got != before {
+		t.Fatalf("busy refusals appended %d records, want none", got-before)
+	}
+}
+
+// readingOf is one instrument's series in rec with exactly attrs.
+func readingOf(rec *metrics.Recorder, name string, attrs metrics.Attrs) metrics.Snapshot {
+	for _, s := range rec.Read() {
+		if s.Name == name && maps.Equal(s.Attrs, map[string]string(attrs)) {
+			return s
+		}
+	}
+	return metrics.Snapshot{}
+}
+
+// lineLog is a logger's output a case reads back, one JSON object a line.
+type lineLog struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *lineLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+// lines is every line logged under msg, decoded.
+func (l *lineLog) lines(msg string) []map[string]any {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []map[string]any
+	scan := bufio.NewScanner(bytes.NewReader(l.buf.Bytes()))
+	for scan.Scan() {
+		var line map[string]any
+		if json.Unmarshal(scan.Bytes(), &line) == nil && line["msg"] == msg {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// THE DUE LISTING IS MOST PACKS FIRST: every active and archived repository
+// holding at least the floor of live packs, the most first and then by id,
+// each with the version its row holds — paged by its cursor, a page's rows in
+// that order across the pages — and never a deleted one, nor one under the
+// floor.
+//
+// Mutation: order the listing by id, and a repository near the bound waits
+// behind every barely due one.
+func TestTheDueListingIsMostPacksFirst(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	packs := map[string]int{"a": 9, "b": 30, "c": 30, "d": 12, "e": 3, "f": 50, "g": 20}
+	ids := map[string]string{}
+	for name, count := range packs {
+		ids[name] = n.ensure(name, suiteSettings(), t1).RepoID
+		n.exec(`UPDATE code_repos SET live_packs = ? WHERE id = ?`, count, ids[name])
+	}
+	// AN ARCHIVED ONE IS LISTED, a deleted one never.
+	n.exec(`UPDATE code_repos SET status = 'archived' WHERE id = ?`, ids["d"])
+	if _, err := n.store.DeleteRepo(t.Context(), n.activate(t2), ids["f"]); err != nil {
+		t.Fatal(err)
+	}
+	n.drain()
+	code.SetPageLimits(n.reader, 2, code.MaxPageBytes)
+	var (
+		got   []code.CompactionCandidate
+		pages int
+	)
+	q := code.ReadQuery{Kind: code.ReadCompactionDue, MinPacks: code.CompactMinMerge,
+		Fresh: statelog.Freshness{Level: statelog.ReadStale}}
+	for {
+		page, err := n.reader.Read(t.Context(), q)
+		if err != nil {
+			t.Fatalf("page %d: %v", pages, err)
+		}
+		pages++
+		got = append(got, page.Due...)
+		if page.Next == "" {
+			break
+		}
+		q.Cursor = page.Next
+		if pages > 10 {
+			t.Fatal("the listing did not end")
+		}
+	}
+	var want []string
+	for _, name := range []string{"b", "c", "g", "d", "a"} {
+		want = append(want, ids[name])
+	}
+	// THE TIE AT THIRTY, by id descending.
+	if ids["b"] < ids["c"] {
+		want[0], want[1] = want[1], want[0]
+	}
+	var listed []string
+	for _, c := range got {
+		listed = append(listed, c.ID)
+		var version int64
+		if err := n.db.Reader().Read(t.Context(), func(tx *sql.Tx) error {
+			return tx.QueryRowContext(t.Context(), `SELECT version FROM code_repos WHERE id = ?`,
+				c.ID).Scan(&version)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if c.Version.Packed() != version || c.Name == "" || int(c.LivePacks) != packs[c.Name] {
+			t.Errorf("%s is listed as %+v, want its name, its %d live packs and its row's version %d",
+				c.ID, c, packs[c.Name], version)
+		}
+	}
+	if !slices.Equal(listed, want) {
+		t.Fatalf("the due listing is %v, want %v: most live packs first, then by id, no deleted repository "+
+			"and none under the floor", listed, want)
+	}
+	if pages < 3 {
+		t.Fatalf("the listing took %d pages of two, want at least three", pages)
+	}
+}
+
+// A DUTY LISTING NAMES NO ASKER: the compactor's `compaction_due` read is the
+// engine's own, so the domain refuses it with an asker — the one place every
+// surface a principal reads the code host through meets — answers it with
+// none, and still refuses a principal's read that names none.
+//
+// Mutation: accept an asker on compaction_due, and a principal's read could
+// list every repository's pack count past its grant.
+func TestADutyListingNamesNoAsker(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.ensure("web", suiteSettings(), t1)
+	stale := statelog.Freshness{Level: statelog.ReadStale}
+	for name, tc := range map[string]struct {
+		q     code.ReadQuery
+		field string
+	}{
+		"a duty listing naming an asker": {code.ReadQuery{Kind: code.ReadCompactionDue, MinPacks: 1,
+			Asker: asker, Fresh: stale}, "asker"},
+		"a duty listing naming no floor": {code.ReadQuery{Kind: code.ReadCompactionDue, Fresh: stale},
+			"min_packs"},
+		"a duty listing naming a limit": {code.ReadQuery{Kind: code.ReadCompactionDue, MinPacks: 1, Limit: 5,
+			Fresh: stale}, "limit"},
+		"a principal's listing naming no asker": {code.ReadQuery{Kind: code.ReadRepos, Fresh: stale}, "asker"},
+		"a principal's listing naming a floor": {code.ReadQuery{Kind: code.ReadRepos, Asker: asker, MinPacks: 1,
+			Fresh: stale}, "min_packs"},
+	} {
+		if _, err := n.reader.Read(t.Context(), tc.q); !errors.Is(err, code.ErrInvalid) ||
+			!strings.Contains(err.Error(), tc.field+":") {
+			t.Errorf("%s: Read = %v, want ErrInvalid naming %s", name, err, tc.field)
+		}
+	}
+	if _, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadCompactionDue, MinPacks: 1,
+		Fresh: stale}); err != nil {
+		t.Fatalf("a duty listing naming no asker: %v", err)
+	}
+	if _, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadCompactionDue, MinPacks: 1,
+		Cursor: "not-a-cursor", Fresh: stale}); !errors.Is(err, code.ErrBadCursor) {
+		t.Fatalf("a duty listing with a cursor it never issued: %v, want ErrBadCursor", err)
+	}
+}

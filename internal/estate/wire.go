@@ -30,9 +30,9 @@ func Subject(nodeID string) string {
 	return SubjectPrefix + "." + coord.DocumentKey(nodeID)
 }
 
-// ProposalSubject is the subject a serving node answers push proposals on —
-// its node's subject with one more token, so no node's [Subject] is ever
-// another's: an escaped id is always exactly one token.
+// ProposalSubject is the subject a serving node answers proposals on, a push's
+// and a compaction's — its node's subject with one more token, so no node's
+// [Subject] is ever another's: an escaped id is always exactly one token.
 func ProposalSubject(nodeID string) string { return laneProposals.subject(nodeID) }
 
 // lane is one of a serving node's registrations ([Serve]): the subject it
@@ -42,10 +42,11 @@ func ProposalSubject(nodeID string) string { return laneProposals.subject(nodeID
 // does not is waiting for — a registration's slots are its own, and a request
 // past them waits behind every answer holding one ([queue.EventQueue.Serve]).
 // A push's proposal waits: queued behind its repository's earlier pushes,
-// then for its batch, for as long as its asker's whole attempt. Every other
-// operation is a read or a write done now. On one registration, sixty-four
-// queued pushes held every slot the node had — it answered no tracker read,
-// no page write and no git fetch's code.resolve until a batch ended; a reader
+// then for its batch, for as long as its asker's whole attempt — and a
+// compaction's waits in the same queue. Every other operation is a read or a
+// write done now. On one registration, sixty-four queued pushes held every
+// slot the node had — it answered no tracker read, no page write and no git
+// fetch's code.resolve until a batch ended; a reader
 // gave up after [ReadAttempt] and marked it suspect for every domain; and an
 // election stalling the code log stalled every committer with sixty-four
 // pushes in flight, spreading the suspicion across the fleet — while the
@@ -63,7 +64,8 @@ const (
 	// [Subject].
 	laneShared lane = ""
 
-	// laneProposals answers push proposals alone, on [ProposalSubject].
+	// laneProposals answers proposals alone — a push's and a compaction's —
+	// on [ProposalSubject].
 	laneProposals lane = "proposals"
 
 	// laneGitReads answers a repository's git reads alone ([GitCopy]) — on

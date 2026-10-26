@@ -186,6 +186,19 @@ func (r PackRow) Ref() PackRef {
 	}
 }
 
+// Full reports a pack no compaction merges again: its pack section at least
+// [FullPackBytes], or its whole bundle at least [FullBundleBytes].
+//
+// THE ONE PREDICATE, read by every party that judges it — the committer's
+// decide of a compaction, which refuses a full input stale, and the plan a
+// compaction is built from — so a plan and the decide that judges it never
+// disagree about a pack. By its bundle as well as its pack section, because
+// an output of a cut scaled down for a dense roll is full by its bundle with
+// its pack section well short of seven eighths of the nominal cut.
+func (r PackRow) Full() bool {
+	return r.Ref().PackBytes() >= FullPackBytes || r.Size >= FullBundleBytes
+}
+
 // RefRow is one ref, or — in a delta — a tombstone (an empty OID).
 type RefRow struct {
 	Ref      string            `json:"ref"`
@@ -356,11 +369,17 @@ const (
 	// node's index of which push introduced each commit reads them: the
 	// engine's own read, which no principal makes.
 	ReadIntroduced ReadKind = "introduced"
+	// ReadCompactionDue is the repositories holding at least
+	// [ReadQuery.MinPacks] live packs, MOST FIRST, each with the version
+	// its row was read at: the listing a git node's compactor polls for
+	// the repositories a compaction may be due in — the engine's own read,
+	// which no principal makes, as `introduced` is.
+	ReadCompactionDue ReadKind = "compaction_due"
 )
 
 // ReadKinds is the closed set.
 func ReadKinds() []ReadKind {
-	return []ReadKind{ReadRepos, ReadRepo, ReadPushes, ReadRefs, ReadIntroduced}
+	return []ReadKind{ReadRepos, ReadRepo, ReadPushes, ReadRefs, ReadIntroduced, ReadCompactionDue}
 }
 
 // Valid reports a kind this build knows.
@@ -375,8 +394,9 @@ type ReadQuery struct {
 	// repository the asker may not read, and a read of one answers
 	// [ErrNotPermitted]. Required rather than defaulted, because a default
 	// would be a reader nobody named, and an optional asker is a hole any
-	// caller that forgot it opens. REFUSED on `introduced`, which no
-	// principal makes: an asker there would be judged by nothing.
+	// caller that forgot it opens. REFUSED on `introduced` and on
+	// `compaction_due`, which no principal makes: an asker there would be
+	// judged by nothing.
 	Asker Principal `json:"asker"`
 	// Repo is the repository's NAME, for repo, pushes and refs.
 	Repo string `json:"repo,omitempty"`
@@ -389,23 +409,65 @@ type ReadQuery struct {
 	// Introduced is an `introduced` read's range: REQUIRED for that kind,
 	// refused on every other.
 	Introduced *IntroducedQuery `json:"introduced,omitempty"`
-	Cursor     string           `json:"cursor,omitempty"`
+	// MinPacks is a `compaction_due` read's floor — the repositories
+	// holding at least this many live packs — REQUIRED, at least 1, for that
+	// kind and refused on every other.
+	MinPacks int    `json:"min_packs,omitempty"`
+	Cursor   string `json:"cursor,omitempty"`
 	// Limit is repos 1..500 (0 = 100), pushes 1..200 (0 = 50), refs
-	// 1..1 000 (0 = 200) and introduced 1..MaxSnapshotItems (0 = the most).
+	// 1..1 000 (0 = 200) and introduced 1..MaxSnapshotItems (0 = the most);
+	// a `compaction_due` page is MaxSnapshotItems and names none.
 	Limit int                `json:"limit,omitempty"`
 	Fresh statelog.Freshness `json:"fresh"`
 }
 
 // ReadAnswer is a [ReadQuery]'s answer.
 type ReadAnswer struct {
-	Repos      []RepoSummary      `json:"repos,omitempty"`
-	Repo       *RepoDetail        `json:"repo,omitempty"`
-	Pushes     []PushRow          `json:"pushes,omitempty"`
-	Refs       []RefRow           `json:"refs,omitempty"`
-	Introduced []IntroducedRow    `json:"introduced,omitempty"`
-	Next       string             `json:"next,omitempty"`
-	Position   statelog.Position  `json:"position"`
-	Level      statelog.ReadLevel `json:"level"`
+	Repos      []RepoSummary         `json:"repos,omitempty"`
+	Repo       *RepoDetail           `json:"repo,omitempty"`
+	Pushes     []PushRow             `json:"pushes,omitempty"`
+	Refs       []RefRow              `json:"refs,omitempty"`
+	Introduced []IntroducedRow       `json:"introduced,omitempty"`
+	Due        []CompactionCandidate `json:"due,omitempty"`
+	Next       string                `json:"next,omitempty"`
+	Position   statelog.Position     `json:"position"`
+	Level      statelog.ReadLevel    `json:"level"`
+}
+
+// CompactionCandidate is one repository a `compaction_due` read lists: its id
+// and name, how many live packs it holds, and the version its row was read at
+// — what a compactor keys its memory of a plan found not due by, so a
+// repository whose row has not moved since is not planned again.
+type CompactionCandidate struct {
+	ID        string            `json:"id"`
+	Name      string            `json:"name"`
+	LivePacks int64             `json:"live_packs"`
+	Version   statelog.Position `json:"version"`
+}
+
+// CompactionProposal is what the node that built a compaction asks the
+// repository's committer to decide ([Committer.ProposeCompaction]): the
+// compaction whole. Its CompactionID is the record's operation id and its
+// Seen the publish's session floor, so it carries nothing beside them.
+type CompactionProposal struct {
+	Compaction Compaction `json:"compaction"`
+}
+
+// CompactResult is what became of one compaction.
+type CompactResult struct {
+	// Outcome is applied, pending or unknown for a compaction whose record
+	// was appended, and empty for one refused with none. Applied is answered
+	// only from the output rows the record applied, never from the decision.
+	Outcome statelog.Outcome `json:"outcome,omitempty"`
+	// Refusal is why it was refused with no record — stale, repo_deleted,
+	// upload_expired, pack_too_large, busy, not_applied or unavailable —
+	// and Detail its one sentence.
+	Refusal Refusal `json:"refusal,omitempty"`
+	Detail  string  `json:"detail,omitempty"`
+	// Position is where its record landed — the outputs' rows' own for an
+	// applied one — and, for a not_applied or repo_deleted refusal the log
+	// made after the append, where that record lies applying nowhere.
+	Position statelog.Position `json:"position,omitzero"`
 }
 
 // RepoSummary is a repository as a listing renders it.

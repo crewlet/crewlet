@@ -481,6 +481,51 @@ func BenchmarkApplyARetireSweep(b *testing.B) {
 	}
 }
 
+// BenchmarkApplyACompaction is a compaction record APPLIED AND COMMITTED — the
+// time it holds the replicated estate's one write lane, on every data node —
+// into a repository of its own each iteration, holding MaxPacksPerRepo live
+// packs seeded outside the timer: inputs=8, 64 and MaxCompactInputs, each into
+// as many outputs as a compaction of that many inputs may write (at most
+// MaxCompactOutputs), so every arm is the most rows its input count can touch —
+// compactDecidedRows of them, every input retired and removed and every
+// output written.
+//
+// inputs=1024 is held under a third of statelog.ApplyTxTimeBudget, which a
+// record is checked against only at its boundary: it decides MaxCompactInputs,
+// which is halved until it is (doc.go's measured section).
+func BenchmarkApplyACompaction(b *testing.B) {
+	quiet(b)
+	for _, inputs := range []int{8, 64, MaxCompactInputs} {
+		outputs := min(inputs, MaxCompactOutputs)
+		b.Run(fmt.Sprint("inputs=", inputs), func(b *testing.B) {
+			e := openApplyEstate(b)
+			a := NewApplier()
+			b.ReportAllocs()
+			b.ResetTimer()
+			b.StopTimer()
+			for i := range b.N {
+				repo := fmt.Sprintf("repo-%06d", i)
+				e.apply(create(b, repo, fmt.Sprintf("r%06d", i)))
+				e.seed(repo, 0, 0, MaxPacksPerRepo)
+				retire := make([]string, inputs)
+				for k := range retire {
+					retire[k] = fmt.Sprintf("%s-pack-%06d", repo, k)
+				}
+				cid := statelog.NewOpID(applyClock, "")
+				add := make([]PackRef, outputs)
+				for k := range add {
+					add[k] = outputOf(cid, k, 1, applyClock)
+				}
+				e.applyTimed(b, a, compactOf(b, repo, cid, retire, add...), compactDecidedRows(inputs, outputs))
+				if left := e.num(`SELECT live_packs FROM code_repos WHERE id = ?`, repo); left !=
+					int64(MaxPacksPerRepo-inputs+outputs) {
+					b.Fatalf("the compaction left %d live packs, want %d", left, MaxPacksPerRepo-inputs+outputs)
+				}
+			}
+		})
+	}
+}
+
 // BenchmarkPushHistoryBytes is what ONE PUSH LEAVES ON EVERY DATA NODE'S DISK:
 // the growth of the replicated estate's file over records each landing one
 // push, divided by the pushes. Two rows with two lifetimes, so two arms:

@@ -220,6 +220,7 @@ var sentinels = []sentinel{
 	{"query.ErrNotIndexed", query.ErrNotIndexed},
 
 	{"estate.ErrOutcomeUnknown", ErrOutcomeUnknown},
+	{"estate.ErrNoGitNode", ErrNoGitNode},
 }
 
 // typedKind is one error type whose value crosses the wire.

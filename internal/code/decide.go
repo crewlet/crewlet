@@ -318,14 +318,10 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		// WHICH OF FOUR STATES, because each has its own remedy
 		// ([RepoGone]): a deleted repository comes back when declared again,
 		// one being purged or purged never does.
-		gone := RepoGone{ID: repoID, Name: repo.name, Status: repo.status,
-			DeletedAt: repo.deletedAt, Retention: retention}
-		if !found {
-			if gone.Name, gone.Purged, err = deletionIn(ctx, tx, repoID); err != nil {
-				return nil, nil, 0, err
-			}
+		if detail, err = goneDetail(ctx, tx, repoID, repo, found, retention); err != nil {
+			return nil, nil, 0, err
 		}
-		refused, detail = RefusalRepoDeleted, gone.Detail()
+		refused = RefusalRepoDeleted
 	case repo.status == RepoStatusArchived:
 		refused = RefusalRepoArchived
 		detail = ArchivedDetail(repo.name)
@@ -380,7 +376,8 @@ func refuseEvery(cmds []Command, code Refusal, detail string) []Command {
 	return out
 }
 
-// pushRepo is what the push decide reads of a repository's row.
+// pushRepo is what a decide reads of a repository's row: a push batch's, and a
+// compaction's ([decideCompaction]).
 type pushRepo struct {
 	name      string
 	status    RepoStatus
@@ -392,7 +389,7 @@ type pushRepo struct {
 	deletedAt time.Time
 }
 
-// pushRepoIn reads a repository's row for the push decide.
+// pushRepoIn reads a repository's row for a decide.
 func pushRepoIn(ctx context.Context, tx *sql.Tx, id string) (pushRepo, bool, error) {
 	var r pushRepo
 	var status string
@@ -960,12 +957,10 @@ func (w *working) decide(push int, p Proposal, v *verdicts, limits Limits) []Com
 		c.Result = ResultOK
 	}
 	if p.Pack != nil && slices.ContainsFunc(cmds, isOK) {
-		minted := p.Pack.Object.Minted()
+		detail, expired := uploadExpired(p.Pack.Object, w.now, "run git push again")
 		switch {
-		case w.now.Sub(minted) >= objstore.RecordWithin:
-			refuseOK(cmds, RefusalUploadExpired, fmt.Sprintf("the pack was uploaded at %s, %s or "+
-				"more before this decision; run git push again", minted.UTC().Format(time.RFC3339),
-				objstore.RecordWithin))
+		case expired:
+			refuseOK(cmds, RefusalUploadExpired, detail)
 		case w.bytes+p.Pack.Size > limits.RepoMaxBytes:
 			refuseOK(cmds, RefusalRepoSize, fmt.Sprintf("%s would hold %s of packs, past %s "+
 				"(code.limits.repo_max_bytes)", w.name, gib(w.bytes+p.Pack.Size), gib(limits.RepoMaxBytes)))
@@ -975,6 +970,42 @@ func (w *working) decide(push int, p Proposal, v *verdicts, limits Limits) []Com
 		cmds = Atomic(cmds)
 	}
 	return cmds
+}
+
+// uploadExpired is the one rule a decide holds a stored bundle's key to: a
+// bundle whose key was minted objstore.RecordWithin or more before the
+// decision may no longer be named by a record — a collection may already have
+// judged so old a key unnamed and deleted its bytes, and a row naming it would
+// name bytes that are gone — and the sentence that says so, ending in again,
+// what its asker does next. ONE RULE AND ONE SENTENCE for every decide that
+// names a stored pack (ADR-0008): a push's pack and a compaction's outputs.
+func uploadExpired(object objstore.Key, now time.Time, again string) (string, bool) {
+	minted := object.Minted()
+	if now.Sub(minted) < objstore.RecordWithin {
+		return "", false
+	}
+	return fmt.Sprintf("the pack was uploaded at %s, %s or more before this decision; %s",
+		minted.UTC().Format(time.RFC3339), objstore.RecordWithin, again), true
+}
+
+// goneDetail is the sentence a decide refuses repo_deleted with: [RepoGone]'s,
+// for a repository with no row (repo is then its zero value, and the deletion
+// marker names it, read here) or one deleted or being purged — retention, the
+// deciding epoch's code.deleted_retention_days, names when its purge may
+// begin. ONE READING OF THE FOUR STATES for every decide that refuses one
+// (ADR-0008): a push's and a compaction's.
+func goneDetail(ctx context.Context, tx *sql.Tx, repoID string, repo pushRepo, found bool,
+	retention time.Duration) (string, error) {
+
+	gone := RepoGone{ID: repoID, Name: repo.name, Status: repo.status, DeletedAt: repo.deletedAt,
+		Retention: retention}
+	if !found {
+		var err error
+		if gone.Name, gone.Purged, err = deletionIn(ctx, tx, repoID); err != nil {
+			return "", err
+		}
+	}
+	return gone.Detail(), nil
 }
 
 // apply moves the working state by a push's ok commands, as its record will.

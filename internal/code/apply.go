@@ -433,6 +433,8 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		payloadRepo = p.RepoID
 	case Purge:
 		payloadRepo = p.RepoID
+	case Compaction:
+		payloadRepo = p.RepoID
 	case RetireSweep:
 		payloadRepo = p.RepoID
 	default:
@@ -466,6 +468,8 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		return a.applyRestore(ctx, tx, at, p)
 	case PurgePart:
 		return a.applyPurgePart(ctx, tx, at, p)
+	case Compaction:
+		return a.applyCompact(ctx, tx, at, p)
 	case RetireSweep:
 		return a.applyRetireSweep(ctx, tx, at, p)
 	}

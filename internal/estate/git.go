@@ -193,23 +193,84 @@ func (r *Router) routeGit(ctx context.Context, spec *opSpec, actor *Actor, x exc
 	return nil, &ErrUnserved{Detail: detail, NodeSilent: w.silent, Git: true}
 }
 
-// ownGit is this node's git half for one walk, read ONCE A REQUEST
-// ([LocalGit]): the server and true where this node is a git node whose code
-// host is built, false otherwise — noted on the walk where this node is a git
-// node with none, so a walk nobody served says why its own node ran nothing.
-// A node with no git half is left out of its own order rather than stamped
-// home: it would fill nothing, and the runner-up behind it would be told it
-// may not either.
+// ownGit is this node's git half for one walk ([Router.gitHalf]), noted on the
+// walk where this node is a git node with none, so a walk nobody served says
+// why its own node ran nothing. A node with no git half is left out of its own
+// order rather than stamped home: it would fill nothing, and the runner-up
+// behind it would be told it may not either.
 func (r *Router) ownGit(w *walk) (GitServer, bool) {
+	if r.localGit == nil {
+		return nil, false
+	}
+	g, ok := r.gitHalf()
+	if !ok {
+		w.note("%s: runs no code host", r.self)
+	}
+	return g, ok
+}
+
+// gitHalf is this node's git half, read ONCE A REQUEST ([LocalGit]): the
+// server and true where this node is a git node whose code host is built, and
+// false otherwise.
+func (r *Router) gitHalf() (GitServer, bool) {
 	if r.localGit == nil {
 		return nil, false
 	}
 	g, ok := r.localGit.Git()
 	if !ok || g == nil {
-		w.note("%s: runs no code host", r.self)
 		return nil, false
 	}
 	return g, true
+}
+
+// ErrNoGitNode is a fleet with no live git node, as [Router.Home] answers it:
+// no node serves a repository's git, so it has no home.
+var ErrNoGitNode = errors.New("estate: no live git node")
+
+// Home is a repository's HOME: the git node rendezvous ranks first for it over
+// every live git node — this one among them where its git half is built — WITH
+// NO DEMOTION. It is the first node of the git walk's own order
+// ([Router.keyed], one function for both) before the router's memory reorders
+// it, so on a quiet fleet the node a repository's git reads are asked of first
+// and the node its own git work falls to are one node, and every node computes
+// the same one from the same set.
+//
+// NO DEMOTION, because work that is the home's own is not a read the walk
+// routes around a slow node: a home that went quiet, or declined a read, is
+// still the home, and its work waits for it rather than moving to a node that
+// would then do it too. A presence view that disagrees between two nodes can
+// make each believe it is home — no lease and no epoch decide it (ADR-0059) —
+// so whatever is done as home must be safe done twice: a home's work is
+// decided by the repository's committer, which takes it once.
+//
+// A READ OF WHO SERVES GIT THAT FAILS ANSWERS ITS ERROR — UNKNOWN, never "this
+// node" and never "nobody" — where the git walk asks this node's own half as
+// the one node left: a read of an object id is the same read from any node,
+// and a home's work done by a node that could not tell is work two nodes may
+// do. A fleet that lists no git node answers [ErrNoGitNode].
+func (r *Router) Home(repoID string) (string, error) {
+	nodes, err := r.gitPlacement.Holders()
+	if err != nil {
+		return "", fmt.Errorf("estate: the home of repository %s: read who serves git: %w", repoID, err)
+	}
+	_, own := r.gitHalf()
+	order := r.keyed(repoID, nodes, own)
+	if len(order) == 0 {
+		return "", fmt.Errorf("estate: the home of repository %s: %w", repoID, ErrNoGitNode)
+	}
+	return order[0], nil
+}
+
+// IsHome reports whether this node is repoID's home ([Router.Home]): (true,
+// nil), (false, nil), or (false, err) where who serves git cannot be read —
+// three facts, so a node that cannot tell does none of a home's work rather
+// than guess.
+func (r *Router) IsHome(repoID string) (bool, error) {
+	home, err := r.Home(repoID)
+	if err != nil {
+		return false, err
+	}
+	return home == r.self, nil
 }
 
 // runLocalGit runs one git operation in-process on this node's own git half,

@@ -1,0 +1,33 @@
+-- A repository is listed by its live packs.
+--
+-- Every push stores one pack, so a busy repository's pack count grows with its
+-- pushes until something merges them: a compaction, which a git node builds for
+-- the repositories it is home for and the repository's committer decides
+-- (internal/code's Compaction). The node finds those repositories by polling
+-- the code host's `compaction_due` read — every active or archived repository
+-- holding at least code.CompactMinMerge live packs, MOST LIVE PACKS FIRST, so a
+-- repository near code.MaxPacksPerRepo, whose pushes are about to be refused,
+-- never waits behind a thousand barely due — once a minute, on every git node.
+-- Without this index that listing reads every repository the company declares
+-- and sorts the ones it keeps, on whichever data node answers it, for every
+-- git node, every minute; with it, the listing is one walk from the index's top
+-- that stops at the first repository below the floor.
+--
+-- PARTIAL, ON THE PREDICATE THE LISTING REPEATS VERBATIM (status IN ('active',
+-- 'archived')): a deleted or purging repository is nobody's to compact, and the
+-- listing never pays for it.
+--
+-- (live_packs, id), walked backwards: the listing's order is most live packs
+-- first and then by id, its cursor the last row's pair, and a backward walk of
+-- an ascending index serves it with no sort (internal/code's plan test holds the
+-- listing's two statements to that seek and to no sort).
+--
+-- What it costs is the push apply's: every record that moves a repository's
+-- live_packs — every push carrying a pack, every compaction, every purge part —
+-- rewrites the repository's one entry here, in the row update it already makes.
+-- That is one entry a record, never one a pack. A listing by what changed since
+-- the last poll would need an index on code_repos.version instead, which every
+-- record about a repository rewrites, settings and sweeps included.
+--
+-- Class: code_repos is unchanged; an index carries no rows of its own.
+CREATE INDEX code_repos_packs_idx ON code_repos (live_packs, id) WHERE status IN ('active', 'archived');    -- the compactor's due listing (Reader.Read compaction_due): most live packs first

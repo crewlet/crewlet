@@ -76,4 +76,8 @@ const (
 	// code_changes_target_idx are partial on: a change in a [ChangeState.Live]
 	// state, spelled in [ChangeStates]' order.
 	liveChanges = `state IN ('draft', 'open')`
+	// retiredKey is code_packs_retired's PRIMARY KEY index, (repo_id,
+	// pack_id, part), which shares its leading column with
+	// code_packs_retired_repo_idx as packsKey does with code_packs_added_idx.
+	retiredKey = "sqlite_autoindex_code_packs_retired_1"
 )

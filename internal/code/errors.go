@@ -46,16 +46,19 @@ var (
 	// wrapped with the field and the reason.
 	ErrInvalid = errors.New("code: refused")
 
-	// ErrInvalidProposal is a push proposal this domain cannot decide,
-	// wrapped with the field and the reason ([Proposal.Validate]), or one
-	// whose push id names a push to another repository. At a committer it is
-	// never a refusal of the push — the receiver formed the proposal, and
-	// held the client's commands (every one receive-pack acts on, read as it
-	// reads them) to [Proposal.ValidateCommands] before any work, so it is
-	// the receiver's bug. From ValidateCommands itself it is
-	// the CLIENT'S push, past what one push may carry, which the receiver
-	// refuses in the client's words.
-	ErrInvalidProposal = errors.New("code: not a push this domain can decide")
+	// ErrInvalidProposal is a proposal this domain cannot decide — a push's
+	// or a compaction's — wrapped with the field and the reason
+	// ([Proposal.Validate], [CompactionProposal.Validate]), or a push whose
+	// push id names a push to another repository, or a compaction whose
+	// outputs hold more objects than the packs it replaces. At a committer it
+	// is never a refusal of the push or the compaction — the node that formed
+	// the proposal is the one at fault: the receiver held the client's
+	// commands (every one receive-pack acts on, read as it reads them) to
+	// [Proposal.ValidateCommands] before any work, and a compaction is built
+	// by the engine alone. From ValidateCommands itself it is the CLIENT'S
+	// push, past what one push may carry, which the receiver refuses in the
+	// client's words.
+	ErrInvalidProposal = errors.New("code: not a proposal this domain can decide")
 
 	// ErrNotServing is a node's code half that RAN NOTHING: a committer that
 	// decided nothing for this proposal and appended nothing — it is
