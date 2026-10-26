@@ -38,6 +38,7 @@ import {
   Callout,
   CopyButton,
   DeepWorkCard,
+  DiffView,
   EntityList,
   OpenInAppCard,
   PropertyList,
@@ -55,6 +56,8 @@ import {
   type RunState,
   type StepListStep,
   type StepState,
+  collapseDiff,
+  diffLines,
 } from "@crewlethq/ui";
 import { ArrowUpRightGlyph, LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
 import {
@@ -538,12 +541,32 @@ export function changeRowsOf(proposal: AssistantProposalCard): ChangeListRow[] {
         return { ...base, kind: "added", to: to.node, isNew: change.new === true, block: to.block };
       case "removed":
         return { ...base, kind: "removed", from: from.node, block: from.block };
-      case "text":
+      case "text": {
+        // A TEXT ACROSS LINES (a page's body) IS DRAWN AS THE DOCUMENT IT IS,
+        // a line diff the way the page's own History draws it: a word diff
+        // ran its headings and bullets into one paragraph and read a line
+        // break as a word removed and added again.
+        const before = change.from ?? "";
+        const after = change.to ?? "";
+        if (before.includes("\n") || after.includes("\n")) {
+          return {
+            ...base,
+            kind: "fact",
+            value: (
+              <DiffView
+                aria-label={change.label}
+                sections={collapseDiff(diffLines(before, after))}
+              />
+            ),
+            block: true,
+          };
+        }
         return {
           ...base,
           kind: "text",
           words: (change.words ?? []).map((w) => ({ op: WORD_OP[w.op], text: w.text })),
         };
+      }
     }
   });
   // THE EXACT REQUEST, which the engine sends to an administrator alone, as
@@ -872,10 +895,18 @@ function EngineLink({ link, on }: { link: { label: string; href: string }; on: C
   );
 }
 
-/** Where an address goes, as a trail of the dashboard's own crumbs. */
-function placeOf(target: InAppTarget): string {
+/** A crumb that is a record's raw id (a UUID), which a person does not read. */
+const RAW_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Where an address goes, as a trail of the dashboard's own crumbs, without a
+ * raw id: "Live › Turns", never "Live › Turns › 01a175e0-6ced-...". The card's
+ * title names the record.
+ */
+export function placeOf(target: InAppTarget): string {
   return crumbsFor(target.path)
     .map((c) => c.label)
+    .filter((label) => !RAW_ID.test(label.trim()))
     .join(" › ");
 }
 

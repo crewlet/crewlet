@@ -12,6 +12,7 @@ import { Router } from "~/app/router.tsx";
 import {
   CardBlock,
   factText,
+  placeOf,
   prepareAgainQuestion,
   ReplyProse,
   runChipOf,
@@ -288,4 +289,15 @@ test("a refusal that is not about access is not drawn as one", () => {
   });
   expect(screen.queryByText(/do not have permission/)).toBeNull();
   expect(screen.getByText(/could not be found/)).toBeTruthy();
+});
+
+// AN OPEN IN APP CARD NAMES THE PLACE WITHOUT A RAW ID: the trail stops at the
+// screen, and the card's title names the record. Mutation: keep every crumb.
+test("an open in app trail carries no raw id", () => {
+  const place = placeOf({
+    path: ["live", "turns", "01a175e0-6ced-770f-b6d7-a746e95556e4"],
+    query: {},
+  });
+  expect(place).not.toMatch(/01a175e0/);
+  expect(place.length).toBeGreaterThan(0);
 });

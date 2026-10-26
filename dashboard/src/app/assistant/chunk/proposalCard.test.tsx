@@ -267,3 +267,38 @@ test("the technical details are drawn when the engine sends them, and only then"
   });
   expect(screen.queryByText(/technical details/)).toBeNull();
 });
+
+// A PAGE'S BODY IS DRAWN AS A LINE DIFF, as the page's History draws it: its
+// headings and bullets stay lines, and an unchanged line ("suffices.") is never
+// shown as removed and added again. Mutation: draw a multi-line text change as
+// a word diff.
+test("a change to a page's body reads as a line diff, like its History", () => {
+  const before = "# Plan\n\nOne owner suffices.\n- Ship it";
+  const after = "# Plan\n\n## TL;DR\n- One owner\n\nOne owner suffices.\n- Ship it";
+  draw({
+    scope: "server",
+    tool: "edit_page",
+    title: "Edit page",
+    changes: [
+      {
+        kind: "text",
+        field: "content",
+        label: "Page",
+        from: before,
+        to: after,
+        words: [
+          { op: "same", text: "# Plan\n\n" },
+          { op: "added", text: "## TL;DR\n- One owner\n\n" },
+          { op: "same", text: "One owner suffices.\n- Ship it" },
+        ],
+      },
+    ],
+  });
+  const diff = screen.getByRole("group", { name: "Page" });
+  const removed = diff.querySelectorAll(".crewlet-diff-view__line--remove");
+  const added = [...diff.querySelectorAll(".crewlet-diff-view__line--add")].map(
+    (line) => line.querySelector(".crewlet-diff-view__text")?.textContent,
+  );
+  expect(removed).toHaveLength(0);
+  expect(added.map((text) => text?.trim())).toEqual(["## TL;DR", "- One owner", ""]);
+});
