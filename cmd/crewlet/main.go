@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
@@ -888,6 +889,11 @@ func validateBoth(cfg configFlags, asJSON bool, stdout io.Writer) error {
 	// for a document with no warnings at all: the payload promises both
 	// lists are arrays, and `append(nil)` of nothing stays nil.
 	res.Warnings = slices.Insert(res.Warnings, 0, engine.BootstrapWarnings(boot)...)
+	// AND WHAT ONLY THE TWO TOGETHER SAY: a Tier A bind no container box on
+	// this host can reach, for a company that runs code work in one. Judged
+	// for the host validating, which is the host a single-node install runs.
+	res.Warnings = append(res.Warnings,
+		engine.ContainerReachWarnings(boot, company.Company, runtime.GOOS)...)
 	res.Summary = map[string]any{
 		"company": company.Name, "seats": len(company.epoch.Seats()),
 		"llm_providers": len(company.epoch.Models.Keys()),

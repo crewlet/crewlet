@@ -88,7 +88,7 @@ func rehost(raw, alias string) string {
 		return raw
 	}
 	u, err := url.Parse(raw)
-	if err != nil || u.Scheme == "" || u.Host == "" || !isLoopbackHost(u.Hostname()) {
+	if err != nil || u.Scheme == "" || u.Host == "" || !LoopbackHost(u.Hostname()) {
 		return raw
 	}
 	if port := u.Port(); port != "" {
@@ -99,10 +99,11 @@ func rehost(raw, alias string) string {
 	return u.String()
 }
 
-// isLoopbackHost reports whether host names this machine's loopback
-// interface: `localhost` or a name under it (RFC 6761 reserves both for
-// loopback, in any case), or a loopback address in either family.
-func isLoopbackHost(host string) bool {
+// LoopbackHost reports whether host names this machine's loopback interface
+// alone: `localhost` or a name under it (RFC 6761 reserves both for loopback,
+// in any case), or a loopback address in either family, bracketed or not.
+func LoopbackHost(host string) bool {
+	host = strings.Trim(host, "[]")
 	const suffix = ".localhost"
 	if strings.EqualFold(host, "localhost") ||
 		(len(host) > len(suffix) && strings.EqualFold(host[len(host)-len(suffix):], suffix)) {
