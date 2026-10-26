@@ -146,7 +146,10 @@ func TestACoordinationReadIsNeverAnsweredByAMemberThatIsBehind(t *testing.T) {
 		case !found:
 			return nil
 		}
-		removed, err := near.DeleteSandboxRun(ctx, turn, rec.Version)
+		_, removed, err := near.MutateSandboxRun(ctx, turn,
+			func(current coord.Record) (coord.SandboxRunChange, error) {
+				return coord.SandboxRunChange{Delete: current.Version == rec.Version}, nil
+			})
 		if err == nil && !removed {
 			err = errors.New("the delete lost its race")
 		}

@@ -1011,10 +1011,10 @@ func (c *Coordinator) OnStarted(ctx context.Context, ev types.SandboxRunStarted)
 // from the seat's count and lift the hold the launch just took — a seat freed
 // beside a job that is starting. So a recount during which this node moved the
 // seat ([Coordinator.adjust]) is read again, and one that cannot settle within
-// [casRetries] reads leaves the counts alone, which is the same answer a
+// [seatRecountRounds] reads leaves the counts alone, which is the same answer a
 // listing that failed gets.
 func (c *Coordinator) syncSeat(ctx context.Context, handle string) {
-	for range casRetries {
+	for range seatRecountRounds {
 		c.mu.Lock()
 		moved := c.moves[handle]
 		c.mu.Unlock()
@@ -1048,6 +1048,22 @@ func (c *Coordinator) syncSeat(ctx context.Context, handle string) {
 		"detail", "the seat's runs kept moving under the recount, so the counts this node "+
 			"already kept stand")
 }
+
+// seatRecountRounds bounds [Coordinator.syncSeat]'s listings.
+//
+// A recount is read again only when THIS NODE moved the seat while the listing
+// ran, so what it races is the seat's own transitions here, and they come in
+// bursts no longer than an answered question's: the answer recorded, the run
+// claimed for its resume, the claim given back to the resuming turn, and that
+// turn's next launch — four moves, each one store write after the last, which
+// is the pace of a listing. Eight rounds is that burst twice over, so a
+// recount that starts at a burst's head still settles after it. Not every
+// transition triggers a recount of its own (a park and a recorded answer only
+// move the counts), so a recount that gives up leaves counts a later recount
+// may be a while correcting — which is why the bound is a burst twice over
+// rather than one. And it stays a bound, half of the sixteen it replaced,
+// because every round is a listing of every run the fleet holds.
+const seatRecountRounds = 8
 
 // OnCompleted claims the run, collects, accounts, then resumes the loop.
 func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunCompleted, trigger *events.Event) error {
@@ -1956,7 +1972,7 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.SandboxAnswe
 		return AnswerNotMine, fmt.Errorf("sandbox: the answer to run %s arrived with no event to "+
 			"record it under", given.TurnID)
 	}
-	for range casRetries {
+	for range answerRecordRounds {
 		run, found, err := c.pending.Get(ctx, given.TurnID)
 		if err != nil {
 			// A STORE THAT COULD NOT BE READ IS NOT A RUN THAT IS GONE.
@@ -2048,6 +2064,19 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.SandboxAnswe
 	return AnswerDeferred, fmt.Errorf("sandbox: run %s kept changing under the answer it was given",
 		given.TurnID)
 }
+
+// answerRecordRounds bounds [Coordinator.AnswerByTurn]'s record loop.
+//
+// A round repeats only when the record was REFUSED: the run was answered
+// another way, or moved on, between the read and the record — a lost race on
+// the row itself is the store's to retry and never reaches here. The read
+// after a refusal lands on the branch that explains it and returns, so one
+// round past the first covers it, and a third covers a question answered and
+// let go of again in between, back to waiting on the same launch. Past that
+// the answer is handed back (AnswerDeferred), and the queue's own backoff
+// spaces the next attempt — the pacing a run that keeps refusing should get,
+// rather than reads back to back.
+const answerRecordRounds = 3
 
 // errRunMovedOn is a resume's report that the run it would have ended moved on
 // to somebody else first — a newer lease owns it, or it was ended by another
@@ -3161,7 +3190,7 @@ var errAskAway = errors.New("sandbox: the run's box is read on another node's ho
 func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk bool) error {
 	var handed []string
 	reclaimed, announced, closed := false, false, false
-	for range casRetries {
+	for range endingRounds {
 		if run.answerOwed() {
 			owing, err := c.letGoAnswer(ctx, run)
 			if err != nil {
@@ -3238,6 +3267,20 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 		run.TurnID)
 }
 
+// endingRounds bounds [Coordinator.finishEnding]'s rounds.
+//
+// A round repeats only when the delete is refused for a reply the row still
+// owes the seat — copies, or an answer, that another attempt at the same ending
+// left on it after this round read it — and a decided ending takes no new
+// answer (the store refuses every live write to it, [ErrRunEnding]), so what a
+// refusal can name is one of a finite set: an answer to let go of, an earlier
+// decline's copies, the let-go's own copies. Four rounds is one for each and
+// one for the delete. A round that finds the very copies it already handed
+// back stops sooner (the same-copies guard below), so the bound is reached only
+// by another node finishing the same ending in step with this one, and the
+// ending is then kept for this node's retry.
+const endingRounds = 4
+
 // keepEnding keeps an ending that could not be finished for this node's retry
 // ([Coordinator.oweEnding]) and returns cause as the kept ending's error.
 func (c *Coordinator) keepEnding(ctx context.Context, run PendingRun, e ending, cause error) error {
@@ -3274,7 +3317,7 @@ func (c *Coordinator) letGoAnswer(ctx context.Context, run PendingRun) (PendingR
 	c.spend(ctx, run.AgentHandle, answer)
 	letGo := LetGo{Ending: run.Ending.ID, Answer: answer.EventIDs, HandBack: handBackOf(answer)}
 	var handed []string
-	for range casRetries {
+	for range letGoRounds {
 		owing, won, err := c.pending.OweHandBack(ctx, run.TurnID, letGo)
 		switch {
 		case err == nil && won:
@@ -3300,6 +3343,16 @@ func (c *Coordinator) letGoAnswer(ctx context.Context, run PendingRun) (PendingR
 	return PendingRun{}, fmt.Errorf("sandbox: letting go of run %s's answer: it kept owing its seat "+
 		"an earlier reply", run.TurnID)
 }
+
+// letGoRounds bounds [Coordinator.letGoAnswer]'s rounds.
+//
+// A round repeats only to hand back the copies an earlier decline still owes
+// before the let-go can be recorded, and a row owes one decline's worth at a
+// time ([PendingRun.HandBack]) while a decided ending takes no new decline: so
+// the second round records the let-go, or finds that another attempt at the
+// same ending already did, and a third is one round's margin. A clear that does
+// not land is stopped sooner, by the same-copies guard below.
+const letGoRounds = 3
 
 // handBackIDs are the ids of what a row owes the seat, in order.
 func handBackIDs(owed []HandedBack) []string {

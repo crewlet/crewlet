@@ -42,10 +42,26 @@ import (
 // run's own fields — the at-most-once tail claim on the status, the epoch
 // fence on a write, the pause expiry on "is it still parked". Within one
 // process a mutex made those atomic; across a fleet the condition has to be
-// re-evaluated against what the store actually holds, so each is a
-// read-decide-write under the record's version, retried on a lost race. A
-// caller that loses re-reads, which is what makes the SECOND writer see the
-// first one's decision instead of overwriting it.
+// re-evaluated against what the store actually holds, so each is a DECISION
+// handed to the store's read-decide-write ([coord.SandboxRuns.MutateSandboxRun]),
+// which writes it under the record's version and, on a lost race, asks it
+// again on the record as it then stands. That is what makes the SECOND writer
+// see the first one's decision instead of overwriting it.
+//
+// # A lost race is the store's to retry, for its patience
+//
+// Not a count of attempts made here. A run's record has more writers than a
+// count can be set for: every tool call its box makes over the bridge appends
+// to it — from as many as twenty subagents at once, Claude Code's default —
+// beside its seat's own turns, a peer recovering it, a person's answer and a
+// person's stop, so the sixteen immediate attempts this file once made could
+// report a healthy, busy record as one that "kept changing" and drop the
+// write. The store retries a lost race after a jittered wait for as long as
+// its patience allows (internal/coord/kv's race.go: a lost race measures load,
+// not health), and answers [coord.ErrUnavailable] only once a write has lost
+// for all of it. What the coordinator still loops on here is never a lost race
+// but an OUTCOME — a decision refused, a row gone between two operations — and
+// each such loop carries a bound of its own, with its reason.
 type CoordStore struct {
 	runs coord.SandboxRuns
 	now  func() time.Time
@@ -71,19 +87,18 @@ func (s *CoordStore) clock() time.Time {
 	return time.Now().UTC()
 }
 
-// casRetries bounds one read-decide-write.
+// launchRounds bounds [CoordStore.BeginLaunch]'s create-or-reset loop.
 //
-// A COUNT, unlike the time the fleet store retries its own lost races for
-// (internal/coord/kv's race.go), and for the reason that file gives its own
-// counted loops: what a write here races ends the race of itself. The time
-// bound exists for records whose writers nothing limits — the token counter —
-// while a run's record is written only by its seat's
-// own turns and a peer recovering it, two or three writers at the very worst.
-// Sixteen is that several times over, so exhausting it is a store that is not
-// settling rather than a queue of legitimate writers, and it is reported as an
-// error instead of as a lost race: a caller told "somebody else got there"
-// stops, while a caller told "no answer" retries.
-const casRetries = 16
+// A round repeats only when the row VANISHED between the create that found it
+// and the reset that read it — the turn's previous run finishing in that
+// window — and the next create then wins, unless another launch of the same
+// turn created the row first, which the next reset takes. So an ordinary
+// launch takes one round, a launch that met a finishing run two, and one that
+// also met a racing launch three; a fourth needs the row to vanish again
+// inside the next create-to-reset window, which nothing in this engine does
+// repeatedly — the reasoning internal/coord/kv's createRounds gives its own
+// create loop. Exhausting it is reported as an error, never as a launch.
+const launchRounds = 3
 
 // BeginLaunch opens a launch on this turn's row. See the contract on
 // [PendingStore].
@@ -121,7 +136,7 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	if err != nil {
 		return PendingRun{}, err
 	}
-	for range casRetries {
+	for range launchRounds {
 		created, err := s.runs.CreateSandboxRun(ctx, run.TurnID, raw)
 		if err != nil {
 			return PendingRun{}, fmt.Errorf("sandbox: create run %s: %w", run.TurnID, err)
@@ -976,32 +991,46 @@ func (s *CoordStore) ListActiveForSeatID(ctx context.Context, seat uuid.UUID) ([
 // seat nothing. See the contract on [PendingStore].
 //
 // A read-decide-delete under the record's version, like every flip here, so a
-// write that lands in between — a let-go, a clear — is seen before the delete.
+// write that lands in between — a let-go, a clear — is seen before the delete:
+// the delete is decided again on the row as it then stands.
 func (s *CoordStore) Finish(ctx context.Context, turnID, ending string) (PendingRun, bool, error) {
-	for range casRetries {
-		run, version, found, err := s.read(ctx, turnID)
+	var (
+		run     PendingRun
+		refused error // the decision's own error, returned as it is
+	)
+	_, gone, err := s.runs.MutateSandboxRun(ctx, turnID, func(record coord.Record) (coord.SandboxRunChange, error) {
+		decoded, err := decodeRun(record)
 		if err != nil {
-			return PendingRun{}, false, err
+			refused = err
+			return coord.SandboxRunChange{}, err
 		}
-		if !found || run.Ending == nil || run.Ending.ID != ending {
-			return PendingRun{}, false, nil
+		run = decoded
+		switch {
+		case run.Ending == nil || run.Ending.ID != ending:
+			return coord.SandboxRunChange{}, nil
+		case len(run.HandBack) > 0:
+			refused = fmt.Errorf("sandbox: finish run %s: %w", turnID, ErrHandBackOwed)
+			return coord.SandboxRunChange{}, refused
+		case run.answerOwed():
+			refused = fmt.Errorf("sandbox: finish run %s: %w", turnID, ErrAnswerOwed)
+			return coord.SandboxRunChange{}, refused
 		}
-		if len(run.HandBack) > 0 {
-			return run, false, fmt.Errorf("sandbox: finish run %s: %w", turnID, ErrHandBackOwed)
+		return coord.SandboxRunChange{Delete: true}, nil
+	})
+	switch {
+	case err != nil && refused != nil && errors.Is(err, refused):
+		// THE ROW AS IT STANDS rides an owed refusal, for the ending to
+		// hand back what it still owes and finish again.
+		if errors.Is(err, ErrHandBackOwed) || errors.Is(err, ErrAnswerOwed) {
+			return run, false, err
 		}
-		if run.answerOwed() {
-			return run, false, fmt.Errorf("sandbox: finish run %s: %w", turnID, ErrAnswerOwed)
-		}
-		gone, err := s.runs.DeleteSandboxRun(ctx, turnID, version)
-		if err != nil {
-			return PendingRun{}, false, fmt.Errorf("sandbox: finish run %s: %w", turnID, err)
-		}
-		if gone {
-			return run, true, nil
-		}
+		return PendingRun{}, false, err
+	case err != nil:
+		return PendingRun{}, false, fmt.Errorf("sandbox: finish run %s: %w", turnID, err)
+	case !gone:
+		return PendingRun{}, false, nil
 	}
-	return PendingRun{}, false, fmt.Errorf(
-		"sandbox: finish run %s: the record kept changing under the delete", turnID)
+	return run, true, nil
 }
 
 // read decodes one record and the version it was read at.
@@ -1058,44 +1087,51 @@ func (s *CoordStore) mutateAny(ctx context.Context, turnID string, decide func(*
 
 // write is the read-decide-write itself; live refuses a run whose ending is
 // decided, with [ErrRunEnding].
+//
+// THE STORE RUNS IT ([coord.SandboxRuns.MutateSandboxRun]), and on a lost race
+// it RE-READS AND RE-DECIDES rather than re-writing what was computed: the
+// other writer may have taken the claim, moved the lease, unparked the run or
+// decided its ending, and every condition decide evaluates is evaluated
+// against fields it could have changed. So decide may run more than once, on
+// a fresh copy of the row each time, and what this answers is the last run's.
 func (s *CoordStore) write(ctx context.Context, turnID string, live bool,
 	decide func(*PendingRun) bool,
 ) (PendingRun, bool, error) {
-	for range casRetries {
-		run, version, found, err := s.read(ctx, turnID)
+	var (
+		next    PendingRun
+		refused error // the decision's own error, returned as it is
+	)
+	_, won, err := s.runs.MutateSandboxRun(ctx, turnID, func(record coord.Record) (coord.SandboxRunChange, error) {
+		run, err := decodeRun(record)
 		if err != nil {
-			return PendingRun{}, false, err
-		}
-		if !found {
-			return PendingRun{}, false, nil
+			refused = err
+			return coord.SandboxRunChange{}, err
 		}
 		if live && run.Ending != nil {
-			return PendingRun{}, false, fmt.Errorf("sandbox: run %s: %w", turnID, ErrRunEnding)
+			refused = fmt.Errorf("sandbox: run %s: %w", turnID, ErrRunEnding)
+			return coord.SandboxRunChange{}, refused
 		}
-		next := run
+		next = run
 		if !decide(&next) {
-			return PendingRun{}, false, nil
+			return coord.SandboxRunChange{}, nil
 		}
 		next.UpdatedAt = s.clock()
 		raw, err := encodeRun(next)
 		if err != nil {
-			return PendingRun{}, false, err
+			refused = err
+			return coord.SandboxRunChange{}, err
 		}
-		won, err := s.runs.UpdateSandboxRun(ctx, turnID, raw, version)
-		if err != nil {
-			return PendingRun{}, false, fmt.Errorf("sandbox: update run %s: %w", turnID, err)
-		}
-		if won {
-			return next, true, nil
-		}
-		// Lost the version. RE-READ AND RE-DECIDE rather than re-writing
-		// what we computed: the other writer may have taken the claim,
-		// moved the lease, unparked the run or decided its ending, and
-		// every condition above is evaluated against fields it could have
-		// changed.
+		return coord.SandboxRunChange{Put: raw}, nil
+	})
+	switch {
+	case err != nil && refused != nil && errors.Is(err, refused):
+		return PendingRun{}, false, err
+	case err != nil:
+		return PendingRun{}, false, fmt.Errorf("sandbox: update run %s: %w", turnID, err)
+	case !won:
+		return PendingRun{}, false, nil
 	}
-	return PendingRun{}, false, fmt.Errorf(
-		"sandbox: update run %s: the record kept changing under the write", turnID)
+	return next, true, nil
 }
 
 // list decodes every record and returns the ones that match, oldest first.
