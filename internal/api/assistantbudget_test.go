@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
@@ -37,7 +38,8 @@ func seatRecord(t *testing.T, fx *assistApp, handle string) map[string]any {
 // exactly as Company › Budgets saves it. Carried on an exec grant bound to
 // it, it lands and every other field of the seat reads as before; the read
 // grant cannot send it; and a change prepared against a seat that moved since
-// is refused by the route itself (409 revision_advanced). The company's ceiling is a merge patch of
+// is refused by the route itself (412 version_moved), while one prepared
+// before an unrelated seat changed still lands. The company's ceiling is a merge patch of
 // the document's one window, which lands the same way. Mutation: build the
 // body from the call instead of the seat as read and the seat loses its
 // model; send it without the derived If-Match and the route refuses it.
@@ -90,10 +92,25 @@ func TestAnApprovedCeilingChangeIsBudgetsOwnWrite(t *testing.T) {
 
 	// STALE: prepared before the change above, against the seat as it was.
 	resp, err = fx.disp.Do(t.Context(), fx.derive(t, approvedFor(req, authz.ActionOrgWrite)), req)
-	if err != nil || resp.Status != http.StatusConflict ||
-		exec.RefusalOf(resp).Code != "revision_advanced" {
-		t.Errorf("a change prepared against a moved seat answered %d %s, %v, want 409 "+
-			"revision_advanced", resp.Status, resp.Body, err)
+	if err != nil || resp.Status != http.StatusPreconditionFailed ||
+		exec.RefusalOf(resp).Code != string(httpjson.CodeVersionMoved) {
+		t.Errorf("a change prepared against a moved seat answered %d %s, %v, want 412 %s",
+			resp.Status, resp.Body, err, httpjson.CodeVersionMoved)
+	}
+
+	// AN UNRELATED CHANGE IS NO CONFLICT: a ceiling prepared on the CEO's
+	// seat lands although the CTO's changed after it was read, because the
+	// precondition is the seat it edits.
+	ceo := prepare(map[string]any{"seat": "ceo", "window": "week", "tokens": float64(7000000)})
+	other := prepare(map[string]any{"seat": "cto", "window": "week", "tokens": float64(9000000)})
+	if resp, err := fx.disp.Do(t.Context(), fx.derive(t, approvedFor(other,
+		authz.ActionOrgWrite)), other); err != nil || resp.Status/100 != 2 {
+		t.Fatalf("the CTO's ceiling answered %d %s, %v", resp.Status, resp.Body, err)
+	}
+	if resp, err := fx.disp.Do(t.Context(), fx.derive(t, approvedFor(ceo,
+		authz.ActionOrgWrite)), ceo); err != nil || resp.Status/100 != 2 {
+		t.Errorf("a ceiling prepared before an unrelated seat changed answered %d %s, %v, "+
+			"want it written", resp.Status, resp.Body, err)
 	}
 
 	// THE COMPANY'S CEILING, as a merge patch of the one window.

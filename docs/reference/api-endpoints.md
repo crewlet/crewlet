@@ -2017,7 +2017,7 @@ Four collections, `GET` and `PUT`:
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/config/{kind}/{id}` | One entity, redacted, with an `ETag`. **The body is the entity itself**, so it goes straight back into the `PUT` |
+| `GET` | `/config/{kind}/{id}` | One entity, redacted, with the entity's own `ETag` (a digest of what it serves, not the document's revision). **The body is the entity itself**, so it goes straight back into the `PUT` |
 | `PUT` | `/config/roles/{handle}` | Replace one seat, wherever it lives — root-level or inside a unit, at any depth. Every entity `PUT` takes `?dry_run=true`, see [Dry runs](#dry-runs) |
 | `PUT` | `/config/units/{id}` | Replace one org unit, by its key |
 | `PUT` | `/config/llm-providers/{key}` | Replace one named LLM provider; with `If-None-Match: *`, add one under that key |
@@ -2042,6 +2042,19 @@ invites, because the caller never sees the rest of the document. The
 [seat-holder check](#what-a-write-answers) applies here too: a unit `PUT` that
 drops a human seat somebody holds, or an open invitation holds, is
 `409 seat_held`.
+
+**The precondition is the entity's.** An entity `PUT` takes `If-Match` with
+the `ETag` its `GET` answered (or `*`), judged against the entity as it stands
+in the revision active when the write lands, never against the whole
+document. A revision that moved for another reason (another seat added, a
+ceiling patched, a credential sealed) is no conflict: the write is spliced into
+the revision active then, up to three times while other writes keep landing,
+and `409 revision_advanced` only after that. An entity that itself changed
+since it was read is `412 version_moved`, carrying the entity as it stands
+(`current`) and its `etag`, so the caller can show its change beside what
+replaced it and send it again with that tag. `If-None-Match: *` is the
+create-only write, never beside `If-Match`, and any other `If-None-Match` is
+`400 bad_if_match`.
 
 Four rules follow from that:
 
@@ -2209,7 +2222,7 @@ On a `409`, re-read `/config` and send the edit again.
 - `404 Not Found`: a revision that is not there, `no_active_revision` on a read before the first write, `no_such_entity` on a per-entity read or write naming an id the active revision does not carry (of a seat or a unit, told only to `admin`, and anybody else is refused `403` as for one outside their team), or `no_route` for a path under `/config` this surface does not serve
 - `405 Method Not Allowed`: `method_not_allowed` for a `/config` path under a method it does not take, with `Allow`
 - `409 Conflict`: `revision_advanced` (a stale `If-Match`, or a race with a concurrent writer) or `no_active_revision` (a `PATCH`, a charter write or a per-entity write on an unconfigured node, or a reload)
-- `412 Precondition Failed`: `already_configured` when `If-None-Match: *` meets an active revision, `no_active_revision` when `If-Match` names a revision and none is active, or `version_moved` when a charter write's `If-Match` names a charter that has changed, carrying the charter now as `current` and its `etag`
+- `412 Precondition Failed`: `already_configured` when `If-None-Match: *` meets an active revision, `no_active_revision` when `If-Match` names a revision and none is active, or `version_moved` when a charter write's or a per-entity write's `If-Match` names a charter or an entity that has changed, carrying it now as `current` and its `etag`
 - `428 Precondition Required`: `bad_if_match` for a charter write with no `If-Match`
 - `415 Unsupported Media Type`: `unsupported_patch_media_type` when a `PATCH` body is a patch format other than a JSON Merge Patch, with `Accept-Patch`
 - `503 Service Unavailable`: `draining` when the node has been told to stop, with a `Retry-After` — see [During a drain](#during-a-drain)
