@@ -428,6 +428,19 @@ func (r *Reconciler) publish(p applyProgress) { r.progress.Store(&p) }
 // Applied is the epoch this node is serving, or 0 before its first apply.
 func (r *Reconciler) Applied() int64 { return r.snapshot().applied }
 
+// Attempt is this node's last concluded apply attempt — the epoch, the
+// revision it tried and how that went — and false before this process has
+// concluded one. It is the record its peers read ([Reconciler.record]), told
+// to this node's own readers: an attempt that failed leaves [Reconciler.Applied]
+// where it was, and the applied epoch alone cannot tell a node still applying a
+// revision from one that refused it.
+func (r *Reconciler) Attempt() (coord.NodeApply, bool) {
+	if row := r.recorded.Load(); row != nil {
+		return *row, true
+	}
+	return coord.NodeApply{}, false
+}
+
 // Serving is the id of the revision this node's engine runs, or empty while it
 // runs none. See [Reconciler.served].
 func (r *Reconciler) Serving() string {

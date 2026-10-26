@@ -1401,6 +1401,46 @@ func TestARevisionThisNodeRefusesNeverBecomesWhatItBootsOn(t *testing.T) {
 	}
 }
 
+// THIS NODE'S OWN READERS ARE TOLD WHAT ITS LAST ATTEMPT MADE OF A REVISION.
+//
+// A refusal leaves the applied epoch where it was, so read alone it is a node
+// still applying. The health push carries [engine.Reconciler.Attempt] beside
+// it, so a reader who may not read the fleet — a unit lead following their
+// save — is told this node refused the revision rather than that it is
+// applying it for good. Nothing before the first concluded attempt, which a
+// zero epoch would misstate.
+//
+// Mutation: report the attempt only once one succeeded, and the refusal reads
+// as the earlier success.
+func TestTheLastAttemptSaysARefusalTheAppliedEpochCannot(t *testing.T) {
+	t.Parallel()
+	p := newPlane(t)
+	if attempt, ok := p.recon.Attempt(); ok {
+		t.Fatalf("an attempt %+v before any tick", attempt)
+	}
+	first := p.activate(t.Context(), t, grownCompanyDoc)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	refused := p.activatePayload(t, "broken", brokenRevision)
+	target, _, err := p.fleet.Target(t.Context())
+	if err != nil {
+		t.Fatalf("Target: %v", err)
+	}
+	if err := p.recon.Tick(t.Context()); err == nil {
+		t.Fatal("a revision that cannot be built applied cleanly")
+	}
+	if p.recon.Applied() != first {
+		t.Fatalf("applied = %d after the refusal, want %d", p.recon.Applied(), first)
+	}
+	attempt, ok := p.recon.Attempt()
+	if !ok || attempt.Epoch != refused || attempt.RevisionID != target.RevisionID ||
+		configplane.ApplyStatus(attempt.Status) != configplane.StatusError {
+		t.Errorf("the last attempt is %+v (reported %v), want an error at epoch %d on %s",
+			attempt, ok, refused, target.RevisionID)
+	}
+}
+
 // A NODE SAYS WHAT IT BOOTED ON UNTIL IT APPLIES SOMETHING ELSE.
 //
 // A node that starts on its boot row and then refuses the fleet's revision is
