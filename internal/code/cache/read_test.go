@@ -351,6 +351,73 @@ func TestManyPagesInstallWhatOnePageWould(t *testing.T) {
 	}
 }
 
+// EVERY PAGE THE ESTATE ANSWERS IS TIMED BY WHAT IT SERVED: a full read's
+// every page under `full`, a delta's under `delta` —
+// crewlet.code.cache.read.page.duration is production's reading of the page
+// MaxFullRounds was measured against, so a page it misses is a full read the
+// cap's evidence never sees — and a page the estate refuses is no page
+// served, timed under neither.
+//
+// Mutation: time page 1 alone, and a full read of many pages counts one;
+// time a page by the read it was asked as, and a delta's page counts as full.
+func TestEveryPageTheEstateAnswersIsTimedByWhatItServed(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	tip, _ := w.push(t, repo, "refs/heads/main", nil)
+	refs := map[string]string{}
+	for i := range 20 {
+		refs[fmt.Sprintf("refs/heads/b%02d", i)] = tip
+	}
+	w.log.write(repo, nil, refs)
+	w.log.set(func(f *fakeLog) { f.pageRows = 3 })
+	c := w.open(t)
+	timed := func(kind cache.SyncKind) uint64 {
+		return histogramCount(w.rec, metrics.CodeCacheReadPageDuration, "kind", string(kind))
+	}
+
+	w.sync(t, c, repo).Release()
+	full := uint64(len(w.log.callsOf(repo)))
+	if full < 2 {
+		t.Fatalf("the full read took %d pages, want several to time", full)
+	}
+	if got := timed(cache.SyncFull); got != full {
+		t.Errorf("a full read of %d pages timed %d under full, want every one", full, got)
+	}
+	if got := timed(cache.SyncDelta); got != 0 {
+		t.Errorf("a full read timed %d pages under delta, want none", got)
+	}
+
+	w.push(t, repo, "refs/heads/main", nil)
+	before := len(w.log.callsOf(repo))
+	s, err := c.Sync(t.Context(), repo, linearizable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Release()
+	if s.Kind != cache.SyncDelta {
+		t.Fatalf("the sync after a push was a %s round, want a delta", s.Kind)
+	}
+	delta := uint64(len(w.log.callsOf(repo)) - before)
+	if got := timed(cache.SyncDelta); got != delta {
+		t.Errorf("a delta of %d pages timed %d under delta, want every one", delta, got)
+	}
+	if got := timed(cache.SyncFull); got != full {
+		t.Errorf("a delta moved the full pages timed from %d to %d", full, got)
+	}
+
+	w.push(t, repo, "refs/heads/main", nil)
+	w.log.set(func(f *fakeLog) {
+		f.hook = func(fakeCall) error { return errors.New("the data node did not answer") }
+	})
+	if _, err := c.Sync(t.Context(), repo, linearizable); !errors.Is(err, cache.ErrLogRead) {
+		t.Fatalf("a sync whose page the estate refused: %v, want ErrLogRead", err)
+	}
+	if gotFull, gotDelta := timed(cache.SyncFull), timed(cache.SyncDelta); gotFull != full || gotDelta != delta {
+		t.Errorf("a refused page was timed: %d full and %d delta, want %d and %d", gotFull, gotDelta, full, delta)
+	}
+}
+
 // A TAIL PAGE SERVES THE PACKS ITS REFS NEED: a push that lands between two
 // pages of a full snapshot moves a ref the later page serves, and adds a pack
 // the packs phase has already passed (its id sorts below every other) — the

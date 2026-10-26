@@ -1043,7 +1043,9 @@ syncs dominating is a cache too small to stay warm; a full sync's time counts
 its wait for one of the eight full reads),
 `crewlet.code.cache.full_rounds` by `state` — `waiting` climbing is a node
 bringing up more repositories at once than it reads whole —
-`crewlet.code.cache.rebuilds` by `reason`,
+`crewlet.code.cache.read.page.duration` by `kind` — a `full` page past about
+60 ms is the data node's connections queueing, which its
+`crewlet.store.pool.wait` confirms — `crewlet.code.cache.rebuilds` by `reason`,
 `crewlet.code.cache.rebuild.refusals` by `rule` — rising at all, damage no
 rebuild repairs — `crewlet.code.cache.checks` by `outcome`, `file` and
 `trigger` — any `damaged` is a disk losing data, or something outside the

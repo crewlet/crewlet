@@ -296,7 +296,8 @@ func (c *Cache) readPacks(ctx context.Context, id string, fresh statelog.Freshne
 // readOnce reads every page of one snapshot — a delta asked for its pushes
 // phase where pushes says so, or, packsOnly, a full one's pages up to the
 // first that serves a ref (readPacks) — or answers the first page's failure
-// as it is: the estate's, as ErrLogRead (logRead).
+// as it is: the estate's, as ErrLogRead (logRead). Every page the estate
+// answers is timed (pageAnswered).
 //
 // A FULL READ HOLDS ONE OF THE NODE'S SLOTS (fullRounds, MaxFullRounds) from
 // the page it first knows it is full to its last: its first, asked from
@@ -317,10 +318,12 @@ func (c *Cache) readOnce(ctx context.Context, id string, since statelog.Position
 		}
 		held = true
 	}
+	asked := time.Now()
 	page, err := c.fetch.RepoState(ctx, code.StateQuery{RepoID: id, Since: since, Fresh: fresh, Pushes: pushes})
 	if err != nil {
 		return snapshot{}, logRead(err)
 	}
+	c.pageAnswered(page, time.Since(asked))
 	if packsOnly && !page.Full {
 		return snapshot{}, fmt.Errorf("%w: %s's snapshot from nothing answered a delta", ErrBadSnapshot, id)
 	}
@@ -345,14 +348,34 @@ func (c *Cache) readOnce(ctx context.Context, id string, since statelog.Position
 			held = true
 		}
 		next := code.StateQuery{RepoID: id, Fresh: fresh, Cursor: page.Next}
+		asked = time.Now()
 		if page, err = c.fetch.RepoState(ctx, next); err != nil {
 			return snapshot{}, logRead(err)
 		}
+		c.pageAnswered(page, time.Since(asked))
 	}
 	if snap.full {
 		slices.SortFunc(snap.refs, func(a, b code.RefRow) int { return strings.Compare(a.Ref, b.Ref) })
 	}
 	return snap, nil
+}
+
+// pageAnswered records how long one page of a snapshot took the estate to
+// answer, from the ask to the answer — the data node's lane, its reader and
+// its scan, and the crossing; on a node that holds the data, its own store's
+// — by what the page served, a whole repository's or what moved since a
+// position: crewlet.code.cache.read.page.duration, production's reading of
+// the page MaxFullRounds was measured against. A page refused is no page
+// served, and is counted nowhere here.
+func (c *Cache) pageAnswered(page code.RepoSnapshot, took time.Duration) {
+	if c.metrics == nil {
+		return
+	}
+	kind := SyncDelta
+	if page.Full {
+		kind = SyncFull
+	}
+	c.metrics.Observe(metrics.CodeCacheReadPageDuration, took, metrics.Attrs{"kind": string(kind)})
 }
 
 // add validates page n of the snapshot and takes its rows in. seen is each

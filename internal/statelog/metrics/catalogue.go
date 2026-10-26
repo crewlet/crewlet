@@ -1187,6 +1187,26 @@ func Catalogue() []Instrument {
 				"own request's time, and they come up eight reads at a time.",
 		},
 		{
+			Name: CodeCacheReadPageDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"kind"},
+			Shows: "How long one page of a repository's rows took the estate " +
+				"to answer this node's cache, by `kind` (`full`: a page of a " +
+				"whole repository's rows — a full sync's, a check's or a " +
+				"hint's; `delta`: a page of what moved since the cache's " +
+				"position), from the ask to the answer: the data node's lane " +
+				"and reader connection, its scan of the page and the crossing " +
+				"— or, on a node that holds the data, its own store's. A full " +
+				"page of refs, ten thousand of them, takes about 60 ms to " +
+				"scan, and a repository of a few hundred refs is one page of " +
+				"a few milliseconds: a `full` p95 far under 60 ms is full " +
+				"reads holding the node's eight slots " +
+				"(`crewlet.code.cache.full_rounds`) briefly, and one climbing " +
+				"past it is a data node whose readers queue — " +
+				"`crewlet.store.pool.wait` there says so. It is production's " +
+				"reading of the page the node's eight full reads at once " +
+				"were measured against.",
+		},
+		{
 			Name: CodeGitWait, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"class"},
 			Shows: "How long a git process waited for a slot on this node, by " +

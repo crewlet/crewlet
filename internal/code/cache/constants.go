@@ -181,7 +181,9 @@ const MaxSnapshotRestarts = 3
 // repositories a node, which the node's downloads outlast once its
 // repositories hold three packs each (S3 gives a node 150 to 290 small
 // bundles a second, NodeFetches). Production's page times, which the model's
-// 60 ms stands in for, are what can move it.
+// 60 ms stands in for, are what can move it, and every git node reads them:
+// crewlet.code.cache.read.page.duration, a page's whole round trip, the data
+// node's lane included.
 const MaxFullRounds = queue.ConcurrentAnswers / 8
 
 // MidxPacks is how many packs gathered beside the maintainer's index make the
