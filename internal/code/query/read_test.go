@@ -453,6 +453,22 @@ func TestANodeThatHoldsNoCopyFillsOnlyAsHome(t *testing.T) {
 		q.Home = false
 		return q
 	}
+	// served asks q again for as long as the node answers it syncing, as an
+	// asker told a node is syncing asks again, and returns the first other
+	// answer. Each read waits the server's 50 ms on the round it joins, and on
+	// a loaded runner a round (a download and git's own work) takes longer,
+	// so a step that wants the copy served awaits it rather than racing that
+	// wait. The 30 s is a hang detector, which no passing run comes near.
+	served := func(q code.GitQuery) (code.GitAnswer, error) {
+		deadline := time.Now().Add(30 * time.Second)
+		for {
+			a, err := s.Read(t.Context(), q)
+			if !unready(err, code.UnreadySyncing) || time.Now().After(deadline) {
+				return a, err
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
 
 	objects.shut()
 	_, err := s.Read(t.Context(), away(treeQ(repo, code.TreeQuery{Rev: head})))
@@ -476,15 +492,7 @@ func TestANodeThatHoldsNoCopyFillsOnlyAsHome(t *testing.T) {
 		t.Error("asked as home, the node holds no copy and is filling none")
 	}
 	objects.open()
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		_, err = s.Read(t.Context(), away(treeQ(repo, code.TreeQuery{Rev: head})))
-		if err == nil || time.Now().After(deadline) {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if err != nil {
+	if _, err := served(away(treeQ(repo, code.TreeQuery{Rev: head}))); err != nil {
 		t.Fatalf("a read not stamped home of the copy the home's read filled = %v, want it served", err)
 	}
 
@@ -495,7 +503,11 @@ func TestANodeThatHoldsNoCopyFillsOnlyAsHome(t *testing.T) {
 	}
 	q := away(treeQ(repo, code.TreeQuery{Rev: second}))
 	q.Fresh = statelog.Freshness{Level: statelog.ReadSession, MinPosition: rows.Position}
-	if a := mustRead(t, s, q); a.Rev != second {
+	a, err := served(q)
+	if err != nil {
+		t.Fatalf("a held copy behind the asker's floor, asked not as home = %v, want it served", err)
+	}
+	if a.Rev != second {
 		t.Errorf("a held copy behind the asker's floor, asked not as home, answered %s, want %s", a.Rev, second)
 	}
 }
