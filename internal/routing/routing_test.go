@@ -75,33 +75,6 @@ func TestTheFirstReasonThatNamesAHandleWins(t *testing.T) {
 	}
 }
 
-// A NOTICE ABOUT ANOTHER SUBJECT STANDS OUTSIDE THE RULE, both ways.
-//
-// The rule is about what one person is told about THIS record. A commit that
-// finishes ana's task and makes her other task workable tells her both, and
-// the second is not deduped away under the first; nor does it claim bo, who
-// still hears that he is watching. Each notice names the subject it is about,
-// which is how a reader tells the two of ana's apart.
-func TestANoticeAboutAnotherSubjectStandsOutsideTheRule(t *testing.T) {
-	t.Parallel()
-	var b routing.Builder[reason]
-	b.Add("ana", assigned, true)
-	b.About("t-2", "ana", unblocked, false)
-	b.About("t-3", "bo", unblocked, false)
-	b.About("t-4", "", unblocked, false)
-	b.Add("bo", watching, false)
-
-	want := []routing.Candidate[reason]{
-		{Handle: "ana", Reason: assigned, Addressed: true},
-		{Handle: "ana", Reason: unblocked, Subject: "t-2"},
-		{Handle: "bo", Reason: unblocked, Subject: "t-3"},
-		{Handle: "bo", Reason: watching},
-	}
-	if got := b.Candidates(); !slices.Equal(got, want) {
-		t.Fatalf("the builder kept %+v, want %+v", got, want)
-	}
-}
-
 // A FALLBACK REACHES ONLY WHEN NOBODY ORDINARY SURVIVES, and then only the
 // lowest-ranked one that does.
 //
@@ -262,34 +235,40 @@ func TestAFallbacksRankIsItsPlaceInTheChain(t *testing.T) {
 // Telling somebody what they just did is a round a model spends on nothing,
 // and a notice in a person's own inbox about their own write — so the actor is
 // dropped under every reason but those their domain says are news to them, and
-// under every reason when it names none. The predicate is ONE function,
+// under every reason when it names none. Such a reason rides a record of its
+// own, as the tracker's unblocked repair does — a commit on the task that
+// became workable, naming its assignee and nobody else — and that record is
+// the one built here. The predicate is ONE function,
 // [routing.Candidate.Hears], because an applier writing notice rows takes this
 // step with no roster and the wake takes it with one: two copies would be two
 // answers for one record.
 func TestTheActorHearsOnlyUnderAReasonThatWakesThem(t *testing.T) {
 	t.Parallel()
-	var b routing.Builder[reason]
-	b.Add("ana", assigned, true)
-	b.About("t-2", "ana", unblocked, false)
-	b.Add("bo", watching, false)
-	cands := b.Candidates()
-
-	want := []routing.Candidate[reason]{
-		{Handle: "ana", Reason: unblocked, Subject: "t-2"},
-		{Handle: "bo", Reason: watching},
+	var own routing.Builder[reason]
+	own.Add("ana", assigned, true)
+	own.Add("bo", watching, false)
+	if got := handlesOf(routing.Route(own.Candidates(), everyone, "ana", newsToTheActor)); !slices.Equal(got, []string{"bo"}) {
+		t.Fatalf("ana's own change woke %v, want bo alone — she is told "+
+			"nothing she just did", got)
 	}
-	if got := routing.Route(cands, everyone, "ana", newsToTheActor); !slices.Equal(got, want) {
-		t.Fatalf("ana's own change woke %+v, want %+v — the actor hears only "+
-			"the notice that is news to them", got, want)
+
+	// THE REPAIR'S RECORD REACHES ANA THOUGH SHE WROTE IT: that a task of
+	// hers became workable is news whoever writes it down.
+	var repair routing.Builder[reason]
+	repair.Add("ana", unblocked, false)
+	want := []routing.Candidate[reason]{{Handle: "ana", Reason: unblocked}}
+	if got := routing.Route(repair.Candidates(), everyone, "ana", newsToTheActor); !slices.Equal(got, want) {
+		t.Fatalf("ana's own unblocked record woke %+v, want %+v — the actor "+
+			"hears the notice that is news to them", got, want)
 	}
 
 	// A DOMAIN THAT NAMES NO SUCH REASON wakes its actor under none.
-	if got := handlesOf(routing.Route(cands, everyone, "ana", nil)); !slices.Equal(got, []string{"bo"}) {
-		t.Fatalf("with no reason waking the actor, ana's own change woke %v", got)
+	if got := routing.Route(repair.Candidates(), everyone, "ana", nil); len(got) != 0 {
+		t.Fatalf("with no reason waking the actor, ana's own record woke %+v", got)
 	}
 
 	// AND THE APPLIER'S STEP IS THE SAME PREDICATE, asked with no roster.
-	for _, c := range cands {
+	for _, c := range slices.Concat(own.Candidates(), repair.Candidates()) {
 		wanted := c.Handle != "ana" || c.Reason == unblocked
 		if got := c.Hears("ana", newsToTheActor); got != wanted {
 			t.Errorf("%s under %q hears ana's change = %v, want %v", c.Handle,

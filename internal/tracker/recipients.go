@@ -119,10 +119,14 @@ func (r Reason) Addressed() bool { return slices.Contains(addressedReasons, r) }
 // WakesActor reports the one reason that reaches the person who made the
 // change.
 //
-// An unblocked notice is about somebody ELSE's task becoming workable, so the
-// actor closing their own blocker is exactly who needs to hear it. Every other
-// reason is dropped for the actor, because telling somebody what they just did
-// is noise a model spends a round on.
+// That a task of yours became workable is news whoever wrote the record that
+// says so: the notice is about the task, not about anything its writer did.
+// Its one writer today is the unblocked repair ([Writer.TellUnblocked]),
+// which the engine runs as its node, so the notice never meets its own
+// author; the rule is the reason's, and it keeps the notice reaching its
+// person through any writer that tells them, the person themself included.
+// Every other reason is dropped for the actor, because telling somebody what
+// they just did is noise a model spends a round on.
 func (r Reason) WakesActor() bool { return r == ReasonUnblocked }
 
 // Candidates is every handle a change concerns, in precedence order.
@@ -196,18 +200,19 @@ func Candidates(n *Notify, batched bool) []routing.Candidate[Reason] {
 	if n.Kind == ChangeComment {
 		addAll(n.Snapshot.ThreadParticipants, ReasonThread, false)
 	}
-	// THE UNBLOCKED NOTICES ARE NOT DEDUPED AGAINST THE REST, because they
-	// are about OTHER tasks: one commit legitimately tells one person both
-	// "your task is done" and "this other one is now workable", and the
-	// second is the only wake that reaches the person who made the change.
-	// Each names the task it is about, which is what makes it survive: the
-	// person who closed ENG-1 and owns the ENG-2 it unblocked would otherwise
-	// be deduped under `assignee` for ENG-1 and dropped as the actor, and
-	// would never learn that ENG-2 became workable — which is the entire
-	// feature. And it is never ADDRESSED: a turn that cannot start yet would
-	// otherwise be forced to post something on every unblock.
+	// THE UNBLOCKED NOTICE TAKES ITS PLACE LIKE ANY OTHER REASON, because its
+	// record is one of its own: [Writer.TellUnblocked] — the repair, and the
+	// only writer of `Snapshot.Unblocked` — publishes a relations commit on
+	// the DEPENDENT naming its assignee and nobody else, so no earlier arm
+	// can claim the handle first. A notice about another task on a record
+	// about this one would be a second notice to one person on one record,
+	// which neither the notice row (keyed on record and recipient) nor the
+	// wake (whose id is derived from the two) can carry — the second collapses
+	// into the first — so it is never written that way. And it is never
+	// ADDRESSED: a turn that cannot start yet would otherwise be forced to
+	// post something on every unblock.
 	for _, party := range n.Snapshot.Unblocked {
-		b.About(party.Task, party.Assignee, ReasonUnblocked, false)
+		add(party.Assignee, ReasonUnblocked, false)
 	}
 	if n.Kind == ChangeRouted {
 		add(n.Snapshot.RoutedTo, ReasonRoutedTo, false)

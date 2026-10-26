@@ -513,7 +513,11 @@ func reasonAlone(reason tracker.Reason) *tracker.Notify {
 		n.Snapshot.ThreadParticipants = []string{"t"}
 		return n
 	case tracker.ReasonUnblocked:
-		n := base(tracker.ChangeStatus)
+		// THE REPAIR'S OWN SHAPE ([tracker.Writer.TellUnblocked], the one
+		// writer of the field): a late relations commit naming the
+		// dependent and its assignee alone.
+		n := base(tracker.ChangeRelations)
+		n.Late = true
 		n.Snapshot.Unblocked = []tracker.TaskParty{{Task: "o", Assignee: "n"}}
 		return n
 	case tracker.ReasonRoutedTo:

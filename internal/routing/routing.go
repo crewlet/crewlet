@@ -41,10 +41,16 @@
 // A reordered arm and a reordered list then both fail. A list held only by a
 // comment saying it matches drifts, and nothing fails.
 //
-// One offer stands outside the rule: a notice about ANOTHER subject than the
-// record's own ([Builder.About]). The add-once rule is about one subject —
-// what a person is told about THIS change — so a commit that finishes your
-// task and thereby makes another of yours workable tells you both.
+// EVERY OFFER IS HELD TO THE RULE, a notice about another subject than the
+// record's own included, because a record reaches one handle ONCE in both
+// places that keep what it reached: a domain's notice row is keyed on the
+// record and the recipient, and a wake's id is derived from the same two, so
+// a second notice to one person on one record collapses into the first and
+// is never delivered. A domain with news for somebody about ANOTHER subject
+// writes it on a record of that subject's own, which reaches them under its
+// own reason and answers for itself afterwards: the tracker's unblocked
+// repair tells a dependent's assignee in a commit on the dependent, not on
+// the task whose close freed it.
 //
 // # The fallback is a chain
 //
@@ -120,27 +126,22 @@ type Candidate[R ~string] struct {
 
 	// InboxOnly marks a candidate written to the inbox and never woken.
 	InboxOnly bool
-
-	// Subject names what this candidate is about when it is NOT the
-	// record's own subject — set by [Builder.About] alone, and it is what
-	// tells a reader which other thing the notice concerns.
-	Subject string
 }
 
 // Hears reports whether c is told of a change actor made.
 //
 // Everybody but the actor is. The actor is told only under a reason
-// wakesActor says is news to them — the tracker's notice that a task became
-// workable is about somebody ELSE's task, so the person who closed its
-// blocker is exactly who needs to hear it — and a nil wakesActor names no
-// such reason. Otherwise telling somebody what they just did is a round a
-// model spends on nothing, and a notice in a person's own inbox about their
-// own write.
+// wakesActor says is news to them — the tracker's `unblocked` tells somebody
+// a task of theirs became workable, which is news whoever wrote the record
+// saying so — and a nil wakesActor names no such reason. Otherwise telling
+// somebody what they just did is a round a model spends on nothing, and a
+// notice in a person's own inbox about their own write.
 //
 // THE ONE STEP OF [Route] A RECORD CAN TAKE ON ITS OWN: who wrote the record
 // is on the record, so an applier writing notice rows — which holds no roster
 // and so takes none of Route's other steps — asks this too, and a row is
-// never written for the change's own author.
+// written for the change's own author only under a reason that is news to
+// them.
 func (c Candidate[R]) Hears(actor string, wakesActor func(R) bool) bool {
 	return c.Handle != actor || (wakesActor != nil && wakesActor(c.Reason))
 }
@@ -182,25 +183,6 @@ func (b *Builder[R]) InboxOnly(handle string, reason R) {
 	b.claim(Candidate[R]{Handle: handle, Reason: reason, InboxOnly: true})
 }
 
-// About adds a candidate about subject, which is NOT the record's own: a
-// commit telling somebody that another thing became theirs to act on.
-//
-// OUTSIDE THE ADD-ONCE RULE in both directions: it is not dropped for a
-// handle already named, and it does not claim the handle for later offers.
-// The rule is about one subject, and this notice is about a different one —
-// deduped against the reasons about this record, the person who finished one
-// task would hear that it was done and never that their other task had become
-// workable, which is the whole of what the notice is for. An empty handle
-// still adds nothing, for [Builder.Add]'s reason.
-func (b *Builder[R]) About(subject, handle string, reason R, addressed bool) {
-	if handle == "" {
-		return
-	}
-	b.out = append(b.out, Candidate[R]{
-		Handle: handle, Reason: reason, Addressed: addressed, Subject: subject,
-	})
-}
-
 // Fallback offers chain as the ordered fallback, under reason.
 //
 // A HANDLE'S RANK IS ITS PLACE IN THE CHAIN — counted across every Fallback
@@ -223,7 +205,7 @@ func (b *Builder[R]) Fallback(reason R, chain ...string) {
 func (b *Builder[R]) Candidates() []Candidate[R] { return b.out }
 
 // claim adds c unless its handle is empty or already named — the add-once
-// rule every offer but [Builder.About] is held to.
+// rule every offer is held to.
 func (b *Builder[R]) claim(c Candidate[R]) {
 	if c.Handle == "" || b.named[c.Handle] {
 		return
