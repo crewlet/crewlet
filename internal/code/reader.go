@@ -1632,7 +1632,7 @@ func (r *Reader) introduced(ctx context.Context, tx *sql.Tx, q ReadQuery, cp sta
 // compactionDue serves one page of a `compaction_due` read: the active and
 // archived repositories holding at least q.MinPacks live packs, MOST LIVE PACKS
 // FIRST and then by id, each with the version its row holds — one ranged walk
-// of code_repos_packs_idx (replicated 0058) from its top, keyset on (live
+// of code_repos_packs_idx (replicated 0060) from its top, keyset on (live
 // packs, id) after a cursor, the index's partial predicate repeated verbatim
 // so the planner may use it at all.
 //

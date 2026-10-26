@@ -556,7 +556,7 @@
 // A git node finds the repositories a compaction may be due in by the
 // [ReadCompactionDue] listing: the active and archived repositories holding
 // at least MinPacks live packs, MOST FIRST, each with its row's version, one
-// backward walk of code_repos_packs_idx (replicated 0058) — the engine's own
+// backward walk of code_repos_packs_idx (replicated 0060) — the engine's own
 // read, which names no asker.
 //
 // # Measured
