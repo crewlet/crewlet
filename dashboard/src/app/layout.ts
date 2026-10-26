@@ -270,6 +270,23 @@ export const ASSISTANT_MAX = 640;
 /** Which shape the assistant takes: a column of the frame, over the page, or the whole window. */
 export type AssistantShape = "column" | "overlay" | "sheet";
 
+/**
+ * The assistant width every OTHER frame threshold counts: the width the reader
+ * dragged it to (kept per browser), or the resting width where they never
+ * did, inside the range a drag allows.
+ *
+ * The thresholds (when Settings' column folds, when a peek becomes a drawer)
+ * used to count the resting 420 whatever was drawn, so beside a 640 panel at
+ * 1700 Settings kept its column over a 560px section, under the floor that
+ * rule exists for. The width drawn is this, capped further by what leaves the
+ * page's sheet its floor ([assistantMaxWidth]); the cap can only make it
+ * narrower, so a threshold that counts this errs towards folding, never
+ * towards a section too narrow to read.
+ */
+export function assistantCounted(stored: number | null): number {
+  return Math.min(ASSISTANT_MAX, Math.max(ASSISTANT_MIN, stored ?? ASSISTANT_WIDTH));
+}
+
 /** What the assistant's column takes from the window: its width and its outer inset. */
 export function assistantTrack(width: number, scale: number): number {
   return width + px(size.shell.inset) * scale;

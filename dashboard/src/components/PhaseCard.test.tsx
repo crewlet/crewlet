@@ -921,7 +921,7 @@ describe("a failed phase", () => {
         defaultOpen
       />,
     );
-    expect(container.querySelector(".phase-head")?.textContent).toContain("rate_limit");
+    expect(container.querySelector(".phase-head")?.textContent).toContain("Rate limited");
     expect(container.querySelector(".phase-body")?.textContent).toContain(
       "cli-agent/claude-code: sitting out until 14:05",
     );

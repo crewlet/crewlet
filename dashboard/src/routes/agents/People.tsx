@@ -46,6 +46,7 @@ import {
   handleLabel,
   indexOrg,
   nameOfIn,
+  stateGroupWord,
   stateLine,
   unitDirectLabel,
   type NameOf,
@@ -202,11 +203,15 @@ function LoadRow({ load, heaviest }: { load: Load; heaviest: number }) {
   );
 }
 
+// THE STATE GROUPS ARE NAMED BY `stateGroupWord`, the words the badge, the
+// chart's legend and Home use, so a seat is never "Needs you" on its card and
+// "Waiting on a person" over it. The engine's `stopped` holds a seat a person
+// paused as well as one a fault stopped, so its group says both.
 const STATE_ORDER = [
-  { key: "needs", label: "Waiting on a person" },
-  { key: "broken", label: "Stopped" },
-  { key: "working", label: "Working" },
-  { key: "idle", label: "Idle" },
+  { key: "needs", label: stateGroupWord("needs") },
+  { key: "broken", label: stateGroupWord("stopped") },
+  { key: "working", label: stateGroupWord("working") },
+  { key: "idle", label: stateGroupWord("idle") },
   // NO ROW FROM THE ENGINE YET — never "not running here": whether a seat is
   // held anywhere in the fleet is the engine's `stopped`/`unplaced` to say,
   // and a seat a peer runs is idle or working like any other.
