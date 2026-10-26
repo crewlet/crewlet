@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
+	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/authz"
 )
 
@@ -157,8 +158,11 @@ func TestAReplaceNeverRemovesByOmission(t *testing.T) {
 		t.Errorf("a dropped seat was refused with %q", got)
 	}
 	p, err = change.Preview(t.Context(), read, wednesday, unitArgs(withoutQA, "roles.qa"))
-	if err != nil || !slices.Equal(p.Removes, []string{"Roles › qa"}) {
-		t.Errorf("a seat removed on purpose previewed %v, warning %v", err, p.Removes)
+	if err != nil || !slices.Equal(p.Removes, []string{"QA Engineer"}) ||
+		p.Risk != wire.RiskDestructive || p.Title != "Change unit Product" ||
+		!strings.HasPrefix(p.Summary, "This removes seat QA Engineer from unit ") {
+		t.Errorf("a seat removed on purpose previewed %v: %q, %q at risk %q, warning %v", err,
+			p.Title, p.Summary, p.Risk, p.Removes)
 	}
 
 	emptied := withAnalyst(func(u map[string]any) { u["goals"] = []any{} })

@@ -12,6 +12,7 @@ import { Router } from "~/app/router.tsx";
 import {
   CardBlock,
   factText,
+  placeOf,
   prepareAgainQuestion,
   ReplyProse,
   runChipOf,
@@ -176,25 +177,54 @@ const base: TurnView = {
 };
 
 test("a failed step says why, in the engine's words", () => {
-  const [step] = stepsOf({
+  const [step] = stepsOf(
+    {
+      ...base,
+      steps: [
+        {
+          step_id: "s",
+          index: 1,
+          tool: "update_task",
+          label: "Preparing a change to FAIR-2",
+          state: "failed",
+          started_at: "2026-10-24T09:41:00Z",
+          refusal: {
+            code: "stale",
+            message: "FAIR-2 changed since it was read.",
+            hint: "Read it again.",
+          },
+        },
+      ],
+    },
+    false,
+  );
+  expect(step!.detail).toContain("FAIR-2 changed since it was read. Read it again.");
+});
+
+// A STEP'S LINE NAMES NO TOOL, AND ITS REQUEST ONLY TO AN ADMINISTRATOR: a
+// person reads "Listing tasks", never "list_tasks · GET /worklet". Mutation:
+// put the tool back in the detail, or show the request to everybody.
+test("a step's line names no tool, and its request only to an administrator", () => {
+  const listed: TurnView = {
     ...base,
     steps: [
       {
         step_id: "s",
         index: 1,
-        tool: "update_task",
-        label: "Preparing a change to FAIR-2",
-        state: "failed",
+        tool: "list_tasks",
+        label: "Listing tasks",
+        request: { method: "GET", route: "/worklet" },
+        state: "done",
         started_at: "2026-10-24T09:41:00Z",
-        refusal: {
-          code: "stale",
-          message: "FAIR-2 changed since it was read.",
-          hint: "Read it again.",
-        },
       },
     ],
-  });
-  expect(step!.detail).toContain("FAIR-2 changed since it was read. Read it again.");
+  };
+  const [person] = stepsOf(listed, false);
+  expect(person!.label).toBe("Listing tasks");
+  expect(person!.detail).toBeUndefined();
+  const [admin] = stepsOf(listed, true);
+  expect(admin!.detail).toBe("GET /worklet");
+  expect(JSON.stringify([person, admin])).not.toContain("list_tasks");
 });
 
 test("a run that took no step carries no count", () => {
@@ -207,4 +237,78 @@ test("a reply's paragraphs are blocks in a div the Markdown rhythm spaces", () =
   expect(root.tagName).toBe("DIV");
   expect(root.classList.contains("prose") && root.classList.contains("md")).toBe(true);
   expect(root.querySelectorAll("p")).toHaveLength(2);
+});
+
+// A REFUSED READ THAT IS NOT ABOUT ACCESS never says "You do not have
+// permission". Mutation: draw every error card as a permission refusal.
+test("a refusal that is not about access is not drawn as one", () => {
+  draw({
+    type: "error",
+    error: {
+      refusal: { code: "not_found", message: "The record this needs could not be found." },
+      phrase: "read the page",
+    },
+  });
+  expect(screen.queryByText(/do not have permission/)).toBeNull();
+  expect(screen.getByText(/could not be found/)).toBeTruthy();
+});
+
+// AN OPEN IN APP CARD NAMES THE PLACE WITHOUT A RAW ID: the trail stops at the
+// screen, and the card's title names the record. Mutation: keep every crumb.
+test("an open in app trail carries no raw id", () => {
+  const place = placeOf({
+    path: ["live", "turns", "01a175e0-6ced-770f-b6d7-a746e95556e4"],
+    query: {},
+  });
+  expect(place).not.toMatch(/01a175e0/);
+  expect(place.length).toBeGreaterThan(0);
+});
+
+// A TWO-LETTER HANDLE IS NEVER LOST: a fact holding "qa" and an
+// administrator's step request ("GET /agents/qa") are drawn whole. Mutation:
+// drop a short value anywhere between the wire and the DOM, and this fails.
+test("a two-letter handle is drawn whole", () => {
+  setCardOpen("e2", true);
+  const event: AssistantCardEvent = {
+    card_id: "e2",
+    message_id: "m",
+    card: {
+      type: "entity",
+      entity: {
+        kind: "task",
+        id: "FAIR-10",
+        title: "Write the regression tests",
+        facts: [
+          { label: "Assignee", value: "qa" },
+          { label: "Reviewer", value: "pm" },
+        ],
+      },
+    },
+  };
+  const { container, unmount } = render(
+    <Router>
+      <CardBlock event={event} local={undefined} on={on} opened={false} />
+    </Router>,
+  );
+  expect(container.textContent).toContain("Assigneeqa");
+  expect(container.textContent).toContain("Reviewerpm");
+  unmount();
+  const [step] = stepsOf(
+    {
+      ...base,
+      steps: [
+        {
+          step_id: "s",
+          index: 1,
+          tool: "get_seat",
+          label: "Reading QA Engineer",
+          request: { method: "GET", route: "/agents/qa" },
+          state: "done",
+          started_at: "2026-10-24T09:41:00Z",
+        },
+      ],
+    },
+    true,
+  );
+  expect(step!.detail).toBe("GET /agents/qa");
 });

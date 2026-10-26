@@ -34,7 +34,7 @@ func TestTheCatalogueHoldsTogether(t *testing.T) {
 	for _, want := range []string{"search_work", "list_tasks", "get_task", "get_task_thread",
 		"get_task_cost", "get_my_work", "list_projects", "get_workload", "list_decisions",
 		"list_agents", "get_agent", "get_org_chart", "list_turns", "list_coding_runs",
-		"get_spend", "get_spend_series", "list_budgets", "search_knowledge", "get_page",
+		"get_spend", "get_spend_series", "list_budgets", "search_knowledge", "list_spaces", "get_page",
 		"get_company_feed", "list_artifacts", "get_artifact", "list_integrations",
 		"get_fleet_health", "list_config_changes", "create_task", "update_task",
 		"comment_on_task", "answer_decision", "set_my_priorities", "mark_inbox",
@@ -232,12 +232,15 @@ func TestAPageActionIsOnlyOneTheScreenAccepts(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("the page actions are %v, want %v", got, want)
 	}
-	args := catalog.Args{"action": "work.filter.apply"}
-	if _, err := catalog.PageActionFor(args, []string{"spend.range.set"}); !errors.Is(err,
-		catalog.ErrNotAccepted) {
+	args := catalog.Args{"action": "work.filter.apply", "args": map[string]any{"status": "todo"}}
+	if _, err := catalog.PageActionFor(args, &wire.PageContext{
+		Accepts: []string{"spend.range.set"}}); !errors.Is(err, catalog.ErrNotAccepted) {
 		t.Errorf("an action the screen did not mount = %v, want ErrNotAccepted", err)
 	}
-	if _, err := catalog.PageActionFor(args, []string{"work.filter.apply"}); err != nil {
+	if _, err := catalog.PageActionFor(args, &wire.PageContext{
+		Accepts:    []string{"work.filter.apply"},
+		ActionArgs: map[string]*wire.ActionArgs{"work.filter.apply": {Type: wire.ArgTypes{wire.ArgObject}}},
+	}); err != nil {
 		t.Errorf("an accepted action = %v", err)
 	}
 	req, err := mustTool(t, "propose_page_change").Request(map[string]any{

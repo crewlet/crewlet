@@ -70,6 +70,11 @@ func (d *Dispatcher) Do(ctx context.Context, g exec.Grant, r exec.Request) (exec
 	if d.Handler != nil {
 		resp = d.Handler(r)
 	}
+	// CUT AS THE REAL DISPATCHER CUTS ([exec.Request.Bound]), so a suite
+	// whose handler answers a long record meets the bound a turn would.
+	if bound := r.Bound(); len(resp.Body) > bound {
+		resp.Body, resp.Truncated = resp.Body[:bound], true
+	}
 	if resp.Status == http.StatusNotFound && r.Method == http.MethodGet && r.Path == "/org" {
 		// THE COMPANY EVERY RIG RUNS IN, for a handler that names no chart
 		// of its own: on UTC, with no seats, which is what a task's preview

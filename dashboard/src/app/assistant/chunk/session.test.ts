@@ -5,9 +5,17 @@
  * decision (stale, expired) resumes it with that result.
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import type { AssistantProposalCard } from "~/contract/assistant.ts";
-import type { AssistantNarrowFrame } from "~/protocol/assistantWire.ts";
+import {
+  createAssistantStreamParser,
+  type AssistantFrameOf,
+  type AssistantNarrowFrame,
+} from "~/protocol/assistantWire.ts";
+import { EVERY_QUESTION, session as floors } from "~/protocol/session.ts";
+import { repoRoot } from "~/test/engineFiles.ts";
 
 const { call, openTurnStream, streams, refuseApproval } = vi.hoisted(() => {
   const streams: { url: string; lastEventId?: string; frame: (f: unknown) => void }[] = [];
@@ -137,4 +145,53 @@ test("with no screen published, an approval carries none", async () => {
     ([route]) => route === "POST /assistant/proposals/{id}/approve",
   );
   expect(sent?.[1]).not.toHaveProperty("page_context");
+});
+
+/** The frames of a stream the engine's own route wrote, as the client parses them. */
+function routeFrames(fixture: string): AssistantNarrowFrame[] {
+  const frames: AssistantNarrowFrame[] = [];
+  const parser = createAssistantStreamParser({
+    frame: (f) => frames.push(f),
+    fault: (f) => {
+      throw new Error(`the route's fixture does not parse: ${JSON.stringify(f)}`);
+    },
+  });
+  parser.push(
+    readFileSync(join(repoRoot(), "internal/api/assistantapi/testdata", fixture), "utf8"),
+  );
+  return frames;
+}
+
+// A WRITE THE ASSISTANT MADE MOVES THE PAGE BEHIND THE DRAWER: the engine's
+// own invalidation, as its route writes it, raises the tab's floor for the
+// domain it names and asks every live question again. The engine named the
+// stream (`CREWLET_TRACKER_LOG`) where the floors are kept by domain, so no
+// assistant write ever moved a screen. Mutation: key the floor by anything
+// but the frame's domain, or name no questions, and this fails.
+test("the engine's invalidation raises the floor it names and asks every question again", async () => {
+  const invalidation = routeFrames("write_turn.sse").find(
+    (f): f is AssistantFrameOf<"action"> =>
+      f.kind === "action" && f.action.name === "context.invalidate",
+  )!;
+  expect(invalidation).toBeDefined();
+  await send("File a task to rotate the keys", null);
+  const heard: [string | null, readonly string[]][] = [];
+  const stop = floors.onWritten((domain, refreshes) => heard.push([domain, refreshes]));
+  try {
+    streams[0]!.frame({ ...invalidation, turn_id: "t1" });
+    // A write whose answer named no position still asks again, with no floor.
+    streams[0]!.frame({
+      ...invalidation,
+      turn_id: "t1",
+      seq: invalidation.seq + 1,
+      action: { ...invalidation.action, invalidate: { domain: "", position: "" } },
+    });
+  } finally {
+    stop();
+  }
+  expect(heard).toEqual([
+    ["tracker", [EVERY_QUESTION]],
+    [null, [EVERY_QUESTION]],
+  ]);
+  expect(floors.floor("tracker")).toBe(invalidation.action.invalidate?.position);
 });

@@ -3,6 +3,7 @@ package cards
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 )
@@ -18,11 +19,18 @@ import (
 // way, so the model is told to point at it rather than guess past the cut.
 // A link's address never reaches a model: it offers open_in_app instead.
 func Summary(card wire.Card, budget int) ([]byte, error) {
+	return SummaryOf(Built{Card: card}, budget)
+}
+
+// SummaryOf is [Summary] of a built card, which also knows what the answer
+// said beyond its rows: that more lie past its page ([Built.More]).
+func SummaryOf(b Built, budget int) ([]byte, error) {
+	card := b.Card
 	switch card.Type {
 	case wire.CardTable:
-		return tableSummary(card.Table, budget)
+		return tableSummary(card.Table, b.More, b.Zone, budget)
 	case wire.CardEntity:
-		return entitySummary(card.Entity, budget)
+		return entitySummary(card.Entity, b.Zone, budget)
 	case wire.CardNotice:
 		return json.Marshal(map[string]string{"notice": card.Notice.Text})
 	case wire.CardError:
@@ -38,27 +46,42 @@ type tableDigest struct {
 	RowCount  int      `json:"row_count"`
 	Shown     int      `json:"rows_shown"`
 	Truncated bool     `json:"truncated,omitempty"`
-	Note      string   `json:"note,omitempty"`
+	// More says the answer holds rows past this page, so row_count is a
+	// floor and never the total.
+	More bool   `json:"more_exist,omitempty"`
+	Note string `json:"note,omitempty"`
 	// Access is the sentence every list carries: what the person may not
 	// see is left out, so the model never reads an absence as proof.
 	Access string `json:"access"`
 }
 
+// MoreNote is what a table summary tells the model of a page with rows past
+// it: its count is a floor. A capped page read as the whole once answered
+// "five turns in a row" for a seat that had failed twenty-five.
+const MoreNote = "This is one page of %d rows and the answer says more exist past it. " +
+	"Never give %[1]d as the total: say \"at least %[1]d\", or read further with a " +
+	"larger limit or a narrower filter."
+
 // AccessNote is what every table summary tells the model about its rows.
 const AccessNote = "Rows the person may not see are left out, so a row missing here " +
 	"is not proof that none exists."
 
-func tableSummary(t *wire.TableCard, budget int) ([]byte, error) {
-	d := tableDigest{Title: t.Title, RowCount: t.RowCount, Rows: t.Rows, Access: AccessNote}
+func tableSummary(t *wire.TableCard, more bool, zone *time.Location, budget int) ([]byte, error) {
+	d := tableDigest{Title: t.Title, RowCount: t.RowCount, Rows: onClock(t, zone),
+		Access: AccessNote, More: more}
 	for _, c := range t.Columns {
 		d.Columns = append(d.Columns, c.Label)
 	}
+	rows := d.Rows
 	return fit(func() (any, int) { return &d, len(d.Rows) }, func(n int) {
-		d.Rows, d.Shown = t.Rows[:n], n
+		d.Rows, d.Shown = rows[:n], n
 		d.Truncated = n < t.RowCount
-		if d.Truncated {
+		switch {
+		case d.Truncated:
 			d.Note = fmt.Sprintf("Only %d of %d rows are listed here; the person "+
 				"sees the table on the card.", n, t.RowCount)
+		case d.More:
+			d.Note = fmt.Sprintf(MoreNote, t.RowCount)
 		}
 	}, budget)
 }
@@ -84,13 +107,16 @@ type itemDigest struct {
 	Depth int    `json:"depth,omitempty"`
 }
 
-func entitySummary(e *wire.EntityCard, budget int) ([]byte, error) {
+func entitySummary(e *wire.EntityCard, zone *time.Location, budget int) ([]byte, error) {
 	d := entityDigest{Kind: e.Kind, ID: e.ID, Title: e.Title, Subtitle: e.Subtitle,
 		Text: e.Text}
 	if len(e.Facts) > 0 {
 		d.Facts = map[string]string{}
 		for _, f := range e.Facts {
 			d.Facts[f.Label] = f.Value
+			if f.Type == wire.ColumnDatetime {
+				d.Facts[f.Label] = Clock(f.Value, zone)
+			}
 		}
 	}
 	items := make([]itemDigest, 0, len(e.Items))
@@ -116,6 +142,55 @@ func entitySummary(e *wire.EntityCard, budget int) ([]byte, error) {
 		d.TextOmitted, d.Text = len(d.Text), ""
 	}
 	return fit(func() (any, int) { return &d, len(items) }, set, budget)
+}
+
+// onClock is a table's rows with every instant in its datetime columns said on
+// the company's clock ([Clock]), a copy: the card the person sees keeps them.
+func onClock(t *wire.TableCard, zone *time.Location) [][]any {
+	var at []int
+	for i, c := range t.Columns {
+		if c.Type == wire.ColumnDatetime {
+			at = append(at, i)
+		}
+	}
+	if len(at) == 0 {
+		return t.Rows
+	}
+	out := make([][]any, len(t.Rows))
+	for r, row := range t.Rows {
+		out[r] = append([]any(nil), row...)
+		for _, i := range at {
+			if i < len(row) {
+				if v, ok := row[i].(string); ok {
+					out[r][i] = Clock(v, zone)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// Clock is an RFC 3339 instant as the model reads it: on the company's clock
+// with the zone's name ("Mon 26 Oct 2026 01:45 PDT"), and a moment that is
+// midnight there as the date alone ("Mon 26 Oct 2026"), which is what a task
+// due all day is stored as. Said on the company's clock because the model
+// answers with what it reads: handed UTC with a Z, it told people times eight
+// hours off their own screen, and read a date due all day as due at
+// midnight UTC, the day before. A value that is not an instant is as it was;
+// a nil zone is UTC.
+func Clock(v string, zone *time.Location) string {
+	at, err := time.Parse(time.RFC3339Nano, v)
+	if err != nil {
+		return v
+	}
+	if zone == nil {
+		zone = time.UTC
+	}
+	local := at.In(zone)
+	if local.Hour() == 0 && local.Minute() == 0 && local.Second() == 0 {
+		return local.Format("Mon 2 Jan 2006")
+	}
+	return local.Format("Mon 2 Jan 2006 15:04 MST")
 }
 
 // fit encodes the digest current returns, dropping entries from its end

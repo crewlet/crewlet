@@ -49,7 +49,6 @@ import {
   Button,
   Callout,
   ChatThread,
-  Composer,
   ConfirmModal,
   EmptyState,
   FileDrop,
@@ -80,6 +79,7 @@ import {
 import { ASSISTANT_INPUT_MAX_RUNES, type AssistantFileRef } from "~/contract/assistant.ts";
 import { questionFits } from "~/protocol/assistantWire.ts";
 import { relTime } from "~/lib/format.ts";
+import { useNow } from "~/lib/clock.ts";
 import { rereadViewer } from "~/lib/viewer.ts";
 import { keyRow, matchesRow, pressText } from "../../keymap.ts";
 import { on as onBus, emit } from "../bus.ts";
@@ -110,6 +110,7 @@ import {
   useConversation,
   conversation,
 } from "./session.ts";
+import { AskComposer, useDraftBox } from "./AskComposer.tsx";
 import { ATTACH_ACCEPT, ATTACH_HINT, useAttachments } from "./attachments.ts";
 import { prepareAgainQuestion } from "./blocks.tsx";
 import { Home } from "./Home.tsx";
@@ -140,16 +141,6 @@ export interface DrawerProps {
 /** Send's words, with Stop named for what it ends: the answer, not the conversation. */
 const SEND_LABELS = { send: "Send", stop: "Stop answering" } as const;
 
-/** A clock for the run chip and the message feet: each second while a turn runs, each minute otherwise. */
-function useNow(fast: boolean): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), fast ? 1000 : 60_000);
-    return () => clearInterval(timer);
-  }, [fast]);
-  return now;
-}
-
 /**
  * One recent conversation, as the Conversations menu lists it: shown at the
  * moment the list is ordered by, so the times read down the menu in order.
@@ -174,14 +165,20 @@ export function Drawer({
   const page = usePageSnapshot();
   const toast = useToast();
   const composer = useRef<HTMLTextAreaElement>(null);
-  const [draft, setDraft] = useState("");
+  // THE DRAFT IS NOT THIS PANEL'S STATE: a keystroke renders the composer
+  // alone, never the thread under it (`AskComposer.tsx` says why).
+  const draft = useDraftBox();
   const [removed, setRemoved] = useState<string | null>(null);
   const [recents, setRecents] = useState<Recent[] | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [clearFailed, setClearFailed] = useState(false);
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
   const running = openTurn(view);
-  const now = useNow(running !== null);
+  // THE SHELL'S ONE CLOCK, as every relative time on screen reads it. The
+  // drawer kept its own, a minute apart once no turn ran, and did not re-read
+  // the time when it slowed: an answer that ended between two ticks read
+  // "in 1s" beside Copy, and the history "in 5s", for up to a minute.
+  const now = useNow();
   const attachments = useAttachments(view.id);
 
   // ON A PHONE THE PANEL IS THE WHOLE WINDOW, and its foot (the composer and
@@ -219,7 +216,13 @@ export function Drawer({
 
   // A PAGE CHANGE PREPARED AGAINST THE SCREEN UNDER THE PANEL is stale once
   // that screen moves; the screen says so on the bus.
-  useEffect(() => onBus("assistant.context.invalidate", ({ revision }) => pageMoved(revision)), []);
+  useEffect(
+    () =>
+      onBus("assistant.context.invalidate", ({ revision, revisions }) =>
+        pageMoved(revision, revisions),
+      ),
+    [],
+  );
 
   // THE PAGE GOES WITH THE NEXT QUESTION until the reader removes it, and a
   // removal lasts until they open ANOTHER page, which attaches itself.
@@ -232,8 +235,8 @@ export function Drawer({
   const bounced =
     last?.phase === "refused" && last.refusal?.code === "assistant_busy" ? last : null;
   useEffect(() => {
-    if (bounced) setDraft((d) => (d === "" ? bounced.question : d));
-  }, [bounced]);
+    if (bounced && draft.read() === "") draft.write(bounced.question);
+  }, [bounced, draft]);
 
   const busyUntil =
     bounced && bounced.refusal?.retryAfterSeconds
@@ -252,7 +255,7 @@ export function Drawer({
   const disabledReason = useMemo(() => {
     if (view.fault === "protocol_mismatch") return "Reload to keep asking";
     if (model !== null) return model.short;
-    if (view.stream === "reconnecting") return "Offline";
+    if (view.stream === "reconnecting") return "Reconnecting to the answer";
     if (waitSeconds > 0) return `You can ask again in ${waitSeconds} seconds`;
     return undefined;
   }, [view.fault, model, view.stream, waitSeconds]);
@@ -274,11 +277,11 @@ export function Drawer({
     (text: string, again?: readonly AssistantFileRef[]) => {
       const question = text.trim();
       if (question === "" || !questionFits(question)) return;
-      setDraft("");
+      draft.write("");
       setAsked((n) => n + 1);
       void send(question, attached, again ?? take());
     },
-    [attached, take],
+    [attached, take, draft],
   );
 
   const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
@@ -308,7 +311,7 @@ export function Drawer({
   }, [queued, running, disabledReason, ask]);
 
   const fill = (text: string) => {
-    setDraft(text);
+    draft.write(text);
     requestAnimationFrame(() => {
       const field = composer.current;
       if (!field) return;
@@ -333,9 +336,9 @@ export function Drawer({
       return;
     }
     // UP IN AN EMPTY BOX brings back the last question to edit.
-    if (event.key === "ArrowUp" && draft === "" && last) {
+    if (event.key === "ArrowUp" && draft.read() === "" && last) {
       event.preventDefault();
-      setDraft(last.question);
+      draft.write(last.question);
     }
   };
 
@@ -484,14 +487,13 @@ export function Drawer({
                 disabled={disabledReason !== undefined}
                 onFiles={(dropped) => attachments.add(dropped.map((d) => d.file))}
               >
-                <Composer
+                <AskComposer
                   ref={composer}
+                  box={draft}
                   id={ASSISTANT_COMPOSER_ID}
                   label="Ask the assistant"
-                  value={draft}
-                  onChange={setDraft}
-                  onSubmit={() => {
-                    if (!attachments.uploading) ask(draft);
+                  onSubmit={(text) => {
+                    if (!attachments.uploading) ask(text);
                   }}
                   onKeyDown={onKeyDown}
                   onPaste={disabledReason === undefined ? onPaste : undefined}
@@ -554,26 +556,26 @@ export function Drawer({
                       Attach image
                     </FilePickButton>
                   }
-                  trailing={
+                  trailing={(text) => (
                     <SendButton
                       mode={stoppable ? "stop" : "send"}
                       labels={SEND_LABELS}
                       title={stoppable ? stopTitle : undefined}
-                      onPress={stoppable ? () => void stop() : () => ask(draft)}
+                      onPress={stoppable ? () => void stop() : () => ask(text)}
                       disabledReason={
                         stoppable
                           ? running?.stopping
                             ? "Stopping"
                             : undefined
                           : (disabledReason ??
-                            (draft.trim() === ""
+                            (text.trim() === ""
                               ? "Type a question first"
                               : attachments.uploading
                                 ? "Images are still uploading"
                                 : undefined))
                       }
                     />
-                  }
+                  )}
                 />
               </FileDrop>
               <Text as="p" variant="caption" tone="tertiary" className="assistant-disclaimer">
@@ -611,6 +613,7 @@ export function Drawer({
                   undo: undoAction,
                 }}
                 retryDisabledReason={disabledReason}
+                technical={admin}
                 onRetry={(text) => ask(text)}
                 onReconnect={reconnect}
               />

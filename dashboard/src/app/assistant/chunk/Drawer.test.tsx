@@ -29,6 +29,23 @@ import type { AssistantModelProblem, AssistantUnavailable } from "../availabilit
 import { Drawer } from "./Drawer.tsx";
 import { conversation, resetSessionForTest } from "./session.ts";
 
+/*
+ * THE THREAD, COUNTED. A keystroke must render the composer alone: the case
+ * that types a follow-up asserts the thread under it was not rendered at all.
+ * The real component draws everything; the wrapper only counts.
+ */
+const threadRenders = vi.hoisted(() => ({ count: 0 }));
+vi.mock("./Thread.tsx", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./Thread.tsx")>();
+  return {
+    ...real,
+    Thread: (props: Parameters<typeof real.Thread>[0]) => {
+      threadRenders.count += 1;
+      return real.Thread(props);
+    },
+  };
+});
+
 const GOLDEN = readFileSync(
   join(repoRoot(), "internal/assistant/wire/testdata/frames.sse"),
   "utf8",
@@ -140,7 +157,7 @@ test("a question is sent with its page, streamed, and drawn with every card the 
   });
   mount();
   expect(
-    screen.getByRole("heading", { name: /^Good (morning|afternoon|evening), Ada$/ }),
+    screen.getByRole("heading", { name: /^(Hello|Good (morning|afternoon|evening)), Ada$/ }),
   ).toBeDefined();
 
   const box = screen.getByRole("textbox", { name: "Ask the assistant" });
@@ -169,6 +186,59 @@ test("a question is sent with its page, streamed, and drawn with every card the 
   expect(screen.getAllByText("No open task covers it yet.").length).toBeGreaterThan(0);
   // A CHANGE WAITS ON THE PERSON, and the Ask button would say so.
   expect(assistantActivity()).toBe("waiting");
+});
+
+test("a follow-up typed fast under a turn with cards keeps every keystroke and renders only the composer", async () => {
+  engine();
+  setFramePage({
+    screen: "worklet-tasks",
+    title: "Worklet › Tasks",
+    path: ["worklet", "tasks"],
+    params: {},
+    query: {},
+  });
+  mount();
+  const box = screen.getByRole("textbox", { name: "Ask the assistant" }) as HTMLTextAreaElement;
+  fireEvent.change(box, { target: { value: "Fix the flaky sign-in test" } });
+  await act(async () => {
+    fireEvent.keyDown(box, { key: "Enter" });
+  });
+  await waitFor(() => expect(conversation().turns[0]?.phase).toBe("awaiting_approval"));
+  expect(screen.getAllByText("Matching tasks").length).toBeGreaterThan(0);
+
+  // KEYSTROKES AS A BROWSER DELIVERS THEM WHEN THEY QUEUE UP: one native
+  // input event after another, each flushed by React on its own, outside
+  // `act`. `act` drains every update before the next keystroke and would hide
+  // the chain that threw a keystroke away (React error #185) once a turn's
+  // cards were rendered by every keystroke.
+  const environment = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean | undefined };
+  const wasActEnvironment = environment.IS_REACT_ACT_ENVIRONMENT;
+  const errors: unknown[] = [];
+  const onError = (event: ErrorEvent) => errors.push(event.error ?? event.message);
+  const logged = vi.spyOn(console, "error").mockImplementation((...args) => errors.push(args));
+  const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+  const typed =
+    "Why did FAIR-3 fail, and is the QA Engineer right to pick up FAIR-10 next? ".repeat(3);
+  threadRenders.count = 0;
+  window.addEventListener("error", onError);
+  environment.IS_REACT_ACT_ENVIRONMENT = false;
+  try {
+    for (const key of typed) {
+      setValue.call(box, box.value + key);
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  } finally {
+    environment.IS_REACT_ACT_ENVIRONMENT = wasActEnvironment;
+    window.removeEventListener("error", onError);
+    logged.mockRestore();
+  }
+
+  expect(errors).toEqual([]);
+  expect(box.value).toBe(typed);
+  expect(threadRenders.count).toBe(0);
+  expect(screen.getByRole("button", { name: "Send" }).getAttribute("aria-disabled")).not.toBe(
+    "true",
+  );
 });
 
 test("a question past the length a turn takes is not sent", async () => {
@@ -261,7 +331,7 @@ test("a model that cannot answer is said above the composer, and Send stays off"
   expect(screen.getByText(SIGNED_OUT.body)).toBeDefined();
   // Not the offline state: the home is drawn and the composer is there.
   expect(
-    screen.getByRole("heading", { name: /^Good (morning|afternoon|evening), Ada$/ }),
+    screen.getByRole("heading", { name: /^(Hello|Good (morning|afternoon|evening)), Ada$/ }),
   ).toBeDefined();
   expect(screen.queryByRole("button", { name: "Model settings" })).toBeNull();
 
@@ -394,9 +464,11 @@ test("the history marks the open conversation and shows when each was last used"
     id: OPEN_ID,
     title: "Payroll",
     created_at: at(90),
-    // RETITLED JUST NOW, used three hours ago: the menu shows the use.
+    // RETITLED JUST NOW, used two and a half hours ago: the menu shows the
+    // use. Half an hour from any boundary, so the shell's clock (which reads
+    // up to a tick behind this case's `now`) says the same "2h ago".
     updated_at: at(0),
-    last_activity_at: at(180),
+    last_activity_at: at(150),
   };
   const other = {
     id: OTHER_ID,
@@ -457,4 +529,75 @@ test("the history marks the open conversation and shows when each was last used"
   expect(answers[1]!.textContent).not.toContain(relTime(open.updated_at, now));
   const clear = screen.getByRole("menuitem", { name: /Clear this conversation/ });
   expect(clear.closest("[role='group']")).toBeNull();
+});
+
+// AN ANSWER THAT ENDS BETWEEN TWO TICKS HAS JUST HAPPENED. The drawer kept a
+// clock of its own that slowed to once a minute when the turn ended, without
+// reading the time again, so the turn's foot said "in 1s" beside Copy for up
+// to a minute. It reads the shell's one clock now, which ticks every second.
+// Mutation: give the drawer back a clock that slows when no turn runs, and the
+// foot still reads the instant before the answer ended.
+test("an answer that ended between the clock's ticks never reads as in the future", async () => {
+  const interrupted = "75099765-5fa3-5aa4-b185-7d8dd69869bd";
+  const frames = GOLDEN.split("\n\n")
+    .filter((block) => block.includes(`${interrupted}.`))
+    .map((block) => `${block}\n\n`)
+    .join("");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init: RequestInit) => {
+      const path = new URL(url).pathname;
+      if (path === "/assistant/conversations" && init.method === "POST") {
+        return json(
+          {
+            conversation: {
+              id: "403212ed-5a4a-586d-8af6-c62411a17c2f",
+              title: "",
+              created_at: "2026-10-24T09:40:58Z",
+              updated_at: "2026-10-24T09:40:58Z",
+              last_activity_at: "2026-10-24T09:40:58Z",
+            },
+          },
+          201,
+        );
+      }
+      if (path.endsWith("/turns")) {
+        return json(
+          {
+            turn_id: interrupted,
+            stream_url: `/assistant/conversations/403212ed-5a4a-586d-8af6-c62411a17c2f/stream?turn=${interrupted}`,
+            after_seq: 0,
+          },
+          202,
+        );
+      }
+      if (path.endsWith("/stream")) {
+        return new Response(frames, {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      }
+      return json({ error: "not_found" }, 404);
+    }),
+  );
+  // The answer ends at 09:41:00.4, a second and a half after the last tick.
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+  try {
+    vi.setSystemTime(Date.parse("2026-10-24T09:40:58.9Z"));
+    mount();
+    const box = screen.getByRole("textbox", { name: "Ask the assistant" });
+    fireEvent.change(box, { target: { value: "Is the deploy done?" } });
+    await act(async () => {
+      fireEvent.keyDown(box, { key: "Enter" });
+    });
+    await waitFor(() => expect(conversation().turns[0]?.phase).toBe("interrupted"));
+    act(() => {
+      vi.advanceTimersByTime(2_000);
+    });
+    const foot = document.querySelector("time.crewlet-relative-time");
+    expect(foot?.getAttribute("datetime")).toBe("2026-10-24T09:41:00.400Z");
+    expect(foot?.textContent).toBe("just now");
+  } finally {
+    vi.useRealTimers();
+  }
 });

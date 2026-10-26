@@ -49,20 +49,27 @@ refused, and the dashboard shows them the reason.
 Anything the person can reach through the engine's API. Beside its dedicated
 tools, the assistant looks a route up in this reference
 ([API Endpoints](../reference/api-endpoints.md), embedded in the engine),
-reads it with the person's own access, and proposes any change on it: the card
-shows the request, its body with secrets masked, and the resource as it is now
-beside what the change makes of it, field by field (a seat added to a unit is
-one added seat with its role and responsibilities). A change prepared against
+reads it with the person's own access, and proposes any change on it. The card
+says what the change does in plain words, read from the resource as it is now
+and what the change makes of it: "Add seat Technical Writer", "Remove seat QA
+Engineer", "Adopt version 4 of the brand kit", with one row per field that
+moves, each named by the seat or unit it belongs to ("Technical Writer ›
+Goal"). A change that deletes something, removes a member such as a seat, or
+removes fields is marked destructive: the card says what goes and whether the
+configuration history can revert it. The exact request, its body with secrets
+masked, is under **Technical details** for an administrator; everybody else
+reviews the rows, which are built from the same request. A change prepared against
 a resource that has moved since is refused rather than overwritten. Before any
 card is drawn, a route that can check a change without making it (every write
 of the company document, `?dry_run=true`) is asked to, as the person: a change
 the route would refuse goes back to the assistant to correct, and never reaches
-the person to approve, and the check's warnings are on the card. A write the
+the person to approve, and the warnings the change itself introduces are on
+the card (one the company already carried is left off). A write the
 history records carries a one-line summary of what it does, shown on the card
 and stored with the revision. A change that replaces a whole object (a unit, a
 seat, the charter) never removes a field by leaving it out: a field the
 assistant drops without saying so is refused before the card, and one the
-person asked to remove leads the card as "This also removes ...". A task or a
+person asked to remove leads the card ("This removes ..."). A task or a
 page that names no project or space
 is shown, and sent, with the one it will land in, or refused when the person's
 team owns none (ADR-0055). Adding a
@@ -81,9 +88,16 @@ offered only to a person who could make the same change on its screen:
 | Share an artifact, withdraw a share | The artifact's owner | The artifact's sharing, with the audience named on the card; a share to the whole company asks the person to confirm it is them |
 | Pause or resume an agent, steer a running turn, answer a coding run | Whoever may do it on the seat's screen | The operator control the screen sends |
 | Change the company's mission, vision or standing policies | Administrators | `PUT /config/charter`, the route Company › Principles saves through: the card shows a word diff of the mission and vision and one row per policy, the approval asks the administrator to confirm it is them when their sign-in is not recent, and a change made to the principles meanwhile makes the proposal stale (**Prepare it again**) |
+| Set or remove one token ceiling: a seat's or the company's, for a day, a week or a month | Administrators | The write Company › Budgets saves: the seat as read with only that window's ceiling changed (`PUT /config/roles/{handle}`), or a merge patch of the company's one window (`PATCH /config`). The card shows one row, the ceiling now and the new one, the history line and the route's warnings; the approval asks the administrator to confirm it is them when their sign-in is not recent, and a change to the configuration meanwhile makes the proposal stale. A lead changing a seat they lead goes through the generic change or Budgets itself |
 
 A change to the screen the person has open (a filter, a range, a draft in an
-open editor) is applied by the page itself and saves nothing.
+open editor) is applied by the page itself and saves nothing. Each screen tells
+the assistant what each of its changes takes (the keys a filter writes, the
+seats and windows Budgets draws, the org builder's operations), and a change
+that does not match is refused before any card is drawn, so the person never
+approves a change the screen cannot apply. Such a change goes stale only when
+what it depends on moves: opening a row's details or another editor beside it
+does not.
 
 ## Turning it on
 

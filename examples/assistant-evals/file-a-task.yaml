@@ -13,6 +13,14 @@ page:
   source_revision: url:3f9c1a0e
   accepts: []
 question: File a task for Ada to rotate the signing key before Friday.
+# The chart a task's assignee is resolved against: a write names a seat
+# that is on it, by its handle or its name.
+answers:
+  - route: GET /org
+    body:
+      timezone: UTC
+      roles:
+        - {handle: ada, name: Ada Lovelace, kind: human}
 script:
   - call: create_task
     args: {title: Rotate the signing key, assignee: ada, due: eow}

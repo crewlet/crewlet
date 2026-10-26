@@ -131,13 +131,32 @@ type StepRequest struct {
 // Refusal is a refusal in the engine's own words: the API's code, its
 // sentence, what to do about it where the route said, and the grants that
 // would have admitted the caller where the authority table names them.
+//
+// TWO READERS, TWO CHANNELS. Message and Hint are what a person reads, and
+// Detail is the route's own account of this one refusal (the envelope's
+// `detail`), written for whoever corrects the request: the model. Detail
+// names tools, fields and config keys a person never sees, so it is never
+// serialised: it rides in memory from the answer to the model's next message
+// ([Refusal.ForModel]) and goes no further, neither to the drawer nor to the
+// stored transcript.
 type Refusal struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
-	// Hint is the route's own next step (the envelope's `hint`), shown on
-	// its own line.
+	// Hint is the next step, shown on its own line.
 	Hint   string   `json:"hint,omitempty"`
 	Grants []string `json:"grants,omitempty"`
+	// Detail is the route's own account of the refusal, for the model only.
+	Detail string `json:"-"`
+}
+
+// ForModel is the refusal as the model reads it: the route's own account where
+// it gave one, which names the field and the value to correct, else the
+// sentence.
+func (r Refusal) ForModel() string {
+	if r.Detail != "" {
+		return r.Detail
+	}
+	return r.Message
 }
 
 // CardEvent carries one card, attached to the assistant message it belongs
@@ -165,8 +184,10 @@ type ActionEvent struct {
 	Invalidate     *Invalidate     `json:"invalidate,omitempty"`
 }
 
-// Invalidate tells open screens a write landed at Position on Domain's log,
-// so the next read they make includes it.
+// Invalidate tells open screens a write landed: at Position on the log of the
+// state-log domain named Domain (`tracker`, never its stream's name), so the
+// next read they make includes it. Both are empty for a write whose answer
+// named no position; the screens read again all the same.
 type Invalidate struct {
 	Domain   string `json:"domain"`
 	Position string `json:"position"`

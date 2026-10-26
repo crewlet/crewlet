@@ -356,3 +356,31 @@ func TestATableDrawsAFewOfItsOwnColumns(t *testing.T) {
 		}
 	}
 }
+
+// A RECORD LINK NAMED BY NOTHING IS NAMED BY WHAT IT OPENS, never by the raw
+// value its address carries: a seat's handle ("pm", which a two-letter
+// handle made a near-empty button) or a page's UUID is how the address spells
+// the record, and "Open seat" is what a person reads. A task, a project or a
+// space keeps its key, which people know. Mutation: fall back to the first
+// path value again, and this fails.
+func TestARecordLinkIsNamedByWhatItOpens(t *testing.T) {
+	t.Parallel()
+	for screen, params := range map[string]map[string]string{
+		"seat": {"handle": "pm"}, "page": {"id": "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"},
+		"turn": {"id": "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"},
+	} {
+		link, err := cards.Link(screen, params, "")
+		if err != nil {
+			t.Fatalf("%s: %v", screen, err)
+		}
+		for _, v := range params {
+			if link.Label == v || !strings.HasPrefix(link.Label, "Open ") {
+				t.Errorf("a %s link with no name reads %q", screen, link.Label)
+			}
+		}
+	}
+	if link, err := cards.Link("project", map[string]string{"key": "FAIR"}, ""); err != nil ||
+		link.Label != "FAIR" {
+		t.Errorf("a project link with no name reads %q (%v), want its key", link.Label, err)
+	}
+}

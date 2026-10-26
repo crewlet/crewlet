@@ -37,6 +37,7 @@ import {
   ASSISTANT_PAGE_DRAFT_MAX_FIELDS,
   ASSISTANT_PAGE_DRAFT_SECRET_PATH,
   ASSISTANT_PAGE_DRAFT_VALUE_MAX_RUNES,
+  type AssistantActionArgs,
   type AssistantDraftField,
   type AssistantDraftFieldKind,
   type AssistantDraftFileRef,
@@ -408,6 +409,50 @@ export function parseDraftChange<D>(
   return { ok: true, value: { next, rows } };
 }
 
+/** What one editable field takes, by its kind: text, a list, or a file of this conversation. */
+function fieldArgs(field: AssistantPageDraft["fields"][number]): AssistantActionArgs {
+  const description = field.hint ? `${field.label}. ${field.hint}` : field.label;
+  switch (field.kind) {
+    case "list":
+      return {
+        type: ["array", "string"],
+        description: `${description}. A list of items, or one item per line.`,
+        items: { type: "string" },
+      };
+    case "file":
+      return {
+        type: ["string", "object"],
+        description: `${description}. The id of a file delivered or attached in this conversation.`,
+      };
+    default:
+      return { type: "string", description };
+  }
+}
+
+/**
+ * What `draft.set` takes on this draft: `values`, each an editable field by
+ * its path, in its kind's shape. Built from the snapshot the page sends, so
+ * the model reads the same fields the screen's parser sets.
+ */
+export function draftSetArgs(draft: AssistantPageDraft): AssistantActionArgs {
+  const properties: Record<string, AssistantActionArgs> = {};
+  for (const field of draft.fields) {
+    if (field.editable === true) properties[field.path] = fieldArgs(field);
+  }
+  // THE FIELD'S OWN VALUE is the one example every field takes as it stands.
+  const first = draft.fields.find((f) => f.editable === true && f.kind === "text" && f.value);
+  return {
+    type: "object",
+    description: "Values for the open draft's editable fields, by path.",
+    additionalProperties: false,
+    required: ["values"],
+    properties: {
+      values: { type: "object", additionalProperties: false, properties },
+    },
+    ...(first ? { examples: [{ values: { [first.path]: first.value } }] } : {}),
+  };
+}
+
 /** What the draft's fields read now, as one comparable value. */
 function fingerprint<D>(spec: AssistantDraftSpec<D>, draft: D): string {
   return JSON.stringify(spec.fields.map((f) => f.read(draft)));
@@ -415,6 +460,14 @@ function fingerprint<D>(spec: AssistantDraftSpec<D>, draft: D): string {
 
 /** What a change to a draft that has closed is told. */
 const CLOSED = "The draft is no longer open on this page.";
+
+/** What a closed draft takes: nothing, since every half refuses it. */
+const CLOSED_ARGS: AssistantActionArgs = {
+  type: "object",
+  description: CLOSED,
+  additionalProperties: false,
+  properties: {},
+};
 
 /**
  * The `draft.set` page action over a draft spec: the screen's own parser,
@@ -431,6 +484,10 @@ export function draftSetAction<D>(
   return {
     get scope() {
       return latest()?.scope ?? "";
+    },
+    get args() {
+      const spec = latest();
+      return spec ? draftSetArgs(draftSnapshot(spec)) : CLOSED_ARGS;
     },
     parse: (raw) => {
       const spec = latest();
@@ -484,7 +541,18 @@ export function useAssistantDraft<D>(spec: AssistantDraftSpec<D> | null): void {
           // The registration is keyed on this content, so a render that
           // changed nothing registers nothing.
           dataVersion: `draft:${hashOf(JSON.stringify(draft))}`,
-          actions: changeable ? { "draft.set": action as PageActionSpec<unknown> } : {},
+          actions: changeable
+            ? {
+                "draft.set": {
+                  ...(action as PageActionSpec<unknown>),
+                  args: draftSetArgs(draft),
+                  // THE DRAFT IS WHAT IT EDITS: a change prepared against an
+                  // older draft is stale once the person typed over it, and
+                  // a filter or a peek beside the editor is not.
+                  tracks: ["data"],
+                },
+              }
+            : {},
         }
       : {},
   );

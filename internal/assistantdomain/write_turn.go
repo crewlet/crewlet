@@ -399,14 +399,17 @@ func checkApps(what string, apps []string) error {
 
 // ParkTurn parks a running turn on a proposal, with the loop's conversation
 // (at most [ParkedMaxBytes], opaque here) sealed beside it until the turn
-// resumes and closes.
-func (w *Writer) ParkTurn(ctx context.Context, c Call, turn uuid.UUID, parked []byte) (statelog.Result, error) {
+// resumes and closes, and the steps it has taken so far counted on the turn.
+func (w *Writer) ParkTurn(ctx context.Context, c Call, turn uuid.UUID, parked []byte,
+	steps int) (statelog.Result, error) {
 	switch {
 	case len(parked) == 0:
 		return statelog.Result{}, invalid("a parked turn keeps its loop's conversation")
 	case len(parked) > ParkedMaxBytes:
 		return statelog.Result{}, invalid("the parked loop is %d bytes and the maximum "+
 			"is %d", len(parked), ParkedMaxBytes)
+	case steps < 0:
+		return statelog.Result{}, invalid("a parked turn has taken %d steps", steps)
 	}
 	return w.onTurn(ctx, c, turn, OpTurnParked, statelog.PatternArbitrated,
 		[]wire.TurnState{wire.TurnRunning},
@@ -415,7 +418,7 @@ func (w *Writer) ParkTurn(ctx context.Context, c Call, turn uuid.UUID, parked []
 			if err != nil {
 				return nil, err
 			}
-			return TurnParked{V: baseRecordVersion, MessagesSealed: sealed}, nil
+			return TurnParked{V: baseRecordVersion, MessagesSealed: sealed, Steps: steps}, nil
 		})
 }
 

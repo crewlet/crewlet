@@ -70,6 +70,17 @@ export function isLater(next: LogPosition, held: LogPosition): boolean {
   return next.seq > held.seq;
 }
 
+/**
+ * What a write moved when its writer cannot name the questions: every one this
+ * tab is asking. A change the Dashboard Assistant applied for the person may
+ * go through any route of the engine (a brand adopted, a seat changed through
+ * the configuration), and no table of routes to questions would stay true, so
+ * every live read asks again, quietly: each `useQuery`, and each `useRest`.
+ * A rare, human-paced event, against a screen that otherwise drew what it held
+ * before the change until it was reloaded.
+ */
+export const EVERY_QUESTION = "*";
+
 /** Heard when a domain was written from this tab: its floor rose. */
 export type WrittenListener = (domain: SessionDomain | null, refreshes: readonly string[]) => void;
 
@@ -125,7 +136,11 @@ export class SessionFloors {
    * moving beside it.
    */
   static moves(kind: string, domain: SessionDomain | null, refreshes: readonly string[]): boolean {
-    return (domain !== null && domainOf(kind) === domain) || refreshes.includes(kind);
+    return (
+      (domain !== null && domainOf(kind) === domain) ||
+      refreshes.includes(kind) ||
+      refreshes.includes(EVERY_QUESTION)
+    );
   }
 
   /**

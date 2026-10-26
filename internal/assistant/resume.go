@@ -150,6 +150,9 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 		return wire.TurnAccepted{}, s.writeFailure(err)
 	}
 	t.steps, t.cards, t.messages = keep.Steps, keep.Cards, keep.Count
+	// EVERY STEP OF A PARKED SEGMENT HAD ENDED: a loop parks only between
+	// its calls.
+	t.finished = keep.Steps
 	if anchor, err := uuid.Parse(keep.Anchor); err == nil {
 		t.anchor = anchor
 	}
@@ -251,7 +254,7 @@ func resultOf(r approval.Resumption, b provenance.Boundary) string {
 		fmt.Fprintf(&out, "The change ended %s.", r.State)
 	}
 	if r.Failure != nil {
-		fmt.Fprintf(&out, " Refusal: %s (%s).", redact.Secrets(r.Failure.Refusal.Message),
+		fmt.Fprintf(&out, " Refusal: %s (%s).", redact.Secrets(r.Failure.Refusal.ForModel()),
 			r.Failure.Refusal.Code)
 	}
 	if r.Receipt != nil && !r.ClientReported {
