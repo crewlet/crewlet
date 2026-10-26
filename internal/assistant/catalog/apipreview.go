@@ -246,8 +246,15 @@ func checked(ctx context.Context, read proposal.Read, req exec.Request,
 	return checkWarnings(resp.Body), nil
 }
 
-// checkWarnings are a check's `warnings`, each its `message` (or the value
-// itself), as single redacted lines.
+// checkWarnings are a check's `warnings` this change introduces, each its
+// `message` (or the value itself), as single redacted lines.
+//
+// ONLY WHAT THE CHANGE INTRODUCES: a config route's check judges the whole
+// document it would store, so its warnings include every advisory the company
+// already carried (a person's seat with no chat contact, on a card that adds
+// an agent). A warning the route marks `"introduced": false` is left off the
+// card; one it does not mark is kept, so nothing a route warns about without
+// saying is ever dropped.
 func checkWarnings(body []byte) []string {
 	var answer struct {
 		Warnings []any `json:"warnings"`
@@ -259,6 +266,9 @@ func checkWarnings(body []byte) []string {
 	for _, w := range answer.Warnings {
 		var line string
 		if record, ok := w.(map[string]any); ok {
+			if introduced, said := record["introduced"].(bool); said && !introduced {
+				continue
+			}
 			line = cards.Text(record["message"])
 		} else {
 			line = cards.Text(w)
