@@ -150,7 +150,19 @@ func (g generic) preview(ctx context.Context, read proposal.Read, _ time.Time,
 
 	var warnings []string
 	if route.DryRun {
-		found, checkErr := checked(ctx, read, req, revision)
+		// ONLY WHAT THIS CHANGE INTRODUCES, where the route can be asked
+		// about the object left as it is (a replace of what was read, an
+		// empty merge patch): a warning the company already carries is on
+		// every change, and shown on each card it buries the one that
+		// matters ([introducedWarnings]). A create or a delete has no such
+		// write, and shows every warning its check raises.
+		var found []string
+		var checkErr error
+		if baseline, ok := unchangedWrite(req, before, summary, route.Summary); ok {
+			found, checkErr = introducedWarnings(ctx, read, req, baseline, revision)
+		} else {
+			found, checkErr = checked(ctx, read, req, revision)
+		}
 		if checkErr != nil {
 			return proposal.Preview{}, checkErr
 		}
@@ -216,6 +228,58 @@ func (g generic) preview(ctx context.Context, read proposal.Read, _ time.Time,
 		Act:            act,
 		Removes:        removalLabels(removals),
 	}, nil
+}
+
+// unchangedWrite is req as a write that leaves its object as it is: a PUT of
+// the representation the preview read, or an empty merge patch, under the same
+// history line. False for a write that has none (a create, a delete).
+func unchangedWrite(req exec.Request, before any, summary string, summarised bool) (exec.Request, bool) {
+	var body map[string]any
+	switch {
+	case req.Method == http.MethodPatch:
+		body = map[string]any{}
+	case req.Method == http.MethodPut && before != nil:
+		record, ok := clone(before).(map[string]any)
+		if !ok {
+			return exec.Request{}, false
+		}
+		body = record
+	default:
+		return exec.Request{}, false
+	}
+	if summarised {
+		body[SummaryKey] = summary
+	}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return exec.Request{}, false
+	}
+	out := req
+	out.Body = encoded
+	return out, true
+}
+
+// introducedWarnings asks a [Route.DryRun] route's check of change and of
+// baseline (the same write leaving the object as it is) and answers the
+// warnings change raises that baseline does not: what THIS change introduces.
+// A warning the company already carries (a person with no chat contact)
+// belongs to every change and to none, and shown on each card it buries the
+// one that matters. The rule Budgets applies to its own Save
+// (the dashboard's introducedWarnings). A refusal of
+// the change is the step's ([PreviewRefusal]); a baseline the route refuses
+// shows the change's every warning rather than hiding one.
+func introducedWarnings(ctx context.Context, read proposal.Read, change, baseline exec.Request,
+	revision string) ([]string, error) {
+
+	after, err := checked(ctx, read, change, revision)
+	if err != nil {
+		return nil, err
+	}
+	before, err := checked(ctx, read, baseline, revision)
+	if err != nil {
+		return after, nil //nolint:nilerr // A baseline that cannot be checked hides nothing.
+	}
+	return slices.DeleteFunc(after, func(w string) bool { return slices.Contains(before, w) }), nil
 }
 
 // checked asks a [Route.DryRun] route to check req: the same request, under
