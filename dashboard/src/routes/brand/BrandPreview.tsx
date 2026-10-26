@@ -1,7 +1,8 @@
 /**
  * The preview beside a brand's cards: a sample doc or slide, in light or
  * dark, drawn from the brand as it stands (an administrator's edit while a
- * card is being changed), and said to be a sample rather than a real artifact.
+ * card is being changed, or a draft nobody published yet), and said to be a
+ * sample rather than a real artifact. A draft's preview is tagged as one.
  *
  * Drawn here, in the page, with the brand's values scoped to the sample's own
  * box: nothing of the brand reaches the dashboard's chrome.
@@ -13,6 +14,7 @@ import {
   Card,
   IconButton,
   SegmentedControl,
+  Tag,
   Text,
   type BrandSampleKind,
   type BrandSampleMode,
@@ -26,13 +28,17 @@ import { faceDrawing } from "~/lib/brand/brand.ts";
 import "~/styles/brand.css";
 import type { BrandAssets } from "~/lib/brand/useBrand.ts";
 
-/** What the preview draws: the brand as published (or a kit's version as it is), or an edit not yet saved. */
-export type BrandPreviewDrawn = "brand" | "changes";
+/**
+ * What the preview draws: the brand as published (or a kit's version as it
+ * is), an edit not yet saved, or a saved draft nobody published yet.
+ */
+export type BrandPreviewDrawn = "brand" | "changes" | "draft";
 
 /** The note under the sample, by what it draws. */
 const NOTES: Readonly<Record<BrandPreviewDrawn, string>> = {
   brand: "A sample drawn with this brand, not a real artifact.",
   changes: "A sample drawn with your changes, not a real artifact.",
+  draft: "A sample drawn with this draft, not a real artifact.",
 };
 
 const KINDS = [
@@ -78,7 +84,7 @@ export function BrandPreview({
 }: {
   document: BrandDocument;
   assets: BrandAssets;
-  /** What the sample draws, which its note says. */
+  /** What the sample draws, which its note says and a draft's tag marks. */
   drawn: BrandPreviewDrawn;
   /** The card's title, which also names its region. */
   title?: string;
@@ -96,6 +102,11 @@ export function BrandPreview({
       <Card.Header
         actions={
           <span className="brand-preview-controls">
+            {drawn === "draft" ? (
+              <Tag size="sm" variant="info">
+                Draft
+              </Tag>
+            ) : null}
             <SegmentedControl
               label="Preview kind"
               semantics="radio"

@@ -82,7 +82,7 @@ test("with every part in place, the first unconfirmed pair is what holds", () =>
   expect(held).toHaveLength(1);
   expect(held[0]).toBe(boxes[0]);
   expect(within(group).getByRole("alert").textContent).toBe(
-    pairs.length === 1 ? "Confirm the pair to adopt." : "Confirm each pair to adopt.",
+    pairs.length === 1 ? "Confirm the pair to publish." : "Confirm each pair to publish.",
   );
 });
 

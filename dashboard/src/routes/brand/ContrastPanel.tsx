@@ -8,7 +8,7 @@
  * adds what it needs, one muted line on why it matters, and its offers as
  * small answer options (`ChoiceButtons size="sm"`), each with a chip of the
  * colour it applies. Text on the light ground below its minimum refuses an
- * adoption: it says "Blocks adoption" and the engine's own reason instead.
+ * adoption: it says "Blocks publishing" and the engine's own reason instead.
  *
  * AN APPLIED OFFER STAYS CHOSEN. Applying one fixes the pair, which would
  * take its offers away with it; they stay drawn, the applied one marked, for
@@ -107,7 +107,7 @@ export function ContrastPanel({
                 ) : null}
                 {low && pair.refuses ? (
                   <Tag size="sm" variant="danger" leadingIcon={<CircleAlertGlyph size="xs" />}>
-                    Blocks adoption
+                    Blocks publishing
                   </Tag>
                 ) : null}
               </div>

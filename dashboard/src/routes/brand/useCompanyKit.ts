@@ -14,6 +14,7 @@
  */
 
 import { useMemo } from "react";
+import type { ArtifactRole } from "~/protocol/index.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { Adoption } from "~/lib/brand/brand.ts";
 import { draftKit } from "~/lib/brand/setup.ts";
@@ -27,6 +28,13 @@ export interface CompanyKit {
   draft: boolean;
   /** That version, read (nothing when the caller asked not to). */
   read: BrandVersionRead;
+  /**
+   * The reader's role on a kit found among the brand kits they may write,
+   * with none adopted; undefined for the adopted kit, which is not listed.
+   */
+  role: ArtifactRole | undefined;
+  /** List the kits again, after a write that changes which kit is the draft. */
+  refetch: () => void;
 }
 
 /** The brand kits a setup may continue, newest first: enough to find the draft a setup left. */
@@ -53,10 +61,19 @@ export function useCompanyKit(
     ? (adoption.newer_version ?? adoption.kit_version)
     : (draft?.head_number ?? 0);
   const read = useBrandVersion(options.read === false ? null : kit, version);
+  const role = adoption ? undefined : draft?.role;
+  const refetch = kits.refetch;
   return useMemo(() => {
     if (adoption === undefined) return undefined;
     if (adoption === null && kits.loading) return undefined;
     if (kit === null) return null;
-    return { kit, version, draft: !adoption || Boolean(adoption.newer_version), read };
-  }, [adoption, kits.loading, kit, version, read]);
+    return {
+      kit,
+      version,
+      draft: !adoption || Boolean(adoption.newer_version),
+      read,
+      role,
+      refetch,
+    };
+  }, [adoption, kits.loading, kit, version, read, role, refetch]);
 }

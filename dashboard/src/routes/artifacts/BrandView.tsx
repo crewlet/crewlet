@@ -4,12 +4,12 @@
  * the version's own `brand.json` and files.
  *
  * WHETHER IT IS THE COMPANY'S BRAND is said over the cards: this version is
- * the adopted one, or it is not, and an administrator may review and adopt it
- * here. The kit itself is changed on Company › Brand, or by an agent or an
- * editor publishing a version; this view draws and never writes. A draft that
- * lacks a primary logo or colour is drawn as far as it goes (the preview
- * falls back to Crewlet's defaults), says what it lacks, and is never offered
- * for adoption.
+ * the published one (adopted, in the engine's word), or it is not, and an
+ * administrator may review and publish it here. The kit itself is changed on
+ * Company › Brand, or by an agent or an editor publishing a version; this
+ * view draws and never writes. A draft that lacks a primary logo or colour is
+ * drawn as far as it goes (the preview falls back to Crewlet's defaults),
+ * says what it lacks, and is never offered for publishing.
  */
 
 import { useState } from "react";
@@ -66,15 +66,15 @@ export function BrandView({ detail, version }: { detail: ArtifactDetail; version
           variant="info"
           action={
             <Button size="small" variant="secondary" onClick={() => setReviewing(true)}>
-              Review and adopt
+              Publish this version
             </Button>
           }
         >
-          {`Version ${version} is not the company's brand. Adopting it makes it the look of every doc, deck and page agents make.`}
+          {`Version ${version} is not the company's brand. Publishing it makes it the look of every doc, deck and page agents make.`}
         </Callout>
       ) : (
         <Callout variant="neutral">
-          An administrator adopts the company's brand on Company › Brand.
+          An administrator publishes the company's brand on Company › Brand.
         </Callout>
       )}
       <BrandBoard document={doc} assets={assets} drawn="brand" />

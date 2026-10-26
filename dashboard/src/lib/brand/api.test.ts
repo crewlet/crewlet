@@ -131,7 +131,7 @@ test("a version that landed and was not adopted says so, with the engine's reaso
   expect(answer.kind).toBe("published");
   if (answer.kind !== "published") return;
   expect(answer.version).toBe(8);
-  expect(answer.text).toMatch(/^Version 8 of the brand kit is saved and not adopted yet\./);
+  expect(answer.text).toMatch(/^Version 8 of the brand kit is saved and not published yet\./);
 });
 
 test("an adopted kit that is gone is replaced by a new kit holding the same files", async () => {
