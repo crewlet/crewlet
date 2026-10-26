@@ -225,8 +225,9 @@ func (w *Waiter) holdsDuty() bool {
 // is never found gone. A roster that cannot answer is no evidence either way,
 // and changes nothing.
 //
-// The clock is this waiter's own and starts again where the duty moves, which
-// can only make a verdict later.
+// The clock is this waiter's own and starts again where the duty moves — every
+// absence is forgotten when the duty is lost, or cannot be confirmed
+// ([Waiter.forgetAbsences]) — which can only make a verdict later.
 func (w *Waiter) goneAfter(ctx context.Context, manager *Manager, runs []PendingRun) {
 	if w.roster == nil {
 		return

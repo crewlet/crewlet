@@ -283,8 +283,8 @@ type Waiter struct {
 	// schedule per turn ([Waiter.follow]).
 	following map[string]bool
 	// absent is when this waiter first found each launch node of a local
-	// run without its presence, for as long as it stays without it
-	// ([Waiter.goneAfter]).
+	// run without its presence, for as long as it stays without it and this
+	// waiter holds the duty ([Waiter.goneAfter], [Waiter.forgetAbsences]).
 	absent map[string]time.Time
 	// sweeping is whether a sweep of this host's boxes is running: one at
 	// a time ([Waiter.sweep]).
@@ -771,6 +771,7 @@ func (w *Waiter) replaceWalk(stop context.CancelFunc) {
 
 // standDown stops the walk and every task in flight: this node has
 // definitively lost the duty, so a peer may hold it and work the same boxes.
+// And it forgets every absence it had been timing ([Waiter.forgetAbsences]).
 //
 // UNDER THE LOCK, so a walk between taking a slot and registering its task
 // cannot slip a task past it ([Waiter.begin]). A cancel only closes channels,
@@ -779,6 +780,7 @@ func (w *Waiter) standDown() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.dutyUntil = time.Time{}
+	clear(w.absent)
 	if w.walk != nil {
 		w.walk()
 	}
@@ -799,6 +801,10 @@ func (w *Waiter) mayTick(ctx context.Context) bool {
 	holds, err := w.claimDuty(ctx)
 	if err != nil {
 		log.WarnContext(ctx, "sandbox_waiter_duty_claim_failed", "error", err.Error())
+		// AND THE ABSENCES IT WAS TIMING ARE FORGOTTEN, as on a lost duty:
+		// a peer may hold the duty while this node cannot tell, and an
+		// absence this node did not watch is no absence it may count.
+		w.forgetAbsences()
 		// FAIL CLOSED. Not knowing whether this node holds the duty and
 		// polling anyway is the multi-poller case the duty exists to
 		// prevent — and skipping a pass costs one interval, which the next
@@ -814,6 +820,21 @@ func (w *Waiter) mayTick(ctx context.Context) bool {
 		w.standDown()
 	}
 	return holds
+}
+
+// forgetAbsences drops every launch node's absence this waiter was timing
+// ([Waiter.goneAfter]): its stint of the duty is over, or may be.
+//
+// A VERDICT NEEDS AN ABSENCE WATCHED WHOLE, within one stint of holding the
+// duty. Kept across stints, an absence this waiter first saw before it lost
+// the duty was still dated then when it got the duty back: a node that had
+// returned meanwhile — seen by the peer that held the duty, never by this one —
+// and happened to be away again on this waiter's first pass back was judged
+// gone at once, and its live runs ended as lost.
+func (w *Waiter) forgetAbsences() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	clear(w.absent)
 }
 
 // connectStreak is one turn's run of consecutive failed reconnects.

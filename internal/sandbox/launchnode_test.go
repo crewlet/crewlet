@@ -292,6 +292,85 @@ func TestALaunchNodeBackWithinTheBoxTimeoutKeepsItsRuns(t *testing.T) {
 	}
 }
 
+// AN ABSENCE IS TIMED WITHIN ONE STINT OF THE DUTY. This waiter saw node-a
+// without its presence, then lost the duty; a peer held it while node-a came
+// back; and when the duty came back here, the box timeout later, node-a
+// happened to be away again — a second restart. Timed from the first sighting,
+// that one pass judged a live node gone and ended its runs. A verdict needs an
+// absence this waiter watched whole, so the clock starts again with the stint:
+// whether the duty was lost or its claim could not be confirmed.
+//
+// Mutation: keep the absences across a lost duty, or across a claim that
+// failed, and the node is judged gone on the first pass back.
+func TestAnAbsenceIsTimedWithinOneStintOfTheDuty(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		lose func(duty *dutyStint)
+	}{
+		{"the duty was lost", func(d *dutyStint) { d.set(false, nil) }},
+		{"its claim failed", func(d *dutyStint) { d.set(false, errors.New("coordination store unreachable")) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newHostRig(t)
+			rig.launchIn("t-stint", Direct, "node-a")
+			fleet := &roster{}
+			fleet.set("node-a", false)
+			duty := &dutyStint{holds: true}
+			w, err := NewWaiter(WaiterOptions{
+				Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
+				Drives: DrivesRemote, Node: "node-b", Roster: fleet,
+				ClaimDuty: duty.claim, DutyTTL: time.Minute,
+				Now: func() time.Time { return rig.now },
+			})
+			if err != nil {
+				t.Fatalf("NewWaiter: %v", err)
+			}
+
+			tickOnce(t, w)
+			tc.lose(duty)
+			if _, err := w.Tick(t.Context()); err != nil && !errors.Is(err, duty.err) {
+				t.Fatalf("Tick off the duty: %v", err)
+			}
+			rig.now = rig.now.Add(DefaultBoxTimeout + time.Second)
+			duty.set(true, nil)
+			tickOnce(t, w)
+			if got := rig.get("t-stint"); !got.LaunchNodeGone.IsZero() || len(rig.announced()) != 0 {
+				t.Fatalf("a node found away on the first pass back on the duty was judged gone at %v",
+					got.LaunchNodeGone)
+			}
+
+			// AND WATCHED WHOLE WITHIN THE STINT, the verdict still comes.
+			rig.now = rig.now.Add(DefaultBoxTimeout)
+			tickOnce(t, w)
+			if got := rig.get("t-stint"); got.LaunchNodeGone.IsZero() {
+				t.Fatal("a node away for the box timeout within one stint was not judged gone")
+			}
+		})
+	}
+}
+
+// dutyStint is the fleet's waiter duty as a case holds it: whether this node
+// holds it now, or why it cannot say.
+type dutyStint struct {
+	mu    sync.Mutex
+	holds bool
+	err   error
+}
+
+func (d *dutyStint) claim(context.Context) (bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.holds, d.err
+}
+
+func (d *dutyStint) set(holds bool, err error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.holds, d.err = holds, err
+}
+
 // A ROSTER THAT CANNOT ANSWER DECIDES NOTHING: an unreachable store is no
 // evidence that a node left.
 //
