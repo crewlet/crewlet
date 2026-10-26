@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/period"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
@@ -306,7 +307,7 @@ func startNode(t *testing.T, spec nodeSpec) *node {
 	}
 	boot := config.DefaultBootstrap()
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&boot.Stream, filepath.Join(t.TempDir(), "stream"))
 	withServingTierA(t, &boot)
 	if spec.boot != nil {
 		spec.boot(&boot)

@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
@@ -129,7 +130,7 @@ func fleetPeers(t *testing.T, peerOpts ...func(*engine.ReconcilerOptions)) (auth
 	material := testKeyMaterial(t)
 	keyed := func() *engine.Engine {
 		return newEngine(t, engine.Options{Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
-			b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+			brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 			b.Secrets.Keys = []config.SecretKey{{ID: b.Secrets.ActiveKeyID, Material: material}}
 		})})
 	}

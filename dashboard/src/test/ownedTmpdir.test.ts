@@ -4,10 +4,12 @@
  * Vitest's forks pool writes every transformed module under
  * `join(os.tmpdir(), nanoid())` and never removes the root project's copy, so
  * each `vitest run` used to leave 16-48 MB behind — 11.9 GB over one day of
- * gate runs, on the volume whose free space the engine's embedded broker
- * sizes itself from. `scripts/owned-tmpdir.mjs` runs the suite with TMPDIR
- * pointed at a directory it creates and removes; these cases hold both halves
- * of that by what they produce: that this very run is inside such a
+ * gate runs, on the disk the engine's Go suites keep their stores and broker
+ * streams on, whose writes then fail. (It once failed every node boot too,
+ * while their brokers still sized themselves from its free space; they
+ * declare a fixed size now.) `scripts/owned-tmpdir.mjs` runs the suite with
+ * TMPDIR pointed at a directory it creates and removes; these cases hold both
+ * halves of that by what they produce: that this very run is inside such a
  * directory, and that the wrapper really does remove one, whatever the exit.
  */
 

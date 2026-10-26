@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
@@ -422,7 +423,7 @@ func TestEveryLeaseThisProcessHoldsIsUnderItsOneIncarnation(t *testing.T) {
 	boot := testBootstrap(t)
 	boot.Node.ID = "node-7"
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&boot.Stream, filepath.Join(t.TempDir(), "stream"))
 	SeedStore(t, &boot)
 	company, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -758,7 +759,14 @@ func newHarnessLogging(t *testing.T, domain statelog.Domain, logger *slog.Logger
 	// A STORE DIRECTORY, ALWAYS. An embedded broker with none keeps its
 	// streams in memory, and every property this framework rests on is
 	// about a stream that survives.
-	return buildHarness(t, domain, js.Config{StoreDir: t.TempDir()}, logger)
+	//
+	// AND A DECLARED SIZE WITH IT, for brokertest's reason: left to derive
+	// its cap from the runner's free space the broker takes three quarters
+	// of it, a fact about the machine rather than about the case. A case
+	// about a full log fills the log's own ceiling, which this does not
+	// move.
+	return buildHarness(t, domain, js.Config{StoreDir: t.TempDir(),
+		StoreMaxBytes: brokertest.StoreMaxBytes}, logger)
 }
 
 // newHarnessOn is [newHarnessFor] over the broker cfg names: an external

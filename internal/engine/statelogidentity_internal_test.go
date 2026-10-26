@@ -15,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
@@ -38,7 +39,7 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {
@@ -358,7 +359,7 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {
@@ -555,9 +556,16 @@ func TestTheBootReadsTheLogsEndBesideTheCheckpoint(t *testing.T) {
 
 // aProvisionedTrackerLog is the tracker's log provisioned on a fresh embedded
 // broker, over a fresh store, by a state log that has started nothing.
+//
+// THE BROKER IS SIZED, at [brokertest.StoreMaxBytes]: the ceilings below are
+// divided from the limit it reports, and left to derive one it reports three
+// quarters of this machine's free disk — so the log this case reads would be
+// sized by the runner, and refused on a disk short of even its floor.
 func aProvisionedTrackerLog(t *testing.T) (*stateLog, *jetstream.Queue, *jetstream.DomainLog) {
 	t.Helper()
-	q, err := jetstream.Open(t.Context(), jetstream.Config{StoreDir: t.TempDir()})
+	q, err := jetstream.Open(t.Context(), jetstream.Config{
+		StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes,
+	})
 	if err != nil {
 		t.Fatalf("open the broker: %v", err)
 	}
@@ -639,7 +647,7 @@ func aRunningNodeOf(t *testing.T, company string) (*Engine, natsjs.JetStream) {
 	t.Helper()
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(company))
 	if err != nil {
