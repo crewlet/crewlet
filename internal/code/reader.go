@@ -1948,7 +1948,7 @@ func cutDueCursor(s string) (int64, string, bool) {
 // never published before every other, then by id, each with what a
 // publication's due rule reads and the version its row was read at.
 //
-// ONE WALK of code_repos_unpublished_idx (replicated 0061), its partial
+// ONE WALK of code_repos_unpublished_idx (replicated 0062), its partial
 // predicate repeated verbatim, which holds exactly the repositories it lists:
 // a repository whose every pack a layer covers costs the listing nothing,
 // however many there are. LEAST RECENTLY PUBLISHED FIRST, so the repository

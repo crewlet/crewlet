@@ -624,7 +624,7 @@
 // repositories a publication may be due in by the [ReadPublicationDue]
 // listing — every active and archived repository holding a pack no layer
 // covers, LEAST RECENTLY PUBLISHED FIRST, one walk of
-// code_repos_unpublished_idx (replicated 0061), the engine's own read. A purge
+// code_repos_unpublished_idx (replicated 0062), the engine's own read. A purge
 // removes the chain with the rest of a repository, in its final record: the
 // chain is bounded apart from what a part counts.
 //
