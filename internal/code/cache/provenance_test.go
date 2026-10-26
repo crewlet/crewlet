@@ -812,6 +812,134 @@ func TestACacheNeverStartedBackfillsNothing(t *testing.T) {
 	}
 }
 
+// A FAILING COPY HOLDS UP NO OTHER. A step that fails waits on its own
+// repository: it is not taken again until its retry window ends — five
+// seconds, doubling with each failure in a row — while every other copy's
+// steps are taken meanwhile; and once the rows serve again, the copy's gap
+// closes at the end of its window. Sharing one wait, the copy used most
+// recently was picked again after every wait, so one repository the data
+// nodes could not serve — a record deferred on every data node through a
+// rolling upgrade, a row this build refuses — held every other copy's gap
+// open for good.
+//
+// Mutation: take a copy's steps inside its window (backfillDue reading no
+// bfRetryAt) — the failing copy is picked again at once, and the pass never
+// reaches the other copy's gap.
+func TestAFailingCopyHoldsUpNoOther(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	failing, other := w.repo(t, 1), w.repo(t, 2)
+	repos := []string{failing, other}
+	for _, repo := range repos {
+		w.push(t, repo, "refs/heads/main", nil)
+	}
+	c := w.open(t, clk.on)
+	for _, repo := range repos {
+		w.sync(t, c, repo)
+	}
+	for _, repo := range repos {
+		w.push(t, repo, "refs/heads/main", nil)
+	}
+	c = w.reopen(t, c, clk.on)
+	w.sync(t, c, other)
+	clk.Add(time.Second)
+	w.sync(t, c, failing) // used last: the copy the backfill takes first
+	refused := errors.New("a record this build cannot read")
+	var serving atomic.Bool
+	w.log.set(func(f *fakeLog) {
+		f.readHook = func(q code.ReadQuery) error {
+			if q.Introduced.RepoID == failing && !serving.Load() {
+				return refused
+			}
+			return nil
+		}
+	})
+	attempts := func() int {
+		t.Helper()
+		return len(w.log.readsOf(failing))
+	}
+
+	steps, err := cache.BackfillPass(c)
+	if !errors.Is(err, refused) {
+		t.Fatalf("the pass took %v and answered %v, want the failing copy's refusal among its steps", steps, err)
+	}
+	if idx := mustIndex(t, c, other); idx.GapThrough != 0 {
+		t.Errorf("the other copy's gap is open after the pass: %+v", idx)
+	}
+	if n := attempts(); n != 1 {
+		t.Errorf("the failing copy's gap was asked %d times inside its window, want once", n)
+	}
+	// Its window ends, and the next failure doubles it.
+	clk.Add(cache.BackfillRetry * 6 / 5)
+	if _, err := cache.BackfillPass(c); !errors.Is(err, refused) {
+		t.Fatalf("once its window ended the pass answered %v, want the copy asked again and refused", err)
+	}
+	clk.Add(cache.BackfillRetry * 6 / 5)
+	if _, err := cache.BackfillPass(c); err != nil || attempts() != 2 {
+		t.Errorf("a window into its second failure the pass answered %v after %d asks, want none taken, two "+
+			"asks in all: the window doubled", err, attempts())
+	}
+	// The rows serve again: the gap closes once the window ends.
+	serving.Store(true)
+	clk.Add(2 * cache.BackfillRetry)
+	backfill(t, c)
+	if idx := mustIndex(t, c, failing); idx.GapThrough != 0 {
+		t.Errorf("once its rows serve again and its window ended, the copy's gap is open: %+v", idx)
+	}
+}
+
+// A RUN GONE FROM THE DISK IS LOST, NOT TAKEN AGAIN FOR EVER. A run its index
+// names that something removed under the cache fails the merge that maps it,
+// and a check that met it gone answered "replaced" and nothing else: either
+// way the next look found the same step due, and the backfill took it again
+// at once, for ever — ten thousand merges in under a second, a warning each,
+// until a full round made the index anew. Now the merge's failure waits out
+// the copy's window, the run's vouch forgotten as the merge finds it gone,
+// and the run's check once the window ends finds it LOST, as a full round
+// finds one: the copy's repair round drops the index and makes it anew.
+//
+// Mutation: answer a run its index names that is gone "replaced"
+// (checkRuns) — its check is taken again at once, and the pass never ends.
+func TestARunGoneFromTheDiskIsLostNotTakenAgainForEver(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t, clk.on)
+	w.sync(t, c, repo)
+	var s cache.Synced
+	for range 2 {
+		w.push(t, repo, "refs/heads/main", nil)
+		s = w.sync(t, c, repo)
+	}
+	idx := mustIndex(t, c, repo)
+	if len(idx.Runs) != 2 {
+		t.Fatalf("the index holds runs %v, want the two deltas' runs, a merge due", idx.Runs)
+	}
+	if err := os.Remove(filepath.Join(s.Dir, cache.RunRel(idx.Runs[0]))); err != nil {
+		t.Fatal(err)
+	}
+
+	steps, err := cache.BackfillPass(c)
+	if !slices.Equal(steps, []string{"merge"}) || err == nil {
+		t.Fatalf("the pass took %v and answered %v, want the one merge, failing", steps, err)
+	}
+	clk.Add(cache.BackfillRetry * 6 / 5)
+	steps, err = cache.BackfillPass(c)
+	if err != nil || len(steps) == 0 || steps[0] != "check" || slices.Contains(steps, "merge") {
+		t.Fatalf("once its window ended the pass took %v and answered %v, want the gone run's check first "+
+			"and no merge", steps, err)
+	}
+	// The repair round the check asked has run before this answers: a delta
+	// would have kept the run beside the lost one.
+	s = w.sync(t, c, repo)
+	if idx = mustIndex(t, c, repo); len(idx.Runs) != 0 || idx.From != s.Position.Packed() {
+		t.Errorf("after its repair the index is %+v, want one made anew at %d", idx, s.Position.Packed())
+	}
+}
+
 // THE BEHIND GAUGE COUNTS WHAT THE BACKFILL OWES. crewlet.code.cache.
 // provenance.behind is the copies whose index has a gap, or whose history is
 // wanted and not read to its start — counted by the schedule as it places

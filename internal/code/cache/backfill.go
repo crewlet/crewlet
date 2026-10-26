@@ -80,8 +80,25 @@ import (
 // node holds at most a third of one reader of each, and the fleet's backfills
 // hold under half of one however many git nodes share them — the serving keeps
 // the rest. Counts that cannot be read are waited on and read again, never
-// paced on a guess; a page the estate could not serve is waited on and asked
-// again, the wait doubling from BackfillRetry to BackfillRetryCeiling.
+// paced on a guess.
+//
+// # A step that fails waits on its own repository
+//
+// A step that fails — a page the estate could not serve, a run that could
+// not be written or merged — is taken again only once its REPOSITORY's
+// retry window ends, the window doubling from BackfillRetry to
+// BackfillRetryCeiling with each failure of it in a row
+// (entry.bfRetryAt), and the backfill meanwhile takes every other
+// repository's steps. Sharing one wait, the repository picked first — the
+// one used most recently — was picked again after every wait, so the rows of
+// one repository the data nodes could not serve held every other copy's gap
+// open; and a failed merge, answered as a step done, was taken again at once,
+// for ever. Only failures that SPAN repositories — two or more in a row with
+// none succeeding between — make the loop itself wait, doubling the same
+// way: the estate unreachable, or a disk refusing every write, never a
+// stream of failures as fast as the copies can fail them. A run the index
+// names that is gone from the disk is LOST, as a full round finds one lost
+// (indexFull): its check asks the repair round that makes the index anew.
 
 // backfillWork is a kind of step, in the order the loop takes them.
 type backfillWork uint8
@@ -115,16 +132,43 @@ type backfillTask struct {
 	unchecked []provenanceRun
 }
 
-// backfillDone is what one step did: its kind (work) and anything at all
-// (did); a page read in page — what the loop then owes a pace; a read that
-// failed (err), which the loop waits on; or nothing due, and when the next
-// step falls due by time (next, zero for none).
+// backfillDone is what one step did: its kind (work), of which repository
+// (repo), and anything at all (did); a page read in page — what the loop
+// then owes a pace; a step that failed (err), whose repository waits retry
+// before the next; or nothing due, and when the next step falls due by time
+// (next, zero for none).
 type backfillDone struct {
-	work backfillWork
-	did  bool
-	page time.Duration
-	next time.Time
-	err  error
+	work  backfillWork
+	repo  string
+	did   bool
+	page  time.Duration
+	next  time.Time
+	err   error
+	retry time.Duration
+}
+
+// backfillStreak is the backfill's failed steps in a row since one last
+// succeeded: how many, the repository the first was of, and how many have
+// failed since they spanned two repositories or more — what the loop as a
+// whole waits on.
+type backfillStreak struct {
+	n      int
+	first  string
+	spread int
+}
+
+// fail counts a failed step of repo and answers how many failures in a row
+// the loop itself waits on: none while every one is of one repository, which
+// its own window holds back while the others' steps go on.
+func (s *backfillStreak) fail(repo string) int {
+	switch {
+	case s.n == 0:
+		s.first = repo
+	case s.spread > 0 || repo != s.first:
+		s.spread++
+	}
+	s.n++
+	return s.spread
 }
 
 // kickBackfill wakes the backfill without waiting for it.
@@ -138,26 +182,30 @@ func (c *Cache) kickBackfill() {
 // backfiller is the backfill's loop, until ctx ends or the cache stops: a
 // step at a time while any is due, the pace a page owes paid before the next
 // step, and — with nothing due — parked, holding nothing of the directory,
-// until it is kicked or the next horizon falls due. A wait for a pace or after
-// a failure is not cut short by a kick: new work is no reason to read the
-// estate sooner.
+// until it is kicked or the next step falls due by time: a horizon, or the
+// end of a repository's retry window. A wait for a pace or after failures
+// that span repositories is not cut short by a kick: new work is no reason
+// to read the estate sooner.
 func (c *Cache) backfiller(ctx context.Context) {
 	var (
-		failures int
-		owed     time.Duration
+		// unpaced is the fleet's counts unreadable in a row.
+		unpaced int
+		owed    time.Duration
+		streak  backfillStreak
 	)
+	alive := func() bool { return ctx.Err() == nil && c.life.Err() == nil }
 	for {
 		if owed > 0 {
 			ratio, err := c.fleetRatio()
 			if err != nil {
-				failures++
+				unpaced++
 				c.log.Warn("code_cache_backfill_unpaced", "error", err)
-				if !c.backfillWait(ctx, c.backfillRetry(failures), false) {
+				if !c.backfillWait(ctx, c.backfillRetry(unpaced), false) {
 					return
 				}
 				continue
 			}
-			failures = 0
+			unpaced = 0
 			pace := time.Duration(BackfillIdle*ratio) * owed
 			owed = 0
 			if !c.backfillWait(ctx, pace, false) {
@@ -178,13 +226,15 @@ func (c *Cache) backfiller(ctx context.Context) {
 		var ok bool
 		switch {
 		case done.err != nil:
-			failures++
-			c.log.Warn("code_cache_backfill_failed", "error", done.err)
-			ok = c.backfillWait(ctx, c.backfillRetry(failures), false)
+			c.log.Warn("code_cache_backfill_failed", "repo", done.repo, "error", done.err, "retry_in", done.retry)
+			ok = alive()
+			if spread := streak.fail(done.repo); spread > 0 {
+				ok = c.backfillWait(ctx, c.backfillRetry(spread), false)
+			}
 		case done.page > 0:
-			failures, owed, ok = 0, done.page, true
+			streak, owed, ok = backfillStreak{}, done.page, true
 		case done.did:
-			failures, ok = 0, ctx.Err() == nil && c.life.Err() == nil
+			streak, ok = backfillStreak{}, alive()
 		default:
 			var until time.Duration
 			if !done.next.IsZero() {
@@ -246,9 +296,11 @@ func (c *Cache) backfillWait(ctx context.Context, d time.Duration, kickable bool
 }
 
 // backfillStep takes the next step due and does it — under ctx and the
-// cache's lifetime, which Stop ends — and answers what it did. Whatever it
-// did, its copy is marked once it has (backfillDirty): a step is a change to
-// the copy's work.
+// cache's lifetime, which Stop ends — and answers what it did. A step that
+// fails opens or widens its repository's retry window, and one that succeeds
+// closes it (entry.bfRetryAt); a step its context ended does neither. And
+// whatever it did, its copy is marked once it has (backfillDirty): a step is
+// a change to the copy's work.
 func (c *Cache) backfillStep(ctx context.Context) (done backfillDone) {
 	t, next := c.nextBackfill()
 	if t == nil {
@@ -260,12 +312,21 @@ func (c *Cache) backfillStep(ctx context.Context) (done backfillDone) {
 	stop := context.AfterFunc(c.life, cancel)
 	defer stop()
 	defer func() {
+		now := c.now()
 		t.e.mu.Lock()
 		gone := c.unpin(t.e, t.inc)
+		switch {
+		case done.err != nil:
+			t.e.bfFailures++
+			t.e.bfRetryAt = now.Add(c.backfillRetry(t.e.bfFailures))
+			done.retry = t.e.bfRetryAt.Sub(now)
+		case done.did && sctx.Err() == nil:
+			t.e.bfFailures, t.e.bfRetryAt = 0, time.Time{}
+		}
 		t.e.mu.Unlock()
 		c.trash(gone)
 		c.backfillDirty(t.e)
-		done.work = t.work
+		done.work, done.repo = t.work, t.e.id
 	}()
 	switch t.work {
 	case workCheck:
@@ -274,8 +335,10 @@ func (c *Cache) backfillStep(ctx context.Context) (done backfillDone) {
 	case workMerge:
 		ok, err := c.mergePair(sctx, t.e, t.inc, t.gen, t.rec, t.pair)
 		switch {
+		case err != nil && sctx.Err() != nil:
 		case err != nil:
-			c.log.Warn("code_cache_provenance_merge_failed", "repo", t.e.id, "incarnation", t.inc.n, "error", err)
+			return backfillDone{err: fmt.Errorf("repository %s: merging runs of its index of pushes: %w", t.e.id,
+				err)}
 		case ok:
 			c.backfillStored(sctx, t)
 		}
@@ -375,12 +438,13 @@ const _ uint64 = 1 << (MaxProvenanceRuns - 1)
 // backfillDue looks at e's backfill: the first step its current index has due
 // — a check of the runs no vouch is held for, a merge, a page of its gap, a
 // page of its history where it is wanted, its horizon — or none and when its
-// horizon falls due; nothing at all for a copy the backfill does not work on
-// (dead, with no converged current incarnation, keeping no index). e.mu is
-// held. It reads no disk and allocates nothing: a run is unchecked when no
-// vouch is held for its name — a vouch held for another identity than the
-// file has is forgotten by the reader that meets it (mapRun), which marks the
-// copy.
+// next falls due: its horizon, or the end of its retry window, before which
+// it has none (entry.bfRetryAt); nothing at all for a copy the backfill does
+// not work on (dead, with no converged current incarnation, keeping no
+// index). e.mu is held. It reads no disk and allocates nothing: a run is
+// unchecked when no vouch is held for its name — a vouch held for another
+// identity than the file has is forgotten by the reader that meets it
+// (mapRun), which marks the copy.
 func (c *Cache) backfillDue(e *entry, now time.Time) dueWork {
 	inc := e.current
 	if e.dead || inc == nil || inc.retired || !inc.converged || inc.record() == nil {
@@ -389,6 +453,10 @@ func (c *Cache) backfillDue(e *entry, now time.Time) dueWork {
 	rec := inc.record()
 	d := dueWork{used: inc.lastUsed, behind: rec.gapped() || e.wantHistory && !rec.Complete, inc: inc,
 		gen: inc.provGen, rec: rec}
+	if now.Before(e.bfRetryAt) {
+		d.when = e.bfRetryAt
+		return d
+	}
 	vouched, unchecked := runMarks(inc, rec)
 	horizon := rec.OldestAt.Add(HorizonEvery)
 	switch pair := mergeDue(rec, vouched); {
@@ -462,8 +530,12 @@ func mergeDue(rec *provenanceState, vouched uint64) int {
 // that passes is vouched for; one that fails, or whose read fails, goes on the
 // copy's repair mark at the identity it failed at, with a repair round asked,
 // which drops the index (dropDamaged: eventFailedCheck) — never under a check
-// of the repository, whose release asks the round again. A run replaced while
-// it was read decides nothing, and the next pass reads its successor.
+// of the repository, whose release asks the round again. A run gone from the
+// disk while its index still names it is LOST, and goes on the mark the same
+// way, as a full round's indexFull makes an index anew over a run it finds
+// gone: answered "replaced", its check found it unchecked again at once, and
+// took it again, for ever. One its index no longer names — retired since the
+// check was picked — decides nothing.
 func (c *Cache) checkRuns(ctx context.Context, t *backfillTask) {
 	p := c.pieces(c.scrubHold)
 	began := time.Now()
@@ -491,9 +563,12 @@ func (c *Cache) checkRuns(ctx context.Context, t *backfillTask) {
 		switch {
 		case err != nil && ctx.Err() != nil:
 			return
-		case err == nil && v == hashNone:
+		case err == nil && v == hashNone && !c.namesRun(t, r):
 			c.countCheck(kind, checkReplaced, triggerFirst)
 			continue
+		case err == nil && v == hashNone:
+			c.countCheck(kind, checkDamaged, triggerFirst)
+			err = errRunGone
 		case err == nil && v == hashSound:
 			c.countCheck(kind, checkSound, triggerFirst)
 			t.e.mu.Lock()
@@ -518,6 +593,16 @@ func (c *Cache) checkRuns(ctx context.Context, t *backfillTask) {
 		t.e.mu.Unlock()
 		return
 	}
+}
+
+// namesRun reports whether t's incarnation's index names run r now: a run
+// number is never taken twice in an incarnation (allocRun), so a run named is
+// the file the check read. e.mu is not held.
+func (c *Cache) namesRun(t *backfillTask, r provenanceRun) bool {
+	t.e.mu.Lock()
+	defer t.e.mu.Unlock()
+	rec := t.inc.record()
+	return rec != nil && rec.named(r.N)
 }
 
 // backfillPage reads and commits one page of t's work — the gap, the history

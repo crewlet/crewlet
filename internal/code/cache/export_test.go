@@ -1346,18 +1346,26 @@ func BackfillAudit(c *Cache) []string {
 
 // BackfillPass takes backfill steps until none is due, and answers every step
 // it took, in order: what a case runs in place of starting the backfill,
-// whose pace it would otherwise wait out. A page the estate did not serve ends
-// the pass with its error.
+// whose pace it would otherwise wait out. A step that fails is answered among
+// them, its error joined to the pass's, and the pass goes on to the other
+// repositories' steps, as the backfill does while the failing one waits out
+// its window — the pass, waiting nothing out, ends there.
 func BackfillPass(c *Cache) ([]string, error) {
-	var steps []string
+	var (
+		steps []string
+		errs  []error
+	)
 	for range 10_000 {
 		step, err := BackfillStep(c)
-		if err != nil || step == "" {
-			return steps, err
+		if err != nil {
+			errs = append(errs, err)
+		}
+		if step == "" {
+			return steps, errors.Join(errs...)
 		}
 		steps = append(steps, step)
 	}
-	return steps, errors.New("cache: the backfill never ran out of steps")
+	return steps, errors.Join(append(errs, errors.New("cache: the backfill never ran out of steps"))...)
 }
 
 // BackfillWakesWith makes the backfill ask f for each wait — after a page,

@@ -663,16 +663,22 @@ const BackfillIdle = 2
 // the index — for one page of one row a day a repository.
 const HorizonEvery = 24 * time.Hour
 
-// BackfillRetry and BackfillRetryCeiling bound the backfill's wait after a
-// page the estate could not serve, or a fleet whose live nodes could not be
-// counted (Options.Fleet): doubling from the first to the second, jittered,
-// and asked again — never a page paced on a guess.
+// BackfillRetry and BackfillRetryCeiling bound the backfill's waits after a
+// step that failed — a page the estate could not serve, a run it could not
+// write or merge — each a window of the failing repository's own, while the
+// other repositories' steps go on (backfill.go); the backfill's wait as a
+// whole after failures that span repositories; and its wait on a fleet whose
+// live nodes could not be counted (Options.Fleet). Each doubles from the
+// first to the second, jittered, and the step is asked again — never a page
+// paced on a guess.
 //
 // FIVE SECONDS TO FIVE MINUTES: a data node that restarts or a router that
 // lost its placement answers again within seconds, and nobody waits on a
 // backfill, so a long outage costs one read every five minutes a git node
-// rather than a stream of them against a fleet that is already down — the
-// shape of the code reconciler's retries (engine's codeReposRetryBase).
+// rather than a stream of them against a fleet that is already down, and
+// one repository whose rows cannot be served costs one read of them every
+// five minutes — the shape of the code reconciler's retries (engine's
+// codeReposRetryBase).
 const (
 	BackfillRetry        = 5 * time.Second
 	BackfillRetryCeiling = 5 * time.Minute

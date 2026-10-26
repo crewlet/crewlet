@@ -118,6 +118,11 @@ const provenanceFile = "internal/code/cache/provenance.go"
 // is (M3-decisions M3-O67).
 var errUnchecked = errors.New("cache: the index of pushes holds a run this process has not yet checked")
 
+// errRunGone is a run its index names that is not on the disk — something
+// outside the engine removed it — so the index holding it is lost, as a full
+// round finds one lost (indexFull).
+var errRunGone = errors.New("cache: a run the index of pushes names is gone from the disk")
+
 // provenanceState is the provenance index's record: what derivedState
 // carries for DerivedProvenance, persisted with the state. IMMUTABLE once
 // stored (commitIndex): a state is encoded outside the entry's lock.
@@ -583,6 +588,15 @@ func (c *Cache) mapRun(e *entry, inc *incarnation, r provenanceRun) (*mappedRun,
 	path := filepath.Join(inc.dir, rel)
 	f, err := os.Open(path)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			// GONE: no vouch stands for a file that is not there, so the
+			// backfill's next look at the copy checks the run — and finds it
+			// lost while its index names it (checkRuns).
+			e.mu.Lock()
+			unvouch(inc, rel)
+			c.backfillDirty(e)
+			e.mu.Unlock()
+		}
 		return nil, fmt.Errorf("cache: opening %s's run %d: %w", e.id, r.N, err)
 	}
 	defer func() { _ = f.Close() }() // read-only, and the mapping outlives the descriptor

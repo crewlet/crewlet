@@ -188,9 +188,14 @@ type entry struct {
 	// (schedule.go), under the schedule's own mu; bfQueued says it is in a
 	// due queue there — what a use reads holding this mu alone, so a use of
 	// a copy the backfill has no step of due takes no lock of the
-	// schedule's.
-	bf       slot
-	bfQueued atomic.Bool
+	// schedule's. bfFailures is the backfill's steps of it that failed in a
+	// row, and bfRetryAt, on Options.Now's clock, when the last of them lets
+	// it take the next: a step that fails waits on its own repository, never
+	// the backfill's other repositories (backfillStep).
+	bf         slot
+	bfQueued   atomic.Bool
+	bfFailures int
+	bfRetryAt  time.Time
 
 	// stateMu serialises persisting the state.
 	stateMu sync.Mutex
