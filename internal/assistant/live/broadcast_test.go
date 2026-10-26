@@ -255,7 +255,7 @@ func waitFor(t *testing.T, cond func() bool) {
 	}
 }
 
-// A FRAME THE FLEET DID NOT SEAL IS DROPPED (ADR-0052): a node following a
+// A FRAME THE FLEET DID NOT SEAL IS DROPPED (ADR-0053): a node following a
 // turn shows only frames sealed under the fleet's keyring, never one written
 // by whoever reached the broker, and never one sealed under another fleet's
 // keys or encrypted under another fleet's AEAD key.
@@ -308,7 +308,7 @@ func TestAFrameTheFleetDidNotSealIsDropped(t *testing.T) {
 	}
 }
 
-// NO FRAME ON THE QUEUE CARRIES THE TURN'S PROSE (ADR-0052): every broadcast
+// NO FRAME ON THE QUEUE CARRIES THE TURN'S PROSE (ADR-0053): every broadcast
 // frame and every replayed page crosses the broker encrypted, so reaching the
 // broker reads no conversation.
 //
@@ -344,7 +344,7 @@ func TestAFrameOnTheQueueCarriesNoneOfTheTurnsProse(t *testing.T) {
 	}
 }
 
-// A FRAME REPLAYED ONTO ANOTHER TURN IS DROPPED (ADR-0052): a frame captured
+// A FRAME REPLAYED ONTO ANOTHER TURN IS DROPPED (ADR-0053): a frame captured
 // off one turn's channel and broadcast on another's does not open there, even
 // re-sealed by a peer that can sign, because the turn is in its associated data.
 //
@@ -392,7 +392,7 @@ func TestAFrameReplayedOntoAnotherTurnIsDropped(t *testing.T) {
 	}
 }
 
-// A STOP OR A REPLAY FOR SOMEBODY ELSE'S TURN IS REFUSED BY THE RUNNER (ADR-0052):
+// A STOP OR A REPLAY FOR SOMEBODY ELSE'S TURN IS REFUSED BY THE RUNNER (ADR-0053):
 // the node running a turn checks the person the request names, so a peer can
 // neither read nor stop another person's turn on its word.
 //

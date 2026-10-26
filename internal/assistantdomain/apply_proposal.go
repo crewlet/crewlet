@@ -14,7 +14,7 @@ import (
 // THE PROPOSAL'S MOVES, AS RECORDS.
 //
 // Which moves are legal is internal/assistant/proposal's state machine
-// (ADR-0050), and this package does not hold a second copy of it. What it holds
+// (ADR-0051), and this package does not hold a second copy of it. What it holds
 // is the record's half: each move names the state it was decided FROM and the
 // state it moves TO, the broker arbitrates it on the proposal's subject, and the
 // apply writes it only while the proposal is still in the state it names. Two

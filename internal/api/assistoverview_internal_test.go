@@ -14,7 +14,7 @@ import (
 // AN ASSISTED PRINCIPAL READS THE OVERVIEW AS ITS PERSON DOES.
 //
 // The four mirrors are decided by the push table rather than the authority
-// table, and none carries a credential, so ADR-0051's parity has nothing to
+// table, and none carries a credential, so ADR-0052's parity has nothing to
 // take away: through an assistant read grant each is built and served exactly
 // as the same person's own request is, for the same audience. Mutation: put an
 // assistant gate back in serveFrom and the assisted principal is refused.

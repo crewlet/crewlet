@@ -90,7 +90,7 @@ var neverReached = []string{
 	"internal/engine",
 }
 
-// THE ASSISTANT IMPORTS NO WRITER AND NO SEAT (ADR-0049).
+// THE ASSISTANT IMPORTS NO WRITER AND NO SEAT (ADR-0050).
 //
 // Every read and write the assistant makes is the person's own request,
 // through the one handler chain, decided by their own grants. The guarantee

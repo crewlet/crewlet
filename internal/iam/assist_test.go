@@ -10,7 +10,7 @@ import (
 // AN ASSISTANT GRANT'S NAME IS NOBODY'S LOGIN, AND NAMES NO OTHER CREDENTIAL.
 //
 // `assist:<grant>` is what the operator column records for a request the
-// assistant made for a person (ADR-0049). A service account enrolled under the
+// assistant made for a person (ADR-0050). A service account enrolled under the
 // class would read as the assistant in every trail that records one, and a
 // name that also read as a session or a token would send a reader resolving it
 // to the wrong table. Mutation: drop the class from credentialClasses and

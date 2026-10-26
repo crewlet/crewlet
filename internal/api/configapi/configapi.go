@@ -231,7 +231,7 @@ func (s *Service) Routes(mux authz.Mux) error {
 		}
 	}
 	// A DOCUMENT WRITE ANSWERS `dry_run=true` AND REQUIRES A SUMMARY, which
-	// its route declares (ADR-0054): [dryRunOf] and [requireSummary] are
+	// its route declares (ADR-0055): [dryRunOf] and [requireSummary] are
 	// what such a handler reads, and the declaration is what a caller (the
 	// assistant's preview) reads instead of the handler.
 	documentWrite := func(pattern string, h http.HandlerFunc) {

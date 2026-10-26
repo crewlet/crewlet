@@ -152,7 +152,7 @@ type assistantNode struct {
 }
 
 // bindRoutes hands the API's route table to the assistant's catalogue, once
-// the API is built: what the generic API tools may name (ADR-0051).
+// the API is built: what the generic API tools may name (ADR-0052).
 func (n *assistantNode) bindRoutes(app *api.App) error {
 	if err := n.tools.Bind(app.AssistantRoutes()); err != nil {
 		return fmt.Errorf("assistant: %w", err)

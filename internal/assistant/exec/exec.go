@@ -1,7 +1,7 @@
 // Package exec is how a Dashboard Assistant tool call becomes an ordinary
 // request: the request a call builds, the answer it gets back, and the seam to
 // the one component that may send it, internal/api/auth's Dispatcher
-// (ADR-0049).
+// (ADR-0050).
 //
 // # Every call is the person's own request, through the one handler chain
 //

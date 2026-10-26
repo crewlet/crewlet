@@ -336,7 +336,7 @@ func TestATurnProposesTheSeatAndChangesNothing(t *testing.T) {
 }
 
 // A SEAT THE UNIT WOULD REFUSE IS REFUSED BEFORE THE PERSON SEES IT, AND ONE IT
-// TAKES LANDS WITH THE HISTORY LINE THE PERSON APPROVED (ADR-0054).
+// TAKES LANDS WITH THE HISTORY LINE THE PERSON APPROVED (ADR-0055).
 //
 // The case the browser found: a turn copied `GET /org`'s resolved seat fields
 // (`tool_sources`, an `llm` block of purposes) into the unit it proposed, the

@@ -19,7 +19,7 @@ import (
 // ANOTHER PERSON'S CONVERSATION IS NOT FOUND, at the store, on every read.
 //
 // A caller with no relation to a conversation is told it does not exist,
-// never that it is forbidden (ADR-0052): every read is keyed on the owner, so
+// never that it is forbidden (ADR-0053): every read is keyed on the owner, so
 // a conversation, its transcript, its turn, its card and its proposal are each
 // not found to anybody else, and a listing shows them nothing. Mutation: drop
 // the owner clause from any one read and its case here goes red.

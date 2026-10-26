@@ -18,7 +18,7 @@ import (
 // it sent, what became of it and how many bytes came back, and NEVER an
 // argument, a query value, an answer or the person's question: those are the
 // company's content, already behind the routes that serve it, and a person's
-// question is theirs (ADR-0052). A write the assistant proposed is recorded
+// question is theirs (ADR-0053). A write the assistant proposed is recorded
 // where it executes, by the act route's own [OperatorActed] under the
 // assistant transport, once the person approved it.
 

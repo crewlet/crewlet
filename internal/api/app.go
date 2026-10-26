@@ -332,7 +332,7 @@ type Options struct {
 
 	// Delegations mints and checks the assistant's grants, and Dispatcher
 	// sends the assistant's tool calls through this API's own handler with
-	// them (ADR-0049). The two are ONE PAIR (the dispatcher sends what the
+	// them (ADR-0050). The two are ONE PAIR (the dispatcher sends what the
 	// delegations mint), and New binds the delegations to this API's guard
 	// and the dispatcher to this API's handler, so a grant is accepted only
 	// by the chain it was minted for.

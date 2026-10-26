@@ -19,7 +19,7 @@ import (
 )
 
 // TestNoWriteWithoutApproval: EVERY WRITE THE ASSISTANT CAN BE TOLD TO MAKE
-// IS ONLY EVER A PROPOSAL (ADR-0050, D09).
+// IS ONLY EVER A PROPOSAL (ADR-0051, D09).
 //
 // A scripted model calls every write tool and the page change in the
 // catalogue, each in a turn of its own, as forcefully as a model can: the
@@ -220,7 +220,7 @@ func (d worldThenApp) Do(ctx context.Context, g exec.Grant, r exec.Request) (exe
 		return assistanttest.Answer(d.world, r), nil
 	}
 	if r.Query.Get(authz.DryRunQuery) == "true" {
-		// A PREVIEW'S CHECK of the world's own object (ADR-0054), which the
+		// A PREVIEW'S CHECK of the world's own object (ADR-0055), which the
 		// world admits: the app holds another company, so its check would
 		// judge a revision this world never had.
 		return evals.JSON(map[string]any{"valid": true, "warnings": []any{}}), nil

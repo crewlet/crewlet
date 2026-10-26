@@ -28,7 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
-// THE ASSISTANT'S DEEP WORK, wired (ADR-0053): internal/assistant's DeepWork
+// THE ASSISTANT'S DEEP WORK, wired (ADR-0054): internal/assistant's DeepWork
 // seam over the sandbox layer and the MCP bridge, which that package may not
 // import.
 //
@@ -39,7 +39,7 @@ import (
 // (agentrun.go), with the turn's own surface on the bridge in place of a
 // seat's. What it does NOT take is the sandbox coordinator: that machinery is
 // a seat's (its lease, its inbox, its fence, a durable run row its node's
-// successor resumes), and the assistant is no seat (ADR-0049). The turn that
+// successor resumes), and the assistant is no seat (ADR-0050). The turn that
 // starts a run watches it to its end, and a node that dies with it ends the
 // turn as interrupted, as any turn on that node; the box's own deadline reaps
 // it.

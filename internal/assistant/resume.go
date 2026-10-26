@@ -23,7 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
-// THE APPROVAL PATH'S HOOKS INTO A PARKED TURN (ADR-0050): what became of a
+// THE APPROVAL PATH'S HOOKS INTO A PARKED TURN (ADR-0051): what became of a
 // proposal is handed back to the turn that proposed it, which carries on from
 // the call it suspended on; a decision that leaves the turn parked (an
 // approved page action the page has not reported yet) appends its frames to

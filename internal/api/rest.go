@@ -254,7 +254,7 @@ func (a *App) serveNamed(what string, path map[string]string) http.HandlerFunc {
 // read.
 //
 // A PRINCIPAL ACTING THROUGH THE ASSISTANT reads them as its person does
-// (ADR-0051's parity): each is the overview its person's socket is pushed,
+// (ADR-0052's parity): each is the overview its person's socket is pushed,
 // shaped for the same audience, and none carries a credential.
 func (a *App) serveFrom(kind stream.Kind, build func(stream.Audience) any) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

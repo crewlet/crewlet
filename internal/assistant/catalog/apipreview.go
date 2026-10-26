@@ -23,7 +23,7 @@ import (
 
 // THE GENERIC CHANGE'S PREVIEW: what a [ProposeAPIChangeTool] call would do,
 // read by the server from the resource as it is now, never from what the model
-// said about it (ADR-0050).
+// said about it (ADR-0051).
 //
 //  1. The request is built from the call ([generic.request]), so the card and
 //     the approval's request are one value.
@@ -50,7 +50,7 @@ import (
 //  6. The verb's own step-up is asked of the approver, shown on the card.
 //  7. A route that answers `?dry_run=true` ([Route.DryRun]) is asked it, with
 //     the exact request and precondition the approval would send, before any
-//     card is drawn (ADR-0054): a body the route would refuse is the step's
+//     card is drawn (ADR-0055): a body the route would refuse is the step's
 //     refusal in the route's own words, so the model corrects it within the
 //     turn, and the check's warnings are rows on the card. The route's check
 //     is the one source of what it accepts; no rule of it is copied here.
@@ -201,7 +201,7 @@ func (g generic) preview(ctx context.Context, read proposal.Read, _ time.Time,
 // checked asks a [Route.DryRun] route to check req: the same request, under
 // the precondition the proposal will be sent with, with `dry_run=true`, through
 // the turn's read grant (which carries a write's method only as such a check,
-// ADR-0054). A refusal is the step's, in the route's words ([PreviewRefusal]);
+// ADR-0055). A refusal is the step's, in the route's words ([PreviewRefusal]);
 // an admitted check answers the warnings it raised, each one line.
 func checked(ctx context.Context, read proposal.Read, req exec.Request,
 	revision string) ([]string, error) {

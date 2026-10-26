@@ -229,7 +229,7 @@ const (
 
 	// --- deep work (im-deep) ---
 
-	// CardFile is the files a deep run delivered (ADR-0053).
+	// CardFile is the files a deep run delivered (ADR-0054).
 	CardFile CardKind = "file"
 )
 
@@ -241,7 +241,7 @@ var CardKinds = []CardKind{
 // Valid reports whether k is a kind this build knows.
 func (k CardKind) Valid() bool { return slices.Contains(CardKinds, k) }
 
-// ProposalState is where a proposal stands (ADR-0050). The legal moves
+// ProposalState is where a proposal stands (ADR-0051). The legal moves
 // between them are internal/assistant/proposal's; the names are here.
 type ProposalState string
 
@@ -447,7 +447,7 @@ const (
 	// ErrorTurnInterrupted is the running node gone.
 	ErrorTurnInterrupted ErrorCode = "turn_interrupted"
 	// ErrorGrantEnded is the person's session ending mid-turn: a sign-out,
-	// a revocation, a suspension or a seat move (ADR-0049).
+	// a revocation, a suspension or a seat move (ADR-0050).
 	ErrorGrantEnded ErrorCode = "grant_ended"
 	// ErrorInternal is a fault no retry of the question clears.
 	ErrorInternal ErrorCode = "internal_error"

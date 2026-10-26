@@ -432,7 +432,7 @@ var ErrRefused = errors.New("not allowed")
 //
 // A request the assistant makes is its person's own, composed from their rows,
 // so an administrator's assistant carries admin, and a write it makes is one
-// the administrator approved from a server-rendered preview (ADR-0050): an
+// the administrator approved from a server-rendered preview (ADR-0051): an
 // edit of somebody's row, a move of their login or seat, a stage, a removal,
 // an invitation withdrawn. Those land as the administrator's own, with the
 // grant named as the credential.
@@ -440,7 +440,7 @@ var ErrRefused = errors.New("not allowed")
 // THE SIGN-IN CEREMONIES DO NOT ([assistRefusedOps]): an enrolment carries a
 // first password link or spends an invitation, an invitation is a link, and
 // ending every session is a session ceremony. The authority table keeps their
-// verbs from the assistant (internal/authz's human-only list, ADR-0051); this
+// verbs from the assistant (internal/authz's human-only list, ADR-0052); this
 // refuses the RECORD for the token's reason, so no surface the table does not
 // guard can be the way a model is handed a credential. Checked first beside
 // the token, on the class as well.

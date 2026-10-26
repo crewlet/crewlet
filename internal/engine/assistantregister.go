@@ -18,7 +18,7 @@ import (
 
 // THE DASHBOARD ASSISTANT'S STATE LOG, wired: its entry in the register, its
 // two sides over the running log, its retention through the trash reaper, and
-// a person's erasure from it (ADR-0052). The orchestrator that reads and
+// a person's erasure from it (ADR-0053). The orchestrator that reads and
 // writes through these sides is internal/assistant, wired in assistant.go.
 //
 // EVERY DATA NODE RUNS IT, whatever its company keeps: the register runs every

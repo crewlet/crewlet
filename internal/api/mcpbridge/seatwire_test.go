@@ -9,7 +9,7 @@ import (
 // serves: its handshake, its advertised tools with their hints, a call's
 // answer, a failure's answer and who each call is decided as are pinned here
 // as the box reads them. The bridge serving a second kind of caller (the
-// assistant's deep work, ADR-0053) must leave every byte of this alone.
+// assistant's deep work, ADR-0054) must leave every byte of this alone.
 func TestASeatSessionIsByteIdenticalOnTheWire(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, "read_page", "post_message", "whoami")

@@ -1,4 +1,4 @@
-# ADR-0054: A proposal is checked by its route before the person sees it
+# ADR-0055: A proposal is checked by its route before the person sees it
 
 - **Status:** accepted
 - **Authority:** `internal/authz`
@@ -46,7 +46,7 @@ the one source of what it takes.
 
 **Letting the read grant send any request carrying `dry_run=true`.** The flag
 means nothing to a route that does not read it, so the grant whose whole
-guarantee is that it changes nothing would write. ADR-0049 rejected exactly
+guarantee is that it changes nothing would write. ADR-0050 rejected exactly
 this; the declaration at the mount, held to the handler by a behavioural walk,
 is what makes it safe.
 

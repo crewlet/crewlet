@@ -212,7 +212,7 @@ func TestTheResumeFixtureIsTheRoutesOwn(t *testing.T) {
 	assistanttest.Golden(t, "testdata/resume.sse", resumed)
 }
 
-// EVERY ROUTE ANSWERS NOT FOUND FOR ANOTHER PERSON'S CONVERSATION (ADR-0052).
+// EVERY ROUTE ANSWERS NOT FOUND FOR ANOTHER PERSON'S CONVERSATION (ADR-0053).
 //
 // Ada asks every route about Grace's conversation, its turn and its card, and
 // is told each does not exist, exactly as for one that never did: no route

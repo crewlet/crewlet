@@ -91,7 +91,7 @@ type turn struct {
 	outside  provenance.Source
 	model    string
 	provider string
-	// deep is the turn's deep work (ADR-0053): what this segment hands a
+	// deep is the turn's deep work (ADR-0054): what this segment hands a
 	// run, and the run in flight.
 	deep deepState
 }

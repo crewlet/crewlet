@@ -30,7 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// THE ENGINE'S HALF OF DEEP WORK (ADR-0053), over the fake sandbox backend and
+// THE ENGINE'S HALF OF DEEP WORK (ADR-0054), over the fake sandbox backend and
 // the real bridge: a run's box, its brief, its inputs and outbox, its one way
 // into Crewlet, its caps and its box's life.
 

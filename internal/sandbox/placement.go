@@ -36,7 +36,7 @@ const (
 	// and reach anything its credentials reach. The right cell for a
 	// workstation or a dedicated VM, the wrong one for a shared host. A
 	// CONFINED backend of this cell (confine.go) is the exception, built
-	// for the Dashboard Assistant's deep work alone (ADR-0053).
+	// for the Dashboard Assistant's deep work alone (ADR-0054).
 	Direct Placement = "direct"
 
 	// Container runs a long-lived Docker or Podman container per box, with

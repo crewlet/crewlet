@@ -13,7 +13,7 @@ import (
 )
 
 // A CHECK IS THE WRITE, DECIDED AT THE READ'S PROOF, AND THE ONLY WRITE A READ
-// GRANT SENDS (ADR-0054).
+// GRANT SENDS (ADR-0055).
 //
 // A route declaring [authz.Policy.Checked] admits `dry_run=true` as its own
 // verb decided by every rule but the step-up, for the person and for their

@@ -194,7 +194,7 @@ const (
 	// what Company › Principles edits in place). THEIR OWN VERBS, decided
 	// exactly as [ActionConfigRead] and [ActionConfigWrite] decide the whole
 	// document, for one reason: they are the one part of the company
-	// document the Dashboard Assistant may carry (ADR-0051's exception),
+	// document the Dashboard Assistant may carry (ADR-0052's exception),
 	// and an assistant column is per verb. On the document's own verbs the
 	// assistant would be one approval from every secret reference, seat and
 	// provider; on these it reaches three fields of prose and nothing else.
@@ -401,7 +401,7 @@ const (
 	ActionBrandAdopt Action = "artifacts.brand.adopt"
 	ActionBrandClear Action = "artifacts.brand.clear"
 
-	// --- the Dashboard Assistant (ADR-0049 to ADR-0052) ---
+	// --- the Dashboard Assistant (ADR-0050 to ADR-0053) ---
 	//
 	// The assistant's own verbs: using it, reading a conversation,
 	// approving or declining a proposal, and an administrator's audited
@@ -410,16 +410,16 @@ const (
 	// ActionAssistantConverse is using the assistant at all: starting a
 	// conversation, asking in it, stopping a turn, clearing one. Whose
 	// conversation it is is never this verb's question: the store answers
-	// 404 for anybody but its owner (ADR-0052).
+	// 404 for anybody but its owner (ADR-0053).
 	ActionAssistantConverse Action = "assistant.converse"
 	// ActionAssistantConversationRead is reading one's own conversations:
 	// the list, a transcript, a turn's live stream and a card's export.
 	ActionAssistantConversationRead Action = "assistant.conversation.read"
 	// ActionAssistantApprove is a person approving one of their own
 	// proposals: `POST /assistant/proposals/{id}/approve`. Everybody's,
-	// because whose proposal it is is the store's answer (ADR-0052) and what
+	// because whose proposal it is is the store's answer (ADR-0053) and what
 	// the write may do is the write's own row, decided again when it is sent.
-	// The write's own step-up is asked by the approval itself (ADR-0050).
+	// The write's own step-up is asked by the approval itself (ADR-0051).
 	ActionAssistantApprove Action = "assistant.approve"
 	// ActionAssistantDecline is a person declining one of their own
 	// proposals.
@@ -467,7 +467,7 @@ func (p Presence) Valid() bool { return slices.Contains(Presences, p) }
 
 // AssistClass is what the Dashboard Assistant may do with a verb: take it
 // under a read grant, carry it only as the one approved request an exec grant
-// binds, or never (ADR-0051). See [rule.assist].
+// binds, or never (ADR-0052). See [rule.assist].
 //
 // IT ONLY EVER TAKES AWAY. An assisted principal is the person, composed from
 // their own identity rows, so the class and every relation are decided for
@@ -483,7 +483,7 @@ const (
 	AssistRead AssistClass = "read"
 	// AssistApprove is a verb the assistant may carry only as the one
 	// request a person approved: an exec grant binds the request's digest,
-	// so the write that runs is the preview the person saw (ADR-0050).
+	// so the write that runs is the preview the person saw (ADR-0051).
 	AssistApprove AssistClass = "approve"
 	// AssistNever is a verb no assistant grant takes, whoever approved what.
 	AssistNever AssistClass = "never"
@@ -640,7 +640,7 @@ type rule struct {
 	// the person approved. Asked of a principal acting through an assistant
 	// grant ([iam.AssistPrefix]) and of nobody else.
 	//
-	// PARITY WITH THE PERSON DECIDES IT (ADR-0051): a verb the person may
+	// PARITY WITH THE PERSON DECIDES IT (ADR-0052): a verb the person may
 	// take is one their assistant may take, as a read or as an approved
 	// change. The only verbs it never takes are [assistantNever]'s, each
 	// with its reason, and that list is the ONE place [AssistNever] is
@@ -933,7 +933,7 @@ var rules = map[Action]rule{
 	// is: a seat rewriting the org it runs inside is a model choosing its
 	// own team. A PERSON'S ASSISTANT carries it as the person's own edit,
 	// approved from a before-and-after of the seats and units it changes,
-	// at the same step-up window (ADR-0051).
+	// at the same step-up window (ADR-0052).
 	ActionOrgWrite: {class: ClassSubtree, humanOnly: true, recency: iam.RecencyStepUp,
 		assist: AssistApprove},
 	// AND A LEAD READS WHAT THEY MAY WRITE: one seat or one unit of their
@@ -1141,7 +1141,7 @@ var rules = map[Action]rule{
 	ActionBrandClear: {class: ClassAdmin, humanOnly: true,
 		presence: PresenceRequired, recency: iam.RecencyStepUp, assist: AssistApprove},
 
-	// --- the Dashboard Assistant (ADR-0049 to ADR-0052) ---
+	// --- the Dashboard Assistant (ADR-0050 to ADR-0053) ---
 	//
 	// THE ASSISTANT'S OWN VERBS, each never the assistant's
 	// ([assistantNever]), HUMAN-ONLY and needing a PERSON PRESENT: a grant
@@ -1326,10 +1326,10 @@ const (
 
 // assistantNever is THE HUMAN-ONLY LIST: every verb the Dashboard Assistant
 // never takes, whoever approved what, each with the reason a reviewer reads
-// and the sentence the person is told (ADR-0051). Every other verb is the
+// and the sentence the person is told (ADR-0052). Every other verb is the
 // person's own through their assistant, as a read or as the one change they
 // approved, because a grant is the person's own session narrowed and never
-// widened (ADR-0049, ADR-0050).
+// widened (ADR-0050, ADR-0051).
 //
 // FOUR KINDS OF VERB AND NO OTHER, and a verb joins only in a reviewed diff
 // that names which:

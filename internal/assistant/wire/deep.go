@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// DEEP WORK AND FILES (ADR-0053): the values the drawer reads about a turn that
+// DEEP WORK AND FILES (ADR-0054): the values the drawer reads about a turn that
 // escalated into a coding CLI's own harness, and about the files a person
 // attaches and a run delivers.
 //

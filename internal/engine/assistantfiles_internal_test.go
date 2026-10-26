@@ -11,7 +11,7 @@ import (
 
 // THE ASSISTANT'S FILE STORE TELLS EVERY DOMAIN REFUSAL AS THE ORCHESTRATOR'S:
 // somebody else's file, a purged conversation and an erased owner are all not
-// found (never forbidden, ADR-0052), a full conversation is invalid and still
+// found (never forbidden, ADR-0053), a full conversation is invalid and still
 // a full conversation to the surface that answers it, and a refusal as written
 // names what to change without the domain's prefix. Mutation: pass a purged
 // conversation through untouched and the route answers it as a failure.

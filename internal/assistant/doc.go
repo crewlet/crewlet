@@ -2,7 +2,7 @@
 // question, answered by a model through the engine's own tool loop, with every
 // read made as that person and every change prepared for them to approve.
 //
-// # It acts as the person and is nobody of its own (ADR-0049)
+// # It acts as the person and is nobody of its own (ADR-0050)
 //
 // The assistant has no identity in product data. It is not a seat: it holds
 // no lease, has no roster entry, writes no diary and is charged to no work
@@ -36,11 +36,11 @@
 // rendered from a server-side preview and bound to its digest and the object's
 // revision (internal/assistant/proposal), the loop suspends with the call
 // unanswered, and only the person's approval, made from their own browser,
-// sends it, once (ADR-0050).
+// sends it, once (ADR-0051).
 //
 // # Deep work
 //
-// A turn may hand its task to a deep-work run (ADR-0053): a coding CLI with
+// A turn may hand its task to a deep-work run (ADR-0054): a coding CLI with
 // its own harness, in a box or confined on the engine host, whose one way into
 // Crewlet is this turn's own surface, bridged ([DeepWork], deep.go). Quick
 // mode's model keeps no tool of its own.

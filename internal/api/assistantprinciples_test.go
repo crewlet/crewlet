@@ -146,7 +146,7 @@ func TestAnApprovedPrinciplesChangeIsThePagesOwnWrite(t *testing.T) {
 	}
 
 	// THE WHOLE DOCUMENT IS THE ADMINISTRATOR'S OWN THROUGH THEIR ASSISTANT
-	// TOO (ADR-0051's parity): an approved patch of it, on the verb its route
+	// TOO (ADR-0052's parity): an approved patch of it, on the verb its route
 	// is decided by, lands as their own save would, and the read grant
 	// still cannot send it.
 	whole := exec.Request{Method: http.MethodPatch, Path: "/config",

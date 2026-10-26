@@ -4,7 +4,7 @@ import "github.com/google/uuid"
 
 // THE DASHBOARD ASSISTANT'S LOG: a person's conversations, turns and
 // proposals, ordered on one stream and applied into every data node's
-// replicated estate (internal/assistantdomain, ADR-0052).
+// replicated estate (internal/assistantdomain, ADR-0053).
 //
 // A LOG OF ITS OWN rather than records on another domain's, because a
 // conversation is sized by how much people talk to the assistant, retained

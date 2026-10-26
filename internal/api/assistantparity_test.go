@@ -41,7 +41,7 @@ import (
 )
 
 // TestPermissionParityAcrossFivePrincipals: THE ASSISTANT SEES WHAT ITS PERSON
-// SEES, AND NOTHING ELSE (ADR-0049), for every read tool in the catalogue.
+// SEES, AND NOTHING ELSE (ADR-0050), for every read tool in the catalogue.
 //
 // Four people sign in to one company through the guard's real session arm:
 // an administrator, a person holding only Worklet, one holding only the
@@ -546,7 +546,7 @@ func (d *recordingDispatcher) writes() []exec.Request {
 	defer d.mu.Unlock()
 	var out []exec.Request
 	for _, e := range d.sent {
-		// A CHECK STORES NOTHING (ADR-0054): a read grant sends one only to
+		// A CHECK STORES NOTHING (ADR-0055): a read grant sends one only to
 		// a route declaring it reads the flag (internal/authz's guard,
 		// configapi's TestEveryWriteThatReadsDryRunDeclaresIt), so it is the
 		// one request with a write's method that is not a write.

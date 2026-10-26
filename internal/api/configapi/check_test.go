@@ -29,7 +29,7 @@ func (m *policyRecorder) MountedWith(pattern string, p authz.Policy) {
 var wildcard = regexp.MustCompile(`\{[^}]+\}`)
 
 // EVERY WRITE THAT READS `dry_run` DECLARES IT, AND EVERY ONE THAT DECLARES IT
-// READS IT (ADR-0054).
+// READS IT (ADR-0055).
 //
 // The declaration is what the Dashboard Assistant's preview and a read grant's
 // guard trust, so it is held to the handler BEHAVIOURALLY: every write this

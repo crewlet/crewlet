@@ -103,7 +103,7 @@ func seatBody(extra map[string]any) map[string]any {
 		map[string]any{"handle": "pm", "name": "Product Manager"}, qa}}
 }
 
-// A CHANGE THE ROUTE WOULD REFUSE IS NEVER A CARD (ADR-0054).
+// A CHANGE THE ROUTE WOULD REFUSE IS NEVER A CARD (ADR-0055).
 //
 // A route that answers `dry_run=true` is asked it before any card is drawn,
 // with the exact request and the precondition the approval would send: a body

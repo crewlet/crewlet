@@ -30,7 +30,7 @@ import (
 // content, under the fleet keyring with associated data naming the conversation
 // and the file ([AAD], [ColumnContent]), because the object store may be a
 // bucket somebody else runs and a conversation is a copy of what one person
-// was shown (ADR-0052). Moved under another file's row, an object does not
+// was shown (ADR-0053). Moved under another file's row, an object does not
 // open. The row records the key the content is sealed under, so a rotation
 // counts it without fetching a byte ([Reader.SealedKeys]).
 //

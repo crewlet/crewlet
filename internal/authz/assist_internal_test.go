@@ -48,7 +48,7 @@ func TestARowStatesItsNatureAndTheListAloneSaysNever(t *testing.T) {
 // A verb that needs a person at the keyboard keeps a machine token out,
 // because a token proves nobody is there. An exec grant carries one request
 // the person approved, from their own browser, a moment ago: that approval is
-// the presence the row asks for (ADR-0050, ADR-0051). A read grant carries no
+// the presence the row asks for (ADR-0051, ADR-0052). A read grant carries no
 // such gesture, so it is refused every presence row, the self arm of a row
 // that spares it for a machine token included, naming the scope (the remedy is
 // a proposal the person approves). A verb on the human-only list is refused

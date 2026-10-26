@@ -17,7 +17,7 @@ import (
 // is a curated write that fails on every call; a row's tool is never a proven
 // read; and its verb is one the authority table lets an approval carry. Every
 // other operator tool is the person's own through the generic change, on the
-// act route, decided by its own verb (ADR-0051). And each catalogue write that
+// act route, decided by its own verb (ADR-0052). And each catalogue write that
 // executes as an operator tool is held to it: the destructive hint its tier is
 // derived from is the tool's own annotation, and every argument the model may
 // send is one the act tool declares, of the same type, so an approved request

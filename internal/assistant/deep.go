@@ -24,7 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
-// DEEP WORK (ADR-0053): a turn that hands its task to a coding CLI running its
+// DEEP WORK (ADR-0054): a turn that hands its task to a coding CLI running its
 // own harness, whose only way into Crewlet is this turn's own surface.
 //
 // # One step, and every call it makes is the turn's

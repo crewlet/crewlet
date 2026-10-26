@@ -18,7 +18,7 @@ import (
 // directory, its keyring and the operator's own files included. That is the
 // documented contract for a seat's code work on a workstation, and it is not
 // one a person's Dashboard Assistant may run under: a deep-work run is steered
-// by whatever the person asked and whatever pages it read (ADR-0053).
+// by whatever the person asked and whatever pages it read (ADR-0054).
 //
 // A CONFINED direct box runs every command its job starts inside the
 // strongest boundary this host can enforce, chosen once by [ProbeConfinement]:
@@ -216,7 +216,7 @@ var keychainServices = []string{
 // THE LAST MATCHING RULE WINS in a sandbox profile, which is what the order
 // relies on: everything is allowed, the denied trees and every write are then
 // taken away, and the box's home and the CLI's install are given back last.
-// Network stays open: web access is the run's (ADR-0053).
+// Network stays open: web access is the run's (ADR-0054).
 //
 // THE HOME'S ANCESTORS MAY BE STAT'ED, each by its literal path and for its
 // metadata alone: never listed, never read, never written. A denied tree

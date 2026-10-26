@@ -290,7 +290,7 @@ func Checking(ctx context.Context) bool {
 }
 
 // decide is [Decide] for a request that is, or is not, a check of its write
-// ([IsCheck], ADR-0054). A check is the write's verb decided by every rule the
+// ([IsCheck], ADR-0055). A check is the write's verb decided by every rule the
 // write is, but two: the proof it asks is the read's, since it changes
 // nothing, and an assistant's read grant may carry it on a row the assistant
 // otherwise sends only as an approved request ([assistBar]).
@@ -351,7 +351,7 @@ func decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 }
 
 // assistBar is the bar a request made through the Dashboard Assistant meets
-// on this row, and whether it meets one (ADR-0051).
+// on this row, and whether it meets one (ADR-0052).
 //
 // THE CLASS OF THE CREDENTIAL DECIDES, NEVER ITS SPELLING: a principal whose
 // [iam.Principal.Via] names the assistant's class is the assistant's, whether
@@ -376,7 +376,7 @@ func decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 // out because a token proves nobody is at a keyboard; an exec grant carries
 // exactly one request whose server-rendered preview the person approved from
 // their own browser, a moment ago, under their own session and Origin, at the
-// step-up the row asks (ADR-0050). That approval IS the person at the
+// step-up the row asks (ADR-0051). That approval IS the person at the
 // keyboard, deciding this request. A read grant carries no such gesture, so it
 // is refused every presence row, the self arm of a row that spares it for a
 // machine token included.
@@ -389,7 +389,7 @@ func decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 // its tool; the request guard binds an exec grant to the one request the
 // person approved, which is what limits it to one write.
 //
-// A CHECK OF AN APPROVED ROW IS A READ GRANT'S TOO ([IsCheck], ADR-0054): it
+// A CHECK OF AN APPROVED ROW IS A READ GRANT'S TOO ([IsCheck], ADR-0055): it
 // stores nothing, so it is the preview's question of the route, asked before
 // any card is drawn. The person-present bar still holds for it.
 func assistBar(p iam.Principal, a Action, r rule, check bool) (Decision, bool) {

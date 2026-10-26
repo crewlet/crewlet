@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 )
 
-// --- the Dashboard Assistant's route table (ADR-0051) ---
+// --- the Dashboard Assistant's route table (ADR-0052) ---
 
 // assistantMethods are the methods the assistant's generic tools send: a read
 // grant's two, and the four an approved change may carry.

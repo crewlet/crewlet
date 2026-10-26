@@ -1,5 +1,5 @@
 -- An assistant conversation keeps its files: the images a person attaches to a
--- question and the files a deep-work run delivers (ADR-0052).
+-- question and the files a deep-work run delivers (ADR-0053).
 -- internal/assistantdomain is the domain.
 --
 -- WHO HAS TO AGREE ON IT: a row naming the file is replicated, derived from the

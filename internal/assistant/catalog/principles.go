@@ -20,7 +20,7 @@ import (
 )
 
 // THE COMPANY'S PRINCIPLES: its mission, vision and standing policies, the one
-// part of the company document the assistant reaches (ADR-0051's exception).
+// part of the company document the assistant reaches (ADR-0052's exception).
 //
 // ONE RESOURCE, ONE WRITE PATH. The read and the write are the routes Company
 // › Principles itself sends (`GET` and `PUT /config/charter`), decided by
@@ -173,7 +173,7 @@ func principlesPreview(t Tool) proposal.Previewer {
 		revision := proposal.Revision{Kind: proposal.RevisionCharter,
 			ID: proposal.CharterID, Version: version}.String()
 		// THE ROUTE'S OWN CHECK, as every route declaring one is asked
-		// (ADR-0054): a policy the charter refuses is the step's refusal,
+		// (ADR-0055): a policy the charter refuses is the step's refusal,
 		// never a card, and its warnings are rows.
 		warnings, err := checked(ctx, read, req, revision)
 		if err != nil {

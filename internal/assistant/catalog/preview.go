@@ -23,7 +23,7 @@ import (
 
 // THE PREVIEWS: what each write would change, read by the server from the
 // object as it is now, through the turn's grant, and never from what the model
-// said about it (ADR-0050). Each answers the exact request its tool builds, so
+// said about it (ADR-0051). Each answers the exact request its tool builds, so
 // the card the person approves and the request the approval sends are one
 // value.
 
@@ -106,7 +106,7 @@ var previews = map[string]func(t Tool) proposal.Previewer{
 // withHome is args with arg named: as the call names it, else the person's own
 // home the write would default to, read from `GET /viewer` (field), which
 // answers it through the one derivation the write applies
-// (internal/engine.ProjectOfSeat, SpaceOfSeat) (ADR-0054).
+// (internal/engine.ProjectOfSeat, SpaceOfSeat) (ADR-0055).
 //
 // THE RESOLVED VALUE IS PINNED INTO THE REQUEST, so the card names the place
 // the approved write lands, never a placeholder, and a chart that moves before

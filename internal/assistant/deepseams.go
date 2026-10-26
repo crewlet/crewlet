@@ -12,7 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
-// THE DEEP-WORK SEAMS (ADR-0053), declared here by their consumer and satisfied
+// THE DEEP-WORK SEAMS (ADR-0054), declared here by their consumer and satisfied
 // by the engine: the coding CLI's run in a box (internal/engine's deep work over
 // internal/sandbox and the MCP bridge, which this package may not import), and
 // the store a conversation's files are kept in.
@@ -58,7 +58,7 @@ type DeepRun struct {
 	// run starts: the images the person attached.
 	Inputs []DeepFile
 	// Surface is the run's only way into Crewlet: the person's own
-	// assistant tools, every call the person's request (ADR-0049).
+	// assistant tools, every call the person's request (ADR-0050).
 	Surface DeepSurface
 	// Timeout, Steps and Tokens are the run's caps: its wall clock, its
 	// CLI's agentic rounds, and the tokens it may spend before it is
@@ -140,7 +140,7 @@ type DeepFile struct {
 
 // Files is where a conversation's files are kept: the images a person attaches
 // and the files a deep run delivers, sealed and owner-keyed like the rest of a
-// conversation (ADR-0052), and purged with it. A draft change that names a
+// conversation (ADR-0053), and purged with it. A draft change that names a
 // file is held to it too ([turn.draftChange]).
 type Files interface {
 	// Store keeps one file, refusing one past [wire.FileMaxBytes].

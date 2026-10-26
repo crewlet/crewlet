@@ -749,7 +749,7 @@ func TestDoctorReportsAFileReadAfterTheShellWasRefused(t *testing.T) {
 	}
 }
 
-// QUICK MODE'S ARGV IS PINNED WHOLE, beside deep work (ADR-0053): the
+// QUICK MODE'S ARGV IS PINNED WHOLE, beside deep work (ADR-0054): the
 // assistant's own model runs Claude Code with no tool of its own, no session
 // and no tool server, and deep work, which runs the same CLI with its harness
 // in a box, never reaches this argv. A flag added to it, or a tool given back,

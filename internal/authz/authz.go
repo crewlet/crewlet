@@ -15,7 +15,7 @@
 // an agent owner's artifacts, and a caller with no relation is answered as if
 // the artifact did not exist.
 //
-// THE DASHBOARD ASSISTANT IS DECIDED HERE TOO: ADR-0051, whose authority this
+// THE DASHBOARD ASSISTANT IS DECIDED HERE TOO: ADR-0052, whose authority this
 // package is. A request the assistant makes is its person's own, so the person
 // is decided exactly as their own click is, and every row says what an
 // assistant grant may do with its verb (read it, carry the one approved
@@ -25,7 +25,7 @@
 // [Decide] holds every grant to the row's class wherever the verb is asked,
 // a verb asked from inside a tool included, which no route sees.
 //
-// A CHECK IS THE WRITE AT THE READ'S PROOF: ADR-0054, whose authority this
+// A CHECK IS THE WRITE AT THE READ'S PROOF: ADR-0055, whose authority this
 // package is. A route declaring [Policy.Checked] answers `dry_run=true` as its
 // verb decided without the step-up, and that check is the one request with a
 // write's method a read grant may send, so the assistant's preview asks the

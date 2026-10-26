@@ -1,6 +1,6 @@
 // Package mcpbridge serves one run's tool surface to a coding agent, over MCP:
 // a seat's executor in agent mode, or a person's Dashboard Assistant deep work
-// (ADR-0053), each decided as its own [Caller].
+// (ADR-0054), each decided as its own [Caller].
 //
 // # What this is for
 //
@@ -94,7 +94,7 @@ const serverName = config.BridgeServerName
 // are the ones the caller built, so a bridged call and a native one are the
 // same call made from two places. A seat's session is built by
 // [SeatSession]; the Dashboard Assistant's deep work opens one over its own
-// surface with a [Caller] of its own (ADR-0053).
+// surface with a [Caller] of its own (ADR-0054).
 type Session struct {
 	// RunID identifies the run. It is the token's subject and the ledger's
 	// key, and it is in every log line here.

@@ -27,7 +27,7 @@ import (
 // # Encrypted, then sealed
 //
 // A frame carries what the person asked and what their reads returned, the
-// same prose and cards internal/assistantdomain encrypts at rest (ADR-0052).
+// same prose and cards internal/assistantdomain encrypts at rest (ADR-0053).
 // The broker authenticates nothing (ADR-0031), so a frame in the clear would
 // make reaching the broker a way to read every person's conversation; the
 // broker's private ports are defence in depth, never the control. So every

@@ -11,7 +11,7 @@ import (
 // internal/agent/builtin and internal/api each walk what they own). A curated
 // tool is a better-shaped shortcut onto a surface; every other surface the
 // person's grant reaches is reached through the generic API tools and decided
-// by its own route (ADR-0051), so a surface needs a row only when a curated
+// by its own route (ADR-0052), so a surface needs a row only when a curated
 // tool is built on it.
 
 func asked(question, tool string) Exposure {

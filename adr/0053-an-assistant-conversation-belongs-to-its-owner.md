@@ -1,4 +1,4 @@
-# ADR-0052: An assistant conversation belongs to its owner
+# ADR-0053: An assistant conversation belongs to its owner
 
 - **Status:** accepted
 - **Authority:** `internal/assistantdomain`
@@ -14,7 +14,7 @@ gone thirty days after it was last used.**
   saw, and the proposals they decided are a state-log domain of their own
   (`CREWLET_ASSISTANT_LOG`), applied into every data node's replicated estate,
   because a person opens the drawer on any node and a reconnect may land on
-  another. A proposal's decision is arbitrated on its own subject (ADR-0050).
+  another. A proposal's decision is arbitrated on its own subject (ADR-0051).
   A turn's live frames are not stored at all: they are told, as presence is
   (ADR-0038), and every frame and every replayed page crosses the broker
   encrypted under the fleet keyring with the turn in its associated data,

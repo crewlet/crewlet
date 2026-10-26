@@ -57,7 +57,7 @@ import (
 // charter it says about no other part of the document: the Dashboard
 // Assistant may read it as the person, and may write it only as the one
 // request its owner approved from a before-and-after the engine rendered,
-// at the same step-up window (ADR-0051's exception, ADR-0050). This route is
+// at the same step-up window (ADR-0052's exception, ADR-0051). This route is
 // that one write path for people and the assistant alike: the assistant's
 // approved change is a PUT here with the If-Match its preview read, and
 // nothing else of the document is reachable through it.

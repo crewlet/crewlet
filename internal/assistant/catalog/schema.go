@@ -14,7 +14,7 @@ import (
 // IdentityArguments are the argument names no assistant tool may declare,
 // because each names who acts, where, or which operation a write is: the
 // company, a principal, an actor, a login, a credential or an operation id.
-// Identity is the grant the call is sent under and nothing else (ADR-0049).
+// Identity is the grant the call is sent under and nothing else (ADR-0050).
 // An argument naming a person or a seat as the SUBJECT of a read (`handle`) is
 // not one of these: the authority table decides that read.
 var IdentityArguments = []string{

@@ -66,7 +66,7 @@ type Policy struct {
 //
 // The alternative, asking the route itself with `dry_run=true`, would put a
 // PUT on a read grant, whose whole guarantee is that it sends nothing but GET
-// and HEAD (ADR-0049); a route that ignored the flag would then write.
+// and HEAD (ADR-0050); a route that ignored the flag would then write.
 type Absent struct {
 	// Creates says a write there creates what it names, sent create-only
 	// (`If-None-Match: *`) by a caller that must not replace one a racer
@@ -91,7 +91,7 @@ func (p Policy) WhenAbsent(a *Absent) Policy {
 }
 
 // Checked is p declaring that its write answers `?dry_run=true` as a check
-// (ADR-0054).
+// (ADR-0055).
 //
 // DECLARED WHERE THE ROUTE IS MOUNTED, beside [Absent], for the same reader:
 // the Dashboard Assistant's preview of a generic change runs the route's own
@@ -193,7 +193,7 @@ func ContextGuard(chart Chart) Guard {
 		}
 		check := Checking(r.Context()) || IsCheck(r, p)
 		// A READ GRANT SENDS A WRITE'S METHOD ONLY AS A CHECK of a route
-		// that declares one (ADR-0054). The edge admits such a grant's
+		// that declares one (ADR-0055). The edge admits such a grant's
 		// write method only with `dry_run=true`, which says nothing about
 		// whether the route reads it; this is where the route's own
 		// declaration is asked, so a route that would ignore the flag and

@@ -32,7 +32,7 @@ func routeRequest(pattern string) *http.Request {
 }
 
 // THE ASSISTANT IS ADMITTED TO EVERY ROUTE IT MAY NAME EXACTLY AS ITS PERSON IS,
-// BUT FOR THE HUMAN-ONLY LIST (ADR-0051).
+// BUT FOR THE HUMAN-ONLY LIST (ADR-0052).
 //
 // The route-level half of the parity walk, in its strong form, over every
 // route the App binds for the assistant's generic tools (App.AssistantRoutes)

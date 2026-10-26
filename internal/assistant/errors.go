@@ -14,7 +14,7 @@ import (
 var (
 	// ErrNotFound reports a conversation, turn or card that does not exist
 	// OR IS SOMEBODY ELSE'S: a caller with no relation is told it does not
-	// exist (ADR-0052).
+	// exist (ADR-0053).
 	ErrNotFound = errors.New("assistant: not found")
 	// ErrTurnRunning reports a question asked in a conversation whose turn
 	// is running (one at a time; a turn waiting on an approval is asked

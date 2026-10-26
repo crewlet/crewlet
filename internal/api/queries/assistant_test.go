@@ -63,7 +63,7 @@ func through(p iam.Principal) context.Context {
 
 // AN ASSISTED QUESTION IS ANSWERED AS ITS PERSON'S OWN, AT EVERY POSTURE.
 //
-// ADR-0051's parity: a question is a read, and no question answers a
+// ADR-0052's parity: a question is a read, and no question answers a
 // credential or a secret in clear, so the registry keeps nothing from a
 // principal acting through the assistant that it does not keep from the same
 // person at their keyboard. Over every question this build registers, each at

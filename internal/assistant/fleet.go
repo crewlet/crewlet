@@ -103,7 +103,7 @@ func (s *Service) StopHere(ctx context.Context, owner, turnID uuid.UUID) (wire.T
 
 // FleetRemote is f as the service's [Remote]: the fleet half's own answers,
 // with a turn that is somebody else's told as [ErrNotFound], never as
-// forbidden, so it says nothing about whether the turn exists (ADR-0052).
+// forbidden, so it says nothing about whether the turn exists (ADR-0053).
 func FleetRemote(f *live.Fleet) Remote { return fleetRemote{f: f} }
 
 type fleetRemote struct{ f *live.Fleet }

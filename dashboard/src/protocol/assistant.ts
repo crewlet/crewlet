@@ -6,7 +6,7 @@
  * answer, a refusal read as the engine's JSON, a `401` sending the reader to
  * sign in and a `403 step_up_required` confirmed and replayed. Nothing here
  * holds a credential, and the assistant's own grants never reach the browser:
- * the engine derives them per request from this session (ADR-0049).
+ * the engine derives them per request from this session (ADR-0050).
  *
  * # Routes are typed by one table
  *

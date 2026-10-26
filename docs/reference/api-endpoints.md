@@ -1838,7 +1838,7 @@ A valid check answers `200`:
 - **No summary is needed**, because nothing is stored to record one on. A `_summary` key in the body is still lifted out, so the document checked is the one the write reads.
 - **`base_revision_id`** is the revision the check was built on, and `""` when nothing is active. A client whose draft was built on a different revision learns that the configuration moved without a second request.
 - **Every other refusal is the write's, in the write's order**: `409 no_active_revision` for a patch with nothing to patch, `409 revision_advanced` for a stale `If-Match`, `412 already_configured` for `If-None-Match: *` on a configured company, and `400` with [problems](#refusals-carry-located-problems) for a document the write would refuse.
-- **A dry run is decided as the write, without the step-up** (ADR-0054): the same permission, a [lead's](#a-lead-edits-their-own-team) included, but not the recent proof, because it changes nothing. A person whose sign-in is old checks a change and is asked to confirm it is them only to make it. The Dashboard Assistant's read access sends a dry run to these routes, and to no other, which is how it checks a change before the person is shown it.
+- **A dry run is decided as the write, without the step-up** (ADR-0055): the same permission, a [lead's](#a-lead-edits-their-own-team) included, but not the recent proof, because it changes nothing. A person whose sign-in is old checks a change and is asked to confirm it is them only to make it. The Dashboard Assistant's read access sends a dry run to these routes, and to no other, which is how it checks a change before the person is shown it.
 - A dry run needs the same token a write does, and a [lead's](#a-lead-edits-their-own-team) is judged as the write would be: a part that is not theirs is `403` with the `refused` list. One answer differs: a seat or unit sent back **unchanged** to its own address is checked for its lead, though the write would be refused as a re-publish, because the check stores nothing and is how a lead reads what the engine derives of their unit as it stands. The whole document sent back unchanged stays refused, since no address decided whose check it is.
 
 #### Refusals carry located problems
@@ -1963,7 +1963,7 @@ ETag: "charter-91ab…"
   the mission, the vision or the policies and nothing else. The verbs are its
   own because the Dashboard Assistant may read the charter as the person and
   write it only as a change its owner approved from a before-and-after, sent
-  here with the `If-Match` its preview read (ADR-0051); no other part of the
+  here with the `If-Match` its preview read (ADR-0052); no other part of the
   document is the assistant's.
 
 **The bounds**, in characters (Unicode code points, the count an editor shows),

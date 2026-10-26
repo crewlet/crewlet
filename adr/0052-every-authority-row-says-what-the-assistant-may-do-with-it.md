@@ -1,4 +1,4 @@
-# ADR-0051: Every authority row says what the assistant may do with it
+# ADR-0052: Every authority row says what the assistant may do with it
 
 - **Status:** accepted
 - **Authority:** `internal/authz`
@@ -12,7 +12,7 @@ a short human-only list.** Every row of the authority table states what its
 verb is to the assistant, in a field of its own beside `humanOnly`, `presence`
 and `recency`: `AssistRead` (a read a turn's read grant takes on the person's
 behalf) or `AssistApprove` (a change it carries only as the one request the
-person approved, ADR-0050). The zero is invalid, and the table's completeness
+person approved, ADR-0051). The zero is invalid, and the table's completeness
 walk fails the build on a row that does not decide, exactly as it does for a
 row with no recency.
 
@@ -69,7 +69,7 @@ spelling, and reads a zero class as never.
 machine token out because a token proves nobody is at a keyboard. An exec grant
 carries one request whose server-rendered preview the person approved from
 their own browser, a moment ago, under their own session, Origin and step-up
-(ADR-0050): that approval is the person at the keyboard, deciding that
+(ADR-0051): that approval is the person at the keyboard, deciding that
 request. A read grant carries no such gesture and is refused every presence
 row. A machine token is still refused it, exactly as before.
 
@@ -104,12 +104,12 @@ none is: the dashboard source preview reads on `artifacts.source.read`.
 ### Why it still meets "no more access than the person"
 
 - **The grant is the person's own session**, re-composed on every request
-  (ADR-0049): no assistant field can admit what the person's own grants and
+  (ADR-0050): no assistant field can admit what the person's own grants and
   relations refuse, and a sign-out ends the assistant at its next step.
 - **Reads are what the person can read**, the same answer to the same request,
   redacted and fenced before the model reads it (ADR-0040).
 - **Every write needs the person's approval of a server-rendered request**
-  (ADR-0050): the card is the engine's reading of the resource, bound to its
+  (ADR-0051): the card is the engine's reading of the resource, bound to its
   revision (an entity tag becomes the write's `If-Match`), and the exec grant
   carries that one request once.
 - **Step-up is kept**: a row's recency is asked of the approver, through the
@@ -156,5 +156,5 @@ against, a credential acting with nobody there, an exec grant cannot be.
 ## What this does not decide
 
 Which tools the model is offered and how a call is shaped
-(`internal/assistant/catalog`), how a grant is scoped and bound (ADR-0049,
-ADR-0050), and the class each verb is decided by, which is the table's own doc.
+(`internal/assistant/catalog`), how a grant is scoped and bound (ADR-0050,
+ADR-0051), and the class each verb is decided by, which is the table's own doc.

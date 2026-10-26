@@ -78,7 +78,7 @@ const (
 	SourcePageContext Source = "page_context"
 	// SourceDeepWork is a Dashboard Assistant deep-work run's account of
 	// what it did: a coding CLI's own words, written after it read web pages
-	// and files nobody in the company wrote (ADR-0053).
+	// and files nobody in the company wrote (ADR-0054).
 	SourceDeepWork Source = "deep_work"
 )
 

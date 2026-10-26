@@ -1460,7 +1460,7 @@ func administrativeGestures(ctx context.Context,
 // A request the Dashboard Assistant makes is its person's own, so an
 // administrator's assistant is composed holding admin, and the one it sends a
 // write through is an exec grant carrying a request the administrator
-// approved (ADR-0050). The record keeps the sign-in ceremonies from it for the
+// approved (ADR-0051). The record keeps the sign-in ceremonies from it for the
 // machine token's reason, whatever authority reached it: an enrolment (a
 // first password link, or a redemption), an invitation (a link) and ending
 // every session are refused [iamdomain.ErrAssistRefused], wrapping

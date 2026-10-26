@@ -69,7 +69,7 @@ type Deps struct {
 	Files Files
 
 	// --- deep work (im-deep) ---
-	// Deep runs deep work; nil is a node that offers none (ADR-0053).
+	// Deep runs deep work; nil is a node that offers none (ADR-0054).
 	Deep DeepWork
 
 	// Now is injectable so a test pins every instant.

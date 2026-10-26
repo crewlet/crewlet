@@ -397,7 +397,7 @@ func (t LocalTools) Valid() bool {
 // default (see [LocalTools]) and is turned off PER ENTRY, by
 // `overrides: {web_tools: denied}`, for a caller whose whole security model
 // is that every byte it reads arrives through the engine's own guard: the
-// Dashboard Assistant (ADR-0049) refuses any member of `assistant.llm` whose
+// Dashboard Assistant (ADR-0050) refuses any member of `assistant.llm` whose
 // merged profile is not denied here, because a page the model fetched for
 // itself is text no authority decision ever saw, and a fetch is also a way
 // OUT for whatever the person's data put in the prompt.

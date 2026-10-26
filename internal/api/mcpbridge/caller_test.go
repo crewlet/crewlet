@@ -20,7 +20,7 @@ import (
 
 // A SESSION THAT IS NOT A SEAT'S: the bridge serves any [mcpbridge.Surface]
 // under the [mcpbridge.Caller] it is handed, and holds that caller's token to
-// the run alone (ADR-0053's deep work). Every case here is about what a token
+// the run alone (ADR-0054's deep work). Every case here is about what a token
 // the model could leak is worth.
 
 // probeSurface is one tool that answers who its call was decided as.

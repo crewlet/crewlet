@@ -11,7 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// THE DASHBOARD ASSISTANT'S COLUMN OF THE AUTHORITY TABLE (ADR-0051).
+// THE DASHBOARD ASSISTANT'S COLUMN OF THE AUTHORITY TABLE (ADR-0052).
 //
 // An assisted principal is the person, composed from their own rows, with the
 // assistant grant named as the credential the request came through. So every
@@ -273,7 +273,7 @@ func sameDecision(a, b authz.Decision) bool {
 
 // THE HUMAN-ONLY LIST IS EXACTLY THE INTENDED SET.
 //
-// ADR-0051's parity rule: the person's assistant takes every verb the person
+// ADR-0052's parity rule: the person's assistant takes every verb the person
 // may take, as a read or as the one change they approved, but for the verbs
 // on the human-only list. That list is PINNED here verb by verb, because each
 // entry is a decision a reviewer makes (a sign-in or session ceremony, a

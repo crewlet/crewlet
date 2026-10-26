@@ -1,4 +1,4 @@
-# ADR-0053: Deep work runs the assistant's CLI with its own tools, only in a box
+# ADR-0054: Deep work runs the assistant's CLI with its own tools, only in a box
 
 - **Status:** accepted
 - **Authority:** `internal/assistant`
@@ -11,14 +11,14 @@
 **A Dashboard Assistant turn may hand its task to a deep-work run: the
 company's `assistant.deep_work` entry, a coding CLI in agent mode, with its own
 shell, files, web search and fetch, and image reading.** The assistant starts in
-quick mode, whose model still has no tool of its own (ADR-0049), and escalates
+quick mode, whose model still has no tool of its own (ADR-0050), and escalates
 by calling `start_deep_work` itself; the drawer shows the run as one step of
 the turn, with its progress, and the Crewlet calls it makes nested under it.
 
 **Its only way into Crewlet is the turn's own surface**, served to the run over
 the engine's MCP bridge: the person's own assistant tools, every call an
 ordinary request under the turn's read grant through the API's one handler
-chain, every write a proposal the person approves (ADR-0050). The bridge
+chain, every write a proposal the person approves (ADR-0051). The bridge
 decides each call as nobody, so the request that carried it adds nothing, and
 no engine credential, API token or grant is ever placed in the run's box: the
 box holds a per-run bridge token that names the run alone, expires with the
@@ -93,7 +93,7 @@ such gap. A remote or contained cell has neither.
 ## Why the obvious alternatives are wrong
 
 **The CLI's own tools in quick mode**: every turn would run a shell on the
-engine host for a question that needed one read, and ADR-0049's guarantee that
+engine host for a question that needed one read, and ADR-0050's guarantee that
 the model reads only what the person's requests return would hold for no turn.
 
 **The seat's sandbox coordinator**: it is built around a seat's lease, inbox and
@@ -102,4 +102,4 @@ that dies with it ends the turn as interrupted, as any turn on that node.
 
 **An API token in the box**: it would be a network credential for the whole
 of the person's access, usable from anywhere until it expired, which is exactly
-what ADR-0049 refuses the assistant.
+what ADR-0050 refuses the assistant.

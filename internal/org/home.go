@@ -3,7 +3,7 @@ package org
 // THE REFUSALS OF A CREATE WITH NO HOME, one sentence each for every surface
 // that meets them: the seat and operator tools that file the work, and the
 // Dashboard Assistant's preview, which resolves the same default through
-// `GET /viewer` before any card is drawn (ADR-0054). Worded once, here, so the
+// `GET /viewer` before any card is drawn (ADR-0055). Worded once, here, so the
 // person's preview and the write it stands for refuse in the same words.
 
 // NoHomeProject is the refusal of a create of tool that names no project,

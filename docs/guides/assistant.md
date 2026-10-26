@@ -18,11 +18,11 @@ have:
   call is one ordinary API request sent with that grant through the engine's
   own handler, so the guard, the authority table and every route's own checks
   decide it exactly as they decide that person's clicks
-  ([ADR-0049](https://github.com/crewlet/crewlet/blob/main/adr/0049-the-assistant-acts-only-through-a-grant-derived-from-the-persons-session.md)).
+  ([ADR-0050](https://github.com/crewlet/crewlet/blob/main/adr/0050-the-assistant-acts-only-through-a-grant-derived-from-the-persons-session.md)).
 - A write is never sent by the assistant. It becomes a proposal the person
   approves from their own session, against a server-rendered preview, under a
   single-use grant bound to that one request
-  ([ADR-0050](https://github.com/crewlet/crewlet/blob/main/adr/0050-an-assistant-write-executes-only-from-its-owners-approval-of-a-server-rendered-preview.md)).
+  ([ADR-0051](https://github.com/crewlet/crewlet/blob/main/adr/0051-an-assistant-write-executes-only-from-its-owners-approval-of-a-server-rendered-preview.md)).
 - The assistant may do whatever its person may, as a read or as a change they
   approve, but for a short human-only list it never takes, whoever approves:
   signing in and the session and token ceremonies (minting or revoking a
@@ -33,12 +33,12 @@ have:
   model (it searches the pages itself instead). It adds a seat to the org
   chart, but it does not create a person or invite one: the answer to either
   is a sign-in link, which stays with you, and the drawer says so
-  ([ADR-0051](https://github.com/crewlet/crewlet/blob/main/adr/0051-every-authority-row-says-what-the-assistant-may-do-with-it.md)).
+  ([ADR-0052](https://github.com/crewlet/crewlet/blob/main/adr/0052-every-authority-row-says-what-the-assistant-may-do-with-it.md)).
   A gesture that asks a recent proof of identity still asks it of the person
   when they approve.
 - A conversation belongs to its owner. No route serves one to anybody else,
   except the audited compliance read below
-  ([ADR-0052](https://github.com/crewlet/crewlet/blob/main/adr/0052-an-assistant-conversation-belongs-to-its-owner.md)).
+  ([ADR-0053](https://github.com/crewlet/crewlet/blob/main/adr/0053-an-assistant-conversation-belongs-to-its-owner.md)).
 
 Only a **person** signed in through a browser session may use it. Machine
 tokens, service accounts and sessions exchanged from a Tier A token are
@@ -61,7 +61,7 @@ the person to approve, and the check's warnings are on the card. A write the
 history records carries a one-line summary of what it does, shown on the card
 and stored with the revision. A task or a page that names no project or space
 is shown, and sent, with the one it will land in, or refused when the person's
-team owns none (ADR-0054). Adding a
+team owns none (ADR-0055). Adding a
 seat to the org chart, editing a person's permissions, purging a task or
 adopting a brand are all proposals the person approves, at the same step-up
 the screen would ask.
@@ -153,7 +153,7 @@ These limits are fixed, not configured:
 
 Deep work lets the assistant hand a large task to a coding agent with its own
 tools (shell, files, web search and fetch, image reading) for up to twenty
-minutes at a time (ADR-0053). It is off unless `assistant.deep_work` names an
+minutes at a time (ADR-0054). It is off unless `assistant.deep_work` names an
 entry:
 
 ```yaml

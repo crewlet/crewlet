@@ -1424,7 +1424,7 @@ func administrativeRequests() []administrativeRequest {
 // The identity estate refuses every administrative record written through the
 // Dashboard Assistant ([iamdomain.ErrAssistRefused], wrapping ErrRefused), and
 // the authority table refuses the same request at the route with reason
-// `assist_refused` (ADR-0051). The record's refusal is answered the same way:
+// `assist_refused` (ADR-0052). The record's refusal is answered the same way:
 // 403 `unauthorized` carrying that reason and NO permission, since the person
 // holds what the gesture needs and takes it themselves. It is matched BEFORE
 // the authority arm it wraps, and is never `token_refused`.

@@ -2,7 +2,7 @@
 // person's conversations, their turns, the messages, steps and cards the
 // person saw, the files they attached or were delivered, and the proposals
 // they decided, on the `CREWLET_ASSISTANT_LOG`
-// stream and applied into every data node's replicated estate (ADR-0052).
+// stream and applied into every data node's replicated estate (ADR-0053).
 //
 // # Who has to agree on it
 //

@@ -22,7 +22,7 @@ import (
 )
 
 // A PERSON'S CONVERSATIONS, every read and write keyed on them: a
-// conversation somebody else owns is one that does not exist (ADR-0052).
+// conversation somebody else owns is one that does not exist (ADR-0053).
 
 // Conversations is one page of p's conversations, the most recently used
 // first.

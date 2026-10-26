@@ -18,7 +18,7 @@ import (
 )
 
 // THE GENERIC API TOOLS: the person's whole API, through their assistant
-// (ADR-0051's parity). Beside the curated tools, which stay as better-shaped
+// (ADR-0052's parity). Beside the curated tools, which stay as better-shaped
 // shortcuts, three tools reach every route the API mounts that the person's
 // grant can reach:
 //
@@ -29,7 +29,7 @@ import (
 //     shaped and fenced by [Shape] as every read's is;
 //   - [ProposeAPIChangeTool] writes: a POST, PUT, PATCH or DELETE, which is
 //     always a proposal, previewed from the resource as it is now and sent
-//     only from the person's approval (ADR-0050).
+//     only from the person's approval (ADR-0051).
 //
 // # A call names a route of the table, never a URL
 //
@@ -47,7 +47,7 @@ import (
 // overview reads, the question route and the act route. A route whose verb the
 // authority table keeps from the assistant is left out of what the model is
 // offered, and every call is still decided by the API's own guard, as the
-// person, through the grant the turn holds (ADR-0049): the guard refuses a
+// person, through the grant the turn holds (ADR-0050): the guard refuses a
 // write to a read grant, the authority table's assistant column refuses the
 // human-only verbs, and the request binding holds an exec grant to the one
 // request that was approved.
@@ -473,7 +473,7 @@ func (g generic) request(args Args, reading bool) (exec.Request, Route, error) {
 // it: the one the body already states, else the call's `summary`, else one
 // naming the change from its route. IN THE BODY, never a header, because the
 // body is what the request digest binds: the history line the route records
-// is the one the person approved on the card (ADR-0054). A body that is not
+// is the one the person approved on the card (ADR-0055). A body that is not
 // one JSON object is left as it is, for the route's own check to refuse.
 func summarised(body []byte, args Args) ([]byte, error) {
 	var doc map[string]any

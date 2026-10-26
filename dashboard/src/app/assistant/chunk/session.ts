@@ -447,7 +447,7 @@ export async function recentConversations(limit = 4) {
 /**
  * The operation each decision is sent under, by proposal: minted at the first
  * press and sent again on a retry, so a retry after an answer nobody heard is
- * the same decision to the engine, which it collapses (ADR-0050). Approvals
+ * the same decision to the engine, which it collapses (ADR-0051). Approvals
  * and declines keep separate keys, because each is its own operation.
  */
 const approvals = new Map<string, string>();

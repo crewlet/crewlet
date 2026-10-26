@@ -60,7 +60,7 @@ import (
 // [config.CharterSettings] and no seat or unit touched. The verb is decided
 // as `config.write` is for a person, so an administrator's own Save is
 // admitted exactly as before; it differs only in the Dashboard Assistant's
-// column (ADR-0051), which is why the narrower write must never stretch to
+// column (ADR-0052), which is why the narrower write must never stretch to
 // anything else. A charter draft that reached past the charter would be a
 // fault in the draft, and is decided by the document's own rules instead, as
 // any other write is, which the assistant is never admitted to.

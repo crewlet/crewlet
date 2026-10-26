@@ -26,7 +26,7 @@ import (
 // THE ASSISTANT'S OWN SURFACE: the tools one turn offers its model, and what a
 // call to one does. Never the agent runtime's tools.Surface, which acts as a
 // seat: every call here is the person's own request through the API's one
-// handler chain, decided by the route it asks (ADR-0049).
+// handler chain, decided by the route it asks (ADR-0050).
 //
 // # What a call can do
 //
@@ -40,7 +40,7 @@ import (
 //   - A WRITE or PAGE ACTION is never sent: its tool's own preview reads the
 //     object as the person, [proposal.New] binds the change to its digest and
 //     revision, the proposal is recorded and carded, and the loop suspends with
-//     the call unanswered until the person decides (ADR-0050).
+//     the call unanswered until the person decides (ADR-0051).
 //   - A DOCS call answers from the engine's own API reference and the route
 //     table, and sends nothing: the routes the person may use, or one route's
 //     documentation, the model's text with every fence marker defused.

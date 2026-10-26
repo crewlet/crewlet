@@ -22,7 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
-// DEEP WORK (ADR-0053), driven end to end through the real orchestrator with
+// DEEP WORK (ADR-0054), driven end to end through the real orchestrator with
 // a scripted model and a scripted deep-work backend: the run's every Crewlet
 // call is executed by the bridge the engine would serve it, which is the
 // surface handed to the backend.

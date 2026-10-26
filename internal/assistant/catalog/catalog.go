@@ -4,7 +4,7 @@
 //
 // # The person's whole API, and better-shaped shortcuts onto it
 //
-// The assistant may do with the API whatever its person may (ADR-0051's
+// The assistant may do with the API whatever its person may (ADR-0052's
 // parity, the human-only list aside): the generic tools ([DescribeAPITool],
 // [APIRequestTool], [ProposeAPIChangeTool]) name any route of the table the API
 // binds ([API.Bind]) and are decided by that route, as the person. The curated
@@ -144,7 +144,7 @@ const (
 	KindDocs Kind = "docs"
 	// KindDeep hands the task to a deep-work run ([DeepWorkTool]): the
 	// coding CLI with its own tools, reaching Crewlet only through the
-	// person's other tools, bridged (ADR-0053). It sends nothing itself.
+	// person's other tools, bridged (ADR-0054). It sends nothing itself.
 	KindDeep Kind = "deep"
 )
 

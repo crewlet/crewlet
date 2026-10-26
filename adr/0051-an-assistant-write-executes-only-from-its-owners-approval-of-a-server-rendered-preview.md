@@ -1,4 +1,4 @@
-# ADR-0050: An assistant write executes only from its owner's approval of a server-rendered preview
+# ADR-0051: An assistant write executes only from its owner's approval of a server-rendered preview
 
 - **Status:** accepted
 - **Authority:** `internal/api/assistantapi`
@@ -81,4 +81,4 @@ would be a second answer to "was this approved".
 
 The proposal states and their legal moves (`internal/assistant/proposal`), the
 routes and their refusal codes (`internal/api/assistantapi`), and which verbs
-are approval-gated at all (ADR-0051).
+are approval-gated at all (ADR-0052).

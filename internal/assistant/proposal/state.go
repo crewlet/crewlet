@@ -76,7 +76,7 @@ type move struct {
 	event Event
 }
 
-// moves is THE STATE MACHINE (ADR-0050): every legal transition, and nothing
+// moves is THE STATE MACHINE (ADR-0051): every legal transition, and nothing
 // else. A settled state has no row, so nothing leaves it; unknown is not
 // settled, and its one way out is a Retry.
 var moves = map[move]wire.ProposalState{

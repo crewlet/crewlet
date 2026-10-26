@@ -278,7 +278,7 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 // actTransport is the transport an act call arrives on, and why an assistant
 // call may not be made, or "".
 //
-// AN ASSISTANT CALL IS ONE APPROVED WRITE (ADR-0050). The request guard
+// AN ASSISTANT CALL IS ONE APPROVED WRITE (ADR-0051). The request guard
 // already admits an assistant grant here only as an exec grant carrying the
 // one request its approval bound, once; this is the second lock, on the one
 // surface every server write goes through: the grant must name the proposal

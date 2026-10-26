@@ -13,7 +13,7 @@ var (
 	// ErrNotFound reports a conversation, turn, card or proposal that does
 	// not exist OR BELONGS TO SOMEBODY ELSE: a caller with no relation to a
 	// conversation is told it does not exist, never that it is forbidden
-	// (ADR-0052).
+	// (ADR-0053).
 	ErrNotFound = errors.New("assistantdomain: not found")
 
 	// ErrPurged reports a write to a conversation a purge or an erasure

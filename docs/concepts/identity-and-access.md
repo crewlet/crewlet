@@ -2654,7 +2654,7 @@ The Dashboard Assistant acts as the person using it: a request it makes is
 decided exactly as that person's own click is, and the credential it came
 through is recorded beside them as `assist:<grant>`. So the table can only
 take away from what the person holds, never add to it, and every row states
-how far it lets the assistant reach (ADR-0051):
+how far it lets the assistant reach (ADR-0052):
 
 - **read**: a read grant takes the verb, so a turn reads what the person may
   read with nothing for them to approve;
@@ -2675,7 +2675,7 @@ assistant whatever it says, because the assistant is not a person at a
 keyboard.
 
 **The company's principles are the one part of the company document the
-assistant reaches** (ADR-0051). Their mission, vision and standing policies are
+assistant reaches** (ADR-0052). Their mission, vision and standing policies are
 read and written on verbs of their own, `config.principles.read` (**read**) and
 `config.principles.write` (**approve**), decided for a person exactly as
 `config.read` and `config.write` decide the whole document: an administrator's,

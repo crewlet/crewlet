@@ -48,7 +48,7 @@ import (
 //
 // Every member of `llm` must be a text-mode entry whose profile denies the
 // CLI's own local tools AND its own web tools. The assistant's guarantee
-// (ADR-0049) is that it reads only what the person's own requests return; a
+// (ADR-0050) is that it reads only what the person's own requests return; a
 // CLI in agent mode runs its own tool loop whose calls never pass the guard, a
 // shell reads whatever the engine user can, and a web fetch is both text no
 // authority decision ever saw and a way out for whatever the person's data
@@ -73,7 +73,7 @@ type Assistant struct {
 
 	// DeepWork is the assistant's escalation into a coding CLI's own
 	// harness for a task that needs research, scripts, files or many steps
-	// (ADR-0053). Absent: the assistant answers in quick mode only.
+	// (ADR-0054). Absent: the assistant answers in quick mode only.
 	DeepWork *AssistantDeepWork `yaml:"deep_work,omitempty" json:"deep_work,omitempty" desc:"Deep work: the assistant hands a large task to a coding CLI running its own tools in a sandbox, reaching Crewlet only through the person's own assistant tools. Absent: quick mode only."`
 }
 
@@ -250,7 +250,7 @@ func (c *Company) AssistantDeepWork() (string, LLMProvider, error) {
 // DeepWorkPlacement is the cell deep work runs in, and whether the company
 // runs deep work at all: its entry's own `run_in`, else the first of e2b and
 // container the company configures, else [PlacementDirect], the engine host,
-// where the engine confines every run (ADR-0053). A REMOTE OR CONTAINED CELL
+// where the engine confines every run (ADR-0054). A REMOTE OR CONTAINED CELL
 // IS PREFERRED whenever one is configured, because the host is the cell whose
 // boundary is the engine's to hold rather than a machine's.
 func (c *Company) DeepWorkPlacement() (Placement, bool) {
@@ -455,7 +455,7 @@ func assistantMemberProblems(member Path, key string, entry *LLMProvider) error 
 	// returned, its web denial applied, as written and streamed), which must
 	// leave the model no shell, file tool or tool server: one on the engine
 	// host reads the engine's own data and keys, outside every request of the
-	// person's (ADR-0049).
+	// person's (ADR-0050).
 	eligible := strings.Join(cliprofile.AssistantEligible(), ", ")
 	switch {
 	case profile.LocalTools != cliprofile.LocalToolsDenied:

@@ -1,4 +1,4 @@
-# ADR-0049: The assistant acts only through a grant derived from the person's session
+# ADR-0050: The assistant acts only through a grant derived from the person's session
 
 - **Status:** accepted
 - **Authority:** `internal/assistant`
@@ -29,9 +29,9 @@ a click in the dashboard), carrying an **assistant grant**:
   and it is never fresher than the request that derived it (its step-up instant is
   clamped to the deriving request's).
 - **Narrowing, never widening.** A read grant reaches only reads, and an exec
-  grant only the one approved request its proposal binds (ADR-0050). The
+  grant only the one approved request its proposal binds (ADR-0051). The
   person's own authority decision is still the whole decision; the grant's
-  scope and the authority table's assistant column (ADR-0051) only subtract.
+  scope and the authority table's assistant column (ADR-0052) only subtract.
 
 **Any route of the person's, and only as a request.** Beside its curated
 tools the assistant reaches the whole API through generic tools
@@ -59,7 +59,7 @@ profile's `local_tools` claim, since a deny list is always a release behind the
 tools a vendor adds. Codex keeps `apply_patch`, which has no switch and whose
 patch check answers whether a host file holds given lines, so Codex is refused.
 
-**Amended by ADR-0053, for deep work alone.** A turn may hand its task to a
+**Amended by ADR-0054, for deep work alone.** A turn may hand its task to a
 deep-work run, whose CLI does have tools of its own: it runs only in a box, or
 on the engine host under OS confinement the person accepted, and its one way
 into Crewlet is this turn's own surface, bridged, so every read it makes is
@@ -87,7 +87,7 @@ failure `internal/api/operator`'s package doc exists to prevent.
 
 ## What this does not decide
 
-How a write waits for the person (ADR-0050), how each verb says what the
-assistant may do with it (ADR-0051) and where conversations live (ADR-0052).
+How a write waits for the person (ADR-0051), how each verb says what the
+assistant may do with it (ADR-0052) and where conversations live (ADR-0053).
 The grant's token format, lifetimes and revocation registry are
 `internal/api/auth`'s own doc.
