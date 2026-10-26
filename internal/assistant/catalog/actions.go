@@ -92,8 +92,11 @@ var resources = []resource{
 }
 
 // resourceOf is the resource a route's path names, if [resources] holds it.
-func resourceOf(route Route) (resource, bool) {
-	i := slices.IndexFunc(resources, func(r resource) bool { return r.Path == route.Path() })
+func resourceOf(route Route) (resource, bool) { return resourceAt(route.Path()) }
+
+// resourceAt is the resource a path pattern names, if [resources] holds it.
+func resourceAt(path string) (resource, bool) {
+	i := slices.IndexFunc(resources, func(r resource) bool { return r.Path == path })
 	if i < 0 {
 		return resource{}, false
 	}

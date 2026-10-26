@@ -307,11 +307,13 @@ func (g generic) describe() Tool {
 			"search": text("Words to narrow the list by, matched against each route's "+
 				"path and documentation.", lineBytes),
 		}),
+		// IN THE PERSON'S WORDS: what is being looked up is the engine's
+		// own reference, which a step never names by its route.
 		Label: func(a map[string]any) string {
 			if route := Args(a).String("route"); route != "" && len(route) <= 160 {
-				return "Reading the documentation of " + route
+				return "Looking up how to work with " + lowerFirst(RequestTitle(route, nil))
 			}
-			return "Looking up the API"
+			return "Looking up what can be done"
 		},
 		Docs: g.document,
 	}
@@ -380,7 +382,7 @@ func genericLabel(doing string) func(map[string]any) string {
 	return func(a map[string]any) string {
 		route := Args(a).String("route")
 		if route == "" || len(route) > 160 {
-			return doing + " an API route"
+			return doing + " a record"
 		}
 		return doing + " " + lowerFirst(callTitle(Args(a)))
 	}

@@ -61,14 +61,18 @@ API, the same way the dashboard's own screens load. So:
   agent or an administrator, and nothing you type can make it.
 
 Behind each answer the panel lists the steps it took, each one a single
-request the assistant made as you (for example "Read token spend by agent").
+request the assistant made as you, in plain words (for example "Read token
+spend by agent"). A step never names the engine's tools; an administrator also
+sees each step's request (its method and path) beside it. A refusal is said in
+plain words too: the assistant is handed the engine's exact reason and says
+what to change.
 Tables can be downloaded as CSV or XLSX from the card, from the snapshot you
 were shown.
 
 A read of a part of the engine that has no card of its own is drawn from the
 answer's own shape and named for what it read, never for the request: a list
 is a table ("Agents"), and one record is a card of its values and the lists it
-holds ("Role · engineer", or the company's configuration with its roles and
+holds ("Seat · engineer", or the company's configuration with its roles and
 units).
 
 ## What it can do
