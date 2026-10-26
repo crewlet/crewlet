@@ -12,7 +12,9 @@
 // copy of the tracker's, the knowledge base's or the identity directory's rows.
 // Its seats still read and write the first two, constantly — every board, every
 // task, every page a tool touches — and ask the third whose record a login names
-// and who holds each human seat, so something has to answer them. EVERY DATA NODE HOLDS THE WHOLE ESTATE
+// and who holds each human seat, and a node that serves requests asks it what a
+// presented machine token is checked against, so something has to answer them.
+// EVERY DATA NODE HOLDS THE WHOLE ESTATE
 // and SERVES it over the broker ([Serve]), and every node's tools are handed
 // facades of one [Router], which answers in-process where this node's copy
 // serves and asks another data node otherwise. So are the operator's surfaces
@@ -348,6 +350,22 @@
 // are its own, because its request path is where a person verb is decided. And
 // a binding crosses NARROWED ([Binding]): the row's credential verifiers and
 // grants never reach the broker, since the asker decides nothing on either.
+//
+// A MACHINE TOKEN'S ROW CROSSES NARROWED TOO, and narrowed differently
+// ([TokenFacts]), because there the asker decides on nearly all of it: the
+// grants the mint carried and the owner's current ones are what the token acts
+// with, and the expiry, the revocation, the epochs and the applied position
+// are what end it or make its absence three-valued — so those cross whole.
+// The VERIFIER is the one value withheld, and the presented SECRET never
+// leaves the asker: what is asked is the token's id, a nonce drawn for that
+// question alone and the keyring entry to answer under, and what crosses in
+// the verifier's place is a MAC over it and the nonce under a key both nodes
+// derive from the fleet keyring. The asker MACs the verifier the presented
+// token implies the same way and takes it as the row's verifier only where the
+// two agree, so credential.CheckToken decides there exactly what it decides on
+// a data node, over a row neither the broker nor anybody on it can test a
+// guess against — and an answer MAC'd for one question verifies under no
+// other's nonce.
 //
 // # Errors keep their identity
 //

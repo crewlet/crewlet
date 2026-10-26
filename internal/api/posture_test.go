@@ -452,10 +452,10 @@ func postureTokens(t *testing.T) postureMachine {
 // postureRows is an identity directory holding a fixed set of tokens.
 type postureRows map[string]credential.TokenRow
 
-func (r postureRows) MachineToken(_ context.Context, id string) (
+func (r postureRows) MachineToken(_ context.Context, presented credential.Token) (
 	credential.TokenRow, error) {
 
-	if row, ok := r[id]; ok {
+	if row, ok := r[presented.ID]; ok {
 		return row, nil
 	}
 	return credential.TokenRow{Applied: 2}, nil

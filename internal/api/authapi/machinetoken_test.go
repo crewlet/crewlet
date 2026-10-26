@@ -118,7 +118,7 @@ func TestAMachineTokenManagesNoProof(t *testing.T) {
 // oneTokenRow is an identity directory holding one token.
 type oneTokenRow struct{ row credential.TokenRow }
 
-func (d oneTokenRow) MachineToken(context.Context, string) (credential.TokenRow, error) {
+func (d oneTokenRow) MachineToken(context.Context, credential.Token) (credential.TokenRow, error) {
 	return d.row, nil
 }
 

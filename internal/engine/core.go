@@ -77,9 +77,14 @@ import (
 // chart and this node's own Tier A tokens are applied to the answer here, on
 // the asking side, as they are to its own rows on a data node. Its party
 // registry reads the directory on the periodic net alone ([DirectoryRefresh]),
-// since there is no applier here to signal it. And it needs no more: the
-// sign-in surface and the request guard run only where the `ingress` role does,
-// which Tier A requires `data` beside, so every session this deployment
+// since there is no applier here to signal it. A request presenting a token
+// puts it two more questions — the row a machine token is checked against,
+// and the seat a Tier A token's login binds — and the engine answers both on
+// such a node through the same router ([Engine.MachineToken],
+// [Engine.BoundSeat]), the verdict formed here by the tables a data node forms
+// it with, and neither a verifier nor a secret crossing for it. The sign-in
+// surface needs more than either and is served only where the `ingress` role
+// is, which Tier A requires `data` beside, so every session this deployment
 // validates is validated against rows the validating node holds — 503 and
 // never 401 on a node that is behind, and no cache in front of either.
 
@@ -791,9 +796,10 @@ func (e *Engine) stateLogOf() (*stateLog, error) {
 // ONE ANSWER FOR BOTH KINDS OF NODE, because the callers are the same tools:
 // whose record a login names ([Engine.HolderRecord]) is asked by a seat's
 // tools on whichever node runs the seat, and a data-less seats node runs
-// seats. What the caller then applies — the chart, this node's own Tier A
-// tokens, how far the answering rows could vouch — is the caller's, on this
-// node, whichever rows answered.
+// seats; and the seat a Tier A token's login binds ([Engine.BoundSeat]) is
+// asked by the request guard on whichever node it runs. What the caller then
+// applies — the chart, this node's own Tier A tokens, how far the answering
+// rows could vouch — is the caller's, on this node, whichever rows answered.
 func (e *Engine) identityDirectory() (bindingDirectory, bool) {
 	if c := e.core.Load(); c != nil && c.iamReader != nil {
 		return c.iamReader, true

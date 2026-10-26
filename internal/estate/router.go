@@ -933,6 +933,7 @@ func (r *Router) tryLocal(ctx context.Context, spec *opSpec, x exchange, acceptL
 		return nil, false, nil
 	}
 	b.ServerSeams = r.seams
+	b.verifiers = r.env.verifiers
 	value, refusal, why, ran := r.runLocal(ctx, spec, b, x, acceptLagging, w.spent)
 	switch {
 	case why != "":

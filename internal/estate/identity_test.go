@@ -7,10 +7,12 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -21,10 +23,17 @@ import (
 var identityStream = floorStreams[identityDomain]
 
 // directory is a data node's identity directory: one person holding one seat,
-// one seat a removed person left, and a lag and a deferral to vouch with.
+// one seat a removed person left, one machine token, and a lag and a deferral
+// to vouch with.
 type directory struct {
 	err   error
 	vouch iamdomain.Vouch
+
+	// token is the row held under [machineID], or nil for [liveToken]'s.
+	token *credential.TokenRow
+
+	// tokenReads, where set, counts the machine-token rows read.
+	tokenReads *atomic.Int64
 }
 
 // verifier is the secret-shaped value the row holds, which no answer may carry.
@@ -54,6 +63,61 @@ func (d directory) SeatHolders(context.Context) ([]iamdomain.SeatHolder, error) 
 		{Seat: "jane", Person: "p-1", Stage: iam.StageSuspended},
 		{Seat: "sam", Person: "p-2", Removed: true},
 	}, nil
+}
+
+// MachineToken is the row held under id: [machineID]'s token, or the absent
+// row — this node's applied position and vouch, and nothing found — for any
+// other id, as the directory answers one.
+func (d directory) MachineToken(_ context.Context, id string) (credential.TokenRow, error) {
+	if d.tokenReads != nil {
+		d.tokenReads.Add(1)
+	}
+	if d.err != nil {
+		return credential.TokenRow{}, d.err
+	}
+	if id != machineID {
+		return credential.TokenRow{Applied: tokenApplied, Lag: d.vouch.Lag,
+			Deferred: d.vouch.Deferred}, nil
+	}
+	if d.token != nil {
+		return *d.token, nil
+	}
+	return liveToken(), nil
+}
+
+// machineID is the one machine token the directory holds, minted at
+// [tokenMinted] with the secret [machineSecret]; tokenApplied is how far the
+// serving node has applied the identity log, past the mint.
+const (
+	machineID     = "018f3a9c-0000-7000-8000-0000000000f1"
+	tokenMinted   = 40
+	tokenApplied  = 50
+	machineSecret = "5d2c0f3a9b8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a392817061f2e"
+)
+
+// tokenNow is the instant a case checks a token at.
+var tokenNow = time.Date(2026, 3, 2, 9, 0, 0, 0, time.UTC)
+
+// presentedToken is the machine token as its holder presents it.
+func presentedToken() credential.Token {
+	return credential.Token{ID: machineID, Position: tokenMinted, Secret: machineSecret}
+}
+
+// liveToken is the row a good token is checked against: found, a token, the
+// verifier its secret implies, live for a day, and its owner active.
+func liveToken() credential.TokenRow {
+	return credential.TokenRow{
+		Applied: tokenApplied, Found: true, IsToken: true,
+		Verifier:  credential.TokenVerifier(machineID, machineSecret),
+		ExpiresAt: tokenNow.Add(24 * time.Hour),
+		Grants:    []iam.Grant{iam.GrantTracker},
+		Epoch:     2,
+		Owner: credential.TokenOwner{
+			Found: true, ID: "018f3a9c-0000-7000-8000-00000000a11c", Kind: iam.KindPerson,
+			Stage: iam.StageActive, Login: "sarah.chen", Grants: []iam.Grant{iam.GrantTracker},
+			Epoch: 2,
+		},
+	}
 }
 
 // A LOGIN'S BINDING CROSSES, AND ITS CREDENTIALS DO NOT: a node holding no data

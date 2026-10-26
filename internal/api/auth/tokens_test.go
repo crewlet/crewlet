@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -41,6 +42,10 @@ type machineRig struct {
 	chart     *fakeChart
 	admin     iam.AdminPosture
 	at        time.Time
+
+	// handed is the token the directory was last handed.
+	mu     sync.Mutex
+	handed credential.Token
 }
 
 func newMachineRig(t *testing.T) *machineRig {
@@ -75,14 +80,26 @@ func newMachineRig(t *testing.T) *machineRig {
 	}
 }
 
-func (m *machineRig) MachineToken(_ context.Context, id string) (credential.TokenRow, error) {
+func (m *machineRig) MachineToken(_ context.Context, presented credential.Token) (
+	credential.TokenRow, error) {
+
+	m.mu.Lock()
+	m.handed = presented
+	m.mu.Unlock()
 	if m.dirErr != nil {
 		return credential.TokenRow{}, m.dirErr
 	}
-	if id != m.presented.ID {
+	if presented.ID != m.presented.ID {
 		return credential.TokenRow{Applied: m.row.Applied}, nil
 	}
 	return m.row, nil
+}
+
+// lastHanded is the token the directory was last handed.
+func (m *machineRig) lastHanded() credential.Token {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.handed
 }
 
 // guard builds a guard with the machine arm over this rig, reporting to tr.
@@ -158,6 +175,17 @@ func TestATokenActsAsItsOwnerWithTheNarrowestOfThreeGrantSets(t *testing.T) {
 	if token != m.presented.ID {
 		t.Errorf("the request carries token %q, want %q — the mint route "+
 			"cannot refuse a token it cannot see", token, m.presented.ID)
+	}
+	// THE DIRECTORY IS HANDED THE TOKEN WHOLE, its secret included: on a node
+	// holding no identity rows the secret is what a data node's narrowed
+	// answer is checked against, so a guard that handed the id alone would
+	// have every token refused there. Mutation: hand the directory
+	// credential.Token{ID: presented.ID} and this fails.
+	if handed := m.lastHanded(); handed.ID != m.presented.ID ||
+		handed.Position != m.presented.Position || handed.Secret != m.presented.Secret {
+		t.Errorf("the directory was handed id %q at %d (the presented secret: %v), "+
+			"want the presented token whole", handed.ID, handed.Position,
+			handed.Secret == m.presented.Secret)
 	}
 
 	// THE OWNER LOST the knowledge base, and the token with them.

@@ -158,6 +158,14 @@ func TestAMachineTokensNameStandsForWhatTheTokenDoes(t *testing.T) {
 		t.Fatalf("a live token's name resolved %v", how)
 	}
 	samePrincipal(t, got, byBearer.principal)
+	// A NAME CARRIES NO SECRET, so the directory is handed the id alone —
+	// and the rows decide it by the table that reads no verifier
+	// (credential.CheckHeld), which is why it still resolved.
+	if handed := m.lastHanded(); handed.ID != m.presented.ID || handed.Secret != "" ||
+		handed.Position != 0 {
+		t.Errorf("a token's name handed the directory id %q at %d with a secret "+
+			"(%v), want the id alone", handed.ID, handed.Position, handed.Secret != "")
+	}
 
 	for _, tc := range []struct {
 		name  string

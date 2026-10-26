@@ -2,10 +2,12 @@ package estate
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
@@ -574,6 +576,50 @@ func (i Identity) BindingByLogin(ctx context.Context, login string) (Binding,
 // directory.
 func (i Identity) SeatHolders(ctx context.Context) ([]iamdomain.SeatHolder, error) {
 	return call(ctx, i.r, opSeatHolders, nil, struct{}{})
+}
+
+// MachineToken answers the row a presented machine token is checked against —
+// [credential.CheckToken]'s input — as a data node holds it, for a node that
+// holds no identity rows of its own.
+//
+// THE PRESENTED TOKEN STAYS HERE. What is asked is its id, a nonce drawn for
+// this question alone and the keyring entry to MAC under; what comes back is
+// the row with its verifier withheld and a MAC over it ([TokenFacts]); and the
+// verifier set on the answer is the one presented implies, only where that MAC
+// confirms it is the stored one. So the table decides here exactly what it
+// decides on a data node, and neither the secret nor the verifier crosses. A
+// token named by its id alone — a view ticket's, whose secret the request that
+// minted it proved — is answered with no verifier, which [credential.CheckHeld]
+// never reads.
+//
+// THE VOUCH IS THE ANSWERING NODE'S, as a binding's is
+// ([Identity.BindingByLogin]): the applied position an absent row is weighed
+// against, and the lag and the deferral the coverage is judged on, are the
+// rows'.
+//
+// AN ERROR IS THE UNKNOWN ARM, always: a row no data node could read, no data
+// node answering, and this node holding no key to check an answer under are
+// all "cannot say", never "no such token".
+func (i Identity) MachineToken(ctx context.Context, presented credential.Token) (
+	credential.TokenRow, error) {
+
+	keyID, key, held := i.r.env.verifiers.asking()
+	if !held {
+		return credential.TokenRow{}, fmt.Errorf("estate: this node holds no key to "+
+			"check a machine token's answer under: secrets.active_key_id %q names "+
+			"none of secrets.keys", keyID)
+	}
+	// rand.Read never returns an error: it crashes the process rather than
+	// hand back a nonce it could not fill.
+	var nonce [nonceBytes]byte
+	_, _ = rand.Read(nonce[:])
+	facts, err := call(ctx, i.r, opIdentityMachineToken, nil, machineTokenArgs{
+		ID: presented.ID, Nonce: nonce, KeyID: keyID,
+	})
+	if err != nil {
+		return credential.TokenRow{}, err
+	}
+	return facts.rowFor(presented, key, nonce), nil
 }
 
 // Knowledge is the native knowledge search, answered by a data node's index.

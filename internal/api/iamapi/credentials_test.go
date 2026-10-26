@@ -625,7 +625,7 @@ func throughTheGuard(t *testing.T, r *rig, row credential.TokenRow, method,
 // oneToken is a directory holding one token row.
 type oneToken struct{ row credential.TokenRow }
 
-func (d oneToken) MachineToken(context.Context, string) (credential.TokenRow, error) {
+func (d oneToken) MachineToken(context.Context, credential.Token) (credential.TokenRow, error) {
 	return d.row, nil
 }
 

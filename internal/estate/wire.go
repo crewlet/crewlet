@@ -227,9 +227,11 @@ const (
 	// unservedNoBackend: this node runs no native backend for the op's
 	// half — the company is on a vendor for it, or the runtime is not up —
 	// OR a half it does run DECLINED before it ran anything ([declined],
-	// [ranNothing]): today a code half refusing code.ErrNotServing — a
+	// [ranNothing]): a code half refusing code.ErrNotServing — a
 	// committer stopping, a node in a maintenance mode that publishes
-	// nothing, a refusal about this node, a half with no reader. Either way
+	// nothing, a refusal about this node, a half with no reader — or an
+	// identity directory asked to MAC a machine token's answer under a key
+	// the node does not hold ([opIdentityMachineToken]). Either way
 	// nothing ran, so every class moves on; the reply's Detail then carries
 	// the half's own cause ([ranNothingDetail]), so a node that has the
 	// backend and answered no_backend says why.

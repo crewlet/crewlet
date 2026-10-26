@@ -140,9 +140,9 @@ var classified = map[string]struct {
 	"estate.Backend.Git": {seamNone, "the git half a git operation is answered from; what it reads " +
 		"is classified on query.Options, which it is built over"},
 	"estate.Backend.Identity": {seamNone, "the identity directory's reader, built over " +
-		"iamdomain.ReaderOptions: who holds a login and each human seat, read from the copy's " +
-		"rows; the chart and the Tier A token list an answer is judged against are the ASKING " +
-		"node's"},
+		"iamdomain.ReaderOptions: who holds a login and each human seat, and the row a machine " +
+		"token is checked against, read from the copy's rows; the chart and the Tier A token " +
+		"list an answer is judged against, and whether a token is good, are the ASKING node's"},
 	"estate.Backend.Artifacts": {seamNone, "the artifacts reader and writer, built over " +
 		"artifactsdomain.ReaderOptions and artifactsdomain.WriterDeps; a caller's role on an " +
 		"artifact is decided and stamped on the asking side"},
@@ -153,6 +153,8 @@ var classified = map[string]struct {
 	"estate.Backend.Answers":   {seamNone, "the copy's distance from its log"},
 	"estate.Backend.Admits":    {seamNone, "the copy's establishment, for a seat's admission"},
 	"estate.Backend.Current":   {seamGate, "whether this node serves the company's configuration"},
+	"estate.Backend.verifiers": {seamNone, "the keys a machine token's narrowed answer is MAC'd " +
+		"under, derived from the node's Tier A keyring, never from the company's configuration"},
 	"estate.Backend.pageBytes": {seamNone, "how much of a paged read one answer carries"},
 
 	"estate.ServerSeams.Units": {seamValue, "the unit a tracker read renders"},

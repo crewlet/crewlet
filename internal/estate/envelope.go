@@ -72,8 +72,15 @@ const channelName = "estate"
 // the router and the server alike, because a node is both: a data node answers
 // its peers and asks them, and a node that could sign a request it could not
 // verify the answer to would believe nothing it was told.
+//
+// AND THE VERIFIER KEYS, the one other thing the estate's wire derives from
+// the keyring: a machine token's answer carries a MAC in place of its verifier
+// ([TokenFacts]), formed by the half that answers and checked by the half that
+// asks. Both need the same keys, and both are handed exactly this value — a
+// second value beside it, wired apart, could be wired from another ring.
 type Envelopes struct {
-	channel *signedask.Channel[request, reply]
+	channel   *signedask.Channel[request, reply]
+	verifiers verifierKeys
 }
 
 // NewEnvelopes builds a node's envelopes from the fleet keyring — Tier A
@@ -86,7 +93,9 @@ func NewEnvelopes(ring statelog.Keyring) (*Envelopes, error) {
 	if err != nil {
 		return nil, fmt.Errorf("estate: %w", err)
 	}
-	return &Envelopes{channel: channel}, nil
+	// THE RING HAS JUST BEEN HELD TO A SIGNING SHAPE — an id on every
+	// entry, the active one among them — so every key derives.
+	return &Envelopes{channel: channel, verifiers: newVerifierKeys(ring)}, nil
 }
 
 // errNoEnvelopes is a router or a server built without envelopes.

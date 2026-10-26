@@ -239,6 +239,7 @@ func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 		return s.encodeReply(out)
 	}
 	b.ServerSeams = s.seams
+	b.verifiers = s.env.verifiers
 	b.pageBytes = usagePageBytes
 	var written *writtenItems
 	if req.Actor != nil && req.Actor.Records {

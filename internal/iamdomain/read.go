@@ -388,10 +388,12 @@ func readEpoch(ctx context.Context, tx *sql.Tx, subject string, out *uint64) err
 // node holds them now, the owner's current epoch, the company's current
 // session generation, and how far this node can vouch.
 //
-// It satisfies the request guard's consumer-defined seam, and it is the
-// token's [Reader.Resolve]: a revocation landing between a credential read
-// and an owner read would produce a verdict that never existed at any instant.
-// WHAT THE ROWS MEAN is [credential.CheckToken]'s, over the value returned.
+// It is what the request guard's machine-token arm reads on a data node, and
+// what a data node answers a node holding no identity rows with — narrowed by
+// internal/estate, which withholds the verifier — and it is the token's
+// [Reader.Resolve]: a revocation landing between a credential read and an
+// owner read would produce a verdict that never existed at any instant. WHAT
+// THE ROWS MEAN is [credential.CheckToken]'s, over the value returned.
 //
 // ONE KEYED READ OF ONE ROW, never a scan, because the token carries its own
 // id in the clear — which is what a credential presented on every request a

@@ -195,7 +195,9 @@ func (l *Lineages) machineToken(ctx context.Context, name string) (iam.Principal
 		return iam.Principal{}, iam.Anonymous
 	}
 	now := t.now()
-	row, err := t.directory.MachineToken(ctx, id)
+	// BY ITS ID ALONE: a ticket holds the token's name, never its secret,
+	// which the request that minted the ticket proved — see [TokenDirectory].
+	row, err := t.directory.MachineToken(ctx, credential.Token{ID: id})
 	if err != nil {
 		log.Log(ctx, UnreadLevel(ctx), "api_lineage_unavailable", "lineage", name,
 			"error", err)

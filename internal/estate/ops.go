@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
@@ -31,9 +32,9 @@ import (
 // operator's MCP. Those reach the estate through this node's router as a
 // seat's tools do, so a node whose copy of the operation's domain is out of
 // service answers its operator from a peer's copy rather than its own, and a
-// node holding no data serves them at all. And the identity directory's two
-// reads, which a node holding no data asks for its seats and its party
-// registry.
+// node holding no data serves them at all. And the identity directory's three
+// reads, which a node holding no data asks for its seats, its party registry
+// and the requests it serves.
 
 // TrackerReader is the tracker's read side the surfaces ask of.
 type TrackerReader interface {
@@ -214,19 +215,21 @@ type UsageReader interface {
 
 // IdentityReader is the identity directory's read side, as a node holding no
 // data asks it: the two questions its seats and its party registry put to the
-// directory, and no others.
+// directory, the one a request presenting a machine token puts, and no others.
 //
 // FACTS AND NOT VERDICTS, exactly as [iamdomain.Reader] answers them: the row a
-// login binds and how far the serving node can vouch for it, and the seats the
-// directory binds. What a stalled applier or a retained record MEANS — and the
-// chart a binding is resolved against, and the Tier A tokens a node declares —
-// are the ASKING node's, because the request path that decides on them is
-// there and a verdict formed on another node would be a second opinion about
-// whose seat a login is.
+// login binds and how far the serving node can vouch for it, the seats the
+// directory binds, and the row a machine token is checked against. What a
+// stalled applier or a retained record MEANS — and the chart a binding is
+// resolved against, the Tier A tokens a node declares, and whether a token is
+// good — are the ASKING node's, because the request path that decides on them
+// is there and a verdict formed on another node would be a second opinion
+// about whose seat a login is, or about whose credential a bearer is.
 type IdentityReader interface {
 	PersonByLoginVouched(ctx context.Context, login string) (iamdomain.Sighting,
 		iamdomain.Vouch, error)
 	SeatHolders(ctx context.Context) ([]iamdomain.SeatHolder, error)
+	MachineToken(ctx context.Context, id string) (credential.TokenRow, error)
 }
 
 // Backend is one data node's answer to every operation, over its copy of the
@@ -329,6 +332,15 @@ type Backend struct {
 	// backend it hands an operation.
 	ServerSeams
 
+	// verifiers are the keys a machine token's narrowed answer is MAC'd
+	// under ([TokenFacts]) — the node's own, from its envelopes, which the
+	// dispatcher sets on every backend it hands an operation: the server for
+	// a request off the wire, this node's router for one it runs in-process.
+	// A NODE'S, never its copy's, as [ServerSeams] are, and set by the
+	// dispatcher for the same reason: a backend is resolved per request, the
+	// keyring once per process.
+	verifiers verifierKeys
+
 	// pageBytes is the most one answer of a PAGED read carries before it is
 	// cut ([usage.Fill]): [usagePageBytes] where the serving half answers a
 	// request off the wire, and zero — one page, the whole read — where
@@ -363,10 +375,12 @@ type ServerSeams struct {
 var errNoHalf = errors.New("estate: this node runs no native backend for this operation")
 
 // declined is a half that RAN NOTHING for a reason of its own — a code
-// committer that refused before it appended anything ([ranNothing]): read as
-// errNoHalf by the router and the server alike, so every class moves on from
-// it with the same arguments, and worded as the half's own refusal, which the
-// walk's account keeps ([ranNothingDetail]).
+// committer that refused before it appended anything ([ranNothing]), or a node
+// holding no key a machine token's answer could be MAC'd under
+// ([opIdentityMachineToken]): read as errNoHalf by the router and the server
+// alike, so every class moves on from it with the same arguments, and worded
+// as the half's own refusal, which the walk's account keeps
+// ([ranNothingDetail]).
 type declined struct{ cause error }
 
 func (d declined) Error() string   { return d.cause.Error() }
@@ -1721,9 +1735,10 @@ var opLinkedFrom = define("knowledge.linked_from", opRead, pagesDomain, false,
 // two things: whose record a login names, which every person verb resolves
 // before it is decided ([iam.OwnerOf]), and who holds each human seat, which
 // the party registry routes inbound messages by and an agent's roster is cut
-// by. ADR-0025 gives such a node no replicated estate and no applier, so both
-// are asked of a data node, floored on the identity log like any read of rows
-// a log derives.
+// by. A node holding no data that serves requests asks a third: the row a
+// presented machine token is checked against ([TokenFacts]). ADR-0025 gives
+// such a node no replicated estate and no applier, so each is asked of a data
+// node, floored on the identity log like any read of rows a log derives.
 
 // Binding is the part of a directory row a binding question reads: who holds
 // the login, what kind of principal they are, how far through enrolment they
@@ -1789,6 +1804,39 @@ var opSeatHolders = define("identity.seat_holders", opRead, identityDomain, fals
 			return nil, errNoHalf
 		}
 		return b.Identity.SeatHolders(ctx)
+	})
+
+// WHAT A PRESENTED MACHINE TOKEN IS CHECKED AGAINST, read in one snapshot —
+// the credential, its owner as this node holds them now, and how far this node
+// can vouch for both — and answered NARROWED: the verifier withheld, and a MAC
+// over it and the asker's nonce, under the key the asker named, in its place
+// ([TokenFacts]). Whether the token is good is decided on the asking node,
+// which holds the presented secret, by the one table every node decides a
+// token by ([credential.CheckToken]). An error is UNKNOWN and crosses as one,
+// never "no such token", which would be a 401 to a pipeline whose credential
+// is fine.
+//
+// A KEY THIS NODE DOES NOT HOLD RUNS NOTHING, as a request signed under one
+// does ([Envelopes]): it is a fact about this node, which an operator changes
+// by adding the key, so the router asks a node that holds it — and it is
+// checked before the row is read, so a node that could not MAC an answer
+// reads nothing for it.
+var opIdentityMachineToken = define("identity.machine_token", opRead, identityDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a machineTokenArgs) (TokenFacts, error) {
+		if b.Identity == nil {
+			return TokenFacts{}, errNoHalf
+		}
+		key, held := b.verifiers.key(a.KeyID)
+		if !held {
+			return TokenFacts{}, declined{cause: fmt.Errorf("it holds no secrets.keys "+
+				"entry %q to answer a machine token's verifier under (it holds %v)",
+				a.KeyID, b.verifiers.held())}
+		}
+		row, err := b.Identity.MachineToken(ctx, a.ID)
+		if err != nil {
+			return TokenFacts{}, err
+		}
+		return factsOf(row, key, a.Nonce), nil
 	})
 
 // served is what a node runs, as a seat's admission asks it.
