@@ -1066,16 +1066,19 @@ func (l *coldLane) RepoState(ctx context.Context, q code.StateQuery) (code.RepoS
 }
 
 // Read is the backfill's read of a repository's push rows (code.read), which
-// a data node answers on the same shared lane as code.repo_state: it holds one
-// of the lane's answers for as long as the rows take to answer, with no cost
-// of its own, since the model prices only a snapshot's page. A cold join's
-// caches are never started, so no backfill reads through the lane here and
-// nothing the benchmark reports moves.
+// a data node answers as it answers code.repo_state: on the same shared lane,
+// and as ONE read transaction (statelog.Reader.Read) on one of its reader
+// connections, so it holds one of each for as long as the rows take to
+// answer, with no cost of its own, since the model prices only a snapshot's
+// page. A cold join's caches are never started, so no backfill reads through
+// the lane here and nothing the benchmark reports moves.
 func (l *coldLane) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
 	if err := l.answers.Acquire(ctx, 1); err != nil {
 		return code.ReadAnswer{}, err
 	}
 	defer l.answers.Release(1)
+	l.readers.take()
+	defer l.readers.give()
 	return l.inner.Read(ctx, q)
 }
 
