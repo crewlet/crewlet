@@ -236,20 +236,23 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 	reinstall, _ := ck.still(c.image, inc.dir)
 	var todo []code.PackRow
 	// over is every pack this install places over files present, by its
-	// checksum, with what found it damaged and why that looked; absent, in a
-	// forced round — the in-place round of a request's pack or object damage
-	// or of a round's own — every pack it installs that the directory LOST —
-	// held before this round (lost) and gone from it since — that repair as
-	// much as one installed again. A pack the rows name that the copy never
+	// checksum, with what found it damaged and why that looked; absent, every
+	// pack it installs that the directory LOST — held before this round (lost)
+	// and gone from it since — a REPAIR as much as one installed again,
+	// WHICHEVER ROUND PUTS IT BACK: a request's forced round, a round's own
+	// repair, or any round reading the copy whole (a shape's, a report's, a
+	// boot's). A failure a lost pack caused is ended by whatever puts the pack
+	// back, so the guard reads that write as it reads any repair
+	// (incarnation.repairWrite); counted only by a forced round, a request
+	// whose git began before another round put the pack back was handed a
+	// forced round that found nothing, the scrub and a whole rebuild of a copy
+	// nothing was wrong with any more. A pack the rows name that the copy never
 	// held is a push it has not read yet, which repairs nothing.
 	over := map[string]reinstallWhy{}
 	absent := map[string]bool{}
 	now := c.now()
 	e.mu.Lock()
-	var before *state
-	if ck.forced {
-		before = inc.state
-	}
+	before := inc.state
 	heldOff := inc.repair.heldOff(now)
 	e.mu.Unlock()
 	for _, p := range snap.packs {
@@ -271,7 +274,7 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 			over[p.GitChecksum] = reinstallWhy{found: "trailer", trigger: f.trigger, drops: f.index}
 		case have == packWrongSize:
 			over[p.GitChecksum] = reinstallWhy{found: "size", trigger: ck.trigger, drops: true}
-		case ck.forced && lost(before, snap, p):
+		case lost(before, snap, p):
 			absent[p.GitChecksum] = true
 		}
 		todo = append(todo, p)
@@ -504,10 +507,10 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 // its checksum), `hint` (a confirmed hint named it: ConfirmHint held its
 // bytes to its row) or `size` (a full round found one at another size than
 // its row's) — and the trigger of the check or scrub that looked, both logged
-// with code_cache_pack_reinstalled; a forced round — a request's in-place
-// repair or a round's own — logs a pack the directory lost (lost) as
-// `absent`. drops: the derived files may have been
-// built from the damage, so they go before it is placed (install's doc).
+// with code_cache_pack_reinstalled; any round logs a pack the directory lost
+// (lost) as `absent`, with its own check's trigger. drops: the derived files
+// may have been built from the damage, so they go before it is placed
+// (install's doc).
 type reinstallWhy struct {
 	found   string
 	trigger checkTrigger
@@ -520,8 +523,8 @@ type reinstallWhy struct {
 type installs struct {
 	added, replaced int
 	// restored is how many of the added were packs the copy had lost (lost):
-	// a forced round's repair, a request's or a round's own, where the rest
-	// are pushes it had not yet read.
+	// a repair, whichever round put them back, where the rest are pushes it
+	// had not yet read.
 	restored int
 	dropped  derivedSet
 	// failed is the packs, by checksum, it was to install again over their
@@ -545,9 +548,14 @@ func (c *Cache) indexVouched(e *entry, inc *incarnation, cs string) bool {
 // incarnation held before the round began (st, its state then): its row added
 // on the log st was read from, at or before st's position — so the copy had
 // it and has lost it. A row added since is a push the copy has not yet read,
-// and no state (or another stream's) says nothing either way.
+// and no state (or another stream's) says nothing either way — nor does an
+// answer BELOW st's position: only a log gone back under the copy gives one to
+// a round (converge's rewound read), and such a log hands the positions past
+// the copy it was restored from to other records, so a push it takes there
+// sits at a position the copy had read without the copy ever having held it.
 func lost(st *state, snap snapshot, p code.PackRow) bool {
-	if st == nil || !st.StreamCreated.Equal(snap.streamCreated) || p.Added.IsZero() {
+	if st == nil || !st.StreamCreated.Equal(snap.streamCreated) || p.Added.IsZero() ||
+		!reached(snap.position, st.Position) {
 		return false
 	}
 	newer, err := st.Position.Before(p.Added)

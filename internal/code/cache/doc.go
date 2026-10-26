@@ -439,7 +439,8 @@
 //     [RebuildMissing]) loses at most the packs that hold the damage, so
 //     those are what is fetched again, IN PLACE FIRST. A failure whose
 //     process began before this process last wrote a REPAIR into the copy —
-//     a pack installed again over its files, a lost pack installed again, a
+//     a pack installed again over its files, a lost pack installed again
+//     (by whichever round put it back: its loss ends however it comes back), a
 //     derived file dropped — may have been of what the repair replaced: it
 //     is answered from the copy as it stands, once a round still repairing it
 //     has ended, and the host runs it once more. A push's pack installed or

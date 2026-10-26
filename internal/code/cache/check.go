@@ -581,8 +581,8 @@ func vouchedRels(inc *incarnation) []string {
 // file found damaged at the identity it was hashed at — a pack's .idx or .rev,
 // whose pack the install puts in again, or a derived file, which the round
 // drops (still) — and the bytes read. forced: the in-place round of a pack's
-// or an object's repair asked it (Cache.Rebuild, repairDamaged), so a pack the
-// rows name and the directory lacks is installed as that repair's.
+// or an object's repair asked it (Cache.Rebuild, repairDamaged), so it held
+// every index file to its trailer whatever its vouch.
 type checked struct {
 	trigger checkTrigger
 	forced  bool

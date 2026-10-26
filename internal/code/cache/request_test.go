@@ -392,6 +392,112 @@ func TestAPushIsNoRepairOfAFailingRequest(t *testing.T) {
 	}
 }
 
+// A LOST PACK ANY ROUND PUTS BACK IS A REPAIR. A pack the copy had read and
+// lost — its files gone, the rows naming it at a position the copy had read —
+// is what a request's git fails on (an object no pack holds), and putting it
+// back ends that failure whichever round does it: a request's forced round, a
+// sync's own repair, or any round that reads the copy whole — here one its
+// shape marked. So that round writes a REPAIR into the copy (the guard's
+// incarnation.repairWrite), counts it `stored` and logs it found=absent, and
+// a request whose git began before it is answered from the copy as it stands,
+// its git run once more over a copy that holds the pack again. Counted only
+// by a forced round, it was no repair to the guard: such a request was handed
+// a forced round that found nothing, the scrub, and a whole rebuild of a copy
+// nothing was wrong with any more.
+//
+// And a pack a log gone back names is no pack the copy lost: restored from an
+// older copy, the log gives the positions past that copy to other records, so
+// a push it takes sits at a position the copy had read without the copy ever
+// having held it.
+//
+// Mutations: a lost pack counted only by a forced round (the request is
+// escalated — a forced check, a scrub and a new incarnation); lost packs read
+// against a position the log has gone back below (the gone-back arm counts a
+// push `stored` and logs it found=absent).
+func TestALostPackAnyRoundPutsBackIsARepair(t *testing.T) {
+	t.Parallel()
+	t.Run("a round its shape marked", func(t *testing.T) {
+		t.Parallel()
+		w := newSyncWorld(t, onMemory)
+		h := w.measured(t)
+		c := w.open(t)
+		s := w.sync(t, c, h.repo)
+		for _, ext := range []string{".pack", ".idx", ".rev"} {
+			if err := os.Remove(filepath.Join(s.Dir, "objects", "pack", "pack-"+h.newer.GitChecksum+ext)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// The request's git meets the loss, and asks its repair only once a
+		// round of nobody's has put the pack back.
+		f := failureOf(t, w, s, "rev-list", "--objects", h.commits[3])
+		cache.MarkWhole(c, h.repo, cache.RebuildShape, 0)
+		w.sync(t, c, h.repo)
+		if got := rebuilds(w, cache.RebuildStored); got != 1 {
+			t.Errorf("rebuilds{reason=stored} = %d after the round that put the lost pack back, want 1", got)
+		}
+		lines := w.logs.lines(t, "code_cache_pack_reinstalled")
+		if len(lines) != 1 || lines[0]["found"] != "absent" || lines[0]["pack_id"] != h.newer.PackID {
+			t.Errorf("code_cache_pack_reinstalled = %v, want the lost pack put back, found=absent", lines)
+		}
+
+		r, err := c.Rebuild(t.Context(), s, f)
+		if err != nil {
+			t.Fatalf("Rebuild: %v", err)
+		}
+		defer r.Release()
+		if r.Kind != cache.SyncNone || cache.Incarnation(r) != cache.Incarnation(s) {
+			t.Errorf("the request was answered %s from incarnation %d, want %s from %d as it stands", r.Kind,
+				cache.Incarnation(r), cache.SyncNone, cache.Incarnation(s))
+		}
+		if got := reports(w, "object", "stale"); got != 1 {
+			t.Errorf("reports{part=object,outcome=stale} = %d, want the request answered as it stands", got)
+		}
+		forced := counterOf(w.rec, metrics.CodeCacheChecks, map[string]string{"trigger": "forced"})
+		scrubbed := counterOf(w.rec, metrics.CodeCacheChecks, map[string]string{"trigger": "request"})
+		if forced != 0 || scrubbed != 0 {
+			t.Errorf("the request's repair checked %d files in place and scrubbed %d, want none: the pack it "+
+				"failed on was put back after it began", forced, scrubbed)
+		}
+		if _, err := runGit(t, w.pool, r.Dir, "", "rev-list", "--objects", h.commits[3]); err != nil {
+			t.Errorf("the copy the request runs again over still fails: %v", err)
+		}
+	})
+
+	t.Run("a log gone back", func(t *testing.T) {
+		t.Parallel()
+		w := newSyncWorld(t, onMemory)
+		repo := w.repo(t, 1)
+		f := w.repos[repo]
+		w.push(t, repo, "refs/heads/main", nil)
+		earlier, head, tips := w.log.state(), f.head, slices.Clone(f.tips)
+		w.push(t, repo, "refs/heads/main", nil)
+		w.push(t, repo, "refs/heads/main", nil)
+		c := w.open(t)
+		ahead := w.sync(t, c, repo).Position
+
+		// Brought back from the earlier copy, the log takes a push of the
+		// history it holds at a position the copy had already read.
+		w.log.restore(earlier)
+		w.client.Run(t, f.work, "reset", "--hard", head)
+		f.head, f.tips = head, tips
+		_, row := w.push(t, repo, "refs/heads/main", nil)
+		if newer, _ := ahead.Before(row.Added); newer {
+			t.Fatalf("the push after the restore sits at %s, past the copy's %s: the case tests nothing", row.Added,
+				ahead)
+		}
+		w.sync(t, c, repo)
+		if len(w.logs.lines(t, "code_cache_log_rewound")) == 0 {
+			t.Fatal("the round did not read the log as gone back: the case tests nothing")
+		}
+		if got := rebuilds(w, cache.RebuildStored); got != 0 {
+			t.Errorf("rebuilds{reason=stored} = %d, want none: the copy never held the push", got)
+		}
+		if lines := w.logs.lines(t, "code_cache_pack_reinstalled"); len(lines) != 0 {
+			t.Errorf("code_cache_pack_reinstalled = %v, want nothing put back", lines)
+		}
+	})
+}
+
 // A CONFIRMED HINT REINSTALLS ONE PACK. A git process that names the pack
 // holding a corrupt object — the row naming a corrupt packed object, from 2.55,
 // or its sentence through a bare "%s", from 2.56 — has the pack held to its

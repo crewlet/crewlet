@@ -1063,7 +1063,8 @@ func Catalogue() []Instrument {
 				"files — the pack, its index or its reverse index — a check " +
 				"before serving or a scrub behind it found failing their " +
 				"own checksum, a full sync found at another size than " +
-				"their row's, a request's repair found the copy had lost, " +
+				"their row's, a full sync found the copy had lost (named " +
+				"by the rows at a position it had read), " +
 				"or a git process named in words " +
 				"and its row confirmed, fetched again IN PLACE with one " +
 				"download a pack, renamed over the damaged files, counted " +
