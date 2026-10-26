@@ -170,8 +170,9 @@ func rows(p proposal.Preview) map[string]wire.Change {
 // A PATCH is merged onto the representation its path reads (RFC 7396, `null`
 // deleting), and only the fields that move are rows; a list of records is
 // matched by the identity each carries, so one added seat is one added
-// member and the seat beside it is no row; the request leads the card and its
-// body follows, redacted. A strong entity tag binds the change and becomes its
+// member and the seat beside it is no row; the request and its body, redacted,
+// are the card's technical details for an administrator, never a row. A strong
+// entity tag binds the change and becomes its
 // If-Match; a representation with no tag but a version field binds the change
 // to that field, which the approval re-reads. A DELETE shows what it removes,
 // a POST what it creates, and a change that moves nothing is refused. The
@@ -203,7 +204,6 @@ func TestAGenericChangeIsPreviewedFromTheResource(t *testing.T) {
 		kind     wire.ChangeKind
 		from, to string
 	}{
-		"request":                            {wire.ChangeFact, "", "PATCH /config"},
 		"turn_engine.max_tool_rounds":        {wire.ChangeChanged, "16", "32"},
 		"turn_engine.temperature":            {wire.ChangeRemoved, "0.2", ""},
 		"roles.crewlet-swe.name":             {wire.ChangeAdded, "", "crewlet-swe"},
@@ -230,9 +230,18 @@ func TestAGenericChangeIsPreviewedFromTheResource(t *testing.T) {
 			t.Errorf("the preview shows %s, which the change leaves alone", untouched)
 		}
 	}
-	if body := got["request.body"].To; strings.Contains(body, secret) ||
-		!strings.Contains(body, `"max_tool_rounds": 32`) {
-		t.Errorf("the card's body is %q, not the request redacted", body)
+	if p.Technical == nil || p.Technical.Method != http.MethodPatch || p.Technical.Path != "/config" ||
+		strings.Contains(p.Technical.Body, secret) ||
+		!strings.Contains(p.Technical.Body, `"max_tool_rounds": 32`) {
+		t.Errorf("the card's technical details are %+v, not the request redacted", p.Technical)
+	}
+	for field := range got {
+		if strings.HasPrefix(field, "request") && field != "request.summary" {
+			t.Errorf("the request is a row (%s), not the technical details", field)
+		}
+	}
+	if p.Title != "Change company configuration" || p.Risk != "" {
+		t.Errorf("the change is titled %q at risk %q", p.Title, p.Risk)
 	}
 	if p.Act != string(authz.ActionOrgWrite) || !p.StepUp {
 		t.Errorf("the change is decided by %q, step-up %v", p.Act, p.StepUp)
@@ -265,7 +274,8 @@ func TestAGenericChangeIsPreviewedFromTheResource(t *testing.T) {
 	// A DELETE, a POST, and a change that moves nothing.
 	p, err = change.Preview(t.Context(), resource("/worklet/items/ENG-1", "", nil), wednesday,
 		map[string]any{"route": "DELETE /worklet/items/{key}", "path": map[string]any{"key": "ENG-1"}})
-	if err != nil || rows(p)["removes"].To != "/worklet/items/ENG-1" || p.Title != "Delete through the API" {
+	if err != nil || rows(p)["removes"].To != "Item ENG-1" || p.Title != "Delete item ENG-1" ||
+		p.Risk != wire.RiskDestructive || p.Summary != "This deletes item ENG-1." || p.Note == "" {
 		t.Errorf("a delete of a resource nothing reads previews %+v, %v", p, err)
 	}
 	p, err = change.Preview(t.Context(), read, wednesday, map[string]any{
@@ -414,7 +424,7 @@ func TestAGenericChangeToNothingIsACreateOrNoCard(t *testing.T) {
 	}
 	want := proposal.Revision{Kind: proposal.RevisionCreate, ID: "/config/mcp-servers/linear",
 		Version: proposal.VersionAbsent}.String()
-	if p.SourceRevision != want || p.Title != "Create through the API" {
+	if p.SourceRevision != want || p.Title != "Create MCP server linear" {
 		t.Errorf("the create is %q bound to %q, want a create bound to %q", p.Title,
 			p.SourceRevision, want)
 	}
@@ -472,6 +482,41 @@ func TestAGenericChangeToNothingIsACreateOrNoCard(t *testing.T) {
 		if !errors.As(err, &refused) || !errors.Is(err, catalog.ErrPreviewRead) ||
 			refused.Refusal.Code == "" {
 			t.Errorf("%s: the preview answered %v, want the route's refusal", name, err)
+		}
+	}
+}
+
+// THE REQUEST IS AN ADMINISTRATOR'S TO READ. An approver who administers the
+// company is shown the exact request behind "Technical details"; anybody else
+// reviews the rows, which are built from the same request, and is sent no
+// method, path or body at all. Mutation: send the technical details to every
+// approver, and this fails.
+func TestTheRequestIsAnAdministratorsToRead(t *testing.T) {
+	t.Parallel()
+	read := resource("/worklet/projects/ENG", `"rev-2"`, map[string]any{"key": "ENG",
+		"name": "Engine"})
+	args := map[string]any{"route": "PUT /worklet/projects/{key}",
+		"path": map[string]any{"key": "ENG"}, "body": map[string]any{"key": "ENG",
+			"name": "Engine room"}}
+	for _, c := range []struct {
+		who       string
+		person    iam.Principal
+		technical bool
+	}{
+		{"an administrator", admin, true},
+		{"a project lead", iam.Principal{Kind: iam.KindPerson, Stage: iam.StageActive,
+			Grants: []iam.Grant{iam.GrantWorklet}}, false},
+	} {
+		_, _, change := generic(t, c.person)
+		p, err := change.Preview(t.Context(), read, wednesday, args)
+		if err != nil {
+			t.Fatalf("%s: %v", c.who, err)
+		}
+		if (p.Technical != nil) != c.technical {
+			t.Errorf("%s is shown the technical details %+v", c.who, p.Technical)
+		}
+		if p.Title != "Change project Engine room" {
+			t.Errorf("%s reads the title %q", c.who, p.Title)
 		}
 	}
 }

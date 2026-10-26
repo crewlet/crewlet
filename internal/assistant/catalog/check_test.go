@@ -62,8 +62,9 @@ func (u *unitRoute) read(_ context.Context, r exec.Request) (exec.Response, erro
 			mustJSON(unknownField) + `}`)}, nil
 	}
 	return exec.Response{Status: http.StatusOK, Body: []byte(`{"valid":true,` +
-		`"warnings":[{"kind":"advisory","message":"pm's daily ceiling sits above the ` +
-		`company's"}]}`)}, nil
+		`"warnings":[{"kind":"advisory","introduced":true,"message":"pm's daily ceiling ` +
+		`sits above the company's"},{"kind":"advisory","introduced":false,"seat":"miles",` +
+		`"message":"miles is a human seat with no chat contact"}]}`)}, nil
 }
 
 func (u *unitRoute) checks() []exec.Request {
@@ -109,7 +110,8 @@ func seatBody(extra map[string]any) map[string]any {
 // with the exact request and the precondition the approval would send: a body
 // it refuses (a field the unit does not take) is the step's refusal in the
 // route's own words, and nothing is proposed; a body it admits is a card whose
-// rows carry the check's warnings. A preview never writes. Mutation: skip the
+// rows carry the warnings the check says this change introduces, never one the
+// company already carried. A preview never writes. Mutation: skip the
 // check, or send it without the flag or the If-Match, and a case here fails.
 func TestAChangeTheRouteWouldRefuseIsNeverACard(t *testing.T) {
 	t.Parallel()
@@ -121,7 +123,7 @@ func TestAChangeTheRouteWouldRefuseIsNeverACard(t *testing.T) {
 	var refused *catalog.PreviewRefusal
 	if !errors.As(err, &refused) || refused.Status != http.StatusBadRequest ||
 		refused.Refusal.Code != "validation_error" ||
-		!strings.Contains(refused.Refusal.Message, "tool_sources: unknown field") {
+		!strings.Contains(refused.Refusal.ForModel(), "tool_sources: unknown field") {
 		t.Fatalf("a body the route refuses previewed %v, want its refusal", err)
 	}
 
@@ -147,6 +149,13 @@ func TestAChangeTheRouteWouldRefuseIsNeverACard(t *testing.T) {
 	if w := got["check.warning.1"]; w.Label != "Warning" ||
 		!strings.Contains(w.To, "above the company's") {
 		t.Errorf("the check's warning is %+v on the card", w)
+	}
+	// ONLY WHAT THIS CHANGE INTRODUCES: a warning the company already
+	// carried is not news about this change.
+	for field, row := range got {
+		if strings.Contains(row.To, "miles") {
+			t.Errorf("row %s carries a warning the change did not introduce: %+v", field, row)
+		}
 	}
 	if got["roles.qa.name"].To != "QA Engineer" {
 		t.Errorf("the added seat's rows are %+v", got)

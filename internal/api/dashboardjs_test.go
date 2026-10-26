@@ -1207,8 +1207,11 @@ const (
 	// "Needs you" holds, from the model the page draws it with, and reading
 	// dates on the company clock took it to 4510.4 KiB, in the Inbox's chunk
 	// and the shared format module. 4511 KiB, which still refuses a doubled
-	// baseline.
-	treeBudget = 4<<20 + 415<<10
+	// baseline. Drawing the assistant's cards in a person's terms (a seat cell
+	// by its name, a refusal by its kind, a pending change as pending, an
+	// administrator's technical rows), in the panel's chunk, took it to 4511.5
+	// KiB. 4512 KiB, which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 416<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

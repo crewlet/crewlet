@@ -167,6 +167,10 @@ func TestADeepRunReachesCrewletOnlyThroughTheTurnsSurface(t *testing.T) {
 		deep.Deep.State != wire.DeepFinished || deep.Deep.Steps != 1 {
 		t.Fatalf("the run's step closed as %+v / %+v", deep, deep.Deep)
 	}
+	if len(deep.Deep.Activity) != 0 {
+		t.Errorf("the finished run's card still carries its activity %q; its report is the "+
+			"answer's to say", deep.Deep.Activity)
+	}
 	if read.Tool != "get_task" || read.Parent != 1 || read.State != wire.StepDone {
 		t.Fatalf("the run's read is %+v, want a done step nested under the run's", read)
 	}
@@ -174,7 +178,7 @@ func TestADeepRunReachesCrewletOnlyThroughTheTurnsSurface(t *testing.T) {
 	for _, f := range frames {
 		if f.Kind == wire.EventStep && f.Step.Index == 1 && f.Step.Deep != nil &&
 			f.Step.Deep.State == wire.DeepRunning &&
-			slices.Contains(f.Step.Deep.Activity, "[tool] Bash: python3 tally.py") {
+			slices.Contains(f.Step.Deep.Activity, "Ran a command") {
 			running = true
 		}
 	}
@@ -653,5 +657,58 @@ func TestAContinuedRunWorksOnTheScreenAsTheDecisionLeftIt(t *testing.T) {
 	if len(runs) != 2 || !strings.Contains(runs[1].Brief, "screen now") ||
 		!strings.Contains(runs[1].Brief, "brand-setup@2") {
 		t.Fatalf("the continued run was not told the screen as it is now: %+v", runs)
+	}
+}
+
+// NO HOST PATH OR RAW TOOL LINE REACHES A PERSON from deep work: a run whose
+// transcript names its box's paths, its CLI's tools and Crewlet's MCP tools,
+// and whose report says where it wrote a file, shows the person plain lines
+// (no "[tool]", no absolute path, no Crewlet call, which its nested steps
+// already list), and hands the model a report with every path cut to the file's
+// name. Mutation: keep the transcript verbatim, or fence the report as the run
+// wrote it, and this fails.
+func TestNoHostPathReachesAPersonFromDeepWork(t *testing.T) {
+	t.Parallel()
+	box := "/private/tmp/claude-501/review-engine/data/assistant-boxes/7f3a/outbox"
+	script := evals.NewDeepScript(evals.DeepRunScript{
+		Lines: []string{"[tool] mcp__crewlet__list_artifacts", "[tool] Write: " + box + "/report.md",
+			"[tool] ToolSearch: select:Read,Write", "I saved the draft in " + box + "/report.md.",
+			"[tool] Bash: rsvg-convert logo.svg -o logo.png → error: not found"},
+		Files:  []assistant.DeepFile{{Name: "report.md", Content: []byte("# Report\n")}},
+		Report: "I wrote the full report to " + box + "/report.md.", Input: 900, Output: 100})
+	f := deepRig(t, script, startDeep("Review the brand"), evals.Say("Done."))
+	accepted, err := f.Ask("brand", "Review our brand", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames := f.Follow(accepted.TurnID, 0)
+	var shown []string
+	for _, fr := range frames {
+		if fr.Kind == wire.EventStep && fr.Step.Deep != nil {
+			shown = append(shown, fr.Step.Deep.Activity...)
+			shown = append(shown, fr.Step.Deep.Reason)
+		}
+	}
+	if len(shown) == 0 {
+		t.Fatal("the run showed no activity at all")
+	}
+	for _, line := range shown {
+		for _, internal := range []string{"[tool]", "/private/", "assistant-boxes", "mcp__",
+			"ToolSearch", "select:"} {
+			if strings.Contains(line, internal) {
+				t.Errorf("a person reads %q, which carries %q", line, internal)
+			}
+		}
+	}
+	for _, want := range []string{"Wrote report.md", "I saved the draft in report.md.",
+		"Ran a command, which failed", "Looked up a tool"} {
+		if !slices.Contains(shown, want) {
+			t.Errorf("the activity %q does not say %q", shown, want)
+		}
+	}
+	answer, ok := toolAnswer(f, "c-deep")
+	if !ok || strings.Contains(answer.Content, "/private/") ||
+		!strings.Contains(answer.Content, "I wrote the full report to report.md.") {
+		t.Errorf("the model read the run as %q", answer.Content)
 	}
 }

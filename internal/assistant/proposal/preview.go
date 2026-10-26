@@ -33,10 +33,21 @@ type Revisions func(ctx context.Context, read Read, sourceRevision string) (stri
 // Preview is one write as the person is shown it, and the request it sends.
 type Preview struct {
 	// Title is the action in sentence case ("Create task"), Target what it
-	// changes ("ENG-142"), Note its consequence in one sentence.
-	Title  string
-	Target string
-	Note   string
+	// changes ("ENG-142"), Summary what it does where the title does not say
+	// it (what a destructive change takes away), and Note its consequence in
+	// one sentence (whether it can be reverted).
+	Title   string
+	Target  string
+	Summary string
+	Note    string
+
+	// Risk is how much care the approval asks, computed from what the
+	// change does ([wire.RiskDestructive]); empty for an ordinary change.
+	Risk wire.ProposalRisk
+
+	// Technical is the exact request in the API's own terms, for an
+	// approver who administers the company; nil for everybody else.
+	Technical *wire.TechnicalRequest
 	// ApproveLabel names the effect on the approve button ("Approve and
 	// create"), never "OK".
 	ApproveLabel string
@@ -73,7 +84,7 @@ type Preview struct {
 	Act string
 
 	// Removes are the fields a replacing write removes from the object as it
-	// is now, by label: the warning the card leads with, so a removal is
+	// is now, by label: what Summary leads the card with, so a removal is
 	// never only a struck-through row among the others. Computed from the
 	// body and the representation the source revision names, both of which
 	// the digest binds.
