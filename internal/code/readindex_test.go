@@ -189,7 +189,7 @@ func TestEveryCodeReadSeeksANamedIndex(t *testing.T) {
 	}
 
 	// THE PACKAGE.
-	walk := walkForReads(sourcetree.Root(t), modulePath)
+	walk := walkForReads(t, sourcetree.Root(t), modulePath)
 	if walk.files == 0 || walk.sites == 0 || len(walk.spelled) == 0 {
 		t.Fatalf("the walk read %d files of %s, judged %d statement sites and found %d texts "+
 			"reading a code table — this gate was certifying nothing", walk.files, codeDir,
@@ -519,18 +519,20 @@ func orPackageLevel(fn string) string {
 // statements whose verdict is known. Every way the package spells a statement
 // must be found: declared, inline, built of constants, an UPDATE, a DELETE, an
 // INSERT that selects, a comma join, a quoted table, a common table
-// expression, a subquery, a context-free method, a field's handle, a file
-// this platform does not build. What only writes, a column a table
-// qualifies, a comment, a string literal and a log key are none. Every way a
-// statement is assembled at run time must make its function a builder: an
-// append, a format, a package-level variable, an exported function's
-// parameter, a closure's, a range over something the walk cannot read whole,
-// and a caller handing a helper what it built; and every way a text is merely
-// CHOSEN among constants must not: a range over a literal, an assignment in
-// each branch, a helper every caller hands a constant, a method likewise, a
-// local that shadows a constant. A method that is no statement is no site, a
-// statement method taken as a value or on a value the walk cannot type is
-// reported, and a test file is never read.
+// expression, a subquery, a context-free method, a field's handle, a
+// connection DB.Conn opened, a file this platform does not build. What only
+// writes, a column a table qualifies, a comment, a string literal and a log
+// key are none. Every way a statement is assembled at run time must make its
+// function a builder: an append, a format, a package-level variable, an
+// exported function's parameter, a closure's, a range over something the walk
+// cannot read whole, and a caller handing a helper what it built; and every
+// way a text is merely CHOSEN among constants must not: a range over a
+// literal, an assignment in each branch, a helper every caller hands a
+// constant, a method likewise, a local that shadows a constant — and a
+// statement prepared from a constant and run with arguments only the run
+// knows, whose one site is its Prepare. A method that is no statement is no
+// site, a statement method taken as a value or on a value the walk cannot
+// type is reported, and a test file is never read.
 func TestTheReadGateFindsEveryStatement(t *testing.T) {
 	t.Parallel()
 
@@ -590,7 +592,7 @@ func TestTheReadGateFindsEveryStatement(t *testing.T) {
 	write("internal/statelog/statelog.go", "package statelog\n\ntype Scope struct{}\n\n"+
 		"type Freshness struct{}\n\n"+
 		"func (Freshness) Query(scope Scope, linearizable bool) string { return \"\" }\n")
-	walk := walkForReads(root, "example.com/m")
+	walk := walkForReads(t, root, "example.com/m")
 
 	if walk.files != 2 {
 		t.Errorf("the walk read %d files, want the package's two non-test ones", walk.files)
@@ -628,6 +630,9 @@ func TestTheReadGateFindsEveryStatement(t *testing.T) {
 		`SELECT token FROM code_names WHERE repo_id = ?`: {[]string{"code_names"}, nil, []string{"direct"}},
 		`SELECT id FROM code_evictions`:                  {[]string{"code_evictions"}, []string{"shadowed"}, nil},
 		`SELECT id FROM code_refs WHERE repo_id = ?`:     {[]string{"code_refs"}, []string{"elsewhereSQL"}, nil},
+		`SELECT target FROM code_refs WHERE ref = ?`:     {[]string{"code_refs"}, []string{"preparedSQL"}, []string{"prepared"}},
+		`UPDATE code_packs SET state = 'retired' WHERE repo_id = ?`: {[]string{"code_packs"},
+			[]string{"connSQL"}, []string{"onConn"}},
 	} {
 		s, ok := walk.spelled[text]
 		if !ok {
@@ -651,8 +656,8 @@ func TestTheReadGateFindsEveryStatement(t *testing.T) {
 			}
 		}
 	}
-	if len(walk.spelled) != 17 {
-		t.Errorf("the walk found %d texts reading a code table, want the fixture's 17: %q",
+	if len(walk.spelled) != 19 {
+		t.Errorf("the walk found %d texts reading a code table, want the fixture's 19: %q",
 			len(walk.spelled), slices.Sorted(maps.Keys(walk.spelled)))
 	}
 
@@ -691,10 +696,12 @@ func TestTheReadGateFindsEveryStatement(t *testing.T) {
 			t.Errorf("the walk declares no %s; it read %q", fn, slices.Sorted(maps.Keys(walk.declared)))
 		}
 	}
-	// Nineteen calls of a statement method on a database/sql handle, the
-	// untyped one and the method value not among them.
-	if walk.sites != 19 {
-		t.Errorf("the walk judged %d statement sites, want the fixture's 19", walk.sites)
+	// Twenty-one calls of a statement method on a database/sql handle — on
+	// the connection DB.Conn's own declaration types, and a statement's
+	// Prepare, among them; the untyped one, the method value and the runs of
+	// the prepared statement not.
+	if walk.sites != 21 {
+		t.Errorf("the walk judged %d statement sites, want the fixture's 21", walk.sites)
 	}
 }
 
@@ -703,6 +710,7 @@ const fixtureCode = "package code\n\n" + `import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"example.com/m/internal/objstore"
 	"example.com/m/internal/statelog"
@@ -728,6 +736,8 @@ const (
 	logKey      = "code_commit_failed"
 	fragmentSQL = ` + "`SELECT id FROM code_deletions WHERE `" + `
 	shadowed    = ` + "`SELECT id FROM code_evictions`" + `
+	preparedSQL = ` + "`SELECT target FROM code_refs WHERE ref = ?`" + `
+	connSQL     = ` + "`UPDATE code_packs SET state = 'retired' WHERE repo_id = ?`" + `
 )
 
 var listed = []string{"code_repos", "code_names"}
@@ -822,5 +832,19 @@ func opaque(ctx context.Context) { _, _ = mystery().QueryContext(ctx, declaredSQ
 func localShadow(ctx context.Context, tx *sql.Tx) {
 	shadowed := "SELECT 1"
 	_, _ = tx.QueryContext(ctx, shadowed)
+}
+
+func prepared(ctx context.Context, tx *sql.Tx, refs []string) {
+	stmt, _ := tx.PrepareContext(ctx, preparedSQL)
+	for _, ref := range refs {
+		key := strings.ToLower(ref)
+		_, _ = stmt.ExecContext(ctx, key)
+		_ = stmt.QueryRow(key)
+	}
+}
+
+func onConn(ctx context.Context, db *sql.DB) {
+	conn, _ := db.Conn(ctx)
+	_, _ = conn.ExecContext(ctx, connSQL, 1)
 }
 `

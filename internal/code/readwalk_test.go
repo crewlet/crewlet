@@ -10,7 +10,9 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"testing"
 
+	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/sourcetree/decltype"
 )
 
@@ -44,12 +46,16 @@ import (
 //
 // # What a builder is
 //
-// A STATEMENT SITE is a call of one of database/sql's statement methods
-// ([statementMethods]) on a *sql.Tx, *sql.DB or *sql.Conn, or of a method of
-// that name this module declares taking the text where database/sql's does —
-// typed through internal/sourcetree/decltype, by declaration, so
-// statelog.Freshness.Query, which builds a read rather than issuing one, is
-// no site, and a statement method on a value the walk cannot type is
+// A STATEMENT SITE is a call of a method named as one of database/sql's
+// statement methods ([statementMethods]) whose declaration takes a text where
+// those take theirs ([takesText]) — typed through
+// internal/sourcetree/decltype, by declaration, database/sql's own read from
+// the toolchain beside this module's. So a *sql.Tx's, a *sql.DB's and a
+// *sql.Conn's are sites, however the walk came by the handle; a *sql.Stmt's
+// Exec and Query, which take the arguments of the statement it was prepared
+// from and no text, are none, since its Prepare is the site that names the
+// text; statelog.Freshness.Query, which builds a read rather than issuing
+// one, is none; and a statement method on a value the walk cannot type is
 // reported rather than passed. A site's text is FOLLOWED: a constant; a local
 // variable every write of which is followed (an assignment, a declaration, a
 // range over a literal of them); a parameter of an unexported function every
@@ -62,14 +68,16 @@ import (
 //
 // # Coverage boundary
 //
-// Read: every non-test file of the package, wherever it is built. Not seen: a
-// statement another package issues from text it assembles over this
-// package's declarations — objstore's builders over [PackReferences] and
-// [RetiredPackReferences] are the one kind there is, and [planShapes] answers
-// for them (holdReferences); a statement method reached through reflection;
-// one called on a value an unread package other than database/sql produced;
-// and a constant of another package, which is not evaluated, so a text built
-// with one is read as the fragments around it.
+// Read: every non-test file of the package, wherever it is built, and the
+// declarations its values are typed by — this module's and database/sql's
+// ([sqlPackage]). Not seen: a statement another package issues from text it
+// assembles over this package's declarations — objstore's builders over
+// [PackReferences] and [RetiredPackReferences] are the one kind there is, and
+// [planShapes] answers for them (holdReferences); a statement method reached
+// through reflection; one called on a value only a package the walk does not
+// read could type — a driver's own interfaces (database/sql/driver) among
+// them; and a constant of another package, which is not evaluated, so a text
+// built with one is read as the fragments around it.
 type readWalk struct {
 	// files is how many non-test files the walk read, and sites how many
 	// statement sites it judged.
@@ -118,7 +126,9 @@ func (s *spelling) String() string {
 }
 
 // statementMethods is every statement method of database/sql's Tx, DB and
-// Conn, by name, with the place of the argument that is its text.
+// Conn, by name, with the place of the argument that is its text — the place
+// at which a *sql.Stmt's method of the same name takes the first of its
+// statement's arguments instead.
 var statementMethods = map[string]int{
 	"Exec": 0, "ExecContext": 1,
 	"Query": 0, "QueryContext": 1,
@@ -126,8 +136,12 @@ var statementMethods = map[string]int{
 	"Prepare": 0, "PrepareContext": 1,
 }
 
-// sqlHandles is database/sql's types a statement method is called on.
-var sqlHandles = map[string]bool{"Tx": true, "DB": true, "Conn": true}
+// sqlPackage is the one package outside the module the walk reads, from the
+// toolchain the module builds with: what declares a statement handle's
+// methods, and the results that hand one on — a connection DB.Conn opens, a
+// statement Tx.PrepareContext prepares — so each is judged by its own
+// declaration rather than by the package it came from.
+const sqlPackage = "database/sql"
 
 // codeDir is the package the gate judges, relative to the module root.
 const codeDir = "internal/code"
@@ -137,9 +151,16 @@ const modulePath = "github.com/crewlet/crewlet"
 
 // walkForReads judges every non-test Go file of module's internal/code under
 // root.
-func walkForReads(root, module string) readWalk {
+func walkForReads(t *testing.T, root, module string) readWalk {
+	t.Helper()
+	// The toolchain's database/sql is the one the module builds against, so
+	// it is located from the module's own root, whatever tree is judged.
+	dirs, err := decltype.Locate(t.Context(), sourcetree.Root(t), sqlPackage)
+	if err != nil {
+		t.Fatal(err)
+	}
 	rw := &readWalker{
-		w:      decltype.New(root, module, nil),
+		w:      decltype.New(root, module, dirs),
 		consts: map[string]constKey{},
 		gens:   map[*ast.ValueSpec]*ast.GenDecl{},
 		pkgVar: map[*ast.ValueSpec]bool{},
@@ -172,25 +193,28 @@ func walkForReads(root, module string) readWalk {
 		}
 	}
 	rw.out.files = len(rw.files)
+	if len(rw.files) > 0 {
+		rw.pkgPath = rw.files[0].Package.Path
+		rw.declare()
+		for _, f := range rw.files {
+			rw.judgeFile(f)
+		}
+		// A declared constant's text serves every function that names it.
+		for _, s := range rw.out.spelled {
+			for _, k := range s.consts {
+				for fn := range rw.uses[k] {
+					s.users[fn] = true
+				}
+				s.folded = s.folded || rw.folds[k]
+			}
+		}
+	}
+	// EVERY FILE THE WALK COULD NOT PARSE, asked once the judging is done:
+	// a package a value is typed by — database/sql's, the module's others —
+	// is read when the walk first meets such a value, and a file of one it
+	// could not parse is a file whose declarations typed nothing.
 	for _, err := range rw.w.Errors() {
 		rw.report("%v", err)
-	}
-	if len(rw.files) == 0 {
-		return rw.out
-	}
-	rw.pkgPath = rw.files[0].Package.Path
-	rw.declare()
-	for _, f := range rw.files {
-		rw.judgeFile(f)
-	}
-	// A declared constant's text serves every function that names it.
-	for _, s := range rw.out.spelled {
-		for _, k := range s.consts {
-			for fn := range rw.uses[k] {
-				s.users[fn] = true
-			}
-			s.folded = s.folded || rw.folds[k]
-		}
 	}
 	return rw.out
 }
@@ -639,44 +663,40 @@ func (rw *readWalker) site(sc scope, call *ast.CallExpr) {
 }
 
 // statementCall judges whether a selector of a statement method's name is a
-// statement: a method of database/sql's handles, a method this module
-// declares that takes a text where database/sql's does, or neither.
+// statement: a method whose declaration — database/sql's or this module's —
+// takes a text where database/sql's Tx, DB and Conn take theirs, or not.
+//
+// BY THE DECLARATION, NEVER BY THE PACKAGE A VALUE CAME FROM: database/sql
+// hands on a *sql.Conn from DB.Conn and a *sql.Stmt from a Prepare alike, and
+// only the first is a handle — a statement's runs, Exec(args ...any) and the
+// rest, are no site, since what they run is the text its Prepare named, which
+// is judged at the Prepare. A walk that took every value database/sql handed
+// on for a handle took each run of a statement prepared once for a second
+// site and the argument at its text's place for SQL, and so refused the
+// prepare-once, run-per-item shape a hot loop wants.
 func (rw *readWalker) statementCall(f *decltype.File, sel *ast.SelectorExpr) siteVerdict {
 	if _, isPkg := rw.w.PackageNamed(sel.X, f); isPkg {
 		// A package's function that shares the name, not a method.
 		return notSite
 	}
-	t := rw.w.TypeOf(sel.X, f)
-	if pkg, unread := t.Unread(); unread {
-		if pkg == "database/sql" {
-			return isSite
-		}
-		// A value only another package the walk does not read could
-		// type, whose methods issue none of this package's statements
-		// (the coverage boundary).
-		return notSite
-	}
-	s := rw.w.Select(t, sel.Sel.Name)
+	s := rw.w.Select(rw.w.TypeOf(sel.X, f), sel.Sel.Name)
 	switch s.Kind {
-	case decltype.Beyond:
-		for _, o := range s.Outside {
-			if o.Package == "database/sql" && sqlHandles[o.Name] {
-				return isSite
-			}
-		}
-		return notSite
 	case decltype.Method:
 		if takesText(s.Type, statementMethods[sel.Sel.Name]) {
 			return isSite
 		}
 		return notSite
-	case decltype.Field, decltype.FromUnread:
+	case decltype.Field, decltype.FromUnread, decltype.Beyond:
+		// A field; and a member of a value only a package the walk does
+		// not read could type or hold, whose methods issue none of this
+		// package's statements (the coverage boundary).
 		return notSite
 	}
 	return untyped
 }
 
-// takesText reports a method signature whose parameter at index is a string.
+// takesText reports a method signature whose parameter at index is a string:
+// `query string`, where a *sql.Stmt's same method takes `args ...any`.
 func takesText(sig decltype.Type, index int) bool {
 	ft, ok := sig.Expr().(*ast.FuncType)
 	if !ok || ft.Params == nil {
