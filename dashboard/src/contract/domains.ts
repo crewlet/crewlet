@@ -17,6 +17,12 @@
  * reads. A kind missing from here is a screen that stays stale after its own
  * write; a kind listed that takes no floor is a screen that believes it waited
  * and did not.
+ *
+ * A QUESTION READ FROM SEVERAL LOGS IS LISTED UNDER EACH — the company feed is
+ * the tracker's work and the knowledge base's pages — and its read names one
+ * `min_position` per listed domain this tab has written (`protocol/session.ts`),
+ * which the engine holds each half of the answer to. Listed under one, the
+ * half on the other log would be drawn from before the tab's own write there.
  */
 export const SESSION_QUERIES = {
   tracker: [
@@ -39,5 +45,5 @@ export const SESSION_QUERIES = {
     "company_feed",
     "decisions",
   ],
-  pages: ["pages", "page", "containers", "page_activity", "page_revision"],
+  pages: ["pages", "page", "containers", "page_activity", "page_revision", "company_feed"],
 } as const;

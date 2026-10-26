@@ -375,7 +375,7 @@ func (f *fakeLog) read(ctx context.Context, q code.ReadQuery, loud bool) (code.R
 	case q.Kind != code.ReadIntroduced || in == nil:
 		return code.ReadAnswer{}, fmt.Errorf("%w: the fake log answers introduced reads alone, not %q",
 			code.ErrInvalid, q.Kind)
-	case q.Fresh.Level == statelog.ReadSession && q.Fresh.MinPosition.IsZero():
+	case q.Fresh.Level == statelog.ReadSession && q.Fresh.Floor(topics.CodeLogStream).IsZero():
 		return code.ReadAnswer{}, fmt.Errorf("%w: a session read with no floor", code.ErrBadLevel)
 	}
 	var hook func(code.ReadQuery) error
@@ -487,7 +487,7 @@ func (f *fakeLog) page(q code.StateQuery, call fakeCall) (code.RepoSnapshot, err
 		switch {
 		case q.Fresh.Level == "" || !q.Fresh.Level.Valid():
 			return code.RepoSnapshot{}, fmt.Errorf("%w: %q", code.ErrBadLevel, q.Fresh.Level)
-		case q.Fresh.Level == statelog.ReadSession && q.Fresh.MinPosition.IsZero():
+		case q.Fresh.Level == statelog.ReadSession && q.Fresh.Floor(topics.CodeLogStream).IsZero():
 			return code.RepoSnapshot{}, fmt.Errorf("%w: a session read with no floor", code.ErrBadLevel)
 		}
 		full := q.Since.IsZero() || q.Since.Stream != topics.CodeLogStream ||

@@ -4169,7 +4169,13 @@ only rises. From then on every question that reads that log
 `read_level=session&min_position=<floor>`, which the engine answers only once
 the serving node holds that position. So the list you just changed never comes
 back from a node that has not applied the change, whether the next read is the
-refetch your press fires or a poll a second later.
+refetch your press fires or a poll a second later. A question read from more
+than one log — Home's feed is the tracker's work and the knowledge base's pages
+— is listed under each of its domains, and names the floor of every one of
+them the tab has written, one `min_position` per log: a page you saved is in
+the feed drawn after the save, as a task you closed is, and each half of the
+answer waits for your write to its own log alone
+([One floor per log](../guides/consistency.md#one-floor-per-log)).
 
 **A retry is the same write.** `unknown` means nobody can vouch either way —
 the connection dropped after the request left, a gateway gave up, or the
@@ -8403,8 +8409,8 @@ a read accepts back, and `GET /work/people/{handle}` at
 `read_level=session&min_position=<position>` is served at `session` and already
 holds the pin. The replay hands the same answer, byte for byte, to the client's
 own `act` and `SessionFloors`: the tab's `tracker` floor must be that position,
-and a read of `work_person` or `work_items` must name it as its `min_position`.
-A floor the client could not parse raises nothing, and the screen that pressed
+and a read of `work_person` or `work_items` — each read from that one log —
+must name it as its one `min_position`. A floor the client could not parse raises nothing, and the screen that pressed
 the button would redraw from before the press with nothing to say so.
 
 The suites themselves run in **Europe/Berlin** under jsdom (`vitest.config.ts`), and

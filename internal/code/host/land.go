@@ -459,7 +459,7 @@ func (s *Server) behind(ctx context.Context, l *landing) (string, bool) {
 		return "", false
 	}
 	now, err := s.o.Estate.Resolve(ctx, code.ResolveQuery{Name: l.Synced.Repo.Name,
-		Fresh: statelog.Freshness{Level: statelog.ReadSession, MinPosition: l.Synced.Position}})
+		Fresh: statelog.FloorAt(statelog.ReadSession, l.Synced.Position)})
 	if err != nil || now.ID != l.Synced.Repo.ID || now.Status != code.RepoStatusActive ||
 		now.LivePacks < code.MaxPacksPerRepo {
 		return "", false

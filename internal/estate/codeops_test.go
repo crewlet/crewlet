@@ -476,7 +476,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	}
 
 	stateQ := code.StateQuery{RepoID: ref.ID, Since: at, Cursor: cursor, Pushes: true, RetiredSince: at,
-		Fresh: statelog.Freshness{Level: statelog.ReadSession, MinPosition: at}}
+		Fresh: statelog.FloorAt(statelog.ReadSession, at)}
 	if got, err := seam.RepoState(ctx, stateQ); err != nil || !reflect.DeepEqual(got, d.snap) {
 		t.Errorf("repo state = (%+v, %v), want %+v", got, err, d.snap)
 	}
@@ -506,7 +506,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}},
 		{Kind: code.ReadIntroduced, Introduced: &code.IntroducedQuery{RepoID: ref.ID, After: at,
 			Through: statelog.Position{Stream: codeStream, Generation: 2, Seq: 90}}, Cursor: "1000041/push-1",
-			Limit: 1, Fresh: statelog.Freshness{Level: statelog.ReadSession, MinPosition: at}},
+			Limit: 1, Fresh: statelog.FloorAt(statelog.ReadSession, at)},
 		{Kind: code.ReadIntroduced, Introduced: &code.IntroducedQuery{RepoID: ref.ID, Descending: true,
 			Before: at}, Fresh: statelog.Freshness{Level: statelog.ReadStale}},
 		{Kind: code.ReadCompactionDue, MinPacks: 8, Cursor: "40/" + ref.ID,
@@ -545,7 +545,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		t.Errorf("resolve ref asked %+v, want %+v", got, refQ)
 	}
 	gitQ := code.GitQuery{Kind: code.GitDiff, RepoID: ref.ID, Asker: code.Principal{Kind: code.PrincipalAgent,
-		Seat: "dev"}, Fresh: statelog.Freshness{Level: statelog.ReadSession, MinPosition: at}, Cursor: "page-1",
+		Seat: "dev"}, Fresh: statelog.FloorAt(statelog.ReadSession, at), Cursor: "page-1",
 		Diff: &code.DiffQuery{Base: "6666666666", Head: "7777777777777777777777777777777777777777",
 			FileB64: "YS5nbw==", Renames: true}}
 	if got, err := seam.GitRead(ctx, gitQ); err != nil || !reflect.DeepEqual(got, d.git) {

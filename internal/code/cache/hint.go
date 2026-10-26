@@ -366,7 +366,7 @@ func (c *Cache) packRow(e *entry, inc *incarnation, pack string, rows *snapshot)
 			return row, true, nil
 		}
 	case !at.IsZero():
-		snap, err := c.readPacks(ctx, e.id, statelog.Freshness{Level: statelog.ReadSession, MinPosition: at})
+		snap, err := c.readPacks(ctx, e.id, statelog.FloorAt(statelog.ReadSession, at))
 		if err != nil {
 			return code.PackRow{}, false, err
 		}

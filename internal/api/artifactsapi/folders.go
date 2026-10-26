@@ -575,7 +575,7 @@ func (s *Service) folderPatched(w http.ResponseWriter, r *http.Request, p iam.Pr
 		status = http.StatusAccepted
 	} else {
 		fresh := decisionRead
-		fresh.MinPosition = res.Position
+		fresh.Floors = []statelog.Position{res.Position}
 		f, _, err := s.reads.Folder(r.Context(), id, fresh)
 		if err == nil {
 			if role, err := s.gate.folderRole(r.Context(), p, f); err == nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml

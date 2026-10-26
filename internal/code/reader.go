@@ -135,15 +135,22 @@ func unpacked(packed int64) statelog.Position {
 
 // pointLevel refuses a freshness a point read cannot serve: an EMPTY level —
 // a code read states its freshness, because a cache's sync and a git
-// request each need a specific one — and a session read naming no position,
-// which would wait for nothing.
+// request each need a specific one — and a session read naming no position
+// on the code log, which would wait for nothing. A floor on ANOTHER log is the
+// request's mistake, refused first and as the framework's reader refuses it
+// ([statelog.ErrForeignPosition]), so a session read naming only such a floor
+// is told which floor is misplaced rather than that it named none.
 func pointLevel(f statelog.Freshness) error {
 	switch {
 	case f.Level == "":
 		return fmt.Errorf("%w: a code read states its freshness", ErrBadLevel)
 	case !f.Level.Valid():
 		return fmt.Errorf("%w: %q is not a read level", ErrBadLevel, f.Level)
-	case f.Level == statelog.ReadSession && f.MinPosition.IsZero():
+	}
+	if err := f.OnlyOn(topics.CodeLogStream); err != nil {
+		return fmt.Errorf("code: this read's floor: %w", err)
+	}
+	if f.Level == statelog.ReadSession && f.Floor(topics.CodeLogStream).IsZero() {
 		return fmt.Errorf("%w: a session read names the position it must include", ErrBadLevel)
 	}
 	return nil
@@ -389,9 +396,7 @@ func (r *Reader) Snapshot(ctx context.Context, q StateQuery) (RepoSnapshot, erro
 		if err := checkCursor(q.Cursor); err != nil {
 			return RepoSnapshot{}, err
 		}
-		query = statelog.Freshness{
-			Level: statelog.ReadSession, MinPosition: q.Cursor.Seen,
-		}.Query(scope, false)
+		query = statelog.FloorAt(statelog.ReadSession, q.Cursor.Seen).Query(scope, false)
 	}
 	var out RepoSnapshot
 	_, err := r.log.Read(ctx, query, func(tx *sql.Tx) error {
@@ -1077,7 +1082,7 @@ func (r *Reader) PushOutcome(ctx context.Context, q OutcomeQuery) (PushOutcome, 
 	case q.RepoID == "" || q.PushID == "":
 		return PushOutcome{}, fmt.Errorf("%w: a push's outcome names its repository and its id", ErrInvalid)
 	}
-	query := statelog.Freshness{Level: statelog.ReadSession, MinPosition: q.At}.Query(
+	query := statelog.FloorAt(statelog.ReadSession, q.At).Query(
 		statelog.ScopeSet{Paths: []string{RepoPath(q.RepoID)}}, false)
 	var out PushOutcome
 	_, err := r.log.Read(ctx, query, func(tx *sql.Tx) error {
@@ -2349,7 +2354,7 @@ func (r *Reader) purgedAt(ctx context.Context, id string, at statelog.Position) 
 		return false, fmt.Errorf("%w: at: a purge is confirmed at its last record's position", ErrInvalid)
 	}
 	var purged bool
-	query := statelog.Freshness{Level: statelog.ReadSession, MinPosition: at}.Query(
+	query := statelog.FloorAt(statelog.ReadSession, at).Query(
 		statelog.ScopeSet{Paths: []string{RepoPath(id)}}, false)
 	_, err := r.log.Read(ctx, query, func(tx *sql.Tx) error {
 		var rows, marked int

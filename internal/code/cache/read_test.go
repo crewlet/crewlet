@@ -162,7 +162,7 @@ func TestAnAnswerBehindTheCacheChangesNothing(t *testing.T) {
 	beyond := at
 	beyond.Seq++
 	pages := len(w.log.firstPages(repo))
-	s, err := c.Sync(t.Context(), repo, statelog.Freshness{Level: statelog.ReadStale, MinPosition: beyond})
+	s, err := c.Sync(t.Context(), repo, statelog.FloorAt(statelog.ReadStale, beyond))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func TestAnAnswerBehindTheCacheChangesNothing(t *testing.T) {
 	floor := at
 	floor.Seq -= 2
 	pages = len(w.log.firstPages(repo))
-	s, err = c.Sync(t.Context(), repo, statelog.Freshness{Level: statelog.ReadSession, MinPosition: floor})
+	s, err = c.Sync(t.Context(), repo, statelog.FloorAt(statelog.ReadSession, floor))
 	if err != nil {
 		t.Fatal(err)
 	}

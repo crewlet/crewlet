@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/learning/memread"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // Errors a query surface reports precisely. Everything else a query returns is
@@ -200,10 +201,21 @@ func (p Params) Values() map[string]any {
 // Repeated keys take the FIRST value. A query string can carry a key twice and
 // a JSON object cannot, so taking the last would make the two transports
 // disagree about a request only one of them can even express.
+//
+// EXCEPT THE KEYS THAT REPEAT BY DESIGN ([tracker.RepeatedKeys]), which keep
+// every value: `min_position` names one floor per log, and a JSON object
+// expresses the same request as an array ([Params.List]), so here the two
+// transports agree by keeping the whole list rather than by dropping all but
+// one floor — which would serve the answer's other log from before the write
+// that floor named.
 func FromQuery(q url.Values) Params {
 	values := make(map[string]any, len(q))
 	for key, list := range q {
-		if len(list) > 0 {
+		switch {
+		case len(list) == 0:
+		case slices.Contains(tracker.RepeatedKeys, key):
+			values[key] = slices.Clone(list)
+		default:
 			values[key] = list[0]
 		}
 	}
@@ -240,6 +252,13 @@ func (p Params) String(key string) string {
 	}
 	return ""
 }
+
+// List reads a parameter that may repeat ([tracker.RepeatedKeys]): every value
+// a query string gave it ([FromQuery] keeps them), every string of a socket
+// frame's JSON array, and a plain string as a list of one — by the grammar's
+// own reading of a list ([tracker.ListOf]), so a socket frame and a query
+// string name the same floors.
+func (p Params) List(key string) ([]string, bool) { return tracker.ListOf(p.values[key]) }
 
 // Int reads an integer parameter, falling back to def.
 //

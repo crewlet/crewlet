@@ -197,11 +197,11 @@ type RoutingQuery struct {
 	// horizon nobody is keeping.
 	Retention time.Duration
 
-	Level       statelog.ReadLevel
-	Session     statelog.Position
-	MinPosition statelog.Position
-	MaxLag      time.Duration
-	MaxLagSeq   uint64
+	Level     statelog.ReadLevel
+	Session   statelog.Position
+	Floors    []statelog.Position
+	MaxLag    time.Duration
+	MaxLagSeq uint64
 }
 
 // Routing answers who one change woke, and under which reason.
@@ -232,12 +232,12 @@ func (r *Reader) Routing(ctx context.Context, q RoutingQuery, now time.Time) (
 		// composed of the history row and the notification rows, and a
 		// closure naming one family would certify it complete while a
 		// deferred record in the other was still holding the rest.
-		Scope:       routingScope(),
-		Session:     q.Session,
-		MinPosition: q.MinPosition,
-		MaxLag:      q.MaxLag,
-		MaxLagSeq:   q.MaxLagSeq,
-		Set:         true,
+		Scope:     routingScope(),
+		Session:   q.Session,
+		Floors:    q.Floors,
+		MaxLag:    q.MaxLag,
+		MaxLagSeq: q.MaxLagSeq,
+		Set:       true,
 	}, func(tx *sql.Tx) error {
 		if err := readRoutingRecord(ctx, tx, &answer); err != nil {
 			return err

@@ -23,8 +23,10 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	seatplacement "github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // THE ENGINE'S OWN GIT HOST, ON THE API: smart HTTP under /git/ for a person's
@@ -561,17 +563,21 @@ func (a *App) serveCodeVerify(w http.ResponseWriter, r *http.Request) {
 	}
 	// THE CALLER'S FLOOR, where it names one: a position on the code log it
 	// read at, which the copy is brought to with no barrier (see
-	// host.Server.StartVerify).
-	var floor statelog.Position
-	if raw := strings.TrimSpace(r.URL.Query().Get("min_position")); raw != "" {
-		at, err := statelog.ParsePosition(raw)
-		if err != nil {
-			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
-				map[string]string{"detail": "min_position: " + err.Error()})
-			return
-		}
-		floor = at
+	// host.Server.StartVerify). Read by the read grammar's own rule
+	// ([tracker.ParseFloors]: `min_position` names one floor per log), so a
+	// floor on any log but the code log is refused naming it, as every read
+	// of one log refuses it, rather than every floor but the first dropped.
+	floors, err := tracker.ParseFloors(queries.FromQuery(r.URL.Query()))
+	asked := statelog.Freshness{Floors: floors}
+	if err == nil {
+		err = asked.OnlyOn(topics.CodeLogStream)
 	}
+	if err != nil {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
+			map[string]string{"detail": err.Error()})
+		return
+	}
+	floor := asked.Floor(topics.CodeLogStream)
 	name := r.PathValue("name")
 	v, err := g.StartVerify(r.Context(), name, repair, floor)
 	var running *host.VerifyRunningError

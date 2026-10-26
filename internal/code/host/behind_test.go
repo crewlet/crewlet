@@ -165,7 +165,8 @@ func (b *boundCase) push(t *testing.T, during func()) (codetest.Pushed, statelog
 func (b *boundCase) readOnce(t *testing.T, pin statelog.Position) {
 	t.Helper()
 	asked := b.reads()
-	if len(asked) != 1 || asked[0].Name != codetest.RepoName || asked[0].Fresh.MinPosition != pin {
+	if len(asked) != 1 || asked[0].Name != codetest.RepoName ||
+		!slices.Equal(asked[0].Fresh.Floors, []statelog.Position{pin}) {
 		t.Fatalf("the landing read the row again %d times (%+v), want once, of %s at session floored at the "+
 			"push's own sync (%s)", len(asked), asked, codetest.RepoName, pin)
 	}

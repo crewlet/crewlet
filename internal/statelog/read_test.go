@@ -1268,7 +1268,7 @@ func (l *landsBetween) Read(ctx context.Context, fn func(*sql.Tx) error) error {
 // THE CALLER'S FLOOR IS HONOURED AT EVERY LEVEL, not only at `session`.
 //
 // A write answers with the position its record landed at, and a caller that
-// hands it back as [statelog.Query.MinPosition] is served nothing from before
+// hands it back as [statelog.Query.Floors] is served nothing from before
 // it — whatever else it asked for. It used to reach the reader at `session`
 // only: a `stale` read carrying a floor waited for nothing and served rows
 // from before the write the caller had just been told about, and a
@@ -1296,7 +1296,7 @@ func TestTheCallersFloorIsHonouredAtEveryLevel(t *testing.T) {
 		w := &stubWaiter{at: healthy().Position}
 		r := newReader(t, db, healthy, w, index)
 		q := pointQuery(level)
-		q.MinPosition = floor
+		q.Floors = []statelog.Position{floor}
 		if _, err := r.Read(t.Context(), q, func(*sql.Tx) error { return nil }); err != nil {
 			t.Fatalf("%s read with a floor: %v", level, err)
 		}
@@ -1319,7 +1319,7 @@ func TestTheCallersFloorIsHonouredAtEveryLevel(t *testing.T) {
 	w := &stubWaiter{at: healthy().Position}
 	r := newReader(t, db, healthy, w, index)
 	q := pointQuery(statelog.ReadStale)
-	q.MinPosition = statelog.Position{Stream: "SOME_OTHER_LOG", Generation: 1, Seq: 5}
+	q.Floors = []statelog.Position{{Stream: "SOME_OTHER_LOG", Generation: 1, Seq: 5}}
 	_, err = r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
 	if !errors.Is(err, statelog.ErrForeignPosition) {
 		t.Fatalf("a stale read with a floor on another stream = %v, want %v",
@@ -1382,7 +1382,7 @@ func TestAFloorOnAnotherStreamIsRefusedAtEveryLevel(t *testing.T) {
 				w := &stubWaiter{at: healthy().Position}
 				r := newReader(t, db, health.fn, w, index)
 				q := pointQuery(level)
-				q.MinPosition = floor
+				q.Floors = []statelog.Position{floor}
 				_, err := r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
 				if !errors.Is(err, statelog.ErrForeignPosition) {
 					t.Errorf("a %s read floored at %s on a node that is %s "+
@@ -1407,7 +1407,7 @@ func TestAFloorOnAnotherStreamIsRefusedAtEveryLevel(t *testing.T) {
 	// evicted node answers it with its own refusal.
 	r := newReader(t, &stubStore{}, evicted, &stubWaiter{at: healthy().Position}, index)
 	q := pointQuery(statelog.ReadStale)
-	q.MinPosition = statelog.Position{Stream: probeStream, Generation: 1, Seq: 1}
+	q.Floors = []statelog.Position{{Stream: probeStream, Generation: 1, Seq: 1}}
 	_, err = r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
 	var refusal *statelog.Refused
 	if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseEvicted {
@@ -1442,7 +1442,7 @@ func TestAStalenessBoundIsRecheckedAfterTheFloorWait(t *testing.T) {
 	r := newReader(t, newStubStore(t), drifting, w, nil)
 
 	q := pointQuery(statelog.ReadStale)
-	q.MinPosition = statelog.Position{Stream: probeStream, Generation: 1, Seq: 42}
+	q.Floors = []statelog.Position{{Stream: probeStream, Generation: 1, Seq: 42}}
 	q.MaxLagSeq = 250
 	_, err := r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
 	var refusal *statelog.Refused
@@ -1460,7 +1460,7 @@ func TestAStalenessBoundIsRecheckedAfterTheFloorWait(t *testing.T) {
 	// figure beside the rows describes the moment they were read.
 	reads.Store(0)
 	within := pointQuery(statelog.ReadStale)
-	within.MinPosition = q.MinPosition
+	within.Floors = q.Floors
 	answer, err := r.Read(t.Context(), within, func(*sql.Tx) error { return nil })
 	if err != nil {
 		t.Fatalf("an unbounded floored read: %v", err)
@@ -1516,10 +1516,10 @@ func TestADeferralLandingDuringTheWaitIsCaughtWhenNoneWasDeferredBefore(t *testi
 			// pass and leaves the answer's transaction as the only door.
 			r := newReader(t, h.estate, healthy, waiter, nil)
 			q := statelog.Query{
-				Level:       statelog.ReadSession,
-				Scope:       statelog.ScopeSet{Paths: []string{"project/ENG/object/b"}},
-				MinPosition: healthy().Position,
-				Set:         set,
+				Level:  statelog.ReadSession,
+				Scope:  statelog.ScopeSet{Paths: []string{"project/ENG/object/b"}},
+				Floors: []statelog.Position{healthy().Position},
+				Set:    set,
 			}
 			answer, err := r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
 			if waiter.waited.Load() == 0 {

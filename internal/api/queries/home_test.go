@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -201,20 +202,6 @@ func TestTheCompanyFeedMergesItsSources(t *testing.T) {
 		t.Errorf("the pages were asked for %v, want created and saved", pageStore.activity.Kinds)
 	}
 
-	// A FLOOR NAMES THE TRACKER'S LOG, and the pages half never gets it: a
-	// position in one domain's log is no bound on another's.
-	if _, err := askNative(t, sources, "company_feed", map[string]any{
-		"read_level": "session", "min_position": "CREWLET_TRACKER_LOG@1:4711",
-	}); err != nil {
-		t.Fatalf("company_feed at a floor: %v", err)
-	}
-	if work.feedQuery.MinPosition.Seq != 4711 {
-		t.Errorf("the tracker half read at %+v, want the caller's floor", work.feedQuery.MinPosition)
-	}
-	if pageStore.fresh.MinPosition.Seq != 0 || pageStore.fresh.Level == statelog.ReadSession {
-		t.Errorf("the pages half was handed the tracker's floor: %+v", pageStore.fresh)
-	}
-
 	if _, err := askNative(t, queries.Sources{Work: work}, "company_feed",
 		map[string]any{"kinds": "page"}); !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("asking for pages where none are kept = %v, want bad params", err)
@@ -222,6 +209,85 @@ func TestTheCompanyFeedMergesItsSources(t *testing.T) {
 	if _, err := askNative(t, sources, "company_feed",
 		map[string]any{"kinds": "gossip"}); !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("an unknown kind = %v, want bad params", err)
+	}
+}
+
+// THE FEED IS READ FROM TWO LOGS, AND EACH HALF WAITS ON THE CALLER'S FLOOR IN
+// ITS OWN.
+//
+// The work is the tracker's log and the pages the knowledge base's. The feed
+// used to take one floor, the tracker's, and read its pages at the dashboard's
+// own level, so a page saved a moment ago could be missing from the feed drawn
+// after the save. Each half takes its own log's floor now
+// ([statelog.Freshness.On]) and never the other's, which its reader refuses as
+// a position on another log. A half whose log the caller named no floor on is
+// read `stale` — a `session` read there would wait for nothing under the
+// stronger name — and the answer reports the weakest level a half was read at,
+// so it never claims for its pages a freshness they were not read at. A floor
+// on a log the feed does not read is refused, naming that log.
+//
+// Mutation: hand the pages half the whole ask, or the work half's, and its
+// floor is the wrong log's; report the first half's level and the
+// one-floor case claims `session` for pages read `stale`.
+func TestTheCompanyFeedWaitsOnTheFloorOfEachLogItReads(t *testing.T) {
+	t.Parallel()
+	base := time.Date(2031, 4, 16, 10, 0, 0, 0, time.UTC)
+	work := &stubWork{feed: tracker.FeedPage{Rows: []tracker.FeedRow{
+		{Task: "a", Kind: tracker.FeedCompleted, At: base,
+			Cursor: tracker.FeedCursor{At: base, Seq: 9}.String()},
+	}, Complete: true}}
+	pageStore := &stubPages{changes: []pages.PageChange{
+		{ID: "h-1", PageID: "p", Kind: pages.ChangeSaved, At: base.Add(-time.Hour), LogSeq: 4},
+	}}
+	sources := queries.Sources{Work: work, Pages: pageStore}
+	tracked := statelog.Position{Stream: "CREWLET_TRACKER_LOG", Generation: 1, Seq: 4711}
+	paged := statelog.Position{Stream: "CREWLET_PAGES_LOG", Generation: 1, Seq: 77}
+
+	got, err := askNative(t, sources, "company_feed", map[string]any{
+		"read_level": "session", "min_position": []any{tracked.String(), paged.String()},
+	})
+	if err != nil {
+		t.Fatalf("company_feed at a floor on each log: %v", err)
+	}
+	if work.feedQuery.Level != statelog.ReadSession ||
+		!slices.Equal(work.feedQuery.Floors, []statelog.Position{tracked}) {
+		t.Errorf("the work half read at %s %v, want session at the tracker's floor %v",
+			work.feedQuery.Level, work.feedQuery.Floors, tracked)
+	}
+	if pageStore.fresh.Level != statelog.ReadSession ||
+		!slices.Equal(pageStore.fresh.Floors, []statelog.Position{paged}) {
+		t.Errorf("the pages half read at %s %v, want session at the knowledge base's floor %v",
+			pageStore.fresh.Level, pageStore.fresh.Floors, paged)
+	}
+	if level := got.(map[string]any)["read_level"]; level != statelog.ReadSession {
+		t.Errorf("the feed read at session in both halves reports %v", level)
+	}
+
+	// A FLOOR ON ONE LOG ONLY: the pages half has nothing of the caller's to
+	// wait for and is read stale, and the answer says the weaker of the two.
+	got, err = askNative(t, sources, "company_feed", map[string]any{
+		"read_level": "session", "min_position": tracked.String(),
+	})
+	if err != nil {
+		t.Fatalf("company_feed at a floor on the tracker's log alone: %v", err)
+	}
+	if !slices.Equal(work.feedQuery.Floors, []statelog.Position{tracked}) {
+		t.Errorf("the work half read at %v, want the tracker's floor %v", work.feedQuery.Floors, tracked)
+	}
+	if pageStore.fresh.Level != statelog.ReadStale || len(pageStore.fresh.Floors) != 0 {
+		t.Errorf("the pages half of a session read with no floor of its own read at %s %v, "+
+			"want stale with none", pageStore.fresh.Level, pageStore.fresh.Floors)
+	}
+	if level := got.(map[string]any)["read_level"]; level != statelog.ReadStale {
+		t.Errorf("the feed whose pages were read stale reports %v — the label of its other half", level)
+	}
+
+	// A FLOOR ON A LOG THE FEED DOES NOT READ is the request's mistake.
+	_, err = askNative(t, sources, "company_feed", map[string]any{
+		"read_level": "session", "min_position": []any{tracked.String(), "CREWLET_CODE_LOG@1:3"},
+	})
+	if !errors.Is(err, queries.ErrBadParams) || !strings.Contains(err.Error(), "CREWLET_CODE_LOG") {
+		t.Errorf("company_feed with a floor on the code log answered %v, want bad params naming it", err)
 	}
 }
 

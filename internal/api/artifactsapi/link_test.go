@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -185,7 +186,7 @@ func TestALinkAfterItsCreateWaitsForTheTrackerToApplyIt(t *testing.T) {
 	if w := g.do(jane, "POST", at(page, "/work-items"), linkENG12, keyed()...); w.Code != http.StatusOK {
 		t.Fatalf("a link with no after on a node behind: %d %s", w.Code, w.Body)
 	}
-	if got := g.work.floors(); len(got) != 1 || !got[0].MinPosition.IsZero() ||
+	if got := g.work.floors(); len(got) != 1 || len(got[0].Floors) != 0 ||
 		got[0].Level != statelog.DefaultReadLevel(statelog.SurfaceDashboard) {
 		t.Fatalf("a link with no after read the tracker at %+v, want the dashboard's level and no floor", got)
 	}
@@ -217,7 +218,7 @@ func TestALinkAfterItsCreateWaitsForTheTrackerToApplyIt(t *testing.T) {
 	if calls := g.writes.all(); len(calls) != 2 || calls[1].arg != "ENG-12" {
 		t.Fatalf("the held link wrote %+v", calls)
 	}
-	if got := g.work.floors(); len(got) != 2 || got[1].MinPosition != created {
+	if got := g.work.floors(); len(got) != 2 || !slices.Equal(got[1].Floors, []statelog.Position{created}) {
 		t.Errorf("the held link read the tracker at %+v, want floored at %v", got, created)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -122,7 +123,7 @@ func TestAskedOnSeesOnlyAnOpenAskNamingThem(t *testing.T) {
 			if q := threads.asked[0]; q != (tracker.ThreadQuery{Task: "t", Author: "legal"}) {
 				t.Errorf("asked %+v, want the task and the author alone", q)
 			}
-			if threads.fresh[0] != want {
+			if !reflect.DeepEqual(threads.fresh[0], want) {
 				t.Errorf("read at %+v, want the caller's %+v", threads.fresh[0], want)
 			}
 		})

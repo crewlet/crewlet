@@ -296,7 +296,7 @@ func (s ObjectEstate) Read(ctx context.Context, at statelog.Position, fn func(*s
 		return false, errNoReader
 	}
 	served, err := s.Reader.log.Read(ctx, statelog.Query{
-		Level: statelog.ReadStale, Scope: DomainScope(), Set: true, MinPosition: at,
+		Level: statelog.ReadStale, Scope: DomainScope(), Set: true, Floors: []statelog.Position{at},
 	}, fn)
 	if err != nil {
 		return false, err

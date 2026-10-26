@@ -297,13 +297,24 @@ func (c *Cache) checkSync(repoID string, fresh statelog.Freshness) error {
 		return fmt.Errorf("%w: a sync states its freshness", code.ErrBadLevel)
 	case !fresh.Level.Valid():
 		return fmt.Errorf("%w: %q is not a read level", code.ErrBadLevel, fresh.Level)
-	case fresh.Level == statelog.ReadSession && fresh.MinPosition.IsZero():
+	}
+	// A FLOOR ON ANOTHER LOG FIRST, as the reader it would reach holds it:
+	// a repository's rows are on the code log, and a position on another
+	// names nothing the sync could wait for.
+	if err := fresh.OnlyOn(topics.CodeLogStream); err != nil {
+		return fmt.Errorf("%w: a sync's floor is on another log than a repository's rows: %w",
+			ErrInvalid, err)
+	}
+	if fresh.Level == statelog.ReadSession && floorOf(fresh).IsZero() {
 		return fmt.Errorf("%w: a session sync names the position it must include", code.ErrBadLevel)
-	case !fresh.MinPosition.IsZero() && fresh.MinPosition.Stream != topics.CodeLogStream:
-		return fmt.Errorf("%w: a sync's floor is on %s, and a repository's rows are on %s",
-			ErrInvalid, fresh.MinPosition.Stream, topics.CodeLogStream)
 	}
 	return nil
+}
+
+// floorOf is a sync's floor: the position on the code log it names — the one
+// log [Cache.checkSync] lets it name one on — or zero.
+func floorOf(fresh statelog.Freshness) statelog.Position {
+	return fresh.Floor(topics.CodeLogStream)
 }
 
 // entryFor is repoID's entry, made when there is none.
@@ -333,13 +344,14 @@ func (c *Cache) atOnce(e *entry, fresh statelog.Freshness) (Synced, bool) {
 	if inc == nil || !inc.converged || fresh.Bounded() {
 		return Synced{}, false
 	}
+	floor := floorOf(fresh)
 	switch fresh.Level {
 	case statelog.ReadStale, statelog.ReadConsistentPrefix:
-		if !fresh.MinPosition.IsZero() && !reached(inc.at, fresh.MinPosition) {
+		if !floor.IsZero() && !reached(inc.at, floor) {
 			return Synced{}, false
 		}
 	case statelog.ReadSession:
-		if !reached(inc.at, fresh.MinPosition) {
+		if !reached(inc.at, floor) {
 			return Synced{}, false
 		}
 	default:
@@ -392,9 +404,9 @@ func answers(have, want statelog.Freshness) bool {
 	}
 	switch want.Level {
 	case statelog.ReadSession:
-		return have.Level == statelog.ReadSession && reached(have.MinPosition, want.MinPosition)
+		return have.Level == statelog.ReadSession && reached(floorOf(have), floorOf(want))
 	default:
-		return want.MinPosition.IsZero()
+		return floorOf(want).IsZero()
 	}
 }
 
@@ -411,8 +423,8 @@ func merge(a, b statelog.Freshness) statelog.Freshness {
 	if strength(b.Level) > strength(a.Level) {
 		out.Level = b.Level
 	}
-	if !b.MinPosition.IsZero() && (out.MinPosition.IsZero() || !reached(out.MinPosition, b.MinPosition)) {
-		out.MinPosition = b.MinPosition
+	if floor := floorOf(b); !floor.IsZero() && (floorOf(out).IsZero() || !reached(floorOf(out), floor)) {
+		out.Floors = []statelog.Position{floor}
 	}
 	out.MaxLag = smallerSet(a.MaxLag, b.MaxLag)
 	out.MaxLagSeq = smallerSet(a.MaxLagSeq, b.MaxLagSeq)

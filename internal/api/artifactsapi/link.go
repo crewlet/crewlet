@@ -84,7 +84,7 @@ type linkBody struct {
 // caller just filed was refused as one nobody filed. So the caller hands back
 // the position the create answered with as `after`, and the item is read
 // through the tracker's own read-your-writes floor ([statelog.Freshness]'s
-// MinPosition, the one `min_position` sets on every tracker read): the read
+// Floors, the one `min_position` sets on every tracker read): the read
 // waits up to the read budget for this node to reach it, and a node that does
 // not is refused `behind`, answered as the tracker's own reads answer it.
 //
@@ -187,7 +187,7 @@ func linkFreshness(w http.ResponseWriter, after string) (statelog.Freshness, boo
 			"answered with, in the form <stream>@<generation>:<sequence>")
 		return statelog.Freshness{}, false
 	}
-	fresh.MinPosition = at
+	fresh.Floors = []statelog.Position{at}
 	return fresh, true
 }
 

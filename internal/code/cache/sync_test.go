@@ -219,7 +219,7 @@ func TestAStaleCallerIsAnsweredWithoutAnEstateCall(t *testing.T) {
 	for _, fresh := range []statelog.Freshness{
 		stale,
 		{Level: statelog.ReadConsistentPrefix},
-		{Level: statelog.ReadSession, MinPosition: at},
+		statelog.FloorAt(statelog.ReadSession, at),
 	} {
 		before := calls(warm)
 		if s := ask(warm, fresh); s.Kind != cache.SyncNone || calls(warm) != before {
@@ -230,7 +230,7 @@ func TestAStaleCallerIsAnsweredWithoutAnEstateCall(t *testing.T) {
 
 	past := w.log.other()
 	before := calls(warm)
-	if s := ask(warm, statelog.Freshness{Level: statelog.ReadSession, MinPosition: past}); s.Kind != cache.SyncDelta ||
+	if s := ask(warm, statelog.FloorAt(statelog.ReadSession, past)); s.Kind != cache.SyncDelta ||
 		calls(warm) != before+1 {
 		t.Errorf("session past the cache's position cost %s and %d calls, want a delta and one", s.Kind,
 			calls(warm)-before)
@@ -592,7 +592,7 @@ func TestARequestThatIsNotASyncIsRefused(t *testing.T) {
 		{"no level", repo, statelog.Freshness{}, code.ErrBadLevel},
 		{"an unknown level", repo, statelog.Freshness{Level: "eventual"}, code.ErrBadLevel},
 		{"session with no floor", repo, statelog.Freshness{Level: statelog.ReadSession}, code.ErrBadLevel},
-		{"a floor on another log", repo, statelog.Freshness{Level: statelog.ReadSession, MinPosition: onPages}, cache.ErrInvalid},
+		{"a floor on another log", repo, statelog.FloorAt(statelog.ReadSession, onPages), cache.ErrInvalid},
 		{"a path for an id", "../x", linearizable, cache.ErrInvalid},
 		{"an id in upper case", strings.ToUpper(repo), linearizable, cache.ErrInvalid},
 	} {

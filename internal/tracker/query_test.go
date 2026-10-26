@@ -2,6 +2,7 @@ package tracker_test
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -326,8 +327,15 @@ func TestSessionNeedsThePositionItWaitsFor(t *testing.T) {
 		t.Errorf("read_level=session with a floor parsed as %q", q.Level)
 	}
 	want := statelog.Position{Stream: "CREWLET_TRACKER_LOG", Generation: 1, Seq: 4711}
-	if q.MinPosition != want {
-		t.Errorf("min_position parsed as %v, want %v", q.MinPosition, want)
+	if !slices.Equal(q.Floors, []statelog.Position{want}) {
+		t.Errorf("min_position parsed as %v, want %v", q.Floors, want)
+	}
+	// AND A ZERO POSITION NAMES NO WRITE, so it is no floor to wait for and
+	// `session` beside it alone is the bare ask.
+	if _, err := parse(t, map[string]any{
+		"read_level": "session", "min_position": "CREWLET_TRACKER_LOG@0:0",
+	}); err == nil {
+		t.Error("read_level=session beside only a zero position was accepted")
 	}
 	// AND THE OTHER THREE STILL PARSE WITHOUT ONE, so this is a rule
 	// about one level rather than about the key.
@@ -354,10 +362,10 @@ func TestMinPositionIsCarriedAtEveryLevelAndRefusedMalformed(t *testing.T) {
 			args["read_level"] = level
 		}
 		q := mustParse(t, args)
-		if q.MinPosition != want {
+		if !slices.Equal(q.Floors, []statelog.Position{want}) {
 			t.Errorf("read_level=%q dropped min_position: got %v, want %v — a "+
 				"floor the reader never sees is one nothing waits for",
-				level, q.MinPosition, want)
+				level, q.Floors, want)
 		}
 	}
 	for _, bad := range []string{"4711", "TRACKER@x:1", "@1:1", "TRACKER@1", "TRACKER@1:-1"} {
@@ -374,6 +382,59 @@ func TestMinPositionIsCarriedAtEveryLevelAndRefusedMalformed(t *testing.T) {
 		"any": `[{"min_position":"CREWLET_TRACKER_LOG@2:9"}]`,
 	}); err == nil {
 		t.Error("an any branch carrying min_position was accepted")
+	}
+}
+
+// `min_position` REPEATS, ONCE PER LOG, AND EVERY FLOOR IS CARRIED.
+//
+// One answer can be read from two logs, and a write the caller is reading back
+// may have landed on both, so each log takes its own floor: as a JSON array off
+// a socket frame, as the strings a query string repeated (which reach a data
+// node across the estate as that array), and one alone as before. Which log
+// each floor holds up is the read's to decide, so the grammar carries every
+// one — and refuses what no read could wait on: two floors on one log, more
+// than [statelog.MaxFloors], and a value that is not a position, each naming
+// the key.
+//
+// Mutation: read min_position with String (the first value, or none of an
+// array) and the floors are lost; drop ValidFloors and the pair on one log is
+// accepted.
+func TestMinPositionRepeatsOncePerLog(t *testing.T) {
+	t.Parallel()
+	work := statelog.Position{Stream: "CREWLET_TRACKER_LOG", Generation: 1, Seq: 5}
+	code := statelog.Position{Stream: "CREWLET_CODE_LOG", Generation: 2, Seq: 9}
+	both := []statelog.Position{work, code}
+	for _, value := range []any{
+		[]any{work.String(), code.String()},
+		[]string{work.String(), code.String()},
+	} {
+		q := mustParse(t, map[string]any{"read_level": "session", "min_position": value})
+		if q.Level != statelog.ReadSession || !slices.Equal(q.Floors, both) {
+			t.Errorf("min_position=%v parsed as %s %v, want session at %v", value, q.Level,
+				q.Floors, both)
+		}
+		fresh, err := tracker.ParseFreshness(tracker.MapParams{"min_position": value})
+		if err != nil || !slices.Equal(fresh.Floors, both) {
+			t.Errorf("ParseFreshness(min_position=%v) = %v, %v; want the floors %v", value,
+				fresh.Floors, err, both)
+		}
+	}
+	for _, bad := range []struct {
+		name  string
+		value any
+		says  string
+	}{
+		{"two floors on one log", []any{work.String(), "CREWLET_TRACKER_LOG@1:7"}, "CREWLET_TRACKER_LOG"},
+		{"more than four", []any{"A@1:1", "B@1:1", "C@1:1", "D@1:1", "E@1:1"}, "at most 4"},
+		{"a number in the list", []any{work.String(), 4711.0}, "min_position"},
+		{"a number for the key", 4711.0, "min_position"},
+	} {
+		_, err := parse(t, map[string]any{"min_position": bad.value})
+		if err == nil || !strings.Contains(err.Error(), "min_position") ||
+			!strings.Contains(err.Error(), bad.says) {
+			t.Errorf("%s: min_position=%v answered %v, want a refusal naming the key and %q",
+				bad.name, bad.value, err, bad.says)
+		}
 	}
 }
 

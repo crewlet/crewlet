@@ -79,10 +79,10 @@ type PersonState struct {
 type PersonQuery struct {
 	Handle string
 
-	Level       statelog.ReadLevel
-	Session     statelog.Position
-	MinPosition statelog.Position
-	MaxLag      time.Duration
+	Level   statelog.ReadLevel
+	Session statelog.Position
+	Floors  []statelog.Position
+	MaxLag  time.Duration
 
 	// MaxLagSeq is the same bound counted in RECORDS, which is what
 	// the broker actually answers — the duration above is derived
@@ -107,13 +107,13 @@ func (r *Reader) Person(ctx context.Context, q PersonQuery, now time.Time) (Pers
 		MaxSnoozeAhead: int64(inbox.MaxSnoozeAhead / time.Second),
 	}
 	served, err := r.log.Read(ctx, statelog.Query{
-		Level:       q.Level,
-		Scope:       personScope(),
-		Session:     q.Session,
-		MinPosition: q.MinPosition,
-		MaxLag:      q.MaxLag,
-		MaxLagSeq:   q.MaxLagSeq,
-		Set:         true,
+		Level:     q.Level,
+		Scope:     personScope(),
+		Session:   q.Session,
+		Floors:    q.Floors,
+		MaxLag:    q.MaxLag,
+		MaxLagSeq: q.MaxLagSeq,
+		Set:       true,
 	}, func(tx *sql.Tx) error {
 		person, held, err := readPerson(ctx, tx, q.Handle)
 		if err != nil {

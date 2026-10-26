@@ -111,7 +111,7 @@ func TestIntroducedPagesInPositionOrder(t *testing.T) {
 	// A GAP: the range (first record, group record] at session, floored at
 	// the group's own position.
 	gap := read(code.IntroducedQuery{RepoID: id, After: positions[0], Through: positions[1]},
-		statelog.Freshness{Level: statelog.ReadSession, MinPosition: positions[1]})
+		statelog.FloorAt(statelog.ReadSession, positions[1]))
 	if fmt.Sprint(ids(gap)) != fmt.Sprint(want[1:1+code.MaxPushesPerRecord]) {
 		t.Fatalf("the gap reads %v, want the group alone", ids(gap))
 	}
@@ -167,7 +167,7 @@ func TestAnIntroducedReadIsTheEnginesOwn(t *testing.T) {
 	}
 	// AND THE OTHER WAY: a principal's read at session is still refused.
 	_, err = n.reader.Read(t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadPushes, Repo: "app",
-		Fresh: statelog.Freshness{Level: statelog.ReadSession, MinPosition: at}})
+		Fresh: statelog.FloorAt(statelog.ReadSession, at)})
 	if !errors.Is(err, code.ErrBadLevel) || !strings.Contains(err.Error(), "linearizable, stale and consistent_prefix") {
 		t.Errorf("a principal's read at session = %v, want ErrBadLevel naming the levels it serves", err)
 	}

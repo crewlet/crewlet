@@ -238,10 +238,10 @@ type ActivityQuery struct {
 	Limit  int
 	Cursor string
 
-	Level       statelog.ReadLevel
-	Session     statelog.Position
-	MinPosition statelog.Position
-	MaxLag      time.Duration
+	Level   statelog.ReadLevel
+	Session statelog.Position
+	Floors  []statelog.Position
+	MaxLag  time.Duration
 
 	// MaxLagSeq is the same bound counted in RECORDS, which is what
 	// the broker actually answers — the duration above is derived
@@ -275,13 +275,13 @@ func (r *Reader) Activity(ctx context.Context, q ActivityQuery, now time.Time) (
 
 	var answer ActivityAnswer
 	served, err := r.log.Read(ctx, statelog.Query{
-		Level:       q.Level,
-		Scope:       activityScope(q),
-		Session:     q.Session,
-		MinPosition: q.MinPosition,
-		MaxLag:      q.MaxLag,
-		MaxLagSeq:   q.MaxLagSeq,
-		Set:         true,
+		Level:     q.Level,
+		Scope:     activityScope(q),
+		Session:   q.Session,
+		Floors:    q.Floors,
+		MaxLag:    q.MaxLag,
+		MaxLagSeq: q.MaxLagSeq,
+		Set:       true,
 	}, func(tx *sql.Tx) error {
 		records, next, err := readActivity(ctx, tx, q, limit)
 		if err != nil {

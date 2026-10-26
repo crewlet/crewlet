@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // A READ BY OBJECT ID NAMES OBJECTS, NEVER REVISIONS, AND PATHS NO GRAMMAR
@@ -88,6 +90,22 @@ func TestAGitQueryIsRefusedByField(t *testing.T) {
 			q.Cursor = strings.Repeat("9", 65)
 			return q
 		}(), "cursor", code.ErrBadCursor},
+		// THE ASKER'S FLOOR IS ON THE CODE LOG: a copy is brought along it
+		// alone, and a floor on another log beside one there would be dropped.
+		{"a floor on the code log", func() code.GitQuery {
+			q := tree(func(*code.TreeQuery) {})
+			q.Fresh = statelog.FloorAt(statelog.ReadSession,
+				statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 9})
+			return q
+		}(), "", nil},
+		{"a floor on another log", func() code.GitQuery {
+			q := tree(func(*code.TreeQuery) {})
+			q.Fresh = statelog.Freshness{Level: statelog.ReadSession, Floors: []statelog.Position{
+				{Stream: topics.CodeLogStream, Generation: 1, Seq: 9},
+				{Stream: topics.TrackerLogStream, Generation: 1, Seq: 4},
+			}}
+			return q
+		}(), "fresh", code.ErrInvalid},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

@@ -290,7 +290,7 @@ func (s *Server) StartVerify(ctx context.Context, name string, repair bool, floo
 	started = true
 	fresh := statelog.Freshness{Level: statelog.ReadLinearizable}
 	if !floor.IsZero() {
-		fresh = statelog.Freshness{Level: statelog.ReadSession, MinPosition: floor}
+		fresh = statelog.FloorAt(statelog.ReadSession, floor)
 	}
 	go s.runVerify(v.ID, v.ended, checked, cache.VerifyRun{Repair: repair, Fresh: fresh})
 	return *v, nil
@@ -306,7 +306,7 @@ func (s *Server) resolveVerified(ctx context.Context, name string, floor statelo
 	//nolint:contextcheck // The host's lifetime ends the read too: Stop must reach it.
 	defer context.AfterFunc(s.life, cancel)()
 	ref, err := s.o.Estate.Resolve(work, code.ResolveQuery{Name: name,
-		Fresh: statelog.Freshness{Level: statelog.ReadStale, MinPosition: floor}})
+		Fresh: statelog.FloorAt(statelog.ReadStale, floor)})
 	if errors.Is(err, code.ErrRepoNotFound) {
 		ref, err = s.o.Estate.Resolve(work, code.ResolveQuery{Name: name,
 			Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}})

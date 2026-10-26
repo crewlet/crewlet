@@ -124,7 +124,7 @@ type StateCursor struct {
 	// answer that serves no retirements.
 	RetiredFrom statelog.Position `json:"retired_from,omitzero"`
 	// Seen is the highest checkpoint a page of this snapshot was read at;
-	// the next page reads at session with MinPosition = Seen, so pages read
+	// the next page reads at session with Seen as its floor, so pages read
 	// on whatever node answers are never read behind one another.
 	Seen statelog.Position `json:"seen"`
 	// Stream is page 1's checkpoint's stream identity: a later page keyed to
@@ -657,7 +657,7 @@ type GitQuery struct {
 	// read. With no floor the copy is read as it stands — an object id
 	// names the same object at every position — and an id the copy lacks
 	// is looked for once more at the log's head before it is answered
-	// [ErrObjectNotFound].
+	// [ErrObjectNotFound]. A floor on another log is [ErrInvalid].
 	Fresh statelog.Freshness `json:"fresh"`
 	// Cursor is a page's Next, handed back whole; empty for the first page.
 	// Opaque to the asker, and refused [ErrBadCursor] where it is not one the
@@ -866,6 +866,11 @@ func (q GitQuery) Validate() error {
 	}
 	if len(q.Cursor) > maxGitCursorBytes {
 		return fmt.Errorf("%w: cursor: %d bytes is no cursor a git read issues", ErrBadCursor, len(q.Cursor))
+	}
+	// THE ASKER'S FLOOR IS ON THE CODE LOG, the one log a copy is brought
+	// along: a position on another names nothing a copy could reach.
+	if err := q.Fresh.OnlyOn(topics.CodeLogStream); err != nil {
+		return fmt.Errorf("%w: fresh: %w", ErrInvalid, err)
 	}
 	for _, s := range []struct {
 		kind    GitReadKind

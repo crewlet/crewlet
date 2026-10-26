@@ -420,7 +420,7 @@ func (in *interleaving) adopt(repo string) string {
 func (in *interleaving) sync(repo string) string {
 	fresh := []statelog.Freshness{
 		stale,
-		{Level: statelog.ReadSession, MinPosition: in.last[repo]},
+		statelog.FloorAt(statelog.ReadSession, in.last[repo]),
 		linearizable,
 	}[in.rng.IntN(3)]
 	s := in.syncAt(repo, fresh)

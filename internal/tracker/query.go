@@ -460,10 +460,12 @@ type Query struct {
 	// same answer.
 	Session statelog.Position
 
-	// MinPosition is the floor a caller named with `min_position` — the
+	// Floors are the floors a caller named with `min_position` — the
 	// position a wake carried, or one its own previous write returned —
-	// and the answer is served from no earlier than it at every level.
-	MinPosition statelog.Position
+	// and the answer is served from no earlier than the one on this log,
+	// at every level. A floor on another log is refused by the read
+	// ([statelog.Query.Floors]), never dropped.
+	Floors []statelog.Position
 
 	Limit  int
 	Cursor string
@@ -471,7 +473,7 @@ type Query struct {
 
 // Params is the request's own parameters, as this parser reads them.
 //
-// DECLARED HERE, BY THE CONSUMER, and kept to the five methods the grammar
+// DECLARED HERE, BY THE CONSUMER, and kept to the six methods the grammar
 // actually calls. The concrete bag lives with the API surface that fills it
 // from a query string or a socket frame — and a parser that imported that
 // surface would be the tracker depending on the transport it is read through,
@@ -479,6 +481,13 @@ type Query struct {
 type Params interface {
 	// String is one value, empty when absent.
 	String(key string) string
+
+	// List is every value a key that may REPEAT was given ([RepeatedKeys]),
+	// in order: each of a query string's values, each string of a JSON
+	// array, and one value given plainly as a list of one. False is a value
+	// that is neither a string nor a list of strings, which the grammar
+	// refuses by the key's name rather than reading as absent.
+	List(key string) ([]string, bool)
 
 	// Int and Bool take a default, because "absent" and "zero" are
 	// different answers for both: `limit=0` is a caller asking for
@@ -525,6 +534,16 @@ var QueryKeys = []string{
 	"subtasks", "tag", "totals", "type", "unit", "updated", "view",
 	"watcher",
 }
+
+// RepeatedKeys are the parameters a request may carry MORE THAN ONCE, read as
+// every value given ([Params.List]): `min_position`, one floor per log an
+// answer is read from ([ParseFreshness]).
+//
+// A LIST, and only these, because every other key is one value: a transport
+// that carries a key twice hands a scalar reader the first, and a key that
+// meant something repeated would read as its first value there, silently. So
+// a transport keeps every value of exactly these.
+var RepeatedKeys = []string{"min_position"}
 
 // FieldKeyPrefix is what makes a parameter a custom-field filter.
 const FieldKeyPrefix = "f."
@@ -1284,15 +1303,23 @@ func (q Query) Wants(field RowField) bool { return slices.Contains(q.RowFields, 
 // level would wait for the zero position, serve this node's committed prefix
 // and label the answer `session`. So `session` is accepted ONLY beside a
 // `min_position`, and refused without one naming the key.
+//
+// IT REPEATS, ONCE PER LOG ([RepeatedKeys]): one answer can be read from two
+// logs — the company feed is the tracker's work and the knowledge base's pages
+// — and the caller reading its writes back may have written to both, so each
+// log the caller wrote takes its own floor, at most one per log and
+// [statelog.MaxFloors] in all ([statelog.ValidFloors]). Which log each floor
+// holds up is the READ's to say, since a position names its log and only the
+// reader knows its own: a read of one log refuses a floor on another
+// ([statelog.Query.Floors]), and a read of several hands each half its own
+// ([statelog.Freshness.On]).
 func ParseFreshness(p Params) (statelog.Freshness, error) {
 	var out statelog.Freshness
-	if raw := strings.TrimSpace(p.String("min_position")); raw != "" {
-		at, err := statelog.ParsePosition(raw)
-		if err != nil {
-			return out, fmt.Errorf("min_position: %w", err)
-		}
-		out.MinPosition = at
+	floors, err := ParseFloors(p)
+	if err != nil {
+		return out, err
 	}
+	out.Floors = floors
 	value := strings.TrimSpace(p.String("read_level"))
 	if value == "" {
 		// ABSENT IS NOT A FIFTH STATE. It resolves to the SURFACE's own
@@ -1313,12 +1340,12 @@ func ParseFreshness(p Params) (statelog.Freshness, error) {
 		return out, fmt.Errorf("tracker: %q is not a read level — the four are "+
 			"linearizable, session, stale and consistent_prefix", value)
 	}
-	if level == statelog.ReadSession && out.MinPosition.IsZero() {
+	if level == statelog.ReadSession && len(out.Floors) == 0 {
 		return out, fmt.Errorf("tracker: read_level=session waits for the " +
 			"caller's own last write and none was named — send the position " +
-			"that write answered with as min_position, or ask for " +
-			"linearizable, or for stale with max_lag_seq to bound how far " +
-			"behind an answer may be")
+			"that write answered with as min_position (one for each log it " +
+			"landed on), or ask for linearizable, or for stale with " +
+			"max_lag_seq to bound how far behind an answer may be")
 	}
 	out.Level = level
 	if level != statelog.ReadStale {
@@ -1332,6 +1359,38 @@ func ParseFreshness(p Params) (statelog.Freshness, error) {
 		return out, nil
 	}
 	return withBounds(out, p)
+}
+
+// ParseFloors reads `min_position` — the caller's floors, one per log
+// ([RepeatedKeys]), held to [statelog.ValidFloors] — and is the ONE reading of
+// the key: [ParseFreshness]'s, and a route's that takes a floor and no level.
+// An empty value names nothing, and so does a zero position: it names no
+// record, so it holds nothing up and is no floor at all, as an absent one is.
+func ParseFloors(p Params) ([]statelog.Position, error) {
+	raws, ok := p.List("min_position")
+	if !ok {
+		return nil, fmt.Errorf("tracker: min_position is a log position, " +
+			"`<stream>@<generation>:<sequence>`, or one per log as a list of them " +
+			"— the value a write answered with as its position")
+	}
+	var floors []statelog.Position
+	for _, raw := range raws {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		at, err := statelog.ParsePosition(raw)
+		if err != nil {
+			return nil, fmt.Errorf("min_position: %w", err)
+		}
+		if !at.IsZero() {
+			floors = append(floors, at)
+		}
+	}
+	if err := statelog.ValidFloors(floors); err != nil {
+		return nil, fmt.Errorf("min_position: %w", err)
+	}
+	return floors, nil
 }
 
 // withBounds reads the two staleness bounds onto an answer that may carry them.
@@ -1366,7 +1425,7 @@ func (q *Query) parseLevel(p Params) error {
 		return err
 	}
 	q.Level, q.MaxLag, q.MaxLagSeq = got.Level, got.MaxLag, got.MaxLagSeq
-	q.MinPosition = got.MinPosition
+	q.Floors = got.Floors
 	return nil
 }
 
@@ -1459,6 +1518,40 @@ func (m MapParams) String(key string) string {
 		return strconv.Itoa(v)
 	}
 	return fmt.Sprint(m[key])
+}
+
+// List is every value given for a key that may repeat ([RepeatedKeys]) — see
+// [ListOf].
+func (m MapParams) List(key string) ([]string, bool) { return ListOf(m[key]) }
+
+// ListOf is one parameter's value read as a list, the ONE reading every bag
+// this grammar is parsed from takes of a key that may repeat ([RepeatedKeys]):
+// a string is a list of one, and a list — a JSON array off a socket frame, or
+// the strings a query string repeated, which reach a data node across the
+// estate as that array — is each of its strings. Absent is an empty list.
+// Anything else is false: a number where a position belongs is a request the
+// grammar refuses by the key's name, never one it reads as having named
+// nothing.
+func ListOf(value any) ([]string, bool) {
+	switch v := value.(type) {
+	case nil:
+		return nil, true
+	case string:
+		return []string{v}, true
+	case []string:
+		return slices.Clone(v), true
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			s, ok := item.(string)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, s)
+		}
+		return out, true
+	}
+	return nil, false
 }
 
 // Int is one value as a number, or def when it is absent OR unparsable.

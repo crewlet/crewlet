@@ -35,11 +35,11 @@ type DecisionsQuery struct {
 	// hold, so an ask put to them under any credential is one row here.
 	Handle string
 
-	Level       statelog.ReadLevel
-	Session     statelog.Position
-	MinPosition statelog.Position
-	MaxLag      time.Duration
-	MaxLagSeq   uint64
+	Level     statelog.ReadLevel
+	Session   statelog.Position
+	Floors    []statelog.Position
+	MaxLag    time.Duration
+	MaxLagSeq uint64
 }
 
 // DecisionsAnswer is the page of open asks, the count of all of them and the
@@ -80,12 +80,12 @@ func (r *Reader) Decisions(ctx context.Context, q DecisionsQuery, now time.Time,
 		Level: q.Level,
 		// THE DOMAIN, for [Reader.MyWork]'s reason: an ask can be on any
 		// task in any container.
-		Scope:       statelog.ScopeSet{Paths: []string{pathDomain}}.Normalised(),
-		Session:     q.Session,
-		MinPosition: q.MinPosition,
-		MaxLag:      q.MaxLag,
-		MaxLagSeq:   q.MaxLagSeq,
-		Set:         true,
+		Scope:     statelog.ScopeSet{Paths: []string{pathDomain}}.Normalised(),
+		Session:   q.Session,
+		Floors:    q.Floors,
+		MaxLag:    q.MaxLag,
+		MaxLagSeq: q.MaxLagSeq,
+		Set:       true,
 	}, func(tx *sql.Tx) error {
 		anchor, err := ResolveDate("today", now, loc)
 		if err != nil {

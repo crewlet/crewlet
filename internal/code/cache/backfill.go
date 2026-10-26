@@ -509,7 +509,7 @@ func (c *Cache) introducedRead(ctx context.Context, q code.IntroducedQuery, floo
 	bool, error) {
 
 	read := code.ReadQuery{Kind: code.ReadIntroduced, Introduced: &q,
-		Fresh: statelog.Freshness{Level: statelog.ReadSession, MinPosition: pos(floor)}}
+		Fresh: statelog.FloorAt(statelog.ReadSession, pos(floor))}
 	var rows []code.IntroducedRow
 	for {
 		page, err := c.fetch.Read(ctx, read)
@@ -645,7 +645,7 @@ func (c *Cache) historyPage(ctx context.Context, t *backfillTask) error {
 func (c *Cache) horizonPage(ctx context.Context, t *backfillTask) error {
 	read := code.ReadQuery{Kind: code.ReadIntroduced, Limit: 1,
 		Introduced: &code.IntroducedQuery{RepoID: t.e.id},
-		Fresh:      statelog.Freshness{Level: statelog.ReadSession, MinPosition: pos(t.rec.From)}}
+		Fresh:      statelog.FloorAt(statelog.ReadSession, pos(t.rec.From))}
 	page, err := c.fetch.Read(ctx, read)
 	if errors.Is(err, code.ErrRepoNotFound) {
 		c.backfillGone(ctx, t, err)

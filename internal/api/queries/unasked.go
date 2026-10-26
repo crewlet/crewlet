@@ -164,11 +164,11 @@ func (s Sources) workRouting(ctx context.Context, p Params) (any, error) {
 		// reader takes it rather than holding it. An absent recipient
 		// set is dated against it: older than the horizon and its
 		// absence is not evidence, newer and it is.
-		Retention:   s.inboxRetention(),
-		Level:       fresh.Level,
-		MaxLag:      fresh.MaxLag,
-		MaxLagSeq:   fresh.MaxLagSeq,
-		MinPosition: fresh.MinPosition,
+		Retention: s.inboxRetention(),
+		Level:     fresh.Level,
+		MaxLag:    fresh.MaxLag,
+		MaxLagSeq: fresh.MaxLagSeq,
+		Floors:    fresh.Floors,
 	}, s.clock())
 	if err != nil {
 		return nil, err

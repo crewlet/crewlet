@@ -545,6 +545,46 @@ func TestARepeatedQueryKeyTakesTheFirst(t *testing.T) {
 	}
 }
 
+// A KEY THAT REPEATS BY DESIGN IS READ WHOLE, ON BOTH TRANSPORTS, AND ONLY IT.
+//
+// `min_position` names one floor per log an answer is read from, and a JSON
+// object expresses the repetition as an array — so a query string keeps every
+// value of it, where taking the first would serve the answer's other log from
+// before the write its floor named. Every other key keeps the first value,
+// the rule above: a scalar reader handed a list would read nothing.
+//
+// Mutation: drop the repeated-key arm from FromQuery and the REST floors are
+// the first alone.
+func TestAKeyThatRepeatsByDesignIsReadWholeOnBothTransports(t *testing.T) {
+	t.Parallel()
+	floors := []string{"CREWLET_TRACKER_LOG@1:5", "CREWLET_PAGES_LOG@1:9"}
+	fromREST := queries.FromQuery(url.Values{"min_position": floors, "role": {"First", "Second"}})
+	fromSocket := queries.FromMap(map[string]any{"min_position": []any{floors[0], floors[1]},
+		"role": "First"})
+	for name, p := range map[string]queries.Params{"rest": fromREST, "socket": fromSocket} {
+		if got, ok := p.List("min_position"); !ok || !slices.Equal(got, floors) {
+			t.Errorf("%s: min_position = %v (%v), want every floor %v", name, got, ok, floors)
+		}
+		if got := p.String("role"); got != "First" {
+			t.Errorf("%s: role = %q, want the first", name, got)
+		}
+	}
+	// ONE VALUE IS A LIST OF ONE, whichever transport carried it.
+	for name, p := range map[string]queries.Params{
+		"rest":   queries.FromQuery(url.Values{"min_position": {floors[0]}}),
+		"socket": queries.FromMap(map[string]any{"min_position": floors[0]}),
+	} {
+		if got, ok := p.List("min_position"); !ok || !slices.Equal(got, floors[:1]) {
+			t.Errorf("%s: one min_position = %v (%v), want %v", name, got, ok, floors[:1])
+		}
+	}
+	// AND A VALUE THAT IS NO LIST OF STRINGS IS SAID TO BE ONE, for the
+	// grammar to refuse by the key's name.
+	if _, ok := queries.FromMap(map[string]any{"min_position": []any{floors[0], 7.0}}).List("min_position"); ok {
+		t.Error("a list holding a number read as a list of positions")
+	}
+}
+
 func TestAMalformedFilterFallsBackRatherThanFailing(t *testing.T) {
 	t.Parallel()
 	// These are a dashboard's own filters. Refusing the whole question

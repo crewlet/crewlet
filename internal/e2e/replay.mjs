@@ -130,7 +130,7 @@ globalThis.fetch = async () => {
 // replay lets through is answered by the captured exchange below.
 globalThis.location = { origin: "http://replay.invalid" };
 
-const { Store, LiveSocket, act, SessionFloors, domainOf } = await import(pathToFileURL(PROTOCOL).href);
+const { Store, LiveSocket, act, SessionFloors, domainsOf } = await import(pathToFileURL(PROTOCOL).href);
 
 const [file, actFile, ...flags] = process.argv.slice(2);
 if (!file || !actFile || actFile.startsWith("--")) {
@@ -552,10 +552,13 @@ if (!domain) {
         `${JSON.stringify(engineAnswer.position)}: the next read waits for the wrong position`,
     );
   }
+  // ONE FLOOR PER LOG THE QUESTION READS, and these read the one log the
+  // write landed on: the list names exactly that position.
   for (const kind of ["work_person", "work_items"]) {
     const fresh = floors.freshness(kind);
-    if (domainOf(kind) !== domain || !fresh || fresh.read_level !== "session" ||
-      fresh.min_position !== engineAnswer.position) {
+    if (JSON.stringify(domainsOf(kind)) !== JSON.stringify([domain]) || !fresh ||
+      fresh.read_level !== "session" ||
+      JSON.stringify(fresh.min_position) !== JSON.stringify([engineAnswer.position])) {
       problems.push(
         `a read of ${kind} after the write names ${JSON.stringify(fresh)}, not a ` +
           `session read at ${JSON.stringify(engineAnswer.position)}`,

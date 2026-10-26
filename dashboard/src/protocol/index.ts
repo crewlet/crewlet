@@ -66,5 +66,5 @@ export { SessionKeepAlive, SESSION_KEEPALIVE_MS } from "./keepalive.ts";
 // the client's own `SessionFloors` — the floor a later read then names.
 export { act, newActOpID } from "./act.ts";
 export type { ActErrorCode, ActResult } from "./act.ts";
-export { SessionFloors, domainOf } from "./session.ts";
+export { SessionFloors, domainsOf } from "./session.ts";
 export type * from "./types.ts";

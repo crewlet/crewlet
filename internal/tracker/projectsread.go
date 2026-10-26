@@ -364,10 +364,10 @@ type ProjectQuery struct {
 	// far side attach ITS OWN chart — see internal/estate.
 	Units Units `json:"-"`
 
-	Level       statelog.ReadLevel
-	Session     statelog.Position
-	MinPosition statelog.Position
-	MaxLag      time.Duration
+	Level   statelog.ReadLevel
+	Session statelog.Position
+	Floors  []statelog.Position
+	MaxLag  time.Duration
 
 	// MaxLagSeq is the same bound counted in RECORDS, which is what
 	// the broker actually answers — the duration above is derived
@@ -461,13 +461,13 @@ func (r *Reader) Projects(ctx context.Context, q ProjectQuery) (
 
 	var listing ProjectListing
 	served, err := r.log.Read(ctx, statelog.Query{
-		Level:       q.Level,
-		Scope:       projectListScope(),
-		Session:     q.Session,
-		MinPosition: q.MinPosition,
-		MaxLag:      q.MaxLag,
-		MaxLagSeq:   q.MaxLagSeq,
-		Set:         true,
+		Level:     q.Level,
+		Scope:     projectListScope(),
+		Session:   q.Session,
+		Floors:    q.Floors,
+		MaxLag:    q.MaxLag,
+		MaxLagSeq: q.MaxLagSeq,
+		Set:       true,
 	}, func(tx *sql.Tx) error {
 		rows, census, err := readProjectRows(ctx, tx, q, limit)
 		if err != nil {
@@ -783,10 +783,10 @@ type ProjectDetailQuery struct {
 	// far side attach ITS OWN chart — see internal/estate.
 	Units Units `json:"-"`
 
-	Level       statelog.ReadLevel
-	Session     statelog.Position
-	MinPosition statelog.Position
-	MaxLag      time.Duration
+	Level   statelog.ReadLevel
+	Session statelog.Position
+	Floors  []statelog.Position
+	MaxLag  time.Duration
 
 	// MaxLagSeq is the same bound counted in RECORDS, which is what
 	// the broker actually answers — the duration above is derived
@@ -816,13 +816,13 @@ func (r *Reader) Project(ctx context.Context, q ProjectDetailQuery) (
 
 	var out ProjectDetail
 	served, err := r.log.Read(ctx, statelog.Query{
-		Level:       q.Level,
-		Scope:       projectDetailScope(key),
-		Session:     q.Session,
-		MinPosition: q.MinPosition,
-		MaxLag:      q.MaxLag,
-		MaxLagSeq:   q.MaxLagSeq,
-		Set:         true,
+		Level:     q.Level,
+		Scope:     projectDetailScope(key),
+		Session:   q.Session,
+		Floors:    q.Floors,
+		MaxLag:    q.MaxLag,
+		MaxLagSeq: q.MaxLagSeq,
+		Set:       true,
 	}, func(tx *sql.Tx) error {
 		return readProjectDetail(ctx, tx, key, q, &out)
 	})

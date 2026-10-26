@@ -656,7 +656,7 @@ func (c *Cache) check(ctx context.Context, s Synced, slot *gitproc.Reserved) (Ve
 	r.Name, r.Position, r.Problems = cmp.Or(l.repo.Name, r.Name), l.at, l.problems
 
 	snap, err := c.read(ctx, e.id, l.at, l.stream, true, false,
-		statelog.Freshness{Level: statelog.ReadSession, MinPosition: l.at})
+		statelog.FloorAt(statelog.ReadSession, l.at))
 	switch {
 	case err != nil:
 		return r, nil, fmt.Errorf("cache: verify %s: reading its rows: %w", r.label(), err)

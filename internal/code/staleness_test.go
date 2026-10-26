@@ -112,7 +112,7 @@ func TestACodeReadWaitsForTheFloorTheCallerNamed(t *testing.T) {
 	if res.Position.IsZero() {
 		t.Fatalf("the push answered no position: %+v", res)
 	}
-	ask := statelog.Freshness{Level: statelog.ReadStale, MinPosition: res.Position}
+	ask := statelog.FloorAt(statelog.ReadStale, res.Position)
 	for name, read := range map[string]func() error{
 		"Snapshot": func() error {
 			_, err := n.reader.Snapshot(t.Context(), code.StateQuery{RepoID: id, Fresh: ask})
@@ -134,7 +134,7 @@ func TestACodeReadWaitsForTheFloorTheCallerNamed(t *testing.T) {
 		"Read(introduced) at session": func() error {
 			_, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadIntroduced,
 				Introduced: &code.IntroducedQuery{RepoID: id},
-				Fresh:      statelog.Freshness{Level: statelog.ReadSession, MinPosition: res.Position}})
+				Fresh:      statelog.FloorAt(statelog.ReadSession, res.Position)})
 			return err
 		},
 	} {

@@ -28,7 +28,7 @@ const (
 	// it is the honest default for a caller reading its own work — a
 	// caller that can NAME that write: the position it landed at is what
 	// the level waits for ([Query.Session] inside the engine,
-	// [Query.MinPosition] from outside it), and a session read that was
+	// [Query.Floors] from outside it), and a session read that was
 	// handed no position waits for nothing and serves this node's own
 	// prefix under a stronger name. That is why no read grammar accepts
 	// the level without a `min_position` beside it.
@@ -346,13 +346,20 @@ type Query struct {
 	// is what a session read waits for.
 	Session Position
 
-	// MinPosition is an explicit floor a caller may name — the position a
-	// wake carried, or one it was handed by its own previous write. It is
-	// honoured at EVERY level (see [Freshness]): the later of it and the
-	// level's own target is what the read waits for, so a caller that
-	// holds a position is never served rows from before it whatever else
-	// it asked for.
-	MinPosition Position
+	// Floors are the explicit floors a caller may name — the position a
+	// wake carried, or one it was handed by its own previous write. They
+	// are honoured at EVERY level (see [Freshness]): the later of the
+	// floor on this log and the level's own target is what the read waits
+	// for, so a caller that holds a position is never served rows from
+	// before it whatever else it asked for.
+	//
+	// EVERY ONE IS ON THIS LOG, or the read is refused before anything
+	// else ([ErrForeignPosition]): a read of one log waits on that log's
+	// floor alone, and a floor on another is the request's mistake — a
+	// read of several logs hands each of its halves only that half's own
+	// ([Freshness.On]), so a floor that reaches the wrong half is one its
+	// composer misplaced, refused rather than dropped.
+	Floors []Position
 
 	// MaxLag is what a stale read says it will accept, and zero means it
 	// accepts anything.
@@ -618,13 +625,18 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 		return Answer{}, fmt.Errorf("statelog: %q is not a read level (want %v)",
 			q.Level, ReadLevels)
 	}
-	// THE CALLER'S FLOOR NAMES A STREAM, and it is checked before any
+	// THE CALLER'S FLOORS NAME STREAMS, and they are checked before any
 	// level — or this node's own health — looks at anything.
-	// [Query.MinPosition] is the one value here that came off a wire; the
-	// session mark and the barrier are this domain's own.
-	if err := q.MinPosition.On(r.stream); err != nil {
+	// [Query.Floors] is the one value here that came off a wire; the
+	// session mark and the barrier are this domain's own. EVERY floor is
+	// held to this log, not only the one this read would wait for: a read
+	// handed a second log's floor beside its own is a composed read whose
+	// halves were not given their own ([Freshness.On]), and dropping the
+	// other would serve that half from before a write its caller named.
+	if err := onlyOn(q.Floors, r.stream); err != nil {
 		return Answer{}, fmt.Errorf("this read's floor: %w", err)
 	}
+	floor := floorOn(q.Floors, r.stream)
 	if q.Resolve != nil && !q.Scope.Empty() {
 		return Answer{}, fmt.Errorf("statelog: this read both declares a scope " +
 			"and resolves one — an object named by reference has no scope " +
@@ -698,7 +710,7 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 	// so a router asking another node for this read hands it on rather than
 	// have that node append a barrier of its own.
 	spent := spentOf(ctx)
-	target, index, err := r.target(ctx, q, h, spent)
+	target, index, err := r.target(ctx, q, floor, h, spent)
 	if err != nil {
 		var refusal *Refused
 		if errors.As(err, &refusal) {
@@ -910,7 +922,8 @@ func (r *Reader) scopeUnread(err error) string {
 // target is the position this read must wait for, by level, and — for a
 // linearizable read — the read index it rests on: the barrier it appended, or
 // the one a node asked for the same read before it established ([Spent]).
-func (r *Reader) target(ctx context.Context, q Query, h Health, spent Spent) (Position, Position, error) {
+// floor is the caller's own on this log, zero where it named none.
+func (r *Reader) target(ctx context.Context, q Query, floor Position, h Health, spent Spent) (Position, Position, error) {
 	// THE CALLER'S FLOOR IS ON THIS LOG: [Reader.Read] refused one that is
 	// not before it got here, because comparing a foreign floor against a
 	// local target is comparing coordinates from two number spaces — see
@@ -929,7 +942,7 @@ func (r *Reader) target(ctx context.Context, q Query, h Health, spent Spent) (Po
 		// own.
 		if at, held := spent.IndexOn(r.stream); held &&
 			at.Generation >= r.waiter.Committed().Generation {
-			return furthest(at, q.MinPosition), at, nil
+			return furthest(at, floor), at, nil
 		}
 		if !r.mode.Publishes() {
 			return Position{}, Position{}, &Refused{
@@ -1013,7 +1026,7 @@ func (r *Reader) target(ctx context.Context, q Query, h Health, spent Spent) (Po
 		// stream has not reached, and waiting for it is what turns a
 		// pasted position into a `behind` refusal the caller can read
 		// rather than an answer served from before it.
-		return furthest(at, q.MinPosition), at, nil
+		return furthest(at, floor), at, nil
 
 	case ReadSession:
 		// THE STRONGEST OF WHAT THE CALLER ALREADY KNOWS. A session
@@ -1021,7 +1034,7 @@ func (r *Reader) target(ctx context.Context, q Query, h Health, spent Spent) (Po
 		// stronger name, so it waits for nothing rather than appending
 		// a barrier nobody asked for — which is why the grammars refuse
 		// the level to a caller that named no position.
-		return furthest(q.Session, q.MinPosition), Position{}, nil
+		return furthest(q.Session, floor), Position{}, nil
 
 	case ReadStale, ReadConsistentPrefix:
 		if refusal := r.pastBound(q, h); refusal != nil {
@@ -1031,7 +1044,7 @@ func (r *Reader) target(ctx context.Context, q Query, h Health, spent Spent) (Po
 		// "whatever this node holds, from here on": the lag is checked
 		// above and reported on the answer, and the wait below is for
 		// the caller's own write rather than for the log's end.
-		return q.MinPosition, Position{}, nil
+		return floor, Position{}, nil
 	}
 	return Position{}, Position{}, fmt.Errorf("statelog: unreachable read level %q", q.Level)
 }
@@ -1043,7 +1056,7 @@ func (r *Reader) target(ctx context.Context, q Query, h Health, spent Spent) (Po
 // Because the bound has to be applied to TWO snapshots and there must be one
 // rule for both. It was enforced only against the snapshot taken before the
 // read waited — and a read can now wait for the caller's own floor
-// ([Query.MinPosition]) for up to [ReadBudget], a wait whose ending says this
+// ([Query.Floors]) for up to [ReadBudget], a wait whose ending says this
 // node reached a position and says nothing whatever about how far the log has
 // run on in the meantime. A caller declaring `max_lag_seq=250` could therefore
 // be served an answer assembled when the node was thousands behind, with

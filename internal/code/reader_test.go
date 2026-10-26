@@ -945,7 +945,7 @@ func TestACodeReadStatesItsFreshness(t *testing.T) {
 		},
 		"Read at session": func() error {
 			_, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadRepos,
-				Fresh: statelog.Freshness{Level: statelog.ReadSession, MinPosition: n.waiter.Committed()}})
+				Fresh: statelog.FloorAt(statelog.ReadSession, n.waiter.Committed())})
 			return err
 		},
 	} {
@@ -972,7 +972,7 @@ func TestARefusedLevelNamesEveryLevelTheReadServes(t *testing.T) {
 	}
 	for _, level := range []statelog.ReadLevel{statelog.ReadSession, "eventual"} {
 		_, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadRepos,
-			Fresh: statelog.Freshness{Level: level, MinPosition: n.waiter.Committed()}})
+			Fresh: statelog.FloorAt(level, n.waiter.Committed())})
 		if !errors.Is(err, code.ErrBadLevel) {
 			t.Fatalf("Read at %s = %v, want ErrBadLevel", level, err)
 		}

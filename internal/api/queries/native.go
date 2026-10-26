@@ -619,7 +619,7 @@ func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
 		// said nothing — which is `stale`, like every other dashboard
 		// poll. See [Freshness] and [Sources.workItems].
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
-		MinPosition: fresh.MinPosition,
+		Floors: fresh.Floors,
 		// THE COUNT BESIDE A PIN IS THE BOARD IT OPENS: the view run on
 		// the company's own clock, which every relative date in it is
 		// cut on — the pair `work_items` parses with.
@@ -679,8 +679,8 @@ func (s Sources) workSavedViews(ctx context.Context, p Params) (any, error) {
 		Viewer: viewer,
 		Units:  s.chartUnits(),
 		Level:  fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
-		MinPosition: fresh.MinPosition,
-		Counts:      counts, Now: s.clock(), Zone: s.zone(),
+		Floors: fresh.Floors,
+		Counts: counts, Now: s.clock(), Zone: s.zone(),
 	})
 	if err != nil {
 		return nil, err
@@ -742,11 +742,11 @@ func (s Sources) workCatalogue(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	answer, err := s.Work.Catalogue(ctx, tracker.CatalogueQuery{
-		Archived:    p.Bool("archived", false),
-		Level:       fresh.Level,
-		MaxLag:      fresh.MaxLag,
-		MaxLagSeq:   fresh.MaxLagSeq,
-		MinPosition: fresh.MinPosition,
+		Archived:  p.Bool("archived", false),
+		Level:     fresh.Level,
+		MaxLag:    fresh.MaxLag,
+		MaxLagSeq: fresh.MaxLagSeq,
+		Floors:    fresh.Floors,
 	})
 	if err != nil {
 		return nil, err
@@ -781,11 +781,11 @@ func (s Sources) workPerson(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	state, err := s.Work.Person(ctx, tracker.PersonQuery{
-		Handle:      handle,
-		Level:       fresh.Level,
-		MaxLag:      fresh.MaxLag,
-		MaxLagSeq:   fresh.MaxLagSeq,
-		MinPosition: fresh.MinPosition,
+		Handle:    handle,
+		Level:     fresh.Level,
+		MaxLag:    fresh.MaxLag,
+		MaxLagSeq: fresh.MaxLagSeq,
+		Floors:    fresh.Floors,
 	}, s.clock())
 	if err != nil {
 		return nil, err
@@ -955,7 +955,7 @@ func (s Sources) workProjects(ctx context.Context, p Params) (any, error) {
 	q.Units = s.chartUnits()
 	// THE CALLER'S OWN — see [Freshness].
 	q.Level, q.MaxLag, q.MaxLagSeq = fresh.Level, fresh.MaxLag, fresh.MaxLagSeq
-	q.MinPosition = fresh.MinPosition
+	q.Floors = fresh.Floors
 	listing, err := s.Work.Projects(ctx, q)
 	if err != nil {
 		return nil, err
@@ -978,13 +978,13 @@ func (s Sources) workProject(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	detail, err := s.Work.Project(ctx, tracker.ProjectDetailQuery{
-		Project:     key,
-		ForType:     strings.TrimSpace(p.String("for_type")),
-		Units:       s.chartUnits(),
-		Level:       fresh.Level,
-		MaxLag:      fresh.MaxLag,
-		MaxLagSeq:   fresh.MaxLagSeq,
-		MinPosition: fresh.MinPosition,
+		Project:   key,
+		ForType:   strings.TrimSpace(p.String("for_type")),
+		Units:     s.chartUnits(),
+		Level:     fresh.Level,
+		MaxLag:    fresh.MaxLag,
+		MaxLagSeq: fresh.MaxLagSeq,
+		Floors:    fresh.Floors,
 	})
 	switch {
 	case errors.Is(err, tracker.ErrNoProject):
@@ -1020,7 +1020,7 @@ func (s Sources) workWorkload(ctx context.Context, p Params) (any, error) {
 		// handed, and each row holds the unit's key.
 		Units: s.chartUnits(),
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
-		MinPosition: fresh.MinPosition,
+		Floors: fresh.Floors,
 	}, s.clock(), s.zone())
 	if err != nil {
 		return nil, err
@@ -1063,7 +1063,7 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	q.Level, q.MaxLag, q.MaxLagSeq = fresh.Level, fresh.MaxLag, fresh.MaxLagSeq
-	q.MinPosition = fresh.MinPosition
+	q.Floors = fresh.Floors
 	if raw := strings.TrimSpace(p.String("container")); raw != "" {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		container, err := viewContainer(p)
@@ -1183,7 +1183,7 @@ func (s Sources) workMyWork(ctx context.Context, p Params) (any, error) {
 		// somebody's day, not a read-back of a write they just made —
 		// see [Freshness] and [Sources.workItems].
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
-		MinPosition: fresh.MinPosition,
+		Floors: fresh.Floors,
 	}, s.clock(), s.zone())
 	if err != nil {
 		return nil, err

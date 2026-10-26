@@ -19,6 +19,14 @@
  * seen. And it is this tab's alone — another tab's writes are its own
  * business, reached by its own polls.
  *
+ * ONE FLOOR PER LOG A QUESTION READS. An answer can be read from more than one
+ * log — the company feed is the tracker's work and the knowledge base's pages
+ * — and such a question is listed under each domain whose log it reads. Its
+ * read names the floor of every one of them this tab has written, as one
+ * `min_position` each (the engine reads the key once per log), so each half
+ * of the answer waits for the tab's own write to its log; a floor of only one
+ * would leave the other half drawn from before the write it missed.
+ *
  * `unknown` RAISES NOTHING. An outcome nobody can vouch for has no position
  * worth waiting on, and a floor at a position that never lands would make
  * every read of the domain wait for it.
@@ -121,31 +129,39 @@ export class SessionFloors {
 
   /**
    * Whether a write heard by a listener moves the answer to `kind`: a question
-   * that reads the written domain at a floor, or one the write names as
-   * moving beside it.
+   * that reads the written domain at a floor — one of the domains it reads,
+   * where it reads several — or one the write names as moving beside it.
    */
   static moves(kind: string, domain: SessionDomain | null, refreshes: readonly string[]): boolean {
-    return (domain !== null && domainOf(kind) === domain) || refreshes.includes(kind);
+    return (domain !== null && domainsOf(kind).includes(domain)) || refreshes.includes(kind);
   }
 
   /**
    * The freshness a read of `kind` names, or null when it names none: the
-   * question takes no floor, or this tab has not written its domain.
+   * question takes no floor, or this tab has written none of its domains.
+   *
+   * ONE `min_position` PER DOMAIN IT READS that this tab has written, in the
+   * order the domains are listed: each is a position on its own log, and the
+   * engine holds each half of the answer to its own. A domain the tab has not
+   * written names no floor, and the engine reads that half as it stands.
    */
-  freshness(kind: string): { read_level: "session"; min_position: string } | null {
-    const domain = domainOf(kind);
-    if (domain === null) return null;
-    const floor = this.floor(domain);
-    return floor === null ? null : { read_level: "session", min_position: floor };
+  freshness(kind: string): { read_level: "session"; min_position: string[] } | null {
+    const floors = domainsOf(kind)
+      .map((domain) => this.floor(domain))
+      .filter((floor): floor is string => floor !== null);
+    return floors.length === 0 ? null : { read_level: "session", min_position: floors };
   }
 }
 
-/** The domain whose log a question reads at a floor, or null for one that takes none. */
-export function domainOf(kind: string): SessionDomain | null {
-  for (const domain of Object.keys(SESSION_QUERIES) as SessionDomain[]) {
-    if ((SESSION_QUERIES[domain] as readonly string[]).includes(kind)) return domain;
-  }
-  return null;
+/**
+ * The domains whose logs a question reads at a floor — one, or each of several
+ * for an answer read from more than one log — and none for one that takes no
+ * floor at all.
+ */
+export function domainsOf(kind: string): SessionDomain[] {
+  return (Object.keys(SESSION_QUERIES) as SessionDomain[]).filter((domain) =>
+    (SESSION_QUERIES[domain] as readonly string[]).includes(kind),
+  );
 }
 
 /** This tab's floors. */

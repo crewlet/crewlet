@@ -65,10 +65,10 @@ type CatalogueQuery struct {
 	// [MaxCatalogueOptions].
 	Options int
 
-	Level       statelog.ReadLevel
-	Session     statelog.Position
-	MinPosition statelog.Position
-	MaxLag      time.Duration
+	Level   statelog.ReadLevel
+	Session statelog.Position
+	Floors  []statelog.Position
+	MaxLag  time.Duration
 
 	// MaxLagSeq is the same bound counted in RECORDS, which is what
 	// the broker actually answers — the duration above is derived
@@ -86,13 +86,13 @@ func (r *Reader) Catalogue(ctx context.Context, q CatalogueQuery) (CatalogueAnsw
 	}
 	var out CatalogueAnswer
 	served, err := r.log.Read(ctx, statelog.Query{
-		Level:       q.Level,
-		Scope:       catalogueScope(),
-		Session:     q.Session,
-		MinPosition: q.MinPosition,
-		MaxLag:      q.MaxLag,
-		MaxLagSeq:   q.MaxLagSeq,
-		Set:         true,
+		Level:     q.Level,
+		Scope:     catalogueScope(),
+		Session:   q.Session,
+		Floors:    q.Floors,
+		MaxLag:    q.MaxLag,
+		MaxLagSeq: q.MaxLagSeq,
+		Set:       true,
 	}, func(tx *sql.Tx) error {
 		types, _, err := readTypeCatalogue(ctx, tx)
 		if err != nil {

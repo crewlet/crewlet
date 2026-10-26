@@ -279,7 +279,7 @@ func (s ObjectEstate) Read(ctx context.Context, at statelog.Position,
 	fn func(*sql.Tx) error) (bool, error) {
 
 	served, err := s.Reader.log.Read(ctx, statelog.Query{
-		Level: statelog.ReadStale, Scope: objectScope, Set: true, MinPosition: at,
+		Level: statelog.ReadStale, Scope: objectScope, Set: true, Floors: []statelog.Position{at},
 	}, fn)
 	if err != nil {
 		return false, err

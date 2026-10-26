@@ -2887,6 +2887,12 @@ var ACT_ERRORS = {
 * reads. A kind missing from here is a screen that stays stale after its own
 * write; a kind listed that takes no floor is a screen that believes it waited
 * and did not.
+*
+* A QUESTION READ FROM SEVERAL LOGS IS LISTED UNDER EACH — the company feed is
+* the tracker's work and the knowledge base's pages — and its read names one
+* `min_position` per listed domain this tab has written (`protocol/session.ts`),
+* which the engine holds each half of the answer to. Listed under one, the
+* half on the other log would be drawn from before the tab's own write there.
 */
 var SESSION_QUERIES = {
 	tracker: [
@@ -2914,7 +2920,8 @@ var SESSION_QUERIES = {
 		"page",
 		"containers",
 		"page_activity",
-		"page_revision"
+		"page_revision",
+		"company_feed"
 	]
 };
 //#endregion
@@ -2939,6 +2946,14 @@ var SESSION_QUERIES = {
 * write arriving after a later one must not lower what the tab has already
 * seen. And it is this tab's alone — another tab's writes are its own
 * business, reached by its own polls.
+*
+* ONE FLOOR PER LOG A QUESTION READS. An answer can be read from more than one
+* log — the company feed is the tracker's work and the knowledge base's pages
+* — and such a question is listed under each domain whose log it reads. Its
+* read names the floor of every one of them this tab has written, as one
+* `min_position` each (the engine reads the key once per log), so each half
+* of the answer waits for the tab's own write to its log; a floor of only one
+* would leave the other half drawn from before the write it missed.
 *
 * `unknown` RAISES NOTHING. An outcome nobody can vouch for has no position
 * worth waiting on, and a floor at a position that never lands would make
@@ -3021,30 +3036,36 @@ var SessionFloors = class {
 	}
 	/**
 	* Whether a write heard by a listener moves the answer to `kind`: a question
-	* that reads the written domain at a floor, or one the write names as
-	* moving beside it.
+	* that reads the written domain at a floor — one of the domains it reads,
+	* where it reads several — or one the write names as moving beside it.
 	*/
 	static moves(kind, domain, refreshes) {
-		return domain !== null && domainOf(kind) === domain || refreshes.includes(kind);
+		return domain !== null && domainsOf(kind).includes(domain) || refreshes.includes(kind);
 	}
 	/**
 	* The freshness a read of `kind` names, or null when it names none: the
-	* question takes no floor, or this tab has not written its domain.
+	* question takes no floor, or this tab has written none of its domains.
+	*
+	* ONE `min_position` PER DOMAIN IT READS that this tab has written, in the
+	* order the domains are listed: each is a position on its own log, and the
+	* engine holds each half of the answer to its own. A domain the tab has not
+	* written names no floor, and the engine reads that half as it stands.
 	*/
 	freshness(kind) {
-		const domain = domainOf(kind);
-		if (domain === null) return null;
-		const floor = this.floor(domain);
-		return floor === null ? null : {
+		const floors = domainsOf(kind).map((domain) => this.floor(domain)).filter((floor) => floor !== null);
+		return floors.length === 0 ? null : {
 			read_level: "session",
-			min_position: floor
+			min_position: floors
 		};
 	}
 };
-/** The domain whose log a question reads at a floor, or null for one that takes none. */
-function domainOf(kind) {
-	for (const domain of Object.keys(SESSION_QUERIES)) if (SESSION_QUERIES[domain].includes(kind)) return domain;
-	return null;
+/**
+* The domains whose logs a question reads at a floor — one, or each of several
+* for an answer read from more than one log — and none for one that takes no
+* floor at all.
+*/
+function domainsOf(kind) {
+	return Object.keys(SESSION_QUERIES).filter((domain) => SESSION_QUERIES[domain].includes(kind));
 }
 /** This tab's floors. */
 var session = new SessionFloors();
@@ -3212,4 +3233,4 @@ function refusalOf(tool, opId, err, floors) {
 	};
 }
 //#endregion
-export { BROKER_FINDING_KINDS, BROKER_KINDS, BROKER_REMOVE_TIMEOUT_MS, LiveSocket, QueryError, REQUEST_TIMEOUT_MS, RestError, SESSION_KEEPALIVE_MS, SessionFloors, SessionKeepAlive, Store, act, api, auth, confirmStepUp, currentSessionNeed, domainOf, isAbort, isLogRefusal, keepsOperation, lastAnsweredAt, layoutOpID, needSession, newActOpID, newGateOpID, onSessionNeed, onStepUpAsked, queryErrorCode, refusedGrants, rest, retryAfterMs, retryAfterSeconds, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer, stepUpAsked, unavailableRetryMs, whenRequestsSettle };
+export { BROKER_FINDING_KINDS, BROKER_KINDS, BROKER_REMOVE_TIMEOUT_MS, LiveSocket, QueryError, REQUEST_TIMEOUT_MS, RestError, SESSION_KEEPALIVE_MS, SessionFloors, SessionKeepAlive, Store, act, api, auth, confirmStepUp, currentSessionNeed, domainsOf, isAbort, isLogRefusal, keepsOperation, lastAnsweredAt, layoutOpID, needSession, newActOpID, newGateOpID, onSessionNeed, onStepUpAsked, queryErrorCode, refusedGrants, rest, retryAfterMs, retryAfterSeconds, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer, stepUpAsked, unavailableRetryMs, whenRequestsSettle };

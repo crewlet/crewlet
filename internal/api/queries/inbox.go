@@ -70,7 +70,7 @@ func (s Sources) workInbox(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	q.Level, q.MaxLag, q.MaxLagSeq = fresh.Level, fresh.MaxLag, fresh.MaxLagSeq
-	q.MinPosition = fresh.MinPosition
+	q.Floors = fresh.Floors
 	if since := strings.TrimSpace(p.String("since")); since != "" {
 		// A POSITION, not an instant, and the WHOLE triple.
 		//

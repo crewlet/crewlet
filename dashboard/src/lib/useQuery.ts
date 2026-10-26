@@ -285,8 +285,8 @@ export function useQuery<K extends QueryName>(
 const FRESHNESS_KEYS = ["read_level", "min_position", "max_lag_seq", "max_lag_seconds"];
 
 /**
- * A question's parameters, with this tab's read floor for its domain named
- * where it has one (`protocol/session.ts`).
+ * A question's parameters, with this tab's read floor named for each domain it
+ * reads where the tab has one (`protocol/session.ts`).
  *
  * EVERY ASK, NOT ONLY THE REFETCH A WRITE FIRES: a poll that came round a
  * second after the write, on a node that had not applied it yet, would

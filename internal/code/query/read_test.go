@@ -324,7 +324,7 @@ func TestAnOidTheCacheLacksIsLookedForOnceAtTheHead(t *testing.T) {
 
 	second := x.commit(map[string]string{"f": "2\n"}, "two")
 	q := treeQ(repo, code.TreeQuery{Rev: second})
-	q.Fresh = statelog.Freshness{Level: statelog.ReadSession, MinPosition: floor}
+	q.Fresh = statelog.FloorAt(statelog.ReadSession, floor)
 	if a := mustRead(t, s, q); a.Rev != second {
 		t.Errorf("the read of %s answered %s", second, a.Rev)
 	}
@@ -506,7 +506,7 @@ func TestANodeThatHoldsNoCopyFillsOnlyAsHome(t *testing.T) {
 		t.Fatal(err)
 	}
 	q := away(treeQ(repo, code.TreeQuery{Rev: second}))
-	q.Fresh = statelog.Freshness{Level: statelog.ReadSession, MinPosition: rows.Position}
+	q.Fresh = statelog.FloorAt(statelog.ReadSession, rows.Position)
 	a, err := served(q)
 	if err != nil {
 		t.Fatalf("a held copy behind the asker's floor, asked not as home = %v, want it served", err)

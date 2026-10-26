@@ -42,11 +42,11 @@ type WorkloadQuery struct {
 	// far side attach ITS OWN chart — see internal/estate.
 	Units Units `json:"-"`
 
-	Level       statelog.ReadLevel
-	Session     statelog.Position
-	MinPosition statelog.Position
-	MaxLag      time.Duration
-	MaxLagSeq   uint64
+	Level     statelog.ReadLevel
+	Session   statelog.Position
+	Floors    []statelog.Position
+	MaxLag    time.Duration
+	MaxLagSeq uint64
 }
 
 // MaxWorkloadHandles is how many people one answer names.
@@ -114,12 +114,12 @@ func (r *Reader) Workload(ctx context.Context, q WorkloadQuery, now time.Time,
 		// about every container at once, and a narrower closure would
 		// certify the answer complete while a deferred record in some
 		// project held work that belongs in it.
-		Scope:       statelog.ScopeSet{Paths: []string{pathDomain}}.Normalised(),
-		Session:     q.Session,
-		MinPosition: q.MinPosition,
-		MaxLag:      q.MaxLag,
-		MaxLagSeq:   q.MaxLagSeq,
-		Set:         true,
+		Scope:     statelog.ScopeSet{Paths: []string{pathDomain}}.Normalised(),
+		Session:   q.Session,
+		Floors:    q.Floors,
+		MaxLag:    q.MaxLag,
+		MaxLagSeq: q.MaxLagSeq,
+		Set:       true,
 	}, func(tx *sql.Tx) error {
 		return readWorkload(ctx, tx, q, now, loc, &out)
 	})

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -518,7 +519,7 @@ func TestCodeReadsAnswerInTheReadVocabulary(t *testing.T) {
 		}
 		got := asked[len(asked)-1]
 		if got.Kind != tc.want.Kind || got.Repo != tc.want.Repo || !slices.Equal(got.Status, tc.want.Status) ||
-			got.Limit != tc.want.Limit || got.Cursor != tc.want.Cursor || got.Fresh != tc.want.Fresh {
+			got.Limit != tc.want.Limit || got.Cursor != tc.want.Cursor || !reflect.DeepEqual(got.Fresh, tc.want.Fresh) {
 			t.Errorf("GET %s asked %+v, want %+v", tc.path, got, tc.want)
 		}
 		// A token the directory binds to no seat asks as itself, under
@@ -724,8 +725,13 @@ func TestVerifyAnswersTheReport(t *testing.T) {
 		return ask(t, a, http.MethodPost, "/code/repos/"+path, true)
 	}
 
+	// A FLOOR ON ANOTHER LOG, alone or beside the code log's own, is refused
+	// before the host is asked: `min_position` names one floor per log, and a
+	// verify reads the code log alone.
 	for _, bad := range []string{"web/verify?repair=maybe", "web/verify?repair=1", "web/verify?repair=true&repair=false",
-		"web/verify?min_position=yesterday"} {
+		"web/verify?min_position=yesterday", "web/verify?min_position=CREWLET_TRACKER_LOG@1:2",
+		"web/verify?min_position=CREWLET_CODE_LOG@1:1&min_position=CREWLET_TRACKER_LOG@1:2",
+		"web/verify?min_position=CREWLET_CODE_LOG@1:1&min_position=CREWLET_CODE_LOG@1:2"} {
 		rec := post(bad)
 		if code, _ := errorBody(t, rec); rec.Code != http.StatusBadRequest || code != "bad_params" {
 			t.Errorf("POST %s answered %d %s, want 400 bad_params", bad, rec.Code, code)

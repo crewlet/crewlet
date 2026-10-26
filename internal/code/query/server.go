@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -281,16 +282,21 @@ func (r *read) held() error {
 // A LANDED-IN READ is brought to the position its tip was resolved at, at
 // least: the moves of the target up to that tip are what its index must hold
 // to name the push that landed the commit there.
+//
+// The asker's floor is on the code log: a floor on any other is refused with
+// the request ([code.GitQuery.Validate]).
 func (r *read) fresh() statelog.Freshness {
 	f := r.q.Fresh
+	floor := f.Floor(topics.CodeLogStream)
 	if r.q.Kind == code.GitLandedIn {
-		if at := r.q.LandedIn.At; f.MinPosition.IsZero() || reachedFloor(at, f.MinPosition) {
-			f.MinPosition = at
+		if at := r.q.LandedIn.At; floor.IsZero() || reachedFloor(at, floor) {
+			floor = at
 		}
 	}
-	if f.MinPosition.IsZero() {
+	if floor.IsZero() {
 		return statelog.Freshness{Level: statelog.ReadStale}
 	}
+	f.Floors = []statelog.Position{floor}
 	if f.Level == "" {
 		f.Level = statelog.ReadSession
 	}

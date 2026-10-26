@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -295,9 +296,9 @@ func TestAFullRoundLeavesAGapTheBackfillFills(t *testing.T) {
 	if len(reads) == 0 {
 		t.Fatal("the backfill read no page of pushes")
 	}
-	if f := reads[0].Fresh; f.Level != statelog.ReadSession || f.MinPosition != s.Position {
+	if f := reads[0].Fresh; f.Level != statelog.ReadSession || f.Floor(topics.CodeLogStream) != s.Position {
 		t.Errorf("the gap's page was read at %s, floor %s: want session at the gap's end %s", f.Level,
-			f.MinPosition, s.Position)
+			f.Floors, s.Position)
 	}
 }
 
@@ -391,9 +392,9 @@ func TestOnlyAWantedHistoryIsBackfilled(t *testing.T) {
 		t.Errorf("after the history was read:\n\t%v", problems)
 	}
 	for _, q := range w.log.readsOf(repo) {
-		if q.Introduced.Descending && (q.Fresh.Level != statelog.ReadSession || q.Fresh.MinPosition.Packed() > from) {
+		if q.Introduced.Descending && (q.Fresh.Level != statelog.ReadSession || q.Fresh.Floor(topics.CodeLogStream).Packed() > from) {
 			t.Errorf("a history page was read at %s floor %s: want session at a floor the index has seen, at "+
-				"most %d", q.Fresh.Level, q.Fresh.MinPosition, from)
+				"most %d", q.Fresh.Level, q.Fresh.Floors, from)
 		}
 	}
 }

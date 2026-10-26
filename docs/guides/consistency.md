@@ -169,12 +169,49 @@ answer and the retention routes alike, and every read takes it back as
   — with the same derived retry hint — rather than serving rows from before
   the write.
 
-A position on another domain's log is refused, not waited for — and refused
-as a **bad request** rather than as one of the refusals below, because it is
-the caller's mistake and every node answers it the same: `400 bad_params` over
-REST, and `bad_params` on the socket. The read checks it before
-anything about the node answering, so an evicted or stalled node says the same
-thing about it as a healthy one.
+A position on a log the answer is not read from is refused, not waited for —
+and refused as a **bad request** rather than as one of the refusals below,
+because it is the caller's mistake and every node answers it the same: `400
+bad_params` over REST, and `bad_params` on the socket, the detail naming the
+log the position is on. The read checks it before anything about the node
+answering, so an evicted or stalled node says the same thing about it as a
+healthy one.
+
+### One floor per log
+
+A position names the log it is a position in, and **one answer can be read
+from more than one log**: the company feed is the tracker's work and the
+knowledge base's pages. A caller may have written to both before it reads — a
+task closed and a page saved from one screen — so `min_position` **repeats,
+once per log**:
+`?min_position=CREWLET_TRACKER_LOG@1:4711&min_position=CREWLET_PAGES_LOG@1:77`
+over REST, and an array of the two tokens on the socket (one alone may be a
+plain string, or an array of one). At most one per log and four in all: two
+on one log, or a fifth, are refused `400 bad_params` naming the key, since a
+read waits on one floor per log and a list longer than the logs any answer
+reads is a client sending every position it holds rather than the ones this
+answer needs.
+
+Which log each floor holds up is the **read's** to say, because only the read
+knows which logs it reads:
+
+- **A question read from one log** — nearly every question — waits on the
+  floor on that log, and refuses a floor on any other as the bad request
+  above. It never quietly waits on its own and drops the rest: a caller who
+  named a floor the answer cannot honour is told which one.
+- **A question read from several logs** hands each half the floor on that
+  half's own log, so each half waits for exactly the caller's write to its
+  log and no other; a floor on a log none of its halves reads is refused.
+- **A `session` read names a floor on each log the caller wrote**, so a half
+  whose log it named no floor on has nothing of the caller's to wait for. That
+  half is read `stale` — what serving this node's rows with nothing to wait
+  for *is* — rather than `session` over a wait for nothing, and the answer
+  reports **the weakest level any half was read at**, so it never claims for
+  one half a freshness only the other had.
+
+The dashboard keeps one floor per log it has written from a tab and names, on
+each read, the floor of every log that question reads (see [Writes are
+confirmed, not optimistic](../reference/dashboard-design.md#writes-are-confirmed-not-optimistic)).
 
 Two spellings, one triple: inside an answer a position is the object
 `{stream, generation, seq}` (`seen_through`, `incomplete.from`, a listing's

@@ -198,10 +198,10 @@ type MyWorkQuery struct {
 	// would answer about whoever it happened to pick.
 	Handle string
 
-	Level       statelog.ReadLevel
-	Session     statelog.Position
-	MinPosition statelog.Position
-	MaxLag      time.Duration
+	Level   statelog.ReadLevel
+	Session statelog.Position
+	Floors  []statelog.Position
+	MaxLag  time.Duration
 
 	// MaxLagSeq is the same bound counted in RECORDS, which is what
 	// the broker actually answers — the duration above is derived
@@ -237,12 +237,12 @@ func (r *Reader) MyWork(ctx context.Context, q MyWorkQuery, now time.Time,
 		// and a narrower closure would certify the answer complete while
 		// a deferred record in some project held the task that belongs
 		// in it.
-		Scope:       statelog.ScopeSet{Paths: []string{pathDomain}}.Normalised(),
-		Session:     q.Session,
-		MinPosition: q.MinPosition,
-		MaxLag:      q.MaxLag,
-		MaxLagSeq:   q.MaxLagSeq,
-		Set:         true,
+		Scope:     statelog.ScopeSet{Paths: []string{pathDomain}}.Normalised(),
+		Session:   q.Session,
+		Floors:    q.Floors,
+		MaxLag:    q.MaxLag,
+		MaxLagSeq: q.MaxLagSeq,
+		Set:       true,
 	}, func(tx *sql.Tx) error {
 		return readMyWork(ctx, tx, q.Handle, now, loc, &out)
 	})

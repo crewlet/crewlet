@@ -116,11 +116,11 @@ type FeedQuery struct {
 	// Limit is 1..[MaxFeedPage].
 	Limit int
 
-	Level       statelog.ReadLevel
-	Session     statelog.Position
-	MinPosition statelog.Position
-	MaxLag      time.Duration
-	MaxLagSeq   uint64
+	Level     statelog.ReadLevel
+	Session   statelog.Position
+	Floors    []statelog.Position
+	MaxLag    time.Duration
+	MaxLagSeq uint64
 }
 
 // FeedSpend is what a completed task cost: its running totals as they stand,
@@ -227,13 +227,13 @@ func (r *Reader) CompanyFeed(ctx context.Context, q FeedQuery) (FeedPage, error)
 	}
 	var out FeedPage
 	served, err := r.log.Read(ctx, statelog.Query{
-		Level:       q.Level,
-		Scope:       statelog.ScopeSet{Paths: []string{pathDomain}}.Normalised(),
-		Session:     q.Session,
-		MinPosition: q.MinPosition,
-		MaxLag:      q.MaxLag,
-		MaxLagSeq:   q.MaxLagSeq,
-		Set:         true,
+		Level:     q.Level,
+		Scope:     statelog.ScopeSet{Paths: []string{pathDomain}}.Normalised(),
+		Session:   q.Session,
+		Floors:    q.Floors,
+		MaxLag:    q.MaxLag,
+		MaxLagSeq: q.MaxLagSeq,
+		Set:       true,
 	}, func(tx *sql.Tx) error {
 		return readCompanyFeed(ctx, tx, q, kinds, &out)
 	})

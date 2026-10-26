@@ -108,7 +108,7 @@ test("a question that takes a floor names this tab's, and a caller's own freshne
   expect(withFloor("page", JSON.stringify({ id: "p1" }))).toEqual({
     id: "p1",
     read_level: "session",
-    min_position: "CREWLET_PAGES_LOG@1:77",
+    min_position: ["CREWLET_PAGES_LOG@1:77"],
   });
   // A question with no floor to take is sent as it was asked.
   expect(withFloor("viewer", "{}")).toEqual({});
@@ -131,7 +131,7 @@ test("a write from this tab asks the questions it moved again, and no others", a
   expect(query).toHaveBeenCalledTimes(3);
   expect(query.mock.calls[2]).toEqual([
     "work_items",
-    { read_level: "session", min_position: "CREWLET_TRACKER_LOG@1:5" },
+    { read_level: "session", min_position: ["CREWLET_TRACKER_LOG@1:5"] },
   ]);
 });
 

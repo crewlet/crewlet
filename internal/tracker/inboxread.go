@@ -241,11 +241,11 @@ type InboxQuery struct {
 	Limit  int
 	Cursor string
 
-	Level       statelog.ReadLevel
-	Session     statelog.Position
-	MinPosition statelog.Position
-	MaxLag      time.Duration
-	MaxLagSeq   uint64
+	Level     statelog.ReadLevel
+	Session   statelog.Position
+	Floors    []statelog.Position
+	MaxLag    time.Duration
+	MaxLagSeq uint64
 }
 
 // Inbox answers a page of one person's notices.
@@ -289,12 +289,12 @@ func (r *Reader) Inbox(ctx context.Context, q InboxQuery, now time.Time) (
 		// notices come from the change records and the marks from the
 		// person's own. A closure naming one would certify an answer
 		// complete that a deferred record in the other was holding.
-		Scope:       inboxScope(),
-		Session:     q.Session,
-		MinPosition: q.MinPosition,
-		MaxLag:      q.MaxLag,
-		MaxLagSeq:   q.MaxLagSeq,
-		Set:         true,
+		Scope:     inboxScope(),
+		Session:   q.Session,
+		Floors:    q.Floors,
+		MaxLag:    q.MaxLag,
+		MaxLagSeq: q.MaxLagSeq,
+		Set:       true,
 	}, func(tx *sql.Tx) error {
 		person, _, err := readPerson(ctx, tx, handle)
 		if err != nil {

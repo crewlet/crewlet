@@ -195,7 +195,13 @@ func (s *stubWork) Flow(_ context.Context, q tracker.FlowQuery, _ time.Time,
 
 func (s *stubWork) CompanyFeed(_ context.Context, q tracker.FeedQuery) (tracker.FeedPage, error) {
 	s.feedQuery = q
-	return s.feed, s.err
+	// AT THE LEVEL ASKED, as the reader answers, so a case can tell which
+	// half of a composed feed set the answer's level.
+	page := s.feed
+	if page.Level == "" {
+		page.Level = q.Level
+	}
+	return page, s.err
 }
 
 func (s *stubWork) Decisions(_ context.Context, q tracker.DecisionsQuery, _ time.Time,
@@ -1410,13 +1416,15 @@ func TestAroundReachesTheCallerAndIsNullWhenAbsent(t *testing.T) {
 // per reader, because the defect was never in one of them: it was that adding
 // the fourteenth question would inherit whatever the thirteenth typed.
 // sessionQuestion is one question this surface serves at a caller's floor:
-// the domain whose log it reads, the arguments it needs to answer at all, and
-// where the stub records the level it was asked at.
+// the domains whose logs it reads — one, or each of the several an answer
+// composed from more than one log reads, each at its own floor — the
+// arguments it needs to answer at all, and where the stub records the level it
+// was asked at.
 type sessionQuestion struct {
-	what   string
-	domain string
-	args   map[string]any
-	level  func(*stubWork, *stubPages) statelog.ReadLevel
+	what    string
+	domains []string
+	args    map[string]any
+	level   func(*stubWork, *stubPages) statelog.ReadLevel
 	// ready prepares stubs a question needs to answer rather than refuse
 	// (a revision has to be held to be read); nil for none.
 	ready func(*stubWork, *stubPages)
@@ -1429,55 +1437,58 @@ type sessionQuestion struct {
 // the dashboard's own list, so the two cannot come to describe different
 // sets.
 var sessionQuestions = []sessionQuestion{
-	{"work_items", "tracker", map[string]any{},
+	{"work_items", []string{"tracker"}, map[string]any{},
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.query.Level }, nil},
-	{"work_item", "tracker", map[string]any{"id": "ENG-1"},
+	{"work_item", []string{"tracker"}, map[string]any{"id": "ENG-1"},
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.taskLevel }, nil},
-	{"work_comments", "tracker", map[string]any{"item": "ENG-1"},
+	{"work_comments", []string{"tracker"}, map[string]any{"item": "ENG-1"},
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.taskLevel }, nil},
-	{"work_item_turns", "tracker", map[string]any{"id": "ENG-1"},
+	{"work_item_turns", []string{"tracker"}, map[string]any{"id": "ENG-1"},
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.taskFresh.Level }, nil},
-	{"work_views", "tracker", map[string]any{"container": "workspace"},
+	{"work_views", []string{"tracker"}, map[string]any{"container": "workspace"},
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.views.Level }, nil},
-	{"work_saved_views", "tracker", map[string]any{},
+	{"work_saved_views", []string{"tracker"}, map[string]any{},
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.every.Level }, nil},
-	{"work_catalogue", "tracker", map[string]any{},
+	{"work_catalogue", []string{"tracker"}, map[string]any{},
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.catalogueQuery.Level }, nil},
-	{"work_person", "tracker", map[string]any{"handle": "ana"},
+	{"work_person", []string{"tracker"}, map[string]any{"handle": "ana"},
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.personQuery.Level }, nil},
-	{"work_projects", "tracker", map[string]any{},
+	{"work_projects", []string{"tracker"}, map[string]any{},
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.projectQuery.Level }, nil},
-	{"work_project", "tracker", map[string]any{"key": "ENG"},
+	{"work_project", []string{"tracker"}, map[string]any{"key": "ENG"},
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.detailQuery.Level }, nil},
-	{"work_workload", "tracker", map[string]any{},
+	{"work_workload", []string{"tracker"}, map[string]any{},
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.workloadQuery.Level }, nil},
-	{"work_activity", "tracker", map[string]any{"container": "workspace"},
+	{"work_activity", []string{"tracker"}, map[string]any{"container": "workspace"},
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.activityQuery.Level }, nil},
 	// OPERATOR-ONLY, and it is in this walk precisely because it
 	// is: `my_work` is somebody's whole day, and an operator
 	// reading it at a level nobody chose is the same defect with a
 	// credential in front of it.
-	{"work_my_work", "tracker", map[string]any{"handle": "ana"},
+	{"work_my_work", []string{"tracker"}, map[string]any{"handle": "ana"},
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.myWorkQuery.Level }, nil},
-	{"work_inbox", "tracker", map[string]any{"handle": "ana"},
+	{"work_inbox", []string{"tracker"}, map[string]any{"handle": "ana"},
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.inboxQuery.Level }, nil},
-	{"work_routing", "tracker", map[string]any{"record_id": "r-1"},
+	{"work_routing", []string{"tracker"}, map[string]any{"record_id": "r-1"},
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.routingQuery.Level }, nil},
-	{"work_flow", "tracker", map[string]any{},
+	{"work_flow", []string{"tracker"}, map[string]any{},
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.flowQuery.Level }, nil},
-	{"company_feed", "tracker", map[string]any{"kinds": "completed"},
+	// TWO LOGS: the work is the tracker's and the pages the knowledge
+	// base's, each half at its own floor
+	// ([TestTheCompanyFeedWaitsOnTheFloorOfEachLogItReads]).
+	{"company_feed", []string{"tracker", "pages"}, map[string]any{"kinds": "completed"},
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.feedQuery.Level }, nil},
-	{"decisions", "tracker", map[string]any{"handle": "ana"},
+	{"decisions", []string{"tracker"}, map[string]any{"handle": "ana"},
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.decisionsQuery.Level }, nil},
-	{"pages", "pages", map[string]any{},
+	{"pages", []string{"pages"}, map[string]any{},
 		func(_ *stubWork, p *stubPages) statelog.ReadLevel { return p.level }, nil},
-	{"page", "pages", map[string]any{"id": "p1"},
+	{"page", []string{"pages"}, map[string]any{"id": "p1"},
 		func(_ *stubWork, p *stubPages) statelog.ReadLevel { return p.level }, nil},
-	{"containers", "pages", map[string]any{},
+	{"containers", []string{"pages"}, map[string]any{},
 		func(_ *stubWork, p *stubPages) statelog.ReadLevel { return p.level }, nil},
-	{"page_activity", "pages", map[string]any{},
+	{"page_activity", []string{"pages"}, map[string]any{},
 		func(_ *stubWork, p *stubPages) statelog.ReadLevel { return p.level }, nil},
-	{"page_revision", "pages", map[string]any{"page": "p1", "version": 2},
+	{"page_revision", []string{"pages"}, map[string]any{"page": "p1", "version": 2},
 		func(_ *stubWork, p *stubPages) statelog.ReadLevel { return p.level },
 		func(_ *stubWork, p *stubPages) { p.revisionHeld = true }},
 }
@@ -1690,41 +1701,49 @@ func TestTheStalenessBoundsReachEveryQuestionThatCanHoldThem(t *testing.T) {
 // same `read_level` — which is the shape the staleness bounds already shipped
 // in, so the walk is over every question rather than the one that goes
 // through the grammar.
+//
+// AND EVERY FLOOR REACHES IT, not the first: `min_position` repeats once per
+// log, and a question that read one log handed its reader only the floor it
+// found first would drop a second the caller named — a floor on another log,
+// which the reader refuses as the request's mistake
+// ([TestASingleLogReadRefusesAnotherLogsFloor]), and which a reader never
+// handed it cannot refuse.
 func TestTheCallersFloorReachesEveryNativeQuestion(t *testing.T) {
 	t.Parallel()
 	want := statelog.Position{Stream: "CREWLET_TRACKER_LOG", Generation: 1, Seq: 4711}
+	other := statelog.Position{Stream: "CREWLET_CODE_LOG", Generation: 1, Seq: 99}
 	for _, tc := range []struct {
-		what  string
-		args  map[string]any
-		floor func(*stubWork, *stubPages) statelog.Position
+		what   string
+		args   map[string]any
+		floors func(*stubWork, *stubPages) []statelog.Position
 	}{
-		{"work_items", nil, func(w *stubWork, _ *stubPages) statelog.Position { return w.query.MinPosition }},
+		{"work_items", nil, func(w *stubWork, _ *stubPages) []statelog.Position { return w.query.Floors }},
 		{"work_item", map[string]any{"id": "ENG-1"},
-			func(w *stubWork, _ *stubPages) statelog.Position { return w.taskFresh.MinPosition }},
+			func(w *stubWork, _ *stubPages) []statelog.Position { return w.taskFresh.Floors }},
 		{"work_comments", map[string]any{"item": "ENG-1"},
-			func(w *stubWork, _ *stubPages) statelog.Position { return w.taskFresh.MinPosition }},
+			func(w *stubWork, _ *stubPages) []statelog.Position { return w.taskFresh.Floors }},
 		{"work_item_turns", map[string]any{"id": "ENG-1"},
-			func(w *stubWork, _ *stubPages) statelog.Position { return w.taskFresh.MinPosition }},
+			func(w *stubWork, _ *stubPages) []statelog.Position { return w.taskFresh.Floors }},
 		{"work_views", map[string]any{"container": "workspace"},
-			func(w *stubWork, _ *stubPages) statelog.Position { return w.views.MinPosition }},
-		{"work_catalogue", nil, func(w *stubWork, _ *stubPages) statelog.Position { return w.catalogueQuery.MinPosition }},
+			func(w *stubWork, _ *stubPages) []statelog.Position { return w.views.Floors }},
+		{"work_catalogue", nil, func(w *stubWork, _ *stubPages) []statelog.Position { return w.catalogueQuery.Floors }},
 		{"work_person", map[string]any{"handle": "ana"},
-			func(w *stubWork, _ *stubPages) statelog.Position { return w.personQuery.MinPosition }},
-		{"work_projects", nil, func(w *stubWork, _ *stubPages) statelog.Position { return w.projectQuery.MinPosition }},
+			func(w *stubWork, _ *stubPages) []statelog.Position { return w.personQuery.Floors }},
+		{"work_projects", nil, func(w *stubWork, _ *stubPages) []statelog.Position { return w.projectQuery.Floors }},
 		{"work_project", map[string]any{"key": "ENG"},
-			func(w *stubWork, _ *stubPages) statelog.Position { return w.detailQuery.MinPosition }},
+			func(w *stubWork, _ *stubPages) []statelog.Position { return w.detailQuery.Floors }},
 		{"work_activity", map[string]any{"container": "workspace"},
-			func(w *stubWork, _ *stubPages) statelog.Position { return w.activityQuery.MinPosition }},
+			func(w *stubWork, _ *stubPages) []statelog.Position { return w.activityQuery.Floors }},
 		{"work_my_work", map[string]any{"handle": "ana"},
-			func(w *stubWork, _ *stubPages) statelog.Position { return w.myWorkQuery.MinPosition }},
+			func(w *stubWork, _ *stubPages) []statelog.Position { return w.myWorkQuery.Floors }},
 		{"work_inbox", map[string]any{"handle": "ana"},
-			func(w *stubWork, _ *stubPages) statelog.Position { return w.inboxQuery.MinPosition }},
+			func(w *stubWork, _ *stubPages) []statelog.Position { return w.inboxQuery.Floors }},
 		{"work_routing", map[string]any{"record_id": "r-1"},
-			func(w *stubWork, _ *stubPages) statelog.Position { return w.routingQuery.MinPosition }},
-		{"pages", nil, func(_ *stubWork, p *stubPages) statelog.Position { return p.fresh.MinPosition }},
+			func(w *stubWork, _ *stubPages) []statelog.Position { return w.routingQuery.Floors }},
+		{"pages", nil, func(_ *stubWork, p *stubPages) []statelog.Position { return p.fresh.Floors }},
 		{"page", map[string]any{"id": "p1"},
-			func(_ *stubWork, p *stubPages) statelog.Position { return p.fresh.MinPosition }},
-		{"containers", nil, func(_ *stubWork, p *stubPages) statelog.Position { return p.fresh.MinPosition }},
+			func(_ *stubWork, p *stubPages) []statelog.Position { return p.fresh.Floors }},
+		{"containers", nil, func(_ *stubWork, p *stubPages) []statelog.Position { return p.fresh.Floors }},
 	} {
 		t.Run(tc.what, func(t *testing.T) {
 			t.Parallel()
@@ -1733,22 +1752,31 @@ func TestTheCallersFloorReachesEveryNativeQuestion(t *testing.T) {
 				ask = askAsOperator
 			}
 			for _, level := range []string{"", "linearizable", "session", "stale", "consistent_prefix"} {
-				work, pages := &stubWork{}, &stubPages{}
-				src := queries.Sources{Work: work, Pages: pages}
-				args := map[string]any{"min_position": want.String()}
-				if level != "" {
-					args["read_level"] = level
-				}
-				for k, v := range tc.args {
-					args[k] = v
-				}
-				if _, err := ask(t, src, tc.what, args); err != nil {
-					t.Fatalf("%s at read_level=%q with a floor: %v", tc.what, level, err)
-				}
-				if got := tc.floor(work, pages); got != want {
-					t.Errorf("%s at read_level=%q carried the floor as %v, want %v "+
-						"— a floor the reader never sees is one nothing waits for",
-						tc.what, level, got, want)
+				for _, named := range []struct {
+					value any
+					want  []statelog.Position
+				}{
+					{want.String(), []statelog.Position{want}},
+					{[]any{want.String(), other.String()}, []statelog.Position{want, other}},
+				} {
+					work, pages := &stubWork{}, &stubPages{}
+					src := queries.Sources{Work: work, Pages: pages}
+					args := map[string]any{"min_position": named.value}
+					if level != "" {
+						args["read_level"] = level
+					}
+					for k, v := range tc.args {
+						args[k] = v
+					}
+					if _, err := ask(t, src, tc.what, args); err != nil {
+						t.Fatalf("%s at read_level=%q with floors %v: %v", tc.what, level,
+							named.value, err)
+					}
+					if got := tc.floors(work, pages); !slices.Equal(got, named.want) {
+						t.Errorf("%s at read_level=%q carried the floors as %v, want %v "+
+							"— a floor the reader never sees is one nothing waits for",
+							tc.what, level, got, named.want)
+					}
 				}
 			}
 			// AND A MALFORMED ONE IS REFUSED AS BAD PARAMETERS, naming

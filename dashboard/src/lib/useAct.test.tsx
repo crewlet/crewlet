@@ -168,7 +168,7 @@ test("an applied press is re-read at the position it landed at, and named in a t
   expect(sent[1]!.params).toMatchObject({
     container: "workspace",
     read_level: "session",
-    min_position: "CREWLET_TRACKER_LOG@1:900",
+    min_position: ["CREWLET_TRACKER_LOG@1:900"],
   });
   expect((await screen.findAllByText("Pinned Triage")).length).toBeGreaterThan(0);
 });
@@ -184,7 +184,7 @@ test("pending tells the person this node has not applied it, and the reads wait 
     0,
   );
   await waitFor(() => expect(sent).toHaveLength(2));
-  expect(sent[1]!.params).toMatchObject({ min_position: "CREWLET_TRACKER_LOG@1:901" });
+  expect(sent[1]!.params).toMatchObject({ min_position: ["CREWLET_TRACKER_LOG@1:901"] });
   expect(session.floor("tracker")).toBe("CREWLET_TRACKER_LOG@1:901");
 });
 
