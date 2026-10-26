@@ -204,17 +204,15 @@ without the `ingress` role binds it for its [probes](#probe-it) alone —
 `/health` and `/ready` — and serves no API, no dashboard and no webhook on it
 (`api_probes_listening`). Every other path answers `404`, or `401` for a write
 or an always-guarded prefix, exactly as an unknown path does on an ingress
-node. The one route it adds is for a seat in
-[box mode](../concepts/llm-backends.md#the-tool-bridge): its box
-calls the seat's tools back over `/mcp/{token}`, and only the node that runs
-the seat can answer, so a satellite with `CREWLET_MCP_BRIDGE_URL` set serves
-that route (`tool_bridge=true` on the same line) — beside the probes, or on
-`api.public.port` when the file sets one (`public_addr` on the same line names
-it), since the bridge is a route a sandbox outside your network calls (see
-[Deployment → Exposing webhooks without the admin API](deployment.md#exposing-webhooks-without-the-admin-api)).
-With `api.port: 0` the satellite binds nothing at all, which is the shape for a
-host that must accept no connection of any kind — at the price of no probe
-and no box mode.
+node. A seat pinned here in
+[box mode](../concepts/llm-backends.md#the-tool-bridge) adds no route either:
+its box calls the seat's tools back over `/mcp/{token}` on the fleet's bridge
+address — the ingress nodes — and the ingress node a call reaches relays it to
+the satellite over the broker connection the satellite already dialled. Give
+the satellite the same `CREWLET_MCP_BRIDGE_URL` as every other node. With
+`api.port: 0` the satellite binds nothing at all, which is the shape for a
+host that must accept no connection of any kind — at the price of no probe;
+its box-mode seats still reach their tools.
 
 ### 2. Pin the role
 
@@ -451,10 +449,10 @@ the dependency surface before choosing a host for it:
   rule, no public URL: the satellite dials out to the broker and
   coordination slot and is never dialled back. That is what makes this
   shape workable in a zone the rest of the fleet is not in. What reaches
-  `api.port` is the orchestrator's probes and, if a seat pinned here runs
-  in box mode, that seat's box calling its `/mcp/{token}` bridge — the
-  box must be able to dial this node for that one. `api.port: 0` closes
-  both.
+  `api.port` is the orchestrator's probes, and nothing else: a seat pinned
+  here in box mode has its box's tool calls relayed to it over the broker
+  by an ingress node, so the box never dials this node. `api.port: 0`
+  closes the probes too.
 
 ---
 
@@ -529,7 +527,10 @@ other, with three network facts the engine cannot check for you:
 - `CREWLET_SANDBOX_OTEL_RECEIVER_URL` must name an address the *sandbox*
   can reach, which means an ingress node. It is explicit config and is
   never derived from whichever node launched the run, so a satellite
-  never advertises itself by accident.
+  never advertises itself by accident. `CREWLET_MCP_BRIDGE_URL`, for a seat
+  in box mode, is the same: an ingress node's address, the same value on
+  every node, and the ingress node a box's call reaches relays it to the
+  satellite over the broker.
 
 Pinning a sandboxed seat to a node that cannot reach the provider gives
 you a seat that claims cleanly and fails every run. The engine knows

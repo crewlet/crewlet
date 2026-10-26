@@ -4038,6 +4038,16 @@ action's result. An approved change shows its outcome on its card; a pure
 view change the screen declared needs no approval (D11) shows a receipt in
 the thread, with Undo while the page still shows what the change made of it.
 
+**The page behind the drawer reads every change the assistant applied.** Each
+server write an approval lands is followed on the turn's stream by a
+`context.invalidate` action naming the domain and the position its record
+landed at, where the route answered one, and arriving all the same where it
+did not (a brand adopted, a seat changed through the configuration). The tab
+raises its read floor for that domain, exactly as a press of its own would,
+and asks every live question again, quietly: each `useQuery` and each
+`useRest` read (`protocol/session.ts`'s `EVERY_QUESTION`). No table maps
+routes to the screens they move, so none can drift.
+
 **What each screen offers** is one id per change, the same list the engine's
 catalogue holds, each parsed, gated and applied by the screen's own code over
 the vocabulary its own controls offer (`app/assistant/urlAction.ts` builds the

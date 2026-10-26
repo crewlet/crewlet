@@ -321,7 +321,7 @@ func TestA404WithoutTheBodyIsReportedAsAMissingSurface(t *testing.T) {
 
 // A NODE WHOSE ROUTER HAS NO /secrets IS A MISSING SURFACE TOO, and it is
 // named for what it is. A node without the ingress role binds api.port for
-// its probes and tool bridge alone ([api.Probes]), and its router answers every other
+// its probes alone ([api.Probes]), and its router answers every other
 // path `no_route` — never `not_found`, the one this client reads as "no such
 // secret" — so it is not taken for a store holding nothing, which the
 // provisioning sink would answer by minting a value it could never write. And

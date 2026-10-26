@@ -265,8 +265,10 @@ providers:
     #     mode is REFUSED at launch rather than started: a coding agent
     #     with none of the seat's tools cannot answer anybody, cannot
     #     reach a colleague and cannot submit its work.
-    #     In a fleet that URL must address the NODE, never a load
-    #     balancer — a session is a live tool surface in one process.
+    #     In a fleet that URL is the fleet's, the same on every node:
+    #     any node serving the API, a load balancer in front of several
+    #     included — the node a call lands on relays it to the one
+    #     holding the seat.
     coding:
       agent: claude-code
       model: haiku                  # the same model as `default`. Haiku is

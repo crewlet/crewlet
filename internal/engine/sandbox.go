@@ -2437,7 +2437,15 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 	// ATTACHED FROM HERE, whatever recovery says: a release has to detach
 	// what this call attached, and a refused seat is released.
 	e.markSandboxSeat(handle, true)
-	return rt.coordinator.RecoverSeat(ctx, handle, owner, epoch)
+	if err := rt.coordinator.RecoverSeat(ctx, handle, owner, epoch); err != nil {
+		return err
+	}
+	// EVERY RUNNING JOB'S SESSION IS OPEN AGAIN HERE NOW ([Engine.reopenAgentRun]),
+	// so the bridge may say a job it holds no session for is over — and not
+	// before, or a box calling in the moment between the seat's lease and
+	// its recovery would be told its live run had ended.
+	e.bridge.SeatReady(seat.ID)
+	return nil
 }
 
 // sandboxSeatAttached reports whether this node attached the seat's sandbox
@@ -2590,6 +2598,11 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	// released the inbox already dropped the hold; the alarm would only
 	// fire into a seat a peer now serves.
 	e.forgetBudgetPark(seat.ID)
+	// AND THE TOOL SESSIONS OF ITS BOX-MODE RUNS, which the seat's next
+	// holder serves from now on: left open here they would pin the seat's
+	// surface in a process that no longer speaks for it, and every box
+	// would go on talking to it — see [mcpbridge.Bridge.ReleaseSeat].
+	e.bridge.ReleaseSeat(seat.ID)
 
 	// AND THE SEAT'S WORKING INDICATORS, for the reason the event above
 	// exists: a seat that went away with no signal leaves its last state

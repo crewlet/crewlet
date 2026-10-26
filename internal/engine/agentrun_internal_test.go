@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -156,7 +157,7 @@ func TestEachRunsBoxIsGivenItsOwnJobsEndpoint(t *testing.T) {
 	}))
 	for _, runID := range []string{"t1", "t2"} {
 		launcher := &agentLauncher{
-			engine: e, turn: &turnctx.Turn{RunID: runID, Seat: seat, Task: "fix it"}, seat: seat,
+			engine: e, turn: &turnctx.Turn{RunID: runID, Seat: seat, Org: c.Org, Task: "fix it"}, seat: seat,
 			codingAgent: "claude-code", placement: sandbox.E2B,
 		}
 		if err := launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{
@@ -182,8 +183,9 @@ func TestEachRunsBoxIsGivenItsOwnJobsEndpoint(t *testing.T) {
 		if err != nil || !found {
 			t.Fatalf("run %s has no row (found %v, err %v)", runID, found, err)
 		}
-		if !strings.Contains(token, run.LaunchID+"~"+runID) {
-			t.Errorf("run %s's endpoint does not name its own job %s", runID, run.LaunchID)
+		agent, _ := c.Org.AgentIDFor(seat)
+		if !strings.Contains(token, run.LaunchID+"~"+agent.String()+"~"+runID) {
+			t.Errorf("run %s's endpoint does not name its own job %s and its seat", runID, run.LaunchID)
 		}
 		if got, reason := e.bridge.Miss(token); got != runID || reason != "" {
 			t.Errorf("run %s's endpoint resolves to run %q (%s)", runID, got, reason)
@@ -500,7 +502,7 @@ func TestABoxModeRunIsRefusedOnANodeThatServesNoBridge(t *testing.T) {
 			ForTurn(launcher.turn),
 	})
 	if err == nil {
-		t.Fatal("a box-mode run launched on a node whose bridge no listener serves")
+		t.Fatal("a box-mode run launched on a node whose bridge nothing reaches")
 	}
 	if !strings.Contains(err.Error(), "api.port") {
 		t.Errorf("the refusal does not name the setting that fixes it: %v", err)
@@ -621,7 +623,7 @@ func TestTheLauncherGuardsTheExecutorsOwnLogin(t *testing.T) {
 	// executorRuntime resolves it: a CLI's box mode runs on that CLI.
 	launcherFor := func(e *Engine, seat *org.Role, runner string) *agentLauncher {
 		return &agentLauncher{
-			engine: e, turn: &turnctx.Turn{RunID: "t1", Seat: seat}, seat: seat,
+			engine: e, turn: &turnctx.Turn{RunID: "t1", Seat: seat, Org: e.Company().Org}, seat: seat,
 			codingAgent: runner, placement: sandbox.E2B,
 		}
 	}
@@ -662,7 +664,7 @@ func TestABoxModeRunCarriesTheSeatsSystemPromptApartFromItsAsk(t *testing.T) {
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	}))
 	launcher := &agentLauncher{
-		engine: e, turn: &turnctx.Turn{RunID: "t1", Seat: seat, Task: "fix the failing test"}, seat: seat,
+		engine: e, turn: &turnctx.Turn{RunID: "t1", Seat: seat, Org: c.Org, Task: "fix the failing test"}, seat: seat,
 		codingAgent: "claude-code", placement: sandbox.E2B,
 	}
 	const system = "You are Agent SWE at Acme.\nSEAT-IDENTITY-MARKER"
@@ -731,4 +733,58 @@ func bridgeFor(t *testing.T, opts mcpbridge.Options) *mcpbridge.Bridge {
 		t.Fatalf("mcpbridge.New: %v", err)
 	}
 	return bridge
+}
+
+// THE BRIDGE FOLLOWS THE SEAT. A node that takes a seat tells the bridge so
+// once the seat's running jobs are recovered — not at the lease, when a missing
+// session would say nothing about the run — and a node that hands the seat on
+// ends its runs' sessions here, which the seat's next holder serves from then
+// on: left open, they would pin the seat's surface in a process that no longer
+// speaks for it, and every box would go on talking to it.
+func TestTheBridgeFollowsTheSeat(t *testing.T) {
+	t.Parallel()
+	c, seat := splitLoginCompany(t, "api", "codex")
+	bridge := bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+	})
+	e, _ := launchRig(t, c, bridge)
+	agent, ok := c.Org.AgentIDFor(seat)
+	if !ok {
+		t.Fatal("the seat has no agent id")
+	}
+	held := placement.Seat{ID: agent, Handle: seat.Handle()}
+	if err := e.backends.Queue.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if bridge.Ready(agent) {
+		t.Fatal("the bridge says the seat is taken before the node took it")
+	}
+	if err := e.prepareSeatSandbox(t.Context(), e.sandbox.Load(), held, 1, "node-a:1"); err != nil {
+		t.Fatalf("prepareSeatSandbox: %v", err)
+	}
+	if !bridge.Ready(agent) {
+		t.Fatal("the seat's runs were recovered and the bridge was not told the seat is taken")
+	}
+
+	launcher := &agentLauncher{
+		engine: e, turn: &turnctx.Turn{RunID: "t1", Seat: seat, Org: c.Org}, seat: seat,
+		codingAgent: "claude-code", placement: sandbox.E2B,
+	}
+	if err := launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{
+		Brief: "fix the failing test", Round: 1,
+		Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil).ForTurn(launcher.turn),
+	}); err != nil {
+		t.Fatalf("LaunchExecutor: %v", err)
+	}
+	if bridge.Live() != 1 {
+		t.Fatalf("%d sessions open after the launch, want the run's", bridge.Live())
+	}
+
+	e.releaseSeat(t.Context(), held)
+	if bridge.Live() != 0 {
+		t.Errorf("%d sessions still open for a seat this node handed on", bridge.Live())
+	}
+	if bridge.Ready(agent) {
+		t.Error("the bridge still says this node holds a seat it handed on")
+	}
 }

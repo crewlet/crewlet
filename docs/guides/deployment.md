@@ -1037,12 +1037,12 @@ What to point where:
   read a node's own Tier A file dial `api.host:api.port`, which is unchanged.
 - **A node without the `ingress` role** serves its
   [probes](../reference/api-endpoints.md#probes-on-a-node-without-ingress) on
-  `api.port` and one route beside them, its seats' tool bridge, and with
-  `api.public` set it binds the public port for the bridge alone — so one
-  Tier A file still serves every role, and every node's
-  `CREWLET_MCP_BRIDGE_URL` names its own public port. Its `api.port: 0` (or
-  `-api-port 0`) is still the hard off switch: it binds nothing, the public
-  port included, whatever the shared file says about `api.public`.
+  `api.port` and nothing else, and binds no public port whatever the shared
+  file says about `api.public` — so one Tier A file still serves every role.
+  Its seats' box-mode runs reach their tools through the ingress nodes'
+  bridge, which relays each call to them, so every node's
+  `CREWLET_MCP_BRIDGE_URL` is the same: the public address. Its `api.port: 0`
+  (or `-api-port 0`) is still the hard off switch for its probes.
 
 `api.host` may stay `0.0.0.0` where the network keeps `api.port` private — a
 container whose public Service or load balancer forwards only `api.public.port`
@@ -1100,23 +1100,9 @@ nothing probes it.
 
 Give each node a distinct `node.id` (or `CREWLET_NODE_ID`) — two nodes sharing an id miscount the fleet. See [Running a Fleet](fleet.md).
 
-If any seat runs in [box mode](../concepts/llm-backends.md#box-mode), the seats node needs its port, and its `CREWLET_MCP_BRIDGE_URL` set to that port as a sandbox reaches it. Without the `ingress` role that listener serves the `/mcp/{token}` tool bridge beside the probes and nothing else (`api_probes_listening … tool_bridge=true`); with `-api-port 0` the node refuses every box-mode launch, naming `api.port`.
+If any seat runs in [box mode](../concepts/llm-backends.md#box-mode), give **both** nodes the same `CREWLET_MCP_BRIDGE_URL`: the ingress node's address as a sandbox reaches it (`http://<host>:8000` here, or its public listener's). A box calls that node, and it relays each call to the seats node over the broker, so the seats node needs no port of its own for it — started with `-api-port 0` it still runs box mode. An ingress node started with `-api-port 0` serves no bridge, and refuses box mode for its own seats, naming `api.port`.
 
-**With a [public listener](#exposing-webhooks-without-the-admin-api) on one host,** the two processes would both bind `api.public.port` — the ingress node for its webhooks, a box-mode seats node for its bridge — and the second fails at boot. Give each process its own public port through a whole `${VAR}`, which a Tier A number accepts:
-
-```yaml
-api:
-  port: 8000
-  public:
-    port: ${CREWLET_PUBLIC_PORT}
-```
-
-```bash
-CREWLET_PUBLIC_PORT=8443 crewlet run -config crewlet.yaml -roles data,ingress -api-host 0.0.0.0 -api-port 8000
-CREWLET_PUBLIC_PORT=8444 crewlet run -config crewlet.yaml -roles data,seats,workers
-```
-
-The seats node binds only its public port, for its bridge; one started with `-api-port 0` binds nothing, so it needs no public port of its own.
+**With a [public listener](#exposing-webhooks-without-the-admin-api) on one host,** only the ingress node binds `api.public.port`: a node without `ingress` binds no public port, so the two processes share one Tier A file as they are.
 
 `crewlet migrate` is idempotent and safe to re-run. Each node also
 auto-migrates its own store file on boot, and two nodes starting together
@@ -1158,8 +1144,9 @@ traffic:
 | A node without it | The same, with the node's half of the health envelope | Is it doing its work: also `503` while its broker link is down, it does not hold its presence lease, or — running seats — it has not been admitted to claim them |
 
 A node without `ingress` serves **nothing else** on that port — no API, no
-dashboard, no webhook — and a seats node's box-mode tool bridge only when
-`CREWLET_MCP_BRIDGE_URL` is set. The reasons, their precedence and both bodies
+dashboard, no webhook, no tool bridge: its seats' box-mode runs reach their
+tools through an ingress node, which relays each call to it. The reasons,
+their precedence and both bodies
 are in [Probes on a node without ingress](../reference/api-endpoints.md#probes-on-a-node-without-ingress).
 
 **While a node starts**, both kinds answer their probes the same way, because
@@ -1167,8 +1154,8 @@ neither serves anything of its own yet: `/health` is `503 {"status": "starting",
 "phase": "recovering"}` while the node recovers what it holds and
 `200 {"status": "starting", "phase": "preparing"}` while it brings up what its
 company configures, and `/ready` is `503` with `reason: "starting"`. Every
-route the node will serve is `503 starting` with a `Retry-After` — on a node
-without `ingress`, that is its tool bridge alone — and every other path is the
+route the node will serve is `503 starting` with a `Retry-After` — a node
+without `ingress` serves none but its probes — and every other path is the
 `404` it answers once it serves. The bodies are in
 [While a node is starting](../reference/api-endpoints.md#while-a-node-is-starting).
 
