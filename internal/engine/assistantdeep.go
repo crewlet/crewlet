@@ -146,10 +146,18 @@ func (d *assistantDeep) target() (deepTarget, error) {
 		return deepTarget{}, fmt.Errorf("providers.llm.%s is not an agent-mode Claude Code "+
 			"entry this node can run deep work on", key)
 	}
-	if d.e.bridge == nil || !d.e.bridge.Mounted() {
+	// THE TWO FIXES APART, as a seat's box-mode launch names them: an unset
+	// base URL is one variable, and a node no box's call can reach is
+	// another ([mcpbridge.Bridge.Reachable]).
+	switch {
+	case d.e.bridge == nil:
 		return deepTarget{}, fmt.Errorf("deep work reaches Crewlet over the tool bridge, and "+
-			"this node serves none: set %s to a URL its runs can reach and give the node an "+
-			"api.port", mcpbridge.BaseURLVar)
+			"this node has none: set %s to the fleet's address, one its runs can reach",
+			mcpbridge.BaseURLVar)
+	case !d.e.bridge.Reachable():
+		return deepTarget{}, errors.New("deep work reaches Crewlet over the tool bridge, and " +
+			"nothing reaches this node's: it serves the API with api.port 0, so it binds no " +
+			"listener for the bridge's route; set api.port")
 	}
 	cell, _ := c.Config.DeepWorkPlacement()
 	t := deepTarget{key: key, agent: agent, placement: sandbox.Placement(cell), company: c}

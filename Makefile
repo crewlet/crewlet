@@ -694,10 +694,16 @@ gate-answer: ## regenerate internal/api/testdata/gate_answer.json from the gate 
 # never hand-edited; the dashboard's suites replay the SAME files through
 # their own decoder, so a change on either side fails until the other follows
 # it. Every test that compares one has "Fixture" in its name, which is what
-# this target runs. Read the diff before committing it.
-assistant-fixtures: ## regenerate the Dashboard Assistant's golden streams from the engine's encoder
+# this target runs. The one file written the other way, page actions'
+# arguments as the dashboard's builders declare them
+# (internal/assistant/wire/testdata/action_args.json), is written by the
+# dashboard's own suite and read by the engine's decoder. Read the diff before
+# committing it.
+assistant-fixtures: require-node ## regenerate the Dashboard Assistant's golden streams and page action arguments
 	CREWLET_REGENERATE_ASSISTANT_FIXTURES=1 $(GO) test ./internal/assistant/... \
 	  ./internal/api/assistantapi/... -count=1 -run Fixture
+	cd dashboard && CREWLET_REGENERATE_ASSISTANT_FIXTURES=1 npx vitest run \
+	  src/app/assistant/actionArgs.test.ts
 
 # internal/api/testdata/objects_answer.json is the object store's rendering —
 # the `objects` block GET /fleet answers (the collector's last collection and

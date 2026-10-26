@@ -232,12 +232,15 @@ func TestAPageActionIsOnlyOneTheScreenAccepts(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("the page actions are %v, want %v", got, want)
 	}
-	args := catalog.Args{"action": "work.filter.apply"}
-	if _, err := catalog.PageActionFor(args, []string{"spend.range.set"}); !errors.Is(err,
-		catalog.ErrNotAccepted) {
+	args := catalog.Args{"action": "work.filter.apply", "args": map[string]any{"status": "todo"}}
+	if _, err := catalog.PageActionFor(args, &wire.PageContext{
+		Accepts: []string{"spend.range.set"}}); !errors.Is(err, catalog.ErrNotAccepted) {
 		t.Errorf("an action the screen did not mount = %v, want ErrNotAccepted", err)
 	}
-	if _, err := catalog.PageActionFor(args, []string{"work.filter.apply"}); err != nil {
+	if _, err := catalog.PageActionFor(args, &wire.PageContext{
+		Accepts:    []string{"work.filter.apply"},
+		ActionArgs: map[string]*wire.ActionArgs{"work.filter.apply": {Type: wire.ArgTypes{wire.ArgObject}}},
+	}); err != nil {
 		t.Errorf("an accepted action = %v", err)
 	}
 	req, err := mustTool(t, "propose_page_change").Request(map[string]any{

@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/queue/memory"
@@ -97,8 +98,12 @@ func newRoomNode(t *testing.T, broker *memory.Broker, name string, acc *access,
 	if err != nil {
 		t.Fatal(err)
 	}
+	// THE ENGINE'S ASK BUDGET, not a shorter one: a room fills from its
+	// peers on that ask alone until the next rebroadcast, which is later
+	// than a case reads for, and an answer applies the moment it arrives,
+	// so a longer budget slows nothing that passes.
 	hub, err := presence.New(presence.Options{Queue: q, Wire: wire, Node: name,
-		AskBudget: 300 * time.Millisecond, Coalesce: 10 * time.Millisecond})
+		AskBudget: eventfan.FleetReadBudget, Coalesce: 10 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}

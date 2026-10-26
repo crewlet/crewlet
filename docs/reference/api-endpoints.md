@@ -7,9 +7,10 @@ routes and reaches the rest of the fleet over the event stream. The routes
 below are identical either way.
 
 A node **without** the `ingress` role binds `api.port` too, and serves only
-its two probes there — `/health` and `/ready` — plus a seats node's box-mode
-tool bridge, unless `api.public` moves the bridge to its own listener: see
-[Probes on a node without ingress](#probes-on-a-node-without-ingress).
+its two probes there — `/health` and `/ready`: see
+[Probes on a node without ingress](#probes-on-a-node-without-ingress). Its
+seats' box-mode runs reach their tools through an ingress node's
+[tool bridge](#routes), which relays each call to the node holding the seat.
 
 There is nothing to install for it — it is compiled into the binary, along
 with the dashboard it serves and the WebSocket that is the dashboard's data
@@ -41,9 +42,8 @@ decides before the guard runs, so a guarded route there is that same `404`
 whatever credential is sent. The probes are deliberately
 **not** public: `/health` describes the node to whoever runs it, so point every
 health check at `api.port`. A node without the `ingress` role serves its
-[probes](#probes-on-a-node-without-ingress) on `api.port` and `/mcp/{token}`
-on `api.public` when it is set, beside the probes otherwise — and nothing at
-all when its `api.port` is `0`. See
+[probes](#probes-on-a-node-without-ingress) on `api.port` and nothing else, on
+either listener — and nothing at all when its `api.port` is `0`. See
 [Deployment → Exposing webhooks without the admin API](../guides/deployment.md#exposing-webhooks-without-the-admin-api).
 
 ---
@@ -180,7 +180,7 @@ serve — and only for one it will serve:
 |---|---|---|
 | `GET /health`, on `api.port` | `503` while the node recovers what it holds, then `200`, `status: "starting"` both times | The `503` is what a startup probe sized for the node's store — and, on a data node of a fleet, for the join it may have to make — bounds; nothing after the recovery holds it. See the phases below. |
 | `GET /ready`, on `api.port` | `503`, `reason: "starting"` | The node does no work and takes no traffic until it serves, so no load balancer and no rollout counts it. |
-| A route this listener will serve | `503 starting`, with `Retry-After: 10` | The caller is told to come back rather than meeting a refused connection, which reads as a node that is not there. On an `ingress` node that is every route of [Which listener serves what](#which-listener-serves-what) on the listener that serves it; on a node without `ingress` it is its box-mode tool bridge (`/mcp/{token}`), on `api.public` when that is set and beside the probes otherwise. |
+| A route this listener will serve | `503 starting`, with `Retry-After: 10` | The caller is told to come back rather than meeting a refused connection, which reads as a node that is not there. On an `ingress` node that is every route of [Which listener serves what](#which-listener-serves-what) on the listener that serves it; a node without `ingress` serves no route but its probes. |
 | A request on the artifact origin (`api.artifacts`) | An empty `503` with `Retry-After: 10` for a ticketed path, the runtime or the kit, and the empty `404` or `405` the origin gives anything else | The origin's own refusal under its own inert headers, never a JSON body, which would be a document an artifact page could read. |
 | Anything else | The `404` that listener answers once the node serves | So a socket says no more while the node starts than it does afterwards, and nobody is sent back to wait for a route this node will never serve. On `api.public` that is the router's own `404 no_route`, the probes included; on `api.port` of an `ingress` node with `api.public` set, the `404` naming `api.public` for a route outside parties call; and on `api.port` of a node without `ingress`, the router's own `404` for every path but the two above (once it serves, its guard answers `401` for a path that asks for a credential, and a `404` says no more than that). |
 
@@ -261,7 +261,7 @@ A node that has been told to stop (SIGTERM, or `Ctrl+C` once) keeps serving HTTP
 | `GET /health` | `200`, `status: "shutting_down"` | Liveness. An orchestrator that could not reach the node would kill it in the middle of the turns the drain exists to finish. |
 | `GET /ready` | `503`, `reason: "draining"` | Readiness: takes the node out of rotation so traffic moves to a peer. |
 | Every other read (`GET`, `HEAD`, `OPTIONS`): the dashboard, the REST reads, `/query/*`, `/ws/stream` | Served | A read starts nothing, and it is how the drain is watched. |
-| `/mcp/{token}` and `/otlp/{token}/v1/{signal}` | Served | They carry the tool calls and spans of coding runs that started before the drain. A [detached run](../concepts/code-sandbox.md) outlives the turn that started it, so the drain never waits on one, and refusing these would shorten no drain and only break a run mid-flight. |
+| `/mcp/{token}` and `/otlp/{token}/v1/{signal}` | Served | They carry the tool calls and spans of coding runs that started before the drain. A [detached run](../concepts/code-sandbox.md) outlives the turn that started it, so the drain never waits on one, and refusing these would shorten no drain and only break a run mid-flight. A tool call whose run's seat is held by another node is relayed there, as it is outside a drain. |
 | Every `/webhooks/*` route, whatever its method | `503` | A delivery is new work, and one of the two `GET` landings acts: the GitHub App return seals a credential and writes a config revision, and an install arrival asks the reconcile loop for a pass. The Slack OAuth landing only renders a page and is refused with the rest, because a per-route carve-out is what refusing by default avoids. |
 | Every other write: `/config`, `/secrets`, `/setup`, `/backup`, the `/worklet/*` writes, `POST /operator/mcp`, `POST /operator/act/{tool}` | `503` | Each one starts work or changes the company the drain is leaving. Refusing by default is what keeps a write route added later from slipping through a drain. `POST /secrets/reveal` rides with them although it changes nothing — it is a `POST` so the names it reads travel in a body — and the CLI run asking it is told to try another node, as a write is. |
 
@@ -399,12 +399,12 @@ node means nothing was done.
 | `POST` | `/webhooks/datadog` | Receive a Datadog monitor alert, authenticated by a constant-time comparison of `X-Crewlet-Token`. Datadog signs nothing, so the token is the whole check: an unset one answers `503`, and one shorter than 26 characters answers `503` too — see [Datadog](../integrations/datadog.md#verification-is-weaker-here-and-that-is-the-providers-ceiling) |
 | `POST` | `/webhooks/forge` | Receive Forge events (FIT-verified) |
 | `POST` | `/otlp/{token}/v1/{signal}` | Engine-fronted OTLP receiver for [sandbox](../concepts/code-sandbox.md) telemetry (per-run token in the path) |
-| `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to a coding agent in box mode. Per-run token in the path; all three verbs because that is what the transport uses |
+| `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to a coding agent in box mode — by the node holding the seat, to which the node the call reaches relays it over the broker. Per-run token in the path; all three verbs because that is what the transport uses. `401` for a token that is forged, expired, or names a run that is over; `503` with a `Retry-After` while no node can answer for the run's seat, after waiting up to two seat-lease lifetimes for one; `502` when the seat's holder took the call and stopped answering before it wrote a status |
 | `GET` `POST` `DELETE` | `/operator/mcp` | Worklet and Doclet, served over MCP to **your** AI assistant. **Always needs a credential**, which for an assistant is a [machine token](#post-iamcredentials-mints-a-machine-token) acting as you: it files and moves work (see [below](#operatormcp--your-own-assistant)). The catalogue is built per request: `503 no_active_revision` until this node's first company brings Worklet or Doclet up, and `404 no_route` on a company that runs neither |
 | `POST` | `/operator/act/{tool}` | The same catalogue's writes, one tool per request, **as the principal your request resolves to**: the dashboard's write surface. Any credential the guard resolved; every tool is decided by the authority table, as on every other surface, and the `Idempotency-Key` header is required (see [below](#operatoract--the-dashboards-write-surface)). Answers as `/operator/mcp` does before the first company and on a company that runs neither Worklet nor Doclet |
 | `POST` | `/assistant/proposals/{id}/approve` | Approve one of **your own** Dashboard Assistant proposals. A proposal whose turn read through an app you no longer hold is not sent: it settles `failed` with the refusal `access_withdrawn`, and the turn ends rather than carrying on with what it read. Your session cookie and a matching `Origin` only (an assistant grant is refused before routing), `Content-Type: application/json`, the `Idempotency-Key` header, and `{"protocol_version": 1, "digest": "sha256:..."}` echoing the digest the card showed, with an optional `page_context`: the screen you decided from, as it is now, which the resumed turn runs on (the actions it accepts, the draft as the change left it). A turn you asked without a page never gains one this way, and a `page_context` the screen's own rules refuse is `400 invalid_body` before anything is decided. Refusals: `404 not_found` (not yours, or no such proposal), `409 proposal_already_decided` (with its `state`), `410 proposal_expired`, `409 proposal_digest_mismatch` (nothing sent), `409 proposal_stale` (the record moved since it was shown), `403 step_up_required` (nothing recorded; confirm it is you and send the same request again), `503 unavailable` with the `op_id` to retry under. A server write is sent in process as you, once, under the proposal's own operation key, and `202` answers its state (`applied`, `failed` or `unknown`), the turn and where its continuation streams. An `unknown` proposal is retried by approving it again: the same write, never a second one |
 | `POST` | `/assistant/proposals/{id}/decline` | Decline one of your proposals: the same body, header and refusals as the approval; nothing is sent, and the assistant is told. `200` with the proposal's state |
-| `PUT` | `/assistant/actions/{id}` | A page claiming (`{"state": "applying"}`), then reporting, a page action you approved (the report may carry `page_context`, the screen as the action left it, read as the approval's is), or a view change (`confirm: none`: a filter, a range, a lens) the turn sent to the page at once, recorded as a proposal it approved itself; the report of a view change settles it and resumes nothing, since its turn never waited for it. The claim succeeds once across your tabs; another tab is `409 action_already_claimed`. A claim must name the revision the screen is at: one whose screen moved since the action was prepared is `409 proposal_stale`, and nothing is applied. The report (`applied`, `stale`, `blocked`, `invalid`, `no_handler`, with the page's `revision`) is the page's own statement, which the assistant reads as client-reported. `Idempotency-Key` is optional: a claim sent again under its key is the same claim |
+| `PUT` | `/assistant/actions/{id}` | A page claiming (`{"state": "applying"}`), then reporting, a page action you approved (the report may carry `page_context`, the screen as the action left it, read as the approval's is), or a view change (`confirm: none`: a filter, a range, a lens) the turn sent to the page at once, recorded as a proposal it approved itself; the report of a view change settles it and resumes nothing, since its turn never waited for it. The claim succeeds once across your tabs; another tab is `409 action_already_claimed`. A claim must name the revision the screen is at for that action (its `action_revisions` entry, else `source_revision`): one whose screen moved since the action was prepared is `409 proposal_stale`, and nothing is applied. The report (`applied`, `stale`, `blocked`, `invalid`, `no_handler`, with the page's `revision`) is the page's own statement, which the assistant reads as client-reported. `Idempotency-Key` is optional: a claim sent again under its key is the same claim |
 | `POST` | `/assistant/audit/conversations/{id}/read` | An administrator's **compliance read** of somebody else's assistant conversation (`assistant.conversation.audit_read`: admin, a recent proof, a person present, never the assistant). `{"protocol_version": 1, "reason": "..."}`, the reason required and at most 500 characters. The read is recorded first, beside your name and reason, and the conversation's owner is shown it; then `200` answers the transcript and an `assistant_conversation_read` audit record names you, the owner and the reason |
 | `POST` | `/assistant/audit/conversations/{id}/files/{file}/read` | The same **compliance read** of one file the conversation keeps, on the same verb and with the same body: the read is recorded beside the conversation first, the `assistant_conversation_read` audit record names the file as well (`file_id`), and `200` answers the file with every header of [the owner's download](#the-dashboard-assistant). A file the conversation does not keep is `404 not_found`, and the read stays on its record. Absent on a node with no object store |
 
@@ -2017,7 +2017,7 @@ Four collections, `GET` and `PUT`:
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/config/{kind}/{id}` | One entity, redacted, with an `ETag`. **The body is the entity itself**, so it goes straight back into the `PUT` |
+| `GET` | `/config/{kind}/{id}` | One entity, redacted, with the entity's own `ETag` (a digest of what it serves, not the document's revision). **The body is the entity itself**, so it goes straight back into the `PUT` |
 | `PUT` | `/config/roles/{handle}` | Replace one seat, wherever it lives — root-level or inside a unit, at any depth. Every entity `PUT` takes `?dry_run=true`, see [Dry runs](#dry-runs) |
 | `PUT` | `/config/units/{id}` | Replace one org unit, by its key |
 | `PUT` | `/config/llm-providers/{key}` | Replace one named LLM provider; with `If-None-Match: *`, add one under that key |
@@ -2042,6 +2042,19 @@ invites, because the caller never sees the rest of the document. The
 [seat-holder check](#what-a-write-answers) applies here too: a unit `PUT` that
 drops a human seat somebody holds, or an open invitation holds, is
 `409 seat_held`.
+
+**The precondition is the entity's.** An entity `PUT` takes `If-Match` with
+the `ETag` its `GET` answered (or `*`), judged against the entity as it stands
+in the revision active when the write lands, never against the whole
+document. A revision that moved for another reason (another seat added, a
+ceiling patched, a credential sealed) is no conflict: the write is spliced into
+the revision active then, up to three times while other writes keep landing,
+and `409 revision_advanced` only after that. An entity that itself changed
+since it was read is `412 version_moved`, carrying the entity as it stands
+(`current`) and its `etag`, so the caller can show its change beside what
+replaced it and send it again with that tag. `If-None-Match: *` is the
+create-only write, never beside `If-Match`, and any other `If-None-Match` is
+`400 bad_if_match`.
 
 Four rules follow from that:
 
@@ -2209,7 +2222,7 @@ On a `409`, re-read `/config` and send the edit again.
 - `404 Not Found`: a revision that is not there, `no_active_revision` on a read before the first write, `no_such_entity` on a per-entity read or write naming an id the active revision does not carry (of a seat or a unit, told only to `admin`, and anybody else is refused `403` as for one outside their team), or `no_route` for a path under `/config` this surface does not serve
 - `405 Method Not Allowed`: `method_not_allowed` for a `/config` path under a method it does not take, with `Allow`
 - `409 Conflict`: `revision_advanced` (a stale `If-Match`, or a race with a concurrent writer) or `no_active_revision` (a `PATCH`, a charter write or a per-entity write on an unconfigured node, or a reload)
-- `412 Precondition Failed`: `already_configured` when `If-None-Match: *` meets an active revision, `no_active_revision` when `If-Match` names a revision and none is active, or `version_moved` when a charter write's `If-Match` names a charter that has changed, carrying the charter now as `current` and its `etag`
+- `412 Precondition Failed`: `already_configured` when `If-None-Match: *` meets an active revision, `no_active_revision` when `If-Match` names a revision and none is active, or `version_moved` when a charter write's or a per-entity write's `If-Match` names a charter or an entity that has changed, carrying it now as `current` and its `etag`
 - `428 Precondition Required`: `bad_if_match` for a charter write with no `If-Match`
 - `415 Unsupported Media Type`: `unsupported_patch_media_type` when a `PATCH` body is a patch format other than a JSON Merge Patch, with `Accept-Patch`
 - `503 Service Unavailable`: `draining` when the node has been told to stop, with a `Retry-After` — see [During a drain](#during-a-drain)
@@ -3604,17 +3617,16 @@ A node whose `node.roles` leave out `ingress` — a [satellite](../guides/satell
 or the seats and workers half of a split deployment — serves no API, no
 dashboard and no webhook. But an orchestrator runs every node, and one it
 cannot probe it can neither restart when it wedges nor wait on during a
-rollout. So such a node binds `api.port` for exactly two routes, and on a seats
-node with `CREWLET_MCP_BRIDGE_URL` set the [tool bridge](#routes) beside them —
-or, with `api.public` set, on that [public listener](#which-listener-serves-what)
-alone, where it is the only route. The guard stands in front of them as it does
+rollout. So such a node binds `api.port` for exactly two routes, and binds no
+[public listener](#which-listener-serves-what): a box-mode run of one of its
+seats reaches its tools through an ingress node's [tool bridge](#routes), which
+relays each call here. The guard stands in front of them as it does
 on an ingress node, so every other path is judged as one there is: `401` to a
 request that presents no credential, since everything outside the guard's
 exemptions is guarded (`/agents`, say), and `404 no_route` for an exempt path
 this node does not serve (`/dashboard`) and for anything once a credential is
-presented. The node logs `api_probes_listening` with `tool_bridge` saying
-whether the bridge is mounted and `public_addr` naming the public listener when
-the bridge has one. `api.port: 0` binds nothing, on this node as on any other.
+presented. The node logs `api_probes_listening`. `api.port: 0` binds nothing,
+on this node as on any other.
 
 `GET /health` is liveness, `200` while the process is alive — through a drain
 and through a broker link that is down — once the node serves; before then it
@@ -6960,7 +6972,7 @@ written against; a version this engine does not speak is
 | `GET` | `/assistant/conversations/{id}` | | `200` the transcript: `{conversation, messages, steps, cards, open_turn, audit_reads}`. A card built from an app the caller no longer holds is replaced by a notice, and so is a message written after its turn read through one (each message records the apps its turn had read through); every step names its `turn_id` |
 | `DELETE` | `/assistant/conversations/{id}` | | `200 {outcome, position}`: the conversation is purged at once, a turn of it running here is stopped and every grant of its open turn is ended |
 | `POST` | `/assistant/conversations/{id}/turns` | `{protocol_version, input: {text}, page_context, attachments?}` | `202 {turn_id, stream_url, after_seq}`. `Idempotency-Key` is **required**, and the same key is the same turn. `attachments` names at most 4 files uploaded to this conversation, each once (`400 invalid_body` otherwise) |
-| `GET` | `/assistant/conversations/{id}/stream?turn=<id>` | | `200 text/event-stream`, below |
+| `GET` | `/assistant/conversations/{id}/stream?turn=<id>` | | `200 text/event-stream`, or `204` when the segment has ended and nothing follows `Last-Event-ID`, below |
 | `POST` | `/assistant/turns/{id}/stop` | `{protocol_version}` | `202 {state}`: a running turn is stopped where it runs, on whichever node of the fleet that is, a turn waiting on an approval is closed stopped and every proposal it waits on declined (under the request's `Idempotency-Key`, when sent), and a turn already over answers the state it ended in. `state` is what the turn truly reached: `stopped`, or what it came to first (`completed`, `waiting_for_approval`), and `running` while its runner has not yet recorded its end, which then arrives on the turn's stream |
 | `GET` | `/assistant/cards/{id}/export.csv` | | `200` the table card as CSV, from the snapshot the conversation stored, never a fresh read |
 | `GET` | `/assistant/cards/{id}/export.xlsx` | | `200` the same table as XLSX |
@@ -6971,6 +6983,31 @@ written against; a version this engine does not speak is
 as the dashboard describes it (at most 16 KiB, 50 resources and 32 page actions)
 or `null` when the person removed the page chip. The model reads the page
 context fenced as somebody else's words: it is a hint and never an authority.
+
+Beside `accepts`, the page context carries `action_args`: what each accepted
+page action takes on that screen now, by action id, as a closed subset of JSON
+Schema (`type`, `description`, `enum`, `const`, `minLength`, `maxLength`,
+`minItems`, `maxItems`, `items`, `properties`, `required`,
+`patternProperties`, `additionalProperties`, `oneOf`, and top-level
+`examples`). The screen builds it from the same declaration its parser reads
+(the address keys a view change writes, the seats and windows a screen draws,
+the org builder's operations), so the model is told the members to send rather
+than guessing them. Every accepted action declares it (`draft.set` may go
+without, since the draft's editable fields declare what it takes). The engine
+reads it strictly: an unknown keyword, a pattern RE2 cannot compile, a schema
+past 6 KiB, 8 levels or 160 parts, or an example its own schema refuses is
+`400 invalid_body`. Before a `propose_page_change` call is previewed or
+recorded, its `args` are held to that schema, and one that does not match is
+the model's refused step, naming the members the screen takes, never a card.
+An action the screen declares no arguments for is never proposed.
+
+`action_revisions` gives each accepted action its own revision: the screen and
+its path, and only the parts of the page the action depends on (its address,
+its selection, its data). A page action's proposal is bound to its action's
+revision, and its claim names the revision of that action, so a change goes
+stale only when what it depends on moved, never because the person opened a
+row's peek or another editor beside it. An action without one is bound to
+`source_revision`.
 
 A screen with a draft or a form open adds `draft`: `{kind, id?, revision?,
 step?, help?, fields, more}`, where `kind` is `client` (the values live in the
@@ -7030,7 +7067,11 @@ seconds.
 
 Send `Last-Event-ID` to resume: every frame after it is replayed. A client that
 falls 512 frames behind is disconnected rather than dropped from, and resumes
-the same way. Frames the running node no longer keeps (it keeps a turn's frames
+the same way. A resume after the last frame of a segment that has already ended
+(a turn waiting on an approval, reopened at the transcript's
+`open_turn.after_seq`) answers `204 No Content` with no body: the client holds
+the whole segment, its `done` included, and does not dial again until a
+decision hands it the next segment's `stream_url`. Frames the running node no longer keeps (it keeps a turn's frames
 two minutes after a segment ends) are answered with a `snapshot` of the turn as
 its transcript holds it, then how it ended.
 

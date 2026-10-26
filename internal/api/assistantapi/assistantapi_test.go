@@ -441,7 +441,8 @@ func TestThePageActionTurnFixtureIsTheRoutesOwn(t *testing.T) {
 			evals.Say("Showing only the tasks still to do.")}})
 	page := &wire.PageContext{Screen: "worklet-tasks", Title: "Worklet \u203a Tasks",
 		Params: map[string]string{}, Query: map[string]string{}, Resources: []wire.Resource{},
-		SourceRevision: "work@3", Accepts: []string{"work.filter.apply"}}
+		SourceRevision: "work@3", Accepts: []string{"work.filter.apply"},
+		ActionArgs: map[string]*wire.ActionArgs{"work.filter.apply": assistanttest.StatusFilterArgs()}}
 	rec := s.do(s.rig.Person, http.MethodPost, "/assistant/conversations/"+
 		s.rig.Conversation.String()+"/turns", wire.TurnRequest{ProtocolVersion: wire.ProtocolVersion,
 		Input: wire.TurnInput{Text: "Show only what is still to do"}, PageContext: page},

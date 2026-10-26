@@ -6,11 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -217,7 +217,7 @@ func (r *Reader) read(ctx context.Context, req request, out any,
 		if err := json.Unmarshal(body, out); err != nil {
 			return "", fmt.Errorf("memread: decode an answer: %w", err)
 		}
-		return NodeOf(r.Owner), nil
+		return config.IncarnationNode(r.Owner), nil
 	}
 	if r.Queue == nil {
 		return answerHere()
@@ -248,7 +248,7 @@ func (r *Reader) read(ctx context.Context, req request, out any,
 // named, and only that process answers, so a holder that restarted since is
 // silent rather than answered for by its successor.
 func (r *Reader) ask(ctx context.Context, req request, owner string, out any) (string, error) {
-	node := NodeOf(owner)
+	node := config.IncarnationNode(owner)
 	req.Owner = owner
 	raw, err := json.Marshal(req)
 	if err != nil {
@@ -277,14 +277,6 @@ func (r *Reader) ask(ctx context.Context, req request, owner string, out any) (s
 	}
 	return "", fmt.Errorf("%w: %s holds %s and did not answer within %s",
 		ErrUnavailable, node, req.Seat.Handle, r.budget())
-}
-
-// NodeOf is the node an incarnation belongs to: the stable id before the
-// incarnation's own suffix (config.NewIncarnation writes `<node>:<uuid>`),
-// which is what a reader knows the node by.
-func NodeOf(owner string) string {
-	node, _, _ := strings.Cut(owner, ":")
-	return node
 }
 
 // request is one read, addressed to the incarnation the asker's lease read

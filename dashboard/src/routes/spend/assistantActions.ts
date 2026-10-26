@@ -10,6 +10,7 @@
  */
 
 import type { PageActionParse } from "~/app/assistant/context.ts";
+import type { AssistantActionArgs } from "~/contract/assistant.ts";
 import { choiceKey, windowKey, type UrlActionKey } from "~/app/assistant/urlAction.ts";
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import { GROUPS } from "~/contract/spend.ts";
@@ -36,6 +37,48 @@ export interface CeilingProposal {
   readonly text: string;
   /** What it reads as: a number of tokens, or null for no ceiling. */
   readonly value: number | null;
+}
+
+/** The longest ceiling the field is typed with: digits and a unit, with room over. */
+const CEILING_MAX = 32;
+
+/**
+ * What a prepared ceiling takes, from the same seats and windows
+ * [parseCeilingPrefill] holds it to: a seat the screen draws (none for the
+ * company), one of the windows, and the value as the field is typed.
+ */
+export function ceilingPrefillArgs(seats: ReadonlySet<string>): AssistantActionArgs {
+  const handles = [...seats].sort();
+  const periods = BUDGET_WINDOWS.map((w) => w.period);
+  return {
+    type: "object",
+    description:
+      "Opens one ceiling's editor with a value filled in, for the person to save. To make " +
+      "the change itself, propose set_token_budget instead.",
+    additionalProperties: false,
+    required: ["period", "ceiling"],
+    properties: {
+      ...(handles.length > 0
+        ? {
+            seat: {
+              type: "string",
+              enum: handles,
+              description: "The seat's handle. Leave it out for the company's own ceiling.",
+            },
+          }
+        : {}),
+      period: { type: "string", enum: periods, description: "The window the ceiling is for." },
+      ceiling: {
+        type: ["string", "null"],
+        maxLength: CEILING_MAX,
+        description: "The ceiling as the field takes it: 1500000, 1.5M or 40M. null for none.",
+      },
+    },
+    examples: [
+      ...(handles.length > 0 ? [{ seat: handles[0], period: periods[0], ceiling: "1.5M" }] : []),
+      { period: periods.at(-1), ceiling: "120M" },
+    ],
+  };
 }
 
 /**
