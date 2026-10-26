@@ -77,6 +77,11 @@ type Options struct {
 	// SeatName is a seat's name by its handle, false where it is not
 	// known; nil draws every seat column by its handle.
 	SeatName func(handle string) (string, bool)
+	// Zone is the company's clock, which every instant the model reads of
+	// the card is said on ([SummaryOf]); nil says them in UTC. The card the
+	// person sees keeps the instant, which the dashboard draws in the
+	// viewer's own zone.
+	Zone *time.Location
 }
 
 // MaxBrief is the most columns a table draws in the drawer: what its narrowest
@@ -303,6 +308,8 @@ type Built struct {
 	// More is a table whose answer says rows lie past this page
 	// ([Table.More]).
 	More bool
+	// Zone is [Options.Zone], carried to the model's summary.
+	Zone *time.Location
 }
 
 // Cards are the card and its notice, in the order they are shown.
@@ -348,6 +355,7 @@ func BuildWith(spec Spec, answer []byte, now time.Time, o Options) (Built, error
 	if spec.Note != "" {
 		built.Note = text(lookup(doc, spec.Note))
 	}
+	built.Zone = o.Zone
 	return built, nil
 }
 

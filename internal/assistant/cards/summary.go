@@ -3,6 +3,7 @@ package cards
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 )
@@ -27,9 +28,9 @@ func SummaryOf(b Built, budget int) ([]byte, error) {
 	card := b.Card
 	switch card.Type {
 	case wire.CardTable:
-		return tableSummary(card.Table, b.More, budget)
+		return tableSummary(card.Table, b.More, b.Zone, budget)
 	case wire.CardEntity:
-		return entitySummary(card.Entity, budget)
+		return entitySummary(card.Entity, b.Zone, budget)
 	case wire.CardNotice:
 		return json.Marshal(map[string]string{"notice": card.Notice.Text})
 	case wire.CardError:
@@ -65,14 +66,15 @@ const MoreNote = "This is one page of %d rows and the answer says more exist pas
 const AccessNote = "Rows the person may not see are left out, so a row missing here " +
 	"is not proof that none exists."
 
-func tableSummary(t *wire.TableCard, more bool, budget int) ([]byte, error) {
-	d := tableDigest{Title: t.Title, RowCount: t.RowCount, Rows: t.Rows, Access: AccessNote,
-		More: more}
+func tableSummary(t *wire.TableCard, more bool, zone *time.Location, budget int) ([]byte, error) {
+	d := tableDigest{Title: t.Title, RowCount: t.RowCount, Rows: onClock(t, zone),
+		Access: AccessNote, More: more}
 	for _, c := range t.Columns {
 		d.Columns = append(d.Columns, c.Label)
 	}
+	rows := d.Rows
 	return fit(func() (any, int) { return &d, len(d.Rows) }, func(n int) {
-		d.Rows, d.Shown = t.Rows[:n], n
+		d.Rows, d.Shown = rows[:n], n
 		d.Truncated = n < t.RowCount
 		switch {
 		case d.Truncated:
@@ -105,13 +107,16 @@ type itemDigest struct {
 	Depth int    `json:"depth,omitempty"`
 }
 
-func entitySummary(e *wire.EntityCard, budget int) ([]byte, error) {
+func entitySummary(e *wire.EntityCard, zone *time.Location, budget int) ([]byte, error) {
 	d := entityDigest{Kind: e.Kind, ID: e.ID, Title: e.Title, Subtitle: e.Subtitle,
 		Text: e.Text}
 	if len(e.Facts) > 0 {
 		d.Facts = map[string]string{}
 		for _, f := range e.Facts {
 			d.Facts[f.Label] = f.Value
+			if f.Type == wire.ColumnDatetime {
+				d.Facts[f.Label] = Clock(f.Value, zone)
+			}
 		}
 	}
 	items := make([]itemDigest, 0, len(e.Items))
@@ -137,6 +142,55 @@ func entitySummary(e *wire.EntityCard, budget int) ([]byte, error) {
 		d.TextOmitted, d.Text = len(d.Text), ""
 	}
 	return fit(func() (any, int) { return &d, len(items) }, set, budget)
+}
+
+// onClock is a table's rows with every instant in its datetime columns said on
+// the company's clock ([Clock]), a copy: the card the person sees keeps them.
+func onClock(t *wire.TableCard, zone *time.Location) [][]any {
+	var at []int
+	for i, c := range t.Columns {
+		if c.Type == wire.ColumnDatetime {
+			at = append(at, i)
+		}
+	}
+	if len(at) == 0 {
+		return t.Rows
+	}
+	out := make([][]any, len(t.Rows))
+	for r, row := range t.Rows {
+		out[r] = append([]any(nil), row...)
+		for _, i := range at {
+			if i < len(row) {
+				if v, ok := row[i].(string); ok {
+					out[r][i] = Clock(v, zone)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// Clock is an RFC 3339 instant as the model reads it: on the company's clock
+// with the zone's name ("Mon 26 Oct 2026 01:45 PDT"), and a moment that is
+// midnight there as the date alone ("Mon 26 Oct 2026"), which is what a task
+// due all day is stored as. Said on the company's clock because the model
+// answers with what it reads: handed UTC with a Z, it told people times eight
+// hours off their own screen, and read a date due all day as due at
+// midnight UTC, the day before. A value that is not an instant is as it was;
+// a nil zone is UTC.
+func Clock(v string, zone *time.Location) string {
+	at, err := time.Parse(time.RFC3339Nano, v)
+	if err != nil {
+		return v
+	}
+	if zone == nil {
+		zone = time.UTC
+	}
+	local := at.In(zone)
+	if local.Hour() == 0 && local.Minute() == 0 && local.Second() == 0 {
+		return local.Format("Mon 2 Jan 2006")
+	}
+	return local.Format("Mon 2 Jan 2006 15:04 MST")
 }
 
 // fit encodes the digest current returns, dropping entries from its end

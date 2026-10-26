@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
 	"github.com/crewlet/crewlet/internal/assistant/cards"
@@ -270,5 +272,38 @@ func TestAPageWithMoreIsNeverTheWhole(t *testing.T) {
 			t.Errorf("next %s: the model reads %s and the cards are %+v, want more=%v", tc.next,
 				res.Model, res.Cards, tc.more)
 		}
+	}
+}
+
+// THE MODEL READS EVERY INSTANT ON THE COMPANY'S CLOCK, and a midnight there as
+// the date: handed UTC with a Z it told people times eight hours off their own
+// screen, and called a task due all day (stored as the company's midnight) due
+// the day before. The person's card keeps the instant, which the dashboard
+// draws in the viewer's zone. Mutation: hand the model the card's cells as
+// they are and this fails.
+func TestTheModelReadsTimesOnTheCompanysClock(t *testing.T) {
+	t.Parallel()
+	zone, err := time.LoadLocation("America/Vancouver")
+	if err != nil {
+		t.Fatalf("the zone database: %v", err)
+	}
+	tasks, _ := catalog.Lookup("list_tasks")
+	answer := []byte(`{"items":[{"key":"FAIR-2","title":"a","due":"2026-10-26T07:00:00Z"},` +
+		`{"key":"FAIR-3","title":"b","due":"2026-10-26T08:45:00Z"}]}`)
+	res, err := catalog.Shape(tasks, nil, exec.Response{Status: http.StatusOK, Body: answer},
+		provenance.NewBoundary(), wednesday, cards.Options{Zone: zone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`Mon 26 Oct 2026\"`, `Mon 26 Oct 2026 01:45 PDT`} {
+		if !strings.Contains(res.Model, want) {
+			t.Errorf("the model reads %s, without %s", res.Model, want)
+		}
+	}
+	if strings.Contains(res.Model, "07:00:00Z") || strings.Contains(res.Model, "08:45:00Z") {
+		t.Errorf("the model reads a UTC instant: %s", res.Model)
+	}
+	if got := res.Cards[0].Table.Rows[0]; !slices.Contains(got, any("2026-10-26T07:00:00Z")) {
+		t.Errorf("the card's row is %v, want the instant kept for the dashboard", got)
 	}
 }

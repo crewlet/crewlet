@@ -286,11 +286,16 @@ func (s *surface) remember(key, model string) {
 
 // cardOptions are what a read's card is told beyond its answer: each seat's
 // name, from the seat directory the turn reads through its own grant, read
-// only when a card has a seat to name.
+// only when a card has a seat to name; and the company's clock, which every
+// instant the model reads is said on.
 func (s *surface) cardOptions(ctx context.Context) cards.Options {
-	return cards.Options{SeatName: func(handle string) (string, bool) {
+	o := cards.Options{SeatName: func(handle string) (string, bool) {
 		return s.names.SeatName(ctx, handle)
 	}}
+	if c, _ := s.t.svc.company(); c != nil {
+		o.Zone = c.Location()
+	}
+	return o
 }
 
 // docs answers a [catalog.KindDocs] call: nothing is sent, and the step says
