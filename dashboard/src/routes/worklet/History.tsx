@@ -87,6 +87,7 @@ import {
 } from "~/lib/work.ts";
 import { FEED_PAGE } from "./feed.tsx";
 import type { WorkActivityAnswer, WorkActivityRecord } from "~/protocol/index.ts";
+import { assisted, authorWords } from "~/lib/attribution.ts";
 
 /**
  * The window this screen offers.
@@ -601,12 +602,14 @@ function HistoryRow({
         <span
           className="truncate"
           title={
-            record.operator_id && record.actor_kind !== "agent"
+            record.operator_id && record.actor_kind !== "agent" && !assisted(record.operator_id)
               ? `Written through ${record.operator_id}`
               : undefined
           }
         >
-          {actorName(record, chrome)}
+          {/* A WRITE THROUGH THE ASSISTANT is the person's, "with the
+              assistant", off the server-set credential; never its grant id. */}
+          {authorWords(actorName(record, chrome), record.operator_id)}
         </span>
         {/* AN OPERATOR IS NOT AN AGENT, and the tracker records which: a write
             made with an API token carries the token's own name and the author

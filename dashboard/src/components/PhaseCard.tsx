@@ -113,7 +113,7 @@ import {
 } from "~/lib/phases.ts";
 import { indentJSON } from "~/lib/jsontext.ts";
 import { MODEL_WORDS, renderMarkdown } from "~/lib/markdown.ts";
-import { indexOrg, seatPath, staleness } from "~/lib/seats.ts";
+import { failureWords, indexOrg, seatPath, staleness } from "~/lib/seats.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useNow } from "~/lib/clock.ts";
 import { href, useIsCurrent } from "~/app/router.tsx";
@@ -846,7 +846,7 @@ export function PhaseCard({
             {record.codingAgent || "sandbox"}
           </Tag>
         )}
-        {record.failed && <Tag variant="danger">{record.errorKind || "failed"}</Tag>}
+        {record.failed && <Tag variant="danger">{failureWords(record.errorKind).tag}</Tag>}
         {record.live && (
           <Tag variant={stale === "stalled" ? "danger" : stale ? "warning" : "info"} dot>
             {parked

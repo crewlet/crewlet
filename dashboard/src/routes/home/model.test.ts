@@ -191,8 +191,17 @@ describe("the figures", () => {
       activity,
     });
     const crew = crewOf([row("working"), row("working"), row("needs"), row("idle")]);
-    expect(crew).toEqual({ working: 2, needs: 1, stopped: 0, idle: 1, total: 4 });
+    expect(crew).toEqual({ working: 2, needs: 1, stopped: 0, paused: 0, idle: 1, total: 4 });
     expect(joinParts(crewParts(crew))).toBe("1 waiting · 1 idle");
+    // A PAUSED SEAT IS SAID TO BE PAUSED, as its badge says, and never
+    // counted among the seats a fault stopped.
+    const stopped = (reason: "paused" | "provider"): AgentRow => ({
+      ...row("stopped"),
+      stopped_reason: reason,
+    });
+    const halted = crewOf([stopped("paused"), stopped("provider"), stopped("provider")]);
+    expect(halted).toMatchObject({ stopped: 3, paused: 1 });
+    expect(joinParts(crewParts(halted))).toBe("1 paused · 2 stopped");
     expect(joinParts(crewParts(crewOf([])))).toBe("No agent seats in the chart");
     expect(troubleParts({ blocked: 2, overdue: 0 })).toEqual(["2 blocked"]);
     expect(troubleParts({ blocked: 0, overdue: 0 })).toEqual([]);

@@ -764,6 +764,42 @@ test("a pause is said in the stopped state's own tone", async () => {
   expect(notice.className).toContain("crewlet-callout--danger");
 });
 
+// ONE BANNER PER CAUSE, IN PLAIN WORDS. A provider stop and the failed turn
+// that came with it were two banners, the first headed by the machine code
+// ("server: llm chain exhausted ..."). The raw message is one press away.
+test("a fault stop is one banner in plain words, the engine's message behind a disclosure", async () => {
+  mount("#/company/org/seats/swe", {
+    agents: [
+      {
+        id: "swe",
+        agent_id: "swe",
+        role: "SWE",
+        handle: "swe",
+        activity: "stopped",
+        stopped_reason: "provider",
+        last_error: {
+          kind: "server",
+          message: "llm chain exhausted after 1 providers (default)",
+          phase: "execute",
+          turn_id: "t1",
+          at: "2026-09-21T09:00:00Z",
+          event_id: "e1",
+        },
+      },
+    ],
+  });
+  await settle();
+  const callouts = document.querySelectorAll(".prof-notices .crewlet-callout");
+  expect(callouts).toHaveLength(1);
+  const text = callouts[0]!.textContent ?? "";
+  expect(text).toContain("This seat is stopped: its model provider is unreachable.");
+  expect(text).toContain("Its model provider ran but gave no usable answer.");
+  expect(text).not.toContain("server:");
+  expect(text).not.toContain("llm chain exhausted");
+  fireEvent.click(screen.getByRole("button", { name: /Technical details/ }));
+  await waitFor(() => expect(screen.getByText(/llm chain exhausted/)).toBeTruthy());
+});
+
 /** The page bar's own "More" — what a phone's bar folds every other action into. */
 function pageMore(): string[] {
   fireEvent.click(screen.getByRole("button", { name: "More on this page" }));

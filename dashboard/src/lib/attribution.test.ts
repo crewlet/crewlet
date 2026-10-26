@@ -10,7 +10,8 @@
 import { describe, expect, test } from "vitest";
 
 import { CHANGE_FIELDS } from "~/contract/attribution.ts";
-import { attribution } from "./attribution.ts";
+import { assisted, attribution, authorLabel, authorWords, throughOf } from "./attribution.ts";
+import { changeAuthor } from "~/routes/doclet/parts.tsx";
 import type { WorkChange } from "~/protocol/index.ts";
 
 function change(over: Partial<WorkChange>): WorkChange {
@@ -216,4 +217,51 @@ test("the people and routing rows can be attributed", () => {
     change({ actor: "ada", fields: { watchers: { from: "bo", to: "" } } }),
   ]);
   expect(emptied.get("watchers")?.cleared).toBe(true);
+});
+
+// A WRITE THROUGH THE ASSISTANT IS THE PERSON'S, WITH THE ASSISTANT. The engine
+// records `assist:<grant>` as the credential (server-set, never claimed by a
+// page), and every history surface printed the grant id: "Miles (through
+// assist:...)" in Config and Audit, "Written through assist:..." in the
+// tracker, and "Miles saved it" with nothing at all on a page.
+describe("a write through the assistant", () => {
+  const GRANT = "assist:0b6f5a4e-6a41-4b6e-9d8c-3f1e2d4c5b6a";
+  test("reads as the person's, with the assistant, and never prints the grant", () => {
+    expect(assisted(GRANT)).toBe(true);
+    for (const words of [
+      authorWords("Miles", GRANT),
+      authorLabel("miles.davis", GRANT),
+      throughOf("miles.davis", GRANT),
+      changeAuthor(
+        { actor: "miles", actor_kind: "human", operator_id: GRANT },
+        () =>
+          ({
+            name: "Miles",
+          }) as never,
+      ),
+    ]) {
+      expect(words).toContain("the assistant");
+      expect(words).not.toContain("assist:");
+      expect(words).not.toContain("0b6f5a4e");
+    }
+    expect(authorWords("Miles", GRANT)).toBe("Miles, with the assistant");
+  });
+
+  test("a plain session write reads as before", () => {
+    const session = "session:5c1d2e3f-0000-4000-8000-000000000000";
+    expect(assisted(session)).toBe(false);
+    expect(assisted(undefined)).toBe(false);
+    expect(authorWords("Miles", session)).toBe("Miles");
+    expect(authorLabel("miles.davis", session)).toBe(`miles.davis (through ${session})`);
+    expect(throughOf("token:ops", "token:ops")).toBe("");
+    expect(
+      changeAuthor(
+        { actor: "miles", actor_kind: "human", operator_id: session },
+        () =>
+          ({
+            name: "Miles",
+          }) as never,
+      ),
+    ).toBe("Miles");
+  });
 });

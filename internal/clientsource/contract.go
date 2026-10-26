@@ -228,6 +228,8 @@ var contract = []Entry{
 	{"MAX_LOGIN", ReadScalar, "internal/api/iamapi.TestTheDashboardChecksALoginByTheEnginesGrammar"},
 	{"CREDENTIAL_CLASSES", ReadLiteral,
 		"internal/api/iamapi.TestTheDashboardChecksALoginByTheEnginesGrammar"},
+	{"ASSIST_CREDENTIAL_PREFIX", ReadScalar,
+		"internal/api/iamapi.TestTheDashboardKnowsTheAssistantsCredentialClass"},
 	{"TOKEN_DEFAULT_DAYS", ReadScalar,
 		"internal/api/iamapi.TestTheDashboardMintsWithinTheEnginesTokenLifetimes"},
 	{"TOKEN_MAX_DAYS", ReadScalar,
@@ -396,6 +398,9 @@ var contract = []Entry{
 	{"AssistantFileStored", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	// assistant.ts (page actions)
 	{"ASSISTANT_PAGE_ACTIONS", ReadLiteral, "internal/assistant/catalog.TestEveryPageActionIsTheDashboardsToo"},
+
+	// failures.ts
+	{"ProviderErrorKind", ReadUnion, "internal/providers/llm.TestTheDashboardKnowsEveryErrorKind"},
 
 	// stops.ts
 	{"StopReason", ReadUnion, "internal/providers/llm.TestTheDashboardKnowsEveryStopReason"},
