@@ -69,7 +69,7 @@ func TestTheBridgeRouteAnswersEveryTransportVerb(t *testing.T) {
 	// names none.
 	seat := &org.Role{Name: "Dev", DeclaredHandle: "dev"}
 	url := bridge.Open(t.Context(), &mcpbridge.Session{
-		RunID: "run-1", Handle: "dev", Role: "Dev",
+		RunID: "run-1", Launch: "job-1", Handle: "dev", Role: "Dev",
 		Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil).
 			ForTurn(&turnctx.Turn{RunID: "run-1", Seat: seat}),
 	})
