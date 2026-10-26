@@ -71,6 +71,12 @@ func TestADiffStatIsFilteredByPathsInGo(t *testing.T) {
 			if d.Base != base || d.Head != head {
 				t.Errorf("base %s head %s, want %s %s", d.Base, d.Head, base, head)
 			}
+			// A PAGE OF NO FILE IS A PAGE: an empty list, never null, as
+			// every answer's list is.
+			if d.Files == nil {
+				t.Errorf("filter %v: the stat's files are null, want a page (empty where the filter admits "+
+					"nothing)", tc.paths)
+			}
 		})
 	}
 

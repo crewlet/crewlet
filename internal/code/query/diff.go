@@ -156,7 +156,13 @@ func (r *read) stat(ctx context.Context, base, head string, paths []string, rena
 			return statPage{}, err
 		}
 	}
-	return statPage{files: p.files, total: p.matched, added: p.added, deleted: p.deleted, next: p.next}, nil
+	// A stat of no file — paths that admit nothing it changed, two trees
+	// alike — is a page of none, never a null: every answer's list is a list.
+	files := p.files
+	if files == nil {
+		files = []code.DiffFile{}
+	}
+	return statPage{files: files, total: p.matched, added: p.added, deleted: p.deleted, next: p.next}, nil
 }
 
 // count is a filtered stat's numstat half: the lines of every file p
