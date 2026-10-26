@@ -390,6 +390,35 @@
 // read is asked of first is the estate router's: the repository's HOME, the
 // first of its rendezvous order over the live git nodes (ADR-0059).
 //
+// # A change's class is lexed, and a directive is code
+//
+// A change's CLASS names what a review of it need not read — whitespace, or
+// comments — and a class only ever relaxes: a rule may exempt a change of a
+// class from an approval it would otherwise ask, so a class is given only
+// where it is true of the program and of every tool that reads the file, and
+// whatever cannot be proved so gets none. [ClassifyGo] judges two versions of
+// a Go file with the language's own lexer, go/scanner: [ChangeClassWhitespaceOnly]
+// where their tokens and comments are the same, [ChangeClassCommentOnly] where
+// their tokens are once the comments are set aside — the semicolons the lexer
+// inserts at a newline counted among the tokens, because a newline that ends a
+// statement is one. Never `git diff -w` or a pattern over the text: the first
+// calls such a newline a space, and the second cannot tell a comment from a
+// string that holds one.
+//
+// A DIRECTIVE IS CODE, AND SO IS THE LAYOUT AROUND ONE. A comment the
+// compiler, cgo, go generate, go test, the build or a linter reads changes
+// what the file builds, runs or reports, and whitespace alone changes what a
+// directive does: a //line indented off its line's start is ignored, a blank
+// line parts an //export from its function, and one under a // +build block
+// decides whether it is a constraint at all. So no class holds where a
+// directive, what follows it up to the next token, or where any comment of
+// its group sits changed; a function body holding an example's Output: and a
+// cgo preamble are code whole; and a file's build constraints are compared as
+// go/build reads them from its header. Documentation — a doc comment above a
+// pragma, a license above a //go:build line — changes freely. A class is
+// judged a path at a time and gives none to a version past
+// [MaxClassedBlobBytes].
+//
 // # What this package does not do
 //
 // It runs no git and serves no HTTP. It decides and applies records, commits
