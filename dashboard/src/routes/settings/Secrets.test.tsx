@@ -646,11 +646,13 @@ describe("the credentials table", () => {
       expect(at.hidden).not.toContain("Hidden to fit");
     });
 
-    // A COLUMN HIDDEN IN FAVOUR OF THE PEEK HAS TO BE IN IT. Squeezed to
-    // nothing, every column that can give way does — and each is a fact the
-    // credential's own peek draws. What reads it never gives way.
+    // A COLUMN HIDDEN IN FAVOUR OF THE PEEK HAS TO BE IN IT. Squeezed to the
+    // name, its readers and the row's actions (353px), every column that can
+    // give way does, and each is a fact the credential's own peek draws. What
+    // reads it never gives way. Narrower still, the grid stacks into card rows
+    // and hides nothing.
     test("every column it can give way is one the credential's peek carries", async () => {
-      const at = await drawn(160);
+      const at = await drawn(360);
       const hidden = at.hidden.replace(/^.*Hidden to fit:\s*/, "").split(/,\s*|\s+and\s+/);
       expect(hidden.sort()).toEqual(["Key id", "Set by", "Source", "Updated"]);
       expect(at.heads).toContain("Read by");

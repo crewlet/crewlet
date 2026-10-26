@@ -1109,8 +1109,13 @@ const (
 	// labelled value field moves the form field, the text area and the
 	// character count into the shared chunk the entry already loads. Moving
 	// the setup form and its dialogs onto that field took it to 340.3 KiB.
-	// 341 KiB, still under two seconds on that link.
-	initialBudget = 341 << 10
+	// 341 KiB, still under two seconds on that link. uilet 0.64.1 and 0.65.1
+	// measured 345.0 KiB with the same dashboard source: the geometry polish
+	// across every component family (crewlet/uilet#135) adds its alignment,
+	// spacing and sizing rules to the one stylesheet (3.9 KiB), and the
+	// screen width AppShell publishes and the folding card head add a few
+	// rules more. 346 KiB, still under two seconds on that link.
+	initialBudget = 346 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1203,8 +1208,13 @@ const (
 	// own declaration (the address keys' schema in the entry's registry, the
 	// org builder's operation vocabulary, an open draft's fields), and each
 	// action's own revision took it to 4509.5 KiB. 4510 KiB, which still
-	// refuses a doubled baseline.
-	treeBudget = 4<<20 + 414<<10
+	// refuses a doubled baseline. uilet 0.64.1 and 0.65.1 took it to 4539.7
+	// KiB with the same dashboard source: the geometry polish across every
+	// component family (crewlet/uilet#135) adds 26.2 KiB of alignment, spacing
+	// and sizing rules to the one sheet, and the kit's code grows 3.7 KiB with
+	// the screen width AppShell publishes and the folding card head. 4540
+	// KiB, which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 444<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

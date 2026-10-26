@@ -9886,7 +9886,8 @@ a.live-row:focus-visible {
    seats' table one track list (`TRACKS`), so each window stands over its
    column in the table below (as `--budget-tracks`). The cells keep the table cell's own inline inset
    (`.crewlet-data-grid__cell`: --spacing-3), which is what puts their words on the table's
-   words. No ground of its own: a grey tile inside the card was a frame
+   words, and the row's two outer cells take the card's inset (--spacing-4), as a flush
+   grid's first and last columns do in a card. No ground of its own: a grey tile inside the card was a frame
    inside the frame. A hairline between windows, as a stat row draws. */
 .budget-row {
   display: grid;
@@ -9895,6 +9896,12 @@ a.live-row:focus-visible {
 }
 .budget-row > * {
   padding: var(--spacing-3);
+}
+.budget-row > :first-child {
+  padding-inline-start: var(--spacing-4);
+}
+.budget-row > :last-child {
+  padding-inline-end: var(--spacing-4);
 }
 .budget-row > .budget-tile {
   border-left: 1px solid var(--color-border-default);

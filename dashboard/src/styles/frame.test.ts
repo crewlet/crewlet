@@ -1319,7 +1319,18 @@ describe("the Spend overview's rows", () => {
     expect(block(css, ".budget-row")).toMatch(/grid-template-columns:\s*var\(--budget-tracks\);/);
     expect(block(css, ".budget-row > *")).toMatch(/padding:\s*var\(--spacing-3\);/);
     expect(block(kitSheet(), ".crewlet-data-grid__cell")).toMatch(
-      /padding:\s*var\(--spacing-1\) var\(--spacing-3\);/,
+      /--crewlet-data-grid-cell-start:\s*var\(--spacing-3\);/,
+    );
+    // A flush grid in a card takes the card's inset at its outer columns, so
+    // the row's outer cells do too.
+    expect(kitSheet()).toMatch(
+      /\.crewlet-card__body > \.crewlet-data-grid \{\s*--crewlet-data-grid-edge:\s*var\(--spacing-4\);/,
+    );
+    expect(block(css, ".budget-row > :first-child")).toMatch(
+      /padding-inline-start:\s*var\(--spacing-4\);/,
+    );
+    expect(block(css, ".budget-row > :last-child")).toMatch(
+      /padding-inline-end:\s*var\(--spacing-4\);/,
     );
     expect(block(css, ".budget-tile")).not.toMatch(/background/);
   });
