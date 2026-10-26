@@ -466,6 +466,57 @@ func TestTheProvidersReferenceValidates(t *testing.T) {
 	}
 }
 
+// THE SANDBOX REFERENCE VALIDATES. The block under "Engine provider" in
+// code-sandbox.md writes out every field of providers.sandbox, so it is the
+// one an operator copies whole — and its container-only fields are held to the
+// cells the company's executors reach, so a value that reads as a harmless
+// default there (`runtime: auto` beside `default_run_in: e2b`) is a refusal.
+// Checked through the whole company path: the reference replaces the
+// quickstart's catalogue, so the quickstart's seats are the executors whose
+// cells it is judged against.
+func TestTheSandboxReferenceValidates(t *testing.T) {
+	t.Parallel()
+	page := string(readRepoFile(t, "docs", "concepts", "code-sandbox.md"))
+	start := strings.Index(page, "\n### Engine provider — `providers.sandbox`\n")
+	if start < 0 {
+		t.Fatal("code-sandbox.md has no `Engine provider — providers.sandbox` section")
+	}
+	m := yamlBlockRE.FindStringSubmatch(page[start:])
+	if m == nil || !strings.HasPrefix(m[1], "providers:") {
+		t.Fatal("the providers.sandbox section no longer opens with a providers block")
+	}
+	var reference, company yaml.Node
+	if err := yaml.Unmarshal([]byte(m[1]), &reference); err != nil {
+		t.Fatalf("the providers.sandbox reference is not YAML: %v", err)
+	}
+	sandbox := mappingValue(mappingValue(reference.Content[0], "providers"), "sandbox")
+	if sandbox == nil {
+		t.Fatal("the providers.sandbox reference block carries no providers.sandbox")
+	}
+	if err := yaml.Unmarshal([]byte(quickstartCompanyBlock(t)), &company); err != nil {
+		t.Fatalf("the quickstart's company is not YAML: %v", err)
+	}
+	providers := mappingValue(company.Content[0], "providers")
+	replaced := false
+	for i := 0; providers != nil && i+1 < len(providers.Content); i += 2 {
+		if providers.Content[i].Value == "sandbox" {
+			providers.Content[i+1], replaced = sandbox, true
+		}
+	}
+	if !replaced {
+		t.Fatal("the quickstart's company has no providers.sandbox to replace")
+	}
+	data, err := yaml.Marshal(&company)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if _, err := ParseCompany(data); err != nil {
+		t.Fatalf("the providers.sandbox reference in code-sandbox.md is refused by "+
+			"validation — an operator copying it gets a document `crewlet validate` "+
+			"rejects:\n%v", err)
+	}
+}
+
 // wholeRef reports whether a value is exactly one ${VAR} reference, which
 // is the only shape a credential may take in a committed example.
 func wholeRef(value string) (string, bool) {
