@@ -35,6 +35,18 @@ import (
 // box once it is reclaimed; and after the announcement, the turn parked on the
 // run is closed on the record as stopped ([CoordinatorOptions.CloseStopped]).
 //
+// # A box on another node's host
+//
+// A `direct` or `container` box is read on its own host ([BoxReader]), and that
+// node may be draining or restarting while its seat has moved here. So the
+// frame that decides the stop — a pause watch, a seat's acquisition — closes
+// the run's session and goes on; this node's own retry of the kept ending asks
+// the host, at once and then on the hand-back's spacing while the host is
+// silent, and finishes the rest ([Coordinator.endRun]). A silent host is no
+// verdict about the box, and its spend is not written off for it: only a box
+// found gone, or a host silent for as long as the fleet waits before it takes a
+// launch node for gone, is ended with nothing read ([Coordinator.readStopped]).
+//
 // # Not the seat fence
 //
 // The seat fence is about OWNERSHIP, and it deliberately leaves a running run
@@ -66,7 +78,9 @@ import (
 // pause landing, a complete re-read of the pauses, the seat's acquisition while
 // paused: a run already stopped has no row left to list. An ending this node
 // could not finish yet is kept for its retry, with the seat's mail held behind
-// it ([Coordinator.oweEnding]), and reported only in the log.
+// it ([Coordinator.oweEnding]), and reported only in the log; and one whose box
+// is read on another node's host is finished by that retry at once, so no
+// caller's frame waits on another node ([Coordinator.endRun]).
 func (c *Coordinator) StopSeat(ctx context.Context, handle string, by RunStop) error {
 	fence, held := c.leaseOf(handle)
 	if !held {
@@ -124,29 +138,30 @@ func (c *Coordinator) StopSeat(ctx context.Context, handle string, by RunStop) e
 	return nil
 }
 
-// collectStopped is the stop's own step of its ending: the run's bridge session
-// closed, what the run had spent read off its box, charged and published as its
-// phase, and all of it recorded on the row in one write
-// ([PendingStore.CollectStop]). Returns the row as that step left it.
+// collectStopped is the stop's own step of its ending: what the run had spent
+// read off its box, charged and published as its phase, and all of it recorded
+// on the row in one write ([PendingStore.CollectStop]). Returns the row as that
+// step left it, or why the box could not be read YET — which keeps the ending
+// for this node's retry.
 //
-// THE SESSION FIRST. The run's CLI is still working until its box is reclaimed,
-// and every tool call it makes through the bridge acts as the seat: closed
-// here, the stop takes effect on the seat's surface at once — no post, no write,
-// no submission after it — rather than after a read of the box that can take as
-// long as the box takes to answer. Closing a closed session is nothing, which
-// is what the reclaim that follows does again.
+// THE SESSION IS CLOSED BEFORE IT, by the ending ([Coordinator.finishEnding]).
+// The run's CLI is still working until its box is reclaimed, and every tool
+// call it makes through the bridge acts as the seat: closed first, the stop
+// takes effect on the seat's surface at once — no post, no write, no submission
+// after it — rather than after a read of the box that can take as long as the
+// box's host takes to answer. Closing a closed session is nothing, which is
+// what the reclaim that follows does again.
 //
-// A BOX THAT CANNOT BE READ IS RECORDED AS READ, with nothing spent: a stop
-// cannot wait on a box that may be gone, and the run's spend is then unknown —
-// which the log says — rather than the stop never finishing. ONCE PER ENDING,
-// for the reason a release records its charge: the collection is recorded with
-// the charge and the publish it made, so an attempt after a crash finds it done.
+// ONCE PER ENDING, for the reason a release records its charge: the collection
+// is recorded with the charge and the publish it made, so an attempt after a
+// crash finds it done.
 func (c *Coordinator) collectStopped(ctx context.Context, run PendingRun) (PendingRun, error) {
-	if c.ended != nil {
-		c.ended(run.TurnID)
-	}
 	collection := StopCollection{Ending: run.Ending.ID}
-	if result, read := c.readStopped(ctx, run); read {
+	result, read, err := c.readStopped(ctx, run)
+	if err != nil {
+		return PendingRun{}, err
+	}
+	if read {
 		collection.InputTokens, collection.OutputTokens = result.InputTokens, result.OutputTokens
 		collection.CacheReadTokens, collection.CacheWriteTokens = result.CacheReadTokens, result.CacheWriteTokens
 		collection.Condensed = result.Condensed
@@ -177,29 +192,72 @@ func (c *Coordinator) collectStopped(ctx context.Context, run PendingRun) (Pendi
 	return current, nil
 }
 
+// readsAway reports whether a stopped run's read is a question for another
+// node's host: its job is in a box, and the box is not on this node's host
+// ([Coordinator.hosts]).
+func (c *Coordinator) readsAway(run PendingRun) bool {
+	return run.SandboxID != "" && run.CommandID != "" && !c.hosts(run)
+}
+
 // readStopped reads what a stopped run's job had done by now off its box,
-// reporting whether there was anything to read: a run whose job never started
-// — a launch stopped before its command was recorded — spent nothing in a box,
-// and one whose box cannot be reached is logged and read as nothing.
+// reporting whether there was anything to read, or why it cannot be read yet.
+//
+// NOTHING TO READ, and the stop finishes with nothing charged, where nothing
+// can be read: a job that never started — a launch stopped before its command
+// was recorded — spent nothing in a box; a box found GONE ([ErrBoxGone]) has
+// nothing left to read, and a stop waiting on it would never finish; and a box
+// on this node's own host that fails to be read is reclaimed next by this very
+// ending, which a stop must not hold up while the job in it still works.
+//
+// NOT YET, where the box's host did not answer ([ErrBoxHostSilent]). That is no
+// failure of the box — only its host reclaims it, and only after it is back —
+// so the ending is kept and this node asks again on the hand-back's spacing
+// ([Coordinator.oweEnding]), as a collection hands its claim back uncounted for
+// the same answer. For as long as the fleet's waiter waits before it judges a
+// silent launch node gone: the box timeout ([Manager.BoxTimeout]), from the
+// stop's decision. Past it, the host is taken for gone and the run's spend is
+// unknowable, which the log says.
 //
 // The result is the run's own, as a collection reads it — floored, held to the
 // record's bound — and marked as a run that did not finish: never a success,
 // never a question, whatever it had written ([stoppedResult]).
-func (c *Coordinator) readStopped(ctx context.Context, run PendingRun) (Result, bool) {
+func (c *Coordinator) readStopped(ctx context.Context, run PendingRun) (Result, bool, error) {
 	if run.SandboxID == "" || run.CommandID == "" {
-		return Result{}, false
+		return Result{}, false, nil
 	}
 	// READ WHERE THE BOX IS — here, or on the node whose host it is on
 	// ([Coordinator.boxResult]) — and fitted here, under the turn it closes.
 	result, _, err := c.boxResult(ctx, run, BoxReadStop)
-	if err == nil {
-		return stoppedResult(c.fitText(ctx, run, result)), true
+	silent := errors.Is(err, ErrBoxHostSilent)
+	switch {
+	case err == nil:
+		return stoppedResult(c.fitText(ctx, run, result)), true, nil
+	case silent && !c.hostGivenUp(run):
+		log.InfoContext(ctx, "sandbox_stop_read_waits", "turn_id", run.TurnID,
+			"sandbox_id", run.SandboxID, "node", run.LaunchNode,
+			"detail", "the node whose host the stopped run's box is on did not answer; the stop "+
+				"is kept, with its session closed, and its box asked again until that node is "+
+				"back or the box timeout since the stop has passed")
+		return Result{}, false, fmt.Errorf("sandbox: reading what stopped run %s had spent: %w",
+			run.TurnID, err)
 	}
 	log.WarnContext(ctx, "sandbox_stop_unread", "turn_id", run.TurnID,
-		"sandbox_id", run.SandboxID, "gone", errors.Is(err, ErrBoxGone), "error", err.Error(),
+		"sandbox_id", run.SandboxID, "gone", errors.Is(err, ErrBoxGone), "host_silent", silent,
+		"error", err.Error(),
 		"detail", "what the stopped run had spent could not be read off its box, so none "+
 			"of it is charged; the run is ended all the same")
-	return Result{}, false
+	return Result{}, false, nil
+}
+
+// hostGivenUp reports whether a stopped run's silent host has been waited for
+// as long as a silent launch node is before the fleet takes it for gone: the box
+// timeout, from the stop's decision ([Coordinator.readStopped]).
+func (c *Coordinator) hostGivenUp(run PendingRun) bool {
+	m := c.mgr()
+	if m == nil || run.Ending == nil {
+		return true
+	}
+	return c.now().Sub(run.Ending.At) >= m.BoxTimeout()
 }
 
 // stoppedResult is what a run a person stopped reports: what it said up to

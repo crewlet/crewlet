@@ -854,7 +854,7 @@ func (c *Coordinator) retryOwed(turnID string) {
 		// that cannot be finished even now is kept again, by
 		// [Coordinator.endRecord] itself.
 		c.endingDone(turnID)
-		decided, err := c.endRecord(ctx, run, *kept)
+		decided, err := c.endRun(ctx, run, *kept, true)
 		ended := decided != nil
 		if err != nil {
 			log.WarnContext(ctx, "sandbox_finish_kept", "turn_id", turnID, "error", err.Error(),
@@ -959,6 +959,13 @@ func (c *Coordinator) retryOwed(turnID string) {
 // inbox on every recount, so the seat took no mail at all until it changed
 // hands.
 func (c *Coordinator) oweEnding(ctx context.Context, run PendingRun, e ending) {
+	c.oweEndingAfter(ctx, run, e, answerRetryCeiling)
+}
+
+// oweEndingAfter is [Coordinator.oweEnding] with the first retry after delay:
+// the hand-back's spacing for an ending a step of which did not land, and none
+// for one decided on a frame that may not finish it ([errAskAway]).
+func (c *Coordinator) oweEndingAfter(ctx context.Context, run PendingRun, e ending, delay time.Duration) {
 	if run.AgentHandle == "" {
 		return
 	}
@@ -973,7 +980,7 @@ func (c *Coordinator) oweEnding(ctx context.Context, run PendingRun, e ending) {
 	r.ending = &e
 	c.mu.Unlock()
 	c.owe(ctx, run.AgentHandle, run.TurnID)
-	c.scheduleOwed(run.TurnID, answerRetryCeiling)
+	c.scheduleOwed(run.TurnID, delay)
 }
 
 // oweRevival keeps a dead claim's revival that did not land

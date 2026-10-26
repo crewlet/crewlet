@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -404,6 +405,141 @@ func TestAStopLeavesAJobItsCollectionHandedToItsTurn(t *testing.T) {
 			if len(spies.closedTurns()) != 0 || len(spies.endedRuns()) != 0 || len(rig.stopAnnouncements()) != 0 {
 				t.Fatalf("the stop closed %d turns, ended %d sessions and announced %d stops of a job it "+
 					"does not end", len(spies.closedTurns()), len(spies.endedRuns()), len(rig.stopAnnouncements()))
+			}
+		})
+	}
+}
+
+// answer stages what the box's host answers the next read with.
+func (b *boxAsks) answer(result Result, err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.result, b.err = result, err
+}
+
+// A STOP OF A RUN WHOSE BOX IS ON ANOTHER NODE'S HOST READS ITS SPEND THERE. The
+// seat moved to this node while the job worked, and the job's direct box is a
+// process tree on the node that launched it, which no other node can read:
+// read here, the box is not found and the run's spend is lost. The frame that
+// decides the stop closes the run's session and waits on no other node; this
+// node's own retry asks the host, charges what it read, and leaves the box to
+// its host, which it tells to look now.
+//
+// Mutation: read the stopped box here rather than asking its host, and the
+// host is never asked; finish the stop on the deciding frame, and the pause
+// watch waits on another node.
+func TestAStopOfARunWhoseBoxIsOnAnotherHostIsReadThere(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	spies := watchStops(rig)
+	asks := &boxAsks{result: Result{Text: "halfway", InputTokens: 4000}}
+	told := &nudges{}
+	rig.onNode(t, "node-b", asks, told)
+	local := readHere(rig)
+	running := rig.launchedBy("t1", "node-a")
+
+	rig.stop(t)
+
+	if !slices.Contains(spies.endedRuns(), "t1") {
+		t.Fatal("the stop did not close the run's session at once")
+	}
+	if got := asks.reads(); len(got) != 0 {
+		t.Fatalf("the deciding frame asked the box's host %v; it waits on no other node", got)
+	}
+	if got := rig.get("t1"); got.Ending == nil || got.Stop == nil {
+		t.Fatalf("the stop was not decided on the row: ending %+v stop %+v", got.Ending, got.Stop)
+	}
+
+	rig.fireRetries()
+
+	if got := asks.reads(); !slices.Equal(got, []BoxRead{BoxReadStop}) {
+		t.Fatalf("the box's host was asked %v; want one stop's read", got)
+	}
+	if *local != 0 {
+		t.Fatalf("this node read %d box(es) itself", *local)
+	}
+	if got := rig.accountant.total(); got != 4000 {
+		t.Fatalf("charged %d tokens, want the 4000 the host read", got)
+	}
+	if killed := rig.provider.KilledIDs(); len(killed) != 0 {
+		t.Fatalf("killed %v here; the box is its host's to reclaim", killed)
+	}
+	if sent := told.all(); len(sent) != 1 || sent[0].Why != NudgeReleased || sent[0].LaunchID != running.LaunchID {
+		t.Fatalf("told the host %+v; want one release of the run's job", sent)
+	}
+	if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
+		t.Fatal("the stopped run's record is still there")
+	}
+	if len(rig.stopAnnouncements()) != 1 {
+		t.Fatalf("announced the stop %d times, want once", len(rig.stopAnnouncements()))
+	}
+	if closed := spies.closedTurns(); len(closed) != 1 || closed[0].Stop.InputTokens != 4000 {
+		t.Fatalf("closed the turn on %+v, want once on the host's read", closed)
+	}
+}
+
+// A SILENT HOST KEEPS THE STOP, AND NEVER WRITES ITS RUN'S SPEND OFF. The node
+// whose host the box is on is draining or restarting: it is no verdict about the
+// box, which only that node reclaims, and only once it is back. So the stop is
+// kept — its session closed, nothing charged, nothing announced — and asked
+// again until the host answers, which charges what it read; only a host silent
+// for the box timeout since the stop, the bound the fleet's waiter takes a
+// launch node for gone by, ends the run with nothing read.
+//
+// Mutation: read a silent host as nothing spent, and the stop finishes on the
+// first retry with its spend lost; drop the bound, and a host that never comes
+// back keeps the stop for good.
+func TestAStopWaitsForASilentHostAndNeverWritesItsSpendOff(t *testing.T) {
+	t.Parallel()
+	silent := fmt.Errorf("asking node-a: %w", ErrBoxHostSilent)
+	for _, tc := range []struct {
+		name string
+		// then is what happens while the stop waits, and the tokens the
+		// stop ends up charging.
+		then   func(rig *coordRig, asks *boxAsks)
+		tokens int
+	}{
+		{"the host comes back", func(_ *coordRig, asks *boxAsks) {
+			asks.answer(Result{Text: "halfway", InputTokens: 4000}, nil)
+		}, 4000},
+		{"the host never does", func(rig *coordRig, _ *boxAsks) {
+			rig.now = rig.now.Add(DefaultBoxTimeout)
+		}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			spies := watchStops(rig)
+			asks := &boxAsks{err: silent}
+			rig.onNode(t, "node-b", asks, &nudges{})
+			rig.launchedBy("t1", "node-a")
+
+			rig.stop(t)
+			rig.fireRetries()
+
+			kept := rig.get("t1")
+			if kept.Ending == nil || kept.Stop == nil || kept.Stop.Collected {
+				t.Fatalf("the stop on a silent host reads ending %+v stop %+v; want it kept, unread",
+					kept.Ending, kept.Stop)
+			}
+			if rig.accountant.asked() != 0 || len(rig.stopAnnouncements()) != 0 || len(spies.closedTurns()) != 0 {
+				t.Fatal("the stop charged, announced or closed its turn while its box's host was silent")
+			}
+			if !slices.Contains(spies.endedRuns(), "t1") {
+				t.Fatal("the kept stop left the run's session open")
+			}
+
+			tc.then(rig, asks)
+			rig.fireRetries()
+
+			if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
+				t.Fatal("the stop was not finished")
+			}
+			if got := rig.accountant.total(); got != tc.tokens {
+				t.Fatalf("charged %d tokens, want %d", got, tc.tokens)
+			}
+			if len(rig.stopAnnouncements()) != 1 || len(spies.closedTurns()) != 1 {
+				t.Fatal("the finished stop was not announced once with its turn closed once")
 			}
 		})
 	}

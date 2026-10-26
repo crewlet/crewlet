@@ -50,7 +50,9 @@ import (
 // SYNCHRONOUS, on the caller's frame: a stop is a reclaim of a box and a few
 // writes, bounded by the coordinator's own teardown grace, and the pause it
 // follows is rare — a watch that waits on it delivers the next change a moment
-// later, where a goroutine per stop would have a lifetime nobody owns.
+// later, where a goroutine per stop would have a lifetime nobody owns. What
+// would wait on ANOTHER node — the read of a box on its host — is left to the
+// coordinator's own retry, which it owns ([sandbox.Coordinator.StopSeat]).
 func (e *Engine) stopSeatRuns(ctx context.Context, seat uuid.UUID, p coord.SeatPause) {
 	if !p.StopRunning {
 		return

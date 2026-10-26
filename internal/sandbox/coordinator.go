@@ -3067,6 +3067,18 @@ var errEndingOwed = errors.New("sandbox: the run's ending is kept until it can b
 // ([errEndingOwed]), which is what a caller that can RETRY needs and a settle
 // has no use for.
 func (c *Coordinator) endRecord(ctx context.Context, run PendingRun, e ending) (*RecordedEnding, error) {
+	return c.endRun(ctx, run, e, false)
+}
+
+// endRun is [Coordinator.endRecord], saying whether its finish may ASK
+// another node's host to read a box ([Coordinator.finishEnding]): only this
+// node's own retry of a kept ending may ([Coordinator.retryOwed]), which runs
+// on the coordinator's own context. Every other caller is a frame somebody is
+// waiting on — the pause watch, a seat's acquisition, a completion's handler —
+// and an ending that needs such a read is decided there and finished by that
+// retry, at once and off the frame.
+func (c *Coordinator) endRun(ctx context.Context, run PendingRun, e ending, mayAsk bool,
+) (*RecordedEnding, error) {
 	decided, ok, err := c.pending.DecideEnding(ctx, run.TurnID, e.decision())
 	if err != nil {
 		c.reportStopped(ctx, run)
@@ -3084,11 +3096,22 @@ func (c *Coordinator) endRecord(ctx context.Context, run PendingRun, e ending) (
 	c.reportStopped(ctx, decided)
 	c.clearAnswerAttempts(decided.AgentHandle, decided.TurnID)
 	ending := *decided.Ending
-	if err := c.finishEnding(ctx, decided); err != nil {
+	if err := c.finishEnding(ctx, decided, mayAsk); err != nil {
+		if errors.Is(err, errAskAway) {
+			// DECIDED, its session closed, and FINISHED BY THIS NODE'S OWN
+			// RETRY, now: not a failure, and nothing to report as one.
+			c.oweEndingAfter(ctx, decided, e, 0)
+			return &ending, nil
+		}
 		return &ending, c.keepEnding(ctx, decided, e, err)
 	}
 	return &ending, nil
 }
+
+// errAskAway is a decided ending whose next step is a read of a box on another
+// node's host, reached on a frame that may not wait for that host
+// ([Coordinator.endRun]): the ending is handed to this node's retry, which may.
+var errAskAway = errors.New("sandbox: the run's box is read on another node's host, off this frame")
 
 // finishEnding does what a decided ending ([PendingRun.Ending]) still has to
 // do, IN THIS ORDER, and deletes the record last:
@@ -3096,9 +3119,13 @@ func (c *Coordinator) endRecord(ctx context.Context, run PendingRun, e ending) (
 //  1. a person's reply the run still holds and owes the seat is LET GO
 //     ([Coordinator.letGoAnswer]), its copies recorded on the row as owed;
 //  2. every copy the row owes ([PendingRun.HandBack]) is published and cleared;
-//  3. for a STOP, what the run spent is read off its box, charged and recorded
+//  3. for a STOP, the run's tool-bridge session is closed, and what the run
+//     spent is read off its box, charged and recorded
 //     ([Coordinator.collectStopped]) — before the box goes, since nothing can
-//     read it after;
+//     read it after. A box on another node's host is read there, and only
+//     where mayAsk says this frame may wait on that host: anywhere else the
+//     ending stops here, decided and with its session closed, and is handed
+//     to this node's retry ([errAskAway]);
 //  4. the box is reclaimed, where the ending reclaims it after its decision;
 //  5. the announcement is published, under the ending's own identity;
 //  6. for a stop, the turn that was parked on the run is closed on the record
@@ -3123,7 +3150,7 @@ func (c *Coordinator) endRecord(ctx context.Context, run PendingRun, e ending) (
 // reply the ending must hand back ([ErrHandBackOwed], [ErrAnswerOwed]), and
 // hands back the row as it stands; the steps run again against it. A step that
 // does not land is returned, and the caller keeps the ending.
-func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun) error {
+func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk bool) error {
 	var handed []string
 	reclaimed, announced, closed := false, false, false
 	for range casRetries {
@@ -3152,6 +3179,13 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun) error {
 			handed = owed
 		}
 		if run.Stop != nil && !run.Stop.Collected {
+			// THE SESSION FIRST: see [Coordinator.collectStopped].
+			if c.ended != nil {
+				c.ended(run.TurnID)
+			}
+			if !mayAsk && c.readsAway(run) {
+				return errAskAway
+			}
 			collected, err := c.collectStopped(ctx, run)
 			if err != nil {
 				return err
