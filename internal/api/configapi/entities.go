@@ -568,10 +568,10 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 			by: attributionOf(r)}
 		var raced error
 		for range entityAttempts {
-			done, err := s.writeEntity(w, r, write)
+			done, writeErr := s.writeEntity(w, r, write)
 			var lost *RacedError
-			if errors.As(err, &lost) {
-				raced = err
+			if errors.As(writeErr, &lost) {
+				raced = writeErr
 				continue
 			}
 			if done {
@@ -644,9 +644,9 @@ func (s *Service) writeEntity(w http.ResponseWriter, r *http.Request, e entityWr
 	// not hold is left to the draft, which refuses it in its own words.
 	if e.expected != "" && !e.create {
 		if current, held := entityKinds[e.kind].find(company.Redact(), e.id); held {
-			tag, err := entityTag(e.kind, current)
-			if err != nil {
-				s.fail(w, "tag the entity", err)
+			tag, tagErr := entityTag(e.kind, current)
+			if tagErr != nil {
+				s.fail(w, "tag the entity", tagErr)
 				return true, nil
 			}
 			if !matchesTag(e.expected, tag) {
