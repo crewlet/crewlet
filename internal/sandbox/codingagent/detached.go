@@ -310,6 +310,12 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	// FINAL BEFORE THE CONFIG IS WRITTEN, which is where a CLI writes the
 	// system text from.
 	req.System = finalSystem(req.System, paths)
+	// AND THE SERVERS AS THIS BOX DIALS THEM, for the same reason: their
+	// URLs, the tool bridge's included, are written in the engine host's
+	// network, and a loopback one reaches nothing from inside a container
+	// ([sandbox.EngineAddress]). Here, because every run reaches its CLI's
+	// config through this one call, whichever caller launched it.
+	req.MCPServers = sandbox.EngineServers(box, req.MCPServers)
 	configPath, err := r.cli.WriteConfig(ctx, box, req, paths)
 	if err != nil {
 		return sandbox.RunHandle{}, err

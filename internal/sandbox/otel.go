@@ -254,7 +254,7 @@ func (r *OtelReceiver) RunEnv(traceID, spanID, turnID, handle string, ttl time.D
 		return nil
 	}
 	env := map[string]string{
-		"OTEL_EXPORTER_OTLP_ENDPOINT": r.EndpointFor(traceID, ttl),
+		otelBoxEndpointVar:            r.EndpointFor(traceID, ttl),
 		"OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
 		"OTEL_EXPORTER_OTLP_HEADERS":  "",
 		"OTEL_RESOURCE_ATTRIBUTES": strings.Join([]string{
@@ -287,6 +287,11 @@ const (
 	OtelUpstreamEndpointVar = "OTEL_EXPORTER_OTLP_ENDPOINT"
 	OtelUpstreamHeadersVar  = "OTEL_EXPORTER_OTLP_HEADERS"
 )
+
+// otelBoxEndpointVar is where a box's exporters read the run's endpoint: the
+// same standard variable the engine reads its upstream from, set inside the
+// box to the receiver instead ([OtelReceiver.RunEnv]).
+const otelBoxEndpointVar = "OTEL_EXPORTER_OTLP_ENDPOINT"
 
 // BuildOtelReceiver is THE construction path, called by every engine.
 //
