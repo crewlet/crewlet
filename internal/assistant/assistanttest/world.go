@@ -37,7 +37,8 @@ func World() map[string]any {
 			map[string]any{"record_id": "r2", "subject_key": "SEC-7", "excerpt": "Rotate the signing key."}}},
 		"/worklet/people/pm": map[string]any{"handle": "pm", "version": 7, "priorities": []any{"ENG-9"}},
 		"/org": map[string]any{"timezone": "Europe/Berlin",
-			"roles": []any{map[string]any{"handle": "pm", "name": "Product manager", "kind": "agent"}},
+			"roles": []any{map[string]any{"handle": "pm", "name": "Product manager", "kind": "agent"},
+				map[string]any{"handle": "qa", "name": "QA Engineer", "kind": "agent"}},
 			"units": []any{map[string]any{"name": "Platform", "roles": []any{
 				map[string]any{"handle": "ada", "name": "Ada Lovelace", "kind": "human"}},
 				"children": []any{map[string]any{"name": "Backend", "roles": []any{
