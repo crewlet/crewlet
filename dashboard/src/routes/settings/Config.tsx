@@ -46,6 +46,7 @@ import {
   SlidersVerticalGlyph,
 } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
+import { DiffView, type DiffHunk } from "~/components/DiffView.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 
 import { usePageLabels } from "~/app/Shell.tsx";
@@ -181,50 +182,28 @@ function shownValue(value: unknown): string {
 }
 
 /**
- * What one change says about its value: the side that exists, or both.
+ * A comparison as the one diff the dashboard draws (`components/DiffView.tsx`),
+ * KEYED by path: an added setting is its new value added, a removed one its
+ * old value removed, and a CHANGED one is both — its old value removed and its
+ * new value added — so the diff underlines what moved inside the value rather
+ * than printing the two halves either side of an arrow.
  *
- * A change whose values are objects puts the arrow at the head of its own line
- * — after the old block, before the new one — because trailing a closing
- * brace it reads as part of it.
+ * ONE HUNK A CHANGE, each skipping nothing: the changes are the whole answer,
+ * not runs cut out of a longer text, and a hunk is what keeps one setting's
+ * two lines together however the next change reads.
  */
-export function changeValue(change: ConfigChange): string {
-  if (change.kind === "added") return shownValue(change.to);
-  if (change.kind === "removed") return shownValue(change.from);
-  const from = shownValue(change.from);
-  const to = shownValue(change.to);
-  return from.includes("\n") || to.includes("\n") ? `${from}\n→ ${to}` : `${from} → ${to}`;
-}
-
-/** The mark each kind of change is drawn with, beside its tint. */
-const CHANGE_MARK: Record<ConfigChange["kind"], string> = {
-  added: "+",
-  removed: "−",
-  changed: "~",
-};
-
-/**
- * A comparison, one change a row: its mark, the path and the value, WHOLE.
- *
- * The tracks are `.config-diff`'s (see there): the path wraps rather than
- * cutting, and so does the value. The mark is a glyph as well as a tint,
- * because colour alone is not a signal, and the kind is said in words to a
- * reader who hears the list rather than seeing it.
- */
-function ConfigChanges({ changes }: { changes: ConfigChange[] }) {
-  return (
-    <ul className="config-diff">
-      {changes.map((change, i) => (
-        <li key={i} className="config-diff-line" data-kind={change.kind}>
-          <span className="config-diff-mark">
-            <span aria-hidden="true">{CHANGE_MARK[change.kind]}</span>
-            <span className="sr-only">{change.kind}</span>
-          </span>
-          <span className="config-diff-path">{change.path}</span>
-          <span className="config-diff-value">{changeValue(change)}</span>
-        </li>
-      ))}
-    </ul>
-  );
+export function configHunks(changes: readonly ConfigChange[]): DiffHunk[] {
+  return changes.map(({ path, kind, from, to }) => ({
+    skipped: 0,
+    lines: [
+      ...(kind === "added"
+        ? []
+        : [{ kind: "remove" as const, text: shownValue(from), before: null, after: null, path }]),
+      ...(kind === "removed"
+        ? []
+        : [{ kind: "add" as const, text: shownValue(to), before: null, after: null, path }]),
+    ],
+  }));
 }
 
 /** The Diff lens's head, which a row pressed below it brings back on screen. */
@@ -563,6 +542,9 @@ export function ConfigScreen({
     { revision_id: revision, against: against || "active" },
     { enabled: !onRevision && lens === "diff" && !!revision },
   );
+  // BUILT WITH THE ANSWER, not on every render: a diff handed new hunks starts
+  // its window and its measured heights over.
+  const diffHunks = useMemo(() => configHunks(diff.data?.changes ?? []), [diff.data?.changes]);
   const fleet = useQuery("fleet", undefined, {
     enabled: onRevision,
     pollMs: FLEET_POLL_MS,
@@ -935,7 +917,10 @@ export function ConfigScreen({
               }
             >
               <div className="col" style={{ gap: 6 }}>
-                <ConfigChanges changes={diff.data?.changes ?? []} />
+                <DiffView
+                  hunks={diffHunks}
+                  aria-label={revision ? `Changes in ${revision.slice(0, 10)}` : "Changes"}
+                />
                 {/* Both `?? 0` guard the ANSWER, not the fields: `changes`
                     and `changes_total` are always sent together, but
                     `diff.data` is null until the query lands, and an

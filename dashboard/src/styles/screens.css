@@ -3558,85 +3558,6 @@ a.knowledge-reader-how:hover {
   color: var(--color-feedback-danger-ink);
 }
 
-/* ---- Config ------------------------------------------------------------- */
-
-/* A CONFIGURATION DIFF, ONE CHANGE A ROW: its mark, the path it changed and
-   the value, in three tracks every row shares. Each row is a SUBGRID of the
-   list, so the values start at one edge all the way down rather than wherever
-   each row's own path happened to end.
-
-   ITS OWN CLASS NAMES. The knowledge page's line diff is uilet's `DiffView`
-   now, but while this list once spelled the same class as the local line
-   diff, that rule won the cascade and laid every change out in its
-   line-number tracks: at 1440 a 92px path got 23px and a 931px value 13px.
-   Two components never share a class here.
-
-   NOTHING IS CUT. The path is what a reader looks for in their YAML and the
-   value is the change itself, so both wrap — a path breaks anywhere rather
-   than running under the value, and an object or a list keeps the document's
-   own indented shape (`changeValue`). The path track is its content up to 40%
-   of the row, so a short path leaves the value the rest.
-
-   THE MARK'S TRACK CARRIES THE ROW'S INSET. A subgrid row's own padding comes
-   out of the first and last tracks it spans (styles/subgrid.test.ts), and a
-   bare `2ch` less the row's `--spacing-2` left the mark about five pixels. */
-.config-diff {
-  display: grid;
-  grid-template-columns: calc(2ch + var(--spacing-2)) fit-content(40%) minmax(0, 1fr);
-  column-gap: var(--spacing-2);
-  row-gap: 2px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-2xs);
-}
-.config-diff-line {
-  display: grid;
-  grid-column: 1 / -1;
-  grid-template-columns: subgrid;
-  align-items: baseline;
-  padding: 2px var(--spacing-2);
-  border-radius: var(--radius-xs);
-}
-.config-diff-mark {
-  text-align: center;
-  user-select: none;
-}
-.config-diff-path {
-  overflow-wrap: anywhere;
-}
-.config-diff-value {
-  min-width: 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-/* THE SERVER'S OWN WORDS: configapi.Change.Kind is added / removed / changed.
-   These selectors once read add / remove / replace, which no answer has ever
-   carried, so every diff line rendered unstyled. */
-.config-diff-line[data-kind="added"] {
-  background: var(--color-feedback-success-soft);
-  color: var(--color-feedback-success-ink);
-}
-.config-diff-line[data-kind="removed"] {
-  background: var(--color-feedback-danger-soft);
-  color: var(--color-feedback-danger-ink);
-}
-.config-diff-line[data-kind="changed"] {
-  background: var(--color-feedback-warning-soft);
-  color: var(--color-feedback-warning-ink);
-}
-/* ON A PHONE THE VALUE TAKES THE ROW UNDER ITS PATH: 40% of a 340px card is
-   a path broken over three lines beside a value squeezed into the rest. */
-@container page (width < 640px) {
-  .config-diff {
-    grid-template-columns: calc(2ch + var(--spacing-2)) minmax(0, 1fr);
-  }
-  .config-diff-value {
-    grid-column: 2;
-  }
-}
-
 /* ---- A live screen that stays readable ---------------------------------- */
 
 /* Everything that changes on a timescale of milliseconds is confined here,
@@ -11063,7 +10984,7 @@ a.live-row:focus-visible {
 
 /* The History tab's comparison of two versions (uilet's VersionCompare, which
    lays the two sides out itself), across both columns, and the files lens
-   inside it. */
+   inside it, whose diffs are `components/DiffView.tsx`'s. */
 .artifact-compare-row {
   grid-column: 1 / -1;
   min-width: 0;
@@ -11085,12 +11006,6 @@ a.live-row:focus-visible {
   margin: 0;
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-semibold);
-}
-.artifact-compare-text {
-  margin: 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font: inherit;
 }
 
 /* ---- a slide deck (routes/artifacts/SlidesView.tsx) ---------------------- */

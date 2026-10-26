@@ -18,9 +18,10 @@
 
 import { useMemo } from "react";
 import { Button, Document, EmptyState, VersionCompare } from "@crewlethq/ui";
-import { ClockGlyph } from "@crewlethq/icons/glyphs";
+import { CheckGlyph, ClockGlyph } from "@crewlethq/icons/glyphs";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
+import { DiffView } from "~/components/DiffView.tsx";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -34,10 +35,13 @@ import { Face, changeNote, changeWords, changedBy, type Who } from "../parts.tsx
  * a page keeps a bounded number of revisions, so on a trimmed page
  * `version - 1` is a read that comes back not found.
  *
- * The two `page_revision` reads and their states live here; the head, the
- * lens switch and the line diff are uilet's [VersionCompare]. THE FIRST
- * VERSION HAS NOTHING TO COMPARE WITH, so it is handed only its full text and
- * no switch is drawn, rather than a diff that says "everything".
+ * The two `page_revision` reads and their states live here; the head and the
+ * lens switch are uilet's [VersionCompare], and the changes lens is the
+ * dashboard's one [DiffView], handed over as `changes` — never the two texts,
+ * which would draw the package's own line diff in the state hues a diff does
+ * not carry. THE FIRST VERSION HAS NOTHING TO COMPARE WITH, so it is handed
+ * only its full text and no switch is drawn, rather than a diff that says
+ * "everything".
  */
 export function VersionView({
   pageID,
@@ -92,16 +96,27 @@ export function VersionView({
       )}
     </QueryState>
   );
-  const compared =
-    body.data && previous > 0
-      ? prior.data
-        ? { before: prior.data.body ?? "", after: text ?? "" }
-        : {
-            changes: (
-              <QueryState error={prior.error} refusal={prior.refusal} loading={prior.loading} />
-            ),
+  const changes =
+    body.data && previous > 0 ? (
+      prior.data ? (
+        <DiffView
+          before={prior.data.body ?? ""}
+          after={text ?? ""}
+          against={`rev ${previous}`}
+          aria-label={`Changes from rev ${previous} to rev ${version}`}
+          empty={
+            <EmptyState
+              size="compact"
+              icon={<CheckGlyph size="xl" />}
+              title="The body did not change"
+              description="Only the title, labels or position changed."
+            />
           }
-      : {};
+        />
+      ) : (
+        <QueryState error={prior.error} refusal={prior.refusal} loading={prior.loading} />
+      )
+    ) : undefined;
 
   return (
     <VersionCompare
@@ -126,13 +141,8 @@ export function VersionView({
       toLabel={`rev ${version}`}
       lens={lens === "full" ? "versions" : "changes"}
       onLensChange={(next) => setLens(next === "versions" ? "full" : "diff")}
-      labels={{
-        lens: "What to show of this revision",
-        versions: "Full text",
-        identicalTitle: "The body did not change",
-        identicalDescription: "Only the title, labels or position changed.",
-      }}
-      {...compared}
+      labels={{ lens: "What to show of this revision", versions: "Full text" }}
+      changes={changes}
       to={full}
       actions={
         <Button size="small" variant="ghost" onClick={onClose}>

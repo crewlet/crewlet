@@ -8,7 +8,7 @@
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { ArtifactCompare } from "./ArtifactCompare.tsx";
+import { ArtifactCompare, lineHunks } from "./ArtifactCompare.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection } from "~/lib/store-hooks.ts";
 import type { ArtifactDetail, ArtifactEntry } from "~/protocol/index.ts";
@@ -107,31 +107,70 @@ const mount = (picked: number, against: number) =>
     </Router>,
   );
 
+/** A diff's lines as `[kind, path or the older and newer numbers, text]`, in order. */
+function linesOf(diff: HTMLElement): string[][] {
+  return [...diff.querySelectorAll<HTMLElement>(".diff-view__line")].map((line) => [
+    line.dataset.kind ?? "",
+    line.querySelector(".diff-view__path")?.textContent ??
+      [...line.querySelectorAll(".diff-view__number")].map((n) => n.textContent).join("|"),
+    line.querySelector(".diff-view__text")?.textContent ?? "",
+  ]);
+}
+
 test("the files are compared by digest, and the changed page line by line", async () => {
   mount(12, 11);
   expect(await screen.findByText("Version 11 and version 12")).toBeTruthy();
-  const files = await screen.findAllByRole("list");
-  const rows = within(files[0] as HTMLElement).getAllByRole("listitem");
-  const text = rows.map((r) => r.textContent ?? "");
-  expect(text.some((t) => t.includes("index.html") && t.includes("changed"))).toBe(true);
-  expect(text.some((t) => t.includes("new.css") && t.includes("added"))).toBe(true);
-  expect(text.some((t) => t.includes("old.css") && t.includes("removed"))).toBe(true);
+  const files = await screen.findByRole("group", {
+    name: "Files changed from version 11 to version 12",
+  });
+  // A CHANGED FILE IS ITS OLD FACTS REMOVED AND ITS NEW ONES ADDED, the digest
+  // among them: the page kept its type and its size, and only the digest says
+  // why it is a change at all.
+  expect(linesOf(files)).toEqual([
+    ["remove", "index.html", "text/html · 64 B · a"],
+    ["add", "index.html", "text/html · 64 B · A"],
+    ["add", "new.css", "text/css · 64 B · d"],
+    ["remove", "old.css", "text/css · 64 B · c"],
+  ]);
   // THE CARRIED FILE IS NOT A CHANGE: one digest, one file.
-  expect(text.some((t) => t.includes("app.js"))).toBe(false);
+  expect(files.textContent).not.toContain("app.js");
   expect(screen.getByText(/1 other file is the same in both/)).toBeTruthy();
-  // AND THE PAGE'S ONE CHANGED LINE, older to newer.
+  // AND THE PAGE'S ONE CHANGED LINE, older to newer, at its number in each
+  // version, after the one unchanged line above it.
   await waitFor(() => expect(screen.getByText("index.html: 1 change")).toBeTruthy());
-  expect(screen.getByText("Line 2")).toBeTruthy();
-  expect(screen.getByText("<p>Draft</p>")).toBeTruthy();
-  expect(screen.getByText("<p>Final</p>")).toBeTruthy();
+  const lines = screen.getByRole("group", { name: "index.html: the lines that changed" });
+  expect(linesOf(lines)).toEqual([
+    ["remove", "2|", "<p>Draft</p>"],
+    ["add", "|2", "<p>Final</p>"],
+  ]);
+  expect(within(lines).getByText("1 unchanged line")).toBeTruthy();
+});
+
+// THE GAP BEFORE EACH RUN IS COUNTED IN THE OLDER VERSION'S LINES: after two
+// lines replaced from line 3, a line inserted after line 9 skips the five
+// unchanged lines between them, and each line keeps its own number.
+test("a text file's runs skip the unchanged lines between them", () => {
+  const hunks = lineHunks([
+    { fromStart: 3, from: ["c", "d"], toStart: 3, to: ["C"] },
+    { fromStart: 10, from: [], toStart: 9, to: ["new"] },
+  ]);
+  expect(hunks.map((h) => h.skipped)).toEqual([2, 5]);
+  expect(hunks.map((h) => h.lines.map((l) => [l.kind, l.before, l.after, l.text]))).toEqual([
+    [
+      ["remove", 3, null, "c"],
+      ["remove", 4, null, "d"],
+      ["add", null, 3, "C"],
+    ],
+    [["add", null, 9, "new"]],
+  ]);
 });
 
 test("the older version is the from half whichever was picked first", async () => {
   mount(11, 12);
   expect(await screen.findByText("Version 11 and version 12")).toBeTruthy();
   await waitFor(() => expect(screen.getByText("index.html: 1 change")).toBeTruthy());
-  const row = screen.getByText("Line 2").closest("li") as HTMLElement;
-  const order = row.textContent ?? "";
+  const order =
+    screen.getByRole("group", { name: "index.html: the lines that changed" }).textContent ?? "";
   expect(order.indexOf("Draft")).toBeLessThan(order.indexOf("Final"));
 });
 

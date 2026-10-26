@@ -51,7 +51,6 @@ import {
   Skeleton,
   highlightTerms,
   InlineCode,
-  DiffView,
   collapseDiff,
   diffLines,
   firstChangedLines,
@@ -74,6 +73,7 @@ import {
 import { href, useParam } from "~/app/router.tsx";
 import { useOwnStar } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
+import { DiffView } from "~/components/DiffView.tsx";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDateCompact, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
@@ -403,7 +403,7 @@ function SaveDiff({ change, detail }: { change: PageChange; detail: PageDetail }
   if (!revs || !preview || preview.sections.length === 0) return null;
   return (
     <>
-      <DiffView sections={preview.sections} aria-label="Latest change" />
+      <DiffView hunks={preview.sections} aria-label="Latest change" />
       {preview.more > 0 && (
         <p className="knowledge-note">
           {plural(preview.more, "more changed line")} in{" "}

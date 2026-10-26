@@ -1,6 +1,7 @@
 /* ---- Company › Principles, a part written in place ----------------------------
    The editor itself is the kit's (`InlineEditor`, `ListInput`, `FormField`,
-   `ConflictNote`, `DiffView`); what is left is how this page stacks them.
+   `ConflictNote`) with the dashboard's one diff (`components/DiffView.tsx`);
+   what is left is how this page stacks them.
    Imported by `routes/settings/principles/edit/useCharterEditing.tsx`, so it
    arrives with the screen rather than in the first paint. */
 

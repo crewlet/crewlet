@@ -1,0 +1,151 @@
+/* ---- The one diff (`components/DiffView.tsx`) --------------------------------
+   EVERY DIFF IS `components/DiffView.tsx`, AND IT CARRIES NO HUE ("Diffs
+   carry no hue" in docs/reference/dashboard-design.md). A line's kind is its
+   glyph, the word read in its place, and one of two surface steps off the
+   diff's own ground: an added line RAISED one rung, a removed one SUNK one.
+   Nothing here names a state, a data series or an identity's hue, which
+   `styles/diffs.test.ts` holds over every rule that names a diff, and it
+   measures the two steps against the ground in every theme.
+
+   THE DIFF'S OWN SHEET, imported by `components/DiffView.tsx`, so it arrives
+   with the first screen that draws a diff rather than in the first paint:
+   every screen that does is a lazy chunk. Every rule selects a `diff-view`
+   class (`styles/classes.test.ts`).
+
+   The root is the size container a keyed diff's rows fold in, with the
+   counts above the box. */
+.diff-view {
+  container: diff-view / inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.diff-view__head {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-compact);
+}
+.diff-view__count {
+  font-family: var(--font-family-mono);
+  font-variant-numeric: tabular-nums;
+}
+/* THE DIFF'S OWN GROUND, the card rung inside the card's hairline. Its two
+   steps are steps off THIS ground: a rung is right only against the ground it
+   was picked for, and on the host's own — a raised line in a raised panel —
+   it would be the panel's colour. Geist Mono at the document's 13px, on its
+   1.45 leading. */
+.diff-view__body {
+  overflow: hidden;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-subtle);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-compact);
+  line-height: var(--font-line-height-body);
+}
+/* A LINE'S TRACKS: its mark and its text, with the numbers before them in a
+   diff of a text and the path between them in a diff of settings. The widths
+   are counts the component publishes (`--diff-digits`, the widest line
+   number's digits; `--diff-path`, the longest path's characters) times the
+   mono face's own unit, so every row of every window block lands on the same
+   tracks without one grid holding them all. */
+.diff-view__line {
+  display: grid;
+  grid-template-columns: 2ch minmax(0, 1fr);
+  column-gap: var(--spacing-2);
+  padding: calc(var(--spacing-1) / 4) var(--spacing-3) calc(var(--spacing-1) / 4) var(--spacing-2);
+}
+.diff-view--numbered .diff-view__line {
+  grid-template-columns:
+    calc(var(--diff-digits) * 1ch) calc(var(--diff-digits) * 1ch) 2ch
+    minmax(0, 1fr);
+}
+/* A side of a split diff carries its own text's number alone. */
+.diff-view--numbered.diff-view--split .diff-view__line {
+  grid-template-columns: calc(var(--diff-digits) * 1ch) 2ch minmax(0, 1fr);
+}
+/* THE PATH IS ITS CONTENT UP TO 40% OF THE LINE, so a short path leaves the
+   value the rest, and a long one wraps rather than running under it. */
+.diff-view--keyed .diff-view__line {
+  grid-template-columns: 2ch min(calc(var(--diff-path) * 1ch), 40%) minmax(0, 1fr);
+}
+/* THE TWO STEPS. Raised is the step a card shows (the palette holds it three
+   ΔE off the card) and sunk is the sheet beneath the card (held 1.5 ΔE off
+   it); both are opaque rungs, which every text step is measured on. */
+.diff-view__line[data-kind="add"] {
+  background: var(--color-surface-elevated);
+}
+.diff-view__line[data-kind="remove"] {
+  background: var(--color-surface-background);
+}
+.diff-view__number {
+  color: var(--color-text-tertiary);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+.diff-view__mark {
+  color: var(--color-text-secondary);
+  text-align: center;
+  user-select: none;
+}
+.diff-view__path {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* NOTHING IS CUT: a line wraps, and keeps its own spacing and its indented
+   shape. */
+.diff-view__text {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* WHERE AN EDITED LINE CHANGED, in the line's own ink: an underline under
+   the descenders, as thick as the face draws one. */
+.diff-view__run {
+  text-decoration-line: underline;
+  text-decoration-thickness: from-font;
+  text-underline-position: under;
+}
+/* A GAP SAYS WHAT IT STANDS FOR: a document edited at both ends, silently
+   closed, looks like one rewritten in the middle. It is words rather than a
+   line, so it takes neither step: hairlines frame it, less the top one at the
+   box's own edge. */
+.diff-view__skip {
+  padding: var(--spacing-1) var(--spacing-3);
+  border-block: 1px solid var(--color-border-default);
+  color: var(--color-text-tertiary);
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-xs);
+}
+.diff-view__block:first-child > .diff-view__skip:first-child {
+  border-block-start: none;
+}
+/* SPLIT: the older text on the left and the newer on the right, a hairline
+   between them. */
+.diff-view__pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+.diff-view__pair > :last-child {
+  border-inline-start: 1px solid var(--color-border-default);
+}
+.diff-view__empty {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-compact);
+}
+/* ON A NARROW DIFF A SETTING'S VALUE TAKES THE ROW UNDER ITS PATH: 40% of a
+   340px diff is a path broken over three lines beside a value squeezed into
+   the rest. The diff's own width decides, as it decides split against
+   unified, because a column beside it narrows it as surely as a phone. */
+@container diff-view (width < 640px) {
+  .diff-view--keyed .diff-view__line {
+    grid-template-columns: 2ch minmax(0, 1fr);
+  }
+  .diff-view--keyed .diff-view__text {
+    grid-column: 2;
+  }
+}

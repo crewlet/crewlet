@@ -7,9 +7,11 @@
  * comparison:
  *
  * - SOURCE: every file added, removed or changed between the two, by digest,
- *   and for a changed text file the lines that changed, as the design
- *   system's `DiffList` draws a difference (a glyph and a word on every row,
- *   never colour alone).
+ *   and for a changed text file the lines that changed, both drawn by the
+ *   dashboard's one [DiffView]: the files as a diff KEYED by path, a changed
+ *   file being its old facts removed and its new ones added (the digest
+ *   among them, since a file can change and keep its type and size), and the
+ *   lines numbered in both versions.
  * - SIDE BY SIDE: both versions drawn, a page in two frames or a document
  *   rendered twice. Data is live and not versioned with the page, so both
  *   show today's data, and the pane says so. A kind compared ITEM BY ITEM
@@ -26,9 +28,10 @@
  */
 
 import { useMemo, useState, type ReactNode } from "react";
-import { Callout, DiffList, Select, Skeleton, VersionCompare, type DiffRow } from "@crewlethq/ui";
+import { Callout, Select, Skeleton, VersionCompare } from "@crewlethq/ui";
 import type { ArtifactDetail, ArtifactEntry } from "~/protocol/index.ts";
 import { QueryState } from "~/components/common.tsx";
+import { DiffView, type DiffHunk } from "~/components/DiffView.tsx";
 import { fmtBytes, plural } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useRest } from "~/lib/useRest.ts";
@@ -157,6 +160,9 @@ function SourceCompare({
     () => (from.data && to.data ? compareFiles(from.data.manifest, to.data.manifest) : null),
     [from.data, to.data],
   );
+  // ONE ANSWER, ONE SET OF HUNKS: a diff keyed by new hunks starts its
+  // window and its measured heights over, so they are built with the answer.
+  const fileDiff = useMemo(() => fileHunks(files?.changes ?? []), [files]);
   const texts = useMemo(
     () =>
       (files?.changes ?? []).filter(
@@ -180,9 +186,14 @@ function SourceCompare({
     >
       {files && (
         <div className="artifact-compare">
-          <DiffList
-            rows={files.changes.map(fileRow)}
-            emptyMessage={`The two versions hold the same ${plural(files.unchanged, "file")}.`}
+          <DiffView
+            hunks={fileDiff}
+            aria-label={`Files changed from version ${older} to version ${newer}`}
+            empty={
+              <p className="artifact-note">
+                The two versions hold the same {plural(files.unchanged, "file")}.
+              </p>
+            }
           />
           {files.changes.length > 0 && files.unchanged > 0 && (
             <p className="artifact-note">
@@ -216,18 +227,76 @@ function SourceCompare({
   );
 }
 
-/** One file's change as a row of the difference. */
-function fileRow(c: FileChange): DiffRow {
-  const facts = (e: ArtifactEntry) => `${e.content_type.split(";")[0]}, ${fmtBytes(e.object.size)}`;
-  const path = <span className="mono">{c.path}</span>;
-  switch (c.kind) {
-    case "added":
-      return { kind: "added", path, to: facts(c.to) };
-    case "removed":
-      return { kind: "removed", path, from: facts(c.from) };
-    case "changed":
-      return { kind: "changed", path, from: facts(c.from), to: facts(c.to) };
-  }
+/**
+ * How much of a file's digest its facts show: enough that the two digests of
+ * one path, read one above the other, differ where they differ — two SHA-256s
+ * of different bytes agree in their first twelve hex digits once in 2^48 —
+ * and short enough to read as a fact beside a type and a size.
+ */
+const DIGEST_SHOWN = 12;
+
+/** What a file is, in a version: its type, its size and the digest it is compared by. */
+function facts(e: ArtifactEntry): string {
+  return [
+    e.content_type.split(";")[0],
+    fmtBytes(e.object.size),
+    e.object.hash.slice(0, DIGEST_SHOWN),
+  ].join(" · ");
+}
+
+/**
+ * The files of two versions as a diff KEYED by path, one hunk a file: an added
+ * file its new facts, a removed one its old, and a changed one both, so the
+ * underline says which of its facts moved.
+ */
+function fileHunks(changes: readonly FileChange[]): DiffHunk[] {
+  const line = (kind: "add" | "remove", path: string, e: ArtifactEntry) => ({
+    kind,
+    text: facts(e),
+    before: null,
+    after: null,
+    path,
+  });
+  return changes.map((c) => ({
+    skipped: 0,
+    lines:
+      c.kind === "added"
+        ? [line("add", c.path, c.to)]
+        : c.kind === "removed"
+          ? [line("remove", c.path, c.from)]
+          : [line("remove", c.path, c.from), line("add", c.path, c.to)],
+  }));
+}
+
+/**
+ * A text file's changed runs as a diff numbered in both versions: each run its
+ * hunk, its older lines removed and its newer ones added, opening on how many
+ * unchanged lines lay between it and the run before.
+ */
+export function lineHunks(hunks: readonly Hunk[]): DiffHunk[] {
+  // The older version's lines accounted for by the runs so far.
+  let seen = 0;
+  return hunks.map((h) => {
+    const skipped = h.fromStart - 1 - seen;
+    seen = h.fromStart - 1 + h.from.length;
+    return {
+      skipped,
+      lines: [
+        ...h.from.map((text, i) => ({
+          kind: "remove" as const,
+          text,
+          before: h.fromStart + i,
+          after: null,
+        })),
+        ...h.to.map((text, i) => ({
+          kind: "add" as const,
+          text,
+          before: null,
+          after: h.toStart + i,
+        })),
+      ],
+    };
+  });
 }
 
 /** The lines that changed in one text file between the two versions. */
@@ -256,6 +325,11 @@ function LineCompare({
       ]);
       return compareLines(await a.text(), await b.text());
     },
+  );
+  // Built with the answer, for the reason `fileDiff` is.
+  const lineDiff = useMemo(
+    () => (answer.data?.kind === "hunks" ? lineHunks(answer.data.hunks.slice(0, SHOWN_HUNKS)) : []),
+    [answer.data],
   );
   if (tooBig) {
     return (
@@ -294,9 +368,14 @@ function LineCompare({
           <h3 className="artifact-compare-heading">
             {to.path}: {plural(result.hunks.length, "change")}
           </h3>
-          <DiffList
-            rows={result.hunks.slice(0, SHOWN_HUNKS).map(hunkRow)}
-            emptyMessage="The text is the same; only its bytes moved (a line ending or an encoding)."
+          <DiffView
+            hunks={lineDiff}
+            aria-label={`${to.path}: the lines that changed`}
+            empty={
+              <p className="artifact-note">
+                The text is the same; only its bytes moved (a line ending or an encoding).
+              </p>
+            }
           />
           {result.hunks.length > SHOWN_HUNKS && (
             <p className="artifact-note">
@@ -306,30 +385,4 @@ function LineCompare({
         </div>
       );
   }
-}
-
-/** One run of changed lines as a row of the difference. */
-function hunkRow(h: Hunk): DiffRow {
-  const block = (text: string[]) => <pre className="artifact-compare-text">{text.join("\n")}</pre>;
-  if (h.from.length === 0) {
-    return { kind: "added", path: lineSpan("Line", h.toStart, h.to.length), to: block(h.to) };
-  }
-  if (h.to.length === 0) {
-    return {
-      kind: "removed",
-      path: lineSpan("Line", h.fromStart, h.from.length),
-      from: block(h.from),
-    };
-  }
-  return {
-    kind: "changed",
-    path: lineSpan("Line", h.toStart, h.to.length),
-    from: block(h.from),
-    to: block(h.to),
-  };
-}
-
-/** A run of lines, as a reader names it: "Line 4", or "Lines 4 to 9". */
-function lineSpan(word: string, start: number, count: number): string {
-  return count <= 1 ? `${word} ${start}` : `${word}s ${start} to ${start + count - 1}`;
 }

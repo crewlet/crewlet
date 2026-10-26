@@ -184,6 +184,65 @@ that read as activity, and the fix for that is not a duller hue — it is none.
 `warning` and `danger` are separate because a seat parked on a question and a
 seat that fell over have both stopped, and only one of them is a failure.
 
+### Diffs carry no hue
+
+Every diff the dashboard draws is one component, `components/DiffView.tsx`,
+and no line of it is coloured: Settings › Configuration's Diff lens, a
+knowledge page's History and its editor's view of a colleague's save, the
+newest change on Knowledge's landing, a principle somebody saved while it was
+being written, and an artifact's versions compared by file and by line. A
+removed line is not a failure and an added one is not done, so the state hues
+are not spent on them; and on a screen that also draws a state, a red removed
+line beside a red failed check would make one red mean two things. The design
+system's own `DiffView`, `DiffSummary` and `DiffList` paint an added line in
+the success state's tint and a removed one in the danger state's, which is why
+the dashboard draws its own from the package's tokens and its pure line diff
+(`diffLines`, `collapseDiff`), and draws none of the three.
+
+A line's kind is said three ways, each enough alone:
+
+- **The glyph gutter**: `+` for an added line and `−` for a removed one, with
+  *Added* or *Removed* read in its place, because a minus sign is announced as
+  anything from "minus" to nothing at all.
+- **Two surface steps off the diff's own ground.** The diff paints the card
+  rung inside the card's hairline wherever it stands, because a rung is right
+  only against the ground it was picked for. An added line is raised one rung
+  (`--color-surface-elevated`) and a removed one sunk one
+  (`--color-surface-background`, the sheet): steps the palette holds three ΔE
+  and 1.5 ΔE off the card in every theme, and opaque rungs, which every text
+  step is measured on.
+- **The word underline.** Where a removed line and an added line are one line
+  edited, the run of each that differs is underlined (`lib/wordDiff.ts`): ONE
+  run, between what the two lines share at their start and at their end, in
+  whole words, and none at all when all they share is spacing and
+  punctuation. A word-by-word diff would mark every word the edit moved past,
+  which makes a small edit prettier and a rewritten paragraph unreadable.
+
+A diff of a text is numbered in both versions, in Geist Mono at the document's
+13px. A diff of SETTINGS — a configuration's paths, an artifact's files — is
+keyed instead: each line names its path where a text's carries its numbers,
+and a setting that changed is its old value removed and its new value added,
+so the underline finds what moved inside it. A hunk opens with a row saying
+how many unchanged lines it skipped, because a gap silently closed makes a
+document edited at both ends look like one rewritten in the middle. A diff is
+unified, or split — the older text beside the newer, each removed line beside
+the line that replaced it — only where it is at least 640px wide (the kit's
+phone breakpoint, read off the diff's own width), and a keyed diff is always
+unified. Past 1,000 rows it is windowed: only the blocks of 100 rows within a
+view of the screen hold their rows, measured against the diff's own scroller,
+and the rest keep the height they last had; under it every row is mounted,
+which keeps find-in-page and a screen reader's reading of the whole diff.
+Its rules are a sheet of its own, `diff.css`, which arrives with the first
+screen that draws a diff rather than in the first paint: every one of those
+screens is a lazy chunk.
+
+`styles/diffs.test.ts` holds the rule in the sheets (no rule naming a diff
+spends a state's, a chart series' or an identity's hue), in the palette (the
+two steps are the rungs either side of the ground, measured off it in every
+state of every theme) and in the tree (nothing imports the package's diffs,
+and no `VersionCompare` is handed the two texts that would make it draw one);
+`components/DiffView.test.tsx` holds what it draws.
+
 ---
 
 ## The palette is measured, not asserted
@@ -195,12 +254,15 @@ other import in `dashboard/src/main.tsx`. Above, because an import is
 evaluated in source order and the components carry their own stylesheets, and
 the baseline has to be the thing a component rule outranks rather than the
 other way round. The dashboard's own sheets (`tokens.css`, `base.css`,
-`components.css`, `frame.css`, `screens.css`) come last. One more is a
-screen's own: `create.css`, the create pages' rules, which
-`routes/artifacts/new/CreateShell.tsx` imports so that it arrives with their
-chunks rather than in the first paint. It lands after every other sheet, so it
-selects only the create pages' own classes (`styles/classes.test.ts`), and
-never a kit class (`TestNoLazyStylesheetCarriesTheDesignSystem`).
+`components.css`, `frame.css`, `screens.css`) come last. The rest are each a
+screen's own, imported by the module that draws it so that it arrives with
+that chunk rather than in the first paint: `create.css`, the create pages'
+(`routes/artifacts/new/CreateShell.tsx`), `charter.css`, the Principles
+editor's, `brand.css`, the brand's, `folders.css`, the folders', and
+`diff.css`, the one diff's (`components/DiffView.tsx`, which every screen
+drawing a diff reaches). Each lands after every other sheet, so it selects
+only its own classes (`styles/classes.test.ts`), and never a kit class
+(`TestNoLazyStylesheetCarriesTheDesignSystem`).
 
 **There is no alias layer.** Every stylesheet in `dashboard/src` reads the
 package's tokens under their own names — `--color-text-tertiary`,
@@ -3759,9 +3821,13 @@ would drift exactly as `textcut`'s four copies and `whsec`'s two did, and the
 clause that would go first is the fence.
 
 A page's history shows **what a save changed**, not only what one version
-said. `lib/diff.ts` is a line diff over the two revisions — Myers, by line,
-with no word-level refinement inside a changed line, because these documents
-are rewritten in paragraphs and a word diff makes a small edit prettier and a
+said. The two revisions are compared by line with the design system's
+`diffLines` (the longest common subsequence of their lines; past 2,000 lines
+a side, a whole replacement rather than a frozen tab) and drawn by the one
+`DiffView` ([Diffs carry no hue](#diffs-carry-no-hue)), over the count of
+lines added and removed against the revision before. Inside an edited line
+it underlines ONE run, never a word-by-word diff, because these documents are
+rewritten in paragraphs and a word diff makes a small edit prettier and a
 large one unreadable. Unchanged runs collapse to a row saying how many lines
 they stand for: a gap silently closed makes a document edited at both ends
 look like one rewritten in the middle. "This save did not change the body" is
@@ -7449,8 +7515,9 @@ edits as one revision was declined. The source is
   charter back rather than sent twice.
 - **A colleague's change to the same part** is never written over unseen. The
   card says the part changed while the person was editing, shows what changed
-  line by line (the kit's `ConflictNote` and `DiffView`), keeps the draft, and
-  offers **Keep my draft** (save it over theirs knowingly) or **Use theirs**.
+  line by line (the kit's `ConflictNote` over the dashboard's one
+  [diff](#diffs-carry-no-hue)), keeps the draft, and offers **Keep my draft**
+  (save it over theirs knowingly) or **Use theirs**.
 - **Unsaved writing is never lost to a stray key.** Cancel or `Esc` on a part
   with changes asks first (*Discard your changes?*), and so does a move to
   another page (*Leave without saving?*) and a reload or a closed tab. Focus
@@ -8169,11 +8236,15 @@ and a diff. **The Diff lens draws the changes first** and the revisions they
 are picked from under them — beneath fifteen rows of history the changes began
 off the screen, so **See its changes** landed on a list — and a revision
 pressed further down brings the changes back on screen (only when they are off
-it; focus stays in the list). **A change is drawn whole**: its mark (`+`, `−`,
-`~`, said as a word to a screen reader), its path wrapping rather than cut, and
-its value as JSON — an object or a list in the document's own indented shape —
-in tracks the whole list shares, so the values start at one edge; on a phone
-the value takes the line under its path. A revision's peek and its page say
+it; focus stays in the list). **A change is drawn whole**, as the one
+[diff](#diffs-carry-no-hue) draws a setting: an added setting is its new value
+added, a removed one its old value removed, and a changed one both — its old
+value removed and its new one added, the run that moved underlined — each with
+its mark (`+` or `−`, said as a word to a screen reader), its path wrapping
+rather than cut, and its value as JSON — an object or a list in the document's
+own indented shape — in tracks every line shares, so the values start at one
+edge; on a diff narrower than a phone's 640px the value takes the line under
+its path. A revision's peek and its page say
 each property once: the header carries its id, summary and state, and **Where
 it came from** its full id and parent (both in the mono face), Source, who
 created it, when, and when it was activated. In the history (and the Diff
@@ -8662,7 +8733,11 @@ brings that carries a design-system rule.
   package's: the badge, the panel, the empty state, the stat row, the
   skeleton, the select, the tab strip, the avatar, the banner, the disclosure,
   the search input, the button and the chip — and the ranked list, the legend,
-  the stacked bar, the activity strip and the sparkline with them.
+  the stacked bar, the activity strip and the sparkline with them. The one
+  peer the dashboard does not draw is the package's diff: its `DiffView`,
+  `DiffSummary` and `DiffList` paint by state, which a diff is not, so every
+  diff is `components/DiffView.tsx`, built from the package's tokens and its
+  line diff ([Diffs carry no hue](#diffs-carry-no-hue)).
 - **What is left of `src/ui/` is of three kinds, and none of them is a second
   recipe for something the package already draws.** A VOCABULARY the package
   does not have and should not — `Tone`, the six words the engine's own
@@ -9228,7 +9303,10 @@ to.
    colour its author chose, a QR code's black on white (`@crewlethq/ui`'s
    `QrCode`, whose two inks are the fixed `color.qr` tokens) and a
    collaborator's presence colour in an artifact are
-   the five bounded exceptions (see "The one rule" above); nothing else is. The character and colour lists are the
+   the five bounded exceptions (see "The one rule" above); nothing else is.
+   **A diff carries no hue at all, not even a state's**: a line's kind is its
+   glyph, one of two surface steps and, on a line edited, an underline (see
+   [Diffs carry no hue](#diffs-carry-no-hue)). The character and colour lists are the
    contract's (`contract/avatar.ts`), held to the engine's and to the design
    system's, and one reading of them (`lib/avatar.ts`'s `avatarOf`) draws a
    part this build does not know as the default part rather than as nothing.

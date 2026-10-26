@@ -41,12 +41,15 @@ import {
   Callout,
   ConfirmModal,
   EditingStatus,
+  EmptyState,
   Input,
   MergeConflicts,
   RichEditor,
   VersionCompare,
   markdownWords,
 } from "@crewlethq/ui";
+import { CheckGlyph } from "@crewlethq/icons/glyphs";
+import { DiffView } from "~/components/DiffView.tsx";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { PAGE_MESSAGE_MAX_BYTES } from "~/contract/pages.ts";
 import { plural, textBudget } from "~/lib/format.ts";
@@ -183,12 +186,22 @@ export function PageEditor({
               fromLabel={`rev ${base.version}`}
               toLabel="the saved page"
               lens="changes"
-              before={base.body}
-              after={page.body ?? ""}
-              labels={{
-                identicalTitle: "The body did not change",
-                identicalDescription: "Only the title, labels or position changed.",
-              }}
+              changes={
+                <DiffView
+                  before={base.body}
+                  after={page.body ?? ""}
+                  against={`rev ${base.version}`}
+                  aria-label={`Changes from rev ${base.version} to the saved page`}
+                  empty={
+                    <EmptyState
+                      size="compact"
+                      icon={<CheckGlyph size="xl" />}
+                      title="The body did not change"
+                      description="Only the title, labels or position changed."
+                    />
+                  }
+                />
+              }
             />
           </div>
         )}

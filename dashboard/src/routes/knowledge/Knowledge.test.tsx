@@ -598,9 +598,9 @@ test("the newest saves are open to read: each note, the lines changed, and the o
   expect(notes).toEqual(["08:00Breaks ties by join order", "07:10Adds a worked example"]);
   // BY THE WORD READ IN PLACE OF THE MARK, which is what a screen reader hears.
   const lines = (word: "Added" | "Removed") =>
-    [...latest.querySelectorAll<HTMLElement>(".crewlet-diff-view__line")]
+    [...latest.querySelectorAll<HTMLElement>(".diff-view__line")]
       .filter((row) => within(row).queryByText(word))
-      .map((row) => row.querySelector(".crewlet-diff-view__text")?.textContent);
+      .map((row) => row.querySelector(".diff-view__text")?.textContent);
   expect(lines("Removed")).toEqual(["Equal balances are paid in any order."]);
   expect(lines("Added")).toEqual(["Equal balances are ordered by join order."]);
   // THE PAGE'S OWN BODY IS THE SAVE'S, so only the revision before it is read.
@@ -631,7 +631,7 @@ test("a long save's lines are a preview that counts the rest and opens the save"
   await waitFor(() =>
     expect(within(latest).queryByRole("group", { name: "Latest change" })).not.toBeNull(),
   );
-  expect(latest.querySelectorAll(".crewlet-diff-view__line")).toHaveLength(6);
+  expect(latest.querySelectorAll(".diff-view__line")).toHaveLength(6);
   // TWENTY-FOUR CHANGED LINES, twelve out and twelve in, and six drawn.
   expect(latest.textContent).toContain("18 more changed lines in this save");
   expect(within(latest).getByRole("link", { name: "this save" }).getAttribute("href")).toBe(

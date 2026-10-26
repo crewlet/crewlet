@@ -16,10 +16,10 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { changeValue, ConfigScreen, RevisionPeek } from "./Config.tsx";
+import { configHunks, ConfigScreen, RevisionPeek } from "./Config.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { LiveSocket, Store } from "~/protocol/index.ts";
+import { LiveSocket, Store, type ConfigChange } from "~/protocol/index.ts";
 
 // EXACTLY what internal/api/configapi/answers.go returns for these two
 // questions. Change the server and this fixture has to change with it, which
@@ -163,39 +163,67 @@ test("a revision row renders the server's own field names", async () => {
   expect(screen.getAllByText("active").length).toBe(1);
 });
 
-test("a diff line carries the kind the server sends", async () => {
+// THE SERVER'S KINDS, AS THE ONE DIFF DRAWS THEM: an added setting is its new
+// value added, a removed one its old value removed, and a CHANGED one both, so
+// the diff can underline what moved inside it. The kinds were once read under
+// a `data-op` with add / remove / replace, which no answer has ever carried.
+test("a change is drawn as its setting's lines, each kind said in words", async () => {
   const { container } = mount("#/config?lens=diff&revision=01JCFGAAAA0000000000000001");
 
   expect(await screen.findByText("integrations.datadog.route_to")).toBeDefined();
-  // data-kind is what the stylesheet selects on. Under the old `data-op` with
-  // add / remove / replace, every line rendered with no tone at all.
-  const kinds = [...container.querySelectorAll(".config-diff-line")].map((el) =>
-    el.getAttribute("data-kind"),
-  );
-  expect(kinds).toEqual(["added", "changed", "removed"]);
-  // AND IN WORDS: the mark is a glyph and a tint, neither of which a reader
-  // who hears the list receives.
-  expect(
-    [...container.querySelectorAll(".config-diff-mark .sr-only")].map((el) => el.textContent),
-  ).toEqual(["added", "changed", "removed"]);
-  // And the value column reads the side that exists for that kind.
-  expect(screen.getByText('"sre-lead"')).toBeDefined();
-  expect(screen.getByText('"a" → "b"')).toBeDefined();
+  const lines = [...container.querySelectorAll<HTMLElement>(".diff-view__line")];
+  expect(lines.map((el) => el.getAttribute("data-kind"))).toEqual([
+    "add",
+    "remove",
+    "add",
+    "remove",
+  ]);
+  expect(lines.map((el) => el.querySelector(".diff-view__path")?.textContent)).toEqual([
+    "integrations.datadog.route_to",
+    "integrations.gitlab.url",
+    "integrations.gitlab.url",
+    "integrations.slack",
+  ]);
+  // AND THE VALUE OF THE SIDE EACH LINE IS: the new for an addition, the old
+  // for a removal, and both halves of the change on their own lines.
+  expect(lines.map((el) => el.querySelector(".diff-view__text")?.textContent)).toEqual([
+    '"sre-lead"',
+    '"a"',
+    '"b"',
+    "{}",
+  ]);
+  // IN WORDS as well as the glyph: the glyph is drawn, the word is what a
+  // reader who hears the list receives.
+  expect(lines.map((el) => el.querySelector(".diff-view__mark")?.textContent)).toEqual([
+    "+Added",
+    "−Removed",
+    "+Added",
+    "−Removed",
+  ]);
   // NOTHING SAYS IT WAS CUT, because it was not: changes_total equals the
-  // number of lines, and a "3 of 3 shown" note would be noise on every diff.
+  // number of changes, and a "3 of 3 shown" note would be noise on every diff.
   expect(screen.queryByText(/shown/)).toBeNull();
 });
 
 // A DIFF IS DRAWN IN ITS OWN TRACKS, and nothing in it is cut. The config
 // list once shared a class with the knowledge page's line diff, so the
 // cascade handed every change that diff's line-number tracks: at 1440 the
-// path got 23px and the value 13px. jsdom lays nothing out, so
-// the cascade over the rendered lines is what is read — with every sheet the
-// dashboard loads, in the order it loads them.
+// path got 23px and the value 13px. One component draws both now, and a diff
+// of settings is KEYED: its path takes the track the numbers take in a diff
+// of a text. jsdom lays nothing out, so the cascade over the rendered lines is
+// what is read — with every sheet the dashboard loads, in the order it loads
+// them: the entry's, then the diff's own, which arrives with the diff.
 test("a diff's path and value are drawn whole, in the diff's own tracks", async () => {
   const read = (name: string) => readFileSync(join(process.cwd(), "src/styles", name), "utf8");
   const style = document.createElement("style");
-  style.textContent = ["tokens.css", "base.css", "components.css", "frame.css", "screens.css"]
+  style.textContent = [
+    "tokens.css",
+    "base.css",
+    "components.css",
+    "frame.css",
+    "screens.css",
+    "diff.css",
+  ]
     .map(read)
     .join("\n");
   document.head.append(style);
@@ -212,14 +240,16 @@ test("a diff's path and value are drawn whole, in the diff's own tracks", async 
       changes_total: 1,
     });
     const path = await screen.findByText("mcp_servers[1]");
-    const list = container.querySelector<HTMLElement>(".config-diff")!;
-    const line = path.closest<HTMLElement>(".config-diff-line")!;
-    expect(getComputedStyle(list).gridTemplateColumns).toBe(
-      "calc(2ch + var(--spacing-2)) fit-content(40%) minmax(0, 1fr)",
+    const diffView = container.querySelector<HTMLElement>(".diff-view")!;
+    const line = path.closest<HTMLElement>(".diff-view__line")!;
+    expect(diffView.classList.contains("diff-view--keyed")).toBe(true);
+    // EVERY ROW TAKES THE SAME TRACKS, so the values start at one edge: the
+    // path's is the longest path's own width, published once on the diff.
+    expect(getComputedStyle(line).gridTemplateColumns).toBe(
+      "2ch min(calc(var(--diff-path) * 1ch), 40%) minmax(0, 1fr)",
     );
-    // EVERY ROW IS THE LIST'S OWN TRACKS, so the values start at one edge.
-    expect(getComputedStyle(line).gridTemplateColumns).toBe("subgrid");
-    const value = line.querySelector<HTMLElement>(".config-diff-value")!;
+    expect(diffView.style.getPropertyValue("--diff-path")).toBe(String("mcp_servers[1]".length));
+    const value = line.querySelector<HTMLElement>(".diff-view__text")!;
     for (const cell of [path, value]) {
       expect(cell.classList.contains("truncate"), cell.className).toBe(false);
       expect(getComputedStyle(cell).textOverflow).not.toBe("ellipsis");
@@ -239,23 +269,44 @@ test("a diff's path and value are drawn whole, in the diff's own tracks", async 
   }
 });
 
-describe("a change's value", () => {
+describe("a change as the diff draws it", () => {
+  /** One change's lines, as `[kind, text]`. */
+  const linesOf = (change: ConfigChange) =>
+    configHunks([change])[0]!.lines.map((line) => [line.kind, line.text]);
+
   test("is JSON, so a string and the setting it spells stay two things", () => {
-    expect(changeValue({ path: "a", kind: "added", to: "true" })).toBe('"true"');
-    expect(changeValue({ path: "a", kind: "added", to: true })).toBe("true");
-    expect(changeValue({ path: "a", kind: "changed", from: 1, to: 2 })).toBe("1 → 2");
+    expect(linesOf({ path: "a", kind: "added", to: "true" })).toEqual([["add", '"true"']]);
+    expect(linesOf({ path: "a", kind: "added", to: true })).toEqual([["add", "true"]]);
+  });
+
+  // ONE SETTING, TWO LINES, ONE HUNK: the old value removed and the new one
+  // added, kept together by their hunk however the next change reads, and
+  // both named by the path the diff is keyed by.
+  test("is a changed setting's old value removed and its new value added", () => {
+    const [hunk, ...rest] = configHunks([{ path: "a.b", kind: "changed", from: 1, to: 2 }]);
+    expect(rest).toEqual([]);
+    expect(hunk).toEqual({
+      skipped: 0,
+      lines: [
+        { kind: "remove", text: "1", before: null, after: null, path: "a.b" },
+        { kind: "add", text: "2", before: null, after: null, path: "a.b" },
+      ],
+    });
   });
 
   // `omitempty` on an `any` drops a JSON null, so a setting changed from null
   // arrives with no `from` — which stringifies to `undefined`.
   test("reads an absent side as the null it was", () => {
-    expect(changeValue({ path: "a", kind: "changed", to: "x" })).toBe('null → "x"');
+    expect(linesOf({ path: "a", kind: "changed", to: "x" })).toEqual([
+      ["remove", "null"],
+      ["add", '"x"'],
+    ]);
   });
 
-  test("puts the arrow at the head of its own line after an object", () => {
-    expect(changeValue({ path: "a", kind: "changed", from: { n: 1 }, to: "x" })).toBe(
-      '{\n  "n": 1\n}\n→ "x"',
-    );
+  test("keeps an object in the document's own indented shape", () => {
+    expect(linesOf({ path: "a", kind: "removed", from: { n: 1 } })).toEqual([
+      ["remove", '{\n  "n": 1\n}'],
+    ]);
   });
 });
 
