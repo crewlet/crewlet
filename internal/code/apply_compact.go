@@ -106,13 +106,14 @@ func (a *Applier) applyCompact(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	var deleted int64
 	if len(retiring) > 0 {
-		list, err := jsonList(distinct(c.Retire))
-		if err != nil {
-			return 0, err
+		list, listErr := jsonList(distinct(c.Retire))
+		if listErr != nil {
+			return 0, listErr
 		}
-		res, err := tx.ExecContext(ctx, deletePacksSQL, c.RepoID, list)
-		if err != nil {
-			return 0, fmt.Errorf("code: remove the packs the compaction at %s replaces: %w", at.position, err)
+		res, deleteErr := tx.ExecContext(ctx, deletePacksSQL, c.RepoID, list)
+		if deleteErr != nil {
+			return 0, fmt.Errorf("code: remove the packs the compaction at %s replaces: %w", at.position,
+				deleteErr)
 		}
 		deleted, _ = res.RowsAffected()
 	}
