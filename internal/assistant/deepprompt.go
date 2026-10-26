@@ -17,7 +17,7 @@ import (
 
 // DeepPromptVersion names the deep-work run's standing instructions, stamped
 // into them, so a run's behaviour can be read against the text it ran under.
-const DeepPromptVersion = "assistant.deep.v1"
+const DeepPromptVersion = "assistant.deep.v2"
 
 // deepRules is the run's standing instruction. A reworded sentence is a
 // behaviour change, and takes a new [DeepPromptVersion].
@@ -35,6 +35,10 @@ const deepRules = "You are doing deep work for a person through the Crewlet assi
 	"continued in this same session with their decision.\n" +
 	"- Never ask for, print or store a password, token or key.\n\n" +
 	"Files:\n" +
+	"- You may write only in your working directory and in $TMPDIR; the rest of the " +
+	"machine is read-only to you. Make temporary files under $TMPDIR (for example " +
+	"`mktemp -p \"$TMPDIR\"`), because some tools default to a system temporary " +
+	"directory you cannot write.\n" +
 	"- The images the person attached are in ./inputs. Read them with your image reader.\n" +
 	"- Put every deliverable in ./outbox, at most 10 files of at most 5 MiB each: PNG, " +
 	"JPEG, WebP, GIF, SVG, CSV, Markdown, plain text, JSON or PDF. Never HTML or a " +

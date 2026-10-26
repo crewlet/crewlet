@@ -189,8 +189,23 @@ func (b *directBox) argv(cmd string) ([]string, error) {
 func (b *directBox) ID() string   { return b.layout.id }
 func (b *directBox) Home() string { return b.layout.home() }
 
-// childEnv is the allowlisted host environment plus the box's home and the run
-// env.
+// TempRootEnv is every variable a process in a host box takes its temporary
+// directory from, each pointed at the box's own .tmp.
+//
+// ONE LIST, because a confined box may write only inside itself, and a temp
+// root left at its default is a write outside it. TMPDIR alone was not
+// enough: Claude Code roots its per-uid temp directory, where its Bash tool
+// keeps each command's working state, at CLAUDE_CODE_TMPDIR or else at a
+// literal /tmp, never at TMPDIR (measured on 2.1.310). Under the host's
+// confinement every shell command a deep-work run made failed before it ran
+// ("EPERM: operation not permitted, mkdir '/tmp/claude-<uid>/...'"). TMP and
+// TEMP are what Python's tempfile and other runtimes read before falling back
+// to /tmp. A container or an E2B VM needs none of this: its /tmp is inside the
+// boundary already.
+var TempRootEnv = []string{"TMPDIR", "TMP", "TEMP", "CLAUDE_CODE_TMPDIR"}
+
+// childEnv is the allowlisted host environment plus the box's home, its
+// temporary directory and the run env.
 //
 // Allowlisted for the same reason the CLI LLM backend allowlists: the engine's
 // environment holds the org's chat token, its collector credential
@@ -205,7 +220,9 @@ func (b *directBox) childEnv(extra map[string]string) map[string]string {
 	env["XDG_DATA_HOME"] = filepath.Join(home, ".local", "share")
 	env["XDG_STATE_HOME"] = filepath.Join(home, ".local", "state")
 	env["XDG_CACHE_HOME"] = filepath.Join(home, ".cache")
-	env["TMPDIR"] = filepath.Join(home, ".tmp")
+	for _, name := range TempRootEnv {
+		env[name] = b.layout.tmp()
+	}
 	for key, value := range b.env {
 		env[key] = value
 	}

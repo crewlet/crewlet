@@ -115,6 +115,11 @@ func (l boxLayout) records() string { return filepath.Join(l.root, "records") }
 
 func (l boxLayout) workspace() string { return filepath.Join(l.home(), WorkspaceSubdir) }
 
+// tmp is the box's own temporary directory: every temp root its processes
+// are pointed at ([TempRootEnv]), inside the home so the box stays the one
+// place a confined run may write.
+func (l boxLayout) tmp() string { return filepath.Join(l.home(), ".tmp") }
+
 // meta is the box's own .crewlet/, where its runner's markers, reports and
 // shim live — the box's side, never a record.
 func (l boxLayout) meta() string { return filepath.Join(l.home(), ".crewlet") }
@@ -896,7 +901,7 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	if err = os.Chmod(layout.root, hostbox.DirMode); err != nil {
 		return nil, localErrorf("could not secure local sandbox %s at %s: %v", id, layout.root, err)
 	}
-	if err = os.MkdirAll(filepath.Join(layout.home(), ".tmp"), hostbox.DirMode); err != nil {
+	if err = os.MkdirAll(layout.tmp(), hostbox.DirMode); err != nil {
 		return nil, localErrorf("could not create local sandbox %s tmpdir: %v", id, err)
 	}
 	if err = os.MkdirAll(layout.records(), hostbox.DirMode); err != nil {

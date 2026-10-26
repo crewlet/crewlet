@@ -42,6 +42,24 @@ directory, stream store, log, keyring and config files, any CLI login, any
 seat's box or the operator's home. A host that can enforce none of these runs
 no deep work, and an administrator is told why; it never runs unconfined.
 
+**The box is the only place it writes, temporary files included.** Every
+temporary root its processes read (`TMPDIR`, `TMP`, `TEMP` and Claude Code's
+`CLAUDE_CODE_TMPDIR`, which the CLI uses instead of `TMPDIR` and otherwise sets
+to a literal `/tmp`) is pointed at the box's own `.tmp`, rather than the
+confinement being widened to the host's `/tmp`: a shared temporary directory
+holds other processes' files, the engine's among them. Each directory above the
+box's home may be stat'ed by its literal path, and never listed, read or
+written, so a script's `mkdir -p` of an absolute path into the box works on
+macOS, whose `mkdir` reads a refused component as a failure unless it can see
+the component is there. A tool that ignores every variable and takes the
+system's per-user temporary directory (`mktemp` without a template on macOS)
+is refused, and the run is told to make temporary files under `$TMPDIR`.
+Claude Code's own command sandbox must stay off inside a box: macOS refuses a
+second sandbox-exec profile under the box's (`sandbox_apply: Operation not
+permitted`). It is off by default and a box's home never turns it on, so the
+confinement is the engine's alone; a host whose managed Claude Code settings
+force it on cannot run a deep-work run's commands.
+
 **Its limits are its own and the turn's.** A run's wall clock never passes the
 turn's read grant; its Crewlet calls and its CLI's rounds are capped by
 `max_steps`, and its tokens by `max_tokens`, across the continuations of one

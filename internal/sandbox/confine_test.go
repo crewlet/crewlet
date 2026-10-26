@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -110,6 +111,8 @@ func TestAConfinedHostBoxCannotReachTheEngine(t *testing.T) {
 		}
 	}
 
+	hostTmpProbe := filepath.Join("/tmp", "crewlet-confine-probe-"+filepath.Base(filepath.Dir(box.Home())))
+	t.Cleanup(func() { _ = os.Remove(hostTmpProbe) })
 	run := func(cmd string) ExecResult {
 		t.Helper()
 		res, err := box.Exec(ctx, cmd, ExecOptions{TimeoutSec: 30})
@@ -119,15 +122,20 @@ func TestAConfinedHostBoxCannotReachTheEngine(t *testing.T) {
 		return res
 	}
 	refused := map[string]string{
-		"the stream store":           "cat " + q(filepath.Join(h.data, "stream", "store.db")),
-		"the data directory listing": "ls " + q(h.data),
-		"the keyring":                "cat " + q(h.keyring),
-		"the config file":            "cat " + q(h.config),
-		"the operator's home":        "cat " + q(h.secret),
-		"another box":                "cat " + q(theirs),
-		"the box's own records":      "ls " + q(records),
-		"a write outside the box":    "echo x > " + q(filepath.Join(filepath.Dir(h.data), "planted")),
-		"a write to the cli install": "echo x >> " + q(h.cli),
+		"the stream store":             "cat " + q(filepath.Join(h.data, "stream", "store.db")),
+		"the data directory listing":   "ls " + q(h.data),
+		"the keyring":                  "cat " + q(h.keyring),
+		"the config file":              "cat " + q(h.config),
+		"the operator's home":          "cat " + q(h.secret),
+		"another box":                  "cat " + q(theirs),
+		"the box's own records":        "ls " + q(records),
+		"the boxes' directory listing": "ls " + q(filepath.Dir(filepath.Dir(box.Home()))),
+		"a write outside the box":      "echo x > " + q(filepath.Join(filepath.Dir(h.data), "planted")),
+		"a write to the cli install":   "echo x >> " + q(h.cli),
+		// The host's own temporary root, where a CLI left at its default
+		// would make its per-uid directory: refused, which is why every
+		// temp root is pointed inside the box rather than this let through.
+		"a directory under the host's /tmp": "mkdir -p " + q(hostTmpProbe),
 	}
 	if runtime.GOOS == "linux" {
 		refused["the engine's environment"] = "cat /proc/" + strconv.Itoa(os.Getpid()) + "/environ"
@@ -136,6 +144,9 @@ func TestAConfinedHostBoxCannotReachTheEngine(t *testing.T) {
 		if res := run(cmd); res.ExitCode == 0 {
 			t.Errorf("%s was reachable from a confined box: %q answered %q", what, cmd, res.Stdout)
 		}
+	}
+	if _, err := os.Stat(hostTmpProbe); err == nil {
+		t.Errorf("a confined job created %s on the host", hostTmpProbe)
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(h.data), "planted")); err == nil {
 		t.Error("a confined job wrote outside its box")
@@ -148,6 +159,14 @@ func TestAConfinedHostBoxCannotReachTheEngine(t *testing.T) {
 		"its own home":    "echo kept > \"$HOME/note\" && cat \"$HOME/note\"",
 		"the cli install": q(h.cli),
 		"the system":      "ls /usr/bin >/dev/null && echo system",
+		// An absolute path into its own home, made a component at a time.
+		"a nested directory by its absolute path": `mkdir -p "$HOME/out/deep" && test -d "$HOME/out/deep"`,
+		// What Claude Code's Bash tool does before every command: its per-uid
+		// directory under CLAUDE_CODE_TMPDIR, then a script's own temp file.
+		"its own temp roots": `mkdir -p "$CLAUDE_CODE_TMPDIR/claude-$(id -u)/project" && ` +
+			`f=$(mktemp -p "$TMPDIR") && echo ok > "$f" && cat "$f" && ` +
+			`python3 -I -c 'import tempfile; tempfile.mkstemp()' && ` +
+			`test -d "$TMP" && test -d "$TEMP"`,
 	}
 	for what, cmd := range allowed {
 		if res := run(cmd); res.ExitCode != 0 {
@@ -169,6 +188,9 @@ func TestTheProfileGivesBackOnlyTheHomeAndTheInstall(t *testing.T) {
 		`(deny file-write* (subpath "/"))`,
 		`(deny process-info* (target others))`,
 		`(allow file-read* (subpath "/home/op/.local/bin"))`,
+		`(allow file-read-metadata (literal "/") (literal "/home") (literal "/home/op") ` +
+			`(literal "/home/op/.crewlet") (literal "/home/op/.crewlet/sandboxes") ` +
+			`(literal "/home/op/.crewlet/sandboxes/boxes") (literal "/home/op/.crewlet/sandboxes/boxes/a"))`,
 		`(allow file-read* file-write* (subpath "/home/op/.crewlet/sandboxes/boxes/a/home"))`,
 	}
 	at := -1
@@ -225,5 +247,54 @@ func TestAConfinementWithoutAMechanismIsRefused(t *testing.T) {
 	if _, err := NewLocal(LocalOptions{Placement: Container, Image: "x", StateDir: t.TempDir(),
 		Confine: &Confinement{}, Host: &HostConfinement{Mechanism: MechanismSandboxExec}}); err == nil {
 		t.Fatal("a confined container box was accepted")
+	}
+}
+
+// TestTheRealClaudeCodeRunsAShellCommandInAConfinedBox is the opt-in smoke for
+// the real CLI under this host's confinement: one headless run asked to use
+// its Bash tool. It needs a signed-in CLI, so it runs only where
+// CREWLET_CONFINED_CLAUDE_SMOKE=1 and CLAUDE_CODE_OAUTH_TOKEN are set, and
+// otherwise logs what it did not check and passes. The temp roots the CLI
+// resolves are held by TestAConfinedHostBoxCannotReachTheEngine on every run.
+func TestTheRealClaudeCodeRunsAShellCommandInAConfinedBox(t *testing.T) {
+	token := os.Getenv("CLAUDE_CODE_OAUTH_TOKEN")
+	if os.Getenv("CREWLET_CONFINED_CLAUDE_SMOKE") != "1" || token == "" {
+		t.Log("the real Claude Code smoke runs only with CREWLET_CONFINED_CLAUDE_SMOKE=1 " +
+			"and CLAUDE_CODE_OAUTH_TOKEN set; the CLI's Bash tool under confinement was not checked")
+		return
+	}
+	cli, err := exec.LookPath("claude")
+	if err != nil {
+		t.Fatalf("the smoke was asked for, but no claude CLI is on PATH: %v", err)
+	}
+	if cli, err = filepath.EvalSymlinks(cli); err != nil {
+		t.Fatal(err)
+	}
+	host, err := ProbeConfinement()
+	if err != nil {
+		t.Fatalf("the smoke was asked for on a host that confines nothing: %v", err)
+	}
+	local, err := NewLocal(LocalOptions{Placement: Direct, StateDir: t.TempDir(),
+		Confine: &Confinement{Read: []string{filepath.Dir(cli)}}, Host: host})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	box, err := local.Create(ctx, Spec{Placement: Direct,
+		Env: map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": token}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = box.Close(context.WithoutCancel(ctx)) })
+	res, err := box.Exec(ctx, q(cli)+" -p "+q("Use your Bash tool to run exactly this "+
+		"command: echo confined-$((20+22)). Then reply with its output and nothing else.")+
+		" --permission-mode bypassPermissions --output-format json", ExecOptions{TimeoutSec: 240})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ExitCode != 0 || !strings.Contains(res.Stdout, "confined-42") ||
+		strings.Contains(res.Stdout, "EPERM") {
+		t.Fatalf("the CLI's Bash tool did not run in a confined box: exit %d\nstdout: %s\nstderr: %s",
+			res.ExitCode, res.Stdout, res.Stderr)
 	}
 }

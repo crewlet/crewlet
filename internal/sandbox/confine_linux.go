@@ -129,7 +129,7 @@ func ConfineMain(args []string) int {
 	// ONE THREAD, start to finish: Landlock restricts the calling thread,
 	// and execve keeps exactly that thread's domain.
 	runtime.LockOSThread()
-	if err := applyLandlock(spec); err != nil {
+	if err = applyLandlock(spec); err != nil {
 		fmt.Fprintln(os.Stderr, "crewlet "+ConfineCommand+": the confinement could not be applied, "+
 			"so nothing ran:", err)
 		return 126
@@ -140,7 +140,11 @@ func ConfineMain(args []string) int {
 }
 
 // applyLandlock restricts the calling thread to spec.
-func applyLandlock(spec landlockSpec) error {
+//
+// The ruleset's descriptor is closed on every path, and a failed close is
+// reported with whatever else failed: the job is not started on a thread whose
+// confinement left a descriptor in an unknown state.
+func applyLandlock(spec landlockSpec) (err error) {
 	abi, err := landlockABI()
 	if err != nil {
 		return fmt.Errorf("landlock: %w", err)
@@ -153,7 +157,7 @@ func applyLandlock(spec landlockSpec) error {
 		return fmt.Errorf("landlock_create_ruleset: %w", errno)
 	}
 	ruleset := int(fd)
-	defer unix.Close(ruleset)
+	defer func() { err = errors.Join(err, closeFD(ruleset, "the landlock ruleset")) }()
 	add := func(paths []string, rights uint64) error {
 		for _, p := range paths {
 			if err := addLandlockRule(ruleset, p, rights&handled); err != nil {
@@ -185,7 +189,7 @@ func applyLandlock(spec landlockSpec) error {
 // addLandlockRule grants rights beneath one path. A path that does not exist
 // grants nothing and is skipped: an allowlist entry for a directory this host
 // lacks is simply nothing to reach.
-func addLandlockRule(ruleset int, path string, rights uint64) error {
+func addLandlockRule(ruleset int, path string, rights uint64) (err error) {
 	fd, err := unix.Open(path, unix.O_PATH|unix.O_CLOEXEC, 0)
 	if errors.Is(err, unix.ENOENT) || errors.Is(err, unix.EACCES) {
 		return nil
@@ -193,7 +197,7 @@ func addLandlockRule(ruleset int, path string, rights uint64) error {
 	if err != nil {
 		return fmt.Errorf("open %s: %w", path, err)
 	}
-	defer unix.Close(fd)
+	defer func() { err = errors.Join(err, closeFD(fd, path)) }()
 	var st unix.Stat_t
 	if err := unix.Fstat(fd, &st); err != nil {
 		return fmt.Errorf("stat %s: %w", path, err)
@@ -208,6 +212,15 @@ func addLandlockRule(ruleset int, path string, rights uint64) error {
 	if _, _, errno := unix.Syscall6(unix.SYS_LANDLOCK_ADD_RULE, uintptr(ruleset),
 		unix.LANDLOCK_RULE_PATH_BENEATH, uintptr(unsafe.Pointer(&attr)), 0, 0, 0); errno != 0 {
 		return fmt.Errorf("landlock_add_rule %s: %w", path, errno)
+	}
+	return nil
+}
+
+// closeFD closes a descriptor this file opened, naming what it held when the
+// close fails.
+func closeFD(fd int, what string) error {
+	if err := unix.Close(fd); err != nil {
+		return fmt.Errorf("close %s: %w", what, err)
 	}
 	return nil
 }

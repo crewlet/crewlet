@@ -184,6 +184,20 @@ func (h *HostConfinement) wrap(r confineRules, argv []string) ([]string, error) 
 	return nil, &ConfinementUnavailableError{Reason: fmt.Sprintf("%q is no mechanism this build runs", h.Mechanism)}
 }
 
+// ancestorsOf is every directory above path, from the root down, path
+// itself excluded.
+func ancestorsOf(path string) []string {
+	var out []string
+	for dir := filepath.Dir(filepath.Clean(path)); ; dir = filepath.Dir(dir) {
+		out = append(out, dir)
+		if dir == filepath.Dir(dir) {
+			break
+		}
+	}
+	slices.Reverse(out)
+	return out
+}
+
 // sbplString quotes s as a sandbox profile string literal. Paths reaching it
 // were refused any quote, backslash or line break by [resolvePath].
 func sbplString(s string) string { return strconv.Quote(s) }
@@ -203,6 +217,14 @@ var keychainServices = []string{
 // relies on: everything is allowed, the denied trees and every write are then
 // taken away, and the box's home and the CLI's install are given back last.
 // Network stays open: web access is the run's (ADR-0053).
+//
+// THE HOME'S ANCESTORS MAY BE STAT'ED, each by its literal path and for its
+// metadata alone: never listed, never read, never written. A denied tree
+// usually holds the home (the boxes directory, beside the other boxes and
+// the records), and macOS's `mkdir -p` makes every component of an absolute
+// path in turn, reading an EPERM as failure unless a stat shows the
+// directory is there. Without this a run could not `mkdir -p "$HOME/out"`,
+// the first line of most scripts a deep-work run writes.
 func sandboxProfile(r confineRules) string {
 	var b strings.Builder
 	b.WriteString("(version 1)\n(allow default)\n")
@@ -224,6 +246,13 @@ func sandboxProfile(r confineRules) string {
 		b.WriteString("(allow file-read*")
 		for _, p := range r.read {
 			b.WriteString(" (subpath " + sbplString(p) + ")")
+		}
+		b.WriteString(")\n")
+	}
+	if ancestors := ancestorsOf(r.write); len(ancestors) > 0 {
+		b.WriteString("(allow file-read-metadata")
+		for _, a := range ancestors {
+			b.WriteString(" (literal " + sbplString(a) + ")")
 		}
 		b.WriteString(")\n")
 	}
