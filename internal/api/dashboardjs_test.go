@@ -1186,8 +1186,11 @@ const (
 	// the run card's mapping and its nested steps, the file card, the
 	// composer's pick, drop and paste with their bounds and uploads, and the
 	// preview hook the draft file card now shares. 4493 KiB, which still
-	// refuses a doubled baseline.
-	treeBudget = 4<<20 + 397<<10
+	// refuses a doubled baseline. Merging main's MCP tool route (#371) beside
+	// the assistant's card rendering took it to 4499.8 KiB: the live view's
+	// CLI runs, their calls in flight and a run drawn before its first round.
+	// 4501 KiB, which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 405<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

@@ -214,9 +214,7 @@ test("a turn that failed before it wrote a word shows its sentence", () => {
       retryable: true,
     },
   });
-  expect(
-    screen.getByText("The assistant's model took too long to answer."),
-  ).toBeTruthy();
+  expect(screen.getByText("The assistant's model took too long to answer.")).toBeTruthy();
 });
 
 test("a sent question shows the images it carried as chips under its bubble", async () => {
