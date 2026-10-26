@@ -323,41 +323,57 @@ func runNumber(name string) (uint64, bool) {
 // commitIndex stores the index change makes of inc's index AS IT STANDS NOW —
 // a clone of it, which change edits and answers true for — under e.mu, as one
 // step, where it is still the index the work began on (gen) and change still
-// applies; it answers the files of the runs the stored index no longer names,
-// which the caller moves into trash/ once the state that no longer names them
-// is written (trashRuns), and whether it stored anything. THE ONE WAY THE
-// INDEX CHANGES BUT ITS MAKING AND ITS DROP, so no writer stores a record over
-// one it did not read.
-func (c *Cache) commitIndex(e *entry, inc *incarnation, gen uint64, change func(next *provenanceState) bool) (
-	[]string, bool) {
-
+// applies, and answers whether it stored anything; the runs the stored index
+// no longer names wait on the incarnation for the next state written, which
+// no longer names them either (retireRuns). THE ONE WAY THE INDEX CHANGES
+// BUT ITS MAKING AND ITS DROP, so no writer stores a record over one it did
+// not read.
+func (c *Cache) commitIndex(e *entry, inc *incarnation, gen uint64, change func(next *provenanceState) bool) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	cur := inc.record()
 	if cur == nil || inc.provGen != gen || inc.discarded {
-		return nil, false
+		return false
 	}
 	next := cur.clone()
 	if !change(next) {
-		return nil, false
+		return false
 	}
 	next.Next = max(next.Next, inc.provNext)
 	c.setRecord(inc, next)
-	return retiredFiles(inc.dir, cur, next), true
+	retireRuns(inc, cur, next)
+	return true
 }
 
-// dropIndex drops inc's index where it is still the index gen names: the
-// repository its pushes were read from is gone. It answers the files to move
-// into trash/ once the state is written.
-func (c *Cache) dropIndex(e *entry, inc *incarnation, gen uint64) []string {
+// dropIndex drops inc's index where it is still the index gen names — the
+// repository its pushes were read from is gone — and answers whether it did;
+// its runs wait for the next state written (retireRuns).
+func (c *Cache) dropIndex(e *entry, inc *incarnation, gen uint64) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	cur := inc.record()
 	if cur == nil || inc.provGen != gen || inc.discarded {
-		return nil
+		return false
 	}
 	c.setRecord(inc, nil)
-	return retiredFiles(inc.dir, cur, nil)
+	retireRuns(inc, cur, nil)
+	return true
+}
+
+// retireRuns puts every run rec names and next does not among inc's retired
+// runs (incarnation.retiredRuns): each stays on the disk, named by the state
+// there, until a state that no longer names it is written, and goes then
+// (persist). e.mu is held. Moved into trash/ by the writer that retired it
+// once ITS state was written, a run whose state write failed stayed where it
+// was, named by nothing once the next write succeeded and counted by no
+// record or budget until a full round listed crewlet/ — rare once the copy is
+// warm, and likeliest under a full disk, which fails every write.
+func retireRuns(inc *incarnation, rec, next *provenanceState) {
+	for _, path := range retiredFiles(inc.dir, rec, next) {
+		if !slices.Contains(inc.retiredRuns, path) {
+			inc.retiredRuns = append(inc.retiredRuns, path)
+		}
+	}
 }
 
 // retiredFiles is the paths of the runs rec names and next does not.
@@ -830,8 +846,7 @@ func (c *Cache) indexing() bool { return c.image.decl(DerivedProvenance) != nil 
 // after every round that answered the index is level with the incarnation
 // (TestTheIndexIsLevelWithItsIncarnation). The round holds the repository's
 // write lock, so nothing else moves Through meanwhile. It answers whether it
-// wrote a run, and the files of the runs it retired, which its caller moves
-// into trash/ once the state that no longer names them is written.
+// wrote a run; a run it retired waits for the round's state (retireRuns).
 //
 // THE INDEX NEVER FAILS A ROUND: the copy the round converged is what its
 // callers wait for, and an index is a decoration of their answers. What this
@@ -841,29 +856,28 @@ func (c *Cache) indexing() bool { return c.image.decl(DerivedProvenance) != nil 
 // left, unchecked) — it leaves to the GAP, widened to the snapshot's
 // position: the backfill reads it, and until then every answer says the
 // index does not hold it (code.Coverage).
-func (c *Cache) foldPushes(ctx context.Context, e *entry, inc *incarnation, snap snapshot) (bool, []string) {
+func (c *Cache) foldPushes(ctx context.Context, e *entry, inc *incarnation, snap snapshot) bool {
 	e.mu.Lock()
 	rec, gen := inc.record(), inc.provGen
 	e.mu.Unlock()
 	to := snap.position.Packed()
 	if rec == nil || to <= rec.Through {
-		return false, nil
+		return false
 	}
 	if c.knobs != nil && c.knobs.folded != nil {
 		defer func(began time.Time) { c.knobs.folded(time.Since(began)) }(time.Now())
 	}
-	var retired []string
-	gap := func(why error) (bool, []string) {
+	gap := func(why error) bool {
 		c.log.Warn("code_cache_provenance_gap", "repo", e.id, "incarnation", inc.n,
 			"from", rec.Through, "through", to, "error", why)
-		widened, _ := c.commitIndex(e, inc, gen, func(next *provenanceState) bool {
+		c.commitIndex(e, inc, gen, func(next *provenanceState) bool {
 			if next.Through >= to {
 				return false
 			}
 			*next = *next.widened(to)
 			return true
 		})
-		return false, append(retired, widened...)
+		return false
 	}
 	switch {
 	case !snap.asked:
@@ -888,8 +902,8 @@ func (c *Cache) foldPushes(ctx context.Context, e *entry, inc *incarnation, snap
 		return true
 	}
 	if len(rows) == 0 {
-		moved, _ := c.commitIndex(e, inc, gen, level)
-		return false, moved
+		c.commitIndex(e, inc, gen, level)
+		return false
 	}
 	if len(rec.Runs) >= MaxProvenanceRuns {
 		// AT THE BOUND, the round makes its own room — the backfill keeps an
@@ -901,14 +915,13 @@ func (c *Cache) foldPushes(ctx context.Context, e *entry, inc *incarnation, snap
 			return gap(fmt.Errorf("%w: no two adjacent runs of its %d are this process's own or checked yet",
 				errUnchecked, len(rec.Runs)))
 		}
-		merged, ok, err := c.mergePair(ctx, e, inc, gen, rec, i)
+		ok, err := c.mergePair(ctx, e, inc, gen, rec, i)
 		switch {
 		case err != nil:
 			return gap(fmt.Errorf("its %d runs could not make room: %w", len(rec.Runs), err))
 		case !ok:
 			return gap(fmt.Errorf("its %d runs moved while two of them were merged", len(rec.Runs)))
 		}
-		retired = merged
 	}
 	built, err := buildRun(from, to, rows)
 	if err != nil {
@@ -918,7 +931,7 @@ func (c *Cache) foldPushes(ctx context.Context, e *entry, inc *incarnation, snap
 	if err != nil {
 		return gap(err)
 	}
-	stored, ok, err := c.storeRun(e, inc, gen, s, func(next *provenanceState, run provenanceRun) bool {
+	ok, err := c.storeRun(e, inc, gen, s, func(next *provenanceState, run provenanceRun) bool {
 		if !level(next) {
 			return false
 		}
@@ -932,10 +945,10 @@ func (c *Cache) foldPushes(ctx context.Context, e *entry, inc *incarnation, snap
 		// Dropped or made anew under the round, which holds the write lock:
 		// nothing a full round is — so a drop by a report's repair, whose
 		// next round makes the index again at its own position.
-		return false, retired
+		return false
 	}
 	c.kickBackfill()
-	return true, append(retired, stored...)
+	return true
 }
 
 // cheapestPair is the adjacent pair of rec's runs, by the first's index, on
@@ -970,11 +983,11 @@ func (c *Cache) vouchedRun(e *entry, inc *incarnation, r provenanceRun) bool {
 // (the rows' horizon), and stores the record naming it in place of the two
 // (storeRun) where both are still named side by side; where nothing of either
 // is above From, the two are retired with no run in their place. It answers
-// the files the stored record no longer names, and whether it stored. Each
-// input is mapped for the merge alone and read in order: the merge streams
-// (mergeRuns), holding nothing a push or a ref.
+// whether it stored; the two inputs wait for the next state written
+// (retireRuns). Each input is mapped for the merge alone and read in order:
+// the merge streams (mergeRuns), holding nothing a push or a ref.
 func (c *Cache) mergePair(ctx context.Context, e *entry, inc *incarnation, gen uint64, rec *provenanceState,
-	i int) ([]string, bool, error) {
+	i int) (bool, error) {
 
 	a, b := rec.Runs[i], rec.Runs[i+1]
 	replace := func(next *provenanceState, run provenanceRun) bool {
@@ -991,29 +1004,28 @@ func (c *Cache) mergePair(ctx context.Context, e *entry, inc *incarnation, gen u
 	}
 	ma, err := c.mapRun(e, inc, a)
 	if err != nil {
-		return nil, false, err
+		return false, err
 	}
 	defer c.maps.drop(ma)
 	mb, err := c.mapRun(e, inc, b)
 	if err != nil {
-		return nil, false, err
+		return false, err
 	}
 	defer c.maps.drop(mb)
 	if err := ctx.Err(); err != nil {
-		return nil, false, err
+		return false, err
 	}
 	kept := ma.file.pushCount() - ma.file.firstAbove(rec.From) + mb.file.pushCount() - mb.file.firstAbove(rec.From)
 	if kept == 0 {
-		retired, ok := c.commitIndex(e, inc, gen, func(next *provenanceState) bool {
+		return c.commitIndex(e, inc, gen, func(next *provenanceState) bool {
 			return replace(next, provenanceRun{})
-		})
-		return retired, ok, nil
+		}), nil
 	}
 	s, err := c.stageRun(func(w io.Writer) (runHeader, error) {
 		return mergeRuns(w, []runFile{ma.file, mb.file}, rec.From)
 	})
 	if err != nil {
-		return nil, false, err
+		return false, err
 	}
 	return c.storeRun(e, inc, gen, s, replace)
 }
@@ -1093,22 +1105,23 @@ func (c *Cache) placeRun(inc *incarnation, s *stagedRun, n uint64) (provenanceRu
 // storeRun places s as a new run of inc's index, vouched for as this
 // process's own, and stores the record change makes of the index as it stands
 // then, given that run (commitIndex) — THE ONE WAY A RUN JOINS AN INDEX. It
-// answers the files the stored record no longer names, and whether it stored:
-// a change that no longer applies — the index dropped or made anew, or moved
-// past what change needs of it — leaves the run named by nothing, and moves it
-// into trash/ at once.
+// answers whether it stored — the runs the stored record no longer names wait
+// for the next state written (retireRuns) — and a change that no longer
+// applies — the index dropped or made anew, or moved past what change needs
+// of it — leaves the run named by nothing, no state either, and moves it into
+// trash/ at once.
 func (c *Cache) storeRun(e *entry, inc *incarnation, gen uint64, s *stagedRun,
-	change func(next *provenanceState, run provenanceRun) bool) ([]string, bool, error) {
+	change func(next *provenanceState, run provenanceRun) bool) (bool, error) {
 
 	e.mu.Lock()
 	n := inc.allocRun()
 	e.mu.Unlock()
 	run, err := c.placeRun(inc, s, n)
 	if err != nil {
-		return nil, false, err
+		return false, err
 	}
 	c.vouchFiles(e, inc, runRel(n))
-	retired, ok := c.commitIndex(e, inc, gen, func(next *provenanceState) bool {
+	ok := c.commitIndex(e, inc, gen, func(next *provenanceState) bool {
 		if !change(next, run) {
 			return false
 		}
@@ -1118,13 +1131,13 @@ func (c *Cache) storeRun(e *entry, inc *incarnation, gen uint64, s *stagedRun,
 	if !ok {
 		c.trashRuns(e, inc, []string{filepath.Join(inc.dir, runRel(n))})
 	}
-	return retired, ok, nil
+	return ok, nil
 }
 
-// trashRuns moves the files of retired runs of inc into trash/ — once the
-// state that named them no longer does — each with its vouch. A file gone
-// already is no failure: a sweep of runs no record names may have moved it
-// first.
+// trashRuns moves the files of retired runs of inc into trash/ — a run no
+// state names: one a written state no longer names (persist), or one no
+// record ever named — each with its vouch. A file gone already is no
+// failure: a sweep of runs no record names may have moved it first.
 func (c *Cache) trashRuns(e *entry, inc *incarnation, paths []string) {
 	for _, path := range paths {
 		if !c.enter() {
@@ -1171,16 +1184,16 @@ func (c *Cache) historyGone(e *entry, inc *incarnation, snap snapshot) bool {
 // and one behind it leaves what lies between to its gap, opened or widened up
 // to it (widened) for the backfill to read. A record naming a run that is not
 // on disk at its size — a file something outside the engine removed — is no
-// record: the index is made anew. It answers the files to move into trash/
-// once the round's state is written: the runs a widened gap or a lost run
-// retired, and every run file no record names — a crash between a run's
-// rename and its state's, or a run a failed state left behind — whose number
-// it also takes past, so no run this process places is renamed over one. The
-// round holds the repository's write lock; the backfill's commits meanwhile
-// are each decided against the record this one stores (commitIndex).
-func (c *Cache) indexFull(e *entry, inc *incarnation, snap snapshot) []string {
+// record: the index is made anew. What it retires waits for the round's
+// state (retireRuns): the runs a widened gap or a lost run retired, and every
+// run file no record names — a crash between a run's rename and its state's
+// — whose number it also takes past, so no run this process places is renamed
+// over one. The round holds the repository's write lock; the backfill's
+// commits meanwhile are each decided against the record this one stores
+// (commitIndex).
+func (c *Cache) indexFull(e *entry, inc *incarnation, snap snapshot) {
 	if !c.indexing() {
-		return nil
+		return
 	}
 	p := snap.position.Packed()
 	listed, err := c.image.listed(inc.dir, engineRoot)
@@ -1216,19 +1229,19 @@ func (c *Cache) indexFull(e *entry, inc *incarnation, snap snapshot) []string {
 	if next != cur {
 		c.setRecord(inc, next)
 	}
-	out := retiredFiles(inc.dir, cur, next)
+	retireRuns(inc, cur, next)
+	for n := range onDisk {
+		path := filepath.Join(inc.dir, runRel(n))
+		if !next.named(n) && (cur == nil || !cur.named(n)) && !slices.Contains(inc.retiredRuns, path) {
+			inc.retiredRuns = append(inc.retiredRuns, path)
+		}
+	}
 	e.mu.Unlock()
 	if lost {
 		c.log.Warn("code_cache_provenance_lost", "repo", e.id, "incarnation", inc.n,
 			"why", "a run the index names is not on disk at its size: the index is made anew")
 	}
-	for n := range onDisk {
-		if !next.named(n) && (cur == nil || !cur.named(n)) {
-			out = append(out, filepath.Join(inc.dir, runRel(n)))
-		}
-	}
 	c.kickBackfill()
-	return out
 }
 
 // seedIndex is a rebuild's seeding of its index (seedRebuild): every run of

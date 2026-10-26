@@ -266,12 +266,12 @@ func (c *Cache) backfillStep(ctx context.Context) backfillDone {
 		c.checkRuns(sctx, t)
 		return backfillDone{did: true}
 	case workMerge:
-		retired, ok, err := c.mergePair(sctx, t.e, t.inc, t.gen, t.rec, t.pair)
+		ok, err := c.mergePair(sctx, t.e, t.inc, t.gen, t.rec, t.pair)
 		switch {
 		case err != nil:
 			c.log.Warn("code_cache_provenance_merge_failed", "repo", t.e.id, "incarnation", t.inc.n, "error", err)
 		case ok:
-			c.backfillStored(sctx, t, retired)
+			c.backfillStored(sctx, t)
 		}
 		return backfillDone{did: true}
 	}
@@ -288,12 +288,12 @@ func (c *Cache) backfillStep(ctx context.Context) backfillDone {
 }
 
 // backfillStored writes down what a step committed into t's index — the
-// incarnation's state, which names its runs — and then moves what the index
-// no longer names into trash/. A state that could not be written leaves the
-// retired runs where they are, named by the state on disk, which a restart
-// reads; a retired incarnation's state is not written at all, its directory
-// leaving with its last pin.
-func (c *Cache) backfillStored(ctx context.Context, t *backfillTask, retired []string) {
+// incarnation's state, which names its runs — and the runs the index no
+// longer names go with it (persist). A state that could not be written leaves
+// them where they are, named by the state on the disk, which a restart reads,
+// and waiting for the next state any writer writes; a retired incarnation's
+// state is not written at all, its directory leaving with its last pin.
+func (c *Cache) backfillStored(ctx context.Context, t *backfillTask) {
 	t.e.mu.Lock()
 	retiredInc := t.inc.retired || t.inc.discarded
 	t.e.mu.Unlock()
@@ -304,7 +304,6 @@ func (c *Cache) backfillStored(ctx context.Context, t *backfillTask, retired []s
 		c.log.Warn("code_cache_provenance_unpersisted", "repo", t.e.id, "incarnation", t.inc.n, "error", err)
 		return
 	}
-	c.trashRuns(t.e, t.inc, retired)
 	c.setGauges()
 }
 
@@ -663,7 +662,7 @@ func (c *Cache) horizonPage(ctx context.Context, t *backfillTask) error {
 		}
 		oldest = row.Position.Packed()
 	}
-	retired, ok := c.commitIndex(t.e, t.inc, t.gen, func(next *provenanceState) bool {
+	ok := c.commitIndex(t.e, t.inc, t.gen, func(next *provenanceState) bool {
 		next.OldestAt = now
 		if oldest == 0 {
 			return true
@@ -685,7 +684,7 @@ func (c *Cache) horizonPage(ctx context.Context, t *backfillTask) error {
 		return true
 	})
 	if ok {
-		c.backfillStored(ctx, t, retired)
+		c.backfillStored(ctx, t)
 	}
 	return nil
 }
@@ -700,8 +699,8 @@ func (c *Cache) commitPage(ctx context.Context, t *backfillTask, from, through i
 	change func(next *provenanceState) bool) error {
 
 	if len(rows) == 0 {
-		if retired, ok := c.commitIndex(t.e, t.inc, t.gen, change); ok {
-			c.backfillStored(ctx, t, retired)
+		if c.commitIndex(t.e, t.inc, t.gen, change) {
+			c.backfillStored(ctx, t)
 		}
 		return nil
 	}
@@ -713,7 +712,7 @@ func (c *Cache) commitPage(ctx context.Context, t *backfillTask, from, through i
 	if err != nil {
 		return err
 	}
-	retired, ok, err := c.storeRun(t.e, t.inc, t.gen, s, func(next *provenanceState, run provenanceRun) bool {
+	ok, err := c.storeRun(t.e, t.inc, t.gen, s, func(next *provenanceState, run provenanceRun) bool {
 		if !change(next) {
 			return false
 		}
@@ -727,7 +726,7 @@ func (c *Cache) commitPage(ctx context.Context, t *backfillTask, from, through i
 		if c.metrics != nil {
 			c.metrics.Add(metrics.CodeCacheProvenanceBackfilled, uint64(len(rows)), nil)
 		}
-		c.backfillStored(ctx, t, retired)
+		c.backfillStored(ctx, t)
 	}
 	return nil
 }
@@ -737,7 +736,7 @@ func (c *Cache) commitPage(ctx context.Context, t *backfillTask, from, through i
 // reads at the log's head and takes the copy out of the cache for.
 func (c *Cache) backfillGone(ctx context.Context, t *backfillTask, why error) {
 	c.log.Info("code_cache_provenance_dropped", "repo", t.e.id, "incarnation", t.inc.n, "why", why.Error())
-	if retired := c.dropIndex(t.e, t.inc, t.gen); retired != nil {
-		c.backfillStored(ctx, t, retired)
+	if c.dropIndex(t.e, t.inc, t.gen) {
+		c.backfillStored(ctx, t)
 	}
 }

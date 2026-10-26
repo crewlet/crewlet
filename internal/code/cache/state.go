@@ -272,20 +272,44 @@ func readState(dir, id string) (*state, error) {
 // maintainer — writes last writes the latest values. A round passes round,
 // which hits the sync.state fault point between the state's staging and its
 // rename (codefault.SyncState).
+//
+// THE RUNS OF THE INDEX OF PUSHES RETIRED BEFORE THE VALUE IS TAKEN GO ONCE IT
+// IS ON THE DISK (incarnation.retiredRuns): the value names none of them, and
+// until it is written the state there still does, so a crash before then
+// boots on a state naming runs that are all still there. A write that fails
+// leaves them waiting for the next — any writer's.
 func (c *Cache) persist(ctx context.Context, e *entry, inc *incarnation, round bool) error {
 	e.stateMu.Lock()
 	defer e.stateMu.Unlock()
 
 	e.mu.Lock()
 	st := inc.stateValue(e.id)
+	retired := inc.retiredRuns
+	inc.retiredRuns = nil
 	e.mu.Unlock()
-	memo := st.Derived[DerivedMemo].Bytes
+	if err := c.writeState(ctx, e, inc, st, round); err != nil {
+		e.mu.Lock()
+		inc.retiredRuns = append(retired, inc.retiredRuns...)
+		e.mu.Unlock()
+		return err
+	}
+	c.trashRuns(e, inc, retired)
+	return nil
+}
 
+// writeState writes st as inc's state, durable before it answers.
+func (c *Cache) writeState(ctx context.Context, e *entry, inc *incarnation, st state, round bool) error {
+	memo := st.Derived[DerivedMemo].Bytes
 	raw, err := json.Marshal(st)
 	if err != nil {
 		return fmt.Errorf("cache: encoding %s's state: %w", e.id, err)
 	}
 	st.Derived = nil // encoded; the incarnation's derived is the record (incarnation.state)
+	if c.knobs != nil && c.knobs.stateWrite != nil {
+		if err = c.knobs.stateWrite(e.id, round); err != nil {
+			return fmt.Errorf("cache: %s's state: %w", e.id, err)
+		}
+	}
 	staged, err := c.stage(hostbox.FileMode, func(f *os.File) error {
 		_, werr := f.Write(raw)
 		return werr

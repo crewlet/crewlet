@@ -350,12 +350,17 @@ type incarnation struct {
 	// provGen counts the indexes it has had in this process, so a page the
 	// backfill read for one is never committed into another; provNext is
 	// the number the next run of any index of it takes in this process, so
-	// no number names two files while a retired one waits for trash/.
+	// no number names two files while a retired one waits for trash/; and
+	// retiredRuns is every run file its index has stopped naming that the
+	// state on the disk may still name — each moved into trash/ by the
+	// first state written after it was retired, which names it no more
+	// (persist).
 	mapped      map[uint64]*mappedRun
 	runHolds    map[gitproc.Repairer][]*mappedRun
 	historyGone bool
 	provGen     uint64
 	provNext    uint64
+	retiredRuns []string
 	// THE MEMO'S IN-MEMORY HALF (memo.go). memo is its index — every entry
 	// this process knows, each one's bytes and last use — made at the first
 	// read or write of the memo in this process and nil before it, which is

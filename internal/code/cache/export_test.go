@@ -1307,6 +1307,16 @@ func RunViaCodes() map[code.PushVia]uint8 { return maps.Clone(runViaCodes) }
 // RunKindCodes: see RunViaCodes.
 func RunKindCodes() map[code.PrincipalKind]uint8 { return maps.Clone(runKindCodes) }
 
+// StateWriteFails makes every write of a repository's state by the cache Open
+// builds ask f first — round says whether a round writes it — and fail with
+// what it answers (nil to write).
+func StateWriteFails(o *Options, f func(repo string, round bool) error) {
+	if o.knobs == nil {
+		o.knobs = &knobs{}
+	}
+	o.knobs.stateWrite = f
+}
+
 // MappedRunsAt bounds the runs the cache Open builds holds mapped at once at
 // n, in place of the process's map count's share.
 func MappedRunsAt(n int) func(*Options) {

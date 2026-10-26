@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -801,6 +802,76 @@ func TestACacheNeverStartedBackfillsNothing(t *testing.T) {
 			t.Fatal("a started cache's backfill never closed the gap")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A RETIRED RUN LEAVES ONCE A WRITTEN STATE NO LONGER NAMES IT. A merge
+// retires the two runs it replaces — the index stops naming them — but the
+// state on the disk names them until the next is written, so a crash before
+// then must find them there; and once a state that no longer names them is
+// written, by whichever writer, they go. Moved by the writer that retired
+// them once ITS state was written, two runs whose state write failed stayed
+// in crewlet/ for good: named by nothing once a later write succeeded, and
+// counted by no record and no budget until a full round listed the directory.
+//
+// Mutation: forget the runs a failed write would have taken (persist dropping
+// its retired runs on a failure) — the merge's inputs are still on the disk
+// after the next write succeeds.
+func TestARetiredRunLeavesOnceAWrittenStateNoLongerNamesIt(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	var failing atomic.Bool
+	refused := errors.New("the disk is full")
+	c := w.open(t, func(o *cache.Options) {
+		cache.StateWriteFails(o, func(_ string, round bool) error {
+			if failing.Load() && !round {
+				return refused
+			}
+			return nil
+		})
+	})
+	w.sync(t, c, repo)
+	var s cache.Synced
+	for range 2 {
+		w.push(t, repo, "refs/heads/main", nil)
+		s = w.sync(t, c, repo)
+	}
+	idx := mustIndex(t, c, repo)
+	if len(idx.Runs) != 2 {
+		t.Fatalf("the index holds runs %v, want the two deltas' runs, a merge due", idx.Runs)
+	}
+	inputs := []string{filepath.Join(s.Dir, cache.RunRel(idx.Runs[0])), filepath.Join(s.Dir, cache.RunRel(idx.Runs[1]))}
+
+	failing.Store(true)
+	if steps := backfill(t, c); !slices.Contains(steps, "merge") {
+		t.Fatalf("the backfill took %v, want the merge of the two runs", steps)
+	}
+	if len(w.logs.lines(t, "code_cache_provenance_unpersisted")) == 0 {
+		t.Fatal("the merge's state write was refused and nothing said so")
+	}
+	if got := mustIndex(t, c, repo); len(got.Runs) != 1 {
+		t.Fatalf("after the merge the index holds runs %v, want the merged one", got.Runs)
+	}
+	for _, in := range inputs {
+		if !statOK(t, in) {
+			t.Errorf("the merge's input %s left the disk while the state there still names it", in)
+		}
+	}
+
+	// The next state written — a round's — names neither, and takes both.
+	failing.Store(false)
+	oid, _ := w.push(t, repo, "refs/heads/main", nil)
+	s = w.sync(t, c, repo)
+	for _, in := range inputs {
+		if statOK(t, in) {
+			t.Errorf("the merge's input %s is still on the disk once a state that no longer names it was written",
+				in)
+		}
+	}
+	if got := introducedBy(t, c, s, oid); got != lastPush(t, w.log, repo).PushID {
+		t.Errorf("the index answers the last commit with %q, want its push", got)
 	}
 }
 

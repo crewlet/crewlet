@@ -213,6 +213,11 @@ type knobs struct {
 	// place of the process's map count's share (runmaps.go): a case reaches
 	// the bound with a handful of copies.
 	mappedRuns int
+	// stateWrite, when set, is asked before every write of a repository's
+	// state — round says whether a round writes it — and an error it answers
+	// is that write's: a case fails the backfill's or the maintainer's write,
+	// which reach no fault point.
+	stateWrite func(repo string, round bool) error
 }
 
 // validate refuses an Options value naming the field and what to set,

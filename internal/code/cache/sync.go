@@ -1467,9 +1467,8 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 	// THE INDEX OF PUSHES (provenance.go), after the packs and the refs and
 	// before the state: a delta's pushes folded as one run before anybody is
 	// answered, a full round's position its index's — or its gap's — upper
-	// bound. What either retires goes to trash/ once the state that no
-	// longer names it is written; and neither fails the round.
-	var retired []string
+	// bound. What either retires waits for a state that no longer names it
+	// (persist); and neither fails the round.
 	provenanceWrote := false
 	if snap.full {
 		trashed, err := c.sweepPacks(e, inc, strays)
@@ -1481,9 +1480,9 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 		// read can meet is the history this round read: a memo its history's
 		// drop shut takes answers again (memo.go).
 		c.reopenMemo(e, inc)
-		retired = c.indexFull(e, inc, snap)
+		c.indexFull(e, inc, snap)
 	} else {
-		provenanceWrote, retired = c.foldPushes(ctx, e, inc, snap)
+		provenanceWrote = c.foldPushes(ctx, e, inc, snap)
 	}
 
 	// The in-memory fields are what the directory now reflects. When it
@@ -1496,10 +1495,10 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 	// index, a file swept out of it.
 	wrote := ins.added+ins.replaced > 0 || refsWritten || indexed || res.trashed
 	// A run of the index of pushes is written down with the state that
-	// names it, and one it retired is moved only once a state no longer
-	// names it — but neither is a file git reads, so no change a rebuild
+	// names it, and one retired goes only once a state no longer names it
+	// (persist) — but neither is a file git reads, so no change a rebuild
 	// weighs.
-	changed := snap.full || wrote || provenanceWrote || len(retired) > 0 ||
+	changed := snap.full || wrote || provenanceWrote || len(inc.retiredRuns) > 0 ||
 		!snap.streamCreated.Equal(inc.stream) || !sameRepo(inc.repo, snap.repo)
 	prevAt, prevStream, prevRepo := inc.at, inc.stream, inc.repo
 	inc.at, inc.stream, inc.repo = snap.position, snap.streamCreated, snap.repo
@@ -1528,9 +1527,6 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 			return res, fmt.Errorf("cache: sync %s: state: %w", e.id, err)
 		}
 	}
-	// What the state no longer names goes once it is written: a run retired
-	// before, a crash between, and the state on disk names a file gone.
-	c.trashRuns(e, inc, retired)
 	if snap.full {
 		e.mu.Lock()
 		inc.converged = c.rereads.Load() == epoch && inc.marks == marks
