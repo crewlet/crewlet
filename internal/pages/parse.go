@@ -6,14 +6,16 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/routing"
 )
 
-// Routing reasons, strongest claim first.
+// Routing reasons, strongest claim first — which is the order [Parser.Parse]
+// offers them in, and so their precedence (internal/routing: the first reason
+// that names a handle is the one it hears under).
 const (
 	// ViaMention: named in a comment or an edit. A directed ask, and the
 	// only reason a mute does not suppress.
@@ -108,29 +110,95 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 	base := p.inbound(record)
 	actor := record.Actor
 
-	var targets []target
-	for _, handle := range record.Notify.Mentions {
-		targets = append(targets, target{handle: handle, via: ViaMention})
-	}
+	// THE TRACKER'S RULE AT ITS SMALLEST (internal/routing): two reasons in
+	// precedence order and a chain of one lead to fall back on. A mention
+	// outranks a watch, so a watcher who is also named hears that they were
+	// named, and hears it once.
+	var b routing.Builder[string]
+	b.AddAll(record.Notify.Mentions, ViaMention, true)
 	// THE RECIPIENTS ARE THE WATCHERS MINUS THE MUTED, subtracted once at
 	// write time — so this can never forget to, and a handle that unwatched
 	// is not woken by a set that still remembers them.
-	for _, handle := range record.Notify.Recipients {
-		targets = append(targets, target{handle: handle, via: ViaWatcher})
+	b.AddAll(record.Notify.Recipients, ViaWatcher, false)
+	// AN ORDINARY SAVE NOBODY FOLLOWS falls back on nobody. A wiki fills up
+	// with pages nobody watches, and waking a lead for every one of them is
+	// how a lead learns to ignore the knowledge base entirely — so only a
+	// change [LeadWorthy] names offers the container's lead, and Route keeps
+	// that copy only when nobody named survived.
+	container := record.Notify.Container
+	offered := container != "" && LeadWorthy(record.Notify.Kind)
+	lead := ""
+	if offered {
+		lead = p.leads[ContainerKey(container)]
+		b.Fallback(ViaLeadFallback, lead)
 	}
+
+	// THE LEAD IS CHECKED AGAINST THE ROSTER LIKE EVERY OTHER RECIPIENT. The
+	// lead map is built from one epoch's org and this parser outlives that
+	// epoch, so a lead whose seat was removed or whose handle was changed is
+	// a handle the company no longer employs — and routing to one produces a
+	// delivery that resolves to nobody at the far end of the notification
+	// service, reported there as an undeliverable recipient rather than here,
+	// where the container that reached nobody is named. A mention or a
+	// watcher who left is dropped for the same reason.
+	//
+	// AND NO REASON HERE WAKES THE ACTOR (a nil wakesActor): a lead writing
+	// in their own container, like anybody saving a page they watch, has
+	// nothing to learn from the change they just made.
+	refused := 0
+	routed := routing.Route(b.Candidates(), employs(reg, &refused), actor, nil)
+	if refused > 0 {
+		log.Debug("pages_unknown_recipients_dropped", "count", refused,
+			"page", base.Metadata[MetaTitle])
+	}
+	if len(routed) == 0 {
+		if offered {
+			// A CHANGE ITS LEAD HAD A REASON TO KNOW ABOUT reached nobody:
+			// the container has no lead (an empty `lead`), or its lead is
+			// the actor, or is no longer a seat (counted above).
+			log.Debug("pages_change_reaches_nobody", "container", container,
+				"lead", lead, "actor", actor, "page", base.Metadata[MetaTitle])
+		}
+		return nil, nil
+	}
+
 	// THE RECORD'S OWN INSTANT stamps every wake it produces — see
 	// [notify.Routed.WakeAt].
 	at := record.CreatedAt
-	if copies := p.directed(base, targets, actor, at, reg); len(copies) > 0 {
-		return copies, nil
+	out := make([]notify.Routed, 0, len(routed))
+	for _, c := range routed {
+		out = append(out, notify.Routed{
+			Inbound: withVia(base, c.Reason),
+			To:      notify.Recipient{Handle: c.Handle},
+			// DERIVED, so a redelivery is recognisable as one. The feed's
+			// claim is the first dedupe layer and it FAILS OPEN — a
+			// coordination store that cannot be reached must not stop
+			// notifications — so this is what catches what slips through.
+			// See [changefeed.WakeID].
+			WakeID: changefeed.WakeID(base.Metadata[MetaChangeID], c.Handle),
+			WakeAt: at,
+		})
 	}
-	if !LeadWorthy(record.Notify.Kind) {
-		// An ordinary save nobody follows. A wiki fills up with pages
-		// nobody watches, and waking a lead for every one of them is how a
-		// lead learns to ignore the knowledge base entirely.
-		return nil, nil
+	return out, nil
+}
+
+// employs narrows the party registry to the one question routing asks —
+// whether the company still employs a handle — and counts the handles it
+// refuses, for the debug line a dropped recipient leaves.
+//
+// A NIL REGISTRY admits everybody, which is the honest answer for a deployment
+// with no organization loaded yet.
+func employs(reg *notify.Registry, refused *int) func(string) bool {
+	if reg == nil {
+		return nil
 	}
-	return p.leadCopy(base, record.Notify.Container, actor, at, reg), nil
+	return func(handle string) bool {
+		if _, ok := reg.ByHandle(handle); ok {
+			return true
+		}
+		*refused++
+		return false
+	}
 }
 
 // LeadWorthy reports whether a change reaches the container's lead when
@@ -142,84 +210,6 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 // lead's prompt has an opener for exactly these three.
 func LeadWorthy(kind ChangeKind) bool {
 	return kind == ChangeCreated || kind == ChangeRemoved || kind == ChangeStatus
-}
-
-type target struct{ handle, via string }
-
-func (p *Parser) directed(base notify.Inbound, targets []target, actor string,
-	at time.Time, reg *notify.Registry) []notify.Routed {
-	var (
-		out     []notify.Routed
-		seen    = map[string]bool{}
-		dropped int
-	)
-	for _, t := range targets {
-		if t.handle == "" || t.handle == actor || seen[t.handle] {
-			continue
-		}
-		seen[t.handle] = true
-		if reg != nil {
-			if _, ok := reg.ByHandle(t.handle); !ok {
-				dropped++
-				continue
-			}
-		}
-		out = append(out, notify.Routed{
-			Inbound: withVia(base, t.via),
-			To:      notify.Recipient{Handle: t.handle},
-			// DERIVED, so a redelivery is recognisable as one. The
-			// feed's claim is the first dedupe layer and it FAILS
-			// OPEN — a coordination store that cannot be reached
-			// must not stop notifications — so this is what catches
-			// what slips through. See [changefeed.WakeID].
-			WakeID: changefeed.WakeID(base.Metadata[MetaChangeID], t.handle),
-			WakeAt: at,
-		})
-	}
-	if dropped > 0 {
-		log.Debug("pages_unknown_recipients_dropped", "count", dropped,
-			"page", base.Metadata[MetaTitle])
-	}
-	return out
-}
-
-// leadCopy is the fallback: the lead of the unit that owns the container.
-func (p *Parser) leadCopy(base notify.Inbound, container, actor string,
-	at time.Time, reg *notify.Registry) []notify.Routed {
-	if container == "" {
-		return nil
-	}
-	lead := p.leads[ContainerKey(container)]
-	if lead == "" {
-		log.Debug("pages_no_recipients", "container", container,
-			"page", base.Metadata[MetaTitle])
-		return nil
-	}
-	// A lead writing in their own container must not wake themselves.
-	if lead == actor {
-		return nil
-	}
-	// AND THE LEAD IS CHECKED AGAINST THE ROSTER LIKE EVERY OTHER RECIPIENT.
-	// The lead map is built from one epoch's org and this parser outlives
-	// that epoch, so a lead whose seat was removed or whose handle was
-	// changed is a handle the company no longer employs — and routing to one
-	// produces a delivery that resolves to nobody at the far end of the
-	// notification service, reported there as an undeliverable recipient
-	// rather than here, where the container that reached nobody is named.
-	// [Parser.directed] drops the same handles for the same reason.
-	if reg != nil {
-		if _, known := reg.ByHandle(lead); !known {
-			log.Debug("pages_lead_is_not_a_seat", "container", container,
-				"lead", lead, "page", base.Metadata[MetaTitle])
-			return nil
-		}
-	}
-	return []notify.Routed{{
-		Inbound: withVia(base, ViaLeadFallback),
-		To:      notify.Recipient{Handle: lead},
-		WakeID:  changefeed.WakeID(base.Metadata[MetaChangeID], lead),
-		WakeAt:  at,
-	}}
 }
 
 func (p *Parser) inbound(record MutationRecord) notify.Inbound {

@@ -4,9 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/routing"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -52,7 +52,10 @@ import (
 // Collapsing those into a boolean is the exact failure this reader exists to
 // end one level up, so [RoutingAnswer.Delivery] is a value: "announced and
 // reached nobody" sends a reader to look at who has left, and "swept" sends
-// them to look at a retention horizon. They are not the same errand.
+// them to look at a retention horizon. They are not the same errand. The rule
+// that tells them apart is [routing.DeliveryOf], every native domain's, and
+// what this reader adds is the evidence it decides on: the history row's
+// `notified`, the notification rows it found, and the caller's horizon.
 //
 // They are separated by the HORIZON, which the caller states: a change older
 // than `tracker.native.inbox_retention_days` is one whose rows the sweep is
@@ -131,10 +134,10 @@ type RoutingAnswer struct {
 	// reached — see the file head. It is the value a surface renders when
 	// [Recipients] is empty, and the three empty states it distinguishes
 	// send a reader to three different places.
-	Delivery Delivery `json:"delivery"`
+	Delivery routing.Delivery `json:"delivery"`
 
 	// RetainedFrom is the instant the stated horizon falls on — the
-	// sweep's own cutoff — and it is what [Delivery] is decided against.
+	// sweep's own cutoff — and it is what Delivery is decided against.
 	// Zero when the caller stated no horizon, which is what makes
 	// `unknown` reachable.
 	RetainedFrom time.Time `json:"retained_from,omitzero"`
@@ -158,49 +161,6 @@ type RoutingAnswer struct {
 	Complete       bool               `json:"complete"`
 	Incomplete     *Incomplete        `json:"incomplete,omitempty"`
 }
-
-// Delivery is what a node can say about who one change reached.
-//
-// A NAMED TYPE rather than two booleans, for the reason the whole domain's
-// enums are: an unknown value off the wire is a value rather than a panic, and
-// a surface switching on one cannot render a combination that does not exist.
-type Delivery string
-
-const (
-	// DeliveryQuiet is a commit that carried no notification at all. It
-	// is not a failure: most field edits announce nothing.
-	DeliveryQuiet Delivery = "quiet"
-
-	// DeliveryReached is the ordinary answer — the rows are here and
-	// [RoutingAnswer.Recipients] names them.
-	DeliveryReached Delivery = "reached"
-
-	// DeliveryNobody is announced, inside the retained window, and no
-	// rows: the routing genuinely resolved to nobody. Every candidate was
-	// the actor themself, or has left the company.
-	DeliveryNobody Delivery = "nobody"
-
-	// DeliverySwept is announced, no rows, and older than the retention
-	// horizon — so their absence is not evidence. The sweep is entitled
-	// to have taken them and the applier is entitled never to have
-	// written them, and neither leaves a trace saying which.
-	DeliverySwept Delivery = "swept"
-
-	// DeliveryUnknown is announced, no rows, and no horizon stated, so
-	// there is nothing to date the absence against. Honest rather than
-	// useful, which is the right way round: the alternative is telling an
-	// operator that a change reached nobody on no evidence at all.
-	DeliveryUnknown Delivery = "unknown"
-)
-
-// Deliveries is the closed set, in the order a reader meets them.
-var Deliveries = []Delivery{
-	DeliveryQuiet, DeliveryReached, DeliveryNobody, DeliverySwept,
-	DeliveryUnknown,
-}
-
-// Valid reports whether d is one this build knows.
-func (d Delivery) Valid() bool { return slices.Contains(Deliveries, d) }
 
 // MaxRoutingRows bounds one change's recipient list.
 //
@@ -310,7 +270,16 @@ func (r *Reader) Routing(ctx context.Context, q RoutingQuery, now time.Time) (
 	if q.Retention > 0 {
 		answer.RetainedFrom = now.Add(-q.Retention)
 	}
-	answer.Delivery = deliveryOf(answer)
+	// THE HISTORY ROW'S `notified` IS THE ANNOUNCEMENT, never "somebody was
+	// woken" — see [ActivityRecord.Notified] — and a record id naming no
+	// row is not held: the two facts the rule needs besides the rows.
+	answer.Delivery = routing.DeliveryOf(routing.Evidence{
+		Held:         answer.Held,
+		Announced:    answer.Notified,
+		Recipients:   len(answer.Recipients),
+		At:           answer.At,
+		RetainedFrom: answer.RetainedFrom,
+	})
 
 	answer.Level = served.Level
 	answer.Complete = served.Complete
@@ -319,30 +288,6 @@ func (r *Reader) Routing(ctx context.Context, q RoutingQuery, now time.Time) (
 		answer.Incomplete = incompleteFrom(served.Incomplete)
 	}
 	return answer, nil
-}
-
-// deliveryOf is the one place the three empty states are told apart.
-//
-// A FUNCTION OVER THE ANSWER rather than a branch inside the read, so it is
-// exercisable without a database — the same reason `textindex`'s arithmetic
-// and `coerce.go`'s table are pure over values.
-func deliveryOf(answer RoutingAnswer) Delivery {
-	switch {
-	case len(answer.Recipients) > 0:
-		return DeliveryReached
-	case !answer.Held || !answer.Notified:
-		// A change nobody wrote and a change that announced nothing
-		// are both QUIET here: neither claimed to reach anybody, so
-		// neither has anything missing. `held` is what tells them
-		// apart, and it is already on the answer.
-		return DeliveryQuiet
-	case answer.RetainedFrom.IsZero():
-		return DeliveryUnknown
-	case answer.At.Before(answer.RetainedFrom):
-		return DeliverySwept
-	default:
-		return DeliveryNobody
-	}
 }
 
 // routingScope is the whole domain, because the two halves live in different

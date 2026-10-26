@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/routing"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -135,7 +136,7 @@ func TestEveryRoutingFieldHasAProducer(t *testing.T) {
 			// before it, so the reason looked implemented from every
 			// angle except the one that counts.
 			if !slices.ContainsFunc(tracker.Candidates(notify, false),
-				func(got tracker.Candidate) bool { return got.Reason == c.reason }) {
+				func(got routing.Candidate[tracker.Reason]) bool { return got.Reason == c.reason }) {
 				t.Errorf("Snapshot.%s is filled and no candidate came back "+
 					"under %q: %+v", c.field, c.reason,
 					tracker.Candidates(notify, false))
@@ -376,7 +377,7 @@ func TestNoReasonIsShadowedByAnEarlierArm(t *testing.T) {
 			continue
 		}
 		if !slices.ContainsFunc(tracker.Candidates(alone, false),
-			func(c tracker.Candidate) bool { return c.Reason == reason }) {
+			func(c routing.Candidate[tracker.Reason]) bool { return c.Reason == reason }) {
 			t.Errorf("%q cannot name anybody even on a notification built for "+
 				"it alone — an earlier arm claims its handle", reason)
 		}

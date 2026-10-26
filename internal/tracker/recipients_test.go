@@ -4,6 +4,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/routing"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -11,7 +12,7 @@ import (
 func everyone(string) bool { return true }
 
 // reasonOf finds the reason a handle appears under, or "".
-func reasonOf(cands []tracker.Candidate, handle string) tracker.Reason {
+func reasonOf(cands []routing.Candidate[tracker.Reason], handle string) tracker.Reason {
 	for _, c := range cands {
 		if c.Handle == handle {
 			return c.Reason
@@ -20,7 +21,7 @@ func reasonOf(cands []tracker.Candidate, handle string) tracker.Reason {
 	return ""
 }
 
-func handles(cands []tracker.Candidate) []string {
+func handles(cands []routing.Candidate[tracker.Reason]) []string {
 	out := make([]string, 0, len(cands))
 	for _, c := range cands {
 		out = append(out, c.Handle)
@@ -219,9 +220,9 @@ func TestOnlyAnUnblockedNoticeReachesTheActor(t *testing.T) {
 	if routed[0].Addressed {
 		t.Error("an unblocked notice is addressed")
 	}
-	if routed[0].Task != "t-2" {
+	if routed[0].Subject != "t-2" {
 		t.Errorf("the unblocked notice names task %q; it is about the task that "+
-			"became workable, not the one that closed", routed[0].Task)
+			"became workable, not the one that closed", routed[0].Subject)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/routing"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -69,7 +70,7 @@ func TestOneChangeSaysWhoItWokeAndWhy(t *testing.T) {
 			"nobody can place", got.SubjectKey)
 	case got.Addressed != 1:
 		t.Fatalf("the addressed count is %d, want 1", got.Addressed)
-	case got.Delivery != tracker.DeliveryReached:
+	case got.Delivery != routing.DeliveryReached:
 		t.Fatalf("the delivery is %q, want reached", got.Delivery)
 	}
 }
@@ -88,7 +89,7 @@ func TestAChangeNobodyWroteIsHeldFalseRatherThanAFailure(t *testing.T) {
 		t.Fatal("a record id naming nothing reports a change that exists")
 	case len(got.Recipients) != 0:
 		t.Fatalf("it carries %d recipients", len(got.Recipients))
-	case got.Delivery != tracker.DeliveryQuiet:
+	case got.Delivery != routing.DeliveryQuiet:
 		t.Fatalf("a change that never existed reports delivery %q, which "+
 			"sends an operator to look for rows that never existed",
 			got.Delivery)
@@ -123,7 +124,7 @@ func TestAnAnnouncedChangeInsideTheWindowThatReachedNobodySaysSo(t *testing.T) {
 		t.Fatal("the change is reported missing")
 	case len(got.Recipients) != 0:
 		t.Fatalf("a create naming nobody woke %d people", len(got.Recipients))
-	case got.Delivery != tracker.DeliveryNobody:
+	case got.Delivery != routing.DeliveryNobody:
 		t.Fatalf("an announced change inside the retention window that "+
 			"reached nobody reports delivery %q — the rows would still be "+
 			"here if there were any", got.Delivery)
@@ -253,7 +254,7 @@ func TestWithNoHorizonAnAbsentSetIsUnknownRatherThanAGuess(t *testing.T) {
 		t.Fatalf("Routing: %v", err)
 	}
 	switch {
-	case got.Delivery != tracker.DeliveryUnknown:
+	case got.Delivery != routing.DeliveryUnknown:
 		t.Fatalf("with no horizon stated the delivery is %q", got.Delivery)
 	case !got.RetainedFrom.IsZero():
 		t.Fatalf("it dated the absence against %s", got.RetainedFrom)

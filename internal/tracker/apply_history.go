@@ -383,11 +383,12 @@ func inboxSubjectKey(fromRow string, notify *Notify) string {
 // # BUT NEVER THE PERSON WHO MADE THE CHANGE
 //
 // Except under the one reason that is news to them ([Reason.WakesActor]):
-// the same step [Route] takes, over the record's actor — the seat's identity
-// whenever a person writes as their seat ([iam.ActorFor]), the spelling a
-// candidate is in. It needs no registry — who wrote the record is on the
-// record — so it belongs here rather than only in the routing, and here is
-// the only place it can be kept: this table is what `work_inbox` reads, and a
+// the same step [Route] takes — [routing.Candidate.Hears], one predicate for
+// both — over the record's actor, the seat's identity whenever a person
+// writes as their seat ([iam.ActorFor]), the spelling a candidate is in. It
+// needs no registry — who wrote the record is on the record — so it belongs
+// here rather than only in the routing, and here is the only place it can be
+// kept: this table is what `work_inbox` reads, and a
 // row written for the actor is a notice in their own inbox about what they
 // just did. A founder who commented on her own task through her assistant
 // found it in her inbox, unread, as "assigned to you", and every such row
@@ -437,7 +438,7 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 		// ([iam.ActorFor]), which is the same spelling a candidate's
 		// handle is in, so one comparison covers a seat, a person at the
 		// dashboard and their own assistant alike.
-		if candidate.Handle == c.record.Actor && !candidate.Reason.WakesActor() {
+		if !candidate.Hears(c.record.Actor, Reason.WakesActor) {
 			continue
 		}
 		res, err := tx.ExecContext(ctx, `

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/routing"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -111,7 +112,7 @@ func TestTheApplierAndTheParserNameTheSamePeople(t *testing.T) {
 	}
 }
 
-func names(candidates []tracker.Candidate) []string {
+func names(candidates []routing.Candidate[tracker.Reason]) []string {
 	out := make([]string, 0, len(candidates))
 	for _, c := range candidates {
 		out = append(out, c.Handle+"/"+string(c.Reason))
@@ -119,7 +120,7 @@ func names(candidates []tracker.Candidate) []string {
 	return out
 }
 
-func addressedCount(candidates []tracker.Candidate) int {
+func addressedCount(candidates []routing.Candidate[tracker.Reason]) int {
 	n := 0
 	for _, c := range candidates {
 		if c.Addressed {

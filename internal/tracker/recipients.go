@@ -1,6 +1,10 @@
 package tracker
 
-import "slices"
+import (
+	"slices"
+
+	"github.com/crewlet/crewlet/internal/routing"
+)
 
 // Who hears about a change, and why the answer is TWO functions.
 //
@@ -16,6 +20,12 @@ import "slices"
 // is what makes the applier's `tracker_notifications` row a complete record of
 // everyone the change concerned, while the wake goes only to the people still
 // there — and why the parity test can assert that the two surfaces agree.
+//
+// THE RULE BOTH APPLY IS internal/routing's, shared with every native domain:
+// one reason per handle, the first offered; the ordered fallback; the
+// post-filter's four steps. What stays here is what is the tracker's own — its
+// eighteen reasons, the ORDER [Candidates] offers them in, which is their
+// precedence, and the one reason that reaches the actor.
 
 // Reason is why one handle hears about a change.
 type Reason string
@@ -96,34 +106,6 @@ var addressedReasons = []Reason{
 // answer. For which reasons lead a PERSON's inbox, see [DefaultPrimaryReasons].
 func (r Reason) Addressed() bool { return slices.Contains(addressedReasons, r) }
 
-// Candidate is one handle and why it is a candidate.
-type Candidate struct {
-	Handle string
-	Reason Reason
-
-	// Addressed marks a wake that asks something of its recipient — a
-	// turn that must answer rather than absorb.
-	Addressed bool
-
-	// FallbackOnly marks a candidate kept only when no ordinary one
-	// survives, and FallbackRank orders those among themselves.
-	FallbackOnly bool
-	FallbackRank int
-
-	// InboxOnly marks a candidate written to the inbox and never woken.
-	InboxOnly bool
-
-	// Task names the task this candidate is about when it is NOT the
-	// subject of the change — which today is the unblocked notice alone.
-	//
-	// It is what makes that notice survive the one-reason-per-handle rule:
-	// the person who closed ENG-1 and owns the ENG-2 it unblocked would
-	// otherwise be deduped under `assignee` for ENG-1 and dropped as the
-	// actor, and would never learn that ENG-2 became workable — which is
-	// the entire feature.
-	Task string
-}
-
 // WakesActor reports the one reason that reaches the person who made the
 // change.
 //
@@ -146,25 +128,16 @@ func (r Reason) WakesActor() bool { return r == ReasonUnblocked }
 // is a property of the CALL that produced the record — a bulk re-tag is
 // thirty facts to absorb rather than thirty asks — and the notification is
 // about one change.
-func Candidates(n *Notify, batched bool) []Candidate {
+func Candidates(n *Notify, batched bool) []routing.Candidate[Reason] {
 	if n == nil {
 		return nil
 	}
-	var out []Candidate
-	seen := map[string]bool{}
+	var b routing.Builder[Reason]
 	add := func(handle string, reason Reason, addressed bool) {
-		if handle == "" || seen[handle] {
-			return
-		}
-		seen[handle] = true
-		out = append(out, Candidate{
-			Handle: handle, Reason: reason, Addressed: addressed && !batched,
-		})
+		b.Add(handle, reason, addressed && !batched)
 	}
 	addAll := func(handles []string, reason Reason, addressed bool) {
-		for _, h := range handles {
-			add(h, reason, addressed)
-		}
+		b.AddAll(handles, reason, addressed && !batched)
 	}
 
 	task := n.Kind.TaskCommit()
@@ -217,13 +190,14 @@ func Candidates(n *Notify, batched bool) []Candidate {
 	// are about OTHER tasks: one commit legitimately tells one person both
 	// "your task is done" and "this other one is now workable", and the
 	// second is the only wake that reaches the person who made the change.
+	// Each names the task it is about, which is what makes it survive: the
+	// person who closed ENG-1 and owns the ENG-2 it unblocked would otherwise
+	// be deduped under `assignee` for ENG-1 and dropped as the actor, and
+	// would never learn that ENG-2 became workable — which is the entire
+	// feature. And it is never ADDRESSED: a turn that cannot start yet would
+	// otherwise be forced to post something on every unblock.
 	for _, party := range n.Snapshot.Unblocked {
-		if party.Assignee == "" {
-			continue
-		}
-		out = append(out, Candidate{
-			Handle: party.Assignee, Reason: ReasonUnblocked, Task: party.Task,
-		})
+		b.About(party.Task, party.Assignee, ReasonUnblocked, false)
 	}
 	if n.Kind == ChangeRouted {
 		add(n.Snapshot.RoutedTo, ReasonRoutedTo, false)
@@ -240,15 +214,12 @@ func Candidates(n *Notify, batched bool) []Candidate {
 	if task {
 		addAll(n.Snapshot.Watchers, ReasonWatcher, false)
 	}
+	// AN UNWATCH IS A RECORD, NOT A WAKE: a human learns that a lead removed
+	// her watch, and an agent is not woken about a decision that was not its
+	// own.
 	if n.Kind == ChangeWatchers {
 		for _, h := range n.Snapshot.RemovedWatchers {
-			if h == "" || seen[h] {
-				continue
-			}
-			seen[h] = true
-			out = append(out, Candidate{
-				Handle: h, Reason: ReasonUnwatched, InboxOnly: true,
-			})
+			b.InboxOnly(h, ReasonUnwatched)
 		}
 	}
 	if n.Kind == ChangePurged {
@@ -263,20 +234,9 @@ func Candidates(n *Notify, batched bool) []Candidate {
 	// reaches NOBODY; with the list, the unit lead is dropped as the actor
 	// and the project lead gets the copy.
 	if n.Kind.mayFallBack() {
-		for rank, handle := range []string{
-			n.Snapshot.RoutingUnitLead, n.Snapshot.ProjectLead,
-		} {
-			if handle == "" || seen[handle] {
-				continue
-			}
-			seen[handle] = true
-			out = append(out, Candidate{
-				Handle: handle, Reason: ReasonLeadFallback,
-				FallbackOnly: true, FallbackRank: rank,
-			})
-		}
+		b.Fallback(ReasonLeadFallback, n.Snapshot.RoutingUnitLead, n.Snapshot.ProjectLead)
 	}
-	return out
+	return b.Candidates()
 }
 
 // assigneeAddressed decides whether the assignee is being ASKED something.
@@ -334,50 +294,16 @@ func (k ChangeKind) mayFallBack() bool {
 	return false
 }
 
-// Route is the post-filter: who is actually woken.
+// Route is the post-filter — who is actually woken — with the tracker's one
+// reason that reaches the person who made the change ([Reason.WakesActor]).
 //
-// Four steps, in this order, and the last one is the whole reason the fallback
-// is a list:
-//
-//  1. Drop the inbox-only candidates — they are a record, not a wake.
-//  2. Drop handles the company no longer employs.
-//  3. Drop the actor, except under the one reason that wakes them.
-//  4. If no ordinary candidate survived, keep the LOWEST-RANKED surviving
-//     fallback and only that one.
-//
-// ONE NAME IS THE ACTOR. A person bound to a seat writes AS that seat — the
-// author iam.ActorFor records for them — so the handle their own gestures
-// land on is the author itself, and a credential nobody is bound through
-// writes, and is watched, under its own login.
-func Route(candidates []Candidate, registry func(string) bool, actor string) []Candidate {
-	var ordinary, fallback []Candidate
-	for _, c := range candidates {
-		if c.InboxOnly {
-			continue
-		}
-		if registry != nil && !registry(c.Handle) {
-			continue
-		}
-		if c.Handle == actor && !c.Reason.WakesActor() {
-			continue
-		}
-		if c.FallbackOnly {
-			fallback = append(fallback, c)
-			continue
-		}
-		ordinary = append(ordinary, c)
-	}
-	if len(ordinary) > 0 {
-		return ordinary
-	}
-	if len(fallback) == 0 {
-		return nil
-	}
-	best := fallback[0]
-	for _, c := range fallback[1:] {
-		if c.FallbackRank < best.FallbackRank {
-			best = c
-		}
-	}
-	return []Candidate{best}
+// Its four steps are [routing.Route]'s: drop the inbox-only candidates, drop
+// handles the company no longer employs, drop the actor except under
+// `unblocked`, and keep the lowest-ranked surviving fallback only when no
+// ordinary candidate survived — the step that is the whole reason the
+// fallback [Candidates] offers is a list.
+func Route(candidates []routing.Candidate[Reason], registry func(string) bool,
+	actor string) []routing.Candidate[Reason] {
+
+	return routing.Route(candidates, registry, actor, Reason.WakesActor)
 }
