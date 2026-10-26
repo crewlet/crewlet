@@ -123,6 +123,60 @@ func TestATranscriptReadsBackWhatWasRecorded(t *testing.T) {
 	}
 }
 
+// A LISTING IS ORDERED BY ITS LAST ACTIVITY AND SAYS IT, so the time a client
+// shows beside each conversation reads down the list in order. A new title
+// moves the record's updated_at and not its activity, so a conversation used
+// first and retitled last stays below the one used after it, and its
+// summary's last_activity_at is the instant the order was decided by.
+// Mutation: leave LastActivityAt out of Summary, or order by updated_at, and
+// this fails.
+func TestAListingIsOrderedByTheActivityItShows(t *testing.T) {
+	t.Parallel()
+	n := newHarness(t)
+	ada := uuid.New()
+	c := person(ada, "ada")
+	ctx := t.Context()
+	first := n.conversation(c, "Payroll")
+	n.openTurn(c, first)
+	second := n.conversation(c, "Hiring plan")
+	n.openTurn(c, second)
+	if _, err := n.writer.TitleConversation(ctx, fresh(c), first, "Payroll, October"); err != nil {
+		t.Fatalf("retitle the first conversation: %v", err)
+	}
+	list, err := n.reader.Conversations(ctx, ada, "", 0)
+	if err != nil {
+		t.Fatalf("list ada's conversations: %v", err)
+	}
+	if len(list.Conversations) != 2 {
+		t.Fatalf("ada's listing holds %d conversations, want 2", len(list.Conversations))
+	}
+	top, below := list.Conversations[0], list.Conversations[1]
+	if top.ID != second || below.ID != first {
+		t.Fatalf("the listing reads %s then %s, want the one used last (%s) first",
+			top.ID, below.ID, second)
+	}
+	// THE CASE DISCRIMINATES only if the retitle put the first one's
+	// updated_at past the second one's activity.
+	if !below.UpdatedAt.After(top.LastActivityAt) {
+		t.Fatalf("the retitle left updated_at at %s, not past the other's activity at %s",
+			below.UpdatedAt, top.LastActivityAt)
+	}
+	for _, summary := range list.Conversations {
+		stored, err := n.reader.Conversation(ctx, ada, summary.ID)
+		if err != nil {
+			t.Fatalf("read conversation %s: %v", summary.ID, err)
+		}
+		if summary.LastActivityAt.IsZero() || !summary.LastActivityAt.Equal(stored.LastActivityAt) {
+			t.Errorf("conversation %s lists its activity as %s, and it is %s", summary.ID,
+				summary.LastActivityAt, stored.LastActivityAt)
+		}
+	}
+	if top.LastActivityAt.Before(below.LastActivityAt) {
+		t.Errorf("the listing's activity reads %s above %s, out of order",
+			top.LastActivityAt, below.LastActivityAt)
+	}
+}
+
 // ONE TURN AT A TIME IN A CONVERSATION, decided by the broker: a second turn
 // opened while one is running or parked is refused, and closing the first
 // frees the conversation for the next. A turn closes once.

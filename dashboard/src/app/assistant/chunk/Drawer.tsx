@@ -150,11 +150,14 @@ function useNow(fast: boolean): number {
   return now;
 }
 
-/** One recent conversation, as the Conversations menu lists it. */
+/**
+ * One recent conversation, as the Conversations menu lists it: shown at the
+ * moment the list is ordered by, so the times read down the menu in order.
+ */
 interface Recent {
   id: string;
   title: string;
-  updated_at: string;
+  last_activity_at: string;
 }
 
 export function Drawer({
@@ -355,7 +358,7 @@ export function Drawer({
     key: r.id,
     label: r.title || "Untitled conversation",
     icon: <MessageSquareGlyph size="sm" />,
-    hint: relTime(r.updated_at, now),
+    hint: relTime(r.last_activity_at, now),
     onSelect: () => void openConversation(r.id),
   }));
   // CLEAR IS OFFERED ONLY FOR A CONVERSATION WITH SOMETHING IN IT: an empty

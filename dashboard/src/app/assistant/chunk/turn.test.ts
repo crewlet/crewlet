@@ -569,6 +569,7 @@ describe("a reloaded transcript's compliance reads", () => {
           title: "Spend",
           created_at: "2026-10-24T09:00:00Z",
           updated_at: "2026-10-24T09:05:00Z",
+          last_activity_at: "2026-10-24T09:05:00Z",
         },
         messages: [],
         steps: [],
@@ -593,6 +594,7 @@ describe("a reloaded transcript", () => {
           title: "Spend",
           created_at: "2026-10-24T09:00:00Z",
           updated_at: "2026-10-24T09:05:00Z",
+          last_activity_at: "2026-10-24T09:05:00Z",
         },
         messages: [
           {
@@ -673,6 +675,7 @@ describe("a reloaded transcript's ended turns", () => {
           title: "awdwad",
           created_at: "2026-10-24T09:00:00Z",
           updated_at: "2026-10-24T09:05:00Z",
+          last_activity_at: "2026-10-24T09:05:00Z",
         },
         messages: [
           {
@@ -744,6 +747,7 @@ describe("a reloaded transcript's steps", () => {
           title: "",
           created_at: "2026-10-24T09:00:00Z",
           updated_at: "2026-10-24T09:05:00Z",
+          last_activity_at: "2026-10-24T09:05:00Z",
         },
         messages: [
           {

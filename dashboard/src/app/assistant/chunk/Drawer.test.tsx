@@ -68,6 +68,7 @@ function engine() {
               title: "",
               created_at: "2026-10-24T09:41:00Z",
               updated_at: "2026-10-24T09:41:00Z",
+              last_activity_at: "2026-10-24T09:41:00Z",
             },
           },
           201,
@@ -339,6 +340,7 @@ test("an empty conversation opened from the history offers no Clear", async () =
     title: "",
     created_at: "2026-10-24T09:41:00Z",
     updated_at: "2026-10-24T09:41:00Z",
+    last_activity_at: "2026-10-24T09:41:00Z",
   };
   vi.stubGlobal(
     "fetch",

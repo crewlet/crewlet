@@ -127,6 +127,12 @@ type ConversationSummary struct {
 	Title     string    `json:"title"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// LastActivityAt is when the conversation was last used (a turn opened,
+	// a message, a step, a card or a proposal recorded), the moment a listing
+	// is ordered by and so the one it shows. UpdatedAt also moves on a change
+	// that is not activity (a new title), so a list showing it disagrees with
+	// its own order.
+	LastActivityAt time.Time `json:"last_activity_at"`
 	// LastTurnState is the newest turn's state, absent before the first.
 	LastTurnState TurnState `json:"last_turn_state,omitempty"`
 }
