@@ -167,8 +167,20 @@ type NodePositions struct {
 // decide what records every node has finished with, so a key that expired
 // would read as a node that has applied NOTHING — which pins the trim for
 // ever, or, read the other way round, lets it delete records that node still
-// needs. An absent node is removed by an operator's audited gesture, never by
-// a clock.
+// needs.
+//
+// # And no row ever leaves it
+//
+// There is no removal, by a clock or by anybody. An absent node stops pinning
+// the trim through an operator's audited EVICTION, whose tombstone the counted
+// set subtracts from these rows ([statelog.CountedSet], once it is older than
+// the fence window) — never through its row going away. The row is what a
+// READMISSION is judged by (the node's last position against the floor,
+// [statelog.PermitReadmission]), so a register that forgot an evicted node
+// would turn every later readmission of a machine still switched off into a
+// judgement about a node that has never reported anything. A removal verb
+// stood here with no caller, and a register that offers one invites wiring it
+// into the eviction.
 type PositionRegister interface {
 	// PutPositions writes this node's row, replacing it wholesale.
 	//
@@ -185,18 +197,6 @@ type PositionRegister interface {
 	// donor search picks the newest snapshot. A per-node read would be N
 	// round trips for one answer.
 	Positions(ctx context.Context) ([]NodePositions, error)
-
-	// ForgetPositions removes a node's row, and it is the only way a row
-	// leaves.
-	//
-	// AN EVICTION DOES NOT CALL IT, and must not. What stops the trim
-	// waiting for an evicted node is its TOMBSTONE, which the counted set
-	// subtracts from these keys; the row itself is what a READMISSION is
-	// judged by — the node's last position against the floor — so an
-	// eviction that forgot it would turn every later readmission of a
-	// machine that is still switched off into a judgement about a node
-	// that has never reported anything.
-	ForgetPositions(ctx context.Context, nodeID string) error
 }
 
 // PositionKey is a node's key in the register.

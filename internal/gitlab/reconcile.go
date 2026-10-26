@@ -240,7 +240,9 @@ type Options struct {
 	Decommission bool
 
 	// Rotate forces a fresh token for every seat, including seats whose
-	// current one still works.
+	// current one still works — and, where the run registers the hook, a
+	// fresh signing secret into the variable signing_secret names
+	// ([PlanSigningSecret]).
 	//
 	// # Why it is a flag rather than what a run does
 	//
@@ -535,7 +537,8 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			res.Notes = append(res.Notes, fmt.Sprintf(
 				"%s: the account held a working token but %s did not, so a "+
 					"fresh one was minted and the old one retired — a running "+
-					"engine holding the old value has to be restarted",
+					"engine holding the old value is refused until it reads the "+
+					"new one, at the step this run's Next: line names",
 				seat.Handle, seat.TokenVar))
 		}
 	}
@@ -1176,22 +1179,26 @@ func PlanSigningSecret(secret, varName string, rotate, registeringHooks bool, ba
 	// Deliberately gated on the flag rather than done on every run: minting
 	// a signing secret every time would re-point the hook at a key the
 	// RUNNING engine does not have yet, refusing every delivery until the
-	// new value is sourced and the process restarted — the same outage the
-	// seat tokens' Rotate doc explains at length.
+	// new value reaches it (sourced and restarted from -env-file or -print,
+	// or the POST /config/reload a -secret-store run names) — the same
+	// outage the seat tokens' Rotate doc explains at length.
 	rotating := rotate && varName != ""
 	if trimmed := strings.TrimSpace(secret); trimmed != "" && !rotating {
 		if rotate {
-			// REPORTED, NOT REFUSED. -rotate is about the seat tokens, and
-			// failing the whole run would stop an operator rotating those
-			// because of a signing secret they manage by hand. They do
-			// need to hear it, though — so it is a note on a run that
-			// otherwise succeeded rather than silence.
-			return SigningPlan{Action: SigningReuse, Note: "the webhook signing " +
-				"secret was left alone: integrations.gitlab.signing_secret is a " +
-				"literal, so there is nowhere to record a new one. Replace it by " +
-				"hand and re-run — a key installed before the signing_token fix " +
-				"was echoed back in cleartext on every delivery, so it is " +
-				"compromised"}
+			// REPORTED, NOT REFUSED. -rotate replaces the seat tokens as
+			// well as a signing secret a variable names, and failing the
+			// whole run would stop an operator rotating those because of
+			// a signing secret they manage by hand. They do need to hear
+			// it, though — so it is a note, on the plan a dry run prints
+			// ([SigningPlan.Describe]) and on a run that otherwise
+			// succeeded, rather than silence. It says how to replace the
+			// literal and nothing about why one would, which is the
+			// operator's to know.
+			return SigningPlan{Action: SigningReuse, Note: "-rotate leaves the " +
+				"webhook signing secret alone: integrations.gitlab.signing_secret " +
+				"is a literal, so there is nowhere to record a new one. To replace " +
+				"it, point the field at a whole ${VAR} and re-run with -rotate, or " +
+				"replace the literal by hand and re-run"}
 		}
 		return SigningPlan{Action: SigningReuse}
 	}
@@ -1217,6 +1224,14 @@ func (p SigningPlan) Describe() string {
 		return "webhook signing secret: untouched (no webhook address — no " +
 			"-public-url and none in Tier A — so no hook is registered)"
 	case SigningReuse:
+		// A REUSE -ROTATE COULD NOT REACH SAYS SO BEFORE THE RUN: printed
+		// as a plain reuse, a dry run with -rotate said nothing of the one
+		// secret the flag was going to leave in place, and only a real
+		// run's notes did. The note is the sentence those notes carry, so
+		// the plan and the run cannot tell it two ways.
+		if p.Note != "" {
+			return "webhook signing secret: reused — " + p.Note
+		}
 		return "webhook signing secret: reused — the configured one already resolves"
 	case SigningMint:
 		return "webhook signing secret: WILL BE MINTED into " + p.Var

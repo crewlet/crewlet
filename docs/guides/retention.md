@@ -19,7 +19,7 @@ crewlet retention status
 **Every `crewlet retention` command that talks to a node needs
 `admin`** — all of them but `verify --restore`, which opens a snapshot
 directory on disk — reads included:
-the `retention` question and every `/work/retention*` route take it, because a
+the `retention` question and every `/worklet/retention*` route take it, because a
 map of which machine holds what and the value a reanchor must echo describe the
 deployment rather than the company. The commands authenticate with
 `CREWLET_API_TOKEN`, and a credential without the grant is refused `403`
@@ -117,7 +117,7 @@ never a horizon.
 | Term | Permits deleting up to |
 |---|---|
 | `applied` | the lowest committed position over the **counted set** of nodes |
-| `min_hold` | the lowest live pin — a backup or a joining node copying the log |
+| `min_hold` | the lowest live pin — a backup copying the log, or a joining node fetching a snapshot and replaying its tail |
 | `backup_floor` | what has left the host |
 | `snapshot_floor` | the *k*-th highest verified snapshot position over the counted set |
 | `feed_ack_floor` | how far **that log's own** wake feed has acknowledged |
@@ -125,12 +125,24 @@ never a horizon.
 
 The **counted set** of a log is every node the trim waits for there: each node
 that has reported a position on the log, and each **live data node** even
-before its first report, when it counts at position zero because it is about
-to replay what the trim would otherwise delete. The live data nodes are listed
-afresh from the presence leases on every tick rather than read from a watched
-view, because a view up to a heartbeat old may miss a node that has just
-booted — the one node the trim must not pass. A node evicted from the log stops
-being counted about a minute after that record lands.
+before its report lands, when it counts at position zero because it applies the
+log all the same. The live data nodes are listed afresh from the presence
+leases on every tick rather than read from a watched view, because a view up to
+a heartbeat old may miss a node that has just come up with no position landed —
+the one node the trim must not pass. A node evicted from the log stops being
+counted about a minute after that record lands.
+
+A node **at boot** is counted by neither until its first position lands, which
+it publishes as its logs start, before it takes a presence lease: until then
+the position an earlier run of it left stands for it, or nothing does if it
+never ran. A node **joining at boot** is in that interval for its whole
+transfer: it fetches its snapshot before it is live and before it reports a
+position. What keeps the tail it is about to replay is its own `min_hold` pin,
+which it renews every fifteen seconds for the whole transfer — the trim ignores
+a pin nobody has renewed for a minute, so a pin taken once would protect only
+the transfer's first minute — and keeps after the install until its own
+published position counts that tail. A backup's pin is renewed the same way,
+for as long as the copy runs.
 
 **The estate's logs are trimmed by one node**: the holder of the trim duty,
 `worker:retention`. Only a data node may claim it, since the trim reads the
@@ -511,8 +523,11 @@ below the published floor whose missing records the log still holds reports
    own heartbeat finds it below the log while running: it pauses its
    appliers, adopts, moves its consumers to the artefact's position and
    resumes, with no restart. It takes a **hold** on every domain's log first,
-   which pins the trim for the duration of the transfer — so a join cannot
-   race the trim that made it necessary. It collects offers until every node
+   which pins the trim for the duration of the transfer and, once the
+   snapshot is installed, until the node's own published position counts the
+   tail it replays — renewed every fifteen seconds throughout, since the trim
+   ignores a hold nobody has renewed for a minute — so a join cannot race the
+   trim that made it necessary. It collects offers until every node
    that can donate has answered, or for five seconds at most. That is every
    live data node — each runs a donor, and one holding no artefact answers
    that it has none — and every node whose row in the positions register was
@@ -555,6 +570,17 @@ below the published floor whose missing records the log still holds reports
    resumes, and if that still leaves it refusing rows that are keyed to the
    stream the broker serves, the next heartbeat notices and a join re-keys it
    — `statelog_runner_not_rekeyed` is the line that says it happened.
+   A fault of the node's **own** before the install — its disk refusing the
+   copy, its own store refusing a write, the coordination store refusing the
+   hold — ends the join at that offer rather than fetching every other one to
+   meet it again, and is never logged against a donor: the node logs
+   `statelog_join_unable` at error naming the fault, comes up (or stays up) on
+   the rows it has, and asks again on the doubling interval, as when nobody
+   could donate. Fix what the line names; the next ask then adopts.
+   And once the artefact is installed the join is an adoption whatever fails
+   next: a node whose own `statelog_adoption` row could not be advanced logs
+   `statelog_adoption_unrecorded` at error level beside `statelog_adopted`,
+   and serves on the artefact like any other adoption.
 3. If none does, the skip reason says why. Fix that first: a fleet where every
    node is `lagging` has an applier problem, not a snapshot problem.
 4. If the fleet genuinely holds none — a single node, or every peer skipping —
@@ -674,6 +700,17 @@ it from that record.
 complete replica. `crewlet retention status` prints this node's store size, the
 projected join against a conservative profile, and the window — so a fleet
 whose store has outgrown its window says so before an incident does.
+
+It is also a term of every data node's **startup probe** in a fleet of more
+than one. A join at boot runs inside the node's recovery, before `/health`
+turns `200`, so a probe that allows the store's recovery and not the window
+kills a joining node partway through its transfer, and the next boot starts the
+transfer again from the first byte. Size the probe as
+[Sizing the startup probe](deployment.md#sizing-the-startup-probe) says, and
+raise it with the window. A lone data node never transfers, so its probe needs
+no such term. While a join runs, `statelog_join_progress` every ten seconds
+says how far it has got and at what rate, which is how a window is checked
+against this fleet's own disks and network rather than the projection.
 
 ## Eviction
 
@@ -1521,13 +1558,13 @@ who ran it: the generation record every data node applies into its audit row nam
 the operator and the credential they used, where it named the node that served
 the request.
 
-**Today that log is the work tracker's**, `CREWLET_TRACKER_LOG`. A reanchor is
-three steps only the log's own domain can take — reset its rows' versions,
-publish its generation record, write its audit row — and the knowledge base,
+**Today that log is Worklet's**, `CREWLET_TRACKER_LOG`. A reanchor is
+three steps only the log's own domain can take (reset its rows' versions,
+publish its generation record, write its audit row), and Doclet,
 the identity estate, the vectors and the usage log have none of
 their own yet, so naming one of their logs is refused before anything moves.
-It used to run the tracker's steps for them, resetting the tracker's rows for a
-log that was not the tracker's. Recover one of those logs by adopting the snapshot of a
+It used to run Worklet's steps for them, resetting Worklet's rows for a
+log that was not Worklet's. Recover one of those logs by adopting the snapshot of a
 peer hydrated on the live stream, or from a backup.
 
 > **The verb could not have completed before this build.** Its reset named
@@ -1577,7 +1614,7 @@ Three different things:
 - **Purging** removes the rows, on every data node as each one reaches the record.
 
 ```
-crewlet work purge <item> -reason "why" -confirm <item-key> [-op-id ID]
+crewlet worklet purge <item> -reason "why" -confirm <item-key> [-op-id ID]
 ```
 
 `<item>` is the task's key or its id. The purge removes every row the task's own records wrote, not only the task's: its
@@ -1818,7 +1855,7 @@ names the duty a node armed and its interval — the only way to tell a duty
 that is running and finding nothing from one that was never armed.
 
 A person's **inbox** — one row per routed change per recipient — is swept at
-`tracker.native.inbox_retention_days`, **365 days** by default and settable
+`tracker.worklet.inbox_retention_days`, **365 days** by default and settable
 between 30 and 3650, and changed live: the sweep reads it off the running
 company at every tick, as the applier does at every batch. It is the one
 horizon here that deletes something a person reads, and it deletes a *pointer* rather than the thing pointed at: the history

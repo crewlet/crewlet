@@ -99,7 +99,7 @@ func TestTurnsFoldOneRowPerTurn(t *testing.T) {
 	case one.Summary != "did the thing":
 		t.Errorf("t-1's summary is %q", one.Summary)
 	case one.WorkItem == nil || *one.WorkItem != (types.WorkItem{
-		Backend: types.WorkNative, ID: "task-1", Key: "ENG-1", Project: "ENG"}):
+		Backend: types.WorkWorklet, ID: "task-1", Key: "ENG-1", Project: "ENG"}):
 		t.Errorf("t-1's work item is %+v, want the completion's", one.WorkItem)
 	case one.Trigger != "chat":
 		t.Errorf("t-1's trigger is %q, want the phase records' own", one.Trigger)

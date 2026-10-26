@@ -12,9 +12,10 @@
 // nothing from the rest of Crewlet so every layer can depend on it.
 //
 // The patterns are a DENYLIST OF KNOWN CREDENTIAL SHAPES, which bounds what
-// this can promise: it catches the vendor prefixes and key formats below, not
-// an arbitrary opaque secret. It is the last line, not the first — the first
-// is not putting a credential in the text.
+// this can promise: it catches the vendor prefixes, the engine's own per-run
+// tokens and the key formats below, not an arbitrary opaque secret. It is the
+// last line, not the first — the first is not putting a credential in the
+// text.
 //
 // # Text that is still being written
 //
@@ -329,7 +330,9 @@ func armourAt(text string, i int) bool {
 
 // rules are applied in order, and order matters where one shape is a prefix of
 // another: sk-proj- is checked before the bare sk- that would otherwise
-// swallow it and label an OpenAI project key as a plain api-key.
+// swallow it and label an OpenAI project key as a plain api-key. It matters
+// too where one shape can HOLD another, which is why the run token is first
+// ([runTokenRule]).
 //
 // Go's regexp is RE2: no backtracking, so matching is linear in the input
 // whatever the pattern — which matters here, because this pass runs over
@@ -342,6 +345,7 @@ func armourAt(text string, i int) bool {
 // [keyBlocks] — before every rule below, so a token shape that happens to occur
 // inside a key's body is taken with the block rather than leaving it split.
 var rules = []rule{
+	runTokenRule,
 	token(`sk-proj-[A-Za-z0-9_-]{20,}`, "api-key"),
 	token(`sk-ant-[A-Za-z0-9_-]{20,}`, "api-key"),
 	token(`sk-[A-Za-z0-9_-]{20,}`, "api-key"),
@@ -353,6 +357,37 @@ var rules = []rule{
 	token(`gl(?:rt|soat|ptt)-[A-Za-z0-9_-]{20,}`, "gitlab-token"),
 	passwordRule.valued(passwordMarker, passwordValue),
 }
+
+// runTokenRule is the engine's OWN per-run token (internal/runtoken): the
+// credential the telemetry receiver's endpoint, the tool bridge's URL and an
+// artifact view ticket each carry, `crewlet_rt1.<tag>.<subject>.<expiry>.<sig>`.
+//
+// BY ITS SHAPE, as a vendor's key is, because there is no value to redact it
+// by: no node that collects a coding run holds the tokens its launch minted —
+// the run's row carries none — and a coding agent that prints its environment
+// or its MCP configuration prints its run's. `crewlet_rt1` is the literal
+// runtoken opens every token with for this rule to key on, and runtoken's
+// TestAMintedTokenIsRedacted holds the two spellings to one.
+//
+// EACH SEGMENT AS RUNTOKEN WRITES IT: an eight-character tag (its `tagLen`),
+// a Unix expiry, and the HMAC-SHA256 in unpadded base64url, 43 characters. The
+// subject is anything but the dot that ends it, whitespace and `[`, and may be
+// empty: a token rides a URL path, so no issuer's subject holds whitespace or
+// a bracket, and runtoken signs an empty one. Never a bracket, because a
+// marker opens with one ([Marker]): a value another rule redacted where a
+// subject would stand is then never read, on a second pass, as a subject, so
+// redacting twice stays redacting once. And never a line break, so the rule
+// is nothing [Settled] has to hold back.
+//
+// FIRST IN THE TABLE, before the vendors' rules, because its tag, subject and
+// signature are base64url or freer, which can spell a vendor's prefix and body
+// — an artifact view ticket's subject is base64url of its claims, and any three
+// of its characters are `sk-` once in 262 144 — and a token can be written
+// straight after a vendor's key. Taken after them, a vendor's rule would
+// replace the piece it knows and leave the rest of the token, its signature
+// among it, in the text — or read the token's own `crewlet_rt1` as the end of
+// the key before it, and leave the rest.
+var runTokenRule = token(`crewlet_rt1\.[A-Za-z0-9_-]{8}\.[^.\s\[]*\.[0-9]+\.[A-Za-z0-9_-]{43}`, "run-token")
 
 // token is the rule that replaces each match of pattern with the marker for
 // what it is.

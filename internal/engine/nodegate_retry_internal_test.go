@@ -12,12 +12,12 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A GESTURE THAT REACHED ONE LOG AND NOT THE OTHER SAYS SO, AND A RETRY UNDER
@@ -56,7 +56,7 @@ func TestAPartialGateIsReportedAndARetryFinishesIt(t *testing.T) {
 			// resolve.
 			flaky, logs, recs := recordingGate(t, e, back)
 			faulted := false
-			trackerName, pagesName := tracker.Domain{}.Name(), pages.Domain{}.Name()
+			trackerName, pagesName := worklet.Domain{}.Name(), doclet.Domain{}.Name()
 			for i := range logs {
 				if logs[i].domain != pagesName {
 					continue
@@ -275,7 +275,7 @@ func TestARetryThroughALaggingApplierWritesNoSecondRecord(t *testing.T) {
 	e, back, _ := trimmedTracker(t)
 	s := e.core.Load().log
 	gate, _, recs := recordingGate(t, e, back)
-	trackerName := tracker.Domain{}.Name()
+	trackerName := worklet.Domain{}.Name()
 	req := GateRequest{Node: "node-away", OpID: statelog.NewOpID(time.Now(), "lagging"), By: gateOperator}
 
 	// THE FIRST GESTURE LANDS ON A LOG THIS NODE IS NOT APPLYING, so the
@@ -344,7 +344,7 @@ func TestAnUnreadableLedgerIsThatLogsErrorAndNothingIsWritten(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
 	gate, _, recs := recordingGate(t, e, back)
-	trackerName, pagesName := tracker.Domain{}.Name(), pages.Domain{}.Name()
+	trackerName, pagesName := worklet.Domain{}.Name(), doclet.Domain{}.Name()
 	if err := back.Store.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `DROP TABLE pages_ops`)
 		return err

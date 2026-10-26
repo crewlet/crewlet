@@ -2,6 +2,7 @@ package cliagent
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -89,8 +90,8 @@ func TestEveryWriterOfTheSharedLoginWaitsForItsLock(t *testing.T) {
 			_, err := p.AdoptHostLogin(t.Context(), home)
 			return err
 		}, func() {
-			if p.ws.HasLogin() {
-				t.Errorf("-from-host wrote while another holder had the lock: %v", p.ws.LoginFiles())
+			if got := loginOnDisk(t, p.ws); len(got) > 0 {
+				t.Errorf("-from-host wrote while another holder had the lock: %v", got)
 			}
 		})
 		if err != nil {
@@ -107,8 +108,8 @@ func TestEveryWriterOfTheSharedLoginWaitsForItsLock(t *testing.T) {
 		err := whileTheLockIsHeld(t, p.ws, func() error {
 			return p.Logout(t.Context(), &bytes.Buffer{}, &bytes.Buffer{})
 		}, func() {
-			if !p.ws.HasLogin() {
-				t.Error("the logout removed the login while another holder had the lock")
+			if got := loginOnDisk(t, p.ws); len(got) != 1 {
+				t.Errorf("the logout touched the login while another holder had the lock: %v", got)
 			}
 			if out, _ := p.ws.loggedOut(); out {
 				t.Error("the logout recorded itself while another holder had the lock")
@@ -117,8 +118,8 @@ func TestEveryWriterOfTheSharedLoginWaitsForItsLock(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Logout: %v", err)
 		}
-		if p.ws.HasLogin() {
-			t.Errorf("the logout did not land once the lock was free: %v", p.ws.LoginFiles())
+		if hasLogin(t, p.ws) {
+			t.Errorf("the logout did not land once the lock was free: %v", loginOnDisk(t, p.ws))
 		}
 	})
 	for name, restore := range map[string]func(*Provider, string) error{
@@ -130,8 +131,8 @@ func TestEveryWriterOfTheSharedLoginWaitsForItsLock(t *testing.T) {
 			p := loginProvider(t)
 			blob := bundleOf(t, p.agent, "creds.json", `{"token":"k-bundled"}`)
 			err := whileTheLockIsHeld(t, p.ws, func() error { return restore(p, blob) }, func() {
-				if p.ws.HasLogin() {
-					t.Errorf("%s wrote while another holder had the lock: %v", name, p.ws.LoginFiles())
+				if got := loginOnDisk(t, p.ws); len(got) > 0 {
+					t.Errorf("%s wrote while another holder had the lock: %v", name, got)
 				}
 			})
 			if err != nil {
@@ -185,8 +186,55 @@ func TestABundleIsDecidedUnderTheLockItWritesUnder(t *testing.T) {
 		if !errors.Is(err, ErrLoggedOut) {
 			t.Errorf("a restore after a logout that landed while it waited = %v, want ErrLoggedOut", err)
 		}
-		if p.ws.HasLogin() {
-			t.Errorf("the restore filled the directory a logout emptied while it waited: %v", p.ws.LoginFiles())
+		if hasLogin(t, p.ws) {
+			t.Errorf("the restore filled the directory a logout emptied while it waited: %v", loginOnDisk(t, p.ws))
 		}
 	})
+}
+
+// EVERY WAITER FOR THE SHARED LOGIN'S LOCK KEEPS ITS OWN DEADLINE. Another
+// process holds the lock — a `crewlet llm` command stopped part way — while one
+// seat of this process waits for it with no deadline of its own, and a second,
+// whose call allows it a fraction of a second, has to be answered in that
+// fraction: every seat's start reads the login under this lock, and a mutex
+// queued ahead of the flock held the second until the first had the lock, or
+// had waited out its whole hostbox.CredentialLockWait.
+//
+// Mutation: queue this process's takers on a mutex ahead of the flock, as
+// lockShared once did, and the second waiter is answered ten seconds late.
+func TestAWaiterForTheSharedLoginsLockKeepsItsOwnDeadline(t *testing.T) {
+	t.Parallel()
+	ws := newWorkspace(t)
+	release, err := hostbox.LockCredentials(t.Context(), ws.CredentialsDir())
+	if err != nil {
+		t.Fatalf("taking the shared login's lock: %v", err)
+	}
+	first := make(chan error, 1)
+	go func() {
+		_, err := ws.Login(context.Background())
+		first <- err
+	}()
+	time.Sleep(lockHeldFor)
+
+	ctx, cancel := context.WithTimeout(t.Context(), lockHeldFor)
+	defer cancel()
+	started := time.Now()
+	_, err = ws.Login(ctx)
+	waited := time.Since(started)
+	release()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("a read of the login past its own deadline = %v, want its deadline", err)
+	}
+	if waited > 5*lockHeldFor {
+		t.Errorf("a read of the login allowed %v waited %v, behind another waiter of this process",
+			lockHeldFor, waited)
+	}
+	select {
+	case err := <-first:
+		if err != nil {
+			t.Errorf("the waiter with no deadline did not take the lock once it was let go: %v", err)
+		}
+	case <-time.After(hostbox.CredentialLockWait + 5*time.Second):
+		t.Fatal("the waiter with no deadline never finished once the lock was let go")
+	}
 }

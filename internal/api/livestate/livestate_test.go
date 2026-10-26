@@ -157,7 +157,7 @@ func TestAnEventNamingOnlyARoleMovesNothing(t *testing.T) {
 //
 // It reads the PHASE events, not a task lifecycle: the five task_* types this
 // projection used to branch on had no publisher at all — they described an
-// engine-owned task object the native tracker replaced — so `working` and
+// engine-owned task object Worklet replaced, so `working` and
 // `idle` have always come from here.
 func TestATurnRunsAndFinishes(t *testing.T) {
 	t.Parallel()

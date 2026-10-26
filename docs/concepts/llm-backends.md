@@ -406,6 +406,7 @@ token — so each of these would run with the credential unused:
 | `auth.mode: api-key` with no `auth.api_key` on a CLI whose key variable is [shared](#profile-fields) (`qwen-code`'s `OPENAI_API_KEY`) | that variable holds other vendors' keys too, so the engine never reads it in the entry's place | name the key: `auth.api_key: "${DASHSCOPE_API_KEY}"` |
 | `auth.mode: inherit-env` on a CLI whose key variable is [shared](#profile-fields) | it would forward whichever vendor's key the engine's process holds under that name | `auth.mode: api-key`, naming the key as `auth.api_key` |
 | the profile's `token_env` or `api_key_env` in `env` | `auth` owns those: whether a value there reaches the CLI depends on `auth.mode` and on whether a credential resolves from the secret store or the engine's environment, which the document cannot show | `auth.token`, or `auth.api_key` with `auth.mode: api-key` |
+| `overrides.token_env` or `overrides.api_key_env` that is not an environment variable name (letters, digits and underscores, not starting with a digit — `MY-TOKEN`, say) | no secret store, `${VAR}` or `crewlet llm login` can hold a name outside that grammar, no shell exports one for `inherit-env` to forward, and a name carrying `=` sets a different variable in the CLI's environment | the variable your build of the CLI reads, e.g. `MY_TOKEN` |
 | a variable the engine sets to isolate the call in `env` (`HOME`, an XDG home, `TMPDIR`, the profile's relocation and isolation variables) | it would replace that isolation for every seat on the entry | drop it; the refusal names the profile field that moves it, where one does |
 
 An `api-key` entry whose key resolves to nothing is not refused — the document
@@ -745,6 +746,8 @@ its own place to run:
 <state_dir>/
 └── <agent>/                          # one per CLI: claude-code/, codex/, …
     ├── credentials/                  # the login — ONE per state_dir and CLI
+    ├── credentials.lock              # taken by every writer and reader of it
+    ├── credentials.pending           # a write of the login, while one is in progress
     ├── seats/                        # where a call signed in with the login runs
     │   ├── sarah-chen/
     │   │   ├── cache/                # XDG_CACHE_HOME — warm, holds no conversation
@@ -1158,7 +1161,7 @@ far — the auxiliary rewrites the seat's tools asked for and the workers the CL
 delegated to — because those calls happen after the part of the turn that
 launched the run has ended and charged what it spent. The part of the turn that
 resumes from the run pays them to the turn's [work
-item](../guides/work-tracker.md#spend-is-on-the-task), beside the run's own
+item](../guides/worklet.md#spend-is-on-the-task), beside the run's own
 tokens. Each call is recorded under the run it was made for — the bridge
 session is given the run's name before its box exists — so a call still in
 flight when the turn launches its next run (a delegated worker outliving the
@@ -2651,7 +2654,11 @@ warning). What ends it is a login **written into the credential directory**:
 `-capture-token` whose sign-in also left a login file there. A headless token
 on its own (`-token-stdin`, or the token `-capture-token` mints) signs the
 entry in through its environment and writes nothing there, so the logout stands
-and the bundle stays out. A **fresh** state directory holds no such record, so
+and the bundle stays out. The logout and the refusal name a token only for an
+entry that takes one: a token variable a store can hold, under `subscription`
+or, exported in the engine's environment, under `inherit-env` — never
+`api-key`, which removes it — with `-capture-token` only where the CLI mints
+one. A **fresh** state directory holds no such record, so
 a container that comes up on an empty volume restores the bundle as it always
 did: to retire a bundle for good, remove `auth.credential_bundle` or the
 `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` secret it was exported to, which `logout`
@@ -2672,11 +2679,15 @@ it in place, so a seat starting its generation never reads half of one.
 crewlet llm login default -capture-token
 ```
 
-Runs the vendor's token-minting command (`claude setup-token`) and puts
-the result in the [encrypted secret store](secret-store.md) under the
-profile's token variable — `CLAUDE_CODE_OAUTH_TOKEN` for Claude Code, the
-one built-in profile whose CLI mints one. **Prefer this whenever the CLI offers
-it:** no credential files to sync, no refresh-token rotation, and it survives an
+Runs the vendor's token-minting command (`claude setup-token`) and puts the
+result in the [encrypted secret store](secret-store.md) under the profile's
+token variable — `CLAUDE_CODE_OAUTH_TOKEN` for Claude Code, the one built-in
+profile whose CLI mints one. Beside a running engine it is stored through that
+engine, and a running fleet reads it at its next configuration apply, which the
+command says, naming `POST /config/reload`; with the engine stopped the
+command stores it in the fleet's store itself, which this node's engine reads
+when it starts. **Prefer this whenever the CLI offers it:**
+no credential files to sync, no refresh-token rotation, and it survives an
 ephemeral container with no persistent volume.
 
 Minting is *interactive* — the CLI opens the same browser sign-in as
@@ -2704,6 +2715,25 @@ can still take a minted token: `-capture-token -print-token` writes it to
 stdout, storing nothing, for you to export as `CLAUDE_CODE_OAUTH_TOKEN` in the
 engine's environment.
 
+**Only under a variable a store can hold.** An `overrides.token_env` that is
+not an environment variable name is refused on every write of the document
+([above](#configuration-reference)), but `crewlet llm` loads the document as a
+run does, without the rules only a write applies. So `-capture-token` and
+`-token-stdin` refuse such an entry themselves, in every mode and with
+`-print-token` too, before anything is minted or read, naming the field: a
+token minted for it could be neither stored nor referenced. So do they for a
+CLI whose profile names no token variable at all — every built-in one but
+`claude-code` — which takes no headless token. Under `api-key` either refusal
+is that mode's own, naming the key it reads, with the field beside it where
+the name is outside the grammar, and without `auth.mode: subscription`, under
+which such an entry could read no token either — except an entry whose CLI
+names no key variable, a pairing every write refuses: it is told that the mode
+puts its key in no variable, and to set `auth.mode: subscription` and sign the
+CLI in with a login. Nothing offers either command for such an entry — not
+`-from-host`'s closing advice, `doctor`, the `-username` refusal, `logout`'s
+notice or a [remote coding run's refusal](code-sandbox.md#failure-modes) — and
+the variable is never asked of a running node.
+
 ### 3. Username / password, where the CLI genuinely has one
 
 ```bash
@@ -2715,17 +2745,34 @@ Available for a profile that declares `stdin_login` — an operator's own
 wrapper, or a self-hosted gateway CLI. No built-in profile declares one,
 because no shipped CLI has one: the `opencode` profile used to, with
 `auth login --username`, a flag no release of either OpenCode major accepts. The password is read from stdin or a declared environment variable,
-never from argv (which is visible in `ps` and lands in shell history).
+never from argv (which is visible in `ps` and lands in shell history). A piped
+password is refused past 4 KiB, not counting the line ending the pipe adds,
+and the pipe is read no further than that, its longest ending and one byte, so
+one pointed at the wrong file is refused before the CLI's login runs rather
+than read whole.
 
 Every built-in profile leaves `stdin_login` unset, and the command says so
-rather than failing obscurely:
+rather than failing obscurely, naming only the routes that entry has, chosen by
+its `auth.mode` first as [`doctor`](#how-doctor-judges-a-sign-in) chooses them.
+Under `subscription` those are a login — the CLI's own login where it has a
+login command, and otherwise a login made with the CLI by hand and adopted with
+`-from-host` — and `-capture-token` where the CLI mints a headless token. Under
+`inherit-env` they are the variables the mode forwards, exported in the engine's
+environment, that login, and, where the CLI mints a token, `-capture-token
+-print-token` to export what it prints, never a token stored with
+`-capture-token`. Under `api-key` they are the key alone, never a login or a
+token. Where the CLI names no variable for the mode — no key variable under
+`api-key`, neither variable under `inherit-env`, a pairing every write of the
+configuration refuses — the mode hands the CLI nothing, and the entry is told
+so and to set `auth.mode: subscription` and sign the CLI in with a login, in
+place of the variables. A `subscription` entry is told:
 
 ```
 cliagent: this CLI has no such login command: the "claude-code" CLI
 authenticates through the vendor's browser OAuth flow — there is no
-username/password login to drive. Run `crewlet llm login` (which brokers
-that flow), or `crewlet llm login -capture-token` where the vendor mints
-a headless token. If your build of this CLI does accept a credential,
+username/password login to drive: run `crewlet llm login default`, or mint
+a headless CLAUDE_CODE_OAUTH_TOKEN with `crewlet llm login default
+-capture-token`. If your build of this CLI does accept a credential,
 declare it under providers.llm.default.overrides.stdin_login
 ```
 
@@ -2771,9 +2818,18 @@ The [secret store](secret-store.md) is the fleet's, so every node of the company
 reads the same bundle (one exported while this node's engine is stopped goes
 to that same store, which the command reaches itself through the node's own
 broker or the external one — a cluster member's goes through a running member
-named with `-api`), and each restores it into its own empty directory:
-`CREWLET_LLM_CLI_<KEY>_CREDENTIALS` by convention, or whatever variable the
-entry's `auth.credential_bundle` names. Each node then
+named with `-api`), and a running fleet reads one written through a node at
+its next apply — the command says so.
+A stored bundle is a stored value, held to the [64 KiB every store
+keeps](secret-store.md#the-design) once packed: a login is a few kilobytes,
+but a CLI whose credentials directory packs to more than that has its export
+refused before anything is written, and the error names what carries
+the bundle instead — `crewlet llm export default` to stdout, kept in your own
+secret manager and piped to `crewlet llm import` on each host, or a login on
+each host.
+Each node restores the bundle
+into its own empty directory: `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` by convention,
+or whatever variable the entry's `auth.credential_bundle` names. Each node then
 holds its own copy of one refresh token, so where the vendor rotates refresh
 tokens two nodes fork it exactly as `-from-host` forks yours — a headless token
 (option 2) or a key (option 5) is the better answer for a fleet. The blob is
@@ -2786,10 +2842,11 @@ where its files carry names the CLI keeps, so an entry [moved to another
 CLI](#an-entry-moved-to-another-cli) needs its bundle exported again.
 
 Only the credential files — and a CLI's exported login document — travel,
-beside a manifest naming the CLI (`crewlet-bundle.json`, `{"agent": "codex"}`;
-an entry that leaves `agent` out exports as `claude-code`), which is never
-written into the credential directory. Sessions, history, and caches never go
-into a bundle.
+read as [one login](#a-login-of-several-files-is-written-whole), so a bundle
+never packs a write that stopped part way, beside a manifest naming the CLI
+(`crewlet-bundle.json`, `{"agent": "codex"}`; an entry that leaves `agent` out
+exports as `claude-code`), which is never written into the credential
+directory. Sessions, history, and caches never go into a bundle.
 
 **Between two hosts that share no database**, pipe it instead:
 
@@ -2903,6 +2960,51 @@ well. A CLI that does not read its key from the environment — `kimi-code` read
 its metered key only from `config.toml` in the credential directory — does not
 declare `env_sign_in`, and a key in its `env` is not counted.
 
+### A login of several files is written whole
+
+Four CLIs keep one login in two files — `gemini-cli` (`oauth_creds.json` beside
+`google_accounts.json`), `cursor-agent` (`cli-config.json` and `auth.json`),
+`kimi-code` (its OAuth token beside the `config.toml` that names its provider)
+and `hermes` (`.env` and `auth.json`) — and the two are a login only while they
+come from the same sign-in. So Crewlet writes the shared login **as one unit**.
+Every writer — the bundle restore, `crewlet llm import`, `-from-host`,
+`logout`, a seat's or a command's carry of a refreshed login, and a [local
+coding box](code-sandbox.md)'s write-back — first records the whole new login
+in a journal beside the credential directory (`credentials.pending`), then puts
+each file in place, then removes the journal. Every reader — a seat's seed,
+`doctor`, `list`, `export`, a restore looking for a login already there, a
+local box's seed — takes the same lock (`credentials.lock`) and finishes a
+journal it finds standing before it reads.
+
+So a writer killed between two files, or refused by the disk part way, leaves
+the login it was replacing or the one it was writing, never half of each: the
+next reader puts the new one in place. A write whose journal landed is the
+login of record from that moment, so one that could not put every file in
+place at once is reported as written, with a `cli_agent_login_unapplied`
+warning naming why (`local_sandbox_credential_unapplied` from a box's
+teardown), and the next reader finishes it. A journal that cannot be finished — the
+disk still refusing it — is never read as a login: `doctor` reports the
+credentials as unknown and why, `crewlet llm list` shows `unknown`, and a seat
+is refused rather than seeded with the file that landed. A journal this build
+cannot read is refused by everything that touches the login, naming the file;
+removing it discards that write, after which sign the entry in again.
+
+**Any one file that holds a login is a login.** `hermes` keeps API keys in
+`.env` and an OAuth pool in `auth.json`, and an entry may use either alone;
+`gemini-cli` signs in without `google_accounts.json`. What makes one file a
+whole login rather than half of two is that the directory is only ever written
+a login at a time. A file the CLI also keeps its own state in holds one only
+once the key its profile's `login_keys` names is in it: without that key it is
+still written, read and seeded with the rest, but it is not reported, exported
+or logged out as a login.
+
+**A write states the whole login.** `-from-host` adopts your login as it is: a
+file your home does not hold is removed from the shared login rather than left
+beside the adopted one from an older sign-in. `logout` writes the login less
+every file of it that holds one — a write left standing is finished first and
+removed with the rest, and one that cannot be finished is replaced whole — so a
+login that was never put in place does not come back at the next seat's start.
+
 ### Token refresh across seats
 
 OAuth access tokens expire in hours, and the CLI refreshes them
@@ -2924,8 +3026,10 @@ refreshed — and writing it back would put the refresh token the vendor had jus
 rotated away in front of every seat.
 
 **And a refresh is a compare-and-swap.** A seat whose CLI did refresh writes
-only while the shared login is still exactly what that seat started from. If
-anything else wrote in between — another seat's refresh, your `crewlet llm
+only while the shared login is still exactly what that seat started from —
+every file of it, and the absence of every file it did not hold, so a refresh
+of one file is never written beside another writer's newer copy of the other.
+If anything else wrote in between — another seat's refresh, your `crewlet llm
 login` or `-from-host` while seats were mid-call, a `crewlet llm logout` — the
 newer login is kept and the seat's is dropped, with a `cli_agent_login_superseded`
 warning naming the provider and the file (never what either holds) and how the
@@ -2939,7 +3043,27 @@ login. The commands that *make* a login are the one exception: what your
 sign-in stored is written whenever it differs from what the command started
 with, over whatever landed while it ran — a refresh a seat made during a
 browser flow that took minutes, or even your own `-from-host` in another
-terminal — because the later of two sign-ins is the one you asked for.
+terminal — because the later of two sign-ins is the one you asked for. It is
+written as the **whole** login the sign-in left: a file the CLI left as the
+command found it goes back as it was rather than staying as the other writer
+left it, and a file the sign-in never held is removed rather than kept beside
+your new token, so the result is not one sign-in's token beside another's
+`config.toml`. A file the CLI itself removed during the sign-in is not
+removed, because no CLI's removal reaches the shared directory — a CLI that
+dropped a credential it could not use is no reason to log the fleet out of the
+login it started from. It stays as the shared directory holds it for as long
+as that is still the login the command started from: as the command found it,
+or as a seat or a local coding box refreshed it while you signed in, which is
+the same login, newer. Once one of *your* writes has replaced the login
+instead — a `-from-host` in another terminal, or a `crewlet llm logout`
+followed by a `crewlet llm import` — its copy is another sign-in's, so it is
+removed like a file the sign-in never held, and what is left is the login your
+sign-in left, without that file. A refreshed copy and another sign-in's look
+alike — neither is the copy the command started from — so they are told apart
+by a counter in the state directory (`login-epoch`), which a refresh never
+moves and every `-from-host`, `import` and `logout` moves before it writes the
+login. A `-from-host` or an `import` that cannot move it writes nothing; a
+`logout` that cannot still removes the login, and reports the failure.
 
 **A refreshed login that cannot be carried out is kept, not pruned.** If the
 export fails — a host too busy to finish it inside its 30-second bound, a CLI
@@ -2971,10 +3095,15 @@ after you finished the browser flow keeps the login there
 runs the same CLI on that state directory carries it out before anything else —
 over a refresh a seat made meanwhile, since it is your sign-in, but never over
 a login of record you replaced after it finished: a `-from-host`, a `crewlet
-llm import` or a `crewlet llm logout` since then wins, and the kept login is
-dropped with `cli_agent_login_superseded` (`shared=replaced`). A bundle the
-engine restores at boot into the empty directory the failed login left is not
-one of those, so your sign-in still lands over it. A `status` or a vendor's
+llm import` or a `crewlet llm logout` since then wins — one that stopped before
+its write landed included, since each moves `login-epoch` first — and the
+kept login is dropped with `cli_agent_login_superseded` (`shared=replaced`).
+It counts as finished when its command, once the export has failed, reads
+`login-epoch` under the lock those writes take, so a write part way through at
+that moment counts wholly before it or wholly after; where it cannot be read
+then, a write since the sign-in began wins too. A
+bundle the engine restores at boot into the empty directory the failed login
+left is not one of those, so your sign-in still lands over it. A `status` or a vendor's
 own logout that cannot carry the kept login out is refused, naming the way
 out: `crewlet llm login` itself replaces a kept login it cannot carry out and
 says so on your terminal (`cli_agent_login_discarded`), and `crewlet llm
@@ -3199,8 +3328,8 @@ it runs on.
 | `env` | Fixed child environment. Never a credential, never `token_env` or `api_key_env`, and never a variable the engine sets to isolate the call (`HOME`, the XDG homes, `TMPDIR`, a `config_env`, `work_config_env` or `isolation_env` variable). |
 | `passthrough_env` | Engine variables forwarded to the child. Never a credential, and never an isolation variable. |
 | `subscription_env` | Child environment set under `auth.mode: subscription` alone, over the entry's `env`: what tells a CLI that picks its sign-in from its environment to use the login the seat's home holds (`gemini-cli`'s `GOOGLE_GENAI_USE_GCA`, which under `api-key` would overrule the key). Never a credential, `token_env`, `api_key_env`, an isolation variable or a variable `env` sets, and never empty; an entry under `subscription` whose `env` names one is refused. |
-| `token_env` | The variable a headless subscription token goes in (`auth.token`, or this variable itself, under `auth.mode: subscription`). |
-| `api_key_env` | The variable a metered key goes in (`auth.api_key`, or this variable itself, under `auth.mode: api-key`). |
+| `token_env` | The variable a headless subscription token goes in (`auth.token`, or this variable itself, under `auth.mode: subscription`). An environment variable name, and refused otherwise ([above](#configuration-reference)). |
+| `api_key_env` | The variable a metered key goes in (`auth.api_key`, or this variable itself, under `auth.mode: api-key`). An environment variable name, and refused otherwise ([above](#configuration-reference)). |
 | `api_key_env_shared` | `api_key_env` is a generic name other vendors' keys are kept under too (`qwen-code`'s `OPENAI_API_KEY`): an `api-key` entry must name its key as `auth.api_key`, the variable is never read in its place from the secret store or the engine's environment, and `inherit-env`, which forwards the engine's own, is refused. |
 | `model_names_provider` | The CLI reads its model as `<provider>/<model>`, split at the first slash, so a `model` with nothing before or after that slash (as the CLI is handed it, through `model_args`) is refused on a write. Declared by `opencode` only — measured from its source; `hermes` and `pi` document a `provider/id` model but are not known to refuse a bare one. |
 | `env_sign_in` | The CLI reads its model provider's key from its own environment, so a [credential-named](#6-a-provider-key-in-env-opencode-hermes-pi) variable in the entry's `env` signs it in. |
@@ -3356,10 +3485,12 @@ do. It reveals only what the entries it works on read — `login`, `status`,
 that one entry, and `list` and a bare `doctor` every entry — so signing in
 `plan` reveals `plan`'s token, key or bundle and the `${VAR}`s its model and
 `env` name, and no other entry's credentials, not even an entry keyed
-`plan.fast`, nor any vendor's. Each reveal is logged by
-name on the node and takes `admin` and a person present, so
-`CREWLET_API_TOKEN` holds one of Tier A's tokens for it
-([CLI reference](../reference/cli.md#commands)). With the engine stopped the
+`plan.fast`, nor any vendor's: it lists the node's names, then asks for those
+the node holds, at most 64 to a request. Each name asked is logged on the
+node, and a reveal takes `admin` and a person present, so `CREWLET_API_TOKEN`
+holds one of Tier A's tokens for it ([CLI
+reference](../reference/cli.md#where-a-command-reads-the-companys-values)).
+With the engine stopped the
 command reaches the store itself — through a solo node's own broker on
 `stream.store_dir`, or the external broker a `stream.type: nats` node dials —
 and reads the same values, and only those, with nothing logged on any node:
@@ -3386,6 +3517,16 @@ one `crewlet llm login` names when it refuses a token the mode never reads:
 | `subscription` | a login: adopt this machine's with `-from-host` where it has one — or, preferred where the CLI mints one, a headless token with `-capture-token` — else the CLI's own `crewlet llm login <key>`, or, for a CLI with no login command (`gemini-cli`, `grok`), a login made with the CLI by hand and adopted. A CLI that keeps no login at all (`qwen-code`) is named its key instead: `auth.mode: api-key`, with the key as `auth.api_key` |
 | `api-key` | the key alone: `auth.api_key`, else — unless the variable is [shared](#5-a-metered-api-key) — the CLI's key variable, stored with `crewlet secrets set` or exported in the engine's environment. Never a login, which would sit in every seat's home beside the key and leave which of the two the CLI bills to the vendor's precedence, and never a token, which the mode removes |
 | `inherit-env` | the variables it forwards, exported in the engine's own environment — never the secret store, which it does not read — and, where the engine's environment holds no key, a login, as under `subscription` but without `-capture-token`, whose token lands in the secret store |
+
+A token or key variable the entry's `overrides` names outside the reference
+grammar — `token_env: MY-TOKEN`, `api_key_env: "MY=KEY"` — is a problem of its
+own, naming `providers.llm.<key>.overrides.token_env` or `.api_key_env`, and
+no route runs through it: no secret store, `${VAR}` or shell export can hold
+such a name ([Configuration reference](#configuration-reference)). So
+`subscription` is not offered `-capture-token`, `api-key` is told to name the
+variable its CLI reads rather than to store or export a key, and `inherit-env`
+is told to export only a variable a shell can — or, where it forwards no
+other, to name one.
 
 One case is not a fault: a CLI pointed at an
 endpoint that takes no key (an `opencode` entry declaring a local server, or a

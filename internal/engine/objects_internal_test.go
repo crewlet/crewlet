@@ -16,7 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
 	"github.com/crewlet/crewlet/internal/objstore/references"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // EVERY DECLARED TABLE IS READ BY THE COLLECTOR THIS ENGINE STARTS.
@@ -29,7 +29,7 @@ import (
 // time, instead.
 func TestTheCollectorReadsEveryDeclaredTable(t *testing.T) {
 	t.Parallel()
-	n := &native{trackerReader: &tracker.Reader{}}
+	n := &native{trackerReader: &worklet.Reader{}}
 	estates := objectEstatesFor(n, &artifactsdomain.Reader{})
 	if _, err := collect.Sources(references.All, estates...); err != nil {
 		t.Fatalf("the collector cannot be built from the declared tables: %v", err)
@@ -286,7 +286,7 @@ func TestTheCollectorNeverStartsOnceStopped(t *testing.T) {
 	e := newSandboxNode(t, parseCompany(t, companyWithoutSandboxDoc))
 	e.Stop(context.Background())
 
-	refs, err := collect.Sources(references.All, refusedEstate{name: tracker.ObjectEstate{}.Name()},
+	refs, err := collect.Sources(references.All, refusedEstate{name: worklet.ObjectEstate{}.Name()},
 		refusedEstate{name: artifactsdomain.ObjectEstate{}.Name()})
 	if err != nil {
 		t.Fatalf("the references: %v", err)

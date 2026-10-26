@@ -409,7 +409,7 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
 
 /**
  * A refusal on authority that says WHY: the access any one of which would
- * have admitted the reader ("needs Tracker access"), or — an empty list — that
+ * have admitted the reader ("needs Worklet access"), or (an empty list) that
  * none would, because what is missing is a relation the org chart does not
  * hold.
  *

@@ -56,7 +56,7 @@ type Providers struct {
 	LLMOrder []string `yaml:"llm_order,omitempty" json:"llm_order,omitempty" desc:"Provider precedence; normally derived from the order they are written in."`
 
 	// Embeddings powers every vector this engine computes: the semantic half
-	// of a native knowledge search and the similarity halves of diary and
+	// of a Doclet knowledge search and the similarity halves of diary and
 	// episode recall. Nil disables them — a search is keyword only, and
 	// episodes are still written, but nothing searches them by similarity.
 	Embeddings *EmbeddingProvider `yaml:"embeddings,omitempty" json:"embeddings,omitempty" desc:"Embedding provider for semantic knowledge search and for diary and episode recall."`
@@ -806,8 +806,9 @@ func (l *LLMProvider) validateModel(path Path) error {
 }
 
 // validateCredentials holds an entry's credentials to the variables its
-// merged profile names, and the profile itself to keeping every credential
-// behind auth ([cliprofile.Profile.ValidateCredentials]).
+// merged profile names, those variables to the reference grammar, and the
+// profile itself to keeping every credential behind auth
+// ([cliprofile.Profile.ValidateCredentials]).
 //
 // The rules exist because the backend's applyAuth (in
 // internal/providers/llm/cliagent) places a credential only where the profile
@@ -844,6 +845,31 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 	agent := l.AgentName()
 	if err := profile.ValidateCredentials(agent); err != nil {
 		p.add(at(path, "overrides"), ErrConflict, "%v", err)
+	}
+
+	// THE TWO VARIABLES A CREDENTIAL IS HANDED OVER IN ARE NAMES OF THE
+	// REFERENCE GRAMMAR, because nothing that keeps a credential can hold
+	// any other: the secret store refuses the name, so `crewlet llm login
+	// -capture-token` cannot write the token there and a `${VAR}` cannot
+	// spell it; no shell exports one for auth.mode inherit-env to forward;
+	// and a name carrying `=` sets a different variable in the CLI's
+	// environment. Only overrides can name one — every shipped profile's
+	// names are in the grammar — and the CLI still starts with it, signed in
+	// by whatever it does read, so this is an admission rule like the rest.
+	// Here rather than in the profile's own rules because the grammar is
+	// envref's, which that leaf does not import.
+	for _, variable := range []struct{ field, name string }{
+		{"token_env", profile.TokenEnv}, {"api_key_env", profile.APIKeyEnv},
+	} {
+		if variable.name != "" && !envref.ValidName(variable.name) {
+			p.add(at(path, "overrides."+variable.field), ErrShape,
+				"%q is not an environment variable name (letters, digits and "+
+					"underscores, not starting with a digit): the CLI is handed its "+
+					"credential under it, and no secret store, ${VAR} or `crewlet llm "+
+					"login` can hold a name outside that grammar, nor a shell export "+
+					"one for auth.mode inherit-env to forward. Name the variable your "+
+					"build of the CLI reads", variable.name)
+		}
 	}
 
 	// The mode-dependent rules each state what a mode does with a
@@ -1085,7 +1111,7 @@ var EmbeddingProviderTypes = []EmbeddingProviderType{EmbeddingOpenAI, EmbeddingO
 
 // EmbeddingProvider is the vector backend, and it has four callers: the
 // fleet-singleton duty that embeds the company's own pages and work items for
-// the semantic half of a native knowledge search, each such search's query
+// the semantic half of a Doclet knowledge search, each such search's query
 // vector, and the similarity halves of diary and episode recall.
 type EmbeddingProvider struct {
 	Type    EmbeddingProviderType `yaml:"type,omitempty" json:"type,omitempty" js:"enum=openai|openai-compatible" desc:"openai (default) or openai-compatible."`

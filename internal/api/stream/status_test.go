@@ -64,8 +64,8 @@ func newStatusRig(t *testing.T) *statusRig {
 	return &statusRig{
 		svc:         svc,
 		admin:       client(active("erin.ng", "founder", iam.GrantAdmin)),
-		lead:        client(active("lee.lead", statusLead, iam.GrantTracker)),
-		tracker:     client(active("sam.lee", "analyst", iam.GrantTracker)),
+		lead:        client(active("lee.lead", statusLead, iam.GrantWorklet)),
+		tracker:     client(active("sam.lee", "analyst", iam.GrantWorklet)),
 		overviewOne: client(active("pat.kim", "intern")),
 	}
 }
@@ -154,7 +154,7 @@ func withheld(t *testing.T, who string, i int, call map[string]any) {
 // tracker's.
 //
 // Mutation: hand every audience the row unmasked, or keep the body versions
-// on a withheld call, or keep the work item for a reader without the tracker,
+// on a withheld call, or keep the work item for a reader without Worklet,
 // and this fails.
 func TestAStatusAudienceGetsNoBodyAndNoMovingBodyVersions(t *testing.T) {
 	t.Parallel()
@@ -186,7 +186,7 @@ func TestAStatusAudienceGetsNoBodyAndNoMovingBodyVersions(t *testing.T) {
 	}{
 		{"an admin", r.admin, true, true},
 		{"the seat's lead", r.lead, true, true},
-		{"a tracker holder who leads nothing", r.tracker, false, true},
+		{"a Worklet holder who leads nothing", r.tracker, false, true},
 		{"a reader of the overview alone", r.overviewOne, false, false},
 	} {
 		got := calls(t, tc.client)
@@ -246,7 +246,7 @@ func TestAStatusAudienceGetsNoBodyFromALeanCall(t *testing.T) {
 		t.Fatalf("the status reader received %d pushes, want two", len(status))
 	}
 	for i, call := range status {
-		withheld(t, "a tracker holder who leads nothing", i, call)
+		withheld(t, "a Worklet holder who leads nothing", i, call)
 	}
 
 	lead := calls(t, r.lead)

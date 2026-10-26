@@ -263,7 +263,7 @@ test("asking files the task to the chosen agent and opens it", async () => {
   });
   expect(shown).toContain(request.brief);
   expect(shown).toContain("(kind `html`)");
-  expect(location.hash).toBe("#/work/CRW-9");
+  expect(location.hash).toBe("#/worklet/CRW-9");
 });
 
 // A PAGE THE PERSON WROTE goes to the agent to build on.

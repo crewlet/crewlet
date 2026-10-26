@@ -215,7 +215,7 @@ func structOf(t reflect.Type) reflect.Type {
 // naming no field is a field that was renamed out from under its rule.
 //
 // A WORK ITEM IS THE TRACKER'S WHEREVER IT APPEARS, as a rule rather than an
-// entry: a seat's current task reaches only a reader who uses the tracker.
+// entry: a seat's current task reaches only a reader who uses Worklet.
 //
 // Mutation: add an unclassified field to [LiveCall], or to [Paused], and this
 // fails; classify `work_item` as status and the rule fails.
@@ -419,7 +419,7 @@ func TestAMaskedCallCarriesNoBodyAndZeroBodyVersions(t *testing.T) {
 		}
 	}
 	if _, ok := wire(t, MaskCall(fullCall(), Reach{}))["work_item"]; ok {
-		t.Error("a reader without the tracker was sent the work item")
+		t.Error("a reader without Worklet was sent the work item")
 	}
 	whole := wire(t, MaskCall(fullCall(), Reach{Body: true, Tracker: true}))
 	if whole["prompt"] != "fix the flaky test" || whole["body_withheld"] != nil {
@@ -432,7 +432,7 @@ func TestAMaskedCallCarriesNoBodyAndZeroBodyVersions(t *testing.T) {
 // A row's call is the projection's own [*LiveCall] on a snapshot and a
 // lean call once a push has left fields out ([LiveCall.Without]) — with its
 // rounds carried or held — and null between calls, a typed nil included. A
-// status reader gets no body from any of them and a reader without the tracker
+// status reader gets no body from any of them and a reader without Worklet
 // no work item; a reader of the trail gets each exactly as the push carried it.
 //
 // Mutation: make MaskCall handle only the projection's own shape, and the lean
@@ -457,11 +457,11 @@ func TestMaskRowHandlesEveryShape(t *testing.T) {
 		masked, _ := status["live_call"].(map[string]any)
 		noBody(t, tc.name, masked)
 		if _, ok := masked["work_item"]; ok {
-			t.Errorf("%s: a reader without the tracker was sent the call's work item", tc.name)
+			t.Errorf("%s: a reader without Worklet was sent the call's work item", tc.name)
 		}
 		turn, _ := status["turn"].(map[string]any)
 		if _, ok := turn["work_item"]; ok || turn == nil {
-			t.Errorf("%s: a reader without the tracker was sent the turn %v, want "+
+			t.Errorf("%s: a reader without Worklet was sent the turn %v, want "+
 				"it without its work item", tc.name, turn)
 		}
 		if got := wire(t, MaskCall(tc.call, Reach{}))["turn_id"]; got != "turn-1" {

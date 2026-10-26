@@ -15,19 +15,19 @@ import (
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/objstore/references"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The native backends, wired: the half of this node's durable state that only a
@@ -84,21 +84,21 @@ type native struct {
 	indexer *search.Indexer
 
 	// writer is the tracker's write authority and pages the wiki's.
-	writer *tracker.Writer
-	pages  *pages.Store
+	writer *worklet.Writer
+	pages  *doclet.Store
 
 	// trackerReader and pageReader are the read paths.
-	trackerReader *tracker.Reader
-	pageReader    *pages.Reader
+	trackerReader *worklet.Reader
+	pageReader    *doclet.Reader
 
-	// searcher answers the knowledge seam natively.
-	searcher *pages.Searcher
+	// searcher is Doclet's answer to the knowledge seam.
+	searcher *doclet.Searcher
 
 	// itemSearch is the tracker's own ranked search, over the SAME index
 	// and the SAME fan-out — see worksearch.go. Its own field because the
 	// two verbs are the tracker's and the wiki's, and a caller holding one
 	// must not be able to reach the other's corpus.
-	itemSearch *tracker.Searcher
+	itemSearch *worklet.Searcher
 
 	// stopSlices withdraws this node as an answerer for the fleet's
 	// search fan-out. Nil when there is no queue to serve on, which is
@@ -120,10 +120,10 @@ type native struct {
 	done sync.WaitGroup
 }
 
-// errNoCore is what the native half refuses to start without on a data node:
-// every one of its writers and readers is over one of the core's logs.
-var errNoCore = errors.New("engine: the native tracker and knowledge base run " +
-	"over the core runtime's state log, and this engine has not started one")
+// errNoCore is what the native halves refuse to start without on a data node:
+// every one of their writers and readers is over one of the core's logs.
+var errNoCore = errors.New("engine: Worklet and Doclet run over the core " +
+	"runtime's state log, and this engine has not started one")
 
 // startNative opens this node's native backends, once per process, over the
 // core runtime [Engine.startCore] already published.
@@ -161,8 +161,8 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// this says — they are the core's — so a company on Jira and Confluence
 	// still applies the tracker's and the knowledge base's logs, and simply
 	// has no writer or reader over either.
-	runTracker := c.Config.TrackerBackendFor() == config.TrackerNative
-	wiki := c.Config.KnowledgeBackendFor() == config.KnowledgeNative
+	runTracker := c.Config.TrackerBackendFor() == config.TrackerWorklet
+	wiki := c.Config.KnowledgeBackendFor() == config.KnowledgeDoclet
 	nodeID, sl := core.nodeID, core.log
 
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
@@ -183,13 +183,13 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 
 	var err error
 	if runTracker {
-		running := sl.Domain(tracker.Domain{}.Name())
+		running := sl.Domain(worklet.Domain{}.Name())
 		if running == nil {
-			return fmt.Errorf("engine: this node runs no tracker domain, so the " +
-				"tracker has nowhere to write — the domain is in the register " +
+			return fmt.Errorf("engine: this node runs no tracker domain, so " +
+				"Worklet has nowhere to write; the domain is in the register " +
 				"and its stream failed to come up")
 		}
-		n.writer, err = tracker.NewWriter(tracker.WriterDeps{
+		n.writer, err = worklet.NewWriter(worklet.WriterDeps{
 			Publisher: running.publisher,
 			// THE APPLIER'S OWN MEASURED RATE, so a refusal's
 			// `retry_after_seconds` is derived from what this node
@@ -227,22 +227,22 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			// attributing those to a person would make a machine's
 			// housekeeping indistinguishable from somebody's decision.
 			Actor:     nodeID,
-			ActorKind: tracker.AuthorSystem,
+			ActorKind: worklet.AuthorSystem,
 			// The process's one recorder, so every write outcome and
 			// every rejection is counted rather than merely declared.
 			Metrics: e.metrics,
 		})
 		if err != nil {
-			return fmt.Errorf("engine: tracker writer: %w", err)
+			return fmt.Errorf("engine: Worklet writer: %w", err)
 		}
 		// THROUGH THE DOMAIN'S OWN READ AUTHORITY, so a level asked for is
 		// a level served: the refusal ladder, the coverage probe and the
 		// barrier a linearizable read waits through. Built beside the
 		// runner rather than here, because the health it refuses on is
 		// the same one seat admission reads.
-		if n.trackerReader, err = tracker.NewReader(
+		if n.trackerReader, err = worklet.NewReader(
 			sl.estate().Reader(), running.reader); err != nil {
-			return fmt.Errorf("engine: tracker reader: %w", err)
+			return fmt.Errorf("engine: Worklet reader: %w", err)
 		}
 	}
 	// THE LEXICAL INDEX COVERS BOTH CORPORA, so it is built under EITHER
@@ -250,7 +250,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	//
 	// It used to sit inside the block below, which was correct while the
 	// index was the knowledge base's alone and silently wrong the moment
-	// it stopped being: a company with `tracker.backend: native` and
+	// it stopped being: a company with `tracker.backend: worklet` and
 	// Confluence for its knowledge indexed none of its own work items,
 	// served no `search_work_items`, and went on paying the embedding
 	// duty for a vector on every one of them — because that duty is armed
@@ -261,7 +261,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// AND IT DERIVES THE BACKLINKS from the same bodies it tokenises, through
 	// the one grammar the knowledge base owns — see [search.Backlinks].
 	n.indexer = search.NewIndexerOver(e.backends.Store, e.domainEstate(),
-		lexicalSources(runTracker, wiki)).WithLinks(pages.Links)
+		lexicalSources(runTracker, wiki)).WithLinks(doclet.Links)
 	// ONE QUERY-VECTOR CACHE FOR BOTH SEARCHES on this node, so a phrase
 	// the palette embedded for the work search is a hit when the same
 	// phrase is searched as knowledge. Read through [Engine.queryModel]
@@ -285,7 +285,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// THE BUCKETS ARE DIVIDED AMONG THE DATA NODES ([Engine.dataRoster]):
 	// only a node that holds the estate holds an index to scan.
 	if runTracker {
-		n.itemSearch = tracker.NewSearcher(e.domainEstate(), itemRanker{
+		n.itemSearch = worklet.NewSearcher(e.domainEstate(), itemRanker{
 			index: n.indexer,
 			fan: &search.FanOut{
 				Self:    nodeID,
@@ -312,25 +312,25 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	}
 
 	if wiki {
-		running := sl.Domain(pages.Domain{}.Name())
+		running := sl.Domain(doclet.Domain{}.Name())
 		if running == nil {
-			return fmt.Errorf("engine: this node runs no pages domain, so the " +
-				"knowledge base has nowhere to write — the domain is in the " +
-				"register and its stream failed to come up")
+			return fmt.Errorf("engine: this node runs no pages domain, so " +
+				"Doclet has nowhere to write; the domain is in the register and " +
+				"its stream failed to come up")
 		}
-		if n.pages, err = pages.NewStore(pages.Options{
+		if n.pages, err = doclet.NewStore(doclet.Options{
 			Publisher: running.publisher, DB: sl.estate().Reader(),
 			// LIVE off the epoch for the reason the searcher below is:
 			// `knowledge.skills_container`, `knowledge.root_space` and
 			// every `space:` are Tier B, and this store is built once per
 			// node while an apply can move any of them underneath it.
-			Reserved: func() pages.Reserved {
+			Reserved: func() doclet.Reserved {
 				return reservedContainers(e.Company())
 			},
 		}); err != nil {
 			return fmt.Errorf("engine: pages store: %w", err)
 		}
-		if n.pageReader, err = pages.NewReader(pages.ReaderOptions{
+		if n.pageReader, err = doclet.NewReader(doclet.ReaderOptions{
 			DB: sl.estate().Reader(), Log: running.reader,
 		}); err != nil {
 			return fmt.Errorf("engine: pages reader: %w", err)
@@ -344,7 +344,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		// tracker too, and gating it on the WIKI's backend left a
 		// tracker-native company on Confluence indexing none of its own
 		// work items.
-		n.searcher = pages.NewSearcher(pages.SearcherOptions{
+		n.searcher = doclet.NewSearcher(doclet.SearcherOptions{
 			Index: n.indexer, SkillsContainer: e.skillsContainer,
 			Node:    nodeID,
 			Peers:   e.searchPeers(),
@@ -390,7 +390,7 @@ func (n *native) objectEstates() []collect.Estate {
 	if n.trackerReader == nil {
 		return nil
 	}
-	return []collect.Estate{tracker.ObjectEstate{Reader: n.trackerReader}}
+	return []collect.Estate{worklet.ObjectEstate{Reader: n.trackerReader}}
 }
 
 // startNativeFor brings the native halves up for the first company an APPLY
@@ -593,7 +593,7 @@ func (e *Engine) nativeHalves() (runTracker, wiki, ok bool) {
 // node's router answers from while its copy serves, and what a test
 // reads to see one node's copy. A surface reads through [OperatorWork]
 // instead, which answers from a peer's copy once this one is out of service.
-func (e *Engine) Tracker() *tracker.Reader {
+func (e *Engine) Tracker() *worklet.Reader {
 	n := e.native.Load()
 	if n == nil {
 		return nil
@@ -603,14 +603,14 @@ func (e *Engine) Tracker() *tracker.Reader {
 
 // TrackerWriter is this node's tracker write side, or nil — nil in a
 // maintenance mode too; see [Engine.writeSide].
-func (e *Engine) TrackerWriter() *tracker.Writer {
+func (e *Engine) TrackerWriter() *worklet.Writer {
 	writer, _ := e.writeSide()
 	return writer
 }
 
 // Pages is this node's OWN copy's knowledge read side, or nil — see
 // [Engine.Tracker]; a surface reads through [OperatorPages].
-func (e *Engine) Pages() *pages.Reader {
+func (e *Engine) Pages() *doclet.Reader {
 	n := e.native.Load()
 	if n == nil {
 		return nil
@@ -632,13 +632,13 @@ func (e *Engine) Backlinks() *search.Indexer {
 
 // PagesStore is this node's knowledge write side, or nil — nil in a
 // maintenance mode too; see [Engine.writeSide].
-func (e *Engine) PagesStore() *pages.Store {
+func (e *Engine) PagesStore() *doclet.Store {
 	_, store := e.writeSide()
 	return store
 }
 
-// NativeSearcher is the native knowledge searcher, or nil.
-func (e *Engine) NativeSearcher() *pages.Searcher {
+// DocletSearcher is Doclet's knowledge searcher, or nil.
+func (e *Engine) DocletSearcher() *doclet.Searcher {
 	n := e.native.Load()
 	if n == nil {
 		return nil
@@ -717,7 +717,7 @@ func (e *Engine) startNativeFeeds(ctx context.Context) {
 			if err := feed.Run(n.run); err != nil {
 				log.ErrorContext(ctx, "changefeed_stopped",
 					"source", translator.Source().Name, "error", err.Error(),
-					"detail", "native writes still land; nothing is woken by them "+
+					"detail", "writes still land; nothing is woken by them "+
 						"until this node or a peer reopens the feed")
 			}
 		}()
@@ -754,18 +754,18 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 		// record's routing snapshot, which the WRITER resolved at commit
 		// — a mention resolved at read time names whoever holds the role
 		// later, which is a different person.
-		parsers = append(parsers, tracker.NewParser(tracker.ParserOptions{}))
-		prompts = append(prompts, tracker.Prompt{})
+		parsers = append(parsers, worklet.NewParser(worklet.ParserOptions{}))
+		prompts = append(prompts, worklet.Prompt{})
 	}
 	if runWiki {
 		// THE LEAD MAP, and the base its notifications link a person to —
 		// `api.external_url`, the address people reach this deployment at,
 		// since the link is opened by whoever the change woke and never by a
 		// vendor ([Engine.publicBase]).
-		parsers = append(parsers, pages.NewParser(pages.ParserOptions{
+		parsers = append(parsers, doclet.NewParser(doclet.ParserOptions{
 			Leads: containerLeads(c.Org), BaseURL: e.publicBase(c),
 		}))
-		prompts = append(prompts, pages.Prompt{})
+		prompts = append(prompts, doclet.Prompt{})
 	}
 	return parsers, prompts
 }
@@ -820,7 +820,7 @@ func (e *Engine) reconcileNative(ctx context.Context, c *Company) {
 //
 // # The bug this fixes
 //
-// [pages.Store.EnsureContainer] HAD NO CALLER. Its own doc says it "runs on
+// [doclet.Store.EnsureContainer] HAD NO CALLER. Its own doc says it "runs on
 // every boot for every unit's space" and nothing ever ran it, so
 // `pages_containers` was empty in every deployment that ever existed: the
 // Knowledge rail said "this node knows about no containers yet" beside a
@@ -852,9 +852,9 @@ func (e *Engine) reconcileNative(ctx context.Context, c *Company) {
 // applying an older revision late must not rewrite the containers' names and
 // purposes back to its own older view, and a reapply of one activation must
 // write nothing. A company no activation has named yet has nothing to stamp,
-// and the store refuses a zero ([pages.ErrNoActivation]); so it is not applied
-// here, and the reconciler's first apply — which carries the pointer's instant
-// — is. See [pages.Store.EnsureContainer].
+// and the store refuses a zero ([doclet.ErrNoActivation]); so it is not applied
+// here, and the reconciler's first apply (which carries the pointer's instant)
+// is. See [doclet.Store.EnsureContainer].
 //
 // # Best effort, and idempotent
 //
@@ -922,12 +922,12 @@ func chartContainers(c *Company) []chartContainer {
 	var out []chartContainer
 	seen := map[string]bool{}
 	add := func(key, name, purpose string) {
-		// THE ONE CANONICAL FORM ([pages.ContainerKey]), which is what a
+		// THE ONE CANONICAL FORM ([doclet.ContainerKey]), which is what a
 		// container key is everywhere else: a page carries `ENG` and a
 		// chart that wrote `eng` — or ` ENG` — would create a second
 		// container no page is in. A copy of the rule here is how the
 		// forms drifted before there was one.
-		key = pages.ContainerKey(key)
+		key = doclet.ContainerKey(key)
 		if key == "" || seen[key] {
 			return
 		}
@@ -981,13 +981,13 @@ func chartContainers(c *Company) []chartContainer {
 //
 // c.ActivatedAt is the instant the revision this company was applied from was
 // activated, and it is what every project is stamped with
-// ([tracker.Project.ChartEpoch]): a node applying an older revision late must
+// ([worklet.Project.ChartEpoch]): a node applying an older revision late must
 // not walk the fleet's newer project names back to its own. The activation's
 // instant and never this node's clock, because every node applies one
 // activation separately and only the instant on the pointer is the same on all
-// of them. A company no activation has named yet — a Tier B file a node booted
-// with — applies nothing here; the reconciler's first apply carries the
-// pointer's instant and applies it then.
+// of them. A company no activation has named — one handed to [New] in code —
+// applies nothing here; the reconciler's first apply carries the pointer's
+// instant and applies it then.
 //
 // # Best effort, and what that costs
 //
@@ -1026,8 +1026,8 @@ func (e *Engine) applyChart(ctx context.Context, c *Company) {
 // one pass would contend with itself at the broker and log a failure for a
 // configuration that is fine. The FIRST declaration wins, which matches how
 // the lead is chosen for the same key.
-func chartProjects(o *org.Organization) []tracker.ChartProject {
-	var out []tracker.ChartProject
+func chartProjects(o *org.Organization) []worklet.ChartProject {
+	var out []worklet.ChartProject
 	seen := map[string]bool{}
 	add := func(key, name, purpose, unit string) {
 		// NORMALIZED THE WAY EVERY OTHER SCOPE IS, through the org's own
@@ -1039,7 +1039,7 @@ func chartProjects(o *org.Organization) []tracker.ChartProject {
 			return
 		}
 		seen[key] = true
-		out = append(out, tracker.ChartProject{
+		out = append(out, worklet.ChartProject{
 			Key: key, Name: name, Purpose: purpose, Unit: unit,
 		})
 	}
@@ -1101,7 +1101,7 @@ func projectLeads(o *org.Organization) map[string]string {
 }
 
 // containerLeads maps a knowledge container to the handle that owns it.
-func containerLeads(o *org.Organization) pages.Leads {
+func containerLeads(o *org.Organization) doclet.Leads {
 	if o == nil {
 		return nil
 	}
@@ -1117,7 +1117,7 @@ func containerLeads(o *org.Organization) pages.Leads {
 			"declared_by", conflict.DeclaredBy, "chose", conflict.Chose,
 			"candidates", conflict.Candidates)
 	}
-	return pages.Leads(leads)
+	return doclet.Leads(leads)
 }
 
 // ProjectOfSeat is one seat's home project, from a chart.
@@ -1327,7 +1327,7 @@ type trackerWriter interface {
 	// RecordTurn is the one write the ENGINE makes as a seat rather than a
 	// tool: a turn's spend onto the task it was spent on. On both halves
 	// for the reason every tool's write is — see [Engine.recordTurnSpend].
-	RecordTurn(ctx context.Context, opID string, turn tracker.TurnRecord) (tracker.WriteResult, error)
+	RecordTurn(ctx context.Context, opID string, turn worklet.TurnRecord) (worklet.WriteResult, error)
 }
 
 // trackerSeams are the tracker halves a seat's tools are handed: this node's
@@ -1340,7 +1340,7 @@ type trackerSeams struct {
 }
 
 // trackerHalves is this node's tracker seams, or false where it runs no
-// native tracker.
+// Worklet.
 //
 // THE ROUTER'S, ON EVERY NODE, so every tool is handed the same kind of half:
 // a data node's router answers from its own copy and a stateless node's asks a
@@ -1393,21 +1393,21 @@ func (e *Engine) trackerHalves() (trackerSeams, bool) {
 // resolve, however they are cased. Resolving through [org.Organization.Unit]
 // instead matched EXACTLY, so `unit: engineering` on a company with a unit
 // named "Engineering" was refused with "This company has no team".
-func ChartUnits(o *org.Organization) tracker.Units { return chartUnits{org: o} }
+func ChartUnits(o *org.Organization) worklet.Units { return chartUnits{org: o} }
 
 type chartUnits struct{ org *org.Organization }
 
 // ResolveUnit answers the unit a stored or typed reference names: its key, its
 // name and its effective lead.
-func (c chartUnits) ResolveUnit(ref string) (tracker.ChartUnit, bool) {
+func (c chartUnits) ResolveUnit(ref string) (worklet.ChartUnit, bool) {
 	if c.org == nil {
-		return tracker.ChartUnit{}, false
+		return worklet.ChartUnit{}, false
 	}
 	unit := c.org.UnitByRef(ref)
 	if unit == nil {
-		return tracker.ChartUnit{}, false
+		return worklet.ChartUnit{}, false
 	}
-	lead := tracker.LeadRef{}
+	lead := worklet.LeadRef{}
 	// THE EFFECTIVE LEAD, which is the one inherited from an ancestor
 	// where this unit declares none — because that is who actually hears
 	// about the project's work, and rendering `none` beside a unit whose
@@ -1422,21 +1422,21 @@ func (c chartUnits) ResolveUnit(ref string) (tracker.ChartUnit, bool) {
 	// a person.
 	if role := c.org.EffectiveLead(unit); role != nil {
 		lead.Handle = role.Handle()
-		lead.Kind = tracker.AuthorAgent
+		lead.Kind = worklet.AuthorAgent
 		if role.IsHuman() {
-			lead.Kind = tracker.AuthorHuman
+			lead.Kind = worklet.AuthorHuman
 		}
 	}
 	// THE KEY AND THE NAME, because the callers ask in both directions:
 	// what a write stores is the key ([org.Unit.Key]) and what a screen
 	// reads is the name.
-	return tracker.ChartUnit{Key: unit.Key(), Name: unit.Name, Lead: lead}, true
+	return worklet.ChartUnit{Key: unit.Key(), Name: unit.Name, Lead: lead}, true
 }
 
 // liveUnits resolves against the epoch current when the tool RUNS.
 type liveUnits struct{ engine *Engine }
 
-func (l liveUnits) ResolveUnit(ref string) (tracker.ChartUnit, bool) {
+func (l liveUnits) ResolveUnit(ref string) (worklet.ChartUnit, bool) {
 	return ChartUnits(l.engine.Company().Org).ResolveUnit(ref)
 }
 
@@ -1481,7 +1481,7 @@ var _ builtin.ChannelDirectory = liveChannels{}
 // transport or tool server is started for. Mattermost's company block is
 // switched by `enabled`; Slack's is on by being declared — the rule
 // [Engine.startNotifications] starts each transport by.
-func (c liveChannels) ChatSurfaces(handle string) []tracker.InformSurface {
+func (c liveChannels) ChatSurfaces(handle string) []worklet.InformSurface {
 	company := c.engine.Company()
 	if company == nil || company.Org == nil || company.Config == nil {
 		return nil
@@ -1490,13 +1490,13 @@ func (c liveChannels) ChatSurfaces(handle string) []tracker.InformSurface {
 	if seat == nil {
 		return nil
 	}
-	var out []tracker.InformSurface
+	var out []worklet.InformSurface
 	if mm := company.Config.Integrations.Mattermost; mm != nil && mm.Enabled &&
 		seat.Mattermost.BotToken != "" {
-		out = append(out, tracker.InformMattermost)
+		out = append(out, worklet.InformMattermost)
 	}
 	if company.Config.Integrations.Slack != nil && seat.Slack.BotToken != "" {
-		out = append(out, tracker.InformSlack)
+		out = append(out, worklet.InformSlack)
 	}
 	return out
 }
@@ -1584,7 +1584,7 @@ func (e *Engine) pageDeps(c *Company) builtin.PageDeps {
 		// THE TOOL-SKILLS CONTAINER, read off the CURRENT epoch for the
 		// reason the defaults are: a write into it is asked for the admin
 		// a tool skill takes, and the store itself refuses a seat every
-		// write there ([pages.Reserved]).
+		// write there ([doclet.Reserved]).
 		SkillsContainer: e.skillsContainer,
 		Await:           await,
 	}
@@ -1619,7 +1619,7 @@ func (e *Engine) pageHalves() (builtin.PageReader, builtin.PageWriter,
 
 // OperatorWork is the tracker's read side as the operator's surfaces reach it —
 // the dashboard's and the REST routes' questions, and the operator's own MCP —
-// or false where this company runs no native tracker here.
+// or false where this company runs no Worklet here.
 //
 // THE ROUTER'S, ON EVERY NODE, exactly as a seat's tools are handed it
 // ([Engine.trackerHalves]), and never this node's own copy read directly. Read
@@ -1651,7 +1651,7 @@ func OperatorWorkWriter(e *Engine) (func(estate.Actor) estate.WorkWriter, bool) 
 
 // OperatorPages is the knowledge base's read side as the operator's surfaces
 // reach it, through the router for [OperatorWork]'s reason — or false where
-// this company runs no native knowledge base here.
+// this company runs no Doclet here.
 func OperatorPages(e *Engine) (estate.Pages, bool) {
 	_, wiki, ok := e.nativeHalves()
 	if !ok || !wiki || e.router == nil {
@@ -1682,8 +1682,8 @@ func (e *Engine) AwaitEstate(ctx context.Context, at statelog.Position) error {
 }
 
 // reservedContainers are the containers a seat's own writes are held back
-// from, each under its own rule, and every container the company DECLARES — the
-// only ones a page is created in, by anybody — see [pages.Reserved].
+// from, each under its own rule, and every container the company DECLARES (the
+// only ones a page is created in, by anybody); see [doclet.Reserved].
 //
 // THE DECLARED SPACES ARE [chartContainers]'s, the very list the containers are
 // made from on every apply: every unit's and seat's `space:`, the root and the
@@ -1693,11 +1693,11 @@ func (e *Engine) AwaitEstate(ctx context.Context, at statelog.Position) error {
 //
 // NOTHING IS DECLARED by a node running no company, which is the meaningful
 // zero: every create is refused until there is a chart to say where pages go.
-func reservedContainers(current *Company) pages.Reserved {
+func reservedContainers(current *Company) doclet.Reserved {
 	if current == nil || current.Config == nil {
-		return pages.Reserved{}
+		return doclet.Reserved{}
 	}
-	held := pages.Reserved{
+	held := doclet.Reserved{
 		Skills: strings.TrimSpace(current.Config.SkillsContainerKey()),
 		Root:   strings.TrimSpace(current.Config.RootSpaceKey()),
 	}
@@ -1725,10 +1725,10 @@ type seatMentions struct{ org *org.Organization }
 // unassigned task woke nobody at all — the lead fallback is precisely what
 // catches a task naming nobody — and with no Units every project that surface
 // listed rendered as belonging to no team.
-func LiveLeads(e *Engine) tracker.Leads { return liveLeads{engine: e} }
+func LiveLeads(e *Engine) worklet.Leads { return liveLeads{engine: e} }
 
 // LiveUnits is the tracker's unit seam over the engine's current chart.
-func LiveUnits(e *Engine) tracker.Units { return liveUnits{engine: e} }
+func LiveUnits(e *Engine) worklet.Units { return liveUnits{engine: e} }
 
 // LiveChannels is the chart's chat surfaces and unit channels, read per call,
 // for a surface built once that outlives every apply — the person-facing tool
@@ -1859,15 +1859,15 @@ func (m seatMentions) Mentions(text string) []string {
 // every such node to walk its container through a data node. Several data
 // nodes announce one edit; a hearer coalesces them into one walk.
 //
-// NAMED AS THE NATIVE BACKEND'S, because the projection outlives an apply that
-// moves the company's skills to Confluence, and the loop ignores a refresh
-// from a backend its source is not on.
-func (e *Engine) nudgeSkills() { e.skillSync.Announce(string(config.KnowledgeNative)) }
+// NAMED AS DOCLET'S, because the projection outlives an apply that moves the
+// company's skills to Confluence, and the loop ignores a refresh from a
+// backend its source is not on.
+func (e *Engine) nudgeSkills() { e.skillSync.Announce(skillBackend(config.KnowledgeDoclet)) }
 
 // walkRemoteSkills reads the tool-skill container through a data node, for a
 // node that holds none.
 //
-// STALE, for the reason [Engine.walkNativeSkills] gives, and one hop further:
+// STALE, for the reason [Engine.walkDocletSkills] gives, and one hop further:
 // the walk runs because a data node APPLIED the change and announced it, and
 // the floor this node carries is its own writes' — so the answering node is
 // at or past both.
@@ -1890,7 +1890,7 @@ func (e *Engine) walkRemoteSkills(ctx context.Context, container string) ([]skil
 	return out, nil
 }
 
-// walkNativeSkills reads the tool-skill container out of this node's own page
+// walkDocletSkills reads the tool-skill container out of this node's own page
 // projection.
 //
 // # It waits for hydration first
@@ -1899,7 +1899,7 @@ func (e *Engine) walkRemoteSkills(ctx context.Context, container string) ([]skil
 // and the registry replaces wholesale, so reading early would silently delete
 // every skill the walk did not reach. The wait is cancelled with the walk: a
 // source change or a stop ends it.
-func (e *Engine) walkNativeSkills(ctx context.Context, container string) ([]skills.Page, error) {
+func (e *Engine) walkDocletSkills(ctx context.Context, container string) ([]skills.Page, error) {
 	if !e.awaitHydration(ctx) {
 		return nil, ctx.Err()
 	}

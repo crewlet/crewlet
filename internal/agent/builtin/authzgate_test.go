@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // EVERY TOOL THIS BUILD REGISTERS HAS AN AUTHORITY RULE.
@@ -78,7 +78,7 @@ func TestEveryToolShapedActionIsARegisteredTool(t *testing.T) {
 // EVERY APP OPENS A TOOL A PERSON REACHES.
 //
 // An app is a permission somebody is given so they can USE something, and a
-// person uses the tracker and the knowledge base through the operator
+// person uses Worklet and Doclet through the operator
 // catalogue — the dashboard's act route, their assistant, the HTTP write
 // surface all dispatch into it. An app no operator tool belongs to is a
 // permission nobody could be told what it opens: ticked on somebody's row, it
@@ -148,8 +148,8 @@ func TestNoSeatOnlyVerbIsOfferedToAPerson(t *testing.T) {
 func TestEveryAppRowHasItsKindsApp(t *testing.T) {
 	t.Parallel()
 	for app, names := range map[iam.Grant][]string{
-		iam.GrantTracker:   append(builtin.WorkTools(), tracker.OperatorOnlyTools()...),
-		iam.GrantKnowledge: append(builtin.PageTools(), builtin.SearchKnowledgeTool),
+		iam.GrantWorklet: append(builtin.WorkTools(), worklet.OperatorOnlyTools()...),
+		iam.GrantDoclet:  append(builtin.PageTools(), builtin.SearchKnowledgeTool),
 	} {
 		for _, name := range names {
 			got, known := authz.AppOf(authz.Action(name))
@@ -192,8 +192,8 @@ func everyToolName(t *testing.T) []string {
 
 // operatorDeps wires EVERY operator tool on, because a walk over a catalogue
 // that omitted half of it would certify the half it saw. OperatorTools drops
-// a tool whose dependency is nil by design — a company on Jira is shown no
-// native tracker — so a nil here is a verb this walk silently stops covering.
+// a tool whose dependency is nil by design (a company on Jira is shown no
+// Worklet), so a nil here is a verb this walk silently stops covering.
 func operatorDeps(t *testing.T) builtin.OperatorDeps {
 	t.Helper()
 	trk := newFakeTracker()
@@ -226,7 +226,7 @@ func operatorDeps(t *testing.T) builtin.OperatorDeps {
 			Seats:          func() []colleague.Seat { return nil },
 			DefaultProject: func(string) string { return "ENG" },
 			Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
-				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
+				return builtin.Actor{Handle: "ops", Kind: worklet.AuthorOperator}, nil
 			},
 		},
 		Pages:        full.Pages,

@@ -973,7 +973,7 @@ units:
 			// underline configs the engine runs.
 			//
 			// A scope with no backend NAMED is deliberately not this case
-			// any more: it derives the native backend, where a curated
+			// any more: it derives Doclet, where a curated
 			// floor over the company's own pages is ordinary.
 			name: "a read scope for a knowledge base that is switched off",
 			tier: TierCompany, validatorOnly: true,

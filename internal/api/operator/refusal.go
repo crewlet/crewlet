@@ -12,12 +12,12 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE ONE REFUSAL MAPPING: what a call that did not do what it was asked is
@@ -435,19 +435,19 @@ func writeSentence(ctx context.Context, cause, err error) string {
 // writeClass is the class a writer's error is refused under.
 func writeClass(err error) crewletmcp.Refusal {
 	switch {
-	case errors.Is(err, tracker.ErrNoTask), errors.Is(err, tracker.ErrNoComment),
-		errors.Is(err, tracker.ErrNoProject), errors.Is(err, pages.ErrNotFound):
+	case errors.Is(err, worklet.ErrNoTask), errors.Is(err, worklet.ErrNoComment),
+		errors.Is(err, worklet.ErrNoProject), errors.Is(err, doclet.ErrNotFound):
 		return crewletmcp.RefusalNotFound
-	case errors.Is(err, tracker.ErrStaleVersion), errors.Is(err, pages.ErrStaleVersion):
+	case errors.Is(err, worklet.ErrStaleVersion), errors.Is(err, doclet.ErrStaleVersion):
 		return crewletmcp.RefusalStaleVersion
-	case errors.Is(err, pages.ErrTitleTaken), errors.Is(err, statelog.ErrExists):
+	case errors.Is(err, doclet.ErrTitleTaken), errors.Is(err, statelog.ErrExists):
 		return crewletmcp.RefusalExists
-	case errors.Is(err, pages.ErrConflict), errors.Is(err, statelog.ErrConflict):
+	case errors.Is(err, doclet.ErrConflict), errors.Is(err, statelog.ErrConflict):
 		return crewletmcp.RefusalConflict
-	case errors.Is(err, tracker.ErrForbidden), errors.Is(err, tracker.ErrNotAuthor),
-		errors.Is(err, pages.ErrReserved):
+	case errors.Is(err, worklet.ErrForbidden), errors.Is(err, worklet.ErrNotAuthor),
+		errors.Is(err, doclet.ErrReserved):
 		return crewletmcp.RefusalForbidden
-	case errors.Is(err, tracker.ErrInvalid), errors.Is(err, pages.ErrInvalid):
+	case errors.Is(err, worklet.ErrInvalid), errors.Is(err, doclet.ErrInvalid):
 		return crewletmcp.RefusalInvalid
 	}
 	if _, ok := builtin.Condition(err); ok {

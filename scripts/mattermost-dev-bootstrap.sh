@@ -53,7 +53,13 @@
 # Mattermost has no usable inbound webhook, so the engine dials OUT over a
 # websocket per agent seat. This stack works behind NAT with no tunnel.
 #
-# Re-runnable: every step is idempotent.
+# Re-runnable: every step is idempotent. Its COMPANY= provision reads the
+# company's stored values through ./crewlet.yaml when one is present, and
+# from the environment alone when none is. With that node's engine stopped it
+# reaches the fleet's secret store itself, through the node's own broker; with
+# the engine up it goes through it, so set CREWLET_API_TOKEN to one of
+# crewlet.yaml's api.auth tokens whose grants include admin. On a member of a
+# cluster whose engine is stopped the provision is refused, naming -api.
 set -euo pipefail
 
 PORT="${MATTERMOST_LISTEN_PORT:-8065}"
@@ -656,6 +662,13 @@ else
   say "Skipping bot provisioning (set COMPANY=<company.yaml> to include it)"
 fi
 
+# THE PATH `.` IS HANDED: a bare name is looked up on PATH rather than in the
+# working directory, so a relative file is spelt with its ./ prefix.
+case "$ENV_FILE" in
+  */*) ENV_SOURCE="$ENV_FILE" ;;
+  *) ENV_SOURCE="./$ENV_FILE" ;;
+esac
+
 cat <<EOF
 
 $(printf '\033[1mDone.\033[0m')
@@ -674,17 +687,38 @@ Next:
            url: "\${MATTERMOST_URL}"
            team: ${TEAM}
 
-  2. Provision the bots (if you did not pass COMPANY= above):
+  2. Load the env file into this shell, and provision the bots into it if
+     you did not pass COMPANY= above (one of -env-file, -secret-store and
+     -print is required), loading it again for the tokens just minted:
 
-       crewlet mattermost provision <company.yaml>
+       set -a; . ${ENV_SOURCE}; set +a
+       crewlet mattermost provision <company.yaml> -env-file ${ENV_FILE}
+       set -a; . ${ENV_SOURCE}; set +a
 
-  3. Check the whole path before you boot:
+     It reads the company's stored values through ./crewlet.yaml when one
+     is here, and from this shell alone when none is. With that node's
+     engine stopped it reaches the fleet's store itself, through the node's
+     own broker; with the engine up, run this step and the next with
+     CREWLET_API_TOKEN set to one of crewlet.yaml's api.auth tokens whose
+     grants include admin, or pass -api URL naming a running node. On a
+     member of a cluster whose engine is stopped it is refused before it
+     changes anything, naming -api.
+
+  3. Check the whole path before you boot or restart:
 
        crewlet mattermost doctor <company.yaml>
 
-  4. Start the engine — it opens one websocket per agent seat:
+  4. Start the engine from that shell, or restart it there if it is up —
+     it opens one websocket per agent seat, with the tokens the env file
+     holds:
 
        crewlet run -config crewlet.yaml -company <company.yaml>
+
+     -company only seeds a node that runs no company yet. A node that
+     already runs one keeps it and logs that the file was ignored: once it
+     is up, hand it step 1's block with crewlet config import
+     <company.yaml> (CREWLET_API_TOKEN as in step 2), which replaces its
+     whole company with the file.
 
 Nothing needs to reach the engine from Mattermost, so no tunnel is needed.
 See docs/integrations/mattermost.md for the full walkthrough.

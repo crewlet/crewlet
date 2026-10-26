@@ -18,7 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE APPLIER IS HANDED THE BROKER'S OWN CREATION INSTANT, and a stream
@@ -44,7 +44,7 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
-	stream := tracker.Domain{}.Stream().Name
+	stream := worklet.Domain{}.Stream().Name
 
 	// FIRST BOOT: the running domain carries what the broker reports.
 	back, err := OpenBackends(t.Context(), &b, cfg)
@@ -71,7 +71,7 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 	if stats.CreatedAt.IsZero() {
 		t.Fatal("the broker reports no creation instant, so nothing below can be checked")
 	}
-	running := e.core.Load().log.Domain(tracker.Domain{}.Name())
+	running := e.core.Load().log.Domain(worklet.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
 	}
@@ -123,7 +123,7 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 		t.Fatalf("New again: %v", err)
 	}
 	t.Cleanup(func() { e2.Stop(context.Background()) })
-	running = e2.core.Load().log.Domain(tracker.Domain{}.Name())
+	running = e2.core.Load().log.Domain(worklet.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running after the second boot")
 	}
@@ -160,7 +160,7 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 	// loop: a stopped applier has a lag of zero, and the row read as ready
 	// for as long as nobody looked at the error beside the number.
 	for _, row := range e2.StateLogStatus(t.Context()) {
-		if row.Name != (tracker.Domain{}).Name() {
+		if row.Name != (worklet.Domain{}).Name() {
 			continue
 		}
 		if row.Ready || !strings.Contains(row.Detail, "recreated") {
@@ -190,14 +190,14 @@ func TestAStreamRebuiltUnderARunningNodeIsNamed(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
 	s := e.core.Load().log
-	running := s.Domain(tracker.Domain{}.Name())
+	running := s.Domain(worklet.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
 	}
 
 	// THE REBUILD, under a node that never stops: the same name, a new
 	// creation instant, and sequences counting from 1 again.
-	rebuildLog(t, js, tracker.Domain{}.Stream())
+	rebuildLog(t, js, worklet.Domain{}.Stream())
 
 	// THE HEARTBEAT IS WHAT SEES IT, on the round trip it already makes.
 	s.publishPositions(t.Context())
@@ -250,7 +250,7 @@ func TestAStreamRebuiltUnderARunningNodeRefusesItsWrites(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
 	s := e.core.Load().log
-	running := s.Domain(tracker.Domain{}.Name())
+	running := s.Domain(worklet.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
 	}
@@ -275,7 +275,7 @@ func TestAStreamRebuiltUnderARunningNodeRefusesItsWrites(t *testing.T) {
 		t.Fatalf("read node-x's record back (held %v): %v", held, err)
 	}
 
-	rebuildLog(t, js, tracker.Domain{}.Stream())
+	rebuildLog(t, js, worklet.Domain{}.Stream())
 
 	// THE RETRY AT ZERO, BEFORE ANY HEARTBEAT HAS SEEN THE REBUILD. The
 	// zero fence's own read of the log carries the stream's creation
@@ -323,7 +323,7 @@ func TestAStreamRebuiltUnderARunningNodeRefusesItsWrites(t *testing.T) {
 			statelog.RefuseWrongStream)
 	}
 	for _, row := range e.StateLogStatus(t.Context()) {
-		if row.Name != (tracker.Domain{}).Name() {
+		if row.Name != (worklet.Domain{}).Name() {
 			continue
 		}
 		if row.Ready || !strings.Contains(row.Detail, "recreated") {
@@ -364,7 +364,7 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
-	stream := tracker.Domain{}.Stream().Name
+	stream := worklet.Domain{}.Stream().Name
 
 	// FIRST BOOT: an object with history on the log, and the log's end.
 	back, err := OpenBackends(t.Context(), &b, cfg)
@@ -383,7 +383,7 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 		back.Close(context.Background())
 		t.Fatalf("the write before the restore: %+v, %v", res, err)
 	}
-	end := endOf(t, e.core.Load().log.Domain(tracker.Domain{}.Name()))
+	end := endOf(t, e.core.Load().log.Domain(worklet.Domain{}.Name()))
 	e.Stop(context.Background())
 
 	// THE CHECKPOINT MOVES PAST THE LOG'S END, and nothing else does: the
@@ -415,7 +415,7 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 		t.Fatalf("New again: %v", err)
 	}
 	t.Cleanup(func() { e2.Stop(context.Background()) })
-	running := e2.core.Load().log.Domain(tracker.Domain{}.Name())
+	running := e2.core.Load().log.Domain(worklet.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running after the second boot")
 	}
@@ -474,7 +474,7 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 			"an operator told it was recreated looks for a delete that never happened")
 	}
 	for _, row := range e2.StateLogStatus(t.Context()) {
-		if row.Name != (tracker.Domain{}).Name() {
+		if row.Name != (worklet.Domain{}).Name() {
 			continue
 		}
 		if row.Ready || !strings.Contains(row.Detail, "past the log's end") {
@@ -508,7 +508,7 @@ func TestTheBootReadsTheLogsEndBesideTheCheckpoint(t *testing.T) {
 			s, q, appendTo := aProvisionedTrackerLog(t)
 			// Records nobody will apply — the loop never starts here —
 			// so their bytes do not matter, only where the log ends.
-			subject := tracker.Domain{}.Stream().SubjectPrefix + ".probe.x"
+			subject := worklet.Domain{}.Stream().SubjectPrefix + ".probe.x"
 			for i := range 2 {
 				if _, _, err := appendTo.Append(t.Context(), subject,
 					fmt.Sprintf("op-%d", i), nil, []byte("{}")); err != nil {
@@ -524,7 +524,7 @@ func TestTheBootReadsTheLogsEndBesideTheCheckpoint(t *testing.T) {
 					INSERT INTO statelog_cursor
 						(stream, generation, seq, stream_created_at, updated_at, applied_version)
 					VALUES (?, 0, ?, ?, ?, 0)`,
-					tracker.Domain{}.Stream().Name, stats.LastSeq+tc.past,
+					worklet.Domain{}.Stream().Name, stats.LastSeq+tc.past,
 					store.EncodeTime(stats.CreatedAt.UTC()),
 					store.EncodeTime(time.Now().UTC()))
 				return err
@@ -532,7 +532,7 @@ func TestTheBootReadsTheLogsEndBesideTheCheckpoint(t *testing.T) {
 				t.Fatalf("stage the checkpoint: %v", err)
 			}
 
-			running, err := s.start(t.Context(), t.Context(), q, tracker.Domain{}, appendTo)
+			running, err := s.start(t.Context(), t.Context(), q, worklet.Domain{}, appendTo)
 			if err != nil {
 				t.Fatalf("start: %v", err)
 			}
@@ -584,7 +584,7 @@ func aProvisionedTrackerLog(t *testing.T) (*stateLog, *jetstream.Queue, *jetstre
 	if err := s.reopenEstate(t.Context()); err != nil {
 		t.Fatalf("open the replicated estate: %v", err)
 	}
-	appendTo, err := s.provision(t.Context(), q, tracker.Domain{})
+	appendTo, err := s.provision(t.Context(), q, worklet.Domain{})
 	if err != nil {
 		t.Fatalf("provision: %v", err)
 	}

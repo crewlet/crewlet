@@ -201,7 +201,7 @@ func TestAnImportIsAnAdministratorsAndItsFlagIsStrict(t *testing.T) {
 		t.Errorf("a lead's import = %d %s, want 403 unauthorized", res.Code, res.Body)
 	}
 	member := iam.Principal{ID: uuid.New(), Login: "sam.member", Kind: iam.KindPerson,
-		Stage: iam.StageActive, Seat: "designer", Grants: []iam.Grant{iam.GrantTracker, iam.GrantKnowledge},
+		Stage: iam.StageActive, Seat: "designer", Grants: []iam.Grant{iam.GrantWorklet, iam.GrantDoclet},
 		ReauthAt: time.Now().Add(time.Hour)}
 	res = doAs(t, s, member, http.MethodPut, "/config?import=true", "{not json",
 		map[string]string{"X-Summary": "an import"})

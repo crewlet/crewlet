@@ -38,7 +38,7 @@ class InertWebSocket {
 
 const ADMIN = {
   login: "U0FOUNDER",
-  grants: ["admin", "tracker", "knowledge"],
+  grants: ["admin", "worklet", "doclet"],
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -47,7 +47,7 @@ const ADMIN = {
 };
 
 /** A reader holding the tracker and the knowledge base, and not Admin. */
-const MEMBER = { ...ADMIN, grants: ["tracker", "knowledge"] };
+const MEMBER = { ...ADMIN, grants: ["worklet", "doclet"] };
 
 const seat = (name: string, handle: string, kind: string, managers: string[] = []) => ({
   handle,
@@ -231,9 +231,9 @@ describe("every widget a section offers", () => {
       "schedules",
       "integrations",
       "budgets",
-      "work",
+      "worklet",
       "live",
-      "knowledge",
+      "doclet",
       "settings",
     ])
       expect(workspaces.has(w as never), w).toBe(true);
@@ -272,7 +272,7 @@ describe("a widget whose choice is not made", () => {
     },
   );
 
-  test.each(["work.view", "knowledge.space"])(
+  test.each(["worklet.view", "doclet.space"])(
     "%s says its list of choices was refused rather than waiting on it",
     async (key) => {
       const { container } = mount(<LeafView widget={leaf(WIDGETS.get(key)!, {})} />);
@@ -292,7 +292,7 @@ describe("a widget whose choice is not made", () => {
 });
 
 describe("a reader whose access no longer opens a widget's page", () => {
-  // WHAT A MEMBER (Tracker and Knowledge, no Admin) CANNOT OPEN, read off the
+  // WHAT A MEMBER (Worklet and Doclet, no Admin) CANNOT OPEN, read off the
   // registry's own rule: Spend's readings are every reader's, so a Settings
   // widget is not by its key alone a closed one.
   const closed = defs.filter((d) => !canUse(d, MEMBER.grants));

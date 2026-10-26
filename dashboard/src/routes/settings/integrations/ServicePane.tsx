@@ -5,7 +5,7 @@
  *
  * WHAT EACH PART READS, and why it is honest:
  *
- *  - WHO WORKS IN IT. Every agent seat holds both of Crewlet's apps
+ *  - WHO WORKS IN IT. Every agent seat holds Worklet and Doclet
  *    (`iam.Apps`), so the Agents tab lists every agent rather than a roster
  *    of who connected. What it adds per agent is what the engine counts:
  *    open, blocked and overdue work (`work_workload`), and the space an agent
@@ -44,7 +44,7 @@ import { documentUnits, handleLabel, indexOrg, type Seat } from "~/lib/seats.ts"
 import { useViewer } from "~/lib/viewer.ts";
 import { useServicesAsk } from "~/lib/services.ts";
 import { useNow } from "~/lib/clock.ts";
-import { KNOWLEDGE, TRACKER, needsWords } from "~/lib/access.ts";
+import { DOCLET, WORKLET, needsWords } from "~/lib/access.ts";
 import { fmtCount, plural, relTime } from "~/lib/format.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { CompanyDocument } from "~/protocol/types.ts";
@@ -56,12 +56,12 @@ const DEFAULT = "The engine's default";
 
 /** What a service gives the company, for the off state and Chat. */
 const GIVES: Record<BuiltInService["key"], string[]> = {
-  works: [
+  worklet: [
     "Projects and tasks, on boards and lists",
     "An inbox and My work for every person",
     "Asks that wait on a person's decision",
   ],
-  knowledge: [
+  doclet: [
     "Spaces and pages, with every revision kept",
     "Search across pages and work, by words and meaning",
     "Skills and diaries the agents read before they act",
@@ -101,7 +101,11 @@ function block(
   doc: CompanyDocument | null | undefined,
   key: "tracker" | "knowledge",
 ): Record<string, unknown> {
-  const value = (doc as Record<string, unknown> | null | undefined)?.[key];
+  return asRecord((doc as Record<string, unknown> | null | undefined)?.[key]);
+}
+
+/** A value of the company document as an object, or an empty one where it is none. */
+function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
@@ -109,7 +113,7 @@ function block(
 function Elsewhere({ service, model }: { service: BuiltInService; model: Model | null }) {
   const by = service.replacedBy;
   const tool = model?.byKey.get("atlassian");
-  const what = service.key === "works" ? "tasks" : "pages";
+  const what = service.key === "worklet" ? "tasks" : "pages";
   return (
     <div className="int-service-off">
       <Callout
@@ -247,19 +251,19 @@ export function ServicePane({ service, model }: { service: BuiltInService; model
       </div>
     );
   }
-  return service.key === "works" ? (
-    <WorksPane service={service} head={head} />
+  return service.key === "worklet" ? (
+    <WorkletPane service={service} head={head} />
   ) : (
-    <KnowledgePane service={service} head={head} />
+    <DocletPane service={service} head={head} />
   );
 }
 
 type Head = (line: ReactNode, actions?: ReactNode, facts?: Fact[]) => ReactNode;
 
-function WorksPane({ service, head }: { service: BuiltInService; head: Head }) {
+function WorkletPane({ service, head }: { service: BuiltInService; head: Head }) {
   const viewer = useViewer();
   const ask = useServicesAsk();
-  const enabled = ask.tracker && viewer.tracker;
+  const enabled = ask.tracker && viewer.worklet;
   const now = useNow();
   const org = useOrg();
   const agents = useMemo(() => indexOrg(org).seats.filter((s) => s.kind === "agent"), [org]);
@@ -284,20 +288,19 @@ function WorksPane({ service, head }: { service: BuiltInService; head: Head }) {
   const keys = feed.data?.keys ?? {};
   const nameOf = (handle: string | undefined) =>
     agents.find((a) => a.handle === handle)?.name ?? handle ?? "Someone";
-  const tracker = block(config.data, "tracker");
+  // THE INBOX HORIZON IS WORKLET'S OWN POLICY, kept in the tracker block's
+  // `worklet` section (`config.Tracker.Worklet`), never on the block itself.
   // AN UNSET KEY IS THE ENGINE'S DEFAULT, said as such: a copy of the
   // engine's constant here would be a second answer that drifts.
-  const retention =
-    typeof tracker.inbox_retention_days === "number" && tracker.inbox_retention_days > 0
-      ? `${tracker.inbox_retention_days} days`
-      : DEFAULT;
+  const days = asRecord(block(config.data, "tracker").worklet).inbox_retention_days;
+  const retention = typeof days === "number" && days > 0 ? `${days} days` : DEFAULT;
 
   if (!enabled) {
     return (
       <div className="int-detail">
         {head(service.sentence)}
         <Callout variant="neutral">
-          {needsWords("Seeing its projects, tasks and who is working on what", [TRACKER])}
+          {needsWords("Seeing its projects, tasks and who is working on what", [WORKLET])}
         </Callout>
       </div>
     );
@@ -345,7 +348,7 @@ function WorksPane({ service, head }: { service: BuiltInService; head: Head }) {
             <ul className="int-feed">
               {rows.map((p) => (
                 <li key={p.key} className="int-feed-row">
-                  <a className="int-feed-what" href={href(["work", p.key])}>
+                  <a className="int-feed-what" href={href(["worklet", p.key])}>
                     <strong>{p.name}</strong> <span className="mono">{p.key}</span>
                   </a>
                   <span className="t-caption int-feed-at">
@@ -361,7 +364,7 @@ function WorksPane({ service, head }: { service: BuiltInService; head: Head }) {
       {tab === "agents" && (
         <div className="int-tab">
           <p className="t-caption">
-            Every agent works in Crewlet Works: it holds the Tracker app with its seat.
+            Every agent works in Worklet: it holds the Worklet app with its seat.
           </p>
           <div className="int-seats">
             {agents.map((a) => {
@@ -422,7 +425,7 @@ function WorksPane({ service, head }: { service: BuiltInService; head: Head }) {
           <DescriptionList
             dense
             items={[
-              ["Work tracker", "Crewlet Works"],
+              ["Work tracker", "Worklet"],
               [
                 "Inbox keeps a row for",
                 viewer.admin ? retention : <EmptyValue label="Admins see this" />,
@@ -447,10 +450,10 @@ function WorksPane({ service, head }: { service: BuiltInService; head: Head }) {
   );
 }
 
-function KnowledgePane({ service, head }: { service: BuiltInService; head: Head }) {
+function DocletPane({ service, head }: { service: BuiltInService; head: Head }) {
   const viewer = useViewer();
   const ask = useServicesAsk();
-  const enabled = ask.knowledge && viewer.knowledge;
+  const enabled = ask.knowledge && viewer.doclet;
   const now = useNow();
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
@@ -480,7 +483,7 @@ function KnowledgePane({ service, head }: { service: BuiltInService; head: Head 
       <div className="int-detail">
         {head(service.sentence)}
         <Callout variant="neutral">
-          {needsWords("Seeing its spaces, pages and what changed", [KNOWLEDGE])}
+          {needsWords("Seeing its spaces, pages and what changed", [DOCLET])}
         </Callout>
       </div>
     );
@@ -518,7 +521,7 @@ function KnowledgePane({ service, head }: { service: BuiltInService; head: Head 
             <ul className="int-feed">
               {spaces.map((c) => (
                 <li key={c.key} className="int-feed-row">
-                  <a className="int-feed-what" href={href(["knowledge", c.key])}>
+                  <a className="int-feed-what" href={href(["doclet", c.key])}>
                     <strong>{c.name || c.key}</strong> <span className="mono">{c.key}</span>
                   </a>
                   <span className="t-caption int-feed-at">{plural(c.pages, "page")}</span>
@@ -531,8 +534,7 @@ function KnowledgePane({ service, head }: { service: BuiltInService; head: Head 
       {tab === "agents" && (
         <div className="int-tab">
           <p className="t-caption">
-            Every agent reads and writes the knowledge base: it holds the Knowledge app with its
-            seat.
+            Every agent reads and writes in Doclet: it holds the Doclet app with its seat.
           </p>
           <div className="int-seats">
             {agents.map((a) => {
@@ -580,7 +582,7 @@ function KnowledgePane({ service, head }: { service: BuiltInService; head: Head 
                 what={
                   <>
                     {verb(c.kind)}{" "}
-                    <a className="prose-link" href={href(["knowledge", "pages", c.page_id])}>
+                    <a className="prose-link" href={href(["doclet", "pages", c.page_id])}>
                       {c.title || "a page"}
                     </a>
                     {c.container ? <span className="t-caption"> in {c.container}</span> : null}
@@ -601,7 +603,7 @@ function KnowledgePane({ service, head }: { service: BuiltInService; head: Head 
           <DescriptionList
             dense
             items={[
-              ["Knowledge base", "Crewlet Knowledge"],
+              ["Knowledge base", "Doclet"],
               ...(viewer.admin
                 ? ([
                     [

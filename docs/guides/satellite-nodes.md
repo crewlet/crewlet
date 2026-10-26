@@ -68,8 +68,8 @@ Slack message routed to that agent works exactly as before.
 
 Whether a satellite is also a **replica** is the `data` role's answer and
 nothing else's. A satellite that holds data applies every one of the
-company's shared state logs — the work tracker, the knowledge base, the
-search vectors, the identity directory and every node's usage history —
+company's shared state logs (Worklet, Doclet, the
+search vectors, the identity directory and every node's usage history)
 into its own database, exactly as a core node does. A stateless one applies
 none of them and asks a data node instead. See
 [what a satellite holds](#what-a-satellite-holds) before you choose a host
@@ -348,7 +348,7 @@ Two failures to know by sight:
 
 ## What a satellite holds
 
-The work tracker, the knowledge base, the search vectors, the identity
+Worklet, Doclet, the search vectors, the identity
 directory and every node's usage history are [replicated state
 machines](replication.md).
 Each is one ordered log the whole fleet shares, and every **data** node
@@ -399,11 +399,11 @@ before you need them:
   that did start: a node applying half the logs serves rows derived from
   one while another's records pile up unapplied, and nothing above it can
   tell that apart from a node that is merely behind.
-- **Every live data node counts for every log's trim.** A data node that
-  has published no position for a log yet is between boot and its first
-  heartbeat, so it is counted at position zero and holds that log's floor
-  for that one heartbeat. A stateless satellite is never counted. (See the
-  counted set in [Retention](retention.md#the-six-terms).)
+- **Every live data node counts for every log's trim.** A live data node
+  that has published no position for a log yet is counted at position zero,
+  and holds that log's floor until its row lands. A stateless satellite is
+  never counted. (See the counted set in
+  [Retention](retention.md#the-six-terms).)
 
 At boot every data node logs the logs it started, whether or not it serves
 HTTP — which on a `roles: [data, seats]` satellite is the one place to look,

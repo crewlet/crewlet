@@ -17,7 +17,7 @@ import "slices"
 // is being written, so it is masked exactly as the trail's questions are
 // decided, never by a second statement of who may read it.
 //
-// And a WORK ITEM a seat is on is the tracker's: a reader without the tracker
+// And a WORK ITEM a seat is on is the tracker's: a reader without Worklet
 // is shown that the seat is working, never which item.
 //
 // # Why one mask, over every shape a call travels in
@@ -54,7 +54,7 @@ type Reach struct {
 	// a principal `audit.seat.read` admits to the seat (its lead).
 	Body bool
 
-	// Tracker is whether the reader holds the tracker, which a work item
+	// Tracker is whether the reader holds Worklet, which a work item
 	// the seat is on belongs to.
 	Tracker bool
 
@@ -234,7 +234,7 @@ type overlayView struct {
 }
 
 // maskTurn is the turn as reader r receives it: without its work item when
-// they do not hold the tracker, as a copy.
+// they do not hold Worklet, as a copy.
 func maskTurn(t *LiveTurn, r Reach) *LiveTurn {
 	if t == nil || r.Tracker || t.WorkItem == nil {
 		return t

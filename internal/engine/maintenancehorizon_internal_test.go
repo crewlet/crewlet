@@ -8,12 +8,12 @@ import (
 	"github.com/crewlet/crewlet/internal/maintenance"
 )
 
-// retentionDoc is a native company stating both of its own sweep horizons.
+// retentionDoc is a company on Worklet stating both of its own sweep horizons.
 func retentionDoc(conversationDays, inboxDays int) string {
 	return fmt.Sprintf(`
 name: Nimbus
 tracker:
-  native:
+  worklet:
     inbox_retention_days: %d
 turn_engine:
   conversation_session:

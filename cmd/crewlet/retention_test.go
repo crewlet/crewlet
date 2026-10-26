@@ -79,7 +79,7 @@ func newFakeRetentionNode(t *testing.T) *fakeRetentionNode {
 		}
 		_ = json.NewEncoder(w).Encode(body)
 	})
-	mux.HandleFunc("POST /work/retention/ack", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /worklet/retention/ack", func(w http.ResponseWriter, r *http.Request) {
 		n.acked = map[string]string{
 			"stream":   r.URL.Query().Get("stream"),
 			"position": r.URL.Query().Get("position"),
@@ -91,7 +91,7 @@ func newFakeRetentionNode(t *testing.T) *fakeRetentionNode {
 		})
 	})
 	for _, verb := range []string{"evict", "readmit"} {
-		mux.HandleFunc("POST /work/retention/"+verb+"/{node}",
+		mux.HandleFunc("POST /worklet/retention/"+verb+"/{node}",
 			func(w http.ResponseWriter, r *http.Request) {
 				n.mu.Lock()
 				n.gated, n.confirm = r.PathValue("node"), r.URL.Query().Get("confirm")
@@ -1009,7 +1009,7 @@ func TestOnlyAnAnswerWithAnEngineCodeIsTheNodesRefusal(t *testing.T) {
 			t.Cleanup(server.Close)
 			client := &nodeClient{base: server.URL, token: "t", http: httpx.Client(nodeRequestTimeout)}
 			var into map[string]any
-			err := client.post(t.Context(), "/work/retention/evict/node-4", &into)
+			err := client.post(t.Context(), "/worklet/retention/evict/node-4", &into)
 			var lost noAnswer
 			if got := !errors.As(err, &lost); err == nil || got != tc.node {
 				t.Errorf("%d %q = %v; the node's own answer %v, want %v", tc.status,

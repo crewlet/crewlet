@@ -16,13 +16,13 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/operator"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/iam"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // EVERY TRANSPORT SERVES THE ONE CATALOGUE, and this holds the two sides a
@@ -89,13 +89,13 @@ func TestEveryTransportServesTheSameCatalogue(t *testing.T) {
 	}
 	args := map[string]any{"item": "ENG-1"}
 	res, err := sess.CallTool(ctx, &mcp.CallToolParams{
-		Name: tracker.GetWorkItemTool, Arguments: args,
+		Name: worklet.GetWorkItemTool, Arguments: args,
 	})
 	if err != nil {
 		t.Fatalf("call over MCP: %v", err)
 	}
 	direct, err := s.Dispatch(asOps, operator.Call{
-		Transport: types.TransportMCP, Tool: tracker.GetWorkItemTool, Args: args,
+		Transport: types.TransportMCP, Tool: worklet.GetWorkItemTool, Args: args,
 	})
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
@@ -125,7 +125,7 @@ func TestARetriedPageCommentCarriesItsOperation(t *testing.T) {
 		Pages: builtin.PageDeps{Reader: kb, Writer: kb},
 	})})
 	ctx := iam.WithPrincipal(t.Context(),
-		person("jane.founder", "jane-founder", iam.GrantKnowledge))
+		person("jane.founder", "jane-founder", iam.GrantDoclet))
 	args := map[string]any{"page": "Runbook", "body": "the step is wrong"}
 	key := statelog.NewOpID(time.Now(), "")
 	comment := func(key string) {
@@ -165,7 +165,7 @@ func TestARetriedPageCommentCarriesItsOperation(t *testing.T) {
 // after a ledger loss decides a second time.
 func TestTheWorkActorCarriesTheOperation(t *testing.T) {
 	t.Parallel()
-	ctx := iam.WithPrincipal(t.Context(), machine("token:founder", iam.GrantTracker))
+	ctx := iam.WithPrincipal(t.Context(), machine("token:founder", iam.GrantWorklet))
 	key := statelog.NewOpID(time.Now().Add(-time.Hour), "")
 	named, err := operator.WorkActor(operator.WithKey(ctx, key), nil)
 	if err != nil {
@@ -232,23 +232,23 @@ type recordingPages struct {
 	opKeys []string
 }
 
-func (*recordingPages) List(context.Context, pages.Filter,
-	statelog.Freshness) (pages.Listing, error) {
-	return pages.Listing{}, nil
+func (*recordingPages) List(context.Context, doclet.Filter,
+	statelog.Freshness) (doclet.Listing, error) {
+	return doclet.Listing{}, nil
 }
 
 func (*recordingPages) Get(context.Context, string,
-	statelog.Freshness) (pages.Detail, error) {
-	return pages.Detail{Page: pages.Page{ID: "p-1", Container: "ENG", Title: "Runbook"}}, nil
+	statelog.Freshness) (doclet.Detail, error) {
+	return doclet.Detail{Page: doclet.Page{ID: "p-1", Container: "ENG", Title: "Runbook"}}, nil
 }
 
-func (p *recordingPages) Comment(_ context.Context, actor pages.Actor, _ string,
-	_ pages.NewComment) (pages.Comment, pages.Written, error) {
+func (p *recordingPages) Comment(_ context.Context, actor doclet.Actor, _ string,
+	_ doclet.NewComment) (doclet.Comment, doclet.Written, error) {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.opKeys = append(p.opKeys, actor.OpKey)
-	return pages.Comment{ID: "c-1"}, pages.Written{}, nil
+	return doclet.Comment{ID: "c-1"}, doclet.Written{}, nil
 }
 
 func (p *recordingPages) keys() []string {

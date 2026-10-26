@@ -226,7 +226,7 @@ describe("the words other screens say an artifact's facts in", () => {
     expect(KIND_LIST).toBe("HTML pages, docs, slides, dashboards, sheets, designs and brand kits");
   });
 
-  // "PAGE" IS KNOWLEDGE'S WORD: the html kind beside Knowledge's Pages named
+  // "PAGE" IS DOCLET'S WORD: the html kind beside Doclet's Pages named
   // two things one way.
   test("an html artifact is called HTML, and no kind is called a page", () => {
     expect(KIND_WORDS.html).toBe("HTML");

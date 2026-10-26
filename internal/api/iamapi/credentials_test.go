@@ -181,7 +181,7 @@ func TestAMintTheDomainRefusesIsAnsweredForWhatItIs(t *testing.T) {
 		want int
 	}{
 		{"a grant the owner does not hold",
-			fmt.Errorf("%w: admin is not among [tracker]",
+			fmt.Errorf("%w: admin is not among [worklet]",
 				iamdomain.ErrRefused), http.StatusForbidden},
 		{"an expiry already past", fmt.Errorf("%w: the expiry has passed",
 			iamdomain.ErrInvalidToken), http.StatusBadRequest},
@@ -252,7 +252,7 @@ func TestAnAdminMintsAServiceAccountAnAdminToken(t *testing.T) {
 		"an empty list": {map[string]any{"label": "deploy",
 			"grants": []string{}}, []iam.Grant{}},
 		"one app, by name": {map[string]any{"label": "deploy",
-			"grants": []string{"tracker"}}, []iam.Grant{iam.GrantTracker}},
+			"grants": []string{"worklet"}}, []iam.Grant{iam.GrantWorklet}},
 	} {
 		r := newRig(t)
 		service(r)
@@ -340,7 +340,7 @@ func TestATierATokenNamesWhoATokenIsFor(t *testing.T) {
 	service := uuid.MustParse("018f3a9c-0000-7000-8000-0000000005e1")
 	r.directory.people[service.String()] = iamdomain.PersonRow{
 		ID: service.String(), Kind: iam.KindMachine, Stage: iam.StageActive,
-		Login: "svc:release", Grants: []iam.Grant{iam.GrantTracker},
+		Login: "svc:release", Grants: []iam.Grant{iam.GrantWorklet},
 	}
 	const value = "a-tier-a-token-long-enough-to-pass"
 	b := config.DefaultBootstrap()
@@ -528,7 +528,7 @@ func TestAPersonMintsTheirOwnTokenFromTheirSession(t *testing.T) {
 		Session: session.LineageRow{Found: true, Epoch: 1, ProvedAt: time.Now()},
 		Person: session.PersonRow{Found: true, Epoch: 1,
 			Stage: iam.StageActive, Login: "bob.sre",
-			Grants: []iam.Grant{iam.GrantTracker}},
+			Grants: []iam.Grant{iam.GrantWorklet}},
 	}}
 	arm, err := auth.NewSessions(auth.SessionsDeps{
 		Signer: signer, Chart: noSeats{}, External: b.API.ExternalBase(),

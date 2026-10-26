@@ -8,10 +8,10 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/pages"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // boundPerson is somebody signed in whose directory row binds them to a seat.
@@ -40,16 +40,16 @@ func machine(id string, grants ...iam.Grant) iam.Principal {
 func TestAPersonsWriteSuppressesTheirOwnWake(t *testing.T) {
 	t.Parallel()
 	ana := boundPerson("ana.silva", "ana")
-	task := tracker.Task{ID: "t-1", Key: "ENG-1", Project: "ENG", Assignee: "ana",
-		Status: tracker.StatusTodo}
+	task := worklet.Task{ID: "t-1", Key: "ENG-1", Project: "ENG", Assignee: "ana",
+		Status: worklet.StatusTodo}
 	moved := task
-	moved.Status = tracker.StatusInProgress
-	notify := tracker.Wake{Kind: tracker.ChangeStatus, Before: task,
+	moved.Status = worklet.StatusInProgress
+	notify := worklet.Wake{Kind: worklet.ChangeStatus, Before: task,
 		After: moved}.Notify(nil)
-	candidates := tracker.Candidates(notify, false)
+	candidates := worklet.Candidates(notify, false)
 
 	woken := func(actor string) bool {
-		for _, c := range tracker.Route(candidates, nil, actor) {
+		for _, c := range worklet.Route(candidates, nil, actor) {
 			if c.Handle == "ana" {
 				return true
 			}
@@ -57,7 +57,7 @@ func TestAPersonsWriteSuppressesTheirOwnWake(t *testing.T) {
 		return false
 	}
 	actor := builtin.ActorOf(ana)
-	if actor.Handle != "ana" || actor.Kind != tracker.AuthorHuman {
+	if actor.Handle != "ana" || actor.Kind != worklet.AuthorHuman {
 		t.Fatalf("a bound person writes as %q (%s), want their seat as a human",
 			actor.Handle, actor.Kind)
 	}
@@ -73,7 +73,7 @@ func TestAPersonsWriteSuppressesTheirOwnWake(t *testing.T) {
 	// AND THE KNOWLEDGE BASE WRITES THE SAME NAME, or the audit feed that
 	// reads both histories shows one person as two.
 	page, err := builtin.PageActorOf(ana)
-	if err != nil || page.Name() != actor.Handle || page.Kind != pages.AuthorHuman {
+	if err != nil || page.Name() != actor.Handle || page.Kind != doclet.AuthorHuman {
 		t.Errorf("a page write is attributed as %+v (%v), the tracker as %q",
 			page, err, actor.Handle)
 	}
@@ -95,7 +95,7 @@ func TestAMachineActorCannotSatisfyAnOwnRecordCheck(t *testing.T) {
 	for _, id := range []string{"ops", "ci", "release-bot"} {
 		// HOLDING THE TRACKER, which the own-record verbs ask beside the
 		// relation — so what refuses the token below is its NAME.
-		token := machine(id, iam.GrantTracker)
+		token := machine(id, iam.GrantWorklet)
 		actor := builtin.ActorOf(token)
 		if org.ValidHandle(actor.Handle) {
 			t.Errorf("a token acts as %q, which a seat could also be called",
@@ -133,11 +133,11 @@ func TestAnUnboundCredentialWritesAsItsLogin(t *testing.T) {
 	for name, c := range map[string]struct {
 		p    iam.Principal
 		name string
-		kind tracker.AuthorKind
+		kind worklet.AuthorKind
 	}{
-		"a token":          {machine("ops-bot"), "token:ops-bot", tracker.AuthorOperator},
-		"an unbound human": {boundPerson("jane.doe", ""), "jane.doe", tracker.AuthorOperator},
-		"a bound human":    {boundPerson("jane.doe", "jane"), "jane", tracker.AuthorHuman},
+		"a token":          {machine("ops-bot"), "token:ops-bot", worklet.AuthorOperator},
+		"an unbound human": {boundPerson("jane.doe", ""), "jane.doe", worklet.AuthorOperator},
+		"a bound human":    {boundPerson("jane.doe", "jane"), "jane", worklet.AuthorHuman},
 	} {
 		actor := builtin.ActorOf(c.p)
 		if actor.Handle != c.name || actor.Kind != c.kind {
@@ -168,16 +168,16 @@ func TestAWriteThroughAMachineTokenNamesTheToken(t *testing.T) {
 	for name, c := range map[string]struct {
 		p      iam.Principal
 		author string
-		kind   tracker.AuthorKind
+		kind   worklet.AuthorKind
 	}{
 		"a person's own token": {func() iam.Principal {
 			p := boundPerson("sarah.chen", "sarah")
 			p.Via = via
 			return p
-		}(), "sarah", tracker.AuthorHuman},
+		}(), "sarah", worklet.AuthorHuman},
 		"a service account's token": {iam.Principal{ID: uuid.New(),
 			Login: "svc:ci", Kind: iam.KindMachine, Stage: iam.StageActive,
-			Via: via}, "svc:ci", tracker.AuthorOperator},
+			Via: via}, "svc:ci", worklet.AuthorOperator},
 	} {
 		work := builtin.ActorOf(c.p)
 		if work.Handle != c.author || work.Kind != c.kind || work.OperatorID != via {

@@ -122,10 +122,10 @@ func matchesName(token, name string) bool {
 // deduplicated, in the order they appear.
 //
 // THE SPINE'S OWN GRAMMAR, exported for the backends whose names are the
-// engine's own — a seat handle, not a vendor username — so the native
-// tracker and knowledge base read a mention exactly as the chat surfaces
-// already do. A vendor whose usernames follow a different rule brings its
-// own (see [gitlab.Mentions], [github.Mentions]); a backend the engine
+// engine's own (a seat handle, not a vendor username), so Worklet and
+// Doclet read a mention exactly as the chat surfaces already do. A vendor
+// whose usernames follow a different rule brings its own (see
+// [gitlab.Mentions], [github.Mentions]); a backend the engine
 // itself hosts must not, because a fourth spelling of "what is a mention"
 // would let one surface wake a seat that another does not.
 //

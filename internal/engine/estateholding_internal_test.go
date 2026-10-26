@@ -16,8 +16,8 @@ import (
 // A DATA NODE HOLDS ITS REPLICATED ESTATE WHATEVER ITS COMPANY RUNS, and its
 // backup copies it.
 //
-// Holding is a fact about the node: a company that moved its tracker off the
-// native backend leaves a data node's file on disk with every row its log ever
+// Holding is a fact about the node: a company that moved its tracker off
+// Worklet leaves a data node's file on disk with every row its log ever
 // derived. While the file was opened only by the native half's runtime, such a
 // node held nothing open, and its backup wrote a manifest for its own file
 // alone and reported success. So a data node that runs no native half at all —

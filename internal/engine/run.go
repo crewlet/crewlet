@@ -60,7 +60,7 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/toolsession"
 	"github.com/crewlet/crewlet/internal/tracing"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // Engine is one process running a company.
@@ -209,7 +209,7 @@ type Engine struct {
 
 	// onInbox is told whose inbox each committed tracker batch moved on
 	// this node. Nil tells nobody — see [Engine.SetOnInboxMoved].
-	onInbox atomic.Pointer[func([]tracker.InboxMovement)]
+	onInbox atomic.Pointer[func([]worklet.InboxMovement)]
 
 	// onInboxGap is told that the movements onInbox hears have a gap. Nil
 	// tells nobody — see [Engine.SetOnInboxGap].
@@ -855,13 +855,15 @@ type Options struct {
 	// revision this node's store marks active, when that is what Company
 	// is.
 	//
-	// ZERO FOR A COMPANY NO ACTIVATION HAS NAMED YET — a Tier B file this
-	// node booted with, which its reconciler publishes and applies with the
-	// pointer's own instant before a seat is claimed. It is not the boot's
-	// clock, because what reads it is the chart apply, which stamps every
-	// project with it so that an older configuration cannot walk a newer
-	// one back — and a boot on a stale revision stamped with NOW is exactly
-	// the older configuration that would. See [Engine.applyChart].
+	// ZERO FOR A COMPANY NO ACTIVATION HAS NAMED — one a caller built in
+	// code. `crewlet run` never passes one: it boots on the revision its
+	// store activated, or on nothing, and a Tier B file reaches the engine
+	// through an activation, applied with the pointer's own instant before
+	// a seat is claimed. It is not the boot's clock, because what reads it
+	// is the chart apply, which stamps every project with it so that an
+	// older configuration cannot walk a newer one back — and a boot on a
+	// stale revision stamped with NOW is exactly the older configuration
+	// that would. See [Engine.applyChart].
 	ActivatedAt time.Time
 
 	// Mode is what this node starts for: normal, or one of the two
@@ -879,24 +881,26 @@ type Options struct {
 	//
 	// WHAT COMES BEFORE IT IS THE NODE'S OWN: its store and its migrations,
 	// the broker (the embedded one's file-store recovery, a leaf's link, a
-	// member's cluster), the streams and buckets it provisions, the
-	// replicated estate, the state logs it provisions and a join's snapshot.
-	// All of it takes as long as what the node holds is large, so the
-	// DEPLOYMENT bounds it — a startup probe sized for the store it gave the
-	// node — and nothing in this process does: a recovery cannot be cut short
-	// without losing what it recovers. APPLYING those logs is not part of it:
-	// their appliers catch up in the background from here on, and what waits
-	// for them is a seat's acquisition ([Engine.StateLogHydrated]), never
-	// this call.
+	// member's cluster), the streams and buckets it provisions, the custody
+	// batches its own event log left unsettled, the replicated estate, the
+	// state logs it provisions and a join's snapshot. All of it takes as
+	// long as what the node holds is large, so the DEPLOYMENT bounds it — a
+	// startup probe sized for the store it gave the node — and nothing in
+	// this process does: a recovery cannot be cut short without losing what
+	// it recovers. APPLYING those logs is not part of it: their appliers
+	// catch up in the background from here on, and what waits for them is a
+	// seat's acquisition ([Engine.StateLogHydrated]), never this call.
 	//
-	// WHAT COMES AFTER IT IS THE COMPANY'S: the sandboxes it configures, the
-	// native halves it runs, and equipping its seats' tools, the shared MCP
-	// servers among them, each bounded by its own `startup_timeout_seconds`.
-	// None of that may hold a startup probe, since a probe sized for a
-	// store's recovery knows nothing about a company's tool servers, so a
-	// caller answering probes (internal/api's Boot) treats this call as the
-	// moment the node is alive past anything only a dead disk could hold for
-	// ever.
+	// WHAT COMES AFTER IT IS THE COMPANY'S: the snapshot of its secrets its
+	// ${VAR} references resolve from ([Engine.bootSecrets]), the epoch built
+	// from its document, the sandboxes it configures, the native halves it
+	// runs, equipping its seats' tools — the shared MCP servers among them,
+	// each bounded by its own `startup_timeout_seconds` — and restoring its
+	// coding CLIs' credential bundles. None of that may hold a startup probe,
+	// since a probe sized for a store's recovery knows nothing about a
+	// company's secrets, tool servers or logins, so a caller answering probes
+	// (internal/api's Boot) treats this call as the moment the node is alive
+	// past anything only a dead disk could hold for ever.
 	//
 	// Called on every boot that gets that far, a node with no company and a
 	// node started in a maintenance mode included, since each recovers what
@@ -1441,14 +1445,6 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	}
 	e.acknowledge(ctx, maintenanceStreams())
 
-	// THE SNAPSHOT BEFORE THE FIRST EPOCH, because the epoch resolves every
-	// ${VAR} it holds as it is built — the provider keys, the integration
-	// tokens, the per-role MCP env. Loading the snapshot afterwards would
-	// give the first epoch environment-only resolution and every later one
-	// the store, so a rotated secret would work on the second apply and not
-	// on boot.
-	e.refreshSecrets(ctx)
-
 	// SERVING BEFORE ANY SEAT, and in every mode: a node restarted into a
 	// maintenance mode still answers reads, and its writers are what
 	// [Engine.estateBackend] withholds.
@@ -1483,26 +1479,6 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		return nil, err
 	}
 
-	// A NIL COMPANY IS THE UNCONFIGURED NODE, not a caller's mistake.
-	//
-	// The store is authoritative at runtime and a fleet's first revision
-	// may arrive over the API, so a node has to be able to run with no
-	// company at all: serving its HTTP surface, reporting itself
-	// unconfigured, and holding no seats until the control plane hands it
-	// an epoch. Everything below is written against that — a nil epoch
-	// means "nothing to equip, nothing to place", never a panic.
-	var company *Company
-	if opts.Company != nil {
-		company, err = NewCompanyWith(opts.Company, e.resolver())
-		if err != nil {
-			return nil, err
-		}
-		company.restoreBundles(ctx)
-		// STAMPED ONCE, as it is built, with the activation the caller
-		// says this company came from — zero for a file no activation has
-		// named yet. See [stampActivation].
-		stampActivation(company, opts.ActivatedAt)
-	}
 	// THE CORE RUNTIME, ON EVERY DATA NODE AND BEFORE ANYTHING DERIVED FROM A
 	// COMPANY: the state log for every registered domain, the node gate and
 	// the identity estate. A node with no company still signs people in — a
@@ -1537,9 +1513,54 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// this one is the recovery to measure.
 	log.InfoContext(ctx, "engine_recovered", "node", nodeID,
 		"detail", "what this node holds is open and recovered; what its company "+
-			"configures (sandboxes, native halves, tool servers) starts next")
+			"configures (its secret snapshot, sandboxes, Worklet and Doclet, tool "+
+			"servers, coding CLI logins) starts next")
 	if opts.Recovered != nil {
 		opts.Recovered()
+	}
+	// THE SNAPSHOT BEFORE THE FIRST EPOCH, because the epoch resolves every
+	// ${VAR} it holds as it is built — the provider keys, the integration
+	// tokens, the per-role MCP env. Loading the snapshot afterwards would
+	// give the first epoch environment-only resolution and every later one
+	// the store, so a rotated secret would work on the second apply and not
+	// on boot.
+	//
+	// BELOW THE BOUNDARY, because nothing it reads is what the node holds:
+	// it is the company's credentials, its cost grows with how many the
+	// company keeps, and the only reader of what it installs is the company
+	// built next. Above the boundary it held a startup probe sized for the
+	// store, and that probe knows nothing of a company's secrets.
+	//
+	// AND ON EVERY NODE, a node with no company included, because the first
+	// apply that brings one builds it from this snapshot whenever its own
+	// refresh cannot read the store. See [Engine.bootSecrets] for why a node
+	// never builds a company from the environment alone.
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
+	if err := e.bootSecrets(ctx); err != nil {
+		return nil, err
+	}
+	// A NIL COMPANY IS THE UNCONFIGURED NODE, not a caller's mistake.
+	//
+	// The store is authoritative at runtime and a fleet's first revision
+	// may arrive over the API, so a node has to be able to run with no
+	// company at all: serving its HTTP surface, reporting itself
+	// unconfigured, and holding no seats until the control plane hands it
+	// an epoch. Everything below is written against that — a nil epoch
+	// means "nothing to equip, nothing to place", never a panic.
+	//
+	// BUILT BELOW THE BOUNDARY with the rest of what the company
+	// configures. A revision that cannot be built exits the boot here, past
+	// the probe, as a bad configuration exits whatever the probe says.
+	var company *Company
+	if opts.Company != nil {
+		company, err = NewCompanyWith(opts.Company, e.resolver())
+		if err != nil {
+			return nil, err
+		}
+		// STAMPED ONCE, as it is built, with the activation the caller
+		// says this company came from — zero for one no activation has
+		// named. See [stampActivation].
+		stampActivation(company, opts.ActivatedAt)
 	}
 	// THE REST IS SKIPPED WHEN THERE IS NO EPOCH. Everything here is
 	// derived from a company — the sandbox backends it configures, the
@@ -1559,7 +1580,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 			return nil, fmt.Errorf("engine: sandbox: %w", err)
 		}
 		// BEFORE equip too, and for exactly the same reason: the ten
-		// native tracker and knowledge tools are registered only where
+		// Worklet and Doclet tools are registered only where
 		// their halves exist, so a node that equipped first would run a
 		// company on the native backends whose seats have no way to read
 		// or write them.
@@ -1579,6 +1600,17 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		if err := e.equip(ctx, company); err != nil {
 			return nil, err
 		}
+		// THE CONFIGURED CREDENTIAL BUNDLES LAST, on Apply's rule: every
+		// step above can still fail the boot, and a boot that fails must
+		// leave no login behind in a state directory the next epoch's seats
+		// share. And before the epoch is current, so its first model call
+		// finds the login. See [Company.restoreBundles].
+		//
+		// BELOW THE BOUNDARY, as the rest of the company is: which entries
+		// carry a bundle is the company's document, and a restore can wait
+		// on the shared login's lock, which a startup probe sized for the
+		// store knows nothing of.
+		company.restoreBundles(ctx)
 	}
 	e.installEpoch(ctx, company)
 

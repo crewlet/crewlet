@@ -193,8 +193,8 @@ func TestTheFleetControlsRecordWhoPressedThem(t *testing.T) {
 	want := iam.Actor{Name: "token:founder", Kind: iam.ActorOperator,
 		OperatorID: "token:founder"}
 
-	for _, path := range []string{"/work/retention/evict/n1?confirm=n1",
-		"/work/retention/readmit/n1?confirm=n1"} {
+	for _, path := range []string{"/worklet/retention/evict/n1?confirm=n1",
+		"/worklet/retention/readmit/n1?confirm=n1"} {
 		if code, body := postAck(t, a, path); code != http.StatusOK {
 			t.Fatalf("%s answered %d: %v", path, code, body)
 		}
@@ -212,24 +212,24 @@ func TestTheFleetControlsRecordWhoPressedThem(t *testing.T) {
 		}
 	}
 
-	postAck(t, a, "/work/retention/capacity?stream=CREWLET_TRACKER_LOG"+
+	postAck(t, a, "/worklet/retention/capacity?stream=CREWLET_TRACKER_LOG"+
 		"&bytes=1048576&confirm=1048576")
 	if log.capacity.By != want.Name || log.capacity.OperatorID != want.OperatorID {
 		t.Errorf("the resize names %q through %q, want %q through %q",
 			log.capacity.By, log.capacity.OperatorID, want.Name, want.OperatorID)
 	}
 
-	postAck(t, a, "/work/retention/reanchor?stream=CREWLET_TRACKER_LOG"+
+	postAck(t, a, "/worklet/retention/reanchor?stream=CREWLET_TRACKER_LOG"+
 		"&confirm=2031-04-02T03:00:00Z")
 	if log.reanchored.By != want {
 		t.Errorf("the reanchor was handed %+v, want %+v", log.reanchored.By, want)
 	}
 
-	postAck(t, a, "/work/retention/maintenance/abandon?stream=CREWLET_TRACKER_LOG")
+	postAck(t, a, "/worklet/retention/maintenance/abandon?stream=CREWLET_TRACKER_LOG")
 	if log.abandoned != want {
 		t.Errorf("the abandon was handed %+v, want %+v", log.abandoned, want)
 	}
-	postAck(t, a, "/work/retention/maintenance/exclude?stream=CREWLET_TRACKER_LOG"+
+	postAck(t, a, "/worklet/retention/maintenance/exclude?stream=CREWLET_TRACKER_LOG"+
 		"&node=n1&confirm=n1")
 	if log.excluded != want {
 		t.Errorf("the exclusion was handed %+v, want %+v", log.excluded, want)
@@ -258,7 +258,7 @@ func TestAnAcknowledgementCarriesTheNamedStreamsOwnGeneration(t *testing.T) {
 	}}
 
 	code, body := postAck(t, ackApp(t, register, node),
-		"/work/retention/ack?stream=CREWLET_PAGES_LOG&position=918100000")
+		"/worklet/retention/ack?stream=CREWLET_PAGES_LOG&position=918100000")
 	if code != http.StatusOK {
 		t.Fatalf("the route answered %d: %v", code, body)
 	}
@@ -303,7 +303,7 @@ func TestAnAcknowledgementNamingAnUnknownStreamIsRefused(t *testing.T) {
 	node := &fakeStateLog{generations: map[string]uint32{"CREWLET_TRACKER_LOG": 3}}
 
 	code, body := postAck(t, ackApp(t, register, node),
-		"/work/retention/ack?stream=CREWLET_TRAKCER_LOG&position=918100000")
+		"/worklet/retention/ack?stream=CREWLET_TRAKCER_LOG&position=918100000")
 	// 404 rather than 503: nothing here is transient, and a 503 tells an
 	// operator who typed the name wrong to send the identical request
 	// again in a minute.
@@ -346,14 +346,14 @@ func TestTheDeploymentControlsRefuseInTheEnvelope(t *testing.T) {
 	}{
 		{http.MethodPost, "/backup", http.StatusBadRequest, httpjson.CodeNoDestination},
 		{http.MethodPost, "/backup?dir=/tmp/x", http.StatusInternalServerError, httpjson.CodeBackupFailed},
-		{http.MethodPost, "/work/retention/ack?stream=CREWLET_TRACKER_LOG", http.StatusBadRequest, httpjson.CodePositionRequired},
-		{http.MethodPost, "/work/retention/ack?stream=NOPE&position=9", http.StatusNotFound, httpjson.CodeUnknownStream},
-		{http.MethodPost, "/work/retention/evict/node-2", http.StatusBadRequest, httpjson.CodeConfirmRequired},
-		{http.MethodGet, "/work/retention/reanchor", http.StatusBadRequest, httpjson.CodeStreamRequired},
-		{http.MethodPost, "/work/retention/reanchor?stream=CREWLET_TRACKER_LOG", http.StatusBadRequest, httpjson.CodeConfirmRequired},
-		{http.MethodPost, "/work/retention/capacity?stream=CREWLET_TRACKER_LOG", http.StatusBadRequest, httpjson.CodeTargetRequired},
-		{http.MethodPost, "/work/retention/capacity?stream=CREWLET_TRACKER_LOG&bytes=1024&confirm=1024", http.StatusConflict, httpjson.CodeCapacityRefused},
-		{http.MethodGet, "/work/retention/maintenance?stream=CREWLET_TRACKER_LOG", http.StatusInternalServerError, httpjson.CodeMaintenanceUnreadable},
+		{http.MethodPost, "/worklet/retention/ack?stream=CREWLET_TRACKER_LOG", http.StatusBadRequest, httpjson.CodePositionRequired},
+		{http.MethodPost, "/worklet/retention/ack?stream=NOPE&position=9", http.StatusNotFound, httpjson.CodeUnknownStream},
+		{http.MethodPost, "/worklet/retention/evict/node-2", http.StatusBadRequest, httpjson.CodeConfirmRequired},
+		{http.MethodGet, "/worklet/retention/reanchor", http.StatusBadRequest, httpjson.CodeStreamRequired},
+		{http.MethodPost, "/worklet/retention/reanchor?stream=CREWLET_TRACKER_LOG", http.StatusBadRequest, httpjson.CodeConfirmRequired},
+		{http.MethodPost, "/worklet/retention/capacity?stream=CREWLET_TRACKER_LOG", http.StatusBadRequest, httpjson.CodeTargetRequired},
+		{http.MethodPost, "/worklet/retention/capacity?stream=CREWLET_TRACKER_LOG&bytes=1024&confirm=1024", http.StatusConflict, httpjson.CodeCapacityRefused},
+		{http.MethodGet, "/worklet/retention/maintenance?stream=CREWLET_TRACKER_LOG", http.StatusInternalServerError, httpjson.CodeMaintenanceUnreadable},
 	}
 	for _, tc := range cases {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
@@ -448,7 +448,7 @@ func TestAReadmissionBelowTheFloorIsRefusedAsAnAnswer(t *testing.T) {
 	gate := &fakeNodeGate{readmit: fmt.Errorf("engine: readmit node node-4: %w", refusal)}
 	a := newApp(t, api.Options{Bootstrap: &b, Nodes: gate})
 
-	code, body := postAck(t, a, "/work/retention/readmit/node-4?confirm=node-4")
+	code, body := postAck(t, a, "/worklet/retention/readmit/node-4?confirm=node-4")
 	if code != http.StatusConflict {
 		t.Fatalf("a refused readmission answered %d: %v", code, body)
 	}
@@ -481,7 +481,7 @@ func TestAReadmissionBelowTheFloorIsRefusedAsAnAnswer(t *testing.T) {
 	// an operator reads as an engine fault.
 	gate.readmit = fmt.Errorf("engine: readmit node node-4: %w", &engine.ReadmissionUnjudged{
 		Node: "node-4", Err: errors.New("read the positions register: unreachable")})
-	code, body = postAck(t, a, "/work/retention/readmit/node-4?confirm=node-4")
+	code, body = postAck(t, a, "/worklet/retention/readmit/node-4?confirm=node-4")
 	if code != http.StatusServiceUnavailable || body["error"] != "readmission_unjudged" {
 		t.Fatalf("an unreadable register answered %d %v, want 503 readmission_unjudged", code, body)
 	}
@@ -492,7 +492,7 @@ func TestAReadmissionBelowTheFloorIsRefusedAsAnAnswer(t *testing.T) {
 
 	// AND A FAILURE THE ENGINE DID NOT TYPE STAYS A FAILURE.
 	gate.readmit = errors.New("engine: something nobody anticipated")
-	if code, body := postAck(t, a, "/work/retention/readmit/node-4?confirm=node-4"); code !=
+	if code, body := postAck(t, a, "/worklet/retention/readmit/node-4?confirm=node-4"); code !=
 		http.StatusInternalServerError || body["error"] != "gate_failed" {
 		t.Fatalf("an untyped failure answered %d %v, want 500 gate_failed", code, body)
 	}
@@ -511,7 +511,7 @@ func TestAnEvictionOfALiveNodeIsRefusedAsAnAnswer(t *testing.T) {
 	gate := &fakeNodeGate{evict: fmt.Errorf("engine: evict node node-4: %w", refusal)}
 	a := newApp(t, api.Options{Bootstrap: &b, Nodes: gate})
 
-	code, body := postAck(t, a, "/work/retention/evict/node-4?confirm=node-4")
+	code, body := postAck(t, a, "/worklet/retention/evict/node-4?confirm=node-4")
 	if code != http.StatusConflict || body["error"] != "eviction_refused" {
 		t.Fatalf("a refused eviction answered %d %v, want 409 eviction_refused", code, body)
 	}
@@ -529,14 +529,14 @@ func TestAnEvictionOfALiveNodeIsRefusedAsAnAnswer(t *testing.T) {
 
 	gate.evict = nil
 	if code, body := postAck(t, a,
-		"/work/retention/evict/node-4?confirm=node-4&force=true"); code != http.StatusOK {
+		"/worklet/retention/evict/node-4?confirm=node-4&force=true"); code != http.StatusOK {
 		t.Fatalf("a forced eviction answered %d %v", code, body)
 	}
 	if !gate.asked[1].Force {
 		t.Fatal("force=true never reached the engine")
 	}
 	if code, _ := postAck(t, a,
-		"/work/retention/readmit/node-4?confirm=node-4&force=true"); code != http.StatusOK ||
+		"/worklet/retention/readmit/node-4?confirm=node-4&force=true"); code != http.StatusOK ||
 		gate.asked[2].Force {
 		t.Fatalf("a readmission carried force (%+v), which it has no meaning for", gate.asked[2])
 	}
@@ -566,7 +566,7 @@ func TestTheGateAnswersPerLogAndCarriesItsOperation(t *testing.T) {
 	a := newApp(t, api.Options{Bootstrap: &b, Nodes: gate})
 	op := statelog.NewOpID(time.Now().Add(-time.Minute), "evict-node-4")
 
-	code, body := postAck(t, a, "/work/retention/evict/node-4?confirm=node-4&op_id="+
+	code, body := postAck(t, a, "/worklet/retention/evict/node-4?confirm=node-4&op_id="+
 		url.QueryEscape(op))
 	if code != http.StatusOK {
 		t.Fatalf("a partial gesture answered %d %v, want 200 — the logs that "+
@@ -614,7 +614,7 @@ func TestTheGateAnswersPerLogAndCarriesItsOperation(t *testing.T) {
 	// AND WITHOUT ONE, A FRESH OPERATION — which it answers with, because a
 	// retry needs it.
 	gate.result = nil
-	code, body = postAck(t, a, "/work/retention/evict/node-4?confirm=node-4")
+	code, body = postAck(t, a, "/worklet/retention/evict/node-4?confirm=node-4")
 	if code != http.StatusOK || body["complete"] != true {
 		t.Fatalf("a complete gesture answered %d %v", code, body)
 	}
@@ -641,14 +641,14 @@ func TestAGateTheEngineCouldNotJudgeSaysWhose(t *testing.T) {
 	gate := &fakeNodeGate{evict: fmt.Errorf("%w: \"node*\" is not a node id",
 		engine.ErrInvalidGate)}
 	a := newApp(t, api.Options{Bootstrap: &b, Nodes: gate})
-	if code, body := postAck(t, a, "/work/retention/evict/node*?confirm=node*"); code !=
+	if code, body := postAck(t, a, "/worklet/retention/evict/node*?confirm=node*"); code !=
 		http.StatusBadRequest || body["error"] != "invalid_gate" {
 		t.Fatalf("an invalid gate answered %d %v, want 400 invalid_gate", code, body)
 	}
 
 	unjudged := &engine.GateUnjudged{Node: "node-4", Err: errors.New("coordination is unreachable")}
 	gate.evict = unjudged
-	code, body := postAck(t, a, "/work/retention/evict/node-4?confirm=node-4")
+	code, body := postAck(t, a, "/worklet/retention/evict/node-4?confirm=node-4")
 	if code != http.StatusServiceUnavailable || body["error"] != "eviction_unjudged" {
 		t.Fatalf("an unjudged eviction answered %d %v, want 503 eviction_unjudged", code, body)
 	}
@@ -698,7 +698,7 @@ func TestTheReanchorStatusTellsAnUnknownStreamFromAnUnreadableOne(t *testing.T) 
 		return rec.Code, body
 	}
 
-	if code, body := get("/work/retention/reanchor?stream=CREWLET_PAGES_LOG"); code != http.StatusOK ||
+	if code, body := get("/worklet/retention/reanchor?stream=CREWLET_PAGES_LOG"); code != http.StatusOK ||
 		body["created_at"] == nil || body["generation"] != float64(1) {
 		t.Fatalf("a readable stream answered %d: %v", code, body)
 	}
@@ -706,25 +706,25 @@ func TestTheReanchorStatusTellsAnUnknownStreamFromAnUnreadableOne(t *testing.T) 
 	// operator confirms knowing whether the log is followed from its first
 	// record or from its end — and, with no case, why there is nothing to do.
 	node.view = engine.ReanchorView{Case: statelog.ReanchorRestored, Cursor: 7_000}
-	if code, body := get("/work/retention/reanchor?stream=CREWLET_PAGES_LOG"); code != http.StatusOK ||
+	if code, body := get("/worklet/retention/reanchor?stream=CREWLET_PAGES_LOG"); code != http.StatusOK ||
 		body["case"] != "restored" || body["cursor"] != float64(7_000) {
 		t.Fatalf("a restored stream's status answered %d: %v, want the restored "+
 			"case at 7000", code, body)
 	}
 	node.view = engine.ReanchorView{Refusal: "nothing to re-anchor: the applier follows it"}
-	if code, body := get("/work/retention/reanchor?stream=CREWLET_PAGES_LOG"); code != http.StatusOK ||
+	if code, body := get("/worklet/retention/reanchor?stream=CREWLET_PAGES_LOG"); code != http.StatusOK ||
 		body["case"] != nil || body["nothing_to_reanchor"] != node.view.Refusal {
 		t.Fatalf("a stream with nothing to re-anchor answered %d: %v, want no case "+
 			"and the reason", code, body)
 	}
 	node.view = engine.ReanchorView{}
-	if code, body := get("/work/retention/reanchor?stream=CREWLET_PAGSE_LOG"); code != http.StatusNotFound ||
+	if code, body := get("/worklet/retention/reanchor?stream=CREWLET_PAGSE_LOG"); code != http.StatusNotFound ||
 		body["error"] != "unknown_stream" {
 		t.Fatalf("a stream this node does not run answered %d: %v", code, body)
 	}
 
 	node.unreadable = errors.New("nats: timeout")
-	code, body := get("/work/retention/reanchor?stream=CREWLET_PAGES_LOG")
+	code, body := get("/worklet/retention/reanchor?stream=CREWLET_PAGES_LOG")
 	if code != http.StatusServiceUnavailable || body["error"] != "stream_unreadable" {
 		t.Fatalf("a stream the broker did not answer for answered %d: %v — "+
 			"reported as unknown, the operator goes looking for a typo", code, body)
@@ -732,7 +732,7 @@ func TestTheReanchorStatusTellsAnUnknownStreamFromAnUnreadableOne(t *testing.T) 
 	// THE ACKNOWLEDGEMENT DOES NOT ASK THE BROKER FOR AN INSTANT IT DOES NOT
 	// USE: the generation is the node's own.
 	if code, body := postAck(t, a,
-		"/work/retention/ack?stream=CREWLET_PAGES_LOG&position=918100000"); code != http.StatusOK {
+		"/worklet/retention/ack?stream=CREWLET_PAGES_LOG&position=918100000"); code != http.StatusOK {
 		t.Fatalf("an acknowledgement while the broker could not answer a status "+
 			"read was refused %d: %v", code, body)
 	}
@@ -769,7 +769,7 @@ func TestARestoredReanchorThatWouldDiscardSaysSoAndDiscardsOnlyOnTheWord(t *test
 		return rec.Code, body
 	}
 
-	code, body := call(http.MethodGet, "/work/retention/reanchor?stream=CREWLET_TRACKER_LOG")
+	code, body := call(http.MethodGet, "/worklet/retention/reanchor?stream=CREWLET_TRACKER_LOG")
 	discards, _ := body["discards"].(map[string]any)
 	if code != http.StatusOK || discards["seq"] != float64(7_100) ||
 		discards["writer"] != "node-b" || discards["subject"] != "task.t-1" ||
@@ -779,7 +779,7 @@ func TestARestoredReanchorThatWouldDiscardSaysSoAndDiscardsOnlyOnTheWord(t *test
 
 	node.plan = statelog.ReanchorPlan{Generation: 2, Case: statelog.ReanchorRestored,
 		Cursor: 7_100}
-	if code, body := call(http.MethodPost, "/work/retention/reanchor?stream=CREWLET_TRACKER_LOG"+
+	if code, body := call(http.MethodPost, "/worklet/retention/reanchor?stream=CREWLET_TRACKER_LOG"+
 		"&confirm=2023-11-14T22:13:20Z&force=true"); code != http.StatusOK || body["discarded"] != nil {
 		t.Fatalf("a forced reanchor answered %d: %v", code, body)
 	}
@@ -788,7 +788,7 @@ func TestARestoredReanchorThatWouldDiscardSaysSoAndDiscardsOnlyOnTheWord(t *test
 	}
 
 	node.plan.Discarded = written
-	code, body = call(http.MethodPost, "/work/retention/reanchor?stream=CREWLET_TRACKER_LOG"+
+	code, body = call(http.MethodPost, "/worklet/retention/reanchor?stream=CREWLET_TRACKER_LOG"+
 		"&confirm=2023-11-14T22:13:20Z&discard=true")
 	if code != http.StatusOK || !node.reanchored.Discard {
 		t.Fatalf("discard=true answered %d and reached the node as %+v", code, node.reanchored)
@@ -812,7 +812,7 @@ func TestAGateRefusesAnOperationIDTheEngineDidNotMint(t *testing.T) {
 		b := closedPosture()
 		gate := &fakeNodeGate{}
 		code, body := postAck(t, newApp(t, api.Options{Bootstrap: &b, Nodes: gate}),
-			"/work/retention/"+verb+"/node-4?confirm=node-4&op_id=op-abc")
+			"/worklet/retention/"+verb+"/node-4?confirm=node-4&op_id=op-abc")
 		if code != http.StatusBadRequest ||
 			body["error"] != string(httpjson.CodeOpIDInvalid) ||
 			body["message"] != httpjson.CodeOpIDInvalid.Message() {
@@ -850,7 +850,7 @@ func TestAGateRefusesAnOperationIDTheBrokerWouldRewrite(t *testing.T) {
 		b := closedPosture()
 		gate := &fakeNodeGate{}
 		code, body := postAck(t, newApp(t, api.Options{Bootstrap: &b, Nodes: gate}),
-			"/work/retention/evict/node-4?confirm=node-4&"+
+			"/worklet/retention/evict/node-4?confirm=node-4&"+
 				url.Values{"op_id": {opID}}.Encode())
 		if code != http.StatusBadRequest || body["error"] != string(httpjson.CodeOpIDInvalid) {
 			t.Errorf("an eviction under an op_id with %s answered %d %v, want 400 "+
@@ -870,7 +870,7 @@ func TestAGateRefusesAnOperationIDTheBrokerWouldRewrite(t *testing.T) {
 	b := closedPosture()
 	gate := &fakeNodeGate{}
 	code, body := postAck(t, newApp(t, api.Options{Bootstrap: &b, Nodes: gate}),
-		"/work/retention/evict/node-4?confirm=node-4&"+
+		"/worklet/retention/evict/node-4?confirm=node-4&"+
 			url.Values{"op_id": {good}}.Encode())
 	if code != http.StatusOK || len(gate.asked) != 1 || gate.asked[0].OpID != good {
 		t.Fatalf("an eviction under a valid op_id answered %d %v and ran as %+v",

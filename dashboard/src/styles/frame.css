@@ -551,7 +551,7 @@
    the controls. */
 
 /* A SCOPE'S LENSES, BESIDE ITS NAME (`PageLenses` in PageActions.tsx, and
-   All projects' drawn by the header): `Work › ENG Core · Tasks | About |
+   All projects' drawn by the header): `Worklet › ENG Core · Tasks | About |
    History | Files`. On every page without lenses the slot is empty and is no
    flex item at all, so it costs the bar no gap.
 

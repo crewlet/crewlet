@@ -12,7 +12,7 @@
  *     agents make looks and sounds), the Org chart, Schedules, Integrations
  *     (the services built into Crewlet above the third-party apps it
  *     connects) and Budgets, last.
- *   - WORKSPACE: what the company does with it. Work, Knowledge, Artifacts and
+ *   - WORKSPACE: what the company does with it. Worklet, Doclet, Artifacts and
  *     Live.
  *   - The FOOT: Settings, the engine's state and the reader. Account has no
  *     row: the user block IS the reader, and opens it from its name and menu.
@@ -45,11 +45,11 @@
  *
  *   - A SIDEBAR ROW is a workspace, or a live shortcut to a pinned view, a
  *     starred page or a running turn. A project is not one: it is a scope of
- *     Work, switched where the trail names it.
+ *     Worklet, switched where the trail names it.
  *   - A SECTION is a PATH segment inside a workspace, drawn by one renderer:
- *     `tabs` in the page header, `lenses` beside Work's scope in the trail,
+ *     `tabs` in the page header, `lenses` beside Worklet's scope in the trail,
  *     `column` for Settings, or `none` where the workspace's own screens lead
- *     to it (Knowledge's landing).
+ *     to it (Doclet's landing).
  *   - An OBJECT TAB is a `tab=` query on an object's own page, bound to 1-9.
  *
  * Nothing is two of those. A section is never a sidebar row and never a
@@ -59,7 +59,7 @@
  * # Hidden for a service the company does not run, locked for access
  *
  * A row or section that reads one of Crewlet's own services (its tracker,
- * Crewlet Works, or its knowledge base, Crewlet Knowledge) names it
+ * Worklet, or its knowledge base, Doclet) names it
  * ([WorkspaceRow.service], [Section.service]). Where the company runs that
  * service elsewhere or not at all, the place is HIDDEN, never locked: there is
  * nothing to ask an admin for, and its addresses say so in place, to every
@@ -83,8 +83,8 @@ export type Workspace =
   | "schedules"
   | "integrations"
   | "budgets"
-  | "work"
-  | "knowledge"
+  | "worklet"
+  | "doclet"
   | "artifacts"
   | "live"
   | "settings"
@@ -92,8 +92,8 @@ export type Workspace =
 
 /**
  * A service built into Crewlet that a company may run elsewhere or not at
- * all: `tracker` is Crewlet Works (projects, tasks, the Inbox's updates and My
- * work), `knowledge` is Crewlet Knowledge (spaces and pages). Named here
+ * all: `tracker` is Worklet (projects, tasks, the Inbox's updates and My
+ * work), `knowledge` is Doclet (spaces and pages). Named here
  * because the navigation hides what reads one the company does not run.
  */
 export type Service = "tracker" | "knowledge";
@@ -104,12 +104,12 @@ export type ServicesRun = Readonly<Record<Service, boolean>>;
 /**
  * How a workspace draws its sections: `tabs` in the page header, a `column`
  * of them beside the screen (Settings), or `none`, where the workspace's own
- * screens lead to its sections (Home, Inbox, and Knowledge, whose landing
- * links its two sections under "For the agents").
+ * screens lead to its sections (Home, Inbox, and Doclet, whose landing links
+ * its two sections under "For the agents").
  *
- * `lenses` is Work's. Its sections are the lenses of the scope the trail
+ * `lenses` is Worklet's. Its sections are the lenses of the scope the trail
  * names, All projects, drawn beside the trail's switcher the way a project
- * draws its own lenses, so the bar reads one way in either scope and Work
+ * draws its own lenses, so the bar reads one way in either scope and Worklet
  * keeps no row of tabs of its own.
  */
 export type SectionRenderer = "tabs" | "lenses" | "column" | "none";
@@ -182,8 +182,8 @@ export interface Section {
   group?: string;
   /**
    * The service built into Crewlet this section reads, where the rest of its
-   * workspace reads none: Expensive tasks names its tasks by the tracker's
-   * keys and titles, and New design's one way to finish is asking an agent,
+   * workspace reads none: Expensive tasks names its tasks by Worklet's keys
+   * and titles, and New design's one way to finish is asking an agent,
    * which files a task. Hidden where the company does not run it
    * ([serviceShown]).
    */
@@ -229,9 +229,10 @@ export interface WorkspaceRow {
   keep?: string[];
   /**
    * The permissions the whole workspace needs, as [Section.grants]: locked,
-   * never hidden. An APP's workspace names its app — Inbox, My work and Work
-   * are the tracker's, Knowledge the knowledge base's — because every screen
-   * in it reads that app; the one address under one that the app does not
+   * never hidden. An APP's workspace names its app (Inbox, My work and the
+   * Worklet workspace name Worklet, the Doclet workspace names Doclet),
+   * because every screen in it reads that app; the one address under one
+   * that the app does not
    * gate is a work item somebody was ASKED about (`App.tsx`), which its own
    * read decides.
    */
@@ -240,8 +241,8 @@ export interface WorkspaceRow {
   personal?: boolean;
   /**
    * The service built into Crewlet the whole workspace reads, as
-   * [Section.service]: Work and My work read Crewlet Works, Knowledge reads
-   * Crewlet Knowledge.
+   * [Section.service]: the Worklet workspace and My work read Worklet, and the
+   * Doclet workspace reads Doclet.
    */
   service?: Service;
   /**
@@ -303,7 +304,7 @@ const NEW_ARTIFACT_PAGES: Readonly<
 /**
  * The kinds made ONLY by asking an agent: a design's create page lays out its
  * boards and hands them to an agent, which files the work as a task, so where
- * the company runs no Crewlet Works the page has no way to finish and is not
+ * the company runs no Worklet the page has no way to finish and is not
  * offered. Every other kind has a create a person finishes on the page.
  */
 const MADE_BY_AN_AGENT: ReadonlySet<MakeKind> = new Set(["design"]);
@@ -396,12 +397,12 @@ export const WORKSPACES: WorkspaceRow[] = [
     chord: "i",
     place: "you",
     renderer: "none",
-    // THE TRACKER'S: the inbox is the notices the tracker routed to the
-    // reader's record, beside the seat and budget conditions waiting on a
-    // person. NOT HIDDEN with the tracker, because those conditions arrive
-    // under every backend: where the company runs no Crewlet Works the
-    // screen draws them and says where asks and mentions go instead.
-    grants: ["tracker"],
+    // WORKLET'S: the inbox is the notices Worklet routed to the reader's
+    // record, beside the seat and budget conditions waiting on a person. NOT
+    // HIDDEN with Worklet, because those conditions arrive under every
+    // backend: where the company runs no Worklet the screen draws them and
+    // says where asks and mentions go instead.
+    grants: ["worklet"],
     sections: [],
   },
   {
@@ -414,9 +415,9 @@ export const WORKSPACES: WorkspaceRow[] = [
     place: "you",
     renderer: "tabs",
     keep: ["handle"],
-    // THE TRACKER'S: every tab is a question about somebody's work items, so
-    // it reads Crewlet Works and is not offered where the company runs none.
-    grants: ["tracker"],
+    // WORKLET'S: every tab is a question about somebody's work items, so it
+    // reads Worklet and is not offered where the company runs none.
+    grants: ["worklet"],
     service: "tracker",
     sections: [
       {
@@ -596,7 +597,7 @@ export const WORKSPACES: WorkspaceRow[] = [
     icon: "plug",
     path: ["company", "integrations"],
     hint: "Crewlet's own services and the apps the company connects",
-    keywords: ["integrations", "connect", "apps", "crewlet works", "crewlet knowledge"],
+    keywords: ["integrations", "connect", "apps"],
     chord: "n",
     place: "company",
     renderer: "none",
@@ -618,46 +619,49 @@ export const WORKSPACES: WorkspaceRow[] = [
     sections: [],
   },
   {
-    key: "work",
-    label: "Work",
+    key: "worklet",
+    label: "Worklet",
     icon: "square-kanban",
-    path: ["work"],
+    path: ["worklet"],
     hint: "Projects and tasks",
+    // WHAT IT HOLDS, in the words a reader looks for it by, as Doclet's: its
+    // name says neither.
+    keywords: ["work tracker", "projects"],
     chord: "w",
     place: "workspace",
     // THE SCOPE'S LENSES, beside the switcher in the trail: All projects'
     // lenses are these three sections, a project's are its own `lens=` tabs,
     // and both draw alike (see [SectionRenderer]).
     renderer: "lenses",
-    // THE TRACKER'S, every lens and every project — but not an item somebody
-    // was ASKED about, which `App.tsx` lets them open: the engine answers the
-    // person an open ask names without the tracker, so they can read what they
-    // were asked and answer it.
-    grants: ["tracker"],
+    // WORKLET'S, every lens and every project, but not an item somebody was
+    // ASKED about, which `App.tsx` lets them open: the engine answers the
+    // person an open ask names without Worklet access, so they can read what
+    // they were asked and answer it.
+    grants: ["worklet"],
     service: "tracker",
     sections: [
       {
-        // WORK OPENS ON ITS PROJECTS: the first question about the company's
-        // work is where it is filed, and every project is one row away from
-        // its own board here.
+        // WORKLET OPENS ON ITS PROJECTS: the first question about the
+        // company's work is where it is filed, and every project is one row
+        // away from its own board here.
         key: "projects",
         label: "Projects",
         icon: "columns-3",
-        path: ["work"],
+        path: ["worklet"],
         hint: "Every project, its lead and progress",
       },
       {
         key: "tasks",
         label: "Tasks",
         icon: "list",
-        path: ["work", "tasks"],
+        path: ["worklet", "tasks"],
         hint: "Every task in the company",
       },
       {
         key: "history",
         label: "History",
         icon: "chart-no-axes-gantt",
-        path: ["work", "history"],
+        path: ["worklet", "history"],
         hint: "Every change to the company’s work",
       },
       // ADDRESSES, NOT LENSES: a saved view is reached from the view strip,
@@ -667,7 +671,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         key: "views",
         label: "Saved views",
         icon: "layout-dashboard",
-        path: ["work", "views"],
+        path: ["worklet", "views"],
         hint: "Every saved view and its owner",
         tab: false,
       },
@@ -675,48 +679,51 @@ export const WORKSPACES: WorkspaceRow[] = [
         key: "search",
         label: "Search",
         icon: "search",
-        path: ["work", "search"],
+        path: ["worklet", "search"],
         hint: "Find tasks",
         tab: false,
       },
     ],
   },
   {
-    key: "knowledge",
-    label: "Knowledge",
+    key: "doclet",
+    label: "Doclet",
     icon: "book-open",
-    path: ["knowledge"],
+    path: ["doclet"],
     hint: "The company’s documentation library and knowledge base",
+    // WHAT IT HOLDS, in the words a reader looks for it by: a reader after the
+    // company's documentation types what it is rather than its name.
+    keywords: ["knowledge base", "docs", "documentation"],
     chord: "k",
     place: "workspace",
-    // NO COLUMN, the approved Knowledge Home: the spaces are a row at the top
-    // of every Knowledge screen and the search sits in the page bar, so a
-    // page is read at the full width of the screen. The sections are reached
-    // from the landing, the palette and the trail.
+    // NO COLUMN, the approved Doclet Home: the spaces are a row at the top of
+    // every Doclet screen and the search sits in the page bar, so a page is
+    // read at the full width of the screen. The sections are reached from the
+    // landing, the palette and the trail.
     renderer: "none",
-    // THE KNOWLEDGE BASE'S: every section reads its pages.
-    grants: ["knowledge"],
+    // DOCLET'S: every section reads its pages.
+    grants: ["doclet"],
     service: "knowledge",
     sections: [
       {
         key: "search",
         label: "Search",
         icon: "search",
-        path: ["knowledge"],
+        path: ["doclet"],
         hint: "Search and browse the knowledge base",
       },
       {
         key: "skills",
         label: "Agent skills",
         icon: "wand-sparkles",
-        path: ["knowledge", "skills"],
+        path: ["doclet", "skills"],
         hint: "Skills agents use and learn",
       },
       {
         key: "diaries",
         label: "Agent diaries",
         icon: "brain",
-        path: ["knowledge", "diaries"],
+        path: ["doclet", "diaries"],
         hint: "What each agent remembers",
         // EVERY SEAT'S MEMORY AT ONCE is admin's; a lead reads their own
         // seats' memory on each seat's page.
@@ -727,8 +734,8 @@ export const WORKSPACES: WorkspaceRow[] = [
   {
     // THE COMPANY'S MADE THINGS, after what it knows: pages, documents and
     // sheets that people and agents publish and share, read and filled in
-    // together. A workspace of its own rather than a section of Knowledge or
-    // Work, because either would gate it by the wrong permission (D32).
+    // together. A workspace of its own rather than a section of Doclet or
+    // Worklet, because either would gate it by the wrong permission (D32).
     key: "artifacts",
     label: "Artifacts",
     icon: "layers",
@@ -919,8 +926,8 @@ export const WORKSPACES: WorkspaceRow[] = [
       },
       {
         key: "spend",
-        // NOT "SPEND" UNDER SPEND: where the company runs no Crewlet Works
-        // the group holds this row alone, and it read "Spend › Spend". The
+        // NOT "SPEND" UNDER SPEND: where the company runs no Worklet the
+        // group holds this row alone, and it read "Spend › Spend". The
         // name its Home widget already carries.
         label: "Token spend",
         icon: "coins",
@@ -936,9 +943,9 @@ export const WORKSPACES: WorkspaceRow[] = [
         path: ["settings", "spend", "tasks"],
         hint: "Tasks that spent the most tokens",
         group: "Spend",
-        // A TASK'S KEY AND TITLE are the tracker's; the readings above are
+        // A TASK'S KEY AND TITLE are Worklet's; the readings above are
         // everybody's.
-        grants: ["tracker"],
+        grants: ["worklet"],
         service: "tracker",
       },
       {
@@ -1096,7 +1103,7 @@ export function framelessOf(path: readonly string[]): FramelessRoute | null {
  *
  * Project and container keys are UPPERCASE, item keys are `KEY-n`, everything
  * else the engine mints is a uuid — and every segment here is lowercase. That
- * is what makes `#/work/views` a list of saved views rather than a project
+ * is what makes `#/worklet/views` a list of saved views rather than a project
  * called VIEWS, without a single escape character in the route table. A
  * handle is lowercase too, which is why handles live ONLY under `seats/`,
  * unit keys only under `teams/` and domains only under `backups/`: none of
@@ -1221,7 +1228,7 @@ export const DESTINATIONS: Destination[] = WORKSPACES.flatMap((row) => {
  * The section a path is in: the section whose path is the LONGEST prefix of
  * it. `#/live/turns/abc` is in Turns, `#/live` is in Now running, and a path
  * under no section (a project, an item) is in the workspace's landing section
- * only where that section's path is a prefix of it: `#/work/ENG` is in
+ * only where that section's path is a prefix of it: `#/worklet/ENG` is in
  * Projects, which is where the reader reached it from.
  */
 export function sectionOf(path: readonly string[]): Section | undefined {
@@ -1326,7 +1333,7 @@ export function workspaceOpen(row: WorkspaceRow, held: readonly string[]): boole
  * reader holding `held`: its own path, or, where that landing section is
  * closed to them, the first of its sections they can open and the company
  * runs. Settings lands on Models & keys, which is Admin's, and a reader
- * holding only Tracker was sent to a refusal although Token spend and
+ * holding only Worklet was sent to a refusal although Token spend and
  * Expensive tasks are theirs. `held` null is a reader not yet read: the
  * workspace's own path, as the frame draws every lock only once it knows.
  */
@@ -1355,13 +1362,13 @@ export function workspaceMissing(row: WorkspaceRow, held: readonly string[]): re
 
 /**
  * What closes an address to a reader holding `held`, as the frame's refusal
- * says it — the WORKSPACE's permissions first, since a reader who cannot open
- * Work cannot open any lens of it, then the SECTION's — or null where nothing
- * does. `what` is the label of whichever closed it.
+ * says it: the WORKSPACE's permissions first, since a reader who cannot open
+ * Worklet cannot open any lens of it, then the SECTION's, or null where
+ * nothing does. `what` is the label of whichever closed it.
  *
  * The caller decides what is exempt: a work item somebody was ASKED about is
  * opened whatever this says (`App.tsx`), because the engine answers the person
- * an open ask names without the tracker.
+ * an open ask names without Worklet access.
  */
 export function closedBy(
   path: readonly string[],

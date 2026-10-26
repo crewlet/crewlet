@@ -245,7 +245,7 @@ func (s Sources) sandboxRuns(ctx context.Context, p Params) (any, error) {
 // seat's body where the authority table's `audit.seat.read` admits them to
 // the run's seat — an admin, or its lead — through [Sources.reach], the one
 // decision a seat's live call, its turns and its memory are read under; its
-// work item where they hold the tracker; and their own record, which a run's
+// work item where they hold Worklet; and their own record, which a run's
 // question may be put to.
 //
 // ONE DECISION PER SEAT per answer, however many runs it has: a board of runs

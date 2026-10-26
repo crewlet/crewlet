@@ -154,9 +154,20 @@ type Result struct {
 	// Installed names the seats whose workspace install this run
 	// completed, minting a bot token.
 	Installed []string
-	// Kept names the seats this run left alone — the SUCCESSFUL outcome
-	// of a re-run, which has to be visible or a quiet report reads as a
-	// run that did nothing.
+	// Kept names the seats this run left alone: Slack already held the
+	// app's manifest, and its install stood — the ledger records the app
+	// installed and the sink holds its bot token. It is the SUCCESSFUL
+	// outcome of a re-run, which has to be visible or a quiet report reads
+	// as a run that did nothing.
+	//
+	// BOTH HALVES, because the report says of a kept seat that its
+	// credential still works and that minting a fresh one would revoke
+	// what the running engine is using. A seat whose manifest was
+	// unchanged but whose app this run installed (with -reinstall, or
+	// after a -no-install run) or left waiting for a click is reported
+	// Installed or Pending alone: reported kept too, a -reinstall run's
+	// seat read as left alone with the token the run had just minted, and
+	// an operator who then minted afresh revoked that token.
 	Kept []string
 	// Validated names the seats whose manifest Slack accepted on a dry
 	// run. Only a dry run fills it; a real run's create and update are
@@ -180,6 +191,24 @@ type Result struct {
 	Failed map[string]string
 
 	Notes []string
+
+	// Recorded counts the values this run obtained from Slack and wrote to
+	// the sink: a created app's signing secret and an installed app's bot
+	// token — what a running engine cannot hold yet.
+	//
+	// THE SIGNING SECRET OF AN APP THIS RUN DID NOT CREATE IS NOT COUNTED,
+	// although every run records it again from the ledger: the sink has
+	// held it since the run that created the app, when that run recorded
+	// into the same sink, so counting it would tell every re-run's operator
+	// to reload an engine that already has it. Where that run recorded
+	// elsewhere (-env-file first and -secret-store later), or the app was
+	// adopted into the ledger by hand, the secret is new to this sink and
+	// still not counted, because the ledger does not say which sink a
+	// value reached; docs/reference/cli.md tells that operator to do the
+	// sink's step themselves. A count rather than the names for GitLab's
+	// reason: the names are variables holding live credentials, and this
+	// only decides whether the report says what still has to happen.
+	Recorded int
 }
 
 // Err reports the run's failures as one error, or nil.
@@ -380,14 +409,15 @@ func (o Options) seat(ctx context.Context, configToken string, seat SeatPlan, re
 			res.Notes = append(res.Notes, fmt.Sprintf(
 				"%s: the recorded app %s no longer exists in Slack, so a "+
 					"replacement was created — anything holding the old app's "+
-					"bot token has to be restarted with the new one",
+					"bot token needs the new app's: the engine reads it at the "+
+					"step named on the Next: line of the run that installs the "+
+					"new app",
 				seat.Handle, record.AppID))
-			// THE HELD TOKEN IS A LEFTOVER. It belongs to the dead app
-			// and it satisfies the sink's half of the "already
-			// installed" check — but the replacement record carries no
-			// bot user id, and that is the half that can only come from
-			// a completed OAuth exchange. So the install runs, and the
-			// stale value is overwritten rather than trusted.
+			// THE HELD TOKEN IS A LEFTOVER. It belongs to the dead app,
+			// and the replacement record carries no bot user id, which
+			// only a completed OAuth exchange records — so the install
+			// asks the sink nothing and runs, and the stale value is
+			// overwritten rather than trusted.
 			record = AppRecord{}
 			delete(o.Ledger.Apps, seat.Handle)
 		}
@@ -403,6 +433,10 @@ func (o Options) seat(ctx context.Context, configToken string, seat SeatPlan, re
 		}
 	}
 
+	// fresh is whether this run created the app, and so obtained a signing
+	// secret no sink held before it; unchanged, whether Slack already held
+	// its manifest, which is half of a seat the run keeps ([Result.Kept]).
+	fresh, unchanged := false, false
 	switch {
 	case record.AppID == "":
 		// VALIDATED FIRST. apps.manifest.create is Tier 1 — roughly one
@@ -434,6 +468,7 @@ func (o Options) seat(ctx context.Context, configToken string, seat SeatPlan, re
 				seat.Handle, created.AppID, err)
 		}
 		res.Created = append(res.Created, seat.Handle)
+		fresh = true
 
 	case record.ManifestHash != fingerprint:
 		if err := o.Admin.UpdateApp(ctx, configToken, record.AppID, manifest); err != nil {
@@ -447,53 +482,78 @@ func (o Options) seat(ctx context.Context, configToken string, seat SeatPlan, re
 		res.Updated = append(res.Updated, seat.Handle)
 
 	default:
-		res.Kept = append(res.Kept, seat.Handle)
+		unchanged = true
 	}
 
 	if record.SigningSecret != "" {
 		if err := o.Sink.Record(ctx, seat.SigningVar, record.SigningSecret); err != nil {
 			return fmt.Errorf("slack: %s: record %s: %w", seat.Handle, seat.SigningVar, err)
 		}
+		if fresh {
+			res.Recorded++
+		}
 	}
-	return o.install(ctx, seat, record, res)
+	switch stood, err := o.install(ctx, seat, record, res); {
+	case err != nil:
+		return err
+	case unchanged && stood:
+		res.Kept = append(res.Kept, seat.Handle)
+	}
+	return nil
 }
 
 // install completes the workspace install, or reports what is left to click.
-func (o Options) install(ctx context.Context, seat SeatPlan, record AppRecord, res *Result) error {
-	if !o.Reinstall {
+// It answers true when the install already stood and it did nothing: the
+// ledger records the app installed and the sink holds its bot token.
+//
+// THE SINK IS ASKED ONLY ABOUT AN APP THAT IS INSTALLED, because only there
+// can its answer spare an install: an app the ledger has never seen
+// installed — one this run created among them, or the replacement for one
+// deleted in the console — has no token anywhere for an install to revoke,
+// and is installed whatever the sink holds. Asked first, a sink that could
+// not answer refused that install for nothing: the run had created the app
+// and recorded its signing secret, and then left it uninstalled over a token
+// whose value could not change what the run did. `crewlet slack provision`
+// reads up front only the tokens of the seats whose app its ledger records
+// installed, for the same reason: a -secret-store run is not refused over any
+// other seat's token, through a node that refuses it the reveal (a machine
+// token, which may record a secret and is refused every reveal) or over a row
+// the keyring cannot open.
+func (o Options) install(ctx context.Context, seat SeatPlan, record AppRecord, res *Result) (bool, error) {
+	if !o.Reinstall && record.Installed() {
 		held, ok, err := o.Sink.Value(ctx, seat.TokenVar)
 		if err != nil {
 			// UNREADABLE IS NOT UNHELD. Treating it as "no token" would
 			// send the operator through an install they did not need,
 			// and a second install revokes the first token — taking a
 			// working seat down to fix nothing.
-			return fmt.Errorf("slack: %s: could not read %s: %w",
+			return false, fmt.Errorf("slack: %s: could not read %s: %w",
 				seat.Handle, seat.TokenVar, err)
 		}
-		if ok && held != "" && record.Installed() {
-			return nil
+		if ok && held != "" {
+			return true, nil
 		}
 	}
 	authorize := AuthorizeURL(record.ClientID, o.BaseURL, seat.Handle)
 	if o.Install == nil {
 		res.Pending[seat.Handle] = authorize
-		return nil
+		return false, nil
 	}
 	code, err := o.Install(ctx, seat.Handle, authorize)
 	if err != nil {
-		return fmt.Errorf("slack: %s: %w", seat.Handle, err)
+		return false, fmt.Errorf("slack: %s: %w", seat.Handle, err)
 	}
 	if strings.TrimSpace(code) == "" {
 		// The operator skipped this seat. The app exists and can be
 		// installed on the next run, so this is a note rather than a
 		// failure.
 		res.Pending[seat.Handle] = authorize
-		return nil
+		return false, nil
 	}
 	installed, err := o.Admin.Exchange(ctx, record.ClientID, record.ClientSecret,
 		strings.TrimSpace(code), o.BaseURL)
 	if err != nil {
-		return fmt.Errorf("slack: %s: %w", seat.Handle, err)
+		return false, fmt.Errorf("slack: %s: %w", seat.Handle, err)
 	}
 	// THE CODE HAS TO BELONG TO THIS SEAT'S APP. One authorize URL is
 	// printed per seat and they look alike; pasting the wrong one mints
@@ -501,23 +561,24 @@ func (o Options) install(ctx context.Context, seat SeatPlan, record AppRecord, r
 	// posts as a colleague with nothing anywhere reporting it. The whole
 	// point of an app per seat is that identities do not cross.
 	if got := strings.TrimSpace(installed.AppID); got != "" && got != record.AppID {
-		return fmt.Errorf(
+		return false, fmt.Errorf(
 			"slack: %s: that approve code belongs to app %s, not this seat's "+
 				"%s — the click used another agent's authorize URL. Re-run "+
 				"and use the URL printed for %s. Nothing was recorded",
 			seat.Handle, got, record.AppID, seat.Handle)
 	}
 	if err := o.Sink.Record(ctx, seat.TokenVar, installed.BotToken); err != nil {
-		return fmt.Errorf("slack: %s: record %s: %w", seat.Handle, seat.TokenVar, err)
+		return false, fmt.Errorf("slack: %s: record %s: %w", seat.Handle, seat.TokenVar, err)
 	}
+	res.Recorded++
 	record.BotUserID = installed.BotUserID
 	record.TeamID = installed.TeamID
 	o.Ledger.Apps[seat.Handle] = record
 	if err := o.Ledger.Save(o.LedgerPath); err != nil {
-		return fmt.Errorf("slack: %s: %w", seat.Handle, err)
+		return false, fmt.Errorf("slack: %s: %w", seat.Handle, err)
 	}
 	res.Installed = append(res.Installed, seat.Handle)
-	return nil
+	return false, nil
 }
 
 // seatNotes renders a seat's plan notes with its handle attached.

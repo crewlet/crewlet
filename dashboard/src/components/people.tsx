@@ -72,7 +72,7 @@ import {
 import {
   ACCESS_WORDS,
   ADMIN,
-  TRACKER,
+  WORKLET,
   accessLabel,
   accessLine,
   expand,
@@ -180,7 +180,7 @@ export function useDirectoryMoved(heard: () => void, enabled = true): void {
 /**
  * Access as words — a directory row's, an invitation's, or what a token
  * carries — one tag per part of its [accessLine]: "Admin", or the apps
- * ("Tracker", "Knowledge"), or "Overview only". A name this build does not
+ * ("Worklet", "Doclet"), or "Overview only". A name this build does not
  * know is drawn raw beside them, so a row never looks as if it held less than
  * it does.
  */
@@ -305,9 +305,9 @@ export function AccessPicker({
  *   - NOTHING TICKED is the overview only — the org chart, the agents'
  *     status, spend and their own account — which every signed-in person
  *     reads, and nothing of the tracker or the knowledge base;
- *   - WITHOUT TRACKER, the work the company's agents send to people never
+ *   - WITHOUT WORKLET, the work the company's agents send to people never
  *     reaches them: an agent asks a person, assigns them a task or waits on
- *     their answer through the tracker, and their inbox and My work are its.
+ *     their answer through Worklet, and their inbox and My work are its.
  *     They can still open and answer a work item an agent asks them about.
  *
  * Only for a person: a service account is a credential somebody scripts, and
@@ -325,10 +325,10 @@ export function AppReachNote({
   if (!APPS.some((app) => have.includes(app)) && !have.includes(ADMIN)) {
     return <Callout variant="warning">Overview only: no tasks or pages.</Callout>;
   }
-  if (!have.includes(TRACKER)) {
+  if (!have.includes(WORKLET)) {
     return (
       <Callout variant="warning">
-        Without {accessLabel(TRACKER)}, agents can’t send {you ? "you" : "them"} work.
+        Without {accessLabel(WORKLET)}, agents can’t send {you ? "you" : "them"} work.
       </Callout>
     );
   }
@@ -1411,7 +1411,7 @@ export function MintTokenDialog({
           {/* A TOKEN CARRYING NOTHING IS STILL A CREDENTIAL, and says what it
               reaches: the overview every signed-in principal reads, and
               nothing of an app — its owner's own inbox, queue and pins
-              included, which are the tracker's. Unsaid, a person holding none
+              included, which are Worklet's. Unsaid, a person holding none
               was offered "Nothing to offer." beside an enabled Mint. */}
           {expand(grants).every((g) => !isGrant(g)) && (
             <Text as="p" variant="caption" tone="secondary">

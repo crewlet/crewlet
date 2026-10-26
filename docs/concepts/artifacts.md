@@ -222,7 +222,7 @@ and a refusal names the value it refused at.
 
 ## Sharing
 
-Artifacts are an **app**, beside the tracker and the knowledge base (see
+Artifacts are an **app**, beside Worklet and Doclet (see
 [Identity and Access](identity-and-access.md#an-artifact-is-opened-by-its-shares)).
 The `artifacts` permission **gates authoring only**: creating, publishing,
 changing a datastore's schema, trashing and restoring. Opening an artifact,
@@ -357,7 +357,7 @@ of an artifact's key, and an agent's `list_artifacts` takes `prefix` and
 
 ## Work items
 
-A tracker work item's **Artifacts** panel lists every artifact made or linked
+A Worklet item's **Artifacts** panel lists every artifact made or linked
 for it, read from the artifacts' own history (`GET /artifacts?work_item=ENG-12`):
 
 - **A write made for an item names it.** A create, a publish or a rollback that
@@ -369,8 +369,8 @@ for it, read from the artifacts' own history (`GET /artifacts?work_item=ENG-12`)
   use it to make a design or a dashboard first and file the task for it after.
 - **A link needs both halves.** The caller must be able to read the artifact
   (any role, viewer and above; the admin path is recorded as every elevated
-  read is), and must be able to change the item (`update_work_item`, the
-  tracker's own decision). The item must be one the company's tracker holds and
+  read is), and must be able to change the item (`update_work_item`,
+  Worklet's own decision). The item must be one Worklet holds and
   not removed, and the link is made under its current key, so an id or a
   former key links where the panel looks.
 - **A link is made once.** A retry under the same `Idempotency-Key` is the same
@@ -717,7 +717,7 @@ contract.
   finding naming its rule, under the code `doc_format`.
 - **Drawn by the dashboard, never as markup.** The engine answers a version tab
   by tab (`GET /artifacts/{id}/versions/{n}/doc`), and the dashboard draws each
-  with the element-constructing Markdown renderer Knowledge pages use, which
+  with the element-constructing Markdown renderer Doclet pages use, which
   also decides what a heading is, so the outline and the page it points into
   cannot disagree.
 - **Searched by every tab**, each title and its text, not by the index.
@@ -728,7 +728,7 @@ contract.
   dropped, and each new tab's file uploaded through the engine (a doc of one
   file gains its `doc.json` with its second tab). A save that raced somebody
   else's publish is merged onto theirs tab by tab, text by line as a
-  Knowledge page's is, and where both changed the same lines, the same title
+  Doclet page's is, and where both changed the same lines, the same title
   or the order, or one removed a tab the other changed, the person settles it
   before saving again. Print prints every tab in order.
 - **Started from a template.** New › Doc begins a doc from the engine's
@@ -793,7 +793,7 @@ Home board uses, each widget citing its dataset and when its rows were true,
 with a Sources rail that shows every dataset's definition, freshness and rows.
 
 - **Read as the viewer.** An `engine` dataset is answered by the question the
-  dashboard's own screens ask (the tracker's, spend's, the agents' status), on
+  dashboard's own screens ask (Worklet's, spend's, the agents' status), on
   the viewer's own request, so two people opening one board each see what
   they may read and nothing more; a figure over a source somebody may not read
   says so and names the permission that would open it
@@ -943,7 +943,7 @@ decisions inside a sheet; a design's live board layer of shapes, connectors
 and images; a dashboard dataset an agent refreshes on a schedule, and
 integration sources a viewer's own connector answers; slide builds, magic moves, live
 embeds and connectors on a slide, and PowerPoint or Google Slides export of a
-deck; live tracker and knowledge data inside
+deck; live Worklet and Doclet data inside
 a page; a page asking a model a question; viewer uploads and device features;
 public links outside the company; moving idle stores to object storage;
 point-in-time recovery from a log archive; concurrent co-editing of long text;

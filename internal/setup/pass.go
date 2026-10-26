@@ -205,7 +205,13 @@ type PassInput struct {
 	// Recreate re-registers hooks with a fresh secret. DESTRUCTIVE across
 	// deployments: the previous secret stops working everywhere else this
 	// company runs, so a caller must confirm it deliberately.
-	Recreate bool
+	//
+	// SPELLED BY THE CALLER that set it ([provision.FreshSwitch]) — the
+	// setup route's own body field — and handed to the vendor's pass as
+	// it is, so a refusal of it names the field that caller sent rather
+	// than a command-line flag. Empty is not asked, which is what the
+	// reconcile loop hands every pass.
+	Recreate provision.FreshSwitch
 
 	// Operator is the transient third-party app credential, when the pass needs
 	// one. Never persisted, and never logged.

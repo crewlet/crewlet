@@ -8,14 +8,14 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// The native tracker and knowledge base, read for a screen.
+// Worklet and Doclet, read for a screen.
 //
 // # These read THIS NODE'S OWN COPY, and that is the whole reason they are cheap
 //
@@ -59,7 +59,7 @@ import (
 // whose caller is allowed to choose. So the function is the unit here, and
 // there is no level constant beside it to reach for by mistake.
 //
-// The rules themselves are [tracker.ParseFreshness]'s and not restated here.
+// The rules themselves are [worklet.ParseFreshness]'s and not restated here.
 // One grammar serves the board, the socket, the REST route and a seat's own
 // tools, and a second reading of these keys would be the one place a freshness
 // key meant something slightly different.
@@ -70,7 +70,7 @@ import (
 // all — it renders the level and the lag beside the rows, so a person who
 // asked for a weaker answer is shown the one they got.
 func freshness(p Params) (statelog.Freshness, error) {
-	got, err := tracker.ParseFreshness(p)
+	got, err := worklet.ParseFreshness(p)
 	if err != nil {
 		return got, fmt.Errorf("%w: %w", ErrBadParams, err)
 	}
@@ -100,43 +100,43 @@ func freshness(p Params) (statelog.Freshness, error) {
 // REST route and a seat's own tool, and a second parser here would be the one
 // place a filter meant something slightly different.
 type WorkReader interface {
-	Tasks(ctx context.Context, q tracker.Query, now time.Time) (tracker.Answer, error)
-	Task(ctx context.Context, idOrKey string, want tracker.DetailWants,
-		fresh statelog.Freshness) (tracker.TaskDetail, error)
+	Tasks(ctx context.Context, q worklet.Query, now time.Time) (worklet.Answer, error)
+	Task(ctx context.Context, idOrKey string, want worklet.DetailWants,
+		fresh statelog.Freshness) (worklet.TaskDetail, error)
 	TurnsOf(ctx context.Context, idOrKey, cursor string, limit int,
-		fresh statelog.Freshness) (tracker.TaskTurns, error)
-	Views(ctx context.Context, q tracker.ViewQuery) (tracker.ViewListing, error)
-	EveryView(ctx context.Context, q tracker.EveryViewQuery) (tracker.ViewListing, error)
+		fresh statelog.Freshness) (worklet.TaskTurns, error)
+	Views(ctx context.Context, q worklet.ViewQuery) (worklet.ViewListing, error)
+	EveryView(ctx context.Context, q worklet.EveryViewQuery) (worklet.ViewListing, error)
 	ExpandedQuery(ctx context.Context, params map[string]any,
-		viewer tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error)
-	Catalogue(ctx context.Context, q tracker.CatalogueQuery) (tracker.CatalogueAnswer, error)
-	Projects(ctx context.Context, q tracker.ProjectQuery) (
-		tracker.ProjectListing, error)
-	Project(ctx context.Context, q tracker.ProjectDetailQuery) (
-		tracker.ProjectDetail, error)
-	Workload(ctx context.Context, q tracker.WorkloadQuery, now time.Time,
-		loc *time.Location) (tracker.WorkloadAnswer, error)
-	Activity(ctx context.Context, q tracker.ActivityQuery, now time.Time) (
-		tracker.ActivityAnswer, error)
-	MyWork(ctx context.Context, q tracker.MyWorkQuery, now time.Time,
-		loc *time.Location) (tracker.MyWork, error)
-	Person(ctx context.Context, q tracker.PersonQuery, now time.Time) (tracker.PersonState, error)
-	Inbox(ctx context.Context, q tracker.InboxQuery, now time.Time) (tracker.InboxAnswer, error)
-	Routing(ctx context.Context, q tracker.RoutingQuery, now time.Time) (
-		tracker.RoutingAnswer, error)
-	Flow(ctx context.Context, q tracker.FlowQuery, now time.Time,
-		loc *time.Location) (tracker.FlowAnswer, error)
-	CompanyFeed(ctx context.Context, q tracker.FeedQuery) (tracker.FeedPage, error)
-	Decisions(ctx context.Context, q tracker.DecisionsQuery, now time.Time,
-		loc *time.Location) (tracker.DecisionsAnswer, error)
+		viewer worklet.Viewer, now time.Time, loc *time.Location) (worklet.Query, error)
+	Catalogue(ctx context.Context, q worklet.CatalogueQuery) (worklet.CatalogueAnswer, error)
+	Projects(ctx context.Context, q worklet.ProjectQuery) (
+		worklet.ProjectListing, error)
+	Project(ctx context.Context, q worklet.ProjectDetailQuery) (
+		worklet.ProjectDetail, error)
+	Workload(ctx context.Context, q worklet.WorkloadQuery, now time.Time,
+		loc *time.Location) (worklet.WorkloadAnswer, error)
+	Activity(ctx context.Context, q worklet.ActivityQuery, now time.Time) (
+		worklet.ActivityAnswer, error)
+	MyWork(ctx context.Context, q worklet.MyWorkQuery, now time.Time,
+		loc *time.Location) (worklet.MyWork, error)
+	Person(ctx context.Context, q worklet.PersonQuery, now time.Time) (worklet.PersonState, error)
+	Inbox(ctx context.Context, q worklet.InboxQuery, now time.Time) (worklet.InboxAnswer, error)
+	Routing(ctx context.Context, q worklet.RoutingQuery, now time.Time) (
+		worklet.RoutingAnswer, error)
+	Flow(ctx context.Context, q worklet.FlowQuery, now time.Time,
+		loc *time.Location) (worklet.FlowAnswer, error)
+	CompanyFeed(ctx context.Context, q worklet.FeedQuery) (worklet.FeedPage, error)
+	Decisions(ctx context.Context, q worklet.DecisionsQuery, now time.Time,
+		loc *time.Location) (worklet.DecisionsAnswer, error)
 	TurnPlaces(ctx context.Context, runs []string,
-		fresh statelog.Freshness) (map[string]tracker.TurnPlace, error)
+		fresh statelog.Freshness) (map[string]worklet.TurnPlace, error)
 	// Thread is the read a comment's write makes to find the question it
-	// answers — here so `work_item` can ask [tracker.AskedOn] whether an
+	// answers, here so `work_item` can ask [worklet.AskedOn] whether an
 	// open ask on the item names the caller, through the SAME read the
 	// answer they would post is resolved by (see [Sources.workItem]).
-	Thread(ctx context.Context, q tracker.ThreadQuery,
-		fresh statelog.Freshness) (tracker.ResolvedThread, error)
+	Thread(ctx context.Context, q worklet.ThreadQuery,
+		fresh statelog.Freshness) (worklet.ResolvedThread, error)
 }
 
 // Keeper is a native source that can say, before anything is read from it,
@@ -185,12 +185,12 @@ func keptHere(src any) (bool, error) {
 
 // PageReader is the knowledge read side this surface calls.
 type PageReader interface {
-	List(ctx context.Context, f pages.Filter, fresh statelog.Freshness) (pages.Listing, error)
-	Get(ctx context.Context, ref string, fresh statelog.Freshness) (pages.Detail, error)
-	Containers(ctx context.Context, fresh statelog.Freshness) ([]pages.ContainerListing, error)
-	Activity(ctx context.Context, q pages.PageActivityQuery) (pages.PageActivity, error)
+	List(ctx context.Context, f doclet.Filter, fresh statelog.Freshness) (doclet.Listing, error)
+	Get(ctx context.Context, ref string, fresh statelog.Freshness) (doclet.Detail, error)
+	Containers(ctx context.Context, fresh statelog.Freshness) ([]doclet.ContainerListing, error)
+	Activity(ctx context.Context, q doclet.PageActivityQuery) (doclet.PageActivity, error)
 	Revision(ctx context.Context, pageID string, version int,
-		fresh statelog.Freshness) (pages.Revision, bool, error)
+		fresh statelog.Freshness) (doclet.Revision, bool, error)
 }
 
 // ---- work -------------------------------------------------------------- //
@@ -217,7 +217,7 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 		return nil, unresolved(ctx, "work_items")
 	}
 	viewer := iam.RecordOwner(principal)
-	q, err := s.Work.ExpandedQuery(ctx, p.Values(), tracker.Viewer{
+	q, err := s.Work.ExpandedQuery(ctx, p.Values(), worklet.Viewer{
 		Handle:  viewer,
 		Project: s.projectOf(viewer),
 		// THE COMPANY'S OWN CLOCK (ADR-0018), which every relative date
@@ -247,12 +247,12 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 	q.Level = statelog.LevelFor(statelog.SurfaceDashboard, q.Level)
 	// AND THE CHART THE UNIT FILTERS RESOLVE THROUGH, set here for the
 	// reason the level is: it is a property of this SURFACE rather than of
-	// the grammar, so `unit=` takes either spelling of a team — its key or
-	// its name — and finds the work filed under each — see [tracker.Units].
+	// the grammar, so `unit=` takes either spelling of a team (its key or
+	// its name) and finds the work filed under each (see [worklet.Units]).
 	q.Units = s.chartUnits()
 	answer, err := s.Work.Tasks(ctx, q, now)
 	switch {
-	case errors.Is(err, tracker.ErrTooBroad):
+	case errors.Is(err, worklet.ErrTooBroad):
 		// A REFUSAL ABOUT THE REQUEST, so it is [ErrBadParams] and not
 		// [ErrUnavailable]: the caller narrows and asks again, where
 		// "unavailable" tells a polling screen to send the identical
@@ -350,11 +350,11 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 	// AND THE CHART, so the properties panel reads "Engineering" where the
 	// row holds `eng` — the same seam the board column and the project
 	// directory resolve through, so one screen cannot call a team two
-	// things. See [tracker.TaskDetail.Units].
+	// things. See [worklet.TaskDetail.Units].
 	//
 	// AND THE COMPANY'S CLOCK, so the rail's due date says how it stands on
 	// the calendar the board's overdue mark was cut on — see
-	// [tracker.DueStanding].
+	// [worklet.DueStanding].
 	//
 	// DECIDED BEFORE IT IS ANSWERED, and twice for somebody without the
 	// tracker — see [Sources.mayReadItem].
@@ -367,29 +367,29 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	detail, err := s.Work.Task(ctx, ref, tracker.DetailWants{
+	detail, err := s.Work.Task(ctx, ref, worklet.DetailWants{
 		Comments: true, History: true, Links: true, Fields: true,
 		Units: s.chartUnits(),
-		Clock: &tracker.DayClock{Now: s.clock(), Zone: s.zone()},
+		Clock: &worklet.DayClock{Now: s.clock(), Zone: s.zone()},
 	}, fresh)
 	switch {
-	case unread && errors.Is(err, tracker.ErrNoTask):
+	case unread && errors.Is(err, worklet.ErrNoTask):
 		// A MISSING ITEM IS THE REFUSAL A CALLER NOT ASKED ON IT GETS, to
 		// somebody the item would have been decided for: "no such item"
-		// before "you may not" would tell a person without the tracker
+		// before "you may not" would tell a person without Worklet
 		// which keys exist.
 		if _, refusal := s.mayReadItem(ctx, principal,
 			authz.Object{Kind: authz.KindTask, ID: ref}); refusal != nil {
 			return nil, refusal
 		}
 		return nil, ErrNotFound
-	case errors.Is(err, tracker.ErrNoTask):
+	case errors.Is(err, worklet.ErrNoTask):
 		return nil, ErrNotFound
 	case err != nil:
 		return nil, err
 	}
 	if unread {
-		asked, err := tracker.AskedOn(ctx, s.Work, detail.Task.ID,
+		asked, err := worklet.AskedOn(ctx, s.Work, detail.Task.ID,
 			iam.RecordOwner(principal), fresh)
 		if err != nil {
 			// THE PROBE COULD NOT READ THE THREAD, which says nothing
@@ -413,7 +413,7 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 // mayReadItem decides `get_work_item` ([authz.ActionWorkRead]) on object for
 // principal, and renders the decision as the error this surface refuses with.
 //
-// # Read the item, then decide again — only for somebody without the tracker
+// # Read the item, then decide again, only for somebody without Worklet
 //
 // A tracker holder reads any item, which the table answers before anything is
 // read. Somebody WITHOUT it reads one item: the one an open ask on it names
@@ -445,7 +445,7 @@ func (s Sources) mayReadItem(ctx context.Context, principal iam.Principal,
 // newest.
 //
 // ITS OWN QUESTION BESIDE `work_item`, which returns the newest
-// [tracker.DetailComments] and a cursor — and nothing read that cursor: the
+// [worklet.DetailComments] and a cursor, and nothing read that cursor: the
 // detail ignores it, so every comment older than the twentieth was
 // unreachable from every screen. A thread is also asked for far more often
 // than the rest of the detail (the Inbox's pane draws the conversation around
@@ -455,7 +455,7 @@ func (s Sources) mayReadItem(ctx context.Context, principal iam.Principal,
 // THE SAME READER AND THE SAME TRANSACTION as the detail, so a page and the
 // coverage it reports describe one instant, and a cursor from `work_item`'s
 // own `comments_cursor` continues exactly where that page stopped. `limit`
-// is held to [tracker.MaxCommentPage].
+// is held to [worklet.MaxCommentPage].
 func (s Sources) workComments(ctx context.Context, p Params) (any, error) {
 	ref := strings.TrimSpace(p.String("item"))
 	if ref == "" {
@@ -465,13 +465,13 @@ func (s Sources) workComments(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	detail, err := s.Work.Task(ctx, ref, tracker.DetailWants{
+	detail, err := s.Work.Task(ctx, ref, worklet.DetailWants{
 		Comments:      true,
 		CommentCursor: strings.TrimSpace(p.String("cursor")),
-		CommentLimit:  Clamp(p.Int("limit", 0), tracker.DetailComments, tracker.MaxCommentPage),
+		CommentLimit:  Clamp(p.Int("limit", 0), worklet.DetailComments, worklet.MaxCommentPage),
 	}, fresh)
 	switch {
-	case errors.Is(err, tracker.ErrNoTask):
+	case errors.Is(err, worklet.ErrNoTask):
 		return nil, ErrNotFound
 	case err != nil:
 		return nil, err
@@ -481,7 +481,7 @@ func (s Sources) workComments(ctx context.Context, p Params) (any, error) {
 		// AN EMPTY THREAD IS A LIST, never an absent key: a screen
 		// drawing "no comments yet" from a missing field cannot tell an
 		// empty thread from an answer that failed to carry one.
-		comments = []tracker.Comment{}
+		comments = []worklet.Comment{}
 	}
 	out := map[string]any{
 		"item": detail.Task.ID,
@@ -499,7 +499,7 @@ func (s Sources) workComments(ctx context.Context, p Params) (any, error) {
 	if detail.KeyCollision {
 		// THE KEY IS NOT THIS TASK'S ADDRESS when another task claimed it
 		// first, so the pane that links back to the task links by its id —
-		// see [tracker.ItemAddress].
+		// see [worklet.ItemAddress].
 		out["key_collision"] = true
 	}
 	if detail.CommentsCursor != "" {
@@ -512,7 +512,7 @@ func (s Sources) workComments(ctx context.Context, p Params) (any, error) {
 }
 
 // workItemTurns answers one page of the turns charged to a task, newest first,
-// each numbered "Turn n" by the task — see [tracker.Reader.TurnsOf].
+// each numbered "Turn n" by the task (see [worklet.Reader.TurnsOf]).
 //
 // ITS OWN QUESTION BESIDE `work_item`, for the reason `work_comments` is: the
 // list has no bound of its own, and the task page asks for it on its Agent
@@ -533,11 +533,11 @@ func (s Sources) workItemTurns(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	page, err := s.Work.TurnsOf(ctx, ref, strings.TrimSpace(p.String("cursor")),
-		Clamp(p.Int("limit", 0), tracker.DefaultTaskTurns, tracker.MaxTaskTurns), fresh)
+		Clamp(p.Int("limit", 0), worklet.DefaultTaskTurns, worklet.MaxTaskTurns), fresh)
 	switch {
-	case errors.Is(err, tracker.ErrNoTask):
+	case errors.Is(err, worklet.ErrNoTask):
 		return nil, ErrNotFound
-	case errors.Is(err, tracker.ErrInvalid):
+	case errors.Is(err, worklet.ErrInvalid):
 		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
 	case err != nil:
 		return nil, err
@@ -565,7 +565,7 @@ func (s Sources) workItemTurns(ctx context.Context, p Params) (any, error) {
 // under their login, and their strip, read under no name, showed the shared
 // views alone. A caller the engine can name nothing for still gets the shared
 // strip, which is the documented meaning of an empty
-// [tracker.ViewQuery.Viewer].
+// [worklet.ViewQuery.Viewer].
 func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
 	container, err := viewContainer(p)
 	if err != nil {
@@ -590,14 +590,14 @@ func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
 	if counts && viewer == "" {
 		return nil, errNoPins
 	}
-	listing, err := s.Work.Views(ctx, tracker.ViewQuery{
+	listing, err := s.Work.Views(ctx, worklet.ViewQuery{
 		Container: container,
 		Viewer:    viewer,
 		// THE CHART, so `container=unit:engineering` and
 		// `container=unit:eng` reach one strip — the same rule that
 		// upper-cases a project key, for the container kind a person
 		// can spell more than one way: by key or by name. See
-		// [tracker.Units].
+		// [worklet.Units].
 		Units: s.chartUnits(),
 		// THE CALLER'S OWN, resolved to this surface's default when they
 		// said nothing — which is `stale`, like every other dashboard
@@ -659,7 +659,7 @@ func (s Sources) workSavedViews(ctx context.Context, p Params) (any, error) {
 	if counts && viewer == "" {
 		return nil, errNoPins
 	}
-	listing, err := s.Work.EveryView(ctx, tracker.EveryViewQuery{
+	listing, err := s.Work.EveryView(ctx, worklet.EveryViewQuery{
 		Viewer: viewer,
 		Units:  s.chartUnits(),
 		Level:  fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
@@ -688,30 +688,30 @@ func (s Sources) workSavedViews(ctx context.Context, p Params) (any, error) {
 // ONE PARAMETER IN THE QUERY GRAMMAR'S OWN SPELLING — `container=project:ENG`,
 // `container=workspace` — because a screen that reaches a strip and then the
 // tasks in it must not have to write the same container two ways.
-func viewContainer(p Params) (tracker.Container, error) {
+func viewContainer(p Params) (worklet.Container, error) {
 	raw := strings.TrimSpace(p.String("container"))
 	if raw == "" {
-		return tracker.Container{}, badParams("container", "",
+		return worklet.Container{}, badParams("container", "",
 			[]string{"workspace", "project:<KEY>", "unit:<name>", "person:<handle>"})
 	}
-	if raw == tracker.ContainerWorkspace {
-		return tracker.Container{Kind: tracker.ContainerWorkspace}, nil
+	if raw == worklet.ContainerWorkspace {
+		return worklet.Container{Kind: worklet.ContainerWorkspace}, nil
 	}
 	kind, id, found := strings.Cut(raw, ":")
-	if !found || !tracker.ValidContainerKind(kind) || id == "" {
-		return tracker.Container{}, badParams("container", raw,
+	if !found || !worklet.ValidContainerKind(kind) || id == "" {
+		return worklet.Container{}, badParams("container", raw,
 			[]string{"workspace", "project:<KEY>", "unit:<name>", "person:<handle>"})
 	}
-	if kind == tracker.ContainerProject {
+	if kind == worklet.ContainerProject {
 		// A PROJECT KEY IS UPPER-CASE wherever it is minted, and the
 		// tracker's own scope parser upper-cases it for the same reason:
 		// a strip asked for as `project:eng` must be the strip a task
 		// query scoped to `project:ENG` belongs to. THROUGH
-		// [tracker.ProjectKey], the tracker's one spelling of that rule,
+		// [worklet.ProjectKey], the tracker's one spelling of that rule,
 		// rather than a copy of it here that could drift from the rest.
-		id = tracker.ProjectKey(id)
+		id = worklet.ProjectKey(id)
 	}
-	return tracker.Container{Kind: kind, ID: id}, nil
+	return worklet.Container{Kind: kind, ID: id}, nil
 }
 
 // workCatalogue answers what a task may BE and what it may carry.
@@ -725,7 +725,7 @@ func (s Sources) workCatalogue(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	answer, err := s.Work.Catalogue(ctx, tracker.CatalogueQuery{
+	answer, err := s.Work.Catalogue(ctx, worklet.CatalogueQuery{
 		Archived:    p.Bool("archived", false),
 		Level:       fresh.Level,
 		MaxLag:      fresh.MaxLag,
@@ -749,7 +749,7 @@ func (s Sources) workCatalogue(ctx context.Context, p Params) (any, error) {
 // It DEMANDED a handle and checked nothing, on the reasoning that the whole
 // surface is guarded so the caller already holds the company's credential.
 // That reasoning stopped holding once a guarded surface meant "somebody
-// signed in" rather than "the operator": every person holding the tracker
+// signed in" rather than "the operator": every person holding Worklet
 // reaches this question, and its answer carries the richest personal record
 // the engine keeps — somebody's unread notices, what they mean to work on
 // next, and who set that order. The parameter selected whose. A scope rule
@@ -764,7 +764,7 @@ func (s Sources) workPerson(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	state, err := s.Work.Person(ctx, tracker.PersonQuery{
+	state, err := s.Work.Person(ctx, worklet.PersonQuery{
 		Handle:      handle,
 		Level:       fresh.Level,
 		MaxLag:      fresh.MaxLag,
@@ -780,14 +780,14 @@ func (s Sources) workPerson(ctx context.Context, p Params) (any, error) {
 // ---- pages ------------------------------------------------------------- //
 
 func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
-	f := pages.Filter{
-		// THE KNOWLEDGE BASE'S OWN CANONICAL FORM ([pages.ContainerKey]),
+	f := doclet.Filter{
+		// THE KNOWLEDGE BASE'S OWN CANONICAL FORM ([doclet.ContainerKey]),
 		// never a copy of it: eleven copies of this rule had drifted and
 		// six did not trim. And canonical HERE, before the read, because
 		// the read's deferral scope is composed from the value as handed
 		// in — a `container=eng` would ask whether a record held against
 		// `eng` is pending, which no writer ever files one under.
-		Container: pages.ContainerKey(p.String("container")),
+		Container: doclet.ContainerKey(p.String("container")),
 		ParentID:  strings.TrimSpace(p.String("parent")),
 		Label:     strings.TrimSpace(p.String("label")),
 		Watcher:   strings.TrimSpace(p.String("watcher")),
@@ -796,7 +796,7 @@ func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 		// `parent`, which already means "under any parent" — a tree
 		// loading its first level asks the opposite question.
 		Roots: p.Bool("roots", false),
-		Limit: Clamp(p.Int("limit", 0), pages.DefaultLimit, pages.MaxLimit),
+		Limit: Clamp(p.Int("limit", 0), doclet.DefaultLimit, doclet.MaxLimit),
 		After: strings.TrimSpace(p.String("after")),
 	}
 	if f.Roots && f.ParentID != "" {
@@ -804,9 +804,9 @@ func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 			"name the parent whose children you want, or roots=true for the top of the container", ErrBadParams)
 	}
 	for _, name := range splitList(p.String("status")) {
-		status := pages.Status(name)
+		status := doclet.Status(name)
 		if !status.Valid() {
-			return nil, badParams("status", name, names(pages.Statuses()))
+			return nil, badParams("status", name, names(doclet.Statuses()))
 		}
 		f.Status = append(f.Status, status)
 	}
@@ -833,7 +833,7 @@ func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	list, err := s.Pages.List(ctx, f, fresh)
-	if errors.Is(err, pages.ErrBadCursor) {
+	if errors.Is(err, doclet.ErrBadCursor) {
 		return nil, badParams("after", f.After, []string{"the after of a previous answer"})
 	}
 	if err != nil {
@@ -930,7 +930,7 @@ func (s Sources) workProjects(ctx context.Context, p Params) (any, error) {
 	// THE TRACKER'S OWN GRAMMAR, parsed by the tracker. `archived=` and
 	// `sort=` are closed sets it owns, and a copy of either here is a
 	// second answer to a question the engine already has one of.
-	q, err := tracker.ParseProjectQuery(p)
+	q, err := worklet.ParseProjectQuery(p)
 	if err != nil {
 		// A REFUSAL ABOUT THE REQUEST — the value names itself and the
 		// accepted ones, so a 400 tells the caller what to send instead.
@@ -961,7 +961,7 @@ func (s Sources) workProject(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	detail, err := s.Work.Project(ctx, tracker.ProjectDetailQuery{
+	detail, err := s.Work.Project(ctx, worklet.ProjectDetailQuery{
 		Project:     key,
 		ForType:     strings.TrimSpace(p.String("for_type")),
 		Units:       s.chartUnits(),
@@ -971,12 +971,12 @@ func (s Sources) workProject(ctx context.Context, p Params) (any, error) {
 		MinPosition: fresh.MinPosition,
 	})
 	switch {
-	case errors.Is(err, tracker.ErrNoProject):
+	case errors.Is(err, worklet.ErrNoProject):
 		// NOT FOUND, NOT UNAVAILABLE, and the message survives the
 		// classification: the refusal names the nearest keys, which is
 		// what a caller who typed one wrong needs.
 		return nil, fmt.Errorf("%w: %w", ErrNotFound, err)
-	case errors.Is(err, tracker.ErrNoType):
+	case errors.Is(err, worklet.ErrNoType):
 		// A BAD PARAMETER, not a missing record: the project is there
 		// and `for_type` is what to change. The refusal lists the types.
 		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
@@ -997,10 +997,10 @@ func (s Sources) workWorkload(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	out, err := s.Work.Workload(ctx, tracker.WorkloadQuery{
+	out, err := s.Work.Workload(ctx, worklet.WorkloadQuery{
 		Unit: strings.TrimSpace(p.String("unit")),
 		// THROUGH THE CHART, so `?unit=` takes the unit's key or its
-		// name — see [tracker.Units]. A screen sends whichever it was
+		// name (see [worklet.Units]). A screen sends whichever it was
 		// handed, and each row holds the unit's key.
 		Units: s.chartUnits(),
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
@@ -1020,8 +1020,8 @@ func (s Sources) workWorkload(ctx context.Context, p Params) (any, error) {
 // project orphaned on a screen and led on a tool call.
 //
 // NIL WHEN THERE IS NO CHART, which the reader renders as every unit
-// unresolved rather than as every project naming none — see [tracker.Units].
-func (s Sources) chartUnits() tracker.Units {
+// unresolved rather than as every project naming none (see [worklet.Units]).
+func (s Sources) chartUnits() worklet.Units {
 	organization := s.organization()
 	if organization == nil {
 		return nil
@@ -1033,7 +1033,7 @@ func (s Sources) chartUnits() tracker.Units {
 
 // workActivity answers a slice of the company's own history.
 func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
-	q := tracker.ActivityQuery{
+	q := worklet.ActivityQuery{
 		Task:     strings.TrimSpace(p.String("task")),
 		Actor:    strings.TrimSpace(p.String("actor")),
 		Assignee: strings.TrimSpace(p.String("assignee")),
@@ -1055,9 +1055,9 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 			return nil, err
 		}
 		switch container.Kind {
-		case tracker.ContainerWorkspace:
+		case worklet.ContainerWorkspace:
 			q.Workspace = true
-		case tracker.ContainerProject:
+		case worklet.ContainerProject:
 			q.Project = container.ID
 		default:
 			return nil, badParams("container", raw,
@@ -1073,9 +1073,9 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 		if name == "" {
 			continue
 		}
-		kind := tracker.ChangeKind(name)
+		kind := worklet.ChangeKind(name)
 		if !kind.Valid() {
-			return nil, badParams("kinds", name, names(tracker.ChangeKinds))
+			return nil, badParams("kinds", name, names(worklet.ChangeKinds))
 		}
 		q.Kinds = append(q.Kinds, kind)
 	}
@@ -1090,9 +1090,9 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 		if name == "" {
 			continue
 		}
-		kind := tracker.AuthorKind(name)
+		kind := worklet.AuthorKind(name)
 		if !kind.Valid() {
-			return nil, badParams("actor_kinds", name, names(tracker.AuthorKinds))
+			return nil, badParams("actor_kinds", name, names(worklet.AuthorKinds))
 		}
 		q.ActorKinds = append(q.ActorKinds, kind)
 	}
@@ -1128,9 +1128,9 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 	}
 	answer, err := s.Work.Activity(ctx, q, s.clock())
 	switch {
-	case errors.Is(err, tracker.ErrNoTask):
+	case errors.Is(err, worklet.ErrNoTask):
 		return nil, ErrNotFound
-	case errors.Is(err, tracker.ErrBadQuery):
+	case errors.Is(err, worklet.ErrBadQuery):
 		// A GATE REFUSAL IS A BAD REQUEST, not a failure: the caller
 		// asked a question this surface will not run — a text search
 		// wider than the feed can scan, a cursor or a `since` from
@@ -1161,7 +1161,7 @@ func (s Sources) workMyWork(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	out, err := s.Work.MyWork(ctx, tracker.MyWorkQuery{
+	out, err := s.Work.MyWork(ctx, worklet.MyWorkQuery{
 		Handle: handle,
 		// THE CALLER'S OWN, defaulting to `stale`: this is a POLL of
 		// somebody's day, not a read-back of a write they just made —

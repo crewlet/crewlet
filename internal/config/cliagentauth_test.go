@@ -4,6 +4,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // cliEntry is a company with one providers.llm entry, "sub", whose body is the
@@ -137,6 +140,25 @@ func TestACLIAgentCredentialWithNowhereToGoIsRefused(t *testing.T) {
 			lines: []string{"agent: hermes", "overrides: {env: {OPENROUTER_API_KEY: sk-or-literal}}"},
 			path:  "providers.llm.sub.overrides", kind: ErrConflict,
 			says: "put it in the entry's own env, which is ${VAR}-resolved",
+		},
+		{
+			// No store can hold the name, so `crewlet llm login
+			// -capture-token` cannot store the token under it, and no ${VAR}
+			// can name it.
+			name:  "a token variable no store can hold",
+			lines: []string{"agent: claude-code", "overrides: {token_env: MY-TOKEN}"},
+			path:  "providers.llm.sub.overrides.token_env", kind: ErrShape,
+			says: `"MY-TOKEN" is not an environment variable name`,
+		},
+		{
+			// `MY=KEY=<key>` in the child's environment is a variable called
+			// MY, which is not the one the CLI reads.
+			name: "a key variable carrying an equals sign",
+			lines: []string{"agent: claude-code",
+				`auth: {mode: api-key, api_key: "${ANTHROPIC_API_KEY}"}`,
+				`overrides: {api_key_env: "MY=KEY"}`},
+			path: "providers.llm.sub.overrides.api_key_env", kind: ErrShape,
+			says: `"MY=KEY" is not an environment variable name`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -281,6 +303,27 @@ func TestACLIAgentProfileThatCannotLoadIsRefusedAtItsOverrides(t *testing.T) {
 		"providers.llm.sub.overrides")
 	if !errors.Is(err, ErrShape) || !strings.Contains(err.Error(), "complete_arg") {
 		t.Errorf("want a shape error naming the misspelled field, got %v", err)
+	}
+}
+
+// EVERY SHIPPED PROFILE HANDS ITS CREDENTIALS OVER UNDER NAMES OF THE
+// REFERENCE GRAMMAR, which is what lets the refusal of one outside it be about
+// overrides alone: a shipped name outside it would be refused at a field
+// the operator never wrote, and its token could never be stored.
+func TestEveryShippedProfileNamesItsCredentialsInTheGrammar(t *testing.T) {
+	t.Parallel()
+	for _, name := range cliprofile.BuiltinNames() {
+		profile, ok := cliprofile.Builtin(name)
+		if !ok {
+			t.Fatalf("%s is listed and not built in", name)
+		}
+		for field, variable := range map[string]string{
+			"token_env": profile.TokenEnv, "api_key_env": profile.APIKeyEnv,
+		} {
+			if variable != "" && !envref.ValidName(variable) {
+				t.Errorf("%s: %s %q is not an environment variable name", name, field, variable)
+			}
+		}
 	}
 }
 

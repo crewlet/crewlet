@@ -109,8 +109,8 @@ func (a *App) mountOperator(mux httpjson.Router, server *operator.Server) {
 	// registered wrong.
 	mux.Handle(operator.MCPPath, server.MCPHandler())
 	log.Info("operator_mcp_mounted", "path", operator.MCPPath,
-		"detail", "an operator's own AI assistant can read and write the "+
-			"company's tracker and knowledge base here, authenticated with "+
+		"detail", "an operator's own AI assistant can read and write "+
+			"Worklet and Doclet here, authenticated with "+
 			"an api.auth.tokens entry or a person's own credential; the tools "+
 			"it lists are the ones this node serves when it asks")
 	// AND THE PERSON'S OWN TRANSPORT over the same catalogue: POST only, one

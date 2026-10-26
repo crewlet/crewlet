@@ -127,7 +127,7 @@ func (r engineRuntime) Tools() []ToolInfo {
 	entries := snapshot.Entries()
 	// THE REGISTRY'S OWN PREDICATE for where a tool delivers, never
 	// re-derived here: it is not "was this served by MCP" — a proven
-	// read-only MCP tool delivers nowhere, and the native tracker's
+	// read-only MCP tool delivers nowhere, and Worklet's
 	// comment tool delivers although it is a builtin. A second derivation
 	// would show one answer on the screen and enforce another at the fence.
 	delivers := snapshot.Deliveries()

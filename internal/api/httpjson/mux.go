@@ -34,7 +34,7 @@ type Router interface {
 // reads a refusal with no code as NOT THE ENGINE'S: something in front of it
 // answered, and the node may still have done what was asked. So the engine's
 // own "there is nothing here" read as a gateway that swallowed a write: a
-// purge sent to a node with no native tracker, where the route is absent by
+// purge sent to a node with no Worklet, where the route is absent by
 // design, printed "whether the purge landed is unknown" and a retry that met
 // the same 404 for ever — and so did every route a newer CLI or dashboard asks
 // an older node for, and every wrong method.

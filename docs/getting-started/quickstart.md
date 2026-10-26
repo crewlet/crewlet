@@ -62,8 +62,7 @@ stream:
                           #   who sign in, whom every node keeps on a
                           #   state log whatever backends the company
                           #   names, and its items and pages, which are on
-                          #   the engine's own tracker and knowledge base
-                          #   here. The engine
+                          #   Worklet and Doclet here. The engine
                           #   REFUSES to boot without one rather than lose
                           #   them at the first restart
 
@@ -197,8 +196,8 @@ units:
     lead: pm                    # the lead seat's HANDLE
     purpose: "Define what gets built and why"
     # A unit's identity on the tracker and the knowledge base. Both default
-    # to the engine's own backends, so these two keys are all it takes to
-    # give the team somewhere to file work and write things down — no site,
+    # to Worklet and Doclet, so these two keys are all it takes to
+    # give the team somewhere to file work and write things down: no site,
     # no project to create, no per-seat account. They name a Jira project and
     # a Confluence space just as well if you switch the backend later, which
     # is why they are not called `jira_project` / `confluence_space`.
@@ -406,10 +405,11 @@ engine in a single invocation:
 crewlet run crewlet.yaml -company company.yaml
 ```
 
-`-company` is a **bootstrap seed**: it is imported when the store holds no
-company yet, and once one exists it is ignored — with a warning that says so,
-naming the file and the two ways to apply it. So a restart never reverts a
-change you made live, however stale the file on disk is.
+`-company` is a **bootstrap seed**: it is imported when no company exists yet,
+in the node's store or anywhere in its fleet, and once one exists it is
+ignored — with a warning that says so, naming the file and the two ways to
+apply it. So a restart never reverts a change you made live, however stale the
+file on disk is.
 
 When you do want the file to win, that is a different flag:
 `crewlet run -import-company company.yaml` makes it the active revision over
@@ -475,8 +475,8 @@ from the keyboard, and on the seat's page). Press **Invite** — the dialog is
 for that seat and offers no other — and fill in
 
 - **your email address** — what the invitation is held against;
-- **your access** — tick **Admin**, which ticks and locks both apps (Tracker
-  and Knowledge) beside it. The founder token holds `admin`, and nobody can
+- **your access**: tick **Admin**, which ticks and locks every app (Worklet,
+  Doclet and Artifacts) beside it. The founder token holds `admin`, and nobody can
   confer a permission they do not hold. Keep Admin, or nobody after you can be
   invited or created except with the token again.
 
@@ -542,7 +542,7 @@ crewlet iam invite you@example.com -seat founder -grants admin
 ```
 
 `-grants admin` stores `admin` and every app beside it; `-grants` takes
-`admin`, `tracker`, `knowledge`, `artifacts` or `none`, and left out on an
+`admin`, `worklet`, `doclet`, `artifacts` or `none`, and left out on an
 invitation it sends every app and not admin.
 
 ```
@@ -565,7 +565,7 @@ greeting.
 
 The sidebar reads top to bottom: Home, Inbox and My work; the Company group
 (Overview, Policies, Org chart, Schedules, Integrations and Budgets); the
-Workspace group (Work, Knowledge, Artifacts and Live); and Settings at its
+Workspace group (Worklet, Doclet, Artifacts and Live); and Settings at its
 foot. Each workspace's sections are tabs in its page header. `g` then a
 letter jumps between them, and `?` lists every key.
 While an agent is working, the Live row counts the seats at work and a
@@ -587,13 +587,13 @@ phase that finishes updates in place rather than moving, so you can read one
 while the next is running. [Turn Engine](../concepts/turn-engine.md) is what
 each one does.
 
-Follow the turn to **Work** and **Knowledge**. Both are the engine's own —
-`tracker.backend` and `knowledge.backend` default to `native`, so your company
+Follow the turn to **Worklet** and **Doclet**. Both are the engine's own:
+`tracker.backend` defaults to `worklet` and `knowledge.backend` to `doclet`, so your company
 has a tracker and a wiki from its first minute with nothing to set up. A seat
 files with `create_work_item` and writes with `write_page`; a row opens the
-item beside the list, and ⌘-click opens its page. Work opens as a **list** —
-one line per item, which reads the same on your first task as on your five
-hundredth — and **Filter** and **Display** in the bar decide what is on it and
+item beside the list, and ⌘-click opens its page. Worklet opens as a **list**
+(one line per item, which reads the same on your first task as on your five
+hundredth), and **Filter** and **Display** in the bar decide what is on it and
 how it is drawn: a board, a table, a calendar or a timeline over the same rows.
 **Projects** beside it is the directory of what your units have declared.
 
@@ -691,10 +691,10 @@ so you can sign in on it with the founder token before any company exists. You
 cannot invite yourself yet — there is no seat to put you on, so an invitation
 there answers `409 no_active_revision` — and the company comes first: import
 or create it with your human seat in it, then invite yourself onto that seat
-as above. The work tracker's and the knowledge base's routes
+as above. Worklet's and Doclet's routes
 answer `503 no_active_revision` until the first revision arrives. That
-revision brings up everything the company needs, the engine's own tracker and
-knowledge base included, with their projects and spaces, and the
+revision brings up everything the company needs, Worklet and Doclet
+included, with their projects and spaces, and the
 [code sandbox](../concepts/code-sandbox.md) when it configures
 `providers.sandbox` — under the same API, with nothing restarted:
 
@@ -831,26 +831,56 @@ through external surfaces — pick yours in
 base, code host, chat, sandbox — with the hosted vs self-hosted options for
 each), then wire them in:
 
-- Connect chat so agents collaborate in channels and you can DM them. If
-  your company already runs on [Slack](../integrations/slack.md), use it —
+- Connect chat — on Slack or on Mattermost, both below — so agents
+  collaborate in channels and you can DM them. Whichever you pick, first add
+  the integration's block to `company.yaml` — the page's *Configure in YAML*
+  section — with a `${VAR}` for each credential: the provisioner mints
+  exactly the variables the file names. It records what it mints through the
+  running node, as the founder token, and the `crewlet config import` that
+  ends each snippet is what hands the engine both: the node took its company
+  from the file once, at step 3, so an edit to the file reaches it only
+  through an import, and an apply is when the engine reads its secret store.
+  If your company already runs on [Slack](../integrations/slack.md), use it —
   the agents land where the conversations already happen, under the
   workspace admin and compliance setup you already have. It needs a public
   URL for its Events API and one OAuth **Allow** click per agent:
   ```bash
-  crewlet slack provision company.yaml -public-url https://your-server.com
+  export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"
+  crewlet slack provision company.yaml -secret-store -public-url https://your-server.com
+  crewlet config import company.yaml        # the block, with what was just minted
   ```
   To try chat on this machine first,
   [Mattermost](../integrations/mattermost.md) ships in this repo's
-  `docker-compose.yml` and needs no account, no inbound URL and no clicks:
+  `docker-compose.yml` and needs no account, no inbound URL and no clicks.
+  Its block names the instance as `url: "${MATTERMOST_URL}"` and
+  `team: nimbus`, the team the script creates:
   ```bash
   docker compose --profile mattermost up -d --wait
-  scripts/mattermost-dev-bootstrap.sh
-  crewlet mattermost provision company.yaml
+  scripts/mattermost-dev-bootstrap.sh       # writes MATTERMOST_* to .env
+  set -a; . ./.env; set +a                  # the admin token the provisioner uses
+  export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"
+  printf %s "$MATTERMOST_URL" | crewlet secrets set MATTERMOST_URL
+  crewlet mattermost provision company.yaml -secret-store
+  crewlet config import company.yaml        # the block, with what was just minted
   ```
+  The engine was started before `.env` existed, so `MATTERMOST_URL` reaches
+  it through the secret store, beside the bots' tokens, rather than through
+  its environment, which nothing changes while it runs.
   Running that stack on a **remote host** rather than this machine? Set
   `MATTERMOST_PUBLIC_URL` to the address your browser uses first — see
   [The Site URL](../integrations/mattermost.md#the-site-url). The engine
   needs no public URL; the Mattermost server still needs to know its own.
+  The import that ends each snippet makes the file the **whole** running
+  document, so it is the right last step only while `company.yaml` is what
+  the node runs. A company created in the dashboard's org builder, or changed
+  there since — a human seat added under **Org chart › Edit org** included — is
+  replaced by the file, and the write is refused `409 seat_held` where the
+  file drops a human seat somebody holds or is invited to. Connect chat from
+  Company › Integrations then, as each page's *Setting it up from the
+  dashboard* section describes
+  ([Slack](../integrations/slack.md#setting-it-up-from-the-dashboard),
+  [Mattermost](../integrations/mattermost.md#setting-it-up-from-the-dashboard)):
+  it seals the credentials and re-activates the company as it stands.
 - Connect a work-item tracker — [Jira](../integrations/jira.md), or the issue
   tracker of the code host you already run
 - Connect a knowledge backend — [Confluence](../integrations/confluence.md) —

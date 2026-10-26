@@ -133,7 +133,7 @@ beforeEach(() => {
 /** Every grant an operator holds. */
 const OPERATOR = {
   login: "ops",
-  grants: ["admin", "tracker", "knowledge"],
+  grants: ["admin", "worklet", "doclet"],
   handle: "jane",
   owner: "jane",
   acts: [],
@@ -261,7 +261,7 @@ test.each([
 // CONTROL is a browser nobody has signed in on, who is asked nothing. Mutation:
 // gate the listing on Admin again and the tracker reader reads "Human seat".
 test("every signed-in reader reads who holds a human seat, and only an admin acts on it", async () => {
-  await mount({ ...OPERATOR, grants: ["tracker"] });
+  await mount({ ...OPERATOR, grants: ["worklet"] });
   await act(async () => {});
   expect(fetched).toContain("/iam/seats");
   expect(caption("Jane Founder")).toBe("Open seat");
@@ -335,7 +335,7 @@ test("a vacant human card offers Invite and Create in its menu to an administrat
   expect(screen.getByRole("dialog", { name: "Add someone as Jane Founder" })).toBeTruthy();
   cleanup();
 
-  await mount({ ...OPERATOR, grants: ["tracker"] });
+  await mount({ ...OPERATOR, grants: ["worklet"] });
   await act(async () => {});
   const read = card("Jane Founder");
   expect(caption("Jane Founder")).toBe("Open seat");
@@ -391,7 +391,7 @@ test("an invited human card's menu cancels its invitation, and a held one has no
 // THE STRUCTURE IS THE BUILDER'S: the company at the root, each unit with its
 // type and the project its work is filed under, and its lead in a pill.
 test("the structure draws the company, and each unit with its project and its lead", async () => {
-  await mount({ login: "jane.doe", grants: ["tracker"], owner: "jane", acts: [] });
+  await mount({ login: "jane.doe", grants: ["worklet"], owner: "jane", acts: [] });
   expect(caption("Acme")).toBe("Company");
   expect(caption("Core")).toBe("Unit · ENG");
   expect(card("Core").getAttribute("title")).toBe("2 seats. Projects: ENG");
@@ -400,9 +400,9 @@ test("the structure draws the company, and each unit with its project and its le
   expect(leadOf("Leadership")).toBe("Lead");
   cleanup();
 
-  // THE PROJECT IS THE TRACKER'S: a reader without Tracker is not asked a
+  // THE PROJECT IS WORKLET'S: a reader without Worklet is not asked a
   // question the engine would refuse, and a unit's node carries its type alone.
-  const { asked } = await mount({ login: "sam", grants: ["knowledge"], owner: "sam", acts: [] });
+  const { asked } = await mount({ login: "sam", grants: ["doclet"], owner: "sam", acts: [] });
   expect(asked).not.toContain("work_projects");
   expect(caption("Core")).toBe("Unit");
   expect(leadOf("Core")).toBe("Lead: CTO");
@@ -475,7 +475,7 @@ test("Add seat is held with its reason for a reader nobody has signed in", async
 test("an operator's Add seat goes to the builder, adding an agent", async () => {
   await mount({
     login: "ops",
-    grants: ["admin", "tracker", "knowledge"],
+    grants: ["admin", "worklet", "doclet"],
     handle: "jane",
     owner: "jane",
     acts: [],
@@ -489,7 +489,7 @@ test("an operator's Add seat goes to the builder, adding an agent", async () => 
 test("a lead's Add seat goes to the builder, adding to the unit they lead", async () => {
   await mount({
     login: "cto.person",
-    grants: ["tracker"],
+    grants: ["worklet"],
     handle: "cto",
     owner: "cto",
     acts: [],
@@ -512,7 +512,7 @@ test("Add seat is held with the managed sentence for a reader who is not a write
 
   await mount({
     login: "cto.person",
-    grants: ["tracker"],
+    grants: ["worklet"],
     handle: "cto",
     owner: "cto",
     acts: [],

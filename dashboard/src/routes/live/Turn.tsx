@@ -305,7 +305,7 @@ export function problemCount(wentWrong: readonly EventRecord[], failed: boolean)
  * Everything the page and the rail know about one turn.
  *
  * THE PAGE AND THE PEEK ARE ONE DEFINITION of what a turn shows — the rule
- * `routes/work/WorkItem.tsx` states for a task, and the same drift is
+ * `routes/worklet/WorkItem.tsx` states for a task, and the same drift is
  * available here. Written twice, the rail is the one somebody reads forty
  * times a day, so it would be the one that kept its fields while the page
  * quietly fell behind, and a reader who clicked through from the rail to
@@ -1770,7 +1770,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   // "Copied" on, so what happened is said in a toast.
   const toast = useToast();
   const [pausing, setPausing] = useState(false);
-  const openTask = useCallback(() => nav.to(["work", taskAddress]), [nav, taskAddress]);
+  const openTask = useCallback(() => nav.to(["worklet", taskAddress]), [nav, taskAddress]);
   const moreItems = useMemo<MenuItem[]>(
     () => [
       ...(attempt?.rows ?? [])

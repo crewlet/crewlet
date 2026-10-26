@@ -10,7 +10,7 @@ import (
 
 // The verbs this engine authorizes.
 //
-// NAMED AFTER THE VERB, NOT THE SURFACE. `PATCH /work/items/{key}` and the
+// NAMED AFTER THE VERB, NOT THE SURFACE. `PATCH /worklet/items/{key}` and the
 // `update_work_item` tool are one action asked two ways, so they are one
 // constant — which is the whole of what stops the operator MCP and a seat's
 // own tools answering differently about one write.
@@ -404,13 +404,13 @@ func (p Presence) Valid() bool { return slices.Contains(Presences, p) }
 type rule struct {
 	class Class
 
-	// app is the app this verb belongs to ([iam.GrantTracker],
-	// [iam.GrantKnowledge], [iam.GrantArtifacts]), or empty for a verb that
+	// app is the app this verb belongs to ([iam.GrantWorklet],
+	// [iam.GrantDoclet], [iam.GrantArtifacts]), or empty for a verb that
 	// belongs to none. It is
 	// the requirement of [ClassApp] and [ClassAppOrAsked], and it is ANDED
 	// onto every relation class ([withApp]): a project's lead who does not
-	// use the tracker does not set its policy, and a comment's author who no
-	// longer uses the knowledge base does not edit it there. An
+	// use Worklet does not set its policy, and a comment's author who no
+	// longer uses Doclet does not edit it there. An
 	// administrator holds every app through [iam.Expand], so naming one
 	// never narrows admin's path.
 	//
@@ -540,7 +540,7 @@ type rule struct {
 // production one. The alternative — a default class — is exactly how a new
 // verb ships ungated, and it ships looking correct.
 var rules = map[Action]rule{
-	// --- using the tracker ------------------------------------------- //
+	// --- using Worklet ------------------------------------------- //
 	//
 	// THE APP IS THE WHOLE RULE: reading the board, a project, its files,
 	// its views and its catalogue, and filing, updating, merging and
@@ -549,34 +549,34 @@ var rules = map[Action]rule{
 	//
 	// READING ONE ITEM IS ALSO THE ASKED PERSON'S. Somebody a colleague put
 	// a question to reads the item the question is on, whether or not they
-	// use the tracker — see [ClassAppOrAsked].
-	ActionWorkRead:      {class: ClassAppOrAsked, app: iam.GrantTracker, recency: iam.RecencyAny},
-	ActionWorkList:      {class: ClassApp, app: iam.GrantTracker, recency: iam.RecencyAny},
-	ActionWorkSearch:    {class: ClassApp, app: iam.GrantTracker, recency: iam.RecencyAny},
-	ActionWorkActivity:  {class: ClassApp, app: iam.GrantTracker, recency: iam.RecencyAny},
-	ActionProjectRead:   {class: ClassApp, app: iam.GrantTracker, recency: iam.RecencyAny},
-	ActionProjectList:   {class: ClassApp, app: iam.GrantTracker, recency: iam.RecencyAny},
-	ActionCatalogueRead: {class: ClassApp, app: iam.GrantTracker, recency: iam.RecencyAny},
-	ActionViewList:      {class: ClassApp, app: iam.GrantTracker, recency: iam.RecencyAny},
+	// use Worklet (see [ClassAppOrAsked]).
+	ActionWorkRead:      {class: ClassAppOrAsked, app: iam.GrantWorklet, recency: iam.RecencyAny},
+	ActionWorkList:      {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny},
+	ActionWorkSearch:    {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny},
+	ActionWorkActivity:  {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny},
+	ActionProjectRead:   {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny},
+	ActionProjectList:   {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny},
+	ActionCatalogueRead: {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny},
+	ActionViewList:      {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny},
 	// A PROJECT'S FILES ARE ITS WORK'S OUTPUT, read and kept on the tracker
 	// as its items are — never on the knowledge base a body of prose might
 	// suggest.
-	ActionFileList:  {class: ClassApp, app: iam.GrantTracker, recency: iam.RecencyAny},
-	ActionFileRead:  {class: ClassApp, app: iam.GrantTracker, recency: iam.RecencyAny},
-	ActionFileWrite: {class: ClassApp, app: iam.GrantTracker, recency: iam.RecencyAny},
+	ActionFileList:  {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny},
+	ActionFileRead:  {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny},
+	ActionFileWrite: {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny},
 
-	ActionWorkCreate: {class: ClassApp, app: iam.GrantTracker, recency: iam.RecencyAny},
-	ActionWorkUpdate: {class: ClassApp, app: iam.GrantTracker, recency: iam.RecencyAny},
+	ActionWorkCreate: {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny},
+	ActionWorkUpdate: {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny},
 	// A COMMENT IS THE TRACKER'S, OR THE ANSWER THE ASKED PERSON OWES. The
 	// asked arm admits a person an open ask names — and the tool then takes
 	// only their answer, which the tracker's writer checks again is theirs.
-	ActionWorkComment: {class: ClassAppOrAsked, app: iam.GrantTracker, recency: iam.RecencyAny},
-	ActionWorkMerge:   {class: ClassApp, app: iam.GrantTracker, recency: iam.RecencyAny},
+	ActionWorkComment: {class: ClassAppOrAsked, app: iam.GrantWorklet, recency: iam.RecencyAny},
+	ActionWorkMerge:   {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny},
 	// A PLACE IS THE APP ON THE TASK, although the record arbitrates on the
 	// project's ORDER rather than on the task: the order is an object nobody
 	// owns, so the only relation to ask about is none. A person's gesture —
 	// see [ActionWorkPlace].
-	ActionWorkPlace: {class: ClassApp, app: iam.GrantTracker, humanOnly: true,
+	ActionWorkPlace: {class: ClassApp, app: iam.GrantWorklet, humanOnly: true,
 		recency: iam.RecencyAny},
 	// THE ROUTE TO AN ITEM'S THREAD ADMITS EVERYBODY and decides nothing:
 	// [ActionWorkComment] decides once the item is read. See
@@ -584,46 +584,46 @@ var rules = map[Action]rule{
 	ActionWorkThread: {class: ClassEverybody, recency: iam.RecencyAny},
 
 	// `write_project` IS TWO GESTURES AND ONLY ONE IS THE LEAD'S, which is
-	// what internal/tracker's own tag rule has always said: adding a label
-	// is open to everybody who uses the tracker, and renaming or archiving
+	// what internal/worklet's own tag rule has always said: adding a label
+	// is open to everybody who uses Worklet, and renaming or archiving
 	// one takes the word off everybody's board. So the TOOL takes the app
 	// and the lead-only facets — a rename, an archive, any policy edit —
 	// ask [ActionProjectPolicy] from inside it.
-	ActionProjectWrite:  {class: ClassApp, app: iam.GrantTracker, recency: iam.RecencyAny},
-	ActionProjectPolicy: {class: ClassContainer, app: iam.GrantTracker, recency: iam.RecencyAny},
+	ActionProjectWrite:  {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny},
+	ActionProjectPolicy: {class: ClassContainer, app: iam.GrantWorklet, recency: iam.RecencyAny},
 	// AND RE-ROUTING IS THE LEAD'S for the same reason, asked from inside
 	// `update_work_item`: it decides which team hears about the work, and
 	// which project the task is filed under comes out of the stored row
 	// rather than the arguments.
-	ActionWorkRoute: {class: ClassContainer, app: iam.GrantTracker, recency: iam.RecencyAny},
+	ActionWorkRoute: {class: ClassContainer, app: iam.GrantWorklet, recency: iam.RecencyAny},
 	// ARCHIVING A PROJECT TAKES IT OUT OF CIRCULATION for everybody, so it
 	// is the lead's like the rest of the policy AND it is never an agent's:
 	// a project nobody can file into again is a company decision.
-	ActionProjectArchive: {class: ClassContainer, app: iam.GrantTracker, humanOnly: true,
+	ActionProjectArchive: {class: ClassContainer, app: iam.GrantWorklet, humanOnly: true,
 		recency: iam.RecencyAny},
 
 	// AN ITEM'S REPORTER TIDIES IT, beside its project's lead and admin:
 	// whoever filed a duplicate takes it out again, and puts it back. A
 	// subtree stays the lead's (the tool refuses an author it), and a purge
 	// stays admin's. See [ClassTidy].
-	ActionWorkRemove:  {class: ClassTidy, app: iam.GrantTracker, recency: iam.RecencyAny},
-	ActionWorkRestore: {class: ClassTidy, app: iam.GrantTracker, recency: iam.RecencyAny},
+	ActionWorkRemove:  {class: ClassTidy, app: iam.GrantWorklet, recency: iam.RecencyAny},
+	ActionWorkRestore: {class: ClassTidy, app: iam.GrantWorklet, recency: iam.RecencyAny},
 	// A MOVE TAKES AN ITEM OUT OF ITS PROJECT, and a file's removal takes a
 	// file out of one: the project's lead or admin, never every colleague
 	// who may add to it.
-	ActionWorkMove:   {class: ClassDestructive, app: iam.GrantTracker, recency: iam.RecencyAny},
-	ActionFileRemove: {class: ClassDestructive, app: iam.GrantTracker, recency: iam.RecencyAny},
+	ActionWorkMove:   {class: ClassDestructive, app: iam.GrantWorklet, recency: iam.RecencyAny},
+	ActionFileRemove: {class: ClassDestructive, app: iam.GrantWorklet, recency: iam.RecencyAny},
 
 	// A WORK ITEM'S REMARK IS ITS AUTHOR'S, or admin's, and the tracker's:
 	// the class answers "may you touch this remark", and the WRITER refuses
 	// anybody but the author an edit, because an edit puts words in
 	// somebody's mouth where a removal only takes them down.
-	ActionWorkCommentEdit: {class: ClassAuthored, app: iam.GrantTracker, recency: iam.RecencyAny},
+	ActionWorkCommentEdit: {class: ClassAuthored, app: iam.GrantWorklet, recency: iam.RecencyAny},
 
 	// A VIEW IS NOT A RECORD, because half of them are not personal at
 	// all: omitting the owner SHARES it, which is a tab on somebody's
 	// project, unit or person page. See [ClassSavedView].
-	ActionViewSave: {class: ClassSavedView, app: iam.GrantTracker, recency: iam.RecencyAny},
+	ActionViewSave: {class: ClassSavedView, app: iam.GrantWorklet, recency: iam.RecencyAny},
 
 	// --- somebody's own record, on the tracker ------------------------ //
 	//
@@ -633,33 +633,33 @@ var rules = map[Action]rule{
 	// views is a gesture nobody asked a lead to make. Every one of them is
 	// the TRACKER's — a person's notices name its tasks and their queue
 	// lists them — so each takes the app beside the relation, and a person
-	// who does not use the tracker has no queue there to keep.
-	ActionPersonRead:    {class: ClassOwnOrLead, app: iam.GrantTracker, recency: iam.RecencyAny},
-	ActionMyWork:        {class: ClassOwnOrLead, app: iam.GrantTracker, recency: iam.RecencyAny},
-	ActionInboxRead:     {class: ClassOwnOrLead, app: iam.GrantTracker, recency: iam.RecencyAny},
-	ActionPrioritiesSet: {class: ClassOwnOrLead, app: iam.GrantTracker, recency: iam.RecencyAny},
-	ActionInboxMark:     {class: ClassOwnRecord, app: iam.GrantTracker, recency: iam.RecencyAny},
-	ActionPinsSet:       {class: ClassOwnRecord, app: iam.GrantTracker, recency: iam.RecencyAny},
+	// who does not use Worklet has no queue there to keep.
+	ActionPersonRead:    {class: ClassOwnOrLead, app: iam.GrantWorklet, recency: iam.RecencyAny},
+	ActionMyWork:        {class: ClassOwnOrLead, app: iam.GrantWorklet, recency: iam.RecencyAny},
+	ActionInboxRead:     {class: ClassOwnOrLead, app: iam.GrantWorklet, recency: iam.RecencyAny},
+	ActionPrioritiesSet: {class: ClassOwnOrLead, app: iam.GrantWorklet, recency: iam.RecencyAny},
+	ActionInboxMark:     {class: ClassOwnRecord, app: iam.GrantWorklet, recency: iam.RecencyAny},
+	ActionPinsSet:       {class: ClassOwnRecord, app: iam.GrantWorklet, recency: iam.RecencyAny},
 
-	// --- using the knowledge base ------------------------------------ //
-	ActionPageRead:      {class: ClassApp, app: iam.GrantKnowledge, recency: iam.RecencyAny},
-	ActionPageList:      {class: ClassApp, app: iam.GrantKnowledge, recency: iam.RecencyAny},
-	ActionKnowledgeRead: {class: ClassApp, app: iam.GrantKnowledge, recency: iam.RecencyAny},
-	// WHERE A PAGE MAY BE CREATED is internal/pages' store's to decide — a
-	// space the company declares — for every author alike; this row decides
+	// --- using Doclet ------------------------------------ //
+	ActionPageRead:      {class: ClassApp, app: iam.GrantDoclet, recency: iam.RecencyAny},
+	ActionPageList:      {class: ClassApp, app: iam.GrantDoclet, recency: iam.RecencyAny},
+	ActionKnowledgeRead: {class: ClassApp, app: iam.GrantDoclet, recency: iam.RecencyAny},
+	// WHERE A PAGE MAY BE CREATED is internal/doclet's store's to decide (a
+	// space the company declares) for every author alike; this row decides
 	// only WHO.
-	ActionPageCreate:  {class: ClassApp, app: iam.GrantKnowledge, recency: iam.RecencyAny},
-	ActionPageSave:    {class: ClassApp, app: iam.GrantKnowledge, recency: iam.RecencyAny},
-	ActionPageComment: {class: ClassApp, app: iam.GrantKnowledge, recency: iam.RecencyAny},
+	ActionPageCreate:  {class: ClassApp, app: iam.GrantDoclet, recency: iam.RecencyAny},
+	ActionPageSave:    {class: ClassApp, app: iam.GrantDoclet, recency: iam.RecencyAny},
+	ActionPageComment: {class: ClassApp, app: iam.GrantDoclet, recency: iam.RecencyAny},
 	// A PAGE'S CREATOR TIDIES IT — renames, trashes, restores — beside its
 	// container's lead and admin. See [ClassTidy].
-	ActionPageRename:  {class: ClassTidy, app: iam.GrantKnowledge, recency: iam.RecencyAny},
-	ActionPageTrash:   {class: ClassTidy, app: iam.GrantKnowledge, recency: iam.RecencyAny},
-	ActionPageRestore: {class: ClassTidy, app: iam.GrantKnowledge, recency: iam.RecencyAny},
+	ActionPageRename:  {class: ClassTidy, app: iam.GrantDoclet, recency: iam.RecencyAny},
+	ActionPageTrash:   {class: ClassTidy, app: iam.GrantDoclet, recency: iam.RecencyAny},
+	ActionPageRestore: {class: ClassTidy, app: iam.GrantDoclet, recency: iam.RecencyAny},
 	// A REMARK IS ITS AUTHOR'S, as a work item's is; the store refuses
 	// anybody but the author an edit, and takes a moderator's removal.
-	ActionPageCommentEdit:   {class: ClassAuthored, app: iam.GrantKnowledge, recency: iam.RecencyAny},
-	ActionPageCommentRemove: {class: ClassAuthored, app: iam.GrantKnowledge, recency: iam.RecencyAny},
+	ActionPageCommentEdit:   {class: ClassAuthored, app: iam.GrantDoclet, recency: iam.RecencyAny},
+	ActionPageCommentRemove: {class: ClassAuthored, app: iam.GrantDoclet, recency: iam.RecencyAny},
 
 	// A QUESTION ANSWERED FROM WHAT THE COMPANY WROTE DOWN draws on
 	// whichever apps the asker uses: the tool searches the pages only for a
@@ -734,7 +734,7 @@ var rules = map[Action]rule{
 	// instructions, so writing one rewrites the prompt the whole company
 	// runs under — the same reach as editing the company document, and it
 	// takes admin rather than the knowledge app that authors an ordinary
-	// page. AND NEVER AN AGENT'S, which internal/pages' store also refuses:
+	// page. AND NEVER AN AGENT'S, which internal/doclet's store also refuses:
 	// a seat writing the instructions every seat obeys is a model editing
 	// the rules it is judged by.
 	ActionSkillPageWrite: {class: ClassAdmin, humanOnly: true, recency: iam.RecencyAny},

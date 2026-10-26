@@ -256,7 +256,7 @@ What the binding buys:
 - **The work the chart hands a seat reaches you.** `#/inbox` — one click
   from the dashboard's landing screen — shows your notices, the one reason of eighteen
   that routed each one, and what is waiting on a decision; `#/me` is your own
-  work, and both are the tracker's — they need the `tracker` app. Both ask the
+  work, and both are Worklet's: they need the `worklet` app. Both ask the
   engine who is looking, and your own record is kept under
   the seat you hold — which is where an assignment, a mention and a lead's
   priority list are addressed. Your login names that
@@ -265,7 +265,7 @@ What the binding buys:
 - **Your seat's lead relations are yours.** Every authority rule that asks "do
   you lead this" is asked about the seat you hold — so the person holding a
   unit's lead seat may re-route that unit's project's work, declare its fields
-  and set a report's priorities (each with the `tracker` app), pause, steer and
+  and set a report's priorities (each with the `worklet` app), pause, steer and
   answer for the team's agents, and read those agents' own trail — where a token
   or service account bound to no seat reaches those only through `admin`. See [the authority
   table](identity-and-access.md#the-authority-table-one-function-decides).
@@ -279,8 +279,8 @@ What the binding buys:
   field and a setting stay `admin`'s. See [A lead edits their own
   team](identity-and-access.md#a-lead-edits-their-own-team).
 
-- **Your writes are the seat's.** A write you make — through the `/work` and
-  `/pages` HTTP routes or through your assistant — is recorded under the
+- **Your writes are the seat's.** A write you make (through the `/worklet` and
+  `/doclet/pages` HTTP routes or through your assistant) is recorded under the
   seat's handle with the author kind `human`, which is what keeps you out of
   the wake your own change sends. There is still no way for a caller to name a seat to act as.
   See [who a write is attributed
@@ -299,9 +299,9 @@ a service account or a token's row is bound to a human seat nobody holds. A
 are here, and the directory refuses every write that would leave one without
 it.
 
-Read and snooze marks are the `mark_inbox` tool wherever they are made — the
+Read and snooze marks are the `mark_inbox` tool wherever they are made (the
 dashboard's buttons through `/operator/act`, a script through
-`PUT /work/people/{handle}/inbox`, your assistant over `/operator/mcp` — and
+`PUT /worklet/people/{handle}/inbox`, your assistant over `/operator/mcp`), and
 each is written as the principal who made it, under the same record name. The
 dashboard writes no work item, page or inbox record as itself: a button in a
 browser writes as the person signed in behind it, never as "the dashboard",
@@ -420,7 +420,7 @@ Two consequences:
    by the tool where the work lives (a Jira assignment emails the
    assignee; a Slack mention pings them). A schedule never fires into a
    human seat either (see the table below). What the engine does tell a
-   person about is its OWN tracker — see
+   person about is its OWN tracker, Worklet: see
    [How a person learns they have work](#how-a-person-learns-they-have-work).
 2. **Agents must never wait.** The turn model is already asynchronous:
    the prompts and tool errors steer the LLM to leave state on the
@@ -437,15 +437,15 @@ on where the work lives:
   a Slack mention pings them, a GitHub review request lands in their GitHub
   inbox. The engine forwards none of it — see the loop above.
 - **The engine's own inbox.** Every change to the
-  [native tracker](task-engine.md) writes a notice to each person it concerns,
+  [Worklet](task-engine.md) writes a notice to each person it concerns,
   under the one reason that routed it to them (`assignee`, `mention`,
   `blocking`, …). It is the `work_inbox` question, and the dashboard's
-  Inbox — the tracker's, so reading it takes the `tracker` app. Somebody
+  Inbox, which is Worklet's, so reading it takes the `worklet` app. Somebody
   without it still sees a question a colleague put to them on a work item,
   among their decisions, and may open that item and post their answer to it
   ([You may answer what you were asked](identity-and-access.md#what-each-app-opens));
-  agents send everything else through the tracker, which is why the
-  dashboard warns when Tracker is left unticked for a person.
+  agents send everything else through Worklet, which is why the
+  dashboard warns when Worklet is left unticked for a person.
 - **The dashboard, the moment that inbox moves.** For somebody with no Slack or
   Jira account — a person who works in Crewlet only — this is the delivery
   surface.
@@ -455,8 +455,8 @@ The third is a **push**, not a poll:
 ```mermaid
 sequenceDiagram
     participant W as Writer (a seat, a person)
-    participant L as Tracker log
-    participant N as Every data node's tracker applier
+    participant L as Worklet's log
+    participant N as Every data node's Worklet applier
     participant S as That node's sockets
     participant D as Sarah's dashboard
     D->>S: watch sarah-chen (on every socket open)
@@ -490,8 +490,8 @@ sequenceDiagram
   and a count — the seat, the task, the reason — and never what the notice
   says, which is read through `work_inbox` as before.
 - **A watch is decided like the inbox itself.** You may watch your own seat;
-  a lead may watch a seat they lead; an administrator may watch any — each with
-  the `tracker` app, since the frames are about tracker notices. A watch
+  a lead may watch a seat they lead; an administrator may watch any, each with
+  the `worklet` app, since the frames are about Worklet notices. A watch
   this node cannot decide — it runs no company yet — is not installed,
   and the dashboard asks again when the refusal's `retry_after` says it may
   have changed — never, on a timer, when that is `0` (a log waiting will not

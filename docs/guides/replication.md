@@ -1,6 +1,6 @@
 # Replication
 
-Crewlet's own tracker, knowledge base, identity directory, artifacts and
+Worklet and Doclet, Crewlet's identity directory, its artifacts and
 artifact datastores are **replicated state machines**: seven domains on one
 framework, the embeddings
 and each node's usage history riding it as
@@ -142,8 +142,8 @@ a call that brings it back is that operation again
 arguments, and brought back with any other it is refused before anything is
 written, rather than half-answered from the first call. The dashboard's
 [act route](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface)
-and the `/work` and `/pages` routes take the key in an `Idempotency-Key` header
-instead — the act route refuses a write without one — and answer the `op_id`
+and the `/worklet` and `/doclet/pages` routes take the key in an `Idempotency-Key` header
+instead (the act route refuses a write without one) and answer the `op_id`
 they wrote under. The purge and node-gate routes take theirs as `?op_id=`. A
 caller that sends
 neither starts a new operation, which finishes nothing: a create repeated that
@@ -303,12 +303,22 @@ that can is already one the trim waits for. Only a data node runs the logs and
 writes to them — a node without the `data` role holds no estate and reaches it
 through a data node
 ([how a request reaches the estate](../concepts/scaling.md#how-a-request-reaches-the-estate))
-— and every live data node is in every log's
-[counted set](retention.md#the-six-terms) from the moment it starts, at
-position zero until its first heartbeat reports one. So the trim never removes
-a record that a node which may still write has not applied, and the one way
-out of that set while a node is still running — an eviction — is the eviction
-gate's.
+— and every data node is in every log's
+[counted set](retention.md#the-six-terms) by the position its heartbeat
+publishes, from the first one, which it writes as its logs start; a running
+node whose position has not landed is counted at position zero by its presence
+lease. So the trim never removes a record that a node which may still write has
+not applied, and the one way out of that set while a node is still running — an
+eviction — is the eviction gate's.
+
+One interval is not covered: a node's own boot, before its first position lands
+— a few milliseconds, longer if that write is refused — when it holds no
+presence lease yet and is counted only by the position an earlier run of it
+left, or not at all if it never ran. A node fetching a snapshot in that
+interval keeps the tail it needs with a pin of its own. A write the node makes
+there is still fenced by the floor it reads, so a purge that passes it is
+refused rather than overwritten; what the interval gives up is the counted
+set's cover for a floor that was read stale.
 
 ### Who a refusal names
 
@@ -557,7 +567,7 @@ the same replicated database, and a node hands that database's write lock to
 its writers in the order they asked for it. A bulk update commits one
 transaction at a time — at most 4 000 rows, about two seconds at the measured
 drain — and a waiting writer takes the lock as soon as the one in front of it
-commits. So a bulk update in the work tracker delays the knowledge base's
+commits. So a bulk update in Worklet delays Doclet's
 apply by the transactions already queued ahead of it, at most one per other
 writer on that node, never by the whole 16 seconds.
 

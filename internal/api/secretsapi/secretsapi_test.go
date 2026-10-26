@@ -316,7 +316,7 @@ func TestAnOversizedValueIsRefused(t *testing.T) {
 	t.Parallel()
 	h, _ := surface(t, cipherFor(t, "k1"), "k1")
 	code, _ := call(t, h, http.MethodPut, "/secrets/BIG",
-		strings.Repeat("x", secretsapi.MaxValueBytes+1))
+		strings.Repeat("x", secrets.MaxValueBytes+1))
 	if code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("PUT = %d, want 413", code)
 	}
@@ -586,7 +586,7 @@ func TestAWriteThatNamesItsProvenanceIsRefused(t *testing.T) {
 		{"source=operator", "v", []string{`"source"`}},
 		{"source=api", "v", []string{`"source"`}},
 		{"by=ops&source=cli", "v", []string{`"by"`, `"source"`}},
-		{"source=operator", strings.Repeat("x", secretsapi.MaxValueBytes+1),
+		{"source=operator", strings.Repeat("x", secrets.MaxValueBytes+1),
 			[]string{`"source"`}},
 	} {
 		code, raw := call(t, h, http.MethodPut, "/secrets/A?"+tc.query, tc.body)
@@ -689,7 +689,7 @@ func TestAWriteRefusesANameNoReferenceCanEverName(t *testing.T) {
 func TestABadNameIsRefusedBeforeTheValueIsRead(t *testing.T) {
 	h, _ := surface(t, cipherFor(t, "k1"), "k1")
 	code, body := call(t, h, http.MethodPut, "/secrets/bad-name",
-		strings.Repeat("x", secretsapi.MaxValueBytes+1))
+		strings.Repeat("x", secrets.MaxValueBytes+1))
 	if code != http.StatusBadRequest || !strings.Contains(body, "invalid_name") {
 		t.Fatalf("PUT with a bad name and an oversized body = %d %s, want 400 invalid_name",
 			code, body)
@@ -735,6 +735,11 @@ func TestEveryRouteTakesTheGrantItsVerbNames(t *testing.T) {
 		// route's once the flag is read: admin as the listing is, so a
 		// caller holding every app is refused it naming admin too.
 		{"revealing the value", http.MethodGet, "/secrets/A?reveal=true", ""},
+		// AND SEVERAL AT ONCE, which is the same verb mounted on its
+		// own route: a caller holding every app is refused it naming
+		// admin, before the body is read.
+		{"revealing several values", http.MethodPost, "/secrets/reveal",
+			`{"names":["A"]}`},
 		{"a write", http.MethodPut, "/secrets/B", "two"},
 		{"a delete", http.MethodDelete, "/secrets/A", ""},
 		{"a rekey", http.MethodPost, "/secrets/rekey", ""},
@@ -820,6 +825,15 @@ func TestARefusedRevealIsTheSameForANameThatDoesNotExist(t *testing.T) {
 			// with nothing under it.
 			if presentBody != absentBody {
 				t.Errorf("the two refusals differ:\n%s\n%s", presentBody, absentBody)
+			}
+			// AND THE SAME FOR SEVERAL AT ONCE, decided on the route
+			// before the body is read.
+			many, manyBody := call(t, h, http.MethodPost, "/secrets/reveal", `{"names":["A"]}`)
+			none, noneBody := call(t, h, http.MethodPost, "/secrets/reveal", `{"names":["NOWHERE"]}`)
+			if many != http.StatusForbidden || none != http.StatusForbidden ||
+				manyBody != noneBody {
+				t.Errorf("revealing several values answered %d and %d, want the "+
+					"one 403 for both:\n%s\n%s", many, none, manyBody, noneBody)
 			}
 		})
 	}

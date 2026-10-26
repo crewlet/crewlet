@@ -26,7 +26,7 @@ import (
 // stood below the turn list's for the same turn. The card is the case that
 // shows it: its rewrite used to be made after the completion, inside the
 // charge's write, so it could not be on the stream before it whatever the
-// ledger did. Driven through a real runTurn on a native task, whose account is
+// ledger did. Driven through a real runTurn on a Worklet task, whose account is
 // past what a card holds.
 func TestATurnsEndFollowsEveryInTurnRecord(t *testing.T) {
 	t.Parallel()
@@ -75,7 +75,7 @@ func TestATurnsEndFollowsEveryInTurnRecord(t *testing.T) {
 // own clock there measured the rewrite into the turn's duration, which then
 // disagreed with the task's turn row, stamped a moment earlier, for the same
 // segment. Both are measured to the one instant the segment ended. Driven
-// through a real runTurn on a native task whose card needs a rewrite, with a
+// through a real runTurn on a Worklet task whose card needs a rewrite, with a
 // rewrite slow enough to show in either figure.
 //
 // Mutation: let the completion read its own clock again, and duration_ms

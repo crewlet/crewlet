@@ -11,7 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // handleChart is a chart whose one relation is between HANDLES: `lead` leads
@@ -69,7 +69,7 @@ func TestALeadNamesAReportTheWayAModelTypesThem(t *testing.T) {
 	company := &org.Organization{Name: "Nimbus", Roles: []*org.Role{dev, lead, ops}}
 	caller := iam.WithPrincipal(context.Background(), iam.Principal{
 		ID: uuid.New(), Kind: iam.KindPerson, Login: "lead.person", Seat: "lead",
-		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantTracker},
+		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantWorklet},
 	})
 
 	for _, c := range []struct {
@@ -98,7 +98,7 @@ func TestALeadNamesAReportTheWayAModelTypesThem(t *testing.T) {
 				},
 				Authorize: builtin.Decide(handleChart{}),
 			}) {
-				if tool.Name() != tracker.SetPrioritiesTool {
+				if tool.Name() != worklet.SetPrioritiesTool {
 					continue
 				}
 				res, err := tool.Call(caller, map[string]any{

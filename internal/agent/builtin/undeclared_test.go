@@ -8,7 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	llm "github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // AN ARGUMENT A BUILTIN DOES NOT READ IS REFUSED BY NAME, ON EVERY PATH A CALL
@@ -70,7 +70,7 @@ func TestAnArgumentABuiltinDoesNotReadIsRefusedOnEveryPath(t *testing.T) {
 		t.Parallel()
 		views := &viewStore{}
 		surface := ownRecordTools(t, &personSpy{}, views)
-		got, err := surface[tracker.SaveWorkViewTool].Call(everyGrant(),
+		got, err := surface[worklet.SaveWorkViewTool].Call(everyGrant(),
 			map[string]any{"owner": "ana", "container": "project:ENG",
 				"name": "Mine", "type": "list"})
 		if err != nil {

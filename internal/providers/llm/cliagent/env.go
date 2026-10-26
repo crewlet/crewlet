@@ -231,12 +231,3 @@ func (p *Provider) probeEnv() []string {
 	_ = prepareHome(home, cache)
 	return buildEnv(p.profile, &Checkout{Home: home, Cache: cache}, p.env, p.auth)
 }
-
-// TokenVarName is the environment variable a profile's headless token lives
-// in, for the messages `crewlet llm login` and `doctor` print.
-func TokenVarName(p cliprofile.Profile) (string, error) {
-	if p.TokenEnv == "" {
-		return "", fmt.Errorf("this CLI mints no headless token")
-	}
-	return p.TokenEnv, nil
-}

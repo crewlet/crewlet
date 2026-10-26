@@ -34,7 +34,7 @@
  * Three rows change the company, each through `useAct` AS THE SIGNED-IN
  * PRINCIPAL (ADR-0024), the seat the directory binds them to where it binds
  * one, their own login where it does not. Each files or moves a task in
- * Crewlet Works, so where the company runs none of it none of the three is
+ * Worklet, so where the company runs none of it none of the three is
  * offered (`lib/services.ts`); elsewhere each is drawn for every reader and
  * says why where it cannot act:
  *
@@ -88,7 +88,7 @@ import {
 import { useNavigator, useRoute } from "../router.tsx";
 import { capsOf, keyRow, matchesRow } from "../keymap.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useSearchQuery } from "~/lib/useSearchQuery.ts";
+import { DOCLET_SEARCH_BACKEND, useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useRecents, forgetAll } from "~/lib/recents.ts";
 import { previewPalette, useViewerPrefs } from "~/lib/prefs.ts";
@@ -328,13 +328,13 @@ export function CommandPalette({
   const names = useQuery("colleague", { q: nameTerm }, { enabled: wantsNames });
   // THE COMPANY'S PROJECTS, once: to name the project a create lands in, and
   // to offer them when nothing on screen or in the chart says which.
-  // A TRACKER QUESTION, asked only of a reader holding Tracker: without it the
+  // A WORKLET QUESTION, asked only of a reader holding Worklet: without it the
   // engine refuses the list, and nothing a reader without it can do here
   // files a task anyway.
   const projectsRead = useQuery(
     "work_projects",
     { limit: PROJECT_PAGE },
-    { enabled: served && runs.tracker && viewer.tracker },
+    { enabled: served && runs.tracker && viewer.worklet },
   );
   const projects: WorkProjectRow[] | null = projectsRead.data?.projects ?? null;
   const projectName = (key: string) => projects?.find((p) => p.key === key)?.name ?? "";
@@ -342,9 +342,9 @@ export function CommandPalette({
   // leaves behind it as it closes.
   const openSwitcher = useOpenProjectSwitcher();
   // NOT OFFERED WHERE THE ENGINE SERVES NO COMPANY, NOR TO A READER WITHOUT
-  // TRACKER: the switcher lists projects, which is the tracker's question.
+  // WORKLET: the switcher lists projects, which is Worklet's question.
   const switchHits =
-    served && runs.tracker && viewer.tracker ? [switchProjectHit(openSwitcher)] : [];
+    served && runs.tracker && viewer.worklet ? [switchProjectHit(openSwitcher)] : [];
 
   // WHICH TERM EACH ANSWER ON HAND IS FOR. `useQuery` keeps the previous
   // answer across a change of parameters — right for a polled table, wrong
@@ -375,7 +375,7 @@ export function CommandPalette({
   const itemRead = useQuery(
     "work_item",
     { id: pickItem },
-    { enabled: pickItem !== "" && ask.tracker && viewer.tracker },
+    { enabled: pickItem !== "" && ask.tracker && viewer.worklet },
   );
 
   // The task at hand: the one on screen, else the best task hit for this term.
@@ -514,7 +514,7 @@ export function CommandPalette({
     // is one another task already claimed, and it opens that task.
     const address =
       result.kind === "unknown" ? undefined : (result.receipt as { item?: string } | null)?.item;
-    if (address) nav.to(["work", address]);
+    if (address) nav.to(["worklet", address]);
     else onClose();
   };
 
@@ -576,7 +576,7 @@ export function CommandPalette({
       const why = !create.access.can
         ? create.access.reason
         : noProjects
-          ? "No projects yet. Add one in Work."
+          ? "No projects yet. Add one in Worklet."
           : "";
       const body = answeredMd ? answerBody(answeredMd) : "";
       const choose = hitProject
@@ -734,9 +734,9 @@ export function CommandPalette({
 
   const openPage = (id: string, url: string) => {
     // A PAGE THIS ENGINE HOLDS OPENS HERE; a vendor wiki's opens there.
-    if (url && /^https?:/.test(url) && pageAnswer.data?.backend !== "native") {
+    if (url && /^https?:/.test(url) && pageAnswer.data?.backend !== DOCLET_SEARCH_BACKEND) {
       window.open(url, "_blank", "noopener");
-    } else nav.to(["knowledge", "pages", id]);
+    } else nav.to(["doclet", "pages", id]);
   };
 
   // THE ANSWER'S SOURCES ARE ROWS TOO, where the search did not already list
@@ -763,7 +763,7 @@ export function CommandPalette({
                 ),
               hint: `source ${i + 1} of the answer`,
               onSelect: () =>
-                s.kind === "task" ? nav.to(["work", s.ref]) : openPage(s.ref, s.url ?? ""),
+                s.kind === "task" ? nav.to(["worklet", s.ref]) : openPage(s.ref, s.url ?? ""),
             },
           ],
     );
@@ -966,7 +966,7 @@ export function CommandPalette({
       push("recent", "Recent", asItems(recentHits(recents, nav, runs)));
       push("running", "Running now", runningRows());
       // EVERY PLACE, UNDER THE SIDEBAR'S OWN HEADINGS ([destinationGroups]),
-      // and Switch project with Work's, where it belongs.
+      // and Switch project with Worklet's, where it belongs.
       for (const g of destinationGroups(nav, standing, runs)) {
         const extra = g.place === "workspace" ? switchHits : [];
         push(`go-${g.place}`, g.label, asItems([...g.hits, ...extra]));
@@ -1016,7 +1016,7 @@ export function CommandPalette({
         icon: <SearchGlyph size="sm" />,
         label: `See every match for “${term}” →`,
         hint: "the full search, with its modes",
-        onSelect: () => nav.to(["work", "search"], { q: term }),
+        onSelect: () => nav.to(["worklet", "search"], { q: term }),
       });
     }
     push("tasks", "Tasks", rows);
@@ -1054,7 +1054,7 @@ export function CommandPalette({
           showKeys: onShowKeys,
           changeTheme: openThemeStep,
           themeName: themeEntry(prefs.palette).name,
-          switchProject: served && runs.tracker && viewer.tracker ? openSwitcher : null,
+          switchProject: served && runs.tracker && viewer.worklet ? openSwitcher : null,
           hash: route.hash || "#/",
         }),
       ),
@@ -1076,7 +1076,7 @@ export function CommandPalette({
     if (picking)
       return pickTerm ? `No agent matches “${pickTerm}”.` : "This company has no agents.";
     if (scope === "tasks") {
-      // WITHHELD FIRST: no term a reader without Tracker types finds a task.
+      // WITHHELD FIRST: no term a reader without Worklet types finds a task.
       if (tasks.withheld) return tasks.withheld;
       if (term.length < SEARCH_MIN) return "Type two or more characters.";
       if (tooLong) return tooLong;
@@ -1091,10 +1091,10 @@ export function CommandPalette({
       if (pages.withheld) return pages.withheld;
       if (term.length < SEARCH_MIN) return "Type two or more characters.";
       if (tooLong) return tooLong;
-      if (pageAnswer.error) return "Knowledge search did not run.";
+      if (pageAnswer.error) return "Page search did not run.";
       if (!pageAnswer.data) return "Searching…";
       if (pageAnswer.data.available === false)
-        return pageAnswer.data.note || "Knowledge search did not run.";
+        return pageAnswer.data.note || "Page search did not run.";
       return `No page matches “${term}”.`;
     }
     if (scope === "artifacts") {
@@ -1455,10 +1455,10 @@ function AnswerLead({
                 <a
                   key={`${s.kind}-${s.ref}`}
                   className="palette-source"
-                  href={s.kind === "task" ? `#/work/${encodeURIComponent(s.ref)}` : undefined}
+                  href={s.kind === "task" ? `#/worklet/${encodeURIComponent(s.ref)}` : undefined}
                   onClick={(e) => {
                     e.preventDefault();
-                    if (s.kind === "task") nav.to(["work", s.ref]);
+                    if (s.kind === "task") nav.to(["worklet", s.ref]);
                     else openPage(s.ref, s.url ?? "");
                   }}
                   // NOT A TAB STOP: focus stays in the field, and every source

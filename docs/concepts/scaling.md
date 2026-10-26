@@ -64,8 +64,8 @@ somebody else runs. One estate either way, carrying both slots — see
 [what the fleet shares](#what-the-fleet-shares).
 
 **Every data node is a full replica.** A node with the `data` role that runs
-the native tracker holds the whole corpus — every task, page, comment and turn
-the company has ever recorded — in its own database, applied from the same
+Worklet and Doclet holds the whole corpus (every task, page, comment and turn
+the company has ever recorded) in its own database, applied from the same
 ordered log as every other data node's. There is no cache tier, no thin
 replica, and no way to run a node that holds part of it.
 

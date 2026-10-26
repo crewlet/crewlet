@@ -8,7 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // What happened, and what is expected of me.
@@ -30,17 +30,17 @@ import (
 
 // FeedReader is the tracker read side these two need.
 type FeedReader interface {
-	Activity(ctx context.Context, q tracker.ActivityQuery, now time.Time) (
-		tracker.ActivityAnswer, error)
-	MyWork(ctx context.Context, q tracker.MyWorkQuery, now time.Time,
-		loc *time.Location) (tracker.MyWork, error)
+	Activity(ctx context.Context, q worklet.ActivityQuery, now time.Time) (
+		worklet.ActivityAnswer, error)
+	MyWork(ctx context.Context, q worklet.MyWorkQuery, now time.Time,
+		loc *time.Location) (worklet.MyWork, error)
 }
 
 type taskActivity struct{ deps WorkDeps }
 
 var _ tools.SeatCallable = (*taskActivity)(nil)
 
-func (t *taskActivity) Name() string { return tracker.TaskActivityTool }
+func (t *taskActivity) Name() string { return worklet.TaskActivityTool }
 
 func (t *taskActivity) Description() string {
 	return "What HAPPENED, in the order it happened: every change to one task " +
@@ -107,13 +107,13 @@ func (t *taskActivity) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(tracker.TaskActivityTool), nil
+		return notInATurn(worklet.TaskActivityTool), nil
 	}
 	reader, ok := t.deps.Reader.(FeedReader)
 	if !ok || t.deps.Reader == nil {
-		return unconfigured(tracker.TaskActivityTool), nil
+		return unconfigured(worklet.TaskActivityTool), nil
 	}
-	q := tracker.ActivityQuery{
+	q := worklet.ActivityQuery{
 		Task:    strings.TrimSpace(argString(args, "task")),
 		Project: strings.TrimSpace(argString(args, "project")),
 		Actor:   strings.TrimSpace(argString(args, "actor")),
@@ -123,13 +123,13 @@ func (t *taskActivity) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Level:   seatReadLevel,
 	}
 	// A KIND IS PASSED AS IT CAME and the tracker's read refuses one it
-	// does not have, naming the set ([tracker.ErrBadQuery], which
+	// does not have, naming the set ([worklet.ErrBadQuery], which
 	// [readFailure] words as an argument to change): built from any string
 	// and never checked, a mistyped kind answered an empty feed that reads
 	// exactly like a project where nothing happened.
 	for _, kind := range strings.Split(argString(args, "kinds"), ",") {
 		if kind = strings.TrimSpace(kind); kind != "" {
-			q.Kinds = append(q.Kinds, tracker.ChangeKind(kind))
+			q.Kinds = append(q.Kinds, worklet.ChangeKind(kind))
 		}
 	}
 	// NEITHER KEY NAMED IS THE SEAT'S OWN PROJECT, not the whole company:
@@ -158,7 +158,7 @@ func (t *taskActivity) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	answer, err := reader.Activity(ctx, q, t.deps.now())
 	if err != nil {
-		return readFailure(ctx, tracker.TaskActivityTool, err), nil
+		return readFailure(ctx, worklet.TaskActivityTool, err), nil
 	}
 	return jsonResult(answer)
 }
@@ -166,8 +166,8 @@ func (t *taskActivity) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // changeKindNames is every change kind, for the schema that offers them: the
 // set a model picks from is the one the read refuses anything outside of.
 func changeKindNames() string {
-	names := make([]string, len(tracker.ChangeKinds))
-	for i, kind := range tracker.ChangeKinds {
+	names := make([]string, len(worklet.ChangeKinds))
+	for i, kind := range worklet.ChangeKinds {
 		names[i] = "`" + string(kind) + "`"
 	}
 	return strings.Join(names, ", ")
@@ -177,7 +177,7 @@ type myWork struct{ deps WorkDeps }
 
 var _ tools.SeatCallable = (*myWork)(nil)
 
-func (t *myWork) Name() string { return tracker.MyWorkTool }
+func (t *myWork) Name() string { return worklet.MyWorkTool }
 
 func (t *myWork) Description() string {
 	return "Everything you are expected to look at, in one call: your " +
@@ -202,11 +202,11 @@ func (t *myWork) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(tracker.MyWorkTool), nil
+		return notInATurn(worklet.MyWorkTool), nil
 	}
 	reader, ok := t.deps.Reader.(FeedReader)
 	if !ok || t.deps.Reader == nil {
-		return unconfigured(tracker.MyWorkTool), nil
+		return unconfigured(worklet.MyWorkTool), nil
 	}
 	// THE HANDLE IS THE TURN'S OWN SEAT AND TAKES NO ARGUMENT.
 	//
@@ -219,11 +219,11 @@ func (t *myWork) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// identity directory binds to a seat writes AS that seat
 	// ([PrincipalActor]), so their day is the seat's and never the
 	// credential's.
-	out, err := reader.MyWork(ctx, tracker.MyWorkQuery{
+	out, err := reader.MyWork(ctx, worklet.MyWorkQuery{
 		Handle: actor.Handle, Level: seatReadLevel,
 	}, t.deps.now(), t.deps.zone())
 	if err != nil {
-		return readFailure(ctx, tracker.MyWorkTool, err), nil
+		return readFailure(ctx, worklet.MyWorkTool, err), nil
 	}
 	return jsonResult(out)
 }

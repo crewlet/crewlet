@@ -98,6 +98,7 @@ func operatorName(name string) error {
 // Set seals a value and writes it for the whole fleet, recording its author
 // and the credential beside them — see [secrets.Author] — and the write path
 // it arrived by, which [secrets.CheckSource] holds to the paths' own words.
+// The value is held to [secrets.MaxValueBytes], as every store holds it.
 func (s *Store) Set(ctx context.Context, name, value string, by secrets.Author,
 	source secrets.Source, now time.Time) error {
 
@@ -114,6 +115,11 @@ func (s *Store) Set(ctx context.Context, name, value string, by secrets.Author,
 		return err
 	}
 	if err := secrets.CheckSource(source); err != nil {
+		return err
+	}
+	// THE SIZE EVERY STORE KEEPS, which every reader of a revealed value
+	// through a node is sized from: see [secrets.MaxValueBytes].
+	if err := secrets.CheckValue(value); err != nil {
 		return err
 	}
 	return s.put(ctx, name, value, by, source, now)
@@ -229,6 +235,60 @@ func (s *Store) All(ctx context.Context) (map[string]string, error) {
 			// The NAME, never the envelope: an error that echoed its
 			// input would put ciphertext into a log that a keyring
 			// might later open.
+			return nil, fmt.Errorf("fleetsecrets: open %s: %w", row.Name, err)
+		}
+		out[row.Name] = value
+	}
+	return out, nil
+}
+
+// Values unseals the operator values held under the names asked for, and no
+// other: a name nothing holds is simply absent from the answer.
+//
+// It is what a reader that needs SEVERAL values at once is given — a CLI run
+// resolving the `${VAR}` references of one company document, through a running
+// node's POST /secrets/reveal or, with that node's engine stopped, directly
+// (the CLI's fleetBackend) — and it exists so that reader is handed exactly
+// the credentials it asks for, the variables its command reads that the store
+// lists, rather than [Store.All]'s every value, and in one round trip rather
+// than one per name.
+//
+// A RESERVED NAME IS REFUSED before anything is read, as [Store.Get] refuses
+// one: no reference can name an engine row, so a caller asking for one has
+// built its list from something other than a document.
+//
+// It FAILS CLOSED on a row it was asked for and cannot open, for [Store.All]'s
+// reason — an answer missing that name would let it resolve from whatever the
+// environment holds — and opens nothing it was not asked for, so an
+// unreadable row nobody named cannot fail a read that never needed it.
+func (s *Store) Values(ctx context.Context, names []string) (map[string]string, error) {
+	if s == nil || s.cipher == nil {
+		return nil, secrets.ErrNoKeyring
+	}
+	wanted := make(map[string]bool, len(names))
+	for _, name := range names {
+		if err := operatorName(name); err != nil {
+			return nil, err
+		}
+		wanted[name] = true
+	}
+	out := make(map[string]string, len(wanted))
+	if len(wanted) == 0 {
+		return out, nil
+	}
+	// ONE LISTING rather than a read per name, which is [Store.All]'s round
+	// trip: the rows a company document names are a handful of a bucket that
+	// is itself small, and the values are opened only for the names asked.
+	rows, err := s.fleet.SecretValues(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("fleetsecrets: read the secrets: %w", err)
+	}
+	for _, row := range rows {
+		if !wanted[row.Name] {
+			continue
+		}
+		value, err := s.cipher.Decrypt(row.Value, secrets.AADForVar(row.Name))
+		if err != nil {
 			return nil, fmt.Errorf("fleetsecrets: open %s: %w", row.Name, err)
 		}
 		out[row.Name] = value
@@ -530,6 +590,9 @@ func (e *Estate) Create(ctx context.Context, name, value string, by secrets.Auth
 		return false, err
 	}
 	if err := secrets.CheckSource(source); err != nil {
+		return false, err
+	}
+	if err := secrets.CheckValue(value); err != nil {
 		return false, err
 	}
 	rec, err := e.store.seal(provenance(name, by, source, now), value)

@@ -17,7 +17,7 @@
  * drawn once, by its id, nearest the top.
  *
  * WHERE THE CURSOR IS is the caller's to say (`cursorOf`), because the
- * answers do not agree on a key: the tracker's histories carry `next_cursor`
+ * answers do not agree on a key: Worklet's histories carry `next_cursor`
  * and the turn list `next`, and a hook that read one of them would page the
  * other as a list with nothing before it.
  */

@@ -24,10 +24,10 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-var nativeItem = types.WorkItem{Backend: types.WorkNative, ID: "t-1", Key: "ENG-1", Project: "ENG"}
+var workletItem = types.WorkItem{Backend: types.WorkWorklet, ID: "t-1", Key: "ENG-1", Project: "ENG"}
 
 // segmentSpend is one segment's runner tally, with every figure a charge reads
 // set to something distinct.
@@ -120,8 +120,8 @@ func TestTaskSpendNeverExceedsTheRollup(t *testing.T) {
 		// dispatch named nothing for.
 		sole *types.WorkItem
 	}{
-		{name: "an item from the trigger", item: &nativeItem},
-		{name: "an item from a sole write", sole: &nativeItem},
+		{name: "an item from the trigger", item: &workletItem},
+		{name: "an item from a sole write", sole: &workletItem},
 		{name: "no item at all"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -145,7 +145,7 @@ func TestTaskSpendNeverExceedsTheRollup(t *testing.T) {
 
 			charged := 0
 			for _, c := range []segmentCharge{parked, finished} {
-				if c.native() {
+				if c.onWorklet() {
 					charged += c.record.Spend.Tokens()
 				}
 			}
@@ -182,7 +182,7 @@ func TestTaskSpendNeverExceedsTheRollup(t *testing.T) {
 func TestAResumedSegmentPaysWhatTheEngineSpentOnItsJob(t *testing.T) {
 	t.Parallel()
 	ended := time.Unix(1_700_000_060, 0).UTC()
-	resume := resumeTel(&nativeItem, nil, 0, 0)
+	resume := resumeTel(&workletItem, nil, 0, 0)
 	resume.jobEngine = jobEngineSpend
 	spend := segmentSpend(1)
 	got := resume.chargeFor(spend, turn.Result{Decision: phase.Done}, nil, ended).record.Spend
@@ -225,12 +225,12 @@ func TestASuspendedTurnIsCountedOnceAndPaidInFull(t *testing.T) {
 	ended := time.Unix(1_700_000_060, 0).UTC()
 
 	t.Run("charged at dispatch", func(t *testing.T) {
-		parked := dispatchTel(&nativeItem).chargeFor(segmentSpend(1),
+		parked := dispatchTel(&workletItem).chargeFor(segmentSpend(1),
 			turn.Result{Suspended: true}, nil, ended)
-		finished := resumeTel(&nativeItem, nil, 4000, 700).chargeFor(segmentSpend(1),
+		finished := resumeTel(&workletItem, nil, 4000, 700).chargeFor(segmentSpend(1),
 			turn.Result{Decision: phase.Done}, nil, ended)
-		if !parked.native() || !finished.native() {
-			t.Fatal("a segment of a turn on a native item charged nothing")
+		if !parked.onWorklet() || !finished.onWorklet() {
+			t.Fatal("a segment of a turn on a Worklet item charged nothing")
 		}
 		if parked.record.Spend.Turns+finished.record.Spend.Turns != 1 {
 			t.Fatalf("one turn counted %d times across its segments",
@@ -256,14 +256,14 @@ func TestASuspendedTurnIsCountedOnceAndPaidInFull(t *testing.T) {
 	t.Run("charged at the end by a sole write", func(t *testing.T) {
 		parked := dispatchTel(nil).chargeFor(segmentSpend(1),
 			turn.Result{Suspended: true}, nil, ended)
-		if parked.native() || parked.carry == nil || parked.carry.Turns != 1 {
+		if parked.onWorklet() || parked.carry == nil || parked.carry.Turns != 1 {
 			t.Fatalf("a parked segment on nothing charged %v and handed on %+v, "+
-				"want nothing charged and the turn handed on", parked.native(), parked.carry)
+				"want nothing charged and the turn handed on", parked.onWorklet(), parked.carry)
 		}
 		resume := resumeTel(nil, parked.carry, 4000, 700)
-		resume.written = turnctx.WrittenFrom([]types.WorkItem{nativeItem}, false)
+		resume.written = turnctx.WrittenFrom([]types.WorkItem{workletItem}, false)
 		finished := resume.chargeFor(segmentSpend(1), turn.Result{Decision: phase.Done}, nil, ended)
-		if !finished.native() || finished.record.Task != "t-1" {
+		if !finished.onWorklet() || finished.record.Task != "t-1" {
 			t.Fatalf("the finishing segment charged %+v, want its sole write", finished.record)
 		}
 		if finished.record.Spend.Turns != 1 {
@@ -278,16 +278,16 @@ func TestASuspendedTurnIsCountedOnceAndPaidInFull(t *testing.T) {
 
 // AN UNATTRIBUTED TURN CHARGES NOTHING.
 //
-// A turn on nothing, or on another tracker's item, has no native row to add
-// to — and a charge that guessed an item would put one turn's cost on work it
+// A turn on nothing, or on another tracker's item, has no Worklet row to add
+// to, and a charge that guessed an item would put one turn's cost on work it
 // was not doing.
 func TestAnUnattributedTurnChargesNothing(t *testing.T) {
 	t.Parallel()
 	ended := time.Unix(1_700_000_060, 0).UTC()
 	jira := types.WorkItem{Backend: types.WorkJira, ID: "10001", Key: "OPS-1"}
 	two := dispatchTel(nil)
-	two.written.Add(nativeItem)
-	two.written.Add(types.WorkItem{Backend: types.WorkNative, ID: "t-2", Key: "ENG-2"})
+	two.written.Add(workletItem)
+	two.written.Add(types.WorkItem{Backend: types.WorkWorklet, ID: "t-2", Key: "ENG-2"})
 
 	for name, c := range map[string]segmentCharge{
 		"on nothing": dispatchTel(nil).chargeFor(segmentSpend(1),
@@ -297,8 +297,8 @@ func TestAnUnattributedTurnChargesNothing(t *testing.T) {
 		"writing two items": two.chargeFor(segmentSpend(1),
 			turn.Result{Decision: phase.Done}, nil, ended),
 	} {
-		if c.native() {
-			t.Errorf("a turn %s charged %+v to the native tracker", name, c.record)
+		if c.onWorklet() {
+			t.Errorf("a turn %s charged %+v to Worklet", name, c.record)
 		}
 		if c.carry != nil {
 			t.Errorf("a finished turn %s handed on %+v, which nothing will ever pay", name, c.carry)
@@ -313,7 +313,7 @@ func TestAnUnattributedTurnChargesNothing(t *testing.T) {
 // one turn must reach two.
 func TestASegmentsOperationIDIsStableAcrossARetry(t *testing.T) {
 	t.Parallel()
-	first := dispatchTel(&nativeItem)
+	first := dispatchTel(&workletItem)
 	first.resumed, first.launchID = true, "launch-1"
 	retry := first
 	retry.startedAt = retry.startedAt.Add(time.Minute)
@@ -339,9 +339,9 @@ type fakeRecorder struct {
 	err   error
 }
 
-func (f *fakeRecorder) RecordTurn(_ context.Context, opID string, _ tracker.TurnRecord) (tracker.WriteResult, error) {
+func (f *fakeRecorder) RecordTurn(_ context.Context, opID string, _ worklet.TurnRecord) (worklet.WriteResult, error) {
 	f.calls = append(f.calls, opID)
-	return tracker.WriteResult{}, f.err
+	return worklet.WriteResult{}, f.err
 }
 
 // A CHARGE THAT CANNOT BE WRITTEN DOES NOT FAIL THE TURN.
@@ -350,7 +350,7 @@ func (f *fakeRecorder) RecordTurn(_ context.Context, opID string, _ tracker.Turn
 // and a tracker that refuses it costs the task its share and nothing else.
 func TestAnUnwritableChargeIsLoggedNotRaised(t *testing.T) {
 	t.Parallel()
-	c := dispatchTel(&nativeItem).chargeFor(segmentSpend(1),
+	c := dispatchTel(&workletItem).chargeFor(segmentSpend(1),
 		turn.Result{Decision: phase.Done}, nil, time.Unix(1_700_000_060, 0).UTC())
 	rec := &fakeRecorder{err: errors.New("the tracker is behind")}
 	(&Engine{}).chargeSegment(t.Context(), rec, c)
@@ -421,7 +421,7 @@ func TestARebasedSegmentIsMintedAtItsRebase(t *testing.T) {
 	}
 	// AND THE CHARGE CARRIES IT: the telemetry's rebase is what the
 	// segment's charge is published under.
-	tel := dispatchTel(&nativeItem)
+	tel := dispatchTel(&workletItem)
 	tel.resumed, tel.launchID, tel.rebasedTo = true, "launch-1", rebased
 	c := tel.chargeFor(segmentSpend(1), turn.Result{Decision: phase.Done}, nil,
 		rebased.Add(time.Minute))
@@ -449,7 +449,7 @@ func TestATurnRecordSaysWhatTheSegmentDid(t *testing.T) {
 		LastReview: &turn.Review{Decision: phase.Done, CompletedWork: "added the retry"},
 	}
 
-	got := dispatchTel(&nativeItem).chargeFor(spend, res, nil, ended).record
+	got := dispatchTel(&workletItem).chargeFor(spend, res, nil, ended).record
 
 	if got.Summary != "added the retry" {
 		t.Errorf("summary = %q, want the reviewer's account of what landed", got.Summary)
@@ -458,7 +458,7 @@ func TestATurnRecordSaysWhatTheSegmentDid(t *testing.T) {
 		t.Errorf("review = %d bytes, want the send-back's notes whole until the write",
 			len(got.Review))
 	}
-	want := []tracker.TurnTool{
+	want := []worklet.TurnTool{
 		{Name: "create_branch", Calls: 1}, {Name: "run_sandbox", Calls: 3},
 		{Name: "search_knowledge", Calls: 1},
 	}
@@ -478,14 +478,14 @@ func TestAFailedSegmentNamesThePhaseThatBroke(t *testing.T) {
 	spend := segmentSpend(1)
 	spend.FailedIn = "review"
 
-	failed := dispatchTel(&nativeItem).chargeFor(spend, turn.Result{Decision: phase.Failed},
+	failed := dispatchTel(&workletItem).chargeFor(spend, turn.Result{Decision: phase.Failed},
 		errors.New("provider refused"), ended).record
 	if failed.Outcome != string(phase.Failed) || failed.FailedIn != "review" {
 		t.Errorf("a failed segment recorded outcome %q in %q, want failed in review",
 			failed.Outcome, failed.FailedIn)
 	}
 
-	done := dispatchTel(&nativeItem).chargeFor(spend, turn.Result{Decision: phase.Done},
+	done := dispatchTel(&workletItem).chargeFor(spend, turn.Result{Decision: phase.Done},
 		nil, ended).record
 	if done.FailedIn != "" {
 		t.Errorf("a segment that ended %q names a failed phase %q", done.Outcome, done.FailedIn)
@@ -527,7 +527,7 @@ func TestATurnCardIsWholeRewrittenOrPointedAway(t *testing.T) {
 		t.Errorf("a long account was not rewritten and marked: %q", got)
 	}
 	got := turnCard(t.Context(), compact.Bound{}, long)
-	if len(got) > tracker.MaxTurnSummary || strings.Contains(got, "investigated") ||
+	if len(got) > worklet.MaxTurnSummary || strings.Contains(got, "investigated") ||
 		!strings.Contains(got, "open the turn") {
 		t.Errorf("an account with no rewrite was %q, want a pointer to the turn and no fragment", got)
 	}
@@ -552,7 +552,7 @@ func TestACardsRewriteIsChargedToItsTask(t *testing.T) {
 	e := &Engine{auxSpend: auxspend.NewLedger(pub)}
 	e.epoch.current.Store(c)
 
-	tel := dispatchTel(&nativeItem)
+	tel := dispatchTel(&workletItem)
 	tel.handle = seat.Handle()
 	tel.auxSpent.Add(segmentAux(1))
 	charge := tel.chargeFor(segmentSpend(1), turn.Result{Decision: phase.Done}, nil,
@@ -606,7 +606,7 @@ func TestATurnTheBudgetEndedStillGetsItsCard(t *testing.T) {
 	if m.Held(t.Context()) == nil {
 		t.Fatal("the meter holds nothing; this case asserts nothing")
 	}
-	tel := dispatchTel(&nativeItem)
+	tel := dispatchTel(&workletItem)
 	tel.handle, tel.budget = seat.Handle(), m
 	charge := tel.chargeFor(segmentSpend(1), turn.Result{Decision: phase.Failed}, nil,
 		time.Unix(1_700_000_060, 0).UTC())

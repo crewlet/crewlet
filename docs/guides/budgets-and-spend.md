@@ -220,8 +220,8 @@ provider, and it is made of these calls:
 - **What a turn recalls by.** Each turn embeds its ask once at its start, for
   its memory and episode recall, and `refresh_memory` and `query_episodes`
   embed the hint they are given each time a seat calls them.
-- **Every knowledge or work search that ranks by meaning** — `semantic`, or
-  `hybrid`, the default, over the engine's own knowledge base and tracker —
+- **Every knowledge or work search that ranks by meaning** (`semantic`, or
+  `hybrid`, the default, over Doclet and Worklet)
   embeds its query: the
   turn-start knowledge prefetch (so a turn start makes this call beside its ask
   vector), `search_knowledge`, `search_work_items`, the retrieval behind

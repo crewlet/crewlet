@@ -1519,6 +1519,45 @@ func TestTheOperatorCredentialReachesThePassAndIsNotKept(t *testing.T) {
 	}
 }
 
+// THE RECREATE SWITCH REACHES THE PASS SPELLED AS THIS ROUTE SPELLS IT.
+//
+// A pass refuses the switch over a secret the company document holds as a
+// literal, naming the switch so the caller knows what to drop. A pass that
+// spelled the switch itself could spell only one surface's, and a caller of
+// this route — who sends a body field and has no flag — would be told to
+// re-run with the command line's `-recreate-webhooks`, which sends them
+// nowhere. The route hands the pass the field's own name, and hands it
+// nothing at all where the body did not ask.
+func TestARecreateReachesThePassSpelledAsTheRouteSpellsIt(t *testing.T) {
+	t.Parallel()
+	for body, want := range map[string]provision.FreshSwitch{
+		`{"recreate_webhooks":true}`:  "recreate_webhooks",
+		`{"recreate_webhooks":false}`: "",
+		`{}`:                          "",
+	} {
+		t.Run(body, func(t *testing.T) {
+			t.Parallel()
+			s := newSurface(t)
+			s.seed(t)
+			pass := &recordingPass{}
+			s.withPass(t, pass)
+			s.seedGitHub(t)
+
+			res := s.do(t, http.MethodPost, "/setup/integrations/github/provision", body, nil)
+			if res.Code != http.StatusOK {
+				t.Fatalf("status = %d: %s", res.Code, res.Body)
+			}
+			in, calls := pass.last()
+			if calls != 1 {
+				t.Fatalf("the pass ran %d times", calls)
+			}
+			if in.Recreate != want {
+				t.Errorf("the pass got the switch %q, want %q", in.Recreate, want)
+			}
+		})
+	}
+}
+
 // --- per-seat setup ---------------------------------------------------------- //
 
 // SLACK IS PER SEAT, and the list names every AGENT rather than only the ones

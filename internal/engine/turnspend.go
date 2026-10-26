@@ -16,7 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // Spend is on the task: what one completed turn SEGMENT charges to the work
@@ -70,7 +70,7 @@ import (
 // turn pays it with its own if it is charged, turn count included. If it is
 // not, nothing ever is — which is what an unattributed turn is.
 //
-// ONLY A NATIVE ITEM IS CHARGED: the counters are the engine's own tracker's
+// ONLY A WORKLET ITEM IS CHARGED: the counters are Worklet's
 // rows. A turn on a Jira issue or a pull request is attributed on its events
 // and charges nothing here.
 
@@ -81,7 +81,7 @@ type segmentCharge struct {
 	// opID is the segment's operation id, and the turn row's.
 	opID string
 	// record is the turn record to publish when item is native.
-	record tracker.TurnRecord
+	record worklet.TurnRecord
 	// carry is what a parked segment charged to nothing hands on to the
 	// segment that finishes the turn; nil otherwise.
 	carry *execstate.Uncharged
@@ -101,11 +101,11 @@ type segmentCharge struct {
 	ended time.Time
 }
 
-// native reports a charge this engine's own tracker takes: one on a native
-// work item. A turn on nothing charges nothing, and a turn on another
-// tracker's item is attributed on its events and has no row here to add to.
-func (c segmentCharge) native() bool {
-	return c.item != nil && c.item.Backend == types.WorkNative
+// onWorklet reports a charge Worklet takes: one on a Worklet work item. A
+// turn on nothing charges nothing, and a turn on another tracker's item is
+// attributed on its events and has no row here to add to.
+func (c segmentCharge) onWorklet() bool {
+	return c.item != nil && c.item.Backend == types.WorkWorklet
 }
 
 // segmentOpID is the operation id of one segment of a run.
@@ -153,7 +153,7 @@ func (t turnTelemetry) chargeFor(spend runner.Spend, res turn.Result, err error,
 	// THE JOB'S ENGINE SPEND: what its bridged calls and the condensation
 	// of its collection cost, which no segment was running to tally.
 	job := t.jobEngine
-	own := withAux(withAux(tracker.TurnSpend{
+	own := withAux(withAux(worklet.TurnSpend{
 		Rounds: spend.Rounds,
 		Input: spend.InputTokens + spend.WorkerInput + spend.JudgeInput + t.jobInput +
 			job.WorkerInput,
@@ -195,18 +195,18 @@ func (t turnTelemetry) chargeFor(spend runner.Spend, res turn.Result, err error,
 		}
 		return charge
 	}
-	charge.record = tracker.TurnRecord{
+	charge.record = worklet.TurnRecord{
 		Task: item.ID, Seat: t.handle, TurnID: t.runID, Trigger: t.trigger.Type,
 		Outcome: segmentOutcome(res, err), Phases: spend.Phases, Spend: total,
 		// WHAT THE SEGMENT DID, WHOLE until the write: the writer refuses
-		// a text past [tracker.MaxTurnSummary] rather than cut it, since
+		// a text past [worklet.MaxTurnSummary] rather than cut it, since
 		// every node stores it, and [Engine.recordTurnSpend] fits it to
 		// the card there — rewritten, never cut. The same summary the
 		// turn's completion event carries, so the task's card and the
 		// trace agree.
 		Summary: planSummary(res),
 		Review:  spend.Review,
-		Tools:   tracker.CountTurnTools(workTools(spend.AllTools)),
+		Tools:   worklet.CountTurnTools(workTools(spend.AllTools)),
 	}
 	// WHICH PHASE BROKE, only where the segment is recorded as failed: a
 	// phase can fail and the turn still end otherwise (a person's stop is
@@ -233,7 +233,7 @@ func segmentOutcome(res turn.Result, err error) string {
 // withAux adds a segment's in-turn auxiliary spend to its charge. Tokens only:
 // an auxiliary call is not a round, and the cache counts are a breakdown of the
 // input it adds, as a phase's are.
-func withAux(s tracker.TurnSpend, aux auxspend.Spent) tracker.TurnSpend {
+func withAux(s worklet.TurnSpend, aux auxspend.Spent) worklet.TurnSpend {
 	s.Input += aux.Input
 	s.Output += aux.Output
 	s.CacheRead += aux.CacheRead
@@ -248,7 +248,7 @@ func auxSpentOf(a sandbox.AuxTokens) auxspend.Spent {
 }
 
 // addUncharged folds what an earlier segment handed on into this one's spend.
-func addUncharged(s tracker.TurnSpend, u *execstate.Uncharged) tracker.TurnSpend {
+func addUncharged(s worklet.TurnSpend, u *execstate.Uncharged) worklet.TurnSpend {
 	if u == nil {
 		return s
 	}
@@ -265,7 +265,7 @@ func addUncharged(s tracker.TurnSpend, u *execstate.Uncharged) tracker.TurnSpend
 }
 
 // unchargedOf is a spend in the suspended conversation's own shape.
-func unchargedOf(s tracker.TurnSpend) *execstate.Uncharged {
+func unchargedOf(s worklet.TurnSpend) *execstate.Uncharged {
 	return &execstate.Uncharged{
 		Turns: s.Turns, Rounds: s.Rounds, Input: s.Input, Output: s.Output,
 		CacheRead: s.CacheRead, CacheWrite: s.CacheWrite, WallMs: s.WallMs,
@@ -276,7 +276,7 @@ func unchargedOf(s tracker.TurnSpend) *execstate.Uncharged {
 // turnRecorder is the one write a segment's charge needs, declared by its one
 // caller.
 type turnRecorder interface {
-	RecordTurn(ctx context.Context, opID string, turn tracker.TurnRecord) (tracker.WriteResult, error)
+	RecordTurn(ctx context.Context, opID string, turn worklet.TurnRecord) (worklet.WriteResult, error)
 }
 
 // endSegment closes one segment of a turn, in the order its readers rely on:
@@ -327,11 +327,11 @@ func (e *Engine) endSegment(ctx context.Context, tel turnTelemetry, spend runner
 type cardedCharge struct {
 	segmentCharge
 	// write is the tracker write the charge goes through; nil where there
-	// is nothing to charge — no native item, or no writer on this node.
+	// is nothing to charge: no Worklet item, or no writer on this node.
 	write turnRecorder
 }
 
-// cardsFor readies a segment's charge: on a native item this node can write
+// cardsFor readies a segment's charge: on a Worklet item this node can write
 // to, its card fitted to the task's turn list ([Engine.withCards]) and the
 // writer it goes through; otherwise a charge with nothing to write, and no
 // rewrite paid for a card nothing will show.
@@ -345,12 +345,12 @@ type cardedCharge struct {
 // charge to the task that woke it was dropped without a word, and a task's
 // spend read zero however much was spent on it.
 func (e *Engine) cardsFor(ctx context.Context, charge segmentCharge) cardedCharge {
-	if !charge.native() {
+	if !charge.onWorklet() {
 		return cardedCharge{segmentCharge: charge}
 	}
 	halves, ok := e.trackerHalves()
 	if !ok {
-		// A NATIVE ITEM ON A NODE THAT HANDS OUT NO TRACKER WRITER is a
+		// A WORKLET ITEM ON A NODE THAT HANDS OUT NO WORKLET WRITER is a
 		// company that moved its tracker off the engine while the turn ran,
 		// or a data node in a maintenance mode, which publishes nothing:
 		// there is nowhere to charge.
@@ -358,12 +358,12 @@ func (e *Engine) cardsFor(ctx context.Context, charge segmentCharge) cardedCharg
 	}
 	charge = e.withCards(ctx, charge)
 	return cardedCharge{segmentCharge: charge, write: halves.as(builtin.Actor{
-		Handle: charge.record.Seat, Kind: tracker.AuthorAgent,
+		Handle: charge.record.Seat, Kind: worklet.AuthorAgent,
 		TurnID: charge.record.TurnID,
 	})}
 }
 
-// recordTurnSpend writes a segment's readied charge to its native work item.
+// recordTurnSpend writes a segment's readied charge to its Worklet work item.
 //
 // TELEMETRY NEVER FAILS THE WORK, so this returns nothing, on the terms
 // [Engine.publishTurnCompleted] states: the turn has finished and its result is
@@ -399,16 +399,16 @@ func (e *Engine) withCards(ctx context.Context, charge segmentCharge) segmentCha
 const condensedCard = "(condensed) "
 
 // turnCard is a turn's summary or review as its task's card carries it:
-// whole within [tracker.MaxTurnSummary], rewritten to fit by the seat's
+// whole within [worklet.MaxTurnSummary], rewritten to fit by the seat's
 // auxiliary model past it, and — where no rewrite can be had — a line saying
 // how long the account is and where it is read whole. Never a cut: the card
 // is the one line a person reads for a turn, and a cut one reads as the turn's
 // whole account.
 func turnCard(ctx context.Context, fit compact.Bound, text string) string {
-	if len(text) <= tracker.MaxTurnSummary {
+	if len(text) <= worklet.MaxTurnSummary {
 		return text
 	}
-	res, err := fit.Fit(ctx, compact.KindOutcome, text, tracker.MaxTurnSummary-len(condensedCard))
+	res, err := fit.Fit(ctx, compact.KindOutcome, text, worklet.MaxTurnSummary-len(condensedCard))
 	if err == nil {
 		return condensedCard + res.Text
 	}

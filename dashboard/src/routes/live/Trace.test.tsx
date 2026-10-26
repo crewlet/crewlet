@@ -72,7 +72,7 @@ async function mount(answer: Record<string, unknown>, viewer: unknown = ADMIN) {
 // screen draws the lock itself, and asks nothing. Mutation: drop the screen's
 // own lock and the trace is asked for a reader the engine refuses.
 test("a reader without Admin is shown the lock, and the trace is never asked", async () => {
-  const { asked } = await mount({}, { login: "erin", owner: "erin", grants: ["tracker"] });
+  const { asked } = await mount({}, { login: "erin", owner: "erin", grants: ["worklet"] });
   expect(await screen.findByText("You need Admin access")).toBeDefined();
   expect(asked).not.toContain("trace");
 });

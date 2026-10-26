@@ -308,7 +308,7 @@ func TestAnsweredOnlyConsultsTheRecordWhenAToolOwesTheAnswer(t *testing.T) {
 	}
 }
 
-// trackerSurface is a seat woken on the engine's own tracker: first-party
+// trackerSurface is a seat woken on Worklet: first-party
 // tools that deliver on `work`, which the executor holds from its first round,
 // beside an MCP chat server it would have to discover.
 func trackerSurface() turn.Surface {

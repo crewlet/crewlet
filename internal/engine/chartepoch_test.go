@@ -12,11 +12,11 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // chartDoc is a company whose one unit names a project and a knowledge
@@ -297,7 +297,7 @@ func readProject(t *testing.T, e *engine.Engine, key string) (string, int64, boo
 }
 
 // eventuallyContainer waits for a knowledge container's row to reach this node.
-func eventuallyContainer(t *testing.T, e *engine.Engine, key string) pages.Container {
+func eventuallyContainer(t *testing.T, e *engine.Engine, key string) doclet.Container {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
@@ -312,7 +312,7 @@ func eventuallyContainer(t *testing.T, e *engine.Engine, key string) pages.Conta
 }
 
 // containerRow reads a container that must already be there.
-func containerRow(t *testing.T, e *engine.Engine, key string) pages.Container {
+func containerRow(t *testing.T, e *engine.Engine, key string) doclet.Container {
 	t.Helper()
 	c, found := readContainer(t, e, key)
 	if !found {
@@ -321,7 +321,7 @@ func containerRow(t *testing.T, e *engine.Engine, key string) pages.Container {
 	return c
 }
 
-func readContainer(t *testing.T, e *engine.Engine, key string) (pages.Container, bool) {
+func readContainer(t *testing.T, e *engine.Engine, key string) (doclet.Container, bool) {
 	t.Helper()
 	var document []byte
 	err := e.Backends().Store.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
@@ -329,12 +329,12 @@ func readContainer(t *testing.T, e *engine.Engine, key string) (pages.Container,
 			`SELECT document FROM pages_containers WHERE key = ?`, key).Scan(&document)
 	})
 	if errors.Is(err, sql.ErrNoRows) {
-		return pages.Container{}, false
+		return doclet.Container{}, false
 	}
 	if err != nil {
 		t.Fatalf("read container %s: %v", key, err)
 	}
-	c, err := pages.DecodeContainer(document)
+	c, err := doclet.DecodeContainer(document)
 	if err != nil {
 		t.Fatalf("decode container %s: %v", key, err)
 	}
@@ -347,8 +347,8 @@ func projectHistory(t *testing.T, e *engine.Engine) int {
 	var n int
 	if err := e.Backends().Store.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM tracker_history
-			WHERE kind IN (?, ?)`, string(tracker.ChangeProjectCreated),
-			string(tracker.ChangeProjectUpdated)).Scan(&n)
+			WHERE kind IN (?, ?)`, string(worklet.ChangeProjectCreated),
+			string(worklet.ChangeProjectUpdated)).Scan(&n)
 	}); err != nil {
 		t.Fatalf("count the project history: %v", err)
 	}

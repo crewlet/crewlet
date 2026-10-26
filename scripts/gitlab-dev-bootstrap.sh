@@ -19,7 +19,13 @@
 #   scripts/gitlab-dev-bootstrap.sh
 #   # then provision your local-pointed config (see the printed command)
 #
-# Re-runnable: every step is idempotent.
+# Re-runnable: every step is idempotent. Its COMPANY= provision reads the
+# company's stored values through ./crewlet.yaml when one is present, and
+# from the environment alone when none is. With that node's engine stopped it
+# reaches the fleet's secret store itself, through the node's own broker; with
+# the engine up it goes through it, so set CREWLET_API_TOKEN to one of
+# crewlet.yaml's api.auth tokens whose grants include admin. On a member of a
+# cluster whose engine is stopped the provision is refused, naming -api.
 set -euo pipefail
 
 GITLAB_CONTAINER="${GITLAB_CONTAINER:-$(docker compose ps -q gitlab 2>/dev/null || true)}"
@@ -129,16 +135,32 @@ cat <<EONOTE
 EONOTE
 
 if [ -z "${COMPANY}" ]; then
+  SEED="<your-config>.yaml"
   cat <<EONEXT
    - Provision a local-pointed config (integrations.gitlab.url = ${GITLAB_URL}):
        GITLAB_ADMIN_TOKEN=${ROOT_TOKEN} \\
-         crewlet gitlab provision <your-config>.yaml \\
+         crewlet gitlab provision ${SEED} \\
            -public-url ${ENGINE_URL} -env-file .env.gitlab
-       source .env.gitlab && crewlet run -config crewlet.yaml -company <your-config>.yaml
+       source .env.gitlab && crewlet run -config crewlet.yaml -company ${SEED}
+     The provision reads the company's stored values through ./crewlet.yaml
+     when one is here: with that node's engine stopped from the fleet's
+     store itself, and with it up through the engine, with
+     CREWLET_API_TOKEN set to one of crewlet.yaml's api.auth tokens whose
+     grants include admin — or pass -api URL naming a running node — and
+     then restart the engine from the sourced shell.
 EONEXT
 else
+  SEED="${COMPANY}"
   cat <<EONEXT
    - Tokens written: .env.gitlab
-   - Next: source .env.gitlab && crewlet run -config crewlet.yaml -company ${COMPANY}
+   - Next: source .env.gitlab && crewlet run -config crewlet.yaml -company ${SEED}
+     (restarting the engine that way if it is up).
 EONEXT
 fi
+cat <<EONEXT
+   - -company only seeds a node that runs no company yet. A node that already
+     runs one keeps it and logs that the file was ignored: once it is up,
+     hand it the file with crewlet config import ${SEED}
+     (CREWLET_API_TOKEN set to one of crewlet.yaml's api.auth tokens whose
+     grants include admin), which replaces its whole company with the file.
+EONEXT

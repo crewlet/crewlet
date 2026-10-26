@@ -61,7 +61,7 @@ const org = {
 
 const OPERATOR = {
   login: "U0FOUNDER",
-  grants: ["admin", "tracker", "knowledge"],
+  grants: ["admin", "worklet", "doclet"],
   handle: "jane",
   owner: "jane",
   name: "Jane",

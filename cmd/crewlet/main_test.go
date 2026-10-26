@@ -1898,9 +1898,10 @@ func TestAMissingDefaultNamesTheFileSittingBesideIt(t *testing.T) {
 
 // THE TWO TIER B FLAGS MEAN OPPOSITE THINGS, so naming both is refused.
 //
-// -company bootstraps an empty store; -import-company replaces what the fleet
-// is running. Any precedence between them is a silent guess about which the
-// operator meant, made about the flag that overwrites a live company.
+// -company bootstraps a company that does not exist yet; -import-company
+// replaces what the fleet is running. Any precedence between them is a silent
+// guess about which the operator meant, made about the flag that overwrites a
+// live company.
 func TestNamingBothTierBFlagsIsRefused(t *testing.T) {
 	t.Parallel()
 	var out, errOut bytes.Buffer

@@ -310,8 +310,8 @@ func whyRouted(b *strings.Builder, project string) {
 
 // handling is the platform-level mechanics block.
 //
-// The native tracker's conventions in Jira's vocabulary, and kept in step with
-// that prompt's (tracker.promptHandling) deliberately: a seat working both
+// Worklet's conventions in Jira's vocabulary, and kept in step with that
+// prompt's (worklet.promptHandling) deliberately: a seat working both
 // should not learn two etiquettes for one kind of surface. Role-specific
 // behaviour — ownership, tone, the quality bar — belongs in the role's
 // behavioural guidelines, and generic diligence (read the comments first, ask
@@ -354,9 +354,9 @@ func handling(b *strings.Builder, meta map[string]string) {
 		" summary when you are done. Other people read this surface: no" +
 		" running commentary, acknowledgements or agreement-only comments.")
 	if via == ViaAssignee {
-		// THE DECLINE GESTURE, AND ONLY FOR THE ISSUE'S HOLDER — the
-		// native tracker's rule, for its reason: that an addressed wake
-		// may not end in silence is the decoder's refusal, and that a
+		// THE DECLINE GESTURE, AND ONLY FOR THE ISSUE'S HOLDER: Worklet's
+		// rule, for its reason: that an addressed wake may not end in
+		// silence is the decoder's refusal, and that a
 		// decline names the right owner on the surface the ask came from
 		// is the executor's contract; what only the tracker knows is that
 		// an issue the seat HOLDS is declined by moving it. A

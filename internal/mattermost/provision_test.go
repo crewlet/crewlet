@@ -1501,6 +1501,32 @@ func TestAnUnreadableSinkStopsTheChatRun(t *testing.T) {
 	}
 }
 
+// A BOT THIS RUN CREATES ASKS NO SINK. Nothing can hold a token for a bot
+// that did not exist a moment ago, so its first token is minted whatever the
+// sink would answer — even a sink that cannot say, as a -secret-store sink
+// whose node refused the reveal cannot.
+//
+// Mutation: ask the sink before minting a created bot's first token, and the
+// run fails on the unreadable sink.
+func TestABotThisRunCreatesIsMintedWhateverItsSinkCanSay(t *testing.T) {
+	t.Parallel()
+	srv := newChatServer()
+	sink := newChatSink()
+	// a -secret-store sink whose node refused the reveal
+	sink.holdsErr = errors.New("the store could not say")
+	res, err := reconcileChat(t, srv, sink, []*org.Role{chatSeat("SWE", "${MM_TOKEN_SWE}", "eng")})
+	if err != nil {
+		t.Fatalf("a seat whose bot this run created was refused over its sink: %v", err)
+	}
+	if !slices.Equal(res.Created, []string{"swe"}) || !slices.Equal(res.Rotated, []string{"swe"}) {
+		t.Fatalf("created %v, minted for %v — want the bot created and minted for",
+			res.Created, res.Rotated)
+	}
+	if !strings.HasPrefix(sink.value("MM_TOKEN_SWE"), "mmtok-") {
+		t.Errorf("the created bot's first token was not recorded: %q", sink.value("MM_TOKEN_SWE"))
+	}
+}
+
 // A ROLLBACK ON A PRE-EXISTING BOT REVOKES ONLY WHAT IT MINTED. Sweeping
 // the account would take an administrator's own token with no way to tell
 // that it had.
@@ -1953,5 +1979,36 @@ func TestAnAdministratorsDeactivationIsNotReversed(t *testing.T) {
 	if !found {
 		t.Errorf("findings = %v, none of them about the deactivated agent",
 			res.Findings())
+	}
+}
+
+// A RUN COUNTS THE TOKENS IT RECORDED, AND A RE-RUN THAT KEPT THEM COUNTS
+// NONE.
+//
+// The count decides whether the command tells the operator what has to happen
+// before a running engine reads a new token: a minted token in the secret
+// store reaches the engine at its next apply and not before, so a report that
+// said nothing left every new bot offline. A re-run that minted nothing has
+// nothing to say.
+func TestARunCountsTheTokensItRecorded(t *testing.T) {
+	t.Parallel()
+	srv := newChatServer()
+	sink := newChatSink()
+	roles := []*org.Role{chatSeat("SWE", "${MM_TOKEN_SWE}", "eng")}
+	res, err := reconcileChat(t, srv, sink, roles)
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if res.Recorded != 1 {
+		t.Errorf("a run that minted one token counted %d", res.Recorded)
+	}
+	srv.forget()
+	again, err := reconcileChat(t, srv, sink, roles)
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if len(again.Kept) != 1 || again.Recorded != 0 {
+		t.Errorf("a re-run that kept the token counted %d (kept %v), want none",
+			again.Recorded, again.Kept)
 	}
 }

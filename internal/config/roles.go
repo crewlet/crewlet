@@ -866,8 +866,8 @@ type Unit struct {
 	// VENDOR-NEUTRAL, and required of any unit that owns either. They were
 	// `integrations.jira.project` and `integrations.confluence.space`,
 	// which made the org chart name a product: a company switching
-	// backends had to rewrite its units, and a company running a native
-	// tracker against a Confluence wiki could not say so at all. The tree
+	// backends had to rewrite its units, and a company running Worklet
+	// against a Confluence wiki could not say so at all. The tree
 	// made this rename once already, when `slack_channel` became `channel`.
 	//
 	// NOT a credential, and NOT a read scope. Read scope is the org-wide

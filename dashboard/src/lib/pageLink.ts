@@ -2,7 +2,7 @@
  * Copy this page's whole address, and say what the browser did with it.
  *
  * THE WHOLE URL, not the hash: what a reader pastes into chat has to open on
- * somebody else's machine, and a bare `#/work/ENG-42` opens nothing.
+ * somebody else's machine, and a bare `#/worklet/ENG-42` opens nothing.
  *
  * The clipboard is refused outright on an insecure origin and by permission
  * policy, and a command that silently did nothing would read as a broken one

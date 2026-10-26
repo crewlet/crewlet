@@ -17,14 +17,14 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // fakeFiles is a project's files held in memory: the tracker's rows for them,
 // keyed by address.
 type fakeFiles struct {
 	mu      sync.Mutex
-	files   map[string]tracker.File
+	files   map[string]worklet.File
 	version uint64
 	writers []string
 
@@ -34,20 +34,20 @@ type fakeFiles struct {
 	refuse error
 }
 
-func newFakeFiles() *fakeFiles { return &fakeFiles{files: map[string]tracker.File{}} }
+func newFakeFiles() *fakeFiles { return &fakeFiles{files: map[string]worklet.File{}} }
 
 func (f *fakeFiles) key(project, path string) string { return project + "/" + path }
 
-func (f *fakeFiles) Files(_ context.Context, q tracker.FileQuery) (tracker.FileListing, error) {
+func (f *fakeFiles) Files(_ context.Context, q worklet.FileQuery) (worklet.FileListing, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if q.Project != "ENG" {
-		return tracker.FileListing{}, fmt.Errorf("%w: %s", tracker.ErrNoProject, q.Project)
+		return worklet.FileListing{}, fmt.Errorf("%w: %s", worklet.ErrNoProject, q.Project)
 	}
-	var out tracker.FileListing
+	var out worklet.FileListing
 	for _, file := range f.files {
 		if !file.Removed() && file.Project == q.Project {
-			out.Files = append(out.Files, tracker.FileRow{Project: file.Project, Path: file.Path,
+			out.Files = append(out.Files, worklet.FileRow{Project: file.Project, Path: file.Path,
 				Size: file.Size, Version: file.Version})
 		}
 	}
@@ -56,15 +56,15 @@ func (f *fakeFiles) Files(_ context.Context, q tracker.FileQuery) (tracker.FileL
 }
 
 func (f *fakeFiles) File(_ context.Context, project, path string,
-	_ statelog.Freshness) (tracker.FileDetail, error) {
+	_ statelog.Freshness) (worklet.FileDetail, error) {
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	file, ok := f.files[f.key(project, path)]
 	if !ok || file.Removed() {
-		return tracker.FileDetail{}, fmt.Errorf("%w: %s", tracker.ErrNoFile, path)
+		return worklet.FileDetail{}, fmt.Errorf("%w: %s", worklet.ErrNoFile, path)
 	}
-	return tracker.FileDetail{File: file}, nil
+	return worklet.FileDetail{File: file}, nil
 }
 
 func (f *fakeFiles) as(actor builtin.Actor) builtin.FileWriter {
@@ -74,39 +74,39 @@ func (f *fakeFiles) as(actor builtin.Actor) builtin.FileWriter {
 	return f
 }
 
-func (f *fakeFiles) PutFile(_ context.Context, _ string, put tracker.FilePut) (tracker.WriteResult, error) {
+func (f *fakeFiles) PutFile(_ context.Context, _ string, put worklet.FilePut) (worklet.WriteResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	current, held := f.files[f.key(put.Project, put.Path)]
-	if put.IfMatch != tracker.NoIfMatch && (!held || current.Version != put.IfMatch) {
-		return tracker.WriteResult{}, tracker.ErrStaleVersion
+	if put.IfMatch != worklet.NoIfMatch && (!held || current.Version != put.IfMatch) {
+		return worklet.WriteResult{}, worklet.ErrStaleVersion
 	}
 	if f.refuse != nil {
-		return tracker.WriteResult{}, f.refuse
+		return worklet.WriteResult{}, f.refuse
 	}
 	f.version++
 	f.puts++
-	file := tracker.File{Project: put.Project, Path: put.Path, ContentType: put.ContentType,
+	file := worklet.File{Project: put.Project, Path: put.Path, ContentType: put.ContentType,
 		Hash: put.Object.Hash, Size: put.Object.Size, Object: put.Object.Key, Version: f.version,
 		UpdatedAt: time.Unix(1_700_000_000, 0).UTC()}
 	f.files[f.key(put.Project, put.Path)] = file
-	return tracker.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied,
+	return worklet.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied,
 		Version: int64(f.version), Position: statelog.Position{Stream: "S", Generation: 1, Seq: f.version}}}, nil
 }
 
 func (f *fakeFiles) RemoveFile(_ context.Context, _, project, path string,
-	_ uint64) (tracker.WriteResult, error) {
+	_ uint64) (worklet.WriteResult, error) {
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	file, ok := f.files[f.key(project, path)]
 	if !ok || file.Removed() {
-		return tracker.WriteResult{}, fmt.Errorf("%w: %s", tracker.ErrNoFile, path)
+		return worklet.WriteResult{}, fmt.Errorf("%w: %s", worklet.ErrNoFile, path)
 	}
 	now := time.Now()
 	file.RemovedAt = &now
 	f.files[f.key(project, path)] = file
-	return tracker.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied}}, nil
+	return worklet.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied}}, nil
 }
 
 // fakeObjects is an object store in memory, each upload an object under a key
@@ -184,7 +184,7 @@ func TestASeatWritesReadsListsAndRemovesAFile(t *testing.T) {
 	files, objects := newFakeFiles(), newFakeObjects()
 	reg := workRegistry(t, fileDeps(files, objects))
 
-	got := callWork(t, reg, tracker.WriteProjectFileTool, map[string]any{
+	got := callWork(t, reg, worklet.WriteProjectFileTool, map[string]any{
 		"path": "reports/q3.md", "content": "# Q3\n\nIt went well.",
 	})
 	if got.Failed {
@@ -201,7 +201,7 @@ func TestASeatWritesReadsListsAndRemovesAFile(t *testing.T) {
 		t.Fatalf("the write was attributed to %v, want the turn's seat", files.writers)
 	}
 
-	got = callWork(t, reg, tracker.ReadProjectFileTool, map[string]any{"path": "/reports/q3.md"})
+	got = callWork(t, reg, worklet.ReadProjectFileTool, map[string]any{"path": "/reports/q3.md"})
 	if got.Failed {
 		t.Fatalf("read: %s", got.Output)
 	}
@@ -210,16 +210,16 @@ func TestASeatWritesReadsListsAndRemovesAFile(t *testing.T) {
 		t.Fatalf("read answered %v", read)
 	}
 
-	got = callWork(t, reg, tracker.ListProjectFilesTool, map[string]any{})
+	got = callWork(t, reg, worklet.ListProjectFilesTool, map[string]any{})
 	if listed := fileAnswer(t, got.Output); got.Failed || listed["count"] != float64(1) {
 		t.Fatalf("list answered %s", got.Output)
 	}
 
-	got = callWork(t, reg, tracker.RemoveProjectFileTool, map[string]any{"path": "reports/q3.md"})
+	got = callWork(t, reg, worklet.RemoveProjectFileTool, map[string]any{"path": "reports/q3.md"})
 	if got.Failed {
 		t.Fatalf("remove: %s", got.Output)
 	}
-	got = callWork(t, reg, tracker.ReadProjectFileTool, map[string]any{"path": "reports/q3.md"})
+	got = callWork(t, reg, worklet.ReadProjectFileTool, map[string]any{"path": "reports/q3.md"})
 	if !got.Failed || !strings.Contains(got.Output, "there is no file") {
 		t.Fatalf("a read of a removed file answered %s", got.Output)
 	}
@@ -232,7 +232,7 @@ func TestALargeFileIsReadInPagesOnWholeCharacters(t *testing.T) {
 	files, objects := newFakeFiles(), newFakeObjects()
 	reg := workRegistry(t, fileDeps(files, objects))
 	text := strings.Repeat("naïve café — ", 10_000) // multi-byte, well past a page
-	if got := callWork(t, reg, tracker.WriteProjectFileTool, map[string]any{
+	if got := callWork(t, reg, worklet.WriteProjectFileTool, map[string]any{
 		"path": "notes.txt", "content": text,
 	}); got.Failed {
 		t.Fatal(got.Output)
@@ -240,7 +240,7 @@ func TestALargeFileIsReadInPagesOnWholeCharacters(t *testing.T) {
 	var sb strings.Builder
 	offset := 0.0
 	for pages := 0; ; pages++ {
-		got := callWork(t, reg, tracker.ReadProjectFileTool, map[string]any{
+		got := callWork(t, reg, worklet.ReadProjectFileTool, map[string]any{
 			"path": "notes.txt", "offset": offset, "max_bytes": 1001,
 		})
 		if got.Failed {
@@ -273,17 +273,17 @@ func TestABinaryFileIsDescribedUnlessAskedForBytes(t *testing.T) {
 	files, objects := newFakeFiles(), newFakeObjects()
 	reg := workRegistry(t, fileDeps(files, objects))
 	raw := []byte{0x89, 'P', 'N', 'G', 0, 1, 2, 0xff}
-	if got := callWork(t, reg, tracker.WriteProjectFileTool, map[string]any{
+	if got := callWork(t, reg, worklet.WriteProjectFileTool, map[string]any{
 		"path": "logo.png", "content": base64.StdEncoding.EncodeToString(raw), "encoding": "base64",
 	}); got.Failed {
 		t.Fatal(got.Output)
 	}
-	got := callWork(t, reg, tracker.ReadProjectFileTool, map[string]any{"path": "logo.png"})
+	got := callWork(t, reg, worklet.ReadProjectFileTool, map[string]any{"path": "logo.png"})
 	if read := fileAnswer(t, got.Output); read["encoding"] != "binary" || read["content"] != nil ||
 		read["content_type"] != "image/png" {
 		t.Fatalf("a binary file read as text answered %v", read)
 	}
-	got = callWork(t, reg, tracker.ReadProjectFileTool, map[string]any{
+	got = callWork(t, reg, worklet.ReadProjectFileTool, map[string]any{
 		"path": "logo.png", "encoding": "base64",
 	})
 	read := fileAnswer(t, got.Output)
@@ -300,16 +300,16 @@ func TestAMissingFileIsNamedAndAFailedReadIsNot(t *testing.T) {
 	t.Parallel()
 	files, objects := newFakeFiles(), newFakeObjects()
 	reg := workRegistry(t, fileDeps(files, objects))
-	got := callWork(t, reg, tracker.ReadProjectFileTool, map[string]any{"path": "nope.md"})
+	got := callWork(t, reg, worklet.ReadProjectFileTool, map[string]any{"path": "nope.md"})
 	if !got.Failed || !strings.Contains(got.Output, "there is no file nope.md in ENG") {
 		t.Fatalf("a missing file answered %s", got.Output)
 	}
-	got = callWork(t, reg, tracker.ListProjectFilesTool, map[string]any{"project": "ops"})
+	got = callWork(t, reg, worklet.ListProjectFilesTool, map[string]any{"project": "ops"})
 	if !got.Failed || !strings.Contains(got.Output, "there is no project OPS") {
 		t.Fatalf("an unknown project answered %s", got.Output)
 	}
 	// Content the store cannot supply: the row is there, the bytes are not.
-	if got := callWork(t, reg, tracker.WriteProjectFileTool, map[string]any{
+	if got := callWork(t, reg, worklet.WriteProjectFileTool, map[string]any{
 		"path": "lost.md", "content": "gone",
 	}); got.Failed {
 		t.Fatal(got.Output)
@@ -317,7 +317,7 @@ func TestAMissingFileIsNamedAndAFailedReadIsNot(t *testing.T) {
 	objects.mu.Lock()
 	clear(objects.objects)
 	objects.mu.Unlock()
-	got = callWork(t, reg, tracker.ReadProjectFileTool, map[string]any{"path": "lost.md"})
+	got = callWork(t, reg, worklet.ReadProjectFileTool, map[string]any{"path": "lost.md"})
 	if !got.Failed || !strings.Contains(got.Output, "NOT empty or missing") ||
 		tools.RefusalOf(got) != tools.RefusalUnavailable {
 		t.Fatalf("a read whose bytes failed answered %s (refusal %q)", got.Output,
@@ -340,10 +340,10 @@ func TestALiveFileNamingNoObjectIsNotReadAsGone(t *testing.T) {
 	t.Parallel()
 	files, objects := newFakeFiles(), newFakeObjects()
 	reg := workRegistry(t, fileDeps(files, objects))
-	files.files[files.key("ENG", "odd.md")] = tracker.File{Project: "ENG", Path: "odd.md",
+	files.files[files.key("ENG", "odd.md")] = worklet.File{Project: "ENG", Path: "odd.md",
 		Hash: objstore.HashOf([]byte("odd")), Size: 3, Version: 1}
 
-	got := callWork(t, reg, tracker.ReadProjectFileTool, map[string]any{"path": "odd.md"})
+	got := callWork(t, reg, worklet.ReadProjectFileTool, map[string]any{"path": "odd.md"})
 	if !got.Failed || tools.RefusalOf(got) != tools.RefusalInternalError ||
 		!strings.Contains(got.Output, "will not help") {
 		t.Fatalf("a read of a live file naming no object answered %s (refusal %q)",
@@ -359,7 +359,7 @@ func TestCorruptContentIsNotAReadToRetry(t *testing.T) {
 	t.Parallel()
 	files, objects := newFakeFiles(), newFakeObjects()
 	reg := workRegistry(t, fileDeps(files, objects))
-	if got := callWork(t, reg, tracker.WriteProjectFileTool, map[string]any{
+	if got := callWork(t, reg, worklet.WriteProjectFileTool, map[string]any{
 		"path": "a.md", "content": "a",
 	}); got.Failed {
 		t.Fatal(got.Output)
@@ -367,7 +367,7 @@ func TestCorruptContentIsNotAReadToRetry(t *testing.T) {
 	objects.mu.Lock()
 	objects.corrupt = true
 	objects.mu.Unlock()
-	got := callWork(t, reg, tracker.ReadProjectFileTool, map[string]any{"path": "a.md"})
+	got := callWork(t, reg, worklet.ReadProjectFileTool, map[string]any{"path": "a.md"})
 	if !got.Failed || tools.RefusalOf(got) != tools.RefusalInternalError ||
 		!strings.Contains(got.Output, "will not help") {
 		t.Fatalf("a read of corrupt content answered %s (refusal %q)", got.Output,
@@ -386,7 +386,7 @@ func TestWritingTheSameContentAgainStoresNothing(t *testing.T) {
 	reg := workRegistry(t, fileDeps(files, objects))
 	write := func(args map[string]any) map[string]any {
 		t.Helper()
-		got := callWork(t, reg, tracker.WriteProjectFileTool, args)
+		got := callWork(t, reg, worklet.WriteProjectFileTool, args)
 		if got.Failed {
 			t.Fatal(got.Output)
 		}
@@ -417,16 +417,16 @@ func TestWritingTheSameContentAgainStoresNothing(t *testing.T) {
 func TestAnUploadTooOldToRecordIsMadeAgain(t *testing.T) {
 	t.Parallel()
 	files, objects := newFakeFiles(), newFakeObjects()
-	files.refuse = fmt.Errorf("%w: r.md", tracker.ErrUploadStale)
+	files.refuse = fmt.Errorf("%w: r.md", worklet.ErrUploadStale)
 	reg := workRegistry(t, fileDeps(files, objects))
-	got := callWork(t, reg, tracker.WriteProjectFileTool, map[string]any{
+	got := callWork(t, reg, worklet.WriteProjectFileTool, map[string]any{
 		"path": "r.md", "content": "late",
 	})
 	if !got.Failed || tools.RefusalOf(got) != tools.RefusalUnavailable ||
 		!strings.Contains(got.Output, "Make the same call again") {
 		t.Fatalf("a stale upload answered %s (refusal %q)", got.Output, tools.RefusalOf(got))
 	}
-	if !errors.Is(files.refuse, tracker.ErrUploadStale) {
+	if !errors.Is(files.refuse, worklet.ErrUploadStale) {
 		t.Fatal("the premise")
 	}
 }
@@ -456,14 +456,14 @@ func TestAFileIsRemovedByItsProjectsLeadOnly(t *testing.T) {
 			}); err != nil {
 				t.Fatalf("register: %v", err)
 			}
-			if got := callWorkAs(colleagueCaller(), t, reg, tracker.WriteProjectFileTool,
+			if got := callWorkAs(colleagueCaller(), t, reg, worklet.WriteProjectFileTool,
 				map[string]any{"path": "notes.md", "content": "kept"}); got.Failed {
 				t.Fatalf("a colleague could not keep a file in the project: %s", got.Output)
 			}
-			got := callWorkAs(colleagueCaller(), t, reg, tracker.RemoveProjectFileTool,
+			got := callWorkAs(colleagueCaller(), t, reg, worklet.RemoveProjectFileTool,
 				map[string]any{"path": "notes.md"})
 			_, err := files.File(t.Context(), "ENG", "notes.md", statelog.Freshness{})
-			removed := errors.Is(err, tracker.ErrNoFile)
+			removed := errors.Is(err, worklet.ErrNoFile)
 			switch {
 			case c.allowed && (got.Failed || !removed):
 				t.Errorf("the project's lead could not remove the file: %s", got.Output)

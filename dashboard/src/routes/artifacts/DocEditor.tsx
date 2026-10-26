@@ -13,7 +13,7 @@
  * # What to do about somebody else's publish
  *
  * A save refused because somebody published since (`version_moved`) is merged
- * onto their version tab by tab: text by line, as the Knowledge editor does,
+ * onto their version tab by tab: text by line, as the Doclet editor does,
  * titles and order as values. A merge with no overlap becomes the draft at
  * once, to be saved again; where both changed the same lines the person
  * settles each clash in `MergeConflicts`, and where both changed a title, the

@@ -281,7 +281,7 @@ func (o Object) Validate() error {
 // the grace exceeds this by more than any two nodes' clocks disagree.
 //
 // TWELVE HOURS: half the collector's day, and comfortably more than the
-// slowest upload the engine accepts — a file of tracker.MaxFileBytes at the
+// slowest upload the engine accepts: a file of worklet.MaxFileBytes at the
 // [MiBPace] floor is eight and a half hours from the key's minting to the
 // last byte stored — plus the write that follows it. The two inequalities are
 // pinned by one test where every constant they name can be imported

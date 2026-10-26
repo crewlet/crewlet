@@ -45,10 +45,10 @@ const EVERY_ACT = ["update_work_item", "create_work_item", "answer_knowledge"];
 
 const JANE: ViewerState = {
   login: "founder",
-  grants: ["admin", "tracker", "knowledge"],
+  grants: ["admin", "worklet", "doclet"],
   admin: true,
-  tracker: true,
-  knowledge: true,
+  worklet: true,
+  doclet: true,
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -68,8 +68,8 @@ const ANONYMOUS: ViewerState = {
   login: "",
   grants: [],
   admin: false,
-  tracker: false,
-  knowledge: false,
+  worklet: false,
+  doclet: false,
   handle: "",
   owner: "",
   name: "",
@@ -87,7 +87,7 @@ const UNBOUND: ViewerState = {
   ...ANONYMOUS,
   login: "ci",
   owner: "ci",
-  grants: ["tracker"],
+  grants: ["worklet"],
   acts: EVERY_ACT,
   anonymous: false,
   unbound: true,
@@ -808,11 +808,11 @@ describe("the actions, made as the person", () => {
     expect(posted.map((x) => [x.tool, x.body.args])).toEqual([
       ["create_work_item", { title: "rotate the join timeout", project: "ENG" }],
     ]);
-    expect(location.hash).toBe("#/work/ENG-431");
+    expect(location.hash).toBe("#/worklet/ENG-431");
   });
 
   test("create on a task page files into that task's project", async () => {
-    const p = mount({ answers: TASKS, hash: "#/work/OPS-7" });
+    const p = mount({ answers: TASKS, hash: "#/worklet/OPS-7" });
     await p.type("rotate the join timeout");
     const where = within(p.row(/Create task/)).getByText("in OPS · Operations");
     expect(where.getAttribute("title")).toBe("OPS: the project you are on");
@@ -915,7 +915,7 @@ describe("the actions, made as the person", () => {
   // A WRITE ROW IS NEVER HIDDEN: it is drawn for every reader, and where
   // this browser cannot act its hint is the sentence that says why — and a
   // press on it says so again instead of doing anything. (A reader holding no
-  // Tracker is sent no task search, so no task is at hand to assign.)
+  // Worklet is sent no task search, so no task is at hand to assign.)
   test.each([
     ["an anonymous reader", ANONYMOUS, WRITE_REASONS.anonymous, [/Ask an agent/, /Create task/]],
     [
@@ -1031,7 +1031,7 @@ describe("the actions, made as the person", () => {
       },
     });
     await p.type("cluster join");
-    expect(p.row(/Create task/).textContent).toContain("No projects yet. Add one in Work.");
+    expect(p.row(/Create task/).textContent).toContain("No projects yet. Add one in Worklet.");
   });
 
   // WHO HOLDS IT NOW is said on the assign step, from the picker's own read.
@@ -1285,7 +1285,7 @@ describe("projects, the switcher and the full search", () => {
     ]);
     expect(rows[1]!.textContent).toContain("3 open");
     fireEvent.click(rows[0]!);
-    expect(location.hash).toBe("#/work/OPS");
+    expect(location.hash).toBe("#/worklet/OPS");
     expect(p.closed).toHaveBeenCalled();
   });
 
@@ -1312,7 +1312,7 @@ describe("projects, the switcher and the full search", () => {
     const p = mount();
     await p.type("invoice");
     fireEvent.click(p.row("Search all work for “invoice”"));
-    expect(location.hash).toBe("#/work/search?q=invoice");
+    expect(location.hash).toBe("#/worklet/search?q=invoice");
   });
 });
 
@@ -1392,11 +1392,11 @@ describe("a screen found by what it holds", () => {
     expect(hits).toContain("Tasks");
   });
 
-  // SETTINGS OPENS WHERE THE READER MAY READ: a reader holding only Tracker
+  // SETTINGS OPENS WHERE THE READER MAY READ: a reader holding only Worklet
   // was sent to Models & keys, which is Admin's, and its entry read "needs
   // Admin access" although Token spend and Expensive tasks are theirs.
   // Mutation: go to the workspace's own path and the press lands on the lock.
-  test("a reader holding only Tracker opens Settings on Token spend, unlocked", () => {
+  test("a reader holding only Worklet opens Settings on Token spend, unlocked", () => {
     const to = vi.fn();
     const nav = { to } as unknown as Parameters<typeof destinationHits>[1];
     const runs = { tracker: true, knowledge: true };
@@ -1406,7 +1406,7 @@ describe("a screen found by what it holds", () => {
       Infinity,
       {
         anonymous: false,
-        grants: ["tracker"],
+        grants: ["worklet"],
       },
       runs,
     ).find((h) => h.id === "nav-settings")!;

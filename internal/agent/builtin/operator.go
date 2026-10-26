@@ -88,7 +88,7 @@ type OperatorDeps struct {
 // OperatorTools is the catalogue for one operator surface.
 //
 // A tool whose dependency is absent is OMITTED, on [Register]'s own rule: a
-// company on Jira has no native tracker, and an assistant shown a tool that
+// company on Jira has no Worklet, and an assistant shown a tool that
 // always fails learns to distrust the whole catalogue.
 //
 // The order is the order an operator's assistant meets them in: read before

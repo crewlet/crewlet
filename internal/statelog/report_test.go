@@ -394,8 +394,8 @@ func TestAnEvictionIsEffectiveExactlyWhenTheGateSaysSo(t *testing.T) {
 
 // A LIVE NODE WITH NO POSITION YET IS COUNTED, AND VISIBLE.
 //
-// It is a node between boot and its first heartbeat — a node adopting a
-// snapshot — and it blocks every term derived from the counted set. A row it
+// It is a live data node whose row has not landed — its heartbeat's write
+// refused — and it blocks every term derived from the counted set. A row it
 // did not appear in would be a block with no visible cause.
 func TestALiveNodeWithNoPositionIsCountedAndRendered(t *testing.T) {
 	t.Parallel()
@@ -855,7 +855,7 @@ func TestAnUnreadableRegisterIsNotAnEmptyFleet(t *testing.T) {
 // THE WHOLE DOCUMENT IS ONE WIRE CONTRACT, so every field in it is spelled
 // the same way.
 //
-// `GET /work/retention` and `crewlet retention status --json` hand this
+// `GET /worklet/retention` and `crewlet retention status --json` hand this
 // document to a script and to a dashboard, and both address fields by name.
 // [Alarm] shipped untagged, so the alarms array alone came back as
 // `Kind`/`Detail`/`Remedy` beside siblings spelling themselves `node_id` and

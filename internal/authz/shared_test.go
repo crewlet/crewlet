@@ -307,7 +307,7 @@ func TestTheLeadArmOpensOnlyAnAgentOwnersArtifacts(t *testing.T) {
 func TestAnArtifactRowIsNeverShownByItsApp(t *testing.T) {
 	t.Parallel()
 	for _, grants := range [][]iam.Grant{nil, {iam.GrantArtifacts},
-		{iam.GrantTracker, iam.GrantKnowledge}, {iam.GrantAdmin}, iam.AllGrants} {
+		{iam.GrantWorklet, iam.GrantDoclet}, {iam.GrantAdmin}, iam.AllGrants} {
 		if authz.Shows(person("jane.doe", grants...), authz.KindArtifact) {
 			t.Errorf("Shows(%v, artifact) is true: an artifact shown by its kind is "+
 				"every private artifact shown to every reader", grants)
@@ -344,7 +344,7 @@ func TestAnArtifactRowIsNeverShownByItsApp(t *testing.T) {
 		if k == authz.KindArtifact {
 			continue
 		}
-		p := person("jane.doe", iam.GrantTracker)
+		p := person("jane.doe", iam.GrantWorklet)
 		got, err := authz.Visible(t.Context(), p, authz.Object{Kind: k}, nimbus(), decidedAt)
 		if err != nil || got != authz.Shows(p, k) {
 			t.Errorf("Visible(%s) = %v, %v; want Shows' %v", k, got, err, authz.Shows(p, k))

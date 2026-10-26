@@ -242,7 +242,7 @@ func TestIamTokenAsksForWhatTheRouteReads(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"id":"c-1","person":"p-1","token":"cwl_pat_the-value",` +
-			`"grants":["tracker"],` +
+			`"grants":["worklet"],` +
 			`"expires_at":"2026-07-01T00:00:00Z"}`))
 	}))
 	defer node.Close()
@@ -251,7 +251,7 @@ func TestIamTokenAsksForWhatTheRouteReads(t *testing.T) {
 
 	var out, errs bytes.Buffer
 	if err := run([]string{"iam", "token", "-person", "p-1", "-label", "ci",
-		"-days", "30", "-grants", "tracker",
+		"-days", "30", "-grants", "worklet",
 		"-config", cfg, "-api", node.URL}, &out, &errs); err != nil {
 		t.Fatalf("iam token: %v\n%s", err, errs.String())
 	}
@@ -268,13 +268,13 @@ func TestIamTokenAsksForWhatTheRouteReads(t *testing.T) {
 		t.Errorf("the body was %v", seen.body)
 	}
 	if grants, _ := seen.body["grants"].([]any); len(grants) != 1 ||
-		grants[0] != "tracker" {
+		grants[0] != "worklet" {
 		t.Errorf("the grants reached the node as %v", seen.body["grants"])
 	}
 	if seen.auth != "Bearer a-tier-a-token" {
 		t.Errorf("authenticated as %q", seen.auth)
 	}
-	for _, want := range []string{"cwl_pat_the-value", "tracker", apiTokenEnv} {
+	for _, want := range []string{"cwl_pat_the-value", "worklet", apiTokenEnv} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the output does not carry %q:\n%s", want, out.String())
 		}
@@ -309,10 +309,10 @@ func TestStrippingGrantsIsSpeltAndNotImplied(t *testing.T) {
 	}
 	// TRIMMED, AND IN THE ENGINE'S ORDER whatever order it was typed in,
 	// each name once.
-	listed := read(" knowledge , tracker,knowledge ").body()
+	listed := read(" doclet , worklet,doclet ").body()
 	if got := listed["grants"].([]string); !slices.Equal(got,
-		[]string{"tracker", "knowledge"}) {
-		t.Errorf("the list parsed to %v, want tracker, knowledge", got)
+		[]string{"worklet", "doclet"}) {
+		t.Errorf("the list parsed to %v, want worklet, doclet", got)
 	}
 }
 
@@ -320,8 +320,8 @@ func TestStrippingGrantsIsSpeltAndNotImplied(t *testing.T) {
 //
 // Admin includes every app whether or not a row says so, so what this buys is
 // what happens when admin is taken AWAY: a row that listed the apps beside it
-// keeps them, and an administrator stepping down — a `remove_grants: [admin]`
-// from the dashboard, say — goes on using the tracker. A command that sent
+// keeps them, and an administrator stepping down (a `remove_grants: [admin]`
+// from the dashboard, say) goes on using Worklet. A command that sent
 // admin alone would leave that row holding nothing past the overview. So the
 // expansion is the command's, on every subcommand that sends a set, and it
 // reaches the node as the stored list.
@@ -333,7 +333,7 @@ func TestTheCLIStoresEveryAppWithAdmin(t *testing.T) {
 	for _, app := range iam.Apps {
 		every = append(every, string(app))
 	}
-	for _, flagged := range []string{"admin", "knowledge,admin", " admin , tracker "} {
+	for _, flagged := range []string{"admin", "doclet,admin", " admin , worklet "} {
 		granted, err := iamGrants(flagged)
 		if err != nil {
 			t.Fatalf("-grants %q: %v", flagged, err)
@@ -479,10 +479,10 @@ func TestAMachineCreateNamesItsGrants(t *testing.T) {
 			[]string{"-grants", "or none"}},
 		{[]string{"create", "-kind", "machine", "-login", "ci:release",
 			"-grants", "trackr"},
-			[]string{`"trackr"`, "admin, tracker, knowledge", "none"}},
+			[]string{`"trackr"`, "admin, worklet, doclet", "none"}},
 		{[]string{"invite", "lead@example.com", "-seat", "lead",
 			"-grants", "billing"},
-			[]string{`"billing"`, "admin, tracker, knowledge"}},
+			[]string{`"billing"`, "admin, worklet, doclet"}},
 		{[]string{"grant", "p-1", "-grants", "none,admin"},
 			[]string{"none", "on its own"}},
 		{[]string{"suspend", "p-1", "-grants", "admin"},
@@ -961,7 +961,7 @@ func TestAnIamInviteAndCreateTakeTheSeatTheOperatorNamed(t *testing.T) {
 	}
 
 	// AND NOWHERE ELSE.
-	if _, err = cli("grant", "p-1", "-grants", "tracker", "-seat",
+	if _, err = cli("grant", "p-1", "-grants", "worklet", "-seat",
 		"platform-lead"); err == nil || !strings.Contains(err.Error(), "iam bind") {
 		t.Errorf("a grant given -seat answered %v, want a refusal naming `iam bind`",
 			err)
@@ -1264,7 +1264,9 @@ func TestIamSeatsSaysWhoHoldsEachSeat(t *testing.T) {
 	}
 	fullFails = false
 
-	// A COMPANY THAT DECLARES NO HUMAN SEAT says so, with -unheld or without.
+	// A COMPANY THAT DECLARES NO HUMAN SEAT says so, with -unheld or without,
+	// and sends the reader to the builder by the name the dashboard draws it
+	// under: it has no Agents item, so a line naming one leads nowhere.
 	answer = `{"seats":[]}`
 	for _, args := range [][]string{{"seats"}, {"seats", "-unheld"}} {
 		none, err := cli(args...)
@@ -1274,6 +1276,11 @@ func TestIamSeatsSaysWhoHoldsEachSeat(t *testing.T) {
 		if !strings.Contains(none, "the company has no human seats") ||
 			strings.Contains(none, "no vacant") {
 			t.Errorf("iam %v over no human seat printed %q", args, none)
+		}
+		if !strings.Contains(none, "Org chart › Edit org") ||
+			strings.Contains(none, "Agents ›") {
+			t.Errorf("iam %v over no human seat named the builder as %q, "+
+				"want Org chart › Edit org", args, none)
 		}
 	}
 

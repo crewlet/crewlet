@@ -47,6 +47,28 @@
 // grammar constrains nothing an operator may name and a token in a proxy log
 // discloses no key ids.
 //
+// # The version is what redaction keys on
+//
+// Every token opens with the literal `crewlet_rt1`, which internal/redact
+// knows as it knows a GitHub token by its `ghp_`: a token is
+// `crewlet_rt1.<tag>.<subject>.<expiry>.<signature>`, and what a box hands
+// back — its report, its transcript, its question, its live output — is
+// redacted of every text of that shape. By its SHAPE, because no node that
+// collects a run holds the tokens its launch minted: the run's row carries
+// none, so there is no value to redact by, and a coding agent that prints its
+// environment or its MCP configuration prints its run's telemetry and bridge
+// tokens. A bare `v2`, which this was, is a word prose holds, so no rule could
+// key on it without redacting prose.
+//
+// The literal is spelled in both packages, since redact imports nothing of
+// the engine; runtoken's TestAMintedTokenIsRedacted holds the two to one
+// spelling, and a token's shape to the rule: the tag's [tagLen] characters,
+// the HMAC-SHA256's 43 in unpadded base64url, and a subject that holds no dot
+// (its separator; a subject that did would make a token [Signer.Validate]
+// refuses), no whitespace and no `[`, which a token's place in a URL path
+// rules out — every issuer's subject is a trace id, a nonce and a run id, or
+// base64url.
+//
 // # One implementation, because it was two
 //
 // This was written once for the OTLP receiver and would have been written a
@@ -70,8 +92,10 @@ import (
 )
 
 // version prefixes every token, so a future format can be told from this one
-// rather than failing as a bad signature.
-const version = "v2"
+// rather than failing as a bad signature — and so that a token is known by its
+// shape wherever it is printed. See the package doc's "The version is what
+// redaction keys on".
+const version = "crewlet_rt1"
 
 // minTTL floors a mint. A token that expired before it was handed over is a
 // run that fails on its first call for a reason nothing in the config
@@ -203,7 +227,10 @@ func New(opts Options) (*Signer, error) {
 // The SUBJECT is whatever the endpoint needs to know about the caller and
 // nothing more: a trace id for the telemetry receiver, a run id for the tool
 // bridge. It is not secret — it travels in a URL — so it must never be a
-// value that grants anything on its own.
+// value that grants anything on its own. And it holds no dot, no whitespace
+// and no `[`: a token whose subject held one is a token internal/redact does
+// not know by its shape (the package doc's "The version is what redaction
+// keys on"), so a box that printed it would have it persisted as printed.
 func (s *Signer) Mint(subject string, ttl time.Duration) string {
 	if ttl < minTTL {
 		ttl = minTTL

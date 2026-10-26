@@ -478,8 +478,8 @@ func (c *countingWithdrawals) ForgetAdmission(ctx context.Context, nodeID, incar
 
 // A PARTIAL SET IS REFUSED, NAMING WHAT IS MISSING. It used to be run: the
 // engine skipped whatever needed the absent piece, so an engine lent a queue
-// and no store served a company with no conversation ledger and no native
-// tracker, and nothing said so. Every node `crewlet run` builds holds all four.
+// and no store served a company with no conversation ledger and no Worklet,
+// and nothing said so. Every node `crewlet run` builds holds all four.
 func TestBackendsSuppliedWithoutEveryEstateAreRefused(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
@@ -927,7 +927,7 @@ func TestAnUnconfiguredEngineTakesItsFirstEpoch(t *testing.T) {
 //
 // An in-memory stream is not "queued events do not survive a restart": the
 // first restart recreates every log empty, and a node whose rows are ahead of
-// it stops serving for good. Measured on a company with no native tracker
+// it stops serving for good. Measured on a company with no Worklet
 // whose pages were the engine's own: it booted, logged an error, and after one
 // restart its pages applier stopped on the recreated stream and the node never
 // admitted a seat again.

@@ -16,8 +16,8 @@
  *
  * # What is counted
  *
- * The work ASSIGNED to the person that is still to do — the tracker's open
- * groups, `not_started` and `active` — and EVERY TASK ON ITS OWN
+ * The work ASSIGNED to the person that is still to do (Worklet's open
+ * groups, `not_started` and `active`) and EVERY TASK ON ITS OWN
  * (`subtasks=separate`), which is how the Queue's list draws them: in the
  * grammar's default a root this person holds brings its whole subtree along
  * unfiltered, so a count taken that way took in sub-tasks held by somebody
@@ -105,12 +105,12 @@ const Reading = createContext<QueueCount | null>(null);
  * asks for, for the reason [InboxCountsProvider] is.
  */
 export function QueueCountProvider({ children }: { children: ReactNode }) {
-  // THE TRACKER'S QUESTION, asked only of a reader holding it — the sidebar
+  // WORKLET'S QUESTION, asked only of a reader holding it; the sidebar
   // draws My work locked for anybody else.
   const viewer = useViewer();
-  // AND OF A COMPANY RUNNING CREWLET WORKS: elsewhere My work is not drawn.
+  // AND OF A COMPANY RUNNING WORKLET: elsewhere My work is not drawn.
   const ask = useServicesAsk();
-  const claim = useQueueCountRead(viewer.handle, viewer.tracker && ask.tracker);
+  const claim = useQueueCountRead(viewer.handle, viewer.worklet && ask.tracker);
   const value = useMemo(() => ({ claim }), [claim]);
   return createElement(Reading.Provider, { value }, children);
 }

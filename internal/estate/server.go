@@ -281,7 +281,7 @@ func deadlineOf(ctx context.Context) time.Time {
 	return d
 }
 
-// writtenItems is the [tracker.WriteLog] a served write reports into on behalf
+// writtenItems is the [worklet.WriteLog] a served write reports into on behalf
 // of an asking node's turn — see [reply.Written]. A walking gesture's writer
 // may report one item more than once; the set keeps it once, in the order it
 // was first reported.
@@ -290,7 +290,7 @@ type writtenItems struct {
 	items []types.WorkItem
 }
 
-// Add implements [tracker.WriteLog].
+// Add implements [worklet.WriteLog].
 func (w *writtenItems) Add(item types.WorkItem) {
 	w.mu.Lock()
 	defer w.mu.Unlock()

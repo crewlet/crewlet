@@ -23,27 +23,27 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/slack"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // Which work item a turn is on — the rules in worksubject.go, driven through
 // the frames that publish a turn's opening and closing records, because what a
 // reader sees is those records rather than the resolver.
 
-// nativeTask is the item the tracker cases wake a seat about.
-var nativeTask = types.WorkItem{
-	Backend: types.WorkNative, ID: "task-1", Key: "ENG-1", Project: "ENG",
+// workletTask is the item the Worklet cases wake a seat about.
+var workletTask = types.WorkItem{
+	Backend: types.WorkWorklet, ID: "task-1", Key: "ENG-1", Project: "ENG",
 }
 
-// trackerWake is a native tracker wake about task-1, as the parser writes it.
+// trackerWake is a Worklet wake about task-1, as the parser writes it.
 func trackerWake() *events.Event {
 	return events.New(types.ExternalNotification{
-		NotificationSource: tracker.Source, SourceEventType: "assigned",
+		NotificationSource: worklet.Source, SourceEventType: "assigned",
 		Subject: "ENG-1: fix the build", Addressed: true,
 		Metadata: map[string]string{
-			tracker.MetaTaskID: "task-1", tracker.MetaTaskKey: "ENG-1",
-			tracker.MetaProject: "ENG", tracker.MetaObject: "task",
-			tracker.MetaObjectID: "task-1",
+			worklet.MetaTaskID: "task-1", worklet.MetaTaskKey: "ENG-1",
+			worklet.MetaProject: "ENG", worklet.MetaObject: "task",
+			worklet.MetaObjectID: "task-1",
 		},
 	}, events.TraceContext{})
 }
@@ -96,7 +96,7 @@ func charged(t *testing.T, want types.WorkItem, basis types.WorkItemBasis,
 func TestATrackerWakeNamesItsItem(t *testing.T) {
 	t.Parallel()
 	start, summary, done := turnRecords(t, trackerWake())
-	charged(t, nativeTask, types.BasisTrigger, start, summary, done)
+	charged(t, workletTask, types.BasisTrigger, start, summary, done)
 }
 
 // A WAKE ABOUT A PERSON'S OWN LIST NAMES NO ITEM.
@@ -107,9 +107,9 @@ func TestATrackerWakeNamesItsItem(t *testing.T) {
 func TestAPersonWakeHasNoItem(t *testing.T) {
 	t.Parallel()
 	start, summary, done := turnRecords(t, events.New(types.ExternalNotification{
-		NotificationSource: tracker.Source, SourceEventType: "prioritised",
+		NotificationSource: worklet.Source, SourceEventType: "prioritised",
 		Metadata: map[string]string{
-			tracker.MetaObject: "person", tracker.MetaObjectID: "ada",
+			worklet.MetaObject: "person", worklet.MetaObjectID: "ada",
 		},
 	}, events.TraceContext{}))
 	if start.WorkItem != nil || summary.WorkItem != nil || done.WorkItem != nil {
@@ -204,12 +204,12 @@ func TestAChatWakeHasNoItemAtDispatch(t *testing.T) {
 // basis, whatever basis the asker had.
 func TestAnAskInheritsTheAskersItem(t *testing.T) {
 	t.Parallel()
-	asked := nativeTask
+	asked := workletTask
 	start, summary, done := turnRecords(t, events.New(types.A2ARequest{
 		ChannelID: "a2a-1", Requester: "lead", Content: "which test is flaky?",
 		WorkItem: &asked, WorkItemBasis: types.BasisTrigger,
 	}, events.TraceContext{}))
-	charged(t, nativeTask, types.BasisAskedBy, start, summary, done)
+	charged(t, workletTask, types.BasisAskedBy, start, summary, done)
 }
 
 // A RESUMED TURN KEEPS THE ITEM IT PARKED WITH.
@@ -222,7 +222,7 @@ func TestAResumedTurnKeepsTheItemItParkedWith(t *testing.T) {
 	t.Parallel()
 	e, p := starting(t, refusingModels(t))
 	company := e.Company()
-	parked := nativeTask
+	parked := workletTask
 	if err := e.resumeTurn(t.Context(), resumeInput{
 		Company: company,
 		Run: sandbox.PendingRun{
@@ -237,7 +237,7 @@ func TestAResumedTurnKeepsTheItemItParkedWith(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("resumeTurn: %v", err)
 	}
-	charged(t, nativeTask, types.BasisResume,
+	charged(t, workletTask, types.BasisResume,
 		*only[*types.AgentTurnStarted](t, p, "agent_turn_started"),
 		*only[*types.AgentTurnCompleted](t, p, "agent_turn_completed"),
 		*only[*types.TurnCompleted](t, p, "turn_completed"))
@@ -268,7 +268,7 @@ func completing(t *testing.T, written []types.WorkItem, res turn.Result) (
 // tells a reader it was inferred from what the turn did.
 func TestASoleWriteNamesTheItemAtCompletion(t *testing.T) {
 	t.Parallel()
-	summary, done := completing(t, []types.WorkItem{nativeTask, nativeTask}, turn.Result{})
+	summary, done := completing(t, []types.WorkItem{workletTask, workletTask}, turn.Result{})
 	for name, got := range map[string]struct {
 		item  *types.WorkItem
 		basis types.WorkItemBasis
@@ -276,7 +276,7 @@ func TestASoleWriteNamesTheItemAtCompletion(t *testing.T) {
 		"agent_turn_completed": {summary.WorkItem, summary.WorkItemBasis},
 		"turn_completed":       {done.WorkItem, done.WorkItemBasis},
 	} {
-		if got.item == nil || *got.item != nativeTask || got.basis != types.BasisSoleWrite {
+		if got.item == nil || *got.item != workletTask || got.basis != types.BasisSoleWrite {
 			t.Errorf("%s names %+v (%q), want the one item written, as a sole write",
 				name, got.item, got.basis)
 		}
@@ -287,8 +287,8 @@ func TestASoleWriteNamesTheItemAtCompletion(t *testing.T) {
 // whichever of its items happened to be written first.
 func TestTwoWritesNameNoItem(t *testing.T) {
 	t.Parallel()
-	other := types.WorkItem{Backend: types.WorkNative, ID: "task-2", Key: "ENG-2", Project: "ENG"}
-	summary, done := completing(t, []types.WorkItem{nativeTask, other}, turn.Result{})
+	other := types.WorkItem{Backend: types.WorkWorklet, ID: "task-2", Key: "ENG-2", Project: "ENG"}
+	summary, done := completing(t, []types.WorkItem{workletTask, other}, turn.Result{})
 	if summary.WorkItem != nil || done.WorkItem != nil {
 		t.Errorf("a turn that wrote two items was charged to %+v / %+v",
 			summary.WorkItem, done.WorkItem)
@@ -303,7 +303,7 @@ func TestTwoWritesNameNoItem(t *testing.T) {
 // finished writing: the resumed half may write a second item.
 func TestASuspensionSaysItIsNotAnEnd(t *testing.T) {
 	t.Parallel()
-	summary, done := completing(t, []types.WorkItem{nativeTask}, turn.Result{Suspended: true})
+	summary, done := completing(t, []types.WorkItem{workletTask}, turn.Result{Suspended: true})
 	if !summary.Suspended || !done.Suspended {
 		t.Errorf("suspended = %v / %v, want both records to say the segment parked",
 			summary.Suspended, done.Suspended)
@@ -330,7 +330,7 @@ func TestTheWritesBeforeAParkCountAtTheEnd(t *testing.T) {
 			TurnID: "run-1", AgentHandle: "swe", Reply: "tool",
 			TaskDescription: "fix the failing test", DelegationDepth: 3,
 		},
-		State: execstate.State{Written: []types.WorkItem{nativeTask}},
+		State: execstate.State{Written: []types.WorkItem{workletTask}},
 		Turn: &turnctx.Turn{RunID: "run-1", Seat: company.Org.AgentSeatByHandle("swe"),
 			Org: company.Org},
 		Answer:  "done",
@@ -339,7 +339,7 @@ func TestTheWritesBeforeAParkCountAtTheEnd(t *testing.T) {
 		t.Fatalf("resumeTurn: %v", err)
 	}
 	done := only[*types.TurnCompleted](t, p, "turn_completed")
-	if done.WorkItem == nil || *done.WorkItem != nativeTask ||
+	if done.WorkItem == nil || *done.WorkItem != workletTask ||
 		done.WorkItemBasis != types.BasisSoleWrite {
 		t.Errorf("the finishing segment names %+v (%q), want the item written "+
 			"before the park, as a sole write", done.WorkItem, done.WorkItemBasis)
@@ -418,7 +418,7 @@ type writingDetach struct{ suspendingTool }
 func (w writingDetach) CallDetached(ctx context.Context, t *turnctx.Turn,
 	args map[string]any,
 ) (tools.DetachedResult, error) {
-	t.Written.Add(nativeTask)
+	t.Written.Add(workletTask)
 	return w.suspendingTool.CallDetached(ctx, t, args)
 }
 
@@ -456,7 +456,7 @@ func TestAParkCarriesWhatTheTurnWrote(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("decode the suspension: ok=%v err=%v", ok, err)
 	}
-	if len(state.Written) != 1 || state.Written[0] != nativeTask {
+	if len(state.Written) != 1 || state.Written[0] != workletTask {
 		t.Errorf("the suspension carries %+v, want the task written before the park",
 			state.Written)
 	}
@@ -509,7 +509,7 @@ func TestTheToolsAndTheCompletionShareOneWriteSet(t *testing.T) {
 	if ctx.Written == nil || ctx.Written != tel.written {
 		t.Fatal("the turn context's write set is not the one the completion reads")
 	}
-	if ctx.WorkItem == nil || *ctx.WorkItem != nativeTask || ctx.WorkItemBasis != types.BasisTrigger {
+	if ctx.WorkItem == nil || *ctx.WorkItem != workletTask || ctx.WorkItemBasis != types.BasisTrigger {
 		t.Errorf("the turn context names %+v (%q), want the trigger's item",
 			ctx.WorkItem, ctx.WorkItemBasis)
 	}

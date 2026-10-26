@@ -40,7 +40,7 @@ func TestAStoreFaultInAReadToolIsAFault(t *testing.T) {
 	logging.Configure(slog.LevelInfo, logging.FormatText, logs)
 	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatConsole, os.Stderr) })
 
-	disk := errors.New("tracker: read ENG-1: open /var/lib/crewlet/replicated.db: " +
+	disk := errors.New("worklet: read ENG-1: open /var/lib/crewlet/replicated.db: " +
 		"disk I/O error")
 	trk := newFakeTracker()
 	trk.readErr = disk
@@ -110,12 +110,12 @@ func TestABrokerBlipAndABusyStoreAreConditions(t *testing.T) {
 	}
 
 	// THE STORE'S GIVE-UP, wrapped the way the store wraps it.
-	trk.writeErr = fmt.Errorf("tracker: update ENG-1: %w",
+	trk.writeErr = fmt.Errorf("worklet: update ENG-1: %w",
 		fmt.Errorf("%w: %w", store.ErrBusy, locked))
 	got := update()
 	assertCondition(t, "a write the store was too busy to take", got, store.ErrBusy, "turso")
 
-	trk.writeErr = fmt.Errorf("tracker: update ENG-1: %w", locked)
+	trk.writeErr = fmt.Errorf("worklet: update ENG-1: %w", locked)
 	if got := update(); tools.RefusalOf(got) != tools.RefusalInternalError {
 		t.Errorf("a lock error the store did not mark busy answered %s (%q); the "+
 			"store marks exactly the give-up a wait clears, and words are not a mark",

@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -91,7 +94,7 @@ func newSelfNode(t *testing.T) *selfNode {
 		}
 		httpjson.Write(w, http.StatusCreated, map[string]any{
 			"id": "c-1", "person": "p-jane", "token": "cwl_pat_the-value",
-			"grants":     []string{"tracker"},
+			"grants":     []string{"worklet"},
 			"expires_at": "2026-07-01T00:00:00Z",
 		})
 	})
@@ -130,7 +133,7 @@ func runSelf(t *testing.T, n *selfNode, stdin string, extra ...string) (
 
 	t.Helper()
 	args := append([]string{"token", "-login", "jane.doe", "-label", "laptop",
-		"-grants", "tracker", "-config", selfConfig(t), "-api", n.server.URL},
+		"-grants", "worklet", "-config", selfConfig(t), "-api", n.server.URL},
 		extra...)
 	var out, errs bytes.Buffer
 	err := runIAM(noEnviron, args, strings.NewReader(stdin), &out, &errs)
@@ -278,5 +281,106 @@ func TestTheCommandLineStatesTheOriginABrowserWould(t *testing.T) {
 		if got := reachedAt(&boot, dialled); got != tc.want {
 			t.Errorf("reachedAt with api.external_url %q = %q, want %q", tc.external, got, tc.want)
 		}
+	}
+}
+
+// A PIPED PASSWORD, OR THE CODE AFTER IT, IS READ NO FURTHER THAN ANY SIGN-IN
+// CARRIES, and refused before anything is sent.
+//
+// Each was the next line of standard input, read to its end: a file piped by
+// mistake was read up to its first line ending, so a blob with none was read
+// whole into memory, and a stream with no line ending was a sign-in that
+// never began. A sign-in's whole body is at most
+// [authapi.MaxLoginBodyBytes], so no password or code is longer; the line is
+// refused at that bound, having read at most one buffer of the line reader
+// past it (bufio's default, 4096 bytes), and the node sees nothing for a
+// password and only the first sign-in for a code.
+//
+// Mutation: read the line with ReadString again, and the stream with no
+// ending runs into its reader's guard and is answered as a failed read.
+func TestAPipedPasswordOrCodeIsReadNoFurtherThanAnySignInCarries(t *testing.T) {
+	const most = maxPipedPasswordBytes + len("\r\n") + 4096
+	for _, tc := range []struct {
+		name     string
+		before   string
+		wantCode string
+		signIns  int
+	}{
+		{name: "the password", signIns: 0},
+		{name: "the second-factor code", before: "a long pass phrase\n", wantCode: "123456", signIns: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n := newSelfNode(t)
+			n.wantCode = tc.wantCode
+			endless := &endlessReader{}
+			args := []string{"token", "-login", "jane.doe", "-label", "laptop",
+				"-grants", "worklet", "-config", selfConfig(t), "-api", n.server.URL}
+			var out, errs bytes.Buffer
+			err := runIAM(noEnviron, args, io.MultiReader(strings.NewReader(tc.before), endless),
+				&out, &errs)
+			if !errors.Is(err, errPipedPasswordTooLong) {
+				t.Fatalf("a line with no end answered %v, want errPipedPasswordTooLong", err)
+			}
+			if endless.read > most {
+				t.Errorf("read %d bytes of the stream to refuse it, want at most %d", endless.read, most)
+			}
+			if len(n.signIns) != tc.signIns {
+				t.Errorf("the node saw %d sign-in(s), want %d", len(n.signIns), tc.signIns)
+			}
+		})
+	}
+}
+
+// A PASSWORD AT THE BOUND IS A PASSWORD, on either reader, and a byte past it
+// is not: the bound refuses a pipe pointed at the wrong thing, never a
+// password a sign-in could carry. A line ending, `\n` or `\r\n`, is not part
+// of the password; the last line may have none, and the code is the line
+// after the password.
+//
+// So the bound is the password's, measured once the ending is gone: a byte
+// past it is refused whatever ending follows, or none. Held to the raw bytes
+// with room for `\r\n`, a password a byte past the bound passed with `\n` or
+// with no ending, and only `\r\n` after it was refused.
+//
+// Mutation: drop the length check after the ending is trimmed, and the
+// password a byte past the bound with `\n` or with no ending is read back on
+// both readers.
+func TestAPasswordAtTheBoundIsReadWholeAndOnePastItIsNot(t *testing.T) {
+	t.Parallel()
+	atLimit := strings.Repeat("p", maxPipedPasswordBytes)
+	for _, ending := range []string{"", "\n", "\r\n"} {
+		if got, err := readPipedPassword(strings.NewReader(atLimit + ending)); err != nil || got != atLimit {
+			t.Errorf("readPipedPassword of the bound and %q: %d bytes, %v", ending, len(got), err)
+		}
+		next := "123456"
+		if ending == "" {
+			next = ""
+		}
+		lines := bufio.NewReader(strings.NewReader(atLimit + ending + next))
+		if got, err := readPiped(lines); err != nil || got != atLimit {
+			t.Errorf("readPiped of the bound and %q: %d bytes, %v", ending, len(got), err)
+		}
+		if next == "" {
+			continue
+		}
+		if got, err := readPiped(lines); err != nil || got != next {
+			t.Errorf("the line after a password at the bound read as %q, %v", got, err)
+		}
+	}
+	for _, ending := range []string{"", "\n", "\r\n"} {
+		past := atLimit + "p" + ending
+		if got, err := readPipedPassword(strings.NewReader(past)); !errors.Is(err, errPipedPasswordTooLong) {
+			t.Errorf("readPipedPassword a byte past the bound and %q: %d bytes, %v", ending, len(got), err)
+		}
+		if got, err := readPiped(bufio.NewReader(strings.NewReader(past))); !errors.Is(err, errPipedPasswordTooLong) {
+			t.Errorf("readPiped a byte past the bound and %q: %d bytes, %v", ending, len(got), err)
+		}
+	}
+	endless := &endlessReader{}
+	if _, err := readPipedPassword(endless); !errors.Is(err, errPipedPasswordTooLong) {
+		t.Fatalf("readPipedPassword of a stream that never ends answered %v", err)
+	}
+	if most := maxPipedPasswordBytes + len("\r\n") + 1; endless.read > most {
+		t.Errorf("readPipedPassword read %d bytes of the stream, want at most %d", endless.read, most)
 	}
 }

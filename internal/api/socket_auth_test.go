@@ -122,7 +122,7 @@ func TestACookieAuthenticatesTheHandshake(t *testing.T) {
 	b := closedPosture()
 	b.API.ExternalURL = "http://127.0.0.1:8080"
 	cookies := newCookieArm(t, &b)
-	live := cookies.person(t, []iam.Grant{iam.GrantTracker}, clock)
+	live := cookies.person(t, []iam.Grant{iam.GrantWorklet}, clock)
 	over := cookies.ended(t)
 	a := newApp(t, api.Options{Bootstrap: &b, Sessions: cookies.arm})
 	without := newApp(t, api.Options{Bootstrap: &b})

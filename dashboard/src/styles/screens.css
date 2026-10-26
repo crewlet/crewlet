@@ -1447,7 +1447,7 @@ a.oc-key:hover {
   min-width: 0;
 }
 /* A PAIR WITH ONE CARD LEFT GIVES IT THE ROW: where the company runs no
-   Crewlet Works the seat's Assigned work draws nothing, and Turns per day sat
+   Worklet the seat's Assigned work draws nothing, and Turns per day sat
    in the left track beside a 334px hole. */
 .prof-pair > :only-child {
   grid-column: 1 / -1;
@@ -2004,9 +2004,9 @@ a.prof-row:hover {
 }
 
 /* ---- Org builder --------------------------------------------------------
-   Agents › Edit org (`routes/org/builder/`, at `#/agents/edit`), the one
-   screen that WRITES the org. Its recipes live here beside the chart's
-   because it draws the same chart, and the two must read as one.
+   Org chart › Edit org (`routes/org/builder/`, at `#/company/org/edit`),
+   the one screen that WRITES the org. Its recipes live here beside the
+   chart's because it draws the same chart, and the two must read as one.
 
    Read `routes/org/builder/builderStyles.test.ts` before changing anything
    below — it reads these rules as text and states what each one buys. */
@@ -2749,10 +2749,10 @@ a.prof-row:hover {
   font-variant-numeric: tabular-nums;
 }
 
-/* ---- Knowledge ----------------------------------------------------------
+/* ---- Doclet -------------------------------------------------------------
 
-   THE APPROVED KNOWLEDGE HOME (routes/knowledge/): the spaces in one row at
-   the top of every Knowledge screen, the search in the page bar, and the
+   THE APPROVED DOCLET HOME (routes/doclet/): the spaces in one row at
+   the top of every Doclet screen, the search in the page bar, and the
    screen's own content at the full width of the sheet, with no column of
    navigation beside it. Every size here is a token; the widths a layout
    needs and no token states are rem, named where they are declared. */
@@ -4713,7 +4713,7 @@ details > summary.int-summary::-webkit-details-marker {
   border-color: var(--color-text-muted);
 }
 
-/* ---- The work tracker ---------------------------------------------------
+/* ---- Worklet ------------------------------------------------------------
    The rail, the head, the three shapes, the peek and the item page.
 
    TWO RULES DECIDE MOST OF WHAT IS HERE.
@@ -5777,7 +5777,7 @@ span.list-position-step {
    than the priority mark's — a subgrid item's padding comes out of the first
    track it spans, so a bare width there resolves to nothing and the value
    overflows onto the cell beside it. 20px is two tabular digits at `--font-size-2xs`,
-   which is the whole range a stored queue has (`tracker.MaxPriorities` is 32).
+   which is the whole range a stored queue has (`worklet.MaxPriorities` is 32).
    The priority mark keeps the bare 16px it needs, one column along. */
 .work-rows[data-ordinals="true"] {
   grid-template-columns:
@@ -5980,7 +5980,7 @@ span.list-position-step {
 
 /* The bar under a project's header: the fact line says how much, and this
    splits it — done, active and still to do, over exactly that census, closed
-   work not in the whole. `routes/work/census.tsx` is where that reading is
+   work not in the whole. `routes/worklet/census.tsx` is where that reading is
    argued, and it owns this wrapper so the page and the peek draw one census
    rather than two widths. */
 .work-census {
@@ -7242,7 +7242,7 @@ a.work-cal-chip {
 /* A TABLE SCROLLS RATHER THAN OVERFLOWING ITS PANEL. A page's own table is
    written for a document and can be wider than the column it lands in here.
    SCOPED TO `.prose.md` like every rule above: the same renderer draws a doc
-   and a Knowledge page into uilet's `Document`, and the rich editor names its
+   and a Doclet page into uilet's `Document`, and the rich editor names its
    tables `md-table` too, so an unscoped rule here outranked the design
    system's table there (a 12px table in a 14px body, its header in the
    secondary ink). */
@@ -8169,7 +8169,7 @@ a.work-cal-chip {
   margin-top: var(--spacing-2);
 }
 
-/* The tracker's widgets (Work, My work, Inbox): a task or a notice as one
+/* Worklet's widgets (Worklet, My work, Inbox): a task or a notice as one
    line of the design system's list, inside the widget's card. */
 /* The rows sit on the card's own inset, under a hairline from its header. */
 .home-tasks {
@@ -8973,7 +8973,7 @@ a.live-row:focus-visible {
   }
 }
 
-/* ---- Work › Search's form (`routes/work/WorkSearch.tsx`) -----------------
+/* ---- Worklet › Search's form (`routes/worklet/WorkSearch.tsx`) --------------
    THE PHRASE NEVER GIVES WAY. The field, the three modes and Search shared
    one row that did not wrap, and at a phone's width the field shrank to 20px
    — a magnifier with nowhere to read the phrase. The form wraps BY WHAT IT
@@ -9000,7 +9000,7 @@ a.live-row:focus-visible {
   max-width: 100%;
 }
 
-/* ---- The New task sheet (`routes/work/NewTask.tsx`) ----------------------
+/* ---- The New task sheet (`routes/worklet/NewTask.tsx`) ----------------------
    Two short fields side by side — type and status, priority and due — because
    each is a word or a date and a full sheet width of one is a line the eye
    crosses for nothing. They stack at a phone's width, where half a sheet is
@@ -10684,7 +10684,7 @@ a.live-row:focus-visible {
 }
 
 /* A DOC: its tabs in one bar, then the outline beside the tab on show, laid
-   out by the Knowledge page's own rules (`.doc-read`, under "A page"); one
+   out by the Doclet page's own rules (`.doc-read`, under "A page"); one
    column on a narrow page. */
 .doc-view {
   display: flex;

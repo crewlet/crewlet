@@ -1504,7 +1504,7 @@ func pack(v []float32, dim int) ([]byte, error) {
 	return out, nil
 }
 
-// TaskCorpus embeds the native tracker's tasks.
+// TaskCorpus embeds Worklet's tasks.
 //
 // ONE STATEMENT, because `tracker_tasks` and `kb_vectors` are both in the
 // replicated estate: the selection is an anti-join between the rows and their
@@ -1555,7 +1555,7 @@ const (
 //
 // EXPORTED FOR THE TRACKER'S INDEX GATE, which plans every statement that reads
 // `tracker_tasks` against the indexes the tracker declares
-// (internal/tracker's TestEveryIndexServesARegisteredQuery). A copy written
+// (internal/worklet's TestEveryIndexServesARegisteredQuery). A copy written
 // for the gate certifies a statement nothing runs, which is how an index on a
 // column nothing ever wrote was kept for this duty's "selection" while the
 // selection the duty does run was certified by nothing.

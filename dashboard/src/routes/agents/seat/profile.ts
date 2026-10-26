@@ -53,8 +53,8 @@ export type SeatTab = (typeof AGENT_TABS)[number];
 
 /**
  * The tabs a seat's page draws for a company running `runs`: its kind's,
- * without Work where the company runs no Crewlet Works, since every task on it
- * is that tracker's.
+ * without Work where the company runs no Worklet, since every task on it is
+ * Worklet's.
  */
 export function seatTabs(human: boolean, runs: ServicesRun): readonly SeatTab[] {
   const tabs: readonly SeatTab[] = human ? HUMAN_TABS : AGENT_TABS;
@@ -96,21 +96,21 @@ export function findSeat(index: OrgIndex, handle: string): Seat | null {
 /**
  * Whether this page asks for a person's own record — their inbox, the order
  * they mean to work in, the claims on their plate — which the engine answers
- * to a TRACKER holder who owns it, leads them or is an admin.
+ * to a WORKLET holder who owns it, leads them or is an admin.
  *
- * THE APP FIRST: every one of those questions is the tracker's, so a reader
- * without Tracker is asked nothing, whoever they lead. THEN THE LEAD, on the
+ * THE APP FIRST: every one of those questions is Worklet's, so a reader
+ * without Worklet is asked nothing, whoever they lead. THEN THE LEAD, on the
  * chart's own reading of who is in their line, the rule My work reads a
  * report's day by. Asked only on Admin and the owner, a lead opening a
  * report's page was told the record needs Admin "or leading them" about
  * somebody they lead, and their day was never drawn.
  */
 export function mayReadRecord(
-  viewer: Pick<ViewerState, "admin" | "tracker" | "handle">,
+  viewer: Pick<ViewerState, "admin" | "worklet" | "handle">,
   index: OrgIndex,
   handle: string,
 ): boolean {
-  if (!viewer.tracker) return false;
+  if (!viewer.worklet) return false;
   if (viewer.admin) return true;
   if (isOwnSeat(viewer, handle)) return true;
   return leadsInLine(index, viewer.handle, handle);

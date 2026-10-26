@@ -80,7 +80,7 @@ type NodeGate interface {
 	Readmit(ctx context.Context, req engine.GateRequest) (engine.GateResult, error)
 }
 
-// serveRetentionAck answers POST /work/retention/ack.
+// serveRetentionAck answers POST /worklet/retention/ack.
 //
 // It publishes an OPERATOR backup floor: the assertion that a copy has reached
 // wherever the company's policy says it must, which the engine cannot see for
@@ -110,7 +110,7 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 		// acknowledged at some other log's generation.
 		//
 		// 404 AND NOT 503, which is the classification GET
-		// /work/retention/reanchor already gives the same refusal from
+		// /worklet/retention/reanchor already gives the same refusal from
 		// the same call: nothing here is transient, and a 503 tells an
 		// operator who typed the stream name wrong to wait and try the
 		// identical request again.
@@ -193,16 +193,16 @@ func (a *App) generationOf(stream string) (uint32, error) {
 // mountRetention registers the write half of the retention surface, through
 // the mount [App.mountDeployment] hands it — which is what decides the grant.
 //
-// NO PURGE HERE. A work item's purge used to be `POST /work/{id}/purge` on
+// NO PURGE HERE. A work item's purge used to be `POST /worklet/{id}/purge` on
 // this surface, with an operator check written beside it; it is
-// `POST /work/items/{key}/purge` on the human write surface now
+// `POST /worklet/items/{key}/purge` on the human write surface now
 // (internal/api/workapi), decided by the authority table's
 // [authz.ActionWorkPurge] like every other verb, with its op id taken from the
 // request's `Idempotency-Key`.
 func (a *App) mountRetention(mount func(string, http.HandlerFunc)) {
-	mount("POST /work/retention/ack", a.serveRetentionAck)
-	mount("POST /work/retention/evict/{node}", a.gate(true))
-	mount("POST /work/retention/readmit/{node}", a.gate(false))
+	mount("POST /worklet/retention/ack", a.serveRetentionAck)
+	mount("POST /worklet/retention/evict/{node}", a.gate(true))
+	mount("POST /worklet/retention/readmit/{node}", a.gate(false))
 }
 
 // callerOpID is the operation id a caller brought in `?op_id=`, or a fresh one
@@ -356,15 +356,15 @@ type capacityRunner interface {
 // the maintenance-mode node runs its API: these are that mode's own control
 // surface rather than the write routes the mode withholds.
 func (a *App) mountCapacity(mount func(string, http.HandlerFunc)) {
-	mount("POST /work/retention/capacity", a.serveSetCapacity)
-	mount("GET /work/retention/maintenance", a.serveMaintenanceStatus)
-	mount("POST /work/retention/maintenance/abandon", a.serveAbandon)
-	mount("POST /work/retention/maintenance/exclude", a.serveExclude)
-	mount("GET /work/retention/reanchor", a.serveReanchorStatus)
-	mount("POST /work/retention/reanchor", a.serveReanchor)
+	mount("POST /worklet/retention/capacity", a.serveSetCapacity)
+	mount("GET /worklet/retention/maintenance", a.serveMaintenanceStatus)
+	mount("POST /worklet/retention/maintenance/abandon", a.serveAbandon)
+	mount("POST /worklet/retention/maintenance/exclude", a.serveExclude)
+	mount("GET /worklet/retention/reanchor", a.serveReanchorStatus)
+	mount("POST /worklet/retention/reanchor", a.serveReanchor)
 }
 
-// serveReanchorStatus answers GET /work/retention/reanchor: the stream's own
+// serveReanchorStatus answers GET /worklet/retention/reanchor: the stream's own
 // creation instant, which is the value the confirmation has to echo, and the
 // case a reanchor would answer now — `recreated` (followed from its first
 // surviving record), `restored` (followed from its end) or `abandoned`
@@ -419,13 +419,13 @@ func (a *App) serveReanchorStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, answer)
 }
 
-// serveReanchor answers POST /work/retention/reanchor.
+// serveReanchor answers POST /worklet/retention/reanchor.
 func (a *App) serveReanchor(w http.ResponseWriter, r *http.Request) {
 	stream, confirm := r.URL.Query().Get("stream"), r.URL.Query().Get("confirm")
 	if stream == "" || confirm == "" {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeConfirmRequired, map[string]string{
 			"detail": "echo the stream's own created_at from GET " +
-				"/work/retention/reanchor — a reanchor declares every position " +
+				"/worklet/retention/reanchor; a reanchor declares every position " +
 				"below the new generation stale, and the confirmation is what " +
 				"says you looked at the stream you are re-anchoring",
 		})
@@ -463,7 +463,7 @@ func (a *App) serveReanchor(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, answer)
 }
 
-// serveSetCapacity answers POST /work/retention/capacity.
+// serveSetCapacity answers POST /worklet/retention/capacity.
 func (a *App) serveSetCapacity(w http.ResponseWriter, r *http.Request) {
 	stream := r.URL.Query().Get("stream")
 	target, err := strconv.ParseUint(r.URL.Query().Get("bytes"), 10, 64)
@@ -512,7 +512,7 @@ func (a *App) serveSetCapacity(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// serveMaintenanceStatus answers GET /work/retention/maintenance.
+// serveMaintenanceStatus answers GET /worklet/retention/maintenance.
 func (a *App) serveMaintenanceStatus(w http.ResponseWriter, r *http.Request) {
 	stream := r.URL.Query().Get("stream")
 	if stream == "" {
@@ -543,7 +543,7 @@ func (a *App) serveMaintenanceStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, body)
 }
 
-// serveAbandon answers POST /work/retention/maintenance/abandon.
+// serveAbandon answers POST /worklet/retention/maintenance/abandon.
 func (a *App) serveAbandon(w http.ResponseWriter, r *http.Request) {
 	a.capacityGesture(w, r, "abandon", func(ctx context.Context, stream string,
 		by iam.Actor) (coord.MaintenanceOperation, error) {
@@ -551,7 +551,7 @@ func (a *App) serveAbandon(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// serveExclude answers POST /work/retention/maintenance/exclude.
+// serveExclude answers POST /worklet/retention/maintenance/exclude.
 func (a *App) serveExclude(w http.ResponseWriter, r *http.Request) {
 	node := r.URL.Query().Get("node")
 	if node == "" || r.URL.Query().Get("confirm") != node {

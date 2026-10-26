@@ -258,7 +258,7 @@ func TestASignedInPersonIsResolvedFromTheirCookie(t *testing.T) {
 func TestASignedInPersonsWritesNameTheirSession(t *testing.T) {
 	t.Parallel()
 	rig := newSignedIn(t)
-	got := rig.call(rig.guard(), http.MethodPost, "/work/items", rig.withCookie)
+	got := rig.call(rig.guard(), http.MethodPost, "/worklet/items", rig.withCookie)
 	if got.status != http.StatusOK || got.how != iam.Resolved {
 		t.Fatalf("a live session's write answered %d (%s)", got.status, got.how)
 	}
@@ -456,7 +456,7 @@ func TestANodeBehindTheSessionServesReadsAndRefusesWrites(t *testing.T) {
 		t.Errorf("a read waited for %v — it is served on the bearer's own "+
 			"proof, and parking it would cost every tab a node's lag", rig.dir.waitedFor)
 	}
-	write := rig.call(g, http.MethodPost, "/work/items", rig.withCookie)
+	write := rig.call(g, http.MethodPost, "/worklet/items", rig.withCookie)
 	if write.status != http.StatusServiceUnavailable {
 		t.Errorf("a write answered %d, want 503", write.status)
 	}
@@ -481,7 +481,7 @@ func TestAWriteStraightAfterSigningInWaitsForItsSession(t *testing.T) {
 	rig.dir.identity.Session = session.LineageRow{}
 	rig.dir.caughtUp = &applied
 
-	write := rig.call(rig.guard(), http.MethodPost, "/work/items", rig.withCookie)
+	write := rig.call(rig.guard(), http.MethodPost, "/worklet/items", rig.withCookie)
 	if write.status != http.StatusOK || write.how != iam.Resolved {
 		t.Fatalf("a write presenting a session this node was about to apply "+
 			"answered %d (%s), want it served once the node caught up",

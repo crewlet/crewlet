@@ -158,7 +158,7 @@ func TestAResetLinkIsRefusedForSomebodyHoldingAGrantTheIssuerLacks(t *testing.T)
 		{"a person holding every app (a control)",
 			slices.Clone(iam.Apps), http.StatusCreated},
 		{"a person holding a name this build does not know",
-			[]iam.Grant{iam.GrantTracker, "billing"}, http.StatusForbidden},
+			[]iam.Grant{iam.GrantWorklet, "billing"}, http.StatusForbidden},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

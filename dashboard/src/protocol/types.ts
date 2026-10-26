@@ -1607,7 +1607,7 @@ export interface ToolRow {
    * WHERE calling this puts something in front of somebody outside the turn,
    * empty for a tool that reaches nobody. The registry's own predicate — not
    * "was this served by MCP": a proven read-only MCP tool delivers nowhere,
-   * and the native tracker's comment tool delivers although it is a builtin.
+   * and Worklet's comment tool delivers although it is a builtin.
    */
   delivers: string;
   /**
@@ -1854,7 +1854,7 @@ export type FleetObjects = { state: Exclude<ObjectsState, "reported"> } | Report
 
 /**
  * The state log's retention document, as `crewlet retention status --json` and
- * `GET /work/retention` both serve it.
+ * `GET /worklet/retention` both serve it.
  *
  * MIRRORS `statelog.Report` FIELD FOR FIELD, deliberately. It is one wire
  * contract with three readers — a CLI, a script and this screen — and a shape
@@ -2293,10 +2293,11 @@ export type KnowledgeReason =
    *  the whole first index build, and rendering it as "nothing found" tells a
    *  reader the company has written nothing down. */
   | "building"
-  /** The caller holds Tracker and not Knowledge: the knowledge base is not
-   *  theirs to search, so nothing was searched — never "nothing matched". The
-   *  dashboard asks the question only with Knowledge (`lib/useSearchQuery.ts`),
-   *  and draws this for an answer that raced an access change. */
+  /** The caller holds Worklet and not Doclet: the knowledge base is not
+   *  theirs to search, so nothing was searched, which is never "nothing
+   *  matched". The dashboard asks the question only with Doclet access
+   *  (`lib/useSearchQuery.ts`), and draws this for an answer that raced an
+   *  access change. */
   | "no_access"
   | (string & {});
 
@@ -2355,14 +2356,15 @@ export interface KnowledgeAnswer extends SearchOutcome {
 }
 
 // ---------------------------------------------------------------------------
-// The native tracker and knowledge base
+// Worklet and Doclet
 // ---------------------------------------------------------------------------
 //
-// These are the engine's OWN backends — a company on Jira or Confluence has
+// These are the engine's OWN backends. A company on Jira or Confluence has
 // none of these questions registered at all, and the screens say so rather
 // than drawing an empty board. Every field here is the Go type's own JSON
-// tag; the wire shape is [work.Summary], [work.Detail], [pages.Summary] and
-// [pages.Detail], serialised as they stand.
+// tag; the wire shape is the `worklet` and `doclet` packages' own types (for
+// example [worklet.TaskDetail], [doclet.Summary] and [doclet.Detail]),
+// serialised as they stand.
 
 /** The tracker's SIX statuses. `blocked` is deliberately not among them: a
  *  blocker is DATA a badge and a filter read, carried beside the status on
@@ -2472,7 +2474,7 @@ export interface WorkRowSpend {
 /** Where `around=` placed one task in an answer's DRAWING order — the list's
  *  own sort, or a board read column by column and lane by lane — over the
  *  whole answer rather than the page. `prev`/`next` are ADDRESSES
- *  (`tracker.ItemAddress`), null at the ends: a neighbour's key, or its id
+ *  (`worklet.ItemAddress`), null at the ends: a neighbour's key, or its id
  *  where another task claimed that key first — stepping to the key would open
  *  the claimant, which is not on this board. `position` is null past the
  *  count's ceiling. On a label board the
@@ -3027,7 +3029,7 @@ export interface WorkCommentsAnswer {
   incomplete?: WorkIncomplete;
 }
 
-/** Another task as a reader names it (`tracker.TaskRef`). */
+/** Another task as a reader names it (`worklet.TaskRef`). */
 export interface WorkTaskRef {
   id: string;
   key: string;
@@ -3038,13 +3040,13 @@ export interface WorkTaskRef {
   status: WorkStatus;
 }
 
-/** One tool a turn called, and how many times (`tracker.TurnTool`). */
+/** One tool a turn called, and how many times (`worklet.TurnTool`). */
 export interface WorkTurnTool {
   name: string;
   calls: number;
 }
 
-/** One turn charged to a task, its segments folded (`tracker.TaskTurn`). */
+/** One turn charged to a task, its segments folded (`worklet.TaskTurn`). */
 export interface WorkItemTurn {
   /** The run the segments share — what the trace link carries. */
   turn_id: string;
@@ -4256,7 +4258,7 @@ export interface InboxChange {
  *  "todo → in_progress", and the typed value is on the row for anything that
  *  needs it. A SET (watchers, an edge kind, tags) carries what it gained and
  *  lost instead, each sorted and each member whole, with `from` and `to`
- *  empty (`tracker.Delta`). */
+ *  empty (`worklet.Delta`). */
 export interface WorkDelta {
   from: string;
   to: string;
@@ -4438,7 +4440,7 @@ export interface WorkMyWork {
   incomplete?: WorkIncomplete;
 }
 
-/** One notice in a person's inbox, as `tracker.InboxNotice` serialises it.
+/** One notice in a person's inbox, as `worklet.InboxNotice` serialises it.
  *
  *  THE ONE FACT NO COMMERCIAL TRACKER RECORDS is `reason`: the applier writes
  *  WHY this change found this person, as one of eighteen, in the precedence
@@ -4688,7 +4690,9 @@ export interface TurnRow {
 
 /** The work item a turn is charged to — `work_item` on the turn events. The
  *  `id` is the identity and `key` the label a person reads; `<backend>:<id>`
- *  is unique across trackers, the bare id is not. */
+ *  is unique across trackers, the bare id is not. `native` is Worklet, the
+ *  spelling every stored record keeps, and no screen shows it
+ *  (`lib/work.ts`'s `WORKLET_ITEM_BACKEND`). */
 export interface TurnWorkItem {
   backend: "native" | "jira" | "github" | "gitlab" | (string & {});
   id: string;

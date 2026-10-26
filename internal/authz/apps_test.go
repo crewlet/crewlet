@@ -68,7 +68,7 @@ func TestEveryAppRowAdmitsAHolderAndRefusesANonHolder(t *testing.T) {
 		object := authz.Object{Kind: authz.KindProject, Owner: "cto", Author: "cto",
 			Container: "PLATFORM", ContainerKind: authz.KindProject, Asked: ""}
 		switch app {
-		case iam.GrantKnowledge:
+		case iam.GrantDoclet:
 			object = authz.Object{Kind: authz.KindPage, Owner: "cto", Author: "cto",
 				Container: "RUNBOOKS"}
 		case iam.GrantArtifacts:
@@ -124,7 +124,7 @@ func TestTheAskedArmAdmitsOnlyThePersonAsked(t *testing.T) {
 				authz.ReasonAsked, true},
 			{"somebody another ask names", asked, item("cto"), authz.ReasonNoGrant, false},
 			{"nobody asked", asked, item(""), authz.ReasonNoGrant, false},
-			{"a tracker holder", person("ana.ops", iam.GrantTracker), item("cto"),
+			{"a Worklet holder", person("ana.ops", iam.GrantWorklet), item("cto"),
 				authz.ReasonGrant, true},
 		} {
 			d := authz.Decide(t.Context(), c.p, a, c.object, nimbus(), decidedAt)
@@ -132,8 +132,8 @@ func TestTheAskedArmAdmitsOnlyThePersonAsked(t *testing.T) {
 				t.Errorf("%s, %s: decided %+v, want admitted=%v for %s", a, c.name,
 					d, c.admit, c.want)
 			}
-			if !c.admit && !slices.Equal(d.Grants, []iam.Grant{iam.GrantTracker}) {
-				t.Errorf("%s, %s: refused naming %v, want [tracker]", a, c.name, d.Grants)
+			if !c.admit && !slices.Equal(d.Grants, []iam.Grant{iam.GrantWorklet}) {
+				t.Errorf("%s, %s: refused naming %v, want [worklet]", a, c.name, d.Grants)
 			}
 		}
 		unread := authz.Decide(t.Context(), asked, a,
@@ -157,7 +157,7 @@ func TestTheAskedArmAdmitsOnlyThePersonAsked(t *testing.T) {
 //
 // A page's creator trashes, restores and renames it and an item's reporter
 // removes and restores it, whoever leads its container — but the app still
-// governs: somebody who no longer uses the knowledge base does not tidy pages
+// governs: somebody who no longer uses Doclet does not tidy pages
 // in it. And the author arm is the AUTHOR's: a colleague tidies nobody else's
 // work. Mutation: check the author arm after the container relation and the
 // author outside the lead's project is refused.
@@ -169,15 +169,15 @@ func TestAnAuthorTidiesOnlyWithTheApp(t *testing.T) {
 		app    iam.Grant
 	}{
 		{authz.ActionPageTrash, authz.Object{Kind: authz.KindPage,
-			Container: "RUNBOOKS", Author: "sre"}, iam.GrantKnowledge},
+			Container: "RUNBOOKS", Author: "sre"}, iam.GrantDoclet},
 		{authz.ActionPageRestore, authz.Object{Kind: authz.KindPage,
-			Container: "RUNBOOKS", Author: "sre"}, iam.GrantKnowledge},
+			Container: "RUNBOOKS", Author: "sre"}, iam.GrantDoclet},
 		{authz.ActionPageRename, authz.Object{Kind: authz.KindPage,
-			Container: "RUNBOOKS", Author: "sre"}, iam.GrantKnowledge},
+			Container: "RUNBOOKS", Author: "sre"}, iam.GrantDoclet},
 		{authz.ActionWorkRemove, authz.Object{Kind: authz.KindTask,
-			Container: "PLATFORM", Author: "sre"}, iam.GrantTracker},
+			Container: "PLATFORM", Author: "sre"}, iam.GrantWorklet},
 		{authz.ActionWorkRestore, authz.Object{Kind: authz.KindTask,
-			Container: "PLATFORM", Author: "sre"}, iam.GrantTracker},
+			Container: "PLATFORM", Author: "sre"}, iam.GrantWorklet},
 	} {
 		with := authz.Decide(t.Context(), personLeading("sre", c.app), c.action,
 			c.object, nimbus(), decidedAt)
@@ -223,7 +223,7 @@ func TestAnUnresolvedTidyAsksForTheRow(t *testing.T) {
 		walked++
 		app, _ := authz.AppOf(a)
 		object := authz.Object{Kind: authz.KindTask, Unresolved: true}
-		if app == iam.GrantKnowledge {
+		if app == iam.GrantDoclet {
 			object.Kind = authz.KindPage
 		}
 		holder := authz.Decide(t.Context(), personLeading("cto", app), a, object,
@@ -274,8 +274,8 @@ func TestShowsFollowsTheKindsApp(t *testing.T) {
 		used[app] = true
 		for _, p := range []iam.Principal{
 			person("jane.doe"),
-			person("jane.doe", iam.GrantTracker),
-			person("jane.doe", iam.GrantKnowledge),
+			person("jane.doe", iam.GrantWorklet),
+			person("jane.doe", iam.GrantDoclet),
 			person("jane.doe", iam.GrantArtifacts),
 			person("jane.doe", iam.GrantAdmin),
 		} {
@@ -299,9 +299,9 @@ func TestShowsFollowsTheKindsApp(t *testing.T) {
 		}
 	}
 	for k, want := range map[authz.ObjectKind]iam.Grant{
-		authz.KindTask: iam.GrantTracker, authz.KindProject: iam.GrantTracker,
-		authz.KindView: iam.GrantTracker, authz.KindPage: iam.GrantKnowledge,
-		authz.KindContainer: iam.GrantKnowledge, authz.KindPerson: "",
+		authz.KindTask: iam.GrantWorklet, authz.KindProject: iam.GrantWorklet,
+		authz.KindView: iam.GrantWorklet, authz.KindPage: iam.GrantDoclet,
+		authz.KindContainer: iam.GrantDoclet, authz.KindPerson: "",
 		authz.KindUnit: "", authz.KindCompany: "", authz.KindArtifact: "",
 	} {
 		if got := authz.AppFor(k); got != want {
@@ -339,7 +339,7 @@ func TestAChartThatCannotAnswerCannotAdmitACallerWithoutTheApp(t *testing.T) {
 		for _, unresolved := range []bool{false, true} {
 			object := authz.Object{Kind: authz.KindProject, Owner: "sre", Author: "sre",
 				Container: "PLATFORM", ContainerKind: authz.KindProject, Unresolved: unresolved}
-			if app == iam.GrantKnowledge {
+			if app == iam.GrantDoclet {
 				object = authz.Object{Kind: authz.KindPage, Owner: "sre", Author: "sre",
 					Container: "RUNBOOKS", Unresolved: unresolved}
 			}
@@ -365,19 +365,19 @@ func TestAChartThatCannotAnswerCannotAdmitACallerWithoutTheApp(t *testing.T) {
 		app    iam.Grant
 	}{
 		{"a report's record", authz.ActionPersonRead,
-			authz.Object{Kind: authz.KindPerson, Owner: "sre"}, iam.GrantTracker},
+			authz.Object{Kind: authz.KindPerson, Owner: "sre"}, iam.GrantWorklet},
 		{"a record nobody has resolved", authz.ActionPersonRead,
 			authz.Object{Kind: authz.KindPerson, Owner: "sre.person", Unresolved: true},
-			iam.GrantTracker},
+			iam.GrantWorklet},
 		{"a project's policy", authz.ActionProjectPolicy,
 			authz.Object{Kind: authz.KindProject, Container: "PLATFORM",
-				ContainerKind: authz.KindProject}, iam.GrantTracker},
+				ContainerKind: authz.KindProject}, iam.GrantWorklet},
 		{"a page in a container", authz.ActionPageTrash,
 			authz.Object{Kind: authz.KindPage, Author: "sre", Container: "RUNBOOKS"},
-			iam.GrantKnowledge},
+			iam.GrantDoclet},
 		{"a project's shared view", authz.ActionViewSave,
 			authz.Object{Kind: authz.KindView, Container: "PLATFORM",
-				ContainerKind: authz.KindProject}, iam.GrantTracker},
+				ContainerKind: authz.KindProject}, iam.GrantWorklet},
 	} {
 		without := authz.Decide(t.Context(), personLeading("cto"), c.action, c.object, down,
 			decidedAt)

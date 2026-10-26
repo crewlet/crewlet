@@ -3,10 +3,9 @@
  *
  * The engine's whole vocabulary is admin and the apps (`contract/identity.ts`'s
  * GRANTS, held to `iam.AllGrants`): `admin`, which runs the company and the
- * engine and INCLUDES EVERY APP, and one permission per app: `tracker` for
- * the work tracker, `knowledge` for the knowledge base and `artifacts` for
- * authoring artifacts (APPS, held to `iam.Apps`, the one place an app is
- * declared). Everything a signed-in
+ * engine and INCLUDES EVERY APP, and one permission per app: `worklet` for
+ * Worklet, `doclet` for Doclet and `artifacts` for authoring artifacts (APPS,
+ * held to `iam.Apps`, the one place an app is declared). Everything a signed-in
  * principal may do beyond its own account and the read-only overview comes
  * from these, so this module is the one place a screen asks "does the reader
  * hold this?" and the one place the dashboard says a permission in words.
@@ -46,11 +45,11 @@ export type App = (typeof APPS)[number];
 /** The permission that runs the company and the engine, and includes every app. */
 export const ADMIN: Grant = "admin";
 
-/** The work tracker's permission. */
-export const TRACKER: App = "tracker";
+/** Worklet's permission: projects, tasks, the inbox and My work. */
+export const WORKLET: App = "worklet";
 
-/** The knowledge base's permission. */
-export const KNOWLEDGE: App = "knowledge";
+/** Doclet's permission: spaces and pages. */
+export const DOCLET: App = "doclet";
 
 /** Whether `name` is an app this build knows. */
 export function isApp(name: string): name is App {
@@ -109,12 +108,12 @@ export const ACCESS_WORDS: Record<Grant, { label: string; description: string }>
     description:
       "Runs the company: settings, secrets and people. Includes every app, and host access to the engine.",
   },
-  tracker: {
-    label: "Tracker",
+  worklet: {
+    label: "Worklet",
     description: "Tasks, projects, the inbox and My work.",
   },
-  knowledge: {
-    label: "Knowledge",
+  doclet: {
+    label: "Doclet",
     description: "Read, search and write pages.",
   },
   artifacts: {
@@ -134,7 +133,7 @@ export function accessLabel(name: string): string {
  *
  *   - "Admin" for anybody holding admin (every app is included, so naming
  *     them beside it would read as if they were separate);
- *   - otherwise the apps they hold, "Tracker · Knowledge";
+ *   - otherwise the apps they hold, "Worklet · Doclet";
  *   - "Overview only" for nobody's apps — the org chart, agents' status,
  *     spend and their own account, which every signed-in principal reads.
  *
@@ -175,16 +174,16 @@ export function questionWithheld(run: { question?: string; body_withheld?: boole
 }
 
 /**
- * A refused change's one sentence, to the reader: "You need Tracker access for
+ * A refused change's one sentence, to the reader: "You need Worklet access for
  * this." ONE SENTENCE where the refusal and its remedy were two that said the
- * same thing ("You do not hold what this change needs. This needs Tracker
+ * same thing ("You do not hold what this change needs. This needs Worklet
  * access.").
  */
 export function youNeedWords(needs: readonly string[]): string {
   return `You need ${accessNames(needs)} access for this.`;
 }
 
-/** The permissions a lock names, as words: "Tracker", or "Tracker or Knowledge". */
+/** The permissions a lock names, as words: "Worklet", or "Worklet or Doclet". */
 export function accessNames(needs: readonly string[]): string {
   return needs.map(accessLabel).join(" or ");
 }
@@ -212,8 +211,8 @@ export function groupLock(reasons: readonly (string | undefined)[]): string | un
 
 /**
  * The one sentence a lock or a refusal says about `what` (a capitalised
- * subject: "Work", "Taking a backup") and the permissions that would open it:
- * "Work needs Tracker access. An admin can give it to you."
+ * subject: "Search", "Taking a backup") and the permissions that would open it:
+ * "Search needs Doclet access. An admin can give it to you."
  *
  * FROM THE ANSWER WHERE THERE IS ONE: a refusal's `grants` are the engine's
  * own (`refusedGrants`), and a lock's are the navigation table's. With none,

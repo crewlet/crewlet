@@ -1,6 +1,6 @@
 package builtin
 
-import "github.com/crewlet/crewlet/internal/tracker"
+import "github.com/crewlet/crewlet/internal/worklet"
 
 // HOW A TOOL NAMES A TASK TO THE CALLER WHO WILL ACT ON THE NAME.
 //
@@ -10,8 +10,8 @@ import "github.com/crewlet/crewlet/internal/tracker"
 // already hold), and every read resolves the key to the task that claimed it
 // first. The other holders are flagged `key_collision` and are reached by
 // their ID alone. So everything a tool hands back to name a task is built by
-// one rule, [tracker.ItemAddress] — the key, unless the flag is set, and then
-// the id — and the tools here used to echo the key whatever the flag said: a
+// one rule, [worklet.ItemAddress] (the key, unless the flag is set, and then
+// the id), and the tools here used to echo the key whatever the flag said: a
 // seat that commented on the duplicate was answered `item: ENG-7`, told to
 // "Read ENG-7's thread", and its next call landed on the claimant.
 //
@@ -22,9 +22,9 @@ import "github.com/crewlet/crewlet/internal/tracker"
 //     called, and `key_collision` where the two differ, so a reader can tell
 //     an id standing in for a key from a fault ([receiptItem], [ReceiptOf]).
 //   - An INSTRUCTION to call a tool on the task names its address, bare,
-//     because the caller copies it into an argument ([tracker.TaskDetail.Address]).
+//     because the caller copies it into an argument ([worklet.TaskDetail.Address]).
 //   - PROSE about the task names its address with the key beside it and why
-//     ([tracker.TaskDetail.Named]), because an id alone says nothing about
+//     ([worklet.TaskDetail.Named]), because an id alone says nothing about
 //     which task it is.
 //
 // A gate holds the package to it: outside the functions listed in its own
@@ -51,7 +51,7 @@ const (
 )
 
 // receiptItem puts on a receipt how it names the task it is about: `item`, the
-// address ([tracker.ItemAddress]), `key` beside it, and `key_collision` where
+// address ([worklet.ItemAddress]), `key` beside it, and `key_collision` where
 // the key is not the address.
 //
 // ONE FUNCTION for every receipt, so a create, a move and an edit cannot name
@@ -59,7 +59,7 @@ const (
 // argument's own name: a caller that hands back the field called `item` as the
 // argument called `item` is right whichever task it was.
 func receiptItem(answer map[string]any, id, key string, collision bool) map[string]any {
-	answer["item"] = tracker.ItemAddress(id, key, collision)
+	answer["item"] = worklet.ItemAddress(id, key, collision)
 	if key != "" {
 		answer["key"] = key
 	}
@@ -75,6 +75,6 @@ func receiptItem(answer map[string]any, id, key string, collision bool) map[stri
 // and comment edit write through the tracker themselves — so their receipts
 // name the item by the same rule, in the same three fields, as every tool's
 // they sit beside on that surface.
-func ReceiptOf(answer map[string]any, before tracker.TaskDetail) map[string]any {
+func ReceiptOf(answer map[string]any, before worklet.TaskDetail) map[string]any {
 	return receiptItem(answer, before.Task.ID, before.Task.Key, before.KeyCollision)
 }

@@ -329,7 +329,7 @@ export function DashboardCreate() {
         message: filed.linked,
       });
     }
-    nav.to(id ? artifactPath(id) : ["work", filed.item]);
+    nav.to(id ? artifactPath(id) : ["worklet", filed.item]);
   };
 
   const dirty = title.trim() !== "" || draft.placed.length > 0 || brief.trim() !== "";

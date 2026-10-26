@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The golden-turn suite: whole turns driven through the REAL loop, the real
@@ -466,9 +466,9 @@ func sortedKeys(m map[string]bool) []string {
 }
 
 // askingTool stands in for `comment_on_work_item`: a first-party tool that
-// DELIVERS on the tracker, recording what it was called with. The tool's own
-// write — the decision validated, the record published — is certified in
-// `builtin` and `tracker`; what this suite owns is the turn around it.
+// DELIVERS on Worklet, recording what it was called with. The tool's own
+// write (the decision validated, the record published) is certified in
+// `builtin` and `worklet`; what this suite owns is the turn around it.
 type askingTool struct {
 	mu    sync.Mutex
 	calls []map[string]any
@@ -498,17 +498,17 @@ func askingTurn(t *testing.T, prov *scriptedProvider) (turn.Result, *askingTool)
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
 		// Woken on the tracker, where the ask lands — so the gate is
 		// the NARROW one, and only a call delivering there satisfies it.
-		reply: turn.ToolReply(tracker.Source),
+		reply: turn.ToolReply(worklet.Source),
 		task:  "decide which region the Q4 launch ships to first",
 		register: func(t *testing.T, reg *tools.Registry) {
 			if err := reg.RegisterWith(asker, tools.OriginBuiltin, tools.Annotations{},
-				tools.DeliversTo(tracker.Source)); err != nil {
+				tools.DeliversTo(worklet.Source)); err != nil {
 				t.Fatalf("Register: %v", err)
 			}
 		},
 	})
 	res, err := turn.Run(context.Background(), r, settings(),
-		turn.Input{RunID: "t-golden", Reply: turn.ToolReply(tracker.Source)})
+		turn.Input{RunID: "t-golden", Reply: turn.ToolReply(worklet.Source)})
 	if err != nil {
 		t.Fatalf("turn.Run: %v", err)
 	}

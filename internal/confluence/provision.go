@@ -66,7 +66,12 @@ type Options struct {
 	// Recreate deletes and remakes every hook to mint a fresh token.
 	// Destructive: it invalidates the token every other deployment of
 	// this company holds.
-	Recreate bool
+	//
+	// Spelled as the caller spells its switch ([provision.FreshSwitch]):
+	// `-recreate-webhooks` from `crewlet confluence provision`,
+	// `recreate_webhooks` from the setup route. A refusal of it names
+	// that spelling, never this package's guess at one.
+	Recreate provision.FreshSwitch
 }
 
 // HookState is what one hook looks like after the run.
@@ -280,7 +285,7 @@ func reconcileCloud(ctx context.Context, opts Options, base string, res *Result)
 
 		current, found := byName[name]
 		switch {
-		case found && opts.Recreate:
+		case found && opts.Recreate.Asked():
 			if err := opts.Client.DeleteWebhook(ctx, current.ID); err != nil {
 				if stop := blame(ctx, &state, err); stop != nil {
 					return stop
@@ -436,7 +441,7 @@ func reconcileDataCenter(ctx context.Context, opts Options, base string, res *Re
 		if hook.Name != name {
 			continue
 		}
-		if opts.Recreate {
+		if opts.Recreate.Asked() {
 			if err := opts.Client.DeleteWebhook(ctx, hook.ID); err != nil {
 				if stop := blame(ctx, &state, err); stop != nil {
 					return stop
@@ -551,10 +556,20 @@ func mintInto(
 	if opts.Value != nil {
 		resolved = strings.TrimSpace(opts.Value(ref))
 	}
-	if resolved != "" && !opts.Recreate {
+	if resolved != "" && !opts.Recreate.Asked() {
 		return resolved, false, nil
 	}
 	variable, ok := provision.SoleVar(ref)
+	if !ok && opts.Recreate.Asked() {
+		// A VALUE THE DOCUMENT OWNS, which the switch asked to replace:
+		// refused naming the switch as its caller spells it and both
+		// ways on ([provision.RefuseFresh]), never as a slot that
+		// resolved to nothing, which is what the refusal below is about.
+		if err := provision.RefuseFresh("integrations.confluence."+field,
+			opts.Recreate, ref); err != nil {
+			return "", false, fmt.Errorf("confluence: %w", err)
+		}
+	}
 	if !ok {
 		// THE SHAPE, NEVER THE VALUE. See [provision.Shape]: this error
 		// becomes State.LastError, which the fleet stores and the
@@ -567,7 +582,7 @@ func mintInto(
 				"or drop -public-url and register the hooks by hand",
 			field, provision.Shape(ref))
 	}
-	secret, err := provision.MintSecret(ctx, opts.Sink, variable, opts.Recreate,
+	secret, err := provision.MintSecret(ctx, opts.Sink, variable, opts.Recreate.Asked(),
 		func() (string, error) { return rand.Text(), nil })
 	if err != nil {
 		return "", false, fmt.Errorf("confluence: %w", err)
@@ -580,15 +595,16 @@ func mintInto(
 	}
 	value := secret.Value
 	// SAID IN THE NOTES, which is the one place a reader looks. There was a
-	// Result.Recorded counter beside this line as well, and it had no reader
-	// anywhere in the tree — printConfluenceHooks renders Deployment,
-	// Account, Hooks and Notes, and the only `.Recorded` in the tree is
-	// GitLab's own. A second, silent record of the same fact is a field
-	// waiting for its first reader to trust a number nothing keeps true, so
-	// the note below is the whole report and the counter is gone.
+	// Result.Recorded counter beside this line as well, and nothing read it:
+	// printConfluenceHooks renders Deployment, Account, Hooks and Notes, and
+	// the Recorded counts that are read are GitLab's, Mattermost's and
+	// Slack's, each deciding its own report's Next: line. A second, silent
+	// record of the same fact is a field waiting for its first reader to
+	// trust a number nothing keeps true, so the note below is the whole
+	// report and the counter is gone.
 	note := fmt.Sprintf("a fresh value was minted into %s (%s), and %s",
 		variable, role, opts.Sink.NextStep())
-	if opts.Recreate {
+	if opts.Recreate.Asked() {
 		note += ". The previous value is now invalid on every other deployment of this company"
 	}
 	res.Notes = append(res.Notes, note)

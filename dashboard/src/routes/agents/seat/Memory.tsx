@@ -16,7 +16,7 @@
  * Every header is the TOTAL the holder counted — never the length of the page
  * it sent, which is fifty at most — and every list cut short says "Latest 50
  * of 142" in its header, the same words on all four (`components/memory.tsx`,
- * whose diary and episode cards Knowledge › Agent diaries draws too), so the
+ * whose diary and episode cards Doclet › Agent diaries draws too), so the
  * two cannot silently disagree.
  */
 

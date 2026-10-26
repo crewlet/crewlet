@@ -14,13 +14,13 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iamdomain"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/usage"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE RUNNING ESTATE IS THE DECLARED ESTATE: its streams, its keys and its
@@ -42,9 +42,9 @@ func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 	s := e.core.Load().log
 
 	declared := map[string][3]string{
-		tracker.Domain{}.Name(): {topics.TrackerLogStream, topics.TrackerLogPrefix, topics.TrackerLogWildcard},
+		worklet.Domain{}.Name(): {topics.TrackerLogStream, topics.TrackerLogPrefix, topics.TrackerLogWildcard},
 		search.Domain{}.Name():  {topics.TrackerVectorsStream, topics.TrackerVectorsPrefix, topics.TrackerVectorsWildcard},
-		pages.Domain{}.Name():   {topics.PagesLogStream, topics.PagesLogPrefix, topics.PagesLogWildcard},
+		doclet.Domain{}.Name():  {topics.PagesLogStream, topics.PagesLogPrefix, topics.PagesLogWildcard},
 		usage.Domain{}.Name():   {topics.UsageLogStream, topics.UsageLogPrefix, topics.UsageLogWildcard},
 		iamdomain.Domain{}.Name(): {topics.IamLogStream, topics.IamLogPrefix,
 			topics.IamLogWildcard},
@@ -180,7 +180,7 @@ func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the tick's inputs: %v", err)
 	}
-	running := s.Domain(tracker.Domain{}.Name())
+	running := s.Domain(worklet.Domain{}.Name())
 	if err := r.domain(t.Context(), running, shared); err != nil {
 		t.Fatalf("the tracker's tick: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 	}
 	var found bool
 	for _, f := range floors {
-		if f.Domain == (tracker.Domain{}).Name() {
+		if f.Domain == (worklet.Domain{}).Name() {
 			found = true
 			floorFields := []string{"at", "blocked_by", "blocked_since", "by", "domain",
 				"floor", "generation", "terms", "trim_to"}
@@ -203,7 +203,7 @@ func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("the tick published no floor under the key %q: %+v", tracker.Domain{}.Name(), floors)
+		t.Errorf("the tick published no floor under the key %q: %+v", worklet.Domain{}.Name(), floors)
 	}
 }
 

@@ -705,7 +705,7 @@ prompt renders differently.
 ### The one event addressed to its own actor
 
 A seat is never told about its own actions — with one exception on GitHub (the
-self-hosted host's failed pipeline and the tracker's notice that a task the
+self-hosted host's failed pipeline and Worklet's notice that a task the
 actor unblocked is now workable are the engine's others). A **failed workflow
 run** names the person whose push triggered it, and when it goes red they are
 the only one who can fix it. A build runs asynchronously, minutes after the
@@ -778,9 +778,10 @@ So it does the two things GitHub genuinely allows:
 | Flag | Effect |
 |---|---|
 | `-public-url URL` | This deployment's public base. Without it no webhook is registered — a hook pointing at the wrong host is worse than no hook, because GitHub then reports a healthy integration delivering into the void |
-| `-secret-store` / `-env-file PATH` / `-print` | Where a minted webhook secret goes. **Required for a real run** — a run with nowhere to put what it mints creates a live secret and prints none of it |
-| `-recreate-webhooks` | Delete and remake every hook to mint a fresh secret. **Destructive**: it invalidates the secret every other deployment of this company holds |
-| `-dry-run` | Read and report; register nothing, and do not open the secret store |
+| `-secret-store` / `-env-file PATH` / `-print` | Where a minted webhook secret goes. **Required for a real run** — a run with nowhere to put what it mints creates a live secret and prints none of it. With `-env-file` or `-print` a run that would mint the secret — it resolves to nothing, or `-recreate-webhooks` asks for a fresh one — is refused before it reaches GitHub where the company's store holds its `${VAR}`: the engine reads the store's value over anything recorded there, so the hooks would sign with a key the engine does not hold ([a sink the store outranks](../reference/cli.md#a-sink-the-store-outranks)) |
+| `-recreate-webhooks` | Delete and remake every hook to mint a fresh secret. **Destructive**: it invalidates the secret every other deployment of this company holds. A literal `webhook_secret` has no variable to mint into, so the run is refused: point the field at a whole `${VAR}`, or run without the flag to register the literal as it is |
+| `-config PATH` / `-api URL` | Where the company's values are read — the org token the run reads GitHub with, the seats' credentials and the webhook secret: through the running engine holding the store `-config` names (default `./crewlet.yaml`), with one of its Tier A tokens in `CREWLET_API_TOKEN`, or through the node `-api` names; with this node's engine stopped, from the fleet's store itself, through the node's own broker or the external one; with neither a file nor `-api`, from the environment alone. A `-secret-store` sink records the same way. On a member of a cluster whose engine is stopped the run is refused before it reads or registers anything, `-recreate-webhooks` included. See [where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values) |
+| `-dry-run` | Read and report; register nothing. The sink is not opened, but the company's values are still read through the run's route as above, and refused where a real run would be |
 
 **A hook the company DEMANDED and could not get is reported; the fallback is not.** `integrations.github.token` is optional, and the connect form asks for it only when the coverage answer is every repository in the organization, both deliberately: routing needs nothing from it, because each agent's own app answers who is participating in a thread. With no token the pass reads nothing and writes nothing at the organization, and it used to say so only in its *notes*, which are not findings, so a surface that had authenticated with nobody reported `ready` with an empty finding list. Measured on a live connect: `phase: ready`, `routes: true`, and exactly one webhook on the organization, belonging to a different deployment and never triggered. It is now `ingress_blocked` against `integrations.github.token`.
 

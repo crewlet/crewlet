@@ -47,7 +47,7 @@ class InertWebSocket {
 
 const JANE = {
   login: "U0FOUNDER",
-  grants: ["admin", "tracker", "artifacts"],
+  grants: ["admin", "worklet", "artifacts"],
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -287,7 +287,7 @@ test("asking an agent makes the deck shared with it, files its task linked to th
   await act(async () => {
     fireEvent.click(ask);
   });
-  await waitFor(() => expect(location.hash).toBe("#/work/OPS-7"));
+  await waitFor(() => expect(location.hash).toBe("#/worklet/OPS-7"));
   const [, path, made] = request.mock.calls[0]!;
   expect(path).toBe("/artifacts");
   expect((made as { body: Record<string, unknown> }).body).toMatchObject({

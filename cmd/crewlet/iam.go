@@ -105,9 +105,9 @@ Flags:
   -reason TEXT   Saved with the change for the audit trail
   -idempotency-key OP
                  Retry a write whose outcome was unknown, as the same operation
-  -grants G,...  On invite, create, grant and token: admin, tracker or
-                 knowledge, comma-separated, or none (overview only). admin
-                 includes every app. Defaults: tracker and knowledge for
+  -grants G,...  On invite, create, grant and token: admin, worklet, doclet
+                 or artifacts, comma-separated, or none (overview only).
+                 admin includes every app. Defaults: worklet and doclet for
                  people, the owner's permissions for a token. Required for a
                  service account
   -seat SEAT     On invite and create: the vacant human seat they'll hold
@@ -408,8 +408,8 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 	case "grant":
 		body := granted.body()
 		if len(body) == 0 {
-			return errors.New("say what to give with -grants: admin, tracker " +
-				"or knowledge, comma-separated, or none")
+			return errors.New("say what to give with -grants: admin, worklet, " +
+				"doclet or artifacts, comma-separated, or none")
 		}
 		body["reason"] = *reason
 		return out.written(client.patch(ctx, "/iam/people/"+subject, body))
@@ -674,18 +674,18 @@ func iamNewPerson(sub, kind string) bool {
 
 // iamGrants reads the -grants flag.
 //
-// THE VOCABULARY IS THE ENGINE'S OWN ([iam.AllGrants]: admin, tracker,
-// knowledge), comma-separated, or the one word `none` — and anything else is
-// refused here, naming the set, before a config file is read or a request is
-// sent. The node refuses a name it does not know too, but an operator who
-// typed `trackr` needs the sentence listing the four words rather than a round
-// trip to a 400, and `none` beside a permission is a contradiction nothing
+// THE VOCABULARY IS THE ENGINE'S OWN ([iam.AllGrants]: admin, worklet,
+// doclet, artifacts), comma-separated, or the one word `none`, and anything
+// else is refused here, naming the set, before a config file is read or a
+// request is sent. The node refuses a name it does not know too, but an
+// operator who typed `worklt` needs the sentence listing the four words rather
+// than a round trip to a 400, and `none` beside a permission is a contradiction nothing
 // should guess the meaning of.
 //
 // `admin` STORES EVERY APP BESIDE IT ([iam.Expand]), as the dashboard's picker
 // does: admin includes every app whether or not the row says so, but a row
-// that says so keeps them when admin is later taken away — an administrator
-// stepping down goes on using the tracker. The list is sent in
+// that says so keeps them when admin is later taken away: an administrator
+// stepping down goes on using Worklet. The list is sent in
 // [iam.AllGrants] order with each name once, whatever order it was typed in.
 func iamGrants(flagged string) (iamGrantList, error) {
 	flagged = strings.TrimSpace(flagged)
@@ -1375,7 +1375,7 @@ func (p *iamPrinter) seats(asked url.Values, answer map[string]any,
 			return nil
 		}
 		fmt.Fprintln(p.w, "the company has no human seats. Add a `kind: "+
-			"human` seat for each person first (Agents › Edit org, or "+
+			"human` seat for each person first (Org chart › Edit org, or "+
 			"`crewlet config import FILE`)")
 		return nil
 	}

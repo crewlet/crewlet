@@ -1953,6 +1953,32 @@ func TestAnUnreadableSinkStopsTheGitLabRun(t *testing.T) {
 	}
 }
 
+// AN ACCOUNT THIS RUN CREATES ASKS NO SINK. Nothing can hold a token for an
+// account that did not exist a moment ago, so its first token is minted
+// whatever the sink would answer — even a sink that cannot say, as a
+// -secret-store sink whose node refused the reveal cannot.
+//
+// Mutation: ask the sink before minting a created account's first token, and
+// the run fails on the unreadable sink.
+func TestAnAccountThisRunCreatesIsMintedWhateverItsSinkCanSay(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	sink := newRecordingSink()
+	// a -secret-store sink whose node refused the reveal
+	sink.holdsErr = errors.New("the store could not say")
+	res, err := reconcileAgainst(t, f, sink, map[string]string{"swe": "GITLAB_TOKEN_SWE"})
+	if err != nil {
+		t.Fatalf("a seat whose account this run created was refused over its sink: %v", err)
+	}
+	if !slices.Equal(res.Created, []string{"swe"}) || !slices.Equal(res.Rotated, []string{"swe"}) {
+		t.Fatalf("created %v, minted for %v — want the seat created and minted for",
+			res.Created, res.Rotated)
+	}
+	if sink.value("GITLAB_TOKEN_SWE") == "" {
+		t.Error("the created account's first token was not recorded")
+	}
+}
+
 // A ROLLBACK ON A PRE-EXISTING ACCOUNT REVOKES ONLY WHAT IT MINTED.
 // Sweeping the account would take an administrator's own token with no way
 // to tell that it had.
@@ -2797,15 +2823,47 @@ func TestRotateReportsASigningSecretItCannotReplace(t *testing.T) {
 		t.Fatalf("the run was refused over a signing secret it was not asked "+
 			"to rotate: %v", err)
 	}
-	var said bool
+	var said string
 	for _, note := range res.Notes {
-		if strings.Contains(note, "signing secret was left alone") {
-			said = true
+		if strings.Contains(note, "leaves the webhook signing secret alone") {
+			said = note
 		}
 	}
-	if !said {
-		t.Errorf("the run said nothing about the signing secret it could not "+
+	if said == "" {
+		t.Fatalf("the run said nothing about the signing secret it could not "+
 			"replace: %v", res.Notes)
+	}
+	// AND HOW TO REPLACE IT, both ways: give -rotate a variable to mint
+	// into, or replace the literal itself.
+	for _, want := range []string{
+		"point the field at a whole ${VAR} and re-run with -rotate",
+		"replace the literal by hand",
+	} {
+		if !strings.Contains(said, want) {
+			t.Errorf("the note does not say %q: %s", want, said)
+		}
+	}
+}
+
+// AND SO DOES THE PLAN A DRY RUN PRINTS. Describe is the line printed before
+// a run acts, and a plan for -rotate over a literal printed a plain "reused":
+// the operator heard that the flag would leave the secret in place only from
+// a real run's notes, after it had rotated every seat's token.
+func TestARotatePlanOverALiteralSaysItLeavesTheSecretAlone(t *testing.T) {
+	t.Parallel()
+	plan := gitlab.PlanSigningSecret(operatorSigningSecret, "", true, true, "api.public.external_url")
+	if plan.Action != gitlab.SigningReuse || plan.Note == "" {
+		t.Fatalf("plan = %+v, want a reuse carrying a note", plan)
+	}
+	if line := plan.Describe(); !strings.Contains(line, plan.Note) {
+		t.Errorf("the plan line does not carry the note:\n%s", line)
+	}
+	// A REUSE NOTHING LEFT IN PLACE carries no note, and its line says only
+	// that the configured secret resolves.
+	plain := gitlab.PlanSigningSecret(operatorSigningSecret, "", false, true, "api.public.external_url")
+	if plain.Note != "" || plain.Describe() !=
+		"webhook signing secret: reused — the configured one already resolves" {
+		t.Errorf("a plain reuse = %+v, %q", plain, plain.Describe())
 	}
 }
 

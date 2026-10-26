@@ -548,7 +548,7 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 	case errors.Is(err, statelog.ErrConflict):
 		// A LOST RACE — the write's snapshot kept moving under it — which
 		// the same request resolves once read again. `stale` says exactly
-		// that, as it does on /work; `bad_params` said the request could
+		// that, as it does on /worklet; `bad_params` said the request could
 		// never succeed however often it was sent.
 		refuse(http.StatusConflict, httpjson.CodeStale,
 			httpjson.Detail{"detail": err.Error()})

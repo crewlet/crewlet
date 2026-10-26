@@ -18,7 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // maintenanceDutyName is the fleet singleton the retention sweep claims.
@@ -162,7 +162,7 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 			// move, a one-sided dependency — and tell the tasks a close
 			// unblocked. Every one is GATED, so a tick with nothing to do
 			// costs one indexed read.
-			jobs = append(jobs, tracker.Jobs(tracker.DutyDeps{
+			jobs = append(jobs, worklet.Jobs(worklet.DutyDeps{
 				DB: trackerEstate, Writer: n.writer,
 				NodeID: core.nodeID,
 				// AND THE LEAD MAP, for the one repair whose commit
@@ -178,11 +178,11 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 			// `tracker_notifications` is Divergent, so each node holds
 			// its own rows and a singleton would tidy one and let the
 			// rest grow for ever. Contributed here rather than in
-			// tracker.Jobs because that list runs under the duty and
+			// worklet.Jobs because that list runs under the duty and
 			// this one must not. Its horizon is the one the PUBLISHED
 			// company states, asked at every sweep — the one the
-			// applier reads per batch — see [tracker.InboxJobs].
-			jobs = append(jobs, tracker.InboxJobs(trackerEstate, e.inboxRetention)...)
+			// applier reads per batch (see [worklet.InboxJobs]).
+			jobs = append(jobs, worklet.InboxJobs(trackerEstate, e.inboxRetention)...)
 		}
 		if core != nil {
 			// AND THE STATE LOG'S OWN OPERATION LEDGERS, one per
@@ -394,8 +394,8 @@ func (e *Engine) activeSeats(ctx context.Context) ([]placement.Seat, error) {
 // an unchanged revision, the rotation gesture, is a different activation here
 // too, and a company applied from the pointer's own activation is accepted
 // even while the reconciler is still inside the apply that publishes it. A
-// company no activation has named yet — a Tier B file a node booted with — is
-// unknown until the reconciler's first apply.
+// company no activation has named — one handed to [New] in code — is unknown
+// until the reconciler's first apply.
 func (e *Engine) fleetCompany(ctx context.Context, c *Company) (*Company, error) {
 	if e.backends == nil || e.backends.Fleet == nil {
 		return nil, fmt.Errorf("engine: this node has no fleet store to read the activation pointer from")
@@ -448,5 +448,5 @@ func (e *Engine) inboxRetention() time.Duration {
 	if c == nil {
 		return config.DefaultInboxRetentionDays * 24 * time.Hour
 	}
-	return c.Config.Tracker.Native.InboxRetention()
+	return c.Config.Tracker.Worklet.InboxRetention()
 }

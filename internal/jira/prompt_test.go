@@ -77,7 +77,7 @@ func TestOnlyTheLeadFallbackIsToldWhyItWasRouted(t *testing.T) {
 }
 
 // THE HANDLING BLOCK NEVER CONTRADICTS THE DELIVERY CHECK, AND NEVER HANDS A
-// COLLEAGUE'S ISSUE AWAY — the native tracker's two rules, in Jira's routings.
+// COLLEAGUE'S ISSUE AWAY: Worklet's two rules, in Jira's routings.
 //
 //   - STAYING OUT IS FOR AN UNADDRESSED ROUTING ONLY, through the same rule
 //     [jira.Prompt.Addressed] answers with. A mentioned seat may not end its

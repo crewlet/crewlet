@@ -160,16 +160,85 @@ func ReferencedVars(value string) []string {
 // The two cases are kept apart because their fixes differ — a literal needs a
 // variable, a composite needs the variable to be the whole value — so
 // collapsing them into "not a reference" would leave an operator to work out
-// which.
+// which. And a slot holding nothing is said to be EMPTY rather than either:
+// read as "a literal", an unset field — a Confluence Cloud webhook_token, a
+// seat's bot_token — sent its operator looking for a value that is not there.
 //
 // ONE IMPLEMENTATION: this was two byte-identical copies, in mattermost and
 // gitlab, and the two provisioners added since had neither and quoted the
 // value instead.
 func Shape(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "empty"
+	}
 	if len(ReferencedVars(value)) == 0 {
 		return "a literal"
 	}
 	return "a reference embedded in other text"
+}
+
+// FreshSwitch is a run's ask for a fresh value where it would otherwise keep
+// the one the company document resolves — a webhook secret minted again over
+// one that works, the only recovery for a secret that was lost — spelled as
+// the surface that asked spells its switch: `-recreate-webhooks` on
+// `crewlet github provision`, `-recreate-webhook` on `crewlet jira provision`,
+// `recreate_webhooks` in the body of
+// `POST /setup/integrations/{kind}/provision`. The zero value is not asked.
+//
+// # The CALLER's spelling, carried with the switch
+//
+// A pass is the vendor's, and every surface that runs one runs the same code,
+// so the only thing a pass can say about the switch that it cannot work out
+// for itself is how the person who set it spells it — and that is what a
+// refusal of the switch has to name ([RefuseFresh]). A pass that spelled the
+// switch itself could spell only one surface's, so a caller of the setup route
+// who sent `recreate_webhooks` would be told to re-run with a flag that
+// surface does not have.
+//
+// ONE VALUE rather than a switch and a spelling beside it, so nothing can set
+// the one without the other: whoever turns the switch on spells it, and a
+// pair would hold "asked, spelled nothing", which a refusal would render as a
+// blank where the remedy belongs.
+type FreshSwitch string
+
+// Asked reports whether the run asked for a fresh value.
+func (f FreshSwitch) Asked() bool { return f != "" }
+
+// RefuseFresh is the refusal for a run that asked for a fresh value (fresh,
+// as the surface that asked spells its switch) over the config value ref at
+// path, where ref holds a value the company document owns rather than a whole
+// ${VAR} reference: a literal, or a reference embedded in other text. It is
+// nil where there is nothing of the kind to refuse — the run did not ask, ref
+// IS a whole reference, which the fresh value is minted into, or ref is empty,
+// which no switch changes and the caller's own refusal covers.
+//
+// # Why the switch gets a refusal of its own
+//
+// Without the switch, a value the document holds resolves (to itself, for a
+// literal) and the pass registers it as it is; with it, the pass skips that
+// and goes straight to [SoleVar] for a variable to mint into. The refusal
+// each pass wrote for a slot that resolved to nothing told that run the value
+// had not resolved and to set a variable — neither is true of a literal,
+// which resolves to itself and names no variable — and kept quiet about the
+// remedy that works without touching the document: running without the
+// switch, which registers the value as it is. So the switch is named, and so
+// are both ways on.
+//
+// THE SHAPE, NEVER THE VALUE ([Shape]): this sentence becomes a pass's
+// State.LastError as well as a line in an operator's terminal, and the value
+// it would quote is the credential.
+func RefuseFresh(path string, fresh FreshSwitch, ref string) error {
+	if !fresh.Asked() {
+		return nil
+	}
+	if _, whole := SoleVar(ref); whole || strings.TrimSpace(ref) == "" {
+		return nil
+	}
+	return fmt.Errorf("%s is %s, a value the company document owns rather "+
+		"than a whole ${VAR} reference, so %s has no variable to mint a fresh "+
+		"one into: point %s at a whole ${VAR} and re-run with %s, or run "+
+		"without %s to register the value it holds as it is",
+		path, Shape(ref), fresh, path, fresh, fresh)
 }
 
 // SoleVar reports the one variable a value is a whole reference to.

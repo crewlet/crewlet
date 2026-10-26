@@ -86,7 +86,19 @@
 // store blip. Treating unknown as refusal makes a node stop refreshing its
 // own presence during exactly the outage it should ride out. Any non-nil
 // error means unknown — there is no error worth special-casing into a
-// definite answer.
+// definite answer about who holds what.
+//
+// ONE CLAIM'S ERROR IS A DEFINITE FACT ABOUT WHAT THE STORE HOLDS, and it is
+// still not a fourth answer: [Custody.ClaimCustody] wrapping
+// [ErrCustodyUndecidable], for a batch whose keeper record the store holds and
+// nothing can read as a keeper. It decides nothing about ownership — not
+// "mine", not "another node's" — so the caller keeps and deletes nothing,
+// exactly as on unknown. What it is NOT is an outage: the store answered,
+// about that one record, and will answer the same until the record is removed
+// or ages out, so a caller that waited on it as on a store it could not reach
+// would wait out the record's month — and one working through many batches
+// would stop at this one, holding every batch behind it on a record no wait
+// clears. So it is told apart, and the caller goes on to the next batch.
 //
 // # A definite answer is a CURRENT one
 //
@@ -237,9 +249,18 @@ func ProtocolGateCounts(resource string) bool {
 }
 
 // ErrUnavailable is the canonical "store could not answer" error. Backends
-// wrap their transport failures in it. Callers should not switch on it —
-// ANY non-nil error means unknown — but it gives the common case one name
-// in logs and lets tests assert the tri-state deliberately.
+// wrap their transport failures in it. Callers should not switch on it — but
+// it gives the common case one name in logs and lets tests assert the
+// tri-state deliberately.
+//
+// NOT SWITCHED ON, because the rule runs the other way: an error is unknown
+// unless the contract the method belongs to names it as a definite answer — a
+// compare-and-set that lost its race ([ErrActivationRaced],
+// [ErrMaintenanceMoved], [ErrObjectBackendMoved]), a request the store will
+// not honour as asked ([ErrTTLTooLong]), and a custody record the store holds
+// and nothing can read ([ErrCustodyUndecidable], see the package doc). A
+// caller that read "not ErrUnavailable" as definite would take every
+// failure a backend did not wrap for a fact.
 var ErrUnavailable = errors.New("coordination store unavailable")
 
 // ErrTTLTooLong reports a claim or renew asking for a TTL the store cannot

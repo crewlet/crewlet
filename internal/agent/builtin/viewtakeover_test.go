@@ -11,7 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // viewStore is the saved-view write side over a table of stored views: it
@@ -19,29 +19,29 @@ import (
 // for, so a case can tell a refusal from a write that landed.
 type viewStore struct {
 	mu     sync.Mutex
-	stored map[string]tracker.View
-	saved  []tracker.View
-	priors []tracker.ViewPrior
+	stored map[string]worklet.View
+	saved  []worklet.View
+	priors []worklet.ViewPrior
 }
 
-func (s *viewStore) ViewPrior(_ context.Context, id string) (tracker.ViewPrior, error) {
+func (s *viewStore) ViewPrior(_ context.Context, id string) (worklet.ViewPrior, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	held, ok := s.stored[id]
 	if !ok {
-		return tracker.ViewPrior{}, nil
+		return worklet.ViewPrior{}, nil
 	}
-	return tracker.ViewPrior{Held: true, Owner: held.Owner, Container: held.Container}, nil
+	return worklet.ViewPrior{Held: true, Owner: held.Owner, Container: held.Container}, nil
 }
 
-func (s *viewStore) WriteView(_ context.Context, _ string, view tracker.View,
-	prior tracker.ViewPrior) (tracker.WriteResult, error) {
+func (s *viewStore) WriteView(_ context.Context, _ string, view worklet.View,
+	prior worklet.ViewPrior) (worklet.WriteResult, error) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.saved = append(s.saved, view)
 	s.priors = append(s.priors, prior)
-	return tracker.WriteResult{Result: statelog.Result{
+	return worklet.WriteResult{Result: statelog.Result{
 		Outcome: statelog.OutcomeApplied,
 	}}, nil
 }
@@ -61,8 +61,8 @@ func (s *viewStore) WriteView(_ context.Context, _ string, view tracker.View,
 // replacement would pass.
 func TestASaveCannotTakeOverAViewItMayNotWrite(t *testing.T) {
 	t.Parallel()
-	eng := tracker.Container{Kind: tracker.ContainerProject, ID: "ENG"}
-	stored := map[string]tracker.View{
+	eng := worklet.Container{Kind: worklet.ContainerProject, ID: "ENG"}
+	stored := map[string]worklet.View{
 		"v-shared": {ID: "v-shared", Container: eng, Name: "Board"},
 		"v-bob":    {ID: "v-bob", Container: eng, Name: "Mine", Owner: "bob"},
 	}
@@ -96,7 +96,7 @@ func TestASaveCannotTakeOverAViewItMayNotWrite(t *testing.T) {
 				},
 				Authorize: builtin.Decide(c.chart),
 			}) {
-				if candidate.Name() == tracker.SaveWorkViewTool {
+				if candidate.Name() == worklet.SaveWorkViewTool {
 					tool = candidate
 				}
 			}
@@ -107,7 +107,7 @@ func TestASaveCannotTakeOverAViewItMayNotWrite(t *testing.T) {
 			for key, value := range c.args {
 				args[key] = value
 			}
-			got, err := tool.Call(personHolding(iam.GrantTracker), args)
+			got, err := tool.Call(personHolding(iam.GrantWorklet), args)
 			if err != nil {
 				t.Fatalf("save_work_view: %v", err)
 			}

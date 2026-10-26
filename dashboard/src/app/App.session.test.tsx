@@ -88,7 +88,7 @@ describe("the socket", () => {
     ["a reset link's page", "#/reset/abc.def", [], 0],
     ["a screen in the frame, nobody signed in", "#/inbox", null, 0],
     ["a screen in the frame, signed in holding no app", "#/inbox", [], 1],
-    ["a screen in the frame, signed in holding one app", "#/inbox", ["knowledge"], 1],
+    ["a screen in the frame, signed in holding one app", "#/inbox", ["doclet"], 1],
     ["a screen in the frame, signed in holding Admin", "#/inbox", ["admin"], 1],
   ])("%s, at %s, holding %j, dials %d times", async (_, hash, grants, dials) => {
     const dialled: string[] = [];
@@ -191,10 +191,10 @@ describe("the socket", () => {
 
 describe("a session the engine does not accept", () => {
   test("sends the reader to sign in, carrying where they were", async () => {
-    mount("#/work?view=board");
+    mount("#/worklet?view=board");
     const depth = history.length;
     act(() => needSession("sign_in"));
-    await waitFor(() => expect(location.hash).toBe(loginFor("#/work?view=board")));
+    await waitFor(() => expect(location.hash).toBe(loginFor("#/worklet?view=board")));
     expect(await screen.findByRole("heading", { name: "Sign in to Crewlet" })).toBeDefined();
     // A REPLACE: the screen the reader was on cannot be drawn for them.
     expect(history.length).toBe(depth);
@@ -280,7 +280,7 @@ describe("a sign-in answered with a session that may only enrol", () => {
       }),
     );
     needSession("sign_in");
-    mount(loginFor("#/work/ENG-42"));
+    mount(loginFor("#/worklet/ENG-42"));
     fireEvent.change(await screen.findByLabelText(/login or email/i), {
       target: { value: "jane.doe" },
     });
@@ -289,7 +289,7 @@ describe("a sign-in answered with a session that may only enrol", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
-    const enrol = `#/enrol?next=${encodeURIComponent("#/work/ENG-42")}`;
+    const enrol = `#/enrol?next=${encodeURIComponent("#/worklet/ENG-42")}`;
     await screen.findByText("Set up two-step verification");
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));

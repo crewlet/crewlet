@@ -14,10 +14,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // throughWire is err as the asking node rebuilds it.
@@ -41,7 +41,7 @@ func throughWire(t *testing.T, err error) error {
 func TestEverySentinelKeepsItsIdentityAcrossTheWire(t *testing.T) {
 	t.Parallel()
 	for _, s := range sentinels {
-		wrapped := fmt.Errorf("tracker: while doing the thing: %w", s.err)
+		wrapped := fmt.Errorf("worklet: while doing the thing: %w", s.err)
 		got := throughWire(t, wrapped)
 		if !errors.Is(got, s.err) {
 			t.Errorf("%s: errors.Is is false after the wire", s.code)
@@ -59,17 +59,17 @@ func TestEverySentinelKeepsItsIdentityAcrossTheWire(t *testing.T) {
 
 // A REFUSAL THAT IS TWO SENTINELS AT ONCE KEEPS BOTH.
 //
-// A page's bad parent is a field refusal ([pages.ErrInvalid], which a tool
-// renders as "refused that") AND the one fact [pages.ErrParent] names, in the
+// A page's bad parent is a field refusal ([doclet.ErrInvalid], which a tool
+// renders as "refused that") AND the one fact [doclet.ErrParent] names, in the
 // shape the pages store builds it. A stateless node's tool branches on either,
 // so the wire has to carry both rather than whichever it met first.
 func TestARefusalThatIsTwoSentinelsKeepsBoth(t *testing.T) {
 	t.Parallel()
 	original := fmt.Errorf("%w (%w)",
-		fmt.Errorf("%w: parent_id: page x is in the trash", pages.ErrInvalid),
-		pages.ErrParent)
+		fmt.Errorf("%w: parent_id: page x is in the trash", doclet.ErrInvalid),
+		doclet.ErrParent)
 	got := throughWire(t, original)
-	if !errors.Is(got, pages.ErrInvalid) || !errors.Is(got, pages.ErrParent) {
+	if !errors.Is(got, doclet.ErrInvalid) || !errors.Is(got, doclet.ErrParent) {
 		t.Fatalf("a parent refusal lost an identity across the wire: %v", got)
 	}
 	if got.Error() != original.Error() {
@@ -122,7 +122,7 @@ func TestTheRouterReadsARefusalTheWayItWasSent(t *testing.T) {
 		unserved.Detail != "data-a: no answer" {
 		t.Fatalf("an unserved estate crossed as %+v", unserved)
 	}
-	unvouchedStep := throughWire(t, fmt.Errorf("walk: %w", tracker.ErrStepUnvouched))
+	unvouchedStep := throughWire(t, fmt.Errorf("walk: %w", worklet.ErrStepUnvouched))
 	if !unvouched(opCreateTask.spec, nil, unvouchedStep) {
 		t.Errorf("an unvouched step crossed as %v, which the router reads as final", unvouchedStep)
 	}
@@ -135,11 +135,11 @@ func TestTheRouterReadsARefusalTheWayItWasSent(t *testing.T) {
 // back to the model.
 func TestAStructuredRefusalKeepsItsValue(t *testing.T) {
 	t.Parallel()
-	original := &tracker.TagClash{Project: "ENG", Slug: "bug-fix", Label: "Bug fix",
-		Other: tracker.Tag{Slug: "bugfix", Label: "Bugfix"}}
-	var clash *tracker.TagClash
+	original := &worklet.TagClash{Project: "ENG", Slug: "bug-fix", Label: "Bug fix",
+		Other: worklet.Tag{Slug: "bugfix", Label: "Bugfix"}}
+	var clash *worklet.TagClash
 	if !errors.As(throughWire(t, original), &clash) {
-		t.Fatal("errors.As(*tracker.TagClash) is false after the wire")
+		t.Fatal("errors.As(*worklet.TagClash) is false after the wire")
 	}
 	if !reflect.DeepEqual(clash, original) {
 		t.Errorf("clash = %+v, want %+v", clash, original)
@@ -152,8 +152,8 @@ func TestAStructuredRefusalKeepsItsValue(t *testing.T) {
 func TestAnUnknownIdentityKeepsItsMessage(t *testing.T) {
 	t.Parallel()
 	got := decodeError(&wireError{Message: "something new went wrong",
-		Sentinels: []string{"tracker.ErrFromTheFuture"},
-		Typed:     []typedError{{Code: "tracker.FutureRefusal"}}})
+		Sentinels: []string{"worklet.ErrFromTheFuture"},
+		Typed:     []typedError{{Code: "worklet.FutureRefusal"}}})
 	if got == nil || got.Error() != "something new went wrong" {
 		t.Fatalf("got %v", got)
 	}
@@ -183,7 +183,7 @@ func TestEveryErrorOfTheCrossingPackagesIsRegistered(t *testing.T) {
 	// whose answers a person verb is decided on. A code is the identifier
 	// as Go code spells it, so a nested package is named by its last
 	// element.
-	for _, pkg := range []string{"tracker", "pages", "statelog", "estate",
+	for _, pkg := range []string{"worklet", "doclet", "statelog", "estate",
 		"iamdomain", "iam", "iam/session", "artifactsdomain", "artifacts",
 		"artifacts/manifest", "artifacts/mediatype", "artifactdata", "artifactdata/canon",
 		"artifactdata/query"} {

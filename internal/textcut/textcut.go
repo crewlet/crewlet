@@ -69,7 +69,7 @@ func Ellipsis(s string, max int) string {
 // bounds the content" — and that is right wherever the budget is advisory. It
 // is wrong wherever the budget is a CEILING somebody enforces: a tracker
 // notification's excerpt is refused at MaxExcerpt by
-// [github.com/crewlet/crewlet/internal/tracker.Notify.Validate], so a marker
+// [github.com/crewlet/crewlet/internal/worklet.Notify.Validate], so a marker
 // that pushed a cut excerpt three bytes over would turn every long comment
 // into a REFUSED WRITE rather than a marked one.
 //

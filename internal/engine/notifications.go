@@ -504,8 +504,8 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 	}
 
 	// THE NATIVE BACKENDS' OWN EDGE, last so a company running both a
-	// vendor tracker and the native one keeps the vendor's parser first —
-	// the parsers are tried in order and the two answer different sources,
+	// vendor tracker and Doclet keeps the vendor's parser first. The
+	// parsers are tried in order and the two answer different sources,
 	// so the order is cosmetic, but a stable one is what makes two boots
 	// of one config log the same thing.
 	nativeParsers, nativePrompts := e.nativeParsers(c)

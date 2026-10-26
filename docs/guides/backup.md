@@ -46,7 +46,7 @@ A deployment's durable state lives in six places:
 | Estate | Where | What it holds |
 |---|---|---|
 | **The node's own store file** | `store.path`, with its `-wal` sidecar | The seat's memory — diary, episodes, counterparty profiles, synthesized skills, onboarding markers, the [conversation ledger](../concepts/conversation-sessions.md) — which is also [replicated onto the stream](../concepts/seat-ownership.md#a-seats-memory-follows-it), so this file is a cache of it rather than its only copy; and, held here **only**: the audit event log (30 days), scheduled-run history, the company-config revision history, the [secret store's](../concepts/secret-store.md) bootstrap rows, and this node's own record of any snapshot it has adopted |
-| **The replicated estate** | `store.replicated_path`, with its `-wal` sidecar | Everything a state log's applier derives from the fleet's own records — the work tracker, the knowledge base's pages, the embeddings that search them, the [identity directory](../concepts/identity-and-access.md) and every node's [daily usage](replication.md#two-compacted-domains-the-embeddings-and-each-nodes-day) — together with the checkpoint that says how far this node has applied. Derivable by replay **only while the log still holds the records**: past the trim floor, a node with no copy of this file adopts a peer's snapshot instead |
+| **The replicated estate** | `store.replicated_path`, with its `-wal` sidecar | Everything a state log's applier derives from the fleet's own records (Worklet, Doclet's pages, the embeddings that search them, the [identity directory](../concepts/identity-and-access.md) and every node's [daily usage](replication.md#two-compacted-domains-the-embeddings-and-each-nodes-day)), together with the checkpoint that says how far this node has applied. Derivable by replay **only while the log still holds the records**: past the trim floor, a node with no copy of this file adopts a peer's snapshot instead |
 | **The object store** | `store.objects`: the `OBJ_crewlet_files` stream on the broker's members (`nats`, the default), or an S3-compatible bucket (`s3`) | The bytes of the company's [files](../concepts/object-store.md), one object per upload. **One store the whole fleet shares**, not a directory of any node's: on `nats` a stream like any other, on `s3` somebody else's bucket. The rows naming the files are in the replicated estate |
 | **The stream estate** | `stream.store_dir` per embedded member, or the external NATS cluster | Agent mailboxes (unacked in-flight work), the shared event and config streams, one ordered **log per state-log domain** — which is the record of truth the file above is derived from — and every [coordination](../concepts/coordination.md) KV bucket: seat, presence and duty leases and fencing epochs, the activation pointer with the current company payload, the completion ledger, delivery dedupe, budget counters, scheduled-fire claims, detached sandbox-run records, the sealed credentials |
 | **Tier A, on disk** | `crewlet.yaml` and the environment it reads | The keyring (`CREWLET_SECRET_KEY_*`) — the sole root of trust for everything sealed — plus API tokens and any NATS credential/TLS files |
@@ -130,8 +130,8 @@ What is worth knowing about it:
   of its secret store. Restoring one without the other gives a company whose
   halves are from different moments. The replicated estate is something the
   node **holds** — every node with the `data` role holds it from the moment it
-  starts, whether or not its company runs the native tracker or knowledge base,
-  because the rows its log derived stay on disk either way — and the backup
+  starts, whether or not its company runs Worklet or Doclet,
+  because the rows its log derived stay on disk either way, and the backup
   copies what the node holds rather than whatever happens to be open. An
   estate the node holds that is closed at that instant (an adoption
   replacing its file, or one whose reopen failed) **refuses the backup, naming
@@ -432,9 +432,17 @@ exercises no recovery code at all. Use it when you want a copy that involves
 no running engine — before a risky upgrade, or when taking the deployment
 down anyway.
 
-1. **Drain and stop every node** — SIGTERM or Ctrl+C once, and let the drain
+1. **Export subscription logins first**, if any seats run on a coding CLI,
+   while the fleet is still up: `crewlet llm export <key>` packs each into one
+   portable bundle. It restores the entry's configured bundle before it reads
+   the login, so it reads the company's values: through the running engine,
+   with one of its Tier A tokens in `CREWLET_API_TOKEN`. Do it before the
+   drain, since with every node stopped a member of a cluster has no running
+   member to read through and is refused ([where a command reads the
+   company's values](../reference/cli.md#where-a-command-reads-the-companys-values)).
+2. **Drain and stop every node** — SIGTERM or Ctrl+C once, and let the drain
    converge; see [graceful shutdown](../concepts/agent-runtime.md#graceful-shutdown).
-2. **Copy, per node:** both store files — `store.path` and, on a node with
+3. **Copy, per node:** both store files — `store.path` and, on a node with
    the `data` role, `store.replicated_path` — each **together with its `-wal`
    sidecar** — committed data lives in both, while the `-shm` and `.lock`
    sidecars are transient — and `stream.store_dir` for every embedded member.
@@ -442,18 +450,16 @@ down anyway.
    the replicated estate and the fleet's shared state telling one story. On
    the default `nats` object store the company's files are a stream, so
    `stream.store_dir` already carries them.
-3. **Copy the bucket, on `s3`:** the objects under the configured prefix's
+4. **Copy the bucket, on `s3`:** the objects under the configured prefix's
    `files/`, with the provider's own tool (`aws s3 sync
    s3://acme-files/crewlet/files/ objects/files/`). Nothing writes them while
    the fleet is stopped, so this copy is of the same instant as the rest; a
    bucket left out is a backup whose rows name files it cannot restore.
-4. **Copy Tier A:** `crewlet.yaml` and any NATS credential/TLS files it
+5. **Copy Tier A:** `crewlet.yaml` and any NATS credential/TLS files it
    names — and record where the keyring material comes from. **Keep the
    keyring out of the data's backup domain**
    ([Secret Store § Backups](../concepts/secret-store.md)): a backup that
    carries both the ciphertext and its key has undone the sealing.
-5. **Export subscription logins**, if any seats run on a coding CLI:
-   `crewlet llm export <key>` packs each into one portable bundle.
 6. **Start the fleet again.**
 
 A `stream.store_dir` left empty selects an in-memory stream server: nothing

@@ -17,10 +17,10 @@ describe("where a sign-in may send the reader", () => {
   // path and query, or the guard would send every reader to the Inbox and
   // look like it worked.
   test("a route of this dashboard is followed, path and query", () => {
-    expect(safeNext("#/work/ENG-42")).toBe("#/work/ENG-42");
-    expect(safeNext("#/work?view=board&status=open")).toBe("#/work?view=board&status=open");
+    expect(safeNext("#/worklet/ENG-42")).toBe("#/worklet/ENG-42");
+    expect(safeNext("#/worklet?view=board&status=open")).toBe("#/worklet?view=board&status=open");
     expect(safeNext("#/")).toBe("#/");
-    expect(safeNext("#/knowledge/ENG/Deploy%20runbook")).toBe("#/knowledge/ENG/Deploy%20runbook");
+    expect(safeNext("#/doclet/ENG/Deploy%20runbook")).toBe("#/doclet/ENG/Deploy%20runbook");
   });
 
   test.each([
@@ -32,7 +32,7 @@ describe("where a sign-in may send the reader", () => {
     ["a backslash a browser reads as a slash", "#/\\evil.example"],
     ["a protocol-relative hash", "#//evil.example"],
     ["a tab a browser strips before it parses", "#/\tevil"],
-    ["a newline", "#/work\n//evil.example"],
+    ["a newline", "#/worklet\n//evil.example"],
     ["a bare word", "evil"],
     ["nothing", ""],
     ["a value far past any address", `#/${"a".repeat(5000)}`],
@@ -51,14 +51,14 @@ describe("where a sign-in may send the reader", () => {
   test("what is followed is the router's own spelling of it", () => {
     // A segment is decoded and re-encoded, so a percent sequence the reader
     // was never shown cannot survive as something else.
-    expect(safeNext("#/work/a%2Fb")).toBe("#/work/a%2Fb");
+    expect(safeNext("#/worklet/a%2Fb")).toBe("#/worklet/a%2Fb");
   });
 });
 
 describe("the address of the sign-in screen", () => {
   test("it carries where the reader was", () => {
-    expect(signInHash("#/work/ENG-42?thread=history")).toBe(
-      `#/login?next=${encodeURIComponent("#/work/ENG-42?thread=history")}`,
+    expect(signInHash("#/worklet/ENG-42?thread=history")).toBe(
+      `#/login?next=${encodeURIComponent("#/worklet/ENG-42?thread=history")}`,
     );
   });
 

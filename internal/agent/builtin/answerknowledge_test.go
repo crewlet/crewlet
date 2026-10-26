@@ -17,16 +17,16 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/compact"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // answerSearch ranks a fixed set of pages and records what it was asked.
@@ -48,29 +48,29 @@ func (s *answerSearch) Search(_ context.Context, q knowledge.Query) knowledge.Re
 
 // answerItems ranks a fixed set of work items.
 type answerItems struct {
-	hits  []tracker.Ranked
+	hits  []worklet.Ranked
 	err   error
-	asked []tracker.SearchQuery
+	asked []worklet.SearchQuery
 }
 
-func (s *answerItems) Search(_ context.Context, q tracker.SearchQuery) (tracker.SearchAnswer, error) {
+func (s *answerItems) Search(_ context.Context, q worklet.SearchQuery) (worklet.SearchAnswer, error) {
 	s.asked = append(s.asked, q)
-	return tracker.SearchAnswer{Hits: s.hits}, s.err
+	return worklet.SearchAnswer{Hits: s.hits}, s.err
 }
 
 // answerPages serves page bodies by id.
 type answerPages struct{ bodies map[string]string }
 
-func (answerPages) List(context.Context, pages.Filter, statelog.Freshness) (pages.Listing, error) {
-	return pages.Listing{}, nil
+func (answerPages) List(context.Context, doclet.Filter, statelog.Freshness) (doclet.Listing, error) {
+	return doclet.Listing{}, nil
 }
 
-func (p answerPages) Get(_ context.Context, ref string, _ statelog.Freshness) (pages.Detail, error) {
+func (p answerPages) Get(_ context.Context, ref string, _ statelog.Freshness) (doclet.Detail, error) {
 	body, ok := p.bodies[ref]
 	if !ok {
-		return pages.Detail{}, errors.New("no such page")
+		return doclet.Detail{}, errors.New("no such page")
 	}
-	return pages.Detail{Page: pages.Page{ID: ref, Body: body}}, nil
+	return doclet.Detail{Page: doclet.Page{ID: ref, Body: body}}, nil
 }
 
 // answerModel is a model with a known answer and a known cost, behind the
@@ -152,12 +152,12 @@ type answerRig struct {
 func newAnswerRig() *answerRig {
 	return &answerRig{
 		search: &answerSearch{hits: []knowledge.Hit{{
-			Title: "Deploy runbook", PageID: "p-1", Backend: pages.Backend,
+			Title: "Deploy runbook", PageID: "p-1", Backend: doclet.Backend,
 			Snippet: "how to deploy",
 		}, {
-			Title: "Rollback", PageID: "p-2", Backend: pages.Backend, Snippet: "undo a deploy",
+			Title: "Rollback", PageID: "p-2", Backend: doclet.Backend, Snippet: "undo a deploy",
 		}}},
-		items: &answerItems{hits: []tracker.Ranked{{
+		items: &answerItems{hits: []worklet.Ranked{{
 			ID: "t-1", Key: "ENG-7", Title: "Automate the deploy", Snippet: "script it",
 		}}},
 		pages: answerPages{bodies: map[string]string{
@@ -650,9 +650,9 @@ func TestALongQuestionIsRefusedNotCut(t *testing.T) {
 //
 // An answer quotes its sources, so an answer written from a work item and read
 // by somebody kept off the tracker is the work item read. The pages are
-// searched only for an asker holding the knowledge base and the items only for
-// one holding the tracker — through the one per-app filter every cross-app
-// answer asks — and an asker holding neither is refused by the table before
+// searched only for an asker holding Doclet and the items only for
+// one holding Worklet (through the one per-app filter every cross-app
+// answer asks), and an asker holding neither is refused by the table before
 // anything is searched or spent. Mutating either search to ignore the asker's
 // apps, or the table to admit an asker with neither, turns this red.
 func TestAnswerKnowledgeSearchesOnlyTheAppsTheAskerHolds(t *testing.T) {
@@ -664,8 +664,8 @@ func TestAnswerKnowledgeSearchesOnlyTheAppsTheAskerHolds(t *testing.T) {
 	}{
 		{"both apps", slices.Clone(iam.Apps), true, true},
 		{"admin, which includes both", []iam.Grant{iam.GrantAdmin}, true, true},
-		{"the tracker alone", []iam.Grant{iam.GrantTracker}, false, true},
-		{"the knowledge base alone", []iam.Grant{iam.GrantKnowledge}, true, false},
+		{"the tracker alone", []iam.Grant{iam.GrantWorklet}, false, true},
+		{"the knowledge base alone", []iam.Grant{iam.GrantDoclet}, true, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -709,7 +709,7 @@ func TestAnswerKnowledgeSearchesOnlyTheAppsTheAskerHolds(t *testing.T) {
 // TWO ASKERS WHO MAY READ DIFFERENT CORPORA NEVER SHARE AN ANSWER.
 //
 // The cache is the node's, and its key used to be the question and the corpus
-// position — so a person holding the tracker alone, asking what a colleague
+// position, so a person holding Worklet alone, asking what a colleague
 // holding both apps had just asked, was handed an answer written from pages
 // they may not read. The apps are in the key; askers who may read the same
 // corpora still share, an admin with somebody holding both apps among them.
@@ -728,7 +728,7 @@ func TestTheTwoAppSetsCacheApart(t *testing.T) {
 	if both := askAs(iam.Apps...); both.Cached || rig.model.calls != 1 {
 		t.Fatalf("the first answer: cached %v after %d calls", both.Cached, rig.model.calls)
 	}
-	tracker := askAs(iam.GrantTracker)
+	tracker := askAs(iam.GrantWorklet)
 	if tracker.Cached || rig.model.calls != 2 {
 		t.Fatalf("a tracker-only asker was served the answer written for both apps "+
 			"(cached %v after %d model calls)", tracker.Cached, rig.model.calls)

@@ -362,7 +362,9 @@ its store, this broker, the replicated estate — `/health` answers
 the recovery ends, before anything the company configures starts (see
 [While a node is starting](../reference/api-endpoints.md#while-a-node-is-starting)).
 So a node under an orchestrator needs a startup probe sized for the largest
-store it may have to recover: [Sizing the startup probe](#sizing-the-startup-probe)
+store it may have to recover — and, on a data node in a fleet of more than one,
+for the snapshot of the replicated estate it may have to fetch before that
+recovery is over: [Sizing the startup probe](#sizing-the-startup-probe)
 has the arithmetic. A liveness probe on its own counts every second of the
 recovery as a failure, restarts the node partway through it, and the next boot
 recovers the same store again. A broker that cannot start at all, such as one
@@ -401,7 +403,7 @@ hold no streams of their own, so both are refused a `store_dir`; see
 **And the company's own records live there, whatever backends it names.**
 Every data node keeps the company's **identity estate** — its people, their
 credentials and sessions — on a state log, and a domain's log is a stream. With
-`tracker.backend: native` or `knowledge.backend: native` (the defaults), its
+`tracker.backend: worklet` or `knowledge.backend: doclet` (the defaults), its
 work items and its pages are there too. An unset `store_dir` means the first restart recreates those logs
 empty, and a node whose rows are ahead of a log that restarted from nothing
 stops serving for good. So the engine refuses to boot without one, and
@@ -979,7 +981,7 @@ api:
 | `/webhooks/*` — every vendor delivery, the Slack OAuth landing, the GitHub App return | `api.public` only |
 | `/otlp/{token}/v1/{signal}` — sandbox telemetry | `api.public` only |
 | `/mcp/{token}` — the box-mode tool bridge | `api.public` only |
-| everything else: `/health`, `/ready`, `/dashboard` and its assets, the sign-in routes under `/auth`, every REST read, `/ws/stream`, `/config`, `/secrets`, `/setup`, `/iam/*`, `/operator/*`, `/backup`, `/fleet/*`, `/work/*` | `api.port` only |
+| everything else: `/health`, `/ready`, `/dashboard` and its assets, the sign-in routes under `/auth`, every REST read, `/ws/stream`, `/config`, `/secrets`, `/setup`, `/iam/*`, `/operator/*`, `/backup`, `/fleet/*`, `/worklet/*`, `/doclet/pages/*` | `api.port` only |
 
 `api.port` answers a public route with `404 no_route` and a hint naming
 `api.public` — a vendor pointed at the wrong port learns it from the first
@@ -1178,8 +1180,11 @@ startupProbe:
   httpGet: {path: /health, port: http}
   periodSeconds: 10
   timeoutSeconds: 5
-  failureThreshold: 60     # ten minutes for the node to recover what it
-                           #   holds; see "Sizing the startup probe"
+  failureThreshold: 60     # ten minutes for a node with no join to make —
+                           #   a lone data node, or a node without data —
+                           #   to recover what it holds. A data node in a
+                           #   fleet adds the join: see "Sizing the
+                           #   startup probe"
 livenessProbe:
   httpGet: {path: /health, port: http}
   periodSeconds: 10
@@ -1224,9 +1229,10 @@ node binds its listener before its boot, so the port answers from the first
 second, but until the node has recovered what it holds itself — its own store
 and that release's schema migrations, the broker's file store, the broker's
 listeners, JetStream catching up with its peers (on a node without `data`, its
-leaf link to a member), the streams and buckets it provisions, the replicated
-estate and its state logs, and a joining node's snapshot — `/health` answers
-`503` with `"phase": "recovering"`. Applying those logs is not part of it: it
+leaf link to a member), the streams and buckets it provisions, the batches of
+a stateless node's events its own event log left unsettled, the
+replicated estate and its state logs, and a joining node's snapshot — `/health`
+answers `503` with `"phase": "recovering"`. Applying those logs is not part of it: it
 catches up in the background from the end of the recovery, and what waits for
 it is the node's first seat, never `/health`. Kubernetes runs no liveness or
 readiness probe until a startup probe has succeeded once, so the startup probe
@@ -1246,11 +1252,13 @@ deployment knows how large a store it gave the node.
 **Nothing the company configures is part of it.** The moment the recovery is
 over the node logs `engine_recovered` and `/health` turns `200`, with
 `"phase": "preparing"`, while the node brings up what its company configures:
-its shared MCP servers — each bounded by its own
-[`startup_timeout_seconds`](../getting-started/configuration.md#mcp-servers),
+the snapshot of the company's secrets its `${VAR}` references resolve from, the
+company built from its document, its shared MCP servers (each bounded by its
+own [`startup_timeout_seconds`](../getting-started/configuration.md#mcp-servers),
 for its start and again for its first tool listing, with no ceiling on the
-setting — its sandboxes and native halves, the first apply of its active
-revision, and the dashboard's projection. A probe sized by the store knows
+setting), its sandboxes, Worklet's and Doclet's halves, its coding CLIs' credential bundles,
+the first apply of its active revision, and the dashboard's projection. A probe
+sized by the store knows
 nothing about any of them, so none of them is allowed to hold it: the startup
 probe passes, the liveness probe takes over and is answered `200`, and
 `/ready` stays `503` with `reason: "starting"` until the node serves, so
@@ -1264,7 +1272,12 @@ as a whole has no deadline beyond its parts', since one cut short would publish
 a company missing whatever had not come up yet. So a part that hangs leaves
 the node `preparing`: `/health` `200`, `/ready` `503 starting`, and no restart.
 A restart would not cure it — the next boot meets the same company and waits on
-the same part — so what a deployment needs is to see it. A rollout stops
+the same part — so what a deployment needs is to see it. The same holds for a
+secret store that does not answer: the node builds no company until it has read
+the store, because one built from the environment alone would run on stale or
+missing credentials, so it asks again, logging `secret_store_unreadable`, until
+the store answers. A value the node's keyring cannot open is the one exception:
+no wait changes that answer, so the boot ends there, naming the secret. A rollout stops
 behind such a pod (a Deployment marks it with `ProgressDeadlineExceeded` after
 its `progressDeadlineSeconds`), and an alert on a pod whose `/ready` has named
 `starting` for longer than the startup probe's window plus twice the slowest
@@ -1272,13 +1285,35 @@ shared tool server's `startup_timeout_seconds` names the node. Its log says
 where it stopped: `engine_recovered`, and no `api_listening` after it.
 
 **The arithmetic:** `failureThreshold × periodSeconds` has to cover the
-recovery of the largest store the node may hold, plus the rest of the node's
-own bring-up.
+recovery of the largest store the node may hold, plus — on a data node in a
+fleet of more than one — the join it may have to make, plus the rest of the
+node's own bring-up.
 
 - **The recovery** was measured at about a second and a half per GiB after a
   crash on a fast local disk (see the boot's three waits under
   [Every node embeds a member of one cluster](#every-node-embeds-a-member-of-one-cluster)).
   A slower disk is slower in proportion.
+- **The join**, on a data node of a fleet. A data node whose rows the logs can
+  no longer bring level — one added to a fleet whose logs have been trimmed,
+  one whose volume was replaced, one that was down longer than a log's replay
+  window or that a peer's reanchor passed — fetches a peer's snapshot of the
+  whole replicated estate and installs it before its recovery ends
+  ([How a node that fell behind catches up](fleet.md#how-a-node-that-fell-behind-catches-up)),
+  and its startup probe waits for that too. The deployment already states how
+  long that may take: `stream.tracker_retention.rejoin_window` (default 30
+  minutes) is its budget for a node to become a complete replica, so it is
+  the term to allow here. Hold the window against the **projected join**
+  `crewlet retention status` prints on its `REPLICA` line, a conservative
+  projection for the replicated estate the node holds today: if the
+  projection is past the window, raise the window and the probe with it, and
+  revisit both as the estate grows. A join cut short — by this probe, a
+  rollout or a preemption — keeps nothing of what it fetched, so the next
+  boot starts the transfer again from the first byte: a probe shorter than
+  the join is a node that never comes up. **A lone data node never
+  transfers** — there is nobody to donate, so its join asks, hears nothing
+  and comes up on the history it has in a moment — and neither does a node
+  without `data`, which holds no copy to replace, so neither needs this
+  term.
 - **The rest of the node's own bring-up** takes seconds on a healthy fleet.
   Allow two minutes for it. That covers the whole of the broker's two bounded
   waits — 30 seconds for the listeners and 60 for JetStream to catch up — and
@@ -1289,18 +1324,31 @@ own bring-up.
   so add those minutes if your members routinely boot while their peers are
   still forming.
 
-The block above allows ten minutes (60 × 10 s). Less the two minutes, that
-leaves eight minutes, or 480 seconds, of recovery: about 320 GiB at 1.5 s per
-GiB, or about 80 GiB on a disk four times slower. For a larger store, raise
-`failureThreshold` and leave `periodSeconds` alone, because the period is
-also how long a finished recovery can wait before the kubelet sees it.
+The block above allows ten minutes (60 × 10 s), which is sized for a node
+with no join to make: a lone data node, or a node without `data`. Less the two
+minutes, that leaves eight minutes, or 480 seconds, of recovery: about 320 GiB
+at 1.5 s per GiB, or about 80 GiB on a disk four times slower. A data node in a
+fleet adds its `rejoin_window` to that: with the default 30 minutes and the
+same eight minutes of recovery, 40 minutes, or `failureThreshold: 240`. For a
+larger store or a longer window, raise `failureThreshold` and leave
+`periodSeconds` alone, because the period is also how long a finished
+recovery can wait before the kubelet sees it.
 
 **Measure your own.** `api_bound` is the moment the port began answering. A
 recovery longer than ten seconds logs `embedded_broker_starting` every ten
-seconds with its `elapsed_seconds`. The time from the process's first log line
-to `engine_recovered` is the recovery the startup probe has to cover; from
-there to `api_listening` (`api_probes_listening` on a node without `ingress`)
-is the company's part, which it does not. Time a node's first boot on a new
+seconds with its `elapsed_seconds`. A boot that joins logs
+`statelog_below_the_floor` (or `statelog_behind_a_reanchor`) when it decides
+to, `statelog_join_fetching` when it starts the transfer — naming the donor,
+the artefact's size and the projected join — then `statelog_join_progress`
+every ten seconds with the bytes received, the total, the elapsed seconds and
+the rate, and `statelog_adopted` once the snapshot is installed. The time from
+the process's first log line to `engine_recovered` is the recovery the startup
+probe has to cover, a join included; from there to `api_listening`
+(`api_probes_listening` on a node without `ingress`) is the company's part,
+which it does not. A crash recovery measures no join, so time a join of its own
+as well — a node added to the fleet, or a volume replaced — and read the rate
+the progress lines give against the projection `crewlet retention status`
+prints. Time a node's first boot on a new
 release as well: each node applies that release's schema migrations to its own
 store as it opens it, inside the recovery. The store holds the company's files
 as well as its streams on the default `nats` object store, which has no byte
@@ -1621,8 +1669,9 @@ one** of them keeps each one:
    writing a batch a data node *claims* it in the coordination store,
    create-only. The claim's winner keeps the batch; any other node that wrote
    it deletes its copy. A batch is acknowledged only once its keeper is
-   decided, and a data node that crashed between writing and claiming settles
-   its copy the same way at its next boot.
+   decided — or once its keeper's record is one nothing can read (below) —
+   and a data node that crashed between writing and claiming settles its copy
+   the same way at its next boot.
 
 That last step is what keeps every figure derived from a node's own log
 honest: the `usage` domain sums each node's day, so a batch two data nodes
@@ -1642,6 +1691,33 @@ trace's or a turn's total, a page of turns' tokens, and the integrations' drop
 and merge counts: each data node counts the rows it keeps and names the ones it
 has not settled, and the node you asked counts each named row once
 ([Reading the fleet's history](../concepts/event-system.md#reading-the-fleets-history)).
+
+**A keeper record nothing can read is left alone rather than guessed at.**
+Every record in the coordination store's custody bucket is written by a claim,
+which names its node. A record that does not decode, or names no node, came
+from somewhere else — written there by hand or by a process that is not
+Crewlet, reshaped by a later build, or corrupted — and says neither who keeps
+the batch nor that nobody does. A data node holding such a batch keeps its copy
+as it is, counted in none of its days; acknowledges the delivery rather than
+hand it to the next data node to write once more; and logs
+`event_custody_undecidable` naming the batch when the delivery arrives and on
+every pass after, a minute apart; its error names where the record is, the
+bucket `crewlet_custody` under the batch's id. Every other batch settles as
+usual, before and after it. Left alone, the batch goes with its rows once it is
+older than the event log's retention, 31 days after it was written. Removing
+the record instead lets the next pass claim the batch afresh — but only once
+you know that no data node kept the batch before its record became unreadable:
+that node holds its copy as kept and logs nothing, and the claim after the
+removal would keep a second. Whether you can remove it depends on the broker:
+
+- **An external NATS cluster** (`stream.type: nats`): with the NATS CLI,
+  connected as the engine's own account, `nats kv del crewlet_custody
+  <batch-id>`, the id from the log line.
+- **The embedded broker:** there is no supported way to reach its buckets from
+  outside the engine — a solo server binds no socket, and the client port a
+  clustered member opens is one the server picks for itself at each start,
+  which no setting names — and the engine has no command that removes a
+  custody record. The batch waits out the event log's retention.
 
 **Upgrade the data nodes first.** A data node writes each event in a batch by
 its own build's category map, and leaves out a type its build does not place —

@@ -533,7 +533,7 @@ interface Arrival {
   readonly seat: string;
   readonly add: string;
   /**
-   * A tracker project key for the node, from Work's New project: its editor
+   * A tracker project key for the node, from Worklet's New project: its editor
    * opens on the Project field holding the key, not yet applied. Taken out of
    * the address once answered, as `add=` is, so a reload asks nothing twice.
    */

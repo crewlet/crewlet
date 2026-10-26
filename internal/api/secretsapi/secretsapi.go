@@ -50,17 +50,27 @@
 // the node's own writer ([Identity]) — and the listing counts both, because
 // the answer an operator retires the old key on is "nothing is under it".
 //
-// # There is exactly one route that returns a value, and it is break-glass
+// # Two routes return a value, and both are break-glass
 //
-// It requires an explicit ?reveal=true — a path that cannot be reached by
-// accident or by a crawl — and it logs the access by operator and name. A
-// read-back that leaves no trace is indistinguishable from an exfiltration,
-// and the name is the whole of what can be logged, because logging the value
-// would be the leak.
+// `GET /secrets/{name}` requires an explicit ?reveal=true — a path that cannot
+// be reached by accident or by a crawl — and `POST /secrets/reveal`, which
+// answers the values of the names its body asks for, is a POST no link or
+// crawl can make. Both are decided on `secrets.reveal` and both log the access
+// by operator and name. A read-back that leaves no trace is indistinguishable
+// from an exfiltration, and the name is the whole of what can be logged,
+// because logging the value would be the leak.
+//
+// The second exists for one reader: a CLI run resolving a company document's
+// `${VAR}` references through a running node, which reads the variables its
+// command reads that the node lists, and asks for them together rather than
+// one request per credential. It is handed exactly the names it asks for —
+// never the store.
 package secretsapi
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"maps"
 	"net/http"
@@ -82,14 +92,43 @@ import (
 
 var log = logging.Get("api.secrets")
 
-// MaxValueBytes bounds one secret's value.
+// MaxJSONValueBytes is the longest one stored value can be once it is spelled
+// as a JSON string, which is how every reveal answers it: [encoding/json]
+// writes each byte it escapes — a control character, `<`, `>`, `&` — as a
+// six-byte \u escape, so six times [secrets.MaxValueBytes], the size every
+// store holds a value to, and its two quotes. It is what a reader of a
+// revealed value has to be prepared to take, since a value a write admitted
+// and the read refused would be stored and unreadable.
+const MaxJSONValueBytes = 6*secrets.MaxValueBytes + 2
+
+// MaxRevealNames bounds the names one POST /secrets/reveal asks for.
 //
-// The largest real credential this engine handles is a service-account JSON
-// key or a PEM private key, which are a few kilobytes; 64 KiB is an order of
-// magnitude above that and still finite. The route is guarded, so this bounds
-// a mistake rather than an attacker — a `curl -d @big.tar` typo should be
-// refused rather than sealed.
-const MaxValueBytes = 64 << 10
+// SIXTY-FOUR, from the answer it bounds: each name can carry a value of up to
+// [MaxJSONValueBytes], so the largest answer is [MaxRevealAnswerBytes] —
+// about 24 MiB — which is what a client has to be prepared to read in one
+// piece. A company document names a few variables per seat (the shipped
+// example reads 22 for eight seats), so most reads are one request, and a
+// caller asking for more than this splits the set into requests of this size
+// rather than one per name.
+const MaxRevealNames = 64
+
+// MaxRevealBodyBytes bounds a POST /secrets/reveal body: [MaxRevealNames]
+// names of a kilobyte each, which no variable a document references is near.
+const MaxRevealBodyBytes = MaxRevealNames << 10
+
+// MaxRevealAnswerBytes is the longest answer POST /secrets/reveal can give:
+// every name asked — whose bytes the body bounds — once, each beside a value
+// of up to [MaxJSONValueBytes] and its punctuation, inside the envelope.
+const MaxRevealAnswerBytes = MaxRevealBodyBytes + MaxRevealNames*(MaxJSONValueBytes+8) + 64
+
+// RevealAnswerBytes is the longest answer `GET /secrets/{name}?reveal=true`
+// can give for name: the name and its value, each at the length JSON spells it
+// in — six bytes a byte at worst, the value's at [MaxJSONValueBytes] — inside
+// the envelope. A function of the name because nothing else bounds one: the
+// reader knows the name it asked for, and the value is the write's to bound.
+func RevealAnswerBytes(name string) int {
+	return 6*len(name) + 2 + MaxJSONValueBytes + 64
+}
 
 // Identity is the identity estate's half of a keyring rotation: the personal
 // values — names, addresses, second factors — the same keyring seals in rows
@@ -207,6 +246,12 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// GET, PUT or DELETE of that name reaches the {name} routes, and no
 	// spelling of a secret's name can reach the rekey handler.
 	mount("POST /secrets/rekey", authz.ActionSecretWrite, s.rekey)
+	// THE VALUES OF SEVERAL NAMES, for a reader resolving one company
+	// document — a POST for the reason rekey is one, since no POST reaches
+	// the {name} routes, and because the names it asks for travel in a body
+	// rather than in a URL a proxy logs and bounds. The reveal's own verb
+	// on the route itself, since there is no metadata half to admit first.
+	mount("POST /secrets/reveal", authz.ActionSecretReveal, s.revealMany)
 	// THE METADATA'S VERB, and a reveal asks the value's on top — see
 	// [Service.get]. The pattern cannot see `?reveal=true`.
 	mount("GET /secrets/{name}", authz.ActionSecretList, s.get)
@@ -329,6 +374,108 @@ func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, map[string]any{"name": name, "value": value})
 }
 
+// revealRequest is the body POST /secrets/reveal reads.
+type revealRequest struct {
+	Names []string `json:"names"`
+}
+
+// revealMany serves POST /secrets/reveal — the values of the names a body
+// asks for, in one answer: `values` for every name held, `missing` for every
+// name nothing holds.
+//
+// IT IS THE BREAK-GLASS READ, AND NOTHING LESS. A CLI run resolving a company
+// document through a running node (`crewlet gitlab provision` and its
+// siblings, `crewlet llm`) reads the variables its command reads that the
+// node lists, and asking for them through `GET /secrets/{name}?reveal=true`
+// one at a time would make one decision, one log line and one round trip per
+// credential where the run has one question. So it is mounted on
+// `secrets.reveal` itself — admin, a person present, a recent proof — decided
+// before the body is read, and the access is logged by name like the single
+// reveal. It answers exactly the names asked, never the whole store: a run is
+// handed the values it asked for and nothing beside them.
+//
+// A NAME OUTSIDE THE REFERENCE GRAMMAR IS REFUSED rather than answered
+// missing, unlike the single read: the one reader of this route asks only for
+// names the listing gave it, which every store holds to the grammar, so a name
+// no store can hold is a caller asking for something other than a command's
+// values — and keeping every name a plain identifier is what bounds the answer
+// at [MaxRevealAnswerBytes]. A reserved name is refused first, as on every route
+// here.
+func (s *Service) revealMany(w http.ResponseWriter, r *http.Request) {
+	if !noQuery(w, r, "POST /secrets/reveal",
+		"send the variables to read as the body, {\"names\": [...]}, and "+
+			"nothing in the query") {
+		return
+	}
+	raw, err := httpjson.ReadBody(w, r, MaxRevealBodyBytes)
+	if err != nil {
+		httpjson.Refuse(w, err)
+		return
+	}
+	var req revealRequest
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err = decoder.Decode(&req); err != nil {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
+			"detail": "the body is not {\"names\": [...]}: " + err.Error(),
+			"hint":   "send the variables to read as a JSON list under names",
+		})
+		return
+	}
+	names := slices.Compact(slices.Sorted(slices.Values(req.Names)))
+	switch {
+	case len(names) == 0:
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
+			"detail": "names is empty",
+			"hint":   "name at least one variable to read",
+		})
+		return
+	case len(names) > MaxRevealNames:
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
+			"detail": strconv.Itoa(len(names)) + " names, and one request reads at most " +
+				strconv.Itoa(MaxRevealNames),
+			"hint": "split the names into requests of at most " +
+				strconv.Itoa(MaxRevealNames),
+		})
+		return
+	}
+	for _, name := range names {
+		if reserved(w, name) {
+			return
+		}
+		if err = secrets.CheckName(name); err != nil {
+			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidName, map[string]string{
+				"detail": err.Error(),
+				"hint": "this route reads the variables a ${VAR} reference can " +
+					"name, and nothing else",
+			})
+			return
+		}
+	}
+	values, err := s.store.Values(r.Context(), names)
+	if err != nil {
+		s.fail(w, "open the secrets", err)
+		return
+	}
+	caller, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
+	missing := make([]string, 0, len(names)-len(values))
+	for _, name := range names {
+		if _, held := values[name]; !held {
+			missing = append(missing, name)
+		}
+	}
+	by := iam.ActorFor(caller)
+	// EVERY NAME, the ones nothing holds included: a read that asked for a
+	// credential is the access whether or not one was there.
+	log.WarnContext(r.Context(), "secrets_revealed", "names", names,
+		"by", by.Name, "operator", by.OperatorID)
+	w.Header().Set("Cache-Control", "no-store")
+	httpjson.Write(w, http.StatusOK, map[string]any{"values": values, "missing": missing})
+}
+
 // put serves PUT /secrets/{name} — store or rotate one value.
 //
 // THE BODY IS THE VALUE, raw bytes, not a JSON wrapper. A credential is
@@ -359,14 +506,18 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if !noQuery(w, r) {
+	if !noQuery(w, r, "PUT /secrets/{name}",
+		"who stored a value is the credential this request authenticated "+
+			"with (updated_by, updated_by_kind, operator_id), and its source "+
+			"is this route's own, "+string(secrets.SourceAPI)+"; send the "+
+			"value as the body and nothing in the query") {
 		return
 	}
 	// THE SHARED READER, not a copy of it. This route answered
 	// `value_too_large` where configapi answered `body_too_large` for the
 	// same 413, and its own reader is also the one place a body arrived
 	// with no time bound on it — see [httpjson.BodyReadTimeout].
-	body, err := httpjson.ReadBody(w, r, MaxValueBytes)
+	body, err := httpjson.ReadBody(w, r, secrets.MaxValueBytes)
 	if err != nil {
 		httpjson.Refuse(w, err)
 		return
@@ -399,16 +550,17 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// noQuery refuses a write that carries a query string, naming its parameters,
-// and reports whether the request may go on.
+// noQuery refuses a request to a route that takes no query string, naming its
+// parameters and the route, and reports whether the request may go on. hint
+// says what the route reads instead.
 //
 // REFUSED, NEVER IGNORED. `?source=` once chose the word a row recorded, and a
 // client still sending it would otherwise be told its write landed while the
 // row says something else — a client that judged its own rows by that word
 // would read every one as overwritten and write it again, for ever, with
 // nothing failing. So any parameter is a 400 before the body is read, and the
-// answer says where the provenance comes from instead.
-func noQuery(w http.ResponseWriter, r *http.Request) bool {
+// answer says what the route reads instead.
+func noQuery(w http.ResponseWriter, r *http.Request, route, hint string) bool {
 	if r.URL.RawQuery == "" {
 		return true
 	}
@@ -419,20 +571,16 @@ func noQuery(w http.ResponseWriter, r *http.Request) bool {
 	}
 	// A query that parses to no name at all (`?&`) is still a query, and is
 	// refused in general terms rather than by a name it does not have.
-	detail := "PUT /secrets/{name} takes no query parameters"
+	detail := route + " takes no query parameters"
 	switch {
 	case len(quoted) == 1:
-		detail = quoted[0] + " is not a parameter of PUT /secrets/{name}, which takes none"
+		detail = quoted[0] + " is not a parameter of " + route + ", which takes none"
 	case len(quoted) > 1:
 		detail = strings.Join(quoted, ", ") + " are not parameters of " +
-			"PUT /secrets/{name}, which takes none"
+			route + ", which takes none"
 	}
 	httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidQuery, map[string]string{
-		"detail": detail,
-		"hint": "who stored a value is the credential this request " +
-			"authenticated with (updated_by, updated_by_kind, operator_id), " +
-			"and its source is this route's own, " + string(secrets.SourceAPI) +
-			"; send the value as the body and nothing in the query",
+		"detail": detail, "hint": hint,
 	})
 	return false
 }

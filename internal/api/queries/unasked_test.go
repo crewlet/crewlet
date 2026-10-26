@@ -16,7 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning/memread"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // answeredMap runs one question and insists it succeeded, so a case about a
@@ -65,7 +65,7 @@ func TestSearchIsUnregisteredWithoutAnIndexAndTheBoardIsNot(t *testing.T) {
 // has them file the duplicate. It is a third answer, with a reason.
 func TestAnIndexStillBuildingIsReportedRatherThanReturnedAsAFailure(t *testing.T) {
 	t.Parallel()
-	w := &stubWork{err: tracker.ErrIndexBuilding}
+	w := &stubWork{err: worklet.ErrIndexBuilding}
 	got := answeredMap(t, queries.Sources{Work: &stubWork{}, WorkSearch: w},
 		"work_search", map[string]any{"q": "billing"})
 	switch {
@@ -76,7 +76,7 @@ func TestAnIndexStillBuildingIsReportedRatherThanReturnedAsAFailure(t *testing.T
 	case got["note"] == "" || got["note"] == nil:
 		t.Error("the answer carries no note, so a screen has nothing to say")
 	}
-	hits, ok := got["hits"].([]tracker.Ranked)
+	hits, ok := got["hits"].([]worklet.Ranked)
 	if !ok || hits == nil {
 		// AN EMPTY SLICE, never null: a client rendering `hits.length`
 		// should not have to guard the field as well.

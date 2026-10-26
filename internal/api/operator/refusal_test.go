@@ -20,7 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/estate"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // diskFault is a store's error as a driver words one: a database path, which
@@ -33,10 +33,10 @@ type faultyReader struct {
 	err error
 }
 
-func (f faultyReader) Task(context.Context, string, tracker.DetailWants,
-	statelog.Freshness) (tracker.TaskDetail, error) {
+func (f faultyReader) Task(context.Context, string, worklet.DetailWants,
+	statelog.Freshness) (worklet.TaskDetail, error) {
 
-	return tracker.TaskDetail{}, f.err
+	return worklet.TaskDetail{}, f.err
 }
 
 // faultySurface is the act route over a tracker whose item reads fail with err.
@@ -67,7 +67,7 @@ func TestAStoreFaultIsAFiveHundredWithNoRetryAfter(t *testing.T) {
 	body := `{"args":{"item":"ENG-1","status":"done"}}`
 
 	status, answer, header := actAnswer(t, faultySurface(t, errors.New(diskFault)),
-		tracker.UpdateWorkItemTool, body)
+		worklet.UpdateWorkItemTool, body)
 	if status != http.StatusInternalServerError ||
 		answer["error"] != string(crewletmcp.RefusalInternalError) {
 		t.Fatalf("a store fault answered %d %v, want 500 internal_error", status, answer)
@@ -79,7 +79,7 @@ func TestAStoreFaultIsAFiveHundredWithNoRetryAfter(t *testing.T) {
 	if strings.Contains(detail, "/var/lib") || strings.Contains(fmt.Sprint(answer), "/var/lib") {
 		t.Errorf("the store's own error reached the client: %v", answer)
 	}
-	if !strings.Contains(detail, "log") || answer["tool"] != tracker.UpdateWorkItemTool {
+	if !strings.Contains(detail, "log") || answer["tool"] != worklet.UpdateWorkItemTool {
 		t.Errorf("the fault's answer %v does not say where its reason is, or for "+
 			"which tool", answer)
 	}
@@ -87,7 +87,7 @@ func TestAStoreFaultIsAFiveHundredWithNoRetryAfter(t *testing.T) {
 	behind := &statelog.Refused{Code: statelog.RefuseBehind, Level: statelog.ReadSession,
 		RetryAfter: 9 * time.Second, Detail: "this node is 40 records behind"}
 	status, answer, header = actAnswer(t, faultySurface(t, behind),
-		tracker.UpdateWorkItemTool, body)
+		worklet.UpdateWorkItemTool, body)
 	if status != http.StatusServiceUnavailable ||
 		answer["error"] != string(crewletmcp.RefusalUnavailable) {
 		t.Fatalf("a read the state log refused answered %d %v, want 503 unavailable",
@@ -114,14 +114,14 @@ func TestAWritersErrorIsWordedForWhoeverReadsIt(t *testing.T) {
 		says   string
 		retry  bool
 	}{
-		{"a fault of the node", fmt.Errorf("tracker: read the ledger: %s", diskFault),
+		{"a fault of the node", fmt.Errorf("worklet: read the ledger: %s", diskFault),
 			http.StatusInternalServerError, httpjson.CodeInternalError, "node's log", false},
 		{"a coordination store that did not answer",
 			fmt.Errorf("dial nats://10.0.0.7:4222: %w", coord.ErrUnavailable),
 			http.StatusServiceUnavailable, httpjson.CodeUnavailable,
 			"The coordination store did not answer", true},
 		{"a refusal the domain composed",
-			fmt.Errorf("%w: the comment is longer than a comment may be", tracker.ErrInvalid),
+			fmt.Errorf("%w: the comment is longer than a comment may be", worklet.ErrInvalid),
 			http.StatusUnprocessableEntity, httpjson.CodeInvalid, "longer than", false},
 		// THE ESTATE'S ROUTER FINDING NO DATA NODE TO RUN IT ON, which a
 		// write through this surface meets whenever every copy is out of
@@ -178,13 +178,13 @@ func TestAWritersErrorIsClassedByTheToolsRule(t *testing.T) {
 		want    crewletmcp.Refusal
 		unknown bool
 	}{
-		{err: tracker.ErrNoTask, want: crewletmcp.RefusalNotFound},
+		{err: worklet.ErrNoTask, want: crewletmcp.RefusalNotFound},
 		{err: &statelog.Unavailable{Reason: statelog.ReasonLogFull},
 			want: crewletmcp.RefusalUnavailable},
 		{err: fmt.Errorf("x: %w", coord.ErrUnavailable), want: crewletmcp.RefusalUnavailable},
 		{err: &estate.ErrUnserved{Detail: "data-b: out_of_service"},
 			want: crewletmcp.RefusalUnavailable},
-		{err: fmt.Errorf("stopped: %w", tracker.ErrStepUnresolved),
+		{err: fmt.Errorf("stopped: %w", worklet.ErrStepUnresolved),
 			want: crewletmcp.RefusalUnavailable, unknown: true},
 		{err: fmt.Errorf("%w (pages.trash, asked of data-b)", estate.ErrOutcomeUnknown),
 			want: crewletmcp.RefusalUnavailable, unknown: true},

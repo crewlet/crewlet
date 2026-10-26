@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore/references"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // schema is the freshly migrated replicated estate's columns per table, and
@@ -142,8 +142,8 @@ const assumedClockSkew = time.Hour
 // once it was minted more than collect.PendingGrace ago, by its own. So the
 // grace has to exceed the bound by more than the two clocks can disagree, or
 // a write could name a key a collection had just read as nobody's. And the
-// bound itself has to outlast the slowest upload the engine accepts — a file
-// of tracker.MaxFileBytes at the objstore.MiBPace floor — or a legal upload
+// bound itself has to outlast the slowest upload the engine accepts (a file
+// of worklet.MaxFileBytes at the objstore.MiBPace floor), or a legal upload
 // would finish only to be refused.
 func TestTheGraceOutlastsTheLongestUnrecordedUpload(t *testing.T) {
 	t.Parallel()
@@ -152,7 +152,7 @@ func TestTheGraceOutlastsTheLongestUnrecordedUpload(t *testing.T) {
 			"collector's grace (%v): a write may name a key the collector deletes",
 			objstore.RecordWithin, assumedClockSkew, collect.PendingGrace)
 	}
-	slowest := objstore.PaceFor(tracker.MaxFileBytes)
+	slowest := objstore.PaceFor(worklet.MaxFileBytes)
 	if slowest >= objstore.RecordWithin {
 		t.Errorf("the largest file at the pacing floor takes %v to upload, and a "+
 			"write may name a key only %v after it was minted", slowest, objstore.RecordWithin)

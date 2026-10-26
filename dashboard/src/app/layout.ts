@@ -37,15 +37,15 @@
  *
  * The first cut of this counted only the first four terms and the list, and
  * the three it missed are each wide enough to matter: at the 1112 it derived,
- * the Work list beside a peek was 396px — under the floor it existed to
- * protect — and on Settings, whose column sits inside the screen, a peek at
+ * the Worklet list beside a peek was 396px (under the floor it existed to
+ * protect), and on Settings, whose column sits inside the screen, a peek at
  * 1280 left the nodes grid 328px and cut its columns off.
  *
  * # Why the SHELL decides, and not a media query
  *
  * Two of those terms are not the window's to know. The section column is a
- * property of the SCREEN — a media query has one width for every screen, so
- * one right for Work is 236px wrong for Settings — and the padding and the
+ * property of the SCREEN (a media query has one width for every screen, so
+ * one right for Worklet is 236px wrong for Settings), and the padding and the
  * inset scale with the reader's DENSITY, which a media query can no more read
  * than it can read a custom property. The last cut wrote its threshold at the
  * widest density for that reason, which was safe and still wrong for the

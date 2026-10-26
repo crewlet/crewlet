@@ -11,7 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE TRACKER APPLIER A RUNNING NODE BUILDS TELLS THE API WHOSE INBOX MOVED.
@@ -30,11 +30,11 @@ func TestTheTrackerApplierTheRegisterBuildsFeedsTheInbox(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	e := &Engine{}
-	var heard [][]tracker.InboxMovement
-	e.SetOnInboxMoved(func(moved []tracker.InboxMovement) {
+	var heard [][]worklet.InboxMovement
+	e.SetOnInboxMoved(func(moved []worklet.InboxMovement) {
 		heard = append(heard, moved)
 	})
-	entry, ok := registrationFor(tracker.Domain{}.Name())
+	entry, ok := registrationFor(worklet.Domain{}.Name())
 	if !ok {
 		t.Fatal("the register has no tracker domain")
 	}
@@ -44,18 +44,18 @@ func TestTheTrackerApplierTheRegisterBuildsFeedsTheInbox(t *testing.T) {
 	}
 
 	at := time.Unix(1_700_000_000, 0).UTC()
-	task := tracker.Task{
-		V: tracker.DocumentVersion, ID: "t-1", Key: "ENG-1", Project: "ENG",
-		Type: "task", Title: "a task", Status: tracker.StatusTodo,
-		StatusGroup: tracker.GroupNotStarted, Priority: tracker.PriorityNormal,
-		Rank: tracker.RankOrigin, CreatedAt: at, UpdatedAt: at,
+	task := worklet.Task{
+		V: worklet.DocumentVersion, ID: "t-1", Key: "ENG-1", Project: "ENG",
+		Type: "task", Title: "a task", Status: worklet.StatusTodo,
+		StatusGroup: worklet.GroupNotStarted, Priority: worklet.PriorityNormal,
+		Rank: worklet.RankOrigin, CreatedAt: at, UpdatedAt: at,
 	}
 	title := "assigned"
-	for seq, rec := range []tracker.MutationRecord{
-		inboxRecord(t, tracker.OpCreate, task, nil),
-		inboxRecord(t, tracker.OpPatch, tracker.TaskPatch{Title: &title}, &tracker.Notify{
-			Kind:     tracker.ChangeStatus,
-			Snapshot: tracker.Snapshot{Key: "ENG-1", Assignee: "bo"},
+	for seq, rec := range []worklet.MutationRecord{
+		inboxRecord(t, worklet.OpCreate, task, nil),
+		inboxRecord(t, worklet.OpPatch, worklet.TaskPatch{Title: &title}, &worklet.Notify{
+			Kind:     worklet.ChangeStatus,
+			Snapshot: worklet.Snapshot{Key: "ENG-1", Assignee: "bo"},
 		}),
 	} {
 		body, err := json.Marshal(rec)
@@ -68,7 +68,7 @@ func TestTheTrackerApplierTheRegisterBuildsFeedsTheInbox(t *testing.T) {
 				Subject: statelog.Subject{Kind: string(rec.Subject.Kind), ID: rec.Subject.ID},
 				Op:      string(rec.Op), OpID: rec.OpID, Writer: rec.Writer,
 			},
-			Position: statelog.Position{Stream: tracker.Domain{}.Stream().Name, Seq: uint64(seq + 1)},
+			Position: statelog.Position{Stream: worklet.Domain{}.Stream().Name, Seq: uint64(seq + 1)},
 			Payload:  body,
 			StoredAt: at.Add(time.Duration(seq+1) * time.Second),
 		}
@@ -84,8 +84,8 @@ func TestTheTrackerApplierTheRegisterBuildsFeedsTheInbox(t *testing.T) {
 		applier.Committed(t.Context())
 	}
 
-	want := []tracker.InboxMovement{
-		{Handle: "bo", UnreadDelta: 1, Subject: "t-1", Reason: tracker.ReasonAssignee},
+	want := []worklet.InboxMovement{
+		{Handle: "bo", UnreadDelta: 1, Subject: "t-1", Reason: worklet.ReasonAssignee},
 	}
 	if len(heard) != 1 || !slices.Equal(heard[0], want) {
 		t.Fatalf("the API heard %v, want exactly one batch %v", heard, want)
@@ -93,21 +93,21 @@ func TestTheTrackerApplierTheRegisterBuildsFeedsTheInbox(t *testing.T) {
 }
 
 // inboxRecord is one tracker record about task t-1.
-func inboxRecord(t *testing.T, op tracker.OpKind, payload any,
-	notify *tracker.Notify) tracker.MutationRecord {
+func inboxRecord(t *testing.T, op worklet.OpKind, payload any,
+	notify *worklet.Notify) worklet.MutationRecord {
 	t.Helper()
 	body, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return tracker.MutationRecord{
-		RecordEnvelope: tracker.RecordEnvelope{
-			V: tracker.RecordVersion, OpID: "t-1-" + string(op),
-			Subject: tracker.TaskSubject("t-1"), Op: op,
+	return worklet.MutationRecord{
+		RecordEnvelope: worklet.RecordEnvelope{
+			V: worklet.RecordVersion, OpID: "t-1-" + string(op),
+			Subject: worklet.TaskSubject("t-1"), Op: op,
 			CreatedAt: time.Unix(1_700_000_000, 0).UTC(),
-			Writer:    "node-a", Scope: tracker.ScopeSet{Subject: true, Container: "ENG"},
+			Writer:    "node-a", Scope: worklet.ScopeSet{Subject: true, Container: "ENG"},
 		},
-		Mutation: body, Actor: "ana", ActorKind: tracker.AuthorHuman,
+		Mutation: body, Actor: "ana", ActorKind: worklet.AuthorHuman,
 		Notify: notify,
 	}
 }

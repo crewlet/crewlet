@@ -132,7 +132,7 @@
 // # Admin, and one permission per app (ADR-0033)
 //
 // The vocabulary is admin and the apps ([iam.Grant]): `admin`, which runs the
-// company and the engine, and one permission per APP (`tracker`, `knowledge`
+// company and the engine, and one permission per APP (`worklet`, `doclet`
 // and `artifacts`), which uses it. Every row names at most one app
 // ([rule.app]), and that decides three things at once: a [ClassApp] row admits whoever holds the app;
 // a RELATION row — a person's own record, a container's lead, a comment's
@@ -232,7 +232,7 @@ import (
 
 // Action is one verb this engine authorizes.
 //
-// THE VERB, NOT THE ROUTE. `PATCH /work/items/{key}` and `update_work_item`
+// THE VERB, NOT THE ROUTE. `PATCH /worklet/items/{key}` and `update_work_item`
 // are one action asked two ways, and naming the route would make them two —
 // which is how the operator MCP and a seat's own tools came to answer
 // differently about the same write.
@@ -369,7 +369,7 @@ type Object struct {
 	// the tracker app.
 	//
 	// SET ONLY BY A CALLER THAT HAS READ THE ITEM and resolved its asks
-	// (internal/tracker's AskedOn), never from an argument: an asked arm a
+	// (internal/worklet's AskedOn), never from an argument: an asked arm a
 	// caller could fill in for themselves would be the tracker app handed to
 	// anybody who typed their own name. Empty means nobody is asked, or
 	// nobody has looked.

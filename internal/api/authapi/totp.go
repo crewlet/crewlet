@@ -109,7 +109,7 @@ func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	body, err := httpjson.ReadBody(w, r, maxLoginBody)
+	body, err := httpjson.ReadBody(w, r, MaxLoginBodyBytes)
 	if err != nil {
 		httpjson.Refuse(w, err)
 		return
