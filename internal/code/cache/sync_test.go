@@ -387,7 +387,8 @@ func TestTheGaugesAreTheFilesOnDisk(t *testing.T) {
 }
 
 // heldBy is what an incarnation's files hold, as the cache counts it: every
-// file of objects/pack, packed-refs and the commit-graph.
+// file of objects/pack, packed-refs, the commit-graph and every run of the
+// index of pushes.
 func heldBy(t *testing.T, dir string) int64 {
 	t.Helper()
 	var total int64
@@ -403,6 +404,17 @@ func heldBy(t *testing.T, dir string) int64 {
 			total += info.Size()
 		} else if !os.IsNotExist(err) {
 			t.Fatal(err)
+		}
+	}
+	// And the cache's own derived files, the index of pushes' runs under
+	// crewlet/ — none before a delta has folded a push.
+	if statOK(t, filepath.Join(dir, "crewlet")) {
+		for _, name := range names(t, filepath.Join(dir, "crewlet")) {
+			info, err := os.Stat(filepath.Join(dir, "crewlet", name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			total += info.Size()
 		}
 	}
 	return total

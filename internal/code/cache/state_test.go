@@ -40,17 +40,57 @@ type stateDoc struct {
 }
 
 // derivedDoc is one declared derived file as the state records it, keyed by
-// its declaration's name (cache.DerivedMidx, cache.DerivedGraph).
+// its declaration's name (cache.DerivedMidx, cache.DerivedGraph,
+// cache.DerivedProvenance).
 type derivedDoc struct {
 	Bytes  int64  `json:"bytes"`
 	Covers int    `json:"covers"`
 	Step   string `json:"step,omitempty"`
+	// Provenance is the index of pushes' record: only its entry carries one.
+	Provenance *provenanceDoc `json:"provenance,omitempty"`
+}
+
+// provenanceDoc is the index of pushes' record as the state holds it — every
+// position packed.
+type provenanceDoc struct {
+	Stream     time.Time `json:"stream"`
+	From       int64     `json:"from"`
+	Through    int64     `json:"through"`
+	GapFrom    int64     `json:"gap_from,omitempty"`
+	GapThrough int64     `json:"gap_through,omitempty"`
+	Complete   bool      `json:"complete,omitempty"`
+	Oldest     int64     `json:"oldest,omitempty"`
+	OldestAt   time.Time `json:"oldest_at,omitzero"`
+	Next       uint64    `json:"next"`
+	Runs       []struct {
+		N       uint64 `json:"n"`
+		Bytes   int64  `json:"bytes"`
+		From    int64  `json:"from"`
+		Through int64  `json:"through"`
+		Pushes  int64  `json:"pushes"`
+		Commits int64  `json:"commits"`
+		Moves   int64  `json:"moves"`
+	} `json:"runs,omitempty"`
 }
 
 // midx and graph are the two declarations' entries: the zero value where the
 // state records none.
 func (doc stateDoc) midx() derivedDoc  { return doc.Derived[string(cache.DerivedMidx)] }
 func (doc stateDoc) graph() derivedDoc { return doc.Derived[string(cache.DerivedGraph)] }
+
+// overPacks is the state's derived files built over the packs — every entry
+// but the index of pushes', which every full round makes, empty where no
+// delta has folded a push, and which a case about the packs' files does not
+// ask about.
+func (doc stateDoc) overPacks() map[string]derivedDoc {
+	out := map[string]derivedDoc{}
+	for name, d := range doc.Derived {
+		if name != string(cache.DerivedProvenance) {
+			out[name] = d
+		}
+	}
+	return out
+}
 
 // derivedBytes is what the state's derived files hold together: what a boot
 // counts beside DiskBytes.
@@ -331,9 +371,9 @@ func TestADerivedFileGoneFromUnderItsStateIsForgotten(t *testing.T) {
 			}
 			doc := readStateDoc(t, dir)
 			switch {
-			case kept == 0 && len(doc.Derived) != 0:
+			case kept == 0 && len(doc.overPacks()) != 0:
 				t.Errorf("the state records derived files %+v that are not on disk", doc.Derived)
-			case kept != 0 && (len(doc.Derived) != 1 || doc.midx() != derivedDoc{Bytes: kept}):
+			case kept != 0 && (len(doc.overPacks()) != 1 || doc.midx() != derivedDoc{Bytes: kept}):
 				t.Errorf("the state records derived files %+v, want only the index's bitmap's %d bytes, "+
 					"made by no write", doc.Derived, kept)
 			}

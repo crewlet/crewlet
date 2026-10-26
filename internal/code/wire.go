@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -562,10 +563,16 @@ const (
 	// contains which, the commits each has that the other lacks, and the
 	// first page of what head changed since the merge base.
 	GitCompare GitReadKind = "compare"
+	// GitLandedIn is whether a commit is in a ref's history, and the push
+	// that put it there and kept it there: the one question about history a
+	// seat asks the server rather than a clone.
+	GitLandedIn GitReadKind = "landed_in"
 )
 
 // GitReadKinds is the closed set.
-func GitReadKinds() []GitReadKind { return []GitReadKind{GitTree, GitBlob, GitDiff, GitCompare} }
+func GitReadKinds() []GitReadKind {
+	return []GitReadKind{GitTree, GitBlob, GitDiff, GitCompare, GitLandedIn}
+}
 
 // Valid reports a kind this build answers.
 func (k GitReadKind) Valid() bool { return slices.Contains(GitReadKinds(), k) }
@@ -608,10 +615,11 @@ type GitQuery struct {
 	// fill, which is this build's answer without the rule.
 	Home bool `json:"home,omitempty"`
 
-	Tree    *TreeQuery    `json:"tree,omitempty"`
-	Blob    *BlobQuery    `json:"blob,omitempty"`
-	Diff    *DiffQuery    `json:"diff,omitempty"`
-	Compare *CompareQuery `json:"compare,omitempty"`
+	Tree     *TreeQuery     `json:"tree,omitempty"`
+	Blob     *BlobQuery     `json:"blob,omitempty"`
+	Diff     *DiffQuery     `json:"diff,omitempty"`
+	Compare  *CompareQuery  `json:"compare,omitempty"`
+	LandedIn *LandedInQuery `json:"landed_in,omitempty"`
 }
 
 // TreeQuery lists one tree.
@@ -668,6 +676,26 @@ type CompareQuery struct {
 	// Base and Head are commit or tag ids, whole or abbreviated.
 	Base string `json:"base"`
 	Head string `json:"head"`
+}
+
+// LandedInQuery asks whether a commit is in a ref's history, and which push
+// landed it there.
+//
+// THE TARGET IS THE ONE THE ASKER WAS SHOWN: the tip it resolved, at the
+// position it read it at, so the git node judges that tip and pays no barrier
+// of its own — and an answer names what it was judged against, never a tip
+// the asker cannot place.
+type LandedInQuery struct {
+	// Commit is the commit asked about, whole or abbreviated.
+	Commit string `json:"commit"`
+	// Target is the whole ref asked about (refs/heads/main).
+	Target string `json:"target"`
+	// TargetOID is the commit Target named when the asker resolved it — a
+	// whole id — and At the position that resolution read it at: the git
+	// node's copy is brought to At before it judges, so the moves of Target
+	// up to that tip are in the index it searches.
+	TargetOID string            `json:"target_oid"`
+	At        statelog.Position `json:"at"`
 }
 
 // ValidRev reports whether rev names an object as a read by oid takes it: a
@@ -780,7 +808,7 @@ func (q GitQuery) Validate() error {
 		kind    GitReadKind
 		present bool
 	}{{GitTree, q.Tree != nil}, {GitBlob, q.Blob != nil}, {GitDiff, q.Diff != nil},
-		{GitCompare, q.Compare != nil}} {
+		{GitCompare, q.Compare != nil}, {GitLandedIn, q.LandedIn != nil}} {
 		switch {
 		case s.kind == q.Kind && !s.present:
 			return fmt.Errorf("%w: %s: a %s read names what it reads", ErrInvalid, s.kind, s.kind)
@@ -795,6 +823,8 @@ func (q GitQuery) Validate() error {
 		return q.Blob.validate()
 	case GitDiff:
 		return q.Diff.validate()
+	case GitLandedIn:
+		return q.LandedIn.validate()
 	}
 	return q.Compare.validate()
 }
@@ -870,6 +900,24 @@ func (q CompareQuery) validate() error {
 	return validRev("compare.head", q.Head)
 }
 
+func (q LandedInQuery) validate() error {
+	if err := validRev("landed_in.commit", q.Commit); err != nil {
+		return err
+	}
+	switch {
+	case !strings.HasPrefix(q.Target, "refs/") || !ValidRef(q.Target):
+		return fmt.Errorf("%w: landed_in.target: %q is not a whole ref (refs/heads/<branch>, refs/tags/<tag>): a "+
+			"branch's short name is resolved to its ref first", ErrInvalid, q.Target)
+	case !gitref.ValidOID(q.TargetOID) || q.TargetOID == ZeroOID:
+		return fmt.Errorf("%w: landed_in.target_oid: %q is not the whole id of the tip the target was resolved to",
+			ErrInvalid, q.TargetOID)
+	case q.At.IsZero() || q.At.Stream != topics.CodeLogStream:
+		return fmt.Errorf("%w: landed_in.at: %s is not the code log position the target was resolved at",
+			ErrInvalid, q.At)
+	}
+	return nil
+}
+
 // GitAnswer answers a [GitQuery]: exactly the field of its Kind is set — a
 // file read whose path names a directory answers Kind tree. Its JSON is at
 // most MaxGitAnswerBytes.
@@ -887,11 +935,66 @@ type GitAnswer struct {
 	// Next is where the next page starts, handed back as the query's Cursor
 	// with the query otherwise unchanged; empty on the last page.
 	Next string `json:"next,omitempty"`
+	// PushedBy is the push that INTRODUCED each commit the answer names —
+	// its Rev, a diff's or a comparison's commits — by the commit's whole id,
+	// where the answering node's index of which push introduced each commit
+	// holds it. A commit it does not name was introduced outside Coverage, or
+	// by a push that listed more than MaxIntroduced commits.
+	PushedBy map[string]PushedBy `json:"pushed_by,omitempty"`
+	// Coverage is what that index holds, on every answer of a node that keeps
+	// one: an absent PushedBy means nothing beyond it.
+	Coverage *Coverage `json:"coverage,omitempty"`
 
-	Tree    *TreeAnswer    `json:"tree,omitempty"`
-	Blob    *BlobAnswer    `json:"blob,omitempty"`
-	Diff    *DiffAnswer    `json:"diff,omitempty"`
-	Compare *CompareAnswer `json:"compare,omitempty"`
+	Tree     *TreeAnswer     `json:"tree,omitempty"`
+	Blob     *BlobAnswer     `json:"blob,omitempty"`
+	Diff     *DiffAnswer     `json:"diff,omitempty"`
+	Compare  *CompareAnswer  `json:"compare,omitempty"`
+	LandedIn *LandedInAnswer `json:"landed_in,omitempty"`
+}
+
+// Coverage is what a git node's index of which push introduced each commit
+// holds: every push with a position in (From, Through] but those in (GapFrom,
+// GapThrough], a range a full read of the repository passed over and the
+// index has not yet read. Complete is From being the start of the push history
+// the rows keep (PushHistory), so a commit with no push inside complete
+// coverage was introduced by a push that listed more than MaxIntroduced
+// commits, or before that history.
+type Coverage struct {
+	From       statelog.Position `json:"from"`
+	Through    statelog.Position `json:"through"`
+	Complete   bool              `json:"complete,omitempty"`
+	GapFrom    statelog.Position `json:"gap_from,omitzero"`
+	GapThrough statelog.Position `json:"gap_through,omitzero"`
+}
+
+// LandedInAnswer is whether Commit is in Target's history, and the push that
+// landed it.
+type LandedInAnswer struct {
+	// Commit is the commit asked about, whole.
+	Commit string `json:"commit"`
+	// Target is the whole ref, TargetOID the tip it was judged against and
+	// At the position that tip was resolved at — the query's own.
+	Target    string            `json:"target"`
+	TargetOID string            `json:"target_oid"`
+	At        statelog.Position `json:"at"`
+	// Landed is Commit reachable from TargetOID.
+	Landed bool `json:"landed"`
+	// LandedBy is the push that made Commit reachable from Target and kept it
+	// so — the first of the target's moves after which every move kept it
+	// reachable, which is never one Commit was reachable from before — with
+	// the move it made (Move); nil where the index this node keeps does not
+	// hold that push, which Detail says.
+	LandedBy *PushedBy `json:"landed_by,omitempty"`
+	Move     *RefMove  `json:"move,omitempty"`
+	// IntroducedBy is the push that introduced Commit itself, which may be
+	// another ref's (a branch merged later).
+	IntroducedBy *PushedBy `json:"introduced_by,omitempty"`
+	// Probes is the ancestry checks the search for the landing ran.
+	Probes int `json:"probes"`
+	// Detail says why LandedBy is nil: the landing predates what the index
+	// holds, falls in a range it has not read yet, or lies past the bound of
+	// the search's checks (internal/code/query's MaxLandedProbes).
+	Detail string `json:"detail,omitempty"`
 }
 
 // TreeAnswer is one page of a tree's listing, in git's own order.

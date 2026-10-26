@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -49,6 +51,13 @@ type fakeLog struct {
 	// behindBy makes a non-linearizable page 1 answer this many records
 	// behind the checkpoint, with no rows: a copy that has not caught up.
 	behindBy uint64
+	// reads is every read of pushes in log order answered (Read), and
+	// readHook runs before each is answered — outside the log's lock — its
+	// error the read's.
+	reads    []code.ReadQuery
+	readHook func(code.ReadQuery) error
+	// pushes counts the push rows ever written, which names each one.
+	pushes int
 }
 
 // fakeRepo is one repository's rows.
@@ -57,7 +66,24 @@ type fakeRepo struct {
 	packs             []code.PackRow
 	refs              map[string]fakeRef
 	tombstonesThrough int64
+	// pushes is every push row the repository still keeps, as the reader
+	// serves one (code.IntroducedRow), in the order they were written.
+	pushes []code.IntroducedRow
 }
+
+// fakePush is one push of a record: the packs it added, the refs it moved
+// (an empty oid deletes one), the refs it moved by force, and the commits it
+// introduced.
+type fakePush struct {
+	packs      []code.PackRow
+	refs       map[string]string
+	forced     map[string]bool
+	introduced []string
+}
+
+// fakePusher is who every push of a fake log is made by: a person, through
+// the token bound to them.
+var fakePusher = code.Principal{Kind: code.PrincipalOperator, OperatorID: "token:ceo", Seat: "ceo"}
 
 // fakeRef is one ref's row; an empty oid is a tombstone.
 type fakeRef struct {
@@ -107,21 +133,102 @@ func (f *fakeLog) create(id, name string) {
 }
 
 // write is one record on repo: packs added and refs moved (an empty oid
-// deletes one), at one position.
+// deletes one), at one position — one push, which introduced no commit the
+// case names.
 func (f *fakeLog) write(repo string, packs []code.PackRow, refs map[string]string) statelog.Position {
+	return f.writePushes(repo, fakePush{packs: packs, refs: refs})
+}
+
+// writePushes is one record on repo holding every push of pushes, in the order
+// group commit decided them, at one position: each push's packs added, its
+// refs moved and its row written, as the code domain's apply writes them.
+func (f *fakeLog) writePushes(repo string, pushes ...fakePush) statelog.Position {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.seq++
 	pos := f.at()
 	r := f.repos[repo]
-	for _, p := range packs {
-		p.Added = pos
-		r.packs = append(r.packs, p)
-	}
-	for ref, oid := range refs {
-		r.refs[ref] = fakeRef{oid: oid, at: pos}
+	for _, p := range pushes {
+		for _, pack := range p.packs {
+			pack.Added = pos
+			r.packs = append(r.packs, pack)
+		}
+		f.pushes++
+		row := code.IntroducedRow{
+			PushedBy: code.PushedBy{
+				PushID:    uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprintf("push-%d", f.pushes))).String(),
+				Position:  pos,
+				At:        time.Unix(1_800_000_000+int64(f.pushes), 0).UTC(),
+				Principal: fakePusher, Via: code.ViaGit,
+			},
+			Introduced: slices.Clone(p.introduced), Count: len(p.introduced),
+		}
+		for _, ref := range slices.Sorted(maps.Keys(p.refs)) {
+			oid := p.refs[ref]
+			old := r.refs[ref].oid
+			if old == "" {
+				old = code.ZeroOID
+			}
+			nw := oid
+			if nw == "" {
+				nw = code.ZeroOID
+			}
+			row.Moves = append(row.Moves, code.RefMove{Ref: ref, Old: old, New: nw, Forced: p.forced[ref]})
+			r.refs[ref] = fakeRef{oid: oid, at: pos}
+		}
+		if len(p.packs) > 0 || len(p.refs) > 0 {
+			r.pushes = append(r.pushes, row)
+		}
 	}
 	return pos
+}
+
+// expirePushes drops repo's push rows at or below through, as the push
+// history's horizon drops the oldest (code.PushHistory) — a record of its
+// own, which moves the checkpoint.
+func (f *fakeLog) expirePushes(repo string, through statelog.Position) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r := f.repos[repo]
+	r.pushes = slices.DeleteFunc(r.pushes, func(p code.IntroducedRow) bool {
+		return p.Position.Packed() <= through.Packed()
+	})
+	f.seq++
+}
+
+// pushRows is repo's push rows as the log holds them now, in (position,
+// push id) order.
+func (f *fakeLog) pushRows(repo string) []code.IntroducedRow {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r := f.repos[repo]
+	if r == nil {
+		return nil
+	}
+	return sortedPushes(r.pushes)
+}
+
+// landedRows is repo's push rows as the log holds them now, in the order they
+// landed: by position, and within one record in the order group commit
+// decided them.
+func (f *fakeLog) landedRows(repo string) []code.IntroducedRow {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r := f.repos[repo]
+	if r == nil {
+		return nil
+	}
+	return slices.Clone(r.pushes)
+}
+
+// sortedPushes is pushes in (position, push id) order, as the reader serves
+// them.
+func sortedPushes(pushes []code.IntroducedRow) []code.IntroducedRow {
+	out := slices.Clone(pushes)
+	slices.SortStableFunc(out, func(a, b code.IntroducedRow) int {
+		return cmp.Or(cmp.Compare(a.Position.Packed(), b.Position.Packed()), strings.Compare(a.PushID, b.PushID))
+	})
+	return out
 }
 
 // other is a record on another repository: the checkpoint moves, and
@@ -194,6 +301,7 @@ func cloneRepos(in map[string]*fakeRepo) map[string]*fakeRepo {
 		c := *r
 		c.packs = slices.Clone(r.packs)
 		c.refs = maps.Clone(r.refs)
+		c.pushes = slices.Clone(r.pushes)
 		out[id] = &c
 	}
 	return out
@@ -241,6 +349,96 @@ type silent struct{ f *fakeLog }
 
 func (s silent) RepoState(ctx context.Context, q code.StateQuery) (code.RepoSnapshot, error) {
 	return s.f.answer(ctx, q, false)
+}
+
+func (s silent) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+	return s.f.read(ctx, q, false)
+}
+
+// Read answers one page of a repository's pushes in log order — the one read
+// a cache makes of the code host (code.ReadIntroduced), its backfill's — as
+// the reader serves it: (After, Through] ascending, Through zero for the
+// checkpoint, or below Before descending; keyset after the cursor
+// "<packed position>/<push id>"; at most Limit rows, or pageRows, or
+// code.MaxSnapshotItems, with a cursor where more remain. A repository the log
+// does not hold is code.ErrRepoNotFound; a session read names its floor.
+func (f *fakeLog) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+	return f.read(ctx, q, true)
+}
+
+func (f *fakeLog) read(ctx context.Context, q code.ReadQuery, loud bool) (code.ReadAnswer, error) {
+	if err := ctx.Err(); err != nil {
+		return code.ReadAnswer{}, err
+	}
+	in := q.Introduced
+	switch {
+	case q.Kind != code.ReadIntroduced || in == nil:
+		return code.ReadAnswer{}, fmt.Errorf("%w: the fake log answers introduced reads alone, not %q",
+			code.ErrInvalid, q.Kind)
+	case q.Fresh.Level == statelog.ReadSession && q.Fresh.MinPosition.IsZero():
+		return code.ReadAnswer{}, fmt.Errorf("%w: a session read with no floor", code.ErrBadLevel)
+	}
+	var hook func(code.ReadQuery) error
+	if loud {
+		f.mu.Lock()
+		f.reads = append(f.reads, q)
+		hook = f.readHook
+		f.mu.Unlock()
+	}
+	if hook != nil {
+		if err := hook(q); err != nil {
+			return code.ReadAnswer{}, err
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r := f.repos[in.RepoID]
+	if r == nil {
+		return code.ReadAnswer{}, fmt.Errorf("%w: %s", code.ErrRepoNotFound, in.RepoID)
+	}
+	through := in.Through.Packed()
+	if in.Through.IsZero() {
+		through = f.at().Packed()
+	}
+	rows := sortedPushes(r.pushes)
+	if in.Descending {
+		slices.Reverse(rows)
+	}
+	key := func(p code.IntroducedRow) string { return fmt.Sprintf("%020d/%s", p.Position.Packed(), p.PushID) }
+	limit := cmp.Or(q.Limit, f.pageRows, code.MaxSnapshotItems)
+	var out code.ReadAnswer
+	for _, p := range rows {
+		at := p.Position.Packed()
+		switch {
+		case in.Descending && at >= in.Before.Packed():
+			continue
+		case !in.Descending && (at <= in.After.Packed() || at > through):
+			continue
+		case q.Cursor != "" && !in.Descending && key(p) <= q.Cursor:
+			continue
+		case q.Cursor != "" && in.Descending && key(p) >= q.Cursor:
+			continue
+		}
+		if len(out.Introduced) == limit {
+			out.Next = key(out.Introduced[len(out.Introduced)-1])
+			break
+		}
+		out.Introduced = append(out.Introduced, p)
+	}
+	return out, nil
+}
+
+// readsOf is every read of pushes answered for repo, in order.
+func (f *fakeLog) readsOf(repo string) []code.ReadQuery {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []code.ReadQuery
+	for _, q := range f.reads {
+		if q.Introduced != nil && q.Introduced.RepoID == repo {
+			out = append(out, q)
+		}
+	}
+	return out
 }
 
 func (f *fakeLog) answer(ctx context.Context, q code.StateQuery, loud bool) (code.RepoSnapshot, error) {
@@ -302,7 +500,7 @@ func (f *fakeLog) page(q code.StateQuery, call fakeCall) (code.RepoSnapshot, err
 		}
 		cur = code.StateCursor{Full: full, Phase: "packs", From: cp, Seen: cp, Stream: f.stream}
 		if !full {
-			cur.Since = q.Since
+			cur.Since, cur.Pushes = q.Since, q.Pushes
 		}
 	} else {
 		cur = *q.Cursor
@@ -340,7 +538,10 @@ func (f *fakeLog) page(q code.StateQuery, call fakeCall) (code.RepoSnapshot, err
 			case cur.Phase == "packs":
 				cur.Phase, cur.After = "refs", ""
 				continue
-			case cur.Phase == "refs" && !first:
+			case cur.Phase == "refs" && cur.Pushes:
+				cur.Phase, cur.After = "pushes", ""
+				continue
+			case (cur.Phase == "refs" || cur.Phase == "pushes") && !first:
 				cur.Phase, cur.After = "tail", ""
 				continue
 			}
@@ -383,6 +584,18 @@ func (f *fakeLog) phase(r *fakeRepo, cur code.StateCursor) []keyed {
 		return packs(func(p code.PackRow) bool { return p.Added.Packed() > cur.Since.Packed() }, addedKey)
 	case "tail":
 		return packs(func(p code.PackRow) bool { return p.Added.Packed() > cur.From.Packed() }, addedKey)
+	case "pushes":
+		// Every push in (Since, From], in (position, push id) order: a push
+		// past page 1's checkpoint is the next delta's, as the reader serves
+		// it.
+		var out []keyed
+		for _, p := range sortedPushes(r.pushes) {
+			if at := p.Position.Packed(); at > cur.Since.Packed() && at <= cur.From.Packed() {
+				out = append(out, keyed{key: fmt.Sprintf("%020d/%s", at, p.PushID),
+					add: func(s *code.RepoSnapshot) { s.Pushes = append(s.Pushes, p) }})
+			}
+		}
+		return out
 	}
 	var out []keyed
 	for name, ref := range r.refs {

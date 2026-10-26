@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha1" //nolint:gosec // git's hashfile trailer IS a SHA-1: the check compares what git wrote, it trusts no hash of its own to it
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"io/fs"
 	"os"
@@ -171,12 +173,22 @@ func (f checkedFile) by() string {
 	return dropCheck
 }
 
-// expect is what a file's name or its row says of its last forty bytes beside
-// git's own rule: prior is the twenty before the trailer (a .idx's and a
-// .rev's pack checksum), trailer the trailer itself (a .pack's name); nil
-// says nothing.
+// expect is what a file's name or its row says of its last bytes beside the
+// trailer rule: prior is the twenty before the trailer (a .idx's and a .rev's
+// pack checksum), trailer the trailer itself (a .pack's name); nil says
+// nothing. run is the provenance index's rule (CheckRunTrailer) in place of
+// git's: a SHA-256 trailer, the last 32 bytes, rather than git's SHA-1.
 type expect struct {
 	prior, trailer []byte
+	run            bool
+}
+
+// hasher is the trailer's hash and its length under e's rule.
+func (e expect) hasher() (hash.Hash, int) {
+	if e.run {
+		return sha256.New(), sha256.Size
+	}
+	return sha1.New(), hashTrailer //nolint:gosec // git's hashfile trailer is a SHA-1
 }
 
 // pieces is how a hash reads a file: through buf, size bytes at a time —
@@ -223,11 +235,12 @@ func noVerdict(ctx context.Context, err error) bool {
 	return ctx.Err() != nil || errors.Is(err, gitproc.ErrBusy)
 }
 
-// trailerSound holds the file at path to git's hashfile trailer — the SHA-1 of
-// every byte before its last twenty against those twenty — and to want,
-// reading it one PIECE at a time as p says, and checking ctx before every
-// read. A file that is not a regular file, or shorter than its trailer and
-// what want names, is damaged.
+// trailerSound holds the file at path to its hashfile trailer — git's, the
+// SHA-1 of every byte before its last twenty against those twenty, or a
+// provenance run's SHA-256 over 32 (expect.run) — and to want, reading it one
+// PIECE at a time as p says, and checking ctx before every read. A file that
+// is not a regular file, or shorter than its trailer and what want names, is
+// damaged.
 //
 // A VERDICT HOLDS ONLY FOR THE FILE IT HASHED: the path is Lstat'ed before it
 // is opened, and after the hash both the open file and the path again, and
@@ -248,7 +261,8 @@ func trailerSound(ctx context.Context, path string, p pieces, want expect) (hash
 		return hashDamaged, idOf(before), 0, nil
 	}
 	id := idOf(before)
-	need := int64(hashTrailer + len(want.prior))
+	sum, trailerLen := want.hasher()
+	need := int64(trailerLen + len(want.prior))
 	if id.size < need {
 		return hashDamaged, id, 0, nil
 	}
@@ -261,8 +275,7 @@ func trailerSound(ctx context.Context, path string, p pieces, want expect) (hash
 	}
 	defer func() { _ = f.Close() }() // read-only: what was read is the answer
 
-	sum := sha1.New() //nolint:gosec // git's hashfile trailer is a SHA-1
-	body := &io.LimitedReader{R: f, N: id.size - hashTrailer}
+	body := &io.LimitedReader{R: f, N: id.size - int64(trailerLen)}
 	var read int64
 	for body.N > 0 {
 		release := func() {}
@@ -312,7 +325,7 @@ func trailerSound(ctx context.Context, path string, p pieces, want expect) (hash
 	if idOf(after) != id || lstatID(path) != id || body.N > 0 {
 		return hashNone, id, read, nil
 	}
-	trailer := tail[len(tail)-hashTrailer:]
+	trailer := tail[len(tail)-trailerLen:]
 	switch {
 	case !bytes.Equal(sum.Sum(nil), trailer),
 		want.prior != nil && !bytes.Equal(tail[:len(want.prior)], want.prior),
@@ -340,20 +353,25 @@ func checksumBytes(cs string) []byte {
 // declaration names is this build's bug, never a file to hold to a trailer it
 // may not carry.
 func (f ownedFile) held() (checkedFile, expect, error) {
-	if f.of.Check != CheckTrailer {
-		return checkedFile{}, expect{}, fmt.Errorf("cache: %s is a file of the derived file %q, which declares "+
-			"the check %q, and no check of this build holds a file to it", filepath.ToSlash(f.rel), f.of.Name,
-			f.of.Check)
-	}
-	// CheckTrailer: git's hashfile trailer, and for a name that carries a
-	// checksum (Owned.Prior) that checksum in the twenty bytes before it.
-	var want expect
-	if f.as.Prior {
-		if m := f.as.Name.FindStringSubmatch(filepath.Base(f.rel)); m != nil {
-			want.prior = checksumBytes(m[1])
+	cf := checkedFile{kind: fileKind(f.as.File), rel: f.rel}
+	switch f.of.Check {
+	case CheckTrailer:
+		// git's hashfile trailer, and for a name that carries a checksum
+		// (Owned.Prior) that checksum in the twenty bytes before it.
+		var want expect
+		if f.as.Prior {
+			if m := f.as.Name.FindStringSubmatch(filepath.Base(f.rel)); m != nil {
+				want.prior = checksumBytes(m[1])
+			}
 		}
+		return cf, want, nil
+	case CheckRunTrailer:
+		// A provenance run's own SHA-256 trailer, written with it.
+		return cf, expect{run: true}, nil
 	}
-	return checkedFile{kind: fileKind(f.as.File), rel: f.rel}, want, nil
+	return checkedFile{}, expect{}, fmt.Errorf("cache: %s is a file of the derived file %q, which declares "+
+		"the check %q, and no check of this build holds a file to it", filepath.ToSlash(f.rel), f.of.Name,
+		f.of.Check)
 }
 
 // heldFiles is every derived file of files as a check and the scrub hold it
@@ -596,8 +614,12 @@ type checked struct {
 
 // checkIndexes is step 2 of a full round (sync.go apply): every checkable file
 // of inc the snapshot names — the .idx and .rev of every pack present at its
-// row's sizes — and every derived file present, held to its trailer when it
-// is not vouched for at the identity it has now. A read slot of the pool is
+// row's sizes — and every derived file git reads that is present, held to its
+// trailer when it is not vouched for at the identity it has now. A derived
+// file the cache's own code writes is no file git reads: the provenance
+// index's runs are held to their own trailer before the cache maps one this
+// process did not write (provenance.go's checks, behind the serving), so a
+// copy's first request after a restart waits on none of them. A read slot of the pool is
 // held for each piece of hashing and none between (D15 of the check's doc:
 // one slot, a piece at a time, none while the round runs git). A pack absent
 // or at the wrong size is not its: the install meets it. Nor is any .pack: a
@@ -652,6 +674,7 @@ func (c *Cache) checkIndexes(ctx context.Context, e *entry, inc *incarnation, sn
 	if err != nil {
 		return ck, err
 	}
+	present = slices.DeleteFunc(present, func(f ownedFile) bool { return f.of.inProcess() })
 	derived, err := heldFiles(present, wants)
 	if err != nil {
 		return ck, err

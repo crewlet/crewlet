@@ -261,10 +261,12 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 		return codeHostParts{}, err
 	}
 
-	// 6. THE CACHE, which takes over the layout's claim.
+	// 6. THE CACHE, which takes over the layout's claim — its rows read
+	// through the router, and its indexes' backfill paced by the fleet's
+	// live git and data nodes as the router's placements count them.
 	seam := e.router.Code()
 	c, err := cache.Open(ctx, cache.Options{
-		Layout: layout, MaxBytes: size.budget, Git: pool, Objects: objects, Fetch: seam,
+		Layout: layout, MaxBytes: size.budget, Git: pool, Objects: objects, Fetch: seam, Fleet: e.codeFleet,
 		Limits: e.codeLimits, HookCommand: hook, Metrics: e.metrics, Now: time.Now,
 	})
 	if err != nil {
@@ -319,6 +321,24 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 		return codeHostParts{}, fmt.Errorf("engine: serve the code host's status on %s: %w", topics.CodeStatus, err)
 	}
 	return codeHostParts{host: h, reads: reads, cache: c, size: size, withdrawStatus: withdraw}, nil
+}
+
+// codeFleet is how many live nodes serve git and how many hold the estate,
+// from the same watched presence view the router's two placements read
+// ([presenceRoster]) — so the backfill of a git cache's indexes paces itself by
+// the fleet the router asks, never another count of it. A node with no view
+// has no fleet, and answers none of either.
+func (e *Engine) codeFleet() (int, int, error) {
+	roster := presenceRoster{view: e.dataView}
+	git, err := roster.LiveGitNodes()
+	if err != nil {
+		return 0, 0, err
+	}
+	data, err := roster.LiveDataNodes()
+	if err != nil {
+		return 0, 0, err
+	}
+	return len(git), len(data), nil
 }
 
 // codeHostParts is what [Engine.buildCodeHost] built: the host, the git reads

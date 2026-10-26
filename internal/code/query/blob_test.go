@@ -55,14 +55,16 @@ func TestAFileIsReadByLineRange(t *testing.T) {
 		}
 	})
 
+	// Every blob read of head names the one commit: one decoration for all.
+	limit := 1<<10 + x.decoration(blobQ(repo, code.BlobQuery{Rev: head, Path: "bin.dat"}))
 	paged := x.server(0, query.Options{})
-	query.SetPageBytes(paged, 1<<10)
+	query.SetPageBytes(paged, limit)
 	for name, content := range files {
 		if name == "bin.dat" {
 			continue
 		}
 		t.Run("page by page: "+name, func(t *testing.T) {
-			ps := pages(t, paged, blobQ(repo, code.BlobQuery{Rev: head, Path: name}), 1<<10)
+			ps := pages(t, paged, blobQ(repo, code.BlobQuery{Rev: head, Path: name}), limit)
 			if got := joined(ps); got != content {
 				t.Errorf("the pages of %s concatenate to %d bytes, want its %d byte for byte", name, len(got),
 					len(content))
@@ -81,7 +83,7 @@ func TestAFileIsReadByLineRange(t *testing.T) {
 
 	t.Run("a long line in pieces", func(t *testing.T) {
 		ps := pages(t, paged, blobQ(repo, code.BlobQuery{Rev: head, Path: "long.txt", StartLine: 2, EndLine: 2}),
-			1<<10)
+			limit)
 		if len(ps) < 3 {
 			t.Fatalf("a 3 000-byte line at a 1 KiB page came in %d pages, want pieces", len(ps))
 		}

@@ -29,6 +29,7 @@ type Cache struct {
 	git      *gitproc.Pool
 	objects  Objects
 	fetch    Fetcher
+	fleet    Fleet
 	limits   func() code.Limits
 	faults   codefault.Injector
 	log      *slog.Logger
@@ -135,10 +136,10 @@ type Cache struct {
 	life   context.Context
 	cancel context.CancelFunc
 
-	// kicks wakes the janitor at once, maintKicks the maintainer and
-	// scrubKicks the scrubber: buffered one, sent without blocking, so any
-	// number of kicks before a pass are one pass.
-	kicks, maintKicks, scrubKicks chan struct{}
+	// kicks wakes the janitor at once, maintKicks the maintainer, scrubKicks
+	// the scrubber and backfillKicks the backfill: buffered one, sent without
+	// blocking, so any number of kicks before a pass are one pass.
+	kicks, maintKicks, scrubKicks, backfillKicks chan struct{}
 	// scrubs is the node's one scrub, given by evidence (scrub.go).
 	scrubs *scrubSlot
 	// repairers mints the name each reader is handed under (pin;
@@ -212,15 +213,16 @@ func Open(ctx context.Context, o Options) (*Cache, error) {
 			"run cache.Prepare on the directory again", ErrOptions, b.dir)
 	}
 	c := &Cache{
-		dir: b.dir, maxBytes: o.MaxBytes, git: o.Git, objects: o.Objects, fetch: o.Fetch, limits: o.Limits,
-		faults: o.Faults, log: o.Logger, metrics: o.Metrics, now: o.Now, knobs: o.knobs,
+		dir: b.dir, maxBytes: o.MaxBytes, git: o.Git, objects: o.Objects, fetch: o.Fetch, fleet: o.Fleet,
+		limits: o.Limits, faults: o.Faults, log: o.Logger, metrics: o.Metrics, now: o.Now, knobs: o.knobs,
 		fetchConcurrency: FetchConcurrency, fetches: newFetchSlots(NodeFetches), roundPacks: MidxRoundPacks,
 		full:         newFullRounds(MaxFullRounds, o.Metrics),
 		midxPacks:    MidxPacks,
 		releaseClaim: sync.OnceFunc(b.claim.Release),
 		kicks:        make(chan struct{}, 1), maintKicks: make(chan struct{}, 1), scrubKicks: make(chan struct{}, 1),
-		scrubs:  newScrubSlot(),
-		entries: map[string]*entry{}, idle: make(chan struct{}),
+		backfillKicks: make(chan struct{}, 1),
+		scrubs:        newScrubSlot(),
+		entries:       map[string]*entry{}, idle: make(chan struct{}),
 	}
 	if o.knobs != nil && o.knobs.roundPacks > 0 {
 		c.roundPacks = o.knobs.roundPacks
@@ -421,11 +423,13 @@ func (c *Cache) leave() {
 	}
 }
 
-// Start starts the cache's background work — the janitor, the maintainer and
-// the scrubber — under ctx: each ends with ctx or with [Cache.Stop],
-// whichever comes first. A second call, or a call after Stop, does nothing. A
-// cache that is never started still opens, syncs and pins; nothing is removed
-// from trash/, evicted, maintained or scrubbed until it is.
+// Start starts the cache's background work — the janitor, the maintainer, the
+// scrubber and the backfill of its indexes of pushes — under ctx: each ends
+// with ctx or with [Cache.Stop], whichever comes first. A second call, or a
+// call after Stop, does nothing. A cache that is never started still opens,
+// syncs, pins and folds every delta's pushes into its indexes as it answers;
+// nothing is removed from trash/, evicted, maintained, scrubbed or backfilled
+// until it is.
 func (c *Cache) Start(ctx context.Context) {
 	c.lifeMu.Lock()
 	defer c.lifeMu.Unlock()
@@ -436,6 +440,7 @@ func (c *Cache) Start(ctx context.Context) {
 	go c.janitor(ctx)
 	go c.maintainer(ctx)
 	go c.scrubber(ctx)
+	go c.backfiller(ctx)
 }
 
 // isStopped reports whether Stop has begun.

@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 )
@@ -160,6 +161,106 @@ func TestValidateRefusesAnUnsaidDeclaration(t *testing.T) {
 	})
 }
 
+// AN IN-PROCESS DECLARATION — the cache's own code writes its files, and no
+// git reads them — SAYS WHAT IT HOLDS AND CLAIMS NOTHING A GIT WRITE HAS: no
+// lane, deadline, charge an object or argument list, which nothing would read,
+// but a Charge sentence; no damage part and nothing done on a report, since no
+// report can name a file git never reads; at most one main file, its presence
+// otherwise its record's; and every file under crewlet/, never objects/, the
+// namespace a push's scratch names as its alternate. A declaration's writes
+// are of one kind. Each row breaks one of those on the provenance index's
+// valid declaration.
+//
+// Mutation: let an in-process write name a lane (drop validateInProcess's lane
+// case) — the "a lane" row passes.
+func TestValidateRefusesAnInProcessDeclarationThatClaimsAGitWrite(t *testing.T) {
+	t.Parallel()
+	provenance := func() Derived {
+		for _, d := range DerivedFiles() {
+			if d.Name == DerivedProvenance {
+				return d
+			}
+		}
+		t.Fatal("the build declares no index of pushes")
+		return Derived{}
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(d *Derived)
+		field  string
+	}{
+		{"a lane", func(d *Derived) { d.Writes[0].Lane = gitproc.ClassMaintenance }, "Writes[0].Lane"},
+		{"a deadline", func(d *Derived) { d.Writes[0].Deadline = func(Covers) time.Duration { return 0 } },
+			"Writes[0].Deadline"},
+		{"a charge an object", func(d *Derived) { d.Writes[1].BytesPerObject = 8 }, "Writes[1].BytesPerObject"},
+		{"an argument list", func(d *Derived) { d.Writes[0].Args = []string{"x"} }, "Writes[0].Args"},
+		{"no charge said", func(d *Derived) { d.Writes[1].Charge = " " }, "Writes[1].Charge"},
+		{"writes of both kinds", func(d *Derived) { d.Writes[1] = DerivedFiles()[0].Writes[0] },
+			"Writes[1].Writer.Subcommand"},
+		{"a damage part", func(d *Derived) { d.Part = gitproc.PartCommitGraph }, "Part"},
+		{"a drop on a report", func(d *Derived) { d.OnReported = Drop }, "OnReported"},
+		{"two main files", func(d *Derived) {
+			for _, name := range []string{"first", "second"} {
+				d.Owns = append(d.Owns, Owned{FilePattern: FilePattern{engineRoot, regexp.MustCompile("^" + name + "$")},
+					File: name, Main: true})
+			}
+		}, "Owns"},
+		{"nothing said of a log gone back", func(d *Derived) { d.OnHistoryGone = "" }, "On(history-gone)"},
+		{"no seed rule", func(d *Derived) { d.Seed = "" }, "Seed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			d := provenance()
+			if err := d.Validate(); err != nil {
+				t.Fatalf("the declaration before the change: %v", err)
+			}
+			tc.mutate(&d)
+			err := d.Validate()
+			if err == nil {
+				t.Fatalf("Validate passed an in-process declaration with %s", tc.name)
+			}
+			if !strings.Contains(err.Error(), `"provenance"`) || !strings.Contains(err.Error(), tc.field) {
+				t.Errorf("Validate answered %q: want it to name the declaration and the field %s", err, tc.field)
+			}
+		})
+	}
+
+	t.Run("roots", func(t *testing.T) {
+		t.Parallel()
+		set := func(change func(midx, provenance *Derived)) []Derived {
+			decls := DerivedFiles()
+			var midx, prov *Derived
+			for i := range decls {
+				switch decls[i].Name {
+				case DerivedMidx:
+					midx = &decls[i]
+				case DerivedProvenance:
+					prov = &decls[i]
+				}
+			}
+			change(midx, prov)
+			return decls
+		}
+		for _, tc := range []struct {
+			name  string
+			decls []Derived
+		}{
+			{"the index of pushes under objects/", set(func(_, p *Derived) { p.Owns[0].Dir = "objects/info" })},
+			{"the index of pushes under refs/", set(func(_, p *Derived) { p.Owns[0].Dir = "refs/crewlet" })},
+			{"git's index under crewlet/", set(func(m *Derived, _ *Derived) { m.Owns[1].Dir = engineRoot })},
+		} {
+			err := validateAll(tc.decls)
+			if err == nil || !strings.Contains(err.Error(), "one the cache's own code writes under crewlet/") {
+				t.Errorf("%s: validateAll answered %v, want the root rule's refusal", tc.name, err)
+			}
+		}
+		if got := derivedRoots(DerivedFiles()); !slices.Equal(got, []string{"objects", engineRoot}) {
+			t.Errorf("the roots a boot walks are %v, want objects and %s: the walk reads what the declarations "+
+				"own", got, engineRoot)
+		}
+	})
+}
+
 // A FAILED WRITE CLEARS WHAT IT HOLDS, A LOCK BY NAME AND A DIRECTORY LISTED
 // AT MOST ONCE. Each write declares what it holds while it runs (Write.Holds),
 // so a failure clears exactly that: the round's index holds its lock alone,
@@ -178,7 +279,7 @@ func TestAFailedWriteClearsWhatItHoldsListingEachDirectoryOnce(t *testing.T) {
 	for _, d := range DerivedFiles() {
 		for _, w := range d.Writes {
 			switch {
-			case w.Trigger == TriggerRound:
+			case d.Name == DerivedMidx && w.Trigger == TriggerRound:
 				round = w
 			case w.Step == StepBitmap:
 				bitmap = w

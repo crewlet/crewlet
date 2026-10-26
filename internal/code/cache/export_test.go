@@ -2,20 +2,27 @@ package cache
 
 import (
 	"context"
+	"crypto/sha1"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
+	"sync/atomic"
+	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // The suite's knobs into the cache: the background loops' steps run
@@ -1159,4 +1166,169 @@ func StatingWith(f func(rel string)) func(*Options) {
 // its own memory an object, and the room for one transfer beside it.
 func WriteCharge(c *Cache, repoID string, w Write) int64 {
 	return chargeOf(c, repoID, w.BytesPerObject)
+}
+
+// BackfillStep takes the backfill's next step due and does it, synchronously
+// and owing no pace, as work of the cache's own: "check", "merge", "gap",
+// "history" or "horizon" for the step it took, "" when none was due — and the
+// error of a page the estate did not serve.
+func BackfillStep(c *Cache) (string, error) {
+	if !c.enter() {
+		return "", ErrStopped
+	}
+	defer c.leave()
+	for range 3 {
+		t, _, moved := c.nextBackfill()
+		if moved {
+			continue
+		}
+		if t == nil {
+			return "", nil
+		}
+		work := map[backfillWork]string{workCheck: "check", workMerge: "merge", workGap: "gap",
+			workHistory: "history", workHorizon: "horizon"}[t.work]
+		// backfillStep pins again what it picks: this walk's pin goes back.
+		t.e.mu.Lock()
+		gone := c.unpin(t.e, t.inc)
+		t.e.mu.Unlock()
+		c.trash(gone)
+		done := c.backfillStep(c.life)
+		return work, done.err
+	}
+	return "", errors.New("cache: the backfill's pick moved under three walks")
+}
+
+// BackfillPass takes backfill steps until none is due, and answers every step
+// it took, in order: what a case runs in place of starting the backfill,
+// whose pace it would otherwise wait out. A page the estate did not serve ends
+// the pass with its error.
+func BackfillPass(c *Cache) ([]string, error) {
+	var steps []string
+	for range 10_000 {
+		step, err := BackfillStep(c)
+		if err != nil || step == "" {
+			return steps, err
+		}
+		steps = append(steps, step)
+	}
+	return steps, errors.New("cache: the backfill never ran out of steps")
+}
+
+// BackfillWakesWith makes the backfill ask f for each wait — after a page,
+// after a failure, or until the next horizon falls due — in place of a timer
+// of d: a case sees how long the backfill means to wait, and wakes it.
+func BackfillWakesWith(o *Options, f func(d time.Duration) <-chan time.Time) {
+	if o.knobs == nil {
+		o.knobs = &knobs{}
+	}
+	o.knobs.backfillWake = f
+}
+
+// CountDecodes counts every move a view of the index of pushes decodes
+// (MoveView.At) into n.
+func CountDecodes(o *Options, n *atomic.Int64) {
+	if o.knobs == nil {
+		o.knobs = &knobs{}
+	}
+	o.knobs.decodes = n
+}
+
+// IndexState is repoID's current incarnation's index of pushes as its record
+// holds it — every position packed — with the bytes its entry counts.
+type IndexState struct {
+	From, Through, GapFrom, GapThrough, Oldest int64
+	Complete                                   bool
+	// Runs is every run's number, in position order, and RunRanges each
+	// one's (From, Through].
+	Runs      []uint64
+	RunRanges [][2]int64
+	Bytes     int64
+}
+
+// Index is repoID's current incarnation's index of pushes, and whether it
+// keeps one.
+func Index(c *Cache, repoID string) (IndexState, bool) {
+	e := lookup(c, repoID)
+	if e == nil {
+		return IndexState{}, false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.current == nil || e.current.record() == nil {
+		return IndexState{}, false
+	}
+	rec := e.current.record()
+	s := IndexState{From: rec.From, Through: rec.Through, GapFrom: rec.GapFrom, GapThrough: rec.GapThrough,
+		Oldest: rec.Oldest, Complete: rec.Complete, Bytes: e.current.derived[DerivedProvenance].Bytes}
+	for _, r := range rec.Runs {
+		s.Runs = append(s.Runs, r.N)
+		s.RunRanges = append(s.RunRanges, [2]int64{r.From, r.Through})
+	}
+	return s, true
+}
+
+// RunRel is run n's path relative to its incarnation.
+func RunRel(n uint64) string { return runRel(n) }
+
+// WantsHistory reports whether repoID's history is wanted in this process.
+func WantsHistory(c *Cache, repoID string) bool {
+	e := lookup(c, repoID)
+	if e == nil {
+		return false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.wantHistory
+}
+
+// RunViaCodes and RunKindCodes are the codes a run's push record names a
+// push's way and its principal's kind by.
+func RunViaCodes() map[code.PushVia]uint8 { return maps.Clone(runViaCodes) }
+
+// RunKindCodes: see RunViaCodes.
+func RunKindCodes() map[code.PrincipalKind]uint8 { return maps.Clone(runKindCodes) }
+
+// FoldTimes tells f what each round's fold of its delta's pushes into the
+// index of pushes took (foldPushes).
+func FoldTimes(o *Options, f func(took time.Duration)) {
+	if o.knobs == nil {
+		o.knobs = &knobs{}
+	}
+	o.knobs.folded = f
+}
+
+// SyntheticIndex is an index of pushes holding pushes synthetic pushes in
+// runs runs of as many each — every push moving one branch and introducing
+// perPush commits of ids drawn as git's are, uniformly — each run built,
+// written and read back in memory as a git node's are: what
+// BenchmarkProvenance's lookup arm searches. It answers the index and the
+// bytes its runs hold.
+func SyntheticIndex(tb testing.TB, runs, pushes, perPush int) (Provenance, int64) {
+	tb.Helper()
+	base := statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 1}.Packed()
+	var files []runFile
+	var size int64
+	for k := range runs {
+		lo, hi := k*pushes/runs, (k+1)*pushes/runs
+		rows := make([]code.IntroducedRow, 0, hi-lo)
+		for i := lo; i < hi; i++ {
+			row := synthetic(base, i, "refs/heads/main")
+			row.Introduced, row.Count = make([]string, perPush), perPush
+			for j := range perPush {
+				row.Introduced[j] = DrawnOID(fmt.Sprintf("commit-%d-%d", i, j))
+			}
+			rows = append(rows, row)
+		}
+		f := runOf(tb, base+int64(lo)-1, base+int64(hi)-1, rows)
+		files = append(files, f)
+		size += int64(len(f.data))
+	}
+	return Provenance{runs: files, from: base - 1, indexed: true}, size
+}
+
+// DrawnOID is an object id drawn from name as git's are, uniformly: its
+// SHA-1.
+func DrawnOID(name string) string {
+	sum := sha1.Sum([]byte(name))
+	return hex.EncodeToString(sum[:])
 }

@@ -176,6 +176,13 @@ type entry struct {
 	// refusal was last logged: a repository failing on every request logs a
 	// refusal once a RebuildCooldown, never once a request.
 	lastRebuild, lastAsked, refusedLogged time.Time
+	// wantHistory: this process has answered a read of the repository as
+	// its home (code.GitQuery.Home), so the backfill reads its index's
+	// history down to the start of the push history the rows keep
+	// (Cache.WantHistory, provenance.go). In memory alone, and the
+	// repository's rather than an incarnation's: a rebuild's product wants
+	// what its predecessor wanted, and the index's Complete is what persists.
+	wantHistory bool
 
 	// stateMu serialises persisting the state.
 	stateMu sync.Mutex
@@ -329,6 +336,24 @@ type incarnation struct {
 	// the round settles (roundReader) — so a report reaches a reader that is
 	// still there or the ordinary rules and never waits on one already gone.
 	held map[gitproc.Repairer][]heldReport
+	// THE PROVENANCE INDEX'S IN-MEMORY HALF (provenance.go). mapped is every
+	// run of its index this process has mapped, by number, and runHolds the
+	// mappings each reader holds (Cache.Provenance), by the reader's name,
+	// let go by that reader's release: a run the index no longer names is
+	// unmapped as its last holder lets go, and every one once the
+	// incarnation is discarded. historyGone: the log under it was recreated
+	// or went back (Cache.reread for RebuildStream or RebuildRewound, a delta
+	// keyed to another stream), so its next full round drops its index
+	// before anything else (EventHistoryGone) — taken by that round.
+	// provGen counts the indexes it has had in this process, so a page the
+	// backfill read for one is never committed into another; provNext is
+	// the number the next run of any index of it takes in this process, so
+	// no number names two files while a retired one waits for trash/.
+	mapped      map[uint64]*mappedRun
+	runHolds    map[gitproc.Repairer][]*mappedRun
+	historyGone bool
+	provGen     uint64
+	provNext    uint64
 	// written is when this process last changed each declaration's files —
 	// a write that moved a file's identity, the round's own index, or a drop
 	// — a time.Now() reading compared on the monotonic clock with a report's
@@ -552,6 +577,7 @@ func (c *Cache) release(e *entry, inc *incarnation, by gitproc.Repairer) {
 	e.mu.Lock()
 	c.used(inc)
 	c.handOn(e, inc, by)
+	c.releaseRuns(inc, by)
 	gone := c.unpin(e, inc)
 	e.mu.Unlock()
 	c.trash(gone)
@@ -657,11 +683,22 @@ func (c *Cache) made(inc *incarnation, name DerivedName, covers int, step Step) 
 // beside no main file (a bitmap a killed writer left with no index) is
 // counted, never read as made; a declaration with no file on disk has no
 // entry. The entry's mu is held.
+//
+// A DECLARATION WITH NO MAIN FILE IS PRESENT WHERE ITS RECORD SAYS SO: the
+// provenance index's runs have no file whose presence is the index's, so a
+// measure has nothing to judge it by — its record names the runs and their
+// bytes (provenanceState), kept WHOLE, and only files of it no record names are
+// counted from the measure, never read as made. Reset by the main-file rule, it
+// was wiped — its coverage and its runs forgotten — after every round's index
+// and every maintenance run (TestAMaintenanceRunKeepsTheProvenanceState).
 func (c *Cache) recordDerived(inc *incarnation, m derivedMeasure) {
 	c.image.each(c.image.all(), func(i int, d *Derived) {
 		bytes, present := m.bytes[d.Name]
 		s := inc.derived[d.Name]
-		if m.mains&(1<<i) == 0 {
+		switch {
+		case !d.hasMain() && s.Step != "":
+			return
+		case !d.hasMain(), m.mains&(1<<i) == 0:
 			s = derivedState{}
 		}
 		s.Bytes = bytes
@@ -686,6 +723,8 @@ func (c *Cache) discard(inc *incarnation) string {
 	}
 	inc.discarded = true
 	c.heldBytes.Add(-(inc.diskBytes + inc.metaBytes))
+	// No reader holds it, so every run of its index mapped goes now.
+	c.forgetRuns(inc)
 	return inc.dir
 }
 

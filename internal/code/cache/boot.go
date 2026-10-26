@@ -168,15 +168,20 @@ func readBoot(ctx context.Context, root string) (*boot, int64, error) {
 
 // measureIncarnation is what an incarnation with no state holds, counted as a
 // state counts it: the files under objects/ — the packs, and every derived
-// file, since validateAll refuses a declaration that owns or holds a file
-// anywhere else — and packed-refs. Reading objects/ alone is right only
-// while that rule stands: a root validateAll admits is one this walk must
-// read too, and the two change together. Its first round reads the whole
-// answer and measures the two halves exactly.
+// file git writes — and under every other root a declaration owns files in
+// (derivedRoots: crewlet/, the cache's own derived files), since validateAll
+// refuses a declaration that owns or holds a file anywhere else; and
+// packed-refs. The roots are READ FROM THE DECLARATIONS, so a root
+// validateAll admits is one this walk reads (M3-decisions M3-O77). Its first
+// round reads the whole answer and measures the two halves exactly.
 func measureIncarnation(ctx context.Context, dir string, skipped func(string, error)) (int64, error) {
-	total, err := sizeUnder(ctx, filepath.Join(dir, "objects"), allNames, skipped)
-	if err != nil {
-		return 0, err
+	var total int64
+	for _, root := range derivedRoots(DerivedFiles()) {
+		n, err := sizeUnder(ctx, filepath.Join(dir, root), allNames, skipped)
+		if err != nil {
+			return 0, err
+		}
+		total += n
 	}
 	refs := filepath.Join(dir, "packed-refs")
 	if info, lerr := os.Lstat(refs); lerr == nil {

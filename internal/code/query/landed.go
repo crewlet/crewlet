@@ -1,0 +1,315 @@
+package query
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/cache"
+	"github.com/crewlet/crewlet/internal/code/gitproc"
+)
+
+// WHETHER A COMMIT LANDED IN A TARGET, AND WHICH PUSH LANDED IT. The first half
+// is one ancestry check against the tip the asker was shown (`git merge-base
+// --is-ancestor <commit> <tip>`); the second is the copy's index of pushes
+// (cache.Provenance): the target's moves in log order up to the position that
+// tip was resolved at, searched with ancestry checks — never a walk of the log
+// or of history. The landing push is the first move after which EVERY move
+// kept the commit reachable, so a commit a force-push removed and a later push
+// put back is answered with the push that put it back.
+//
+// THE SEARCH. The moves split into SEGMENTS at every forced move, every
+// deletion and the index's gap: inside one, every move is a fast-forward of
+// the one before it, read whole, so whether the commit is reachable from a
+// move's new value turns from no to yes at most once, and a binary search
+// finds where. It starts in the newest segment; where that segment's first
+// move already reaches the commit and a forced move began it, the commit was
+// reachable just before it exactly when it is reachable from that move's old
+// value, which one more check asks — and if it was, the landing lies below,
+// in the segment before. MaxLandedProbes bounds the checks: past it the
+// answer names how far the search reached rather than a push.
+//
+// NEVER A WRONG PUSH. A move is the landing only where the commit was NOT
+// reachable from its old value: inside a segment the move before it says so,
+// but at the view's first move, or the first above a gap — whose moves were
+// never read — the old value is asked, and where it reaches the commit the
+// landing predates what the index holds, answered with no push and a detail
+// naming the range (M3-decisions M3-O20), never the first push the index
+// happens to hold.
+
+// MaxLandedProbes is the most ancestry checks a landed-in search runs beside
+// its first, against the tip.
+//
+// 64, A JUDGMENT (M3-decisions M3-O22's provisional value, which the measure
+// keeps): an unforced branch with a million moves in the window takes twenty
+// checks, so 64 search three forced segments of that size whole, and each
+// forced move since the landing costs about two. BenchmarkLandedIn measured a
+// check at 2.6 to 4.4 ms over gittest.History's 32 MB (14 000 commits, the
+// copy's commit-graph written) — a git process each, its start most of it —
+// so 64 take 0.28 s, 3% of gitproc.ReadDeadline. The deadline is NOT what
+// sets the bound, though it would admit hundreds more: each check is a process
+// of the node's read lane under the read's one unit of the seat share, and a
+// branch force-pushed more than thirty times since a commit landed on it is
+// answered with how far the search reached rather than with seconds of that
+// lane. Without the graph a check walks by date — 24 ms over the same history
+// for the longest, the commit against the tip — and the gigabyte's walks are
+// thirty times longer; the read's own deadline bounds those.
+const MaxLandedProbes = 64
+
+// landedRead answers whether the query's commit is in its target's history at
+// the tip it names, and the push that landed it there.
+func (r *read) landedRead(ctx context.Context, objs found) (code.GitAnswer, error) {
+	q := r.q.LandedIn
+	commit, tip := objs.revs[q.Commit], objs.revs[q.TargetOID]
+	for _, side := range []struct {
+		field, rev string
+		o          object
+	}{{"landed_in.commit", q.Commit, commit}, {"landed_in.target_oid", q.TargetOID, tip}} {
+		if side.o.peeledKind != "commit" {
+			return code.GitAnswer{}, fmt.Errorf("%w: %s: %s names a %s; a landed-in read asks about commits",
+				code.ErrInvalid, side.field, side.rev, side.o.peeledKind)
+		}
+	}
+	l := &landing{r: r, ctx: ctx, commit: commit.peeled,
+		walk: max(gitproc.ReadDeadline, gitproc.HistoryWalk(r.synced.Repo.LiveObjects))}
+	ans := &code.LandedInAnswer{Commit: commit.peeled, Target: q.Target, TargetOID: q.TargetOID, At: q.At}
+	a := code.GitAnswer{Kind: code.GitLandedIn, Rev: commit.peeled, LandedIn: ans}
+	landed, err := l.ancestor(tip.peeled)
+	if err != nil {
+		return code.GitAnswer{}, err
+	}
+	ans.Landed = landed
+	if !landed {
+		return a, nil
+	}
+	if !r.prov.Indexed() {
+		ans.Detail = fmt.Sprintf("%s keeps no index of pushes it can read for repository %s yet, so which push "+
+			"landed the commit is not answered; ask again, or ask another git node", r.s.o.NodeID,
+			r.synced.Repo.Name)
+		return a, nil
+	}
+	if by, ok := r.prov.Commit(commit.peeled); ok {
+		ans.IntroducedBy = &by
+	}
+	l.view = r.prov.Moves(q.Target, q.At)
+	j, detail, err := l.search()
+	ans.Probes = l.probes
+	switch {
+	case err != nil:
+		return code.GitAnswer{}, err
+	case j < 0:
+		ans.Detail = detail
+		return a, nil
+	}
+	m := l.view.At(j)
+	ans.LandedBy, ans.Move = &m.By, &m.RefMove
+	return a, nil
+}
+
+// landing is one landed-in search: the commit it asks about, the target's
+// moves it searches and the checks it has run.
+type landing struct {
+	r      *read
+	ctx    context.Context
+	commit string
+	view   cache.MoveView
+	walk   time.Duration
+	probes int
+}
+
+// errProbes ends a search whose checks reached MaxLandedProbes.
+var errProbes = errors.New("query: the landed-in search reached its bound of ancestry checks")
+
+// search is the index of the move that landed the commit, or -1 with why no
+// move is named; an error is a check's failure.
+func (l *landing) search() (int, string, error) {
+	v, n := l.view, l.view.Len()
+	target := l.r.q.LandedIn.Target
+	if n == 0 {
+		return -1, l.before0(), nil
+	}
+	bounds, gaps := v.Segments(), v.Gaps()
+	// The newest move up to the tip must keep the commit, or no move this
+	// index holds is the one that put the tip where it was shown.
+	switch keeps, err := l.reach(n - 1); {
+	case err != nil:
+		return l.stopped(err, bounds, len(bounds)-1, n)
+	case !keeps:
+		return -1, fmt.Sprintf("the newest move of %s this node indexes up to position %s, push %s, does not "+
+			"keep the commit: the move that put the tip asked about there is one this node has not indexed yet",
+			target, l.r.q.LandedIn.At, v.At(n-1).By.PushID), nil
+	}
+	// last is the oldest move known to keep the commit, as every move after
+	// it does: the landing is it or one before it.
+	k, hi, last := len(bounds)-1, n, n-1
+	for {
+		lo := bounds[k]
+		// The first move of [lo, hi) that reaches the commit, given hi-1 does.
+		first := lo
+		for first < last {
+			mid := int(uint(first+last) >> 1)
+			keeps, err := l.reach(mid)
+			if err != nil {
+				return l.stopped(err, bounds, k, last)
+			}
+			if keeps {
+				last = mid
+			} else {
+				first = mid + 1
+			}
+		}
+		if first > lo {
+			// The move before it, in the same segment and read whole beside
+			// it, did not reach the commit: this one landed it.
+			return first, "", nil
+		}
+		if lo == 0 || slices.Contains(gaps, lo) {
+			// The view's first move, or the first above the gap: what lay
+			// before it is unknown, so its old value is asked.
+			was, err := l.before(lo)
+			switch {
+			case err != nil:
+				return l.stopped(err, bounds, k, last)
+			case was:
+				return -1, l.unindexed(lo, gaps), nil
+			}
+			return lo, "", nil
+		}
+		// A forced move began the segment, and reached the commit: did the
+		// commit stand on the target just before it?
+		was, err := l.before(lo)
+		switch {
+		case err != nil:
+			return l.stopped(err, bounds, k, last)
+		case !was:
+			return lo, "", nil
+		}
+		// It did: the landing lies in the segment below, whose newest move —
+		// the one before this forced move, read whole beside it — reaches
+		// the commit, being where this move's old value came from.
+		k, hi = k-1, lo
+		last = hi - 1
+	}
+}
+
+// stopped is the answer of a search a check ended: past MaxLandedProbes, no
+// push, the oldest move known to keep the commit — last, n where the search
+// knew none — and how many forced moves below it, the segment it stopped in
+// begun by bounds[k] among them, it did not search past; any other failure,
+// the check's.
+func (l *landing) stopped(err error, bounds []int, k, last int) (int, string, error) {
+	if !errors.Is(err, errProbes) {
+		return -1, "", err
+	}
+	target := l.r.q.LandedIn.Target
+	if last >= l.view.Len() {
+		return -1, fmt.Sprintf("the search reached its bound of %d ancestry checks before it read a move of %s",
+			l.r.s.probes, target), nil
+	}
+	// A segment the index's gap began, rather than a forced move or a
+	// deletion, is said apart.
+	forced, gap := 0, false
+	for _, b := range bounds[1 : k+1] {
+		if l.view.Forced(b) {
+			forced++
+		} else {
+			gap = true
+		}
+	}
+	at := l.view.At(last).By
+	detail := fmt.Sprintf("landed at or before push %s (position %s); %d forced moves of %s were not searched "+
+		"past within the %d ancestry checks a search runs", at.PushID, at.Position, forced, target, l.r.s.probes)
+	if gap {
+		detail += ", nor a range of its moves this node has not indexed yet"
+	}
+	return -1, detail, nil
+}
+
+// before0 is why no push is named for a commit the target holds where the
+// index holds no move of it at all.
+func (l *landing) before0() string {
+	cov := l.r.prov.Coverage()
+	if cov.Complete {
+		return fmt.Sprintf("landed before the push history the data nodes keep: this node's index holds no move "+
+			"of %s up to position %s", l.r.q.LandedIn.Target, l.r.q.LandedIn.At)
+	}
+	return fmt.Sprintf("landed before position %s, where this node's index of %s's moves begins",
+		cov.From, l.r.q.LandedIn.Target)
+}
+
+// unindexed is why no push is named for a commit already reachable from the
+// old value of move i, the view's first or the first above the gap.
+func (l *landing) unindexed(i int, gaps []int) string {
+	at := l.view.At(i).By
+	target := l.r.q.LandedIn.Target
+	if slices.Contains(gaps, i) && i > 0 {
+		below := l.view.At(i - 1).By
+		return fmt.Sprintf("landed between push %s (position %s) and push %s (position %s) of %s, a range this "+
+			"node has not indexed yet", below.PushID, below.Position, at.PushID, at.Position, target)
+	}
+	if slices.Contains(gaps, i) {
+		return fmt.Sprintf("landed before push %s (position %s), the oldest move of %s above a range this node "+
+			"has not indexed yet", at.PushID, at.Position, target)
+	}
+	if l.r.prov.Coverage().Complete {
+		return fmt.Sprintf("landed before push %s (position %s), the oldest move of %s in the push history the "+
+			"data nodes keep", at.PushID, at.Position, target)
+	}
+	return fmt.Sprintf("landed before push %s (position %s), the oldest move of %s this node indexes", at.PushID,
+		at.Position, target)
+}
+
+// reach reports whether the commit is reachable from move i's new value: no
+// for a deletion, with no check.
+func (l *landing) reach(i int) (bool, error) {
+	if l.view.Deletion(i) {
+		return false, nil
+	}
+	return l.ancestorBudgeted(l.view.At(i).New)
+}
+
+// before reports whether the commit was reachable from move i's old value: no
+// for a create, with no check.
+func (l *landing) before(i int) (bool, error) {
+	old := l.view.At(i).Old
+	if old == code.ZeroOID {
+		return false, nil
+	}
+	return l.ancestorBudgeted(old)
+}
+
+// ancestorBudgeted is ancestor, counted against MaxLandedProbes.
+func (l *landing) ancestorBudgeted(tip string) (bool, error) {
+	if l.probes >= l.r.s.probes {
+		return false, errProbes
+	}
+	l.probes++
+	return l.ancestor(tip)
+}
+
+// ancestor reports whether the commit is reachable from tip: one `git
+// merge-base --is-ancestor`, which goes by generation where the copy holds a
+// commit-graph, given the read's deadline or a walk of the whole history
+// (gitproc.HistoryWalk), whichever is larger, under the request's own.
+func (l *landing) ancestor(tip string) (bool, error) {
+	if tip == l.commit {
+		return true, nil
+	}
+	deadline, err := l.r.bound(l.ctx, l.walk)
+	if err != nil {
+		return false, err
+	}
+	res, err := l.r.s.o.Git.Run(l.ctx, gitproc.Cmd{
+		Dir: l.r.synced.Dir, Args: []string{"merge-base", "--is-ancestor", l.commit, tip},
+		Config: l.r.s.o.Cache.ServeConfig(), Class: gitproc.ClassRead, Deadline: deadline, Answers: []int{1},
+	})
+	tooLong := fmt.Errorf("%w: whether %s is in %s's history did not finish in %s", code.ErrSliceTooLarge,
+		l.commit, tip, deadline)
+	if err := l.r.failed(l.ctx, "ancestry check", res, err, tooLong); err != nil {
+		return false, err
+	}
+	return res.Exit == 0, nil
+}

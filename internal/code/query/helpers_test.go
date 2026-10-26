@@ -99,6 +99,32 @@ func (x *fixture) server(i int, o query.Options) *query.Server {
 	return s
 }
 
+// synced brings the i-th git node's copy of repo to the log's head, folding
+// every push its rows hold into the node's index.
+func (x *fixture) synced(i int, repo string) {
+	x.t.Helper()
+	s, err := x.f.Nodes()[i].Cache().Sync(x.t.Context(), repo, codetest.Linearizable)
+	if err != nil {
+		x.t.Fatalf("sync node %d's copy of %s: %v", i, repo, err)
+	}
+	s.Release()
+}
+
+// decoration is what q's provenance adds to every page of its answer on the
+// first git node — the push that introduced each commit it names, and what
+// the node's index holds (code.GitAnswer.PushedBy, Coverage) — read whole once
+// the copy is level with the log, so every page read after it carries the
+// same: the room a case scaling the page bound leaves for it, beside the
+// kind's own.
+func (x *fixture) decoration(q code.GitQuery) int {
+	x.t.Helper()
+	x.synced(0, q.RepoID)
+	a := mustRead(x.t, x.server(0, query.Options{}), q)
+	bare := a
+	bare.PushedBy, bare.Coverage = nil, nil
+	return encoded(x.t, a) - encoded(x.t, bare)
+}
+
 // person is the person every fixture pushes as, as a read names them.
 var person = code.Principal{Kind: code.PrincipalOperator, OperatorID: "token:ceo", Seat: "ceo"}
 

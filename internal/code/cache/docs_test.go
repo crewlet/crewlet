@@ -24,9 +24,9 @@ import (
 // declaration cannot land it without the page, and a row whose declaration
 // went fails here.
 //
-// Mutation: add a row for `provenance` to the page, and it names a derived
-// file the cache does not declare; drop `.bitmap` from midx's Owns, and the
-// row's files are not what the declaration owns.
+// Mutation: add a row for `memo` to the page, and it names a derived file the
+// cache does not declare; drop `.bitmap` from midx's Owns, and the row's files
+// are not what the declaration owns.
 func TestTheConceptPageNamesEveryDerivedFile(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(sourcetree.Root(t), "docs", "concepts", "code-host.md")
@@ -122,14 +122,15 @@ func derivedFilesCell(t *testing.T, d cache.Derived) string {
 }
 
 // readPattern is how an operator reads an owned file's pattern: anchored,
-// literal but for git's forty hex digits of a checksum. A pattern spelled any
-// other way is one this reading does not know, and the case says so rather
-// than guess at the page's words.
+// literal but for git's forty hex digits of a checksum and a number counted
+// from one. A pattern spelled any other way is one this reading does not
+// know, and the case says so rather than guess at the page's words.
 func readPattern(t *testing.T, re *regexp.Regexp) string {
 	t.Helper()
 	s := strings.TrimSuffix(strings.TrimPrefix(re.String(), "^"), "$")
 	s = strings.ReplaceAll(s, "([0-9a-f]{40})", "<checksum>")
 	s = strings.ReplaceAll(s, "[0-9a-f]{40}", "<checksum>")
+	s = strings.ReplaceAll(s, "[1-9][0-9]*", "<n>")
 	s = strings.ReplaceAll(s, `\.`, ".")
 	if strings.ContainsAny(s, `\[](){}*+?|^$`) {
 		t.Fatalf("the owned pattern %s reads as %q: teach readPattern its spelling", re, s)
@@ -139,8 +140,9 @@ func readPattern(t *testing.T, re *regexp.Regexp) string {
 
 // derivedTriggers is how the page names what starts a write.
 var derivedTriggers = map[cache.Trigger]string{
-	cache.TriggerRound:      "a full read",
+	cache.TriggerRound:      "a sync, before it answers",
 	cache.TriggerMaintainer: "the background indexing",
+	cache.TriggerBackfill:   "the backfill",
 }
 
 // derivedWritesCell is the writes cell d's Writes spell: each trigger in the

@@ -29,6 +29,8 @@ const (
 	CodeCacheHints                   = "crewlet.code.cache.hints"
 	CodeCacheMaintenanceRefusals     = "crewlet.code.cache.maintenance.refusals"
 	CodeCacheMaintenanceRefused      = "crewlet.code.cache.maintenance.refused"
+	CodeCacheProvenanceBackfilled    = "crewlet.code.cache.provenance.backfilled"
+	CodeCacheProvenanceBehind        = "crewlet.code.cache.provenance.behind"
 	CodeCacheRebuildRefusals         = "crewlet.code.cache.rebuild.refusals"
 	CodeCacheRebuilds                = "crewlet.code.cache.rebuilds"
 	CodeCacheReports                 = "crewlet.code.cache.reports"

@@ -1,10 +1,34 @@
 // Package query is THE SERVER-SIDE READS OF A REPOSITORY BY OBJECT ID: a
-// tree's listing, a file's lines, a diff's stat or one file's patch, and how
-// two commits compare — real git over a PINNED incarnation of the node's own
-// cache (internal/code/cache), in the READ lane, every answer one page of at
-// most code.MaxGitAnswerBytes of JSON with a cursor where the next begins.
-// It runs on git nodes, holds no goroutine of its own, and writes nothing: a
-// read's processes run on its caller's goroutine and end with its context.
+// tree's listing, a file's lines, a diff's stat or one file's patch, how two
+// commits compare, and whether a commit landed in a branch and which push
+// landed it — real git over a PINNED incarnation of the node's own cache
+// (internal/code/cache), in the READ lane, every answer one page of at most
+// code.MaxGitAnswerBytes of JSON with a cursor where the next begins. It runs
+// on git nodes, holds no goroutine of its own, and writes nothing: a read's
+// processes run on its caller's goroutine and end with its context.
+//
+// # Which push, from the copy's index
+//
+// Every commit an answer names — its revision, a diff's or a comparison's
+// commits and merge base, a landed-in read's commit and tip — is named with
+// the push that introduced it (code.GitAnswer.PushedBy), read from the pinned
+// copy's index of pushes (cache.Cache.Provenance), and the answer carries
+// what that index holds (code.Coverage): both are in every page's envelope,
+// measured into it before a page is cut. The index DECORATES and nothing
+// waits on it: a copy whose index cannot be read yet — a run a previous
+// process wrote, not yet checked — answers without either. A read this node
+// answered as the repository's home (code.GitQuery.Home) marks its history
+// wanted (cache.Cache.WantHistory), so the one node every walk asks first
+// reads it back, once per fleet, for repositories seats ask about.
+//
+// A LANDED-IN READ (landed.go) is one ancestry check against the tip the
+// asker resolved and the position it read it at, the copy brought there,
+// then a segmented binary search of the branch's moves in the index — never a
+// walk of the log or of the history — bounded by MaxLandedProbes. It names
+// the first move after which every move kept the commit, and never a move the
+// commit was reachable before: a landing older than the index's oldest move
+// of the branch, or inside its gap, is answered with no push and the range it
+// lies in (TestALandingTheIndexDoesNotHoldIsNotAttributed).
 //
 // # By object id, never by ref
 //
@@ -119,4 +143,14 @@
 // warm kind is two orders of magnitude inside gitproc.ReadDeadline, the
 // comparison's walk is what grows with a history, and code.GitShareWait keeps
 // its two-second floor.
+//
+// BenchmarkLandedIn over the same composition (14 080 commits) with a branch
+// moved through it 2 000 times by pushes, the commit asked about landed 1 000
+// moves ago, five reads of each arm on the same machine, the copy of a node
+// that read the repository whole and so wrote its commit-graph at once: a
+// landed-in read of a branch never forced takes 32 ms and 11 checks, one
+// forced three times since 56 ms and 17, and one forced 66 times 284 ms and
+// all MaxLandedProbes, answered with how far it reached — 2.6 to 4.4 ms a
+// check, a git process each. One check walking by date over the same history,
+// with no commit-graph — the commit against the branch's tip — takes 24 ms.
 package query

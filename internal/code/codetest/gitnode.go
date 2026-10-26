@@ -174,6 +174,23 @@ type GitOptions struct {
 	// case that holds a read's processes, or records them; nil is the pool
 	// itself.
 	QueryPool func(query.Pool) query.Pool
+	// Fleet is how many live git and data nodes the cache's backfill paces
+	// its reads by (cache.Options.Fleet); nil is a node with no fleet, one of
+	// each.
+	Fleet cache.Fleet
+}
+
+// rowsOf is the rows' side of a git node's cache (cache.Fetcher): its
+// snapshots through the estate the host asks, and its reads of the code host
+// — the backfill's pages of pushes among them — through the seam Node.Read
+// answers by, as the engine hands the cache one router for both.
+type rowsOf struct {
+	host.Estate
+	read func(context.Context, code.ReadQuery) (code.ReadAnswer, error)
+}
+
+func (r rowsOf) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+	return r.read(ctx, q)
 }
 
 // GitNode is one git node: its pool, its cache over its own directory, its
@@ -281,8 +298,13 @@ func (g *GitNode) start(t testing.TB) *gitIncarnation {
 		t.Fatalf("codetest: %s's object store: %v", n.id, err)
 	}
 	limits := func() code.Limits { return g.o.Limits }
+	fleet := g.o.Fleet
+	if fleet == nil {
+		fleet = func() (int, int, error) { return 1, 1, nil }
+	}
 	if n.cache, err = cache.Open(ctx, cache.Options{
-		Layout: layout, MaxBytes: g.o.CacheMaxBytes, Git: n.pool, Objects: objects, Fetch: g.o.Estate,
+		Layout: layout, MaxBytes: g.o.CacheMaxBytes, Git: n.pool, Objects: objects,
+		Fetch: rowsOf{Estate: g.o.Estate, read: g.o.Reads}, Fleet: fleet,
 		Limits: limits, HookCommand: HookCommand(t), Faults: g.o.Faults, Metrics: n.metrics, Logger: g.o.Logger,
 		Now: time.Now,
 	}); err != nil {

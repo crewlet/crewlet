@@ -19,9 +19,11 @@ import (
 // by adding a declaration, never beside them.
 //
 // A derived file is one the cache writes from what an incarnation already
-// holds — its packs, its refs — and that no row names: the multi-pack-index (a
-// full round's, and the maintainer's with its bitmap or without one) and the
-// commit-graph. Each was spelled in a dozen places that agreed only because
+// holds — its packs, its refs, or the push rows a round read beside them — and
+// that no row names: the multi-pack-index (a full round's, and the
+// maintainer's with its bitmap or without one), the commit-graph, and the
+// index of which push introduced each commit (provenance.go). Each was
+// spelled in a dozen places that agreed only because
 // nothing had changed them apart: its file names in the sweep, Verify, the
 // size measure, the check and the scrub; its argument lists, charges, lanes
 // and deadlines beside each writer; what a removed pack and what a damage
@@ -55,8 +57,22 @@ import (
 //     declarations it names and no others.
 //
 // Its files live INSIDE THE INCARNATION, so they are counted by the budget,
-// leave with the repository and are written again over a rebuild's packs; a
-// pack's .pack, .idx and .rev are not derived files — the rows name them.
+// leave with the repository and are written again over a rebuild's packs — or
+// linked into the rebuild's incarnation, for a declaration whose files a
+// rebuild keeps (Seed); a pack's .pack, .idx and .rev are not derived files —
+// the rows name them.
+//
+// TWO KINDS OF WRITER. git writes the multi-pack-index and the commit-graph,
+// in a lane of the pool, under a deadline over what it covers and a memory
+// charge an object; the cache's OWN GO CODE writes the provenance index (an
+// IN-PROCESS write: Writer.Subcommand ""), which runs no git, holds no slot and
+// is bounded by its caller's context, so its row says what it holds instead
+// (Write.Charge). A declaration's writes are all of one kind, and its kind
+// says who reads its files: git reads a git-written one — so a damage report
+// names it by its part — and nothing but the cache reads an in-process one,
+// which no report can name. A git-written declaration's files live under
+// objects/, git's own namespace; an in-process one's under crewlet/, the
+// engine's (engineRoot), which no git process reads.
 
 // DerivedName names one declared kind of node-local derived file: a closed
 // set whose one list is DerivedFiles.
@@ -72,7 +88,20 @@ const (
 	// DerivedGraph is the maintainer's commit-graph, written first on an
 	// incarnation that has none (maintain.go, GRAPH FIRST).
 	DerivedGraph DerivedName = "commit-graph"
+	// DerivedProvenance is the index of which push introduced each commit and
+	// every update each push landed on a ref (provenance.go): written by every
+	// round that reads pushes before it answers, and by the backfill behind
+	// the serving — the cache's own write, which no git process reads.
+	DerivedProvenance DerivedName = "provenance"
 )
+
+// engineRoot is the one directory of an incarnation's root besides objects/
+// that a declaration may own files in: the ENGINE'S, for what the cache's own
+// code writes. Not objects/, which is git's namespace — a push's scratch names
+// it as its one alternate, and git's tools walk it — and not refs/, hooks/,
+// info/ or logs/, git's too (a loose ref under refs/ outranks packed-refs for
+// every reader), nor a root file's name.
+const engineRoot = "crewlet"
 
 // Valid reports whether n names a declaration of DerivedFiles.
 func (n DerivedName) Valid() bool {
@@ -89,10 +118,14 @@ const (
 	// InputRefs is packed-refs — a bitmap's selected commits, and the graph's
 	// --reachable tips.
 	InputRefs Input = "refs"
+	// InputPushRows is the code domain's push rows: those a delta's pushes
+	// phase serves (code.StateQuery.Pushes), and those the backfill reads a
+	// page at a time (code.ReadIntroduced) — never the incarnation's files.
+	InputPushRows Input = "push-rows"
 )
 
 // Inputs is every Input.
-var Inputs = []Input{InputPacks, InputRefs}
+var Inputs = []Input{InputPacks, InputRefs, InputPushRows}
 
 // Valid reports whether i is one of Inputs.
 func (i Input) Valid() bool { return slices.Contains(Inputs, i) }
@@ -101,15 +134,23 @@ func (i Input) Valid() bool { return slices.Contains(Inputs, i) }
 type Trigger string
 
 const (
-	// TriggerRound is a full round, before it answers.
+	// TriggerRound is a round of a sync, before it answers: which rounds is
+	// the write's own — the round's multi-pack-index a full one's past
+	// MidxRoundPacks packs, the provenance index's fold every delta's that
+	// served pushes.
 	TriggerRound Trigger = "round"
 	// TriggerMaintainer is the maintainer's pass — debounced, duty-cycled and
 	// admitted on the node's memory.
 	TriggerMaintainer Trigger = "maintainer"
+	// TriggerBackfill is the cache's own background loop over what a round
+	// left to read (provenance.go): a page of push rows a full round passed
+	// over or a seat's question wants, or a merge of runs — paced by the
+	// fleet, behind the serving.
+	TriggerBackfill Trigger = "backfill"
 )
 
 // Triggers is every Trigger.
-var Triggers = []Trigger{TriggerRound, TriggerMaintainer}
+var Triggers = []Trigger{TriggerRound, TriggerMaintainer, TriggerBackfill}
 
 // Valid reports whether t is one of Triggers.
 func (t Trigger) Valid() bool { return slices.Contains(Triggers, t) }
@@ -124,10 +165,15 @@ const (
 	// correctness promise: git reads a pack's own index where a derived file
 	// is absent or covers less.
 	FreshDebounced Freshness = "debounced"
+	// FreshAtRound is current at the incarnation's position whenever a round
+	// has answered, for the range its coverage names (code.Coverage): an
+	// answer about a push outside that range says so, rather than answering
+	// that there is none.
+	FreshAtRound Freshness = "at-round"
 )
 
 // Freshnesses is every Freshness.
-var Freshnesses = []Freshness{FreshDebounced}
+var Freshnesses = []Freshness{FreshDebounced, FreshAtRound}
 
 // Valid reports whether f is one of Freshnesses.
 func (f Freshness) Valid() bool { return slices.Contains(Freshnesses, f) }
@@ -143,10 +189,15 @@ const (
 	// carries a checksum (Owned.Prior), that checksum in the twenty before
 	// it. git checks none of it when it reads.
 	CheckTrailer Check = "trailer"
+	// CheckRunTrailer is a provenance run's own trailer: the last 32 bytes are
+	// the SHA-256 of every byte before them, written with the run
+	// (provenance.go). Nothing the cache reads of a run is read from one this
+	// process did not write or check.
+	CheckRunTrailer Check = "run-trailer"
 )
 
 // Checks is every Check.
-var Checks = []Check{CheckTrailer}
+var Checks = []Check{CheckTrailer, CheckRunTrailer}
 
 // Valid reports whether c is one of Checks.
 func (c Check) Valid() bool { return slices.Contains(Checks, c) }
@@ -176,6 +227,16 @@ const (
 	// copy's scrub due (report.go) — and a request that met it is repaired
 	// as a pack's damage is (Cache.Rebuild).
 	EventReported Event = "reported"
+	// EventHistoryGone is the code log under the incarnation no longer being
+	// the history it was read from — recreated (another stream identity than
+	// the one recorded), re-anchored onto another generation, or gone back (a
+	// linearizable answer below a position read before) — so every position it
+	// recorded may name another record. Made by the full round that reads the
+	// incarnation whole for that reason, BEFORE its sweep and before any git
+	// process sees the round's image (sync.go apply). A declaration built over
+	// the packs alone meets the same change as the packs the restored history
+	// no longer names, which that round's sweep removes as EventPackRemoved.
+	EventHistoryGone Event = "history-gone"
 
 	// eventFailedCheck is a file of the declaration FAILING ITS CHECK — the
 	// round's check, the scrub: the bytes' verdict, which no declaration
@@ -188,7 +249,7 @@ const (
 )
 
 // Events is every Event a declaration answers, in the order it states them.
-var Events = []Event{EventPackAdded, EventPackRemoved, EventRefsMoved, EventReported}
+var Events = []Event{EventPackAdded, EventPackRemoved, EventRefsMoved, EventReported, EventHistoryGone}
 
 // Valid reports whether e is one of Events.
 func (e Event) Valid() bool { return slices.Contains(Events, e) }
@@ -229,8 +290,10 @@ type Owned struct {
 	File string
 	// Main: this is the file whose presence is the declaration's — the index
 	// itself, the graph itself — where every other owned file is a part of it
-	// (a bitmap, a reverse index). Exactly one a declaration, its Name a
-	// literal.
+	// (a bitmap, a reverse index). Exactly one a git-written declaration, its
+	// Name a literal; at most one an in-process one, whose presence may be its
+	// record instead: a set of the provenance index's runs has no file whose
+	// presence is the index's — its state names the runs (Cache.recordDerived).
 	Main bool
 	// Prior: the forty hex digits of its name, the pattern's one capture
 	// group, are the checksum it carries in the twenty bytes before its
@@ -252,10 +315,14 @@ const (
 	StepBitmap Step = "bitmap"
 	// StepGraph is the commit-graph.
 	StepGraph Step = "graph"
+	// StepProvenance is a run of the provenance index — a round's fold, a
+	// backfilled page or a merge. Never refused for memory: it is no value of
+	// the maintenance refusals' counter or gauge, which name git's steps.
+	StepProvenance Step = "provenance"
 )
 
 // Steps is every Step, in the order a line or a count names them.
-var Steps = []Step{StepBitmap, StepIndex, StepGraph}
+var Steps = []Step{StepBitmap, StepIndex, StepGraph, StepProvenance}
 
 // Valid reports whether s is one of Steps.
 func (s Step) Valid() bool { return slices.Contains(Steps, s) }
@@ -274,8 +341,10 @@ type Covers struct {
 }
 
 // Writer is the code that runs a write: the non-test file under internal/code,
-// slash-separated from the module root, and the git subcommand it runs there.
-// TestNothingButSyncWritesACache holds it to that file's allowance row.
+// slash-separated from the module root, and the git subcommand it runs there
+// — "" for an IN-PROCESS write, the cache's own Go code writing the file.
+// TestNothingButSyncWritesACache holds it to that file's allowance row: a git
+// write's subcommand's, an in-process write's filesystem row.
 type Writer struct {
 	File       string
 	Subcommand string
@@ -285,17 +354,28 @@ type Writer struct {
 type Write struct {
 	Step    Step
 	Trigger Trigger
-	Lane    gitproc.Class
-	// Deadline is the write's process bound over what it covers.
+	// Lane is the pool's lane git runs the write in; "" for an in-process
+	// write, which runs no git and holds no slot of any lane.
+	Lane gitproc.Class
+	// Deadline is the write's process bound over what it covers; nil for an
+	// in-process write, which its caller's context bounds.
 	Deadline func(Covers) time.Duration
 	// BytesPerObject is the write's own memory an object of what it covers:
 	// it is admitted at charge(objects, BytesPerObject), which adds room for
-	// one transfer of the same repository (memory.go).
+	// one transfer of the same repository (memory.go). Zero for an in-process
+	// write, which no admission charges: its Charge says what it holds.
 	BytesPerObject int64
 	Writer         Writer
 	// Args is the argument list its writer hands git: one of the writer
-	// file's own literals, so the writers gate reads it where git runs.
+	// file's own literals, so the writers gate reads it where git runs. Nil
+	// for an in-process write.
 	Args []string
+	// Charge is an IN-PROCESS write's account of what it holds, one
+	// sentence: set exactly when Writer.Subcommand is "". An in-process write
+	// holds no slot and is bounded by its caller's context, so a per-object
+	// charge or a process deadline would be a figure nothing reads; what it
+	// holds is the bound a reader of the declaration needs instead.
+	Charge string
 	// Holds is what THIS write holds only while it runs: admitted by Verify
 	// only then, and removed after a run of it that did not succeed — a lock
 	// git removes when asked to stop and leaves when killed, a temporary
@@ -309,6 +389,31 @@ type Write struct {
 	Holds []FilePattern
 }
 
+// SeedRule is what a rebuild does with a declaration's files in the
+// incarnation it replaces (rebuild.go's seedRebuild).
+type SeedRule string
+
+const (
+	// SeedNone: the new incarnation writes them again — the multi-pack-index
+	// and the commit-graph, functions of the packs, which may be what failed
+	// in the copy being replaced.
+	SeedNone SeedRule = "none"
+	// SeedLink: hard-linked into the new incarnation, its record carried
+	// with them — files that are a function of the ROWS rather than the
+	// packs, which a rebuild reads again unchanged, so writing them again
+	// would read the rows again for nothing. A link is the same inode, so a
+	// file this process vouched for in the copy being replaced is vouched
+	// for in the new one, and one it has not is held to its Check before
+	// anything reads it there, as it would have been in the old.
+	SeedLink SeedRule = "link"
+)
+
+// SeedRules is every SeedRule.
+var SeedRules = []SeedRule{SeedNone, SeedLink}
+
+// Valid reports whether r is one of SeedRules.
+func (r SeedRule) Valid() bool { return slices.Contains(SeedRules, r) }
+
 // Derived is one declared kind of node-local derived file.
 type Derived struct {
 	Name   DerivedName
@@ -320,11 +425,14 @@ type Derived struct {
 	Check Check
 	// Part is the part of a repository a damage report names it by: one of
 	// the parts gitproc.Damage.Drops answers. A report naming it is
-	// EventReported for it.
+	// EventReported for it. Zero for an in-process declaration, whose files
+	// no git process reads and so no report can name.
 	Part      gitproc.Part
 	Freshness Freshness
 	// What each Event does to it.
-	OnPackAdded, OnPackRemoved, OnRefsMoved, OnReported Change
+	OnPackAdded, OnPackRemoved, OnRefsMoved, OnReported, OnHistoryGone Change
+	// Seed is what a rebuild does with its files.
+	Seed SeedRule
 }
 
 // On is what event e does to d.
@@ -338,8 +446,23 @@ func (d Derived) On(e Event) Change {
 		return d.OnRefsMoved
 	case EventReported:
 		return d.OnReported
+	case EventHistoryGone:
+		return d.OnHistoryGone
 	}
 	return ""
+}
+
+// inProcess reports whether d's files are the cache's own Go code's to write
+// — every write of it an in-process one (Write.Charge) — rather than git's.
+// Validate refuses a declaration whose writes are of both kinds.
+func (d *Derived) inProcess() bool {
+	return len(d.Writes) > 0 && d.Writes[0].Writer.Subcommand == ""
+}
+
+// hasMain reports whether d owns a file whose presence is its own
+// (Owned.Main); one that owns none is present where its record says so.
+func (d *Derived) hasMain() bool {
+	return slices.ContainsFunc(d.Owns, func(o Owned) bool { return o.Main })
 }
 
 // The patterns of DerivedFiles, compiled once: a regular expression is
@@ -353,6 +476,10 @@ var (
 	tmpBitmap  = regexp.MustCompile(`^tmp_bitmap_[A-Za-z0-9]+$`)
 	graphMain  = regexp.MustCompile(`^commit-graph$`)
 	graphLock  = regexp.MustCompile(`^commit-graph\.lock$`)
+	// provenanceRunName is a run of the provenance index:
+	// crewlet/provenance.<n>, n the run's number in decimal from 1, as the
+	// index's record names it (provenanceRun).
+	provenanceRunName = regexp.MustCompile(`^provenance\.[1-9][0-9]*$`)
 )
 
 // DerivedFiles is the closed list, in the order a pass plans its steps and a
@@ -367,6 +494,13 @@ var (
 // pack-bitmap-write.c), registered for no cleanup, so a writer killed while it
 // writes the bitmap — the end of a run, where most of its time is — leaves it.
 // A non-incremental `multi-pack-index write` writes no multi-pack-index.d/.
+//
+// The PROVENANCE INDEX is the cache's own: a run written by the round that
+// folds a delta's pushes and by the backfill, each staged in tmp/ and renamed
+// in, so no write of it holds a file in the incarnation; built from the push
+// rows rather than the packs, so no pack added, removed or retired and no ref
+// moved changes it, and a log gone back drops it; kept by a rebuild, which
+// reads the same rows again (provenance.go says why it is eager).
 func DerivedFiles() []Derived {
 	maintained := func(c Covers) time.Duration { return gitproc.PackWorkDeadline(c.DiskBytes) }
 	return []Derived{{
@@ -392,7 +526,8 @@ func DerivedFiles() []Derived {
 		Check:       CheckTrailer,
 		Part:        gitproc.PartMultiPackIndex,
 		Freshness:   FreshDebounced,
-		OnPackAdded: Keep, OnPackRemoved: Drop, OnRefsMoved: Keep, OnReported: Drop,
+		OnPackAdded: Keep, OnPackRemoved: Drop, OnRefsMoved: Keep, OnReported: Drop, OnHistoryGone: Keep,
+		Seed: SeedNone,
 	}, {
 		Name:   DerivedGraph,
 		Inputs: []Input{InputPacks, InputRefs},
@@ -403,7 +538,28 @@ func DerivedFiles() []Derived {
 		Check:       CheckTrailer,
 		Part:        gitproc.PartCommitGraph,
 		Freshness:   FreshDebounced,
-		OnPackAdded: Keep, OnPackRemoved: Drop, OnRefsMoved: Keep, OnReported: Drop,
+		OnPackAdded: Keep, OnPackRemoved: Drop, OnRefsMoved: Keep, OnReported: Drop, OnHistoryGone: Keep,
+		Seed: SeedNone,
+	}, {
+		Name:   DerivedProvenance,
+		Inputs: []Input{InputPushRows},
+		Writes: []Write{
+			{Step: StepProvenance, Trigger: TriggerRound, Writer: Writer{File: provenanceFile},
+				Charge: "a delta's pushes, which its snapshot already holds, folded into one run streamed to tmp/: " +
+					"the run's commits and moves sorted in memory, at most the delta's own rows"},
+			{Step: StepProvenance, Trigger: TriggerBackfill, Writer: Writer{File: provenanceFile},
+				Charge: "a page of push rows (code.MaxPageBytes) as one run, or a merge of adjacent runs streamed " +
+					"from their mapped files through one buffer — nothing held a push"},
+		},
+		Owns:      []Owned{{FilePattern: FilePattern{engineRoot, provenanceRunName}, File: "provenance"}},
+		Check:     CheckRunTrailer,
+		Freshness: FreshAtRound,
+		// Its input is the push rows, which no pack and no ref of the
+		// incarnation moves; a report names no file of it, since no git process
+		// reads one; and a log gone back makes every position it records
+		// another record's.
+		OnPackAdded: Keep, OnPackRemoved: Keep, OnRefsMoved: Keep, OnReported: Keep, OnHistoryGone: Drop,
+		Seed: SeedLink,
 	}}
 }
 
@@ -432,23 +588,27 @@ func (d Derived) Validate() error {
 		step    Step
 	}
 	seen := map[key]bool{}
+	inProcess := d.inProcess()
 	for i, w := range d.Writes {
 		field := fmt.Sprintf("Writes[%d]", i)
+		if (w.Writer.Subcommand == "") != inProcess {
+			return bad(field+".Writer.Subcommand", "is %q beside a write of the other kind: a derived file is "+
+				"written by git or by the cache's own code, never both, since who writes it says who reads it",
+				w.Writer.Subcommand)
+		}
+		var err error
+		if inProcess {
+			err = w.validateInProcess(field, bad)
+		} else {
+			err = w.validateGit(field, bad)
+		}
 		switch {
+		case err != nil:
+			return err
 		case !w.Step.Valid():
 			return bad(field+".Step", "is %q, none of %v", w.Step, Steps)
 		case !w.Trigger.Valid():
 			return bad(field+".Trigger", "is %q, none of %v", w.Trigger, Triggers)
-		case !w.Lane.Valid():
-			return bad(field+".Lane", "is %q, none of %v", w.Lane, gitproc.Classes)
-		case w.Deadline == nil:
-			return bad(field+".Deadline", "is nil: say how long its process may run")
-		case w.BytesPerObject <= 0:
-			return bad(field+".BytesPerObject", "is %d: say what an object costs it in memory", w.BytesPerObject)
-		case len(w.Args) == 0:
-			return bad(field+".Args", "is empty")
-		case w.Args[0] != w.Writer.Subcommand:
-			return bad(field+".Args", "begin %q, not its writer's subcommand %q", w.Args[0], w.Writer.Subcommand)
 		case !writerFile(w.Writer.File):
 			return bad(field+".Writer.File", "is %q: a clean slash path of a .go file under internal/code/",
 				w.Writer.File)
@@ -485,14 +645,29 @@ func (d Derived) Validate() error {
 				"the forty hex digits", o.Name, o.Name.NumSubexp())
 		}
 	}
-	if mains != 1 {
-		return bad("Owns", "has %d main files, and a declaration has one: the file whose presence is its", mains)
+	switch {
+	case !inProcess && mains != 1:
+		return bad("Owns", "has %d main files, and a declaration git writes has one: the file whose presence "+
+			"is its", mains)
+	case inProcess && mains > 1:
+		return bad("Owns", "has %d main files, and a declaration has at most one", mains)
 	}
 	if !d.Check.Valid() {
 		return bad("Check", "is %q, none of %v", d.Check, Checks)
 	}
-	if d.Part == 0 || (&gitproc.Damage{Kind: gitproc.ErrCorrupt, Parts: d.Part}).Drops() != d.Part {
+	// A DAMAGE REPORT NAMES ONLY WHAT GIT READS. A declaration git writes is a
+	// part a report drops; an in-process one is none, and keeps its files on a
+	// report — no report can be about them, and the check and the scrub hold
+	// them to their Check instead.
+	switch {
+	case !inProcess && (d.Part == 0 || (&gitproc.Damage{Kind: gitproc.ErrCorrupt, Parts: d.Part}).Drops() != d.Part):
 		return bad("Part", "is %v, which is no part a damage report drops (gitproc.Damage.Drops)", d.Part)
+	case inProcess && d.Part != 0:
+		return bad("Part", "is %v, and no git process reads the files of a derived file the cache's own code "+
+			"writes, so no damage report names one", d.Part)
+	case inProcess && d.OnReported != Keep:
+		return bad("OnReported", "is %q, and no damage report names a file the cache's own code writes: %q",
+			d.OnReported, Keep)
 	}
 	if !d.Freshness.Valid() {
 		return bad("Freshness", "is %q, none of %v", d.Freshness, Freshnesses)
@@ -502,7 +677,72 @@ func (d Derived) Validate() error {
 			return bad("On("+string(e)+")", "is %q, none of %v", d.On(e), Changes)
 		}
 	}
+	if !d.Seed.Valid() {
+		return bad("Seed", "is %q, none of %v", d.Seed, SeedRules)
+	}
 	return nil
+}
+
+// validateGit refuses a write git runs that leaves anything of it unsaid: its
+// lane, its process's deadline, its memory charge an object and its argument
+// list, which begins with its subcommand — and that names a Charge, which is
+// an in-process write's.
+func (w Write) validateGit(field string, bad func(field, format string, args ...any) error) error {
+	switch {
+	case !w.Lane.Valid():
+		return bad(field+".Lane", "is %q, none of %v", w.Lane, gitproc.Classes)
+	case w.Deadline == nil:
+		return bad(field+".Deadline", "is nil: say how long its process may run")
+	case w.BytesPerObject <= 0:
+		return bad(field+".BytesPerObject", "is %d: say what an object costs it in memory", w.BytesPerObject)
+	case len(w.Args) == 0:
+		return bad(field+".Args", "is empty")
+	case w.Args[0] != w.Writer.Subcommand:
+		return bad(field+".Args", "begin %q, not its writer's subcommand %q", w.Args[0], w.Writer.Subcommand)
+	case w.Charge != "":
+		return bad(field+".Charge", "is set on a write git runs, whose lane, deadline and charge an object say "+
+			"what it holds")
+	}
+	return nil
+}
+
+// validateInProcess refuses an in-process write that claims what only a git
+// write has — a lane, a deadline, a charge an object or an argument list,
+// figures nothing would read — or that does not say what it holds (Charge).
+func (w Write) validateInProcess(field string, bad func(field, format string, args ...any) error) error {
+	switch {
+	case w.Lane != "":
+		return bad(field+".Lane", "is %q, and the cache's own code runs no git and holds no slot", w.Lane)
+	case w.Deadline != nil:
+		return bad(field+".Deadline", "is set, and an in-process write is bounded by its caller's context")
+	case w.BytesPerObject != 0:
+		return bad(field+".BytesPerObject", "is %d, and no admission charges an in-process write: its Charge "+
+			"says what it holds", w.BytesPerObject)
+	case len(w.Args) != 0:
+		return bad(field+".Args", "is %q, and an in-process write hands git nothing", w.Args)
+	case strings.TrimSpace(w.Charge) == "":
+		return bad(field+".Charge", "is empty: say, in a sentence, what the write holds while it runs")
+	}
+	return nil
+}
+
+// derivedRoots is every directory of an incarnation's root that holds what
+// the rows and the declarations put there: objects/ — the packs', and git's
+// derived files' — and every other root a declaration owns or holds a file
+// under, each once, in the declarations' order. What a boot's walk of a copy
+// with no state reads (measureIncarnation), so a root validateAll admits is
+// one that walk reads.
+func derivedRoots(decls []Derived) []string {
+	roots := []string{"objects"}
+	for i := range decls {
+		for _, p := range decls[i].patterns() {
+			root, _, _ := strings.Cut(p.Dir, "/")
+			if !slices.Contains(roots, root) {
+				roots = append(roots, root)
+			}
+		}
+	}
+	return roots
 }
 
 // writerFile reports whether f names a Go file under internal/code the way
@@ -545,19 +785,23 @@ func anchored(re *regexp.Regexp) bool {
 
 // validateAll is every declaration's Validate, and what holds only across
 // them: names unique; no two maintainer writes of one Step, since the refusal
-// counter and gauge are keyed by step; every file a declaration owns or holds
-// under objects/ — the root is the repository's own fixed files, and refs/
-// stays empty (a loose ref would outrank packed-refs for every reader); and
-// every part a damage report may drop (gitproc.Damage.Drops) some
-// declaration's, or that damage would drop nothing. Open refuses a cache
-// whose declarations fail it, so a build whose declarations are wrong never
-// opens one — and TestEveryDerivedFileIsDeclared catches it first.
+// counter and gauge are keyed by step (only git's writes are maintainer
+// writes); every file a declaration git writes owns or holds under objects/,
+// and every file one the cache's own code writes under crewlet/ (engineRoot)
+// — the root is the repository's own fixed files, refs/ stays empty (a loose
+// ref would outrank packed-refs for every reader), and objects/ is git's, the
+// one directory a push's scratch names as its alternate; and every part a
+// damage report may drop (gitproc.Damage.Drops) some declaration's, or that
+// damage would drop nothing. Open refuses a cache whose declarations fail it,
+// so a build whose declarations are wrong never opens one — and
+// TestEveryDerivedFileIsDeclared catches it first.
 //
-// THE ROOT RULE IS WHAT LETS A BOOT WALK objects/ ALONE: a copy with no state
-// is counted by its files under objects/ and its packed-refs
-// (measureIncarnation), which counts every derived file only because this
-// rule keeps them there. A root admitted here is a root that walk must read
-// too, and the two change together.
+// THE ROOT RULE IS WHAT A BOOT'S WALK READS (M3-decisions M3-O77): a copy with
+// no state is counted by its files under objects/ and every other root a
+// declaration owns files in (derivedRoots), and its packed-refs
+// (measureIncarnation) — which counts every derived file only because this
+// rule keeps them under those roots. A root admitted here is a root that walk
+// reads too, read from the same declarations, so the two cannot drift.
 func validateAll(decls []Derived) error {
 	names := map[DerivedName]bool{}
 	steps := map[Step]DerivedName{}
@@ -580,12 +824,18 @@ func validateAll(decls []Derived) error {
 			}
 			steps[w.Step] = d.Name
 		}
+		root := "objects"
+		if d.inProcess() {
+			root = engineRoot
+		}
 		for _, p := range d.patterns() {
-			if p.Dir != "objects" && !strings.HasPrefix(p.Dir, "objects/") {
-				return fmt.Errorf("derived file %q has files in %s, and a derived file lives under objects/: the "+
-					"root holds the repository's own files, refs/ stays empty since a loose ref outranks "+
-					"packed-refs for every reader, and a boot counts a copy with no state by objects/ and "+
-					"packed-refs", d.Name, p.Dir)
+			if p.Dir != root && !strings.HasPrefix(p.Dir, root+"/") {
+				return fmt.Errorf("derived file %q has files in %s, and a derived file git writes lives under "+
+					"objects/, one the cache's own code writes under %s/: the root holds the repository's own "+
+					"files, refs/ stays empty since a loose ref outranks packed-refs for every reader, objects/ "+
+					"is git's own namespace — a push's scratch names it as its one alternate — and a boot counts "+
+					"a copy with no state by the roots its declarations own and packed-refs", d.Name, p.Dir,
+					engineRoot)
 			}
 		}
 		parts |= d.Part

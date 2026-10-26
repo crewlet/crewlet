@@ -243,13 +243,17 @@
 // it owns and the files a write of it holds only while it runs, its check, the
 // part a damage report names it by, what it promises a reader, and what each
 // change to its inputs — a pack added, a pack removed, the refs rewritten, its
-// own files reported damaged — does to it. There are two: the MULTI-PACK-INDEX
-// (a full round's, without a bitmap, once the snapshot names MidxRoundPacks
-// packs; the maintainer's, with its bitmap and lookup table where the node's
-// memory holds one and without one where it does not) and the COMMIT-GRAPH
-// (the maintainer's, written first on a copy that has none). Their files live
-// inside the incarnation, so the budget counts them, they leave with the
-// repository and a rebuild writes them again over its packs. Each is a REGULAR
+// own files reported damaged — does to it. There are three: the
+// MULTI-PACK-INDEX (a full round's, without a bitmap, once the snapshot names
+// MidxRoundPacks packs; the maintainer's, with its bitmap and lookup table
+// where the node's memory holds one and without one where it does not), the
+// COMMIT-GRAPH (the maintainer's, written first on a copy that has none) and
+// the INDEX OF PUSHES (below: runs under crewlet/, written by the cache's own
+// code and no git — a round's fold and the backfill — and the one declaration
+// a change to the packs or the refs keeps). Their files live inside the
+// incarnation, so the budget counts them and they leave with the repository;
+// a rebuild writes the first two again over its packs and links the index's
+// runs. Each is a REGULAR
 // file, as every file of the image is — the root's HEAD, config, packed-refs
 // and state too: a symbolic link, or anything else, at one of their names is
 // outside the image, so the next full round moves it into trash/ without
@@ -309,6 +313,30 @@
 // writes — a file a writer leaves that the image does not admit is trashed
 // under a running reader, and a file the image admits that no writer makes
 // is a hole anyone may fill.
+//
+// # The index of pushes
+//
+// Beside each copy the cache keeps an index of which push introduced each
+// commit and every update each push landed on a ref (provenance.go), built
+// from the push rows a snapshot serves rather than from the packs, which is
+// what [Cache.Provenance] answers a query server's reads from. EAGER: every
+// delta round folds the pushes it applied into one immutable run before it
+// answers, so a push is named the moment the sync after it returns. BEHIND
+// THE SERVING, one backfill goroutine per cache (backfill.go, started by
+// [Cache.Start]) reads the rest a page at a time: the GAP a full round passed
+// over, on every node holding a copy, and the HISTORY before an index's first
+// full round only once [Cache.WantHistory] marks it wanted — the query
+// server's read answered as the repository's home — each page read at a
+// session floor the index has already seen, so a data node behind the log
+// never answers a range in part, and paced by BackfillIdle times the fleet's
+// git nodes for each data node ([Options.Fleet]). Runs never overlap, and one
+// record — the state's — names them, changed only by a compare-and-set
+// against the incarnation's index generation, so a round under the write lock
+// and the backfill under a pin never undo each other's work. A run this
+// process did not write is held to its SHA-256 trailer before it is mapped,
+// the scrub holds every run again, and one that fails drops the index: the
+// full round that repairs the copy makes it again at its own position, and
+// the backfill reads back below it what is wanted there.
 //
 // # What this process did not write is checked before it serves, and every byte is scrubbed behind it
 //
@@ -774,6 +802,7 @@
 //	  lock                          this process's claim (internal/flock)
 //	  repos/<id>.<n>.git/           a repository's INCARNATION: a bare repository
 //	    crewlet-state.json          what the directory reflects, renamed in last
+//	    crewlet/provenance.<n>      the index of pushes' runs, which no git reads
 //	  scratch/                      a request's own repositories: a push's scratch, a view
 //	  tmp/                          every file before its rename into place
 //	  trash/                        what is being removed, by the janitor
@@ -937,6 +966,21 @@
 // page behind; what a cap leaves in line is the nodes times the cap, where no
 // cap's is every repository every node was asked for: the figures
 // MaxFullRounds is set from.
+//
+// The INDEX OF PUSHES (BenchmarkProvenance, five operations of each arm, on
+// the cold join's machine: four cores of a Core Ultra 7 265U, git 2.56.0). A
+// delta sync's fold of one push — its run built, staged and synced, renamed
+// in, its directory synced — takes 0.84 ms of a 4.2 ms round whose pack comes
+// from a store in the process, a fifth of the cheapest round there is and its
+// two syncs most of it, and 1.23 ms of a 68 ms one from the S3 fake at 30 ms a
+// first byte (1.8%). Runs of pushes of three commits each hold 64 bytes for
+// each commit introduced, about 190 a push. A lookup that misses, every run
+// searched, over four million commits: 0.54, 3.7, 15.5 and 29.8 µs at 1, 8, 32
+// and 64 runs ([MaxProvenanceRuns] says what that decides). A cold node's
+// backfill of 30 000 pushes through a solo node — the data node's read, in
+// process — read four pages of about 7 500 pushes, each about 3.9 MB, the
+// read's 4 MiB bound reached before its 10 000 rows: 115 ms of the data node's
+// read and about 148 ms a step, and 1.78 s in all at [BackfillIdle]'s pace.
 //
 // The MULTI-PACK-INDEX, over a source repository's composition — every commit
 // four files of one directory, so commits are a seventh of the objects

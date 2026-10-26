@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
+	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
@@ -29,9 +30,16 @@ const (
 	inUseMarker  = "REFUSED-IN-USE"
 )
 
+// TestMain is also the push hook when real git starts this binary as
+// proc-receive (codetest.HookCommand): BenchmarkProvenance's backfill arm
+// pushes through a solo node's production relay, with the production hook at
+// its other end.
 func TestMain(m *testing.M) {
 	if dir := os.Getenv(openEnv); dir != "" {
 		os.Exit(openAsSecondProcess(dir))
+	}
+	if status, ok := codetest.RunHookIfAsked(); ok {
+		os.Exit(status)
 	}
 	os.Exit(m.Run())
 }
@@ -64,7 +72,8 @@ func openAsSecondProcess(dir string) int {
 	}
 	_, err = cache.Open(ctx, cache.Options{
 		Layout: layout, MaxBytes: 1 << 30, Git: pool, Objects: store, Fetch: unanswered{},
-		Limits: code.DefaultLimits, HookCommand: []string{"/bin/true"}, Now: time.Now,
+		Fleet: func() (int, int, error) { return 1, 1, nil }, Limits: code.DefaultLimits,
+		HookCommand: []string{"/bin/true"}, Now: time.Now,
 	})
 	if err != nil {
 		return refused(err)
@@ -79,4 +88,8 @@ type unanswered struct{}
 
 func (unanswered) RepoState(context.Context, code.StateQuery) (code.RepoSnapshot, error) {
 	return code.RepoSnapshot{}, errors.New("the second process reads no rows")
+}
+
+func (unanswered) Read(context.Context, code.ReadQuery) (code.ReadAnswer, error) {
+	return code.ReadAnswer{}, errors.New("the second process reads no pushes")
 }

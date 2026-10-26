@@ -42,6 +42,11 @@ func (r *read) compareRead(ctx context.Context, objs found) (code.GitAnswer, err
 	if err != nil {
 		return code.GitAnswer{}, err
 	}
+	if mb != "" {
+		// The merge base is a commit the answer names too, and the page's
+		// envelope below is measured with its push.
+		r.decorate(mb)
+	}
 	behind, ahead, err := r.sides(ctx, base.peeled, head.peeled, walk)
 	if err != nil {
 		return code.GitAnswer{}, err

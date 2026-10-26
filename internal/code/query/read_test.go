@@ -33,7 +33,8 @@ import (
 // read builds. Each path was fed to cat-file's batch, `<id>:<path>`, where it
 // is a name like any other. This is what keeps diff-tree's, diff's and
 // rev-list's `--output` out — the writers gate argues their run-time
-// arguments in its allowance — so an argument a read adds is red here.
+// arguments in its allowance — so an argument a read adds is red here. A
+// landed-in read's ancestry checks are held too: whole ids, both sides.
 func TestAPathReachesGitOnlyOnStandardInput(t *testing.T) {
 	t.Parallel()
 	rec := &recording{}
@@ -63,6 +64,8 @@ func TestAPathReachesGitOnlyOnStandardInput(t *testing.T) {
 		mustRead(t, s, diffQ(repo, code.DiffQuery{Base: base, Head: head, File: p}))
 	}
 	mustRead(t, s, compareQ(repo, base[:8], head))
+	tip, at := x.tip("refs/heads/main")
+	mustRead(t, s, landedQ(repo, base[:7], "refs/heads/main", tip, at, true))
 
 	ran := rec.ran()
 	if len(ran) < 20 {
@@ -96,6 +99,7 @@ var templates = [][]string{
 	{"diff-tree", "-z", "-r", "--raw", "--no-ext-diff", "--no-textconv", "-M", "<oid>", "<oid>"},
 	{"diff", "--no-color", "--no-ext-diff", "--no-textconv", "-U3", "<oid>", "<oid>"},
 	{"merge-base", "<oid>", "<oid>"},
+	{"merge-base", "--is-ancestor", "<oid>", "<oid>"},
 	{"rev-list", "--left-right", "--count", "<range>"},
 }
 

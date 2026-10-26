@@ -655,7 +655,7 @@ func (c *Cache) check(ctx context.Context, s Synced, slot *gitproc.Reserved) (Ve
 	defer l.close()
 	r.Name, r.Position, r.Problems = cmp.Or(l.repo.Name, r.Name), l.at, l.problems
 
-	snap, err := c.read(ctx, e.id, l.at, l.stream, true,
+	snap, err := c.read(ctx, e.id, l.at, l.stream, true, false,
 		statelog.Freshness{Level: statelog.ReadSession, MinPosition: l.at})
 	switch {
 	case err != nil:

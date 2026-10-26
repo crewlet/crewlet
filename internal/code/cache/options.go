@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
@@ -18,11 +19,23 @@ import (
 )
 
 // Fetcher is the rows' side of a cache: one page of a repository's snapshot,
-// its refs and packs at a position. estate.CodeSeam satisfies it on every
-// node; a single-node harness wires the in-process reader.
+// its refs and packs at a position (RepoState) — a delta's with the pushes it
+// covers, which a round folds into its index of pushes before it answers —
+// and one page of a repository's pushes in log order (Read, of
+// code.ReadIntroduced), by which the backfill reads what a full round passed
+// over (backfill.go). estate.CodeSeam satisfies it on every node; a
+// single-node harness wires the in-process reader.
 type Fetcher interface {
 	RepoState(ctx context.Context, q code.StateQuery) (code.RepoSnapshot, error)
+	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
 }
+
+// Fleet is how many live nodes serve git and how many hold the estate, as
+// this node's placements see them now — or why it cannot say: what the
+// backfill paces its reads of the estate by (BackfillIdle). A node with no
+// fleet — no coordination, nobody else to ask — answers none of either,
+// which the pace reads as one of each.
+type Fleet func() (gitNodes, dataNodes int, err error)
 
 // Objects is the object store's read of one pack bundle, verified against
 // the row that names it: *objstore.Store satisfies it.
@@ -51,6 +64,10 @@ type Options struct {
 
 	// Fetch reads a repository's rows.
 	Fetch Fetcher
+
+	// Fleet counts the live git nodes and data nodes the backfill paces its
+	// reads by: the engine's placements, read again after every page.
+	Fleet Fleet
 
 	// Limits is the current epoch's code.limits.
 	Limits func() code.Limits
@@ -180,6 +197,18 @@ type knobs struct {
 	// every directory entry the cache stats to count its bytes (image.sizes):
 	// a case counts what the end of a maintenance run reads.
 	stating func(rel string)
+	// decodes, when set, counts every move a view of the index of pushes
+	// decodes (MoveView.At): a case holds a landed-in search to the few
+	// moves it probes.
+	decodes *atomic.Int64
+	// backfillWake, when set, is the backfill's wait — after a page, after a
+	// failure, or until the next horizon falls due — in place of a timer of
+	// d: a case sees how long the backfill means to wait, and wakes it.
+	backfillWake func(d time.Duration) <-chan time.Time
+	// folded, when set, is told what each round's fold of its delta's pushes
+	// into the index took (foldPushes): a benchmark weighs the fold against
+	// the round it is part of.
+	folded func(took time.Duration)
 }
 
 // validate refuses an Options value naming the field and what to set,
@@ -205,6 +234,9 @@ func (o Options) validate() error {
 		return refuse("Objects is nil: a cache reads its packs from the object store")
 	case o.Fetch == nil:
 		return refuse("Fetch is nil: a cache reads its repositories' rows through the code seam")
+	case o.Fleet == nil:
+		return refuse("Fleet is nil: the backfill paces its reads of the estate by the fleet's live git and " +
+			"data nodes")
 	case o.Limits == nil:
 		return refuse("Limits is nil: a cache serves under the current epoch's code.limits")
 	case o.Now == nil:

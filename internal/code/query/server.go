@@ -25,6 +25,13 @@ type Cache interface {
 	// ServeConfig is the configuration every git process in a cache runs
 	// with: one value, so no read sees a copy with another idea of it.
 	ServeConfig() []gitproc.KV
+	// Provenance is the pinned copy's index of which push introduced each
+	// commit, held while the copy is; an error is an index the node cannot
+	// read yet, which a read answers without (step 8).
+	Provenance(s cache.Synced) (cache.Provenance, error)
+	// WantHistory marks a repository's history as wanted: what a read
+	// answered as the repository's home asks of its index (step 9).
+	WantHistory(repoID string)
 }
 
 // Pool runs git. *gitproc.Pool satisfies it.
@@ -61,11 +68,13 @@ type Options struct {
 // with its caller's context.
 type Server struct {
 	o Options
-	// syncWait bounds a read's wait on its sync (statelog.ReadBudget), and
-	// pageBytes an answer's JSON (code.MaxGitAnswerBytes) — fields so this
+	// syncWait bounds a read's wait on its sync (statelog.ReadBudget),
+	// pageBytes an answer's JSON (code.MaxGitAnswerBytes) and probes a
+	// landed-in search's ancestry checks (MaxLandedProbes) — fields so this
 	// package's tests can scale them (export_test.go).
 	syncWait  time.Duration
 	pageBytes int
+	probes    int
 }
 
 // New is a server over o, refusing a field it needs by name.
@@ -86,10 +95,12 @@ func New(o Options) (*Server, error) {
 	if missing != "" {
 		return nil, fmt.Errorf("%w: query.Options.%s is required", code.ErrInvalid, missing)
 	}
-	return &Server{o: o, syncWait: statelog.ReadBudget, pageBytes: code.MaxGitAnswerBytes}, nil
+	return &Server{o: o, syncWait: statelog.ReadBudget, pageBytes: code.MaxGitAnswerBytes, probes: MaxLandedProbes},
+		nil
 }
 
-// Read answers q: a page of the tree, file, diff or comparison it names.
+// Read answers q: a page of the tree, file, diff or comparison it names, or
+// whether a commit landed in a target and the push that landed it.
 //
 //  1. q is validated (code.GitQuery.Validate), and its cursor read as one its
 //     kind issues.
@@ -120,6 +131,18 @@ func New(o Options) (*Server, error) {
 //  7. The kind's own git runs under ONE unit of the node's seat git-work
 //     share, released the moment it ends — never across a sync or a check,
 //     which hold no read-lane slot (code.GitShare).
+//  8. Every commit the answer names — its revision, a diff's or a
+//     comparison's commits, a landed-in read's commit and tip — is named with
+//     the push that introduced it (code.GitAnswer.PushedBy), from the copy's
+//     index of pushes, and the answer carries what that index holds
+//     (code.Coverage) — measured into every page's envelope, so a page cut
+//     against it fits with them. A copy whose index cannot be read yet is
+//     answered without either: an index decorates an answer, and no read
+//     waits on it.
+//  9. A read this node answered as the repository's home (code.GitQuery.Home)
+//     marks the repository's history wanted (cache.Cache.WantHistory): the one
+//     node a walk asks first reads it back, once per fleet, and only for a
+//     repository a seat asks about.
 func (s *Server) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
 	if err := q.Validate(); err != nil {
 		return code.GitAnswer{}, err
@@ -145,6 +168,7 @@ func (s *Server) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, err
 	if err != nil {
 		return code.GitAnswer{}, err
 	}
+	r.index(objs)
 	release, err := s.o.Share.Take(ctx, code.SeatWorkRead)
 	if err != nil {
 		return code.GitAnswer{}, err
@@ -156,7 +180,44 @@ func (s *Server) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, err
 		return code.GitAnswer{}, err
 	}
 	a.RepoID, a.Position = q.RepoID, r.synced.Position
+	a.PushedBy, a.Coverage = r.pushedBy, r.coverage
+	if q.Home {
+		s.o.Cache.WantHistory(q.RepoID)
+	}
 	return a, nil
+}
+
+// index reads the pinned copy's index of pushes, and names the push that
+// introduced each commit the query names (step 8).
+func (r *read) index(objs found) {
+	p, err := r.s.o.Cache.Provenance(r.synced)
+	if err != nil || !p.Indexed() {
+		return
+	}
+	r.prov = p
+	cov := p.Coverage()
+	r.coverage = &cov
+	for _, rev := range revsOf(r.q) {
+		if o := objs.revs[rev]; o.peeledKind == "commit" {
+			r.decorate(o.peeled)
+		}
+	}
+}
+
+// decorate names the push that introduced commit id, where the index holds
+// it: before any page is cut, since every page's envelope carries it.
+func (r *read) decorate(id string) {
+	if !r.prov.Indexed() {
+		return
+	}
+	by, ok := r.prov.Commit(id)
+	if !ok {
+		return
+	}
+	if r.pushedBy == nil {
+		r.pushedBy = map[string]code.PushedBy{}
+	}
+	r.pushedBy[id] = by
 }
 
 // read is one Read in progress.
@@ -171,6 +232,13 @@ type read struct {
 	// look.
 	synced cache.Synced
 	linear bool
+	// prov is the copy's index of pushes, the zero one where it keeps none
+	// it can read; pushedBy the push that introduced each commit the answer
+	// names, and coverage what the index holds — each carried by every page
+	// and so measured into its envelope (room).
+	prov     cache.Provenance
+	pushedBy map[string]code.PushedBy
+	coverage *code.Coverage
 }
 
 // judgeable refuses a seat's read on a node that cannot judge a seat (step 2).
@@ -209,8 +277,17 @@ func (r *read) held() error {
 // as it stands. An object id names one object at every position, so no level
 // buys an answer the copy cannot give; what a floor buys is a copy holding the
 // asker's own pushes, which step 5's second look covers for every other id.
+//
+// A LANDED-IN READ is brought to the position its tip was resolved at, at
+// least: the moves of the target up to that tip are what its index must hold
+// to name the push that landed the commit there.
 func (r *read) fresh() statelog.Freshness {
 	f := r.q.Fresh
+	if r.q.Kind == code.GitLandedIn {
+		if at := r.q.LandedIn.At; f.MinPosition.IsZero() || reachedFloor(at, f.MinPosition) {
+			f.MinPosition = at
+		}
+	}
 	if f.MinPosition.IsZero() {
 		return statelog.Freshness{Level: statelog.ReadStale}
 	}
@@ -218,6 +295,12 @@ func (r *read) fresh() statelog.Freshness {
 		f.Level = statelog.ReadSession
 	}
 	return f
+}
+
+// reachedFloor reports whether a is past b, both on the code log.
+func reachedFloor(a, b statelog.Position) bool {
+	before, err := b.Before(a)
+	return err == nil && before
 }
 
 // sync pins the copy at fresh, in place of any copy the read holds, its wait
@@ -309,6 +392,8 @@ func (r *read) answer(ctx context.Context, objs found, at cursor) (code.GitAnswe
 		return r.blobRead(ctx, objs, at)
 	case code.GitDiff:
 		return r.diffRead(ctx, objs, at)
+	case code.GitLandedIn:
+		return r.landedRead(ctx, objs)
 	}
 	return r.compareRead(ctx, objs)
 }
@@ -381,7 +466,8 @@ func cursorOf(q code.GitQuery) (cursor, error) {
 		}
 		return parseCursor(q.Cursor, q.Kind, map[byte]int{'f': 1})
 	}
-	// A comparison answers its first page of files and no more: a diff of
-	// its merge base and head reads the rest.
+	// A comparison answers its first page of files and no more — a diff of
+	// its merge base and head reads the rest — and a landed-in read one
+	// answer of a few ids.
 	return parseCursor(q.Cursor, q.Kind, map[byte]int{})
 }

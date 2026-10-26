@@ -293,6 +293,29 @@ leaves it, seven eighths of a volume of its own ([`git`](configuration.md#git))
 push, and nothing compacts a repository's packs yet, so it grows by every
 push's pack.
 
+**What the index of pushes costs a git node.** Beside each copy a git node
+keeps the index of which push introduced each commit
+([Which push landed a commit](code-host.md#which-push-landed-a-commit)): about
+64 bytes a commit introduced, about 190 bytes for a push of three, inside the
+cache's budget — some 3.5 GB for a monorepo's 18 million pushes in 181 days,
+and 8.6 GB for the 45 million of a company pushing 250 000 a day, indexed
+whole. Every sync folds the pushes it applied before it answers, 0.84 ms for a
+push. A repository's history before a node's first full read of it is read
+back only by its home, and only once a seat has asked about it, a page of the
+data node's push rows at a time — measured on four cores of a Core Ultra 7
+265U, pages of about 7 500 pushes and 4 MB, about 150 ms each — and after each
+page the backfill waits twice that page's time for each git node the fleet
+has to a data node, rounded up. So that monorepo's 2 400 pages are read back
+in about 18 minutes on a fleet of one git node to each data node, and in
+about 77 minutes at sixteen git nodes over three data nodes, where each page
+waits twelve times its own time; the worst case is one cold git node that is
+the home of every repository it caches, every one of them asked about, reading
+the whole 181 days of a company pushing 250 000 a day: about 6 000 pages and
+24 GB over the router, about 45 minutes at one git node to each data node,
+beside that node's cold syncs of the same repositories. These are figures,
+not promises: until a node's index is complete, an answer about an older
+commit says which range it does not hold rather than naming a push.
+
 **What every data node holds for the code host.** Every data node holds the
 whole estate, and the code host's rows with it. A person's push of one commit
 leaves a push row of about 395 bytes, kept 181 days, and its pack's row of

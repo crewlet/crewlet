@@ -73,6 +73,8 @@ func revsOf(q code.GitQuery) []string {
 		revs = []string{q.Diff.Base, q.Diff.Head}
 	case code.GitCompare:
 		revs = []string{q.Compare.Base, q.Compare.Head}
+	case code.GitLandedIn:
+		revs = []string{q.LandedIn.Commit, q.LandedIn.TargetOID}
 	}
 	return slices.Compact(revs)
 }

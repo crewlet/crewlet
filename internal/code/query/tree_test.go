@@ -78,11 +78,13 @@ func TestATreeIsListedByItsOid(t *testing.T) {
 	})
 
 	t.Run("paged at 1 KiB", func(t *testing.T) {
+		q := treeQ(repo, code.TreeQuery{Rev: head, Recursive: true})
+		limit := 1<<10 + x.decoration(q)
 		paged := x.server(0, query.Options{})
-		query.SetPageBytes(paged, 1<<10)
+		query.SetPageBytes(paged, limit)
 		want := lsTree(t, x, "", "-r", head)
 		var got []code.TreeEntry
-		ps := pages(t, paged, treeQ(repo, code.TreeQuery{Rev: head, Recursive: true}), 1<<10)
+		ps := pages(t, paged, q, limit)
 		for _, p := range ps {
 			got = append(got, p.Tree.Entries...)
 			if p.Tree.Total != len(want) {

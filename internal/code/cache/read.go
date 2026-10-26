@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"golang.org/x/sync/semaphore"
 
 	"github.com/crewlet/crewlet/internal/code"
@@ -51,6 +53,14 @@ type snapshot struct {
 	// restreamed: page 1 was a delta keyed to another stream than the
 	// incarnation's, and this is the whole answer read again.
 	restreamed bool
+	// since is a delta's floor — what it is a delta from — and pushes its
+	// pushes phase, where page 1 was asked for it (asked): every push
+	// applied in (since, position], in (position, push id) order, each once
+	// — what the round folds into the incarnation's index of pushes
+	// (provenance.go), so an asked phase with no row is no push.
+	since  statelog.Position
+	pushes []code.IntroducedRow
+	asked  bool
 }
 
 // kind is what reading s cost.
@@ -115,7 +125,9 @@ func (m *logMark) set(stream time.Time, at statelog.Position) {
 }
 
 // read is the snapshot of id an incarnation at at, on the stream made at
-// stream, converges to: full, or a delta from at, at fresh.
+// stream, converges to: full, or a delta from at, at fresh — a delta asked for
+// its pushes phase where pushes says the incarnation keeps an index of pushes
+// to fold them into (provenance.go).
 //
 //  1. Page 1 asks from at (zero when full).
 //  2. A page-1 DELTA keyed to another stream than the incarnation's is the
@@ -131,7 +143,7 @@ func (m *logMark) set(stream time.Time, at statelog.Position) {
 //     or a reanchor moved under a delta.
 //  5. Every page is validated (snapshot.add) — ErrBadSnapshot, naming the
 //     page and the row.
-func (c *Cache) read(ctx context.Context, id string, at statelog.Position, stream time.Time, full bool,
+func (c *Cache) read(ctx context.Context, id string, at statelog.Position, stream time.Time, full, pushes bool,
 	fresh statelog.Freshness) (snapshot, error) {
 
 	since := at
@@ -140,7 +152,7 @@ func (c *Cache) read(ctx context.Context, id string, at statelog.Position, strea
 	}
 	restarts, restreamed := 0, false
 	for {
-		snap, err := c.readOnce(ctx, id, since, fresh, false)
+		snap, err := c.readOnce(ctx, id, since, fresh, pushes && !since.IsZero(), false)
 		switch {
 		case errors.Is(err, code.ErrSnapshotMoved):
 			if restarts == MaxSnapshotRestarts {
@@ -274,23 +286,24 @@ func logRead(err error) error {
 // again from page 1 when the history moves under it, as read is.
 func (c *Cache) readPacks(ctx context.Context, id string, fresh statelog.Freshness) (snapshot, error) {
 	for restarts := 0; ; restarts++ {
-		snap, err := c.readOnce(ctx, id, statelog.Position{}, fresh, true)
+		snap, err := c.readOnce(ctx, id, statelog.Position{}, fresh, false, true)
 		if !errors.Is(err, code.ErrSnapshotMoved) || restarts == MaxSnapshotRestarts {
 			return snap, err
 		}
 	}
 }
 
-// readOnce reads every page of one snapshot — or, packsOnly, a full one's
-// pages up to the first that serves a ref (readPacks) — or answers the first
-// page's failure as it is: the estate's, as ErrLogRead (logRead).
+// readOnce reads every page of one snapshot — a delta asked for its pushes
+// phase where pushes says so, or, packsOnly, a full one's pages up to the
+// first that serves a ref (readPacks) — or answers the first page's failure
+// as it is: the estate's, as ErrLogRead (logRead).
 //
 // A FULL READ HOLDS ONE OF THE NODE'S SLOTS (fullRounds, MaxFullRounds) from
 // the page it first knows it is full to its last: its first, asked from
 // nothing; its second, when the log answers a delta in full, since page 1
 // decides and was asked as a delta's. A delta's pages hold none.
 func (c *Cache) readOnce(ctx context.Context, id string, since statelog.Position,
-	fresh statelog.Freshness, packsOnly bool) (snapshot, error) {
+	fresh statelog.Freshness, pushes, packsOnly bool) (snapshot, error) {
 
 	held := false
 	defer func() {
@@ -304,7 +317,7 @@ func (c *Cache) readOnce(ctx context.Context, id string, since statelog.Position
 		}
 		held = true
 	}
-	page, err := c.fetch.RepoState(ctx, code.StateQuery{RepoID: id, Since: since, Fresh: fresh})
+	page, err := c.fetch.RepoState(ctx, code.StateQuery{RepoID: id, Since: since, Fresh: fresh, Pushes: pushes})
 	if err != nil {
 		return snapshot{}, logRead(err)
 	}
@@ -313,7 +326,7 @@ func (c *Cache) readOnce(ctx context.Context, id string, since statelog.Position
 	}
 	snap := snapshot{
 		full: page.Full, position: page.Position, streamCreated: page.StreamCreated,
-		packs: map[packKey]code.PackRow{},
+		packs: map[packKey]code.PackRow{}, since: since, asked: pushes && !page.Full,
 	}
 	seen := map[string]int{}
 	for n := 1; ; n++ {
@@ -397,7 +410,69 @@ func (s *snapshot) add(id string, n int, page code.RepoSnapshot, seen map[string
 			s.refs[i] = r
 		}
 	}
+	for _, p := range page.Pushes {
+		if err := s.addPush(p); err != nil {
+			return bad("%v", err)
+		}
+	}
 	s.repo = page.Repo
+	return nil
+}
+
+// addPush validates one row of a delta's pushes phase and takes it in: a
+// push the delta asked for, at a position on the code log in (since,
+// position], after every row before it in (position, push id) order — so
+// each push is served once — whose moves name refs and object ids and whose
+// commits are object ids: what a run of the index of pushes encodes
+// (provrun.go), held to it before anything is written.
+func (s *snapshot) addPush(p code.IntroducedRow) error {
+	switch {
+	case !s.asked:
+		return fmt.Errorf("push %s is served by a snapshot that asked for no pushes phase", p.PushID)
+	case p.Position.Stream != topics.CodeLogStream || p.Position.Valid() != nil:
+		return fmt.Errorf("push %s is at %s, which is no position on %s", p.PushID, p.Position,
+			topics.CodeLogStream)
+	case p.Position.Packed() <= s.since.Packed() || p.Position.Packed() > s.position.Packed():
+		return fmt.Errorf("push %s is at %s, outside the delta's (%s, %s]", p.PushID, p.Position, s.since,
+			s.position)
+	}
+	if n := len(s.pushes); n > 0 {
+		last := s.pushes[n-1]
+		if c := cmp.Compare(last.Position.Packed(), p.Position.Packed()); c > 0 ||
+			c == 0 && last.PushID >= p.PushID {
+			return fmt.Errorf("push %s at %s is served after push %s at %s", p.PushID, p.Position, last.PushID,
+				last.Position)
+		}
+	}
+	if err := validPush(p); err != nil {
+		return err
+	}
+	s.pushes = append(s.pushes, p)
+	return nil
+}
+
+// validPush holds one push as the rows served it to what a run of the index
+// of pushes encodes (provrun.go) — its id a canonical UUID, its moves refs
+// between object ids, its commits object ids — before anything is written of
+// it: a delta's pushes phase (addPush) and the backfill's pages alike.
+func validPush(p code.IntroducedRow) error {
+	if id, err := uuid.Parse(p.PushID); err != nil || id.String() != p.PushID {
+		return fmt.Errorf("push id %q is not a canonical UUID", p.PushID)
+	}
+	for _, m := range p.Moves {
+		switch {
+		case !gitref.ValidRef(m.Ref):
+			return fmt.Errorf("push %s moved %q, which is not a ref", p.PushID, m.Ref)
+		case !gitref.ValidOID(m.Old) || !gitref.ValidOID(m.New):
+			return fmt.Errorf("push %s moved %s from %q to %q, which are not object ids", p.PushID, m.Ref, m.Old,
+				m.New)
+		}
+	}
+	for _, oid := range p.Introduced {
+		if !gitref.ValidOID(oid) || oid == gitref.ZeroOID {
+			return fmt.Errorf("push %s introduced %q, which is not an object id", p.PushID, oid)
+		}
+	}
 	return nil
 }
 

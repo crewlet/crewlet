@@ -85,7 +85,7 @@ func BenchmarkBoot(b *testing.B) {
 				}
 				c, err := cache.Open(b.Context(), cache.Options{
 					Layout: layout, MaxBytes: 1 << 40, Git: pool, Objects: noObjects{t: b}, Fetch: noRows{t: b},
-					Limits: code.DefaultLimits, HookCommand: []string{"/bin/true"}, Now: time.Now,
+					Fleet: soloFleet, Limits: code.DefaultLimits, HookCommand: []string{"/bin/true"}, Now: time.Now,
 				})
 				if err != nil {
 					b.Fatalf("Open: %v", err)
@@ -577,10 +577,13 @@ func (w *syncWorld) logRepo(n int) string {
 }
 
 // writePushes writes each push to repo in w's log as the record that landed
-// it: its pack's row, and main moved to its tip.
+// it: its pack's row, main moved to its tip, and its row naming the tip as a
+// commit it introduced — so every delta's fold builds commit records, as a
+// real push's does.
 func (w *syncWorld) writePushes(repo string, pushes []pushRange, rows []code.PackRow) {
 	for i, p := range pushes {
-		w.log.write(repo, []code.PackRow{rows[i]}, map[string]string{"refs/heads/main": p.tip})
+		w.log.writePushes(repo, fakePush{packs: []code.PackRow{rows[i]},
+			refs: map[string]string{"refs/heads/main": p.tip}, introduced: []string{p.tip}})
 	}
 }
 
@@ -600,7 +603,7 @@ func (w *syncWorld) coldCache(b *testing.B, root string, n, fetch int, mutate ..
 	}
 	o := cache.Options{
 		Layout: layout, MaxBytes: 1 << 40, Git: newPoolOf(b, layout, "", runtime.NumCPU(), 0, 1<<40), Objects: w.store,
-		Fetch: silent{w.log}, Limits: code.DefaultLimits, HookCommand: []string{"/bin/true"},
+		Fetch: silent{w.log}, Fleet: soloFleet, Limits: code.DefaultLimits, HookCommand: []string{"/bin/true"},
 		Metrics: w.rec, Now: time.Now,
 	}
 	for _, m := range mutate {
@@ -1001,6 +1004,12 @@ func (l *timedLog) RepoState(ctx context.Context, q code.StateQuery) (code.RepoS
 	began := time.Now()
 	defer func() { l.took.Add(int64(time.Since(began))) }()
 	return l.inner.RepoState(ctx, q)
+}
+
+func (l *timedLog) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+	began := time.Now()
+	defer func() { l.took.Add(int64(time.Since(began))) }()
+	return l.inner.Read(ctx, q)
 }
 
 // nextPush lands one push on repo in w: a commit on top of tip adding the

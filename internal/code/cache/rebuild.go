@@ -1095,12 +1095,15 @@ func (c *Cache) queueRebuild(e *entry, inc *incarnation, reason RebuildReason, w
 // synced once every link is made, as an install's renames are, before any
 // ref names what they hold.
 //
-// It links PACKS ONLY. Every derived file (derived.go) is written again over
-// the new incarnation's packs — the round's index by its own round, the
-// maintainer's index and the commit-graph by the maintainer, the graph first —
-// rather than linked from the copy being replaced, whose derived files may be
-// what failed.
+// Of the derived files (derived.go) it links only those whose declaration a
+// rebuild keeps (Seed: SeedLink) — the index of pushes, a function of the rows
+// a rebuild would read again unchanged (seedIndex). Every other is written
+// again over the new incarnation's packs — the round's index by its own round,
+// the maintainer's index and the commit-graph by the maintainer, the graph
+// first — rather than linked from the copy being replaced, whose derived files
+// may be what failed.
 func (c *Cache) seedRebuild(e *entry, replaced, inc *incarnation, whole []string) error {
+	c.seedIndex(e, replaced, inc)
 	from := filepath.Join(replaced.dir, "objects", "pack")
 	into := filepath.Join(inc.dir, "objects", "pack")
 	seeded := 0

@@ -104,9 +104,11 @@ func TestADiffStatIsFilteredByPathsInGo(t *testing.T) {
 	})
 
 	t.Run("paged", func(t *testing.T) {
+		q := diffQ(repo, code.DiffQuery{Base: base, Head: head})
+		limit := 700 + x.decoration(q)
 		paged := x.server(0, query.Options{})
-		query.SetPageBytes(paged, 700)
-		ps := pages(t, paged, diffQ(repo, code.DiffQuery{Base: base, Head: head}), 700)
+		query.SetPageBytes(paged, limit)
+		ps := pages(t, paged, q, limit)
 		var got []string
 		for _, p := range ps {
 			for _, f := range p.Diff.Files {
@@ -203,9 +205,11 @@ func TestAFilesPatchNamesItsPaths(t *testing.T) {
 	}
 
 	t.Run("paged", func(t *testing.T) {
+		q := diffQ(repo, code.DiffQuery{Base: base, Head: head, File: "mod.txt"})
+		limit := 1<<10 + x.decoration(q)
 		paged := x.server(0, query.Options{})
-		query.SetPageBytes(paged, 1<<10)
-		ps := pages(t, paged, diffQ(repo, code.DiffQuery{Base: base, Head: head, File: "mod.txt"}), 1<<10)
+		query.SetPageBytes(paged, limit)
+		ps := pages(t, paged, q, limit)
 		want := x.git("diff", "--no-color", "--full-index", base, head, "--", "mod.txt")
 		if len(ps) < 2 || joined(ps) != want {
 			t.Errorf("%d pages concatenate to\n%s\nwant several of\n%s", len(ps), joined(ps), want)

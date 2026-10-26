@@ -52,11 +52,12 @@ const stateFormat = 2
 const stateName = "crewlet-state.json"
 
 // maxStateBytes bounds the read of a state file. A state at the domain's
-// bounds is about 25 KB — 64 protection rules of a 255-byte pattern each
+// bounds is about 30 KB — 64 protection rules of a 255-byte pattern each
 // (code.MaxProtectionsPerRepo), a 1 KB description, a few hundred bytes of
-// scalars, and the derived files' map at a few dozen bytes a declaration — so
-// a mebibyte is forty times anything this cache writes, and a file past it is
-// not one this cache wrote, whatever is in it.
+// scalars, the derived files' map at a few dozen bytes a declaration, and the
+// provenance index's record, MaxProvenanceRuns runs of about 150 bytes each —
+// so a mebibyte is thirty times anything this cache writes, and a file past it
+// is not one this cache wrote, whatever is in it.
 const maxStateBytes = 1 << 20
 
 // state is the state file.
@@ -111,6 +112,14 @@ type derivedState struct {
 	// index). Such an entry is counted and never read as made — it covers
 	// nothing (covers), and the maintainer writes it again.
 	Step Step `json:"step,omitempty"`
+	// Provenance is the provenance index's record — its coverage and its runs
+	// (provenance.go) — which only that declaration's entry carries, and only
+	// with its Step: a set of runs has no main file, so its record is what
+	// says it is there. At most MaxProvenanceRuns runs, so a state stays
+	// constant-size whatever the index holds. IMMUTABLE once stored: every
+	// change stores a new value (copy on write), so a state encoded outside
+	// the entry's lock shares it safely.
+	Provenance *provenanceState `json:"provenance,omitempty"`
 }
 
 // covers is how many packs d covers: the packs the write that made it
@@ -165,6 +174,15 @@ func (st *state) check() error {
 		case d.Step != "" && !slices.Contains(takes, d.Step):
 			return fmt.Errorf("it records derived file %q as made by step %q, which no write of it takes", name,
 				d.Step)
+		case d.Provenance != nil && name != DerivedProvenance:
+			return fmt.Errorf("it records an index of pushes for derived file %q, which keeps none", name)
+		case name == DerivedProvenance && (d.Provenance != nil) != (d.Step != ""):
+			return fmt.Errorf("it records derived file %q made by step %q with an index %t: an index is recorded "+
+				"by the write that made it", name, d.Step, d.Provenance != nil)
+		case d.Provenance != nil:
+			if err := d.Provenance.check(d.Bytes); err != nil {
+				return fmt.Errorf("it records derived file %q as %w", name, err)
+			}
 		}
 	}
 	return nil

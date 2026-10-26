@@ -797,8 +797,9 @@ func TestASweepDropsTheMultiPackIndexWithAPack(t *testing.T) {
 	if _, err := runGit(t, w.pool, s.Dir, "", "fsck", "--connectivity-only", "--no-progress"); err != nil {
 		t.Errorf("fsck after a pack was removed under the index: %v", err)
 	}
-	if doc := readStateDoc(t, s.Dir); len(doc.Derived) != 0 {
-		t.Errorf("the state records %+v after the derived files were dropped, want none", doc.Derived)
+	if doc := readStateDoc(t, s.Dir); len(doc.overPacks()) != 0 {
+		t.Errorf("the state records %+v after the derived files were dropped, want none over the packs",
+			doc.Derived)
 	}
 
 	clk.Add(cache.MidxMinInterval)
@@ -1722,9 +1723,15 @@ func TestStopEndsAMaintenanceRun(t *testing.T) {
 // index its own list beside its declaration, and the round's process is.
 func TestTheMaintainersStepsAreTheDeclaredWrites(t *testing.T) {
 	t.Parallel()
+	// Git's writes: an in-process one (the index of pushes') runs no git
+	// process, and the writers gate ties it to its file instead.
 	var declared []cache.Write
 	for _, d := range cache.DerivedFiles() {
-		declared = append(declared, d.Writes...)
+		for _, wr := range d.Writes {
+			if wr.Writer.Subcommand != "" {
+				declared = append(declared, wr)
+			}
+		}
 	}
 	maintainer := func(yield func(cache.Write) bool) {
 		for _, wr := range declared {

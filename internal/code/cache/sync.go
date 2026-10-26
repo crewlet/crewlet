@@ -1036,14 +1036,17 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 	for {
 		var at statelog.Position
 		var stream time.Time
+		// indexed: the incarnation keeps an index of pushes, which a delta's
+		// pushes phase is folded into before the round answers (apply).
+		indexed := false
 		if inc != nil {
 			e.mu.Lock()
-			at, stream = inc.at, inc.stream
+			at, stream, indexed = inc.at, inc.stream, inc.record() != nil
 			e.mu.Unlock()
 		}
 		markStream, markAt := c.mark.read()
 		var snap snapshot
-		snap, err = c.read(ctx, e.id, at, stream, full, fresh)
+		snap, err = c.read(ctx, e.id, at, stream, full, indexed, fresh)
 		switch {
 		case errors.Is(err, code.ErrRepoNotFound) && escalate():
 			continue
@@ -1102,6 +1105,7 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 			if inc.reread == "" {
 				inc.reread = RebuildStream
 			}
+			inc.historyGone = true
 			e.mu.Unlock()
 		}
 		if gone != nil {
@@ -1249,7 +1253,8 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 
 // reread marks every current incarnation which selects for a WHOLE read: its
 // next round reads the repository whole, nothing is answered from it at once
-// until then, and the reason is counted when that read completes. It answers
+// until then, the reason is counted when that read completes, and that read
+// drops its index of pushes first (incarnation.historyGone). It answers
 // the epoch a round's convergence must still find to count as one. Rare — a
 // log recreated or gone back under the node — so a walk of every entry.
 func (c *Cache) reread(reason RebuildReason, which func(*incarnation) bool) uint64 {
@@ -1263,6 +1268,9 @@ func (c *Cache) reread(reason RebuildReason, which func(*incarnation) bool) uint
 			if inc.reread == "" {
 				inc.reread = reason
 			}
+			// Every position its index of pushes recorded may name another
+			// record now: its next full round drops it (EventHistoryGone).
+			inc.historyGone = true
 		}
 		e.mu.Unlock()
 	}
@@ -1323,6 +1331,14 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 		// maintenance on its incarnation first, and none starts while a
 		// round runs (maintain.go).
 		c.stopMaintenance(e, inc)
+		// A LOG RECREATED OR GONE BACK under the incarnation drops what its
+		// positions name — the index of pushes (EventHistoryGone) — before
+		// the sweep, and before any git process sees the round's image.
+		if c.historyGone(e, inc, snap) {
+			if _, err := c.dropFor(e, inc, EventHistoryGone, 0); err != nil {
+				return res, fmt.Errorf("cache: sync %s: drop derived files: %w", e.id, err)
+			}
+		}
 		trashed, err := c.tidy(inc, snap)
 		if err != nil {
 			return res, fmt.Errorf("cache: sync %s: sweep: %w", e.id, err)
@@ -1436,12 +1452,22 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 		return res, err
 	}
 
+	// THE INDEX OF PUSHES (provenance.go), after the packs and the refs and
+	// before the state: a delta's pushes folded as one run before anybody is
+	// answered, a full round's position its index's — or its gap's — upper
+	// bound. What either retires goes to trash/ once the state that no
+	// longer names it is written; and neither fails the round.
+	var retired []string
+	provenanceWrote := false
 	if snap.full {
 		trashed, err := c.sweepPacks(e, inc, strays)
 		if err != nil {
 			return res, fmt.Errorf("cache: sync %s: sweep: %w", e.id, err)
 		}
 		res.trashed = res.trashed || trashed
+		retired = c.indexFull(e, inc, snap)
+	} else {
+		provenanceWrote, retired = c.foldPushes(ctx, e, inc, snap)
 	}
 
 	// The in-memory fields are what the directory now reflects. When it
@@ -1453,7 +1479,12 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 	// wrote: the round wrote into the directory — packs in or out, refs, the
 	// index, a file swept out of it.
 	wrote := ins.added+ins.replaced > 0 || refsWritten || indexed || res.trashed
-	changed := snap.full || wrote || !snap.streamCreated.Equal(inc.stream) || !sameRepo(inc.repo, snap.repo)
+	// A run of the index of pushes is written down with the state that
+	// names it, and one it retired is moved only once a state no longer
+	// names it — but neither is a file git reads, so no change a rebuild
+	// weighs.
+	changed := snap.full || wrote || provenanceWrote || len(retired) > 0 ||
+		!snap.streamCreated.Equal(inc.stream) || !sameRepo(inc.repo, snap.repo)
 	prevAt, prevStream, prevRepo := inc.at, inc.stream, inc.repo
 	inc.at, inc.stream, inc.repo = snap.position, snap.streamCreated, snap.repo
 	if snap.full {
@@ -1481,6 +1512,9 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 			return res, fmt.Errorf("cache: sync %s: state: %w", e.id, err)
 		}
 	}
+	// What the state no longer names goes once it is written: a run retired
+	// before, a crash between, and the state on disk names a file gone.
+	c.trashRuns(e, inc, retired)
 	if snap.full {
 		e.mu.Lock()
 		inc.converged = c.rereads.Load() == epoch && inc.marks == marks

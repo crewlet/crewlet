@@ -581,3 +581,71 @@ const ScrubInterval = RebuildQuiet
 // report about damage the last scrub could not have seen waits at most an
 // hour for the scrub that finds it, beside the copy's daily one.
 const ScrubCooldown = time.Hour
+
+// MaxProvenanceRuns is the most runs an index of pushes holds (provenance.go):
+// a commit's lookup binary-searches every run, newest first, so the bound is
+// what a lookup costs at worst. The backfill merges before an index reaches
+// it, and a round's fold at it merges its two cheapest runs first.
+//
+// 32 (M3-decisions M3-O22's provisional value, which the measure keeps): the
+// largest of {8, 16, 32, 64} at which a lookup that misses — every run
+// searched — costs under 1% of a warm tree read, the answer it decorates:
+// BenchmarkCodeRead's warm p50 listing is 5.2 ms (the query package's
+// Measured section), so 52 µs. BenchmarkProvenance's lookup arm, over four
+// million commits — 96 MB of commit records, past the last-level cache at
+// every run count — missed in 0.54 µs at one run, 3.7 at 8, 15.5 at 32 and
+// 29.8 at 64. The large model's 18 million pushes, some 54 million commits,
+// make each run's binary search about four steps deeper, every one a miss
+// to memory at about 100 ns: some 27 µs at 32 runs and 55 µs at 64, the
+// first under the bound and the second past it — an extrapolation of the
+// measured arm, not a measure of that index. Geometric merging keeps
+// O(log n) runs — about 25 for that index — so the bound is reached only
+// while the backfill lags a burst of deltas.
+const MaxProvenanceRuns = 32
+
+// ProvenanceMergeFactor is how near two adjacent runs' push counts must be
+// for the backfill to merge them: the larger at most this many times the
+// smaller.
+//
+// TWO, git's own geometric factor (`git repack --geometric=2`): runs of
+// similar size coalesce, so their sizes double as they merge — O(log n) runs,
+// each push written O(log n) times over its life — while a large run beside
+// a stream of small ones is never rewritten for each of them.
+const ProvenanceMergeFactor = 2
+
+// BackfillIdle is how long the backfill waits after each page it reads, as a
+// multiple of that page's own duration and of the fleet's ratio of live git
+// nodes to live data nodes (backfill.go): every git node backfills from the
+// data nodes, so its share of them is the ratio.
+//
+// TWO: a git node then reads a third of the time at most against one data
+// node's worth of git nodes, so the fleet's backfills hold about a third of
+// one reader of each data node — the code retention pass's share of the
+// estate's write lane (code.RetentionLaneShare), applied to a read — however
+// many git nodes share them, and the serving keeps the other two thirds.
+const BackfillIdle = 2
+
+// HorizonEvery is how often the backfill asks the rows for the oldest push
+// they keep — an index's horizon (provenanceState.Oldest) — and drops what
+// it holds below it: runs wholly below at once, and records below it at
+// their next merge.
+//
+// A DAY: the rows drop pushes past code.PushHistory (181 days) as the log
+// moves, so a day's lag holds at most a day's pushes past them — under 1% of
+// the index — for one page of one row a day a repository.
+const HorizonEvery = 24 * time.Hour
+
+// BackfillRetry and BackfillRetryCeiling bound the backfill's wait after a
+// page the estate could not serve, or a fleet whose live nodes could not be
+// counted (Options.Fleet): doubling from the first to the second, jittered,
+// and asked again — never a page paced on a guess.
+//
+// FIVE SECONDS TO FIVE MINUTES: a data node that restarts or a router that
+// lost its placement answers again within seconds, and nobody waits on a
+// backfill, so a long outage costs one read every five minutes a git node
+// rather than a stream of them against a fleet that is already down — the
+// shape of the code reconciler's retries (engine's codeReposRetryBase).
+const (
+	BackfillRetry        = 5 * time.Second
+	BackfillRetryCeiling = 5 * time.Minute
+)

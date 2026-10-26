@@ -130,6 +130,7 @@ func (w *world) options(t testing.TB, mutate ...func(*cache.Options)) cache.Opti
 		Git:         w.pool,
 		Objects:     noObjects{t: t},
 		Fetch:       noRows{t: t},
+		Fleet:       soloFleet,
 		Limits:      code.DefaultLimits,
 		HookCommand: []string{"/bin/true"},
 		Logger:      w.logs.logger(),
@@ -202,6 +203,15 @@ func (n noRows) RepoState(context.Context, code.StateQuery) (code.RepoSnapshot, 
 	n.t.Errorf("a cache read a repository's rows where nothing may")
 	return code.RepoSnapshot{}, io.ErrUnexpectedEOF
 }
+
+func (n noRows) Read(context.Context, code.ReadQuery) (code.ReadAnswer, error) {
+	n.t.Errorf("a cache read a repository's pushes where nothing may")
+	return code.ReadAnswer{}, io.ErrUnexpectedEOF
+}
+
+// soloFleet is a node with no fleet: one git node and one data node, itself,
+// which a backfill paces its pages by.
+func soloFleet() (int, int, error) { return 1, 1, nil }
 
 // noObjects is an Objects a case fails on: opening a cache reads no pack.
 type noObjects struct{ t testing.TB }

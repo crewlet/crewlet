@@ -337,7 +337,9 @@ func (im *image) present(dir string) ([]ownedFile, error) {
 // bytes each declaration's owned files hold, keyed by its name for every
 // declaration with a file on disk — none for one with none — and the
 // declarations whose main file (Owned.Main) is there. What
-// Cache.recordDerived sets an incarnation's record from.
+// Cache.recordDerived sets an incarnation's record from; a declaration with no
+// main file is present where its record says it is, so no bit of mains is
+// about it.
 type derivedMeasure struct {
 	bytes map[DerivedName]int64
 	mains derivedSet
@@ -454,6 +456,16 @@ const maxDerived = 32
 // all is every declaration.
 func (im *image) all() derivedSet { return derivedSet(1)<<len(im.decls) - 1 }
 
+// decl is the declaration named name, or nil where the image holds none.
+func (im *image) decl(name DerivedName) *Derived {
+	for i := range im.decls {
+		if im.decls[i].Name == name {
+			return &im.decls[i]
+		}
+	}
+	return nil
+}
+
 // set is the declarations named names.
 func (im *image) set(names ...DerivedName) derivedSet {
 	var s derivedSet
@@ -528,11 +540,19 @@ func (im *image) each(s derivedSet, f func(i int, d *Derived)) {
 	}
 }
 
-// files is the main file of every declaration of s, in declaration order:
-// what a line names a drop by.
+// files is what a line names each declaration of s by, in declaration order:
+// its main file's name — and, for one with no main file (the provenance
+// index's runs), what a check of its files is counted as (Owned.File), since
+// "." would name nothing.
 func (im *image) files(s derivedSet) []string {
 	out := []string{}
-	im.each(s, func(_ int, d *Derived) { out = append(out, filepath.Base(im.mainRel(d.Name))) })
+	im.each(s, func(_ int, d *Derived) {
+		if d.hasMain() {
+			out = append(out, filepath.Base(im.mainRel(d.Name)))
+			return
+		}
+		out = append(out, d.Owns[0].File)
+	})
 	return out
 }
 
@@ -844,6 +864,12 @@ func (c *Cache) dropFor(e *entry, inc *incarnation, ev Event, named derivedSet) 
 			c.droppedDerived(inc, 1<<i)
 			name := c.image.decls[i].Name
 			s := inc.derived[name]
+			if !c.image.decls[i].hasMain() {
+				// A declaration with no main file is there by its record
+				// (recordDerived), and a record naming a file gone is no
+				// record: the index of pushes goes with its first run.
+				s = derivedState{Bytes: s.Bytes}
+			}
 			s.Bytes = max(s.Bytes-size, 0)
 			c.setDerived(inc, name, s, true)
 			e.mu.Unlock()
@@ -862,6 +888,9 @@ func (c *Cache) dropFor(e *entry, inc *incarnation, ev Event, named derivedSet) 
 	// gone is due again.
 	e.mu.Lock()
 	c.image.each(drop, func(_ int, d *Derived) { c.setDerived(inc, d.Name, derivedState{}, false) })
+	// The runs of an index of pushes dropped stay mapped only while their
+	// readers hold them (provenance.go).
+	c.forgetRuns(inc)
 	e.mu.Unlock()
 	return drop, nil
 }
@@ -871,7 +900,13 @@ func (c *Cache) dropFor(e *entry, inc *incarnation, ev Event, named derivedSet) 
 // can end a pack's or an object's failure (repaired). e.mu is held.
 func (c *Cache) droppedDerived(inc *incarnation, s derivedSet) {
 	c.wrote(inc, s)
-	repaired(inc)
+	read := false
+	c.image.each(s, func(_ int, d *Derived) { read = read || !d.inProcess() })
+	if read {
+		// Only a file git reads can be what a failed process met: the
+		// cache's own (the index of pushes) repairs no read.
+		repaired(inc)
+	}
 }
 
 // measure sets inc's counts from its directory: the packs installed (an .idx

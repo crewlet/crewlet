@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/code/cache`
-- **Enforced-by:** `internal/code/cache.TestEveryDerivedFileIsDeclared`, `internal/code/cache.TestValidateRefusesAnUnsaidDeclaration`, `internal/code/cache.TestTheSweepKeepsExactlyTheDeclaredImage`, `internal/code/cache.TestADerivedFileFollowsItsDeclarationOnEveryEvent`, `internal/code/cache.TestTheCodeReadsTheDeclarations`, `internal/code/cache.TestEveryPackAddedReadsItsDeclaration`, `internal/code/cache.TestEveryHoldOfADerivedFileReadsItsDeclarationsCheck`, `internal/code/cache.TestADropStopsARunWritingWhatItDrops`, `internal/code/cache.TestAReportADeclarationKeepsItsFilesOnRecordsNoDrop`, `internal/code/cache.TestARequestsDamageNoDropRepairsIsRepairedAsAPacks`, `internal/code/cache.TestTheMaintainersStepsAreTheDeclaredWrites`, `internal/code/cache.TestNothingButSyncWritesACache` (its declared-writers half, held able to fail by its control), `internal/code/cache.TestTheConceptPageNamesEveryDerivedFile`, `internal/code/cache.TestTheStateIsWhatTheNextBootKnows`, `internal/code/cache.TestADerivedFileGoneFromUnderItsStateIsForgotten`
+- **Enforced-by:** `internal/code/cache.TestEveryDerivedFileIsDeclared`, `internal/code/cache.TestValidateRefusesAnUnsaidDeclaration`, `internal/code/cache.TestTheSweepKeepsExactlyTheDeclaredImage`, `internal/code/cache.TestADerivedFileFollowsItsDeclarationOnEveryEvent`, `internal/code/cache.TestTheCodeReadsTheDeclarations`, `internal/code/cache.TestEveryPackAddedReadsItsDeclaration`, `internal/code/cache.TestEveryHoldOfADerivedFileReadsItsDeclarationsCheck`, `internal/code/cache.TestADropStopsARunWritingWhatItDrops`, `internal/code/cache.TestAReportADeclarationKeepsItsFilesOnRecordsNoDrop`, `internal/code/cache.TestARequestsDamageNoDropRepairsIsRepairedAsAPacks`, `internal/code/cache.TestTheMaintainersStepsAreTheDeclaredWrites`, `internal/code/cache.TestNothingButSyncWritesACache` (its declared-writers half, held able to fail by its control), `internal/code/cache.TestTheConceptPageNamesEveryDerivedFile`, `internal/code/cache.TestTheStateIsWhatTheNextBootKnows`, `internal/code/cache.TestADerivedFileGoneFromUnderItsStateIsForgotten`, `internal/code/cache.TestValidateRefusesAnInProcessDeclarationThatClaimsAGitWrite`, `internal/code/cache.TestAMaintenanceRunKeepsTheProvenanceState`, `internal/code/cache.TestAFileUnderCrewletIsCountedInTheBudget`, `internal/code/cache.TestARebuildLinksTheIndex`, `internal/code/cache.TestARewoundLogDropsTheIndex`
 - **Measured:** at 1152ca322 the two derived files a cache writes — the multi-pack-index (a full round's without a bitmap, the maintainer's with its bitmap or without one) and the commit-graph — were spelled in eighteen of the cache's non-test files (`multi-pack-index`, `commit-graph` or `tmp_bitmap` 122 times): their file names in the sweep, Verify, the check, the scrub and the size measure; their argument lists, charges, lanes and deadlines beside each writer; what a removed pack, rewritten refs and a damage report do to them in the install, the refs' write, the sync and the reports; and the state's own struct. They agreed only because nothing had changed them apart, and M3 adds more kinds.
 - **Cost-when-tried:** the sweep's image grammar and Verify's listing were made one predicate a directory because two copies of the grammar had disagreed about what a cache is, and the derived files were the part still spelled beside it — a file a writer leaves that the grammar does not admit is trashed under a running reader, and a file the grammar admits that no writer makes is a hole anyone may fill. And each directory's grammar admitted a file of the root, and one in `objects/info`, as anything but a directory: a symbolic link named `commit-graph`, or named `config` over a file holding the configuration the pool requires, was kept by the sweep and admitted by Verify, and git read the file it pointed at, outside the incarnation, its budget and what a rebuild replaces — the link at `config` passing the pool's shape check too, which reads through it.
 - **Tag-status:** unreleased
@@ -45,3 +45,22 @@ real git writes.
 Which derived files exist after this (later parts add their own, each by a declaration), what any one of
 them costs or when it is due (the maintainer's and each part's own measurements), or anything outside one
 node's cache — a derived object published for every node is a decision of its own.
+
+## Amendment — a derived file the cache's own code writes
+
+The index of which push introduced each commit is the first derived file no git process writes or reads:
+the cache's own Go code builds it from the code domain's push rows. Its declaration's writes are IN-PROCESS
+— no lane, deadline, memory charge an object or argument list, which nothing would read, but a sentence of
+what each holds (`Write.Charge`) — and a declaration's writes are all of one kind, since who writes a file
+says who reads it. No damage report can name a file git never reads, so an in-process declaration has no
+part and keeps its files on a report; its check is its own (a run's SHA-256 trailer), held before anything
+reads a file this process did not write, and by the scrub. Its files live under the incarnation's
+`crewlet/` — the engine's root, never `objects/`, the namespace a push's scratch names as its one
+alternate — and a boot's walk of a copy with no state reads every root a declaration owns, read from the
+declarations. A declaration need not own a file whose presence is its own (`Owned.Main`): a set of runs is
+present by its record, which a measure keeps whole. Two more answers join the changes a declaration states:
+what a log gone back under the node does to it (`OnHistoryGone` — the index's positions then name other
+records, so it is dropped before anything reads the copy), and what a rebuild does with its files (`Seed`:
+written again over the new packs, or LINKED into the new incarnation with the record and the vouch of each
+file, for a file that is a function of the rows a rebuild reads again unchanged). The writers gate ties an
+in-process write to its file's filesystem row, as a git write is tied to its subcommand's.

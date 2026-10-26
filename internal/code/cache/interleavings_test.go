@@ -24,7 +24,10 @@ import (
 // interleaving of what a node's cache meets, every cache equals a cache
 // rebuilt from nothing at the same position — HEAD, config and packed-refs
 // byte for byte, the same pack files and nothing outside the image (imageOf)
-// — and no file under repos/ holds the pack of a push no row names.
+// — no file under repos/ holds the pack of a push no row names, and every
+// repository's index of pushes, backfilled as far as it goes, says within the
+// coverage it claims exactly what the push rows say (indexAgainstLog): the
+// push that introduced each commit, and every move of every ref in log order.
 //
 // Each seed draws interleavingSteps operations by weight over two
 // repositories, each with a pushed commit to start from, and checks every
@@ -404,7 +407,8 @@ func (in *interleaving) adopt(repo string) string {
 	tip, cs := in.w.packInto(t, repo, sc.Dir, nil)
 	row := in.w.storeBundle(t, in.w.bundle(cs), pushID)
 	ref := in.branch()
-	row.Added = in.w.log.write(repo, []code.PackRow{row}, map[string]string{ref: tip})
+	row.Added = in.w.log.writePushes(repo, fakePush{packs: []code.PackRow{row}, refs: map[string]string{ref: tip},
+		introduced: []string{tip}})
 	in.last[repo] = row.Added
 	if err := in.c.Adopt(t.Context(), repo, sc, row.Ref()); err != nil {
 		in.fatalf("Adopt: %v", err)
@@ -588,10 +592,24 @@ func (in *interleaving) check(step int) {
 	t := in.t
 	in.scrubAll()
 	in.noteReports()
+	// THE INDEX OF PUSHES, read back as far as it goes: the first
+	// repository's history wanted, as a seat's read of it here as its home
+	// would want it, and every step the backfill has due taken — the gaps
+	// the run's full rounds passed over, that history, the horizon — so the
+	// check below holds what the backfill wrote as well as what the rounds
+	// folded.
+	in.c.WantHistory(in.repos[0])
+	if _, err := cache.BackfillPass(in.c); err != nil {
+		in.fatalf("the backfill: %v", err)
+	}
 	for _, repo := range in.repos {
 		s := in.syncAt(repo, linearizable)
 		got := imageOf(t, s.Dir)
 		in.checkSound(step, repo, s.Dir)
+		if problems := indexAgainstLog(in.c, in.w.log, repo, s); len(problems) > 0 {
+			t.Fatalf("after step %d, repo-%d's index of pushes:\n\t%s", step, slices.Index(in.repos, repo)+1,
+				strings.Join(problems, "\n\t"))
+		}
 		s.Release()
 		if want := in.w.rebuilt(t, repo); got != want {
 			t.Fatalf("after step %d, repo-%d's cache:\n%s\nwant a fresh cache's at the same position:\n%s",

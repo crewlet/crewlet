@@ -786,7 +786,11 @@ func Catalogue() []Instrument {
 				"whatever was checked before, then every file if that " +
 				"repaired nothing. By `file` " +
 				"(`commit-graph`, `multi-pack-index`, `bitmap`, `midx-rev`: " +
-				"files the node derives from its packs; `idx`, `rev`: a " +
+				"files the node derives from its packs; `provenance`, a run " +
+				"of the node's index of which push introduced each commit, " +
+				"which no git reads, held to its own SHA-256 trailer — a run " +
+				"a previous process left before anything first reads it, " +
+				"behind the serving, and every run by a scrub; `idx`, `rev`: a " +
 				"pack's index and reverse index, stored with its push; " +
 				"`pack`, the pack itself, read only by a scrub), `outcome` " +
 				"(`sound`; `damaged` — a derived file dropped to be written " +
@@ -800,7 +804,9 @@ func Catalogue() []Instrument {
 				"verdict is its) and `trigger` (`first`, a copy's first full " +
 				"sync in this process, which reads every index file a " +
 				"previous process left, or the scrub after it, which reads " +
-				"every pack and every file that sync did not; `unvouched`, a " +
+				"every pack and every file that sync did not, or the check of " +
+				"a `provenance` run a previous process left or a rebuild " +
+				"linked; `unvouched`, a " +
 				"later full sync reading only what this process has neither " +
 				"written nor checked since; `scrub`, a used copy's daily " +
 				"scrub; `report`, a scrub a git process's report or crash " +
@@ -985,6 +991,40 @@ func Catalogue() []Instrument {
 				"repository purged, evicted or rebuilt smaller, or a node " +
 				"given more memory, which the cache reads again every ten " +
 				"seconds.",
+		},
+		{
+			Name: CodeCacheProvenanceBackfilled, Kind: KindCounter, Unit: UnitCount,
+			Shows: "Pushes this node's git cache read into its indexes of which " +
+				"push introduced each commit BEHIND the serving: the range a " +
+				"full sync passed over — the pushes made while the node was " +
+				"down, every node holding a copy reading its own — and a " +
+				"repository's history back to the start of the push history " +
+				"the data nodes keep, read only by the node that answers a " +
+				"seat's reads of it as its home, once a seat has asked. Every " +
+				"sync folds the pushes it applied into the index before it " +
+				"answers, and none of those is counted here. A page at a " +
+				"time, each followed by a pause of twice its own duration " +
+				"times the fleet's git nodes for each data node, so the " +
+				"fleet's backfills hold under half of one reader of each data " +
+				"node. Rising after a restart is the gap closing; rising for " +
+				"hours on one node is one large history read once — " +
+				"`crewlet.code.cache.provenance.behind` says what is left.",
+		},
+		{
+			Name: CodeCacheProvenanceBehind, Kind: KindGauge, Unit: UnitCount,
+			Shows: "Repositories whose index of which push introduced each " +
+				"commit is behind on this node: a range a full sync passed " +
+				"over that the backfill has not yet read, or a history a " +
+				"seat's reads asked this node, as the repository's home, to " +
+				"read and that it has not yet read to its start. A copy " +
+				"nobody asked about is never read back further than its first " +
+				"full sync, so it is never counted. Until it is zero, an " +
+				"answer naming a commit's push says which range it does not " +
+				"hold rather than answering that no push introduced it. " +
+				"Staying above zero is a backfill that cannot read the data " +
+				"nodes — its warnings, code_cache_backfill_failed, say why — " +
+				"or a history larger than its pace reads in the time it has " +
+				"been asked for.",
 		},
 		{
 			Name: CodeCacheRebuildRefusals, Kind: KindCounter, Unit: UnitCount,

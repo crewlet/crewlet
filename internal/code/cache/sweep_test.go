@@ -376,12 +376,37 @@ func TestADerivedFileFollowsItsDeclarationOnEveryEvent(t *testing.T) {
 
 	w.push(t, repo, "refs/heads/main", nil)
 	w.sync(t, c, repo)
+	// THE INDEX OF PUSHES is built over the push rows, which none of those
+	// moved: every delta above folded its push as a run, and every run is
+	// still there.
+	idx, ok := cache.Index(c, repo)
+	if !ok || len(idx.Runs) != 3 {
+		t.Fatalf("the index of pushes after three deltas is %+v (kept %t), want a run of each", idx, ok)
+	}
+	var runs []string
+	for _, n := range idx.Runs {
+		runs = append(runs, filepath.Join(dir, cache.RunRel(n)))
+	}
 	w.log.recreate(before)
 	s := w.sync(t, c, repo)
 	held("a full round that removes the packs a log gone back no longer names", false)
-	if doc := readStateDoc(t, s.Dir); len(doc.Derived) != 0 {
-		t.Errorf("the state after the drop records %+v, want no index, no bitmap, no graph and none of their bytes",
-			doc.Derived)
+	for _, run := range runs {
+		if statOK(t, run) {
+			t.Errorf("after the log went back, %s is on disk: a log gone back drops the index, whose positions "+
+				"name other records now", filepath.Base(run))
+		}
+	}
+	// What the state records follows: no index over the packs, no bitmap,
+	// no graph, and an index of pushes made anew at the round's position,
+	// holding nothing yet.
+	doc := readStateDoc(t, s.Dir)
+	if prov, ok := doc.Derived[string(cache.DerivedProvenance)]; len(doc.Derived) != 1 || !ok || prov.Bytes != 0 {
+		t.Errorf("the state after the drop records %+v, want only an empty index of pushes", doc.Derived)
+	}
+	if idx, ok := cache.Index(c, repo); !ok || len(idx.Runs) != 0 || idx.From != s.Position.Packed() ||
+		idx.Through != s.Position.Packed() {
+		t.Errorf("the index of pushes after the log went back is %+v (kept %t), want one made anew at %d", idx, ok,
+			s.Position.Packed())
 	}
 	if packs, bitmap, graph := cache.Indexed(c, repo); packs != 0 || bitmap || graph {
 		t.Errorf("the incarnation after the drop records an index over %d packs (bitmap %t) and a graph %t, "+

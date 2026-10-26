@@ -174,7 +174,19 @@ type SoloOptions struct {
 	Roster    func() code.Roster
 	Current   func() bool
 	QueryPool func(query.Pool) query.Pool
+	// WrapReads wraps every git node's reads of the code host (GitOptions'
+	// Reads) — its cache's backfill's pages of pushes among them: the window
+	// a case has onto them, to fail or count them; nil reads the data node.
+	WrapReads func(Reads) Reads
+	// LogBytes is the code log's ceiling; 0 is soloLogBytes. A benchmark
+	// whose history outgrows what that ceiling admits beside its gate
+	// reserve — about 7 MB of records, the reserve the larger of a sixteenth
+	// and the fleet term (statelog.Reservation) — raises it.
+	LogBytes int64
 }
+
+// Reads is a git node's read of the code host's rows (GitOptions.Reads).
+type Reads = func(context.Context, code.ReadQuery) (code.ReadAnswer, error)
 
 // Solo is a NewFleet of SoloNodes over o, each case's shape laid over it — a
 // wrapper o carries wrapping the case's. objects, when not nil, is each
@@ -226,6 +238,9 @@ func SoloNode(t testing.TB, o SoloOptions) *SoloFleet {
 	if o.People == nil {
 		o.People = []string{"ceo", "dev"}
 	}
+	if o.LogBytes == 0 {
+		o.LogBytes = soloLogBytes
+	}
 	if o.ClientGit == "" {
 		o.ClientGit = gittest.Require(t)
 	}
@@ -238,18 +253,21 @@ func SoloNode(t testing.TB, o SoloOptions) *SoloFleet {
 	// before its broker does.
 	t.Cleanup(f.teardown)
 	f.data = StartDataNode(t, DataOptions{ID: soloDataNode, Queue: f.openBroker(t), Dir: f.dir,
-		Limits: o.Limits, Faults: o.Faults, LogBytes: soloLogBytes, Operator: soloOperatorNode})
+		Limits: o.Limits, Faults: o.Faults, LogBytes: o.LogBytes, Operator: soloOperatorNode})
 	var estate host.Estate = &soloEstate{data: f.data}
 	if o.WrapEstate != nil {
 		estate = o.WrapEstate(estate)
 	}
+	var reads Reads = func(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+		return f.data.Served().Read(ctx, q)
+	}
+	if o.WrapReads != nil {
+		reads = o.WrapReads(reads)
+	}
 	for i := range o.GitNodes {
 		id := fmt.Sprintf("solo-%c", 'a'+i)
 		f.git = append(f.git, StartGitNode(t, GitOptions{
-			ID: id, Dir: filepath.Join(f.dir, id, "git"), Estate: estate,
-			Reads: func(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
-				return f.data.Served().Read(ctx, q)
-			},
+			ID: id, Dir: filepath.Join(f.dir, id, "git"), Estate: estate, Reads: reads,
 			Objects: func() objstore.Backend { return o.Objects }, Limits: o.Limits, Timing: o.Timing,
 			Faults: o.Faults, Credentials: f.creds, Audit: f.record,
 			MaxTransfers: o.MaxTransfers, MaxProcesses: o.MaxProcesses, CacheMaxBytes: o.CacheMaxBytes,

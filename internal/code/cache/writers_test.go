@@ -315,9 +315,22 @@ func derivedHalf(decls []cache.Derived, rows []writerRow, argv map[string][][]st
 			writers[w.Writer.File] = true
 		}
 	}
-	// Rule 1, and rule 6.
+	// Rule 1, and rule 6. An IN-PROCESS write (no subcommand: the cache's own
+	// Go code writes the file, Write.Charge) runs no git, so its row is its
+	// file's filesystem row, and it has no argument list to spell.
 	for _, d := range decls {
 		for _, w := range d.Writes {
+			if w.Writer.Subcommand == "" {
+				if !slices.ContainsFunc(rows, func(r writerRow) bool {
+					return r.file == w.Writer.File && r.kind == kindOS && slices.Contains(r.derived, d.Name)
+				}) {
+					out = append(out, fmt.Sprintf("derived file %q declares an in-process %s write of step %s by "+
+						"%s, and no row of cacheWriters (%s, %s) names it: the declaration names a writer that does "+
+						"not exist, or the row forgot what it writes", d.Name, w.Trigger, w.Step, w.Writer.File,
+						w.Writer.File, kindOS))
+				}
+				continue
+			}
 			kind := kindGit + " " + w.Writer.Subcommand
 			if !slices.ContainsFunc(rows, func(r writerRow) bool {
 				return r.file == w.Writer.File && r.kind == kind && slices.Contains(r.derived, d.Name)
@@ -434,6 +447,11 @@ var cacheWriters = []writerRow{
 	{"internal/code/cache/adopt.go", kindOS,
 		"the receiving node's own pack, once its row has applied: linked into tmp/ and from there into " +
 			"objects/pack, and its staging names removed", nil},
+	{"internal/code/cache/provenance.go", kindOS,
+		"the index of pushes, the cache's own derived file under the incarnation's crewlet/: the directory " +
+			"made for its first run, and a rebuild's links of the runs of the copy it replaces into its own — " +
+			"every run itself staged in tmp/ and renamed in through durable.go, and retired through layout.go's " +
+			"toTrash", []cache.DerivedName{cache.DerivedProvenance}},
 	{"internal/code/host/receive.go", kindGit + " receive-pack",
 		"a push, received in its SCRATCH repository (cache.NewScratch) — never in a cache, since git " +
 			"migrates a push's objects into the repository it runs in before any hook can refuse them; " +
@@ -1827,6 +1845,27 @@ func controlDerivedHalf(t *testing.T) {
 	if got := derivedHalf([]cache.Derived{midx}, []writerRow{pair}, argv); len(got) != 0 {
 		t.Errorf("control: the derived half reported problems on a declaration, its row and its argument list "+
 			"that match:\n\t%s", strings.Join(got, "\n\t"))
+	}
+
+	// AN IN-PROCESS DECLARATION — the cache's own code writes it, no git —
+	// is tied to its file's filesystem row: with none naming it, reported
+	// once; with one, nothing, though no argument list is spelled anywhere;
+	// and an os row in that file naming nothing is no row of it.
+	own := cache.Derived{Name: cache.DerivedProvenance, Writes: []cache.Write{{
+		Step: cache.StepProvenance, Trigger: cache.TriggerRound, Writer: cache.Writer{File: y},
+		Charge: "what it holds",
+	}}}
+	bare := writerRow{file: y, kind: kindOS, why: "an os row naming nothing"}
+	got = derivedHalf([]cache.Derived{own}, []writerRow{bare}, nil)
+	if want := `derived file "provenance" declares an in-process round write of step provenance by ` +
+		`internal/code/cache/y.go, and no row`; len(got) != 1 || !strings.Contains(got[0], want) {
+		t.Errorf("control: an in-process declaration whose file's os row names nothing reported:\n\t%s\nwant one "+
+			"problem saying %q", strings.Join(got, "\n\t"), want)
+	}
+	tied := writerRow{file: y, kind: kindOS, why: "its row", derived: []cache.DerivedName{cache.DerivedProvenance}}
+	if got := derivedHalf([]cache.Derived{own}, []writerRow{tied}, nil); len(got) != 0 {
+		t.Errorf("control: the derived half reported problems on an in-process declaration and the os row naming "+
+			"it:\n\t%s", strings.Join(got, "\n\t"))
 	}
 }
 

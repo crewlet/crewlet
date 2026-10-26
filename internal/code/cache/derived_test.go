@@ -1,6 +1,7 @@
 package cache_test
 
 import (
+	"errors"
 	"io/fs"
 	"path"
 	"path/filepath"
@@ -61,6 +62,13 @@ func TestEveryDerivedFileIsDeclared(t *testing.T) {
 			{rel: "objects/pack/tmp_bitmap_AbC123", holder: cache.DerivedMidx},
 			{rel: "objects/info/commit-graph", owner: cache.DerivedGraph},
 			{rel: "objects/info/commit-graph.lock", holder: cache.DerivedGraph},
+			// The index of pushes' runs, numbered from one in canonical
+			// decimal: the bare name, a run numbered zero or spelled with a
+			// leading zero, and a run's name under objects/ are none of its.
+			{rel: "crewlet/provenance.1", owner: cache.DerivedProvenance},
+			{rel: "crewlet/provenance.17", owner: cache.DerivedProvenance},
+			{rel: "crewlet/provenance"}, {rel: "crewlet/provenance.0"}, {rel: "crewlet/provenance.017"},
+			{rel: "objects/info/provenance.1"},
 			// The image's fixed files, a pack's own, and names beside the
 			// declared ones that no write of this build makes: a split
 			// graph's chain, an incremental index's chain, an alternates
@@ -129,9 +137,13 @@ func TestEveryDerivedFileIsDeclared(t *testing.T) {
 		if _, bitmap, graph := cache.Indexed(c, repo); !bitmap || !graph {
 			t.Fatalf("the maintainer left a bitmap (%t) and a graph (%t); the case needs both written", bitmap, graph)
 		}
+		// And the cache's own: a delta folding a push into the index of
+		// pushes writes its run.
+		w.push(t, repo, "refs/heads/main", nil)
+		w.sync(t, c, repo)
 		maintained := derivedOnDisk(t, s.Dir)
-		t.Logf("the suite's git wrote, of the derived files: %v after the round, %v after the maintainer",
-			roundWrote, maintained)
+		t.Logf("the suite's git and the cache wrote, of the derived files: %v after the round, %v after the "+
+			"maintainer and a delta", roundWrote, maintained)
 		owned := map[cache.DerivedName]int{}
 		for _, rel := range maintained {
 			got := cache.OwnersOf(rel)
@@ -162,21 +174,28 @@ func oneName(name cache.DerivedName) []cache.DerivedName {
 }
 
 // derivedOnDisk is every file under the incarnation at dir's objects/ that is
-// no pack's own file, by its path relative to dir, slash-separated, sorted.
+// no pack's own file, and every file under its crewlet/ — the two roots the
+// declarations own files in — by its path relative to dir, slash-separated,
+// sorted. A copy that has not yet written into crewlet/ has none.
 func derivedOnDisk(t *testing.T, dir string) []string {
 	t.Helper()
 	pack := regexp.MustCompile(`^pack-[0-9a-f]{40}\.(pack|idx|rev)$`)
 	var out []string
-	err := filepath.WalkDir(filepath.Join(dir, "objects"), func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || pack.MatchString(d.Name()) {
+	for _, root := range []string{"objects", "crewlet"} {
+		err := filepath.WalkDir(filepath.Join(dir, root), func(p string, d fs.DirEntry, err error) error {
+			if errors.Is(err, fs.ErrNotExist) && p == filepath.Join(dir, root) {
+				return fs.SkipDir
+			}
+			if err != nil || d.IsDir() || pack.MatchString(d.Name()) {
+				return err
+			}
+			rel, err := filepath.Rel(dir, p)
+			out = append(out, filepath.ToSlash(rel))
 			return err
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
-		rel, err := filepath.Rel(dir, p)
-		out = append(out, filepath.ToSlash(rel))
-		return err
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 	slices.Sort(out)
 	return out

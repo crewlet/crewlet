@@ -73,6 +73,10 @@ func TestEveryAnswerFitsAPage(t *testing.T) {
 	if a := mustRead(t, s, compareQ(repo, base, head)); encoded(t, a) > limit {
 		t.Errorf("the comparison encodes to %d bytes, past %d", encoded(t, a), limit)
 	}
+	tip, at := x.tip("refs/heads/main")
+	if a := mustRead(t, s, landedQ(repo, base, "refs/heads/main", tip, at, true)); encoded(t, a) > limit {
+		t.Errorf("the landed-in answer encodes to %d bytes, past %d", encoded(t, a), limit)
+	}
 }
 
 // A PAGE IS CUT AGAINST THE WHOLE ANSWER. Every field an answer carries is in
@@ -100,7 +104,11 @@ func TestAPageIsCutAgainstTheWholeAnswer(t *testing.T) {
 	tree["lines.txt"] = strings.ReplaceAll(lines.String(), "<x", "<y")
 	head := x.commit(tree, "head")
 	repo := x.repo(codetest.RepoName)
-	for limit := 900; limit <= 1600; limit += 41 {
+	// The sweep is of the room each kind's own content has: a diff names two
+	// commits, the most any read here decorates, so every bound leaves at
+	// least that room beside its provenance.
+	deco := x.decoration(diffQ(repo, code.DiffQuery{Base: base, Head: head}))
+	for limit := 900 + deco; limit <= 1600+deco; limit += 41 {
 		s := x.server(0, query.Options{})
 		query.SetPageBytes(s, limit)
 		pages(t, s, treeQ(repo, code.TreeQuery{Rev: head, Recursive: true}), limit)

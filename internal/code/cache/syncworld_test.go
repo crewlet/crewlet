@@ -164,11 +164,13 @@ func (w *syncWorld) push(t testing.TB, repo, ref string, files map[string]string
 	return w.pushAs(t, repo, ref, files, "")
 }
 
-// pushAs is push under the given pack id ("" mints one).
+// pushAs is push under the given pack id ("" mints one): its row names the
+// commit as the one it introduced, as a receiving node's scan would.
 func (w *syncWorld) pushAs(t testing.TB, repo, ref string, files map[string]string, packID string) (string, code.PackRow) {
 	t.Helper()
 	oid, row := w.commit(t, repo, files, packID)
-	row.Added = w.log.write(repo, []code.PackRow{row}, map[string]string{ref: oid})
+	row.Added = w.log.writePushes(repo, fakePush{packs: []code.PackRow{row}, refs: map[string]string{ref: oid},
+		introduced: []string{oid}})
 	return oid, row
 }
 
@@ -318,7 +320,10 @@ func (w *syncWorld) dir(t testing.TB, c *cache.Cache, repo string) string {
 // packed-refs byte for byte, the names of its pack files, and every entry
 // outside the image grammar. The maintainer's outputs — the multi-pack-index
 // and the commit-graph — are left out: whether one is on disk is the
-// maintainer's schedule, not the rows'.
+// maintainer's schedule, not the rows'. So is crewlet/, the index of pushes:
+// what it holds is how much of the push history this copy has read, never
+// what a fresh copy at the same position would — it is held to the rows by
+// its own check (checkIndex).
 func (w *syncWorld) image(t testing.TB, c *cache.Cache, repo string) string {
 	t.Helper()
 	return imageOf(t, w.dir(t, c, repo))
@@ -335,7 +340,7 @@ func (w *syncWorld) rebuilt(t testing.TB, repo string) string {
 	defer layout.Release()
 	pool := newPool(t, layout)
 	c, err := cache.Open(t.Context(), cache.Options{
-		Layout: layout, MaxBytes: 1 << 40, Git: pool, Objects: w.store, Fetch: silent{w.log},
+		Layout: layout, MaxBytes: 1 << 40, Git: pool, Objects: w.store, Fetch: silent{w.log}, Fleet: soloFleet,
 		Limits: code.DefaultLimits, HookCommand: []string{"/bin/true"}, Now: time.Now,
 	})
 	if err != nil {
@@ -371,6 +376,8 @@ func imageOf(t testing.TB, dir string) string {
 		parent, name := filepath.Dir(rel), d.Name()
 		switch {
 		case rel == ".":
+		case parent == "." && name == "crewlet" && d.IsDir():
+			return fs.SkipDir
 		case parent == "." && (name == "refs" || name == "objects") && d.IsDir():
 		case parent == "." && !d.IsDir() && slices.Contains([]string{"HEAD", "config", "packed-refs", "crewlet-state.json"}, name):
 		case parent == "refs" && d.IsDir() && (name == "heads" || name == "tags"):
