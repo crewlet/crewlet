@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/adr"
+	"github.com/crewlet/crewlet/internal/regexlit"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
@@ -563,7 +564,7 @@ type citation struct {
 // A FILE IS SPLIT INTO LINES ONLY IF IT CAN CITE: [adr.Reference] opens with
 // `\b`, so the regexp package has no prefix to jump to and tried it at every
 // byte of the tree, which was most of this gate's twenty-five seconds. Its
-// derived prefilter (see [sourcetree.Required]) skips a file that holds no
+// derived prefilter (see [regexlit.Required]) skips a file that holds no
 // substring a citation needs, and that file holds no citation.
 func citations(t *testing.T, root string) []citation {
 	t.Helper()
@@ -615,7 +616,7 @@ func citations(t *testing.T, root string) []citation {
 }
 
 // referenceNeeds is what a citation cannot be written without.
-var referenceNeeds = sourcetree.Required(adr.Reference)
+var referenceNeeds = regexlit.Required(adr.Reference)
 
 // danglingCitations is every citation under root of a record declared does
 // not hold, and how many citations the walk read in all.
@@ -738,7 +739,7 @@ func TestEveryDocLinkNamesAPackageThatExists(t *testing.T) {
 		body := read(t, path)
 		if !packageLinkNeeds.AdmitsString(body) {
 			// Not one `[internal/` or `[cmd/` in the file, so no link
-			// the matcher could find (see sourcetree.Required).
+			// the matcher could find (see regexlit.Required).
 			return nil
 		}
 		rel, _ := filepath.Rel(root, path)
@@ -782,7 +783,7 @@ func packageLinks(line string) []string {
 var packageLinkRE = regexp.MustCompile(`\[((?:internal|cmd)/[a-z0-9]+(?:/[a-z0-9]+)*)\]`)
 
 // packageLinkNeeds is what a package link cannot be written without.
-var packageLinkNeeds = sourcetree.Required(packageLinkRE)
+var packageLinkNeeds = regexlit.Required(packageLinkRE)
 
 var linkRE = regexp.MustCompile(`\]\(([^)]+)\)`)
 

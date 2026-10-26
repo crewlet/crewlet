@@ -51,6 +51,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
+	"github.com/crewlet/crewlet/internal/regexlit"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/static"
 )
@@ -748,15 +749,15 @@ type priceFound struct {
 }
 
 // priceFormNeeds is what each of priceForms cannot match without
-// (sourcetree.Required), by index. Every form but the field name's opens with
+// (regexlit.Required), by index. Every form but the field name's opens with
 // a class or `\b`, which leaves the regexp package no prefix to jump to, so
 // each ran over every byte of every module; a module that holds nothing a form
 // needs is not handed to it, which cannot change what it finds. The big
 // chunks hold most of what the forms need, so this skips the small ones.
-var priceFormNeeds = func() []sourcetree.Prefilter {
-	out := make([]sourcetree.Prefilter, len(priceForms))
+var priceFormNeeds = func() []regexlit.Prefilter {
+	out := make([]regexlit.Prefilter, len(priceForms))
 	for i, form := range priceForms {
-		out[i] = sourcetree.Required(form.re)
+		out[i] = regexlit.Required(form.re)
 	}
 	return out
 }()

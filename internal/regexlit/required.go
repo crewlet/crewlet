@@ -1,9 +1,8 @@
-package sourcetree
+package regexlit
 
 import (
 	"bytes"
 	"fmt"
-	"go/token"
 	"maps"
 	"regexp"
 	"regexp/syntax"
@@ -17,61 +16,9 @@ import (
 // Prefilter is what a regular expression's matches cannot do without: a few
 // CLAUSES, each a set of substrings, such that every match contains at least
 // one substring of every clause. A text that fails a clause cannot match, so a
-// scan may skip it without running the expression.
-//
-// # Why a gate needs one
-//
-// Go's regexp has one fast path, an IndexString jump to the expression's
-// literal PREFIX, and a gate's pattern almost never has one: `\bADR-`,
-// `(?m)^func`, `(?i)…` and an alternation all leave the prefix empty, so the
-// matcher steps through every byte — about a megabyte a second under the race
-// detector, measured over this tree's thirty-six megabytes of Go. A substring
-// search is SIMD and does not care. So a gate tests a text with [Required]'s
-// prefilter first and runs its expression only on what passes, and the verdict
-// is the same set of matches, because what is skipped provably holds none.
-//
-// # Why it is DERIVED, and derived here
-//
-// A hand-written list of "the literals this pattern needs" beside the pattern
-// is a second copy that drifts, and the drift is silent in the worst
-// direction: a prefilter that rejects a text its expression would have matched
-// is a gate that has stopped guarding while reporting a clean tree. The
-// withdrawn-vocabulary gate had exactly such a hand-rolled core, and it was
-// unsound — it lowered the text with strings.ToLower, which leaves U+017F (ſ)
-// as it is, while `(?i)s` matches it. So the clauses are read off the
-// expression's own syntax tree by ONE implementation every gate shares, whose
-// soundness is argued once, below, and certified by its own suite.
-//
-// # Why it is sound
-//
-// Each node of the parsed, simplified expression yields the EXACT set of
-// strings it matches when that set is small, and otherwise clauses every one
-// of its matches satisfies — possibly none, which admits everything:
-//
-//   - a literal is its own exact string; under (?i) it is compared folded
-//     (see [foldedRune]), and a rune that cannot be compared that way — or
-//     U+FFFD, which in a pattern also matches any byte that is not UTF-8 —
-//     cuts it, and its longest piece is required;
-//   - a character class of at most [maxClass] runes is the exact set of them;
-//   - a concatenation's match is its children's matches end to end, so it
-//     satisfies every child's clauses, and a run of adjacent exact children
-//     is the cross product of their sets (up to [maxExact] strings), folded
-//     where any part of it is (see [cross]);
-//   - an alternation's match is one branch's, so it satisfies the UNION of
-//     one clause from each branch — and nothing, if any branch has none;
-//   - a capture is its child, and one-or-more satisfies its child's clauses;
-//     zero-or-more, an optional, an anchor and a word boundary can each match
-//     the empty string, so they require nothing.
-//
-// Anything else — a wide class, any character, a node this list does not
-// name — requires nothing and so admits everything, which is never wrong,
-// only slower. That is the whole rule: the derivation may admit too much and
-// never too little.
-//
-// A text skipped this way is never parsed or examined, so a gate that also
-// reported a file it could not read loses that report for the files it now
-// skips. The gates here read source the compiler has already read, and none
-// relied on it.
+// scan may skip it without running the expression. The package doc argues why
+// that is sound, and why the clauses are derived rather than written beside
+// the pattern.
 type Prefilter struct {
 	// clauses are checked in order, most selective first; a text must
 	// satisfy every one. None — the zero value, or an expression nothing
@@ -132,7 +79,7 @@ func Required(re *regexp.Regexp) Prefilter {
 // Admits reports whether body could hold a match: false only when it fails a
 // clause.
 func (p Prefilter) Admits(body []byte) bool {
-	if p.folds && escapes().in(body) {
+	if p.folds && HasEscape(body) {
 		return true
 	}
 	var lowered []byte
@@ -188,19 +135,56 @@ func (p Prefilter) AdmitsString(text string) bool {
 // clause's substrings sorted, a folded one in its lowered form. Nil when it
 // admits everything. It is for a gate's controls and messages — a gate that
 // wants its scan to stay cheap can assert its pattern still yields something
-// to look for.
+// to look for. It is [Prefilter.Terms] with the comparison flattened away,
+// read off them so the two cannot disagree on what is looked for.
 func (p Prefilter) Clauses() [][]string {
 	var out [][]string
-	for _, c := range p.clauses {
-		var set []string
-		for _, s := range c.plain {
-			set = append(set, string(s))
-		}
-		for _, s := range c.folded {
-			set = append(set, string(s))
+	for _, terms := range p.Terms() {
+		set := make([]string, 0, len(terms))
+		for _, term := range terms {
+			set = append(set, term.Text)
 		}
 		slices.Sort(set)
 		out = append(out, slices.Compact(set))
+	}
+	return out
+}
+
+// Term is one substring of a clause and how a text is searched for it.
+type Term struct {
+	// Text is the substring: as it is when Folded is false, and otherwise in
+	// its Unicode lowering, the form a text's lowering is searched for.
+	Text string
+	// Folded is whether Text is looked for in a text's Unicode lowering
+	// ([bytes.ToLower]) rather than in the text itself, as a (?i) literal
+	// is. A folded term is the one kind a text can match without its
+	// lowering showing it, through a rune [HasEscape] reports: ſ is `s` to
+	// (?i), and lowers to itself.
+	Folded bool
+}
+
+// Terms is what the prefilter looks for, clause by clause in the order it
+// checks, each substring with how it is compared. Nil when it admits
+// everything.
+//
+// It is for a caller that looks the substrings up somewhere other than in a
+// text it holds — an index of the pieces each text contains — and so has to
+// make [Prefilter.Admits]'s comparison itself. A text satisfies a clause when
+// it holds one of the clause's terms: byte for byte when the term is not
+// Folded, and in the text's Unicode lowering when it is. And no Folded term
+// can rule out a text [HasEscape] reports, which is why Admits admits such a
+// text outright whenever a clause compares folded.
+func (p Prefilter) Terms() [][]Term {
+	var out [][]Term
+	for _, c := range p.clauses {
+		terms := make([]Term, 0, len(c.plain)+len(c.folded))
+		for _, s := range c.plain {
+			terms = append(terms, Term{Text: string(s)})
+		}
+		for _, s := range c.folded {
+			terms = append(terms, Term{Text: string(s), Folded: true})
+		}
+		out = append(out, terms)
 	}
 	return out
 }
@@ -594,6 +578,18 @@ func foldedRune(r rune) (rune, bool) {
 	return 0, false
 }
 
+// HasEscape reports whether body holds a rune no folded comparison can see
+// through: one the regexp folds together with an ASCII letter and that does
+// not lower to that letter's lowering — derived from the Unicode tables (see
+// [escapes]), U+017F (ſ) alone today. A (?i) literal can match such a text
+// at a place its lowering does not show, so [Prefilter.Admits] admits it
+// outright whenever a clause compares folded, and a caller making the
+// comparison itself from [Prefilter.Terms] cannot rule it out by any Folded
+// term.
+func HasEscape(body []byte) bool {
+	return escapes().in(body)
+}
+
 // escapeSet is the runes a folded comparison cannot see through: a text
 // holding one is admitted outright.
 type escapeSet [][]byte
@@ -677,53 +673,4 @@ func lineLocal(re *syntax.Regexp) bool {
 		}
 	}
 	return true
-}
-
-// Identifiers is a prefilter for Go source on the identifiers a gate's
-// matcher compares: a file whose bytes spell none of them cannot hold the
-// construct, so a gate need not parse it.
-//
-// EXACT, not a heuristic, because Go has no escapes in an identifier: a name
-// in the source is the bytes of the name, whether it is a selector, a callee,
-// a composite literal's type or key, or a declaration. A STRING is not — an
-// import path or a literal's value can be spelled with escapes the bytes
-// never show — which is why a gate keyed on an import parses the imports
-// instead. So a gate that hands this the same table its matcher reads skips
-// exactly the files it would have parsed and found nothing in.
-type Identifiers struct {
-	names [][]byte
-}
-
-// MustIdentifiers is the [Identifiers] prefilter for names, each of which
-// must be a Go identifier: a prefilter on anything else is not exact, and a
-// gate built on one would skip a file its matcher would flag. It panics, as
-// [regexp.MustCompile] does, on a name that is not one, or on no names.
-func MustIdentifiers(names ...string) Identifiers {
-	if len(names) == 0 {
-		panic("sourcetree: an Identifiers prefilter of no names is one a " +
-			"gate's table emptied out from under it — name what the matcher compares")
-	}
-	var ids Identifiers
-	for _, name := range names {
-		if !token.IsIdentifier(name) {
-			panic(fmt.Sprintf("sourcetree: %q is not a Go identifier, so a "+
-				"prefilter on its bytes is not exact", name))
-		}
-		ids.names = append(ids.names, []byte(name))
-	}
-	return ids
-}
-
-// In reports whether src spells any of the identifiers. The zero value names
-// none and admits every file, the one answer that cannot hide a construct.
-func (ids Identifiers) In(src []byte) bool {
-	if len(ids.names) == 0 {
-		return true
-	}
-	for _, name := range ids.names {
-		if bytes.Contains(src, name) {
-			return true
-		}
-	}
-	return false
 }

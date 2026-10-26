@@ -46,7 +46,7 @@ func (f moduleFile) under(tops ...string) bool {
 // the duty gate internal/ and cmd/. Five gates each walked and read the
 // module for themselves, and then ran a pattern with no literal prefix, or a
 // parser, over all of it; the read is shared, and each gate's prefilter
-// (sourcetree.Required, sourcetree.Identifiers) decides what it examines.
+// (regexlit.Required, sourcetree.Identifiers) decides what it examines.
 func readModule(root string) ([]moduleFile, error) {
 	var out []moduleFile
 	err := sourcetree.Walk(root, func(path string, d fs.DirEntry, err error) error {

@@ -1,7 +1,8 @@
-package sourcetree
+package regexlit
 
 import (
 	"fmt"
+	"maps"
 	"math/rand/v2"
 	"regexp"
 	"regexp/syntax"
@@ -327,6 +328,21 @@ func orbitOf(r rune) []rune {
 	return out
 }
 
+// escapeByDefinition reports whether r, whose orbit is orbit, is an escape as
+// the escape set's doc defines one: a rune that is not ASCII, folded together
+// with an ASCII letter, that does not lower to that letter's lowering.
+func escapeByDefinition(r rune, orbit []rune) bool {
+	if r < utf8.RuneSelf {
+		return false
+	}
+	for _, m := range orbit {
+		if m < utf8.RuneSelf && unicode.ToLower(m) != unicode.ToLower(r) {
+			return true
+		}
+	}
+	return false
+}
+
 // THE FOLDED COMPARISON IS SOUND FOR EVERY RUNE THERE IS.
 //
 // Not evidence but the proof, by exhaustion: for every rune a (?i) literal
@@ -334,23 +350,37 @@ func orbitOf(r rune) []rune {
 // what the prefilter looks for, or is an escape that admits the whole text —
 // or the rune is one the prefilter refuses to compare, and a literal is cut
 // there.
+//
+// An escape is what HasEscape reports, because that is what Admits asks, and
+// what a caller making the comparison from Terms asks: the proof is of the
+// function they call. And it reports EXACTLY the runes that fold with an
+// ASCII letter without lowering to its lowering (escapeByDefinition, which
+// states that rune by rune where the package derives it from the ASCII
+// letters): a rune it missed is a match skipped, and one more is a text
+// admitted, or an index entry passed, for nothing.
 func TestTheFoldedComparisonIsSoundForEveryRune(t *testing.T) {
 	t.Parallel()
-	escaped := map[rune]bool{}
-	for _, e := range escapes() {
-		r, _ := utf8.DecodeRune(e)
-		escaped[r] = true
-	}
+	var encoded [utf8.UTFMax]byte
+	escaped := func(r rune) bool { return HasEscape(utf8.AppendRune(encoded[:0], r)) }
 	compared, refused := 0, 0
 	for r := rune(0); r <= unicode.MaxRune; r++ {
+		orbit := orbitOf(r)
+		switch is, want := escaped(r), escapeByDefinition(r, orbit); {
+		case is && !want:
+			t.Fatalf("HasEscape reports %q, which folds with no ASCII letter it "+
+				"fails to lower to, so every text holding it is admitted for nothing", r)
+		case want && !is:
+			t.Fatalf("%q folds with an ASCII letter and does not lower to its "+
+				"lowering, and HasEscape does not report it", r)
+		}
 		lowered, ok := foldedRune(r)
 		if !ok {
 			refused++
 			continue
 		}
 		compared++
-		for _, m := range orbitOf(r) {
-			if unicode.ToLower(m) != lowered && !escaped[m] {
+		for _, m := range orbit {
+			if unicode.ToLower(m) != lowered && !escaped(m) {
 				t.Fatalf("(?i)%q matches %q, which lowers to %q, not to the %q "+
 					"the prefilter looks for, and is not an escape", r, m,
 					unicode.ToLower(m), lowered)
@@ -360,11 +390,11 @@ func TestTheFoldedComparisonIsSoundForEveryRune(t *testing.T) {
 	// THE TWO RUNES THE FINDING NAMED. The long s folds with `s` and does
 	// not lower to it, so it must be an escape; the Kelvin sign folds with
 	// `k` and DOES lower to it, so lowering alone covers it.
-	if !escaped['ſ'] {
+	if !escaped('ſ') {
 		t.Error("U+017F folds with s and lowers to itself, and it is not an escape: " +
 			"a withdrawn name spelled with a long s would be skipped")
 	}
-	if escaped['\U0000212A'] {
+	if escaped('\U0000212A') {
 		t.Error("U+212A lowers to k, so admitting every text that holds one is waste")
 	}
 	if refused == 0 {
@@ -424,32 +454,115 @@ func TestAPatternThatRequiresNothingAdmitsEverything(t *testing.T) {
 	if !(Prefilter{}).AdmitsString("anything") || !(Prefilter{}).Admits([]byte("x")) {
 		t.Error("the zero Prefilter skips a text; it must admit everything")
 	}
-	if !(Identifiers{}).In([]byte("package p")) {
-		t.Error("the zero Identifiers skips a file; it must admit everything")
-	}
 }
 
-// AN IDENTIFIER PREFILTER IS ON IDENTIFIERS ONLY.
-func TestIdentifiersRefusesWhatIsNotAnIdentifier(t *testing.T) {
+// TERMS ARE THE CLAUSES' PIECES, EACH WITH THE COMPARISON ADMITS MAKES.
+//
+// A caller that looks a prefilter's substrings up somewhere other than in a
+// text — an index of the pieces each text holds — reads them through Terms and
+// makes Admits's comparison itself, so a Folded flag that disagreed with
+// Admits would be a hole in that caller's answers which nothing else here
+// would see. Held over the gates' patterns and generated ones: Terms are
+// Clauses' substrings, clause by clause in the same order, a folded one in
+// its lowered form; and the comparison made from Terms and HasEscape alone,
+// as their docs state it, admits exactly the texts Admits does. Each text is
+// also tried upper- and lower-cased, because a wrong flag shows only where
+// the case differs from the pattern's: a plain `ADR-` compared folded admits
+// `adr-`, and a folded `spend_window` compared as it is skips `SPEND_WINDOW`.
+func TestTermsAreTheClausesPieces(t *testing.T) {
 	t.Parallel()
-	ids := MustIdentifiers("UpdateStream", "Auxiliary")
-	if !ids.In([]byte("js.CreateOrUpdateStream(ctx, c)")) || !ids.In([]byte("e.Auxiliary(")) {
-		t.Error("a file spelling one of the identifiers was skipped")
+	if got := (Prefilter{}).Terms(); got != nil {
+		t.Errorf("the zero Prefilter has the terms %v; it looks for nothing", got)
 	}
-	if ids.In([]byte("js.CreateStream(ctx, c)")) {
-		t.Error("a file spelling none of the identifiers was admitted")
+	rng := rand.New(rand.NewPCG(20261026, 3))
+	patterns := slices.Sorted(maps.Keys(gatePatterns))
+	for range 1000 {
+		patterns = append(patterns, randomPattern(rng, 3))
 	}
-	for _, bad := range [][]string{nil, {"net/http"}, {"func"}, {"a b"}, {""}} {
-		func() {
-			defer func() {
-				if recover() == nil {
-					t.Errorf("MustIdentifiers(%q) accepted a name a prefilter is not "+
-						"exact for", bad)
+	plain, folded, compared := 0, 0, 0
+	for _, pattern := range patterns {
+		need := Required(regexp.MustCompile(pattern))
+		terms, clauses := need.Terms(), need.Clauses()
+		if len(terms) != len(clauses) {
+			t.Fatalf("Required(%s) has %d clauses of terms and %d of substrings",
+				pattern, len(terms), len(clauses))
+		}
+		for i, clause := range terms {
+			var texts []string
+			for _, term := range clause {
+				texts = append(texts, term.Text)
+				if !term.Folded {
+					plain++
+					continue
 				}
-			}()
-			MustIdentifiers(bad...)
-		}()
+				folded++
+				if lowered := strings.ToLower(term.Text); lowered != term.Text {
+					t.Fatalf("Required(%s) has the folded term %q, which is not the "+
+						"lowered form %q a text's lowering is searched for",
+						pattern, term.Text, lowered)
+				}
+			}
+			slices.Sort(texts)
+			if texts = slices.Compact(texts); !slices.Equal(texts, clauses[i]) {
+				t.Fatalf("Required(%s): clause %d's terms are %q and its "+
+					"substrings %q", pattern, i, texts, clauses[i])
+			}
+		}
+		parsed, err := syntax.Parse(pattern, syntax.Perl)
+		if err != nil {
+			t.Fatalf("parse %q: %v", pattern, err)
+		}
+		for range 10 {
+			var b strings.Builder
+			b.WriteString(noise(rng))
+			if rng.IntN(4) > 0 {
+				generate(rng, parsed, &b)
+			}
+			b.WriteString(noise(rng))
+			text := b.String()
+			for _, variant := range []string{text, strings.ToUpper(text), strings.ToLower(text)} {
+				compared++
+				if got, want := admitsByTerms(terms, variant), need.AdmitsString(variant); got != want {
+					t.Fatalf("Required(%s) (%v) admits %q: %v; its terms %v, "+
+						"compared as their docs say: %v", pattern, need, variant,
+						want, terms, got)
+				}
+			}
+		}
 	}
+	// A FLAG NEVER SEEN IS A COMPARISON THE PROPERTY ABOVE NEVER CHECKED.
+	if plain == 0 || folded == 0 {
+		t.Fatalf("%d plain and %d folded terms, so one comparison was never checked",
+			plain, folded)
+	}
+	t.Logf("%d patterns: %d plain and %d folded terms; %d texts compared both ways",
+		len(patterns), plain, folded, compared)
+}
+
+// admitsByTerms is Admits made from Terms and HasEscape alone, as their docs
+// state it: a text holding an escape is admitted outright when any term is
+// Folded, and otherwise has to hold, for every clause, one of its terms —
+// byte for byte, or in the text's lowering when the term is Folded.
+func admitsByTerms(terms [][]Term, text string) bool {
+	anyFolded := slices.ContainsFunc(terms, func(clause []Term) bool {
+		return slices.ContainsFunc(clause, func(term Term) bool { return term.Folded })
+	})
+	if anyFolded && HasEscape([]byte(text)) {
+		return true
+	}
+	lowered := strings.ToLower(text)
+	for _, clause := range terms {
+		held := slices.ContainsFunc(clause, func(term Term) bool {
+			if term.Folded {
+				return strings.Contains(lowered, term.Text)
+			}
+			return strings.Contains(text, term.Text)
+		})
+		if !held {
+			return false
+		}
+	}
+	return true
 }
 
 // A LINE-LOCAL PATTERN FINDS THE SAME MATCHES LINE BY LINE AS OVER THE TEXT.

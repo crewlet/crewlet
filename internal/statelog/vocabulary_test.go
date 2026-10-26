@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/regexlit"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
@@ -153,14 +154,14 @@ func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 	}
 
 	// THE PREFILTER IS WHAT MAKES THIS CHECK AFFORDABLE. It is derived
-	// from the patterns (sourcetree.Required), whose own suite certifies
+	// from the patterns (regexlit.Required), whose own suite certifies
 	// that it never rejects a text a pattern matches; what is held here is
 	// that it still filters: a pattern that yields nothing to look for — or
 	// only a fragment a few characters long — makes the prefilter admit
 	// nearly every line of the tree, which is the seventeen seconds it
 	// exists to avoid.
 	for _, pattern := range withdrawnScan().order {
-		need := sourcetree.Required(regexp.MustCompile("(?i)" + pattern))
+		need := regexlit.Required(regexp.MustCompile("(?i)" + pattern))
 		clauses := need.Clauses()
 		if len(clauses) == 0 || shortestLiteral(clauses[0]) < 4 {
 			t.Fatalf("pattern %q yields the prefilter %v — one that filters "+
@@ -451,9 +452,9 @@ type vocabularyScan struct {
 	// has silently stopped guarding. This gate's own hand-rolled core did:
 	// it lowered a line with strings.ToLower, which leaves U+017F as it is,
 	// while the folded expression reads it as `s` — so a withdrawn name
-	// spelled with a long s passed. sourcetree.Required admits any text
+	// spelled with a long s passed. regexlit.Required admits any text
 	// holding such a rune, by a rule derived from the Unicode tables.
-	needs sourcetree.Prefilter
+	needs regexlit.Prefilter
 }
 
 // withdrawnScan compiles the list once per binary.
@@ -468,7 +469,7 @@ var withdrawnScan = sync.OnceValue(func() vocabularyScan {
 		parts = append(parts, "("+pattern+")")
 	}
 	re := regexp.MustCompile("(?i)" + strings.Join(parts, "|"))
-	return vocabularyScan{order: order, re: re, needs: sourcetree.Required(re)}
+	return vocabularyScan{order: order, re: re, needs: regexlit.Required(re)}
 })
 
 // shortestLiteral is the length of the shortest string in a prefilter clause.

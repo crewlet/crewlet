@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/regexlit"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
@@ -46,9 +47,9 @@ import (
 var benchVariable = regexp.MustCompile(`^\S*CREWLET_BENCH_S3\S*$`)
 
 // benchVariableNeeds is what a value benchVariable matches cannot be spelled
-// without — the stem — DERIVED from the pattern (sourcetree.Required) rather
+// without — the stem — DERIVED from the pattern (regexlit.Required) rather
 // than written beside it, where it would drift from the pattern it stands for.
-var benchVariableNeeds = sourcetree.Required(benchVariable)
+var benchVariableNeeds = regexlit.Required(benchVariable)
 
 // THE REAL BUCKET IS NAMED IN ONE PLACE: no Go source outside this package
 // spells one of the CREWLET_BENCH_S3_* variables' names, or the stem a name
