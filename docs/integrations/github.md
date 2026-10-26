@@ -556,7 +556,7 @@ a recipe shared by several seats belongs on each seat's own `sandbox.setup`.
   another seat's variable names something nothing answers, and is told the
   variable is not set; a shared server never sees any of them. An app's
   identity stays with the agent it was created for, by construction
-  ([ADR-0057](https://github.com/crewlet/crewlet/blob/main/adr/0057-a-seats-github-app-token-is-issued-at-use-and-read-only-by-that-seat.md)).
+  ([ADR-0058](https://github.com/crewlet/crewlet/blob/main/adr/0058-a-seats-github-app-token-is-issued-at-use-and-read-only-by-that-seat.md)).
 - **Scoped at mint time.** The token carries the seat's tier's permissions
   (and `workflows: write` where the seat opts in) and nothing else, narrowed to
   the seat's `repos` where it names any. A `review`

@@ -230,30 +230,6 @@ func TestABrokenDocumentIsNeverStored(t *testing.T) {
 	}
 }
 
-// THE ACTIVE REVISION IS MARKED, because "which is running" is the question
-// this list is opened to answer and an id alone cannot answer it.
-func TestTheRevisionListingMarksTheActiveOne(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	cfg := bootstrapForStore(t, dir)
-	for i, name := range []string{"Nimbus One", "Nimbus Two"} {
-		path := companyFile(t, dir, fmt.Sprintf("c%d.yaml", i), func(doc string) string {
-			return strings.Replace(doc, "name: Nimbus", "name: "+name, 1)
-		})
-		if _, _, err := configCmd(t, cfg, "import", path); err != nil {
-			t.Fatalf("import %s: %v", name, err)
-		}
-	}
-	out, _, err := configCmd(t, cfg, "revisions")
-	if err != nil {
-		t.Fatalf("revisions: %v", err)
-	}
-	stars := strings.Count(out, "*")
-	if stars != 1 {
-		t.Fatalf("%d revisions are marked active:\n%s", stars, out)
-	}
-}
-
 // A DIFF IS ALWAYS REDACTED, with no flag to turn it off: a diff is what an
 // operator pastes into a ticket to ask whether a change looks right, and
 // that is the single most likely way a credential leaves the machine.
@@ -265,7 +241,7 @@ func TestADiffIsRedactedAndNamesWhatMoved(t *testing.T) {
 	if _, _, err := configCmd(t, cfg, "import", first); err != nil {
 		t.Fatalf("import: %v", err)
 	}
-	firstID := activeRevisionID(t, cfg)
+	firstID := bootRevisionID(t, cfg)
 
 	// ONE FIELD, deep in the document: a structural diff has to report the
 	// path to it, not the lines around it.
@@ -314,7 +290,7 @@ func TestTheDiffQuotesStringsAndNotOtherValues(t *testing.T) {
 		companyFile(t, dir, "one.yaml", nil)); err != nil {
 		t.Fatalf("import: %v", err)
 	}
-	firstID := activeRevisionID(t, cfg)
+	firstID := bootRevisionID(t, cfg)
 
 	second := companyFile(t, dir, "two.yaml", func(doc string) string {
 		return strings.Replace(doc, "model: claude-sonnet-5", "model: claude-opus-5", 1)
@@ -360,7 +336,7 @@ func TestTheDiffCommandPrintsEveryChange(t *testing.T) {
 		companyFile(t, dir, "one.yaml", wide("claude-sonnet-5"))); err != nil {
 		t.Fatalf("import: %v", err)
 	}
-	firstID := activeRevisionID(t, cfg)
+	firstID := bootRevisionID(t, cfg)
 	if _, _, err := configCmd(t, cfg, "import",
 		companyFile(t, dir, "two.yaml", wide("claude-opus-5"))); err != nil {
 		t.Fatalf("second import: %v", err)
@@ -398,7 +374,7 @@ func TestDiffingARevisionAgainstItselfSaysSo(t *testing.T) {
 	if _, _, err := configCmd(t, cfg, "import", companyFile(t, dir, "one.yaml", nil)); err != nil {
 		t.Fatalf("import: %v", err)
 	}
-	out, _, err := configCmd(t, cfg, "diff", activeRevisionID(t, cfg))
+	out, _, err := configCmd(t, cfg, "diff", bootRevisionID(t, cfg))
 	if err != nil {
 		t.Fatalf("diff: %v", err)
 	}
@@ -424,7 +400,7 @@ func TestDiffingARevisionAgainstItselfSaysSo(t *testing.T) {
 // activates.
 //
 // That the pointer then MOVES on the next start is asserted where it happens:
-// TestANodeWithNoPointerPublishesItsActiveRevision in reconcile_test.go.
+// TestReactivatingTheBootRevisionOfflineMintsAnEpoch in bootpublish_test.go.
 func TestAnOfflineActivationSaysWhatItDidAndDidNot(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -433,7 +409,7 @@ func TestAnOfflineActivationSaysWhatItDidAndDidNot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
-	id := activeRevisionID(t, cfg)
+	id := bootRevisionID(t, cfg)
 	activated, _, err := configCmd(t, cfg, "activate", id)
 	if err != nil {
 		t.Fatalf("activate: %v", err)
@@ -507,24 +483,21 @@ func TestActivatingAnUnknownRevisionIsRefused(t *testing.T) {
 	}
 }
 
-// activeRevisionID reads the marked row out of the listing.
-func activeRevisionID(t *testing.T, cfg string) string {
+// bootRevisionID reads the row this node boots on out of the listing: the one
+// whose STATE opens with "boots".
+func bootRevisionID(t *testing.T, cfg string) string {
 	t.Helper()
 	out, _, err := configCmd(t, cfg, "revisions")
 	if err != nil {
 		t.Fatalf("revisions: %v", err)
 	}
 	for line := range strings.SplitSeq(out, "\n") {
-		if !strings.HasPrefix(line, "*") {
-			continue
+		if fields := strings.Fields(line); len(fields) >= 2 &&
+			strings.HasPrefix(fields[1], "boots") {
+			return fields[0]
 		}
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			t.Fatalf("cannot read a revision id out of %q", line)
-		}
-		return fields[1]
 	}
-	t.Fatalf("no active revision in:\n%s", out)
+	t.Fatalf("no revision this node boots on in:\n%s", out)
 	return ""
 }
 
@@ -565,7 +538,7 @@ func TestALiteralCredentialIsMaskedEverywhereItIsPrinted(t *testing.T) {
 	if _, errs, err := configCmd(t, cfg, "import", literal); err != nil {
 		t.Fatalf("import: %v (%s)", err, errs)
 	}
-	firstID := activeRevisionID(t, cfg)
+	firstID := bootRevisionID(t, cfg)
 
 	// show is redacted...
 	shown, _, err := configCmd(t, cfg, "show")
@@ -734,7 +707,7 @@ func TestEachSubcommandStillAcceptsItsOwnFlags(t *testing.T) {
 	}
 	// -revision and -against need a real id, so they are exercised against
 	// the revision the import above wrote rather than a literal.
-	id := activeRevisionID(t, cfg)
+	id := bootRevisionID(t, cfg)
 	if _, _, err := configCmd(t, cfg, "export", "-revision", id); err != nil {
 		t.Errorf("export -revision: %v", err)
 	}

@@ -80,7 +80,7 @@ func (s *surface) withProbe(t *testing.T, kind integration.Kind, probe setup.Pro
 	probes[kind] = probe
 	s.mux = http.NewServeMux()
 	s.setup = newService(t, setupapi.Options{
-		Company: s.company, Config: s.config, Secrets: s.vault,
+		Config: s.config, Secrets: s.vault,
 		Resolve:        s.vault.get,
 		Status:         s.status,
 		Probes:         probes,
@@ -174,10 +174,7 @@ func TestAVerifyWritesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	active, _, err := s.configs.Active(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
+	active := s.active(t)
 	sealed := s.vault.snapshot()
 
 	for _, body := range []string{
@@ -196,12 +193,8 @@ func TestAVerifyWritesNothing(t *testing.T) {
 	if len(after) != len(before) {
 		t.Errorf("a check stored a revision: %d before, %d after", len(before), len(after))
 	}
-	still, _, err := s.configs.Active(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if still.ID != active.ID {
-		t.Errorf("a check moved the active revision from %s to %s", active.ID, still.ID)
+	if still := s.active(t); still.ID != active.ID {
+		t.Errorf("a check moved the fleet's revision from %s to %s", active.ID, still.ID)
 	}
 	if got := s.vault.snapshot(); !maps.Equal(got, sealed) {
 		t.Errorf("a check changed the sealed store: %v, was %v", got, sealed)
@@ -478,10 +471,10 @@ func TestNewRefusesAProbeSetMissingAKind(t *testing.T) {
 	t.Parallel()
 	probes := inertProbes()
 	delete(probes, integration.KindGitLab)
-	cfg, _, _ := newConfigSurface(t)
+	cfg := newConfigSurface(t).svc
 	v := &vault{}
 	_, err := setupapi.New(setupapi.Options{
-		Company: companySource(t, nil), Config: cfg, Secrets: v, Resolve: v.get,
+		Config: cfg, Secrets: v, Resolve: v.get,
 		Passes: setup.NewRunner(nil, nil, nil), Probes: probes,
 		Sink:   func(iam.Actor) (provision.TokenSink, error) { return nil, nil },
 		Status: &statusStore{}, SlackApps: func() map[string]string { return nil },

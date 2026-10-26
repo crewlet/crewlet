@@ -546,9 +546,12 @@ func TestAnUnavailableAnswerWithADetailCarriesBoth(t *testing.T) {
 // the same request on this node answers the same way until the change reaches
 // it.
 //
+// A route whose writes carry no operation id says so by leaving the key out:
+// an empty `op_id` is one a client would send back.
+//
 // Mutation: drop the `outcome` key, let the detail's `op_id` or `outcome`
-// win, or keep the caller's Retry-After on an unvouched one, and a case goes
-// red.
+// win, write an empty `op_id`, or keep the caller's Retry-After on an
+// unvouched one, and a case goes red.
 func TestAnUnknownOutcomeSaysSoAsAField(t *testing.T) {
 	t.Parallel()
 	if httpjson.OutcomeUnknown != string(statelog.OutcomeUnknown) {
@@ -558,16 +561,18 @@ func TestAnUnknownOutcomeSaysSoAsAField(t *testing.T) {
 	}
 	for _, c := range []struct {
 		name      string
+		opID      string
 		unvouched bool
 		retry     string
 	}{
-		{"a lost acknowledgement", false, "2"},
-		{"an unvouched unknown", true, ""},
+		{"a lost acknowledgement", "0192-op", false, "2"},
+		{"an unvouched unknown", "0192-op", true, ""},
+		{"a write that carries no operation id", "", false, "2"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			rec := httptest.NewRecorder()
-			httpjson.UnknownOutcome(rec, 2, "0192-op", c.unvouched, httpjson.Detail{
+			httpjson.UnknownOutcome(rec, 2, c.opID, c.unvouched, httpjson.Detail{
 				"outcome": "applied", "op_id": "not-the-key", "unvouched": true,
 				"item": "ENG-1", "error": "not-the-code",
 			})
@@ -581,10 +586,18 @@ func TestAnUnknownOutcomeSaysSoAsAField(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 				t.Fatalf("body is not JSON: %v", err)
 			}
-			if body["outcome"] != httpjson.OutcomeUnknown || body["op_id"] != "0192-op" ||
+			if body["outcome"] != httpjson.OutcomeUnknown ||
 				body["error"] != string(httpjson.CodeUnavailable) || body["item"] != "ENG-1" {
-				t.Errorf("body = %v, want outcome unknown and the key over the "+
-					"route's own, beside the route's other detail", body)
+				t.Errorf("body = %v, want outcome unknown beside the route's other detail",
+					body)
+			}
+			opID, said := body["op_id"]
+			if c.opID == "" && said {
+				t.Errorf("op_id = %v, want none for a write that carries none, over the "+
+					"route's own", opID)
+			}
+			if c.opID != "" && opID != c.opID {
+				t.Errorf("op_id = %v, want the key %s over the route's own", opID, c.opID)
 			}
 			if _, said := body["unvouched"]; said != c.unvouched {
 				t.Errorf("unvouched present = %v, want %v: body %v", said,

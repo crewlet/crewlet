@@ -529,7 +529,7 @@ func TestALeadsWholeDocumentWritesAreJudgedTheSameWay(t *testing.T) {
 // activeRevision is the id of the revision active now.
 func activeRevision(t *testing.T, s *surface) string {
 	t.Helper()
-	revision, found, err := s.configs.Active(t.Context())
+	revision, found, err := s.active(t.Context())
 	if err != nil || !found {
 		t.Fatalf("active revision: %v (found=%v)", err, found)
 	}

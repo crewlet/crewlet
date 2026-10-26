@@ -481,7 +481,7 @@ func (s *Service) getEntity(kind string) http.HandlerFunc {
 		case errors.Is(err, ErrNoActiveRevision):
 			httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoActiveRevision,
 				map[string]string{
-					"hint": "this node has no active company revision to read",
+					"hint": "the fleet runs no company to read",
 				})
 			return
 		case err != nil:
@@ -603,31 +603,32 @@ type entityWrite struct {
 	by        iam.Actor
 }
 
-// writeEntity makes one attempt: it reads the revision active now, decides
+// writeEntity makes one attempt: it reads the fleet's revision now, decides
 // the caller's reach and the entity's precondition against it, and writes onto
 // it. done reports that the request has been answered; a [*RacedError] is a
 // revision that moved meanwhile, which the caller tries again.
 func (s *Service) writeEntity(w http.ResponseWriter, r *http.Request, e entityWrite) (done bool, err error) {
 	ctx := r.Context()
-	active, found, err := s.configs.Active(ctx)
+	cur, found, err := s.current(ctx)
 	if err != nil {
-		s.fail(w, "read the active revision", err)
+		s.fail(w, "read the fleet's revision", err)
 		return true, nil
 	}
+	active := cur.revision
 	if !found {
 		// Nothing to splice into. Refused rather than treated as an empty
 		// company: creating the first revision through an entity route
 		// would build a company out of one provider or server.
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision,
 			map[string]string{
-				"hint": "this node has no active company revision to edit: " +
-					"import one with `crewlet config import`",
+				"hint": "the fleet runs no company to edit: create one " +
+					"with PUT /config or `crewlet config import`",
 			})
 		return true, nil
 	}
 	company, err := s.open(active)
 	if err != nil {
-		if !refuseUnreadable(w, err) {
+		if !RefuseUnreadable(w, err) {
 			s.fail(w, "open the active revision", err)
 		}
 		return true, nil

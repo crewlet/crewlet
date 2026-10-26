@@ -2,10 +2,16 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"net"
+	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/engine"
@@ -53,20 +59,13 @@ roles:
 `
 
 // bootDecided starts an engine as `crewlet run` does, from the decision over
-// the store cfg names, and stops it when the case ends.
+// the store cfg names — through the same step, which holds the store until the
+// engine has opened it ([bootEngine]) — and stops it when the case ends.
 func bootDecided(t *testing.T, cfg string, boot *config.Bootstrap, seed tierBSeed) (*engine.Engine, seedPlan) {
 	t.Helper()
-	plan, err := decideSeed(t.Context(), boot, seed, storeAt(cfg), quiet())
+	e, plan, err := bootEngine(t.Context(), boot, seed, storeAt(cfg), engine.New, quiet())
 	if err != nil {
-		t.Fatalf("decide the seed: %v", err)
-	}
-	opts, err := bootOptions(boot, plan)
-	if err != nil {
-		t.Fatal(err)
-	}
-	e, err := engine.New(t.Context(), opts)
-	if err != nil {
-		t.Fatalf("engine.New: %v", err)
+		t.Fatalf("boot the engine: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.WithoutCancel(t.Context())) })
 	return e, plan
@@ -117,7 +116,7 @@ func TestAStaleSeedNeverBecomesTheEnginesCompany(t *testing.T) {
 	t.Parallel()
 	cfg := bootstrapForStore(t, t.TempDir())
 	boot := storedBoot(t, cfg)
-	activateStored(t, cfg, liveRevisionDoc)
+	serveStored(t, cfg, liveRevisionDoc)
 
 	// Every check below reports rather than stops, so a boot on the file
 	// says each thing it got wrong.
@@ -202,8 +201,9 @@ func TestAManagedNodeOnAnEmptyStoreRunsNoCompany(t *testing.T) {
 		t.Errorf("a managed node runs %q %v from a file it ignores, want no company",
 			name, seats)
 	}
-	if _, found, err := e.Backends().Store.Configs().Active(t.Context()); err != nil || found {
-		t.Errorf("a managed node's store holds an active revision (%v, %v), want none", found, err)
+	if revisions, err := e.Backends().Store.Configs().List(t.Context(), 0, 0); err != nil ||
+		len(revisions) != 0 {
+		t.Errorf("a managed node's store holds %d revisions (%v), want none", len(revisions), err)
 	}
 	if _, found, err := e.Backends().Fleet.Target(t.Context()); err != nil || found {
 		t.Errorf("a managed node pointed the fleet at a revision (%v, %v), want none", found, err)
@@ -258,5 +258,117 @@ func TestAFirstBootThisNodeCannotBuildIsRefusedWithNothingWritten(t *testing.T) 
 	if _, found, err := e.Backends().Fleet.Target(t.Context()); err != nil || found {
 		t.Errorf("the fleet was pointed at a company this node cannot build (%v, %v)",
 			found, err)
+	}
+}
+
+// THE BOOT HOLDS ITS STORE FROM THE READ IT DECIDES ON UNTIL THE ENGINE HAS
+// OPENED IT, and gives it back once the engine has.
+//
+// `crewlet run` decides what the engine boots on by reading this node's store,
+// closes it, and opens it for the engine only once the broker is up — seconds
+// later, on a cluster join. An offline `crewlet config import` landing in that
+// gap used to write the very row the boot had decided on, and the first tick
+// then cleared the operator's change under a false "the fleet moved on". So
+// the case stands a SECOND PROCESS in the gap, the one place the claim can be
+// seen from: every check inside this process shares it. There, the import
+// meets the starting node — it takes the node's API, as it does beside a
+// running engine, and the listener `crewlet run` binds before it decides
+// answers `503 starting` — and a command with no way through the API is
+// refused naming this process; the store stays as the boot read it. Once the
+// engine has opened the file the boot's share is given back, and the engine's
+// alone refuses the command; once the engine has stopped nothing does, and the
+// import is written.
+//
+// Mutations, each run red: give back the claim [storeAt] takes as soon as it
+// has it, or take none, and the import is written in the gap; drop the claim
+// from the plan [decideFile] makes, and it outlives the engine, so the import
+// after the stop is sent to the node instead of written; give it back in
+// [bootEngine] before the open rather than after, and the import is written in
+// the gap.
+func TestTheBootHoldsItsStoreUntilTheEngineHasOpenedIt(t *testing.T) {
+	t.Parallel()
+	// THE STARTING NODE'S LISTENER, bound before the boot decides (step 5
+	// of the boot), answering every route it will serve `503 starting`.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := bootstrapForURL(t, "http://"+listener.Addr().String())
+	boot := storedBoot(t, cfg)
+	starting, err := api.NewBoot(boot, "cli-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewUnstartedServer(starting.Handler())
+	_ = server.Listener.Close()
+	server.Listener = listener
+	server.Start()
+	t.Cleanup(server.Close)
+	// THE OPERATOR'S CREDENTIAL, so the import's way through the node is
+	// taken rather than refused for want of one.
+	operator := []string{apiTokenEnv + "=" + cliFixtureToken}
+
+	// THE STOPPED NODE'S STORE: a company it ran, and an offline import over
+	// it — the offer this start publishes.
+	dir := t.TempDir()
+	base := serveStored(t, cfg, runnableRevisionDoc)
+	renamed := func(name string) func(string) string {
+		return func(string) string {
+			return strings.Replace(runnableRevisionDoc, `"Nimbus"`, `"`+name+`"`, 1)
+		}
+	}
+	if _, errs, err := configCmd(t, cfg, "import",
+		companyFile(t, dir, "offer.yaml", renamed("Nimbus Offline"))); err != nil {
+		t.Fatalf("the offline import before the start: %v (%s)", err, errs)
+	}
+	offered := bootRevisionID(t, cfg)
+	later := companyFile(t, dir, "later.yaml", renamed("Nimbus Later"))
+	holder := fmt.Sprintf("pid %d ", os.Getpid())
+
+	// THE GAP: the decision has read the store, and the engine has not
+	// opened it.
+	inTheGap := func(ctx context.Context, opts engine.Options) (*engine.Engine, error) {
+		verdict, said := offlineCommand(ctx, t, operator, "config", "import", later, "-config", cfg)
+		if verdict != offlineFailed || !strings.Contains(said, "503") ||
+			!strings.Contains(said, "starting") {
+			t.Errorf("an offline import while the node starts ended %s, want it sent to the "+
+				"starting node and answered 503 starting: %s", verdict, said)
+		}
+		verdict, said = offlineCommand(ctx, t, operator, "config", "activate", base, "-config", cfg)
+		if verdict != offlineLocked || !strings.Contains(said, holder) {
+			t.Errorf("an offline activate while the node starts ended %s, want it refused by "+
+				"the lock, naming this process (%s): %s", verdict, holder, said)
+		}
+		return engine.New(ctx, opts)
+	}
+	e, plan, err := bootEngine(t.Context(), boot, tierBSeed{}, storeAt(cfg), inTheGap, quiet())
+	if err != nil {
+		t.Fatalf("boot the engine: %v", err)
+	}
+	stop := sync.OnceFunc(func() { e.Stop(context.WithoutCancel(t.Context())) })
+	t.Cleanup(stop)
+	if plan.boot.ID != offered || plan.boot.Offer == nil {
+		t.Fatalf("the engine booted on %s (offer %+v), want the offline offer %s",
+			plan.boot.ID, plan.boot.Offer, offered)
+	}
+	if row := bootRow(t, e.Backends().Store); row.ID != offered || row.Offer == nil {
+		t.Errorf("this node boots on %s (offer %+v) once started, want the offer %s the "+
+			"boot read, untouched", row.ID, row.Offer, offered)
+	}
+
+	// THE ENGINE HOLDS THE FILE NOW, with the boot's share given back.
+	if verdict, said := offlineCommand(t.Context(), t, operator, "config", "activate", base,
+		"-config", cfg); verdict != offlineLocked || !strings.Contains(said, holder) {
+		t.Errorf("an offline activate beside the running engine ended %s, want it refused "+
+			"by the lock, naming this process: %s", verdict, said)
+	}
+
+	// AND ONCE IT HAS STOPPED NOTHING HOLDS IT: the boot's claim did not
+	// outlive the engine it handed the file to.
+	stop()
+	if verdict, said := offlineCommand(t.Context(), t, operator, "config", "import", later,
+		"-config", cfg); verdict != offlineWrote {
+		t.Errorf("an offline import once the engine stopped ended %s, want it written: %s",
+			verdict, said)
 	}
 }

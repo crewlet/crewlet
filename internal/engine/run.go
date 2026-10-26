@@ -718,11 +718,18 @@ type Engine struct {
 	// and nothing retired.
 	mailboxes *maintenance.Mailboxes
 
-	// reconciler is the loop converging this engine on the activation
-	// pointer, recorded by [Engine.NewReconciler]. The mailbox sweep reads
-	// which activation this engine's epoch came from through it, because
-	// nothing else knows: an apply is handed a document, not an epoch.
-	reconciler atomic.Pointer[Reconciler]
+	// following is held by a reconciler tick from its read of the pointer to
+	// its record of what this node now serves ([Reconciler.Tick]), so one
+	// engine follows the pointer one tick at a time.
+	//
+	// ON THE ENGINE, not the reconciler, because what it orders is the
+	// engine's: two ticks interleaved, each reading the pointer and then
+	// applying, let the one that read the OLDER epoch apply last, and the
+	// boot row — moved only to what the engine just applied — walk back to
+	// it. Production builds one reconciler per engine; a test harness that
+	// builds a second ([Engine.NewReconciler] does not refuse one) is held
+	// to the same order rather than trusted not to.
+	following sync.Mutex
 
 	// rewired remembers what the last seat-identity retry resolved on each
 	// surface, so the recovery is logged on the TRANSITION rather than on
@@ -867,15 +874,21 @@ type Options struct {
 	Bootstrap *config.Bootstrap
 	Company   *config.Company
 
-	// ActivatedAt is when Company was activated: the `activated_at` of the
-	// revision this node's store marks active, when that is what Company
-	// is.
+	// ActivatedAt is when Company was activated: the instant of the
+	// activation this node last applied it from, which its store keeps on
+	// the revision it boots on, when that is what Company is.
 	//
 	// ZERO FOR A COMPANY NO ACTIVATION HAS NAMED — one a caller built in
-	// code. `crewlet run` never passes one: it boots on the revision its
-	// store activated, or on nothing, and a Tier B file reaches the engine
-	// through an activation, applied with the pointer's own instant before
-	// a seat is claimed. It is not the boot's clock, because what reads it
+	// code, or an offline command's choice the fleet has not taken yet
+	// (an offer: see [store.Offer]). `crewlet run` boots on the revision
+	// its store says it boots on, or on nothing, and a Tier B file reaches
+	// the engine through an activation, applied with the pointer's own
+	// instant before a seat is claimed. An offer boots with none because no
+	// activation has named it: stamped with an offline instant, the
+	// replicated estate would carry a document the fleet may never run, at
+	// an instant later than the fleet's, and refuse the fleet's own stamps.
+	// The first apply of the activation that publishes it stamps it. It is
+	// not the boot's clock, because what reads it
 	// is the chart apply, which stamps every project with it so that an
 	// older configuration cannot walk a newer one back — and a boot on a
 	// stale revision stamped with NOW is exactly the older configuration

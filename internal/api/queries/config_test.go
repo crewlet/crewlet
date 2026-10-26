@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -37,6 +38,9 @@ func configSurface(t *testing.T, docs ...string) (*configapi.Service, []string) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	// EACH ONE ACTIVATED IN TURN, as the writes that made them were: the
+	// company the surface answers is the fleet's pointer.
+	plane := coordmemory.NewFleet()
 	var ids []string
 	for i, doc := range docs {
 		cfg, err := config.ParseCompany([]byte(doc))
@@ -51,18 +55,33 @@ func configSurface(t *testing.T, docs ...string) (*configapi.Service, []string) 
 		if err != nil {
 			t.Fatal(err)
 		}
-		id, err := db.Configs().InsertActive(t.Context(), store.Revision{
+		revision := store.Revision{
 			CreatedByKind: iam.ActorOperator,
 			Source:        "test", CreatedBy: "operator", Summary: "revision",
 			Payload: payload, CreatedAt: pinned.Add(time.Duration(i) * time.Minute),
-		})
+		}
+		id, err := db.Configs().Insert(t.Context(), revision)
 		if err != nil {
 			t.Fatalf("insert: %v", err)
+		}
+		request := coord.ActivationRequest{
+			RevisionID: id, Summary: revision.Summary, Payload: payload, At: revision.CreatedAt,
+			Origin: coord.RevisionOrigin{
+				Author: revision.CreatedBy, AuthorKind: revision.CreatedByKind,
+				Source: revision.Source, CreatedAt: revision.CreatedAt,
+			},
+			ExpectAbsent: len(ids) == 0,
+		}
+		if len(ids) > 0 {
+			request.Expect = ids[len(ids)-1]
+		}
+		if _, err := plane.Activate(t.Context(), request); err != nil {
+			t.Fatalf("activate: %v", err)
 		}
 		ids = append(ids, id)
 	}
 	svc, err := configapi.New(configapi.Options{
-		Store: db, Plane: coordmemory.NewFleet(), Cipher: cipher,
+		Store: db, Plane: plane, Cipher: cipher, Node: "core-1",
 		Holders: func(context.Context, []string, time.Time) (
 			map[string]configapi.SeatHolder, error) {
 

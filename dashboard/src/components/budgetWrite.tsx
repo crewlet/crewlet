@@ -156,6 +156,12 @@ function WriteStatus({ write, onReload }: { write: CeilingWrite; onReload: () =>
  * this node has applied it and the answer the screen draws carries it. Going
  * back to the served figure at once drew the ceiling being replaced for a
  * beat after "Saved", which reads as a save that did not take.
+ *
+ * UNLESS THIS NODE REFUSED IT. Then the figure is the served one again — the
+ * ceiling the gate goes on enforcing — marked as refused here, rather than
+ * the saved ceiling marked as applying for as long as the page stayed open.
+ * A save a later activation passed before this node applied it settles the
+ * same way an apply does, on the answer re-read after it.
  */
 export function CeilingEditor({
   scope,
@@ -170,7 +176,11 @@ export function CeilingEditor({
   window: BudgetWindow | undefined;
   /** The company clock, for when the window resets. */
   zone: string;
-  /** Re-read what the screen draws once this node applies a saved ceiling. */
+  /**
+   * Re-read what the screen draws: once this node applies the saved ceiling,
+   * or a later activation passes it (`useCeilingWrite`), and on the Reload a
+   * conflict, or a request that may have landed, offers.
+   */
   onApplied: () => void;
 }) {
   const access = useOrgWriteAccess(targetOf(scope));
@@ -209,11 +219,20 @@ export function CeilingEditor({
   // mark goes, and the figure is the answer's own again. The served ceiling
   // matching the one saved settles it too; and an answer that arrived after
   // the apply and says otherwise (a colleague's newer ceiling) is the truth,
-  // so it settles on that rather than drawing the saved value for ever.
+  // so it settles on that rather than drawing the saved value for ever. A
+  // save a later activation passed was never this node's to apply: the
+  // served figure is the truth at once, and the re-read brings it up to date.
   const seenAtApply = useRef<BudgetWindow | undefined | null>(null);
   const { reset } = write;
+  const standing = saved?.standing;
   useEffect(() => {
-    if (!saved?.applied) {
+    if (standing === "passed") {
+      seenAtApply.current = null;
+      reset();
+      setExpected(undefined);
+      return;
+    }
+    if (standing !== "applied") {
       seenAtApply.current = null;
       return;
     }
@@ -223,7 +242,7 @@ export function CeilingEditor({
       reset();
       setExpected(undefined);
     }
-  }, [saved?.applied, w, limit, expected, reset]);
+  }, [standing, w, limit, expected, reset]);
 
   // A SAVE CLOSES THE FIELD: the figure beside the bar says the new ceiling
   // and that it is applying, which is the answer the person was waiting for.
@@ -268,7 +287,10 @@ export function CeilingEditor({
     write.submit({ [period]: text } as TypedCeilings);
   }
 
-  const shown = saved && expected !== undefined ? expected : (limit ?? null);
+  // THE SAVED CEILING while this node applies it, and the one it enforces
+  // once it has refused it, or a later activation has passed it.
+  const drawsSaved = saved && (saved.standing === "applying" || saved.standing === "applied");
+  const shown = drawsSaved && expected !== undefined ? expected : (limit ?? null);
   const who = scope.kind === "company" ? "The company" : scope.name;
 
   // WHAT IS OPEN, for the assistant, while the field is: the ceiling as
@@ -313,9 +335,13 @@ export function CeilingEditor({
       <span className={shown === null ? "ceiling-value muted" : "ceiling-value"}>
         {shown === null ? "No ceiling" : `of ${fmtCount(shown)}`}
       </span>
-      {saved && (
+      {saved && saved.standing !== "passed" && (
         <span className="ceiling-applying t-caption" role="status">
-          {saved.applied ? "applied" : "applying…"}
+          {saved.standing === "applied"
+            ? "applied"
+            : saved.standing === "refused"
+              ? "refused by this node"
+              : "applying…"}
         </span>
       )}
       {/* A PANEL ANCHORED TO THE PENCIL, not a field in the cell: a check's

@@ -30,7 +30,7 @@ func (f *stubFlow) Complete(context.Context, string, string) (string, error) {
 	return f.seat, f.err
 }
 
-func (f *stubFlow) InstallURL(string) string { return f.install }
+func (f *stubFlow) InstallURL(context.Context, string) string { return f.install }
 
 // landing drives GET /webhooks/github-app and returns the page.
 func landing(t *testing.T, flow webhooks.AppCompleter, query string) *httptest.ResponseRecorder {

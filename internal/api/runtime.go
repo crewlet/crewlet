@@ -67,6 +67,10 @@ type RuntimeState struct {
 	// AppliedEpoch is the config revision this node is running.
 	AppliedEpoch int64
 
+	// ConfigAttempt is this node's last concluded apply attempt, nil before
+	// this process has concluded one. See [ConfigAttempt].
+	ConfigAttempt *ConfigAttempt
+
 	// StallLag is how far behind the node's watched duty is: the time
 	// since its last beat, once it has missed one, and the early warning
 	// before the watchdog ends the process at the lease TTL. Zero is

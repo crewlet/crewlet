@@ -19,7 +19,7 @@
 // naming it is read, for that seat's resolution alone, renewed before it runs
 // short in the seat's tool servers and in a running box's token files, and
 // never sealed (githubtoken.go), because only this package holds a seat's
-// configuration, its app's key and its boxes together. ADR-0057 is the
+// configuration, its app's key and its boxes together. ADR-0058 is the
 // decision.
 package engine
 

@@ -30,6 +30,8 @@ import { DIRECTORY_READ, useHumanSeats } from "~/components/people.tsx";
 import { alarmKindTitle, alarmsLink } from "~/lib/alarms.ts";
 import { useNow } from "~/lib/clock.ts";
 import { plural, relTime } from "~/lib/format.ts";
+import { configStanding, offRevision } from "~/lib/configStanding.ts";
+import { standingCaption } from "./standingWords.ts";
 import { authWords, modelLine, usesOf } from "~/lib/models.ts";
 import { SERVER_STATE_WORDS } from "~/lib/mcpServers.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -123,7 +125,13 @@ function Nodes() {
   const fleet = useQuery("fleet", undefined, { pollMs: 15_000 });
   const data = fleet.data;
   const nodes = data?.nodes ?? [];
-  const behind = nodes.filter((n) => data && (n.config_epoch ?? 0) < data.target_epoch);
+  // NOT RUNNING THE ACTIVATED REVISION, the Nodes screen's own rule: a node
+  // that refused the target reports the target's epoch (`configStanding`).
+  const behind = data
+    ? nodes
+        .filter((n) => offRevision(data, n))
+        .map((n) => ({ node: n, caption: standingCaption(configStanding(data, n)) }))
+    : [];
   const stranded = data?.unplaceable ?? [];
   return (
     <WidgetCard title="Nodes" from="settings-nodes">
@@ -133,7 +141,7 @@ function Nodes() {
           <StatCard
             label="Behind on config"
             value={behind.length}
-            sub={data?.target_epoch ? `target epoch ${data.target_epoch}` : "no target yet"}
+            sub={data?.activation ? `target epoch ${data.activation.epoch}` : "no target yet"}
           />
           <StatCard
             label="Unplaceable"
@@ -143,11 +151,11 @@ function Nodes() {
         </StatGroup>
         {(behind.length > 0 || stranded.length > 0) && (
           <List className="home-admin-list">
-            {behind.slice(0, ROWS).map((n) => (
+            {behind.slice(0, ROWS).map(({ node: n, caption }) => (
               <ListItem
                 key={`node:${n.id}`}
                 href={href(["settings", "nodes", n.id])}
-                leading={<Tag variant="warning">Behind</Tag>}
+                leading={<StandingTag caption={caption} />}
               >
                 {n.id}
               </ListItem>
@@ -165,6 +173,19 @@ function Nodes() {
         )}
       </QueryState>
     </WidgetCard>
+  );
+}
+
+/**
+ * Why a node is listed under Nodes: its standing's caption as a tag, a refusal
+ * in the danger tone because it is the one a reader has to act on.
+ */
+function StandingTag({ caption }: { caption: string }) {
+  const failed = caption === "refused" || caption === "partial";
+  return (
+    <Tag variant={failed ? "danger" : "warning"}>
+      {caption ? caption.charAt(0).toUpperCase() + caption.slice(1) : "Behind"}
+    </Tag>
   );
 }
 
@@ -414,7 +435,7 @@ function Configuration() {
   const revisions = audit.data ?? [];
   const active = revisions.find((r) => r.is_active);
   const nodes = fleet.data?.nodes ?? [];
-  const behind = nodes.filter((n) => fleet.data && (n.config_epoch ?? 0) < fleet.data.target_epoch);
+  const behind = nodes.filter((n) => fleet.data && offRevision(fleet.data, n));
   return (
     <WidgetCard title="Configuration" from="settings-config">
       <QueryState

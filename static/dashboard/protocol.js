@@ -158,6 +158,7 @@ function emptyState() {
 		org: null,
 		tools: [],
 		health: null,
+		lastHealth: null,
 		tokens: null,
 		budget: null,
 		schedules: null,
@@ -232,7 +233,7 @@ var Store = class {
 		if (snap.tokens && snap.tokens.totals) this.state.tokens = snap.tokens;
 		this.state.budget = snap.budget ?? null;
 		if (snap.schedules) this.state.schedules = snap.schedules;
-		if (snap.health) this.state.health = snap.health;
+		if (snap.health) this.state.health = this.state.lastHealth = snap.health;
 		this.emit(...ALL_DATA_SLICES);
 	}
 	/**
@@ -386,6 +387,7 @@ var Store = class {
 	}
 	applyHealth(health) {
 		this.state.health = health ?? null;
+		if (health) this.state.lastHealth = health;
 		this.link(!!health);
 		this.emit("health");
 	}
@@ -429,17 +431,18 @@ var Store = class {
 	* naming the company, listing its agents and tools in the palette, from the
 	* snapshot it held — while a session refused at its first handshake, sent
 	* nothing, named and listed none of it. An outage keeps the last state on purpose ("showing the
-	* last state received"); a refusal is not an outage. `health` stays: it is
-	* the unguarded `/health`, not the company.
+	* last state received"); a refusal is not an outage. `health` stays, and
+	* `lastHealth` with it: it is the unguarded `/health`, not the company.
 	*/
 	setAccessRefused(reason) {
 		const next = reason === null ? null : reason.trim();
 		if (this.state.accessRefused === next) return;
 		this.state.accessRefused = next;
 		if (next !== null) {
-			const { health, connected, lostAt, everConnected, authRejected } = this.state;
+			const { health, lastHealth, connected, lostAt, everConnected, authRejected } = this.state;
 			Object.assign(this.state, emptyState(), {
 				health,
+				lastHealth,
 				connected,
 				lostAt,
 				everConnected,

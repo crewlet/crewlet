@@ -184,11 +184,17 @@ func embeddingWidth(c *Company) int {
 
 // Apply publishes a new epoch, reporting what happened to this node.
 //
-// The build comes first and touches nothing: [NewCompany] validates, resolves
-// the org and constructs the providers without reaching the network. So a
-// revision that cannot be built is refused with the previous epoch still
-// current and still correct — there is no rollback path because there was no
-// mutation, which is the point of publishing rather than mutating.
+// The secret snapshot is re-read first, and it is the one thing an apply
+// changes before it can refuse: the store's newest values, which every live
+// ${VAR} lookup on the serving epoch reads too, so a refused revision leaves
+// the node resolving rotated credentials rather than broken ones. Then the
+// build, which touches nothing: [NewCompany] validates, resolves the org and
+// constructs the providers without reaching the network. So a revision that
+// cannot be built is refused with the previous epoch still current and still
+// correct — there is no rollback path because nothing it built was published,
+// which is the point of publishing rather than mutating. A caller that must
+// refuse a revision before even the snapshot moves validates it first, as the
+// reconciler does ([config.Company.ValidateRunnable]).
 //
 // The three outcomes belong to the control plane, not to this function's
 // convenience:

@@ -23,8 +23,9 @@ import (
 func TestMain(m *testing.M) {
 	// THE CASES THAT RE-EXECUTE THIS BINARY: as the node they stop, by a
 	// signal and by taking its broker connection away, as the process a
-	// second interrupt kills, and as the engine holding a store's lock
-	// ([holdTheStore]). Before the sink below, which each node probe
+	// second interrupt kills, as the engine holding a store's lock
+	// ([holdTheStore]), and as an operator's command run beside a node
+	// ([offlineCommand]). Before the sink below, which each node probe
 	// installs for itself: its log is what the parent reads the order of
 	// the shutdown from.
 	if os.Getenv(drainProbeEnv) != "" {
@@ -38,6 +39,9 @@ func TestMain(m *testing.M) {
 	}
 	if path := os.Getenv(holdStoreEnv); path != "" {
 		os.Exit(runHoldStore(path))
+	}
+	if args := os.Getenv(offlineCommandEnv); args != "" {
+		os.Exit(runOfflineCommand(args))
 	}
 	silenceProcessLog()
 	os.Exit(m.Run())

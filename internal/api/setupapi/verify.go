@@ -38,14 +38,12 @@ import (
 // against the address already in force.
 func (s *Service) verify(w http.ResponseWriter, r *http.Request) {
 	kind := integration.Kind(r.PathValue("kind"))
-	company, roster := s.company()
-	if company == nil {
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision, map[string]string{
-			"hint": "no company configuration is active",
-		})
+	fc, ok := s.companyFor(w, r, "no company configuration is active")
+	if !ok {
 		return
 	}
-	state, ok := s.stateFor(r.Context(), company, roster, kind)
+	company := fc.company
+	state, ok := s.stateFor(r.Context(), company, fc.roster, kind)
 	if !ok {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownKind, map[string]string{
 			"detail": "this build serves no setup for " + string(kind),

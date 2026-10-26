@@ -45,8 +45,9 @@ import (
 //
 // activatedAt is when the configuration this chart came from was activated —
 // the instant on the fleet's activation pointer, which every node reads and a
-// node keeps as its active revision's `activated_at` — and it is the project's
-// epoch ([configplane.ActivationStamp]). Never the apply's own clock: every
+// node keeps as its boot row's `served_at` once it has applied it — and it is
+// the project's epoch ([configplane.ActivationStamp]). Never the apply's own
+// clock: every
 // node applies one activation separately, at its reconcile tick and again at
 // every boot, so an instant read there differs on every one of them and both
 // things the epoch is for stop working. A node that boots on a stale revision
