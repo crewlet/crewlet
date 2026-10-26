@@ -1742,6 +1742,17 @@ cache on its own disk. What such a node needs from its host:
   reads. It is
   never backed up, and a backup tool of your own skips it with
   `--exclude-caches`.
+- **Nothing to set for `vm.max_map_count`.** A git node reads the runs of its
+  indexes of which push introduced each commit through memory it maps from
+  their files, and the kernel counts every mapping of the engine's process
+  against `vm.max_map_count`, one setting of the whole host — a pod cannot set
+  its own — past which the process can map nothing, its own heap included,
+  and stops. So the node holds at most a quarter of the count mapped (16 382
+  runs at Linux's default 65 530), reads the count at boot and names its
+  bound as `mapped_runs` on `code_cache_opened`; a host that raised the count
+  for something else raises the bound with it, and one that lowered it below
+  the default lowers what every process on it may map, this one's bound
+  included ([Which push landed a commit](../concepts/code-host.md#which-push-landed-a-commit)).
 - **A writable `$TMPDIR` short enough for a socket.** Every push's git hands its
   ref updates back to the engine over a unix socket made under `$TMPDIR`, whose
   path is held to 100 bytes (darwin takes 104, Linux 108): a node whose

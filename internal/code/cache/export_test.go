@@ -1307,6 +1307,24 @@ func RunViaCodes() map[code.PushVia]uint8 { return maps.Clone(runViaCodes) }
 // RunKindCodes: see RunViaCodes.
 func RunKindCodes() map[code.PrincipalKind]uint8 { return maps.Clone(runKindCodes) }
 
+// MappedRunsAt bounds the runs the cache Open builds holds mapped at once at
+// n, in place of the process's map count's share.
+func MappedRunsAt(n int) func(*Options) {
+	return func(o *Options) {
+		if o.knobs == nil {
+			o.knobs = &knobs{}
+		}
+		o.knobs.mappedRuns = n
+	}
+}
+
+// MappedRuns is how many runs c holds mapped now, and the most it may.
+func MappedRuns(c *Cache) (now, most int) { return c.maps.count(), c.maps.most }
+
+// MappedRunsOf is the bound on mapped runs a process whose map count is count
+// holds itself to.
+func MappedRunsOf(count int) int { return mappedRunsOf(count) }
+
 // FoldTimes tells f what each round's fold of its delta's pushes into the
 // index of pushes took (foldPushes).
 func FoldTimes(o *Options, f func(took time.Duration)) {

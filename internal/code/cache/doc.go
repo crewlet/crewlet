@@ -341,7 +341,13 @@
 // process did not write is held to its SHA-256 trailer before it is mapped,
 // the scrub holds every run again, and one that fails drops the index: the
 // full round that repairs the copy makes it again at its own position, and
-// the backfill reads back below it what is wanted there.
+// the backfill reads back below it what is wanted there. A run is read
+// through a MAPPING of the process (unix.Mmap), and the kernel counts every
+// mapping of the process against one node-wide sysctl, vm.max_map_count,
+// past which every mapping fails, the Go heap's growth among them: so the
+// cache holds at most a quarter of that count mapped (MappedRunShare, read at
+// Open; 16 382 at Linux's default), keeping a run its last reader let go for
+// the copy's next reader only while that bound has room (runmaps.go).
 //
 // # The memo
 //

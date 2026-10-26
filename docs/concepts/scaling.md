@@ -316,7 +316,11 @@ keeps the index of which push introduced each commit
 cache's budget — some 3.5 GB for a monorepo's 18 million pushes in 181 days,
 and 8.6 GB for the 45 million of a company pushing 250 000 a day, indexed
 whole. Every sync folds the pushes it applied before it answers, 0.84 ms for a
-push. A repository's history before a node's first full read of it is read
+push. A read maps the runs of the copy's index into memory, and a node holds
+at most a quarter of the host's `vm.max_map_count` of them mapped at once
+(16 382 at the default 65 530), however many copies its seats read: the runs
+of the copies read most recently stay mapped for their next read, and a node
+reading more copies than that maps the others again as each is read. A repository's history before a node's first full read of it is read
 back only by its home, and only once a seat has asked about it, a page of the
 data node's push rows at a time — measured on four cores of a Core Ultra 7
 265U, pages of about 7 500 pushes and 4 MB, about 150 ms each — and after each

@@ -147,6 +147,9 @@ type Cache struct {
 	kicks, maintKicks, scrubKicks, backfillKicks chan struct{}
 	// scrubs is the node's one scrub, given by evidence (scrub.go).
 	scrubs *scrubSlot
+	// maps is the node's runs of its indexes of pushes mapped into memory,
+	// held to a bound under the process's count of mappings (runmaps.go).
+	maps *runMaps
 	// repairers mints the name each reader is handed under (pin;
 	// Synced.Repairer): one counter for the cache, since the pool reports to
 	// one observer and a name must say which reader of which copy it is.
@@ -238,6 +241,20 @@ func Open(ctx context.Context, o Options) (*Cache, error) {
 	if c.log == nil {
 		c.log = log
 	}
+	// THE BOUND ON MAPPED RUNS, from the count of mappings the kernel lets
+	// this process hold (runmaps.go). A count that cannot be read is
+	// Linux's default, the least a distribution ships, and said so: guessed
+	// high, the bound would let the runs take the mappings the runtime's own
+	// heap needs.
+	mapCount, err := readMapCount()
+	if err != nil {
+		c.log.Warn("code_cache_map_count_unread", "error", err, "assumed", DefaultMapCount)
+		mapCount = DefaultMapCount
+	}
+	c.maps = newRunMaps(mappedRunsOf(mapCount))
+	if o.knobs != nil && o.knobs.mappedRuns > 0 {
+		c.maps = newRunMaps(o.knobs.mappedRuns)
+	}
 	c.clock = newHeatClock(c.now)
 	c.heat = newHeat(c.clock)
 	// Under the boot's values (a trace, the logger's attributes), never
@@ -283,7 +300,7 @@ func Open(ctx context.Context, o Options) (*Cache, error) {
 	}
 	c.log.Info("code_cache_opened", "dir", c.dir, "repos", len(c.entries), "bytes", c.heldBytes.Load(),
 		"budget", o.MaxBytes, "trashed", trashed, "memory", c.memory.Bytes, "memory_from", c.memory.From,
-		"memory_reserved", c.memReserve, "maintenance_budget", c.maint.budgetNow())
+		"memory_reserved", c.memReserve, "maintenance_budget", c.maint.budgetNow(), "mapped_runs", c.maps.most)
 	c.setGauges()
 	// THE OBSERVER, last: every run of the pool's from now on reports what
 	// it named to this cache (report.go). One cache a pool, and given back

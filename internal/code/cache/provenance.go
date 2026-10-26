@@ -83,10 +83,18 @@ import (
 // A run is MAPPED read-only (unix.Mmap) the first time a reader of its
 // incarnation needs it, and every lookup is a binary search over that memory.
 // A mapping is shared by every reader and HELD by each one that took it
-// (Cache.Provenance) until that reader lets its pin go; a run a merge or a
-// drop has replaced is unmapped as its last holder lets go, and every mapping
-// of an incarnation once it is discarded. Held past its file's name — renamed
-// into trash/ and removed — a mapping would keep that file's blocks.
+// (Cache.Provenance) until that reader lets its pin go, and then KEPT for the
+// copy's next reader within the node's bound on mapped runs — the process's
+// count of mappings over MappedRunShare, past which the mapping let go
+// longest ago is unmapped (runmaps.go) — so a busy repository's reads search
+// memory the page cache backs, and a node that has read every copy it holds
+// maps no more than the bound: kept until its index stopped naming it, every
+// run of every copy ever read stayed mapped, and a node reading some ten
+// thousand copies took the mappings the runtime's own heap needs. A run a
+// merge or a drop has replaced is unmapped as its last holder lets go, and
+// every mapping of an incarnation once it is discarded. Held past its file's
+// name — renamed into trash/ and removed — a mapping would keep that file's
+// blocks.
 //
 // # Nothing a run says is read from a run this process did not write or check
 //
@@ -374,46 +382,28 @@ func withRun(runs []provenanceRun, run provenanceRun) []provenanceRun {
 	return slices.Insert(runs, i, run)
 }
 
-// mappedRun is one run mapped into this process's memory.
-type mappedRun struct {
-	n    uint64
-	data []byte
-	file runFile
-	// holds is how many readers hold it (Cache.Provenance); stale, that the
-	// index no longer names it — it is unmapped at its last release.
-	holds int
-	stale bool
-}
-
-// unmap gives m's memory back.
-func (m *mappedRun) unmap() {
-	if m.data != nil {
-		_ = unix.Munmap(m.data) // what fails here is no mapping of ours, and nothing reads it again
-		m.data = nil
-	}
-}
-
-// forgetRuns lets go of every mapping of inc no reader holds that its index
-// no longer names — or all of them, once inc is discarded — and marks the
-// held ones stale, to go at their last release; e.mu is held.
+// forgetRuns lets go of every mapping of inc its index no longer names — or
+// all of them, once inc is discarded — unmapping those no reader holds now
+// and leaving each held one to its last release (runMaps.forget); e.mu is
+// held.
 func (c *Cache) forgetRuns(inc *incarnation) {
 	if len(inc.mapped) == 0 {
 		return
 	}
 	rec := inc.record()
 	for n, m := range inc.mapped {
-		if rec != nil && !inc.discarded && rec.named(n) && !m.stale {
+		if rec != nil && !inc.discarded && rec.named(n) {
 			continue
 		}
-		m.stale = true
-		if m.holds == 0 {
+		delete(inc.mapped, n)
+		if c.maps.forget(m) {
 			m.unmap()
-			delete(inc.mapped, n)
 		}
 	}
 }
 
-// releaseRuns is reader by letting go of the runs it held; e.mu is held.
+// releaseRuns is reader by letting go of the runs it held, each kept idle
+// for the next reader while its index names it (runMaps.let); e.mu is held.
 func (c *Cache) releaseRuns(inc *incarnation, by gitproc.Repairer) {
 	held := inc.runHolds[by]
 	if len(held) == 0 {
@@ -421,12 +411,11 @@ func (c *Cache) releaseRuns(inc *incarnation, by gitproc.Repairer) {
 	}
 	delete(inc.runHolds, by)
 	for _, m := range held {
-		m.holds--
-		if m.holds == 0 && m.stale {
-			m.unmap()
+		if c.maps.let(m) {
 			if inc.mapped[m.n] == m {
 				delete(inc.mapped, m.n)
 			}
+			m.unmap()
 		}
 	}
 }
@@ -436,9 +425,15 @@ func (c *Cache) releaseRuns(inc *incarnation, by gitproc.Repairer) {
 // Provenance where the incarnation keeps none. An error is an index this
 // node cannot read yet: a run a previous process left that the backfill has
 // not yet held to its trailer (nothing is read of it, and the backfill is
-// woken to check it), or a run its record names that cannot be mapped. A
-// reader answers without the index either way: an index decorates an answer,
-// and no request waits on a hash.
+// woken to check it), a run its record names that cannot be mapped, or a
+// node whose readers hold every run its bound on mapped runs lets it map
+// (runmaps.go). A reader answers without the index either way: an index
+// decorates an answer, and no request waits on a hash.
+//
+// A run another reader mapped is HELD as it is found, under the entry's lock,
+// so the bound cannot unmap it between finding it and reading it; one nobody
+// has mapped — or that the bound has unmapped since — is mapped outside the
+// lock and installed for the next reader once the record still names it.
 func (c *Cache) Provenance(s Synced) (Provenance, error) {
 	if err := c.handedOut(s, "a read of the index of pushes"); err != nil {
 		return Provenance{}, err
@@ -451,20 +446,43 @@ func (c *Cache) Provenance(s Synced) (Provenance, error) {
 			e.mu.Unlock()
 			return Provenance{}, nil
 		}
+		held := make(map[uint64]*mappedRun, len(rec.Runs))
 		var want []provenanceRun
 		for _, r := range rec.Runs {
-			if m := inc.mapped[r.N]; m == nil || m.stale {
-				want = append(want, r)
+			m := inc.mapped[r.N]
+			switch {
+			case m != nil && c.maps.hold(m):
+				held[r.N] = m
+				continue
+			case m != nil:
+				// Unmapped by the node's bound since its last reader let it
+				// go: mapped again below.
+				delete(inc.mapped, r.N)
 			}
+			want = append(want, r)
 		}
 		e.mu.Unlock()
+		// letGo gives back what this reading took, when it answers nothing.
+		letGo := func(fresh map[uint64]*mappedRun) {
+			e.mu.Lock()
+			for _, m := range held {
+				if c.maps.let(m) {
+					if inc.mapped[m.n] == m {
+						delete(inc.mapped, m.n)
+					}
+					m.unmap()
+				}
+			}
+			e.mu.Unlock()
+			for _, f := range fresh {
+				c.maps.drop(f)
+			}
+		}
 		fresh := make(map[uint64]*mappedRun, len(want))
 		for _, r := range want {
 			m, err := c.mapRun(e, inc, r)
 			if err != nil {
-				for _, f := range fresh {
-					f.unmap()
-				}
+				letGo(fresh)
 				if errors.Is(err, errUnchecked) {
 					c.kickBackfill()
 				}
@@ -477,9 +495,7 @@ func (c *Cache) Provenance(s Synced) (Provenance, error) {
 			// The index moved while its runs were mapped: map against the
 			// record that names them now.
 			e.mu.Unlock()
-			for _, f := range fresh {
-				f.unmap()
-			}
+			letGo(fresh)
 			continue
 		}
 		p := Provenance{from: rec.From, cov: rec.coverage(), indexed: true}
@@ -496,21 +512,27 @@ func (c *Cache) Provenance(s Synced) (Provenance, error) {
 			inc.runHolds = map[gitproc.Repairer][]*mappedRun{}
 		}
 		for _, r := range rec.Runs {
-			m := inc.mapped[r.N]
-			if f := fresh[r.N]; f != nil && (m == nil || m.stale) {
-				if m != nil && m.holds == 0 {
-					m.unmap()
+			m := held[r.N]
+			if m == nil {
+				// Mapped fresh by this reader: installed, in place of a
+				// mapping of the run the bound has unmapped meanwhile — or one
+				// another reader installed meanwhile, which this one then
+				// holds instead, its own let go.
+				if cur := inc.mapped[r.N]; cur != nil && c.maps.hold(cur) {
+					m = cur
+				} else {
+					m = fresh[r.N]
+					delete(fresh, r.N)
+					inc.mapped[r.N] = m
+					c.maps.hold(m)
 				}
-				m, inc.mapped[r.N] = f, f
-				delete(fresh, r.N)
 			}
-			m.holds++
 			inc.runHolds[s.Repairer] = append(inc.runHolds[s.Repairer], m)
 			p.runs = append(p.runs, m.file)
 		}
 		e.mu.Unlock()
 		for _, f := range fresh {
-			f.unmap()
+			c.maps.drop(f)
 		}
 		return p, nil
 	}
@@ -519,7 +541,9 @@ func (c *Cache) Provenance(s Synced) (Provenance, error) {
 
 // mapRun maps run r of inc, read-only, once it is vouched for at the identity
 // it has — errUnchecked otherwise, its stale vouch forgotten so the backfill
-// checks it — and held to what its record says of it.
+// checks it — and held to what its record says of it: within the node's
+// bound on mapped runs (runMaps.reserve), as nobody's yet — the caller holds
+// it, or drops it.
 func (c *Cache) mapRun(e *entry, inc *incarnation, r provenanceRun) (*mappedRun, error) {
 	rel := runRel(r.N)
 	path := filepath.Join(inc.dir, rel)
@@ -548,8 +572,12 @@ func (c *Cache) mapRun(e *entry, inc *incarnation, r provenanceRun) (*mappedRun,
 		return nil, fmt.Errorf("%w: %s's run %d is %d bytes, and its record says %d", errRunMalformed, e.id, r.N,
 			info.Size(), r.Bytes)
 	}
+	if err := c.maps.reserve(); err != nil {
+		return nil, fmt.Errorf("cache: mapping %s's run %d: %w", e.id, r.N, err)
+	}
 	data, err := unix.Mmap(int(f.Fd()), 0, int(info.Size()), unix.PROT_READ, unix.MAP_SHARED)
 	if err != nil {
+		c.maps.unreserve()
 		return nil, fmt.Errorf("cache: mapping %s's run %d: %w", e.id, r.N, err)
 	}
 	file, err := openRunBytes(data)
@@ -557,11 +585,12 @@ func (c *Cache) mapRun(e *entry, inc *incarnation, r provenanceRun) (*mappedRun,
 		err = fmt.Errorf("%w: it holds (%d, %d] and %d pushes, and its record names (%d, %d] and %d",
 			errRunMalformed, file.h.from, file.h.through, file.h.pushes, r.From, r.Through, r.Pushes)
 	}
+	m := &mappedRun{n: r.N, data: data, file: file}
 	if err != nil {
-		_ = unix.Munmap(data)
+		c.maps.drop(m)
 		return nil, fmt.Errorf("cache: %s's run %d: %w", e.id, r.N, err)
 	}
-	return &mappedRun{n: r.N, data: data, file: file}, nil
+	return m, nil
 }
 
 // Provenance is an incarnation's index of which push introduced each commit,
@@ -964,12 +993,12 @@ func (c *Cache) mergePair(ctx context.Context, e *entry, inc *incarnation, gen u
 	if err != nil {
 		return nil, false, err
 	}
-	defer ma.unmap()
+	defer c.maps.drop(ma)
 	mb, err := c.mapRun(e, inc, b)
 	if err != nil {
 		return nil, false, err
 	}
-	defer mb.unmap()
+	defer c.maps.drop(mb)
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}

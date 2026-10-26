@@ -337,7 +337,9 @@ type incarnation struct {
 	// still there or the ordinary rules and never waits on one already gone.
 	held map[gitproc.Repairer][]heldReport
 	// THE PROVENANCE INDEX'S IN-MEMORY HALF (provenance.go). mapped is every
-	// run of its index this process has mapped, by number, and runHolds the
+	// run of its index this process holds mapped, by number — held by a
+	// reader, or kept for the next within the node's bound on mapped runs
+	// (runmaps.go), which may unmap one nobody holds — and runHolds the
 	// mappings each reader holds (Cache.Provenance), by the reader's name,
 	// let go by that reader's release: a run the index no longer names is
 	// unmapped as its last holder lets go, and every one once the

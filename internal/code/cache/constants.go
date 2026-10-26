@@ -677,3 +677,23 @@ const (
 	BackfillRetry        = 5 * time.Second
 	BackfillRetryCeiling = 5 * time.Minute
 )
+
+// MappedRunShare bounds the runs of the indexes of pushes the cache holds
+// mapped at once (runmaps.go): the process's count of mappings
+// (vm.max_map_count, read at Open) over this.
+//
+// A QUARTER: every mapping the engine's process makes counts against the one
+// sysctl — the Go heap's, the store's library and its threads', every run's —
+// and past it every one fails, the runtime's own heap growth with them, which
+// is fatal. The rest of the process holds a few thousand at most, so three
+// quarters leave it more than ten times that; and a quarter of Linux's
+// default, 16 382 runs, holds the indexes of some three thousand copies kept
+// mapped for their next reader — at the five or so runs an index holds
+// between merges — while the readers of one node, each holding the runs of
+// one index for the length of one read, hold at most a few hundred.
+const MappedRunShare = 4
+
+// DefaultMapCount is Linux's default vm.max_map_count (DEFAULT_MAX_MAP_COUNT,
+// 65 536 less 6): the count a darwin build holds itself to (mapcount_other.go)
+// and a Linux node whose kernel answers none (Open logs it).
+const DefaultMapCount = 65530

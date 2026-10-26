@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -799,6 +801,117 @@ func TestACacheNeverStartedBackfillsNothing(t *testing.T) {
 			t.Fatal("a started cache's backfill never closed the gap")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// THE RUNS A NODE HOLDS MAPPED STAY UNDER ITS BOUND. Every run a reader maps
+// is one mapping of the engine's process, which the kernel counts against
+// vm.max_map_count — one count for the whole node — and past it every mapping
+// the process asks for fails, the runtime's own heap growth among them, which
+// is fatal. Kept for as long as its index named it, a run of every copy ever
+// read stayed mapped, the count growing with the copies a node's seats read.
+// So twenty copies of two runs each, read one after another under a bound of
+// eight, hold at most eight runs mapped — the kernel's own count of them where
+// it says, Linux's /proc/self/maps — and every read is answered from its
+// index, the first copy's again once the bound has unmapped its runs; a
+// reader that finds every mapping held by readers is answered without the
+// index, and one let go makes room for it.
+//
+// Mutation: keep every run let go (runMaps.reserve unmapping none, its bound
+// unchecked) — the twenty copies hold forty runs mapped.
+func TestTheRunsANodeHoldsMappedStayUnderItsBound(t *testing.T) {
+	t.Parallel()
+	const bound, copies = 8, 20
+	w := newSyncWorld(t, onMemory)
+	var repos []string
+	for i := 1; i <= copies; i++ {
+		repo := w.repo(t, i)
+		w.push(t, repo, "refs/heads/main", nil)
+		repos = append(repos, repo)
+	}
+	c := w.open(t, cache.MappedRunsAt(bound))
+	pin := func(repo string) cache.Synced {
+		t.Helper()
+		s, err := c.Sync(t.Context(), repo, linearizable)
+		if err != nil {
+			t.Fatalf("sync of %s: %v", repo, err)
+		}
+		return s
+	}
+	// Two runs a copy: the two deltas folded after its first full read.
+	tips := map[string]string{}
+	for _, repo := range repos {
+		pin(repo).Release()
+		for range 2 {
+			tips[repo], _ = w.push(t, repo, "refs/heads/main", nil)
+			pin(repo).Release()
+		}
+	}
+	answers := func(repo string) {
+		t.Helper()
+		s := pin(repo)
+		defer s.Release()
+		p, err := c.Provenance(s)
+		if err != nil {
+			t.Fatalf("reading %s's index: %v", repo, err)
+		}
+		if by, ok := p.Commit(tips[repo]); !ok || by.PushID != lastPush(t, w.log, repo).PushID {
+			t.Errorf("%s's index answers its last commit with %q (%t), want its last push", repo, by.PushID, ok)
+		}
+	}
+	for _, repo := range repos {
+		answers(repo)
+		if now, most := cache.MappedRuns(c); now > bound || most != bound {
+			t.Fatalf("after reading %s the node holds %d runs mapped, under a bound of %d (want %d)", repo, now,
+				most, bound)
+		}
+	}
+	if runtime.GOOS == "linux" {
+		// The kernel names a mapping by its file's path with every link
+		// resolved; and this cache's runs are the ones under its directory,
+		// whatever the cases beside it map.
+		dir, err := filepath.EvalSymlinks(w.layout.Dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := os.ReadFile("/proc/self/maps")
+		if err != nil {
+			t.Fatal(err)
+		}
+		mine := 0
+		for _, line := range strings.Split(string(raw), "\n") {
+			if strings.Contains(line, dir+"/") && strings.Contains(line, "/crewlet/provenance.") {
+				mine++
+			}
+		}
+		if mine == 0 || mine > bound {
+			t.Errorf("the kernel counts %d mappings of this cache's runs, want some — the last copies read kept "+
+				"for their next reader — and at most its bound of %d", mine, bound)
+		}
+	}
+	answers(repos[0]) // its runs unmapped by the bound since, and mapped again
+
+	// Every mapping held: a reader past the bound is answered without the
+	// index, and one let go makes its room.
+	var held []cache.Synced
+	for _, repo := range repos[:bound/2] {
+		s := pin(repo)
+		if _, err := c.Provenance(s); err != nil {
+			t.Fatalf("reading %s's index under a bound with room: %v", repo, err)
+		}
+		held = append(held, s)
+	}
+	s := pin(repos[copies-1])
+	defer s.Release()
+	if _, err := c.Provenance(s); err == nil {
+		t.Error("a reader past a bound its readers hold whole read the index")
+	}
+	held[0].Release()
+	if _, err := c.Provenance(s); err != nil {
+		t.Errorf("a reader once another let its runs go: %v", err)
+	}
+	for _, h := range held[1:] {
+		h.Release()
 	}
 }
 

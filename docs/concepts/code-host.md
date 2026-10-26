@@ -1553,7 +1553,16 @@ are dropped when the log under the node is restored or recreated, whose
 positions then name other records. A run the node has not written since it
 started is held to its own SHA-256 checksum before anything reads it — until
 then an answer carries no pushes — and every run is checked again by the
-scrub; one that fails drops the index, which the backfill reads again.
+scrub; one that fails drops the index, which the backfill reads again. A read
+searches a run through memory the node maps from its file, and the kernel
+counts every mapping of the engine's process against one setting of the
+whole host, `vm.max_map_count` (65 530 unless the host raised it), past which
+the process can map nothing — not even memory for itself, which stops it. So
+a node keeps at most a quarter of that count of runs mapped (16 382 at the
+default, read at boot and named as `mapped_runs` on `code_cache_opened`): a
+run its last reader let go stays mapped for the copy's next reader only while
+there is room, the one let go longest ago unmapped first, and a read that finds
+every mapping held by reads in flight is answered without its pushes.
 `crewlet.code.cache.provenance.backfilled` counts the pushes the backfill
 read, and `crewlet.code.cache.provenance.behind` the repositories whose index
 is still behind on the node ([Metrics](../reference/metrics.md)).
@@ -2085,7 +2094,8 @@ A git node's [cache](#the-cache-on-a-git-node) logs under the component `code.ca
 
 | Line | Level | Means |
 |---|---|---|
-| `code_cache_opened` | `INFO` | The node opened its cache at boot: the `dir`, the `repos` and `bytes` it already held, its byte `budget`, and how many leftovers it moved aside (`trashed`); and the node's `memory` as its git read it, where from (`memory_from`: `/proc/meminfo`, a cgroup's limit file, or `sysctl hw.memsize`), what it keeps for everything but its background work (`memory_reserved`), and what that leaves the work (`maintenance_budget`). |
+| `code_cache_opened` | `INFO` | The node opened its cache at boot: the `dir`, the `repos` and `bytes` it already held, its byte `budget`, and how many leftovers it moved aside (`trashed`); and the node's `memory` as its git read it, where from (`memory_from`: `/proc/meminfo`, a cgroup's limit file, or `sysctl hw.memsize`), what it keeps for everything but its background work (`memory_reserved`), and what that leaves the work (`maintenance_budget`); and the most runs of its indexes of pushes it holds mapped at once (`mapped_runs`: a quarter of the kernel's `vm.max_map_count`, [Kept like the rest of the copy](#which-push-landed-a-commit)). |
+| `code_cache_map_count_unread` | `WARN` | The node could not read how many mappings the kernel lets its process hold (`/proc/sys/vm/max_map_count`; `error`), so it bounds the runs of its indexes of pushes it maps as if the count were Linux's default (`assumed`, 65 530). A sandboxed kernel that hides `/proc/sys`; nothing to do unless the host lowered the count below its default, which lowers what every process on it may map. |
 | `code_cache_memory_changed` | `INFO` | The node's memory read differently from the last reading — a container resized in place — and the background work's `maintenance_budget` moved with it; `was` is the reading before. The git lanes keep their boot sizes until a restart. |
 | `code_cache_memory_unreadable` | `WARN` | The node's memory could not be read again; the last reading and its budget stand until a read succeeds. Once until then. |
 | `code_cache_trashed` | `WARN` | At boot, something in the cache that is not a repository's current copy was moved aside to be removed — a copy an interrupted rebuild left, a stray, or a copy recorded in another build's format; `why` says which. Nothing is lost: the rows and the object store bring the repository back at its next fetch. |

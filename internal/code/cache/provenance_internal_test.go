@@ -2,6 +2,7 @@ package cache
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -285,6 +286,70 @@ func TestAMergeKeepsEveryPushAboveItsFloor(t *testing.T) {
 		if m := v.At(i); m.By.PushID != rows[i+3].PushID || m.New != oidOf(i+4) {
 			t.Errorf("the merge's move %d is %+v, want push %d's", i, m, i+3)
 		}
+	}
+}
+
+// THE BOUND UNMAPS THE RUN LET GO LONGEST AGO, AND NEVER ONE HELD. A mapping
+// past the node's bound on mapped runs makes room by unmapping an idle one —
+// the one its last reader let go before every other's — so the runs of the
+// copies people are reading stay mapped; a mapping a reader holds is never
+// taken from under it, so a bound every reader holds whole refuses the next
+// mapping rather than exceed itself; and a run its index stops naming is
+// unmapped at its last release, never kept idle for a reader that will not
+// come.
+//
+// Mutation: evict from the idle list's head (the most recently let go) — the
+// first run let go is still held, and the last is gone.
+func TestTheBoundUnmapsTheRunLetGoLongestAgo(t *testing.T) {
+	t.Parallel()
+	rm := newRunMaps(2)
+	mapped := func(n uint64) *mappedRun {
+		t.Helper()
+		if err := rm.reserve(); err != nil {
+			t.Fatalf("reserving run %d's mapping under a bound with room: %v", n, err)
+		}
+		m := &mappedRun{n: n}
+		if !rm.hold(m) {
+			t.Fatalf("a fresh mapping of run %d could not be held", n)
+		}
+		return m
+	}
+	first, second := mapped(1), mapped(2)
+	if rm.let(first) || rm.let(second) {
+		t.Fatal("a run its index still names was unmapped at its last release, not kept for the next reader")
+	}
+	third := mapped(3)
+	switch {
+	case rm.hold(first):
+		t.Error("past the bound, the run let go first is still mapped")
+	case !rm.hold(second):
+		t.Error("past the bound, the run let go last was unmapped before the one let go first")
+	}
+	if got := rm.count(); got != 2 {
+		t.Errorf("the node holds %d runs mapped under a bound of 2", got)
+	}
+	// Both held now: the bound refuses a third rather than take one.
+	if err := rm.reserve(); !errors.Is(err, errMapsFull) {
+		t.Errorf("a mapping past a bound its readers hold whole = %v, want errMapsFull", err)
+	}
+	if rm.let(third) {
+		t.Fatal("a run still named was unmapped at its last release")
+	}
+	if err := rm.reserve(); err != nil {
+		t.Errorf("a mapping once a reader let one go = %v, want room", err)
+	}
+	if rm.hold(third) {
+		t.Error("the idle run the new mapping made room with is still mapped")
+	}
+	// A run its index no longer names goes at its last release.
+	if rm.forget(second) {
+		t.Error("a held run was unmapped as its index stopped naming it")
+	}
+	if !rm.let(second) {
+		t.Error("a run its index no longer names was kept idle at its last release")
+	}
+	if rm.hold(second) {
+		t.Error("a run its index no longer names was held again")
 	}
 }
 

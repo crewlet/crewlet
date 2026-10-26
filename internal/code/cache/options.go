@@ -209,6 +209,10 @@ type knobs struct {
 	// into the index took (foldPushes): a benchmark weighs the fold against
 	// the round it is part of.
 	folded func(took time.Duration)
+	// mappedRuns, when above zero, is the node's bound on mapped runs in
+	// place of the process's map count's share (runmaps.go): a case reaches
+	// the bound with a handful of copies.
+	mappedRuns int
 }
 
 // validate refuses an Options value naming the field and what to set,
