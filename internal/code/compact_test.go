@@ -382,6 +382,75 @@ func TestACompactionIsRefusedForWhatItsRepositoryIs(t *testing.T) {
 	}
 }
 
+// A COMPACTION IS DECIDED AT THE PACK BOUND, AND MAKES ROOM: the bound holds
+// pushes back and never a compaction, which adds no pack and is the one way a
+// repository at MaxPacksPerRepo live packs ever takes a pack again. At the
+// bound, and past it as a later build's committer may leave a repository, a
+// push carrying a pack is refused compaction_behind whole and undecided,
+// while a compaction of two of the repository's live packs into one is
+// applied, its live packs dropping by exactly one, since the apply counts the
+// rows it moves. At the bound that one pack is room, and the same push run
+// again is an entry of a record; past it the bound still holds the push back,
+// its sentence naming what the repository still holds.
+//
+// Each repository holds two real live packs and its row counts the rest: the
+// decides read the count off the row and the inputs off their own rows, so
+// the case stores no two thousand pushes.
+//
+// Mutation: refuse a compaction of a repository holding MaxPacksPerRepo live
+// packs or more, and both arms fail on the compaction's answer — the build
+// under which a repository that reached the bound would refuse every push
+// carrying a pack for good.
+func TestACompactionIsDecidedAtThePackBoundAndMakesRoom(t *testing.T) {
+	t.Parallel()
+	for name, held := range map[string]int64{
+		"at the bound":   code.MaxPacksPerRepo,
+		"past the bound": code.MaxPacksPerRepo + 3,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			n := newNode(t)
+			repo, ids := packedRepo(t, n, "web", 2)
+			n.exec(`UPDATE code_repos SET live_packs = ? WHERE id = ?`, held, repo)
+			c, _ := committerOn(t, n, n.pub)
+			// push proposes a push carrying a pack, creating a branch of
+			// its own.
+			push := func() answer {
+				ref := "refs/heads/" + uuid.NewString()
+				res, err := c.Propose(t.Context(), packed(proposal(repo,
+					update(ref, code.ZeroOID, oidOf(ref))), harnessAt))
+				return answer{res, err}
+			}
+			// behind fails t unless a is a refusal of the whole push at the
+			// bound, undecided, its sentence naming packs live packs.
+			behind := func(when string, a answer, packs int64) {
+				t.Helper()
+				want := code.BehindDetail("web", packs)
+				if a.err != nil || a.res.Outcome != "" || a.res.Answer.Refused != code.RefusalCompactionBehind ||
+					a.res.Answer.Detail != want {
+					t.Fatalf("%s, a push carrying a pack answered %q %q (%q), %v; want compaction_behind (%q), "+
+						"undecided", when, a.res.Outcome, a.res.Answer.Refused, a.res.Answer.Detail, a.err, want)
+				}
+				requireOnePlacement(t, a.res.Answer)
+			}
+			behind("before the compaction", push(), held)
+
+			res, err := c.ProposeCompaction(t.Context(), compactionOf(n, repo, ids, 2, harnessAt))
+			requireApplied(t, res, err)
+			left := int64(n.count(`SELECT live_packs FROM code_repos WHERE id = ?`, repo))
+			if left != held-1 {
+				t.Fatalf("the compaction left %d live packs of %d, want %d: two retired, one added", left, held,
+					held-1)
+			}
+			if left >= code.MaxPacksPerRepo {
+				behind("still past the bound after the compaction", push(), left)
+				return
+			}
+			requireOK(t, push())
+		})
+	}
+}
+
 // A COMPACTION THAT INVENTS OBJECTS IS REFUSED BEFORE ITS RECORD: outputs that
 // hold more objects than the rows of the packs they replace count are a
 // builder's bug — a merge writes no object its inputs did not hold — so the
