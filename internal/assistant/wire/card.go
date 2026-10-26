@@ -147,11 +147,20 @@ type ProposalCard struct {
 	// Changes is the "What will change" list, scope first, every change a
 	// before and after pair (D10).
 	Changes []Change `json:"changes"`
-	// Note is the consequence, in one sentence.
+	// Summary is what the change does, in a sentence above the rows, where
+	// the title alone does not say it: what a destructive change takes away.
+	Summary string `json:"summary,omitempty"`
+	// Note is the consequence, in one sentence, under the rows: whether and
+	// how the change can be reverted.
 	Note string `json:"note,omitempty"`
-	// Removes are the fields the change removes from the object as it is
-	// now, by label: the warning the card leads with.
-	Removes []string `json:"removes,omitempty"`
+	// Risk is how much care the approval asks ([ProposalRisk]); absent for
+	// an ordinary change.
+	Risk ProposalRisk `json:"risk,omitempty"`
+	// Technical is the exact request the approval sends, for an approver
+	// who administers the company: what the rows describe, in the API's own
+	// terms. Absent for everybody else, who reviews the rows, which are
+	// built from the same request.
+	Technical *TechnicalRequest `json:"technical,omitempty"`
 	// Audience is who will see the result where visibility changes (a
 	// share, a comment others are notified of).
 	Audience []string `json:"audience,omitempty"`
@@ -183,6 +192,15 @@ type ProposalCard struct {
 	// Failure is the engine's refusal of a failed proposal, and whether a
 	// Retry is offered.
 	Failure *Failure `json:"failure,omitempty"`
+}
+
+// TechnicalRequest is a proposal's request as an administrator reads it behind
+// the card's "Technical details": its method, its path with the query, and its
+// body, indented and redacted.
+type TechnicalRequest struct {
+	Method string `json:"method"`
+	Path   string `json:"path"`
+	Body   string `json:"body,omitempty"`
 }
 
 // PageActionRef is the page action a page-scope proposal applies: the action's
@@ -376,6 +394,12 @@ func (p *ProposalCard) validate() error {
 	case p.PageAction != nil && (p.Scope != ScopePage || p.PageAction.Name == ""):
 		return fmt.Errorf("%w: only a page-scope proposal names a page action, and "+
 			"it names it", ErrInvalid)
+	case p.Risk != "" && !p.Risk.Valid():
+		return fmt.Errorf("%w: proposal risk %q is not one of %v", ErrInvalid, p.Risk,
+			ProposalRisks)
+	case p.Technical != nil && (p.Technical.Method == "" || p.Technical.Path == ""):
+		return fmt.Errorf("%w: a proposal's technical details name the method and the path",
+			ErrInvalid)
 	}
 	for _, ch := range p.Changes {
 		if !ch.Kind.Valid() {

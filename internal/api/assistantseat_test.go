@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
+	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
@@ -104,7 +105,7 @@ func prepareSeat(t *testing.T, fx *assistApp, read exec.Grant) (proposal.Preview
 	if err != nil || resp.Status != http.StatusOK {
 		t.Fatalf("api_request read the unit: %d %s, %v", resp.Status, resp.Body, err)
 	}
-	shaped, err := catalog.Shape(reader, args, resp, provenance.NewBoundary(), time.Now())
+	shaped, err := catalog.Shape(reader, args, resp, provenance.NewBoundary(), time.Now(), cards.Options{})
 	if err != nil || !strings.Contains(shaped.Model, "cto") {
 		t.Fatalf("the model was handed %q, %v, not the unit", shaped.Model, err)
 	}
@@ -195,10 +196,10 @@ func TestAnAgentSeatIsAddedThroughTheGenericChange(t *testing.T) {
 	again := req
 	resp, err = fx.disp.Do(t.Context(), fx.derive(t, approvedFor(again, authz.ActionOrgWrite)),
 		again)
-	if err != nil || resp.Status != http.StatusConflict ||
-		exec.RefusalOf(resp).Code != string(httpjson.CodeRevisionAdvanced) {
-		t.Errorf("a change prepared against the old unit answered %d %s, %v, want 409 %s",
-			resp.Status, resp.Body, err, httpjson.CodeRevisionAdvanced)
+	if err != nil || resp.Status != http.StatusPreconditionFailed ||
+		exec.RefusalOf(resp).Code != string(httpjson.CodeVersionMoved) {
+		t.Errorf("a change prepared against the old unit answered %d %s, %v, want 412 %s",
+			resp.Status, resp.Body, err, httpjson.CodeVersionMoved)
 	}
 	if now, err := catalog.Revision(t.Context(), readOver(fx, read), p.SourceRevision); err != nil ||
 		now == p.SourceRevision {
@@ -376,7 +377,7 @@ func TestASeatTheUnitWouldRefuseIsRefusedBeforeThePersonSeesIt(t *testing.T) {
 	_, err = propose(resolved, "")
 	var refused *catalog.PreviewRefusal
 	if !errors.As(err, &refused) || refused.Status != http.StatusBadRequest ||
-		!strings.Contains(refused.Refusal.Message, "tool_sources") {
+		!strings.Contains(refused.Refusal.ForModel(), "tool_sources") {
 		t.Fatalf("a seat with fields the unit does not take previewed %v, want the "+
 			"route's refusal naming them", err)
 	}

@@ -47,6 +47,12 @@ type Table struct {
 	Brief []string
 	// Open links the whole card to its screen.
 	Open *Open
+	// More, where named, is the path to the answer's own word that rows lie
+	// past this page: a cursor to the next one (`next`, `next_cursor`) or a
+	// flag (`more`, `is_truncated`). A page that says so is a page, never
+	// the whole: the model is told the count is "at least" what it holds,
+	// and the person that there are more ([Built.More]).
+	More string
 }
 
 // Column is one table column: where each row holds it, and how it is drawn.
@@ -59,6 +65,23 @@ type Column struct {
 	// Prose marks text a person or an agent wrote (a title, a question, a
 	// snippet), which a model reads fenced.
 	Prose bool
+	// Seat marks a text column whose value is a seat's handle, drawn by the
+	// seat's name where the build is told it ([Options.SeatName]): a person
+	// knows "QA Engineer", not "qa", and the model reads what the person
+	// sees, which the catalogue's resolver takes back as a name.
+	Seat bool
+}
+
+// Options are what a build is told beyond the spec and the answer.
+type Options struct {
+	// SeatName is a seat's name by its handle, false where it is not
+	// known; nil draws every seat column by its handle.
+	SeatName func(handle string) (string, bool)
+	// Zone is the company's clock, which every instant the model reads of
+	// the card is said on ([SummaryOf]); nil says them in UTC. The card the
+	// person sees keeps the instant, which the dashboard draws in the
+	// viewer's own zone.
+	Zone *time.Location
 }
 
 // MaxBrief is the most columns a table draws in the drawer: what its narrowest
@@ -215,6 +238,9 @@ func (s Spec) Validate() error {
 				return fmt.Errorf("cards: table column %q is not a unique key with a "+
 					"label, a path and a type", c.Key)
 			}
+			if c.Seat && c.Type != wire.ColumnText {
+				return fmt.Errorf("cards: table column %q names a seat and is not text", c.Key)
+			}
 			keys[c.Key] = true
 		}
 		if len(t.Brief) > MaxBrief {
@@ -279,6 +305,11 @@ type Built struct {
 	// Note is the answer's own sentence on why it holds nothing, read at
 	// the spec's Note path; empty where it says none.
 	Note string
+	// More is a table whose answer says rows lie past this page
+	// ([Table.More]).
+	More bool
+	// Zone is [Options.Zone], carried to the model's summary.
+	Zone *time.Location
 }
 
 // Cards are the card and its notice, in the order they are shown.
@@ -300,6 +331,11 @@ var ErrNotJSON = errors.New("cards: the answer is not JSON")
 // count, and a notice names how many rows were shown. A field the answer does
 // not hold is an empty cell, never a guess.
 func Build(spec Spec, answer []byte, now time.Time) (Built, error) {
+	return BuildWith(spec, answer, now, Options{})
+}
+
+// BuildWith is [Build] told what o says.
+func BuildWith(spec Spec, answer []byte, now time.Time, o Options) (Built, error) {
 	if err := spec.Validate(); err != nil {
 		return Built{}, err
 	}
@@ -309,7 +345,7 @@ func Build(spec Spec, answer []byte, now time.Time) (Built, error) {
 	}
 	var built Built
 	if spec.Table != nil {
-		built, err = buildTable(spec.Table, doc, now)
+		built, err = buildTable(spec.Table, doc, now, o)
 	} else {
 		built, err = buildEntity(spec.Entity, doc)
 	}
@@ -319,6 +355,7 @@ func Build(spec Spec, answer []byte, now time.Time) (Built, error) {
 	if spec.Note != "" {
 		built.Note = text(lookup(doc, spec.Note))
 	}
+	built.Zone = o.Zone
 	return built, nil
 }
 
@@ -336,7 +373,7 @@ func decode(answer []byte) (any, error) {
 	return doc, nil
 }
 
-func buildTable(t *Table, doc any, now time.Time) (Built, error) {
+func buildTable(t *Table, doc any, now time.Time, o Options) (Built, error) {
 	rows, _ := lookup(doc, t.Rows).([]any)
 	if t.Expand != "" {
 		rows = expand(rows, t.Expand)
@@ -356,6 +393,12 @@ func buildTable(t *Table, doc any, now time.Time) (Built, error) {
 		cells := make([]any, len(columns))
 		for i, c := range columns {
 			cells[i] = cell(c.Type, lookup(row, c.Path))
+			if handle, ok := cells[i].(string); ok && c.Seat && handle != "" &&
+				o.SeatName != nil {
+				if name, known := o.SeatName(handle); known {
+					cells[i] = name
+				}
+			}
 		}
 		card.Rows = append(card.Rows, cells)
 	}
@@ -379,12 +422,34 @@ func buildTable(t *Table, doc any, now time.Time) (Built, error) {
 	}
 	card.Truncated = len(card.Rows) < card.RowCount
 	built := Built{Card: out, Empty: card.RowCount == 0}
-	if card.Truncated {
+	if t.More != "" {
+		built.More = morePast(lookup(doc, t.More))
+	}
+	switch {
+	case card.Truncated:
 		notice := Notice(wire.NoticeInfo, fmt.Sprintf("Showing the first %d of %d rows. "+
 			"Open it in the app to see the rest.", len(card.Rows), card.RowCount))
 		built.Notice = &notice
+	case built.More && card.RowCount > 0:
+		notice := Notice(wire.NoticeInfo, fmt.Sprintf("Showing the first %d rows; there "+
+			"are more. Open it in the app to see the rest.", card.RowCount))
+		built.Notice = &notice
 	}
 	return built, out.Validate()
+}
+
+// morePast reads an answer's word that rows lie past its page: a cursor that
+// is present and not empty, or a flag that is true.
+func morePast(v any) bool {
+	switch m := v.(type) {
+	case bool:
+		return m
+	case string:
+		return m != ""
+	case nil:
+		return false
+	}
+	return true
 }
 
 func buildEntity(e *Entity, doc any) (Built, error) {

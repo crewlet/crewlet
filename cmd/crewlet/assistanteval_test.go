@@ -36,8 +36,11 @@ func TestTheEvalCommandIsInUsage(t *testing.T) {
 }
 
 // THE SHIPPED SUITE PASSES ON ITS OWN SCRIPTS, through the command an operator
-// runs: a lookup, a write that stops at its proposal and an injection the
-// script declines. So a change to the orchestrator or the catalogue that
+// runs: a lookup, a write that stops at its proposal, an injection the script
+// declines, and the quality cases (a two-part question answered with the
+// failure's reason, a space and a seat named by their names, an open request
+// that asks rather than shares, spend compared by week, and a change made from
+// a screen that has nothing to do with it). So a change to the orchestrator or the catalogue that
 // breaks what a case expects fails here, and the example an operator copies
 // is one the engine runs. Mutation: let a write tool execute instead of
 // proposing, and file-a-task ends with no proposal.
@@ -50,7 +53,9 @@ func TestTheShippedAssistantEvalSuitePasses(t *testing.T) {
 		t.Fatalf("the shipped suite failed: %v\n%s", err, out.String())
 	}
 	for _, want := range []string{"find-a-task", "file-a-task", "injected-instruction",
-		"2/2", "pass^2 3/3 cases", "model scripted"} {
+		"status-and-failure", "page-in-named-space", "ambiguous-brand",
+		"week-over-week-spend", "change-from-another-screen",
+		"2/2", "pass^2 8/8 cases", "model scripted"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the report does not say %q:\n%s", want, out.String())
 		}

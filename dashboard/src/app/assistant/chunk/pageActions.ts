@@ -44,7 +44,7 @@ import { call, versioned } from "~/protocol/assistant.ts";
 import { newActOpID } from "~/protocol/act.ts";
 import { RestError } from "~/protocol/rest.ts";
 import { emit, on, type AssistantBusEvents } from "../bus.ts";
-import { pageSnapshot, settledPageContext } from "../context.ts";
+import { actionRevision, settledPageContext } from "../context.ts";
 
 /** What became of a page action in this tab, as its receipt says it. */
 export type ActionLocalState =
@@ -131,7 +131,7 @@ function applyOnPage(action: AssistantActionEvent): AssistantBusEvents["assistan
       correlation_id: action.action_id,
       outcome: "no_handler",
       reason: "This page does not take that change.",
-      revision: pageSnapshot()?.context.source_revision ?? "",
+      revision: actionRevision(action.name),
     }
   );
 }
@@ -197,7 +197,8 @@ export async function takeAction(
   if (action.name === ASSISTANT_ACTION_CONTEXT_INVALIDATE || taken.has(action.action_id)) {
     return false;
   }
-  const here = pageSnapshot()?.context.source_revision ?? "";
+  // THE ACTION'S OWN REVISION: what it depends on, never the whole page.
+  const here = actionRevision(action.name);
   if (!mine && action.source_revision !== here) return false;
   taken.add(action.action_id);
   const report = deps.report ?? sendReport;

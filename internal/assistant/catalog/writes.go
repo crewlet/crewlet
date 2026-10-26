@@ -65,9 +65,9 @@ func writeTools() []Tool {
 			object([]string{"title"}, map[string]*schema{
 				"title":    text("What the work is, in one line.", lineBytes),
 				"body":     text("The description, in Markdown.", bodyBytes),
-				"project":  text("The project key. Default the person's team's.", nameBytes),
-				"assignee": text("A seat's handle. Default the project's default assignee.", nameBytes),
-				"ask":      text("A colleague's handle: the task IS a question they owe an answer to.", nameBytes),
+				"project":  text("The project's key or name. Default the person's team's.", nameBytes),
+				"assignee": text("A seat's handle or name. Default the project's default assignee.", nameBytes),
+				"ask":      text("A colleague's handle or seat name: the task IS a question they owe an answer to.", nameBytes),
 				"parent":   text("The parent task's key or id, for a subtask.", nameBytes),
 				"type":     text("A task type from the workspace's catalogue.", nameBytes),
 				"status":   oneOf("Where it starts. Default todo.", statuses...),
@@ -85,7 +85,7 @@ func writeTools() []Tool {
 				"body":     text("A new description, replacing the old one.", bodyBytes),
 				"status":   oneOf("A new status.", statuses...),
 				"priority": oneOf("A new priority.", priorities...),
-				"assignee": text("A seat's handle, or \"\" to unassign.", nameBytes),
+				"assignee": text("A seat's handle or name, or \"\" to unassign.", nameBytes),
 				"reason":   text("With assignee: one line on why the work is theirs now.", lineBytes),
 				"due":      text("A new due date (2031-04-16, today, eow, +7d).", nameBytes),
 				"labels":   names("The task's tags, replacing them.", 20),
@@ -111,7 +111,7 @@ func writeTools() []Tool {
 				"their handle.",
 			object([]string{"items"}, map[string]*schema{
 				"items":  names("Task keys or ids, most important first.", 100),
-				"handle": text("A report's handle. Default the person's own list.", nameBytes),
+				"handle": text("A report's handle or seat name. Default the person's own list.", nameBytes),
 			})),
 		write("mark_inbox", "mark_inbox", false, "mark the inbox",
 			"Propose marking inbox notices read or unread, by their record ids.",
@@ -122,14 +122,14 @@ func writeTools() []Tool {
 		write("pause_agent", "pause_seat", true, "pause agents",
 			"Propose pausing an agent seat, optionally stopping the turn it is running.",
 			object([]string{"handle", "reason"}, map[string]*schema{
-				"handle":       text("The seat's handle.", nameBytes),
+				"handle":       text("The seat's handle or name.", nameBytes),
 				"reason":       text("Why, in one line.", lineBytes),
 				"stop_running": flag("Stop the turn it is running now as well."),
 			})),
 		write("resume_agent", "resume_seat", false, "resume agents",
 			"Propose resuming a paused agent seat.",
 			object([]string{"handle"}, map[string]*schema{
-				"handle": text("The seat's handle.", nameBytes),
+				"handle": text("The seat's handle or name.", nameBytes),
 			})),
 		write("steer_turn", "steer_turn", false, "steer running turns",
 			"Propose a note to a turn that is running now; it becomes that agent's input.",
@@ -148,7 +148,7 @@ func writeTools() []Tool {
 			object([]string{"title", "body"}, map[string]*schema{
 				"title":     text("The page's title.", lineBytes),
 				"body":      text("The page, in Markdown.", bodyBytes),
-				"container": text("The space's key. Default the person's team's.", nameBytes),
+				"container": text("The space's key or name (list_spaces lists them). Default the person's team's.", nameBytes),
 				"parent":    text("The id of the page it belongs under.", nameBytes),
 				"labels":    names("Labels.", 20),
 				"status":    oneOf("published (the default) or draft.", "published", "draft"),
@@ -171,9 +171,23 @@ func writeTools() []Tool {
 		if out[i].Name == "answer_decision" {
 			out[i].Tier = TierConsequential
 		}
+		out[i].Names = writeNames[out[i].Name]
 	}
-	out = append(out, principlesWrite())
+	out = append(out, principlesWrite(), budgetWrite())
 	return append(out, shareTools()...)
+}
+
+// writeNames are the arguments of each write that name a seat, a project or a
+// space, which the turn resolves from a name to the key before the preview is
+// read ([Resolver.Resolve]). A share's audience is not one: `unit:<key>` and
+// `company` are an audience's own grammar, which its route reads.
+var writeNames = map[string]map[string]Directory{
+	"create_task":       {"project": DirProject, "assignee": DirSeat, "ask": DirSeat},
+	"update_task":       {"assignee": DirSeat},
+	"set_my_priorities": {"handle": DirSeat},
+	"pause_agent":       {"handle": DirSeat},
+	"resume_agent":      {"handle": DirSeat},
+	"create_page":       {"container": DirSpace},
 }
 
 // The artifacts surface's share routes (internal/api/artifactsapi), the ones

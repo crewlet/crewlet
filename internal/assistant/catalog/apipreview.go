@@ -157,55 +157,62 @@ func (g generic) preview(ctx context.Context, read proposal.Read, _ time.Time,
 		warnings = found
 	}
 
-	c := changes{}
-	c.fact("request", "Request", req.Method+" "+shownPath(req))
+	var after any
+	switch req.Method {
+	case http.MethodDelete:
+	case http.MethodPatch:
+		after = mergePatch(clone(before), changed)
+	default:
+		after = changed
+	}
+	l := newLabeller(before, after)
+	said := describe(route, req.Method, creates, before, after, body, removals, address, l)
+	d := differ{l: l}
 	if len(removals) > 0 {
 		// THE REMOVALS LEAD THE ROWS as one line, beside the warning the
 		// card heads itself with ([proposal.Preview.Removes]).
-		c.fact("request.removes", "Removes", strings.Join(removalLabels(removals), ", "))
+		d.c.fact("request.removes", "Removes", strings.Join(d.removalLabels(removals), ", "))
 	}
-	switch req.Method {
-	case http.MethodDelete:
-		if before == nil {
-			c.fact("removes", "Removes", req.Path)
-		} else {
-			leaves(&c, "", before, proposal.Removed)
-		}
-	case http.MethodPost:
-		leaves(&c, "", changed, func(field, label, v string) wire.Change {
+	switch {
+	case req.Method == http.MethodDelete && before == nil:
+		d.c.fact("removes", "Deletes", capitalised(said.Object))
+	case req.Method == http.MethodDelete:
+		d.leaves("", before, proposal.Removed)
+	case before == nil:
+		d.leaves("", after, func(field, label, v string) wire.Change {
 			return proposal.Added(field, label, v, false)
 		})
 	default:
-		after := changed
-		if req.Method == http.MethodPatch {
-			after = mergePatch(clone(before), changed)
-		}
-		if before == nil {
-			leaves(&c, "", after, func(field, label, v string) wire.Change {
-				return proposal.Added(field, label, v, false)
-			})
-		} else {
-			diff(&c, "", before, after)
-		}
+		d.diff("", before, after)
 	}
-	if len(c) == 1 {
+	if len(d.c) == 0 {
 		return proposal.Preview{}, fmt.Errorf("%w: the change leaves %s exactly as it is",
 			ErrInvalidArguments, req.Path)
 	}
-	c = bounded(c)
+	// THE REQUEST ITSELF IS AN ADMINISTRATOR'S TO READ, behind the card's
+	// "Technical details": everybody else reviews the rows, which are built
+	// from the same request and the resource it changes.
+	var technical *wire.TechnicalRequest
+	if g.person.Can(iam.GrantAdmin) {
+		technical = &wire.TechnicalRequest{Method: req.Method, Path: shownPath(req)}
+		if body != nil {
+			technical.Body = prettyBody(body)
+		}
+	}
+	c := bounded(d.c, technical != nil)
 	for i, warning := range warnings {
 		c.fact("check.warning."+strconv.Itoa(i+1), "Warning", warning)
 	}
 	c.fact("request.summary", "History note", redact.Secrets(summary))
-	if body != nil {
-		c.fact("request.body", "Request body", prettyBody(body))
-	}
 	recency, _ := authz.RecencyOf(authz.Action(act))
 	return proposal.Preview{
-		Title:        titleOf(req.Method, creates),
+		Title:        said.Title,
 		Target:       req.Path,
-		Note:         "This is sent to the engine's API exactly as shown, as you.",
-		ApproveLabel: "Approve and send",
+		Summary:      said.Summary,
+		Note:         said.Note,
+		Risk:         said.Risk,
+		Technical:    technical,
+		ApproveLabel: said.ApproveLabel,
 		Changes:      c.rows(),
 		StepUp:       recency == iam.RecencyStepUp,
 		// ON EVERY METHOD, for a representation that was read: a DELETE or
@@ -214,7 +221,7 @@ func (g generic) preview(ctx context.Context, read proposal.Read, _ time.Time,
 		SourceRevision: revision,
 		Request:        req,
 		Act:            act,
-		Removes:        removalLabels(removals),
+		Removes:        d.removalLabels(removals),
 	}, nil
 }
 
@@ -246,8 +253,15 @@ func checked(ctx context.Context, read proposal.Read, req exec.Request,
 	return checkWarnings(resp.Body), nil
 }
 
-// checkWarnings are a check's `warnings`, each its `message` (or the value
-// itself), as single redacted lines.
+// checkWarnings are a check's `warnings` this change introduces, each its
+// `message` (or the value itself), as single redacted lines.
+//
+// ONLY WHAT THE CHANGE INTRODUCES: a config route's check judges the whole
+// document it would store, so its warnings include every advisory the company
+// already carried (a person's seat with no chat contact, on a card that adds
+// an agent). A warning the route marks `"introduced": false` is left off the
+// card; one it does not mark is kept, so nothing a route warns about without
+// saying is ever dropped.
 func checkWarnings(body []byte) []string {
 	var answer struct {
 		Warnings []any `json:"warnings"`
@@ -259,6 +273,9 @@ func checkWarnings(body []byte) []string {
 	for _, w := range answer.Warnings {
 		var line string
 		if record, ok := w.(map[string]any); ok {
+			if introduced, said := record["introduced"].(bool); said && !introduced {
+				continue
+			}
 			line = cards.Text(record["message"])
 		} else {
 			line = cards.Text(w)
@@ -272,18 +289,6 @@ func checkWarnings(body []byte) []string {
 
 // ActPrefix is the act route's path ahead of the tool's name.
 const ActPrefix = "/operator/act/"
-
-// titleOf is a change's title, by its method and whether it creates what its
-// path names.
-func titleOf(method string, creates bool) string {
-	switch {
-	case method == http.MethodPost || creates:
-		return "Create through the API"
-	case method == http.MethodDelete:
-		return "Delete through the API"
-	}
-	return "Change through the API"
-}
 
 // shownPath is the path a card names, with the query it carries.
 func shownPath(req exec.Request) string {
@@ -321,7 +326,7 @@ func readRepresentation(ctx context.Context, read proposal.Read, reader Route,
 	case !cards.Permitted(resp.Status):
 		return representation{}, refusedRead(resp)
 	case resp.Truncated:
-		return representation{}, fmt.Errorf("%w: %s is larger than one step reads, so the "+
+		return representation{}, fmt.Errorf("%w: %s is larger than a change's preview reads, so the "+
 			"change could not be shown against it", ErrPreviewRead, reader.Pattern)
 	}
 	doc, err := cards.Decode(resp.Body)
@@ -429,8 +434,15 @@ func clone(v any) any {
 	return v
 }
 
+// differ draws a change's rows, each labelled and valued as a person reads it
+// ([labeller]).
+type differ struct {
+	c changes
+	l labeller
+}
+
 // diff appends the rows for what moves from before to after at field.
-func diff(c *changes, field string, before, after any) {
+func (d *differ) diff(field string, before, after any) {
 	switch b := before.(type) {
 	case map[string]any:
 		a, ok := after.(map[string]any)
@@ -450,11 +462,11 @@ func diff(c *changes, field string, before, after any) {
 			is, has := a[k]
 			switch {
 			case had && !has:
-				removedLeaves(c, join(field, k), was)
+				d.removedLeaves(join(field, k), was)
 			case !had && has:
-				addedLeaves(c, join(field, k), is, true)
+				d.addedLeaves(join(field, k), is, true)
 			default:
-				diff(c, join(field, k), was, is)
+				d.diff(join(field, k), was, is)
 			}
 		}
 		return
@@ -463,46 +475,46 @@ func diff(c *changes, field string, before, after any) {
 		if !ok {
 			break
 		}
-		diffList(c, field, b, a)
+		d.diffList(field, b, a)
 		return
 	}
 	if equalJSON(before, after) {
 		return
 	}
 	if isRecord(before) || isRecord(after) {
-		removedLeaves(c, field, before)
-		addedLeaves(c, field, after, false)
+		d.removedLeaves(field, before)
+		d.addedLeaves(field, after, false)
 		return
 	}
-	if row, ok := valueRow(field, before, after); ok {
-		*c = append(*c, row)
+	if row, ok := d.valueRow(field, before, after); ok {
+		d.c = append(d.c, row)
 	}
 }
 
 // diffList appends the rows for a list moving from before to after: records
 // matched by the identity each carries, every other list as one value.
-func diffList(c *changes, field string, before, after []any) {
+func (d *differ) diffList(field string, before, after []any) {
 	if equalJSON(before, after) {
 		return
 	}
 	was, wasKeyed := keyed(before)
 	is, isKeyed := keyed(after)
 	if !wasKeyed || !isKeyed {
-		if row, ok := valueRow(field, before, after); ok {
-			*c = append(*c, row)
+		if row, ok := d.valueRow(field, before, after); ok {
+			d.c = append(d.c, row)
 		}
 		return
 	}
 	for _, e := range was {
 		if match := find(is, e.id); match == nil {
-			removedLeaves(c, join(field, e.id), e.value)
+			d.removedLeaves(join(field, e.id), e.value)
 		} else {
-			diff(c, join(field, e.id), e.value, match.value)
+			d.diff(join(field, e.id), e.value, match.value)
 		}
 	}
 	for _, e := range is {
 		if find(was, e.id) == nil {
-			addedLeaves(c, join(field, e.id), e.value, false)
+			d.addedLeaves(join(field, e.id), e.value, false)
 		}
 	}
 }
@@ -550,55 +562,62 @@ func find(list []entry, id string) *entry {
 
 // addedLeaves appends a row for every value v holds, as added under field;
 // onRecord marks a field added to a record that already exists.
-func addedLeaves(c *changes, field string, v any, onRecord bool) {
-	leaves(c, field, v, func(f, label, value string) wire.Change {
+func (d *differ) addedLeaves(field string, v any, onRecord bool) {
+	d.leaves(field, v, func(f, label, value string) wire.Change {
 		return proposal.Added(f, label, value, onRecord)
 	})
 }
 
 // removedLeaves appends a row for every value v holds, as removed.
-func removedLeaves(c *changes, field string, v any) {
-	leaves(c, field, v, proposal.Removed)
+func (d *differ) removedLeaves(field string, v any) {
+	d.leaves(field, v, proposal.Removed)
 }
 
 // leaves appends row(field, label, value) for every scalar v holds beneath
 // field, a list of plain values as one value.
-func leaves(c *changes, field string, v any, row func(field, label, value string) wire.Change) {
+func (d *differ) leaves(field string, v any, row func(field, label, value string) wire.Change) {
 	switch t := v.(type) {
 	case map[string]any:
 		for _, k := range slices.Sorted(maps.Keys(t)) {
-			leaves(c, join(field, k), t[k], row)
+			d.leaves(join(field, k), t[k], row)
 		}
 		return
 	case []any:
 		if list, ok := keyed(t); ok && len(list) > 0 {
 			for _, e := range list {
-				leaves(c, join(field, e.id), e.value, row)
+				d.leaves(join(field, e.id), e.value, row)
 			}
 			return
 		}
 		if slices.ContainsFunc(t, isRecord) {
 			for i, e := range t {
-				leaves(c, join(field, strconv.Itoa(i+1)), e, row)
+				d.leaves(join(field, strconv.Itoa(i+1)), e, row)
 			}
 			return
 		}
 	}
+	items, isItems := plainItems(v)
 	value := scalar(v)
+	if isItems {
+		items = d.l.items(field, items)
+		value = strings.Join(items, ", ")
+	} else {
+		value = d.l.value(field, value)
+	}
 	if value == "" || field == "" {
 		return
 	}
-	line := row(field, cards.FieldLabel(field), value)
+	line := row(field, d.l.label(field), value)
 	// A LIST OF PLAIN VALUES IS DRAWN AS A LIST: its items ride beside the
 	// joined line, on the side the row holds.
-	if items, ok := plainItems(v); ok {
+	if isItems {
 		if line.Kind == wire.ChangeRemoved {
 			line.FromItems = items
 		} else {
 			line.Items = items
 		}
 	}
-	*c = append(*c, line)
+	d.c = append(d.c, line)
 }
 
 // plainItems is v as the items of a list of plain values, each as one line of
@@ -620,25 +639,35 @@ func plainItems(v any) ([]string, bool) {
 // valueRow is the row for one field moving from before to after: a list of
 // plain values on either side as a list ([proposal.List]), any other value as
 // one line.
-func valueRow(field string, before, after any) (wire.Change, bool) {
+func (d *differ) valueRow(field string, before, after any) (wire.Change, bool) {
+	label := d.l.label(field)
 	was, wasList := plainItems(before)
 	is, isList := plainItems(after)
 	if (wasList || before == nil) && (isList || after == nil) && (wasList || isList) {
-		return proposal.List(field, cards.FieldLabel(field), was, is)
+		return proposal.List(field, label, d.l.items(field, was), d.l.items(field, is))
 	}
-	return proposal.Value(field, cards.FieldLabel(field), scalar(before), scalar(after))
+	return proposal.Value(field, label, d.l.value(field, scalar(before)),
+		d.l.value(field, scalar(after)))
 }
 
-// bounded is c with at most [diffRows] field rows past the request's, the rest
-// counted in one row.
-func bounded(c changes) changes {
-	if len(c) <= diffRows+1 {
+// removalLabels are removal paths as the card names them: a member by its
+// name, every other field in words ([labeller.label]).
+func (d *differ) removalLabels(paths []string) []string {
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		out = append(out, d.l.label(p))
+	}
+	return out
+}
+
+// bounded is c with at most [diffRows] rows, the rest counted in one row,
+// which points an administrator to the technical details.
+func bounded(c changes, technical bool) changes {
+	if len(c) <= diffRows {
 		return c
 	}
-	more := len(c) - diffRows - 1
-	out := append(changes{}, c[:diffRows+1]...)
-	out.fact("more", "More", strconv.Itoa(more)+" more fields change; the request "+
-		"body below is the whole change")
+	out := append(changes{}, c[:diffRows]...)
+	out.fact("more", "More", moreRows(len(c)-diffRows, technical))
 	return out
 }
 

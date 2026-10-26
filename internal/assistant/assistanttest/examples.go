@@ -24,6 +24,8 @@ var exampleValues = map[string]any{
 	"mission":      "Help friends share costs fairly.",
 	"vision":       "Settling up takes seconds.",
 	"policies":     []any{"Miles is the final authority."},
+	"seat":         "qa",
+	"tokens":       float64(1500000),
 }
 
 // ExampleArgs is a call's arguments for a tool with the JSON Schema params:

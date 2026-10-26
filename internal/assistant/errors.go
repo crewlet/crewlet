@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/assistant/live"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 )
 
@@ -39,6 +40,11 @@ var (
 	// ErrInvalid reports a request the assistant refuses as written, naming
 	// the field.
 	ErrInvalid = errors.New("assistant: invalid")
+	// ErrCaughtUp reports a stream with nothing to send: the turn's segment
+	// has ended and the client resumed after its last frame. The one
+	// sentinel the local log and the fleet's follow both answer
+	// ([live.ErrCaughtUp]), named here beside the others the surface maps.
+	ErrCaughtUp = live.ErrCaughtUp
 
 	// The proposal outcomes, answered by the approval path
 	// (internal/assistant/proposal and its routes).
