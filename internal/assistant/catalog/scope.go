@@ -22,9 +22,10 @@ func scopeOf(parts ...string) string {
 	return strings.Join(kept, ", ")
 }
 
-// lastDays is a window of days back from now, "last 7 days", "" for none.
-func lastDays(a Args, arg string, fallback int) string {
-	n, ok := a.Int(arg)
+// lastDays is a call's `days` window back from now, "last 7 days", with
+// fallback for a call that names none and "" for no window.
+func lastDays(a Args, fallback int) string {
+	n, ok := a.Int("days")
 	if !ok || n <= 0 {
 		n = fallback
 	}
@@ -37,10 +38,10 @@ func lastDays(a Args, arg string, fallback int) string {
 	return "last " + strconv.Itoa(n) + " days"
 }
 
-// quoted is a search's words as its scope says them.
-func quoted(a Args, arg string) string {
-	if q := strings.TrimSpace(a.String(arg)); q != "" {
-		return "“" + q + "”"
+// quoted is a search's words, its `q`, as its scope says them.
+func quoted(a Args) string {
+	if q := strings.TrimSpace(a.String("q")); q != "" {
+		return "\u201c" + q + "\u201d"
 	}
 	return ""
 }
@@ -65,16 +66,16 @@ var dueScope = map[string]string{
 
 // taskScope is list_tasks' filters, in the order a person says them.
 func taskScope(a Args) string {
-	var statuses []string
+	var said []string
 	for _, s := range a.Strings("status") {
-		statuses = append(statuses, strings.ReplaceAll(s, "_", " "))
+		said = append(said, strings.ReplaceAll(s, "_", " "))
 	}
 	closed := ""
 	if a.Bool("show_closed") {
 		closed = "including finished"
 	}
-	return scopeOf(a.String("priority"), strings.Join(statuses, " or "),
+	return scopeOf(a.String("priority"), strings.Join(said, " or "),
 		dueScope[a.String("due")], labelled(a, "assignee", "assigned to"),
 		labelled(a, "project", "in"), labelled(a, "type", "type"),
-		labelled(a, "tag", "tagged"), quoted(a, "q"), closed)
+		labelled(a, "tag", "tagged"), quoted(a), closed)
 }

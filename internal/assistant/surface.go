@@ -350,7 +350,7 @@ func (s *surface) propose(ctx context.Context, tool catalog.Tool, args map[strin
 		return s.refuseBefore(ctx, tool, args, "Not proposed", err), nil
 	}
 	args = resolved
-	if err := tool.Check(args); err != nil {
+	if err = tool.Check(args); err != nil {
 		return s.refuseBefore(ctx, tool, args, "Not proposed", err), nil
 	}
 	step := s.t.stepStart(tool, args, nil, "")
@@ -505,7 +505,7 @@ func (s *surface) navigate(ctx context.Context, tool catalog.Tool, args map[stri
 		return s.refuseBefore(ctx, tool, args, "Not opened", err), nil
 	}
 	args = resolved
-	if err := tool.Check(args); err != nil {
+	if err = tool.Check(args); err != nil {
 		return s.refuseBefore(ctx, tool, args, "Not opened", err), nil
 	}
 	link, probe, err := catalog.Open(args)

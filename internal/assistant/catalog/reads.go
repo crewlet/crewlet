@@ -120,7 +120,7 @@ func readTools() []Tool {
 					prose("snippet", "Matched", "snippet")},
 				Open: &cards.Open{Screen: "worklet-search"}}}),
 			Label: func(map[string]any) string { return "Searching tasks" },
-			Scope: func(a Args) string { return quoted(a, "q") },
+			Scope: quoted,
 		},
 		{
 			Name: "list_tasks", Phrase: "list tasks",
@@ -442,7 +442,7 @@ func readTools() []Tool {
 				if a.String("view") != "activity" {
 					return ""
 				}
-				return scopeOf(lastDays(a, "days", 7), labelled(a, "handle", "for"))
+				return scopeOf(lastDays(a, 7), labelled(a, "handle", "for"))
 			},
 			Names: map[string]Directory{"handle": DirSeat},
 		},
@@ -516,7 +516,7 @@ func readTools() []Tool {
 				if a.Bool("failed") {
 					failedOnly = "failed only"
 				}
-				return scopeOf(failedOnly, lastDays(a, "days", 0))
+				return scopeOf(failedOnly, lastDays(a, 0))
 			},
 			Names: map[string]Directory{"handle": DirSeat},
 		},
@@ -570,7 +570,7 @@ func readTools() []Tool {
 			},
 			Label: func(map[string]any) string { return "Reading token spend" },
 			Scope: func(a Args) string {
-				return scopeOf(lastDays(a, "days", 7), labelled(a, "handle", "for"))
+				return scopeOf(lastDays(a, 7), labelled(a, "handle", "for"))
 			},
 			Names: map[string]Directory{"handle": DirSeat},
 		},
@@ -617,7 +617,7 @@ func readTools() []Tool {
 				if a.String("view") == "by_group" {
 					group = labelled(a, "group", "by")
 				}
-				return scopeOf(lastDays(a, "days", 30), bucket, group)
+				return scopeOf(lastDays(a, 30), bucket, group)
 			},
 		},
 		{
@@ -679,7 +679,7 @@ func readTools() []Tool {
 					prose("snippet", "Matched", "snippet"), col("id", "Page", "id", tText)},
 				Open: &cards.Open{Screen: "doclet"}}}),
 			Label: func(map[string]any) string { return "Searching the knowledge base" },
-			Scope: func(a Args) string { return quoted(a, "q") },
+			Scope: quoted,
 		},
 		{
 			Name: "list_spaces", Phrase: "list the knowledge spaces",
@@ -766,7 +766,7 @@ func readTools() []Tool {
 					col("updated", "Updated", "updated_at", tDatetime), col("id", "Artifact", "id", tText)},
 				Open: &cards.Open{Screen: "artifacts"}}}),
 			Label: func(map[string]any) string { return "Listing artifacts" },
-			Scope: func(a Args) string { return scopeOf(a.String("kind"), quoted(a, "q")) },
+			Scope: func(a Args) string { return scopeOf(a.String("kind"), quoted(a)) },
 		},
 		{
 			Name: "get_artifact", Phrase: "read this artifact",
