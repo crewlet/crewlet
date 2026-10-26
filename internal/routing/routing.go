@@ -16,11 +16,13 @@
 // path calls it again on another node minutes later and must get the same
 // set.
 //
-// [Route] is the post-filter, and it needs the two facts a record cannot
-// carry: who the company employs RIGHT NOW, and who made the change.
-// Splitting the two is what makes an applier's notice rows a complete record
-// of everyone a change concerned, while the wake goes only to the people
-// still there.
+// [Route] is the post-filter, and it needs the ONE fact a record cannot
+// carry: who the company employs RIGHT NOW. Who made the change IS on the
+// record, which is why an applier takes Route's actor step too
+// ([Candidate.Hears]) and leaves only the roster to the wake. Splitting the
+// roster out is what makes an applier's notice rows a complete record of
+// everyone a change concerned but its author, while the wake goes only to
+// the people still there.
 //
 // # One reason per handle, and the order is the precedence
 //
@@ -28,9 +30,16 @@
 // and every later offer of the same handle is dropped — [Builder]'s add-once
 // rule. A person who is mentioned AND watching is told they were mentioned:
 // the stronger fact, and the one they will act on. So the order a domain
-// OFFERS its reasons in IS its precedence, written once, in the one function
-// that offers them, and never as a list beside that function which it has to
-// be kept in step with.
+// OFFERS its reasons in IS its precedence, decided in the one function that
+// offers them.
+//
+// A domain that also declares its reasons as a LIST in that order, for the
+// surfaces that print and filter by reason (the tracker's Reasons is one),
+// has written the precedence twice. It holds the list to its candidate
+// function with a test: for every kind it routes, with a different handle in
+// every field it routes from, the candidates come back in the list's order.
+// A reordered arm and a reordered list then both fail. A list held only by a
+// comment saying it matches drifts, and nothing fails.
 //
 // One offer stands outside the rule: a notice about ANOTHER subject than the
 // record's own ([Builder.About]). The add-once rule is about one subject —
@@ -73,9 +82,10 @@
 //
 // The standard library and nothing else. A domain's applier runs a [Builder]
 // inside its transaction and every domain imports this package, so it opens
-// no store, reads no clock and no configuration, and holds no roster: what
-// would differ between two nodes is passed in by the caller that has it, as
-// [Route]'s registry and actor are.
+// no store, reads no clock and no configuration, and holds no roster. The
+// one thing that would differ between two nodes, the roster, is passed in by
+// the caller that has it, as [Route]'s registry; the actor passed beside it
+// is the record's own, the same on every node that reads the record.
 package routing
 
 import (

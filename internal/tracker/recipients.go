@@ -15,11 +15,14 @@ import (
 // and the wake path call it on a different node minutes later, and get the
 // same answer.
 //
-// [Route] is the post-filter, and it needs two facts a record cannot carry:
-// who the company employs RIGHT NOW, and who made the change. Splitting them
-// is what makes the applier's `tracker_notifications` row a complete record of
-// everyone the change concerned, while the wake goes only to the people still
-// there — and why the parity test can assert that the two surfaces agree.
+// [Route] is the post-filter, and it needs the one fact a record cannot carry:
+// who the company employs RIGHT NOW. Who made the change is on the record, so
+// the applier takes Route's actor step too ([routing.Candidate.Hears]) and
+// leaves only the roster to the wake. That split makes the applier's
+// `tracker_notifications` rows a complete record of everyone the change
+// concerned but its author, while the wake goes only to the people still
+// there — and it is why the parity test can assert that the two surfaces
+// agree.
 //
 // THE RULE BOTH APPLY IS internal/routing's, shared with every native domain:
 // one reason per handle, the first offered; the ordered fallback; the
