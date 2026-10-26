@@ -1048,3 +1048,42 @@ func TestALoginWriteThatCommittedIsWrittenThoughAFileWasRefused(t *testing.T) {
 		}
 	})
 }
+
+// A RUN'S BASELINE NEVER BECOMES A LOGIN ITS HOME DOES NOT HOLD. Mid-run, a
+// seat's home changed only a file a refresh never carries — one it was not
+// seeded with — while another writer moved the shared login past the seed.
+// The carry has nothing to write, and the shared login is not this home's:
+// taken for its new baseline, the run's later refresh of its own stale token
+// passed the compare-and-swap at release and reverted the newer login.
+//
+// Mutation: answer the shared login as the baseline whenever a carry has
+// nothing to write, and the release writes the stale refresh over the newer
+// token.
+func TestARunsBaselineNeverBecomesALoginItsHomeDoesNotHold(t *testing.T) {
+	t.Parallel()
+	p := twoFileProvider(t, nil)
+	writeShared(t, p.ws, map[string]string{"auth.json": `{"token":"seed"}`})
+	co, err := p.ws.Acquire(t.Context(), "dev", "call", p)
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	writeShared(t, p.ws, map[string]string{"auth.json": `{"token":"newer"}`})
+	home := func(name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(co.Home, ".fake", name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	home("config.toml", `provider = "this home's own"`)
+	if err := co.carryRefreshed(t.Context()); err != nil {
+		t.Fatalf("the mid-run carry: %v", err)
+	}
+	home("auth.json", `{"token":"refreshed from the seed"}`)
+	if err := co.Release(t.Context()); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	want := map[string]string{"auth.json": `{"token":"newer"}`}
+	if got := readLogin(t, p.ws); !maps.Equal(got, want) {
+		t.Errorf("the shared login is %v, want the newer one kept %v", got, want)
+	}
+}
