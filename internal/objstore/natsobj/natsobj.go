@@ -1677,17 +1677,44 @@ const pieceSubjects = "$O." + Bucket + ".C.>"
 // # What a sweep costs as the bucket grows
 //
 // The sort makes a listing grow faster than the bucket: measured on one solo
-// member (internal/jsapi's BenchmarkASubjectListing), a page takes 0.11 s at
-// a hundred thousand objects and 1.1 to 1.35 s at a million, a whole listing
-// 12.1 s — once an hour, holding one of the leader's API workers a page at a
-// time. The sweep runs on its duty's lifetime with no deadline, so each page
-// is held to the client's five seconds on its own, which by that growth a
-// page outgrows at a few million objects; a bucket that size is a fleet's,
-// and a fleet's files belong on S3 (`crewlet validate` warns of the nats
-// bucket on one). A walk of the piece subjects — an ordered consumer
-// delivering each one's last piece, headers only, as the metadata walk does
-// — would be linear, and is not taken because a consumer is served by any
-// replica and this listing is the leader's.
+// member's file store over the bucket's own piece subjects (internal/jsapi's
+// BenchmarkASubjectListing, one listing each on four cores), a page takes
+// 0.13 s at a hundred thousand objects, 0.39 s at three hundred thousand,
+// 1.26 s at a million and 4.22 s at three million, a whole listing 0.13,
+// 1.36, 13.2 and 120 s — once an hour, holding one of the leader's API
+// workers a page at a time. The sweep runs on its duty's lifetime with no
+// deadline, so each page is held to the client's five seconds on its own,
+// which by that growth a page outgrows at about three and a half million
+// objects on those cores. Past it every sweep fails, and the uploads it would
+// have abandoned stay billed, but after a node's first, each asks the page
+// once ([jsapi.Leader.Subjects] keeps what a page nobody answered was asked
+// for) rather than three sorts of every piece subject at once; a bucket that
+// size has outgrown the broker, and the S3 backend lists its unfinished
+// uploads itself at any size (`crewlet validate` warns of the nats bucket on
+// a fleet).
+//
+// # Why not a walk of the pieces
+//
+// A walk of the piece subjects — an ordered consumer delivering each one's
+// last piece, headers only, as the metadata walk does — is linear in the
+// objects, and a replica serving it would cost nothing here, since every
+// candidate is read again from the leader. It is not taken for what the walk
+// reads: the broker finds each subject's last message in the file-store
+// block holding it, and delivering it loads that block, so the walk's cost is
+// the bucket's BYTES, about all of them for objects smaller than a block, where
+// the listing reads only the per-subject index the store keeps in memory.
+// Measured beside the listing on two thousand objects of one 128 KiB piece
+// each, the walk took 103 ms where it took 6.3 ms over the same subjects on
+// empty messages, and the listing 2.2 ms on either; over a million and three
+// million empty messages it took 3.1 and 6.9 s, where the listing took 13.2
+// and 120. But a million real objects is a hundred gigabytes and more to
+// read for every sweep, beside the metadata walk's own read of the same
+// blocks. And to start it the broker reads the per-subject state of every
+// block whose state is not in memory, which it lets go of two minutes after
+// the block was last read, holding the stream's store lock throughout (the
+// vendored server's filestore.go, multiLastSeqsLocked), so an hourly walk
+// would hold every append to the bucket on that member behind a read of the
+// bucket.
 func (b *Backend) Pending(ctx context.Context, visit func(objstore.Pending) error) error {
 	// THE CANDIDATES ARE THE SUBJECT LISTING ITSELF, whittled down by the
 	// metadata walk, so the pass holds no more than the broker's answers

@@ -31,7 +31,7 @@ import (
 // and never past the lookup ceiling. The client's own listers asked each page
 // once and held the WHOLE listing for the caller's deadline, or for the
 // client's five seconds where the caller had none — which a listing of a
-// million subjects, twelve seconds long (below), could never finish inside:
+// million subjects, thirteen seconds long (below), could never finish inside:
 // the object collector's sweep runs on its duty's lifetime with no deadline,
 // so a bucket that size could never be listed. A page is the unit the bound
 // is kept for, as it is the unit asked again.
@@ -53,14 +53,17 @@ import (
 // subject under the filter to cut each page out of them
 // (server/jetstream_api.go, jsStreamInfoRequest), so every page of a listing
 // costs what the whole listing does, and that grows faster than the set.
-// Measured on one solo member's file store (BenchmarkASubjectListing), a page
-// came back in 0.11 seconds at a hundred thousand subjects, about 0.29 at
-// three hundred thousand and 1.1 to 1.35 at a million — a whole listing 0.11,
-// 1.15 (four pages) and 12.1 seconds (eleven). So a page is given the read
-// term beside what the last page this reader asked took — the same work,
-// asked of the same leader a moment later, measured as the round trip of the
-// request that was answered — and a reader's first page ever the read term
-// alone, the one figure nothing has measured: a listing of millions of
+// Measured on one solo member's file store over the object store's own piece
+// subjects (BenchmarkASubjectListing, one listing each on four cores), a page
+// came back in 0.13 seconds at a hundred thousand subjects, 0.39 at three
+// hundred thousand, 1.26 at a million and 4.22 at three million — a whole
+// listing 0.13, 1.36 (four pages), 13.2 (eleven) and 120 seconds
+// (thirty-one), and a page reaches the five seconds a caller with no
+// deadline keeps at about three and a half million. So a page is given the
+// read term beside what the last page this reader asked took — the same
+// work, asked of the same leader a moment later, measured as the round trip
+// of the request that was answered — and a reader's first page ever the read
+// term alone, the one figure nothing has measured: a listing of millions of
 // subjects asks its first page again once for every two seconds the page
 // takes, and never a page after it. A page NOBODY ANSWERED is measured too,
 // as at least as long as it was asked for, and only an answered page lowers

@@ -747,9 +747,10 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 # its 5 GB index and its gigabyte split into hundreds of packs,
 # internal/code/host's gigabyte history, hundred thousand refs and
 # 100 000-file tree, internal/code/query's gigabyte history read by object
-# id, and internal/jsapi's stream of a million subjects (two minutes a count)
-# — unless CREWLET_BENCH_LARGE=1; an arm that silently did
-# not run reads as one that measured nothing worth showing. Not through
+# id, and internal/jsapi's streams of a million and of three million subjects
+# (about five minutes a count on four cores) — unless CREWLET_BENCH_LARGE=1;
+# an arm that silently did not run reads as one that measured nothing worth
+# showing. Not through
 # skipgate, for the same reason: an allowance there would make that skip
 # silent again. The code host's pools and every client run the node pin, which
 # GIT_ENV puts first on PATH as it does for every test target, so a figure is
