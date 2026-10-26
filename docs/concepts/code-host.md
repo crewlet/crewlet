@@ -1365,7 +1365,11 @@ read at a position the index has already seen, so the data node that answers
 holds every push in it — a data node behind the log would hold the range in
 part, and a commit pushed in the missing part would be answered with no push.
 A page that ends inside one record of several pushes leaves that record to
-the next page, whole.
+the next page, whole. And a page of pushes, a sync's or the backfill's, is
+held to what the data node reads for it as well as to what it answers — 4 MB
+of each, every command a push's client sent counted, a refused one too — so
+pushes that each landed one ref beside hundreds refused are read in more
+pages, never in one too costly to answer.
 
 **Never a wrong push.** `landed_in` names the first move of the branch after
 which every move kept the commit reachable, so a commit a force-push removed

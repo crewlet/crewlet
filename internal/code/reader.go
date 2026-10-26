@@ -753,6 +753,10 @@ func (r *Reader) refs(ctx context.Context, tx *sql.Tx, repoID string, out *RepoS
 // applied after it is the NEXT delta's — served here too, it would be folded
 // into the cache's index twice, once by each round. And bounded BELOW
 // exclusively, for the same reason: a push at Since is the round before's.
+//
+// EACH PUSH COSTS THE PAGE WHAT IT READS where that is more than what it
+// sends ([scanIntroduced]): its row stores every command its client sent, and
+// the phase sends only the refs it landed.
 func (r *Reader) pushesPhase(ctx context.Context, tx *sql.Tx, repoID string, out *RepoSnapshot,
 	cur *StateCursor, pg *page) (bool, error) {
 
@@ -775,15 +779,14 @@ func (r *Reader) pushesPhase(ctx context.Context, tx *sql.Tx, repoID string, out
 	defer func() { _ = rows.Close() }()
 	asked, served := pg.left(), 0
 	for rows.Next() {
-		row, _, err := scanPush(rows)
+		in, cost, err := scanIntroduced(rows)
 		if err != nil {
 			return false, fmt.Errorf("code: read %s's pushes since %s: %w", repoID, cur.Since, err)
 		}
-		in := introducedOf(row)
 		out.Pushes = append(out.Pushes, in)
 		served++
-		cur.After = pushCursor(row.Position, row.PushID)
-		if pg.add(in.encodedBytes()) {
+		cur.After = pushCursor(in.Position, in.PushID)
+		if pg.add(cost) {
 			return false, rows.Err()
 		}
 	}
@@ -980,12 +983,41 @@ func scanPush(s scanner) (PushRow, int, error) {
 	return row, len(commands), nil
 }
 
+// scanIntroduced reads a push row as the index of which push introduced each
+// commit is built from it ([introducedOf]), and answers what serving it costs
+// a page: the larger of the row it SENDS and the commands it READ.
+//
+// A PAGE OF CONDENSED PUSHES IS HELD TO WHAT IT READS, not only to what it
+// sends. A push row stores every command its client sent, a refused one too
+// ([RecordedRef]), and the condensed row only the refs the push landed — so
+// a push of one branch beside 999 refused refs at MaxRefNameBytes, a mirror
+// push refused everywhere but one branch or a crafted client's, is 656 bytes
+// sent and 403 KB read and decoded. Counted by what it sends, a page took
+// 6 393 of them and decoded 2.6 GB of commands to send four mebibytes: past
+// any estate read's attempt, and again on every retry, so a backfill or a
+// delta sync that met a run of them never got past it. Nothing else a push
+// row holds is wider than what it sends — its introduced ids are sent whole,
+// as are its id, its position and its principal, and the rest is a few
+// fixed columns — so a page reads at most its byte budget and one row of
+// commands beside the rows it sends: the history listing's bound, which
+// sends the commands themselves.
+func scanIntroduced(rows *sql.Rows) (IntroducedRow, int, error) {
+	pushed, commands, err := scanPush(rows)
+	if err != nil {
+		return IntroducedRow{}, 0, err
+	}
+	in := introducedOf(pushed)
+	return in, max(in.encodedBytes(), commands), nil
+}
+
 // The read limits, past which a query is refused naming the bound rather than
 // clamped.
 //
 // A page's BYTES are held to MaxPageBytes whatever its count — measured with
-// every row's rules and commands — so these bound what one request READS and
-// are sized to what a surface shows of it:
+// every row's rules and commands, and where a page sends its pushes condensed
+// (the `introduced` read, a snapshot's pushes phase) with the commands it read
+// to condense them ([scanIntroduced]) — so these bound what one request READS
+// and are sized to what a surface shows of it:
 //
 //   - a listing of repositories: 100 by default, a screen of them, and 500
 //     at most, which with every repository at MaxProtectionsPerRepo rules is
@@ -1574,9 +1606,22 @@ func (r *Reader) refsListing(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 // Before descending, newest first, down to the oldest push the rows keep;
 // keyset after the last push served, `<packed position>/<push id>`, since
 // group commit puts up to 64 pushes at one position. A page ends at its row
-// limit or at MaxPageBytes of rows, whichever first, and always serves one.
-// A repository with no row — purged — is [ErrRepoNotFound], which drops the
-// index that asked.
+// limit or once its rows reach MaxPageBytes, each counted by what it sends or
+// by the commands it read, whichever is more ([scanIntroduced]), and always
+// serves one. A repository with no row — purged — is [ErrRepoNotFound], which
+// drops the index that asked.
+//
+// ITS ROW LIMIT IS MaxSnapshotItems, a snapshot page's, and never the history
+// listing's MaxPushesPerPage: that is a screen of history a person reads,
+// and this is the engine's own read, whose cost its bytes bound — what a
+// page sends and what it reads — whatever its count. So the row limit need
+// only stop a page of the narrowest pushes about where its bytes would, and
+// it does: a seat's deletion of a one-letter branch, with no commit to
+// introduce, is 345 bytes sent, so ten thousand of them are 3.45 MB of a
+// page's 4 MiB, while a page of pushes of three commits each ends at its
+// bytes first, at about 7 500 (internal/code/cache's measured section). Two
+// hundred a page would read a monorepo's 18 million pushes of 181 days back
+// in 90 000 pages rather than 2 400.
 func (r *Reader) introduced(ctx context.Context, tx *sql.Tx, q ReadQuery, cp statelog.Position,
 	out *ReadAnswer) error {
 
@@ -1615,13 +1660,12 @@ func (r *Reader) introduced(ctx context.Context, tx *sql.Tx, q ReadQuery, cp sta
 	defer func() { _ = rows.Close() }()
 	pg := page{maxRows: limit, maxB: r.pageBytes}
 	for rows.Next() {
-		pushed, _, err := scanPush(rows)
+		row, cost, err := scanIntroduced(rows)
 		if err != nil {
 			return fmt.Errorf("code: read %s's pushes in log order: %w", name, err)
 		}
-		row := introducedOf(pushed)
 		out.Introduced = append(out.Introduced, row)
-		if pg.add(row.encodedBytes()) {
+		if pg.add(cost) {
 			out.Next = pushCursor(row.Position, row.PushID)
 			break
 		}

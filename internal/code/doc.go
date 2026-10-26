@@ -366,7 +366,12 @@
 // session, pages ascending over a range or descending below a position; and
 // a delta snapshot asked for its PUSHES PHASE serves every push applied in
 // (Since, its position], each once across its pages, so the index a git node
-// folds them into is level with its copy at every round. Every reader of the
+// folds them into is level with its copy at every round. Those two send each
+// push CONDENSED to the refs it landed, and hold a page to the commands it
+// read as well as to the rows it sends, since a push row stores every command
+// its client sent, the refused ones too: a run of pushes that each landed one
+// ref beside hundreds refused is read in more pages, never in one that
+// decodes gigabytes of commands to send four mebibytes. Every reader of the
 // index's first shape — the listing, the history horizon, a purge part and
 // its count — reads the reordered one, so it is one index, not two.
 //
