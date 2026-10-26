@@ -49,7 +49,7 @@ export function drawValue(text: string, items?: readonly string[] | null): Drawn
   }
   if (isDocument(text) && text.includes("\n")) {
     return {
-      node: <CodeBlock code={text.trim()} language="json" wrap maxHeight={240} copyable={false} />,
+      node: <CodeBlock code={text.trim()} language="json" wrap copyable={false} />,
       block: true,
     };
   }
