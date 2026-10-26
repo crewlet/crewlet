@@ -202,6 +202,7 @@ A `v*` tag is the only compatibility boundary: a surface no tag has shipped has 
 - Test files sit beside what they cover, a test file that is not Go included: the dashboard's Vitest suites beside their modules in `dashboard/src`, and `internal/e2e/replay.mjs` beside the `golden_test.go` that runs it. There is no top-level `tests/` tree
 - **A contract with more than one implementation gets ONE suite** (`queuetest`, `coordtest`, `storetest`, `scheduletest`, `sandboxtest`), which every backend runs, the memory twins included
 - **A store on a fresh path starts from the migrated image** — `storetest.OpenNode`, `storetest.OpenEstate`, or `storetest.Seed` before an engine boots on it. Only a test whose subject is migration opens a fresh file with `store.OpenNode`
+- **A test broker that reserves a fixed amount declares its size** — `brokertest.StoreIn` for a node's stream, `StoreMaxBytes: brokertest.StoreMaxBytes` for a broker opened directly, `externaltest.Start` for an external one. Left unset, the limit is three quarters of the runner's free disk, so the case passes or fails on the machine. Only a case whose subject is the derived limit states its own
 - Every subsystem needs tests, and a test names the invariant it protects, not the function it calls
 - Use the fakes in `internal/providers`; tests never call real LLM APIs
 - **A test that cannot fail is worse than no test** — break what you wrote on purpose and confirm the suite goes red

@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -35,7 +36,7 @@ const peopleDoc = companyDoc + `
 func identityEngine(t *testing.T) (*engine.Engine, *fleetsecrets.Estate) {
 	t.Helper()
 	boot := bootstrap(t, func(b *config.Bootstrap) {
-		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	})
 	e := newEngine(t, engine.Options{Bootstrap: boot,
 		Company: parsedCompany(t, peopleDoc)})

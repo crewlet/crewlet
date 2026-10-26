@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -56,7 +57,7 @@ func stageRestoredBroker(t *testing.T) divergedBroker {
 	d := divergedBroker{a: testBootstrap(t)}
 	d.a.Node.ID = "node-a"
 	d.a.Store.Path = filepath.Join(base, "a", "crewlet.db")
-	d.a.Stream.StoreDir = filepath.Join(base, "stream")
+	brokertest.StoreIn(&d.a.Stream, filepath.Join(base, "stream"))
 	SeedStore(t, &d.a)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {

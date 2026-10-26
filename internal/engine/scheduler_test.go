@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // WHAT THIS FILE EXISTS FOR.
@@ -43,7 +44,7 @@ func scheduledEngine(t *testing.T, c *config.Company) *engine.Engine {
 	t.Helper()
 	return newEngine(t, engine.Options{
 		Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
-			b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+			brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 		}),
 		Company: c,
 	})

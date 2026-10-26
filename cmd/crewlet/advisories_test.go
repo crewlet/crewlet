@@ -288,8 +288,7 @@ func TestRunLogsTheAdvisoriesOfTheDocumentItApplies(t *testing.T) {
 	dir := t.TempDir()
 	boot := writeFile(t, dir, "crewlet.yaml", "store:\n  path: "+
 		filepath.Join(dir, "crewlet.db")+"\n"+
-		"stream:\n  store_dir: "+filepath.Join(dir, "stream")+"\n  debug: true\n"+
-		fixtureKeyring)
+		fixtureStream(dir)+"  debug: true\n"+fixtureKeyring)
 	logFile := filepath.Join(dir, "node.log")
 
 	err := runEngine([]string{"-config", boot,
@@ -338,8 +337,7 @@ func TestRunLogsNoAdvisoryBesideARefusalItsFlagsDraw(t *testing.T) {
 	dir := t.TempDir()
 	boot := writeFile(t, dir, "crewlet.yaml", "store:\n  path: "+
 		filepath.Join(dir, "crewlet.db")+"\n"+
-		"stream:\n  store_dir: "+filepath.Join(dir, "stream")+"\n"+
-		fixtureKeyring)
+		fixtureStream(dir)+fixtureKeyring)
 	logFile := filepath.Join(dir, "node.log")
 
 	err := runEngine([]string{"-config", boot,

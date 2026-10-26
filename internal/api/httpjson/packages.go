@@ -17,7 +17,7 @@ var goPackages = map[string]bool{
 	"artifactspike": true, "artifactupload": true,
 	"atlassian": true, "atlassianhost": true, "auth": true, "authapi": true,
 	"authevents": true, "authz": true, "auxspend": true, "backoff": true,
-	"backup": true, "brandformat": true, "builtin": true, "chain": true, "changefeed": true,
+	"backup": true, "brandformat": true, "brokertest": true, "builtin": true, "chain": true, "changefeed": true,
 	"canon": true, "canvasformat": true, "edits": true,
 	"cliagent": true, "clientsource": true,
 	"cliprofile": true, "codingagent": true, "colleague": true, "collect": true,

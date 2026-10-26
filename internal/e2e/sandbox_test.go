@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 )
@@ -285,7 +286,7 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 	boot := config.DefaultBootstrap()
 	withServingTierA(t, &boot)
 	boot.Store.Path = dbPath
-	boot.Stream.StoreDir = streamDir
+	brokertest.StoreIn(&boot.Stream, streamDir)
 	seedStore(t, &boot)
 
 	e, err := engine.New(t.Context(), engine.Options{

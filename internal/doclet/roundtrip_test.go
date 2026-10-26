@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/doclet"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
@@ -85,7 +86,12 @@ func harnessReserved() doclet.Reserved {
 // with the test.
 func openLog(t *testing.T) *js.DomainLog {
 	t.Helper()
-	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
+	// THE BROKER DECLARES ITS SIZE, for brokertest's reason: left to derive
+	// its cap from the runner's free space it takes three quarters of it,
+	// and would refuse even this log's gibibyte on a runner with less than
+	// a gibibyte and a third free, whatever the case under it does.
+	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir(),
+		StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open a broker: %v", err)
 	}
@@ -99,10 +105,8 @@ func openLog(t *testing.T) *js.DomainLog {
 	// floor Tier A holds stream.pages_log_max_bytes to: the smallest log any
 	// node runs, which is the one the gate reserve takes the largest share
 	// of, so every write here is admitted against the tightest ordinary
-	// ceiling a production log has — and a reservation an embedded broker
-	// in a temporary directory can grant, where a default sized for years
-	// of a company's growth may not be. Everything else is the domain's
-	// own declaration, its largest record included.
+	// ceiling a production log has. Everything else is the domain's own
+	// declaration, its largest record included.
 	if err := q.EnsureDomainStream(t.Context(), js.DomainStream{
 		Name: spec.Name, Subjects: spec.Subjects, MaxBytes: config.PagesLogMaxBytesFloor,
 		MaxMessageBytes: spec.MaxAppendBytes(), Duplicates: spec.Duplicates,

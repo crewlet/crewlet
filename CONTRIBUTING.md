@@ -95,11 +95,16 @@ Run the dashboard's suites through `npm test` (or `npm test -- <file>` for
 one file, `npm run test:watch` for the watch loop), never a bare
 `npx vitest`. Vitest's forks pool writes every transformed module into a
 fresh directory under the system temp directory and never removes it — 16 to
-48 MB a run, which over a day of gate runs filled the volume the engine's
-embedded broker sizes its storage from. Both scripts run Vitest through
-`dashboard/scripts/owned-tmpdir.mjs`, which points `TMPDIR` at a directory it
-creates and removes; `src/test/ownedTmpdir.test.ts` fails a run that was
-started without it.
+48 MB a run, which over a day of gate runs left 11.9 GB on the machine that
+runs the engine's suites. The Go suites keep their stores and broker streams
+under that same temp directory (`t.TempDir()`), and a write that finds the
+disk full fails a case for a reason nothing in the change explains. It used
+to fail every node boot first, while the test brokers still sized their
+storage from the volume's free space; they declare a fixed size now
+(`internal/queue/jetstream/brokertest`), which ended that failure and not the
+leak. Both scripts run Vitest through `dashboard/scripts/owned-tmpdir.mjs`,
+which points `TMPDIR` at a directory it creates and removes;
+`src/test/ownedTmpdir.test.ts` fails a run that was started without it.
 
 The race detector is not optional here: the engine's concurrency model is
 real parallelism, and every "atomic because it is single-threaded" assumption
@@ -551,6 +556,19 @@ still fails at the first fixture and no case pays the whole migration sequence
 for nothing it asserts. Only a test whose subject is migration — the schema
 cases, `Pending`, an adoption, a fresh-file boot — opens a fresh file with
 `store.OpenNode`.
+
+A test broker that reserves a fixed amount declares its size rather than take
+it from the runner's disk: a node fixture gives its stream a directory through
+`brokertest.StoreIn`, which sets `stream.store_max_bytes` to
+`brokertest.StoreMaxBytes` with it, a broker opened directly with a store
+directory sets `StoreMaxBytes: brokertest.StoreMaxBytes`, and an external one
+comes from `externaltest.Start`, whose account states the same limit. Left
+unset, an embedded broker's limit is three quarters of the free space on a
+volume every package beside it shares, and a fresh node reserves several
+gibibytes of it at boot, so a case passes on a roomy runner and fails on a
+fuller one whatever the change. Only a case whose subject is the derived
+limit, or a refusal below the floor, states a size of its own; one that
+reserves nothing, or only what the broker reports it has left, needs none.
 
 ### The end-to-end gates
 

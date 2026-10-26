@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // nobody is a credential resolver that resolves nobody: what this case asks of
@@ -31,7 +32,7 @@ func (nobody) Principal(context.Context, string) (iam.Principal, iam.Resolution)
 func TestTheArtifactOriginIsBuiltOverTheEngine(t *testing.T) {
 	t.Parallel()
 	boot := bootstrap(t, func(b *config.Bootstrap) {
-		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 		b.API.ExternalURL = "http://127.0.0.1:8000"
 		b.API.Artifacts = config.APIArtifacts{Host: "127.0.0.1", Port: 8001,
 			ExternalURL: "http://127.0.0.1:8001"}

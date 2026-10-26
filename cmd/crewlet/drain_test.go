@@ -28,6 +28,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/whsec"
 )
 
@@ -172,17 +173,22 @@ func TestASignalledNodeDrainsWithItsProbesUp(t *testing.T) {
 	base := "http://127.0.0.1:" + strconv.Itoa(port)
 
 	dir := t.TempDir()
-	// THE KEYRING IS PART OF A RUNNABLE TIER A, and this case is the only
-	// one in the tree that starts a node from a real file in a real
-	// process: every record on every state log is signed under it, so a
-	// document without one is a node that refuses to boot rather than a
-	// node with one feature off.
+	// THE KEYRING IS PART OF A RUNNABLE TIER A, and this case starts a node
+	// from a real file in a real process: every record on every state log
+	// is signed under it, so a document without one is a node that refuses
+	// to boot rather than a node with one feature off.
+	//
+	// AND SO IS THE BROKER'S SIZE, beside its store_dir ([brokertest.StoreIn]
+	// has why): without one the broker's limit is three quarters of the
+	// runner's free disk, and on a small disk this node refuses to boot at
+	// whichever state log's ceiling no longer fits.
 	boot := writeFile(t, dir, "crewlet.yaml", fmt.Sprintf(`node:
   id: drain-probe
 store:
   path: %s
 stream:
   store_dir: %s
+  store_max_bytes: %d
 secrets:
   active_key_id: drain-probe
   keys:
@@ -198,7 +204,7 @@ api:
       - id: founder
         token: %s
         grants: [admin]
-`, filepath.Join(dir, "crewlet.db"), filepath.Join(dir, "stream"),
+`, filepath.Join(dir, "crewlet.db"), filepath.Join(dir, "stream"), brokertest.StoreMaxBytes,
 		testKeyMaterial(t), port, port, drainProbeToken))
 	company := writeFile(t, dir, "company.yaml", fmt.Sprintf(`name: Acme
 providers:

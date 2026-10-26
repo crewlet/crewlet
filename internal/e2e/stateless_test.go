@@ -28,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -108,7 +109,7 @@ func dataMemberBootstrap(t *testing.T, port int, ring keyring) *config.Bootstrap
 	withCredential(t, &boot)
 	boot.Node.ID = "data-a"
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&boot.Stream, filepath.Join(t.TempDir(), "stream"))
 	boot.Stream.Leaf.Host, boot.Stream.Leaf.Port = "127.0.0.1", port
 	boot.Coordination.Type = config.CoordinationEmbeddedKV
 	return &boot
@@ -521,7 +522,7 @@ func TestANodeAdmissionDoesNotApplyToIsReadyOnItsPresence(t *testing.T) {
 			boot.Node.ID = "probed"
 			boot.Node.Roles = tc.roles
 			boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-			boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+			brokertest.StoreIn(&boot.Stream, filepath.Join(t.TempDir(), "stream"))
 			boot.Coordination.Type = config.CoordinationEmbeddedKV
 			withKeyring(t, &boot)
 			n := bootNodeWith(t, engine.Options{
