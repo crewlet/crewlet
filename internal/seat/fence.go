@@ -66,13 +66,16 @@ var ErrSeatMoved = errors.New("seat: the seat moved to another node")
 //
 // # What it deliberately does not cover
 //
-// A DETACHED run — a coding CLI in agent mode, or a sandbox job — is not
-// fenced, and that is the design rather than a gap. Such a run outlives its
-// turn on purpose: its placement is on its own row, and the process that
-// collects it is often not the one that launched it, so closing a fence over
-// it would kill an hour of work on an ordinary rebalance and lose its output,
-// to guard writes the bridge's own run-scoped, expiring credential already
-// bounds. What is fenced is the RESUME — the turn that comes back to collect
+// A RUNNING executor run — every agent seat's executor is its coding CLI's
+// own detached run — is not fenced, and that is the design rather than a gap.
+// Such a run outlives its turn on purpose: its placement is on its own row,
+// and the process that collects it is often not the one that launched it, so
+// closing a fence over it would kill an hour of work on an ordinary rebalance
+// and lose its output, to guard writes the bridge's own run-scoped, expiring
+// credential already bounds. What is fenced is either end of it: the LAUNCH,
+// which asks this fence immediately before it opens a bridge session or a box
+// (the engine's seatFence), so a seat that moved while its turn built the
+// prompt starts nothing; and the RESUME — the turn that comes back to collect
 // the run runs under the grant the collecting node holds.
 //
 // A nil Host returns nil, and so does a handle no grant covers at all: with

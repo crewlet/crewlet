@@ -55,7 +55,7 @@ func spentProvider(t *testing.T, reset time.Duration) (*Provider, *testClock) {
 // Proved by taking the CLI AWAY after the first call: a call that launched
 // one would fail as a missing binary, not as the spent plan.
 //
-// Mutation: make benched always answer nil, and the second call reaches the
+// Mutation: make SittingOut always answer nil, and the second call reaches the
 // missing binary.
 func TestASpentPlanSitsTheEntryOutUntilItsReset(t *testing.T) {
 	t.Parallel()
@@ -193,7 +193,7 @@ func TestARejectedLoginDoesNotSitTheEntryOut(t *testing.T) {
 	if _, err := ask(t, p, llm.Request{}); llm.KindOf(err) != llm.KindAuth {
 		t.Fatalf("the rejected login answered %v, want auth", err)
 	}
-	if err := p.benched(); err != nil {
+	if err := p.SittingOut(); err != nil {
 		t.Errorf("a rejected login sat the entry out: %v", err)
 	}
 }

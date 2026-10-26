@@ -39,27 +39,23 @@ const (
 
 // Message is one turn of a conversation.
 //
-// The JSON tags are a WIRE FORMAT, and they are the field names on purpose.
-// A suspended agent turn serializes its whole conversation into a durable row
-// that another BUILD reads back days later
-// ([github.com/crewlet/crewlet/internal/agent/execstate]), and untagged these
-// keys are whatever the Go field happens to be called — so a rename here is
-// an unresumable run with no compile error and no symptom but a refusal in a
-// log. Pinned to the spellings already on the wire; changing one is a format
-// change and needs a version bump on the other side.
+// It is never persisted: a conversation lives for one phase's tool loop in
+// one process, and a turn that parks on its executor's run carries the
+// turn's bookkeeping across the park, not a conversation
+// ([github.com/crewlet/crewlet/internal/agent/execstate]).
 type Message struct {
-	Role       string     `json:"Role,omitempty"`
-	Content    string     `json:"Content,omitempty"`
-	ToolCalls  []ToolCall `json:"ToolCalls,omitempty"`
-	ToolCallID string     `json:"ToolCallID,omitempty"`
-	Name       string     `json:"Name,omitempty"`
+	Role       string
+	Content    string
+	ToolCalls  []ToolCall
+	ToolCallID string
+	Name       string
 
 	// Failed marks a tool message whose call FAILED — the tool refused,
 	// errored, or never ran because its arguments did not parse. The
 	// Content still says why; this is the flag beside it, which a backend
 	// renders so the model reads the result as the failure it is.
 	// Meaningless on any other role.
-	Failed bool `json:"Failed,omitempty"`
+	Failed bool
 }
 
 // ToolDef is a tool offered to the model. Parameters is a JSON Schema object.
@@ -71,9 +67,9 @@ type ToolDef struct {
 
 // ToolCall is the model asking for a tool to run.
 type ToolCall struct {
-	ID        string         `json:"ID,omitempty"`
-	Name      string         `json:"Name,omitempty"`
-	Arguments map[string]any `json:"Arguments,omitempty"`
+	ID        string
+	Name      string
+	Arguments map[string]any
 
 	// ArgumentsError is why the arguments the model wrote could not be
 	// decoded, and empty when they could. Arguments is then EMPTY, and the
@@ -81,7 +77,7 @@ type ToolCall struct {
 	// never asked for (a search over everything, a post with no body). The
 	// tool loop answers such a call with this reason as a failed result
 	// instead, which the model can read and fix.
-	ArgumentsError string `json:"ArgumentsError,omitempty"`
+	ArgumentsError string
 }
 
 // StopReason is why a model stopped writing one response, so the tool loop
@@ -314,7 +310,9 @@ const (
 
 	// KindRateLimit is a spent plan or a rate limit the CLI reported in its
 	// vendor's own words. The backend sits the entry out for a while
-	// (internal/providers/llm/cliagent), and the chain moves on.
+	// (internal/providers/llm/cliagent), and the chain moves on — a call to
+	// its next member, and a seat's executor launch to the next member that
+	// can run it.
 	KindRateLimit
 
 	// KindAuth is a login the CLI reports expired or missing. Retryable

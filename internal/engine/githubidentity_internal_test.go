@@ -11,6 +11,7 @@ import (
 const appSeatsDoc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     primary: {model: claude-sonnet-5}
 roles:
@@ -87,6 +88,7 @@ func TestATokenResolvedAccountIsRegisteredFolded(t *testing.T) {
 	const doc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     primary: {model: claude-sonnet-5}
 roles:
@@ -118,6 +120,7 @@ func TestAnAppOutranksALeftoverToken(t *testing.T) {
 	const doc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     primary: {model: claude-sonnet-5}
 roles:
@@ -155,6 +158,7 @@ func TestASeatWithNoAppKeepsItsToken(t *testing.T) {
 	const doc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     primary: {model: claude-sonnet-5}
 roles:

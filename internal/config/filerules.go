@@ -92,12 +92,12 @@ func (c *Company) validateOptionalKeys() error {
 	return p.err()
 }
 
-// validateRunOptionalKeys holds a coding run's `optional_keys` lists — a seat's
-// sandbox block's, over its env, and every setup step's, over its env and its
-// files — to the rule a tool server's list is held to ([Company.validateOptionalKeys]):
-// an entry that leaves nothing out is refused, because the key it was meant
-// for stays required, and a coding run is refused wherever its value resolves
-// to nothing.
+// validateRunOptionalKeys holds an executor box's `optional_keys` lists — a
+// seat's sandbox block's, over its env, and every setup step's, over its env
+// and its files — to the rule a tool server's list is held to
+// ([Company.validateOptionalKeys]): an entry that leaves nothing out is
+// refused, because the key it was meant for stays expected, and a run is
+// logged as starting without it wherever its value resolves to nothing.
 //
 // AN ADMISSION RULE like that one: nothing about running depends on it, since
 // an entry naming nothing is merely never consulted.
@@ -113,7 +113,7 @@ func (c *Company) validateRunOptionalKeys() error {
 			held.settings(step.Env)
 			held.contents(step.Files)
 			held.check(&p, at(idx(path, i), "optional_keys"), step.OptionalKeys,
-				"this step's env, nor a path of its files", "no coding run is started")
+				"this step's env, nor a path of its files", runStartsWithout)
 		}
 	}
 	if c.Providers.Sandbox != nil {
@@ -128,12 +128,19 @@ func (c *Company) validateRunOptionalKeys() error {
 			held := heldKeys{}
 			held.settings(gate.Env)
 			held.check(&p, at(path, "sandbox.optional_keys"), gate.OptionalKeys,
-				"this sandbox block's env", "no coding run is started")
+				"this sandbox block's env", runStartsWithout)
 		}
 		steps(at(path, "sandbox.setup"), gate.Setup)
 	}
 	return p.err()
 }
+
+// runStartsWithout is what happens to an executor run whose environment holds
+// a reference that resolves to nothing and is not optional, for the sentence
+// [heldKeys.check] writes: the run is the seat's turn itself, so it starts,
+// and the gap is logged for the operator to find (the engine's runEnvironment).
+const runStartsWithout = "the seat's executor run starts without it and logs " +
+	"the gap as sandbox_env_unresolved"
 
 // heldKeys is what an `optional_keys` list is checked against: for each key
 // its values are written under, whether one of them carries a reference, and

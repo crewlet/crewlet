@@ -44,7 +44,6 @@ func TestEveryLimitIsReadFromTheKeyItNames(t *testing.T) {
 	// so a row answering its default rather than the document fails.
 	written := map[string]string{
 		"turn_engine.max_iterations":                  "5",
-		"turn_engine.max_tool_rounds":                 "31",
 		"turn_engine.onboarding_max_tool_rounds":      "7",
 		"turn_engine.delegation_depth_limit":          "4",
 		"turn_engine.delegation.max_parallel":         "2",

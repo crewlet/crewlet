@@ -65,7 +65,6 @@ const LIMIT_GROUPS: Readonly<
  */
 const LABELS: Readonly<Record<string, string>> = {
   "turn_engine.max_iterations": "Review rounds per turn",
-  "turn_engine.max_tool_rounds": "Tool rounds per run",
   "turn_engine.onboarding_max_tool_rounds": "Tool rounds on a first turn",
   "turn_engine.delegation_depth_limit": "Delegation depth",
   "turn_engine.delegation.max_parallel": "Workers at once",

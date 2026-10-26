@@ -196,7 +196,7 @@ func sandboxPayload(turnID string) map[string]any {
 	return map[string]any{
 		"turn_id": turnID, "role": "Coder", "agent_handle": "coder",
 		"agent_id": "a-9", "coding_agent": "claude", "sandbox_id": "sb-1",
-		"task": "fix the build",
+		"task": "fix the build", "provider_key": "spare", "model": "claude-haiku",
 	}
 }
 
@@ -211,6 +211,11 @@ func TestASandboxRunIsTrackedThenDropped(t *testing.T) {
 	}
 	if runs[0].Status != "running" || runs[0].Task != "fix the build" {
 		t.Errorf("entry = %+v", runs[0])
+	}
+	// THE MEMBER THE RUN WAS LAUNCHED ON, which a running run is drawn with.
+	if runs[0].ProviderKey != "spare" || runs[0].Model != "claude-haiku" {
+		t.Errorf("entry names %q/%q, want the member the run was launched on",
+			runs[0].ProviderKey, runs[0].Model)
 	}
 
 	s.Apply(env("sandbox_run_completed", map[string]any{"turn_id": "tn-1"}))

@@ -80,6 +80,14 @@ func TestTierAWarnsAboutWhatItCannotRefuse(t *testing.T) {
 			},
 			"api.port", "no orchestrator can probe it",
 		},
+		// THE SEATS ROLE WITH NO LISTENER: every executor's box calls its
+		// seat's tools through the bridge this node would serve there.
+		"a seats node with no port": {
+			func(b *config.Bootstrap) {
+				b.Node.Roles = []string{"data", "seats", "workers"}
+			},
+			"api.port", "every executor run this node launches is refused",
+		},
 		// A BROKER ASKED TO BE VERBOSE INTO A SINK THAT TAKES NO DEBUG
 		// produces nothing at all: `stream.debug` unlocks nats-server's
 		// own Debugf population, and those are still DEBUG records.
@@ -576,7 +584,7 @@ func TestEveryNodeNeedsAStreamThatSurvivesARestart(t *testing.T) {
 // go quiet; walk only the top-level roles and the unit's seat is missed.
 func TestACompanyNobodyCanJoinIsAdvisedNotRefused(t *testing.T) {
 	t.Parallel()
-	const agents = "name: Acme\nproviders:\n  llm:\n    main:\n" +
+	const agents = "name: Acme\nproviders:\n  sandbox: {fake: true}\n  llm:\n    main:\n" +
 		"      model: claude-sonnet-5\n"
 	for name, tc := range map[string]struct {
 		doc     string
@@ -647,17 +655,22 @@ func TestACompanyNobodyCanJoinIsAdvisedNotRefused(t *testing.T) {
 	}
 }
 
-// THE PORT IS WARNED ABOUT ONLY WHERE INGRESS WAS ASKED FOR. A node without the
-// role that binds nothing is a satellite with nothing inbound, which an
-// operator chooses; an omitted role list is the single-process default before
-// anybody chose a port; and a declared ingress node with a port is the shape
-// the warning asks for. Each is held quiet here, so a warning that fired on
-// every port of 0 fails this rather than training its reader to skip it.
-func TestOnlyADeclaredIngressNodeIsWarnedForBindingNothing(t *testing.T) {
+// THE PORT IS WARNED ABOUT ONLY WHERE INGRESS OR SEATS WAS ASKED FOR. A node
+// with neither role that binds nothing is a satellite with nothing inbound,
+// which an operator chooses; an omitted role list is the single-process
+// default before anybody chose a port; and a declared ingress or seats node
+// with a port is the shape the warning asks for. Each is held quiet here, so a
+// warning that fired on every port of 0 fails this rather than training its
+// reader to skip it.
+func TestOnlyADeclaredIngressOrSeatsNodeIsWarnedForBindingNothing(t *testing.T) {
 	t.Parallel()
 	for name, mutate := range map[string]func(*config.Bootstrap){
-		"a data node without ingress": func(b *config.Bootstrap) {
+		"a data node with neither role": func(b *config.Bootstrap) {
+			b.Node.Roles = []string{"data", "workers"}
+		},
+		"a declared seats node with a port": func(b *config.Bootstrap) {
 			b.Node.Roles = []string{"data", "seats", "workers"}
+			b.API.Port = 8080
 		},
 		"roles left to the default": func(b *config.Bootstrap) {},
 		"a declared ingress node with a port": func(b *config.Bootstrap) {

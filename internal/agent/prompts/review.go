@@ -1,5 +1,10 @@
 package prompts
 
+import (
+	"fmt"
+	"strings"
+)
+
 // ReviewHeader is the reviewer's contract: the rules that decide its one
 // decision.
 //
@@ -44,12 +49,26 @@ package prompts
 // that for a turn that reached nobody. Whether this round still owed a
 // further delivery — a correction the first answer needs — is a question about
 // the work's merits, which is the reviewer's.
+//
+// THE RUN'S OWN WORK IS IN NO LOG, and the header says so for every seat
+// because every executor is a coding CLI's own run: its edits, commands,
+// tests and commits happen in its box, and the log holds only the calls it
+// made to the seat's tools over the bridge. A reviewer that read the log as
+// everything the agent did took a run that fixed a bug and pushed the branch
+// for one that narrated a fix it never made — "no git or test calls, so the
+// claim is fabricated" — and sent a delivered turn back to max_iterations.
 const ReviewHeader = "\n## REVIEW phase" +
 	"\nJudge the work below, then call `submit_review` exactly once." +
 	"\n" +
 	"\n`## What the agent did` is the evidence: calls marked `→ success` " +
 	"happened, and `→ error` calls did not take effect. `## What the agent " +
 	"produced` is the agent's own account of itself." +
+	"\n**The agent ran as a coding CLI with its own shell.** Its local work " +
+	"— editing files, running commands and tests, committing — is not in " +
+	"`## What the agent did`, which lists only the calls it made to your " +
+	"tools. Judge that work on its report and on any branches or pull " +
+	"requests listed under `## What the run delivered`; a missing shell or " +
+	"test call is not fabrication." +
 	"\n**Delivery is already settled:** the engine checked the agent's " +
 	"delivery claims against this turn's whole log, earlier rounds " +
 	"included, and overturns a `done` when no round reached the person " +
@@ -83,20 +102,6 @@ const reviewBlockedOutcome = " Already asked → `done`: their reply " +
 	"sending it back only asks twice. Nothing anyone replies would finish it " +
 	"→ `failed`. Whoever triggered this turn is still owed a reply where " +
 	"they asked, even one that only says who you are waiting on."
-
-// reviewSandboxRule is rendered only where the executor is offered
-// run_sandbox ([ReviewInput.OffersSandbox]), like the executor's own sandbox
-// section.
-//
-// It stops the reviewer reading a run_sandbox-delegated investigation as
-// fabrication — the absence of shell calls is the DESIGN — and looping the
-// turn to max_iterations. Unconditional, it was prose about a tool on every
-// review of every seat in the company, nearly none of which can call it.
-const reviewSandboxRule = "\n**A successful `run_sandbox` call IS the code " +
-	"work:** a coding agent ran the shell and the tests inside its own " +
-	"sandbox, and its report is in `## What the agent produced`. No " +
-	"`git` / shell / test calls here is not fabrication — judge the report " +
-	"on its merits."
 
 // ReviewInput is the evidence the reviewer judges against.
 //
@@ -132,9 +137,15 @@ type ReviewInput struct {
 	// the next round that its summary does not cover.
 	OpenQuestions string
 
-	// Produced is the executor's final prose — the answer where the answer
-	// is prose, the sandbox report where a coding run produced one.
+	// Produced is the executor's final prose — its run's closing reply.
 	Produced string
+
+	// Delivered is the branches and pull requests the executor's run
+	// reported delivering, rendered by [DeliveredRefs]. The one evidence of
+	// its local work besides its own report, since that work is in no log.
+	// Empty renders no section: a run that pushed nothing has nothing to
+	// list, and the header names the section conditionally.
+	Delivered string
 
 	// ToolLog is the round's call log, VERBATIM: every call with its
 	// success or error outcome. Always rendered, as "(none)" when empty —
@@ -154,12 +165,6 @@ type ReviewInput struct {
 	// the header refers to it conditionally.
 	EarlierIterations string
 
-	// OffersSandbox is whether the executor this reviews is offered
-	// run_sandbox, which gates the rule on reading a sandbox run's report —
-	// the caller's answer, read off the executor's universe, as
-	// [ExecutorInput.OffersSandbox] is.
-	OffersSandbox bool
-
 	// OffersA2A is whether the seat holds a2a_ask, which gates the blocked
 	// rule's naming it among the ways the next round reaches a colleague.
 	OffersA2A bool
@@ -178,9 +183,9 @@ type ReviewInput struct {
 // The reviewer sees the rules that decide its decision (what each decision
 // means is `submit_review`'s schema, beside the field), what the agent said
 // it set out to do, the tool-call log, and the text it produced — so it
-// judges against evidence rather than self-narration. The sandbox rule renders
-// only where the executor was offered run_sandbox, and `a2a_ask` is named only
-// where the seat holds it. No domain tools, no catalogue, no policies /
+// judges against evidence rather than self-narration — and what its run
+// delivered, since its local work is in no log. `a2a_ask` is named only where
+// the seat holds it. No domain tools, no catalogue, no policies /
 // roster / backstory: the reviewer's question is whether this round's work is
 // right, and everything it needs to answer that is in front of it.
 //
@@ -217,24 +222,44 @@ func BuildReview(seat Seat, in ReviewInput) Prompt {
 	if in.Produced != "" {
 		b.Heading("produced", "\n## What the agent produced", in.Produced)
 	}
+	if in.Delivered != "" {
+		b.Heading("delivered_refs", "\n## What the run delivered", in.Delivered)
+	}
 	return b.Build()
 }
 
-// reviewHeader is [ReviewHeader] with the rules that hold only for some seats.
+// DeliveredRefs renders the branches and pull requests a run reported for the
+// reviewer, one per line, saying how many more it reported than the list
+// carries — or "" when it reported none.
 //
-// A FUNCTION OF THE SEAT'S SURFACE, never of the round: both gates are frozen
-// for the turn, so the review prompt stays byte-identical across the rounds of
-// its phase.
+// THE ELIDED COUNT IS SAID, never dropped: the list is bounded where the run
+// is collected, and a reviewer shown three refs of a run that pushed five
+// would judge the five as three.
+func DeliveredRefs(refs []string, elided int) string {
+	if len(refs) == 0 && elided <= 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(refs)+1)
+	for _, ref := range refs {
+		lines = append(lines, "- "+ref)
+	}
+	if elided > 0 {
+		lines = append(lines, fmt.Sprintf("- (and %d more the run reported)", elided))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// reviewHeader is [ReviewHeader] with the rule that holds only for some seats.
+//
+// A FUNCTION OF THE SEAT'S SURFACE, never of the round: the gate is frozen for
+// the turn, so the review prompt stays byte-identical across the rounds of its
+// phase.
 func reviewHeader(in ReviewInput) string {
 	header := ReviewHeader
 	if in.OffersA2A {
 		header += reviewA2ARule
 	}
-	header += reviewBlockedOutcome
-	if in.OffersSandbox {
-		header += reviewSandboxRule
-	}
-	return header
+	return header + reviewBlockedOutcome
 }
 
 // outcomeLine renders the outcome word with who wrote it.

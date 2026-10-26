@@ -313,9 +313,20 @@ timeouts beneath it. Round one always runs: a cap that refused before any work
 started would report a turn as timed out having done nothing, which is a
 misconfiguration rather than a slow turn.
 
-A resumed turn — one re-entering a suspended [code sandbox](code-sandbox.md)
-run — carries **no** cap. The cap bounds the turn a fire started; the resumed
-half is finishing work the box already did.
+**The cap spans the whole turn, its executor's run included.** An agent
+seat's executor is its coding CLI's own [run in a box](code-sandbox.md), and
+the turn parks while the run works, so a turn is several segments — the
+launch, then one per collection — and a reviewer that sends the work back
+launches the run again. The cap is an instant, measured from when the fire's
+turn began and carried on the park, so every later segment is held to the
+same one: the round a segment collects always runs, and none after it starts
+once the instant has passed. The run itself is the part that can outlast the
+cap by hours, so the instant is written on its row too
+([`PendingRun.Deadline`](code-sandbox.md)): the completion poll ends a run
+still working past it as if it had finished, logging
+`sandbox_run_past_deadline`, and the collection that follows reads what it did
+up to then and resumes its turn to judge it, rather than cutting it off with
+its work unrecorded.
 
 ---
 
@@ -328,7 +339,7 @@ scheduling:
   enabled: true              # master switch
   tick_seconds: 10           # scheduler poll interval
   jitter_seconds: 0          # max per-schedule deterministic spread (see below)
-  catchup_min_seconds: 120   # lower clamp on the catchup window
+  catchup_min_seconds: 120   # lower clamp on the catchup window (at least 1)
   catchup_max_seconds: 7200  # upper clamp on the catchup window
 ```
 

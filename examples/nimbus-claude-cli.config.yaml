@@ -32,9 +32,8 @@
 #     crewlet llm doctor default            -company examples/nimbus-claude-cli.company.yaml \
 #                                           -config  examples/nimbus-claude-cli.config.yaml
 #
-#     # 3. The tool bridge the engineers' agent-mode runs dial back on,
-#     #    and go.
-#     export CREWLET_MCP_BRIDGE_URL="http://127.0.0.1:8000"   # = api.port below
+#     # 3. Go.  Every seat's executor run is a `direct` box on this
+#     #    machine and dials api.port below on loopback for its tools.
 #     set -a; . ./.env; set +a          # MATTERMOST_URL + the bot tokens
 #                                       #   the bootstrap wrote
 #     crewlet run -config examples/nimbus-claude-cli.config.yaml \
@@ -183,16 +182,16 @@ api:
   # process — one process serves engine + dashboard + webhooks.  Open the
   # dashboard at http://localhost:8000/ once it is up.
   #
-  # IT ALSO SERVES THE MCP TOOL BRIDGE the three engineering seats need:
-  # their executor runs as the coding CLI's own agentic loop in a box, and
-  # the seat's tools reach that box back over /mcp/{token} here.  Set
-  # CREWLET_MCP_BRIDGE_URL to a URL the box can dial — for a `direct` box
-  # on this machine that is http://127.0.0.1:<this port>.  Change the port
-  # and change that variable with it; without it agent mode is refused at
-  # launch rather than started with no tools.  In a fleet the URL must
-  # address the NODE and never a load balancer: a bridge session is a live
-  # tool surface in one process, and a peer that never held it answers 401
-  # for ever.
+  # IT ALSO SERVES THE MCP TOOL BRIDGE every agent seat needs: each seat's
+  # executor runs as its coding CLI's own agentic loop in a box, and the
+  # seat's tools reach that box back over /mcp/{token} here.  A `direct`
+  # box on this machine dials this port on loopback, which the node
+  # derives from the socket it binds — nothing to set, and `port: 0`
+  # would leave every executor launch refused.  A `container` or `e2b`
+  # box needs CREWLET_MCP_BRIDGE_URL, a URL that box reaches this node
+  # at; in a fleet it must address the NODE and never a load balancer: a
+  # bridge session is a live tool surface in one process, and a peer
+  # that never held it answers 401 for ever.
   #
   # 8000 rather than 80, deliberately.  The only reason to bind the plain
   # http port is so a webhook URL an external service registers needs no

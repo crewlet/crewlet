@@ -1050,7 +1050,13 @@ type Node struct {
 	// There is no "unbounded". Zero is unset rather than a setting — a cap
 	// of zero turns is not a thing an operator can want — and somebody who
 	// wants effectively no bound writes a large number they can see.
-	MaxConcurrent int `yaml:"max_concurrent,omitempty" json:"max_concurrent,omitempty" js:"min=0" desc:"Agent turns this process runs at once; 0 takes the engine default. Per node, so a fleet's ceiling is N times this."`
+	//
+	// It bounds the turn SEGMENTS this process runs itself — the onboarding
+	// pass, a launch, the collect and the review — and not the executor
+	// runs between them: a turn suspends at its launch and frees its slot,
+	// and a seat runs at most one executor run at a time, so the seats this
+	// node holds are what bound those.
+	MaxConcurrent int `yaml:"max_concurrent,omitempty" json:"max_concurrent,omitempty" js:"min=0" desc:"Turn segments this process runs at once (a seat's executor run is not one of them: each seat runs at most one); 0 takes the engine default. Per node, so a fleet's ceiling is N times this."`
 }
 
 // nodeRoleNames is the vocabulary, for the error message and the schema.

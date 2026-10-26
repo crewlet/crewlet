@@ -18,6 +18,7 @@ func TestTheChannelDirectoryIsTheChartsSurfacesAndUnitChannels(t *testing.T) {
 	e.epoch.current.Store(companyFor(t, `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     gateway:
       model: sonnet

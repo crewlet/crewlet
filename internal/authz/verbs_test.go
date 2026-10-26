@@ -22,7 +22,7 @@ import (
 //
 // Both are facts about the VERB, so the refusal has to say what it is before
 // any class weighs a permission: a seat holding nothing takes a seat-only verb
-// (an ask, a coding run — the role's registry decides who is offered it), a
+// (an ask — the role's registry decides who is offered it), a
 // person holding admin is refused one as [authz.ReasonSeatOnly] naming no
 // permission (none would change it), and a seat is refused a human-only one as
 // [authz.ReasonSeatRefused], again naming none — a seat holding admin, and a
@@ -102,7 +102,7 @@ func TestSeatOnlyAndHumanOnlyAreCheckedBeforeTheClass(t *testing.T) {
 // NO ROW IS BOTH SEAT-ONLY AND HUMAN-ONLY.
 //
 // Such a row admits nobody at all, and it reads in the table as two careful
-// decisions rather than as the dead verb it is. Mutation: mark run_sandbox
+// decisions rather than as the dead verb it is. Mutation: mark a2a_ask
 // human-only and this goes red.
 func TestNoRowIsBothSeatOnlyAndHumanOnly(t *testing.T) {
 	t.Parallel()

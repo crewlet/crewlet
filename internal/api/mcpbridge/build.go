@@ -37,19 +37,31 @@ const BaseURLVar = "CREWLET_MCP_BRIDGE_URL"
 // key: there is no node without one, so reaching here with one is a mistake to
 // name, not a posture to degrade into.
 //
-// An unset base URL builds NOTHING, and that is a real configuration rather
-// than an error: most deployments run no agent mode. The route is then absent,
-// and a seat that asks for agent mode is refused with the variable named —
-// which is a better failure than a run that starts and cannot call a tool.
-func Build(env func(string) string, material runtoken.Material) (*Bridge, error) {
-	if !Configured(env) {
+// hostURL is where a box on this node's own host reaches it — the node's own
+// listener on loopback ([Options.HostURL]), derived by whoever bound that
+// listener, "" where the node binds none.
+//
+// NEITHER BUILDS NOTHING. The route is then absent, and every executor launch
+// on this node is refused naming what is missing — which is a better failure
+// than a run that starts and cannot call a tool. A node that runs no seat
+// needs no bridge, so the absence is not an error here; the launch is where it
+// is decided. One without the other builds a bridge that reaches the boxes it
+// can: the host URL alone serves the `direct` cell, and the variable alone
+// every cell.
+func Build(env func(string) string, material runtoken.Material, hostURL string) (*Bridge, error) {
+	hostURL = strings.TrimSpace(hostURL)
+	if !Configured(env) && hostURL == "" {
 		return nil, nil
 	}
-	return New(Options{Material: material, BaseURL: strings.TrimSpace(env(BaseURLVar))})
+	var base string
+	if Configured(env) {
+		base = strings.TrimSpace(env(BaseURLVar))
+	}
+	return New(Options{Material: material, BaseURL: base, HostURL: hostURL})
 }
 
-// Configured reports whether env names a bridge base URL: whether [Build]
-// builds a bridge at all.
+// Configured reports whether env names a bridge base URL — the address every
+// cell's boxes can dial, and the only one a container's or a remote box can.
 //
 // ITS OWN FUNCTION because a node asks it before there is an engine to build
 // one: `crewlet run` binds the listener a seats node serves its bridge on the

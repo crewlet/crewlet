@@ -1654,8 +1654,8 @@ The registered media type is `application/merge-patch+json`; plain `application/
 
 ```bash
 curl -X PATCH https://engine.example.com/config \
-  -H "Authorization: Bearer $TOKEN" -H "X-Summary: raise the executor round cap" \
-  -d '{"turn_engine": {"max_tool_rounds": 32}}'
+  -H "Authorization: Bearer $TOKEN" -H "X-Summary: allow one more self-iteration per turn" \
+  -d '{"turn_engine": {"max_iterations": 4}}'
 ```
 
 - **Deep merge.** `{"providers": {"llm": {"main": {"model": "claude-opus-5"}}}}` changes that model and leaves the provider's type, its keys and every other provider alone.
@@ -3443,9 +3443,11 @@ shaped the same way.
   "events":    [ { /* recent event row, newest first — payload-free, plus
                       a `failed` boolean */ }, ... ],
   "sandboxes": [ { /* in-flight detached coding run: turn_id, role,
-                      agent_handle, agent_id, coding_agent, sandbox_id,
-                      task, status (the run record's own word), started_at,
-                      question, audience, work_item, owner, paused_at */ }, ... ],
+                      agent_handle, agent_id, coding_agent, provider_key and
+                      model (the executor-chain member it was launched on),
+                      sandbox_id, task, status (the run record's own word),
+                      started_at, question, audience, work_item, owner,
+                      paused_at */ }, ... ],
   "tools":     [ { /* one catalogue entry — see The Tool Catalogue below */ } ],
   "org":       { /* /org payload */ },
   "tokens":    { /* the spend rollup — same shape as /tokens/breakdown */ },
@@ -3581,7 +3583,7 @@ or the seats and workers half of a split deployment — serves no API, no
 dashboard and no webhook. But an orchestrator runs every node, and one it
 cannot probe it can neither restart when it wedges nor wait on during a
 rollout. So such a node binds `api.port` for exactly two routes, and on a seats
-node with `CREWLET_MCP_BRIDGE_URL` set the [tool bridge](#routes) beside them —
+node the [tool bridge](#routes) beside them —
 or, with `api.public` set, on that [public listener](#which-listener-serves-what)
 alone, where it is the only route. The guard stands in front of them as it does
 on an ingress node, so every other path is judged as one there is: `401` to a
@@ -4248,7 +4250,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `fleet_broker` | `{}` | `GET /fleet/broker`: what every live node advertises about its broker, the metadata group as a member reports it, and where the two disagree. **Takes `admin`**. See [below](#the-brokers-membership) |
 | `backups` | `{}` | `GET /backups`: each owner's newest backup and the backup history, the Settings › Backups & retention screen. **Takes `admin`**. See [below](#get-backups) |
 | `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Settings › MCP Tools screen's Servers section. **Takes `admin`**. See [below](#get-mcp-servers) |
-| `limits` | `{}` | The caps the engine holds the company's work to, as it ENFORCES them: `{limits: [{key, group, unit, value, default, off, default_off}]}`, in drawing order. `key` is the setting's path in the company document (`turn_engine.max_iterations`, `turn_engine.max_tool_rounds`, `turn_engine.onboarding_max_tool_rounds`, `turn_engine.delegation_depth_limit`, the six `turn_engine.delegation.*` caps, `notification_rate_limit`, `notification_coalesce_max_batch`, and `schedules.timeout_seconds`, the timeout every schedule takes unless it sets its own); `group` is `turn`, `delegation`, `notifications` or `schedules`; `unit` is `count`, `seconds`, `fraction` or `per_second`. `value` is what the applied company holds, which is the default wherever the document says nothing, and `default` is the engine's own, so a screen draws both and never keeps a copy of a default. There is no "was it written" flag, because the applied company does not remember. `off` marks a value that switches its limit off: a `notification_rate_limit` of 0 (no limit) and an `onboarding_max_tool_rounds` of 0 (no onboarding pass). `default_off` asks the same of `default`, so a screen saying which default a set value replaced says Off where the default is no limit. Empty on a node running no company. **Takes `admin`**, as the `config` question it is read beside does |
+| `limits` | `{}` | The caps the engine holds the company's work to, as it ENFORCES them: `{limits: [{key, group, unit, value, default, off, default_off}]}`, in drawing order. `key` is the setting's path in the company document (`turn_engine.max_iterations`, `turn_engine.onboarding_max_tool_rounds`, `turn_engine.delegation_depth_limit`, the six `turn_engine.delegation.*` caps, `notification_rate_limit`, `notification_coalesce_max_batch`, and `schedules.timeout_seconds`, the timeout every schedule takes unless it sets its own); `group` is `turn`, `delegation`, `notifications` or `schedules`; `unit` is `count`, `seconds`, `fraction` or `per_second`. `value` is what the applied company holds, which is the default wherever the document says nothing, and `default` is the engine's own, so a screen draws both and never keeps a copy of a default. There is no "was it written" flag, because the applied company does not remember. `off` marks a value that switches its limit off: a `notification_rate_limit` of 0 (no limit) and an `onboarding_max_tool_rounds` of 0 (no onboarding pass). `default_off` asks the same of `default`, so a screen saying which default a set value replaced says Off where the default is no limit. Empty on a node running no company. **Takes `admin`**, as the `config` question it is read beside does |
 | `sign_in_policy` | `{}` | How a person signs in on THIS node, read from its own `api.auth`: `{node, policy: {second_factor, min_password_length, session_absolute_seconds, session_idle_seconds, step_up_seconds}}`. Every value is the one the engine enforces, so a setting the file leaves out arrives as its default (`required`, 12, 168 hours, 1 hour), and `session_idle_seconds` is the engine's constant 12 hours. Tier A, so nodes of one fleet may disagree and `node` names the one that answered; changing a value is an edit to that node's file and a restart. **Takes `admin`**. The two values a sign-in form needs before anybody has signed in are also on the unguarded [`/auth/config`](#routes) |
 | `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so Settings › Nodes polls this rather than waiting for one. **Takes `admin`**. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
 | `sandbox_runs` | `{audience?}` | `GET /sandbox-runs`: `unknown_query` on a company with no sandbox configured, and `unavailable` when the fleet's run record could not be read. Each run carries `work_item` (`{backend, id, key, project}`, or null), the item the launching turn was charged to, and `launch_id`, the job the row holds now — what `sandbox_tail` is asked by |
@@ -7465,6 +7467,7 @@ reclaimed, work preserved on a pushed branch) is listed on both.
     {
       "turn_id": "<uuid>", "launch_id": "<uuid>", "agent_handle": "eng", "role": "Engineer",
       "status": "awaiting_clarification", "coding_agent": "claude-code",
+      "provider_key": "default", "model": "sonnet",
       "task_description": "Add retry to the webhook client",
       "question": "Which backoff ceiling should I use?", "audience": "manager",
       "audience_handles": ["founder"], "audience_fallback": false,
@@ -7480,9 +7483,15 @@ reclaimed, work preserved on a pushed branch) is listed on both.
 ```
 
 `launch_id` names the job the row holds now. A turn can launch more than
-one — a resumed executor that calls `run_sandbox` again reuses the row — and
+one — a reviewer that sends the work back, or a person's answer carrying a
+parked run on, relaunches the executor under the same row — and
 `sandbox_tail` is asked by it, so a run's page polls the live
 output of the job it shows rather than of whichever replaced it.
+`provider_key` and `model` name the member of the seat's executor chain the
+job was launched on, which a fallback at launch makes other than the chain's
+head. `bridge_calls` is always an array on a row the store answered — every
+run's tools reach it over the bridge, so an empty one is a run that has called
+nothing yet — and absent only where the run's body is withheld from the reader.
 
 `box_exists` and `paused_at` stand in for the sandbox id: a board wants to
 know that a box exists and that it is currently paused (and being billed
@@ -8204,9 +8213,11 @@ Notes:
   `skill_refiner`, `episode_compaction`, `skill_clustering`,
   `skill_promotion`, `answer_knowledge`, and `condense_<kind>` for each kind of
   text a compaction rewrites. Its rows sum to that phase.
-- `calls` is PROVIDER CALLS on every bucket: a phase's model rounds, an
-  auxiliary record's coalesced calls. It counted records once, which made a
-  forty-round executor one call.
+- `calls` is PROVIDER CALLS on every bucket: a phase's model rounds, a
+  coding run's own CLI turns as its CLI reported them (`cli_turns`, one for a
+  run whose CLI reports none — OpenCode reports none), an auxiliary record's
+  coalesced calls. The executor's own record counts none: its run's calls are
+  the run's. It counted records once, which made a forty-turn run one call.
 - `by_provider` answers "which configured entry (`providers.llm.<key>`) do we
   pay for", which `by_model` cannot: a fallback chain serves several models
   under one key. `models` is every model the entry answered with, biggest

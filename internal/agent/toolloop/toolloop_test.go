@@ -967,7 +967,7 @@ func TestARefusedRoundDoesNotRunItsTools(t *testing.T) {
 // and every later charge is refused whatever its size. The loop used to make
 // the next call anyway, which the vendor billed and the meter then refused:
 // a phase opened after the turn was refused (the reviewer after a judge's
-// refusal, the executor after onboarding's) paid for one round it could
+// refusal, a worker after its parent's) paid for one round it could
 // never keep. Stopped before the call, it is refused with the same error, and
 // a person's note waiting for that round is left in the box for whoever
 // reads it next rather than marked as read by a round that never ran.
@@ -1061,101 +1061,6 @@ func TestAnUnreachableCounterIsNotARefusal(t *testing.T) {
 	}
 }
 
-// --- suspend ---------------------------------------------------------------
-
-func TestASuspendLeavesExactlyOneDanglingToolCall(t *testing.T) {
-	t.Parallel()
-	// The invariant a resume checks: zero means nothing to resume into,
-	// two means the model answers one and strands the other.
-	p := &scriptedProvider{turns: []llm.Completion{
-		{ToolCalls: []llm.ToolCall{toolCall("call-1", "run_sandbox")}},
-	}}
-	s := &fakeSurface{
-		tools: []llm.ToolDef{def("run_sandbox")},
-		results: map[string]toolloop.ToolResult{
-			"run_sandbox": {Suspend: true, SuspendPayload: map[string]any{"run": "r1"}},
-		},
-	}
-
-	res, err := toolloop.Run(t.Context(), toolloop.Config{
-		Provider: p, Surface: s, MaxRounds: 5, AllowSuspend: true,
-	})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if !res.Suspended {
-		t.Fatal("the loop did not report a suspend")
-	}
-	if res.PendingToolCallID != "call-1" || res.PendingToolName != "run_sandbox" {
-		t.Errorf("pending call = %q/%q, want call-1/run_sandbox",
-			res.PendingToolCallID, res.PendingToolName)
-	}
-	if res.SuspendPayload["run"] != "r1" {
-		t.Errorf("payload = %v, want the tool's own", res.SuspendPayload)
-	}
-
-	// Exactly one dangling call: the assistant asked and no tool message
-	// answered it.
-	answered := map[string]bool{}
-	asked := map[string]bool{}
-	for _, m := range res.Messages {
-		for _, c := range m.ToolCalls {
-			asked[c.ID] = true
-		}
-		if m.Role == llm.RoleTool {
-			answered[m.ToolCallID] = true
-		}
-	}
-	var dangling []string
-	for id := range asked {
-		if !answered[id] {
-			dangling = append(dangling, id)
-		}
-	}
-	if len(dangling) != 1 || dangling[0] != "call-1" {
-		t.Errorf("dangling calls = %v, want exactly [call-1]", dangling)
-	}
-}
-
-func TestASuspendIsRefusedWhereItCannotBeResumed(t *testing.T) {
-	t.Parallel()
-	// Honouring it in a phase that never persists a partial conversation
-	// strands the turn with a call nothing will ever answer. The model
-	// still gets an answer, so it sees a refusal rather than silence.
-	p := &scriptedProvider{turns: []llm.Completion{
-		{ToolCalls: []llm.ToolCall{toolCall("call-1", "run_sandbox")}},
-		{Content: "understood"},
-	}}
-	s := &fakeSurface{
-		tools: []llm.ToolDef{def("run_sandbox")},
-		results: map[string]toolloop.ToolResult{
-			"run_sandbox": {Suspend: true, Output: "launched"},
-		},
-	}
-
-	res, err := toolloop.Run(t.Context(), toolloop.Config{
-		Provider: p, Surface: s, MaxRounds: 5, AllowSuspend: false,
-	})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if res.Suspended {
-		t.Fatal("a phase that cannot resume was allowed to suspend")
-	}
-	var answered bool
-	for _, m := range res.Messages {
-		if m.Role == llm.RoleTool && m.ToolCallID == "call-1" {
-			answered = true
-		}
-	}
-	if !answered {
-		t.Error("the refused suspend left its call unanswered")
-	}
-	if len(res.Executions) != 1 || !res.Executions[0].Failed {
-		t.Errorf("executions = %+v, want one marked failed", res.Executions)
-	}
-}
-
 // --- the fence -------------------------------------------------------------
 
 func TestTheFenceRunsBeforeAnythingIsSpent(t *testing.T) {
@@ -1191,7 +1096,7 @@ func TestTheFenceRunsBetweenARoundsCalls(t *testing.T) {
 	// reach outside the engine. Checking only at the top of the round lets
 	// a node that lost the seat run out every remaining call in the round
 	// it was already in — which is the chat post, the tracker write and
-	// the sandbox launch, serially, on a seat a peer is now running.
+	// the delegated worker, serially, on a seat a peer is now running.
 	sentinel := errors.New("seat lost")
 	p := &scriptedProvider{turns: []llm.Completion{{
 		Content: "working",

@@ -344,7 +344,7 @@ func TestAStdoutAHelperHeldIsAServerFailure(t *testing.T) {
 	if !strings.Contains(err.Error(), "held its stdout open") {
 		t.Errorf("err = %v, want it to say the stdout was held", err)
 	}
-	if err := p.benched(); err != nil {
+	if err := p.SittingOut(); err != nil {
 		t.Errorf("a held stdout sat the entry out: %v", err)
 	}
 }

@@ -75,6 +75,8 @@ func (s *LiveState) applySandbox(env Envelope, payload map[string]any) {
 			AgentHandle: str(payload, "agent_handle"),
 			AgentID:     str(payload, "agent_id"),
 			CodingAgent: str(payload, "coding_agent"),
+			ProviderKey: str(payload, "provider_key"),
+			Model:       str(payload, "model"),
 			SandboxID:   str(payload, "sandbox_id"),
 			Task:        str(payload, "task"),
 			Status:      SandboxRunning,

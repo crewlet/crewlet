@@ -31,8 +31,7 @@ func (p *slowProvider) Complete(ctx context.Context, req llm.Request) (*llm.Comp
 }
 
 // timedSurface answers after a fixed delay, as a named origin, and records what
-// the loop had published and which round the call was told it was in at the
-// moment each call reached it.
+// the loop had published at the moment each call reached it.
 type timedSurface struct {
 	delay  time.Duration
 	origin string
@@ -43,21 +42,15 @@ type timedSurface struct {
 	// has to mean.
 	latest *toolloop.Result
 	atCall []toolloop.Result
-	rounds []int
 }
 
 func (s *timedSurface) ToolDefs() []llm.ToolDef { return []llm.ToolDef{def("read"), def("write")} }
 func (s *timedSurface) Phase() string           { return "execute" }
 
-func (s *timedSurface) Execute(ctx context.Context, _ llm.ToolCall) (toolloop.ToolResult, error) {
+func (s *timedSurface) Execute(_ context.Context, _ llm.ToolCall) (toolloop.ToolResult, error) {
 	if s.latest != nil {
 		s.atCall = append(s.atCall, *s.latest)
 	}
-	round, ok := toolloop.CallRound(ctx)
-	if !ok {
-		round = -1
-	}
-	s.rounds = append(s.rounds, round)
 	time.Sleep(s.delay)
 	return toolloop.ToolResult{Output: "ok", Origin: s.origin, Server: s.server}, nil
 }
@@ -234,27 +227,6 @@ func TestTheRunningCallIsPublishedBeforeTheCallAndClearedAfter(t *testing.T) {
 	}
 	if res.Running != nil || !res.RoundStartedAt.IsZero() {
 		t.Errorf("a finished result carries live-only state: running %+v, round start %v", res.Running, res.RoundStartedAt)
-	}
-}
-
-func TestACallIsToldItsRoundOnThePhasesScale(t *testing.T) {
-	t.Parallel()
-	p := &scriptedProvider{turns: []llm.Completion{
-		{Content: "one", ToolCalls: []llm.ToolCall{toolCall("1", "read")}},
-		{Content: "two", ToolCalls: []llm.ToolCall{toolCall("2", "read")}},
-		{Content: "done"},
-	}}
-	s := &timedSurface{}
-	// A phase already twenty rounds in — an extension continuing it.
-	ctx := toolloop.WithRoundOffset(t.Context(), 20)
-	if _, err := toolloop.Run(ctx, toolloop.Config{Provider: p, Surface: s, MaxRounds: 4}); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if len(s.rounds) != 2 || s.rounds[0] != 21 || s.rounds[1] != 22 {
-		t.Errorf("calls were told rounds %v, want [21 22] — the phase's numbers, not the invocation's", s.rounds)
-	}
-	if _, ok := toolloop.CallRound(t.Context()); ok {
-		t.Error("a context no loop stamped answers a round")
 	}
 }
 

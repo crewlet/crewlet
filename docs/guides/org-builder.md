@@ -182,11 +182,15 @@ company has no model:
 # 1. Write the running company to a file
 crewlet config export > company.yaml
 
-# 2. Add the model to it
+# 2. Add the model to it, and the sandbox every seat's executor
+#    runs in: here this machine, as your user
 providers:
   llm:
     default:
       model: sonnet
+  sandbox:
+    local: {}
+    default_run_in: direct
 
 # 3. Sign its CLI in to your subscription, and check it end to end
 #    (on a member of a cluster, add -api with a running member's URL
@@ -230,6 +234,12 @@ crewlet run
   installed, signed in and still matches the profile Crewlet drives it with.
   For another CLI or an API key, write the entry
   [LLM Backends](../concepts/llm-backends.md) describes instead.
+- **The sandbox is this machine.** A `direct` box runs the CLI as your user
+  on the node's own host, and calls the seat's tools back through the node's
+  own listener on loopback, so there is nothing else to set — the node only
+  needs its `api.port`. A `container` or `e2b` cell instead needs
+  `CREWLET_MCP_BRIDGE_URL`, a URL that box reaches the node at (see
+  [Code Sandbox](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)).
 - **The import is offline**, with the node stopped: it marks the revision
   active in the node's store, and the node publishes it to the fleet as it
   starts. The work that waited on the seats' inboxes runs on the new model.

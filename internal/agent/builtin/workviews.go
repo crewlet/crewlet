@@ -261,7 +261,7 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// window a second edit of the same view was collapsed into the first and
 	// answered `applied` without landing. Derived from the call ([opIDFor]),
 	// a retry is one write and a second edit is a second one.
-	opID := opIDFor(actor, t.Name(), "view", viewObjectKey(id), args)
+	opID := opIDFor(ctx, actor, t.Name(), "view", viewObjectKey(id), args)
 	var prior worklet.ViewPrior
 	if id == "" {
 		id = createdViewID(opID)

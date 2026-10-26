@@ -42,6 +42,7 @@ func TestASeatsCredentialsReachAnHTTPServerAsHeaders(t *testing.T) {
 	company := specCompany(t, `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -121,6 +122,7 @@ func provisioningDoc(provisioned bool) string {
 	return `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -253,6 +255,7 @@ func heldBackCompany(t *testing.T) *Company {
 	return specCompany(t, `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -415,6 +418,7 @@ func TestABoxsToolServerReadsItsOwnReferencesThroughTheEngine(t *testing.T) {
 	company := specCompany(t, `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5

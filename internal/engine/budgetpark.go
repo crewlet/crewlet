@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // THE BUDGET PARK: A SEAT OUT OF ROOM WAITS FOR ITS WINDOW, IT DOES NOT BURN
@@ -142,13 +143,23 @@ func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, e
 		return "", false, nil
 	}
 	r, refusing, err := m.refusing(ctx)
+	starved := false
+	if err == nil && !refusing {
+		// AND A WINDOW TOO SHORT FOR A LAUNCH, which every turn makes: a
+		// seat with room left but less than the executor floor refuses
+		// every turn at its launch ([executorHeadroom]), and a seat that
+		// is not parked takes each redelivery into the same refusal until
+		// the broker dead-letters it. Parked, it waits for the window that
+		// starves it to turn over, exactly as for a full one.
+		r, starved, err = m.starved(ctx)
+	}
 	if err != nil {
 		log.WarnContext(ctx, "budget_park_unknown", "seat", handle, "error", err,
 			"detail", "the counters could not be read, so the delivery runs and "+
 				"its own meter decides whether a round fits")
 		return "", false, nil
 	}
-	if !refusing {
+	if !refusing && !starved {
 		return "", false, nil
 	}
 	seat, err := e.seatID(handle)
@@ -173,19 +184,28 @@ func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, e
 	if err != nil {
 		return "", false, fmt.Errorf("engine: park %s on its budget: %w", handle, err)
 	}
-	// THE PARK IS THE GATE SAYING NO, and it is recorded as the window's
-	// refusal ([meter.turnAway]): the delivery it defers is the turn whose
-	// first charge would have been refused, and stamped the window, had it
-	// run. Recorded once the hold is taken, so a park that could not be made
-	// — the delivery NAKed and asked about again — is one refusal and not
-	// two.
-	m.turnAway(ctx, r)
-
 	reason := fmt.Sprintf("budget: %s window %s resets %s",
 		r.Window.Period, r.Window.Label, rfc3339(r.Window.End))
+	if refusing {
+		// THE PARK IS THE GATE SAYING NO, and it is recorded as the
+		// window's refusal ([meter.turnAway]): the delivery it defers is
+		// the turn whose first charge would have been refused, and stamped
+		// the window, had it run. Recorded once the hold is taken, so a
+		// park that could not be made — the delivery NAKed and asked about
+		// again — is one refusal and not two. A STARVED window is not
+		// stamped: it has room, and the counter stamps only a window with
+		// none, so there is no refusal of a charge to record.
+		m.turnAway(ctx, r)
+	} else {
+		reason = fmt.Sprintf("budget: %s window %s leaves %d tokens, below the %d an "+
+			"executor launch needs (turn_engine.executor_min_budget_tokens); resets %s",
+			r.Window.Period, r.Window.Label, max(r.Limit-r.Used, 0), m.basis.floor,
+			rfc3339(r.Window.End))
+	}
 	log.InfoContext(ctx, "seat_budget_parked", "seat", handle, "scope", r.Scope,
 		"period", string(r.Window.Period), "window", r.Window.Label,
-		"used", r.Used, "limit", r.Limit, "resets_at", rfc3339(r.Window.End),
+		"used", r.Used, "limit", r.Limit, "floor", m.basis.floor, "starved", starved,
+		"resets_at", rfc3339(r.Window.End),
 		"detail", "this seat's mail waits on its inbox until the window turns "+
 			"over or a revision raises the ceiling")
 	if !budgetBasisOf(e.Company(), seat).equal(m.basis) {
@@ -194,24 +214,40 @@ func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, e
 	return reason, true, nil
 }
 
-// budgetRefusing reports whether one of a seat's capped windows is refusing,
-// the reason naming it and the instant that window turns over — the budget
-// stage's question, ASKED WITHOUT PARKING. For a caller that is not a delivery
-// (a retried resume) and so has no mail of its own to hold: it waits for the
-// window's end rather than parks, and a delivery that arrives meanwhile takes
-// the park itself. An unreadable counter is not a refusal, for the reason
+// budgetHold is what a seat's budget holds a resumed turn back for: a capped
+// window refusing outright, or one leaving less room than an executor launch
+// needs ([meter.starved]) — the two conditions the budget stage parks a seat's
+// mail on — as a refusal that lifts when that window turns over. False where
+// neither holds, and where the counters cannot be read, for the reason
 // [Engine.budgetPark] gives.
-func (e *Engine) budgetRefusing(ctx context.Context, handle string) (string, time.Time, bool) {
-	m := e.meterFor(e.Company(), handle)
+//
+// FOR A RESUME, WHICH HAS NO MAIL TO PARK. A recorded answer's retry asks it
+// before every attempt ([Engine.mayResumeAnswer]) — an answer always relaunches
+// its executor, so a starved window refuses it as surely as a full one — and a
+// collected job's resume that its relaunch was refused for is held on it
+// ([sandbox.ErrResumeHeld]).
+func (e *Engine) budgetHold(ctx context.Context, c *Company, handle string) (sandbox.Refusal, bool) {
+	m := e.meterFor(c, handle)
 	if m == nil || !m.basis.capped() {
-		return "", time.Time{}, false
+		return sandbox.Refusal{}, false
 	}
 	r, refusing, err := m.refusing(ctx)
-	if err != nil || !refusing {
-		return "", time.Time{}, false
+	if err != nil {
+		return sandbox.Refusal{}, false
 	}
-	return fmt.Sprintf("budget: %s window %s resets %s",
-		r.Window.Period, r.Window.Label, rfc3339(r.Window.End)), r.Window.End, true
+	reason := fmt.Sprintf("budget: %s window %s resets %s",
+		r.Window.Period, r.Window.Label, rfc3339(r.Window.End))
+	if !refusing {
+		var starved bool
+		if r, starved, err = m.starved(ctx); err != nil || !starved {
+			return sandbox.Refusal{}, false
+		}
+		reason = fmt.Sprintf("budget: %s window %s leaves %d tokens, below the %d an executor "+
+			"launch needs (turn_engine.executor_min_budget_tokens); resets %s",
+			r.Window.Period, r.Window.Label, max(r.Limit-r.Used, 0), m.basis.floor,
+			rfc3339(r.Window.End))
+	}
+	return sandbox.Refusal{Condition: waitBudget, Reason: reason, Until: r.Window.End}, true
 }
 
 // recordBudgetParkLocked records a park and arms its reset. The caller holds
@@ -378,15 +414,17 @@ func budgetBasisOf(c *Company, seat uuid.UUID) budgetBasis {
 }
 
 // equal reports whether two bases decide a park alike: the same ceilings in
-// each scope and the same clock.
+// each scope, the same clock and the same executor floor.
 //
 // THE CLOCK COUNTS, not only the ceilings, because it is what cuts the windows:
 // a company that moves its zone moves the end of every window, so the alarm a
 // park armed under the old clock is set for an instant that no longer ends
-// anything.
+// anything. AND THE FLOOR: a seat parked starved under one floor may have room
+// for a launch under a lower one now, and one parked full is starved sooner
+// under a higher one.
 func (b budgetBasis) equal(o budgetBasis) bool {
 	return maps.Equal(b.org, o.org) && maps.Equal(b.seat, o.seat) &&
-		zoneName(b.zone) == zoneName(o.zone)
+		zoneName(b.zone) == zoneName(o.zone) && b.floor == o.floor
 }
 
 func zoneName(loc *time.Location) string {

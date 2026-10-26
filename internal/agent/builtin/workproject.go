@@ -237,7 +237,7 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// verb telling the two records apart — so the call made again, a seat's
 	// re-run or an operator's retry, writes each record once.
 	if !tagEdit.Empty() {
-		opID := opIDFor(actor, t.Name(), "tags", key, args)
+		opID := opIDFor(ctx, actor, t.Name(), "tags", key, args)
 		result, err := writer.WriteTags(ctx, opID, key,
 			tagEdit, worklet.TagAuthority{Policy: authority.Policy})
 		if err != nil {
@@ -266,7 +266,7 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		out["tags"] = tags
 	}
 	if !edit.Empty() {
-		opID := opIDFor(actor, t.Name(), "policy", key, args)
+		opID := opIDFor(ctx, actor, t.Name(), "policy", key, args)
 		result, err := writer.WriteProject(ctx, opID, key,
 			edit, authority)
 		if err != nil {

@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
+	"strconv"
 	"sync/atomic"
 
 	"github.com/crewlet/crewlet/internal/api"
@@ -25,7 +27,7 @@ type nodeListeners struct {
 // serves them the boot surface, or binds nothing when api.port is 0, which is
 // the hard off switch for every one of them.
 //
-// bridge says whether this node will have an agent-mode tool bridge, which is
+// bridge says whether this node will have its executors' tool bridge, which is
 // what decides whether a node without the ingress role binds api.public at all
 // ([api.PublicListener]), and whether its boot surface tells a call to the
 // bridge to come back ([api.NewBoot]). The artifact origin is bound by
@@ -83,6 +85,45 @@ func bindListeners(ctx context.Context, boot *config.Bootstrap, nodeID string, b
 			"route the node will serve 503 starting until it serves "+
 			"(api_listening, or api_probes_listening on a node without ingress)")
 	return l, nil
+}
+
+// bridgeHostURL is where a box on this node's own host — the `direct` cell —
+// reaches the node's tool bridge: the listener that serves the bridge, as this
+// host dials it ([engine.Options.BridgeHostURL]). Empty where the node serves
+// none: it binds no listener (api.port 0), or it runs no seat and so opens no
+// session.
+//
+// THE LISTENER THE BRIDGE IS SERVED ON, which is api.public where this node
+// binds one — the bridge is a public route — and api.port otherwise
+// ([api.PublicListener], [serveProbes]).
+func (l *nodeListeners) bridgeHostURL(boot *config.Bootstrap, nodeID string) string {
+	if l == nil || !boot.Profile(nodeID).RunsSeats() {
+		return ""
+	}
+	served := l.api
+	if l.public != nil {
+		served = l.public
+	}
+	return loopbackURL(served.socket.Addr())
+}
+
+// loopbackURL is the URL a process on this host dials a TCP listener at: the
+// address it bound where that is one address, and loopback where it took
+// every interface. Plain http, because a listener of this process serves no
+// TLS of its own — that is terminated in front of it — and a box on the host
+// dials it directly. Empty for an address that is not TCP.
+func loopbackURL(addr net.Addr) string {
+	tcp, ok := addr.(*net.TCPAddr)
+	if !ok {
+		return ""
+	}
+	ip := tcp.IP
+	if ip == nil || ip.IsUnspecified() {
+		// EVERY INTERFACE, which a Go listener on ":port" is dual-stack:
+		// IPv4 loopback reaches it whichever family it was written in.
+		ip = net.IPv4(127, 0, 0, 1)
+	}
+	return "http://" + net.JoinHostPort(ip.String(), strconv.Itoa(tcp.Port))
 }
 
 // recovered tells the boot surface the engine has recovered what this node

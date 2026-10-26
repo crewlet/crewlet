@@ -409,17 +409,24 @@ roles:
     llm: claude-sonnet
 ```
 
-Resolution order for a satellite (`phase.Registry.Chain`): the role's per-phase chain, which is the flat `role.llm_<phase>` field (`llm_review`, `llm_subagent`, `llm_auxiliary`, `llm_judge`, `llm_sandbox`) or else the same key inside the `llm` mapping → the role's own `llm` chain (the mapping's `default`, or the plain string or list) → the provider keyed `"default"` → the first provider configured. The flat field wins over the same key inside the mapping, so a seat can take a shared mapping and override one phase without restating the block.
+Resolution order for a satellite (`phase.Registry.Chain`): the role's per-phase chain, which is the flat `role.llm_<phase>` field (`llm_review`, `llm_subagent`, `llm_auxiliary`, `llm_judge`) or else the same key inside the `llm` mapping → the role's own `llm` chain (the mapping's `default`, or the plain string or list) → the provider keyed `"default"` → the first provider configured. The flat field wins over the same key inside the mapping, so a seat can take a shared mapping and override one phase without restating the block.
 
 ---
 
 ## Round-cap extension judge
 
-The executor has a tool-call round cap (`max_tool_rounds`, 24 by default);
-onboarding has its own. When the LLM exhausts the cap before finishing, the
-rescue path synthesises an `incomplete` outcome and hands the round to the
-reviewer as-is. That throws away in-progress work whenever the agent was
-actually close to done — the cap is a static guess, not a progress check.
+The first-turn onboarding pass, which runs on the engine's own tool loop,
+has a tool-call round cap (`onboarding_max_tool_rounds`, 10 by default). When
+the LLM exhausts it before finishing, the pass ends unmarked and retries next
+turn, which throws away in-progress work whenever the agent was actually close
+to done — the cap is a static guess, not a progress check.
+
+The executor is not judged. It is its coding CLI's own run, whose rounds the
+CLI counts against `role.sandbox.max_turns` /
+`providers.sandbox.default_max_turns` ([Code Sandbox](code-sandbox.md)), so
+there is no engine loop for a judge to extend. A run that stops without
+submitting — on that cap or any other way — is rescued: the engine writes an
+`incomplete` outcome and the reviewer judges the record.
 
 The **extension judge** interposes between exhaustion and rescue: a
 cheap LLM call inspects the tool log and the last assistant message and
@@ -444,10 +451,10 @@ submission. A loop its terminator ended never reports exhaustion.
 
 ```mermaid
 flowchart TD
-    A["phase loop hits max_tool_rounds (ExhaustedRounds)"]
+    A["onboarding loop hits onboarding_max_tool_rounds (ExhaustedRounds)"]
     B["judge LLM (llm_judge → llm → default fallback chain)<br/>sees: phase, the turn's ask, tool log (last 12 calls), last assistant text<br/>returns: extend(N, reason) | rescue(reason)"]
     C["<b>extend</b> → re-enter toolloop.Run with the same messages<br/>+ N more rounds on the same provider"]
-    D["<b>rescue</b> → the engine writes an `incomplete` outcome and the reviewer judges the record<br/>(also fires when the ceiling is reached or the judge call failed)"]
+    D["<b>rescue</b> → the pass ends unmarked and retries next turn<br/>(also fires when the ceiling is reached or the judge call failed)"]
     A --> B
     B -->|extend| C
     B -->|rescue| D
@@ -670,11 +677,10 @@ word it is reading is the engine's.
 | Field | Default | Purpose |
 |-------|---------|---------|
 | `extension_enabled` | `true` | Master switch |
-| `execute_max_tool_rounds_ceiling` | `48` | Hard cap on total executor rounds with extensions (2x base 24) |
 | `onboarding_max_tool_rounds_ceiling` | `20` | Hard cap on total onboarding rounds with extensions (2x base 10) |
 | `extension_round_step` | `8` | Max rounds the judge may grant per call |
 
-The judge covers **the executor and onboarding**; each has its own base cap and ceiling. (The reviewer has no knob: it holds one submission tool, so its budget is a structural fact rather than an operator preference.) (Onboarding has no rescue path — a `rescue`/ceiling outcome just ends the pass unmarked and it retries next turn — so the judge is purely additive there.)
+The judge covers **onboarding** alone: the executor is its coding CLI's own run, whose rounds the CLI counts against `max_turns`, so there is no engine loop for a judge to extend. (The reviewer has no knob: it holds one submission tool, so its budget is a structural fact rather than an operator preference.) (Onboarding has no rescue path — a `rescue`/ceiling outcome just ends the pass unmarked and it retries next turn — so the judge is purely additive there.)
 
 **Per-role provider**: set `role.llm_judge` to a small/fast model
 (Haiku-class). Resolution follows the standard phase chain:
@@ -819,7 +825,7 @@ whose indicator carries no text):
 | A suspension the engine could not record | Indicator cleared: the run is settled and its box reclaimed on the spot, so nothing is coming back. A store that could not say whether the write landed keeps it instead, because a run it moved to running is one the completion poll resumes |
 | That run parked on a clarification question | Indicator cleared — the agent has stopped and a person may take days to answer. One turn's hold, so a second turn working in the same thread keeps its own |
 | A park the engine could not record | **Held where the claim went back, cleared where it could not.** A park arrives holding the run's claim, and the claim is the promise that a tail will run: given back, the completion is polled, collected and parked again, so the box really is still working and the indicator is honest. Unable to go back, the row would sit in a claim nothing re-takes — no poll, no redelivery, no answer, no reaper — so the run is settled like any other lost turn and the hold goes down with it |
-| That run settled instead of resuming — its box could not be read back, its row carried no suspended conversation, or a claim it took could not be given back | Indicator cleared: the record is deleted and the box reclaimed, so the suspended turn is never resumed. The same hold and the same rule as a park; only the reason differs |
+| That run settled instead of resuming — its box could not be read back, its row carried none of its turn's parked state, or a claim it took could not be given back | Indicator cleared: the record is deleted and the box reclaimed, so the suspended turn is never resumed. The same hold and the same rule as a park; only the reason differs |
 | The resumed turn came back, the run's record could not be READ to find out which box to settle, and the store ended the run anyway | Indicator cleared. The store is asked to end the run while it is still the claim the tail took, and a claim it does end is a turn nothing will resume. Staying quiet would leave the row in a claim no poll, redelivery, answer or reaper picks up, with the indicator over it |
 | That same settle DECLINED, because the resumed turn had called `run_sandbox` again before it returned | Indicator **left standing**, and what it now describes is the relaunched job. The ending is licensed for the claim alone, so a row the relaunch took back through launching is left to whoever moved it, no stop is reported, and that turn is coming back after all: the relaunched job's completion resumes the same `turn_id`, exactly as the suspended-for-a-run row above says |
 | The seat leaves the company's agent seats — removed from the chart, or made a person's and not an agent's again within the retirement grace | Indicator cleared as each of its runs is ended. The hold has usually gone down with the seat already; this covers the order in which it has not |
@@ -1306,15 +1312,16 @@ wall-clock correction mid-call cannot report a negative or inflated one.
 |---|---|---|
 | `agent_phase_completed` | `started_at` | When **this segment** of the phase began. A resumed executor is one phase in two segments and its `duration_ms` covers both, so `started_at` is deliberately not "published minus duration" — that instant is when the first segment began, possibly a day earlier on another node, and the gap between the segments was the coding run rather than this phase |
 | | `duration_ms` | The phase's own wall clock, extensions and a suspend's pre-resume half included |
-| | `rounds[]` | One entry per provider call: `{round, started_at, duration_ms, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, tool_calls}`. The **model's half** of the round only — its tool calls are timed on their own rows — so a slow model and a slow tool are never one number. `round` is the scale `tool_executions[].round` and `round_narration[].round` share, across an extension and a resume |
-| | `max_rounds` / `round_ceiling` | The round cap the phase **ended** under (its base budget plus every extension the judge granted) and the most it could ever have been raised to. Never a ceiling below the cap: with extensions off, or a resumed executor whose fresh budget sits on top of its parked rounds, the ceiling is the cap |
+| | `rounds[]` | One entry per provider call: `{round, started_at, duration_ms, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, tool_calls}`. The **model's half** of the round only — its tool calls are timed on their own rows — so a slow model and a slow tool are never one number. `round` is the scale `tool_executions[].round` and `round_narration[].round` share, across an extension and a resume. A collected executor states **one** round — the engine's one request, the launch, and its one answer, the collection — timed from the launch to the collection with the run's calls inside it, and carrying no tokens: the run's own turns and tokens are on its `phase: sandbox` record |
+| | `max_rounds` / `round_ceiling` | The round cap the phase **ended** under (its base budget plus every extension the judge granted) and the most it could ever have been raised to. Never a ceiling below the cap: with extensions off the ceiling is the cap. An executor states `1` for both — its one round is the run, whose own turns are bounded by `max_turns`, not by this |
 | | `cache_read_tokens` / `cache_write_tokens` | The provider's prompt cache's share of `input_tokens`, summed over the rounds. A **breakdown** of the input, never an addition to it: `total_tokens` is still input plus output, and the cache's share is `cache_read_tokens / input_tokens` |
 | | `provider_key` | The `providers.llm` entry that **served** the phase — the operator's name beside the vendor's `model`. The chain reports the member that answered, so after a hand-off it is the entry that took over rather than the head that failed; latched with `model` by the same rule (the first completion that names one), and stated by the head until then. Empty on a phase no entry answered, exactly as its `model` is. A judge names its entry, and a worker the member of its own chain that answered |
 | | `host_round` | On a worker (`phase=subagent`): the round of the executor whose `delegate` call spawned it. On a judge: the round the host phase ran out on. `host_iteration` names the turn iteration, which one phase of forty rounds spans whole |
 | | `launch_id` | On a resumed executor that collected a detached coding run: which launch it collected, since one turn can launch more than once. On a `phase: sandbox` record — the run itself, published when it is collected — it is part of the record's identity, `(turn_id, phase, iteration, launch_id)` |
 | | `activity_transcript` | On a `phase: sandbox` record only: the run's own account of what it did, redacted; a long one keeps its first 64 KiB and its last 192 KiB in whole lines, with a note line where its middle was. `activity_transcript_elided_lines` and `activity_transcript_elided_bytes` count what that left out (absent on a transcript kept whole). See [each run is published as a phase](code-sandbox.md#runs-are-uncapped-each-run-is-published-as-a-phase) |
+| | `cli_turns` | On a `phase: sandbox` record only: the model turns the run's CLI reported its own loop took — the run's provider calls, which the engine neither made nor timed, and what every spend figure's `calls` counts the record as. Claude Code reports them; OpenCode's stream carries no count a reader can trust, so its runs report none and count as one call. The executor's own record counts none |
 | | `work_item` | The item the turn is charged to, as the turn knew it when the record was published — absent while nothing named one |
-| `tool_executions[]` | `started_at` / `duration_ms` | When the call was handed to the surface and how long the surface took to answer. **Absent** on a row nothing timed — a call whose arguments did not parse, an agent-mode run's bridged call — because absent means "not recorded" and a zero would mean "instant" |
+| `tool_executions[]` | `started_at` / `duration_ms` | When the call was handed to the surface and how long the surface took to answer. An executor run's call is timed the same way by the bridge it was made over, since it ran inside the CLI's own loop. **Absent** on a row nothing timed — a call whose arguments did not parse — because absent means "not recorded" and a zero would mean "instant" |
 | | `origin` / `server` | Who **answered**: `builtin` or `mcp:<server>`, and the bare server name for the second. Absent on a call no tool answered — an unknown name, one not offered to the surface, one the skill guard refused — since the surface refused it before any server saw it |
 | `agent_turn_progress` | `rounds[]`, the cache tokens | As on the record, so far |
 | | `max_rounds` / `round_ceiling` | The cap the phase is running under **now** — an extension raises it mid-phase — and on the opening frame, before the model has answered once |
@@ -1357,7 +1364,6 @@ Each phase row in that view leads with its **phase word** on the neutral pill (e
 ```yaml
 turn_engine:
   max_iterations: 3
-  max_tool_rounds: 24                    # base executor cap
   onboarding_max_tool_rounds: 10         # dedicated first-turn onboarding pass (0 = disabled)
   delegation:                            # bounds on every `delegate` call
     max_parallel: 3                      # workers running at once
@@ -1365,13 +1371,13 @@ turn_engine:
     max_turns: 20                        # tool rounds one worker may run
     max_turns_ceiling: 40                # highest max_turns a template may declare
     budget_fraction: 0.2                 # ONE slice for the whole call, not per task
-    min_tokens_per_task: 500             # call refused if the per-task share falls below this
+    min_tokens_per_task: 500             # call refused if the per-task share falls below this; 0 = no floor
     task_timeout_seconds: 300            # wall-clock cap on one worker
     call_timeout_seconds: 900            # wall-clock cap on the whole call, waves included
-  sandbox_min_budget_tokens: 2000        # refuse a coding run below this remaining budget
+  executor_min_budget_tokens: 25000      # refuse an executor launch below this remaining
+                                         #   budget; a ceiling below it is refused
   delegation_depth_limit: 3
-  extension_enabled: true                # round-cap extension judge (executor + onboarding)
-  execute_max_tool_rounds_ceiling: 48    # hard cap on total executor rounds with extensions
+  extension_enabled: true                # round-cap extension judge (onboarding)
   onboarding_max_tool_rounds_ceiling: 20 # hard cap on total onboarding rounds with extensions
   extension_round_step: 8                # max rounds the judge may grant per call
 

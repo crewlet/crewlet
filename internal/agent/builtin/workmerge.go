@@ -137,7 +137,7 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	cancelled := before.Task
 	cancelled.Status = worklet.StatusCancelled
 	cancelled.StatusGroup = worklet.StatusCancelled.Group()
-	opID := opIDFor(actor, t.Name(), "merge", before.Task.ID, args)
+	opID := opIDFor(ctx, actor, t.Name(), "merge", before.Task.ID, args)
 	got, err := t.deps.Merges(actor).MergeDuplicates(ctx, opID, before.Task.ID, survivor,
 		moveSubtasks(args), worklet.Wake{
 			Kind: worklet.ChangeStatus, Before: before.Task, After: cancelled,

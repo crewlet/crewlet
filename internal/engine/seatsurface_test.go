@@ -144,7 +144,6 @@ units:
             private_key: "${DEV_PEM}"
             webhook_secret: "${DEV_HOOK}"
         sandbox:
-          enabled: true
           max_turns: 12
           setup:
             - name: fetch

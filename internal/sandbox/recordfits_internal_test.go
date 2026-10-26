@@ -95,8 +95,8 @@ func TestAnUncondensedQuestionKeepsWholeLinesOrIsNotAsked(t *testing.T) {
 // A REF IS REDACTED BEFORE ANYTHING READS IT. It is whatever word a report
 // put on its `Delivered:` line, and a box holds the seat's credentials — so
 // the coordinator, which trusts no runner to have redacted what it hands back,
-// redacts each before the record, the resumed executor's text and the bound
-// that measures them.
+// redacts each before the record, the run's report and the bound that
+// measures them.
 func TestADeliveredRefIsRedactedBeforeItIsRecorded(t *testing.T) {
 	t.Parallel()
 	secret := "ghp_" + strings.Repeat("c", 36)
@@ -105,7 +105,7 @@ func TestADeliveredRefIsRedactedBeforeItIsRecorded(t *testing.T) {
 	rec := runPhase(PendingRun{}, LaunchRecord{}, got, time.Now())
 	for where, refs := range map[string][]string{
 		"the result": got.DeliveredRefs, "the record": rec.DeliveredRefs,
-		"the resumed text": {resumeText(got)},
+		"the run's report": {runReport(got)},
 	} {
 		if strings.Contains(strings.Join(refs, " "), secret) {
 			t.Errorf("a credential survived in %s: %q", where, refs)
@@ -147,9 +147,9 @@ func TestDeliveredRefsAreDedupedAndBoundedWithTheRestCounted(t *testing.T) {
 			len(got.DeliveredRefs), got.DeliveredRefsElided)
 	}
 
-	text := resumeText(got)
+	text := runReport(got)
 	if !strings.Contains(text, fmt.Sprintf("(and %d more its report names", got.DeliveredRefsElided)) {
-		t.Errorf("the resumed executor is not told the list is short: %.300q", text)
+		t.Errorf("the run's report does not say the list is short: %.300q", text)
 	}
 	rec := runPhase(PendingRun{}, LaunchRecord{}, got, time.Now())
 	if rec.DeliveredRefsElided != got.DeliveredRefsElided || len(rec.DeliveredRefs) != len(got.DeliveredRefs) {

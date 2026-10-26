@@ -25,8 +25,8 @@ import (
 // nor wait on during a rollout: a node that has not yet joined the fleet reads
 // exactly like one that has, and the next one is replaced while the first is
 // still claiming nothing. So api.port on such a node carries /health and /ready
-// and nothing else — plus, on a node running seats with a bridge URL, the
-// agent-mode tool bridge, which was never ingress's to serve ([mountBridge]).
+// and nothing else — plus, on a node running seats, the executors' tool
+// bridge, which was never ingress's to serve ([mountBridge]).
 // api.port 0 binds nothing, here as everywhere.
 //
 // # The same answers, sized to the node
@@ -135,7 +135,8 @@ type ProbeOptions struct {
 	// QueueBackend names the event queue's backend, for display.
 	QueueBackend string
 
-	// Bridge is the node's agent-mode tool bridge. Nil serves none.
+	// Bridge is the node's tool bridge for its executors' runs. Nil serves
+	// none.
 	Bridge *mcpbridge.Bridge
 }
 

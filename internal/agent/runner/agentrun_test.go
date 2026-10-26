@@ -3,6 +3,7 @@ package runner_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -22,319 +23,322 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// recordingLauncher stands in for the engine's detached-run seam.
-type recordingLauncher struct {
-	req  runner.AgentRunRequest
-	runs int
-	err  error
-}
-
-func (l *recordingLauncher) LaunchExecutor(_ context.Context, req runner.AgentRunRequest) error {
-	l.runs++
-	l.req = req
-	return l.err
-}
-
-// agentFixture is the shared runner with an agent-mode executor.
+// agentFixture is the shared runner over launcher, collecting resume when it
+// is set.
 func agentFixture(t *testing.T, launcher runner.AgentLauncher, resume *runner.Resume) *runner.Runner {
 	t.Helper()
 	prov := &scriptedProvider{}
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}},
-		buildOpts{agentRun: launcher, resume: resume})
+		buildOpts{launcher: launcher, resume: resume})
 	return r
 }
 
-// AN AGENT-MODE EXECUTOR SPENDS NO MODEL CALL OF ITS OWN.
+// THE EXECUTOR SPENDS NO MODEL CALL OF ITS OWN.
 //
 // This is the whole shape: the CLI's loop drives the model, so the engine's
-// job is to hand it a brief and stop. A branch that fell through to the native
-// loop would run the phase twice — once here on the engine's tokens and once
-// in the box on the subscription's — and only the second would have the tools.
-func TestAnAgentModeExecutorLaunchesAndSuspends(t *testing.T) {
+// job is to hand it a brief and park. A launch that also called a model here
+// would run the phase twice — once on the engine's tokens and once in the box
+// on the subscription's — and only the second would have the tools.
+func TestTheExecutorLaunchesItsRunAndParks(t *testing.T) {
 	t.Parallel()
-	launcher := &recordingLauncher{}
-	r := agentFixture(t, launcher, nil)
+	launcher := &playLauncher{}
+	prov := &scriptedProvider{}
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{launcher: launcher})
 
 	w, _, err := r.Execute(context.Background(), 1, "", nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 	if !w.Suspended {
-		t.Fatal("an agent-mode executor did not suspend, so nothing will collect its run")
+		t.Fatal("the executor did not park, so nothing will collect its run")
 	}
-	if launcher.runs != 1 {
-		t.Fatalf("launched %d runs, want exactly 1", launcher.runs)
+	if launcher.launched() != 1 {
+		t.Fatalf("launched %d runs, want exactly 1", launcher.launched())
 	}
-	if launcher.req.Surface == nil {
+	if len(prov.seen) != 0 {
+		t.Errorf("the launch made %d model calls of its own, want none", len(prov.seen))
+	}
+	req := launcher.last(t)
+	if req.Surface == nil {
 		t.Fatal("the run was launched with no tool surface, so the bridge has nothing to dispatch against")
 	}
-	// The SEAT'S OWN PROMPT, not a second one written for the CLI: the run
-	// has to carry the identity and the ask, or the box gets a task with no
-	// idea whose it is.
-	if !strings.Contains(launcher.req.Brief, "post the weekly summary") {
-		t.Errorf("the brief does not carry the turn's ask: %q", launcher.req.Brief)
+	// The SEAT'S OWN PROMPT: the run has to carry the identity and the ask,
+	// or the box gets a task with no idea whose it is.
+	if !strings.Contains(req.Brief, "post the weekly summary") {
+		t.Errorf("the brief does not carry the turn's ask: %q", req.Brief)
 	}
-	if !strings.Contains(launcher.req.System, "CTO") {
-		t.Errorf("the system prompt does not carry the seat's identity: %q", launcher.req.System)
+	if !strings.Contains(req.System, "CTO") {
+		t.Errorf("the system prompt does not carry the seat's identity: %q", req.System)
 	}
 	// The SUBMISSION is on the surface, because that is how the CLI ends
-	// its run — over the bridge, exactly as a native loop ends locally.
-	// Read off the tool DEFINITIONS, which is what the bridge serves to a
-	// tools/list: a submission the surface holds but does not publish is
-	// one the CLI can never call.
-	published := false
-	for _, def := range launcher.req.Surface.ToolDefs() {
-		if def.Name == runner.SubmitWorkTool {
-			published = true
-		}
-	}
-	if !published {
+	// its run — over the bridge. Read off the tool DEFINITIONS, which is
+	// what the bridge serves to a tools/list: a submission the surface holds
+	// but does not publish is one the CLI can never call.
+	if !slices.Contains(toolNames(req.Surface.ToolDefs()), runner.SubmitWorkTool) {
 		t.Error("the bridged surface does not publish submit_work, so the run cannot say what it did")
 	}
 }
 
-// AN AGENT-MODE EXECUTOR'S PROMPT TRAVELS IN THE TWO HALVES A NATIVE PASS
-// SENDS: the seat's standing instructions as system text, the turn's ask as
-// the prompt.
+// THE PROMPT TRAVELS IN TWO HALVES: the seat's standing instructions as system
+// text, the turn's ask as the brief.
 //
 // The coding CLI appends the first to its own system prompt and runs the
 // second. Joined into one brief, as they once were, the seat's identity,
 // policies and memory reached the model as the opening of the user's request,
-// and the CLI's system prompt said nothing of whose work it was doing. Held to
-// the native pass on the same seat, byte for byte, so a half that drifted from
-// the other runtime's fails as surely as one that moved.
-func TestAnAgentModeExecutorsPromptTravelsInTheHalvesANativePassSends(t *testing.T) {
+// and the CLI's system prompt said nothing of whose work it was doing.
+func TestTheExecutorsPromptTravelsInItsTwoHalves(t *testing.T) {
 	t.Parallel()
-	launcher := &recordingLauncher{}
-	agent := agentFixture(t, launcher, nil)
-	if _, _, err := agent.Execute(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Execute (agent mode): %v", err)
+	launcher := &playLauncher{}
+	r := agentFixture(t, launcher, nil)
+	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
 	}
-
-	prov := &scriptedProvider{execute: []llm.Completion{submitCall(t, runner.SubmitWorkTool,
-		`{"outcome":"delivered","summary":"done","deliveries":["slack_post"]}`)}}
-	native, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{})
-	if _, _, err := native.Execute(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Execute (native): %v", err)
+	req := launcher.last(t)
+	if !strings.Contains(req.System, "## Your turn") || !strings.Contains(req.System, "CTO") {
+		t.Errorf("the system half is not the seat's contract and identity:\n%s", req.System)
 	}
-	requests := prov.requestsFor("execute")
-	if len(requests) == 0 {
-		t.Fatal("the native pass made no call")
+	if strings.Contains(req.Brief, "CTO") || strings.Contains(req.Brief, "## Your turn") {
+		t.Errorf("the seat's standing instructions ride the prompt the CLI runs:\n%s", req.Brief)
 	}
-	var system, user string
-	for _, m := range requests[0].Messages {
-		switch {
-		case m.Role == llm.RoleSystem && system == "":
-			system = m.Content
-		case m.Role == llm.RoleUser && user == "":
-			user = m.Content
-		}
-	}
-	if launcher.req.System == "" || launcher.req.System != system {
-		t.Errorf("the agent-mode system text is not the native system message:\n%q\nwant\n%q",
-			launcher.req.System, system)
-	}
-	if launcher.req.Brief != user {
-		t.Errorf("the agent-mode brief is not the native user message:\n%q\nwant\n%q",
-			launcher.req.Brief, user)
-	}
-	if strings.Contains(launcher.req.Brief, "CTO") {
-		t.Errorf("the seat's identity rides the prompt the CLI runs:\n%s", launcher.req.Brief)
+	if strings.Contains(req.System, "post the weekly summary") {
+		t.Errorf("the turn's ask rides the system half:\n%s", req.System)
 	}
 }
 
-// AN AGENT-MODE EXECUTOR IS NOT TAUGHT A TOOL IT IS NOT OFFERED.
+// THE COLLECTION REACHES ONLY WHAT THE LAUNCH DID.
 //
-// Its seat may carry an enabled gate — the gate is where the executor's box
-// reads its setup, env and MCP servers — but such a seat is never offered
-// run_sandbox: its CLI already holds a shell. The prompt's sandbox section was
-// rendered off the gate all the same, so the brief taught every such turn a
-// tool the bridge never lists. The same seat on the native loop is the
-// control, and is taught it, so a section that vanished everywhere fails too.
-func TestAnAgentModeExecutorIsNotTaughtRunSandbox(t *testing.T) {
+// A resume rebuilds the executor's surface from the registry, so it is the
+// second place the narrowing has to hold: built from the whole registry, the
+// collected surface could reach mark_onboarded — and a citation replayed at
+// collection would be judged against a surface the run never had.
+func TestACollectedRunReachesOnlyWhatItsLaunchDid(t *testing.T) {
 	t.Parallel()
-	gate := &org.RoleSandbox{Enabled: true}
-	withTool := func(t *testing.T, reg *tools.Registry) {
-		if err := reg.Register(stubTool{name: runner.RunSandboxTool}, tools.OriginBuiltin); err != nil {
+	marker := func(t *testing.T, reg *tools.Registry) {
+		if err := reg.Register(stubTool{name: runner.MarkOnboardedTool, out: "ok"}, tools.OriginBuiltin); err != nil {
 			t.Fatalf("Register: %v", err)
 		}
 	}
-
-	launcher := &recordingLauncher{}
-	agent, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
-		buildOpts{agentRun: launcher, sandbox: gate, register: withTool})
-	if _, _, err := agent.Execute(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Execute: %v", err)
+	got := executeRound(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+		buildOpts{register: marker}, 1, "", nil,
+		run{calls: []llm.ToolCall{{ID: "s", Name: "slack_post"}}, text: "done"}, runner.RunRecord{})
+	if slices.Contains(got.surface.Catalogue, runner.MarkOnboardedTool) {
+		t.Error("the collected executor can reach mark_onboarded")
 	}
-	if launcher.runs != 1 {
-		t.Fatalf("launched %d runs", launcher.runs)
-	}
-	for _, taught := range []string{"Sandbox code work", "run_sandbox"} {
-		if prompt := launcher.req.System + "\n" + launcher.req.Brief; strings.Contains(prompt, taught) {
-			t.Errorf("the agent-mode prompt teaches %q, a tool its surface never offers:\n%s", taught, prompt)
-		}
-	}
-
-	prov := &scriptedProvider{execute: []llm.Completion{submitCall(t, runner.SubmitWorkTool,
-		`{"outcome":"delivered","summary":"done","deliveries":["slack_post"]}`)}}
-	native, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}},
-		buildOpts{sandbox: gate, register: withTool})
-	if _, _, err := native.Execute(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	if system := systemOf(t, prov, "execute"); !strings.Contains(system, "Sandbox code work") {
-		t.Error("a gated seat on the native loop, offered run_sandbox, was not taught it")
+	if slices.Contains(toolNames(got.launch.Surface.ToolDefs()), runner.MarkOnboardedTool) {
+		t.Error("the launched run was offered mark_onboarded")
 	}
 }
 
-// A RESUMED EXECUTOR REACHES ONLY WHAT A FRESH ONE DOES, on both resume paths.
-//
-// A resume rebuilds the executor's surface from the registry, so it is the
-// second place the narrowing has to hold: built from the whole registry, a
-// resumed executor could activate mark_onboarded — and skip orientation for
-// good, which phaseScoped exists to prevent — and a resumed agent-mode run got
-// run_sandbox back. The parked state decides which path runs; the seat's gate
-// decides whether a native executor is offered run_sandbox, and a native seat
-// whose gate is on is the control that keeps it, so a resume that dropped the
-// tool everywhere fails too. The native case also ASKS to activate each hidden
-// tool, since activate_tool reaches exactly the universe the surface was built
-// from.
-func TestAResumedExecutorReachesOnlyWhatAFreshOneDoes(t *testing.T) {
+// A PARK THE ENGINE CAN PERSIST, carrying what the collection needs.
+func TestAParkedRunCarriesWhatItsCollectionNeeds(t *testing.T) {
 	t.Parallel()
-	hidden := func(t *testing.T, reg *tools.Registry) {
-		for _, name := range []string{runner.MarkOnboardedTool, runner.RunSandboxTool} {
-			if err := reg.Register(stubTool{name: name, out: "ok"}, tools.OriginBuiltin); err != nil {
-				t.Fatalf("Register: %v", err)
-			}
-		}
-	}
-	gate := &org.RoleSandbox{Enabled: true}
-	for _, tc := range []struct {
-		name       string
-		agentRun   bool
-		gate       *org.RoleSandbox
-		runSandbox bool
-	}{
-		{name: "native, no gate"},
-		{name: "native, gated", gate: gate, runSandbox: true},
-		{name: "agent mode, gated", agentRun: true, gate: gate},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			opts := buildOpts{sandbox: tc.gate, register: hidden}
-			prov := &scriptedProvider{}
-			if tc.agentRun {
-				opts.agentRun = &recordingLauncher{}
-				opts.resume = &runner.Resume{
-					State:   execstate.State{Version: execstate.Version, AgentRun: true, Round: 1},
-					Answer:  "done",
-					Bridged: []ledger.Call{{Name: "slack_post", Result: "posted"}},
-				}
-			} else {
-				prov.execute = []llm.Completion{
-					activate(runner.MarkOnboardedTool),
-					activate(runner.RunSandboxTool),
-					submitWork(t),
-				}
-				opts.resume = &runner.Resume{State: suspendedAfterTwoRounds(), Answer: "the run succeeded"}
-			}
-			r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, opts)
-			_, surface, err := r.Resume(context.Background(), nil)
-			if err != nil {
-				t.Fatalf("Resume: %v", err)
-			}
-			if slices.Contains(surface.Catalogue, runner.MarkOnboardedTool) {
-				t.Error("the resumed executor can reach mark_onboarded")
-			}
-			if got := slices.Contains(surface.Catalogue, runner.RunSandboxTool); got != tc.runSandbox {
-				t.Errorf("the resumed executor reaches run_sandbox = %v, want %v", got, tc.runSandbox)
-			}
-			for i, req := range prov.seen {
-				offered := toolNames(req.Tools)
-				if slices.Contains(offered, runner.MarkOnboardedTool) {
-					t.Errorf("resumed request %d was offered mark_onboarded, which activate_tool reached", i+1)
-				}
-				if !tc.runSandbox && slices.Contains(offered, runner.RunSandboxTool) {
-					t.Errorf("resumed request %d was offered run_sandbox, which activate_tool reached", i+1)
-				}
-			}
-			if !tc.agentRun && len(prov.seen) < 3 {
-				t.Fatalf("the resumed executor made %d requests; its activations never got a round after them",
-					len(prov.seen))
-			}
-		})
-	}
-}
-
-// A SUSPENSION THE ENGINE CAN PERSIST, and one that says which shape it is.
-//
-// The flag is what the resume reads, and it has to be on the STATE rather than
-// re-derived from config: a run parked for days comes back to whatever the
-// company was applied to since, and an agent run collected as a native one
-// rebuilds a conversation that never existed.
-func TestAnAgentRunSuspensionCarriesWhatAResumeNeeds(t *testing.T) {
-	t.Parallel()
-	r := agentFixture(t, &recordingLauncher{}, nil)
+	r := agentFixture(t, &playLauncher{}, nil)
 	if _, _, err := r.Execute(context.Background(), 2, "", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 	got, ok := r.Suspended()
 	if !ok {
-		t.Fatal("no suspension was recorded, so the engine has nothing to write")
-	}
-	if !got.State.AgentRun {
-		t.Error("the state does not say it is an agent run")
-	}
-	if len(got.State.Messages) > 0 {
-		t.Error("an agent run recorded an engine conversation it does not have")
+		t.Fatal("no state was recorded, so the engine has nothing to write")
 	}
 	if got.State.Round != 2 {
-		t.Errorf("round = %d, want the round it suspended in", got.State.Round)
+		t.Errorf("round = %d, want the round it was launched in", got.State.Round)
 	}
 	if got.State.Task != "post the weekly summary" {
 		t.Errorf("task = %q", got.State.Task)
+	}
+	if !slices.Contains(got.State.ActiveTools, runner.SubmitWorkTool) {
+		t.Errorf("active tools = %v, want the surface the run was offered", got.State.ActiveTools)
 	}
 	if err := got.State.Validate(); err != nil {
 		t.Errorf("the recorded state is invalid, so nothing would persist it: %v", err)
 	}
 }
 
-// A LAUNCH THAT FAILS FAILS THE PHASE, rather than falling through to the
-// native loop.
-//
-// A seat configured for agent mode whose run cannot start has a configuration
-// problem — no sandbox, no bridge URL, no runner for its CLI — and quietly
-// running the executor a different way hides it behind a turn that merely
-// looks expensive, on a model the operator did not choose for the work.
-func TestALaunchFailureFailsThePhase(t *testing.T) {
+// A PARK IS COLLECTED FROM WHAT THE ENGINE PERSISTED, not from the value the
+// launching runner held: the process that collects a run reads the state back
+// off the wire, so a field that does not survive its encoding is one the
+// collection silently loses. Launched, encoded, decoded, and collected by a
+// fresh runner, the run's delivery is the turn's.
+func TestAParkedRunIsCollectedFromItsPersistedForm(t *testing.T) {
 	t.Parallel()
-	launcher := &recordingLauncher{err: errors.New("no bridge url")}
-	r := agentFixture(t, launcher, nil)
+	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
+	launched, req := launch(t, entries, buildOpts{}, 1, "", nil)
+	bridged := play(t, req, deliver(t, "posted the weekly summary"))
 
-	_, _, err := r.Execute(context.Background(), 1, "", nil)
+	parked, ok := launched.Suspended()
+	if !ok {
+		t.Fatal("the launch recorded no state")
+	}
+	blob, err := execstate.Encode(parked.State)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	state, found, err := execstate.Decode(blob)
+	if err != nil || !found {
+		t.Fatalf("Decode: %v (found %v)", err, found)
+	}
+	if !slices.Equal(state.ActiveTools, parked.State.ActiveTools) {
+		t.Errorf("active tools %v came back as %v", parked.State.ActiveTools, state.ActiveTools)
+	}
+
+	collector, _ := buildWith(t, entries, buildOpts{
+		resume: &runner.Resume{State: state, Answer: "posted it", Bridged: bridged},
+	})
+	w, _, err := collector.Resume(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if w.Outcome != turn.OutcomeDelivered || w.Rescued {
+		t.Errorf("outcome = %q rescued = %v, want the delivery the run submitted", w.Outcome, w.Rescued)
+	}
+	if !slices.Equal(w.Deliveries, []string{"slack_post"}) {
+		t.Errorf("deliveries = %v, want the call the run cited", w.Deliveries)
+	}
+}
+
+// A LAUNCH THAT FAILS FAILS THE PHASE, and CLOSES it.
+//
+// There is no other way to run the executor, so the error is the phase's. And
+// the phase's started record was published before the launch — it carries the
+// prompt the run was sent — so a launch that never happened publishes the
+// phase's completion too: failed, with the error. Left open, the phase reads
+// as running for ever on every screen that draws it.
+//
+// Mutation: drop the completion on the error path, and the record is gone.
+func TestALaunchFailureFailsAndClosesThePhase(t *testing.T) {
+	t.Parallel()
+	pub := newCapture()
+	launcher := &playLauncher{err: errors.New("no bridge url")}
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+		buildOpts{launcher: launcher, pub: pub})
+
+	work, _, err := r.Execute(context.Background(), 1, "", nil)
 	if err == nil {
-		t.Fatal("a failed launch produced a phase, so the executor silently ran somewhere else")
+		t.Fatal("a failed launch produced a phase")
 	}
 	if !strings.Contains(err.Error(), "no bridge url") {
 		t.Errorf("the error loses the cause: %v", err)
 	}
 	if _, ok := r.Suspended(); ok {
-		t.Error("a failed launch recorded a suspension, so the engine would open a row nothing can complete")
+		t.Error("a failed launch recorded a state, so the engine would open a row nothing can complete")
+	}
+	// The counterfactual of a broken phase that had acted: nothing was
+	// called, so the turn reads as having done nothing and keeps its retry.
+	if len(work.Calls) != 0 {
+		t.Errorf("a launch that never ran reports calls: %+v", work.Calls)
+	}
+	done := completedPhase(t, pub, "execute")
+	if !done.Failed || !strings.Contains(done.Error, "no bridge url") {
+		t.Errorf("failed = %v error = %q, want the launch failure on the record", done.Failed, done.Error)
+	}
+	if done.SystemPrompt == "" {
+		t.Error("the failed launch's record lost the prompt it would have run with")
 	}
 }
 
-// AN AGENT-MODE EXECUTOR LAUNCHES NOTHING ON A REFUSAL ALREADY CERTAIN.
+// A LAUNCH A PERSON STOPPED DID NOT FAIL. The phase closes carrying the stop
+// as its error and not marked failed, exactly as a phase the engine drives
+// does: a turn is listed as failed when any of its rows is, and a turn
+// somebody deliberately ended is not one that broke.
+func TestALaunchAPersonStoppedClosesThePhaseWithoutFailingIt(t *testing.T) {
+	t.Parallel()
+	pub := newCapture()
+	launcher := &playLauncher{err: fmt.Errorf("the seat's fence: %w", turn.ErrStoppedByPerson)}
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+		buildOpts{launcher: launcher, pub: pub})
+
+	_, _, err := r.Execute(context.Background(), 1, "", nil)
+	if !turn.Stopped(err) {
+		t.Fatalf("Execute = %v, want the stop", err)
+	}
+	done := completedPhase(t, pub, "execute")
+	if done.Failed {
+		t.Error("a stopped launch was recorded as a failure")
+	}
+	if done.Error == "" {
+		t.Error("the record does not say why the phase ended")
+	}
+}
+
+// A CLOSED FENCE LAUNCHES NOTHING. A run outlives the segment that launched it
+// and is not fenced once it runs, so the launch is the last moment a seat that
+// moved node, or one a person stopped, can be kept from starting one — and
+// nothing is opened, published or parked first.
+//
+// Mutation: check the fence after the launch, and a run starts on a seat this
+// node no longer holds.
+func TestAClosedFenceLaunchesNothing(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		fence error
+	}{
+		{"the seat moved", errors.New("seat cto is held by node-b")},
+		{"a person stopped it", turn.ErrStoppedByPerson},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pub := newCapture()
+			launcher := &playLauncher{}
+			r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+				buildOpts{launcher: launcher, pub: pub, fence: func() error { return tc.fence }})
+
+			_, _, err := r.Execute(context.Background(), 1, "", nil)
+			if !errors.Is(err, tc.fence) {
+				t.Fatalf("Execute = %v, want the fence's own answer", err)
+			}
+			if launcher.launched() != 0 {
+				t.Errorf("launched %d runs past a closed fence", launcher.launched())
+			}
+			if started := pub.startedPhases(); len(started) != 0 {
+				t.Errorf("published %v for a phase that never opened", started)
+			}
+			if _, ok := r.Suspended(); ok {
+				t.Error("a launch that never happened recorded a state")
+			}
+		})
+	}
+}
+
+// THE LAUNCH IS HANDED THE TURN'S OWN FENCE, to ask again before it opens
+// anything: the prompt built since the phase opened can take a model call of
+// its own. The same closure the runner was built with — a fence compares the
+// grant it captured when it was built with the one held when it is called, so
+// the launch is held to the turn's admission only by this one.
+func TestTheLaunchIsHandedTheTurnsOwnFence(t *testing.T) {
+	t.Parallel()
+	launcher := &playLauncher{}
+	asked := 0
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+		buildOpts{launcher: launcher, fence: func() error { asked++; return nil }})
+
+	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	req := launcher.last(t)
+	if req.Fence == nil {
+		t.Fatal("the launch was handed no fence")
+	}
+	before := asked
+	if err := req.Fence(); err != nil || asked != before+1 {
+		t.Fatalf("the launch's fence = %v and asked the turn's %d time(s), want the turn's own",
+			err, asked-before)
+	}
+}
+
+// THE EXECUTOR LAUNCHES NOTHING ON A REFUSAL ALREADY CERTAIN.
 //
 // Its calls are made in a box and post-charged when the run is collected, so
-// no round of the engine's loop is there to stop them: a run launched on a
+// no round of an engine loop is there to stop them: a run launched on a
 // window already past its ceiling is paid for whole, and every token of it is
-// over the cap. Asked before the launch, the executor is refused as a native
-// one is before its first round.
-func TestAnAgentModeExecutorLaunchesNothingOnAStandingRefusal(t *testing.T) {
+// over the cap. Asked before the launch, the executor is refused as an engine
+// phase is before its first round — and opens nothing.
+func TestTheExecutorLaunchesNothingOnAStandingRefusal(t *testing.T) {
 	t.Parallel()
-	launcher := &recordingLauncher{}
+	pub := newCapture()
+	launcher := &playLauncher{}
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
-		buildOpts{agentRun: launcher, budget: &ceilingMeter{
+		buildOpts{launcher: launcher, pub: pub, budget: &ceilingMeter{
 			countingMeter: countingMeter{seen: []int{120}}, ceiling: 100,
 		}})
 
@@ -342,11 +346,14 @@ func TestAnAgentModeExecutorLaunchesNothingOnAStandingRefusal(t *testing.T) {
 	if !errors.Is(err, toolloop.ErrBudgetExhausted) {
 		t.Fatalf("Execute = %v, want the refusal the meter holds", err)
 	}
-	if launcher.runs != 0 {
-		t.Errorf("launched %d runs on a refusal that already stood", launcher.runs)
+	if launcher.launched() != 0 {
+		t.Errorf("launched %d runs on a refusal that already stood", launcher.launched())
+	}
+	if started := pub.startedPhases(); len(started) != 0 {
+		t.Errorf("published %v for a phase that never opened", started)
 	}
 	if _, ok := r.Suspended(); ok {
-		t.Error("a launch that never happened recorded a suspension")
+		t.Error("a launch that never happened recorded a state")
 	}
 }
 
@@ -373,20 +380,19 @@ func (r chargingRewriter) Complete(ctx context.Context, _ llm.Request) (*llm.Com
 	return &llm.Completion{Content: "condensed: the earlier round drafted the summary"}, nil
 }
 
-// AN AGENT-MODE EXECUTOR LAUNCHES NOTHING WHEN ITS OWN BRIEF FILLS THE WINDOW.
+// THE EXECUTOR LAUNCHES NOTHING WHEN ITS OWN BRIEF FILLS THE WINDOW.
 //
 // The phase asks the meter before it builds anything, and the answer is room;
 // building the brief then rewrites a prior round's long output with the seat's
 // auxiliary model, charged to the same counters, and that rewrite takes the
 // window past its ceiling. A run launched now is paid for whole past it, so the
-// executor asks again once the brief exists and is refused as a native pass is
-// before its first round.
-func TestAnAgentModeExecutorLaunchesNothingWhenItsBriefFillsTheWindow(t *testing.T) {
+// executor asks again once the brief exists and is refused.
+func TestTheExecutorLaunchesNothingWhenItsBriefFillsTheWindow(t *testing.T) {
 	t.Parallel()
-	launcher := &recordingLauncher{}
+	launcher := &playLauncher{}
 	meter := &ceilingMeter{ceiling: 100}
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
-		buildOpts{agentRun: launcher, budget: meter,
+		buildOpts{launcher: launcher, budget: meter,
 			compact: compact.New(chargingModels{meter: meter, tokens: 150}, nil).
 				For(nil, auxspend.Use{Stage: types.AuxStageTurn})})
 	history := []ledger.Iteration{{Text: strings.Repeat("drafting the weekly summary. ", 400)}}
@@ -398,8 +404,8 @@ func TestAnAgentModeExecutorLaunchesNothingWhenItsBriefFillsTheWindow(t *testing
 	if got := meter.charges(); len(got) != 1 || got[0] != 150 {
 		t.Fatalf("charges = %v, want the one rewrite this case is about", got)
 	}
-	if launcher.runs != 0 {
-		t.Errorf("launched %d runs on a window the brief had already filled", launcher.runs)
+	if launcher.launched() != 0 {
+		t.Errorf("launched %d runs on a window the brief had already filled", launcher.launched())
 	}
 	if _, ok := r.Suspended(); ok {
 		t.Error("a launch that never happened recorded a suspension")
@@ -411,11 +417,11 @@ func TestAnAgentModeExecutorLaunchesNothingWhenItsBriefFillsTheWindow(t *testing
 // not be the one that launched it.
 func TestAResumedAgentRunReportsWhatTheRunSubmitted(t *testing.T) {
 	t.Parallel()
-	r := agentFixture(t, &recordingLauncher{}, &runner.Resume{
-		State:  execstate.State{Version: execstate.Version, AgentRun: true, Round: 1},
+	r := agentFixture(t, &playLauncher{}, &runner.Resume{
+		State:  execstate.State{Version: execstate.Version, Round: 1},
 		Answer: "cloned the repo, fixed the failing test, opened the merge request",
-		Bridged: []ledger.Call{
-			{Name: "slack_post", Result: "posted"},
+		Bridged: []toolloop.Execution{
+			{Name: "slack_post", Output: "posted"},
 			{Name: runner.SubmitWorkTool, Args: map[string]any{
 				"outcome":    "delivered",
 				"summary":    "fixed the failing test and opened the MR",
@@ -445,17 +451,17 @@ func TestAResumedAgentRunReportsWhatTheRunSubmitted(t *testing.T) {
 	}
 }
 
-// AN ABSENT SUBMISSION IS NOT A VALUE — the same rule a native pass follows.
+// AN ABSENT SUBMISSION IS NOT A VALUE.
 //
 // A run that stopped without saying what it did is rescued as incomplete and
 // judged on its record. Reading the prose it happened to end with as a
 // delivery would put a claim in its mouth on the one question that matters.
 func TestAnAgentRunThatNeverSubmittedIsRescued(t *testing.T) {
 	t.Parallel()
-	r := agentFixture(t, &recordingLauncher{}, &runner.Resume{
-		State:   execstate.State{Version: execstate.Version, AgentRun: true, Round: 1},
+	r := agentFixture(t, &playLauncher{}, &runner.Resume{
+		State:   execstate.State{Version: execstate.Version, Round: 1},
 		Answer:  "I had a look around and then ran out of turns",
-		Bridged: []ledger.Call{{Name: "slack_history", Result: "read"}},
+		Bridged: []toolloop.Execution{{Name: "slack_history", Output: "read"}},
 	})
 
 	w, _, err := r.Resume(context.Background(), nil)
@@ -481,11 +487,11 @@ func TestAnAgentRunThatNeverSubmittedIsRescued(t *testing.T) {
 // the last write wins.
 func TestTheLastSubmissionAnAgentRunMadeWins(t *testing.T) {
 	t.Parallel()
-	r := agentFixture(t, &recordingLauncher{}, &runner.Resume{
-		State:  execstate.State{Version: execstate.Version, AgentRun: true, Round: 1},
+	r := agentFixture(t, &playLauncher{}, &runner.Resume{
+		State:  execstate.State{Version: execstate.Version, Round: 1},
 		Answer: "done",
-		Bridged: []ledger.Call{
-			{Name: "slack_post", Result: "posted"},
+		Bridged: []toolloop.Execution{
+			{Name: "slack_post", Output: "posted"},
 			{Name: runner.SubmitWorkTool, Args: map[string]any{
 				"outcome": "blocked", "summary": "could not reach the repo",
 			}},
@@ -511,11 +517,11 @@ func TestTheLastSubmissionAnAgentRunMadeWins(t *testing.T) {
 // call the decoder rejects would throw away work that was really done.
 func TestAMalformedSubmissionRescuesRatherThanFailing(t *testing.T) {
 	t.Parallel()
-	r := agentFixture(t, &recordingLauncher{}, &runner.Resume{
-		State:  execstate.State{Version: execstate.Version, AgentRun: true, Round: 1},
+	r := agentFixture(t, &playLauncher{}, &runner.Resume{
+		State:  execstate.State{Version: execstate.Version, Round: 1},
 		Answer: "did some things",
-		Bridged: []ledger.Call{
-			{Name: "slack_post", Result: "posted"},
+		Bridged: []toolloop.Execution{
+			{Name: "slack_post", Output: "posted"},
 			{Name: runner.SubmitWorkTool, Args: map[string]any{"outcome": "teleported"}},
 		},
 	})
@@ -529,102 +535,47 @@ func TestAMalformedSubmissionRescuesRatherThanFailing(t *testing.T) {
 	}
 }
 
-// THE STATE DECIDES WHICH RESUME RUNS, not the config.
-//
-// A native suspension resumed on a runner configured for agent mode must still
-// re-enter its conversation: the two are different shapes, and picking by
-// config would rebuild whichever one the company happens to say today.
-func TestANativeSuspensionResumesNativelyEvenInAgentMode(t *testing.T) {
-	t.Parallel()
-	prov := &scriptedProvider{execute: []llm.Completion{
-		submitCall(t, runner.SubmitWorkTool, `{
-			"outcome":"delivered","summary":"posted it","deliveries":["slack_post"]}`),
-	}}
-	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
-		agentRun: &recordingLauncher{},
-		resume: &runner.Resume{
-			State: execstate.State{
-				Version:         execstate.Version,
-				Messages:        suspendedConversation(),
-				PendingCallID:   "call-1",
-				PendingCallName: "run_sandbox",
-				Round:           1,
-				// The pre-suspend rounds' calls, which is what makes a
-				// delivery made before the suspend citable after it.
-				ToolExecutions: []map[string]any{
-					{"name": "slack_post", "success": true, "result": "posted"},
-				},
-			},
-			Answer: "the sandbox finished",
-		},
-	})
-
-	w, _, err := r.Resume(context.Background(), nil)
-	if err != nil {
-		t.Fatalf("Resume: %v", err)
-	}
-	if w.Outcome != turn.OutcomeDelivered {
-		t.Fatalf("outcome = %q — the native conversation was not re-entered", w.Outcome)
-	}
-	if len(prov.requestsFor("execute")) == 0 {
-		t.Error("no model call was made, so the native loop did not run")
-	}
-}
-
-// suspendedConversation is the minimum a native suspension needs: one
-// assistant turn whose tool call is still unanswered.
-func suspendedConversation() []llm.Message {
-	return []llm.Message{
-		{Role: llm.RoleSystem, Content: "you are the CTO"},
-		{Role: llm.RoleUser, Content: "post the weekly summary"},
-		{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{
-			{ID: "call-1", Name: "run_sandbox", Arguments: map[string]any{"brief": "fix it"}},
-		}},
-	}
-}
-
 // THE PROMPT REACHES THE RECORD, published at the launch.
 //
-// Nothing else will: a native pass publishes it from inside the tool loop,
-// which agent mode does not enter, and the resume's own record deliberately
-// carries none (it re-entered a phase rather than opening one). Without this
-// an operator reading an agent-mode turn on the dashboard sees a run that
-// finished and no sign of what it was asked — on the one runtime where the
-// prompt is the whole of the engine's instruction to the agent.
+// Nothing else will: the collection's own record deliberately carries none (it
+// collects a run rather than opening a conversation). Without this an operator
+// reading a turn on the dashboard sees a run that finished and no sign of what
+// it was asked — and the prompt is the whole of the engine's instruction to
+// the agent.
 func TestAnAgentRunPublishesThePromptItWasLaunchedWith(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
-		buildOpts{agentRun: &recordingLauncher{}, pub: pub})
+		buildOpts{pub: pub})
 
 	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 	prompts := pub.promptsFor("execute")
 	if len(prompts) == 0 {
-		t.Fatal("an agent-mode launch published no prompt, so the turn's record has no ask in it")
+		t.Fatal("a launch published no prompt, so the turn's record has no ask in it")
 	}
 	if !strings.Contains(prompts[0], "post the weekly summary") {
 		t.Errorf("the published prompt does not carry the ask: %q", prompts[0])
 	}
 }
 
-// AN AGENT-MODE PROMPT IS MEASURED WITH ITS TOOL ARRAY, although the Brief
-// does not contain it.
+// THE EXECUTOR'S PROMPT IS MEASURED WITH ITS TOOL ARRAY, although neither
+// half of the prompt contains it.
 //
-// The launcher is handed the system and user text as one Brief and the surface
-// separately: the definitions reach the coding CLI over the MCP bridge, not in
-// the prompt. The CLI's own model is billed for every one of them all the
-// same, so a meter that counted only the Brief would report the engine's most
-// tool-heavy runtime as its slimmest — and the argument for leaving them out
-// ("they are not in the prompt") is exactly the one a reader will make when
-// deleting the term, which is why the case is here.
+// The launcher is handed the system and user text and the surface separately:
+// the definitions reach the coding CLI over the MCP bridge, not in the prompt.
+// The CLI's own model is billed for every one of them all the same, so a
+// meter that counted only the text would report the engine's most tool-heavy
+// phase as its slimmest — and the argument for leaving them out ("they are not
+// in the prompt") is exactly the one a reader will make when deleting the
+// term, which is why the case is here.
 func TestAnAgentRunMeasuresTheToolsItAdvertisedOverTheBridge(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
-	launcher := &recordingLauncher{}
+	launcher := &playLauncher{}
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
-		buildOpts{agentRun: launcher, pub: pub})
+		buildOpts{launcher: launcher, pub: pub})
 
 	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -632,10 +583,10 @@ func TestAnAgentRunMeasuresTheToolsItAdvertisedOverTheBridge(t *testing.T) {
 
 	got := pub.sizes()
 	if len(got) != 1 {
-		t.Fatalf("published %d prompt.size events for one agent-mode launch, want 1", len(got))
+		t.Fatalf("published %d prompt.size events for one launch, want 1", len(got))
 	}
 	m := got[0]
-	defs := launcher.req.Surface.ToolDefs()
+	defs := launcher.last(t).Surface.ToolDefs()
 	if len(defs) == 0 {
 		t.Fatal("the launcher was handed no tools, so this case cannot tell a fix from a bug")
 	}
@@ -643,18 +594,15 @@ func TestAnAgentRunMeasuresTheToolsItAdvertisedOverTheBridge(t *testing.T) {
 		t.Errorf("measured %d tools at %d chars, the run was advertised %d at %d",
 			m.ToolCount, m.ToolBytes, len(defs), toolArrayBytes(t, defs))
 	}
-	// And the Brief itself, which is the system and user text joined.
+	// And both halves of the prompt itself.
 	if m.SystemBytes == 0 || m.UserBytes == 0 {
-		t.Errorf("measured %d/%d system/user chars for a launch whose Brief is both",
+		t.Errorf("measured %d/%d system/user bytes for a launch that sends both",
 			m.SystemBytes, m.UserBytes)
-	}
-	if m.MessageBytes != 0 {
-		t.Errorf("message_bytes = %d on a launch that opens a phase rather than resuming one",
-			m.MessageBytes)
 	}
 }
 
-// AN AGENT-MODE RUN'S EVENT SAYS WHAT IT DID, and which box it did it in.
+// A RUN'S EVENT SAYS WHAT IT DID, which box it did it in, and which member of
+// the seat's executor chain ran it.
 //
 // The resume used to hand the record builder a zero result while holding the
 // whole account in the bridged log, so the published event carried no
@@ -663,18 +611,21 @@ func TestAnAgentRunMeasuresTheToolsItAdvertisedOverTheBridge(t *testing.T) {
 // empty response leave no transcript to fall back on, and the "composing its
 // first round" placeholder only shows on a LIVE phase. An operator saw a
 // decision word and a blank card for a run that made real tool calls.
+//
+// THE MEMBER IS THE LAUNCH'S, not the chain's head: a launch that fell back
+// to the second entry ran on it, and a record naming the head — or nobody —
+// charges the run's spend to an entry that never served it.
 func TestAResumedAgentRunPublishesWhatTheRunDid(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
 	prov := &scriptedProvider{}
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
-		agentRun: &recordingLauncher{},
-		pub:      pub,
+		pub: pub,
 		resume: &runner.Resume{
-			State:  execstate.State{Version: execstate.Version, AgentRun: true, Round: 1},
+			State:  execstate.State{Version: execstate.Version, Round: 1},
 			Answer: "cloned the repo, fixed the failing test, opened the merge request",
-			Bridged: []ledger.Call{
-				{Name: "slack_post", Result: "posted"},
+			Bridged: []toolloop.Execution{
+				{Name: "slack_post", Output: "posted"},
 				{Name: runner.SubmitWorkTool, Args: map[string]any{
 					"outcome":    "delivered",
 					"summary":    "fixed the failing test and opened the MR",
@@ -683,6 +634,7 @@ func TestAResumedAgentRunPublishesWhatTheRunDid(t *testing.T) {
 			},
 			Run: runner.RunRecord{
 				CodingAgent: "claude-code", SandboxID: "box-7",
+				ProviderKey: "fallback-plan", Model: "claude-sonnet-5",
 				DeliveredRefs: []string{"https://example.com/pr/9"},
 			},
 		},
@@ -732,24 +684,27 @@ func TestAResumedAgentRunPublishesWhatTheRunDid(t *testing.T) {
 	if len(done.DeliveredRefs) != 1 {
 		t.Errorf("delivered_refs = %v, want what the run produced", done.DeliveredRefs)
 	}
+	if done.ProviderKey != "fallback-plan" || done.Model != "claude-sonnet-5" {
+		t.Errorf("provider_key = %q model = %q, want the member the launch picked",
+			done.ProviderKey, done.Model)
+	}
 }
 
-// A NATIVE PHASE IS STILL NATIVE. The backend is a fact about where a phase
-// ran, not a flag the resume path sets for everything it touches.
+// A PHASE THAT RAN HERE IS NATIVE. The backend is a fact about where a phase
+// ran, not a flag the collection sets for everything it touches: the reviewer
+// runs in this process's own loop.
 func TestAPhaseThatRanHereReportsTheNativeBackend(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
-	prov := &scriptedProvider{execute: []llm.Completion{
-		submitCall(t, runner.SubmitWorkTool, `{"outcome":"no_action","summary":"nothing to do"}`),
-		text("done"),
+	prov := &scriptedProvider{review: []llm.Completion{
+		submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`),
 	}}
-	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}},
-		buildOpts{reply: turn.NoReply(), pub: pub})
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{pub: pub})
 
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Execute: %v", err)
+	if _, err := r.Review(context.Background(), 1, workFor("posted"), nil); err != nil {
+		t.Fatalf("Review: %v", err)
 	}
-	done := completedPhase(t, pub, "execute")
+	done := completedPhase(t, pub, "review")
 	if done.Backend != types.BackendNative {
 		t.Errorf("backend = %q, want native", done.Backend)
 	}

@@ -24,8 +24,8 @@ import (
 // option. A detached run OUTLIVES its turn, its process and sometimes its
 // node: when the seat moves — a lease lapse, a drain, a rolling upgrade — the
 // node that owns it next is the one whose recovery pass has to find the run.
-// On a per-node store that pass found nothing, so the suspended Execute
-// conversation was unreachable and the sandbox was neither resumed nor reaped:
+// On a per-node store that pass found nothing, so the parked turn was
+// unreachable and the sandbox was neither resumed nor reaped:
 // a billed box, running to its own TTL, handing its result to nobody. The
 // release path's own comment states the contract this restores — "a detached
 // run belongs to its row, not to this process, and the seat's next owner
@@ -114,8 +114,9 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	// And the job's own record starts here: the instant the launch exists
 	// is the instant its phase began, and a previous job's record — its
 	// start, its iteration, whether its phase was published — is not this
-	// one's. Only the model is the caller's.
-	run.Launch = LaunchRecord{StartedAt: now, Model: run.Launch.Model}
+	// one's. Only the model and the entry it runs on are the caller's.
+	run.Launch = LaunchRecord{StartedAt: now, Model: run.Launch.Model,
+		ProviderKey: run.Launch.ProviderKey}
 	raw, err := encodeRun(run)
 	if err != nil {
 		return PendingRun{}, err
@@ -148,13 +149,17 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 }
 
 // resetLaunch is [CoordStore.BeginLaunch]'s half for a row that was already
-// there — a second run_sandbox call in this turn, or a redelivered kick-off —
+// there — a second launch in this turn, or a redelivered kick-off —
 // reporting the row as it reset it, whether it did and, where a newer lease
 // refused it, that lease's epoch. Neither is a row that is gone.
 //
 // Only the LAUNCH-SCOPED state is reset: the identity fields stay the existing
-// row's, and so does the box reference, which the caller is about to reattach
-// to.
+// row's, and so does the box reference — its id, its cell and its CLI, as one —
+// until the launch attaches a box of its own ([CoordStore.AttachSandbox]). The
+// reset row hands that box to the launch as [PendingRun.Prior], which decides
+// whether the new job continues in it or reclaims it through its own cell
+// first; the row naming it meanwhile is what lets recovery reclaim it if the
+// launching node dies before deciding.
 //
 // A RESET THE ROW REFUSES IS NEVER A LAUNCH THAT WENT AHEAD: a newer lease
 // owns the run (the epoch reported), or its ending is decided — an error
@@ -163,14 +168,29 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 // named by nothing.
 func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fence) (PendingRun, bool, int64, error) {
 	var held int64
+	var prior PriorBox
 	opened, reset, err := s.mutateLive(ctx, run.TurnID, func(existing *PendingRun) bool {
 		if outranked(*existing, fence) {
 			held = existing.OwnerEpoch
 			return false
 		}
+		// READ BEFORE THE RESET, inside the same compare-and-swap, so the
+		// box handed to the launch is exactly the one the write replaced.
+		prior = PriorBox{
+			SandboxID: existing.SandboxID, Placement: existing.Placement,
+			CodingAgent: existing.CodingAgent, Status: existing.Status,
+		}
 		existing.Status = StatusLaunching
 		existing.LaunchID = run.LaunchID
 		existing.Launch = run.Launch
+		// The turn's cap is the turn's, the same on every launch of it —
+		// written anyway, so the row says what this launch was told.
+		existing.Deadline = run.Deadline
+		// THIS job's bridge session, which replaced the previous job's:
+		// the box that job ran in dials a session nothing serves any more.
+		existing.LaunchNode, existing.BridgeNonce = run.LaunchNode, run.BridgeNonce
+		// A hold was on the previous job's resume, which is over.
+		existing.HeldFor, existing.HeldUntil = "", time.Time{}
 		if fence.Fenced() {
 			existing.Owner, existing.OwnerEpoch = fence.Owner, fence.Epoch
 		}
@@ -195,15 +215,22 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// AND ITS COST: a parked job's tokens are paid by the resume its
 		// answer drives, which has happened by the time a new job opens.
 		existing.ParkedInputTokens, existing.ParkedOutputTokens = 0, 0
+		existing.ParkedCacheReadTokens, existing.ParkedCacheWriteTokens = 0, 0
 		// NOR ARE THE PREVIOUS JOB'S TOOL CALLS THIS JOB'S. The bridged
-		// log is the whole record an agent-mode resume rebuilds its phase
+		// log is the whole record a run's resume rebuilds its phase
 		// from, and a second executor round under the same turn id — what
 		// a reviewer's self_iterate produces — would otherwise replay the
 		// FIRST round's submit_work: a round that in fact submitted
 		// nothing would report the previous round's outcome instead of
 		// being rescued, and its deliveries would satisfy this round's
 		// delivery check.
-		existing.BridgeCalls, existing.BridgeCallsElided = nil, 0
+		//
+		// EXCEPT FOR A JOB THAT CONTINUES ONE THAT ASKED: that is the same
+		// round carried on, and the calls made before the question are its
+		// calls ([PendingRun.Continues]).
+		if !run.Continues {
+			existing.BridgeCalls, existing.BridgeCallsElided = nil, 0
+		}
 		// AND THE PREVIOUS JOB'S CHARGE IS NOT THIS JOB'S. Carried over,
 		// it would tell this job's completion that its spend is already
 		// counted, and the company would never be billed for it.
@@ -212,6 +239,9 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 	})
 	if err != nil {
 		return PendingRun{}, false, 0, fmt.Errorf("sandbox: relaunch run %s: %w", run.TurnID, err)
+	}
+	if reset {
+		opened.Prior = prior
 	}
 	return opened, reset, held, nil
 }
@@ -304,9 +334,28 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 			run.Launch.CollectFailures = 0
 			run.Launch.CollectFailingSince = time.Time{}
 		}
+		// HELD, or not: every release decides it afresh, so a hold an
+		// earlier release put on the run does not outlast the attempt it
+		// held back.
+		run.HeldFor, run.HeldUntil = "", time.Time{}
+		if hold := release.Hold; hold != nil {
+			run.HeldFor, run.HeldUntil = hold.Condition, hold.Until.UTC()
+		}
 		return true
 	})
 	return released, err
+}
+
+// LiftHold clears a run's hold for cond — see [PendingStore.LiftHold].
+func (s *CoordStore) LiftHold(ctx context.Context, turnID string, cond Condition) (bool, error) {
+	_, lifted, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if run.HeldFor == "" || run.HeldFor != cond {
+			return false
+		}
+		run.HeldFor, run.HeldUntil = "", time.Time{}
+		return true
+	})
+	return lifted, err
 }
 
 // MarkAwaiting parks a run until a person answers.
@@ -323,6 +372,7 @@ func (s *CoordStore) MarkAwaiting(ctx context.Context, turnID string, q Clarific
 		run.Branch = q.Branch
 		run.SessionID = q.SessionID
 		run.ParkedInputTokens, run.ParkedOutputTokens = q.InputTokens, q.OutputTokens
+		run.ParkedCacheReadTokens, run.ParkedCacheWriteTokens = q.CacheReadTokens, q.CacheWriteTokens
 		// A NEW QUESTION, measured from its own asking, with nothing yet
 		// recorded against it and nothing yet declined: an answer and the
 		// replies let go of belong to the question they were matched to.
@@ -674,6 +724,10 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 		}
 		run.SandboxID = box.SandboxID
 		run.CommandID = box.CommandID
+		// The box's cell moves with the box — see [BoxRef.Placement].
+		if box.Placement != "" {
+			run.Placement = box.Placement
+		}
 		run.CodingAgent = box.CodingAgent
 		run.SessionID = box.SessionID
 		run.PauseTTLSeconds = box.PauseTTLSec
@@ -779,7 +833,7 @@ func appendBounded(calls []BridgeCall, elided int, next BridgeCall) ([]BridgeCal
 	return kept, elided + dropped
 }
 
-// MarkSuspended writes the suspended Execute loop and opens the run to the
+// MarkSuspended writes the parked turn's state and opens the run to the
 // completion poll. See the contract on [PendingStore].
 func (s *CoordStore) MarkSuspended(ctx context.Context, turnID string, suspension Suspension) (bool, error) {
 	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {

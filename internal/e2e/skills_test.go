@@ -226,7 +226,7 @@ func TestASkillPagePublishedToDocletReachesTheRegistry(t *testing.T) {
 
 	const frontmatter = "---\nkey: deploy-conventions\ntitle: Deploying\n" +
 		"summary: how this company deploys\nphases: [execute]\n" +
-		"trigger:\n  tool: run_sandbox\n---\n"
+		"trigger:\n  tool: delegate\n---\n"
 	written, err := n.engine.PagesStore().Create(t.Context(), pageOperator(), doclet.NewPage{
 		Container: "TS", Title: "Deploying",
 		Body: frontmatter + "Tag the release before you announce it.",

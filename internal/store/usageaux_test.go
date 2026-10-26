@@ -26,7 +26,7 @@ func TestAnAuxiliaryRecordIsPartOfItsSeatsDay(t *testing.T) {
 	w := usageDayOf(day, day.Add(24*time.Hour))
 
 	phase, err := json.Marshal(map[string]any{
-		"agent_id": "seat-1", "role": "Dev", "phase": "execute", "model": "opus",
+		"agent_id": "seat-1", "role": "Dev", "phase": "review", "model": "opus",
 		"rounds": []any{map[string]any{}, map[string]any{}}, "input_tokens": 100,
 		"output_tokens": 10, "total_tokens": 110,
 	})
@@ -83,7 +83,7 @@ func TestAnAuxiliaryRecordIsPartOfItsSeatsDay(t *testing.T) {
 	for _, c := range got.Seats[0].Tokens {
 		cells[c.Phase+"/"+c.Worker] = c
 	}
-	if c := cells["execute/"]; c.Total != 110 || c.Calls != 2 {
+	if c := cells["review/"]; c.Total != 110 || c.Calls != 2 {
 		t.Errorf("the phase's cell = %+v, want 110 tokens over its 2 rounds", c)
 	}
 	if c := cells["auxiliary/persist_decider"]; c.Total != 930 || c.Calls != 3 ||

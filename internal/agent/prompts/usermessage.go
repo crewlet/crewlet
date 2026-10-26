@@ -1,6 +1,9 @@
 package prompts
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // PriorWorkHeader introduces the prior-work ledger: what an EARLIER ROUND of
 // this same turn already did.
@@ -77,6 +80,16 @@ type UserMessage struct {
 	// on its first turn and whenever the trigger has no reproducible
 	// conversation key.
 	ConversationHistory string
+
+	// Steered is every note a person sent this turn that the turn has
+	// already read, each rendered by [SteerMessage], in the order read.
+	//
+	// IN THE BRIEF, LAST, because the run it opens is a fresh session: a
+	// phase the engine drives carries a read note in its conversation, after
+	// its opening, and a run has no conversation of the engine's to carry
+	// it in — so a correction a reviewer read would otherwise bind every
+	// phase of the turn but the one that does the work again.
+	Steered []string
 }
 
 // taskHeader introduces the ask.
@@ -117,6 +130,11 @@ func BuildPhaseUserMessage(m UserMessage) Prompt {
 	b.Heading("task", taskHeader+"\n"+task)
 	if m.PriorWork != "" {
 		b.Heading("prior_work", PriorWorkHeader+"\n"+m.PriorWork)
+	}
+	for i, note := range m.Steered {
+		// A key per note: a section's key is unique within its prompt,
+		// and each note is its own heading.
+		b.Heading(fmt.Sprintf("steered_%d", i+1), note)
 	}
 	return b.Build()
 }

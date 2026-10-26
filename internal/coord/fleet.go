@@ -46,7 +46,7 @@ import (
 //   - A detached coding run outlives its turn, its process and sometimes its
 //     node, and is recovered by whichever node owns the seat NEXT. That node
 //     read its own database, found nothing, and left a billed sandbox running
-//     with a suspended conversation nothing could re-enter.
+//     with a parked turn nothing could re-enter.
 //
 // None of these is a lease: nothing here is owned, held or fenced. They are
 // counters, claims and records, and the coordination store is simply where a

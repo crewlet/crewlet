@@ -6,7 +6,7 @@ phases: [execute]
 title: GitLab tools
 summary: |
   Read / search code + issues + MRs; review, comment, and track work.
-  Authoring code happens in the sandbox (run_sandbox), not via these tools.
+  Author code in your own checkout with your shell and git, not via these tools.
 ---
 
 You have access to GitLab via MCP. Capabilities:
@@ -16,12 +16,12 @@ You have access to GitLab via MCP. Capabilities:
   (approve, comment on the diff, resolve threads).
 - Track work and report status back to the requester.
 
-**Writing code is a sandbox job, not a GitLab-tool job.** When a task needs
-you to *implement or modify code* and your seat is offered `run_sandbox`,
-call it (the `skill:code_runtime` skill says how to brief it) — a coding
-agent does the work in an isolated checkout and opens the MR under your own
-GitLab identity. Use the GitLab tools here to read diffs, review, comment,
-and follow up on that MR — not to author the change.
+**Writing code is your checkout's job, not a GitLab-tool job.** You run as
+a coding agent with your own shell and git in your box: to *implement or
+modify code*, clone the project there, make the change, run its tests,
+push a branch and open the MR under your own GitLab identity. Use the
+GitLab tools here to read diffs, review, comment, and follow up on that
+MR — not to author the change.
 
 You act as your own GitLab service account: humans assign issues/MRs to you,
 request your review, and @-mention you by your username. When a merge request

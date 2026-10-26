@@ -83,9 +83,9 @@ func TestTheFirstReplyAnswersTheQuestionOnEveryBackend(t *testing.T) {
 	}
 }
 
-// answerResumer resumes the parked run as a coding agent would: it fails the
-// first time, and on the next it calls run_sandbox again and the new job parks
-// on a second question.
+// answerResumer resumes the parked run as a turn would: it fails the first
+// time, and on the next it relaunches its executor and the new job parks on a
+// second question.
 type answerResumer struct {
 	store *sandbox.CoordStore
 
@@ -99,7 +99,13 @@ func (r *answerResumer) Resume(ctx context.Context, req sandbox.ResumeRequest) e
 	r.calls++
 	first := r.calls == 1
 	if !first {
-		r.answers = append(r.answers, req.Answer)
+		// A person's answer carries the run on: it rides the request's
+		// Asked, never its Answer, which is a collected run's own report.
+		var answer string
+		if req.Asked != nil {
+			answer = req.Asked.Answer
+		}
+		r.answers = append(r.answers, answer)
 	}
 	r.mu.Unlock()
 	if first {

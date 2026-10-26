@@ -296,8 +296,14 @@ func (g *schemaGen) overrides() map[reflect.Type]map[string]any {
 	textList := map[string]any{"type": "array", "items": text}
 	toggle := g.boolSchema()
 
+	// The mapping's keys are READ OFF PhaseLLM's own fields rather than
+	// listed, because a list here is a second spelling of the decoder: a
+	// phase removed from the type stayed in this list, and the schema
+	// offered an editor a key the strict decoder refuses.
 	phases := map[string]any{}
-	for _, name := range []string{"default", "review", "subagent", "auxiliary", "judge", "sandbox"} {
+	llmFields := reflect.TypeFor[PhaseLLM]()
+	for i := range llmFields.NumField() {
+		name, _, _ := strings.Cut(llmFields.Field(i).Tag.Get("yaml"), ",")
 		phases[name] = map[string]any{"anyOf": []any{text, textList}}
 	}
 

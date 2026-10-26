@@ -1016,7 +1016,7 @@ export function schedulesOf(settings: SeatSettings): ScheduleSpec[] {
  */
 export function llmChain(
   llm: PhaseLLM | undefined,
-  phase?: "default" | "review" | "subagent" | "auxiliary" | "judge" | "sandbox",
+  phase?: "default" | "review" | "subagent" | "auxiliary" | "judge",
 ): string[] {
   const keys = (value: ProviderKeys | undefined): string[] =>
     typeof value === "string"
@@ -1039,7 +1039,6 @@ export function llmChain(
     ...keys(mapping["subagent"]),
     ...keys(mapping["auxiliary"]),
     ...keys(mapping["judge"]),
-    ...keys(mapping["sandbox"]),
   ]);
 }
 

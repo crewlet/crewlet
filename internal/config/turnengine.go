@@ -1,7 +1,8 @@
 package config
 
 // TurnEngine configures the two-stage turn: an executor that decides and acts
-// in one agentic loop, and a reviewer that judges the record it left.
+// in one agentic run — the seat's coding CLI's own, in a box — and a reviewer
+// that judges the record it left, in the engine's own tool loop.
 //
 // Almost every field here is a CAP, and every cap is a trade between a turn
 // that gives up too early and one that burns a budget thrashing. The
@@ -17,6 +18,10 @@ type TurnEngine struct {
 	// MaxIterations caps execute-review rounds per turn. Review returning
 	// self_iterate increments it; on breach the turn is terminated as
 	// failed with a guard-breach event.
+	//
+	// EACH ITERATION IS A WHOLE EXECUTOR RUN — a box, its setup, a fresh
+	// launch of the CLI — so this bounds what a turn may spend on
+	// re-doing its work, not merely how many reviews it gets.
 	MaxIterations int `yaml:"max_iterations,omitempty" json:"max_iterations,omitempty" js:"min=0" desc:"Execute/review iterations per turn."`
 
 	// Delegation bounds every `delegate` call: how many workers run at
@@ -31,47 +36,52 @@ type TurnEngine struct {
 	// the turn is terminated as failed.
 	DelegationDepthLimit int `yaml:"delegation_depth_limit,omitempty" json:"delegation_depth_limit,omitempty" js:"min=0" desc:"Maximum depth of agent-to-agent delegation chains."`
 
-	// MaxToolRounds caps rounds within one executor run. A round is one LLM
-	// call plus the tools it emits. On breach the executor exits and the
-	// reviewer sees the exhaustion, which typically forces another
-	// iteration.
-	//
-	// It is the ONE round cap a turn's own work has now: the executor
-	// plans, discovers and acts in one conversation, so the budget the
-	// three-phase engine split across plan_max_tool_rounds (16) and
-	// max_tool_rounds (20) is one number. The reviewer has no knob — it
-	// holds a single submission tool, so its budget is a structural fact
-	// rather than an operator preference.
-	MaxToolRounds int `yaml:"max_tool_rounds,omitempty" json:"max_tool_rounds,omitempty" js:"min=0" desc:"Tool rounds within one executor run."`
-
 	// OnboardingMaxToolRounds is the dedicated first-turn onboarding
 	// pass's own budget. It runs BEFORE the executor with its own rounds
 	// so onboarding never starves the work submission on a first turn.
 	// 0 disables onboarding: the dedicated pass is the only place a seat
-	// onboards, since the executor never reaches mark_onboarded.
-	OnboardingMaxToolRounds int `yaml:"onboarding_max_tool_rounds,omitempty" json:"onboarding_max_tool_rounds,omitempty" js:"min=0" desc:"Rounds for the first-turn onboarding pass; 0 disables it."`
+	// onboards, since the executor never reaches mark_onboarded. Read it
+	// through [TurnEngine.OnboardingRounds].
+	//
+	// A POINTER, because 0 is a setting rather than an absence: a stored
+	// revision is decoded onto the defaults and an encoder drops a zero
+	// int, so a company that turned onboarding off had it back on — at the
+	// default — the first time its revision was read from the store.
+	OnboardingMaxToolRounds *int `yaml:"onboarding_max_tool_rounds,omitempty" json:"onboarding_max_tool_rounds,omitempty" js:"min=0" desc:"Rounds for the first-turn onboarding pass (default 10); 0 disables it."`
 
 	// ExtensionEnabled is the master switch for the round-cap extension
-	// judge: on exhaustion, a cheap model decides whether the phase is
-	// making progress or thrashing, and grants rounds or falls through to
-	// the rescue path.
-	ExtensionEnabled Toggle `yaml:"extension_enabled,omitempty" json:"extension_enabled,omitzero" desc:"Round-cap extension judge (default on)."`
+	// judge on the ONBOARDING PASS: on exhaustion, a cheap model decides
+	// whether the pass is making progress or thrashing, and grants rounds
+	// or falls through to the rescue path.
+	//
+	// Onboarding only, because it is the one pass with a round budget the
+	// engine sets and a loop the engine runs: the executor is its CLI's own
+	// run, capped by providers.sandbox.default_max_turns, and the reviewer
+	// holds a single submission tool.
+	ExtensionEnabled Toggle `yaml:"extension_enabled,omitempty" json:"extension_enabled,omitzero" desc:"Round-cap extension judge for the onboarding pass (default on)."`
 
-	// The ceilings the judge may grant up to, per phase. Setting one equal
-	// to that phase's base round count disables extensions for that phase
-	// without disabling them for the others.
-	ExecuteMaxToolRoundsCeiling    int `yaml:"execute_max_tool_rounds_ceiling,omitempty" json:"execute_max_tool_rounds_ceiling,omitempty" js:"min=0" desc:"Hard ceiling for executor rounds across extensions."`
+	// OnboardingMaxToolRoundsCeiling is what the judge may grant the
+	// onboarding pass up to. Setting it equal to onboarding_max_tool_rounds
+	// disables extensions.
 	OnboardingMaxToolRoundsCeiling int `yaml:"onboarding_max_tool_rounds_ceiling,omitempty" json:"onboarding_max_tool_rounds_ceiling,omitempty" js:"min=0" desc:"Hard ceiling for onboarding rounds across extensions."`
 
-	// ExtensionRoundStep caps what one judge call may grant. Repeated
-	// exhaustion during an extended run calls the judge again, so this is
-	// per extension rather than per turn.
-	ExtensionRoundStep int `yaml:"extension_round_step,omitempty" json:"extension_round_step,omitempty" js:"min=0" desc:"Maximum rounds one extension call may grant."`
+	// ExtensionRoundStep caps what one judge call may grant the onboarding
+	// pass. Repeated exhaustion during an extended pass calls the judge
+	// again, so this is per extension rather than per turn.
+	ExtensionRoundStep int `yaml:"extension_round_step,omitempty" json:"extension_round_step,omitempty" js:"min=0" desc:"Maximum onboarding rounds one extension call may grant."`
 
-	// SandboxMinBudgetTokens is a pre-flight floor: refuse to launch a
-	// coding run below it, rather than launching one that dies mid-run
-	// having produced nothing.
-	SandboxMinBudgetTokens int `yaml:"sandbox_min_budget_tokens,omitempty" json:"sandbox_min_budget_tokens,omitempty" js:"min=0" desc:"Refuse a coding run below this remaining budget."`
+	// ExecutorMinBudgetTokens is a pre-flight floor on EVERY executor
+	// launch — a turn's first and each relaunch after a self_iterate:
+	// below this much budget left, or when the budget cannot be read, the
+	// launch is refused and the seat parks until the window turns over or
+	// a ceiling moves, rather than launching a run that dies mid-way having
+	// produced nothing. 0 turns the floor off. See
+	// [defaultExecutorMinBudgetTokens] for where the default comes from,
+	// and read it through [TurnEngine.ExecutorFloor].
+	//
+	// A POINTER for onboarding_max_tool_rounds' reason: an explicit 0 must
+	// survive the store, which decodes a revision onto the defaults.
+	ExecutorMinBudgetTokens *int `yaml:"executor_min_budget_tokens,omitempty" json:"executor_min_budget_tokens,omitempty" js:"min=0" desc:"Refuse an executor launch, and park the seat, below this remaining token budget (default 25000; 0 = no floor)."`
 
 	// ConversationSession is the cross-turn ledger. It is nested here
 	// rather than beside it because the turn engine reads it on every
@@ -80,36 +90,62 @@ type TurnEngine struct {
 	ConversationSession ConversationSession `yaml:"conversation_session,omitempty" json:"conversation_session"`
 }
 
+// Turn-engine defaults the fields cannot carry themselves, because an unset
+// field and an explicit 0 mean different things there.
+const (
+	// defaultExecutorMinBudgetTokens is 25000 because the floor has to
+	// cover the FIRST REQUEST of a run, which the launch cannot shrink: the
+	// CLI's own harness prompt and tool definitions (about 15k input tokens
+	// for Claude Code), the seat's bridged tool array beside them, and the
+	// seat's system prompt. A floor below one such request refuses nothing
+	// it was meant to — the 2000 it replaced was sized for a delegated
+	// coding job's brief, and passed every run that then died on its first
+	// round.
+	defaultExecutorMinBudgetTokens = 25000
+
+	// defaultOnboardingRounds is the pass's own budget: activate the
+	// knowledge-base tools, read the team's onboarding pages, capture the
+	// conventions and mark the seat — a handful of calls, with the extension
+	// judge granting up to the ceiling a pass that is still reading.
+	defaultOnboardingRounds = 10
+)
+
 // DefaultTurnEngine is the turn engine's shipped defaults.
 func DefaultTurnEngine() TurnEngine {
 	return TurnEngine{
 		MaxIterations:        3,
 		Delegation:           DefaultDelegation(),
 		DelegationDepthLimit: 3,
-		// 24 = the 16 the retired planning phase had plus the 20 the
-		// acting phase had, minus the round each spent on its own
-		// submission and the re-reads the second made of what the first
-		// had already fetched. One conversation does the discovery once:
-		// measured against the three-phase engine's own logs, a turn that
-		// took 16+20 spends closer to 20 when its reading is not thrown
-		// away between them, and 24 leaves headroom before the extension
-		// judge is consulted.
-		MaxToolRounds:           24,
-		OnboardingMaxToolRounds: 10,
-		// 2x each phase's base, which is what an extension is for: a phase
+		// 2x the pass's base, which is what an extension is for: a pass
 		// that is genuinely progressing gets a second budget, and one that
 		// is thrashing hits a wall an operator can see in the numbers.
-		ExecuteMaxToolRoundsCeiling:    48,
-		OnboardingMaxToolRoundsCeiling: 20,
+		OnboardingMaxToolRoundsCeiling: 2 * defaultOnboardingRounds,
 		ExtensionRoundStep:             8,
-		SandboxMinBudgetTokens:         2000,
 		ConversationSession:            DefaultConversationSession(),
 	}
 }
 
-// Extends reports whether the round-cap extension judge is on, applying
-// the true default.
+// Extends reports whether the onboarding pass's round-cap extension judge is
+// on, applying the true default.
 func (t *TurnEngine) Extends() bool { return t.ExtensionEnabled.Or(true) }
+
+// OnboardingRounds is the onboarding pass's round budget, applying the
+// default: 0 is a pass that never runs.
+func (t *TurnEngine) OnboardingRounds() int {
+	if t.OnboardingMaxToolRounds == nil {
+		return defaultOnboardingRounds
+	}
+	return *t.OnboardingMaxToolRounds
+}
+
+// ExecutorFloor is the remaining token budget below which an executor
+// launch is refused, applying the default: 0 is no floor.
+func (t *TurnEngine) ExecutorFloor() int {
+	if t.ExecutorMinBudgetTokens == nil {
+		return defaultExecutorMinBudgetTokens
+	}
+	return *t.ExecutorMinBudgetTokens
+}
 
 func (t *TurnEngine) validate(path Path) error {
 	var p problems
@@ -120,7 +156,6 @@ func (t *TurnEngine) validate(path Path) error {
 	}{
 		{"max_iterations", t.MaxIterations},
 		{"delegation_depth_limit", t.DelegationDepthLimit},
-		{"max_tool_rounds", t.MaxToolRounds},
 		{"extension_round_step", t.ExtensionRoundStep},
 	}
 	for _, f := range positive {
@@ -135,9 +170,10 @@ func (t *TurnEngine) validate(path Path) error {
 		name  string
 		value int
 	}{
-		{"sandbox_min_budget_tokens", t.SandboxMinBudgetTokens},
+		// 0 is meaningful here: it turns the launch floor off.
+		{"executor_min_budget_tokens", t.ExecutorFloor()},
 		// 0 is meaningful here: it disables the dedicated onboarding pass.
-		{"onboarding_max_tool_rounds", t.OnboardingMaxToolRounds},
+		{"onboarding_max_tool_rounds", t.OnboardingRounds()},
 	}
 	for _, f := range nonNegative {
 		if f.value < 0 {
@@ -148,22 +184,14 @@ func (t *TurnEngine) validate(path Path) error {
 	p.wrap(t.Delegation.validate(at(path, "delegation")))
 
 	// A ceiling below its own base is not a smaller budget, it is a
-	// contradiction: the phase starts above the ceiling the judge may
-	// grant up to, so the extension path can only ever refuse. Equal is
-	// the documented way to disable extensions for one phase.
-	ceilings := []struct {
-		name, baseName string
-		value, base    int
-	}{
-		{"execute_max_tool_rounds_ceiling", "max_tool_rounds", t.ExecuteMaxToolRoundsCeiling, t.MaxToolRounds},
-		{"onboarding_max_tool_rounds_ceiling", "onboarding_max_tool_rounds", t.OnboardingMaxToolRoundsCeiling, t.OnboardingMaxToolRounds},
-	}
-	for _, c := range ceilings {
-		if c.value < c.base {
-			p.add(at(path, c.name), ErrOutOfRange,
-				"must be at least %s (%d), got %d: set them equal to disable "+
-					"extensions for this phase", c.baseName, c.base, c.value)
-		}
+	// contradiction: the pass starts above the ceiling the judge may grant
+	// up to, so the extension path can only ever refuse. Equal is the
+	// documented way to disable extensions.
+	if t.OnboardingMaxToolRoundsCeiling < t.OnboardingRounds() {
+		p.add(at(path, "onboarding_max_tool_rounds_ceiling"), ErrOutOfRange,
+			"must be at least onboarding_max_tool_rounds (%d), got %d: set them "+
+				"equal to disable extensions", t.OnboardingRounds(),
+			t.OnboardingMaxToolRoundsCeiling)
 	}
 
 	p.wrap(t.ConversationSession.validate(at(path, "conversation_session")))

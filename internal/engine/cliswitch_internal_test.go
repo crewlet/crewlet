@@ -17,7 +17,7 @@ import (
 // derived from the key, and the operator renders one per provider name — and
 // the process-wide workspace registry held that directory under the CLI that
 // first opened it, for the life of the process. So moving `k` from claude-code
-// to codex was admitted by the API and then refused by every running node
+// to opencode was admitted by the API and then refused by every running node
 // (`state_dir ... is already driving "claude-code"`), while a node that
 // restarted applied it: the fleet split across two revisions until every node
 // had restarted. Each CLI now keeps its own share of the directory
@@ -27,7 +27,7 @@ import (
 // NOT PARALLEL: the derived case points the CLI home at a directory of its own.
 //
 // Mutation: refuse a second CLI on a directory Shared already holds, as it
-// did, and the move to codex is refused on the running node.
+// did, and the move to opencode is refused on the running node.
 func TestAnEntryMovedToAnotherCLIAppliesLive(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -55,6 +55,7 @@ func TestAnEntryMovedToAnotherCLIAppliesLive(t *testing.T) {
 				return parseBundled(t, fmt.Sprintf(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     k:
       agent: %s
@@ -69,11 +70,11 @@ roles:
 			e := bundleNode(t, revision("claude-code", "sonnet"))
 			assertEntryOn(t, e, "claude-code", dir)
 
-			status, stages, err := e.Apply(t.Context(), revision("codex", "gpt-5"), time.Now())
+			status, stages, err := e.Apply(t.Context(), revision("opencode", "anthropic/claude-sonnet-5"), time.Now())
 			if err != nil || status != configplane.StatusOK {
-				t.Fatalf("moving k to codex: Apply = (%s, %v, %v), want ok on the running node", status, stages, err)
+				t.Fatalf("moving k to opencode: Apply = (%s, %v, %v), want ok on the running node", status, stages, err)
 			}
-			assertEntryOn(t, e, "codex", dir)
+			assertEntryOn(t, e, "opencode", dir)
 
 			status, stages, err = e.Apply(t.Context(), revision("claude-code", "sonnet"), time.Now())
 			if err != nil || status != configplane.StatusOK {

@@ -78,45 +78,6 @@ func (s *Surface) WithGuard(g Guard) *Surface {
 	return s
 }
 
-// Detached is a tool whose work outlives the call that started it.
-//
-// The one tool in the engine that has any use for this is run_sandbox: it
-// starts a coding run and asks the loop to SUSPEND with the call unanswered,
-// so the conversation can be persisted and re-entered — minutes later,
-// possibly after a restart, possibly on another node — when the run finishes.
-//
-// Optional, like [SeatCallable], and for the same reason: a plain Callable is
-// unaffected and knows nothing about turns.
-type Detached interface {
-	Callable
-
-	// CallDetached runs the tool and may ask the loop to SUSPEND with this
-	// call unanswered.
-	CallDetached(ctx context.Context, turn *turnctx.Turn, args map[string]any) (DetachedResult, error)
-}
-
-// DetachedResult is an ordinary result that may also stop the loop.
-//
-// A SECOND optional interface rather than a Suspend field on [Result], for the
-// same reason SeatCallable is one: Result is the MCP tool contract, an MCP
-// server has no notion of a turn to suspend, and widening it would put a
-// turn-engine concept on every bridged tool to be ignored. This way the one
-// tool whose work outlives its turn asks for the ability, and the rest of the
-// registry is unaffected.
-type DetachedResult struct {
-	Result
-
-	// Suspend stops the loop with this call UNANSWERED, so the conversation
-	// can be persisted and re-entered when the detached work finishes.
-	// Honoured only where the phase allows suspending — Execute — and
-	// logged and ignored elsewhere, because a phase that never persists a
-	// partial conversation cannot resume one.
-	Suspend bool
-
-	// Payload is handed to the caller to persist alongside the state.
-	Payload map[string]any
-}
-
 // SeatCallable is a tool that needs to know which seat is calling it.
 //
 // The tools that speak FOR a seat: asking a colleague, marking an onboarding
@@ -230,8 +191,8 @@ func (s *Surface) Activate(name string) bool {
 // For a renderer that has to keep an EXTERNAL copy of what is offered and
 // cannot see when the set moved: the MCP bridge holds one MCP server per run
 // and re-renders after every bridged call, since a bridged `activate_tool` is
-// the only thing that can widen a surface while the engine's own loop is
-// suspended. Almost none of those calls change anything, and [Surface.ToolDefs]
+// the only thing that can widen the surface of a run the engine is not
+// driving. Almost none of those calls change anything, and [Surface.ToolDefs]
 // deep-clones every active tool's JSON Schema — so asking costs one integer
 // where finding out costs the whole rendering.
 //
@@ -388,6 +349,16 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 	// one for a seat at all. An outer answer wins — see
 	// [turnctx.WithPrincipal] — so a surface reached through somebody's
 	// own credential still acts as them.
+	//
+	// AND ITS PLACE IN THE RUN'S LOG, taken before it runs: a write the call
+	// makes derives its operation id from how many differing calls to the
+	// same tool came before it, and a run's calls are concurrent — see
+	// [turnctx.CallLog.Reserve]. Taken failed or not: a call that reports a
+	// failure may still have written part of what it asked for, and a call
+	// the log never heard of is one a later count misses — which hands a
+	// repeat its first copy's id. A place nothing wrote under only raises a
+	// count, and a raised count is a fresh operation.
+	ctx = s.turn.CallLog().Reserve(ctx, call.Name, args)
 	res, err := s.invoke(turnctx.WithPrincipal(ctx, s.turn), e.Tool, args)
 	if err != nil {
 		tracing.Fail(span, err)
@@ -398,13 +369,6 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 	}
 	s.record(Call{Name: call.Name, Args: args, Output: res.Output, Failed: res.Failed,
 		Cause: res.Cause})
-	// INTO THE RUN'S LOG TOO, failed or not: a call that reports a failure
-	// may still have written part of what it asked for (a gesture stopped
-	// at a step whose outcome is unknown), and a call the log never heard
-	// of is one a later count misses — which hands a repeat its first
-	// copy's id. Recording one that wrote nothing only raises a count, and
-	// a raised count is a fresh operation. See [turnctx.CallLog].
-	s.turn.CallLog().Record(call.Name, args)
 	if s.guard != nil && !res.Failed {
 		// SUCCESS ONLY. A load that named a key nobody has comes back
 		// failed, and treating it as an unlock would let a typo open
@@ -413,7 +377,7 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 	}
 	span.SetAttributes(
 		attribute.Bool("crewlet.tool_failed", res.Failed),
-		attribute.String("crewlet.tool_outcome", invokedOutcome(res.Failed, res.Suspend)))
+		attribute.String("crewlet.tool_outcome", invokedOutcome(res.Failed)))
 	// WHO ANSWERED, stamped here because this is the one frame that
 	// resolved the name to a registered entry — the registry records the
 	// origin at registration and the loop sees only a name. Only on this
@@ -421,7 +385,6 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 	server, _ := e.FromMCP()
 	return toolloop.ToolResult{
 		Output: res.Output, Failed: res.Failed, Cause: res.Cause,
-		Suspend: res.Suspend, SuspendPayload: res.Payload,
 		Origin: e.Origin, Server: server,
 	}, nil
 }
@@ -437,20 +400,11 @@ func outcomeFor(known bool) string {
 }
 
 // invokedOutcome names what a real invocation did.
-//
-// `suspended` is its own outcome rather than a flavour of success: a
-// suspending call is the one that returns NO ledger row — toolloop leaves it
-// unanswered and appends no Execution — so this span is the only in-band
-// record that `run_sandbox` was ever called.
-func invokedOutcome(failed, suspended bool) string {
-	switch {
-	case suspended:
-		return "suspended"
-	case failed:
+func invokedOutcome(failed bool) string {
+	if failed {
 		return "failed"
-	default:
-		return "ok"
 	}
+	return "ok"
 }
 
 // invoke runs one tool, telling it who is calling when it asks.
@@ -466,17 +420,11 @@ func invokedOutcome(failed, suspended bool) string {
 // widening the signature would put a turn-shaped argument on every bridged
 // tool to be ignored. This way the two kinds of tool coexist under one
 // registry, and the one that needs the fact asks for it.
-func (s *Surface) invoke(ctx context.Context, tool Callable, args map[string]any) (DetachedResult, error) {
-	switch t := tool.(type) {
-	case Detached:
-		return t.CallDetached(ctx, s.turn, args)
-	case SeatCallable:
-		res, err := t.CallForTurn(ctx, s.turn, args)
-		return DetachedResult{Result: res}, err
-	default:
-		res, err := tool.Call(ctx, args)
-		return DetachedResult{Result: res}, err
+func (s *Surface) invoke(ctx context.Context, tool Callable, args map[string]any) (Result, error) {
+	if t, ok := tool.(SeatCallable); ok {
+		return t.CallForTurn(ctx, s.turn, args)
 	}
+	return tool.Call(ctx, args)
 }
 
 func (s *Surface) record(c Call) {

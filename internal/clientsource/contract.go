@@ -139,9 +139,8 @@ var contract = []Entry{
 
 	// models.ts
 	{"CLIAuthMode", ReadUnion, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
-	{"CLIMode", ReadUnion, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"DEFAULT_CLI_AGENT", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
-	{"DEFAULT_CLI_MODE", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
+	{"EXECUTOR_CLI_AGENTS", ReadLiteral, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"DEFAULT_CLI_AUTH_MODE", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"DEFAULT_CLI_TIMEOUT_SECONDS", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"DEFAULT_CLI_MAX_CONCURRENT", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},

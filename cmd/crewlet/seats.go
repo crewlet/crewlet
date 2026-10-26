@@ -155,7 +155,8 @@ func seatsAct(environ config.Source, args []string, tool string, pausing bool, s
 	case pausing && answer.Receipt.Changed:
 		fmt.Fprintf(stdout, "paused %s (by %s at %s)\n", handle, by, answer.Receipt.PausedAt)
 		if answer.Receipt.StopRunning {
-			fmt.Fprintln(stdout, "  The turn it is on ends at its next round and is not run again.")
+			fmt.Fprintln(stdout, "  The turn it is on ends at its next round and is not run again; "+
+				"an executor run it already launched works on in its box until it ends.")
 		} else {
 			fmt.Fprintln(stdout, "  The turn it is on, if any, finishes first; nothing new starts.")
 		}

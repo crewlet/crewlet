@@ -16,6 +16,7 @@ import (
 const cliCompanyDoc = `
 name: Nimbus
 providers:
+  sandbox: {fake: true}
   llm:
     main:
       model: claude-sonnet-5
@@ -308,7 +309,7 @@ func TestTheDiffCommandPrintsEveryChange(t *testing.T) {
 	wide := func(model string) func(string) string {
 		return func(string) string {
 			doc := strings.Builder{}
-			doc.WriteString("name: Nimbus\nproviders:\n  llm:\n")
+			doc.WriteString("name: Nimbus\nproviders:\n  sandbox: {fake: true}\n  llm:\n")
 			for i := range configapi.MaxChanges + 10 {
 				fmt.Fprintf(&doc, "    p%04d: {model: %s}\n", i, model)
 			}

@@ -1,6 +1,7 @@
 package prompts
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -151,6 +152,35 @@ func TestPhaseUserMessageReadsChronologically(t *testing.T) {
 	order(t, msg, "CONVERSATION-HISTORY", "THE-ASK", "PRIOR-WORK")
 	if !strings.HasPrefix(msg, ConversationHistoryHeader) {
 		t.Error("conversation history must lead the message")
+	}
+}
+
+// A NOTE THE TURN HAS READ IS IN THE BRIEF, after everything the turn already
+// had, each its own section. A run is a fresh session with nowhere else to
+// read it, so without this a turn sent back after a person corrected it
+// launches its next run on the task as it was before the correction.
+func TestPhaseUserMessageCarriesTheNotesTheTurnHasRead(t *testing.T) {
+	t.Parallel()
+	first := SteerMessage("founder", "post to #staging, not #general")
+	second := SteerMessage("founder", "and tag the release")
+	msg := BuildPhaseUserMessage(UserMessage{
+		TaskDescription: "THE-ASK",
+		PriorWork:       "PRIOR-WORK",
+		Steered:         []string{first, second},
+	})
+	order(t, msg.Text, "THE-ASK", "PRIOR-WORK", "post to #staging", "tag the release")
+	if !msg.Valid() {
+		t.Fatalf("the outline does not tile the brief: %+v", msg.Sections)
+	}
+	var keys []string
+	for _, s := range msg.Sections {
+		keys = append(keys, s.Key)
+	}
+	if want := []string{"task", "prior_work", "steered_1", "steered_2"}; !slices.Equal(keys, want) {
+		t.Errorf("sections = %v, want %v", keys, want)
+	}
+	if none := BuildPhaseUserMessage(UserMessage{TaskDescription: "THE-ASK"}).Text; strings.Contains(none, "A note from") {
+		t.Errorf("a brief with no note read carries one:\n%s", none)
 	}
 }
 

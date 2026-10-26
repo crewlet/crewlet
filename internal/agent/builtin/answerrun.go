@@ -22,11 +22,10 @@ const AnswerRunTool = "answer_run"
 
 // MaxRunAnswerBytes bounds one answer to a parked coding run.
 //
-// HALF OF [ToolAnswerBytes], because the answer is not delivered alone: it is
-// spliced into the resumed turn as the result of the suspended `run_sandbox`
-// call, framed by the question it answers and the instructions to continue,
-// and that whole message is one tool answer in the turn's context. The other
-// half is the room the question and the framing take. A person's answer to a
+// HALF OF [ToolAnswerBytes], because the answer is not delivered alone: the
+// run resumes on it framed by the question it answers and the instructions to
+// continue, and that whole message is held to one tool answer's size. The
+// other half is the room the question and the framing take. A person's answer to a
 // coding agent's question is a sentence or a paragraph; one this size is a
 // document, and belongs on a page the run can be pointed at.
 const MaxRunAnswerBytes = ToolAnswerBytes / 2

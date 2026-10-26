@@ -450,6 +450,7 @@ roles:
     handle: ceo
     goal: Run the company
 providers:
+  sandbox: {fake: true}
   llm:
     default:
       model: sonnet
@@ -472,6 +473,7 @@ providers:
 const scopeCompanyDoc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     default:
       model: sonnet
@@ -1114,9 +1116,9 @@ func TestASeatsNodeReadsAndStoresThroughTheDataNodeItNames(t *testing.T) {
 		return strings.Replace(healthyDoctorEntry(t, key, "m"),
 			"auth: {token: fake-headless-token}", `auth: {token: "${`+name+`}"}`, 1)
 	}
-	company := writeFile(t, dir, "company.yaml", "name: Acme\nproviders:\n  llm:\n"+
+	company := writeFile(t, dir, "company.yaml", "name: Acme\nproviders:\n  sandbox: {fake: true}\n  llm:\n"+
 		signsInFrom("claude", "FLEET_TOKEN")+signsInFrom("other", "OTHER_TOKEN")+
-		"roles:\n  - name: CEO\n    handle: ceo\n    llm: claude\n")
+		"roles:\n  - name: CEO\n    handle: ceo\n    kind: human\n")
 	base := []string{"doctor", "claude", "-no-smoke", "-company", company, "-config", cfg}
 
 	var out, notes bytes.Buffer

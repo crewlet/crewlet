@@ -14,11 +14,12 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/agent/steer"
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/auxspend"
@@ -54,15 +55,20 @@ import (
 // reaches a sandbox cell — at boot, or at whichever apply brings one — and
 // every later revision only swaps the manager under them.
 
-// buildSandbox constructs the manager for a company, or nil when no seat can
-// run code.
+// buildSandbox constructs the manager for a company, or nil when no seat's
+// executor reaches a box.
 //
-// Nil is an ordinary outcome, not a failure: providers.sandbox is absent in
-// most deployments, and a build with none simply never offers run_sandbox.
-// What is NOT ordinary is a configured provider that cannot be constructed —
-// that fails the apply, because the alternative publishes a company whose
-// sandbox-enabled seats plan around a box they will never get.
-func buildSandbox(c *config.Company, env *config.Resolver, otel *sandbox.OtelReceiver) (*sandbox.Manager, error) {
+// Nil is an ordinary outcome only for a company with no agent seat that can
+// launch one — config refuses an agent seat with an executor and no
+// providers.sandbox — and, until its first entry, for one with no models. What
+// is NOT ordinary is a configured provider that cannot be constructed: that
+// fails the apply, because the alternative publishes a company whose seats
+// cannot run a single turn.
+//
+// play is what a `providers.sandbox.fake` company's runs do ([fakeRunners]);
+// nil plays every run as the double's own demonstration.
+func buildSandbox(c *config.Company, env *config.Resolver, otel *sandbox.OtelReceiver,
+	play fakePlayer) (*sandbox.Manager, error) {
 	spec := c.Providers.Sandbox
 	if spec == nil || !spec.Enabled() {
 		return nil, nil
@@ -79,30 +85,73 @@ func buildSandbox(c *config.Company, env *config.Resolver, otel *sandbox.OtelRec
 	if len(providers) == 0 {
 		return nil, nil
 	}
+	runners := sandboxRunners()
+	if spec.Fake {
+		runners = fakeRunners(play)
+	}
 	return sandbox.NewManager(sandbox.ManagerOptions{
-		Providers:          providers,
-		DefaultPlacement:   sandbox.Placement(spec.RunIn()),
-		Runners:            sandboxRunners(),
-		DefaultCodingAgent: string(spec.DefaultCodingAgent),
-		DefaultTimeout:     seconds(spec.Timeout()),
-		DefaultPauseTTL:    secondsPtr(spec.PauseTTL()),
-		DefaultMaxTurns:    spec.DefaultMaxTurns,
-		DefaultSetup:       setupSteps(spec.Setup),
-		Telemetry:          otel,
+		Providers:        providers,
+		DefaultPlacement: sandbox.Placement(spec.RunIn()),
+		Runners:          runners,
+		DefaultTimeout:   seconds(spec.Timeout()),
+		DefaultPauseTTL:  secondsPtr(spec.PauseTTL()),
+		DefaultMaxTurns:  spec.MaxTurns(),
+		DefaultSetup:     setupSteps(spec.Setup),
+		Telemetry:        otel,
 	})
 }
 
-// sandboxRunners is every coding agent this build can drive.
+// sandboxRunners is every coding agent this build can drive in a box: the CLIs
+// an executor can run on.
 //
-// A FUNCTION rather than a literal at the one call site, because a second
-// reader needs the same list: `crewlet llm doctor` refuses an agent-mode entry
-// whose CLI has no runner, and it checks against codingagent.Names(). A test
-// holds the two together — a drift would have the doctor pass an entry the
-// engine then refuses at the seat's first turn.
+// A FUNCTION rather than a literal at the one call site, because two other
+// readers need the same list: `crewlet llm doctor` reports an executor-chain
+// member whose CLI has no runner as skipped, and config refuses a chain with
+// none, both against codingagent.Names(). Tests hold all three together — a
+// drift would have config pass a chain the engine then refuses at the seat's
+// first launch.
 func sandboxRunners() map[string]sandbox.Runner {
 	return map[string]sandbox.Runner{
 		codingagent.ClaudeCodeName: codingagent.NewClaudeCode(),
 		codingagent.OpenCodeName:   codingagent.NewOpenCode(),
+	}
+}
+
+// fakePlayer is what a `providers.sandbox.fake` run does: called once per run
+// with the request it was started with, answering its result. See
+// [sandbox.FakeRunner.Player].
+type fakePlayer = func(ctx context.Context, req sandbox.RunRequest) sandbox.Result
+
+// fakeRunners is every runner [sandboxRunners] registers, as the in-process
+// double, each playing its runs with play.
+//
+// THE SAME NAMES, because the double stands in for the box and not for the
+// choice of CLI: a fake company's executor chains pick their member exactly as
+// a real one's do, and only what the run does differs. And A RUN THAT
+// FINISHES, because a double whose job never ended would park every turn of a
+// demonstration company for good — the double's own runner is what completes
+// it ([demoRun], unless a test scripts the run).
+func fakeRunners(play fakePlayer) map[string]sandbox.Runner {
+	if play == nil {
+		play = demoRun
+	}
+	runners := make(map[string]sandbox.Runner, len(codingagent.Names()))
+	for _, name := range codingagent.Names() {
+		runner := sandbox.NewFakeRunner(name)
+		runner.Player = play
+		runners[name] = runner
+	}
+	return runners
+}
+
+// demoRun is what a demonstration company's run does: nothing, and its report
+// says so. The turn then collects a run that submitted nothing, and is judged
+// on that record like any run that ended without saying what it did.
+func demoRun(_ context.Context, _ sandbox.RunRequest) sandbox.Result {
+	return sandbox.Result{
+		Success: true,
+		Text: "This run was played by providers.sandbox.fake, the in-process " +
+			"double: no coding agent ran and no tool was called.",
 	}
 }
 
@@ -124,15 +173,15 @@ func buildSandboxProviders(spec *config.SandboxProvider, env *config.Resolver, r
 	// WALKED IN THE CLOSED SET'S ORDER, not the map's: a map iterates
 	// randomly, and an error naming whichever backend happened to come
 	// first would differ between two runs of the same broken config.
-	for _, placement := range config.BackendPlacements() {
+	for _, placement := range config.Placements {
 		if _, want := reached[placement]; !want {
 			continue
 		}
 		if !spec.Configured(placement) {
 			// Refused by validation, so this is the belt to that brace: an
 			// embedder building a company by hand reaches it, and a
-			// silently missing backend would offer run_sandbox to a seat
-			// whose runs can never start.
+			// silently missing backend would publish a company whose
+			// executors on that cell can never start.
 			return nil, fmt.Errorf("providers.sandbox: %q is reached by %s and "+
 				"has no backend configured", placement, reached[placement])
 		}
@@ -305,12 +354,11 @@ type runEnv struct {
 
 // runEnvironment is one coding run's environment and provisioning: the
 // provider-wide setup steps, then the seat's own, and the run environment
-// they, the seat's sandbox block and the engine assemble. ONE PLACE FOR BOTH
-// LAUNCH PATHS — the run_sandbox tool and an agent-mode executor — because a
-// box is provisioned the same way whichever of them opens it. Nil-safe on the
-// gate, since an agent-mode executor runs in a box whether or not the seat
-// has a sandbox block of its own, and on c, a box launched with no company to
-// read a provisioning plan from — every variable is then the operator's.
+// they, the seat's sandbox block and the engine assemble. Nil-safe on the
+// seat's box settings, since a seat's executor runs in a box whether or not
+// the seat has a sandbox block of its own, and on c, a box launched with no
+// company to read a provisioning plan from — every variable is then the
+// operator's.
 //
 // # The environment
 //
@@ -363,12 +411,12 @@ type runEnv struct {
 // shared by every launch on this node, and a body resolved into them would be
 // a credential cached past the snapshot it came from.
 func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
-	gate *org.RoleSandbox, defaults []sandbox.SetupStep) runEnv {
+	settings *org.RoleSandbox, defaults []sandbox.SetupStep) runEnv {
 
 	resolver := e.resolver()
 	setup := slices.Clone(defaults)
-	if gate != nil {
-		setup = append(setup, seatSetupSteps(gate.Setup)...)
+	if settings != nil {
+		setup = append(setup, seatSetupSteps(settings.Setup)...)
 	}
 
 	// THE LAYERS, each value with what declared it.
@@ -390,10 +438,10 @@ func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 				optional: slices.Contains(step.OptionalKeys, key)}
 		}
 	}
-	if gate != nil {
-		for key, value := range gate.Env {
+	if settings != nil {
+		for key, value := range settings.Env {
 			merged[key] = layered{value: value, path: "role.sandbox.env." + key,
-				where: "role.sandbox.optional_keys", optional: slices.Contains(gate.OptionalKeys, key)}
+				where: "role.sandbox.optional_keys", optional: slices.Contains(settings.OptionalKeys, key)}
 		}
 	}
 
@@ -643,7 +691,7 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		return fmt.Errorf("%w: %w", sandbox.ErrResumeUnavailable, err)
 	}
 	if !ok {
-		return fmt.Errorf("%w: run %s has no suspended conversation",
+		return fmt.Errorf("%w: run %s has no parked turn state",
 			sandbox.ErrResumeUnavailable, req.Run.TurnID)
 	}
 	// ONE EPOCH for the whole resume: the seat checked here, the organization
@@ -680,8 +728,12 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		RefsElided:    req.DeliveredRefsElided,
 		InputTokens:   req.InputTokens,
 		OutputTokens:  req.OutputTokens,
+		CacheRead:     req.CacheReadTokens,
+		CacheWrite:    req.CacheWriteTokens,
 		Begin:         req.Begin,
 		Engine:        req.Engine,
+		Ended:         req.Ended,
+		Asked:         req.Asked,
 	})
 }
 
@@ -769,6 +821,10 @@ type resumeInput struct {
 	// [sandbox.ResumeRequest.InputTokens].
 	InputTokens  int
 	OutputTokens int
+	// CacheRead and CacheWrite are InputTokens' cached share — see
+	// [sandbox.ResumeRequest.CacheReadTokens].
+	CacheRead  int
+	CacheWrite int
 
 	// Begin is the coordinator's commit, called once the segment is certain
 	// to run and before any of it does — see [sandbox.ResumeRequest.Begin].
@@ -779,6 +835,14 @@ type resumeInput struct {
 	// bridged calls and the condensation of its collection — which this
 	// segment's charge includes too: see [sandbox.ResumeRequest.Engine].
 	Engine sandbox.EngineSpend
+
+	// Ended is how the collected run's CLI said it ended, verbatim — see
+	// [sandbox.ResumeRequest.Ended] and [Engine.noteRunEnded].
+	Ended sandbox.RunEnding
+
+	// Asked is the question a person's answer resumes the run from, which
+	// the turn carries the run on with — see [sandbox.ResumeRequest.Asked].
+	Asked *sandbox.AskedRun
 }
 
 // resumeTurn re-enters a suspended turn.
@@ -885,104 +949,20 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		return fmt.Errorf("%w: run %s was handed to resumeTurn without the "+
 			"company its seat was resolved in", sandbox.ErrResumeUnavailable, in.Run.TurnID)
 	}
-	resumedReply, err := resumeReply(in.Run)
+	// BEFORE ANYTHING THIS SEGMENT LAUNCHES: a run that ended on its
+	// vendor's spent plan sits its entry out here, on the node whose launch
+	// the turn's next run is — see [Engine.noteRunEnded].
+	e.noteRunEnded(ctx, company, in.Run, in.Ended)
+	parked, err := e.parkedRunner(ctx, company, in,
+		// The working indicator's phase updates, on the same terms as
+		// the dispatch path: the resumed segment opens its phases like
+		// any other, and a reader watching the thread should see them
+		// move when the box's answer lands.
+		func(ph phase.Phase) { status.Phase(ph.String()) })
 	if err != nil {
 		return err
 	}
-	tel, err := e.describeResume(ctx, company, in)
-	if err != nil {
-		// A RETRY, like every early return here: nothing ran, and the
-		// coordinator hands its claim back so the next attempt judges the
-		// rebase again against its own clock.
-		return err
-	}
-	// THE COUNTER AS THE RUN LEFT IT, read once before anything is sent:
-	// the run was post-charged a moment ago, and a window it took past its
-	// ceiling refuses every call this segment would make. Before the turn
-	// identity, which carries it to every auxiliary call the segment makes
-	// ([turnTelemetry.budget]).
-	tel.budget = e.resumeMeterFor(ctx, company, in.Turn.Handle())
-	turnIdentity := tel.runnerTurn(company, in.Run.DelegationDepth,
-		in.Run.DelegationChain, resumeTask(in), resumedReply, e.WithheldContacts())
-	// The runtime, and the note box it decides — see [steerBox].
-	agentRun := e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context)
-	box := steerBox(agentRun)
-	r, err := company.RunnerFor(in.Turn.Handle(),
-		e.seatRegistry(company, in.Turn.Handle()), RunnerInput{
-			Task:    resumeTask(in),
-			Compact: e.compactorFor(company),
-			// THE RUNNER NEEDS IT TOO, not just the loop below. This
-			// field reaches runner.Config.Reply, which is what
-			// submit_work's own citation check reads — so a resumed turn
-			// with this unset accepted `no_action` on a turn somebody was
-			// waiting on, and accepted a citation naming any surface at
-			// all, before the loop's later checks ever ran.
-			Reply:     resumedReply,
-			Publisher: e.backends.Queue,
-			Turn:      turnIdentity,
-			// THE SAME RUNTIME THE TURN SUSPENDED UNDER — supplied here for
-			// the turn's LATER rounds, not for this one: whether the phase
-			// being re-entered was agentic is the state's own answer (see
-			// [execstate.State.AgentRun]), but a turn that loops to another
-			// iteration must run that one the same way it ran the first.
-			AgentRun: agentRun,
-			// A RESUMED SEGMENT IS STEERABLE LIKE ANY OTHER: it is the
-			// same turn running again, and a note sent while it parked
-			// was answered `closed` — the box that segment had is gone.
-			Steer:  box,
-			Budget: tel.budget.budget(),
-			// A resumed Execute loop can exhaust its rounds like any other,
-			// and it is the phase most likely to: it comes back mid-task with
-			// its budget already partly spent.
-			Judge:     e.judgeFor(company, in.Turn.Handle(), tel.aux()),
-			Remaining: e.remainingFor(company, in.Turn.Handle()),
-			// THE SAME FENCE THE DISPATCH PATH GETS, and a resume needs it
-			// more than a fresh turn does: this loop was parked across a
-			// coding run that may have taken an hour, and the node that
-			// resumes it is not always the node that suspended it. The
-			// grant it closes on is the one THIS node holds now — which
-			// is the correct anchor, since the resume is what this node is
-			// admitted for.
-			Fence: e.seatFence(in.Turn.Handle()),
-			// The working indicator's phase updates, on the same terms as
-			// the dispatch path: the resumed Execute loop opens a phase
-			// like any other, and a reader watching the thread should see
-			// it move when the box's answer lands.
-			OnPhase: func(ph phase.Phase) { status.Phase(ph.String()) },
-			// THE SKILL REGISTRY, which this call site omitted. With nil
-			// Skills the runner's guardFor returns nil, so the load-before-use
-			// gate was disarmed for every resumed turn: a seat could call a
-			// tool whose required skill it had never loaded, on the one path
-			// where nobody would notice — and the two RunnerFor sites must
-			// agree or a turn changes shape by being resumed.
-			Skills: e.skills,
-			// NO onboarding on a resume. The pass is a seat's FIRST turn, and
-			// this turn already ran its first phase — running it here would
-			// spend the resumed turn's opening on orientation for a seat that
-			// is mid-task.
-			Resume: &runner.Resume{
-				State: in.State, Answer: in.Answer,
-				// WHICH BOX DID THE WORK. Off the run's own row, because
-				// this process may not be the one that launched it — and
-				// it is the only thing that can say a phase ran in a
-				// sandbox rather than in this process's own tool loop.
-				Run: runner.RunRecord{
-					CodingAgent:   in.Run.CodingAgent,
-					SandboxID:     in.Run.SandboxID,
-					LaunchID:      in.Run.LaunchID,
-					DeliveredRefs: in.DeliveredRefs,
-					RefsElided:    in.RefsElided,
-				},
-				// THE RUN'S OWN TOOL CALLS, off its durable row. An
-				// agent-mode executor called them over the bridge, possibly
-				// in another process, so this list is the only record of
-				// what the phase did — its submission included.
-				Bridged: bridgedCalls(in.Run.BridgeCalls),
-			},
-		})
-	if err != nil {
-		return err
-	}
+	r, tel, box, resumedReply := parked.runner, parked.tel, parked.box, parked.reply
 	// THE SEGMENT IS NOW CERTAIN TO RUN, and the coordinator records that
 	// before any of it does — for a person's recorded answer, that THIS TURN
 	// TOOK IT, and that the delivery which carried it is worked
@@ -1015,10 +995,10 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// path, with the defer as the backstop.
 	closeSteer := e.openSteer(in.Run.TurnID, in.Turn.Handle(), box, r)
 	defer closeSteer(ctx)
-	// NO WALL-CLOCK CAP ON A RESUME. The cap bounds the turn a fire started;
-	// a detached sandbox run can legitimately outlive it, and the resumed
-	// half is finishing work the box already did rather than starting more.
-	res, err := turn.Run(ctx, r, company.TurnSettings(0),
+	// THE TURN'S OWN DEADLINE, off the park: the cap bounds the turn a fire
+	// started, so the round this segment collects always runs and no round
+	// after it starts once that instant has passed ([turn.Settings.Deadline]).
+	res, err := turn.Run(ctx, r, company.TurnSettings(tel.deadline),
 		resumeInputFor(in, resumedReply))
 	closeSteer(ctx)
 	// THE TURN RAN, so from here the indicator follows what it concluded
@@ -1046,6 +1026,23 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			return fmt.Errorf("%w (a person stopped the resumed turn): %w",
 				sandbox.ErrResumeAbandoned, err)
 		}
+		// A BUDGET THAT REFUSES THE SEGMENT HOLDS IT, before anything
+		// decides it is lost: the round's relaunch — a reviewer's send-back,
+		// or the run an answer carries on — or a call of its own was refused
+		// because the seat's window is full or too short for a launch. A
+		// window turns over, so this is a wait and not a failure: abandoned
+		// for having acted (the run's own calls, made before the segment
+		// began), the turn was lost for a budget, and handed back for an
+		// ordinary retry, every attempt re-collected the job and ran its
+		// review again into the same refusal. Held, the job waits collected
+		// in its paused box, the seat held behind it, until the window that
+		// refuses it turns over — or a revision raises its ceiling — and is
+		// resumed then ([sandbox.ErrResumeHeld]); an answer's resume waits
+		// on the same refusal in its own series ([Engine.mayResumeAnswer]).
+		if held := e.heldByBudget(ctx, company, in.Turn.Handle(), err); held != nil {
+			working = false
+			return held
+		}
 		if reason, abandon := turn.Abandon(res, err); abandon {
 			// The same decision the dispatcher makes on the other path
 			// (see (*Dispatcher).abandon), from the same rule, taken here
@@ -1054,11 +1051,10 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			// is not redelivered into a conversation a retry must not
 			// re-enter.
 			//
-			// A resumed turn is the one most likely to qualify. It
-			// re-enters the executor's suspended loop with the whole
-			// pre-suspend conversation, and the round that called
-			// run_sandbox was never closed, so its writes are in no
-			// ledger and a replay would repeat every one of them.
+			// A resumed turn is the one most likely to qualify. Its run
+			// already acted through the bridge — posted, wrote, delegated
+			// — and a replay of the resume would judge, and send back,
+			// work whose effects are already out in the world.
 			//
 			// The indicator comes down with it: the run is settled,
 			// the box reclaimed and the record deleted, so nothing is
@@ -1092,10 +1088,205 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// running and leaves the box for the next completion — and keeps its
 	// indicator on the same terms, off the ROW rather than off the intent.
 	if res.Suspended {
-		working = stillWorking(e.persistSuspension(ctx, r, in.Run.TurnID, tel.written, charge, tel.ask, tel.senders))
+		working = stillWorking(e.persistSuspension(ctx, r, in.Run.TurnID, tel, charge))
 	}
 	e.recordResume(ctx, in, res)
 	return nil
+}
+
+// parked is a parked turn's runner, rebuilt to re-enter it: the runner, the
+// telemetry it was built from, its note box and the reply contract it holds
+// its submission to.
+type parked struct {
+	runner *runner.Runner
+	tel    turnTelemetry
+	box    *steer.Box
+	reply  turn.Reply
+}
+
+// parkedRunner builds the runner a parked turn re-enters as, off its row and
+// its park, in company — the epoch the caller admitted the turn's seat in.
+//
+// ONE CONSTRUCTION for the two callers that rebuild a parked turn: the resume
+// that collects its run ([Engine.resumeTurn]) and the bridge session its run's
+// box calls, rebuilt on the node that lost it ([Engine.reopenBridgeSession]).
+// The two have to agree — a surface the box calls after a restart that differs
+// from the one it was launched on, or from the one the collection judges, is a
+// turn that changes shape by being interrupted — and agreeing by copy is how
+// the call sites drifted before (the skill registry one of them omitted).
+//
+// Every error is a RETRY: nothing has run.
+func (e *Engine) parkedRunner(ctx context.Context, company *Company, in resumeInput,
+	onPhase func(phase.Phase),
+) (parked, error) {
+	resumedReply, err := resumeReply(in.Run)
+	if err != nil {
+		return parked{}, err
+	}
+	tel, err := e.describeResume(ctx, company, in)
+	if err != nil {
+		// A RETRY, like every early return here: nothing ran, and the
+		// coordinator hands its claim back so the next attempt judges the
+		// rebase again against its own clock.
+		return parked{}, err
+	}
+	// THE COUNTER AS THE RUN LEFT IT, read once before anything is sent:
+	// the run was post-charged a moment ago, and a window it took past its
+	// ceiling refuses every call this segment would make. Before the turn
+	// identity, which carries it to every auxiliary call the segment makes
+	// ([turnTelemetry.budget]).
+	tel.budget = e.resumeMeterFor(ctx, company, in.Turn.Handle())
+	turnIdentity := tel.runnerTurn(company, in.Run.DelegationDepth,
+		in.Run.DelegationChain, resumeTask(in), resumedReply, e.WithheldContacts())
+	// The launcher, and the note box the turn files — see [turnSteerBox].
+	launcher := e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context)
+	box := turnSteerBox()
+	r, err := company.RunnerFor(in.Turn.Handle(),
+		e.seatRegistry(company, in.Turn.Handle()), RunnerInput{
+			Task:    resumeTask(in),
+			Compact: e.compactorFor(company),
+			// THE RUNNER NEEDS IT TOO, not just the loop. This field
+			// reaches runner.Config.Reply, which is what submit_work's own
+			// citation check reads — so a resumed turn with this unset
+			// accepted `no_action` on a turn somebody was waiting on, and
+			// accepted a citation naming any surface at all, before the
+			// loop's later checks ever ran.
+			Reply:     resumedReply,
+			Publisher: e.backends.Queue,
+			Turn:      turnIdentity,
+			// THE LAUNCHER, for the turn's LATER iterations rather than this
+			// one: this segment collects the run the turn parked on, and a
+			// turn its reviewer sends back launches its next run from here
+			// — on whichever member of the pinned chain can take it then.
+			Launcher: launcher,
+			// A RESUMED SEGMENT IS STEERABLE LIKE ANY OTHER: it is the same
+			// turn running again, and a note sent while it parked was
+			// answered `closed` — the box that segment had is gone.
+			Steer:  box,
+			Budget: tel.budget.budget(),
+			// NO ROUND-CAP JUDGE: the only engine loop a resumed segment
+			// runs is the reviewer's, whose budget is one submission and its
+			// correctives rather than a cap to extend, and the onboarding
+			// pass — the one phase with a cap — never runs on a resume.
+			Remaining: e.remainingFor(company, in.Turn.Handle()),
+			// THE SAME FENCE THE DISPATCH PATH GETS, and a resume needs it
+			// more than a fresh turn does: this loop was parked across a
+			// coding run that may have taken an hour, and the node that
+			// resumes it is not always the node that suspended it. The grant
+			// it closes on is the one THIS node holds now — which is the
+			// correct anchor, since the resume is what this node is admitted
+			// for.
+			Fence:   e.seatFence(in.Turn.Handle()),
+			OnPhase: onPhase,
+			// THE SKILL REGISTRY, which a call site once omitted. With nil
+			// Skills the runner's guardFor returns nil, so the
+			// load-before-use gate was disarmed for every resumed turn: a
+			// seat could call a tool whose required skill it had never
+			// loaded, on the one path where nobody would notice — and the
+			// RunnerFor sites must agree or a turn changes shape by being
+			// resumed.
+			Skills: e.skills,
+			// NO onboarding on a resume. The pass is a seat's FIRST turn, and
+			// this turn already ran its first phase — running it here would
+			// spend the resumed turn's opening on orientation for a seat that
+			// is mid-task.
+			Resume: &runner.Resume{
+				State: in.State, Answer: in.Answer,
+				// WHICH BOX DID THE WORK. Off the run's own row, because
+				// this process may not be the one that launched it — and it
+				// is the only thing that can say a phase ran in a sandbox
+				// rather than in this process's own tool loop.
+				Run: runner.RunRecord{
+					CodingAgent: in.Run.CodingAgent,
+					SandboxID:   in.Run.SandboxID,
+					// AND WHICH ENTRY RAN IT, as the launch recorded the
+					// member it picked: the executor's record and its spend
+					// are charged to that entry and model, which a fallback
+					// makes other than the chain's head — and which the
+					// chain resolved now could name differently again.
+					ProviderKey:   in.Run.Launch.ProviderKey,
+					Model:         in.Run.Launch.Model,
+					LaunchID:      in.Run.LaunchID,
+					DeliveredRefs: in.DeliveredRefs,
+					RefsElided:    in.RefsElided,
+				},
+				// THE RUN'S OWN TOOL CALLS, off its durable row. The
+				// executor called them over the bridge, possibly in another
+				// process, so this list is the only record of what the
+				// phase did — its submission included.
+				Bridged: bridgedCalls(in.Run.BridgeCalls),
+				// AND A PERSON'S ANSWER, which carries the run on rather
+				// than reporting it — see [runner.Asked].
+				Asked: runnerAsked(in.Asked),
+			},
+		})
+	if err != nil {
+		return parked{}, err
+	}
+	return parked{runner: r, tel: tel, box: box, reply: resumedReply}, nil
+}
+
+// heldByBudget is a resumed segment's error as the hold it is, where the seat's
+// budget refused it ([toolloop.ErrBudgetExhausted]) and one of its windows is
+// still refusing or starved ([Engine.budgetHold]) — nil for every other error,
+// and for a refusal whose window has turned over since, which an ordinary
+// retry now runs.
+func (e *Engine) heldByBudget(ctx context.Context, company *Company, handle string, err error) *sandbox.HeldError {
+	if !errors.Is(err, toolloop.ErrBudgetExhausted) {
+		return nil
+	}
+	refusal, held := e.budgetHold(ctx, company, handle)
+	if !held {
+		return nil
+	}
+	return &sandbox.HeldError{Refusal: refusal, Err: err}
+}
+
+// runnerAsked is the coordinator's account of an answered question in the
+// runner's terms, nil for a resume no answer drove.
+func runnerAsked(asked *sandbox.AskedRun) *runner.Asked {
+	if asked == nil {
+		return nil
+	}
+	return &runner.Asked{
+		Question: asked.Question, Answer: asked.Answer, By: asked.By,
+		Branch: asked.Branch, SessionID: asked.SessionID, BoxKept: asked.BoxKept,
+	}
+}
+
+// noteRunEnded sits out the entry a collected run launched on, where the run
+// ended on its vendor's report of a spent plan or a rate limit
+// ([cliagent.Provider.RunEnded]) — on this node, in the epoch this resume runs
+// in, which is the epoch every launch the resumed turn makes picks its member
+// from.
+//
+// HERE, BECAUSE NOTHING ELSE SEES IT. The run is its CLI's own, in a box, and
+// never goes through the entry's text calls — the one path that benched an
+// entry. Unread, a reviewer's send-back relaunched the turn into the very plan
+// the run had just spent, and so did every other seat's next launch on the
+// entry, while a text call on it would have moved the chain on at once. A run
+// that ended otherwise, an entry this epoch does not have — renamed or removed
+// since the launch — and one that is not a coding CLI's bench nothing.
+func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.PendingRun, ended sandbox.RunEnding) {
+	if c == nil || c.Models == nil || run.Launch.ProviderKey == "" ||
+		(ended.Text == "" && ended.Error == "") {
+		return
+	}
+	provider, ok := c.Models.Provider(run.Launch.ProviderKey)
+	if !ok {
+		return
+	}
+	agent, isCLI := provider.(*cliagent.Provider)
+	if !isCLI {
+		return
+	}
+	if agent.RunEnded(ended.Text, ended.Error, !ended.Success) {
+		log.InfoContext(ctx, "executor_run_spent_its_entry",
+			"turn_id", run.TurnID, "seat", run.AgentHandle,
+			"provider_key", run.Launch.ProviderKey,
+			"detail", "the run ended on its vendor's limit report; the entry sits out on "+
+				"this node, so the turn's next launch takes the next member that can run")
+	}
 }
 
 // recordResume files a finished resumed turn against the conversation it was
@@ -1188,12 +1379,12 @@ func resumeReply(run sandbox.PendingRun) (turn.Reply, error) {
 	return reply, nil
 }
 
-// persistSuspension writes a turn's suspended conversation to its row, which
+// persistSuspension writes a turn's parked state to its row, which
 // is also what OPENS the run to the completion poll, and reports whether the
 // turn is actually coming back.
 //
 // Called the moment the turn returns Suspended, because the runner holds the
-// conversation only until its frame unwinds. Until this lands the run sits in
+// parked state only until its frame unwinds. Until this lands the run sits in
 // [sandbox.StatusLaunching] and nothing polls or claims it — the job is
 // already executing, and a job that finishes first would otherwise be
 // collected against a row with nothing to resume into.
@@ -1232,12 +1423,11 @@ func resumeReply(run sandbox.PendingRun) (turn.Reply, error) {
 // that ends it to state the whole turn. And so does what
 // the turn was ASKED (execstate.State.Ask), which the finishing segment's
 // completed-turn event carries and is woken by something else entirely — and
-// WHO asked it (execstate.State.Senders), which a refresh_memory call in any
-// later segment tells the memory filter, since no later segment has the
-// interactions to read them off.
+// who said it, its interactions (execstate.State.Interactions), which that
+// event carries for the post-turn workers that read a settled turn, and which
+// every later segment reads who asked off, as a dispatch does.
 func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID string,
-	written *turnctx.Written, charge segmentCharge, ask string,
-	senders []types.CanonicalIdentity,
+	tel turnTelemetry, charge segmentCharge,
 ) (bool, error) {
 	rt := e.sandbox.Load()
 	if rt == nil {
@@ -1251,25 +1441,26 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 			"the turn suspended but recorded no conversation", nil)
 		return false, nil
 	}
-	suspension.State.Written, suspension.State.WrittenMany = written.Items()
+	suspension.State.Written, suspension.State.WrittenMany = tel.written.Items()
 	suspension.State.Uncharged = charge.carry
 	suspension.State.SoFar = charge.soFar
-	suspension.State.Ask = ask
-	suspension.State.Senders = senders
+	suspension.State.Ask = tel.ask
+	suspension.State.Interactions = tel.interactions
+	suspension.State.Deadline = tel.deadline
 	blob, err := execstate.Encode(suspension.State)
 	if err != nil {
 		e.failSuspension(ctx, rt, turnID, "sandbox_suspension_unserializable",
-			"the suspended conversation could not be serialized", err)
+			"the parked turn state could not be serialized", err)
 		return false, nil
 	}
 	// The iteration rides BESIDE the blob: the coordinator files the run's
-	// own phase record under it and never decodes the conversation.
+	// own phase record under it and never decodes the state.
 	suspended, err := rt.pending.MarkSuspended(ctx, turnID, sandbox.Suspension{
 		State: blob, Iteration: suspension.State.Round,
 	})
 	if err != nil {
 		e.failSuspension(ctx, rt, turnID, "sandbox_suspension_unwritable",
-			"the suspended conversation could not be written", err)
+			"the parked turn state could not be written", err)
 		// UNKNOWN, not lost: the write may have landed, and the settle
 		// that follows it declines a row that is no longer launching.
 		return false, fmt.Errorf("engine: recording the suspension of turn %s: %w", turnID, err)
@@ -1314,133 +1505,6 @@ func (e *Engine) failSuspension(ctx context.Context, rt *sandboxRuntime, turnID,
 	}
 }
 
-// launcher is the run_sandbox tool's seam into the sandbox layer.
-//
-// It exists to assemble a launch from things only the engine holds — the
-// seat's config block, the run environment, the box spec — so the tool itself
-// stays a thin adapter that reads a brief and reports a suspension.
-type launcher struct{ engine *Engine }
-
-var _ builtin.SandboxLauncher = (*launcher)(nil)
-
-func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (sandbox.LaunchResult, error) {
-	e := l.engine
-	rt := e.sandbox.Load()
-	if rt == nil {
-		return sandbox.LaunchResult{}, fmt.Errorf("this engine has no sandbox backend configured")
-	}
-	manager, pending := rt.coordinator.Manager(), rt.pending
-	seat, err := t.RequireSeat()
-	if err != nil {
-		return sandbox.LaunchResult{}, err
-	}
-	company := e.Company()
-	gate := seatSandbox(company, seat.Handle())
-	if gate == nil || !gate.Enabled {
-		// Belt and braces: the tool is only on a sandbox-enabled seat's
-		// surface, but the surface is built from a snapshot and a seat can
-		// lose its gate across an apply mid-turn.
-		return sandbox.LaunchResult{}, fmt.Errorf("this seat's sandbox is not enabled")
-	}
-	if config.Placement(gate.RunIn) == config.PlacementSelf {
-		// `self` means this seat's code work rides its own executor run,
-		// which is a coding CLI in agent mode and already holds a shell,
-		// an editor and a checkout. A second box beside it would give the
-		// seat two filesystems with the work in the one the turn cannot
-		// see — so the tool refuses and says which shell to use, rather
-		// than provisioning a box whose output is invisible.
-		return sandbox.LaunchResult{}, fmt.Errorf(
-			"this seat runs its code work in its own agent session (role.sandbox.run_in: " +
-				"self) — use the shell and editor you already have rather than " +
-				"starting a second box")
-	}
-
-	// THE PRE-FLIGHT BUDGET FLOOR. turn_engine.sandbox_min_budget_tokens
-	// was validated, schema'd and documented and read by nothing, so a
-	// company that set it got a new revision and no behaviour.
-	//
-	// It is checked HERE rather than in the tool, because this is the frame
-	// that holds the seat's counter — and refused as a launch error, which
-	// the tool reports back to the model as a failed call. That is the
-	// point of a floor: a coding run costs a box, a clone and a toolchain
-	// install before it produces a token, so a seat with no headroom must
-	// learn that now and fall back to its own tools rather than after the
-	// job has died mid-run having delivered nothing.
-	if err := sandboxHeadroom(ctx, e.remainingFor(company, seat.Handle()),
-		company.Config.TurnEngine.SandboxMinBudgetTokens); err != nil {
-		return sandbox.LaunchResult{}, err
-	}
-
-	// A box this turn already has, paused from an earlier call. An EMPTY id
-	// on an existing row means that box is gone — reaped past its pause TTL,
-	// or torn down under a zero TTL — so this call provisions a fresh one
-	// and the work re-seeds from the pushed branch.
-	reuse := ""
-	if existing, found, err := pending.Get(ctx, t.RunID); err == nil && found {
-		reuse = existing.SandboxID
-	}
-
-	// A RUN WHOSE ENVIRONMENT DOES NOT RESOLVE IS NOT STARTED, by the rule a
-	// tool server is held to (toolcredentials.go): handed an empty code-host
-	// token it clones nothing and pushes nothing, after spending its box. The
-	// refusal is this call's result, classed unavailable by the tool, so it
-	// costs the turn one round rather than the turn — a model told a token is
-	// being minted can try later or do the work with its own tools.
-	run := e.runEnvironment(ctx, company, seat, gate, manager.DefaultSetup())
-	if run.gap != nil {
-		run.logGap(ctx, seat.Handle(), "no box is started")
-		return sandbox.LaunchResult{}, errors.New(run.gap.runRefusal())
-	}
-	run.logFacts(ctx, seat.Handle())
-	setup := run.setup
-	servers := l.engine.boxServers(ctx, company, seat, gate)
-	// The seat's own model and login, resolved from llm_sandbox — which
-	// falls back to `llm`, because sandboxed work IS this seat's own work
-	// running somewhere else, and `llm` is what that work runs on — for the
-	// runner that will read them, resolved here as BuildSpec resolves it, so
-	// a pairing that runner cannot drive is refused before a box exists.
-	runner := gate.CodingAgent
-	if runner == "" {
-		runner = manager.DefaultCodingAgent()
-	}
-	coding, refused := newCodingRun(company, seat, phase.Sandbox, runner, run.env)
-	if refused != nil {
-		return sandbox.LaunchResult{}, refused
-	}
-	model, env := coding.model, coding.env
-	spec := manager.BuildSpec(sandbox.SpecInput{
-		// The seat's cell, empty inheriting providers.sandbox's default.
-		// Resolved at LAUNCH rather than at config time, for the same
-		// reason coding_agent is: a catalogue change reaches every seat
-		// that named nothing without rewriting their blocks.
-		Placement:       sandbox.Placement(gate.RunIn),
-		CodingAgent:     runner,
-		PauseTTL:        pauseTTL(gate),
-		MaxTurns:        gate.MaxTurns,
-		Env:             env,
-		CredentialFiles: coding.files,
-	})
-	if err := sandboxCredentials(company, seat, phase.Sandbox, spec.Placement, env); err != nil {
-		return sandbox.LaunchResult{}, err
-	}
-
-	return rt.coordinator.Launch(ctx, manager, sandbox.LaunchRequest{
-		Turn:  sandboxTurnRef(ctx, t, seat.Name),
-		Brief: brief,
-		Wider: t.Task,
-		Task:  t.Task,
-		// HOW TO ASK A PERSON, with the names the chart gives this seat —
-		// without it the coding agent was never told the ask shim its box
-		// carries exists, so no run could park on a question at all.
-		Ask:        askBrief(company.Org, seat),
-		Setup:      setup,
-		Spec:       spec,
-		Model:      model,
-		MCPServers: servers,
-		ReuseBox:   reuse,
-	})
-}
-
 // launchFence is the seat lease this node writes on a seat's behalf under —
 // a launch, the record of an answer, the claim of a completion or an answer —
 // which the run's row is stamped with and every later write the node makes on
@@ -1478,29 +1542,27 @@ func (e *Engine) launchFence(handle string) (sandbox.Fence, bool) {
 // sandboxTurnRef is what a detached run's durable row records about the turn
 // that launched it.
 //
-// ONE BUILDER FOR BOTH LAUNCH PATHS — the run_sandbox tool and a cli-agent
-// executor handed its whole turn — because it is one row, the same facts and
-// the same reasons: the resume happens in another process, days later, and can
-// recover none of this from a trigger that is long gone. Written out twice it
-// drifted inside a single commit: one copy put the partition in both
-// conversation fields, which compiles, because both are strings.
+// A BUILDER OF ITS OWN rather than a literal in the launch, because it is the
+// row's whole account of the turn and the resume can recover none of it: it
+// happens in another process, days later, from a trigger that is long gone.
+// Written out at two launch sites once, it drifted inside a single commit: one
+// copy put the partition in both conversation fields, which compiles, because
+// both are strings.
 //
 // EVERY FACT OFF THE TURN'S OWN EPOCH, never the engine's current company. An
 // apply landing mid-turn is the next epoch, and a company renamed there
 // derives a DIFFERENT agent id for the same seat — so a row taking its id from
 // the live company named an agent none of that turn's other events did, and
 // its announcements split the seat in two on every surface that groups by id.
-// One path already took the id from the turn and said why; the other did not,
-// which is the whole hazard of writing the rule twice.
 //
-// The ROLE NAME is the caller's, because each already holds the seat it
-// resolved and the turn's copy is the same pointer — nothing is gained by
-// deriving it a second time here.
+// The ROLE NAME is the caller's, because it already holds the seat it resolved
+// and the turn's copy is the same pointer — nothing is gained by deriving it a
+// second time here.
 //
 // The TRACE comes from the ACTIVE span, so the box's spans nest under the call
 // that started them rather than appearing as unrelated work minutes later.
-// TurnRef carried these two since the OTLP receiver was written and the
-// run_sandbox path left both empty: PendingRun.TraceID was always "", RunEnv
+// TurnRef carried these two since the OTLP receiver was written and a launch
+// once left both empty: PendingRun.TraceID was always "", RunEnv
 // minted no telemetry token for any launch (it refuses to scope one to an
 // empty trace, which is the one property that scoping has), and describeResume
 // filed every resumed turn under no trace at all.
@@ -1538,35 +1600,10 @@ func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string) sandbox.T
 		// AND WHO ASKED, which the park resolves a question addressed to
 		// "the requester" against — see [sandbox.PendingRun.Requester].
 		Requester: t.Requester,
+		// AND WHEN THE TURN'S CAP ENDS, for the poll to end a run that
+		// outlasts it — see [sandbox.PendingRun.Deadline].
+		Deadline: t.Deadline,
 	}
-}
-
-// sandboxHeadroom refuses a launch below turn_engine.sandbox_min_budget_tokens.
-//
-// THREE-VALUED, like every other budget read in this engine: a seat with no
-// counter is uncapped and passes, a seat below the floor is refused, and a
-// read that FAILED is refused too — launching a box on an unknown budget is
-// how a company discovers its ceiling by spending past it.
-func sandboxHeadroom(ctx context.Context, remaining runner.Remaining, floor int) error {
-	if floor <= 0 {
-		return nil
-	}
-	if remaining == nil {
-		// No counter anywhere in the epoch, which is a company with no
-		// token budget rather than a read that could not be made.
-		return nil
-	}
-	left, err := remaining.Remaining(ctx)
-	if err != nil {
-		return fmt.Errorf("this seat's remaining token budget could not be read, "+
-			"and a coding run costs a box before it produces anything: %w", err)
-	}
-	if left < floor {
-		return fmt.Errorf("this seat has %d tokens left and a coding run needs at "+
-			"least %d (turn_engine.sandbox_min_budget_tokens): do the work with "+
-			"your own tools, or report that the budget is exhausted", left, floor)
-	}
-	return nil
 }
 
 // sandboxMCP renders the seat's SCOPED coding-agent MCP surface.
@@ -1598,10 +1635,10 @@ func sandboxHeadroom(ctx context.Context, remaining runner.Remaining, floor int)
 // servers, for the caller to judge and say ([Engine.boxServers]); minted is
 // what the seat's provisioning passes mint ([Engine.mintedFor]).
 func sandboxMCP(
-	env *config.Resolver, c *Company, seat *org.Role, gate *org.RoleSandbox,
+	env *config.Resolver, c *Company, seat *org.Role, settings *org.RoleSandbox,
 	minted map[string]integration.Kind,
 ) (map[string]sandbox.MCPServer, []*credentialMissing) {
-	if len(gate.MCP.Servers) == 0 {
+	if len(settings.MCP.Servers) == 0 {
 		return nil, nil
 	}
 	configured := make(map[string]*config.MCPServer, len(c.Config.MCPServers))
@@ -1610,11 +1647,11 @@ func sandboxMCP(
 	}
 	var (
 		servers  []sandbox.MCPServer
-		scoped   = make([]string, 0, len(gate.MCP.Servers))
+		scoped   = make([]string, 0, len(settings.MCP.Servers))
 		withheld []*credentialMissing
-		seen     = make(map[string]struct{}, len(gate.MCP.Servers))
+		seen     = make(map[string]struct{}, len(settings.MCP.Servers))
 	)
-	for _, name := range gate.MCP.Servers {
+	for _, name := range settings.MCP.Servers {
 		if _, dup := seen[name]; dup {
 			continue
 		}
@@ -1657,9 +1694,9 @@ func sandboxMCP(
 // nothing restarts a box's servers, so a server withheld from this run is
 // offered to the first coding run launched once the seal reaches this node.
 func (e *Engine) boxServers(
-	ctx context.Context, c *Company, seat *org.Role, gate *org.RoleSandbox,
+	ctx context.Context, c *Company, seat *org.Role, settings *org.RoleSandbox,
 ) map[string]sandbox.MCPServer {
-	servers, withheld := sandboxMCP(e.resolver(), c, seat, gate, e.mintedFor(c, seat.Handle()))
+	servers, withheld := sandboxMCP(e.resolver(), c, seat, settings, e.mintedFor(c, seat.Handle()))
 	states := e.mintingStates(ctx, withheld)
 	for _, missing := range withheld {
 		missing = missing.judged(states)
@@ -1684,20 +1721,21 @@ func (e *Engine) boxServers(
 // input carry a pointer rather than a sentinel number. A negative value never
 // reaches here: role validation refuses it.
 //
-// NIL-SAFE, like [maxTurnsFor] and for the same seat: an agent-mode executor
-// is placed by its own providers.llm entry and runs in a box whether or not
-// role.sandbox was ever written, and reading the override off a block that
+// NIL-SAFE, like [maxTurnsFor] and for the same seat: an executor is placed by
+// its own providers.llm entry and runs in a box whether or not role.sandbox
+// was ever written, and reading the override off a block that
 // does not exist panicked that seat's first launch — after the bridge session
 // was opened and before anything would have closed it.
-func pauseTTL(gate *org.RoleSandbox) *time.Duration {
-	if gate == nil || gate.PauseTTLSeconds == nil {
+func pauseTTL(settings *org.RoleSandbox) *time.Duration {
+	if settings == nil || settings.PauseTTLSeconds == nil {
 		return nil
 	}
-	d := seconds(*gate.PauseTTLSeconds)
+	d := seconds(*settings.PauseTTLSeconds)
 	return &d
 }
 
-// seatSandbox is a seat's sandbox gate, or nil.
+// seatSandbox is a seat's own box settings — `role.sandbox` — or nil for a seat
+// with none, whose boxes take the catalogue's alone.
 //
 // KEYED ON THE HANDLE, which is what makes the answer single-valued. Two seats
 // may carry one display NAME — it is an admission rule, so a revision stored
@@ -1761,10 +1799,13 @@ func (e *Engine) sandboxManager() *sandbox.Manager {
 // An apply builds the catalogue itself, earlier, so that a revision whose
 // catalogue cannot be built is refused before anything else moves.
 func (e *Engine) startSandboxFor(ctx context.Context, c *Company) error {
-	manager, err := buildSandbox(c.Config, e.resolver(), e.sandboxOtel)
+	manager, err := buildSandbox(c.Config, e.resolver(), e.sandboxOtel, e.fakePlay)
 	if err != nil {
 		return err
 	}
+	// Pinned on the epoch it was built for, as an apply pins its own — see
+	// [Company.catalogue].
+	c.catalogue = manager
 	_, err = e.startSandbox(ctx, manager)
 	return err
 }
@@ -1778,18 +1819,17 @@ func (e *Engine) startSandboxFor(ctx context.Context, c *Company) error {
 // the second of those that had no path at all — the coordinator was built at
 // boot or never, so a node started unconfigured (the quickstart's own route)
 // or on a company with no providers.sandbox served every later revision's
-// code-enabled seats with no run_sandbox, no agent-mode executor and no way to
-// finish a run a peer had left on one of its seats, until the process
-// restarted. Once up, a revision only swaps the manager ([Engine.Apply]'s
+// seats with no executor and no way to finish a run a peer had left on one of
+// its seats, until the process restarted. Once up, a revision only swaps the manager ([Engine.Apply]'s
 // `sandbox` stage), because the busy set and the poll loop are this process's.
 //
 // A NIL MANAGER IS NOT A START: the company reaches no cell, and the runtime
 // waits for one that does.
 //
 // SPLIT FROM THE POLL on the boot path, where the two need different things to
-// exist: the coordinator must exist before equip, which registers run_sandbox
-// only on a node that has one, and the poll needs the node, whose incarnation
-// its fleet-singleton duty is claimed under. On an apply the node already
+// exist: the coordinator must exist before the node's seats take a turn, every
+// one of which launches its executor through it, and the poll needs the node,
+// whose incarnation its fleet-singleton duty is claimed under. On an apply the node already
 // exists, so this starts the poll too — and PREPARES THE SEATS this node
 // already holds, which took their leases before there was a control topic to
 // attach or a run to recover ([Engine.prepareHeldSeats]).
@@ -1808,8 +1848,7 @@ func (e *Engine) startSandbox(ctx context.Context, manager *sandbox.Manager) (bo
 		return false, nil
 	}
 	log.Info("sandbox_enabled", "placements", manager.Placements(),
-		"default_run_in", string(manager.DefaultPlacement()),
-		"coding_agent", manager.DefaultCodingAgent())
+		"default_run_in", string(manager.DefaultPlacement()))
 	if e.node == nil {
 		// BOOT: the node, the poll and every seat come after this.
 		return true, nil
@@ -1838,8 +1877,12 @@ func (e *Engine) buildSandboxRuntime(manager *sandbox.Manager) (*sandboxRuntime,
 		return nil, fmt.Errorf("providers.sandbox needs a coordination store: a detached " +
 			"run's state is a fleet record, and without one a seat handoff orphans every box")
 	}
-	pending := sandbox.NewCoordStore(e.backends.Fleet)
+	return e.sandboxRuntimeOn(sandbox.NewCoordStore(e.backends.Fleet), manager)
+}
 
+// sandboxRuntimeOn is the machinery [Engine.buildSandboxRuntime] builds, over
+// the given run store: the coordinator wired to this engine's every seam.
+func (e *Engine) sandboxRuntimeOn(pending sandbox.PendingStore, manager *sandbox.Manager) (*sandboxRuntime, error) {
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
 		Queue: e.backends.Queue, Pending: pending, Manager: manager,
 		Resume:  &resumer{engine: e},
@@ -2160,8 +2203,8 @@ func (e *Engine) mayResumeAnswer(ctx context.Context, handle string) (sandbox.Re
 	case !c.AdmitsTriggers:
 		return sandbox.Refusal{Condition: waitPosture, Reason: "config posture refuses new work"}, true
 	}
-	if reason, resets, refusing := e.budgetRefusing(ctx, handle); refusing {
-		return sandbox.Refusal{Condition: waitBudget, Reason: reason, Until: resets}, true
+	if refusal, held := e.budgetHold(ctx, e.Company(), handle); held {
+		return refusal, true
 	}
 	return sandbox.Refusal{}, false
 }
@@ -2349,7 +2392,7 @@ func (e *Engine) prepareSeat(ctx context.Context, seat placement.Seat, epoch int
 	// whose last owner went away renders as broken until it happens to do
 	// some work.
 	//
-	// FOR EVERY SEAT, not only a code-enabled node's: this sat behind the
+	// FOR EVERY SEAT, not only a sandbox node's: this sat behind the
 	// sandbox step's early return, so on the ordinary node — one whose
 	// company configures no providers.sandbox — no seat was ever announced
 	// and every one of them stayed on whatever its last owner left behind.
@@ -2657,56 +2700,16 @@ type codingRun struct {
 	env   map[string]string
 }
 
-// newCodingRun resolves the [codingRun] of a box driven by runner on the
-// entry seat's phase resolves to, over seatEnv — the environment the seat's
-// own config assembled ([Engine.runEnvironment]) — or refuses one that runner
-// cannot drive with a [SandboxModelError], before a box exists.
+// newCodingRun is the [codingRun] of a box run on agent — the executor-chain
+// member the launch picked ([agentLauncher.member]) — over seatEnv, the
+// environment the seat's own config assembled ([Engine.runEnvironment]).
 //
-// TWO CALLERS, TWO PHASES, and the difference is load-bearing. A run_sandbox
-// call is CODE WORK the executor delegated, so it runs on llm_sandbox — a seat
-// legitimately points that at a cheaper or more code-shaped model than the one
-// it thinks with. An AGENT-MODE run is the executor ITSELF, so it runs on the
-// executor's own entry: sending it to llm_sandbox would run a seat's whole turn
-// on the model it chose for a subordinate job, silently, on any seat that set
-// both.
-//
-// THE RUNNER IS AN INPUT, because an entry's model is written in its own
-// CLI's grammar and its sign-in is that CLI's. A run_sandbox launch takes its
-// runner from role.sandbox.coding_agent and its model from llm_sandbox
-// independently, so the pairing is the operator's, and one entry under ANOTHER
-// CLI's runner cannot work: Claude Code was handed an OpenCode entry's
-// `openrouter/anthropic/claude-sonnet-5`, and OpenCode a Claude Code entry's
-// `sonnet` with a login it never reads, each starting a box that failed inside
-// it. An agent-mode run never meets this while its turn's epoch holds: its
-// runner is its entry's own CLI. Config refuses the same pairing on a write
-// ([config.Company.validateSandboxCodingAgents]) and both say one sentence
-// ([config.CodingAgentMismatch]).
-//
-// A seat with no resolvable model is not an error here: a company with no
-// models takes no turn, so launches no run (see nomodels.go), and the run
-// carries the seat's own environment and nothing else. Neither is a provider
-// that is not a CLI, which only a test's fake is: it names no model a coding
-// agent could read, so the run carries the seat's environment alone.
-func newCodingRun(c *Company, seat *org.Role, ph phase.Phase, runner string,
-	seatEnv map[string]string) (codingRun, error) {
-	run := codingRun{env: seatEnv}
-	if c == nil || c.Models == nil {
-		return run, nil
-	}
-	member, err := c.Models.Head(seat, ph)
-	if err != nil {
-		log.Warn("sandbox_llm_unresolved", "seat", seat.Handle(),
-			"phase", ph.String(), "error", err)
-		return run, nil
-	}
-	agent, isCLI := member.Provider.(*cliagent.Provider)
-	if !isCLI {
-		return run, nil
-	}
-	if agent.Agent() != runner {
-		return codingRun{}, &SandboxModelError{msg: fmt.Sprintf("seat %q: %s",
-			seat.Handle(), config.CodingAgentMismatch(runner, member.Key, agent.Agent()))}
-	}
+// THE PICKED MEMBER, never a second resolution of the chain: the runner the box
+// runs IS that member's CLI, so its model, written in that CLI's own grammar,
+// and its sign-in, which that CLI reads, are always ones the runner can use —
+// and a launch that fell back past the head runs on the member it fell back
+// to, with that member's login rather than the head's.
+func newCodingRun(agent *cliagent.Provider, seatEnv map[string]string) codingRun {
 	// THE MODEL AS THE ENTRY'S TEXT CALLS PASS IT, AND THE CLI IT IS WRITTEN
 	// FOR. An entry's model is in that CLI's own grammar — OpenCode reads
 	// `<provider>/<model>`, Claude Code an alias — so the run is handed the
@@ -2716,9 +2719,11 @@ func newCodingRun(c *Company, seat *org.Role, ph phase.Phase, runner string,
 	// No base URL: an entry has none of its own — the CLI talks to its
 	// vendor, and declaring a custom provider for it would point a coding
 	// agent at an endpoint nothing is serving.
-	run.model = agent.ModelArgument()
-	run.env = underlay(seatEnv, entrySignIn(agent, runner, seatEnv))
-	run.files = agent.SandboxCredentials()
+	run := codingRun{
+		model: agent.ModelArgument(),
+		env:   underlay(seatEnv, entrySignIn(agent, seatEnv)),
+		files: agent.SandboxCredentials(),
+	}
 	// A LOGIN THE CLI KEEPS IN ITS OWN DATABASE travels as the document its
 	// export printed, mapped where the runner imports it from — the runner's
 	// path, not the profile's, because the runner is what reads it
@@ -2729,7 +2734,7 @@ func newCodingRun(c *Company, seat *org.Role, ph phase.Phase, runner string,
 		}
 		run.files[codingagent.CredentialDocument] = doc
 	}
-	return run, nil
+	return run
 }
 
 // entrySignIn is the sign-in an entry contributes to a run's environment,
@@ -2749,8 +2754,8 @@ func newCodingRun(c *Company, seat *org.Role, ph phase.Phase, runner string,
 // underlaid beside a seat's own plan token silently moved that seat onto the
 // company's metered key, and beside a Bedrock toggle it rode into a box that
 // never reads it.
-func entrySignIn(agent *cliagent.Provider, runner string, seatEnv map[string]string) map[string]string {
-	if runner == codingagent.ClaudeCodeName && signsIn(seatEnv, codingagent.ClaudeCodeCredentialEnv) {
+func entrySignIn(agent *cliagent.Provider, seatEnv map[string]string) map[string]string {
+	if agent.Agent() == codingagent.ClaudeCodeName && signsIn(seatEnv, codingagent.ClaudeCodeCredentialEnv) {
 		return nil
 	}
 	return agent.SandboxEnv()
@@ -2769,17 +2774,6 @@ func signsIn(env map[string]string, names []string) bool {
 	return false
 }
 
-// SandboxModelError reports a coding run whose coding agent cannot use the
-// model and sign-in its providers.llm entry gives it, refused before the box
-// is minted.
-//
-// Its own type for the reason [SandboxCredentialError] is one: the remedy is a
-// config edit — another entry, another coding agent — and never a retry, since
-// nothing about the vendor being up changes what a runner can read.
-type SandboxModelError struct{ msg string }
-
-func (e *SandboxModelError) Error() string { return e.msg }
-
 // SandboxCredentialError reports a coding run whose box could never
 // authenticate, refused before the box is minted.
 //
@@ -2796,11 +2790,12 @@ func (e *SandboxCredentialError) Error() string { return e.msg }
 // sandboxCredentials refuses a run whose coding agent has nothing to
 // authenticate with inside its box.
 //
-// THE FAILURE THIS CLOSES IS SILENT AND EXPENSIVE. A subscription CLI that
-// mints no headless token (Codex, Gemini CLI) authenticates from credential
-// FILES, and those deliberately never leave the engine host: they carry a
-// refresh token whose rotation is shared fleet state. So a seat on such a
-// provider running in a remote cell provisions a box, installs the agent,
+// THE FAILURE THIS CLOSES IS SILENT AND EXPENSIVE. A subscription login with
+// no headless token to travel — a Claude Code plan nobody captured a token
+// for — authenticates from credential FILES, and those deliberately never
+// leave the engine host: they carry a refresh token whose rotation is shared
+// fleet state. So an executor on such an entry, placed in a remote cell,
+// provisions a box, installs the agent,
 // applies every setup step, starts the job — and the agent fails at its first
 // model call with the vendor's own "not authenticated", minutes in, naming
 // nothing an operator could act on. The documented error existed in the docs
@@ -2813,35 +2808,14 @@ func (e *SandboxCredentialError) Error() string { return e.msg }
 // brought its own credential passes — which is why the check can be a refusal
 // rather than a warning.
 //
-// THE PHASE IS THE CALLER'S, and it is the same phase the caller resolved the
-// run's model with — see [runLLM]. A run_sandbox launch runs on llm_sandbox
-// and an agent-mode run on the executor's own entry, and a guard that always
-// asked llm_sandbox inspected the wrong provider for every agent-mode seat
-// that set both: it waved through a remote run whose CLI had no token, and
-// refused one whose executor entry would have minted one.
-func sandboxCredentials(c *Company, seat *org.Role, ph phase.Phase, placement sandbox.Placement, env map[string]string) error {
+// THE PICKED MEMBER'S ENTRY, the one whose login the box runs under ([newCodingRun]):
+// a guard that asked the chain's head would wave through a fallback launch on a
+// member with no travelling token, and refuse one whose own entry mints one.
+func sandboxCredentials(agent *cliagent.Provider, key, seat string, placement sandbox.Placement,
+	env map[string]string) error {
 	if placement.OnEngineHost() {
 		// A local box seeds the credential files and writes a refreshed
 		// one back, so files alone are a complete answer there.
-		return nil
-	}
-	if c == nil || c.Models == nil {
-		return nil
-	}
-	member, err := c.Models.Head(seat, ph)
-	if err != nil {
-		//nolint:nilerr // Deliberate: a seat with no resolvable model for
-		// this phase is not this guard's question. A company with no
-		// models takes no turn and so launches no run, and [runLLM],
-		// which resolved the same seat and phase to pick the run's model
-		// moments ago, has already logged it. Returning the error here
-		// would refuse a run over a question this guard does not ask.
-		return nil
-	}
-	agent, isCLI := member.Provider.(*cliagent.Provider)
-	if !isCLI {
-		// Only a test's fake is not a CLI: it signs nothing in, so there
-		// is no host-bound half to strand.
 		return nil
 	}
 	if signsIn(env, agent.CredentialEnvNames()) {
@@ -2868,7 +2842,7 @@ func sandboxCredentials(c *Company, seat *org.Role, ph phase.Phase, placement sa
 	// IT JUDGES THE RIGHT CLI, and the key it lets through is one the run can
 	// read: the box is handed the entry's model exactly as its text calls
 	// name it, so its provider is the one the operator keyed for those calls,
-	// and a run whose runner is another CLI never gets here ([newCodingRun]).
+	// and the runner is that entry's own CLI ([newCodingRun]).
 	// Narrowing it to the variable the model's provider segment "should" use
 	// would need a table of that CLI's providers the engine does not ship and
 	// would be wrong anyway: OpenCode's `zai` reads ZHIPU_API_KEY,
@@ -2880,7 +2854,7 @@ func sandboxCredentials(c *Company, seat *org.Role, ph phase.Phase, placement sa
 			}
 		}
 	}
-	return credentialRefusal(agent, member.Key, seat.Handle(), placement)
+	return credentialRefusal(agent, key, seat, placement)
 }
 
 // credentialRefusal is the [SandboxCredentialError] for a remote run nothing
@@ -2914,16 +2888,21 @@ func sandboxCredentials(c *Company, seat *org.Role, ph phase.Phase, placement sa
 // Its own function rather than the tail of [sandboxCredentials] so that the
 // guard's VERDICT — which runs are refused — reads apart from its wording.
 func credentialRefusal(agent *cliagent.Provider, key, seat string, placement sandbox.Placement) *SandboxCredentialError {
-	localCell := fmt.Sprintf("role.sandbox.run_in: %q or %q", sandbox.Direct, sandbox.Container)
+	// THE ENTRY'S CELL, which is what places an executor: its own run_in,
+	// or the catalogue's default for an entry that names none. A seat has
+	// no cell of its own to move.
+	localCell := fmt.Sprintf("providers.llm.%s.run_in: %q or %q, or "+
+		"providers.sandbox.default_run_in for an entry that names none",
+		key, sandbox.Direct, sandbox.Container)
 	if sign, fromEnv := agent.ModeSignIn(); fromEnv {
-		lead := fmt.Sprintf("seat %q runs code in %q, and nothing in this run's environment "+
-			"authenticates %q: %s", seat, placement, key, sign.Missing())
+		lead := fmt.Sprintf("seat %q's executor runs on %q in %q, and nothing in this run's "+
+			"environment authenticates it: %s", seat, key, placement, sign.Missing())
 		switch {
 		case len(sign.Variables) == 0 && len(sign.Misnamed) == 0:
 			// The mode hands the CLI nothing, so the remedy is the mode
 			// — and the login it names reaches a box only in a local cell.
 			return &SandboxCredentialError{msg: fmt.Sprintf(
-				"%s; that login reaches this seat's box only in a local cell (%s)", lead, localCell)}
+				"%s; that login reaches the box only in a local cell (%s)", lead, localCell)}
 		case len(sign.Variables) == 0 && sign.Mode == cliagent.AuthAPIKey:
 			// Its one variable is outside the grammar, and the lead names
 			// that field as the remedy. Not role.sandbox.env: every write
@@ -2934,15 +2913,15 @@ func credentialRefusal(agent *cliagent.Provider, key, seat string, placement san
 			// inherit-env whose every variable is such a name: the login
 			// it seeds is the one sign-in left, and only a local cell has it.
 			return &SandboxCredentialError{msg: fmt.Sprintf(
-				"%s; or give this seat a local cell (%s), which is seeded with the entry's login",
+				"%s; or run the entry in a local cell (%s), which is seeded with its login",
 				lead, localCell)}
 		case sign.Mode == cliagent.AuthAPIKey:
 			return &SandboxCredentialError{msg: fmt.Sprintf(
 				"%s; or give this seat its own %s in role.sandbox.env", lead, sign.Variables[0])}
 		default:
 			return &SandboxCredentialError{msg: fmt.Sprintf(
-				"%s; or set %s in this seat's role.sandbox.env, or give this seat a local cell "+
-					"(%s), which is seeded with the entry's login",
+				"%s; or set %s in this seat's role.sandbox.env, or run the entry in a local cell "+
+					"(%s), which is seeded with its login",
 				lead, strings.Join(sign.Variables, " or "), localCell)}
 		}
 	}
@@ -2955,11 +2934,11 @@ func credentialRefusal(agent *cliagent.Provider, key, seat string, placement san
 			"an environment variable name, so no secret store, ${VAR} or shell export can "+
 			"carry one and `crewlet llm login -capture-token` refuses to mint it", key, tokenVar)
 	}
-	remedy := "Give this seat a local cell — " + localCell
+	remedy := "Run the entry in a local cell — " + localCell
 	switch {
 	case agent.MintsHeadlessToken():
 		remedy = fmt.Sprintf("Mint a token that travels with `crewlet llm login %s "+
-			"-capture-token`, or give this seat a local cell (%s)", key, localCell)
+			"-capture-token`, or run the entry in a local cell (%s)", key, localCell)
 	case agent.SignsInThroughEnv():
 		// This CLI's key travels the way a token does, so the one-line
 		// fix is the key rather than a placement change — named by the
@@ -2973,8 +2952,8 @@ func credentialRefusal(agent *cliagent.Provider, key, seat string, placement san
 		}
 		remedy = fmt.Sprintf("Set the key of %s, under the variable %s reads for "+
 			"that provider, in providers.llm.%s.env or in this seat's "+
-			"role.sandbox.env — both are exported into the box — or give this seat a "+
-			"local cell (%s)",
+			"role.sandbox.env — both are exported into the box — or run the entry in "+
+			"a local cell (%s)",
 			provider, agent.Agent(), key, localCell)
 		// The key travels whatever token_env says, so it stays the remedy,
 		// and the field the doctor reports is named beside it.
@@ -2984,14 +2963,14 @@ func credentialRefusal(agent *cliagent.Provider, key, seat string, placement san
 		}
 	case misnamedToken != "":
 		remedy = fmt.Sprintf("No headless token can travel: %s. Name the variable your build "+
-			"of the CLI reads there, or give this seat a local cell (%s)", misnamedToken, localCell)
+			"of the CLI reads there, or run the entry in a local cell (%s)", misnamedToken, localCell)
 	}
 	return &SandboxCredentialError{msg: fmt.Sprintf(
-		"seat %q runs code in %q, where the %q subscription login cannot follow it: "+
+		"seat %q's executor runs on %q in %q, where its subscription login cannot follow it: "+
 			"the login stays on the engine host because it carries a refresh token whose "+
 			"rotation is fleet state, and nothing in this run's environment "+
 			"authenticates. %s",
-		seat, placement, key, remedy)}
+		seat, key, placement, remedy)}
 }
 
 // underlay adds defaults to env WITHOUT overwriting what is already there.

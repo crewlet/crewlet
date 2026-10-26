@@ -172,16 +172,19 @@ providers:
         env:
           GIT_TERMINAL_PROMPT: "0"
         brief: >-
-          Use $GITLAB_TOKEN (already in your environment — this seat's own
-          GitLab PAT) for all GitLab work: git authenticates to gitlab.com
+          When $GITLAB_TOKEN is in your environment it is this seat's own
+          GitLab PAT, for all GitLab work: git authenticates to gitlab.com
           with it automatically, so just clone, fetch, and push over plain
           HTTPS. SSH-style remotes (`git@gitlab.com:...`) are rewritten to
           HTTPS for you. Never embed the token in a URL. To open a merge
           request, use GitLab push options — no CLI needed:
           `git push -o merge_request.create -o merge_request.target=main
           -o merge_request.title="<title>" origin HEAD:<your-branch>`
-          creates the MR under your own identity. Your git commit identity
-          is preconfigured.
+          creates the MR under your own identity. Without $GITLAB_TOKEN
+          this seat has no GitLab identity: public projects still clone
+          anonymously, but nothing you push is accepted, so hand a code
+          change to the seat that owns the project instead. Your git
+          commit identity is preconfigured.
 ```
 
 Every security property of the GitHub form holds here and for the same reasons — the helper is scoped to the host at **both** layers (the `credential."https://…".helper` key *and* the `host=` check in the script), it stays silent with no token so public clones fall through to anonymous, the `insteadOf` rewrites use `--add` because the key is multi-valued, and the commit identity comes from the engine's generic `$CREWLET_AGENT_*` facts. And the helper is written into the box's home by a command and registered as a quoted shell snippet, as there: git is given the helper's absolute path, which only the box's shell knows (`"$HOME"`, expanded), the helper is made executable, both in commands, and the path is quoted because git runs a helper's value through the shell and a box's home may hold a space ([Local sandboxes](../concepts/code-sandbox.md#local-sandboxes)); this way the one step works in every cell, which is how `examples/nimbus.company.yaml` ships it. Two GitLab-specific wrinkles: the basic-auth **username is arbitrary** for PAT auth (GitLab ignores it — the token is the password, so `oauth2` is a conventional placeholder), and the helper must match the host **including a non-standard port** when the instance runs on one (the dev compose serves `gitlab.local:8929`), so template the host from your `integrations.gitlab.url` rather than copying `gitlab.com` blindly.

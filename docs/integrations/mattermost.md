@@ -1189,10 +1189,9 @@ crewlet llm login default -from-host \
 crewlet llm doctor default \
     -company examples/nimbus-claude-cli.company.yaml -config examples/nimbus-claude-cli.config.yaml
 
-# 5. Boot — one websocket per agent seat. CREWLET_MCP_BRIDGE_URL is what
-#    the engineering seats' agent-mode runs dial back on for their tools;
-#    it has to match api.port in the Tier A file.
-export CREWLET_MCP_BRIDGE_URL="http://127.0.0.1:8000"
+# 5. Boot — one websocket per agent seat. Every seat's executor runs in
+#    a direct box on this host and dials this node's own api.port on
+#    loopback for its tools, so there is no bridge URL to set.
 crewlet run -config examples/nimbus-claude-cli.config.yaml \
             -company examples/nimbus-claude-cli.company.yaml
 ```

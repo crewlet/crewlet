@@ -91,6 +91,7 @@ func TestTheClaudeParserReadsTheEnvelope(t *testing.T) {
 		"is_error": false,
 		"session_id": "sess-1",
 		"total_cost_usd": 0.42,
+		"num_turns": 23,
 		"usage": {"input_tokens": 1200, "output_tokens": 300}
 	}`)
 	if !res.Success {
@@ -98,6 +99,11 @@ func TestTheClaudeParserReadsTheEnvelope(t *testing.T) {
 	}
 	if res.SessionID != "sess-1" || res.CostUSD != 0.42 {
 		t.Fatalf("envelope fields lost: %+v", res)
+	}
+	// THE RUN'S OWN TURNS: the provider calls its loop made, which the
+	// engine never saw and every spend figure counts the run's record by.
+	if res.Turns != 23 {
+		t.Fatalf("turns = %d, want the 23 the CLI reported", res.Turns)
 	}
 	if res.InputTokens != 1200 || res.OutputTokens != 300 {
 		t.Fatalf("usage lost: %+v", res)
@@ -468,6 +474,41 @@ func derefOr[T any](p *T, absent string) any {
 	return *p
 }
 
+// THE RUN'S TURN CAP REACHES OPENCODE, on the agent the run runs as. It is the
+// one bound on an executor's work — Claude Code carries it as --max-turns — so
+// a run on this CLI that dropped it ran uncapped while the setting read as
+// wired. Zero is uncapped, and states no cap at all: OpenCode refuses a step
+// count below one.
+func TestTheOpenCodeConfigCarriesTheRunsTurnCap(t *testing.T) {
+	t.Parallel()
+	type capped struct {
+		DefaultAgent string `json:"default_agent"`
+		Agents       map[string]struct {
+			Steps *int `json:"steps"`
+		} `json:"agents"`
+	}
+	read := func(body string) capped {
+		var c capped
+		if err := json.Unmarshal([]byte(body), &c); err != nil {
+			t.Fatalf("unmarshal: %v\n%s", err, body)
+		}
+		return c
+	}
+
+	_, body := writeOpenCodeConfig(t, sandbox.RunRequest{Limits: sandbox.Limits{MaxTurns: 40}})
+	got := read(body)
+	agent, ok := got.Agents[got.DefaultAgent]
+	if got.DefaultAgent == "" || !ok || agent.Steps == nil || *agent.Steps != 40 {
+		t.Errorf("the run's agent %q carries steps %v, want the cap of 40 on the agent the "+
+			"run runs as:\n%s", got.DefaultAgent, derefOr(agent.Steps, "(absent)"), body)
+	}
+
+	_, body = writeOpenCodeConfig(t, sandbox.RunRequest{})
+	if got := read(body); len(got.Agents) != 0 {
+		t.Errorf("an uncapped run stated a step count:\n%s", body)
+	}
+}
+
 // The config carries the run's POSTURE, not just its servers, and
 // this CLI reads it from the checkout rather than from a flag — so a run that
 // wrote none would not fall back to the vendor's defaults. It would inherit
@@ -626,5 +667,36 @@ func TestAToolOnlyStreamReportsNoAnswer(t *testing.T) {
 	}
 	if res.Error == "" {
 		t.Fatal("the failure says nothing")
+	}
+}
+
+// A RUN THAT CARRIES ON AN ASKING RUN'S WORK CONTINUES ITS OWN CONVERSATION.
+// The run that parked on a person's question knew what it had read, tried and
+// decided; a new conversation told only the answer starts that over. So where
+// the launch names the asking run's session, each runner continues it — Claude
+// Code with `--resume`, OpenCode by working in that session, which it
+// continues when it already holds it — and where it names none, each starts a
+// conversation of its own.
+//
+// Mutation: drop the flag, or mint OpenCode a fresh session whatever the
+// request, and the continued row goes red.
+func TestAContinuedRunResumesTheAskingRunsSession(t *testing.T) {
+	t.Parallel()
+	continued := sandbox.RunRequest{Brief: "the answer: main", ResumeSession: "ses_0123456789abcdef0123456789abcdef"}
+
+	cmd := claude().Command(continued, codingagent.Paths{}, "")
+	if !strings.Contains(cmd, "--resume 'ses_0123456789abcdef0123456789abcdef'") {
+		t.Errorf("Claude Code does not resume the asking run's session: %s", cmd)
+	}
+	if fresh := claude().Command(sandbox.RunRequest{Brief: "x"}, codingagent.Paths{}, ""); strings.Contains(fresh, "--resume") {
+		t.Errorf("a fresh Claude Code run resumes something: %s", fresh)
+	}
+
+	script := scriptOf(t, opencode().Command(continued, codingagent.Paths{}, ""))
+	if !strings.Contains(script, "--session 'ses_0123456789abcdef0123456789abcdef'") {
+		t.Errorf("OpenCode does not work in the asking run's session:\n%s", script)
+	}
+	if fresh := scriptOf(t, opencode().Command(sandbox.RunRequest{Brief: "x"}, codingagent.Paths{}, "")); strings.Contains(fresh, "0123456789abcdef0123456789abcdef") {
+		t.Errorf("a fresh OpenCode run works in the asking run's session:\n%s", fresh)
 	}
 }

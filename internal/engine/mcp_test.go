@@ -38,6 +38,7 @@ func mcpCompany(shared bool, echo string) string {
 	return fmt.Sprintf(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5

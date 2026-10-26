@@ -36,17 +36,18 @@
  *    has not started, while the turn runs.
  *
  * A TURN THAT PARKED ON A CODING RUN IS ONE TURN: its executor publishes one
- * record when it finally finishes, carrying every round from before the park
- * and after it at their own instants, so the phase spans the run it waited on
- * and the run sits beside it.
+ * record when the run is collected, carrying the run as its one round — from
+ * the launch to the collection, with the run's calls at their own instants
+ * inside it — so the phase spans the run it waited on and the run sits beside
+ * it.
  *
  * # What cannot be placed is still shown
  *
- * A call whose arguments did not parse was answered rather than run, and an
- * agent-mode executor's rounds ran inside somebody else's loop; neither kind
- * of call carries instants. Those are UNTIMED rows — listed under the
- * waterfall as "not placed on this clock" — rather than bars drawn at an
- * invented position, or dropped. The list says PLACED rather than
+ * A call whose arguments did not parse was answered rather than run, so it
+ * carries no instants — unlike an executor run's calls, which ran inside its
+ * CLI's own loop and are timed at the bridge they were made over. Such a call
+ * is an UNTIMED row — listed under the waterfall as "not placed on this
+ * clock" — rather than a bar drawn at an invented position, or dropped. The list says PLACED rather than
  * timed because a call can be measured and still have nowhere to go: timed
  * but unstamped, in a round with no model call of its own to follow. Whether
  * a call was measured at all is [callMeasured]'s, which every surface asks.

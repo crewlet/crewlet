@@ -51,7 +51,7 @@ func newEngineRuntime(e *engine.Engine, reconciler *engine.Reconciler) (engineRu
 // that runs e: its runtime over the same engine and reconciler, under the same
 // requirements, as [NewEngineRuntime] — so a node's /health says the same thing
 // whichever surface serves it — its node id, the roles its presence lease
-// advertises, and its agent-mode tool bridge where it runs seats. With
+// advertises, and its executors' tool bridge where it runs seats. With
 // api.public set the command serves that bridge on a listener of its own
 // ([BridgeOnly]) rather than beside the probes.
 //
@@ -80,7 +80,7 @@ func EngineProbeOptions(boot *config.Bootstrap, e *engine.Engine,
 		Roles: profile.Roles.Names(), QueueBackend: e.Backends().Queue.Backend(),
 	}
 	// A BRIDGED SESSION IS A LIVE TOOL SURFACE IN THE PROCESS THAT OPENED IT,
-	// so the node running the agent-mode seat is the only node its box can
+	// so the node running the seat is the only node its executor's box can
 	// reach — and only a node running seats opens one. THROUGH THE PREDICATE
 	// the listener on api.public was bound by, before this engine existed
 	// ([PublicListener]), so the bridge is served exactly where it was bound.

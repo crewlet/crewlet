@@ -1513,7 +1513,7 @@ func (t *createWorkItem) askFor(ctx context.Context, actor Actor, task worklet.T
 		// DERIVED LIKE EVERY COMMENT'S, so a re-run turn — or the same
 		// call brought back under its operation — files one question
 		// rather than two.
-		ID:         commentID(actor, CreateWorkItemTool, task.ID, args),
+		ID:         commentID(ctx, actor, CreateWorkItemTool, task.ID, args),
 		Task:       task.ID,
 		Author:     actor.Handle,
 		AuthorKind: actor.Kind,
@@ -1664,7 +1664,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// the default said, the second attempt derived another operation and
 	// filed a second item. The call's own arguments beside it tell every
 	// new item apart, as they do a new view's ([viewObjectKey]).
-	opID := opIDFor(actor, t.Name(), "create",
+	opID := opIDFor(ctx, actor, t.Name(), "create",
 		createObjectKey(argString(args, "project")), args)
 	task.ID = createdTaskID(opID)
 	// A UNIT THE CALLER NAMED, checked against the chart and open to every
@@ -1809,7 +1809,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// and writing it before the create would name a task no node holds.
 	if len(blockers) > 0 {
 		result, err := t.deps.Dependencies(actor).Depend(ctx,
-			opIDFor(actor, t.Name(), "depend", task.ID, args), worklet.DependencyChange{
+			opIDFor(ctx, actor, t.Name(), "depend", task.ID, args), worklet.DependencyChange{
 				Task: task.ID, Project: task.Project, WaitingOnAdd: blockers,
 			}, t.deps.Leads)
 		if err != nil {
@@ -2300,7 +2300,7 @@ func handles(all ...string) []string {
 // the step, because the operation is already bound to them: an operation
 // names the one call it was answered for, and brought back with any other
 // arguments it is refused before anything here runs ([WorkDeps.bindOperation]).
-func opIDFor(actor Actor, tool, verb, object string, args map[string]any) string {
+func opIDFor(ctx context.Context, actor Actor, tool, verb, object string, args map[string]any) string {
 	if actor.Operation != "" {
 		return statelog.StepOpID(actor.Operation, verb+"-"+object)
 	}
@@ -2309,7 +2309,7 @@ func opIDFor(actor Actor, tool, verb, object string, args map[string]any) string
 		return statelog.NewOpID(time.Now(), verb+"-"+object)
 	}
 	identity := []string{opIDNamespace, seed, verb, object, turnctx.ArgsDigest(args)}
-	if repeat := actor.Calls.Ordinal(tool, args); repeat > 0 {
+	if repeat := actor.Calls.Ordinal(ctx, tool, args); repeat > 0 {
 		identity = append(identity, "repeat:"+strconv.Itoa(repeat))
 	}
 	return statelog.DeriveOpID(actor.OperationSince(), verb+"-"+object, identity...)
@@ -2584,7 +2584,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// same arguments and is still the same one. Derived HERE, before the
 	// patch is built, because a checklist gesture mints the ids of the lists
 	// and items it adds from it.
-	opID := opIDFor(actor, t.Name(), "update", before.Task.ID, args)
+	opID := opIDFor(ctx, actor, t.Name(), "update", before.Task.ID, args)
 	reason, refusal := assignmentReason(args)
 	if refusal != "" {
 		return failed(refusal), nil
@@ -2768,7 +2768,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	}
 	if !change.Empty() {
 		result, err := t.deps.Dependencies(actor).Depend(ctx,
-			opIDFor(actor, t.Name(), "depend", before.Task.ID, args), change, t.deps.Leads)
+			opIDFor(ctx, actor, t.Name(), "depend", before.Task.ID, args), change, t.deps.Leads)
 		_, patchRan := answer["outcome"]
 		switch {
 		case err != nil && patchRan:
@@ -2867,7 +2867,7 @@ func (d WorkDeps) declareLabels(ctx context.Context, actor Actor,
 			"cannot declare labels at a write. Ask the project lead to "+
 			"declare it, or file without the label."))
 	}
-	opID := opIDFor(actor, write.tool, "tags", project, args)
+	opID := opIDFor(ctx, actor, write.tool, "tags", project, args)
 	created, warnings, err := d.ProjectWriter(actor).EnsureTags(ctx, opID,
 		project, labels)
 	if err != nil {
@@ -3374,7 +3374,7 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// re-run turn posts once rather than saying the same thing
 		// twice. The engine's redelivery guarantees make a re-run turn
 		// ordinary rather than exceptional.
-		ID:         commentID(actor, t.Name(), before.Task.ID, args),
+		ID:         commentID(ctx, actor, t.Name(), before.Task.ID, args),
 		Task:       before.Task.ID,
 		Author:     actor.Handle,
 		AuthorKind: actor.Kind,
@@ -3480,7 +3480,7 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			Handle: actor.Handle, Watch: true, Auto: true,
 		}
 	}
-	opID := opIDFor(actor, t.Name(), "comment", comment.ID, args)
+	opID := opIDFor(ctx, actor, t.Name(), "comment", comment.ID, args)
 	got, err := writer.UpdateTask(ctx, opID, before.Task.ID, before.Task.Project,
 		// A COMMENT NEVER CONDITIONS ON A VERSION: it adds to the thread
 		// rather than replacing anybody's value, so there is nothing a
@@ -3586,7 +3586,7 @@ func unansweredWarning(task worklet.Task, actor Actor, comment *worklet.Comment)
 // leaves them out there: the operation the caller made the call under IS the
 // claim that this is that call, so the comment it names is the one the first
 // call posted.
-func commentID(actor Actor, tool, taskID string, args map[string]any) string {
+func commentID(ctx context.Context, actor Actor, tool, taskID string, args map[string]any) string {
 	if actor.Operation != "" {
 		return uuid.NewSHA1(commentNamespace, []byte(actor.Operation+"\x00"+
 			taskID+"\x00"+actor.Handle)).String()
@@ -3596,7 +3596,7 @@ func commentID(actor Actor, tool, taskID string, args map[string]any) string {
 		seed = uuid.NewString()
 	}
 	name := seed + "\x00" + taskID + "\x00" + actor.Handle + "\x00" + turnctx.ArgsDigest(args)
-	if repeat := actor.Calls.Ordinal(tool, args); repeat > 0 {
+	if repeat := actor.Calls.Ordinal(ctx, tool, args); repeat > 0 {
 		name += "\x00repeat:" + strconv.Itoa(repeat)
 	}
 	return uuid.NewSHA1(commentNamespace, []byte(name)).String()

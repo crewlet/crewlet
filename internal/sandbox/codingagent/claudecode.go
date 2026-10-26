@@ -60,13 +60,12 @@ func (ClaudeCode) Name() string { return ClaudeCodeName }
 //
 // STREAM-JSON, AND --verbose WITH IT. `--output-format json` prints ONE object
 // when the run ends and nothing before it, and in print mode this CLI writes
-// nothing to stderr either — so a run on the engine's default coding agent
-// showed a person nothing while it worked and left no transcript when it was
-// done. stream-json prints every message as it happens, one JSON object a
-// line, ending — as the vendor documents the stream — in the result message,
-// the same object json printed alone. In print mode the CLI refuses
-// stream-json without --verbose ("When using --print,
-// --output-format=stream-json requires --verbose").
+// nothing to stderr either — so a run on Claude Code showed a person nothing
+// while it worked and left no transcript when it was done. stream-json prints
+// every message as it happens, one JSON object a line, ending — as the vendor
+// documents the stream — in the result message, the same object json printed
+// alone. In print mode the CLI refuses stream-json without --verbose ("When
+// using --print, --output-format=stream-json requires --verbose").
 //
 // THE SYSTEM TEXT IS APPENDED, NOT SUBSTITUTED: `--append-system-prompt-file`
 // adds the run's standing instructions after Claude Code's own system prompt,
@@ -85,10 +84,18 @@ func (ClaudeCode) Command(req sandbox.RunRequest, paths Paths, configPath string
 	if req.System != "" {
 		parts = append(parts, "--append-system-prompt-file", shellQuote(paths.System()))
 	}
+	// THE ASKING RUN'S OWN CONVERSATION, carried on with the brief — the
+	// answer — as its next prompt, where the job before this one parked on
+	// a question in this box ([sandbox.RunRequest.ResumeSession]). Claude
+	// Code keeps its sessions under the box's home, which a continued box
+	// still has.
+	if req.ResumeSession != "" {
+		parts = append(parts, "--resume", shellQuote(req.ResumeSession))
+	}
 	// VERBATIM, because the only entry that reaches this runner is a
 	// claude-code one, which already names the model in Claude Code's own
-	// terms — its alias or id exactly as its text calls pass it. The engine
-	// refuses every other CLI's entry here.
+	// terms — its alias or id exactly as its text calls pass it. A launch
+	// passes over every other CLI's entry, so none reaches here.
 	if req.Model != "" {
 		parts = append(parts, "--model", shellQuote(req.Model))
 	}
@@ -228,6 +235,9 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 		SessionID:     msg.SessionID,
 		CostUSD:       msg.TotalCostUSD,
 		DeliveredRefs: deliveredRefs(msg.Result),
+		// The run's own model turns, as its loop counted them: the
+		// provider calls the run made, which the engine never saw.
+		Turns: msg.NumTurns,
 	}
 	if u := msg.Usage; u != nil {
 		// INPUT TOKENS ARE A SUM: the vendor's input_tokens is only the
@@ -265,7 +275,10 @@ type claudeResult struct {
 	Errors       []string `json:"errors"`
 	SessionID    string   `json:"session_id"`
 	TotalCostUSD float64  `json:"total_cost_usd"`
-	Usage        *struct {
+	// NumTurns is how many turns the run's agent loop took — one model
+	// call each — on every subtype, a run stopped by its turn cap included.
+	NumTurns int `json:"num_turns"`
+	Usage    *struct {
 		InputTokens              int `json:"input_tokens"`
 		OutputTokens             int `json:"output_tokens"`
 		CacheReadInputTokens     int `json:"cache_read_input_tokens"`

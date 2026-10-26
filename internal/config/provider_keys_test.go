@@ -1,6 +1,8 @@
 package config_test
 
 import (
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -10,6 +12,7 @@ import (
 const providerKeyDoc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     default:
       model: claude-sonnet-5
@@ -79,20 +82,35 @@ func TestTheMappingFormIsCheckedTooAndNamedWhereItWasWritten(t *testing.T) {
 func TestEveryPerPhaseFieldIsCovered(t *testing.T) {
 	t.Parallel()
 	// A field left out of the check is a field where the typo stays
-	// invisible, and there is no way to notice that from the outside.
-	for _, field := range []string{
-		"llm", "llm_review",
-		"llm_subagent", "llm_auxiliary", "llm_judge", "llm_sandbox",
-	} {
-		if err := validateDoc(t, "    "+field+": nope"); err == nil {
-			t.Errorf("%s: an unconfigured provider validated cleanly", field)
+	// invisible, and there is no way to notice that from the outside. So the
+	// fields are READ OFF THE TYPES — every `llm`-prefixed seat key and every
+	// key of the mapping form — rather than listed: a listed phase that was
+	// removed kept passing here on the decoder's unknown-key refusal, and a
+	// phase that was added was never asked about. Each refusal must name the
+	// field, so the decoder's refusal cannot stand in for the rule.
+	var flat []string
+	role := reflect.TypeFor[config.Role]()
+	for i := range role.NumField() {
+		key, _, _ := strings.Cut(role.Field(i).Tag.Get("yaml"), ",")
+		if strings.HasPrefix(key, "llm") {
+			flat = append(flat, key)
 		}
 	}
-	for _, key := range []string{
-		"default", "review", "subagent", "auxiliary", "judge", "sandbox",
-	} {
-		if err := validateDoc(t, "    llm:\n      "+key+": nope"); err == nil {
-			t.Errorf("llm.%s: an unconfigured provider validated cleanly", key)
+	if len(flat) < 2 {
+		t.Fatalf("found the seat keys %v, which is not the per-phase family", flat)
+	}
+	for _, field := range flat {
+		err := validateDoc(t, "    "+field+": nope")
+		if err == nil || !errors.Is(err, config.ErrUnknownValue) || !strings.Contains(err.Error(), "roles[0]."+field) {
+			t.Errorf("%s: an unconfigured provider was not refused there: %v", field, err)
+		}
+	}
+	mapping := reflect.TypeFor[config.PhaseLLM]()
+	for i := range mapping.NumField() {
+		key, _, _ := strings.Cut(mapping.Field(i).Tag.Get("yaml"), ",")
+		err := validateDoc(t, "    llm:\n      "+key+": nope")
+		if err == nil || !errors.Is(err, config.ErrUnknownValue) || !strings.Contains(err.Error(), "roles[0].llm") {
+			t.Errorf("llm.%s: an unconfigured provider was not refused there: %v", key, err)
 		}
 	}
 }

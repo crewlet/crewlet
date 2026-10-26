@@ -4,92 +4,91 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// The executor, run by somebody else's agent loop.
+// The executor, run by its coding CLI's own agentic loop.
 //
-// # What agent mode changes, and what it deliberately does not
+// # What is the CLI's, and what stays the engine's
 //
-// In text mode the engine's tool loop is the agency: it prompts, the model
-// answers with tool calls, the engine runs them, and everything a reader knows
-// about the turn comes from that loop. In agent mode a coding CLI runs the
-// executor itself — its own loop, its own shell — and the seat's tools reach
-// it over the MCP bridge, which dispatches through the SAME tools.Surface a
-// native loop would call.
+// Every seat's executor is its coding CLI's own run, in a box: its own loop,
+// its own shell, its own edits and commits. The seat's tools reach it over the
+// MCP bridge, which dispatches through the SAME tools.Surface every
+// engine-driven phase calls. So what the CLI owns is how the executor's work
+// happens; everything around it stays the engine's, and each of those is a
+// deliberate refusal to fork:
 //
-// So what changes here is only how the executor's rounds happen. Everything
-// around them is untouched, and each of those is a deliberate refusal to fork:
-//
-//   - The PROMPT is the same one. An agent-mode executor is the same seat with
-//     the same catalogue, memory, skills and workers; a second prompt builder
-//     would drift on the half nobody re-reads.
-//   - The SURFACE is the same one, built the same way, with the same skill
-//     guard. The bridge executes against it, so a tool denied natively is
-//     denied there.
+//   - The PROMPT is the seat's: identity, chart, memory, skills and workers,
+//     built once here and handed to the CLI as an appended system prompt and
+//     the brief it runs.
+//   - The SURFACE is built the same way as every phase's, with the same skill
+//     guard. The bridge executes against it, so a tool denied to the seat is
+//     denied to its run.
 //   - The SUBMISSION is the same tool. The CLI ends its run by calling
-//     submit_work over the bridge, exactly as a native loop ends by calling it
-//     locally, so the outcome vocabulary and the rescue path are shared.
-//   - The REVIEWER is unchanged and still native. The point of a reviewer is
-//     that it is not the thing being reviewed.
+//     submit_work over the bridge, so the outcome vocabulary and the rescue
+//     path are the engine's.
+//   - The REVIEWER is the engine's own loop. The point of a reviewer is that
+//     it is not the thing being reviewed.
 //
-// # Why it suspends
+// # Why the turn parks
 //
 // An agentic run outlives its turn — that is what makes it worth doing — so it
-// takes the detached shape the sandbox layer already has: the phase returns
-// suspended, the row carries what a resume needs, and a completion re-enters
-// the same turn, possibly in another process on another node. What it does NOT
-// carry is a conversation: there is no engine loop to re-enter, which is what
-// [execstate.State.AgentRun] marks and what [Runner.resumeAgentRun] reads.
+// is detached: the phase returns suspended, the row carries what a resume
+// needs, and the run's collection re-enters the same turn, possibly in another
+// process on another node. What it does NOT carry is a conversation: there is
+// no engine loop to re-enter, which is why [execstate.State] holds the turn's
+// bookkeeping and nothing a model said — and the context the turn froze at its
+// start, since a turn sent back for another iteration launches its next run
+// from the segment that collected this one.
 
-// AgentLauncher starts the executor as somebody else's agentic run.
+// AgentLauncher starts the executor as its coding CLI's own agentic run.
 //
 // Declared by the consumer, and narrow on purpose: the runner knows what the
 // executor should be asked to do and which tools it may use; the engine knows
-// what a detached run is, where it goes and how to reach it. Neither has to
-// learn the other's half.
+// what a detached run is, which member of the seat's executor chain takes it,
+// where it goes and how to reach it. Neither has to learn the other's half.
 type AgentLauncher interface {
 	// LaunchExecutor starts the run and returns once it is going. It does
-	// NOT wait for it: the phase suspends and a completion re-enters the
-	// turn later.
+	// NOT wait for it: the phase suspends and the run's collection
+	// re-enters the turn later.
 	//
-	// An error fails the phase rather than falling back to a native loop.
-	// A seat configured for agent mode whose run cannot start has a
-	// configuration problem, and quietly running the executor a different
-	// way would hide it behind a turn that merely looks expensive.
+	// An error fails the phase: there is no other way to run the executor,
+	// and the error says why this run could not start.
 	LaunchExecutor(ctx context.Context, req AgentRunRequest) error
 }
 
-// AgentRunRequest is one executor handed to an outside agent loop.
+// AgentRunRequest is one executor handed to its coding CLI's agent loop.
 //
-// THE PROMPT ARRIVES IN THE TWO HALVES a native pass sends it in, because
-// the CLIs that run agent mode take it in two: Claude Code appends a file to
-// its own system prompt, OpenCode adds an instruction file to its default
-// agent's. Both keep the vendor's harness prompt — the part that teaches its
-// shell, editor and loop, which agent mode is FOR — and put the seat's
-// standing instructions on the system side of the conversation beneath it.
-// Joined into one document, as they once were, the seat's identity, policies
-// and memory reached the model as the first user message, which a model weighs
-// as a request rather than as who it is.
+// THE PROMPT ARRIVES IN TWO HALVES, because the CLIs take it in two: Claude
+// Code appends a file to its own system prompt, OpenCode adds an instruction
+// file to its default agent's. Both keep the vendor's harness prompt — the
+// part that teaches its shell, editor and loop, which the run is FOR — and put
+// the seat's standing instructions on the system side of the conversation
+// beneath it. Joined into one document, as they once were, the seat's
+// identity, policies and memory reached the model as the first user message,
+// which a model weighs as a request rather than as who it is.
 type AgentRunRequest struct {
 	// System is the executor's system prompt: the seat's standing
-	// instructions, exactly as a native pass sends them as its system
-	// message.
+	// instructions.
 	System string
 
-	// Brief is the turn's own ask — the user message a native pass sends
-	// beside System — and the whole of what the CLI is prompted with.
+	// Brief is the turn's own ask — with its earlier rounds, and every note
+	// a person sent the turn that it has already read — and the whole of
+	// what the CLI is prompted with.
 	Brief string
 
-	// Surface is what the run may call, bridged. The SAME object a native
-	// loop would execute against; see the package rule above.
+	// Surface is what the run may call, bridged; see the package rule
+	// above.
 	Surface *tools.Surface
 
 	// Spend is what the calls Surface serves cost the engine, counted
@@ -101,25 +100,65 @@ type AgentRunRequest struct {
 	// Round is the turn iteration this executor is, so the run's record and
 	// the resumed phase agree about which round they are in.
 	Round int
+
+	// OnFallback publishes a launch-time hand-off against THIS turn: the
+	// launch walks the seat's executor chain for a member that can take the
+	// run ([chain.Pick]), and each member it skips is a provider_fallback
+	// like a call's. The launcher has no publisher of its own and must not
+	// grow one — which turn, phase and iteration a hand-off belongs to is
+	// the runner's to say — so the runner hands it this, bound to the
+	// launch. Never nil.
+	OnFallback func(chain.Fallback)
+
+	// Continue is set when this launch CARRIES ON a run that parked on a
+	// person's question, now answered — the same round, relaunched: the
+	// asking run's CLI session, and the prompt that continues it, which the
+	// launch uses where it runs in the asking run's box. Brief is then what
+	// a fresh run is told instead, the question and the answer included —
+	// see [Asked]. Nil for every other launch.
+	Continue *Continuation
+
+	// Fence is the turn's own fence ([Config.Fence]), which the launch asks
+	// again immediately before it opens anything: the prompt built since
+	// the phase opened can take a model call of its own, and a seat that
+	// moved or was stopped meanwhile must not still buy a box. THE SAME
+	// CLOSURE, never one the launcher builds: a fence compares the grant it
+	// was built under with the one held when it is called, so it is the
+	// turn's admission that the launch is held to. Nil where the runner was
+	// built without one.
+	Fence func() error
 }
 
-// executeAsAgentRun runs the executor as a detached agentic run.
+// Continuation is how a launch carries on an asking run — see
+// [AgentRunRequest.Continue].
+type Continuation struct {
+	// SessionID is the asking run's CLI session; Brief its next prompt.
+	SessionID string
+	Brief     string
+}
+
+// executeAsAgentRun launches the executor as a detached agentic run.
 //
-// It builds the same surface and the same prompt a native pass would, hands
-// them to the launcher, and suspends. The suspension it records carries no
-// conversation — see [execstate.State.AgentRun] — but everything else a resume
-// needs: the round, the ledger, the surface it may still use, and the skills
-// it had loaded.
+// It builds the surface and the prompt, hands them to the launcher, and
+// parks. The state it records carries no conversation — see [execstate.State]
+// — but everything a resume needs: the round, the ledger, the surface it may
+// still use, and the skills it had loaded.
+//
+// A LAUNCH THAT DOES NOT HAPPEN STILL CLOSES ITS PHASE. The started record is
+// published before the launch, so the record carries the prompt the run was
+// sent; a launch refused after that publishes the phase's completion too —
+// failed, or stopped where a person stopped it — or the phase reads as still
+// running for ever on every screen that draws it.
 func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	history []ledger.Iteration,
 ) (turn.Work, turn.Surface, error) {
-	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot(), true)
+	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot())
 
-	// The submission tool is on the surface for the same reason it is in a
-	// native pass: it is how the executor says what it did. The CLI calls
-	// it over the bridge, and the value it captures here is read only when
-	// the resume happens in THIS process — otherwise the resume rebuilds it
-	// from the run's durable bridged-call log.
+	// The submission tool is on the surface because it is how the executor
+	// says what it did. The CLI calls it over the bridge, and the value it
+	// captures here is read only when the resume happens in THIS process —
+	// otherwise the resume rebuilds it from the run's durable bridged-call
+	// log.
 	var surface *tools.Surface
 	submit := structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
 		decodeWork(r.cfg.Reply,
@@ -137,7 +176,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	}
 	surface = built
 
-	system, user := r.executorPrompt(ctx, round, notes, history, snapshot, built)
+	system, user := r.executorPrompt(ctx, notes, history, snapshot, built)
 	// AND ASKED AGAIN once the brief exists, before anything is on the
 	// record: assembling it rewrites the prior rounds' payloads past their
 	// budgets with the seat's auxiliary model, charged to the same counters,
@@ -147,51 +186,148 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, err)
 	}
 	// THE PROMPT REACHES THE RECORD, published here because nothing else
-	// will: a native pass publishes it from inside runPhase, which agent
-	// mode does not enter, and the resume's own record deliberately carries
-	// no prompt (it re-entered a phase rather than opening one). Without
-	// this an operator reading an agent-mode turn sees a run that finished
-	// and no sign of what it was asked.
+	// will: the collection's own record deliberately carries no prompt (it
+	// collects a run rather than opening a conversation). Without this an
+	// operator reading a turn sees a run that finished and no sign of what
+	// it was asked.
 	//
-	// NO SEED — this opens a phase rather than re-entering one — and the
-	// surface, whose definitions are NOT in the prompt below: they reach the
-	// CLI over the MCP bridge, where the CLI's own model is billed for
-	// every one of them. See [emitter.promptSize].
+	// The surface travels too, whose definitions are NOT in the prompt
+	// below: they reach the CLI over the MCP bridge, where the CLI's own
+	// model is billed for every one of them. See [emitter.promptSize].
 	//
-	// NO ROUND CAPS: the rounds are the CLI's, inside its own loop, and
-	// the engine enforces no cap on them to state.
-	r.emitter().started(ctx, phase.Execute, round, system, user, nil, surface, roundCaps{})
+	// ONE ROUND OF ONE, the cap the collected record states too: the
+	// engine's whole exchange with the run is this launch and its answer,
+	// and the CLI's own turns inside it are bounded by the run's turn cap
+	// (`max_turns`) rather than by anything the engine states here. See
+	// [agentRunResult].
+	emit := r.emitter()
+	began := time.Now()
+	caps := roundCaps{max: runRound, ceiling: runRound}
+	emit.started(ctx, phase.Execute, round, system, user, surface, caps)
 
-	if err := r.cfg.AgentRun.LaunchExecutor(ctx, AgentRunRequest{
-		System:  system.Text,
-		Brief:   user.Text,
-		Surface: surface,
-		Spend:   bridged,
-		Round:   round,
+	if err := r.cfg.Launcher.LaunchExecutor(ctx, AgentRunRequest{
+		System:     system.Text,
+		Brief:      user.Text,
+		Surface:    surface,
+		Spend:      bridged,
+		Round:      round,
+		OnFallback: func(f chain.Fallback) { emit.fallback(ctx, phase.Execute, round, f) },
+		Fence:      r.cfg.Fence,
 	}); err != nil {
-		return turn.Work{}, turn.Surface{}, fmt.Errorf("launching the agent-mode executor: %w", err)
+		err = fmt.Errorf("runner: %s: launching the executor's run: %w", phase.Execute, err)
+		// A PHASE A PERSON STOPPED DID NOT FAIL, exactly as for every phase
+		// the engine drives: it carries the stop as its error and is not
+		// marked failed, since a turn somebody deliberately ended is not one
+		// that broke.
+		emit.completed(ctx, phaseRecord{
+			Phase: phase.Execute, Iteration: round, System: system, User: user,
+			Available: surface.Active(),
+			Elapsed:   time.Since(began),
+			StartedAt: began.UTC(), Caps: caps,
+			Failed: !turn.Stopped(err), Err: err,
+		})
+		return turn.Work{}, describe(surface), err
 	}
 
-	r.recordAgentSuspension(round, surface, history)
+	r.recordAgentSuspension(round, surface, history, began, time.Since(began))
 	return turn.Work{Calls: calls(surface), Suspended: true}, describe(surface), nil
 }
 
-// recordAgentSuspension captures what a resumed agent run needs.
+// continueAgentRun carries on a run that parked on a person's question, now
+// answered ([Asked]): the SAME round, relaunched rather than collected — in
+// the asking run's box, continuing its own conversation, where that box is
+// still there, and as a fresh run told the question and the answer where it is
+// not. The launch decides which, once it knows which box it has.
 //
-// The mirror of [Runner.recordSuspension], and separate rather than a branch
-// inside it because the two states are shaped differently: that one is a
-// conversation with a dangling call, this one is deliberately not a
-// conversation at all. A single function taking a flag would have every field
-// mean something in one mode and nothing in the other.
-func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, history []ledger.Iteration) {
+// THE ROUND'S SURFACE AND CLOCK CARRY ON. The surface is the asking run's —
+// the tools it had active, the skills the turn had loaded — and its calls so
+// far are on the turn's call log already ([Runner.Resume] seeded it), so the
+// relaunched run's writes go on counting from them; the round's launch time
+// keeps accumulating from the instant the round first launched. No new phase
+// is opened: the round's started record was published when it first launched,
+// and its completion is the collection that finally closes it — unless this
+// relaunch is refused, which closes it here.
+func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteration,
+	state execstate.State, asked *Asked, logged []ledger.Call,
+) (turn.Work, turn.Surface, error) {
+	began := time.Now()
+	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot())
+	var surface *tools.Surface
+	submit := structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
+		decodeWork(r.cfg.Reply,
+			func() []ledger.Call { return turn.Record(history, calls(surface)) },
+			func() turn.Surface { return describe(surface) }))
+	bridged := NewBridgedSpend()
+	built, err := r.surfaceWith(ctx, r.meterFor(bridged), phase.Execute, state.Round, snapshot,
+		submit, state.ActiveTools, state.LoadedSkills...)
+	if err != nil {
+		return turn.Work{}, turn.Surface{}, err
+	}
+	surface = built
+
+	system, user := r.executorPrompt(ctx, "", history, snapshot, built)
+	if err := toolloop.Refusal(ctx, r.cfg.Budget); err != nil {
+		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, err)
+	}
+	emit := r.emitter()
+	caps := roundCaps{max: runRound, ceiling: runRound}
+	if err := r.cfg.Launcher.LaunchExecutor(ctx, AgentRunRequest{
+		System: system.Text,
+		// A FRESH RUN'S BRIEF is the round's own, and what the run before it
+		// asked and was told: it remembers neither.
+		Brief: user.Text + "\n\n" + asked.Reseed(),
+		Continue: &Continuation{
+			SessionID: asked.SessionID, Brief: asked.Continuation(),
+		},
+		Surface:    surface,
+		Spend:      bridged,
+		Round:      state.Round,
+		OnFallback: func(f chain.Fallback) { emit.fallback(ctx, phase.Execute, state.Round, f) },
+		Fence:      r.cfg.Fence,
+	}); err != nil {
+		err = fmt.Errorf("runner: %s: carrying on the run with its answer: %w", phase.Execute, err)
+		emit.completed(ctx, phaseRecord{
+			Phase: phase.Execute, Iteration: state.Round, System: system, User: user,
+			Available: surface.Active(),
+			Elapsed:   time.Duration(state.LaunchMS)*time.Millisecond + time.Since(began),
+			StartedAt: began.UTC(), Caps: caps,
+			Failed: !turn.Stopped(err), Err: err,
+		})
+		return turn.Work{Calls: logged}, describe(surface), err
+	}
+	launchedAt := state.LaunchedAt
+	if launchedAt.IsZero() {
+		launchedAt = began
+	}
+	r.recordAgentSuspension(state.Round, surface, history, launchedAt,
+		time.Duration(state.LaunchMS)*time.Millisecond+time.Since(began))
+	// THE ROUND'S CALLS SO FAR, the run's before it asked: they happened,
+	// and a turn that parks again has acted by them.
+	return turn.Work{Calls: logged, Suspended: true}, describe(surface), nil
+}
+
+// recordAgentSuspension captures what the run's collection needs.
+func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, history []ledger.Iteration,
+	began time.Time, launched time.Duration,
+) {
 	state := execstate.State{
 		Version:      execstate.Version,
-		AgentRun:     true,
 		ActiveTools:  surface.Active(),
 		LoadedSkills: r.loadedSkills(),
 		Round:        round,
-		Iterations:   history,
-		Task:         r.cfg.Task,
+		// THE LAUNCH'S HALF OF THE PHASE, and where it began, for the
+		// record the collection publishes. See [execstate.State.LaunchMS]
+		// and [execstate.State.LaunchedAt].
+		LaunchMS:   int(launched / time.Millisecond),
+		LaunchedAt: began.UTC(),
+		Iterations: history,
+		Task:       r.cfg.Task,
+		// EVERY NOTE THE TURN HAD READ, for the phases after the run's
+		// collection. See [execstate.State.Steered].
+		Steered: r.carriedSteers(),
+		// AND WHAT THE TURN STARTED WITH, for the launches after it. See
+		// [execstate.State.Context].
+		Context: frozen(r.cfg.Context, r.cfg.Conversation),
 	}
 	if err := state.Validate(); err != nil {
 		// Not recorded, and the absence is what the engine reports: a run
@@ -205,6 +341,34 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 	r.suspension = &Suspension{State: state}
 }
 
+// frozen is the turn-start context a runner builds every launch's prompt from,
+// as a park carries it: the blocks' rendered text and the prior-turns block —
+// what [Runner.executorPrompt] reads of them, and nothing else.
+func frozen(blocks prefetch.Blocks, conversation string) execstate.Frozen {
+	return execstate.Frozen{
+		ThreadContext:       blocks.ThreadContext,
+		PersonalMemory:      blocks.PersonalMemory,
+		RelevantKnowledge:   blocks.RelevantKnowledge,
+		EpisodeRecall:       blocks.EpisodeRecall,
+		CounterpartyProfile: blocks.CounterpartyProfile,
+		SynthesizedSkills:   blocks.SynthesizedSkills,
+		Conversation:        conversation,
+	}
+}
+
+// thawed is a parked turn's frozen context back in the shape a runner's
+// prompts read — the inverse of [frozen].
+func thawed(f execstate.Frozen) (prefetch.Blocks, string) {
+	return prefetch.Blocks{
+		ThreadContext:       f.ThreadContext,
+		PersonalMemory:      f.PersonalMemory,
+		RelevantKnowledge:   f.RelevantKnowledge,
+		EpisodeRecall:       f.EpisodeRecall,
+		CounterpartyProfile: f.CounterpartyProfile,
+		SynthesizedSkills:   f.SynthesizedSkills,
+	}, f.Conversation
+}
+
 // resumeAgentRun turns a finished agentic run into the turn's Work.
 //
 // THE RUN'S OWN TOOL CALLS ARE THE RECORD, replayed from the durable log the
@@ -214,22 +378,29 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 // calling submit_work over the bridge, and replaying that call through a fresh
 // submission tool is what recovers the outcome it declared.
 //
-// An absent submission is NOT a value — the same rule a native pass follows.
-// A run that stopped without saying what it did is rescued as incomplete and
-// judged on its record, rather than having a delivery inferred from the prose
-// the CLI happened to end with.
+// An absent submission is NOT a value. A run that stopped without saying what
+// it did is rescued as incomplete and judged on its record, rather than having
+// a delivery inferred from the prose the CLI happened to end with.
 //
 // `history` is the turn's closed rounds, which its submission's citations read
 // beside the run's own calls — see [turn.Record].
 func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
-	state execstate.State, answer string, bridged []ledger.Call,
+	state execstate.State, answer string, bridged []toolloop.Execution,
 ) (turn.Work, turn.Surface, error) {
-	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot(), true)
+	// THIS SEGMENT'S START, which the collection's record states as its
+	// started_at: a start read off neither segment would put the record at
+	// the epoch, a day before the turn existed. Its DURATION is the
+	// phase's — both segments, the launch's carried on the park — and
+	// never the run between them, which is the run's own fact, on the
+	// record of the box it ran in. See types.AgentPhaseCompleted.
+	began := time.Now()
+	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot())
+	logged := ledgerCalls(bridged)
 
 	var surface *tools.Surface
 	submit := structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
 		decodeWork(r.cfg.Reply,
-			func() []ledger.Call { return turn.Record(history, bridged) },
+			func() []ledger.Call { return turn.Record(history, logged) },
 			func() turn.Surface { return describe(surface) }))
 
 	built, err := r.surfaceWith(ctx, r.ownMeter(), phase.Execute, state.Round, snapshot, submit,
@@ -239,20 +410,21 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	}
 	surface = built
 
-	replaySubmission(ctx, submit, bridged)
+	replaySubmission(ctx, submit, logged)
 
-	work, described, err := r.finishWork(ctx, state.Round, work{
+	run := r.cfg.Resume.Run
+	res := agentRunResult(answer, bridged, run, state.LaunchedAt, began)
+	res.StartedAt = began.UTC()
+	res.Elapsed = time.Duration(state.LaunchMS)*time.Millisecond + time.Since(began)
+	work, described := r.finishWork(ctx, state.Round, work{
 		submit:   submit,
-		res:      agentRunResult(answer, bridged),
+		res:      res,
 		surface:  surface,
 		snapshot: snapshot,
-		run:      r.cfg.Resume.Run,
+		run:      run,
 	})
-	if err != nil {
-		return turn.Work{}, turn.Surface{}, err
-	}
 	// The RUN's calls, not this process's surface's — see the doc above.
-	work.Calls = bridged
+	work.Calls = logged
 	return work, described, nil
 }
 
@@ -267,29 +439,62 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 // saw a decision word and a blank card for a run that made real tool calls.
 //
 // ONE ROUND, and that is not a stand-in for a number the engine failed to
-// count — it is the honest one. A round is an iteration of the ENGINE's tool
-// loop: one request, one answer. In agent mode the engine made a single
-// request — the launch — and got a single answer back, however many turns the
-// CLI took inside its own loop to produce it. The bridge's call log carries no
-// round of its own and inventing one per call would claim a structure nobody
-// observed, splitting one run into thirty rounds of one call each.
-func agentRunResult(answer string, bridged []ledger.Call) phaseResult {
-	res := toolloop.Result{Text: answer, RoundsUsed: 1}
+// count — it is the honest one. A round is an iteration of the ENGINE's
+// exchange with a model: one request, one answer. For the executor the engine
+// made a single request — the launch — and got a single answer back, however
+// many turns the CLI took inside its own loop to produce it. The bridge's call
+// log carries no round of its own and inventing one per call would claim a
+// structure nobody observed, splitting one run into thirty rounds of one call
+// each. So the record's cap is that one round too: the engine allowed the
+// run one request, and its turns are bounded by the CLI's own cap
+// (`max_turns`), which is the run's fact rather than this phase's.
+//
+// THE ROUND IS TIMED, from the launch (launchedAt, the phase's first instant)
+// to the collection (answered, when the run's answer came back), so a
+// timeline draws the run as the span the phase waited on and places each
+// bridged call inside it at the instant the bridge measured. Two clocks when
+// the launch and the collection ran on different nodes, which is why a skew
+// that would make the span negative states none. It carries NO TOKENS: what
+// the run spent is the run's own fact, on the `sandbox` record its collection
+// publishes, and repeating it here would charge every rollup twice.
+//
+// THE MEMBER THAT RAN IT is the record's entry and model: the launch picked it
+// from the seat's executor chain, so the chain's head is not an answer, and a
+// record naming nobody files the run's spend under no provider.
+func agentRunResult(answer string, bridged []toolloop.Execution, run RunRecord,
+	launchedAt, answered time.Time,
+) phaseResult {
+	res := toolloop.Result{
+		Text: answer, RoundsUsed: runRound, MaxRounds: runRound,
+		Model: run.Model, ProviderKey: run.ProviderKey,
+	}
+	if !launchedAt.IsZero() {
+		res.Rounds = []toolloop.Round{{
+			Round: runRound, StartedAt: launchedAt.UTC(),
+			Duration: max(answered.Sub(launchedAt), 0),
+			Model:    run.Model, ToolCalls: len(bridged),
+		}}
+	}
 	for _, call := range bridged {
-		res.Executions = append(res.Executions, toolloop.Execution{
-			Round: 1, Name: call.Name, Args: call.Args,
-			Output: call.Result, Failed: call.Failed,
-		})
+		call.Round = runRound
+		res.Executions = append(res.Executions, call)
 	}
 	if strings.TrimSpace(answer) != "" {
 		// The run's own last word, on the round its calls are on, so the
 		// ledger reads as one block rather than as prose beside orphaned
 		// tool rows. There is no separate reasoning to report: a CLI's
 		// thinking stays inside its own loop.
-		res.Narration = []toolloop.Narration{{Round: 1, Content: answer}}
+		res.Narration = []toolloop.Narration{{Round: runRound, Content: answer}}
 	}
-	return phaseResult{Text: answer, Rounds: 1, Result: res}
+	return phaseResult{Text: answer, Rounds: runRound, Result: res,
+		Caps: roundCaps{max: runRound, ceiling: runRound}}
 }
+
+// runRound is the one round an executor run's record has, which every call
+// the run makes is recorded on — see [agentRunResult] for why there is one.
+// The workers a run's delegate call spawns nest under it too, so they sit
+// under the call that spawned them.
+const runRound = 1
 
 // replaySubmission feeds the run's own submit_work call back through a fresh
 // submission tool, so the outcome the CLI declared is the one the turn reports.

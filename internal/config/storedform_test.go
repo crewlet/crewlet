@@ -58,6 +58,7 @@ func TestTheStoredFormCarriesTheDeclarationOrder(t *testing.T) {
 	authored, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu: {model: m}
     alpha: {model: m}
@@ -107,6 +108,7 @@ func TestAnAuthoredOrderWinsOverTheKeyOrder(t *testing.T) {
 	_, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     llm_order: ["mike", "zulu"]
     zulu: {model: m}
@@ -121,6 +123,7 @@ roles:
 	cfg, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm_order: ["mike", "zulu"]
   llm:
     zulu: {model: m}
@@ -200,6 +203,7 @@ func TestTheAdmissionRulesAreAClassApartFromTheRunnableOnes(t *testing.T) {
 	const doc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu: {model: m}
 units:
@@ -249,6 +253,7 @@ func TestAStoredRevisionGetsTheSameDefaults(t *testing.T) {
 	authored, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu: {model: m}
 roles:
@@ -352,7 +357,6 @@ roles:
     handle: ceo
     llm: zulu
     sandbox:
-      enabled: true
       setup:
         - {name: registry, env: {TOKEN: "${SEAT}"}}
 `

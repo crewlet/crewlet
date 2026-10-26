@@ -223,7 +223,6 @@ func BuildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver) (*cl
 		Key:                        key,
 		Model:                      model,
 		Agent:                      spec.AgentName(),
-		AgentMode:                  spec.AgentMode(),
 		StateDir:                   stateDir,
 		Overrides:                  spec.Overrides,
 		Timeout:                    time.Duration(spec.Timeout() * float64(time.Second)),

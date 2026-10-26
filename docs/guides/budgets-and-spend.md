@@ -35,6 +35,20 @@ windows it falls in at once, against the company and against its seat, as soon
 as its reply arrives, and what it asked for runs only while every capped window
 of both had room for it.
 
+**A ceiling has room for one executor run, or it is refused.** Every executor
+launch needs `turn_engine.executor_min_budget_tokens` (default 25 000 — one
+run's opening request) left in every capped window of its seat and of the
+company, and a seat short of it is parked until the window turns over. That
+holds for a launch in the middle of a turn too — a reviewer sending the work
+back for another run, or a person's answer carrying a parked run on: the job
+the turn just collected is **held**, collected in its paused box with its seat
+held behind it, and the turn resumes once the window turns over or a revision
+raises the ceiling (`sandbox_resume_held` in the log), rather than reviewing it
+again on every retry into the same refusal. A
+ceiling below that floor never has it left, so on a seat that runs an executor,
+or on a company that has one, it is refused when the document is validated,
+at the ceiling: raise it to the floor, or lower the floor (`0` turns it off).
+
 A round's size is known only from its reply, so by the time it is judged the
 vendor has billed it, and **a refused round is counted like any other**. The
 window that refused it therefore reads **over its ceiling** by that round — a
@@ -203,7 +217,10 @@ learning cost. A compaction of
 seventy rewrites is one record of seventy calls. So the live window trails the
 counter by up to one flush, and a named window by up to two (the flush, and the
 usage publisher's own tick). Every figure's **calls** are provider calls — a
-phase's model rounds, an auxiliary record's coalesced calls — never records.
+phase's model rounds, a coding run's own turns as its CLI reported them (one
+per run where the CLI reports none, as OpenCode does), an auxiliary record's
+coalesced calls — never records. The executor's own record counts none, since
+its run's calls are the run's.
 
 **What is not counted: embeddings.** The calls that turn text into vectors are
 metered by neither the counter nor the rollup: they run on the embeddings

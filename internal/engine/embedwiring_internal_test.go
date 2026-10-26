@@ -75,6 +75,7 @@ func keyedCompany(t *testing.T, endpoint, key string) *Company {
 	return companyWith(t, fmt.Sprintf(`
 name: Nimbus
 providers:
+  sandbox: {fake: true}
   llm:
     scripted:
       model: claude-x

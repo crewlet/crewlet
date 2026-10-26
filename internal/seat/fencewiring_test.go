@@ -36,15 +36,18 @@ var carriers = map[string]string{
 	"toolloop.Config":    "the model/tool loop that performs the check",
 }
 
-// Agent mode is the one executor path with no entry here, and that is a
-// decision rather than an omission. A coding CLI's run is DETACHED: the phase
-// suspends the moment it starts, the turn ends, and the run outlives it —
-// deliberately, since its placement is on its own row and the process that
-// collects it is often not the one that launched it. Fencing it would kill an
-// hour of somebody's coding run on an ordinary rebalance and lose its output,
-// to guard against writes the bridge's own run-scoped, expiring credential
-// already bounds. What IS fenced is the resume: the turn that comes back to
-// collect the run runs under the grant the collecting node holds. See
+// The executor's RUN is the one thing a turn starts with no entry here, and
+// that is a decision rather than an omission. Every executor is its coding
+// CLI's own run, and that run is DETACHED: the phase suspends the moment it
+// starts, the turn ends, and the run outlives it — deliberately, since its
+// placement is on its own row and the process that collects it is often not
+// the one that launched it. Fencing it while it runs would kill an hour of
+// somebody's coding run on an ordinary rebalance and lose its output, to guard
+// against writes the bridge's own run-scoped, expiring credential already
+// bounds. What IS fenced is either end: the launch, which runner.Config's fence
+// covers when the phase opens and the engine's launcher asks again, by a
+// direct call rather than through a literal, before it opens anything; and the
+// resume, which runs under the grant the collecting node holds. See
 // [seat.Host.Fence].
 
 type literal struct {

@@ -436,3 +436,80 @@ func TestTheProbesOutliveThePublicListener(t *testing.T) {
 		t.Error("api.port is still listening after the surface stopped")
 	}
 }
+
+// A DIRECT BOX DIALS THE LISTENER ITS NODE BOUND, ON LOOPBACK. The `direct`
+// cell's run is a process of this host, so the node's own socket is an
+// address it can always reach, and that is what lets the quickstart's company
+// — one direct cell, no CREWLET_MCP_BRIDGE_URL — run its first turn. The
+// listener is the one the bridge is served on: api.public where the node binds
+// one, api.port otherwise ([api.PublicListener]); and a node that runs no seat
+// opens no session, so it derives none.
+//
+// Mutation: derive from api.port whatever the public listener, and the
+// public row dials the probes' port, where the bridge answers 404; derive on a
+// node without seats and the satellite row names an address nothing serves.
+func TestADirectBoxDialsTheListenerItsNodeBound(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		roles  []string
+		public bool
+		want   string // "api", "public" or ""
+	}{
+		{"a seats node on api.port", []string{"data", "seats", "workers"}, false, "api"},
+		{"a seats node with a public listener", []string{"data", "seats", "workers"}, true, "public"},
+		{"a node that runs no seat", []string{"data", "workers"}, false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			boot := bootstrapFor(t, reservePort(t))
+			boot.Node.Roles = tc.roles
+			if tc.public {
+				boot.API.Public = config.APIPublic{Host: "127.0.0.1", Port: reservePort(t)}
+			}
+			listeners, err := bindListeners(t.Context(), boot, "node-0", true, bindReserved,
+				logging.Get("test"))
+			if err != nil {
+				t.Fatalf("bindListeners: %v", err)
+			}
+			t.Cleanup(func() { listeners.close(context.Background(), logging.Get("test")) })
+			want := ""
+			switch tc.want {
+			case "api":
+				want = "http://127.0.0.1:" + strconv.Itoa(boot.API.Port)
+			case "public":
+				want = "http://127.0.0.1:" + strconv.Itoa(boot.API.Public.Port)
+			}
+			if got := listeners.bridgeHostURL(boot, "node-0"); got != want {
+				t.Errorf("a direct box dials %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// LOOPBACK FOR A LISTENER ON EVERY INTERFACE, ITS OWN ADDRESS OTHERWISE. A
+// socket bound to every interface answers on loopback, which no network
+// policy between the host and itself can refuse; one bound to a single
+// address answers only there, so loopback would be refused.
+func TestALoopbackURLIsWhereThisHostDialsTheSocket(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		addr net.Addr
+		want string
+	}{
+		{"every IPv4 interface", &net.TCPAddr{IP: net.IPv4zero, Port: 8080}, "http://127.0.0.1:8080"},
+		{"every IPv6 interface", &net.TCPAddr{IP: net.IPv6unspecified, Port: 8080}, "http://127.0.0.1:8080"},
+		{"no address at all", &net.TCPAddr{Port: 8080}, "http://127.0.0.1:8080"},
+		{"one private address", &net.TCPAddr{IP: net.ParseIP("10.0.0.5"), Port: 8080}, "http://10.0.0.5:8080"},
+		{"IPv6 loopback", &net.TCPAddr{IP: net.IPv6loopback, Port: 8080}, "http://[::1]:8080"},
+		{"not TCP", &net.UnixAddr{Name: "/run/crewlet.sock", Net: "unix"}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := loopbackURL(tc.addr); got != tc.want {
+				t.Errorf("loopbackURL(%v) = %q, want %q", tc.addr, got, tc.want)
+			}
+		})
+	}
+}

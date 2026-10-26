@@ -119,6 +119,7 @@ func gitlabModeCompany(t *testing.T, url, mode string) *Company {
 	doc := fmt.Sprintf(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5

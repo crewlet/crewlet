@@ -197,7 +197,7 @@ var coordinatorEntries = map[string][]entryDrive{
 		},
 	},
 	"Launch": {{
-		name: "a run_sandbox call on the run's own turn",
+		name: "a relaunch on the run's own turn",
 		call: func(t *testing.T, rig *coordRig) {
 			if _, err := rig.coordinator.Launch(t.Context(), rig.manager, launchReq("t1")); err != nil {
 				t.Logf("Launch: %v", err)
@@ -702,6 +702,13 @@ func (s *refusingStore) ReleaseClaim(ctx context.Context, turnID string, r Relea
 		return false, errRefusedCall
 	}
 	return s.inner.ReleaseClaim(ctx, turnID, r)
+}
+
+func (s *refusingStore) LiftHold(ctx context.Context, turnID string, cond Condition) (bool, error) {
+	if s.called("LiftHold") {
+		return false, errRefusedCall
+	}
+	return s.inner.LiftHold(ctx, turnID, cond)
 }
 
 func (s *refusingStore) MarkAwaiting(ctx context.Context, turnID string, q Clarification) error {

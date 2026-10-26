@@ -204,16 +204,17 @@ without the `ingress` role binds it for its [probes](#probe-it) alone —
 `/health` and `/ready` — and serves no API, no dashboard and no webhook on it
 (`api_probes_listening`). Every other path answers `404`, or `401` for a write
 or an always-guarded prefix, exactly as an unknown path does on an ingress
-node. The one route it adds is for a seat in
-[agent mode](../concepts/llm-backends.md#the-tool-bridge): its box
-calls the seat's tools back over `/mcp/{token}`, and only the node that runs
-the seat can answer, so a satellite with `CREWLET_MCP_BRIDGE_URL` set serves
+node. The one route it adds is for its seats' executors: each runs in a box
+that calls the seat's tools back over
+[`/mcp/{token}`](../concepts/llm-backends.md#the-tool-bridge), and only the
+node that runs the seat can answer, so a satellite that runs seats serves
 that route (`tool_bridge=true` on the same line) — beside the probes, or on
 `api.public.port` when the file sets one (`public_addr` on the same line names
 it), since the bridge is a route a sandbox outside your network calls (see
 [Deployment → Exposing webhooks without the admin API](deployment.md#exposing-webhooks-without-the-admin-api)).
 With `api.port: 0` the satellite binds nothing at all, which is the shape for a
-host that must accept no connection of any kind — at the price of no probe
+host that must accept no connection of any kind — at the price of no tool
+bridge, so a seats satellite launches no executor, and no probe
 and no agent mode.
 
 ### 2. Pin the role

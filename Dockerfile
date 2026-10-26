@@ -91,7 +91,7 @@ COPY static/dashboard/THIRD_PARTY_NOTICES.txt /usr/share/doc/crewlet/dashboard/
 # every route it will serve 503 `starting`. `node.roles` decides what it then
 # carries: with `ingress`, the whole API (the dashboard, the REST API and
 # every webhook route); without it, only the /health and /ready probes, and a
-# seats node's agent-mode tool bridge. A deployment that sets
+# seats node's executor tool bridge. A deployment that sets
 # `api.public.port` moves the webhook, OTLP and bridge routes to that second
 # listener, which is the operator's to publish beside this one.
 #

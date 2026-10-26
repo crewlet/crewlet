@@ -169,6 +169,7 @@ func routingEngine(t *testing.T, instance string) (*Engine, *Company) {
 	cfg, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -272,6 +273,7 @@ func TestTheRetryWillNotWireASurfaceTheStartPathRefuses(t *testing.T) {
 			cfg, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5

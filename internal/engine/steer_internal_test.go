@@ -7,13 +7,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/steer"
+	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/signedask"
@@ -163,70 +163,67 @@ func TestAnEndedTurnIsAnsweredClosedForAWhile(t *testing.T) {
 	}
 }
 
-// launcherStub is an agent-mode executor, which no case launches.
+// launcherStub is an executor launcher no case launches through.
 type launcherStub struct{}
 
 func (launcherStub) LaunchExecutor(context.Context, runner.AgentRunRequest) error { return nil }
 
-// AN AGENT RUNTIME TURN REFUSES STEER. Its executor is a coding CLI's own loop,
-// whose rounds the engine does not drive, so no round boundary exists to hand
-// a note to — and a person is told so rather than promised a delivery. The box
-// is filed all the same, so the refusal is an answer and not silence.
+// EVERY TURN REFUSES STEER. Every executor is its coding CLI's own loop, whose
+// rounds the engine does not drive, so no round boundary exists to hand a note
+// to — and a person is told so rather than promised a delivery. The box is
+// filed all the same, so the refusal is an answer and not silence.
 func TestAnAgentRuntimeTurnRefusesSteer(t *testing.T) {
 	t.Parallel()
-	if steerBox(nil).Supported() != true {
-		t.Fatal("a native turn's box refuses notes")
-	}
 	d := mustSteerDesk(t, steerRing)
-	d.register("run-1", steerSeat{handle: "swe"}, steerBox(launcherStub{}))
+	d.register("run-1", steerSeat{handle: "swe"}, turnSteerBox())
 	status, _, err := d.offer("run-1", steer.Note{ID: "n", Text: "x"})
 	if err != nil || status != steer.StatusUnsupported {
-		t.Errorf("an agent-runtime turn answered (%s, %v), want unsupported", status, err)
+		t.Errorf("a turn launching its executor's run answered (%s, %v), want unsupported",
+			status, err)
 	}
-}
-
-// offeringProvider has a person steer the turn while its first model call is
-// in flight, and then fails that call — so the turn ends before any round
-// could read the note.
-type offeringProvider struct {
-	desk  *steerDesk
-	runID string
-}
-
-func (offeringProvider) Model() string { return "offering" }
-
-func (p offeringProvider) Complete(ctx context.Context, _ llm.Request) (*llm.Completion, error) {
-	req := founderNote(p.runID)
-	req.ID, req.Deadline = signedask.NewID(), time.Now().Add(time.Minute)
-	raw, err := p.desk.wire.SealRequest(req)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := p.desk.answer(ctx, raw); err != nil {
-		return nil, err
-	}
-	return nil, &llm.Error{Kind: llm.KindFatal, Provider: "test", Model: "offering"}
 }
 
 // A NOTE THAT MISSED THE TURN IS REPORTED EXPIRED.
 //
 // Taken while the turn ran, never read because the turn ended first: the
 // person was answered `pending`, and the turn's record is the only place that
-// can say what became of it. It says so before the turn's own completion, and
-// a note sent after the end is answered closed.
+// can say what became of it. The closer every turn calls on its way out
+// reports it, on the turn, as sent — and a note sent after the end is answered
+// closed.
+//
+// AT THE SEAM, not through a turn: every turn's executor is now its coding
+// CLI's own run, whose box answers each note `unsupported`
+// ([TestAnAgentRuntimeTurnRefusesSteer]), so no turn the engine runs takes a
+// note a round could miss. The box here is one that takes notes, as a turn's
+// box does wherever its rounds are the engine's.
 func TestANoteThatMissedTheTurnIsReportedExpired(t *testing.T) {
 	t.Parallel()
 	desk := mustSteerDesk(t, steerRing)
-	e, p := starting(t, modelsOf(t, offeringProvider{desk: desk, runID: "run-1"}))
+	e, p := starting(t, refusingModels(t))
 	e.steers = desk
-	tick := events.New(types.TaskAssigned{
-		TaskID: "t-1", RoleName: "SWE", Description: "write the standup note",
-	}, events.TraceContext{})
-	if _, err := e.runTurn(t.Context(), Request{
-		RunID: "run-1", Handle: "swe", WorkKey: "wk-1", Events: []*events.Event{tick},
-	}); err == nil {
-		t.Fatal("the turn succeeded; this case needs one that ends before its next round")
+	company := e.Company()
+	seat := company.Org.AgentSeatByHandle("swe")
+	r, err := company.RunnerFor("swe", nil, RunnerInput{
+		Reply: turn.NoReply(), Launcher: launcherStub{}, Publisher: p,
+		Turn: runner.Turn{RunID: "run-1", WorkKey: "wk-1",
+			Context: &turnctx.Turn{RunID: "run-1", WorkKey: "wk-1", Seat: seat, Org: company.Org}},
+	})
+	if err != nil {
+		t.Fatalf("RunnerFor: %v", err)
 	}
+	box := steer.New()
+	closeSteer := e.openSteer("run-1", "swe", box, r)
+
+	req := founderNote("run-1")
+	req.ID, req.Deadline = signedask.NewID(), time.Now().Add(time.Minute)
+	raw, err := desk.wire.SealRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := desk.answer(t.Context(), raw); err != nil {
+		t.Fatalf("offering the note: %v", err)
+	}
+	closeSteer(t.Context())
 
 	evs := p.published()
 	at := position(evs, "agent_turn_steered")
@@ -239,23 +236,9 @@ func TestANoteThatMissedTheTurnIsReportedExpired(t *testing.T) {
 		got.OperatorID != "pat:ops-token" || got.Note != "use staging" || got.Round != 0 {
 		t.Errorf("the note is recorded %+v, want it expired, unread, naming who sent it", got)
 	}
-	if ended := position(evs, "agent_turn_completed"); ended < at {
-		t.Errorf("the turn's completion (%d) precedes the note it missed (%d)", ended, at)
-	}
 	if status, _, _ := desk.offer("run-1", steer.Note{ID: "late", Text: "x"}); status != steer.StatusClosed {
 		t.Errorf("a note after the turn ended answered %s, want closed", status)
 	}
-}
-
-// modelsOf is a one-model registry under the key the starting fixture's seat
-// runs on.
-func modelsOf(t *testing.T, p llm.Provider) *phase.Registry {
-	t.Helper()
-	models, err := phase.NewRegistry([]phase.Entry{{Key: "only", Provider: p}})
-	if err != nil {
-		t.Fatalf("phase.NewRegistry: %v", err)
-	}
-	return models
 }
 
 // sweAgent is the fixture seat's derived id, as a desk files it.

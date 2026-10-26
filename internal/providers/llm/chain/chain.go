@@ -10,10 +10,18 @@
 // one: its vendor's outage or its own crash is not the next member's, so the
 // walk moves on.
 //
-// Fallback is per CALL, not per round. A member that fails is dropped along
-// with whatever it produced, and the next one starts the call from scratch,
-// which keeps one telemetry span per attempt instead of a conversation
-// stitched from two models.
+// Fallback is per CALL, not per round, for a text call. A member that fails is
+// dropped along with whatever it produced, and the next one starts the call
+// from scratch, which keeps one telemetry span per attempt instead of a
+// conversation stitched from two models.
+//
+// A seat's EXECUTOR falls back per LAUNCH instead ([Pick]): its run is the
+// CLI's own, in a box, and hours long, so there is no call to retry on the next
+// member once it started — a run that meets a limit midway is not relaunched
+// elsewhere. What can still move is where the next run starts, so the launch
+// asks each member whether it is ready in the same order and with the same
+// vocabulary a call uses: a retryable refusal hands off, a fatal one stops the
+// walk, and running out is the same [Error] a call reports.
 package chain
 
 import (
@@ -206,6 +214,59 @@ func (c *Chain) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 	}
 
 	return nil, &Error{Attempted: c.Keys(), Err: last}
+}
+
+// Pick is the executor's fallback at launch: the first of members that ready
+// accepts, walked in order.
+//
+// ready answers for one member at the moment of the launch — nil when it can
+// take the run, a classified error when it cannot. A RETRYABLE refusal (an
+// entry sitting out its spent plan) hands off exactly as [Chain.Complete]
+// does: it is logged as provider_fallback, reported to onFallback naming the
+// member that takes over — or none, on the last — and the walk moves on. A
+// fatal refusal is returned as it came, for the reason a fatal call stops the
+// walk. Every member refusing retryably is an [*Error] naming them all, so the
+// caller reads an exhausted launch exactly as an exhausted call — the same
+// unavailability the seat reports either way.
+//
+// The caller filters members that can never take a launch (a CLI with no
+// in-box runner) BEFORE calling: that is a fact of the configuration, not a
+// refusal of the moment, and announcing it as a hand-off on every launch
+// would publish a fallback nothing fell from.
+func Pick(ctx context.Context, members []Member, ready func(Member) error,
+	onFallback func(Fallback)) (Member, error) {
+	if len(members) == 0 {
+		return Member{}, &llm.Error{
+			Kind: llm.KindFatal,
+			Err:  errors.New("chain: no member can take the launch"),
+		}
+	}
+	var last error
+	for i, m := range members {
+		err := ready(m)
+		if err == nil {
+			return m, nil
+		}
+		kind := llm.KindOf(err)
+		if !kind.Retryable() {
+			return Member{}, err
+		}
+		next := ""
+		if i+1 < len(members) {
+			next = members[i+1].Key
+		}
+		log.WarnContext(ctx, "provider_fallback",
+			"from", m.Key, "to", next, "kind", kind.String(), "error", err.Error())
+		if onFallback != nil {
+			onFallback(Fallback{From: m.Key, To: next, Kind: kind, Err: err})
+		}
+		last = err
+	}
+	attempted := make([]string, len(members))
+	for i, m := range members {
+		attempted[i] = m.Key
+	}
+	return Member{}, &Error{Attempted: attempted, Err: last}
 }
 
 // Error reports that every member failed retryably.

@@ -16,8 +16,9 @@ import (
 //
 //   - "writing about an action does not perform it" — a turn that ended with
 //     a composed reply nobody was sent. It stays here, not only in
-//     `submit_work`'s description, because in text mode the tool protocol is
-//     the engine's own envelope and no CLI harness can teach it;
+//     `submit_work`'s description, because the executor's CLI ends its own
+//     run on a closing reply that reaches nobody: its harness teaches it to
+//     act, not that the only way to a person is a tool of the seat's;
 //   - the discovery sentence — an actor that gave up when the tool it needed
 //     was not already on its surface;
 //   - the full-arc rule — routed comment triggers produced recon only, and
@@ -59,36 +60,21 @@ const untrustedTextHeading = "\n## Text somebody else wrote"
 // KeyUntrustedText is the outline key of that section.
 const KeyUntrustedText = "untrusted_text"
 
-// executorSandboxSection is rendered only where the executor is offered
-// run_sandbox ([ExecutorInput.OffersSandbox]).
-//
-// Gated because it is absent for very nearly every role: unconditional, it
-// would be prose about a tool the seat does not have, on every executor prompt
-// in the company. What the tool does and takes is its own description; what
-// this adds is the one fact about the TURN — it pauses for the run and resumes
-// with its report — which is what stops a seat ending the turn to "report
-// later" and leaving the requester waiting on a run nobody follows up.
-const executorSandboxSection = "\n## Sandbox code work" +
-	"\nReal code work — changing code, running tests, reproducing a bug — " +
-	"goes to `run_sandbox`. This turn pauses while the run works and resumes " +
-	"with its report as the call's result, so act on it in the SAME turn: " +
-	"report the outcome, link the pull request, update the ticket."
-
 // ExecutorInput is everything the executor prompt renders beyond the seat
 // itself.
 //
-// Every field is frozen at turn start and none of them varies as the loop
-// runs: that is what makes the prompt byte-identical on round 9 and round 1,
-// which is what the provider's prefix cache is priced on. Work that
-// accumulates DURING the turn belongs in [BuildPhaseUserMessage].
+// Every field is frozen at turn start and none of them varies between the
+// turn's launches: that is what makes the prompt byte-identical on its third
+// run and its first, which is what the provider's prefix cache is priced on.
+// Work that accumulates DURING the turn belongs in [BuildPhaseUserMessage].
 //
 // The zero value renders the plain contract with nothing to discover and no
 // prefetch blocks, which is what most tests want.
 type ExecutorInput struct {
 	// Discoverable is what the executor can reach but does not hold yet,
 	// rendered by [github.com/crewlet/crewlet/internal/tools.Snapshot.Discoverable]:
-	// on the executor, which holds every first-party tool from its first
-	// round, that is its MCP servers by name. Empty renders no section.
+	// on the executor, which holds every first-party tool from its launch,
+	// that is its MCP servers by name. Empty renders no section.
 	Discoverable string
 
 	// AvailableTools is every name on the surface built for this phase,
@@ -138,16 +124,6 @@ type ExecutorInput struct {
 	// Skills is the tool-skill registry. Nil keeps the prompt free of skill
 	// scaffolding entirely.
 	Skills SkillCatalogue
-
-	// OffersSandbox is whether run_sandbox is on the surface this executor
-	// is offered, which is what the sandbox section teaches.
-	//
-	// THE CALLER'S ANSWER, not the role's gate read here: the gate is not
-	// what says a seat holds the tool. A seat whose executor runs in agent
-	// mode is never offered it — it already holds a shell — whatever its
-	// gate says, and the section rendered off the gate told that seat's
-	// coding CLI about a tool its bridge never lists, on every turn.
-	OffersSandbox bool
 }
 
 // BuildExecutor renders the executor's system prompt, and its outline.
@@ -218,10 +194,6 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 	// seat and costs the prompt cache nothing.
 	b.Heading(KeyUntrustedText, untrustedTextHeading, provenance.StandingInstruction)
 
-	if in.OffersSandbox {
-		b.Heading("sandbox", executorSandboxSection)
-	}
-
 	// FIRST of the prefetched blocks, because it is the trigger's own
 	// context rather than something retrieved about it, and the executor
 	// reads this prompt top-down: what the conversation is before what the
@@ -283,7 +255,7 @@ const KeyDiscoverableTools = "discoverable_tools"
 // can reach has no section, rather than a heading over "(none)".
 //
 // NOT "Available tools", which is what it was titled while it listed every
-// tool the phase already held. That is the heading a text-mode prompt gives
+// tool the phase already held. That is the heading a text call's prompt gives
 // the JSON definitions of the tools the phase DOES hold, in the same
 // conversation, and two sections under one heading saying different things
 // is a model reading whichever it saw last.

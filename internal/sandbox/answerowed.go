@@ -573,11 +573,15 @@ func (c *Coordinator) attemptOwed(ctx context.Context, run PendingRun) {
 		return
 	}
 	c.moveRun(claimed.AgentHandle, StatusAnswered, StatusResumed)
-	disposition, err := c.resumeAndSettle(ctx, claimed, answerText(claimed, answer.Text, answer.attribution()),
-		true, answer.trigger(), runOutcome{
-			InputTokens: claimed.ParkedInputTokens, OutputTokens: claimed.ParkedOutputTokens,
-			Engine: parkedEngineSpend(claimed),
-		})
+	// NO REPORT, and the question and its answer instead: the run is not
+	// over, and the turn carries it on with them ([ResumeRequest.Asked]).
+	disposition, err := c.resumeAndSettle(ctx, claimed, "", true, answer.trigger(), runOutcome{
+		InputTokens: claimed.ParkedInputTokens, OutputTokens: claimed.ParkedOutputTokens,
+		CacheReadTokens:  claimed.ParkedCacheReadTokens,
+		CacheWriteTokens: claimed.ParkedCacheWriteTokens,
+		Engine:           parkedEngineSpend(claimed),
+		Asked:            askedRun(claimed, *answer),
+	})
 	if disposition == AnswerDeferred {
 		// The claim went back: the run is [StatusAnswered] again with
 		// the same answer on it, owed the same resume.
@@ -1193,6 +1197,54 @@ func (c *Coordinator) Readmit(cond Condition, handles ...string) {
 		r.waiting = ""
 		c.scheduleOwedLocked(turnID, 0)
 	}
+	c.liftHoldsLocked(cond, handles)
+}
+
+// liftHoldsLocked lifts, in the background, every hold on cond this node's
+// seats' runs are under ([PendingRun.HeldFor]) — the seats named, or every
+// seat — so the next poll announces those jobs' completions again. The caller
+// holds c.mu.
+//
+// THE ROWS ARE THE RECORD, not a list in memory: a hold is written on the run
+// and survives the node, so a node that took the seat over since lifts what
+// its predecessor held. Only the seats this node holds, because a peer's
+// signal is its own to act on, and a lift is a write under the lease.
+//
+// IN THE BACKGROUND because Readmit is a signal sent from the engine's own
+// event paths and must stay cheap; the listing is one read of the store.
+func (c *Coordinator) liftHoldsLocked(cond Condition, handles []string) {
+	if c.closed {
+		return
+	}
+	c.inflight.Add(1)
+	go func() {
+		defer c.inflight.Done()
+		ctx := c.life
+		runs, err := c.pending.ListActive(ctx)
+		if err != nil {
+			log.WarnContext(ctx, "sandbox_hold_lift_unread", "condition", string(cond),
+				"error", err.Error(), "detail", "the holds lift on the clock instead")
+			return
+		}
+		for _, run := range runs {
+			if run.HeldFor != cond ||
+				(len(handles) > 0 && !slices.Contains(handles, run.AgentHandle)) {
+				continue
+			}
+			if _, held := c.leaseOf(run.AgentHandle); !held {
+				continue
+			}
+			lifted, err := c.pending.LiftHold(ctx, run.TurnID, cond)
+			switch {
+			case err != nil:
+				log.WarnContext(ctx, "sandbox_hold_lift_failed", "turn_id", run.TurnID,
+					"condition", string(cond), "error", err.Error())
+			case lifted:
+				log.InfoContext(ctx, "sandbox_resume_hold_lifted", "turn_id", run.TurnID,
+					"agent", run.AgentHandle, "condition", string(cond))
+			}
+		}
+	}()
 }
 
 // signal is what a [Coordinator.Readmit] was for: a condition, on one seat or —

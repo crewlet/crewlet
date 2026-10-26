@@ -1282,14 +1282,8 @@ function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWe
  * on the reading that a repeat meant the turn's dispatch had been re-delivered
  * and re-run. It cannot mean that — a re-delivery mints a new run id
  * (`adr/0017`) and lands on a different Turn screen, which is what the attempt
- * banner above is for. What it actually means is a SUSPEND: an executor that
- * parked on a detached coding run publishes its opening frame, and the resume
- * re-enters that same phase at that same iteration and publishes the parked
- * conversation it sends instead. Merged, one real suspend drew `EXECUTE ×2`
- * with System 0 B and User 0 B over a phase whose opening carried 3,166 bytes
- * of system prompt, and offered the two prompts as a token "range" — see
- * [promptWeights], which has the measured pair. They are two prompts, so they
- * are two rows, and the second says it is a re-entry.
+ * banner above is for — so every measurement here is a prompt this turn sent,
+ * and two of them are two rows. See [promptWeights].
  */
 function PromptWeights({ rows }: { rows: PromptWeight[] }) {
   return (
@@ -1305,30 +1299,18 @@ function PromptWeights({ rows }: { rows: PromptWeight[] }) {
             <span className="t-label spacer">Prompt sent</span>
             <span className="t-label num-col">System</span>
             <span className="t-label num-col">User</span>
-            <span className="t-label num-col">Messages</span>
             <span className="t-label num-col">Tools</span>
             <span className="t-label num-col">Approx. tokens</span>
           </div>
           {rows.map((w) => (
-            /* KEYED ON THE EVENT, not on the phase key: a suspended executor
-               publishes two measurements under one `phase|iteration`, so that
-               pair is a duplicate React key that reconciles the re-entry's
-               figures onto the opening's row. */
+            /* KEYED ON THE EVENT, not on the phase key: two measurements
+               under one `phase|iteration` would be a duplicate React key that
+               reconciles one prompt's figures onto the other's row. */
             <div key={w.id} className="row gap-2">
               <PhaseTag phase={w.phase} />
               {w.iteration > 1 && (
                 <span className="t-caption" title="self-iterate round">
                   iter {w.iteration}
-                </span>
-              )}
-              {/* WHICH OF THE TWO THIS IS. Two rows under one phase tag and
-                  one iteration read as a repeating panel unless the second
-                  says why it is there — and it is the row whose System and
-                  User columns are legitimately 0, because a re-entered phase
-                  opens no conversation. */}
-              {w.resumed && (
-                <span className="t-caption" title="Resumed after its coding run">
-                  resumed
                 </span>
               )}
               <span className="spacer" />
@@ -1337,12 +1319,6 @@ function PromptWeights({ rows }: { rows: PromptWeight[] }) {
               </span>
               <span className="mono t-num t-caption num-col" title="bytes in the user message">
                 {fmtBytes(w.userBytes)}
-              </span>
-              <span
-                className="mono t-num t-caption num-col"
-                title="Size of the resumed conversation"
-              >
-                {fmtBytes(w.messageBytes)}
               </span>
               <span
                 className="mono t-num t-caption num-col"
@@ -1578,9 +1554,8 @@ export function turnCrumbLabel(view: TurnView, ordinal: number | null): string {
  * Transcript.
  *
  * A parked turn is the engine's "working" with no phase in flight: its
- * executor launched a detached run and suspended, and the run is the work —
- * often for the whole of an agent-mode executor's turn, and for hours on a
- * long native one. Every watch link lands on this tab, and without this card
+ * executor launched its detached run and suspended, and the run is the work —
+ * for most of the turn, and for hours on a long one. Every watch link lands on this tab, and without this card
  * a parked turn's Transcript held nothing live and no way to the thing that
  * was: the run's output was a Timeline span and a click away. It is the SAME
  * poll that span opens (`LiveOutput`, `sandbox_tail`), and the run's own page

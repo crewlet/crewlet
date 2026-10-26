@@ -35,6 +35,7 @@ const rotatedGitLabSecret = "whsec_YS1yb3RhdGVkLXNpZ25pbmcta2V5LW9mLTMyYnl0ZXM="
 var servedYAML = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     primary:
       model: claude-sonnet-5
@@ -79,6 +80,7 @@ roles:
 var gitLabOnlyYAML = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     primary:
       model: claude-sonnet-5
@@ -98,6 +100,7 @@ roles:
 const referencedSecretsYAML = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     primary:
       model: claude-sonnet-5
@@ -426,6 +429,7 @@ func TestWithoutAResolverNothingVerifies(t *testing.T) {
 const seatAppsYAML = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     primary:
       model: claude-sonnet-5

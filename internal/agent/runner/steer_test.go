@@ -2,6 +2,7 @@ package runner_test
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -16,24 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/providers/llm"
-	"github.com/crewlet/crewlet/internal/tools"
 )
-
-// offeringTool is a builtin that, when the executor calls it, has a person
-// offer a note to the running turn — the moment a person steers is exactly
-// while a turn is busy.
-type offeringTool struct {
-	box  *steer.Box
-	note steer.Note
-}
-
-func (o offeringTool) Name() string               { return "peek" }
-func (o offeringTool) Description() string        { return "peek at something" }
-func (o offeringTool) Parameters() map[string]any { return nil }
-func (o offeringTool) Call(context.Context, map[string]any) (tools.Result, error) {
-	o.box.Offer(o.note)
-	return tools.Result{Output: "peeked"}, nil
-}
 
 // founderNote is a note a bound person sent through their session: By is the
 // seat they act as, as iam.ActorFor names them, and OperatorID the credential.
@@ -62,57 +46,40 @@ func (c *capture) steered() []*types.AgentTurnSteered {
 	return out
 }
 
-// THE REVIEWER SEES A NOTE THE EXECUTOR WAS STEERED WITH.
+// THE REVIEWER READS A NOTE SENT WHILE THE RUN WORKED.
 //
-// The note is read by the executor at its next round, and the reviewer — a
-// fresh conversation judging the work — opens with it too. Without that the
-// reviewer grades the work against the task the person corrected: an executor
-// that followed "post to #staging" would be sent back for not posting to the
-// channel the original ask named.
-func TestTheReviewerSeesANoteTheExecutorWasSteeredWith(t *testing.T) {
+// A person who corrects a turn while its run is out is correcting the work the
+// reviewer is about to judge. The segment that collects the run drains the
+// turn's box at the reviewer's first round, so the reviewer judges the work
+// against the task as corrected — and the read is recorded once, as delivered
+// to the phase that read it.
+func TestTheReviewerReadsANoteSentWhileTheRunWorked(t *testing.T) {
 	t.Parallel()
 	box := steer.New()
 	pub := newCapture()
-	prov := &scriptedProvider{
-		execute: []llm.Completion{
-			{ToolCalls: []llm.ToolCall{{ID: "p", Name: "peek"}}},
-			submitWork(t),
-		},
-		review: []llm.Completion{submitCall(t, runner.SubmitReviewTool,
-			`{"decision":"done","final_artifact":"a"}`)},
-	}
-	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
-		steer: box, pub: pub,
-		register: func(t *testing.T, reg *tools.Registry) {
-			if err := reg.Register(offeringTool{box: box, note: founderNote}, tools.OriginBuiltin); err != nil {
-				t.Fatalf("Register: %v", err)
-			}
-		},
-	})
-	work, _, err := r.Execute(t.Context(), 1, "", nil)
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	if _, err := r.Review(t.Context(), 1, work, nil); err != nil {
-		t.Fatalf("Review: %v", err)
-	}
+	prov := &scriptedProvider{review: []llm.Completion{submitCall(t, runner.SubmitReviewTool,
+		`{"decision":"done","final_artifact":"a"}`)}}
+	entries := []phase.Entry{{Key: "default", Provider: prov}}
+	opts := buildOpts{steer: box, pub: pub}
+	launched, req := launch(t, entries, opts, 1, "", nil)
+	bridged := play(t, req, deliver(t, "posted"))
+	// Sent while the run was out.
+	box.Offer(founderNote)
 
-	exec := prov.requestsFor("execute")
-	if len(exec) != 2 || holds(exec[0]) || !holds(exec[1]) {
-		t.Fatalf("the executor did not read the note at its next round (%d rounds)", len(exec))
+	collector, work, _ := collect(t, entries, opts, launched, nil, bridged, "posted", runner.RunRecord{})
+	if _, err := collector.Review(t.Context(), 1, work, nil); err != nil {
+		t.Fatalf("Review: %v", err)
 	}
 	review := prov.requestsFor("review")
 	if len(review) == 0 || !holds(review[0]) {
-		t.Fatal("the reviewer judged the work without the note the executor was steered with")
+		t.Fatal("the reviewer judged the work without the note sent while it was done")
 	}
-	// Recorded ONCE, as delivered, at the executor round that read it —
-	// carrying the note into the reviewer is not a second delivery.
 	got := pub.steered()
 	if len(got) != 1 {
 		t.Fatalf("published %d agent_turn_steered, want 1: %+v", len(got), got)
 	}
-	if got[0].Outcome != types.SteerDelivered || got[0].Phase != types.Phase(phase.Execute) ||
-		got[0].Round != 2 || got[0].NoteID != "req-1" || got[0].SteeredBy != "founder" ||
+	if got[0].Outcome != types.SteerDelivered || got[0].Phase != types.Phase(phase.Review) ||
+		got[0].Round != 1 || got[0].NoteID != "req-1" || got[0].SteeredBy != "founder" ||
 		got[0].SteeredByKind != string(iam.ActorHuman) ||
 		got[0].OperatorID != "session:founder-1" ||
 		got[0].Note != founderNote.Text || got[0].TurnID != "t-1" || got[0].AgentHandle != "cto" {
@@ -120,52 +87,91 @@ func TestTheReviewerSeesANoteTheExecutorWasSteeredWith(t *testing.T) {
 	}
 }
 
-// A NOTE READ BY THE REVIEWER BINDS THE NEXT EXECUTOR ITERATION. A turn sent
-// back for another pass opens a fresh executor conversation, and the note is
-// carried into it rather than lost with the conversation it was read in.
+// A NOTE BINDS THE TURN'S LATER ITERATIONS, across every park between them.
+// The reviewer that read it sends the work back; the next run is launched
+// with the note in its brief, since a run is a fresh session with nowhere
+// else to read it; and the reviewer of THAT run — a fresh runner in whichever
+// process collects it — opens with the note too, carried on the park rather
+// than read again.
+//
+// Mutations: leave the carried notes out of the brief, or off the park, and
+// one half goes red.
 func TestANoteBindsTheTurnsLaterIterations(t *testing.T) {
 	t.Parallel()
 	box := steer.New()
-	prov := &scriptedProvider{
-		execute: []llm.Completion{submitWork(t)},
-		review: []llm.Completion{submitCall(t, runner.SubmitReviewTool,
-			`{"decision":"self_iterate","notes":"try again"}`)},
-	}
-	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{steer: box})
-	work, _, err := r.Execute(t.Context(), 1, "", nil)
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	// Offered between the phases: the reviewer's first round reads it.
+	pub := newCapture()
+	prov := &scriptedProvider{review: []llm.Completion{submitCall(t, runner.SubmitReviewTool,
+		`{"decision":"self_iterate","notes":"try again"}`)}}
+	entries := []phase.Entry{{Key: "default", Provider: prov}}
+	opts := buildOpts{steer: box, pub: pub}
+
+	note := prompts.SteerMessage(founderNote.By, founderNote.Text)
+
+	launched, req := launch(t, entries, opts, 1, "", nil)
+	bridged := play(t, req, deliver(t, "posted"))
+	// The collecting runner's own launcher: it is the one that launches the
+	// turn's next run.
+	relauncher := &playLauncher{}
+	collecting := opts
+	collecting.launcher = relauncher
+	collector, work, _ := collect(t, entries, collecting, launched, nil, bridged, "posted", runner.RunRecord{})
 	box.Offer(founderNote)
-	if _, err := r.Review(t.Context(), 1, work, nil); err != nil {
+	if _, err := collector.Review(t.Context(), 1, work, nil); err != nil {
 		t.Fatalf("Review: %v", err)
 	}
-	if _, _, err := r.Execute(t.Context(), 2, "try again", nil); err != nil {
+	if strings.Contains(req.Brief, note) {
+		t.Fatal("the first run was launched with a note offered after it finished")
+	}
+
+	// The turn sent back: the collecting runner launches the next run.
+	if _, _, err := collector.Execute(t.Context(), 2, "try again", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	exec := prov.requestsFor("execute")
-	if holds(exec[0]) {
-		t.Fatal("the first iteration read a note offered after it finished")
+	parked, ok := collector.Suspended()
+	if !ok {
+		t.Fatal("the second launch recorded no park")
 	}
-	if !holds(exec[len(exec)-1]) {
-		t.Error("the second executor iteration lost the note the reviewer read")
+	relaunched := relauncher.last(t)
+	if !strings.Contains(relaunched.Brief, note) {
+		t.Fatalf("the second run's brief lost the note the reviewer read:\n%s", relaunched.Brief)
+	}
+
+	// Collected by a fresh runner, whose reviewer is a fresh conversation.
+	again := &scriptedProvider{review: []llm.Completion{submitCall(t, runner.SubmitReviewTool,
+		`{"decision":"done","final_artifact":"a"}`)}}
+	final, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: again}}, buildOpts{
+		steer: steer.New(), pub: pub,
+		resume: &runner.Resume{State: parked.State, Answer: "posted",
+			Bridged: play(t, relaunched, deliver(t, "posted to staging"))},
+	})
+	work, _, err := final.Resume(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if _, err := final.Review(t.Context(), 2, work, nil); err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	if review := again.requestsFor("review"); len(review) == 0 || !holds(review[0]) {
+		t.Error("the second reviewer judged the work without the note the turn had read")
+	}
+	// CARRIED, not read again: the one delivery is the first reviewer's.
+	if got := pub.steered(); len(got) != 1 {
+		t.Errorf("published %d agent_turn_steered for one note, want 1: %+v", len(got), got)
 	}
 }
 
-// workerProvider tells the executor's requests from a worker's by the
-// submission each surface offers, and has a person steer the turn while the
-// worker is running.
-type workerProvider struct {
+// steeringWorker answers a delegated worker and the reviewer, and has a person
+// steer the turn while the worker is running.
+type steeringWorker struct {
 	t    *testing.T
 	box  *steer.Box
 	mu   sync.Mutex
 	seen map[string][]llm.Request
 }
 
-func (p *workerProvider) Model() string { return "scripted" }
+func (p *steeringWorker) Model() string { return "scripted" }
 
-func (p *workerProvider) Complete(_ context.Context, req llm.Request) (*llm.Completion, error) {
+func (p *steeringWorker) Complete(_ context.Context, req llm.Request) (*llm.Completion, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	offered := toolNames(req.Tools)
@@ -185,35 +191,32 @@ func (p *workerProvider) Complete(_ context.Context, req llm.Request) (*llm.Comp
 		return &llm.Completion{ToolCalls: []llm.ToolCall{{ID: "w2",
 			Name: subagent.SubmitTool, Arguments: map[string]any{"result": "found it"}}}}, nil
 	case slices.Contains(offered, runner.SubmitReviewTool):
+		p.seen["review"] = append(p.seen["review"], req)
 		c := submitCall(p.t, runner.SubmitReviewTool, `{"decision":"done","final_artifact":"a"}`)
 		return &c, nil
 	default:
-		p.seen["execute"] = append(p.seen["execute"], req)
-		if len(p.seen["execute"]) == 1 {
-			return &llm.Completion{ToolCalls: []llm.ToolCall{{ID: "d", Name: subagent.ToolName,
-				Arguments: map[string]any{"tasks": []any{
-					map[string]any{"id": "look", "prompt": "look into it",
-						"system_prompt": "You look into things."},
-				}}}}}, nil
-		}
-		c := submitWork(p.t)
-		return &c, nil
+		return nil, fmt.Errorf("steeringWorker: asked by a phase it does not play (tools %v)", offered)
 	}
 }
 
 // SUBAGENTS ARE NOT STEERED. A worker is a leaf its parent directs, and a note
-// meant for the turn is the turn's to read: offered while a worker runs, it
-// waits in the box through every round the worker takes and reaches the
-// executor's next round instead.
+// meant for the turn is the turn's to read: offered while a worker the run
+// delegated to is running, it waits in the box through every round the worker
+// takes and reaches the reviewer that judges the run instead.
 func TestSubagentsAreNotSteered(t *testing.T) {
 	t.Parallel()
 	box := steer.New()
-	prov := &workerProvider{t: t, box: box, seen: map[string][]llm.Request{}}
-	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
-		steer: box, subagent: &runner.SubagentConfig{Limits: shipped()},
-	})
-	if _, _, err := r.Execute(t.Context(), 1, "", nil); err != nil {
-		t.Fatalf("Execute: %v", err)
+	prov := &steeringWorker{t: t, box: box, seen: map[string][]llm.Request{}}
+	entries := []phase.Entry{{Key: "default", Provider: prov}}
+	opts := buildOpts{steer: box, subagent: &runner.SubagentConfig{Limits: shipped()}}
+	round := executeRound(t, entries, opts, 1, "", nil, run{calls: []llm.ToolCall{
+		{ID: "d", Name: subagent.ToolName, Arguments: map[string]any{"tasks": []any{
+			map[string]any{"id": "look", "prompt": "look into it", "system_prompt": "You look into things."},
+		}}},
+		submitWork(t),
+	}}, runner.RunRecord{})
+	if _, err := round.collector.Review(t.Context(), 1, round.work, nil); err != nil {
+		t.Fatalf("Review: %v", err)
 	}
 	workers := prov.seen["worker"]
 	if len(workers) < 2 {
@@ -224,49 +227,10 @@ func TestSubagentsAreNotSteered(t *testing.T) {
 			t.Fatalf("worker round %d read the turn's note", i+1)
 		}
 	}
-	exec := prov.seen["execute"]
-	if len(exec) < 2 || !holds(exec[1]) {
-		t.Error("the executor's round after the delegate call did not read the note")
-	}
 	if strings.Contains(workers[len(workers)-1].Messages[0].Content, founderNote.Text) {
 		t.Error("the note reached a worker's prompt")
 	}
-}
-
-// A RESUMED EXECUTOR READS A NOTE AT ITS ROUND BOUNDARY, as the pass it
-// continues would have. The engine hands a resumed segment the turn's note box
-// ("a resumed segment is steerable like any other"), and a phase that drained
-// nothing left the note in the box: the executor finished the parked work
-// without the correction and only the reviewer read it.
-//
-// The round the delivery is announced at is on the PHASE's scale — the
-// re-entry's first round is the phase's third, after the two it ran before it
-// parked — so the record sits beside the round that read it.
-func TestAResumedExecutorReadsANoteAtItsRoundBoundary(t *testing.T) {
-	t.Parallel()
-	box := steer.New()
-	pub := newCapture()
-	prov := &scriptedProvider{execute: []llm.Completion{submitWork(t)}}
-	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
-		steer: box, pub: pub,
-		resume: &runner.Resume{State: suspendedAfterTwoRounds(), Answer: "the run succeeded"},
-	})
-	// Sent while the turn's coding run was collected, before the re-entered
-	// loop's first round.
-	box.Offer(founderNote)
-	if _, _, err := r.Resume(t.Context(), nil); err != nil {
-		t.Fatalf("Resume: %v", err)
-	}
-	exec := prov.requestsFor("execute")
-	if len(exec) == 0 || !holds(exec[0]) {
-		t.Fatal("the resumed executor did not read the note at its first round")
-	}
-	got := pub.steered()
-	if len(got) != 1 {
-		t.Fatalf("published %d agent_turn_steered, want 1: %+v", len(got), got)
-	}
-	if got[0].Outcome != types.SteerDelivered || got[0].Phase != types.Phase(phase.Execute) ||
-		got[0].Round != 3 {
-		t.Errorf("the delivery record is %+v, want delivered at execute round 3", got[0])
+	if review := prov.seen["review"]; len(review) == 0 || !holds(review[0]) {
+		t.Error("the reviewer after the delegate call did not read the note")
 	}
 }

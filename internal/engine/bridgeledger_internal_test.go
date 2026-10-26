@@ -4,8 +4,10 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -60,7 +62,7 @@ func TestABridgeSessionsCallsAreFiledUnderItsBoundJobAndCarryItsSpend(t *testing
 	l := &bridgeLedger{store: store, spend: meter}
 	l.bind("launch-1")
 	for range 3 {
-		if err := l.Append(t.Context(), "run-1", tools.Call{Name: "query_episodes"}); err != nil {
+		if err := l.Append(t.Context(), "run-1", mcpbridge.Call{Call: tools.Call{Name: "query_episodes"}}); err != nil {
 			t.Fatalf("Append: %v", err)
 		}
 	}
@@ -93,7 +95,7 @@ func TestAnUnboundBridgeSessionFilesNothing(t *testing.T) {
 	t.Parallel()
 	store := &appendingStore{}
 	l := newBridgeLedger(store, nil)
-	if err := l.Append(t.Context(), "run-1", tools.Call{Name: "read_page"}); err != nil {
+	if err := l.Append(t.Context(), "run-1", mcpbridge.Call{Call: tools.Call{Name: "read_page"}}); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
 	if len(store.appends) != 0 {
@@ -110,7 +112,7 @@ func TestABridgeSessionWithNoMeterSendsNoSpend(t *testing.T) {
 	l := newBridgeLedger(store, nil)
 	l.bind("launch-0")
 	for range 2 {
-		if err := l.Append(t.Context(), "run-1", tools.Call{Name: "read_page"}); err != nil {
+		if err := l.Append(t.Context(), "run-1", mcpbridge.Call{Call: tools.Call{Name: "read_page"}}); err != nil {
 			t.Fatalf("Append on a job the row no longer holds: %v", err)
 		}
 	}
@@ -118,5 +120,37 @@ func TestABridgeSessionWithNoMeterSendsNoSpend(t *testing.T) {
 		if a.Spent != (sandbox.EngineSpend{}) {
 			t.Errorf("append %d carried spend %+v from a session with no meter", i+1, a.Spent)
 		}
+	}
+}
+
+// THE BRIDGE'S MEASUREMENT REACHES THE ROW. The session times each call and
+// names who answered it, and the row is the only place a collection — often
+// another process — can read either from: the executor's record places the
+// run's calls on its timeline by them.
+//
+// Mutation: drop the start, the duration, the origin or the server from the
+// append, and this goes red.
+func TestABridgedCallsMeasurementIsFiledWithIt(t *testing.T) {
+	t.Parallel()
+	store := &appendingStore{}
+	l := newBridgeLedger(store, nil)
+	l.bind("launch-1")
+	at := time.Date(2026, 6, 15, 12, 1, 2, 0, time.UTC)
+	if err := l.Append(t.Context(), "run-1", mcpbridge.Call{
+		Call:      tools.Call{Name: "jira_search"},
+		StartedAt: at, Duration: 2345 * time.Millisecond,
+		Origin: "mcp:jira", Server: "jira",
+	}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if len(store.appends) != 1 {
+		t.Fatalf("%d appends, want 1", len(store.appends))
+	}
+	got := store.appends[0].Call
+	if !got.StartedAt.Equal(at) || got.DurationMS != 2345 {
+		t.Errorf("filed start %s and %d ms, want %s and 2345", got.StartedAt, got.DurationMS, at)
+	}
+	if got.Origin != "mcp:jira" || got.Server != "jira" {
+		t.Errorf("filed origin %q and server %q, want mcp:jira and jira", got.Origin, got.Server)
 	}
 }

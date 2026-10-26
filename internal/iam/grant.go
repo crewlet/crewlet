@@ -54,9 +54,10 @@ const (
 	// entry is a command every engine host executes, a seat's `mcp_env` and
 	// its per-phase model keys (`llm_*`, a `cli-agent` provider among them)
 	// choose what the seat's children run and which credentials they are
-	// handed, a `sandbox` cell of `run_in: self` runs a coding agent on the
-	// engine host, and a seat's worker grants decide which tools a worker
-	// runs with. So a holder can run anything on every engine host and read
+	// handed, a model entry's `run_in: direct` runs the seat's executor, a
+	// fully permissioned coding agent, on the engine host, and a seat's
+	// worker grants decide which tools a worker runs with. So a holder can
+	// run anything on every engine host and read
 	// whatever a process there can — the keyring included — and every
 	// other permission is transitively theirs. A split permission for "the
 	// part that runs code" was weighed and declined: it would be the whole

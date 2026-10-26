@@ -43,6 +43,7 @@ import (
 const companyYAML = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     primary:
       model: claude-sonnet-5
@@ -321,7 +322,7 @@ func TestAWorkerOnlyNodeServesNoHTTPAndSaysSo(t *testing.T) {
 	// assertion's record went.
 	//
 	// AT WARN ONLY WHERE NOTHING ELSE WARNED. A node whose DECLARED roles
-	// name ingress has been told at WARN already, by the `api.port`
+	// name ingress or seats has been told at WARN already, by the `api.port`
 	// advisory its start logs, which leaves an undeclared node.roles out —
 	// so that node is the one this line warns, and every other is told at
 	// info. Mutation: warn on every ingress node and the declared-ingress
@@ -454,8 +455,8 @@ func TestANodeWithoutTheIngressRoleServesOnlyItsProbes(t *testing.T) {
 }
 
 // A SEATS NODE WITHOUT INGRESS ALSO SERVES ITS OWN TOOL BRIDGE, beside its
-// probes. A bridged session lives in the process that opened it, so the box of
-// an agent-mode seat can reach only the node running that seat; gating the
+// probes. A bridged session lives in the process that opened it, so a seat's
+// executor box can reach only the node running that seat; gating the
 // bridge on ingress with the rest of the API launched boxes whose every tool
 // call found nothing listening. The listener carries the bridge's own refusal
 // for a bad token, the probes, and no dashboard or REST route.
@@ -478,7 +479,7 @@ func TestASeatsNodeWithoutIngressServesItsProbesAndToolBridge(t *testing.T) {
 	}
 	if surface == nil {
 		t.Fatalf("a seats node with a bridge URL bound no listener, so its "+
-			"agent-mode boxes can reach no tools:\n%s", logged.String())
+			"executor boxes can reach no tools:\n%s", logged.String())
 	}
 	t.Cleanup(func() { surface.stop(context.Background(), logging.Get("test")) })
 	if surface.app != nil || surface.projector != nil {
@@ -2260,7 +2261,7 @@ func TestValidateLocatesAnEntrysProfileRefusal(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			doc := "name: Acme\nproviders:\n  llm:\n    sub:\n      model: m\n" + tc.entry
+			doc := "name: Acme\nproviders:\n  sandbox: {fake: true}\n  llm:\n    sub:\n      model: m\n" + tc.entry
 			path := writeYAML(t, "company.yaml", doc)
 			var out, errOut bytes.Buffer
 			if err := run([]string{"validate", path, "-tier", "company", "-json"}, &out, &errOut); err == nil {

@@ -49,14 +49,13 @@ var onboardingAlwaysOn = []string{ReflectAndPersistTool, MarkOnboardedTool}
 // The builtin names the runner's surfaces and prompts depend on. Named here
 // rather than imported from internal/agent/builtin, which is a leaf the engine
 // wires in: the runner builds the surfaces those tools sit on and must not
-// grow a dependency on every tool to name four of them.
+// grow a dependency on every tool to name three of them.
 // TestTheRunnerNamesTheBuiltinsItDependsOn pins them against the builtin
 // package's own constants, so a rename there fails a test here rather than
 // silently emptying a surface or ungating a prompt rule.
 const (
 	ReflectAndPersistTool = "reflect_and_persist"
 	MarkOnboardedTool     = "mark_onboarded"
-	RunSandboxTool        = "run_sandbox"
 	A2AAskTool            = "a2a_ask"
 )
 
@@ -132,8 +131,9 @@ type Onboarding struct {
 	// Latch is the process-local memory of who is already onboarded.
 	Latch *Latch
 
-	// Rounds and Ceiling are the pass's own budget, separate from the
-	// executor's.
+	// Rounds and Ceiling are the pass's own budget — the only engine-driven
+	// phase with a ceiling above its budget, so the only one the round-cap
+	// extension reaches.
 	Rounds  int
 	Ceiling int
 
@@ -236,15 +236,10 @@ func (r *Runner) Onboard(ctx context.Context) (bool, error) {
 // ITERATION 0, so a dashboard groups it under the turn BEFORE the first
 // executor round, which runs at iteration 1. The phase events, the extension
 // judge and the failure path all come from runPhase — the same machinery the
-// executor and the reviewer use, which is what stops onboarding drifting into
-// a second turn engine.
+// reviewer uses, which is what stops onboarding drifting into a second turn
+// engine.
 func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error) {
-	// WITHOUT run_sandbox: a call of it launches a box and starts a coding
-	// job, and this pass cannot suspend to record that run, so the loop
-	// marks the call failed only after the job has started — leaving a run
-	// nothing collects. A tool in the snapshot is one the prompt lists to
-	// discover and activate_tool reaches.
-	snapshot := r.cfg.Registry.Snapshot().Without(RunSandboxTool)
+	snapshot := r.cfg.Registry.Snapshot()
 	surface, err := r.surfaceWith(ctx, r.ownMeter(), phase.Onboarding, 0, snapshot, nil,
 		onboardingAlwaysOn)
 	if err != nil {

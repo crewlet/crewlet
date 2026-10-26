@@ -345,7 +345,7 @@ func TestTheOperatorCatalogueIsDrawnFromTheSeatOne(t *testing.T) {
 	// AND THE TURN-ONLY TOOLS ARE ABSENT. A diary belongs to a seat, a
 	// skill is loaded into a phase, and a colleague ask is answered by
 	// waking a seat — there is nobody here for any of the three.
-	for _, name := range []string{"reflect_and_persist", "use_skill", "a2a_ask", "run_sandbox"} {
+	for _, name := range []string{"reflect_and_persist", "use_skill", "a2a_ask"} {
 		if slices.Contains(s.Tools(), name) {
 			t.Errorf("the operator surface offers %q, which only means something inside a turn", name)
 		}

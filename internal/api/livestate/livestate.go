@@ -312,11 +312,11 @@ type LiveState struct {
 	// live call to match and seed a fresh one — an in-flight row for a
 	// phase that finished, which nothing would ever clear.
 	//
-	// The timestamp is what makes this safe for a SUSPENDED Execute phase:
-	// it publishes a completion checkpoint under these exact coordinates
-	// and then, when the detached run lands, resumes the same loop and
-	// streams more rounds under them. Those rounds are strictly newer than
-	// the checkpoint, so only a round at or before it is dropped.
+	// The timestamp is what makes this safe for a phase published under the
+	// same coordinates more than once — a parked executor whose collection
+	// later publishes its record under the coordinates its launch used:
+	// whatever comes later is strictly newer than the checkpoint, so only a
+	// round at or before it is dropped.
 	finishedCalls *boundedSet[stamp]
 
 	// spend holds per-phase RECORDS rather than a folded rollup, so the

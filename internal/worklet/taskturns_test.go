@@ -46,12 +46,12 @@ func TestTurnsOfNumbersTurnsNotSegments(t *testing.T) {
 
 	parked := segment("run-a", 1, "suspended", "execute")
 	parked.Summary = "started the branch"
-	parked.Tools = []worklet.TurnTool{{Name: "run_sandbox", Calls: 1}}
+	parked.Tools = []worklet.TurnTool{{Name: "delegate", Calls: 1}}
 	resumed := segment("run-a", 0, "done", "execute", "review")
 	resumed.Summary = "added the retry"
 	resumed.Review = "the timeout path has no test"
 	resumed.Spend.SentBack = 1
-	resumed.Tools = []worklet.TurnTool{{Name: "run_sandbox", Calls: 2}, {Name: "comment", Calls: 1}}
+	resumed.Tools = []worklet.TurnTool{{Name: "delegate", Calls: 2}, {Name: "comment", Calls: 1}}
 	// MORE OF A TURN CHARGED ELSEWHERE: a segment carrying no count.
 	elsewhere := segment("run-c", 0, "done", "execute")
 	// A TURN THAT BROKE IN REVIEW, which the card marks on that chip.
@@ -106,7 +106,7 @@ func TestTurnsOfNumbersTurnsNotSegments(t *testing.T) {
 	if !slices.Equal(a.Phases, []string{"execute", "review"}) {
 		t.Errorf("run-a phases %v, want each once in first-run order", a.Phases)
 	}
-	wantTools := []worklet.TurnTool{{Name: "run_sandbox", Calls: 3}, {Name: "comment", Calls: 1}}
+	wantTools := []worklet.TurnTool{{Name: "delegate", Calls: 3}, {Name: "comment", Calls: 1}}
 	if !slices.Equal(a.Tools, wantTools) {
 		t.Errorf("run-a tools %+v, want %+v", a.Tools, wantTools)
 	}

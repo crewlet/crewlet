@@ -1247,10 +1247,13 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	// AND A PORT ALREADY TAKEN FAILS THE BOOT HERE, at once, rather than
 	// after a recovery that can take minutes and is then thrown away.
 	//
-	// THE BRIDGE IS READ OFF THE ENVIRONMENT the engine will build it from
-	// (it is handed no Options.Environment, so that is this process's), for
-	// a node that binds api.public only to serve it.
-	listeners, err := bindListeners(ctx, boot, nodeID, mcpbridge.Configured(os.Getenv), bind, log)
+	// THE BRIDGE IS DECIDED BY THE RULE THE ENGINE BUILDS IT BY, for a node
+	// that binds api.public only to serve it: a node running seats serves
+	// one wherever it binds a listener — a direct box dials that listener on
+	// loopback — and any node the environment names an address for serves
+	// one (it is handed no Options.Environment, so that is this process's).
+	bridge := mcpbridge.Configured(os.Getenv) || boot.Profile(nodeID).RunsSeats()
+	listeners, err := bindListeners(ctx, boot, nodeID, bridge, bind, log)
 	if err != nil {
 		return err
 	}
@@ -1324,6 +1327,9 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	// AND THE MOMENT /health TURNS 200: the engine says when it has
 	// recovered what this node holds — see [engine.Options.Recovered].
 	opts.Recovered = listeners.recovered
+	// AND WHERE A DIRECT BOX DIALS THE BRIDGE: the listener this process
+	// bound for it, on loopback — see [engine.Options.BridgeHostURL].
+	opts.BridgeHostURL = listeners.bridgeHostURL(boot, nodeID)
 
 	log.InfoContext(ctx, "engine_starting", "version", version.String(),
 		"company", plan.startsOn(), "seed", string(plan.act), "seed_file", plan.file.Path)
@@ -1929,22 +1935,22 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// off Tier A, whose answer is the presence lease's: the profile's id
 		// is the one field it does not need.
 		hint := "api.port is 0, so this node binds no listener: no " +
-			"orchestrator can probe it (/health, /ready) and an agent-mode " +
-			"seat's box finds no tool bridge here"
+			"orchestrator can probe it (/health, /ready) and a seat's " +
+			"executor box finds no tool bridge here"
 		if boot.Profile("").RunsIngress() {
 			hint = "api.port is 0, so this node serves no dashboard, no REST " +
-				"API, no webhook endpoint, no probe and no agent-mode tool " +
+				"API, no webhook endpoint, no probe and no executor tool " +
 				"bridge; every integration is deaf here"
 		}
-		// A WARNING ONLY WHERE NOTHING ELSE WARNED. An ingress node whose
-		// DECLARED roles name ingress was told this at WARN already, by the
+		// A WARNING ONLY WHERE NOTHING ELSE WARNED. A node whose DECLARED
+		// roles name ingress or seats was told this at WARN already, by the
 		// `api.port` advisory at the start ([logBootstrapAdvisories]), and
 		// one fact warned about twice is a log that teaches its reader to
 		// skim. That advisory leaves an UNDECLARED node.roles out on
 		// purpose — every role, which is also the single-process shape
 		// before anybody chose a port — so that node, which serves nothing
-		// any integration can reach, is warned here instead. Every other
-		// node is told what it gave up, at info.
+		// any integration or executor can reach, is warned here instead.
+		// Every other node is told what it gave up, at info.
 		level := slog.LevelInfo
 		if boot.Node.Roles == nil {
 			level = slog.LevelWarn
@@ -1977,7 +1983,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// orchestrator runs every node and has to be able to restart one that
 	// wedged and wait on one that has not joined, and the TOOL BRIDGE, because
 	// a bridged session is a live tool surface in the process that opened it,
-	// so a seats node running an agent-mode seat is the only node its box can
+	// so a seats node running a seat is the only node its executor's box can
 	// reach. See [api.Probes].
 	if !boot.Profile(nodeID).RunsIngress() {
 		return serveProbes(ctx, boot, e, reconciler, listeners, log)
@@ -2720,10 +2726,11 @@ func artifactOrigin(boot *config.Bootstrap, e *engine.Engine, app *api.App, node
 // api.port the node's probes, and its tool bridge where it has one — api.public
 // instead when the file sets it — and serves nothing else.
 //
-// The bridge needs a seats node and a bridge URL. A node that runs no seats
-// opens no session, so the route there could only answer every box with 401;
-// and with no CREWLET_MCP_BRIDGE_URL the engine built no bridge at all. Either
-// way the route is absent rather than refusing. Which of them a node mounts is
+// The bridge needs a seats node: one that runs no seats opens no session, so
+// the route there could only answer every box with 401, and is absent rather
+// than refusing. A seats node serves it on the listener it binds — which a
+// direct box dials on loopback — whether or not CREWLET_MCP_BRIDGE_URL names an
+// address for the other cells. Which of them a node mounts is
 // [api.EngineProbeOptions]' decision, the one the end-to-end suite probes
 // through too.
 func serveProbes(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
@@ -2776,9 +2783,9 @@ func serveProbes(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// Empty unless the bridge has a listener of its own on api.public.
 		"public_addr", publicAddr,
 		"hint", "node.roles does not include ingress, so this node serves only "+
-			"/health and /ready, and the agent-mode tool bridge ("+
-			mcpbridge.PathPrefix+"{token}) where it runs seats with "+
-			mcpbridge.BaseURLVar+" set — on api.public when the file sets one; "+
+			"/health and /ready, and the executors' tool bridge ("+
+			mcpbridge.PathPrefix+"{token}) where it runs seats — on api.public "+
+			"when the file sets one; "+
 			"webhooks, the dashboard and the REST API are a peer's with the "+
 			"ingress role")
 	return surface, nil

@@ -370,10 +370,13 @@ agent_phase_completed      # one phase's durable record: prompts, response,
                            # tool calls, and `rounds[]` — each provider call's
                            # timing, tokens and `stop_reason` (end or
                            # tool_use; absent where the backend reported
-                           # none). A failed phase carries `error_kind` — a
-                           # provider kind (rate_limit, auth, timeout,
-                           # server, fatal), budget_exhausted, stopped for a
-                           # phase a person ended, canceled, or error
+                           # none). A coding run's own record (`phase:
+                           # sandbox`) carries `cli_turns`, the model turns
+                           # its CLI reported. A failed phase carries
+                           # `error_kind` — a provider kind (rate_limit,
+                           # auth, timeout, server, fatal), budget_exhausted,
+                           # stopped for a phase a person ended, canceled, or
+                           # error
 auxiliary_spend            # what the seat's auxiliary model cost for one key —
                            # stage (turn, reflection, background, operator),
                            # purpose, seat or person, turn, model, provider

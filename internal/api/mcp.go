@@ -13,9 +13,9 @@ import (
 
 // The MCP bridge edge.
 //
-// A coding agent in agent mode calls its seat's tools HERE rather than holding
-// them, so the seat's credentials — its chat token, its tracker token, its
-// code-host token — never enter a box running generated code. See
+// A seat's executor, its coding CLI's run, calls the seat's tools HERE rather
+// than holding them, so the seat's credentials — its chat token, its tracker
+// token, its code-host token — never enter a box running generated code. See
 // internal/api/mcpbridge for what the bridge does with a call once it arrives.
 //
 // # This route is deliberately reachable without the API's own auth
@@ -38,10 +38,12 @@ import (
 
 // mountBridge registers the bridge, or says why it did not.
 //
-// A nil bridge is an ordinary configuration — most deployments run no agent
-// mode — and the route is then ABSENT rather than answering 503: an endpoint
-// that exists and refuses everything reads to an operator as broken, while one
-// that is not there matches what the config says.
+// A nil bridge is an ordinary configuration — a node that binds no listener
+// and names no [mcpbridge.BaseURLVar] builds none, and every executor launch
+// there is refused naming that — and the route is then ABSENT rather than
+// answering 503: an endpoint that exists and refuses everything reads to an
+// operator as broken, while one that is not there matches what the config
+// says.
 func mountBridge(mux httpjson.Router, bridge *mcpbridge.Bridge) {
 	if bridge == nil {
 		return

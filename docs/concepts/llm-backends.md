@@ -100,13 +100,13 @@ them:
 | Open models: OpenRouter, a hosted provider, a local server | `opencode` | the model provider's key in `env`, under that provider's own variable, or a login of OpenCode's own | yes |
 | Gemini, Qwen, Cursor, Copilot, Grok, Muse, Kimi, Hermes, Pi | see [Supported CLIs](#supported-clis) | the vendor's own login, or a key (Qwen Code: a key only) | no — text mode only |
 
-The last column is about two things a seat can ask of its CLI beyond answering:
-running the executor itself ([agent mode](#agent-mode)), and authoring code in a
-[sandbox](code-sandbox.md). Both run the CLI as a coding agent, and this build
-has a coding-agent runner for two of them, `claude-code` and `opencode`. A seat
-on any other CLI is a text model behind the engine's tool loop — which is every
-seat's default — and its code work, if it has any, goes to an entry on one of
-those two through `role.llm_sandbox`.
+The last column is whether the CLI can run a seat's executor: every agent
+seat's executor is its coding CLI's own run in a [sandbox](code-sandbox.md),
+where it does the seat's work and its code work alike, and this build has a
+coding-agent runner for two CLIs, `claude-code` and `opencode`. Any other CLI
+serves a seat's reviewer, workers and side passes (`llm_review`,
+`llm_subagent`, `llm_auxiliary`, `llm_judge`), and a seat whose `llm` chain
+holds no `claude-code` or `opencode` entry is refused on the write.
 
 A seat can mix them: its executor on one entry, its reviewer on another, its
 auxiliary work on a third, each a different CLI if you like — see
@@ -178,8 +178,8 @@ named as `auth.api_key: "${OPENAI_API_KEY}"`.
 Codex runs with its shell switched off and its own `--sandbox read-only`, so the
 one local tool it keeps, `apply_patch`, writes nothing — see [Tool calls in text
 mode](#tool-calls-in-text-mode) — and it has no coding-agent runner, so a Codex
-entry is a text model: a seat on it that writes code points `role.llm_sandbox`
-at a `claude-code` or `opencode` entry.
+entry cannot run an executor: a seat's `llm` points at a `claude-code` or
+`opencode` entry, and Codex serves its reviewer, workers or side passes.
 
 ### Open models, OpenRouter and local servers: OpenCode
 
@@ -482,8 +482,9 @@ Crewlet's, so check it against the version `crewlet llm doctor` reports.
 ## Per-phase models
 
 Phase selection resolves by `providers.llm` **key**, so `llm`,
-`llm_review`, `llm_subagent`, `llm_auxiliary`, `llm_judge` and `llm_sandbox`
-each name an entry, including list-form fallback chains. See
+`llm_review`, `llm_subagent`, `llm_auxiliary` and `llm_judge`
+each name an entry, including list-form fallback chains. The seat's code
+work is its executor's run, so it runs on `llm` like the rest of the executor. See
 [Turn Engine — per-phase LLM models](turn-engine.md#per-phase-llm-models).
 
 The model goes on the CLI's `--model`, so one entry is one model, and per-phase
@@ -660,6 +661,17 @@ sentence, until the window ends:
 The sit-out is the entry's own, on the node that heard the sentence: every other
 node learns the same thing from its own calls, once per window. A later sit-out
 never shortens an earlier one.
+
+**An executor's run is heard too.** A seat's executor is its CLI's own run in a
+box, which never goes through a text call, so the node that collects a run
+reads how it ended — its answer, its error, whether it failed — against the
+same `limit_markers`, by the same rules as a call, and sits the entry out
+before the turn launches again (`cli_agent_run_limit_reported`). A launch picks
+the first member of the seat's chain that is not sitting out, so a reviewer
+sending the turn back an hour into the same window moves to the next entry
+rather than walking into the same limit. **An apply keeps it**: an entry an
+apply rebuilds with its specification unchanged carries the sit-out over,
+since its plan is no less spent for a new configuration revision.
 
 **A login is never sat out.** An expired or missing login is `auth`, which also
 moves the seat down its chain, but the very next call tries the entry again:
@@ -955,8 +967,7 @@ spawned, so it runs no executor and reaches no entry.
 The credential guard that refuses a remote run nothing signs in, and names
 the remedy the entry's `auth.mode` reads (see
 [Code Sandbox](code-sandbox.md#failure-modes)), reads **this**
-entry for an agent-mode run — the run *is* the executor — and the seat's
-`llm_sandbox` only for `run_sandbox` work.
+entry the launch picked — the run *is* the executor.
 
 **The run names the model exactly as the entry's text calls do.** An
 entry's `model` is written in its CLI's own grammar, and an agent-mode
@@ -1047,15 +1058,20 @@ ends, whatever ended it.
 
 The endpoint is a per-run URL carrying a signed token that expires with
 the run, and the session is closed the moment the run ends, whatever
-ended it. Set **`CREWLET_MCP_BRIDGE_URL`** to a URL a sandbox can reach;
-without it agent mode is **refused** at launch rather than started — a
-coding agent with none of the seat's tools cannot answer anybody, cannot
-touch a ticket and cannot submit its work. The URL has to reach a
-listener, so the node also needs `api.port`: a node that binds none
-(`api.port: 0`) refuses agent mode by naming `api.port`, rather than
-handing a box an endpoint nothing answers. With `api.public.port` set the
-bridge is served on that public listener and nowhere else, so the URL
-names it.
+ended it. Where the box dials it depends on its cell. A **`direct`** box is
+a process tree on the node's own host, so it dials the node's own listener
+on loopback, which the node derives from the socket it binds — nothing to
+set. A **`container`** or **`e2b`** box cannot reach the host's loopback,
+so it dials **`CREWLET_MCP_BRIDGE_URL`**, set to a URL that box reaches
+the node at. A launch whose box has no address to dial is **refused**
+rather than started — a coding agent with none of the seat's tools cannot
+answer anybody, cannot touch a ticket and cannot submit its work — naming
+what to set: `api.port` on a node that binds no listener (`api.port: 0`
+serves no bridge at all), the variable for a cell it is missing for. Each
+such cell is also said once when a company is applied
+(`executor_bridge_unreachable`). With `api.public.port` set the bridge is
+served on that public listener and nowhere else, so a direct box dials it
+there and the variable names it.
 
 > **In a fleet, that URL must address the node itself, not a load
 > balancer in front of several.** A
@@ -2580,11 +2596,10 @@ headless token does, so it works in a remote cell; the rest of `env`
 is not carried there. That is `opencode`'s alone: [agent mode](#agent-mode)
 and code-sandbox work both need a coding-agent runner for the entry's own
 CLI, and `hermes` and `pi` have none. An entry's model is written
-for its own CLI and its sign-in is that CLI's, so a `run_sandbox` launch on
-one needs that CLI as the seat's coding agent
-(`role.sandbox.coding_agent: opencode`), and any other pairing is
-[refused](code-sandbox.md#failure-modes). A `hermes` or `pi` seat that runs
-code points `role.llm_sandbox` at a `claude-code` or `opencode` entry instead. A
+for its own CLI and its sign-in is that CLI's, so a run on one is that CLI's
+own run, and a launch passes over a `hermes` or `pi` member of a seat's chain;
+a seat whose chain holds no `claude-code` or `opencode` entry is
+[refused](code-sandbox.md#failure-modes). A
 key given in the seat's `role.sandbox.env` is counted by the remote-box check as
 well. A CLI that does not read its key from the environment — `kimi-code` reads
 its metered key only from `config.toml` in the credential directory — does not
@@ -3043,27 +3058,30 @@ three probes are sent as a seat's call, with a system prompt, so they run
 on the channel a seat's prompt takes — a probe with none ran under the vendor's
 default on most profiles, and reported on a configuration no seat ever had.
 
-On an **agent-mode** entry the report carries two more lines, and both
-check something that fails at a seat's *first turn* and nowhere earlier:
+On an entry some seat's executor launches on, the report carries an
+`executor` section, and every line of it checks something that fails at a
+seat's *first turn* and nowhere earlier:
 
 ```
-mode          : agent (the CLI runs the executor)
-agent runtime : runner: "claude-code" is registered
-              : tool bridge: https://engine.example.com
+executor      : seats: swe, qa
+              : runner: "claude-code" is registered
+              : tool bridge: this node's own listener, on loopback (a direct box; the node needs api.port)
 ```
 
-The **runner** line is whether this build can actually drive that CLI as
-a coding agent. Agent mode reuses the coding-agent runners rather than
-growing a second way to invoke the same binary, and there are two of
-them — `claude-code` and `opencode`. An entry naming any other CLI in
-agent mode validates cleanly, appears in the schema and reports a
-configured provider, then refuses the moment a seat has work. The
-**tool bridge** line is `CREWLET_MCP_BRIDGE_URL`: without it every
-agent-mode launch is refused, because a coding agent with none of the
-seat's tools cannot answer anybody, touch a ticket or submit its work.
+The **seats** line is which agent seats' executor chains hold this entry,
+resolved as the launch resolves them. The **runner** line is whether this
+build can actually drive that CLI as a coding agent: there are two runners,
+`claude-code` and `opencode`, and a member naming any other CLI is reported
+as skipped at launch rather than faulted — it still serves that seat's text
+calls. The **tool bridge** line is where the run's box dials the seat's
+tools, which turns on the entry's cell: a `direct` box dials the node's own
+listener on loopback and needs no setting, and a `container` or `e2b` box
+dials `CREWLET_MCP_BRIDGE_URL` alone — unset there, every launch on the entry
+is refused, because a coding agent with none of the seat's tools cannot
+answer anybody, touch a ticket or submit its work.
 
-A text-mode entry reports neither, rather than reporting that it would
-not work in a mode it is not in. The full rules are in the [CLI
+An entry no seat's executor launches on reports no executor section,
+rather than reporting what it would need for a run it never makes. The full rules are in the [CLI
 reference](../reference/cli.md#crewlet-llm).
 
 ### How `doctor` judges a sign-in
@@ -3171,11 +3189,10 @@ that runs often — it skips all three and says so on each line.
   runner (`claude-code` or `opencode`), a `providers.sandbox` catalogue to
   place the run in, and a bridge URL a box can dial. `crewlet llm doctor`
   checks all of it — see [Operating it](#operating-it).
-- **Code work needs one more decision.** A seat's [code
-  sandbox](code-sandbox.md) work runs on the entry its `llm_sandbox` resolves
-  to, and runs *that entry's own CLI* as its coding agent, so only a
-  `claude-code` or `opencode` entry can do it (an `opencode` entry takes
-  `role.sandbox.coding_agent: opencode`). On any backend including remote
+- **Code work is the executor's run.** A seat's [code
+  sandbox](code-sandbox.md) work is its executor's own run, on the entry the
+  launch picks from its `llm` chain, and runs *that entry's own CLI* as its
+  coding agent, so only a `claude-code` or `opencode` entry can do it. On any backend including remote
   E2B, what travels into the box is the environment that signs the CLI in:
   a headless token (`crewlet llm login <key> -capture-token`, and Claude
   Code in the box bills your plan), an `api-key` entry's key, what
@@ -3189,9 +3206,9 @@ that runs often — it skips all three and says so on each line.
   plus `run_in: direct` or `container`), which is seeded with the login and,
   when the box closes, writes back one its run refreshed — only while the
   shared login still holds what the box was seeded with, by the same
-  compare-and-swap a seat's refresh takes. A seat on any other CLI — Codex,
-  Gemini CLI, Kimi Code, `hermes`, `pi` — points `role.llm_sandbox` at a
-  `claude-code` or `opencode` entry; see
+  compare-and-swap a seat's refresh takes. A seat's `llm` points at a
+  `claude-code` or `opencode` entry; any other CLI — Codex, Gemini CLI, Kimi
+  Code, `hermes`, `pi` — serves its reviewer, workers and side passes; see
   [Code Sandbox](code-sandbox.md#failure-modes).
 - **No per-call sampling, effort or output cap.** Each is the CLI's own
   configuration of its model — see

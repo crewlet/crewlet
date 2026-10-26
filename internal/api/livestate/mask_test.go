@@ -70,7 +70,8 @@ var turnFields = map[string]class{
 // shown to the people it is put to as well — [SandboxEntry.For].
 var sandboxFields = map[string]class{
 	"turn_id": status, "role": status, "agent_handle": status, "agent_id": status,
-	"coding_agent": status, "sandbox_id": status, "status": status,
+	"coding_agent": status, "provider_key": status, "model": status,
+	"sandbox_id": status, "status": status,
 	"started_at": status, "audience": status, "owner": status, "paused_at": status,
 	"body_withheld": status,
 	"task":          body, "question": body,

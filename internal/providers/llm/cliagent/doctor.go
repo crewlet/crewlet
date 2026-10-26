@@ -83,7 +83,6 @@ const probeSkew = 5 * time.Minute
 type Diagnosis struct {
 	Provider   string
 	Agent      string
-	Mode       string
 	Model      string
 	Binary     string
 	BinaryPath string
@@ -118,32 +117,44 @@ type Diagnosis struct {
 	// Web is whether the CLI's own fetch tool reached the web, measured.
 	Web string
 
-	// AgentRuntime is what an AGENT-MODE entry needs beyond a login, and
-	// is empty for a text-mode one. Each half of it fails at a seat's
-	// first turn and nowhere earlier: a CLI with no coding-agent runner
-	// has nothing to drive, and a box with no bridge to dial gets none of
-	// the seat's tools.
-	AgentRuntime []string
+	// Executor is what an entry a seat's EXECUTOR can launch on needs beyond
+	// a login, and is empty for an entry no executor chain holds. Each half
+	// of it fails at a seat's first launch and nowhere earlier: a CLI with no
+	// in-box runner is skipped by every launch, and a box with no bridge to
+	// dial gets none of the seat's tools.
+	Executor []string
 
 	Problems []string
 }
 
 // DiagnoseOptions are the facts a provider cannot see about itself.
 //
-// Both belong to the PROCESS rather than to the provider — which runners this
-// build registers, and what a sandbox can dial — and both decide whether agent
-// mode works. Passed in rather than read here, so `doctor` reports the engine's
-// own answers instead of this package's guess at them.
+// They belong to the COMPANY and the PROCESS rather than to the provider —
+// which seats launch their executor on this entry, which runners this build
+// registers, and what a box can dial — and together they decide whether a
+// seat's executor can run on it. Passed in rather than read here, so `doctor`
+// reports the engine's own answers instead of this package's guess at them.
 type DiagnoseOptions struct {
 	// Smoke runs the real completion and the two tool probes.
 	Smoke bool
 
-	// AgentRunners are the coding-agent runner names this build has. An
-	// agent-mode entry naming a CLI outside them cannot run at all.
+	// ExecutorSeats are the agent seats whose executor chain holds this
+	// entry, as the company resolves them. Empty means no seat's executor
+	// can launch here, and the entry serves text calls only.
+	ExecutorSeats []string
+
+	// AgentRunners are the in-box coding-agent runner names this build has.
+	// An executor launch skips an entry whose CLI is outside them.
 	AgentRunners []string
 
+	// Cell is the cell a run launched on this entry is placed in — its own
+	// run_in, else the company's default_run_in. A `direct` box dials the
+	// node's own listener on loopback; a box in any other cell dials
+	// BridgeURL alone.
+	Cell string
+
 	// BridgeURL is CREWLET_MCP_BRIDGE_URL as this process sees it. Empty
-	// means agent mode is refused at launch.
+	// means a launch whose box is not on the node's host is refused.
 	BridgeURL string
 }
 
@@ -155,11 +166,11 @@ type DiagnoseOptions struct {
 func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis {
 	smoke := opts.Smoke
 	d := Diagnosis{
-		Provider: p.key, Agent: p.agent, Mode: p.modeName(), Model: p.model,
+		Provider: p.key, Agent: p.agent, Model: p.model,
 		Binary: p.profile.Binary, WrittenFor: p.profile.WrittenFor,
 		StateDir: p.ws.StateDir(),
 	}
-	d.AgentRuntime, d.Problems = p.agentRuntime(opts)
+	d.Executor, d.Problems = p.executor(opts)
 
 	path, err := exec.LookPath(p.profile.Binary)
 	switch {
@@ -390,55 +401,67 @@ func (p *Provider) keyRemedy() string {
 		"as auth.api_key (the CLI reads it from %s)", p.profile.APIKeyEnv)
 }
 
-// modeName is how this entry runs, for the report.
-func (p *Provider) modeName() string {
-	if p.agentMode {
-		return "agent (the CLI runs the executor)"
-	}
-	return "text (a model behind the engine's tool loop)"
-}
-
-// agentRuntime measures what an agent-mode entry needs beyond a login.
+// executor measures what an entry a seat's executor launches on needs beyond
+// a login.
 //
-// BOTH HALVES FAIL AT A SEAT'S FIRST TURN AND NOWHERE EARLIER, which is the
-// whole reason they are here: an entry naming a CLI this build has no runner
-// for validates cleanly and reports a configured provider, and an engine with
-// no reachable bridge URL refuses every agent-mode launch at the moment a seat
-// finally has work. `doctor` is what a deploy script gates on, so it is the
-// last place either can be caught before an agent is waiting.
+// BOTH HALVES FAIL AT A SEAT'S FIRST LAUNCH AND NOWHERE EARLIER, which is the
+// whole reason they are here: an engine with no reachable bridge URL refuses
+// every launch at the moment a seat finally has work, and a CLI with no in-box
+// runner is skipped by every launch while validating cleanly as a provider.
+// `doctor` is what a deploy script gates on, so it is the last place either
+// can be caught before an agent is waiting.
 //
-// A TEXT-MODE ENTRY REPORTS NOTHING HERE, rather than reporting that it would
-// not work in a mode it is not in. It runs as a subprocess of this engine and
-// needs neither.
-func (p *Provider) agentRuntime(opts DiagnoseOptions) (lines, problems []string) {
-	if !p.agentMode {
+// A NON-RUNNER MEMBER IS A LINE, NOT A PROBLEM. The company refuses an agent
+// seat whose executor chain holds no runner at all, so a CLI without one sits
+// in a chain beside one that has it — skipped at launch, and still the seat's
+// model for every text call the chain serves. Faulting it would make `doctor`
+// red on a configuration the engine runs.
+//
+// AN ENTRY NO EXECUTOR CHAIN HOLDS REPORTS NOTHING HERE: it serves text calls
+// as a subprocess of this engine and needs neither.
+func (p *Provider) executor(opts DiagnoseOptions) (lines, problems []string) {
+	if len(opts.ExecutorSeats) == 0 {
 		return nil, nil
 	}
-	if slices.Contains(opts.AgentRunners, p.agent) {
-		lines = append(lines, fmt.Sprintf("runner: %q is registered", p.agent))
-	} else {
-		lines = append(lines, fmt.Sprintf("runner: none for %q", p.agent))
-		problems = append(problems, fmt.Sprintf(
-			"agent mode drives %q through a coding-agent runner and this build "+
-				"registers none for it (has: %s) — set `mode: text` on "+
-				"providers.llm.%s, or point it at a CLI that has one",
-			p.agent, strings.Join(opts.AgentRunners, ", "), p.key))
+	lines = append(lines, "seats: "+strings.Join(opts.ExecutorSeats, ", "))
+	if !slices.Contains(opts.AgentRunners, p.agent) {
+		lines = append(lines, fmt.Sprintf(
+			"runner: none for %q — skipped at launch (runners: %s); serves "+
+				"those seats' text calls only",
+			p.agent, strings.Join(opts.AgentRunners, ", ")))
+		return lines, nil
 	}
-	if strings.TrimSpace(opts.BridgeURL) != "" {
+	lines = append(lines, fmt.Sprintf("runner: %q is registered", p.agent))
+	switch {
+	case opts.Cell == directCell:
+		// ON THE HOST, so the node's own listener is the address, derived
+		// by the node that binds it: the variable is not needed, and a
+		// report calling it missing would send an operator to set what the
+		// quickstart never asks for. What the box does need — a listener —
+		// is the node's Tier A, which this command does not read; a node
+		// with none says so itself at start (`api.port`).
+		lines = append(lines, "tool bridge: this node's own listener, on loopback "+
+			"(a direct box; the node needs api.port)")
+	case strings.TrimSpace(opts.BridgeURL) != "":
 		lines = append(lines, "tool bridge: "+opts.BridgeURL)
-	} else {
+	default:
 		lines = append(lines, "tool bridge: unset")
 		problems = append(problems, fmt.Sprintf(
-			"agent mode hands the seat's tools to the box over an MCP bridge and "+
-				"%s is unset, so every launch is refused — a coding agent with "+
-				"none of the seat's tools cannot answer anybody or submit its "+
-				"work. Set it to a URL a sandbox can reach",
-			bridgeURLVar))
+			"a seat's executor reaches its tools over an MCP bridge, and a box in "+
+				"the %s cell is not on the node's host, so it dials %s alone — which "+
+				"is unset, so every launch on providers.llm.%s is refused: a coding "+
+				"agent with none of the seat's tools cannot answer anybody or submit "+
+				"its work. Set it to a URL that box reaches the node at",
+			orNone(opts.Cell), bridgeURLVar, p.key))
 	}
 	return lines, problems
 }
 
-// bridgeURLVar is the variable an agent-mode box dials the engine on.
+// directCell is the cell whose box is a process tree on the engine's own host
+// — config.PlacementDirect, spelled here for [bridgeURLVar]'s reason.
+const directCell = "direct"
+
+// bridgeURLVar is the variable an executor's box dials the engine on.
 //
 // SPELLED HERE RATHER THAN IMPORTED, because importing the API package into a
 // provider would be a dependency from a leaf onto an edge for one string —
@@ -704,7 +727,6 @@ func (d Diagnosis) Render(w io.Writer) {
 	}
 	line("provider", d.Provider)
 	line("cli agent", d.Agent)
-	line("mode", d.Mode)
 	if d.Model != "" {
 		line("model", d.Model)
 	}
@@ -729,10 +751,10 @@ func (d Diagnosis) Render(w io.Writer) {
 	line("smoke test", d.Smoke)
 	line("local tools", d.LocalTools)
 	line("web", d.Web)
-	for i, entry := range d.AgentRuntime {
+	for i, entry := range d.Executor {
 		label := ""
 		if i == 0 {
-			label = "agent runtime"
+			label = "executor"
 		}
 		line(label, entry)
 	}
@@ -821,7 +843,7 @@ func (p *Provider) SandboxCredentialDocument() string {
 // doctor reported the entry healthy.
 //
 // Read off [childEnv] like [Provider.signIn], so a run carries exactly the
-// credentials a text-mode call is given: what the auth mode removes from the
+// credentials a text call is given: what the auth mode removes from the
 // child it removes from the box.
 func (p *Provider) SandboxEnv() map[string]string {
 	env := childEnv(p.profile, &Checkout{}, p.env, p.auth)

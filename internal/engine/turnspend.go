@@ -51,8 +51,8 @@ import (
 // ([Engine.withCards]). A resumed segment adds the collected coding run it
 // resumed from, which no phase of the engine's own ran — and what the ENGINE
 // spent on that run while no segment was running (turnTelemetry.jobEngine):
-// an agent-mode run's bridged calls, whose auxiliary rewrites and delegated
-// workers are counted on the run's own meter and written to its row with
+// a run's bridged calls, whose auxiliary rewrites and delegated workers are
+// counted on the run's own meter and written to its row with
 // every call ([runner.BridgedSpend]), and the condensation of the run's
 // report, failure or question at collection, which the coordinator carries to
 // this resume ([sandbox.ResumeRequest.Engine]). Each figure lands beside the
@@ -159,8 +159,8 @@ func (t turnTelemetry) chargeFor(spend runner.Spend, res turn.Result, err error,
 			job.WorkerInput,
 		Output: spend.OutputTokens + spend.WorkerOutput + spend.JudgeOutput + t.jobOutput +
 			job.WorkerOutput,
-		CacheRead:  spend.CacheRead,
-		CacheWrite: spend.CacheWrite,
+		CacheRead:  spend.CacheRead + t.jobCacheRead,
+		CacheWrite: spend.CacheWrite + t.jobCacheWrite,
 		WallMs:     int(max(ended.Sub(t.startedAt), 0) / time.Millisecond),
 		Workers:    spend.Workers + job.Workers,
 		SentBack:   spend.SentBack,
@@ -264,7 +264,7 @@ func addUncharged(s worklet.TurnSpend, u *execstate.Uncharged) worklet.TurnSpend
 	return s
 }
 
-// unchargedOf is a spend in the suspended conversation's own shape.
+// unchargedOf is a spend in the parked turn state's own shape.
 func unchargedOf(s worklet.TurnSpend) *execstate.Uncharged {
 	return &execstate.Uncharged{
 		Turns: s.Turns, Rounds: s.Rounds, Input: s.Input, Output: s.Output,

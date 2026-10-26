@@ -99,10 +99,9 @@ func (e ToolSkillGuardBlocked) SummaryFor(actor string) string {
 // technically already stored — and reading it back means hauling every phase's
 // whole prompt and response across the driver to count them in Go, which is
 // exactly the cost schema/0015 promoted the spend columns out of the payload
-// to avoid. The measured integers — the text a phase opens with, or the parked
-// conversation a resumed one re-enters instead, the tool definitions offered
-// alongside either, how many there were, and one approximation over the lot —
-// answer the question at a scan.
+// to avoid. The measured integers — the text a phase opens with, the tool
+// definitions offered alongside it, how many there were, and one approximation
+// over the lot — answer the question at a scan.
 //
 // WHAT IT DOES NOT MEASURE, because a meter read as more than it is, is worse
 // than no meter. This row is one phase's OPENING frame: not the whole phase's
@@ -132,35 +131,16 @@ type PromptSize struct {
 	Phase     Phase  `json:"phase"`
 
 	// ApproximateTokens covers every term below it — the system and user
-	// text, a resumed phase's seeded conversation, and the tool-definition
-	// array — over one chars-per-token ratio. The byte counts ride along so
-	// a reader comparing builds can apply their own.
+	// text and the tool-definition array — over one chars-per-token ratio.
+	// The byte counts ride along so a reader comparing builds can apply
+	// their own.
 	ApproximateTokens int `json:"approximate_tokens"`
 
-	// SystemBytes and UserBytes are the two messages a phase OPENS a
-	// conversation with. Both are zero on a resumed phase, which prepends
-	// neither: what it sends is MessageBytes.
+	// SystemBytes and UserBytes are the two messages a phase opens its
+	// conversation with — for the executor, the system prompt and the
+	// brief its run is launched with.
 	SystemBytes int `json:"system_bytes"`
 	UserBytes   int `json:"user_bytes"`
-
-	// MessageBytes is the conversation a RESUMED phase re-enters — its
-	// original system and user messages, the assistant rounds since, and
-	// the tool results they collected — and zero for a phase that opens one
-	// of its own. A detached coding run stops the executor mid-loop and the
-	// loop is re-entered later, so its prompt is a message list rather than
-	// a pair of strings; measuring only the pair reported every resumed
-	// executor as a phase with no prompt at all.
-	//
-	// WHAT IS COUNTED, per message: every message's text and the compact
-	// JSON of its tool calls' arguments.
-	//
-	// WHAT IS STILL OUT, in the same spirit as ToolBytes naming the
-	// cli-agent fence as the larger rendering: each tool call's id and name,
-	// bounded identifiers beside arguments that run to kilobytes, and the
-	// envelope the backend adds around all of it (the cli-agent transcript's
-	// own `## assistant` headings, its role labels), so the real figure is
-	// larger than this one.
-	MessageBytes int `json:"message_bytes"`
 
 	// ToolBytes is the COMPACT JSON size of the tool-definition array
 	// offered with the prompt, in ONE CANONICAL SHAPE — `{name,
@@ -171,7 +151,8 @@ type PromptSize struct {
 	// SO IT IS A FLOOR, and the backend never sends exactly it: the
 	// `cli-agent` text backend renders those same definitions INDENTED,
 	// inside a fenced catalogue and followed by a response contract, and an
-	// agent-mode CLI reads them over MCP in its own vendor's wrapping. The
+	// executor's run reads them over the MCP bridge in its own vendor's
+	// wrapping. The
 	// same property ApproximateTokens' ratio has, for the same reason: a
 	// figure that changed shape with the CLI could not be compared across a
 	// chain or across builds, and comparison is what this row exists for.

@@ -8,7 +8,7 @@ import (
 
 // A CODING RUN AND A TEXT CALL ON ONE ENTRY NAME ONE MODEL.
 //
-// ModelArgument is what an agent-mode or code-sandbox run of the entry's own
+// ModelArgument is what the executor's run of the entry's own
 // CLI is handed, and argv is what every text call passes; both render the
 // profile's model_args, an override's provider prefix included. A run that
 // rebuilt the value its own way addressed OpenCode's box as

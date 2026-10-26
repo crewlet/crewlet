@@ -249,7 +249,6 @@ test("each phase's prompt size is rendered rather than banded and dropped", asyn
           approximate_tokens: 7400,
           system_bytes: 24000,
           user_bytes: 1200,
-          message_bytes: 0,
           tool_bytes: 3800,
           tool_count: 11,
         }),
@@ -264,37 +263,23 @@ test("each phase's prompt size is rendered rather than banded and dropped", asyn
   // and the dominant one: a measured turn read ~6,900 tokens here against the
   // provider's 205,000.
   expect(screen.getByTitle("11 tool definitions, as compact JSON").textContent).toBe("3.7 KB");
-  expect(screen.getByTitle("Size of the resumed conversation")).toBeTruthy();
 });
 
-// A SUSPENDED PHASE DRAWS BOTH OF ITS PROMPTS.
+// TWO MEASUREMENTS ARE TWO ROWS, NEVER ONE MERGED ROW.
 //
 // The panel used to collapse a repeated `phase|iteration` into one row with an
 // `×N` chip, reading a repeat as the turn's dispatch having been re-delivered.
 // A redelivery mints a new run id (`adr/0017`) and the turn query is
-// `WHERE turn_id = ?`, so the attempts never share a page — the repeat is a
-// SUSPEND. `internal/agent/runner/resume.go` re-enters the parked phase at the
-// parked iteration, and the two measurements are two prompts: the opening
-// system and user text, then the conversation the resume sends instead. Merged
-// into one, the row asserted System 0 B over a 24,000-byte system prompt and
-// called two different prompts a token range.
-test("a phase that suspended draws its opening and its re-entry, not one merged row", async () => {
+// `WHERE turn_id = ?`, so the attempts never share a page: two measurements
+// here are two prompts this turn sent. Merged into one, the row reported one
+// prompt's figures over the other's and called two prompts a token range.
+test("two measurements under one phase key draw two rows, not one merged row", async () => {
   mount(
     {
       events: [
         phase("2026-09-13T10:01:30Z", 90_000),
-        promptSize({
-          approximate_tokens: 1753,
-          system_bytes: 24000,
-          user_bytes: 2800,
-          message_bytes: 0,
-        }),
-        promptSize({
-          approximate_tokens: 1814,
-          system_bytes: 0,
-          user_bytes: 0,
-          message_bytes: 3329,
-        }),
+        promptSize({ approximate_tokens: 1753, system_bytes: 24000, user_bytes: 2800 }),
+        promptSize({ approximate_tokens: 1814, system_bytes: 900, user_bytes: 0 }),
       ],
     },
     "context",
@@ -302,13 +287,9 @@ test("a phase that suspended draws its opening and its re-entry, not one merged 
   await screen.findByText("Prompt sent");
   const tokens = screen.getAllByTitle("the engine's own approximation");
   expect(tokens.map((t) => t.textContent)).toEqual(["1,753", "1,814"]);
-  // THE OPENING FRAME IS STILL ON THE PAGE. This is the figure the merge
-  // destroyed — the re-entry's 0 replaced it, and the panel reported a phase
-  // that opened with no prompt at all.
+  // EACH ROW KEEPS ITS OWN FIGURES: merged, the second's replaced the first's.
   const systems = screen.getAllByTitle("bytes in the system prompt");
-  expect(systems.map((s) => s.textContent)).toEqual(["23 KB", "0 B"]);
-  // And exactly the second row says why its opening is empty.
-  expect(screen.getAllByText("resumed")).toHaveLength(1);
+  expect(systems.map((s) => s.textContent)).toEqual(["23 KB", "900 B"]);
 });
 
 // EVERY FIGURE COLUMN SHARES ONE BOX WITH THE ROWS AROUND IT.

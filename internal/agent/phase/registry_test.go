@@ -128,41 +128,22 @@ func TestARepeatedKeyIsCollapsed(t *testing.T) {
 	}
 }
 
-func TestSandboxTakesItsOwnKeyThenTheRoleDefault(t *testing.T) {
-	t.Parallel()
-	// Sandboxed work IS this seat's own work, done somewhere else. There is
-	// no executor key to inherit — `llm` is the executor's chain — so its
-	// own key overrides and the role default is the only fallback.
-	r := reg(t, "default", "coder")
-	role := &org.Role{Name: "Eng", LLM: org.ProviderKeys{"default"}}
-
-	if got := chainKeys(t)(r.Chain(role, phase.Sandbox)); !slices.Equal(got, []string{"default"}) {
-		t.Errorf("sandbox chain = %v, want the role default [default]", got)
-	}
-	role.LLMSandbox = org.ProviderKeys{"coder"}
-	if got := chainKeys(t)(r.Chain(role, phase.Sandbox)); !slices.Equal(got, []string{"coder"}) {
-		t.Errorf("sandbox chain = %v, want its own [coder]", got)
-	}
-}
-
 func TestEveryPhaseReadsItsOwnField(t *testing.T) {
 	t.Parallel()
 	// A switch that returns the wrong field for one phase is invisible: the
 	// seat still runs, on the wrong model. Each phase gets a uniquely-named
 	// provider so a crossed wire has somewhere to show up.
-	r := reg(t, "default", "r", "s", "a", "j", "sb")
+	r := reg(t, "default", "r", "s", "a", "j")
 	role := &org.Role{
 		Name: "CTO", LLM: org.ProviderKeys{"default"},
 		LLMReview: org.ProviderKeys{"r"}, LLMSubagent: org.ProviderKeys{"s"},
 		LLMAuxiliary: org.ProviderKeys{"a"}, LLMJudge: org.ProviderKeys{"j"},
-		LLMSandbox: org.ProviderKeys{"sb"},
 	}
 	// The executor has no field of its own: `llm` IS its chain, so it must
 	// resolve to the role default here rather than to any satellite's key.
 	want := map[phase.Phase]string{
 		phase.Execute: "default", phase.Review: "r",
 		phase.Subagent: "s", phase.Auxiliary: "a", phase.Judge: "j",
-		phase.Sandbox: "sb",
 		// ONBOARDING HAS NO FIELD OF ITS OWN and resolves to the role
 		// default — asserted rather than omitted, so adding an
 		// `llm_onboarding:` without wiring it here fails loudly.
@@ -296,7 +277,7 @@ func TestResolveIsTheChainATurnRunsOn(t *testing.T) {
 	t.Parallel()
 	roles := []*org.Role{
 		{Name: "per-phase", LLM: org.ProviderKeys{"alpha"}, LLMReview: org.ProviderKeys{"beta", "alpha"},
-			LLMJudge: org.ProviderKeys{"typo", "beta", "beta"}, LLMSandbox: org.ProviderKeys{"typo"}},
+			LLMJudge: org.ProviderKeys{"typo", "beta", "beta"}, LLMAuxiliary: org.ProviderKeys{"typo"}},
 		{Name: "names nothing"},
 		{Name: "only unknown", LLM: org.ProviderKeys{"typo"}},
 	}

@@ -53,7 +53,6 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 		// never the process environment, which an engine handed an
 		// environment of its own does not read anywhere else.
 		Env:               e.LookupSecret,
-		Sandbox:           e.sandboxLauncher(c),
 		Knowledge:         knowledgeSearch(e, c),
 		Events:            e.telemetry(),
 		Recall:            e.prefetcher(c),
@@ -139,28 +138,6 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	}
 	e.embeddings.Store(&embedder)
 	return nil
-}
-
-// sandboxLauncher is the run_sandbox tool's seam for epoch c, or nil where no
-// seat can run code.
-//
-// Nil OMITS the tool rather than registering a broken one: a model shown a
-// tool that always fails learns to distrust the whole catalogue and burns a
-// round finding out each time — and a seat that planned around a box it will
-// never get delivers nothing while looking like it tried.
-//
-// It asks the EPOCH as well as the node. A revision that drops
-// providers.sandbox leaves the runtime running, because the runs already in
-// flight still have to be polled and finished through the backends that made
-// them (see [sandbox.Coordinator.SetManager]) — and a launcher registered against that
-// runtime would mint new boxes on a catalogue the company no longer
-// configures.
-func (e *Engine) sandboxLauncher(c *Company) builtin.SandboxLauncher {
-	if e.sandbox.Load() == nil || c == nil || c.Config == nil ||
-		c.Config.Providers.Sandbox == nil {
-		return nil
-	}
-	return &launcher{engine: e}
 }
 
 // a2aFor builds the agent-to-agent service for one epoch, or nil.

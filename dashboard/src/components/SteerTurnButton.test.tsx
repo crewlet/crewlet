@@ -2,9 +2,9 @@
  * Steer is offered only where a note can reach the turn.
  *
  * A note enters a turn at the top of its next round in the ENGINE'S OWN loop
- * (`internal/agent/steer`). A turn parked on a coding run is in nobody's loop
- * but the run's — its own `run_sandbox`, or an executor that runs as a coding
- * agent — and the engine would answer `steer_unsupported` one press too late.
+ * (`internal/agent/steer`). A turn parked on its executor's coding run is in
+ * nobody's loop but the run's, and the engine would answer `steer_unsupported`
+ * one press too late.
  * So the control is drawn and HELD there, with the reason and what to do
  * instead, for a reader who could otherwise press it.
  */

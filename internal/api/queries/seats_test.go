@@ -27,6 +27,7 @@ func TestEveryAgentSeatIsInTheRollupDirectory(t *testing.T) {
 	cfg := parse(t, `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5

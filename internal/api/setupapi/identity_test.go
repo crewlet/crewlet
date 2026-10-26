@@ -12,7 +12,7 @@ import (
 // an account rather than by an app of its own.
 const identityDoc = `{
   "name": "Acme",
-  "providers": {"llm": {"zulu": {"model": "claude-sonnet-5"}}},
+  "providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"model": "claude-sonnet-5"}}},
   "integrations": {
     "atlassian": {"org_id": "${ORG_ID}", "api_key": "${ORG_KEY}"},
     "jira": {"cloud_id": "c1", "site_url": "https://acme.atlassian.net",

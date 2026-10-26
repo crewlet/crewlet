@@ -55,7 +55,7 @@ type listMCPTools struct{ surface func() *tools.Surface }
 func (t *listMCPTools) Name() string { return ListMCPToolsTool }
 
 // Description says what the call answers and what follows it, in the words a
-// text-mode CLI and an agent-mode one both read truly: "callable from your
+// text call's model and an executor's CLI both read truly: "callable from your
 // next round", never "its schema arrives on the next message", which
 // described a vendor's tool channel this engine no longer has.
 func (t *listMCPTools) Description() string {

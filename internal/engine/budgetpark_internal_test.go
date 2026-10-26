@@ -107,9 +107,14 @@ func (r *parkRig) runs() int {
 	return r.ran
 }
 
+// leadDoc is the park cases' company: one Lead whose day is capped at %d, and
+// %f the executor's floor (turn_engine.executor_min_budget_tokens) — 0 for the
+// cases about a FULL window, so "room" means a token of it.
 const leadDoc = `
 name: Acme
 timezone: Europe/Berlin
+turn_engine:
+  executor_min_budget_tokens: %f
 roles:
   - name: Lead
     handle: lead
@@ -117,7 +122,19 @@ roles:
       day: %d
 `
 
+// leadCompany is leadDoc with the day's ceiling and the executor's floor.
+func leadCompany(t *testing.T, dayCeiling, floor string) *Company {
+	t.Helper()
+	return companyFor(t, strings.NewReplacer("%d", dayCeiling, "%f", floor).Replace(leadDoc))
+}
+
 func newParkRig(t *testing.T, dayCeiling string) *parkRig {
+	t.Helper()
+	return newFlooredParkRig(t, dayCeiling, "0")
+}
+
+// newFlooredParkRig is [newParkRig] under an executor floor.
+func newFlooredParkRig(t *testing.T, dayCeiling, floor string) *parkRig {
 	t.Helper()
 	q := memory.New()
 	if err := q.Start(t.Context()); err != nil {
@@ -126,7 +143,7 @@ func newParkRig(t *testing.T, dayCeiling string) *parkRig {
 	t.Cleanup(func() { _ = q.Stop(context.Background()) })
 	r := &parkRig{q: q, fleet: coordmem.NewFleet(), alarms: &fakeAlarms{}, now: parkedAt}
 	r.e = &Engine{backends: &Backends{Queue: q, Fleet: r.fleet}}
-	r.e.epoch.current.Store(companyFor(t, strings.Replace(leadDoc, "%d", dayCeiling, 1)))
+	r.e.epoch.current.Store(leadCompany(t, dayCeiling, floor))
 	// THE ENGINE'S CLOCK, which the park's question, its alarm and the
 	// meter the question is asked through all read.
 	r.e.clock = r.clock
@@ -332,14 +349,14 @@ func TestARaisedCeilingReleasesTheParkAtOnce(t *testing.T) {
 	r.renew(t)
 
 	// An unrelated revision — the same ceilings — leaves the park alone.
-	same := companyFor(t, strings.Replace(leadDoc, "%d", "100", 1))
+	same := leadCompany(t, "100", "0")
 	r.e.epoch.current.Store(same)
 	r.e.reconcileBudgetParks(t.Context(), same)
 	if r.runs() != 0 {
 		t.Fatal("a revision that changed no ceiling released the park")
 	}
 
-	raised := companyFor(t, strings.Replace(leadDoc, "%d", "1000", 1))
+	raised := leadCompany(t, "1000", "0")
 	r.e.epoch.current.Store(raised)
 	r.e.reconcileBudgetParks(t.Context(), raised)
 	if got := r.runs(); got != 1 {
@@ -389,6 +406,94 @@ func TestATurnRefusedMidFlightParksTheSeat(t *testing.T) {
 	if handed != 1 {
 		t.Errorf("the delivery was handed over %d times, want once: the refused turn "+
 			"was NAKed into a redelivery rather than parked", handed)
+	}
+}
+
+// A SEAT WHOSE WINDOW LEAVES LESS THAN A LAUNCH NEEDS IS PARKED UNTIL IT TURNS
+// OVER, exactly as a full one is — and a revision that lowers the floor
+// releases it at once.
+//
+// Every turn launches its executor, and a launch below the floor is refused
+// ([executorHeadroom]): a seat with room, but less than the floor, refused
+// every delivery at its launch and took the redelivery into the same refusal
+// until the broker dead-lettered it. The window has room, so the counter is
+// stamped with nothing: no charge was refused.
+//
+// Mutation: drop the floor from the budget stage, and the starved seat runs.
+func TestASeatBelowTheExecutorFloorIsParkedUntilItsWindowTurnsOver(t *testing.T) {
+	t.Parallel()
+	r := newFlooredParkRig(t, "100", "50")
+	fleet, refusals := counted(r.fleet, nil)
+	r.e.backends.Fleet = fleet
+	r.spend(t, 60)
+
+	r.deliver(t)
+	if got := r.runs(); got != 0 || !slices.Contains(r.holds(), pauseReasonBudget) {
+		t.Fatalf("a seat with 40 tokens left under a floor of 50: runs %d, holds %v; want it "+
+			"parked", got, r.holds())
+	}
+	if got := refusals.refused(); len(got) != 0 {
+		t.Errorf("refusals recorded = %v for a window with room: no charge was refused", got)
+	}
+	alarms := r.alarms.live()
+	if len(alarms) != 1 || alarms[0].wait != berlinMidnight.Sub(parkedAt) {
+		t.Fatalf("alarms = %+v, want one set for Berlin's midnight", alarms)
+	}
+	r.renew(t)
+
+	// A revision that lowers the floor under what the window has left
+	// releases the park at once.
+	lowered := leadCompany(t, "100", "30")
+	r.e.epoch.current.Store(lowered)
+	r.e.reconcileBudgetParks(t.Context(), lowered)
+	if got := r.runs(); got != 1 {
+		t.Fatalf("after the floor was lowered %d turns ran, want the held one at once", got)
+	}
+
+	// And a starved seat parked again waits out its window as a full one does.
+	r.spend(t, 20)
+	r.renew(t)
+	r.deliver(t)
+	if got := r.runs(); got != 1 || !slices.Contains(r.holds(), pauseReasonBudget) {
+		t.Fatalf("a seat with 20 tokens left under a floor of 30: runs %d, holds %v", got, r.holds())
+	}
+	alarms = r.alarms.live()
+	if len(alarms) != 1 {
+		t.Fatalf("alarms = %+v, want the second park's", alarms)
+	}
+	r.renew(t)
+	r.mu.Lock()
+	r.now = berlinMidnight.Add(time.Second)
+	r.mu.Unlock()
+	alarms[0].fire()
+	if got := r.runs(); got != 2 {
+		t.Fatalf("after the window turned over %d turns ran, want the held one", got)
+	}
+}
+
+// A LAUNCH REFUSED BELOW THE FLOOR MID-FLIGHT PARKS THE SEAT too: the window
+// had room for a launch when the delivery was claimed, and the turn's own
+// context took it under the floor before the launch.
+func TestALaunchRefusedBelowTheFloorParksTheSeat(t *testing.T) {
+	t.Parallel()
+	r := newFlooredParkRig(t, "100", "50")
+	r.mu.Lock()
+	r.turnFn = func() (turn.Result, error) {
+		r.spend(t, 60)
+		return turn.Result{}, executorHeadroom(t.Context(), staticRemaining{left: 40}, 50)
+	}
+	r.mu.Unlock()
+	r.deliver(t)
+	if r.runs() != 1 || !slices.Contains(r.holds(), pauseReasonBudget) {
+		t.Fatalf("a launch refused below the floor: runs %d, holds %v; want the seat parked",
+			r.runs(), r.holds())
+	}
+	r.mu.Lock()
+	handed := r.handed
+	r.mu.Unlock()
+	if handed != 1 {
+		t.Errorf("the delivery was handed over %d times, want once: the refused launch was "+
+			"NAKed into a redelivery rather than parked", handed)
 	}
 }
 
@@ -506,7 +611,7 @@ func TestARaisedCeilingReleasesASeatParkedOnARefusedRound(t *testing.T) {
 	}
 	r.renew(t)
 
-	raised := companyFor(t, strings.Replace(leadDoc, "%d", "1000", 1))
+	raised := leadCompany(t, "1000", "0")
 	r.e.epoch.current.Store(raised)
 	r.e.reconcileBudgetParks(t.Context(), raised)
 	if got := r.runs(); got != 2 {

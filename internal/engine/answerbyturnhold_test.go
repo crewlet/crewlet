@@ -21,8 +21,8 @@ import (
 // QUESTION, end to end through the seat's inbox.
 //
 //  1. A run parks on question Q1, and two people answer Q1 by turn.
-//  2. The first answer resumes the run, and the resumed turn calls
-//     run_sandbox again: the seat is busy, so its inbox is held, and the
+//  2. The first answer resumes the run, and the resumed turn relaunches
+//     its executor: the seat is busy, so its inbox is held, and the
 //     second answer waits on it.
 //  3. The new job parks on question Q2, which lifts the hold — and the second
 //     answer is the first thing the seat is offered.
@@ -143,8 +143,8 @@ func TestAnAnswerByTurnHeldBehindItsRunsNextJobDoesNotAnswerItsNextQuestion(t *t
 	}
 }
 
-// relaunchingResumer re-enters a parked run as a coding agent whose turn calls
-// run_sandbox again would: it takes the answer, and launches the next job.
+// relaunchingResumer re-enters a parked run as a turn that relaunches its
+// executor would: it takes the answer, and launches the next job.
 type relaunchingResumer struct {
 	coordinator *sandbox.Coordinator
 	manager     *sandbox.Manager

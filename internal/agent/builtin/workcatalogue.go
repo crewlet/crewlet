@@ -198,7 +198,7 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 		// DERIVED from the call, like every write it makes, so the call
 		// made again — a seat's re-run, an operator's retry — replaces the
 		// list once ([opIDFor]).
-		opID := opIDFor(actor, t.Name(), "types", "workspace", args)
+		opID := opIDFor(ctx, actor, t.Name(), "types", "workspace", args)
 		result, err := writer.WriteTypes(ctx, opID, types)
 		if err != nil {
 			return writeFailure(ctx, actor, worklet.WriteWorkCatalogueTool, err), nil
@@ -223,7 +223,7 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 		}
 	}
 	if hasFields {
-		opID := opIDFor(actor, t.Name(), "fields", "workspace", args)
+		opID := opIDFor(ctx, actor, t.Name(), "fields", "workspace", args)
 		result, err := writer.WriteFields(ctx, opID, fields)
 		if err != nil {
 			failure := writeFailure(ctx, actor, worklet.WriteWorkCatalogueTool, err)

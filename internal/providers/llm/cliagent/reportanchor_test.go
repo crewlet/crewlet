@@ -82,7 +82,7 @@ func TestAnAnswerThatMentionsALimitIsAnAnswer(t *testing.T) {
 			if !strings.Contains(got, tc.want) {
 				t.Errorf("came back %q (calls %+v), want the answer carrying %q", comp.Content, comp.ToolCalls, tc.want)
 			}
-			if err := p.benched(); err != nil {
+			if err := p.SittingOut(); err != nil {
 				t.Errorf("an answer sat the entry out: %v", err)
 			}
 		})
@@ -129,7 +129,7 @@ func TestTheVendorsOwnReportStillSitsTheEntryOut(t *testing.T) {
 			if _, err := ask(t, p, llm.Request{}); llm.KindOf(err) != llm.KindRateLimit {
 				t.Fatalf("the vendor's report answered %v, want a rate limit", err)
 			}
-			if err := p.benched(); err == nil {
+			if err := p.SittingOut(); err == nil {
 				t.Error("the vendor's report did not sit the entry out")
 			}
 		})

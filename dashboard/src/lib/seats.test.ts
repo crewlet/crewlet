@@ -939,7 +939,7 @@ describe("llmChain", () => {
   // judge — reads as five models on the seat page.
   test("one key named by several phases is listed once", () => {
     expect(
-      llmChain({ default: "big", review: "big", judge: "tiny", sandbox: ["big", "tiny"] }),
+      llmChain({ default: "big", review: "big", judge: "tiny", subagent: ["big", "tiny"] }),
     ).toEqual(["big", "tiny"]);
   });
 

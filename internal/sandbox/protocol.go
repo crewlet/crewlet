@@ -1,11 +1,10 @@
-// Package sandbox is the code-work runtime: a sandbox-enabled seat runs its
-// executor phase as a coding agent inside an isolated box instead of the native
-// tool loop.
+// Package sandbox is the executor runtime: every agent seat's executor is its
+// coding CLI's own run, inside a box placed in one of the catalogue's cells.
 //
-// The shape that matters is that a coding run is DETACHED. The tool starts it,
-// the Execute loop SUSPENDS, and the engine RESUMES the same loop with the
-// result spliced in when the run completes — possibly minutes later, possibly
-// in a different process after a restart, possibly on a different node. Nothing
+// The shape that matters is that a run is DETACHED. The launch starts it, the
+// turn SUSPENDS, and the engine RESUMES the same turn with the run's report
+// when the run completes — possibly minutes later, possibly in a different
+// process after a restart, possibly on a different node. Nothing
 // here parks a goroutine on a running job: a goroutine cannot survive a
 // restart, and a coding agent legitimately runs for longer than a deployment
 // window.
@@ -161,9 +160,10 @@ type Limits struct {
 // set by nobody while looking exactly like a wired knob.
 type Spec struct {
 	// Placement is WHICH configured backend runs this box. Resolved from
-	// role.sandbox.run_in over providers.sandbox.default_run_in, and carried
-	// here rather than chosen by the caller so the launch, the pending row
-	// and the reconnect all name the same cell.
+	// the run_in of the providers.llm entry the launch picked, over
+	// providers.sandbox.default_run_in, and carried here rather than chosen
+	// by the caller so the launch, the pending row and the reconnect all
+	// name the same cell.
 	Placement Placement
 
 	// CodingAgent names the runner: "claude-code", "opencode", …
@@ -238,6 +238,18 @@ type Result struct {
 	CacheWriteTokens int
 	CostUSD          float64
 	SessionID        string
+
+	// Turns is how many model turns the run's CLI says its own loop took —
+	// each one a provider call the engine neither made nor saw — and zero
+	// where the CLI reported none. It is what the run's phase record counts
+	// as its calls (tokens.PhaseCalls): a run whose CLI said nothing counts
+	// as one, the one call the engine knows it asked for.
+	//
+	// AS REPORTED, never estimated: Claude Code states it on its result
+	// line (`num_turns`); OpenCode's stream does not carry a count a
+	// reader can trust — 2.0 prints a step's `step_start` for some steps
+	// of a run and not others — so its runs report none.
+	Turns int
 
 	// NeedsInput means the agent asked a question and stopped. Question and
 	// AskTo say what it asked and who should answer: "requester", "team",
@@ -317,6 +329,7 @@ func (r Result) usageFloored() (Result, bool) {
 	floor(&r.OutputTokens)
 	floor(&r.CacheReadTokens)
 	floor(&r.CacheWriteTokens)
+	floor(&r.Turns)
 	if r.CostUSD < 0 {
 		r.CostUSD, floored = 0, true
 	}
@@ -578,6 +591,19 @@ type RunRequest struct {
 
 	// Brief is the task: the prompt the CLI runs, and nothing standing.
 	Brief string
+
+	// ResumeSession is the CLI's own conversation the run CONTINUES, with
+	// Brief as its next prompt — Claude Code's `--resume <id>`, OpenCode's
+	// `--session <id>` — where the job before it in this box parked on a
+	// person's question and the answer has come. Empty starts a new one.
+	//
+	// THE CLI'S SESSION AND NOT A SUMMARY OF IT, because the run that asked
+	// knew what it had read, tried and decided, and a fresh conversation
+	// told only the question and the answer starts that work again. It holds
+	// only in the box the session lives in, which is why the launch sets it
+	// only where the job continues in the asking job's box
+	// ([LaunchRequest.Continue]).
+	ResumeSession string
 
 	Env    map[string]string
 	Limits Limits

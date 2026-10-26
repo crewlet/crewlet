@@ -327,6 +327,7 @@ func TestAnEntityPathRefusesEveryVerbButGetAndPut(t *testing.T) {
 const entityDoc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5

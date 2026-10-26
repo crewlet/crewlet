@@ -169,7 +169,7 @@ func TestAPatchKeepsEveryListItDidNotName(t *testing.T) {
 	s := newSurface(t)
 	seedNewerPeer(t, s)
 
-	patchOnly(t, s, `{"mission": "unrelated", "providers": {"llm": {"zulu": {"model": "claude-opus-5"}}}}`,
+	patchOnly(t, s, `{"mission": "unrelated", "providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"model": "claude-opus-5"}}}}`,
 		summaryHeader)
 
 	// THE LIST THE PATCH NEVER MENTIONED, with the keys a newer build wrote
@@ -328,7 +328,7 @@ func TestAPatchNamingAKeyThisBuildCannotRepresentIsRefused(t *testing.T) {
 				providers := d["providers"].(map[string]any)
 				providers["llm"].(map[string]any)["zulu"].(map[string]any)["provider_setting"] = true
 			},
-			`{"providers": {"llm": {"zulu": {"provider_setting": null}}}}`,
+			`{"providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"provider_setting": null}}}}`,
 		},
 		"deleting one on an mcp server": {
 			func(d map[string]any) {

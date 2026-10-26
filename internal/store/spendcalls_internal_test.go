@@ -3,10 +3,11 @@ package store
 import "testing"
 
 // A SPEND ROW COUNTS ITS PROVIDER CALLS: a phase its rounds where it lists
-// them, its rounds_used where it does not (an agent-mode executor, whose
-// rounds are the CLI's), and one where neither says — and an auxiliary record
-// counts the calls it coalesced, filed as the auxiliary phase with its purpose
-// as the worker and its stage beside it.
+// them, its rounds_used where it does not, and one where neither says; a coding
+// run its CLI's own turns as reported, and one where the CLI reported none; an
+// executor's own record NONE, since its run's calls are the run's — and an
+// auxiliary record counts the calls it coalesced, filed as the auxiliary phase
+// with its purpose as the worker and its stage beside it.
 func TestASpendRowCountsItsProviderCalls(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -14,12 +15,24 @@ func TestASpendRowCountsItsProviderCalls(t *testing.T) {
 		want                     Spend
 	}{{
 		name: "a phase's rounds", eventType: "agent_phase_completed",
-		payload: `{"phase":"execute","rounds":[{},{},{}],"rounds_used":9,"total_tokens":10}`,
-		want:    Spend{Phase: "execute", TotalTokens: 10, Calls: 3},
+		payload: `{"phase":"review","rounds":[{},{},{}],"rounds_used":9,"total_tokens":10}`,
+		want:    Spend{Phase: "review", TotalTokens: 10, Calls: 3},
 	}, {
-		name: "an agent-mode phase's rounds_used", eventType: "agent_phase_completed",
-		payload: `{"phase":"execute","rounds_used":5}`,
-		want:    Spend{Phase: "execute", Calls: 5},
+		name: "a phase's rounds_used where it lists none", eventType: "agent_phase_completed",
+		payload: `{"phase":"subagent","rounds_used":5}`,
+		want:    Spend{Phase: "subagent", Calls: 5},
+	}, {
+		name: "an executor's own record", eventType: "agent_phase_completed",
+		payload: `{"phase":"execute","rounds":[{}],"rounds_used":1,"cli_turns":4}`,
+		want:    Spend{Phase: "execute", Calls: 0},
+	}, {
+		name: "a coding run's own turns", eventType: "agent_phase_completed",
+		payload: `{"phase":"sandbox","cli_turns":12,"total_tokens":40}`,
+		want:    Spend{Phase: "sandbox", TotalTokens: 40, Calls: 12},
+	}, {
+		name: "a coding run whose CLI reported no turns", eventType: "agent_phase_completed",
+		payload: `{"phase":"sandbox","total_tokens":40}`,
+		want:    Spend{Phase: "sandbox", TotalTokens: 40, Calls: 1},
 	}, {
 		name: "a judge's single call", eventType: "agent_phase_completed",
 		payload: `{"phase":"judge","host_phase":"execute"}`,

@@ -147,7 +147,7 @@ func (OpenCode) Name() string { return OpenCodeName }
 // the whole total, so the script prints it as one last line of its own type
 // ([openCodeUsageEvent]) once the run has ended.
 func (OpenCode) Command(req sandbox.RunRequest, paths Paths, _ string) string {
-	return "sh -c " + shellQuote(openCodeScript(req, paths, newOpenCodeSession(), openCodeTimes{
+	return "sh -c " + shellQuote(openCodeScript(req, paths, openCodeSessionFor(req), openCodeTimes{
 		listen: openCodeListenWait, mcp: openCodeMCPWait, sync: openCodeLoginSync, stop: openCodeStopWait,
 	}))
 }
@@ -174,6 +174,19 @@ func newOpenCodeSession() string {
 	// crashes the process rather than return an error since Go 1.24.
 	_, _ = rand.Read(raw[:])
 	return hex.EncodeToString(raw[:])
+}
+
+// openCodeSessionFor is the session a run works in: the asking run's own, where
+// this one carries it on with the answer ([sandbox.RunRequest.ResumeSession]),
+// and a fresh one otherwise. OpenCode CONTINUES a session it already holds, and
+// a continued box holds the asking run's — so naming it is the whole of
+// continuing it. The id the session report gave ([sandbox.Result.SessionID])
+// carries the `ses_` the script adds, which comes off here.
+func openCodeSessionFor(req sandbox.RunRequest) string {
+	if id := strings.TrimPrefix(req.ResumeSession, "ses_"); id != "" {
+		return id
+	}
+	return newOpenCodeSession()
 }
 
 // openCodeScript is the run's script for one session id, exporting a login the
@@ -212,7 +225,8 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 	// OpenCode splits at its first slash into a provider and a model — so
 	// `anthropic/claude-sonnet-5` or `openrouter/anthropic/claude-sonnet-5`
 	// means one thing in both places, signed in by the login or the key of
-	// the provider it names. The engine refuses every other CLI's entry here.
+	// the provider it names. A launch passes over every other CLI's entry,
+	// so none reaches here.
 	if req.Model != "" {
 		run = append(run, "--model", shellQuote(req.Model))
 	}
@@ -440,6 +454,24 @@ func (OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbo
 		// for an undo a headless run never offers — on a large checkout a
 		// copy of its tree per step, for nothing.
 		"snapshots": false,
+		// THE AGENT THE RUN IS, stated rather than inherited, for the
+		// reason the permissions are: the turn cap below is set on an
+		// agent, and an image whose own config named another default would
+		// run the brief on an agent the cap never reached.
+		"default_agent": openCodeAgent,
+	}
+	// THE RUN'S TURN CAP, on that agent: `steps`, OpenCode's bound on its
+	// agent's iterations, after which the agent answers in text and the run
+	// ends — Claude Code's --max-turns ([ClaudeCode.Command]) in this CLI's
+	// own vocabulary. It is the one bound on an executor's work
+	// (providers.sandbox.default_max_turns and a seat's role.sandbox.max_turns,
+	// already reconciled into Limits), so a run on this CLI that did not
+	// carry it ran without one. Absent at zero, which is uncapped: OpenCode
+	// refuses a step count below one.
+	if req.Limits.MaxTurns > 0 {
+		cfg["agents"] = map[string]any{
+			openCodeAgent: map[string]any{"steps": req.Limits.MaxTurns},
+		}
 	}
 	if len(req.MCPServers) > 0 {
 		cfg["mcp"] = map[string]any{"servers": openCodeMCP(req.MCPServers)}
@@ -481,6 +513,12 @@ func (OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbo
 	}
 	return path, nil
 }
+
+// openCodeAgent is the OpenCode agent a run runs as: `build`, the CLI's own
+// default primary agent — the one with every tool, which a run that writes
+// code is. Its config is OpenCode 2's `agents.<name>`, whose `steps` carries the
+// run's turn cap.
+const openCodeAgent = "build"
 
 // openCodeMCP translates the generic launch specs into OpenCode 2's schema.
 //
@@ -779,6 +817,12 @@ func (d *openCodeEvents) Result() sandbox.Result {
 		res.CostUSD = u.Data.Cost
 		res.SessionID = u.Data.ID
 	}
+	// NO TURN COUNT ([sandbox.Result.Turns]): the session report carries
+	// none, and the stream's step markers cannot be counted — 2.0.32 prints
+	// `step_start` for a run's first step and, in nearly every multi-step
+	// run measured, not for the steps after it — so a count read off them
+	// would be one for most runs and right only by luck. None reported is
+	// a run counted as the one call the engine asked for.
 	if !success {
 		res.Error = d.errText
 		if res.Error == "" {

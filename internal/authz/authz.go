@@ -154,9 +154,9 @@
 // each a field on the row and each checked before the class. [rule.humanOnly]
 // keeps an agent off a person's gesture — purging, archiving a project,
 // writing the chart. [rule.seatOnly] is its mirror: only an agent seat whose
-// role offers the tool takes it — asking a colleague, starting a coding run —
-// with no permission at all, because which seats are offered it is the role's
-// registry's decision and a person has no turn for it to spend.
+// role offers the tool takes it — asking a colleague — with no permission at
+// all, because which seats are offered it is the role's registry's decision
+// and a person has no turn for it to spend.
 //
 // # An artifact is decided per object, by its shares
 //
@@ -204,9 +204,10 @@
 // configuration runs code: an `mcp_servers` entry is a command every engine
 // host executes, a seat's `mcp_env` and its per-phase model keys (`llm_*`, a
 // `cli-agent` provider among them) choose what a seat's children run and which
-// credentials they are handed, a `sandbox` cell of `run_in: self` runs a coding
-// agent on the engine host itself, and a seat's worker grants decide which of
-// its tools a worker runs with. So holding it IS running code on every engine
+// credentials they are handed, a `providers.llm` entry or
+// `providers.sandbox.default_run_in` placed `direct` runs every agent seat's
+// executor — a coding CLI with its own shell — on the engine host itself, and
+// a seat's worker grants decide which of its tools a worker runs with. So holding it IS running code on every engine
 // host, and whatever a process there can read — the keyring included — is
 // reachable through it. It is conferred like host access.
 //

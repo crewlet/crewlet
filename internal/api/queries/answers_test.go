@@ -194,6 +194,7 @@ func namesakes(t *testing.T) (*config.Company, map[string]string) {
 	cfg := parsed(t, `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     p: {model: m}
 roles:
@@ -742,8 +743,12 @@ func TestBudgetsStateEveryWindowWithItsCeiling(t *testing.T) {
 	// window carries no `limit` at all, never a 0 that reads as full.
 	cfg := parsed(t, `
 name: Acme
+# Ceilings this small are below the executor's launch floor, which a company
+# whose seats run an executor may not be; the floor is not this answer's subject.
+turn_engine: {executor_min_budget_tokens: 0}
 timezone: Europe/Berlin
 providers:
+  sandbox: {fake: true}
   llm:
     p: {model: m}
 roles:
@@ -833,7 +838,11 @@ func TestBudgetsAreNearAtNineTenthsAndNotATokenBefore(t *testing.T) {
 	// so a screen has no number of its own to disagree with.
 	cfg := parsed(t, `
 name: Acme
+# Ceilings this small are below the executor's launch floor, which a company
+# whose seats run an executor may not be; the floor is not this answer's subject.
+turn_engine: {executor_min_budget_tokens: 0}
 providers:
+  sandbox: {fake: true}
   llm:
     p: {model: m}
 roles:
@@ -876,8 +885,12 @@ func TestBudgetsReadTheWindowTheCompanysClockIsIn(t *testing.T) {
 	// day's spend all evening and roll it seven hours early.
 	cfg := parsed(t, `
 name: Acme
+# Ceilings this small are below the executor's launch floor, which a company
+# whose seats run an executor may not be; the floor is not this answer's subject.
+turn_engine: {executor_min_budget_tokens: 0}
 timezone: America/Los_Angeles
 providers:
+  sandbox: {fake: true}
   llm:
     p: {model: m}
 roles:
@@ -928,7 +941,11 @@ func TestBudgetsWithNoCounterSayNobodyLooked(t *testing.T) {
 	// three windows of zeroes.
 	cfg := parsed(t, `
 name: Acme
+# Ceilings this small are below the executor's launch floor, which a company
+# whose seats run an executor may not be; the floor is not this answer's subject.
+turn_engine: {executor_min_budget_tokens: 0}
 providers:
+  sandbox: {fake: true}
   llm:
     p: {model: m}
 roles:
@@ -963,7 +980,11 @@ func TestBudgetsCarryTheRefusalTheCounterRecorded(t *testing.T) {
 	// and the window's state says `refusing`.
 	cfg := parsed(t, `
 name: Acme
+# Ceilings this small are below the executor's launch floor, which a company
+# whose seats run an executor may not be; the floor is not this answer's subject.
+turn_engine: {executor_min_budget_tokens: 0}
 providers:
+  sandbox: {fake: true}
   llm:
     p: {model: m}
 roles:

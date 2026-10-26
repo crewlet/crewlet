@@ -77,9 +77,9 @@ units: [...]                            # optional — org structure tree (see b
 
 turn_engine:                            # optional — executor/reviewer turn config
   max_iterations: 3                     # hard cap on self_iterate loops per turn
-  max_tool_rounds: 24                   # max tool-call rounds within one executor run
-                                        #   (the reviewer has no knob: it holds one
-                                        #   submission tool, so its budget is structural)
+                                        #   (an executor run's own rounds are capped by
+                                        #   role.sandbox.max_turns / providers.sandbox.
+                                        #   default_max_turns: the run is its CLI's loop)
   onboarding_max_tool_rounds: 10        # dedicated first-turn onboarding pass (0 = disabled)
   delegation:                           # bounds on every `delegate` call — see Turn Engine § Workers
     max_parallel: 3                     # workers running at once within one call
@@ -87,13 +87,17 @@ turn_engine:                            # optional — executor/reviewer turn co
     max_turns: 20                       # tool rounds one worker may run (a request above it is clamped)
     max_turns_ceiling: 40               # highest max_turns a worker template may declare
     budget_fraction: 0.2                # ONE slice for the whole call, shared by every task in it
-    min_tokens_per_task: 500            # call refused up front if the per-task share falls below this
+    min_tokens_per_task: 500            # call refused up front if the per-task share falls below this; 0 = no floor
     task_timeout_seconds: 300           # wall-clock cap on one worker
     call_timeout_seconds: 900           # wall-clock cap on the whole call, dependency waves included
-  sandbox_min_budget_tokens: 2000       # refuse a coding run below this remaining budget
+  executor_min_budget_tokens: 25000     # refuse an executor launch, and park the seat, below
+                                        #   this remaining budget (0 = no floor). A seat's or
+                                        #   the company's token_budget ceiling below it is
+                                        #   refused: no launch could ever fit
   delegation_depth_limit: 3             # max colleague-handoff chain depth before depth_cap guard breach
-  extension_enabled: true               # round-cap extension judge (executor + onboarding)
-  execute_max_tool_rounds_ceiling: 48   # hard ceiling for executor rounds across extensions (2x base 24)
+  extension_enabled: true               # round-cap extension judge for the onboarding pass
+                                        #   (an executor run is its CLI's loop, which no
+                                        #   judge extends)
   onboarding_max_tool_rounds_ceiling: 20  # hard ceiling for onboarding rounds across extensions (2x base 10)
   extension_round_step: 8               # max rounds the judge may grant per extension call
   conversation_session:                 # what this seat already said in ONE thread / issue / PR,
@@ -198,7 +202,7 @@ learning:                               # optional — agent-learning subsystem
     compaction_min_cluster_size: 3      # singletons / pairs left raw
     compaction_jaccard_threshold: 0.6   # tool-sequence similarity to pool a cluster
     compaction_batch_size: 200          # max raw rows pulled per pass
-    exemplar_count: 2                   # raw rows kept per cluster for drill-down
+    exemplar_count: 2                   # raw rows kept per cluster for drill-down (at least 1)
     # Action 4 (optional): evict ancient compacted entries for hard storage caps.
     compacted_max_age_days: 0           # 0 = disabled
 ```
@@ -313,7 +317,7 @@ scheduling:                              # optional — role/unit scheduled work
   enabled: true                          # master switch
   tick_seconds: 10                       # scheduler poll interval
   jitter_seconds: 0                      # max per-schedule spread to smooth a shared cron minute
-  catchup_min_seconds: 120               # lower clamp on the missed-tick catchup window
+  catchup_min_seconds: 120               # lower clamp on the missed-tick catchup window (at least 1)
   catchup_max_seconds: 7200              # upper clamp on the missed-tick catchup window
 ```
 
@@ -352,11 +356,12 @@ providers:
                                         #   credential, which still builds: every call then fails
                                         #   with the CLI's own sign-in error, which names it, where
                                         #   a missing model has no such tell
-      mode: text                        # optional — text (default): a model behind the engine's
-                                        #   tool loop; agent: the CLI runs the executor itself
-                                        #   (claude-code and opencode only)
-      run_in: ""                        # agent mode only — direct | container | e2b; empty takes
-                                        #   providers.sandbox.default_run_in
+      run_in: ""                        # optional — where a seat's executor runs when it launches
+                                        #   on this entry: direct | container | e2b; empty takes
+                                        #   providers.sandbox.default_run_in. Only claude-code and
+                                        #   opencode can run an executor, so the field is REFUSED on
+                                        #   any other CLI's entry, where nothing would read it; any
+                                        #   CLI serves the reviewer, workers and side passes
       state_dir: ""                     # optional — the login + per-seat CLI homes, each CLI
                                         #   under <state_dir>/<agent>. Empty:
                                         #   $CREWLET_LLM_CLI_HOME/<key>, else ~/.crewlet/llm-cli/<key>.
@@ -368,12 +373,15 @@ providers:
                                         #   live and starts that CLI signed out. Its bundle
                                         #   (auth.credential_bundle) stays the old CLI's and is
                                         #   refused until re-exported from the new one
-      timeout_seconds: 600              # optional — one CLI invocation, wall clock (default 600):
-                                        #   the process launch, the model's whole answer and the
-                                        #   CLI's own retries. A breach is a retryable `timeout`
-      max_concurrent: 4                 # optional — CLI processes at once (default 4). Each is a
-                                        #   200-400 MB runtime, and subscription plans throttle
-                                        #   concurrency hard
+      timeout_seconds: 600              # optional — one text-phase CLI invocation, wall clock
+                                        #   (default 600): the process launch, the model's whole
+                                        #   answer and the CLI's own retries. A breach is a
+                                        #   retryable `timeout`. An executor run is bounded by its
+                                        #   round cap instead (providers.sandbox.default_max_turns)
+      max_concurrent: 4                 # optional — text-phase CLI processes at once (default 4).
+                                        #   Each is a 200-400 MB runtime, and subscription plans
+                                        #   throttle concurrency hard. Executor runs are not
+                                        #   counted: each seat runs one at a time
       env: {}                           # optional — extra child env, ${ENV_VAR}-resolved. The
                                         #   child gets an ALLOWLISTED environment, never the
                                         #   engine's, so declare anything else the CLI needs here —
@@ -413,7 +421,9 @@ providers:
       auth:
         mode: api-key                   # reads ANTHROPIC_API_KEY
 
-    gpt:                                # OpenAI's models through Codex
+    gpt:                                # OpenAI's models through Codex — for a seat's reviewer,
+                                        #   workers and side passes (llm_review, llm_subagent, …):
+                                        #   Codex runs no executor
       agent: codex
       model: gpt-5
       auth:
@@ -426,6 +436,14 @@ providers:
                                         #   a bare id is refused on a write
       env:
         OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"  # the key of the provider the model names
+
+  sandbox:                              # REQUIRED once the company has an agent seat and an entry
+                                        #   above: every seat's executor runs as its CLI's own run,
+                                        #   in a box from this catalogue (code-sandbox.md)
+    local:
+      state_dir: "./acme-data/sandboxes"  # box directories, removed at teardown
+    default_run_in: direct              # where a run on an entry with no run_in happens. direct
+                                        #   runs the CLI on this host as the engine's user
 ```
 
 **One entry is one CLI on one model, signed in one way.** Per-phase models
@@ -1406,7 +1424,8 @@ node: every webhook URL, vendor app manifest and per-run sandbox endpoint is
 built on it, while every link a person follows stays on `api.external_url`.
 Publish `api.public.port`, keep `api.port` private, and point
 `CREWLET_MCP_BRIDGE_URL` and `CREWLET_SANDBOX_OTEL_RECEIVER_URL` for remote
-sandboxes at the public address — see
+sandboxes at the public address (a `direct` box dials the public listener on
+loopback, with nothing to set) — see
 [Deployment → Exposing webhooks without the admin API](../guides/deployment.md#exposing-webhooks-without-the-admin-api).
 On a node without the `ingress` role, whose only route is its seats' tool
 bridge, the bridge moves to `api.public` too, so one file still serves every
@@ -1653,8 +1672,8 @@ units:
 | `avatar` | dict | no | **Agent seats only.** How the dashboard draws this seat wherever it shows who the seat is: `character`, one of the thirty Crewlet characters (`crewlet`, `hexlet`, `peaklet`, `prismlet`, `towerlet`, `bricklet`, `gemlet`, `coglet`, `pluslet`, `shieldlet`, `stacklet`, `sparklet`, `cloudlet`, `foxlet`, `rocketlet`, `crownlet`, `cactlet`, `wisplet`, `heartlet`, `flasklet`, `chiplet`, `duolet`, `chatlet`, `pagelet`, `archlet`, `dashlet`, `octlet`, `conelet`, `hivelet`, `folderlet`), and `color`, one of `purple`, `cyan`, `green`, `amber`, `rose` or `blue`. Either may be left out: an absent character is `crewlet`, the original, and an absent colour is `purple`, so a seat that says nothing is drawn as every agent was before a seat could choose. Presentation only: no prompt, route or placement reads it, and it survives a rename because nothing derives it from the name. An id outside those lists, or the block on a human seat (a person is drawn as themself), is refused by an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to). The org builder offers both as pickers in the seat's editor and in the Add dialog, which suggests a character no agent wears yet |
 | `goal` | string | no | Individual mission statement |
 | `backstory` | string | no | Personality, background, expertise |
-| `llm` | string or dict | no | Named LLM provider key — **the executor's**, and so the seat's own model. Dict form adds `default`, `review`, `subagent`, `auxiliary`, `judge`, `sandbox` keys for the [per-phase model split](../concepts/turn-engine.md#per-phase-llm-models); there is no `execute` key, because `llm` is it |
-| `llm_review` / `llm_subagent` / `llm_sandbox` | string | no | Per-phase overrides (alternative to the dict-shaped `llm`) |
+| `llm` | string or dict | no | Named LLM provider key — **the executor's**, and so the seat's own model. Dict form adds `default`, `review`, `subagent`, `auxiliary`, `judge` keys for the [per-phase model split](../concepts/turn-engine.md#per-phase-llm-models); there is no `execute` key, because `llm` is it, and no `sandbox` key, because the executor's run is the seat's code work |
+| `llm_review` / `llm_subagent` | string | no | Per-phase overrides (alternative to the dict-shaped `llm`) |
 | `llm_auxiliary` | string | no | Cheap/fast model used by the turn-start prefetch, the condensing of large tool results, and the reflection workers (PersistDecider, episode summariser). Each call pays a CLI launch under a fixed deadline, so name a fast model — see [Auxiliary work and latency](../concepts/llm-backends.md#auxiliary-work-and-latency) |
 | `llm_judge` | string | no | Cheap/fast model used by the [round-cap extension judge](../concepts/turn-engine.md#round-cap-extension-judge); falls back to `llm` |
 | `token_budget` | dict | no | This seat's own token ceilings per calendar window — `day`, `week`, `month`, each optional — on top of the company's. See [Token budgets](#token-budgets) |
@@ -1672,7 +1691,7 @@ units:
 | `project` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.Project` / `org.Role.Project`). The team's tracker project as identity: an item that names nobody in the org chart routes to the unit lead, it is the project the team files work under, and on Worklet it is what an item filed with no `unit` belongs to, whoever filed it (see [Worklet](../guides/worklet.md#which-team-an-item-belongs-to)). **Vendor-neutral**: it names a Worklet project or a Jira one, whichever [`tracker.backend`](#tracker) the company runs, so switching backends does not rewrite the org chart. **Not** an MCP credential, and it does **not** scope knowledge reads. Keys are an upper-case letter plus 1–9 upper-case letters or digits (`ENG`, `PROD`), which is the shape every backend accepts |
 | `space` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.Space` / `org.Role.Space`). The team's knowledge container as identity: a page change that names nobody routes to the unit lead, and it is where the team writes. Vendor-neutral and shaped like `project`, above. It does **not** scope reads — read scope is the org-wide `knowledge.scope` only. The reserved containers (`knowledge.skills_container`, default `TS`, and `knowledge.root_space`, default `HOME`) are refused here |
 | `workers` | list[string] | no | Which [worker templates](#worker-templates) this seat may delegate to. **Empty means every one** — a company that publishes three workers wants its seats using them, and requiring each seat to opt in turns a shared library into per-seat copy-paste. A name no template defines is refused at load |
-| `sandbox` | dict | no | The seat's [code sandbox](../concepts/code-sandbox.md#per-role-gate--rolesandbox) gate. **Absent means the seat is never offered the sandbox tool.** `enabled: true` offers it; `run_in` picks where its code work runs (`direct`, `container`, `e2b`, or `self` — inside its own agent-mode executor run; empty inherits `providers.sandbox.default_run_in`); `coding_agent` (`claude-code` or `opencode`) overrides the provider default — the seat's code work runs on the entry its `llm_sandbox` resolves to, and the coding agent must be that entry's own CLI, so only a `claude-code` or `opencode` entry can do code work ([failure modes](../concepts/code-sandbox.md#failure-modes)); `pause_ttl_seconds` (unset inherits the provider's, `0` never holds a paused box, negative refused) and `max_turns` (unset inherits, `0` uncapped, negative refused) tune its runs; `env` is the environment injected into them and where external-service tokens are declared, every `${VAR}` in it resolving before a `run_sandbox` box starts unless its key is listed under `optional_keys`, which leaves it out instead ([credentials and the run environment](../concepts/code-sandbox.md#credentials-and-the-run-environment)) — a setup step declares its own `optional_keys`, over its `env` and the paths of its `files`; `mcp.servers` names which of the seat's MCP servers the coding agent gets; `setup` is per-seat provisioning applied after `providers.sandbox.setup`. On a seat whose executor runs in [agent mode](../concepts/llm-backends.md#agent-mode) the gate places nothing and drives nothing — that seat is never offered `run_sandbox`, and its one box is its executor's, placed by the entry's `run_in` — so its `run_in` may only be `self` or empty and its `coding_agent` only empty or that entry's own CLI, while its `setup`, `env`, `mcp`, `pause_ttl_seconds` and `max_turns` reach that box whether or not `enabled` is set. On any other seat a block with any of `run_in`, `env`, `mcp` or `setup` but `enabled` unset is refused, since none of it would be read. Each of these is an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to). A setup step's `files` entry — the seat's own or an engine-wide one — that a box the seat runs in would refuse is refused on the write, naming the step, the path and the seat: a `direct` box writes a file only inside its own home, which it mints per box, so it takes a relative path and refuses every absolute one, and a `container` box writes one only under its home mount at `/home/user`. An `e2b` box writes a file at any other path, but refuses another account's home (`~name/…`) and a path naming a directory, so the home itself and a directory above it are refused on the write as well. Name such a file relative to the box's home instead (`.npmrc`, or `~/.npmrc`), which every cell writes under its home, or have a command of the step write it under `"$HOME"` ([setup steps](../concepts/code-sandbox.md#setup-steps--provisioning-the-box)) |
+| `sandbox` | dict | no | What this seat's [executor box](../concepts/code-sandbox.md#per-role-gate--rolesandbox) reads beyond `providers.sandbox`. Every agent seat's executor is its coding CLI's own run in a box, placed by the `run_in` of the `providers.llm` entry the launch picks (empty takes `providers.sandbox.default_run_in`), so the block places nothing and gates nothing: **absent means the engine-wide settings alone**. Six keys: `setup`, per-seat provisioning applied after `providers.sandbox.setup`; `env`, the environment injected into the run and where external-service tokens are declared — a `${VAR}` in it that resolves to nothing is left out and the run still starts, its start logging `sandbox_env_unresolved` naming the key ([credentials and the run environment](../concepts/code-sandbox.md#credentials-and-the-run-environment)); `optional_keys`, the keys of `env` whose absence is expected and so left out without that line — a setup step declares its own `optional_keys`, over its `env` and the paths of its `files`; `mcp.servers`, which of the seat's MCP servers the coding agent gets beside its tool bridge; `pause_ttl_seconds`, how long a box blocked on a person's answer stays paused (unset inherits `providers.sandbox.default_pause_ttl_seconds`, `0` never holds a paused box, negative refused); and `max_turns`, the agentic-round cap on one of the seat's runs (unset inherits `providers.sandbox.default_max_turns`, 96 when that is unset too; `0` uncapped; negative refused). Any other key — the removed `enabled`, `run_in` and `coding_agent` among them — is refused as unknown. A setup step's `files` entry — the seat's own or an engine-wide one — that a box the seat runs in would refuse is refused on the write, naming the step, the path and the seat: a `direct` box writes a file only inside its own home, which it mints per box, so it takes a relative path and refuses every absolute one, and a `container` box writes one only under its home mount at `/home/user`. An `e2b` box writes a file at any other path, but refuses another account's home (`~name/…`) and a path naming a directory, so the home itself and a directory above it are refused on the write as well. Name such a file relative to the box's home instead (`.npmrc`, or `~/.npmrc`), which every cell writes under its home, or have a command of the step write it under `"$HOME"` ([setup steps](../concepts/code-sandbox.md#setup-steps--provisioning-the-box)) |
 | `placement` | dict | no | Which nodes may run this seat; absent means any node that runs seats (see [Placement](../guides/fleet.md#placement)). Agent seats only: a human seat is never claimed, so one carrying a placement is refused. `node` pins it to one node id and `labels` names pairs a node must **all** carry under [`node.labels`](../concepts/configuration.md#nodelabels); give both and both must hold. Everything is compared exactly against what a node advertises, so each part takes the shape a node's own is held to. A **label key** follows the node-label grammar: not empty, at most 63 bytes, and no whitespace or unprintable character anywhere (`zone`, `topology.example.com/rack`). A **label value** may hold spaces inside it or be empty, but none around it, since a node's values are trimmed. **`node`** is a node id: it starts with a letter or digit and holds only letters, digits, `.`, `_` or `-`, at most 64 characters — and it is compared as written, so a `${VAR}` is not resolved here. A selector outside these shapes could never match a node, so it is refused at validation, naming the field, rather than left for the running fleet to report as `seats_unplaceable` |
 | `schedules` | list | no | Role-scoped recurring tasks — see [Schedules](#schedules) |
 

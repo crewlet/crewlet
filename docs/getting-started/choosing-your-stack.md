@@ -69,15 +69,16 @@ any backend, or via a local cell (`providers.sandbox.local` plus `run_in:
 direct`), which runs the coding agent on the engine host against the same
 login.
 
-**And the CLI can run the turn itself.** `mode: agent` makes the seat's executor
-the CLI's own agentic loop — a real shell, a real editor, a real checkout — with
-the seat's tools reaching it over an MCP bridge, as a detached run that outlives
+**And the CLI runs the turn itself.** Every agent seat's executor is its CLI's
+own agentic loop — a real shell, a real editor, a real checkout — with the
+seat's tools reaching it over an MCP bridge, as a detached run that outlives
 the turn. It needs more than a sign-in: a CLI with a coding-agent runner
-(`claude-code` or `opencode`), a `providers.sandbox` catalogue to place the run
-in, and `CREWLET_MCP_BRIDGE_URL` set to something a box can dial. `crewlet llm
-doctor` checks all three. Text mode stays the default and is the better answer
-when you want the tool log to be the engine's own. See
-[LLM Backends § Two modes](../concepts/llm-backends.md#two-modes-a-text-model-or-the-agent-itself).
+(`claude-code` or `opencode`) in the seat's chain, a `providers.sandbox`
+catalogue to place the run in, and a bridge its box can dial — a `direct` box
+dials the node's own listener on loopback, while a `container` or `e2b` box
+needs `CREWLET_MCP_BRIDGE_URL`. `crewlet llm doctor` checks all three. The
+engine's own tool loop runs the reviewer, delegated workers and the side
+passes. See [LLM Backends § The tool bridge](../concepts/llm-backends.md#the-tool-bridge).
 
 **Embeddings** (`providers.embeddings`) power the semantic half of a Doclet
 or Worklet search (the company's own pages and work items, embedded once for
@@ -386,15 +387,14 @@ needs none — as long as *something* names a cell, since a backend is only
 built for a cell that is reached.
 
 Coding-agent choice: the coding agent **is** the CLI of the entry the seat's
-code work runs on (`role.llm_sandbox`, else its `llm`), with that entry's model
-and that entry's sign-in, so it needs no extra secret. **Claude Code** runs a
-`claude-code` entry; **OpenCode** — version 2, the `@opencode/cli` package, in
-the box — runs an `opencode` entry and so any model OpenCode reaches, which
-takes `coding_agent: opencode` on the seat (or as the provider default). Any
-other pairing is [refused](../concepts/code-sandbox.md#failure-modes), and a
-seat whose own model is on a CLI with no coding-agent runner — Codex, Gemini
-CLI, the rest — points `role.llm_sandbox` at a `claude-code` or `opencode`
-entry. A sign-in the seat carries itself in `role.sandbox.env` — a Claude Code
+executor launches on (the first member of its `llm` chain that can run one),
+with that entry's model and that entry's sign-in, so it needs no extra secret.
+**Claude Code** runs a `claude-code` entry; **OpenCode** — version 2, the
+`@opencode/cli` package, in the box — runs an `opencode` entry and so any model
+OpenCode reaches. A seat whose `llm` chain holds no `claude-code` or `opencode`
+entry is [refused](../concepts/code-sandbox.md#failure-modes); a CLI with no
+coding-agent runner — Codex, Gemini CLI, the rest — serves the seat's reviewer,
+workers and side passes instead. A sign-in the seat carries itself in `role.sandbox.env` — a Claude Code
 token, say — counts toward the check that refuses a remote box its entry's login
 cannot follow.
 

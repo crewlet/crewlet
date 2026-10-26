@@ -242,15 +242,13 @@ func newWorld(t *testing.T) *world {
 	// which its own TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead
 	// pins. Mirrored rather than imported because registering the real set
 	// needs eight dependency doubles; kept HONEST because the previous
-	// mirror had a2a_ask and run_sandbox carrying no annotations at all,
+	// mirror had a2a_ask carrying no annotations at all,
 	// which is what a comment in this file claimed for years after it
 	// stopped being true.
 	add(subagent.ToolName, tools.OriginBuiltin, tools.Annotations{})
 	add("activate_tool", tools.OriginBuiltin, tools.Annotations{})
 	add("list_mcp_server_tools", tools.OriginBuiltin, tools.Annotations{})
 	add("a2a_ask", tools.OriginBuiltin,
-		tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes})
-	add("run_sandbox", tools.OriginBuiltin,
 		tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes})
 	// The private-state writes. Each says OpenWorld explicitly, which is
 	// what makes it reachable by a worker its parent granted it to.
@@ -415,7 +413,7 @@ func TestAGrantRefusesTheEngineControlDenylist(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
 	denied := []string{
-		subagent.ToolName, "run_sandbox", "activate_tool",
+		subagent.ToolName, "activate_tool",
 		"list_mcp_server_tools", "a2a_ask",
 	}
 	// The parent holds every one of these; the request names every one.
@@ -500,9 +498,9 @@ func TestAWorkerMayBeGrantedAWriteToItsParentsOwnMemory(t *testing.T) {
 func TestAWorkerIsStillRefusedTheToolsThatLeaveTheProcess(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
-	g := subagent.Permit(w.snapshot, w.parentAll(), []string{"a2a_ask", "run_sandbox"})
+	g := subagent.Permit(w.snapshot, w.parentAll(), []string{"a2a_ask"})
 
-	for _, name := range []string{"a2a_ask", "run_sandbox"} {
+	for _, name := range []string{"a2a_ask"} {
 		if slices.Contains(g.Active, name) {
 			t.Errorf("%s leaves the process and was granted", name)
 		}
@@ -3084,12 +3082,12 @@ func (c *countingTool) Parameters() map[string]any { return nil }
 func (c *countingTool) Call(context.Context, map[string]any) (tools.Result, error) {
 	return tools.Result{Output: "no turn"}, nil
 }
-func (c *countingTool) CallForTurn(_ context.Context, turn *turnctx.Turn,
+func (c *countingTool) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	v, _ := args["v"].(string)
-	c.counts[v] = turn.CallLog().Ordinal(c.Name(), args)
+	c.counts[v] = turn.CallLog().Ordinal(ctx, c.Name(), args)
 	return tools.Result{Output: "counted"}, nil
 }
 
@@ -3158,7 +3156,7 @@ func TestAWorkerCountsTheRunsCallsButNotItsSiblings(t *testing.T) {
 		t.Fatalf("the workers counted %d and %d different calls before theirs, "+
 			"want the run's 1 each — the second saw its sibling's call", first, second)
 	}
-	if got := calls.Ordinal(counter.Name(), map[string]any{"v": "parent"}); got != 2 {
+	if got := calls.Ordinal(t.Context(), counter.Name(), map[string]any{"v": "parent"}); got != 2 {
 		t.Fatalf("after the wave the run counts %d different calls before a "+
 			"repeat of its own, want both workers' — the repeat would take its "+
 			"first copy's id with a worker's write in place", got)

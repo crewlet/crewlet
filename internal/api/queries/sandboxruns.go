@@ -351,6 +351,8 @@ var runKeys = map[string]runShown{
 	"role":                runStatus,
 	"status":              runStatus,
 	"coding_agent":        runStatus,
+	"provider_key":        runStatus, // which entry's plan the job spends: what it is doing
+	"model":               runStatus,
 	"placement":           runStatus,
 	"task_description":    runBody,
 	"question":            runQuestion,
@@ -438,6 +440,12 @@ func runRow(run sandbox.PendingRun) map[string]any {
 		"role":         run.Role,
 		"status":       run.Status,
 		"coding_agent": run.CodingAgent,
+		// THE EXECUTOR-CHAIN MEMBER THE JOB RUNS ON, and its model: a
+		// fallback at launch makes it other than the chain's head, and
+		// which entry's plan a job is spending is the first thing a person
+		// watching a long run asks.
+		"provider_key": run.Launch.ProviderKey,
+		"model":        run.Launch.Model,
 		// WHERE the run is, which became an operator question the moment
 		// providers.sandbox became a catalogue: one company now runs some
 		// seats on the engine host and others in a remote box, and "is
@@ -452,7 +460,7 @@ func runRow(run sandbox.PendingRun) map[string]any {
 		// chain — because the audience above named nobody the chart has.
 		// Always an array, empty on a run that is not parked on a
 		// question.
-		"audience_handles":  nonNilStrings(run.AudienceHandles),
+		"audience_handles":  nonNil(run.AudienceHandles),
 		"audience_fallback": run.AudienceFallback,
 		"branch":            run.Branch,
 		"trace_id":          run.TraceID,
@@ -472,14 +480,17 @@ func runRow(run sandbox.PendingRun) map[string]any {
 		// its trigger — empty means nobody is waiting, which is the safe
 		// half.
 		"reply": run.Reply,
-		// THE BRIDGE'S OWN TOOL LOG. A native loop keeps its calls in
-		// memory and the turn writes them at the end; a bridged run's are
-		// made by a process outside the engine, minutes or hours apart
-		// and possibly across a restart, so this row is the only copy
-		// there is. `bridge_calls_elided` says how many were cut from the
+		// THE BRIDGE'S OWN TOOL LOG. Every run's calls are made by a
+		// process outside the engine, over its bridge, minutes or hours
+		// apart and possibly across a restart, so this row is the only
+		// copy there is. `bridge_calls_elided` says how many were cut from the
 		// middle, because a log that silently skips is a log that lies
 		// about what the run did.
-		"bridge_calls":        run.BridgeCalls,
+		// ALWAYS AN ARRAY on a row the store answered: every run is
+		// bridged, so an empty log is a run that has called nothing — a
+		// fact the run's page states — and never "not known", which a
+		// reader is told only by the key being absent (a withheld body).
+		"bridge_calls":        nonNil(run.BridgeCalls),
 		"bridge_calls_elided": run.BridgeCallsElided,
 		// THE THREE IDENTIFIERS a person needs to find this run in
 		// somebody else's system: the coding CLI's own session, the
@@ -530,11 +541,11 @@ func answerableInChat(conversation string) bool {
 	return notify.Derived(conversation)
 }
 
-// nonNilStrings is a list that encodes as `[]` rather than `null` when empty,
-// so a reader indexes it without a presence check.
-func nonNilStrings(list []string) []string {
+// nonNil is a list that encodes as `[]` rather than `null` when empty, so a
+// reader indexes it without a presence check.
+func nonNil[T any](list []T) []T {
 	if list == nil {
-		return []string{}
+		return []T{}
 	}
 	return list
 }

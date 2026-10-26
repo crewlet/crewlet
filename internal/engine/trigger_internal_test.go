@@ -18,6 +18,9 @@ import (
 func TestATurnReadsNoOlderThanTheChangeThatWokeIt(t *testing.T) {
 	t.Parallel()
 	e, _ := spendingEngine(t)
+	// The turn has begun by the time it parks on its executor's launch,
+	// which is as far as this case needs it to go.
+	rigRuns(t, e, nil)
 	stream := worklet.Domain{}.Stream().Name
 	at := statelog.Position{Stream: stream, Generation: 2, Seq: 77}
 	woke := taskWake("task-9", "ENG-9")

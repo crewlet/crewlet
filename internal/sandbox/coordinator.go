@@ -24,8 +24,8 @@ import (
 // ErrResumeUnavailable reports that this node cannot resume the run a
 // completion refers to.
 //
-// NOT a failure of the run — a failure of ROUTING. The suspended Execute
-// conversation can only be resumed where the seat is, so the completion has to
+// NOT a failure of the run — a failure of ROUTING. The parked turn can only be
+// resumed where the seat is, so the completion has to
 // go back and reach that node instead of being settled here. Returning instead
 // of raising would let the caller fall through to settling the run done and
 // tearing the box down, discarding the agent's whole in-progress turn.
@@ -40,20 +40,47 @@ var ErrResumeUnavailable = errors.New("sandbox: this node cannot resume the run"
 //
 // The counterpart of the dispatcher's own abandon decision, on the other path
 // a turn can arrive by, and it exists for the same reasons. A resumed turn
-// re-enters the executor's suspended conversation, so a redelivery re-runs
-// every call the resumed round made, and a run that came back from a coding box
-// is the turn most likely to have pushed a branch or opened a pull request
-// already. A turn that PANICKED is abandoned too: the suspended conversation is
-// the same bytes on every delivery, so the retry reaches the same defect.
+// re-enters the turn its executor's run parked, so a redelivery re-runs every
+// call the resumed segment made, and a run that came back from a coding box is
+// the turn most likely to have pushed a branch or opened a pull request
+// already. A turn that PANICKED is abandoned too: the parked state is the same
+// bytes on every delivery, so the retry reaches the same defect.
 //
 // A resumer wraps its error in this when, and only when, the turn's own answer
 // says so (in the engine, turn.Abandon). The coordinator then never reverts the
 // claim, which is what stops a retry winning the flip: it settles the delivery
 // and the run, reclaiming the box and deleting the record, so no redelivery
 // finds anything to claim. Every other resume failure still reverts and comes
-// back, because the suspended conversation is the expensive thing here and a
-// resume that proved nothing has lost nothing by trying again.
+// back, because the parked turn is the expensive thing here and a resume that
+// proved nothing has lost nothing by trying again.
 var ErrResumeAbandoned = errors.New("sandbox: the resumed turn broke and must not be resumed again")
+
+// ErrResumeHeld reports a resumed turn its seat's conditions refused — the
+// token budget it would relaunch its executor under, today — returned wrapped
+// in a [HeldError] that says what the refusal waits for.
+//
+// NOT A FAILURE, AND NOT A RETRY. The coordinator hands the claim back holding
+// the run's resume until the refusal lifts ([PendingRun.HeldFor]) and spends
+// the completion that drove it: the job stays collected in its paused box, the
+// seat stays held behind it, and the poll announces the job again once the hold
+// lifts. Handed back for an ordinary retry, the broker redelivered the
+// completion and the poll re-announced it at once, and every attempt
+// re-collected the job and ran its review again into the same refusal.
+var ErrResumeHeld = errors.New("sandbox: the resume waits for its seat's conditions")
+
+// HeldError is a resume refused by its seat's conditions — see [ErrResumeHeld]
+// — and the [Refusal] it waits on.
+type HeldError struct {
+	Refusal Refusal
+	Err     error
+}
+
+func (e *HeldError) Error() string {
+	return "sandbox: the resume is held (" + e.Refusal.Reason + "): " + e.Err.Error()
+}
+
+// Unwrap reports the refusal as both [ErrResumeHeld] and its own cause.
+func (e *HeldError) Unwrap() []error { return []error{ErrResumeHeld, e.Err} }
 
 // ErrHandBackOwed is a store's refusal to delete a run, or to record more
 // copies on it, while it still owes the seat's inbox the copies it carries
@@ -95,7 +122,7 @@ var ErrSeatNotHeld = errors.New("sandbox: this node does not hold the seat")
 // after it is refused.
 var ErrRunEnding = errors.New("sandbox: the run's ending is decided, so it takes no other write")
 
-// Resumer re-enters a suspended Execute loop.
+// Resumer re-enters a turn parked on its executor's run.
 //
 // The one seam between the sandbox layer and the agent layer, and it is
 // deliberately narrow: the coordinator hands back the run's OPAQUE state blob
@@ -118,10 +145,26 @@ type Resumer interface {
 type ResumeRequest struct {
 	Run PendingRun
 
-	// Answer is what the pending run_sandbox call is answered with: the
-	// coding agent's findings, or a person's reply to its question. Already
-	// redacted — it becomes a tool message published as a phase record.
+	// Answer is what the resumed turn files as its executor's report: the
+	// collected run's own account of itself ([runReport]). Already redacted
+	// — it is published as a phase record. Empty on a person's answer, which
+	// is no report of anything the run did ([ResumeRequest.Asked]).
 	Answer string
+
+	// Asked is set when a PERSON'S ANSWER drives the resume of a run that
+	// parked on a question: what was asked, the reply, and what the run
+	// left behind. Nil for a completion.
+	//
+	// THE TURN CARRIES THE RUN ON WITH IT, and never files it as the run's
+	// report. The run stopped mid-round because it could not go on without
+	// the answer, so the round is not over: the resumed turn relaunches its
+	// executor, continuing the CLI's own session in the box the run asked
+	// from, with the answer as its next prompt — or, where that box is
+	// gone, a fresh run told the question, the answer and the branch
+	// ([Continuation]). Filed as the report, the answer reached the turn
+	// as a run that ended without submitting, which was rescued as
+	// incomplete and the executor never saw the reply.
+	Asked *AskedRun
 
 	// Success is whether the sandbox run itself succeeded, for the resumed
 	// phase's own record.
@@ -160,6 +203,16 @@ type ResumeRequest struct {
 	InputTokens  int
 	OutputTokens int
 
+	// CacheReadTokens and CacheWriteTokens are the share of InputTokens the
+	// job's prompt cache served and stored ([Result.CacheReadTokens]) — a
+	// breakdown, never an addition — carried the same two ways, so the
+	// charge that pays for the job says how much of it was cached, as it
+	// says for every phase the engine ran itself. Every executor is a job,
+	// so without them the cached share of almost everything a turn spends
+	// would be missing from its work item's account.
+	CacheReadTokens  int
+	CacheWriteTokens int
+
 	// Begin is what the resumer calls ONCE, at the moment the resumed
 	// segment is certain to run and before anything of it does — after
 	// every check that can still send the resume back as a retry. An error
@@ -192,6 +245,22 @@ type ResumeRequest struct {
 	// that lands runs from reaches the item, so the item errs short of the
 	// turn, never past it.
 	Engine EngineSpend
+
+	// Ended is how the collected run's CLI said it ended — its answer and
+	// its error as the runner read them, and whether it succeeded — VERBATIM,
+	// beside Answer's account of it. The vendor's report of a spent plan or
+	// a rate limit is in there, and only the resuming node can act on it: it
+	// holds the entry the run launched on, and its next launch of the turn —
+	// a reviewer's send-back — is the one that must not walk into the same
+	// limit. Zero on a person's answer: no run ended.
+	Ended RunEnding
+}
+
+// RunEnding is how a collected run said it ended — see [ResumeRequest.Ended].
+type RunEnding struct {
+	Text    string
+	Error   string
+	Success bool
 }
 
 // Accountant post-charges a collected run's tokens.
@@ -261,7 +330,7 @@ type CoordinatorOptions struct {
 	// finished it: collected, failed, torn down or reaped.
 	//
 	// It exists for credentials a run HOLDS rather than for its own state.
-	// An agent-mode run's box dials the engine's tool bridge with a
+	// A run's box dials the engine's tool bridge with a
 	// per-run token, and a session left open is a box that outlived its
 	// run keeping a working key to a live seat's whole surface. The token
 	// expires on its own clock, so this is the difference between a
@@ -425,22 +494,22 @@ type CoordinatorOptions struct {
 	Now func() time.Time
 }
 
-// Coordinator is the engine's hands on the detached run_sandbox flow.
+// Coordinator is the engine's hands on its executors' detached runs.
 //
 // Four transitions, and the ordering of each is what makes the flow safe:
 //
-//   - SUSPEND → HELD. The suspending turn persists its conversation and the
+//   - SUSPEND → HELD. The suspending turn persists its parked state and the
 //     seat is marked held, so no queued event slips a turn in beside a run
 //     that is still going.
 //   - COMPLETION → RESUME. A completion is claimed AT MOST ONCE, and only
 //     for the job it reports, the result collected with the box paused for
 //     reuse, tokens post-accounted and the run published as a phase of its
-//     own once per launch however often the tail is retried, and the
-//     suspended loop re-entered with the result spliced in.
+//     own once per launch however often the tail is retried, and the parked
+//     turn re-entered with the run's record to judge.
 //     The seat stays held through all of it and is freed only at the last
 //     moment before the resume, because freeing it earlier lets a queued
 //     event take the slot, the resume fail, and the redelivery find the claim
-//     already flipped, with the suspended conversation permanently lost.
+//     already flipped, with the parked turn permanently lost.
 //   - PARK → ANSWER. A run that stops to ask a person something gives the
 //     seat BACK — the answer arrives on that seat's own inbox, and a person
 //     can take days — and leaves a question open on it instead, stamped with
@@ -547,7 +616,7 @@ type Coordinator struct {
 // match exists for arrived at a seat the screening called free, and was
 // consumed as an ordinary turn while the box waited out its pause TTL.
 //
-// COUNTED rather than boolean, because a resumed Execute can launch a SECOND
+// COUNTED rather than boolean, because a resumed turn can launch a SECOND
 // run before the first is settled: the seat is free only when the last of them
 // is, and one seat can drive a job while another of its runs waits for a
 // person.
@@ -902,16 +971,33 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 		// (successive poll ticks both firing before the claim landed, an
 		// at-least-once redelivery, the retry a failed resume opened), or
 		// the row no longer holds its job running: parked on the question
-		// that job asked, replaced by the next run_sandbox call, or over —
+		// that job asked, replaced by the turn's next launch, or over —
 		// or a newer lease than this node's owns it.
 		log.InfoContext(ctx, "sandbox_completion_already_claimed",
 			"turn_id", ev.TurnID, "launch_id", ev.LaunchID)
 		return nil
 	}
 
-	result, err := c.collect(ctx, run)
+	result, ended, err := c.collect(ctx, run)
 	if err != nil {
 		return c.collectFailed(ctx, run, err)
+	}
+	if ended {
+		// A RUN ENDED AT ITS TURN'S CAP was working until the collection
+		// stopped it, and the claim read its row before then: a call it made
+		// over the bridge meanwhile is on the row and not on the claim, and
+		// the resumed turn judges the run on the claim's log. Read back
+		// once the box is stopped, so what the run did is all of it.
+		latest, found, readErr := c.pending.Get(ctx, run.TurnID)
+		switch {
+		case readErr != nil:
+			// The claim's log stands: the turn is judged on the calls it
+			// holds, and the line says the late ones may be missing from it.
+			log.WarnContext(ctx, "sandbox_run_calls_reread_failed",
+				"turn_id", run.TurnID, "launch_id", run.LaunchID, "error", readErr.Error())
+		case found && latest.LaunchID == run.LaunchID:
+			run.BridgeCalls, run.BridgeCallsElided = latest.BridgeCalls, latest.BridgeCallsElided
+		}
 	}
 
 	// Carried on the claimed row from here, so that handing the claim back
@@ -941,10 +1027,12 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 	// survives the handoffs which reset it. Every
 	// disposition that returns an error is the retry, and every one that
 	// does not is an ending.
-	_, err = c.resumeAndSettle(ctx, run, resumeText(result), result.Success, trigger, runOutcome{
+	_, err = c.resumeAndSettle(ctx, run, runReport(result), result.Success, trigger, runOutcome{
 		DeliveredRefs: result.DeliveredRefs, DeliveredRefsElided: result.DeliveredRefsElided,
 		InputTokens: result.InputTokens, OutputTokens: result.OutputTokens,
+		CacheReadTokens: result.CacheReadTokens, CacheWriteTokens: result.CacheWriteTokens,
 		Engine: run.Launch.Bridged.Plus(EngineSpend{Aux: result.Condensed}),
+		Ended:  RunEnding{Text: result.Text, Error: result.Error, Success: result.Success},
 	})
 	return err
 }
@@ -1025,7 +1113,7 @@ func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause e
 			"collection is retried until it has failed for the poll's give-up window")
 	// COUNTED: the claim did not move the seat's holding count — running and
 	// resumed both hold it — and handing it back to running leaves it there.
-	if err := c.unclaimAt(ctx, run, true, collectUnrevertedDetail, now); err != nil {
+	if err := c.unclaimAt(ctx, run, true, collectUnrevertedDetail, now, nil); err != nil {
 		//nolint:nilerr // Deliberate, as at every other hand-back: the claim
 		// did not go back, so the run has been ended and announced, and a
 		// redelivered completion would find nothing to claim.
@@ -1046,9 +1134,17 @@ type runOutcome struct {
 	DeliveredRefsElided int
 	InputTokens         int
 	OutputTokens        int
+	CacheReadTokens     int
+	CacheWriteTokens    int
 	// Engine is what the engine spent on the job between segments — see
 	// [ResumeRequest.Engine].
 	Engine EngineSpend
+	// Ended is how the collected run said it ended — see
+	// [ResumeRequest.Ended].
+	Ended RunEnding
+	// Asked is the question a person's answer resumes the run from — see
+	// [ResumeRequest.Asked].
+	Asked *AskedRun
 }
 
 // parkedEngineSpend is what the engine spent on a parked job outside every
@@ -1061,17 +1157,42 @@ func parkedEngineSpend(run PendingRun) EngineSpend {
 }
 
 // collect reconnects, reads the result, and PAUSES the box rather than tearing
-// it down: the resumed Execute may call run_sandbox again to continue in the
-// same checkout, and re-provisioning would throw away the working tree.
-func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, error) {
+// it down.
+//
+// THE BOX OUTLIVES ITS JOB for three readers. The resumed turn relaunches its
+// executor whenever its reviewer sends the work back, and the relaunch
+// continues in this box — the same checkout, the CLI's own session — rather
+// than re-provisioning and throwing the working tree away
+// ([Coordinator.Launch]). A run that parks waits in it for its answer. And a
+// resume that fails and is retried collects again, from a box still there to
+// read. Paused rather than left running between them, because nothing runs in
+// it until one of those comes, and a paused box is the one the pause reaper
+// bounds ([PendingRun.HeldSince]); whichever ending the turn reaches reclaims
+// it.
+//
+// ENDED reports a run its turn's wall-clock cap ended ([PendingRun.Deadline]):
+// the poll announced its completion while its job was still working, so what
+// is collected is what it did up to now — read before the pause stops it,
+// since a paused remote box cannot be read — and the result says it was cut
+// off and why, so neither the reviewer nor the record takes a run the clock
+// stopped for one that finished.
+func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, bool, error) {
 	manager := c.mgr()
 	box, runner, err := manager.Reconnect(ctx, Placement(run.Placement), run.SandboxID, run.CodingAgent)
 	if err != nil {
-		return Result{}, err
+		return Result{}, false, err
+	}
+	ended := false
+	if run.PastDeadline(c.now()) {
+		done, pollErr := runner.Poll(ctx, box, run.Handle())
+		ended = pollErr == nil && !done
 	}
 	result, err := runner.Collect(ctx, box, run.Handle())
 	if err != nil {
-		return Result{}, err
+		return Result{}, false, err
+	}
+	if ended {
+		result = endedAtDeadline(result, run.Deadline)
 	}
 	// WHAT THE RUN SAYS IT SPENT IS NEVER A REFUND — see [Result.usageFloored].
 	var floored bool
@@ -1097,7 +1218,23 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, erro
 			"detail", "the pause instant was not recorded; a run that parks on a question is "+
 				"expired from its park instead, and one that resumes settles its own box")
 	}
-	return result, nil
+	return result, ended, nil
+}
+
+// endedAtDeadline is what a run its turn's cap ended reports: what it said up
+// to then, marked as cut off. Never a success, whatever it had written — it
+// did not get to say it was done — and never a question: a run that is being
+// stopped is not one a person's answer could continue.
+func endedAtDeadline(result Result, deadline time.Time) Result {
+	why := fmt.Sprintf("the run was ended at its turn's wall-clock cap, %s, before it "+
+		"finished; what it had done by then is collected", deadline.UTC().Format(time.RFC3339))
+	result.Success = false
+	result.NeedsInput, result.Question, result.AskTo = false, "", ""
+	if result.Error != "" {
+		why += ". It had reported: " + result.Error
+	}
+	result.Error = why
+	return result
 }
 
 // charge post-accounts a collected run's tokens, ONCE per launch, and reports
@@ -1222,7 +1359,10 @@ func runPhase(run PendingRun, facts LaunchRecord, result Result, collected time.
 		Agent: run.AgentID, RoleName: run.Role,
 		TurnID: run.TurnID, WorkKey: run.WorkKey,
 		Iteration: facts.Iteration, Phase: types.PhaseSandbox,
-		Model: facts.Model,
+		// The entry and the model the job was launched on, as the launch
+		// recorded them: the member of the executor chain that took the
+		// run, which a fallback makes other than the head.
+		Model: facts.Model, ProviderKey: facts.ProviderKey,
 		// Redacted again, at the publish, although the runner redacts at
 		// collection: this is the boundary the record leaves by, and a
 		// runner that forgot would otherwise put a box's credentials in
@@ -1239,13 +1379,16 @@ func runPhase(run PendingRun, facts LaunchRecord, result Result, collected time.
 		TotalTokens:                   result.InputTokens + result.OutputTokens,
 		CacheReadTokens:               result.CacheReadTokens,
 		CacheWriteTokens:              result.CacheWriteTokens,
-		WorkItem:                      run.WorkItem,
-		LaunchID:                      run.LaunchID,
-		Backend:                       types.BackendSandbox,
-		CodingAgent:                   run.CodingAgent,
-		SandboxID:                     run.SandboxID,
-		CostUSD:                       result.CostUSD,
-		DeliveredRefs:                 result.DeliveredRefs,
+		// The run's own model turns, as its CLI reported them: the calls
+		// every spend figure counts this record as (tokens.PhaseCalls).
+		CLITurns:      result.Turns,
+		WorkItem:      run.WorkItem,
+		LaunchID:      run.LaunchID,
+		Backend:       types.BackendSandbox,
+		CodingAgent:   run.CodingAgent,
+		SandboxID:     run.SandboxID,
+		CostUSD:       result.CostUSD,
+		DeliveredRefs: result.DeliveredRefs,
 		// How many more it reported than the record lists, said rather
 		// than dropped — see [MaxDeliveredRefBytes].
 		DeliveredRefsElided: result.DeliveredRefsElided,
@@ -1344,6 +1487,7 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 		// and a re-seeded run was told to check out the URL.
 		Branch: result.WIPBranch, SessionID: result.SessionID,
 		InputTokens: result.InputTokens, OutputTokens: result.OutputTokens,
+		CacheReadTokens: result.CacheReadTokens, CacheWriteTokens: result.CacheWriteTokens,
 		// And what condensing this collection cost, paid by the same resume.
 		Condensed: result.Condensed,
 		// WHO IT IS PUT TO, resolved now and written with the question:
@@ -1572,7 +1716,7 @@ func (c *Coordinator) owes(turnID string) bool {
 // the seat's inbox some time later: behind a pause, behind a seat busy on
 // another of its coding runs, after a NAK's backoff, or as a second copy of a
 // retried `answer_run`. By then the run may have been answered by somebody
-// else, resumed, called `run_sandbox` again, and parked on a NEW question —
+// else, resumed, relaunched its executor, and parked on a NEW question —
 // and an answer that claimed whatever the run is waiting on now resumed it a
 // second time with the first question's answer presented as the second's.
 // So the delivery carries the question it was given against
@@ -1851,11 +1995,11 @@ func (c *Coordinator) announceAnswered(ctx context.Context, run PendingRun,
 	}
 }
 
-// resumeAndSettle re-enters the suspended loop, then settles the box.
+// resumeAndSettle re-enters the parked turn, then settles the box.
 //
-// After the resumed Execute returns: if the executor called run_sandbox AGAIN
-// the row is back in running and a new job owns the paused box, so it is left
-// for the next completion. Otherwise the phase is done with the box, so the box
+// After the resumed turn returns: if it relaunched its executor the row is
+// back in running and a new job owns the paused box, so it is left for the
+// next completion. Otherwise the phase is done with the box, so the box
 // is torn down and the run finished.
 //
 // IT REPORTS WHAT IT LEFT THE DELIVERY, not merely whether it failed, because
@@ -1873,8 +2017,8 @@ func (c *Coordinator) announceAnswered(ctx context.Context, run PendingRun,
 // # A recorded answer the run ends without
 //
 // A run claimed out of [StatusAnswered] carries the person's reply on its row,
-// and a resume can end the run before any turn took that reply: no
-// conversation to re-enter, a claim that cannot be given back, a resume that
+// and a resume can end the run before any turn took that reply: no parked
+// state to re-enter, a claim that cannot be given back, a resume that
 // broke before its turn began. ON EVERY ROUTE the reply then goes back to the
 // seat through the run's row: the store will not delete a row still holding a
 // reply no turn took ([ErrAnswerOwed]), so the ending lets it go first,
@@ -1892,22 +2036,22 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 	answer string, success bool, trigger *events.Event, outcome runOutcome,
 ) (AnswerDisposition, error) {
 	if len(run.ExecuteState) == 0 {
-		// No suspended conversation to resume, and the turn cannot
-		// continue without one.
+		// No parked turn to resume, and the run cannot be judged without
+		// one.
 		//
 		// This is now unreachable through any live path — a run holds
-		// [StatusLaunching] until its conversation is written, and a
-		// launching run is not claimable — which is exactly why it stays:
-		// it is the assertion that the launching state is doing its job.
-		// A claimed run without one is a row this build's launch path did
-		// not write, and it is failed as no_execute_state rather than
+		// [StatusLaunching] until its turn's parked state is written, and
+		// a launching run is not claimable — which is exactly why it
+		// stays: it is the assertion that the launching state is doing its
+		// job. A claimed run without one is a row this build's launch path
+		// did not write, and it is failed as no_execute_state rather than
 		// resumed into nothing.
 		log.WarnContext(ctx, "sandbox_resume_no_execute_state",
 			"turn_id", run.TurnID, "claimed_from", run.ClaimedFrom,
-			"detail", "the row carried no suspended conversation; the turn "+
+			"detail", "the row carried no parked turn state; the turn "+
 				"cannot be resumed and the run is failed")
-		if !c.settleFailed(ctx, run, types.SandboxFailureNoConversation,
-			"the run record carried no suspended conversation, so the turn that "+
+		if !c.settleFailed(ctx, run, types.SandboxFailureNoExecuteState,
+			"the run record carried none of its turn's parked state, so the turn that "+
 				"started it cannot be continued") {
 			return AnswerNotMine, errRunMovedOn
 		}
@@ -1964,7 +2108,8 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 		Run: run, Answer: answer, Success: success, Trigger: trigger,
 		DeliveredRefs: outcome.DeliveredRefs, DeliveredRefsElided: outcome.DeliveredRefsElided,
 		InputTokens: outcome.InputTokens, OutputTokens: outcome.OutputTokens,
-		Engine: outcome.Engine, Begin: begin,
+		CacheReadTokens: outcome.CacheReadTokens, CacheWriteTokens: outcome.CacheWriteTokens,
+		Engine: outcome.Engine, Ended: outcome.Ended, Asked: outcome.Asked, Begin: begin,
 	}); err != nil {
 		if errors.Is(err, ErrResumeAbandoned) && !began.Load() {
 			// BROKEN BEFORE ITS TURN BEGAN — a panic re-entering the
@@ -1997,8 +2142,8 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 		if errors.Is(err, ErrResumeAbandoned) {
 			// THE CLAIM IS NEVER GIVEN BACK. Reverting it here would hand
 			// the completion to a retry, and that retry would re-enter the
-			// same suspended conversation and either repeat the writes this
-			// turn has already made or reach the same panic, which are the
+			// same parked turn and either repeat the writes this turn has
+			// already made or reach the same panic, which are the
 			// two things a resume must not do twice. The turn is lost
 			// either way, and neither is recoverable by trying again.
 			//
@@ -2010,10 +2155,10 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 			// node kept it, beside a paused box nobody would collect.
 			//
 			// The seat's busy count is RECOUNTED from the store rather than
-			// re-marked: the resumed turn is over, but it may have called
-			// run_sandbox again before it broke, and that relaunch counted
-			// the seat busy on a job this settle has just ended. And
-			// nothing is announced, because the turn did resume and has
+			// re-marked: the resumed turn is over, but it may have
+			// relaunched its executor before it broke, and that relaunch
+			// counted the seat busy on a job this settle has just ended.
+			// And nothing is announced, because the turn did resume and has
 			// already published its own failed completion. The reply it
 			// took was spent when it took it.
 			log.ErrorContext(ctx, "sandbox_resume_abandoned",
@@ -2026,6 +2171,21 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 			// the claim, and handing the delivery back to the ordinary
 			// route would run a second turn on a message the resumed one
 			// has already acted on.
+			return AnswerConsumed, nil
+		}
+		// A RESUME ITS SEAT'S CONDITIONS REFUSED IS HELD, not retried — see
+		// [ErrResumeHeld]. A COMPLETION'S only: a recorded answer's resume is
+		// already its own series, which asks the seat's conditions before
+		// every attempt and waits on the same refusal ([Admission]).
+		var held *HeldError
+		if errors.As(err, &held) && !claimedAnswer(run) {
+			if unclaimErr := c.unclaimHeld(ctx, run, held.Refusal); unclaimErr != nil {
+				//nolint:nilerr // The run was ended in its place, as on
+				// the retry's path below: nothing is left to come back to.
+				return AnswerNotMine, nil
+			}
+			// THE COMPLETION IS SPENT: the hold is on the row, and the poll
+			// announces the job again when it lifts.
 			return AnswerConsumed, nil
 		}
 		// UN-CLAIM so a retry can win the flip again. Without this the NAK'd
@@ -2065,21 +2225,27 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 		return AnswerConsumed, nil
 	}
 	if latest.LaunchID != run.LaunchID && slices.Contains(Active, latest.Status) {
-		// The resumed executor called run_sandbox AGAIN: a new detached job
-		// owns the box and the suspending turn re-marked the seat busy.
+		// The resumed turn RELAUNCHED its executor: a new detached job owns
+		// the row, and the relaunch held the seat as it opened it. The box
+		// this run was collected from is the new job's too, or is already
+		// gone: the relaunch continued in it where it could, and reclaimed it
+		// through its own cell before taking a fresh one where it could not
+		// ([Coordinator.Launch]) — so there is nothing of this run's left for
+		// a settle here to reclaim.
 		//
 		// TOLD BY ITS LAUNCH, because its status can be any live one by
 		// now: launching until the resumed turn writes its conversation,
 		// running while it works, and claimed by its own completion, or
 		// parked on a question of its own, when it finished before this
-		// read. Reading for running alone once tore a second run_sandbox
-		// call's box down underneath it, and reading for running or
+		// read. Reading for running alone once tore a second launch's box
+		// down underneath it, and reading for running or
 		// launching tore down the checkout of a question the next job had
 		// just asked and ended the run under it. A relaunch that is
 		// already over (one that could not start) is settled like the
 		// rest: the phase is done with whatever box it still names.
-		log.InfoContext(ctx, "sandbox_reused_in_turn",
-			"turn_id", run.TurnID, "status", latest.Status)
+		log.InfoContext(ctx, "sandbox_relaunched_in_turn",
+			"turn_id", run.TurnID, "status", latest.Status,
+			"sandbox_id", latest.SandboxID, "continued", latest.SandboxID == run.SandboxID)
 		return AnswerConsumed, nil
 	}
 	c.finish(ctx, latest, ending{fence: fenceOf(run)})
@@ -2145,7 +2311,7 @@ func (c *Coordinator) spend(ctx context.Context, handle string, answer RecordedA
 //
 // The LATEST record, because the box to settle is the one it names now: a
 // re-seeded run provisioned a fresh box, so the claimed snapshot's id is stale,
-// and a resumed executor that called run_sandbox again has a new job in it. A
+// and a resumed turn that relaunched its executor has a new job in it. A
 // record that is already gone is answered with the snapshot, whose settle then
 // reclaims a box that may still be there and finds nothing to delete.
 //
@@ -2332,7 +2498,26 @@ func (c *Coordinator) settleClaimed(ctx context.Context, run PendingRun, cause e
 // error is not this answer — a retry keeps it, so the delivery comes back, and
 // an ending drops it, because there is nothing left to come back to.
 func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, counted bool, detail string) error {
-	return c.unclaimAt(ctx, run, counted, detail, time.Time{})
+	return c.unclaimAt(ctx, run, counted, detail, time.Time{}, nil)
+}
+
+// unclaimHeld hands back a claim whose resume the seat's conditions refused,
+// holding the run's resume until refusal lifts ([Release.Hold]).
+//
+// A REFUSAL ONLY AN EVENT LIFTS is held until [answerWaitBackstop], the bound
+// a recorded answer's series waits for the same signal: the signal lifts it
+// sooner ([Coordinator.Readmit]), and a signal never wired to say so costs the
+// turn that much and no more.
+func (c *Coordinator) unclaimHeld(ctx context.Context, run PendingRun, refusal Refusal) error {
+	if refusal.Until.IsZero() {
+		refusal.Until = c.now().Add(answerWaitBackstop)
+	}
+	log.InfoContext(ctx, "sandbox_resume_held",
+		"turn_id", run.TurnID, "agent", run.AgentHandle, "condition", string(refusal.Condition),
+		"reason", refusal.Reason, "until", refusal.Until.UTC().Format(time.RFC3339),
+		"detail", "the job stays collected in its paused box and its seat held behind it; "+
+			"its completion is announced again when the refusal lifts")
+	return c.unclaimAt(ctx, run, false, resumeUnrevertedDetail, time.Time{}, &refusal)
 }
 
 // unclaimAt is [Coordinator.unclaim] for a claim handed back because the
@@ -2340,7 +2525,7 @@ func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, counted bool,
 // counts onto the job's record ([Release.CollectFailedAt]); zero is any other
 // hand-back.
 func (c *Coordinator) unclaimAt(ctx context.Context, run PendingRun, counted bool, detail string,
-	collectFailedAt time.Time,
+	collectFailedAt time.Time, hold *Refusal,
 ) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
 	defer cancel()
@@ -2348,7 +2533,7 @@ func (c *Coordinator) unclaimAt(ctx context.Context, run PendingRun, counted boo
 	released, err := c.pending.ReleaseClaim(ctx, run.TurnID, Release{
 		Launch: run.LaunchID, To: to, Charged: run.Charged, CompanyCharged: run.CompanyCharged,
 		Published: run.Launch.Published, CollectFailedAt: collectFailedAt,
-		Collected: run.Collected, Fence: fenceOf(run),
+		Collected: run.Collected, Fence: fenceOf(run), Hold: hold,
 	})
 	switch {
 	case err != nil:
@@ -2478,8 +2663,8 @@ const (
 
 // resumeBrokenDetail is the sentence a run whose resume broke before its turn
 // began reaches an operator's board with: nothing of the turn ran, and trying
-// again would re-enter the same suspended conversation and reach the same
-// defect, so the run is ended rather than retried.
+// again would re-enter the same parked turn and reach the same defect, so the
+// run is ended rather than retried.
 const resumeBrokenDetail = "the turn this coding run belongs to could not be re-entered — " +
 	"resuming it broke before the turn began, and another attempt would reach the same " +
 	"defect — so the turn cannot be continued; the work it pushed, if any, is on its branch"
@@ -3220,7 +3405,7 @@ func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner stri
 // answered. Whether a turn took it is the one thing the row has to say, and it
 // says it ([RecordedAnswer.TakenAt]). A claim whose process stopped before its
 // turn took the answer never used it, and the answer is still the run's: the
-// run has its suspended conversation and the answer on its row, and resuming
+// run has its parked turn and the answer on its row, and resuming
 // it with that answer is exactly what the dead claim was doing. So the claim is
 // given back to the answer ([PendingStore.ReviveAnswer]) — the run answered
 // again, fenced to this node's lease in the same write — and this node drives
@@ -3387,8 +3572,8 @@ const MaxAnswerRevivals = 3
 // a zero one — re-seeds from its pushed branch when it resumes, as any answered
 // run does; reviving a run with no box, or no branch, resumes the same turn
 // with the same answer the person gave, which is what the person asked for. NOR
-// THE CONVERSATION: a claim is only ever taken on a run that has one, and the
-// resume's own refusal of one that does not ([types.SandboxFailureNoConversation])
+// THE PARKED STATE: a claim is only ever taken on a run that has it, and the
+// resume's own refusal of one that does not ([types.SandboxFailureNoExecuteState])
 // hands the answer back through the run's ending in any case.
 func (c *Coordinator) revivable(run PendingRun) string {
 	answer := run.Answer
@@ -3644,23 +3829,27 @@ func fenceOf(run PendingRun) Fence {
 	return Fence{Owner: run.Owner, Epoch: run.OwnerEpoch}
 }
 
-// resumeText is the run_sandbox reply spliced into the resumed Execute loop.
+// runReport is a collected run's own account of itself, which the resumed turn
+// files as its executor's report: the reviewer judges the run on it beside the
+// calls it made over the bridge, and the turn's record carries it.
 //
-// It carries the coding agent's findings — reported text plus delivered refs,
-// or the error — framed so the executor CONTINUES the task rather than redoing
-// it. Secret-redacted, because it becomes a tool message published as a phase
-// record.
-func resumeText(result Result) string {
+// THE RUN'S WORDS AND WHY IT ENDED, and nothing addressed to anybody. The run
+// IS the executor — it did the work, told whoever was waiting through its own
+// tools, and ended — so there is no later executor for this text to instruct.
+// An instruction here is read by the reviewer as something the executor said,
+// and filed on the work item as what the turn did. Secret-redacted, because it
+// is published as a phase record.
+func runReport(result Result) string {
 	status := "did NOT fully succeed"
 	if result.Success {
 		status = "succeeded"
 	}
-	lines := []string{"The sandbox coding run " + status + "."}
+	lines := []string{"The executor's run " + status + "."}
 	if len(result.DeliveredRefs) > 0 {
 		delivered := "Delivered: " + strings.Join(result.DeliveredRefs, ", ")
 		if result.DeliveredRefsElided > 0 {
-			// SAID, so the executor does not report a short list as all of
-			// it: the rest are in the report it reads below.
+			// SAID, so the reviewer does not read a short list as all of
+			// it: the rest are in the report below.
 			delivered += fmt.Sprintf(" (and %d more its report names, not listed here)",
 				result.DeliveredRefsElided)
 		}
@@ -3672,66 +3861,49 @@ func resumeText(result Result) string {
 		// WHY, BESIDE WHAT IT SAID. A run that wrote a report and still did
 		// not succeed — it crashed after writing it, its question or its
 		// result could not be read, its CLI reported an error after an
-		// answer — used to hand the executor its report alone under "did
-		// NOT fully succeed", with the reason nowhere it could read it.
+		// answer — used to be filed with its report alone under "did NOT
+		// fully succeed", with the reason nowhere a reader could find it.
 		if !result.Success && result.Error != "" && result.Error != result.Text {
 			lines = append(lines, "\nWhy it did not succeed: "+result.Error)
 		}
 	case result.Error != "":
 		lines = append(lines, "\nError: "+result.Error)
 	}
-	lines = append(lines, "\nThe sandbox did the code work above — do NOT redo it. Continue the "+
-		"task: report the outcome to the requester on the channel it came from "+
-		"(on success share the result / PR; on failure explain what blocked it "+
-		"and what's needed), and take any remaining action with your tools.")
 	return redact.Secrets(strings.Join(lines, "\n"))
 }
 
-// answerText is the run_sandbox reply spliced in when a parked clarification
-// is answered.
-//
-// What it must NOT do is promise a box that no longer exists. A run whose
-// sandbox id is empty had its box reclaimed — reaped past the pause TTL, or
-// torn down the moment it blocked under a zero TTL — so the next call
-// provisions a fresh one: git is the durable state, and the brief has to say
-// so or the coding agent starts by looking for a working tree that is gone.
-//
-// BY names who answered where the route knows it — an answer by turn carries
-// the person, while a chat reply's sender is already in the conversation the
-// resumed turn reports back to — and "" leaves the answer unattributed.
-func answerText(run PendingRun, answer, by string) string {
-	lines := []string{
-		"The sandbox coding run paused to ask a person a question before it could finish.",
+// AskedRun is what a person's answer resumes a parked run with — see
+// [ResumeRequest.Asked]. Redacted, as everything a resume hands the turn is:
+// the turn publishes it and hands it to the run.
+type AskedRun struct {
+	// Question is what the run asked and Answer the reply; By is who gave
+	// it, where the route knows — an answer by turn names the person, while
+	// a chat reply's sender is already in the conversation the turn reports
+	// back to — and "" otherwise.
+	Question, Answer, By string
+
+	// Branch is the work-in-progress branch the run pushed before it asked,
+	// "" where its ask named none: the durable half of the work, which a
+	// run carrying on on a fresh machine starts from.
+	Branch string
+
+	// SessionID is the asking job's CLI session, which the relaunch
+	// continues where it runs in the asking job's box ([Continuation]).
+	SessionID string
+
+	// BoxKept is whether that box is still there. False once it was
+	// reclaimed while the question waited — reaped past the pause TTL, or
+	// torn down the moment the run blocked under a zero TTL — so the work
+	// carries on on a fresh machine, from the branch, and the run has to be
+	// told so or it starts by looking for a working tree that is gone.
+	BoxKept bool
+}
+
+// askedRun is what run's recorded answer resumes it with.
+func askedRun(run PendingRun, answer RecordedAnswer) *AskedRun {
+	return &AskedRun{
+		Question: redact.Secrets(run.Question), Answer: redact.Secrets(answer.Text),
+		By: answer.attribution(), Branch: run.Branch, SessionID: run.SessionID,
+		BoxKept: run.SandboxID != "",
 	}
-	if run.Question != "" {
-		lines = append(lines, "\nQuestion it asked: "+run.Question)
-	}
-	if by != "" {
-		lines = append(lines, "Answer from "+by+": "+answer)
-	} else {
-		lines = append(lines, "Their answer: "+answer)
-	}
-	if run.Branch != "" {
-		lines = append(lines, "\nWork-in-progress is on git branch: "+run.Branch)
-	}
-	if run.SandboxID != "" {
-		lines = append(lines, "\nThe sandbox is still up with that work-in-progress. Continue the "+
-			"task: call run_sandbox again with a brief that incorporates this "+
-			"answer so the coding agent finishes the work (it reuses the same "+
-			"checkout). When it's done, report the outcome to the requester on "+
-			"the channel this came from.")
-	} else {
-		branch := "check out the work-in-progress branch it pushed earlier"
-		if run.Branch != "" {
-			branch = "check out the existing branch `" + run.Branch + "`"
-		}
-		lines = append(lines, "\nThat sandbox has since been reclaimed, so the next run starts on "+
-			"a FRESH machine — the earlier working tree and the coding agent's "+
-			"memory of it are gone, but the pushed branch has the work. "+
-			"Continue the task: call run_sandbox again with a brief that tells "+
-			"it to "+branch+", re-read the code there, and finish the work with "+
-			"this answer incorporated. When it's done, report the outcome to "+
-			"the requester on the channel this came from.")
-	}
-	return redact.Secrets(strings.Join(lines, "\n"))
 }

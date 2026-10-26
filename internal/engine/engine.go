@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -90,6 +91,24 @@ type Company struct {
 	// separately, at its reconcile tick and again at every boot. See
 	// [Engine.applyChart].
 	ActivatedAt time.Time
+
+	// catalogue is the sandbox catalogue this epoch was built with
+	// ([buildSandbox]): the cells a launch may place a box in, the runners
+	// it may start, the engine-wide setup steps and the default turn cap.
+	// Nil where the company reaches no cell — no providers.sandbox, or no
+	// seat that launches.
+	//
+	// PINNED WITH THE EPOCH, and what every launch of this epoch's turns
+	// places its run by, never the node's live manager: the turn's member,
+	// its run_in and its seat's box settings come from this epoch, and a
+	// launch that read the catalogue of whichever revision was live at the
+	// moment could resolve a pinned entry to a cell its own revision never
+	// configured, or refuse a run_in the live catalogue had just dropped.
+	// The node's coordinator keeps the live manager — the newest catalogue,
+	// carrying every cell a box already out may be in — for polling,
+	// collecting and reclaiming runs that are already out
+	// ([sandbox.Coordinator.SetManager]).
+	catalogue *sandbox.Manager
 }
 
 // NewCompany builds an epoch from a validated config.
@@ -253,11 +272,13 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 			Withheld: in.Turn.Context.WithholdsContacts},
 		Registry: reg,
 		Models:   c.Models,
+		// The onboarding pass's extension policy: the executor's rounds
+		// are its CLI's own, capped by the run's max_turns, and the
+		// reviewer's budget is a structural one — so the pass is the only
+		// engine loop a cap is extended in.
 		Caps: runner.Caps{
-			ExecutorRounds:  te.MaxToolRounds,
-			ExecutorCeiling: te.ExecuteMaxToolRoundsCeiling,
-			ExtensionStep:   te.ExtensionRoundStep,
-			ExtensionOn:     te.ExtensionEnabled.Or(true),
+			ExtensionStep: te.ExtensionRoundStep,
+			ExtensionOn:   te.ExtensionEnabled.Or(true),
 		},
 		Budget: in.Budget,
 		Judge:  in.Judge,
@@ -282,7 +303,7 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 				CallTimeout:      seconds(del.CallTimeoutSeconds),
 				MaxParallel:      del.MaxParallel,
 				BudgetFraction:   del.BudgetFraction,
-				MinTokensPerTask: del.MinTokensPerTask,
+				MinTokensPerTask: del.PerTaskFloor(),
 			},
 			// CLONED, because the live config cell is replaced wholesale
 			// by an apply and a turn holding the old map would otherwise
@@ -304,16 +325,16 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 		OnPhase: in.OnPhase,
 		Onboarding: runner.Onboarding{
 			Markers: in.Markers, Latch: in.Latch,
-			Rounds:  te.OnboardingMaxToolRounds,
+			Rounds:  te.OnboardingRounds(),
 			Ceiling: te.OnboardingMaxToolRoundsCeiling,
 		},
 		Resume: in.Resume,
-		// The executor's RUNTIME: nil for the native tool loop, non-nil
-		// for a coding CLI in agent mode. Supplied by the caller rather
-		// than resolved here, because building it needs the engine and
-		// the turn — and there is one helper behind both call sites, so
-		// a turn cannot change runtime by being resumed.
-		AgentRun: in.AgentRun,
+		// The executor's LAUNCHER, which the runner requires. Supplied by
+		// the caller rather than resolved here, because building it needs
+		// the engine and the turn — and there is one helper behind both
+		// call sites ([Engine.agentRunFor]), so a turn launches the same
+		// way whether it is dispatched or resumed.
+		Launcher: in.Launcher,
 		// The turn's note box, opened by the caller because the caller is
 		// what files it where a person's note can find it.
 		Steer: in.Steer,
@@ -384,12 +405,11 @@ type RunnerInput struct {
 	// this is wired unconditionally rather than branched on.
 	OnPhase func(phase.Phase)
 
-	// AgentRun runs this turn's executor as a coding CLI's own agentic
-	// run. Nil is the native tool loop. Built by [Engine.agentRunFor],
-	// which BOTH RunnerFor call sites use — a turn whose executor ran as
-	// an agentic loop and came back to a native one would rebuild a
-	// surface for a conversation that never existed.
-	AgentRun runner.AgentLauncher
+	// Launcher runs this turn's executor as its coding CLI's own agentic
+	// run. Built by [Engine.agentRunFor], which BOTH RunnerFor call sites
+	// use; nil is a seat with nothing to launch on, which the runner
+	// refuses to be built for.
+	Launcher runner.AgentLauncher
 
 	// Markers and Latch drive the first-turn onboarding pass. Nil markers
 	// disable it: without somewhere to mark, the pass would run every turn
@@ -399,31 +419,40 @@ type RunnerInput struct {
 	Markers runner.Markers
 	Latch   *runner.Latch
 
-	// Resume makes this runner's turn a RE-ENTRY into a suspended Execute
-	// conversation rather than a fresh turn. Nil is the ordinary case.
+	// Resume makes this runner's turn the COLLECTION of the executor run it
+	// parked on rather than a fresh turn. Nil is the ordinary case.
 	Resume *runner.Resume
 
 	// Steer is the turn's box of notes from a person, opened by
-	// [steerBox] from the SAME launcher as AgentRun above — a turn whose
-	// executor is a coding CLI's own loop answers every note
-	// `unsupported`. Nil is a turn nobody can steer: every test that
-	// drives a runner directly.
+	// [turnSteerBox]. Nil is a turn with no box: every test that drives a
+	// runner directly.
 	Steer *steer.Box
 }
 
 // TurnSettings is the loop's pinned configuration for this epoch.
 //
-// wallClock is the cap THIS turn's trigger carried, in seconds, zero for the
-// triggers that carry none. It is a per-turn argument rather than a config
-// field because it comes off the fire, not the epoch.
-func (c *Company) TurnSettings(wallClock int) turn.Settings {
+// deadline is the instant THIS turn's wall-clock cap ends ([wallClockDeadline]
+// on the turn's own start, carried across its parks), zero for the triggers
+// that carry none. It is a per-turn argument rather than a config field
+// because it comes off the fire, not the epoch.
+func (c *Company) TurnSettings(deadline time.Time) turn.Settings {
 	te := c.Config.TurnEngine
 	return turn.Settings{
 		MaxIterations:        te.MaxIterations,
 		DelegationDepthLimit: te.DelegationDepthLimit,
 		SkipNames:            MetaToolNames(),
-		MaxWallClock:         time.Duration(wallClock) * time.Second,
+		Deadline:             deadline,
 	}
+}
+
+// wallClockDeadline is the instant a turn begun at started stops starting
+// rounds, for a fire's wall-clock cap of capSeconds — zero, no deadline, for
+// the zero cap every other trigger carries. See [turn.Settings.Deadline].
+func wallClockDeadline(started time.Time, capSeconds int) time.Time {
+	if capSeconds <= 0 {
+		return time.Time{}
+	}
+	return started.Add(time.Duration(capSeconds) * time.Second).UTC()
 }
 
 // MetaToolNames are the tools the ledger filters out.

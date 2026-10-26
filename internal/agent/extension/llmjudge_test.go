@@ -39,7 +39,7 @@ func (a *answering) Complete(_ context.Context, req llm.Request) (*llm.Completio
 
 func judgeReq() extension.Request {
 	return extension.Request{
-		Phase:                 phase.Execute,
+		Phase:                 phase.Onboarding,
 		Task:                  "reply to the review comment",
 		RoundsUsed:            20,
 		MaxStep:               8,
@@ -202,7 +202,7 @@ func TestTheJudgeCountsOnlyARepeatedFailureAsALoop(t *testing.T) {
 func TestOneCallAlwaysRendersTheSameWay(t *testing.T) {
 	t.Parallel()
 	req := extension.Request{
-		Phase: phase.Execute,
+		Phase: phase.Onboarding,
 		Calls: []ledger.Call{{Name: "search", Args: map[string]any{
 			"zebra": 1, "alpha": 2, "mid": 3, "beta": 4, "yankee": 5,
 		}}},

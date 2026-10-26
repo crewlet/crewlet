@@ -10,10 +10,10 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/agent/runner"
-	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
+	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -46,7 +46,7 @@ func (h *heldTool) Call(ctx context.Context, _ map[string]any) (tools.Result, er
 	return tools.Result{Output: h.name + " done"}, nil
 }
 
-// bridgedRun is an agent-mode run launched through the real launcher onto a
+// bridgedRun is an executor run launched through the real launcher onto a
 // bridge a test can dial: the engine, the run's row store, and the client
 // session its box would hold.
 type bridgedRun struct {
@@ -54,9 +54,8 @@ type bridgedRun struct {
 	session *mcp.ClientSession
 }
 
-// launchBridged launches turnID's executor as an agent-mode run over a surface
-// offering the given tools, and dials its bridge the way the box's own coding
-// agent would.
+// launchBridged launches turnID's executor over a surface offering the given
+// tools, and dials its bridge the way the box's own coding agent would.
 func launchBridged(t *testing.T, turnID string, offered ...tools.Callable) bridgedRun {
 	t.Helper()
 	server := httptest.NewServer(http.NotFoundHandler())
@@ -68,7 +67,7 @@ func launchBridged(t *testing.T, turnID string, offered ...tools.Callable) bridg
 	mux.Handle(mcpbridge.PathPrefix+"{token}", bridge.Handler())
 	server.Config.Handler = mux
 
-	c, seat := splitLoginCompany(t, "api", "codex")
+	c, seat := executorCompany(t)
 	e, jobs := launchRig(t, c, bridge)
 	reg := tools.NewRegistry()
 	var names []string
@@ -78,16 +77,15 @@ func launchBridged(t *testing.T, turnID string, offered ...tools.Callable) bridg
 		}
 		names = append(names, tool.Name())
 	}
-	launcher := &agentLauncher{
-		engine: e, turn: &turnctx.Turn{RunID: turnID, Seat: seat}, seat: seat,
-		codingAgent: "claude-code", placement: sandbox.E2B,
-	}
+	launcher := launcherOn(e, c, seat, turnID)
 	if err := launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{
 		Brief: "fix the failing test", Round: 1,
 		// BOUND TO THE LAUNCHER'S OWN TURN, as the runner binds every
 		// phase surface: the bridge acts as that turn's seat on every call
 		// and refuses a surface that names none.
-		Surface: tools.NewSurface("execute", reg.Snapshot(), names).ForTurn(launcher.turn),
+		Surface:    tools.NewSurface("execute", reg.Snapshot(), names).ForTurn(launcher.turn),
+		OnFallback: func(chain.Fallback) {},
+		Fence:      e.seatFence(seat.Handle()),
 	}); err != nil {
 		t.Fatalf("LaunchExecutor: %v", err)
 	}

@@ -82,7 +82,14 @@ const stallThreshold = 2
 
 // Observe records one round's artifact.
 func (s *StallDetector) Observe(artifact string) {
-	s.history = append(s.history, ArtifactHash(artifact))
+	s.observeHash(ArtifactHash(artifact))
+}
+
+// observeHash records one round's artifact by its hash — a round closed in an
+// earlier segment of the turn, whose ledger entry carries the hash
+// ([ledger.Iteration.ArtifactHash]).
+func (s *StallDetector) observeHash(hash string) {
+	s.history = append(s.history, hash)
 }
 
 // ShouldAbort reports whether the last [stallThreshold] observations are

@@ -195,9 +195,9 @@ describe("a prompt with headings", () => {
   });
 
   it("renders a title's inline markdown rather than printing its backticks", () => {
-    draw({ system: "## Sandbox (the `run_sandbox` tool)\nuse it" });
-    const row = within(outline()).getByRole("option", { name: /Sandbox/ });
-    expect(row.querySelector("code")?.textContent).toBe("run_sandbox");
+    draw({ system: "## Submitting (the `submit_work` tool)\nuse it" });
+    const row = within(outline()).getByRole("option", { name: /Submitting/ });
+    expect(row.querySelector("code")?.textContent).toBe("submit_work");
     expect(row.textContent).not.toContain("`");
   });
 

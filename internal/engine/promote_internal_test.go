@@ -22,6 +22,7 @@ func promotionCompany(t *testing.T, units string) *Company {
 	return companyFor(t, `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     gateway:
       model: sonnet
@@ -281,6 +282,7 @@ func TestPromotionFollowsItsToggle(t *testing.T) {
 	c := companyFor(t, `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     gateway:
       model: sonnet

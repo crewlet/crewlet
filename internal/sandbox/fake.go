@@ -375,7 +375,8 @@ func (p *FakeProvider) KilledIDs() []string {
 	return slices.Clone(p.Killed)
 }
 
-// FakeRunner is a coding agent whose job finishes when a test says so.
+// FakeRunner is a coding agent whose job finishes when a test says so — or,
+// with a [FakeRunner.Player], whose every job is played by that function.
 type FakeRunner struct {
 	mu sync.Mutex
 
@@ -385,6 +386,24 @@ type FakeRunner struct {
 
 	done   bool
 	result Result
+
+	// Player, when set, is what each job started on this runner DOES: called
+	// once per job with the request it was started with, and its answer is
+	// the job's result. Set it before the first Start.
+	//
+	// PLAYED ON THE JOB'S FIRST POLL OR COLLECT, never at Start: a detached
+	// job does its work after its launch has returned and its turn has
+	// parked, and a play that ran inside Start would make every bridged call
+	// it makes land while the launch is still in flight — a shape no real
+	// job has. And played on the poller's goroutine rather than one of the
+	// runner's own, so there is no goroutine here to outlive the test or the
+	// process: the job's work is bounded by the poll that asked for it.
+	//
+	// A job this runner did not start — one a previous process launched —
+	// is reported done and failed, saying so: its play lived in the process
+	// that started it, and a fake has nothing to resume it from.
+	Player func(ctx context.Context, req RunRequest) Result
+	plays  map[string]*fakePlay
 
 	// StartErr, when set, fails every Start.
 	StartErr error
@@ -419,9 +438,38 @@ type FakeRunner struct {
 
 var _ Runner = (*FakeRunner)(nil)
 
+// fakePlay is one job a [FakeRunner.Player] plays: the request it was started
+// with, and the result once it has been played.
+type fakePlay struct {
+	req    RunRequest
+	once   sync.Once
+	result Result
+}
+
 // NewFakeRunner returns a runner under the given name.
 func NewFakeRunner(name string) *FakeRunner {
-	return &FakeRunner{name: name, installed: map[string]bool{}}
+	return &FakeRunner{name: name, installed: map[string]bool{}, plays: map[string]*fakePlay{}}
+}
+
+// play is a played job's result, playing it first if nothing has yet; ok is
+// false where no Player is set and the job finishes when a test says so.
+func (r *FakeRunner) play(ctx context.Context, handle RunHandle) (Result, bool) {
+	r.mu.Lock()
+	player := r.Player
+	p := r.plays[handle.CommandID]
+	r.mu.Unlock()
+	if player == nil {
+		return Result{}, false
+	}
+	if p == nil {
+		return Result{Error: "the fake runner did not start this job: its play lived in " +
+			"the process that started it"}, true
+	}
+	// ONCE, under the job's own guard rather than the runner's lock: the
+	// play can take as long as its work does, and every other job's poll —
+	// and every read of what was started — must not queue behind it.
+	p.once.Do(func() { p.result = player(ctx, p.req) })
+	return p.result, true
 }
 
 // Name is the coding agent's key in the runner registry.
@@ -445,16 +493,24 @@ func (r *FakeRunner) Start(ctx context.Context, box Sandbox, req RunRequest) (Ru
 	}
 	req.Env = maps.Clone(req.Env)
 	r.started = append(r.started, req)
-	return RunHandle{CommandID: fmt.Sprintf("cmd-%d", len(r.started)), PID: 4242}, nil
+	handle := RunHandle{CommandID: fmt.Sprintf("cmd-%d", len(r.started)), PID: 4242}
+	if r.Player != nil {
+		r.plays[handle.CommandID] = &fakePlay{req: req}
+	}
+	return handle, nil
 }
 
-// Poll reports done only once [FakeRunner.Finish] has been called.
+// Poll reports done once [FakeRunner.Finish] has been called — or, under a
+// [FakeRunner.Player], once the job has been played, which this poll does.
 func (r *FakeRunner) Poll(ctx context.Context, box Sandbox, handle RunHandle) (bool, error) {
 	r.mu.Lock()
 	poll := r.PollFunc
 	r.mu.Unlock()
 	if poll != nil {
 		return poll(ctx, box)
+	}
+	if _, played := r.play(ctx, handle); played {
+		return true, nil
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -464,18 +520,26 @@ func (r *FakeRunner) Poll(ctx context.Context, box Sandbox, handle RunHandle) (b
 	return r.done, nil
 }
 
-// Collect returns the result a test queued with [FakeRunner.Finish].
+// Collect returns the result a test queued with [FakeRunner.Finish], or the
+// one the job's play answered.
 func (r *FakeRunner) Collect(ctx context.Context, box Sandbox, handle RunHandle) (Result, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.CollectErr != nil {
+		r.mu.Unlock()
 		return Result{}, r.CollectErr
 	}
-	if r.CollectFunc != nil {
-		if err := r.CollectFunc(ctx); err != nil {
+	collect := r.CollectFunc
+	r.mu.Unlock()
+	if collect != nil {
+		if err := collect(ctx); err != nil {
 			return Result{}, err
 		}
 	}
+	if result, played := r.play(ctx, handle); played {
+		return result, nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return r.result, nil
 }
 

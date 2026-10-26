@@ -867,7 +867,7 @@ test("a turn card shows the send-back notes", async () => {
           review: "the timeout path has no test.",
           tools: [
             { name: "create_branch", calls: 1 },
-            { name: "run_sandbox", calls: 4 },
+            { name: "delegate", calls: 4 },
           ],
         })}
         chrome={{ seatName: (h: string) => (h === "swe" ? "SWE" : h) }}
@@ -881,7 +881,7 @@ test("a turn card shows the send-back notes", async () => {
   expect(within(card).getByText("sent back for another pass")).toBeTruthy();
   expect(within(card).getByText("the timeout path has no test.")).toBeTruthy();
   expect(within(card).getByText("Reviewer:")).toBeTruthy();
-  expect(within(card).getByText("run_sandbox ×4")).toBeTruthy();
+  expect(within(card).getByText("delegate ×4")).toBeTruthy();
   expect(within(card).getByText("14m 2s · 38.4k tokens")).toBeTruthy();
   expect(within(card).getByText("Trace").getAttribute("href")).toBe(
     href(["live", "turns", "run-1"]),
@@ -918,7 +918,7 @@ test("a failed turn marks the phase it broke in", async () => {
           outcome: "failed",
           failed_in: "review",
           summary: "",
-          tools: [{ name: "run_sandbox", calls: 1 }],
+          tools: [{ name: "delegate", calls: 1 }],
         })}
         chrome={{}}
         now={NOW}

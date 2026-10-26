@@ -223,13 +223,26 @@ describe("the current turn's calls", () => {
 describe("the setup card's words", () => {
   const role = (over: Partial<ConfigRole>): ConfigRole => ({ name: "SWE", ...over });
 
-  test("a sandbox is not offered until it is enabled, and a default is said as one", () => {
-    expect(sandboxWords(role({}))).toBe("Not offered");
-    expect(sandboxWords(role({ sandbox: { enabled: false, run_in: "e2b" } }))).toBe("Not offered");
+  // EVERY AGENT SEAT'S EXECUTOR RUNS IN A BOX, so the row never says one is
+  // missing: a seat with no block runs on the catalogue's defaults, and one
+  // with a block is said by what it adds.
+  test("a seat's box is the catalogue's defaults, or what its own block adds", () => {
+    expect(sandboxWords(role({}))).toBe("The catalogue's defaults");
+    expect(sandboxWords(role({ sandbox: {} }))).toBe("The catalogue's defaults");
     expect(
-      sandboxWords(role({ sandbox: { enabled: true, run_in: "e2b", coding_agent: "opencode" } })),
-    ).toBe("e2b · opencode");
-    expect(sandboxWords(role({ sandbox: { enabled: true } }))).toBe("The provider's default cell");
+      sandboxWords(
+        role({
+          sandbox: {
+            setup: [{ name: "deps" }, { name: "lint" }],
+            env: { GH_TOKEN: "${GH}", REGION: "eu" },
+            mcp: { servers: ["github"] },
+            max_turns: 40,
+          },
+        }),
+      ),
+    ).toBe("2 setup steps · 2 variables · 1 tool server · up to 40 turns");
+    // Zero is an explicit "uncapped", said as itself rather than as a cap of 0.
+    expect(sandboxWords(role({ sandbox: { max_turns: 0 } }))).toBe("No turn cap");
   });
 
   test("placement is a pinned node, a set of labels, or any node", () => {

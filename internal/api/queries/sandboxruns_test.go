@@ -307,6 +307,26 @@ func TestTheBoardSaysWhereEachRunIs(t *testing.T) {
 	}
 }
 
+// THE BOARD NAMES THE MEMBER EACH RUN WAS LAUNCHED ON, and its model: a
+// launch-time fallback runs a job on an entry other than the chain's head, and
+// which entry's plan a long run is spending is what a person reading the board
+// asks.
+//
+// Mutation: drop either key from the row and this goes red.
+func TestTheBoardNamesTheMemberEachRunWasLaunchedOn(t *testing.T) {
+	store := seedRuns(t, sandbox.PendingRun{TurnID: "t1", AgentHandle: "swe", Role: "SWE",
+		Status: sandbox.StatusRunning, CreatedAt: runBase,
+		Launch: sandbox.LaunchRecord{ProviderKey: "spare", Model: "claude-haiku"}})
+	rows := askRuns(t, store)
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want one", len(rows))
+	}
+	if rows[0]["provider_key"] != "spare" || rows[0]["model"] != "claude-haiku" {
+		t.Errorf("row names %v/%v, want the member the run was launched on",
+			rows[0]["provider_key"], rows[0]["model"])
+	}
+}
+
 // THE BOARD NAMES THE JOB EACH RUN HOLDS, which is what its live output is
 // asked by (`sandbox_tail{turn_id, launch_id}`). A turn can launch more than
 // one job, so the run's page could not poll a running run's output without it.

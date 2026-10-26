@@ -24,6 +24,7 @@ import (
 const leadDoc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5

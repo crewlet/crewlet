@@ -823,7 +823,7 @@ func (d *Dispatcher) parkOnBudget(ctx context.Context, handle string) (queue.Res
 // unconditionally, on the premise that "nothing was recorded, so a redelivery
 // runs it cleanly". That premise holds for the two writes [workkey] guards and
 // for nothing else: every MCP write, every chat post, every `a2a_ask` (a fresh
-// channel per call) and every `run_sandbox` is keyed on nothing at all. A
+// channel per call) and every executor launch is keyed on nothing at all. A
 // deterministic mid-turn failure therefore replayed round one's external
 // effects up to the broker's whole delivery budget: twenty-five attempts spaced
 // by a backoff that doubles from a second to thirty, so about ten minutes of
@@ -1245,7 +1245,7 @@ func (d *Dispatcher) answered(ctx context.Context, handle string, evs []*events.
 //
 // Every one of those waits — a pause, a busy seat, a NAK's backoff, a retried
 // copy — can outlast the question the answer was given against: the run is
-// answered another way meanwhile, resumes, calls run_sandbox again and parks
+// answered another way meanwhile, resumes, relaunches its executor and parks
 // on a new question, and the held answer is the first thing offered when the
 // seat frees. The answer names the question it answers
 // ([types.SandboxAnswerGiven.LaunchID]), so the coordinator resumes the run

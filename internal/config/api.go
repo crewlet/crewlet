@@ -47,7 +47,8 @@ type API struct {
 	// surface: the dashboard, the REST API, the webhooks and the probes,
 	// less the routes [API.Public] moves to a listener of their own.
 	// Without it, the probes alone (/health and /ready) — plus a seats
-	// node's agent-mode tool bridge where api.public is unset — because an
+	// node's tool bridge, which every executor run dials back on, where
+	// api.public is unset — because an
 	// orchestrator runs every node and must be able to probe each, while
 	// the API is placed only where traffic is meant to arrive. ONE PORT
 	// rather than a second setting for the probes: the probes are already
@@ -59,7 +60,7 @@ type API struct {
 	// So a port is not what makes a node SERVE the API — a port and the
 	// ingress role together are ([Bootstrap.ServesAPI]), and only that pair
 	// asks for the authentication settings below.
-	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"Bind port of this node's HTTP listener: the whole API with the ingress role (less the routes api.public moves to its own listener), only /health and /ready without it (and a seats node's agent-mode tool bridge, where api.public is unset). 0 binds nothing."`
+	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"Bind port of this node's HTTP listener: the whole API with the ingress role (less the routes api.public moves to its own listener), only /health and /ready without it (and a seats node's executor tool bridge, where api.public is unset). 0 binds nothing."`
 
 	// ExternalURL is where a BROWSER reaches this deployment — a person, a
 	// session cookie and every link a person follows — and, while no

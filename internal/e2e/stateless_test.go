@@ -70,8 +70,7 @@ func startStatelessPairWith(t *testing.T, amend func(doc string) string,
 	}
 	// PINNED, so the one agent seat runs where the data is not: a turn that
 	// happened to land on the data node would test nothing here.
-	doc = strings.Replace(doc, "    handle: ceo\n    llm: scripted\n",
-		"    handle: ceo\n    llm: scripted\n    placement:\n      node: agent-1\n", 1)
+	doc = strings.Replace(doc, ceoSeat, ceoSeat+"    placement:\n      node: agent-1\n", 1)
 	cfg, err := config.ParseCompany([]byte(doc))
 	if err != nil {
 		t.Fatalf("company config: %v", err)
@@ -81,8 +80,9 @@ func startStatelessPairWith(t *testing.T, amend func(doc string) string,
 	// keyring the data member holds, and a node keyed differently is a node
 	// whose every request is refused.
 	ring := fleetRing(t)
-	data, dataBoot := bootDataMember(t, cfg, model, env, ring)
-	data.app, data.server = serveAPI(t, data.engine, dataBoot, nil)
+	dataLn := bridgeListener(t, "")
+	data, dataBoot := bootDataMember(t, cfg, model, env, hostBridgeURL(dataLn), ring)
+	data.app, data.server = serveAPI(t, data.engine, dataBoot, dataLn, nil)
 	port := dataBoot.Stream.Leaf.Port
 
 	agentDir := t.TempDir()
@@ -94,8 +94,26 @@ func startStatelessPairWith(t *testing.T, amend func(doc string) string,
 	agentBoot.Stream.Leaf.URLs = []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", port)}
 	agentBoot.Coordination.Type = config.CoordinationEmbeddedKV
 	ring.hold(&agentBoot)
-	agent := bootNode(t, &agentBoot, cfg, model, env)
+	agentLn := bridgeListener(t, "")
+	agent := bootNode(t, &agentBoot, cfg, model, env, hostBridgeURL(agentLn))
+	serveBridge(t, agent, &agentBoot, agentLn)
 	return statelessPair{data: data, agent: agent, agentStore: agentDir, agentBoot: &agentBoot}
+}
+
+// serveBridge serves a node's tool bridge alone on ln, as `crewlet run` binds
+// a seats node without the ingress role ([api.BridgeOnly]): the seat runs
+// here, so its executor's box calls its tools back on this node and no other.
+func serveBridge(t *testing.T, n *node, boot *config.Bootstrap, ln net.Listener) {
+	t.Helper()
+	handler := api.BridgeOnly(boot, n.engine.Bridge())
+	if handler == nil {
+		t.Fatalf("node %s built no tool bridge to serve", n.id)
+	}
+	srv := httptest.NewUnstartedServer(handler)
+	_ = srv.Listener.Close()
+	srv.Listener = ln
+	srv.Start()
+	t.Cleanup(srv.Close)
 }
 
 // dataMemberBootstrap is the pair's data member: a node holding the data, with
@@ -130,11 +148,11 @@ func dataMemberBootstrap(t *testing.T, port int, ring keyring) *config.Bootstrap
 // route listener's [jetstream.ErrRoutePortTaken] among them, since this member
 // is no cluster's and opens no route listener to lose.
 func bootDataMember(t *testing.T, cfg *config.Company, model *scriptedModel,
-	env map[string]string, ring keyring) (*node, *config.Bootstrap) {
+	env map[string]string, bridge string, ring keyring) (*node, *config.Bootstrap) {
 	t.Helper()
 	for attempt := 1; ; attempt++ {
 		boot := dataMemberBootstrap(t, leafPort(t), ring)
-		n, err := newNode(t, nodeOptions(boot, cfg, env), model)
+		n, err := newNode(t, nodeOptions(boot, cfg, env, bridge), model)
 		switch {
 		case err == nil:
 			return n, boot
@@ -154,18 +172,21 @@ func bootDataMember(t *testing.T, cfg *config.Company, model *scriptedModel,
 // Neither bootstrap is validated here: engine.New holds every bootstrap it is
 // given to Tier A, and a refusal names the node it was building.
 func bootNode(t *testing.T, boot *config.Bootstrap, cfg *config.Company, model *scriptedModel,
-	env map[string]string) *node {
+	env map[string]string, bridge string) *node {
 	t.Helper()
-	return bootNodeWith(t, nodeOptions(boot, cfg, env), model)
+	return bootNodeWith(t, nodeOptions(boot, cfg, env, bridge), model)
 }
 
 // nodeOptions is the engine options every harness node is built with: its
-// bootstrap and company, the harness's activation instant, and its own
-// environment ([nodeEnvironment]) rather than the process's.
-func nodeOptions(boot *config.Bootstrap, cfg *config.Company, env map[string]string) engine.Options {
+// bootstrap and company, the harness's activation instant, its own
+// environment ([nodeEnvironment]) rather than the process's, and where a box on
+// this host dials its bridge ([hostBridgeURL]; "" for a node that serves none).
+func nodeOptions(boot *config.Bootstrap, cfg *config.Company, env map[string]string,
+	bridge string) engine.Options {
 	return engine.Options{
 		Bootstrap: boot, Company: cfg, ActivatedAt: harnessActivation,
-		Environment: nodeEnvironment(env),
+		Environment: nodeEnvironment(env), SandboxPollInterval: runPollInterval,
+		BridgeHostURL: bridge,
 	}
 }
 
@@ -218,7 +239,7 @@ func TestADataMemberRefusesATakenLeafPortByName(t *testing.T) {
 		t.Fatalf("company config: %v", err)
 	}
 	boot := dataMemberBootstrap(t, held.Addr().(*net.TCPAddr).Port, fleetRing(t))
-	_, err = newNode(t, nodeOptions(boot, cfg, nil), model)
+	_, err = newNode(t, nodeOptions(boot, cfg, nil, ""), model)
 	if !errors.Is(err, jetstream.ErrLeafPortTaken) {
 		t.Fatalf("a data member on a held leaf port answered %v, want %v", err,
 			jetstream.ErrLeafPortTaken)

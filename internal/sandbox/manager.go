@@ -29,9 +29,6 @@ const DefaultBoxTimeout = 900 * time.Second
 // the work re-seeds from the pushed branch, which was always the durable half.
 const DefaultPauseTTL = 1800 * time.Second
 
-// DefaultCodingAgent is the runner a provider that names none resolves to.
-const DefaultCodingAgent = "claude-code"
-
 // ConfigError reports providers.sandbox being misconfigured — a placement
 // with no backend behind it, or a coding agent with no registered runner.
 type ConfigError struct{ msg string }
@@ -53,11 +50,10 @@ type ManagerOptions struct {
 	// checked here rather than at the first coding run.
 	DefaultPlacement Placement
 
+	// Runners are the coding agents a box can run, by CLI name. A launch
+	// names its own — the CLI of the executor-chain member it launches on —
+	// so there is no default among them to fall back to.
 	Runners map[string]Runner
-
-	// DefaultCodingAgent is the effective agent when a role leaves
-	// role.sandbox.coding_agent empty. Empty takes [DefaultCodingAgent].
-	DefaultCodingAgent string
 
 	// DefaultTimeout is the box TTL. Zero takes [DefaultBoxTimeout].
 	DefaultTimeout time.Duration
@@ -74,10 +70,10 @@ type ManagerOptions struct {
 	// could ever reach.
 	DefaultPauseTTL *time.Duration
 
-	// DefaultMaxTurns caps the agentic rounds of a coding run on a seat
-	// that names none. Zero is uncapped, which is the default: the right
-	// number depends on the work a company gives its agents, and one that
-	// is too low truncates a real task mid-flight.
+	// DefaultMaxTurns caps the agentic rounds of a run on a seat that names
+	// none: providers.sandbox.default_max_turns, whose default and its reason
+	// are the config's. Zero is uncapped — an explicit setting this layer
+	// passes through rather than a value it fills in.
 	DefaultMaxTurns int
 
 	// DefaultSetup are the engine-wide steps (providers.sandbox.setup)
@@ -111,12 +107,11 @@ type Manager struct {
 	// [Manager.carrying] — and nothing is ever provisioned through one.
 	retired map[Placement]Provider
 
-	codingAgent string
-	timeout     time.Duration
-	pauseTTL    time.Duration
-	maxTurns    int
-	setup       []SetupStep
-	telemetry   *OtelReceiver
+	timeout   time.Duration
+	pauseTTL  time.Duration
+	maxTurns  int
+	setup     []SetupStep
+	telemetry *OtelReceiver
 }
 
 // NewManager validates the options and returns the manager.
@@ -138,23 +133,19 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 		return nil, &ConfigError{msg: "providers.sandbox: no coding-agent runners registered"}
 	}
 	m := &Manager{
-		providers:   maps.Clone(opts.Providers),
-		placement:   opts.DefaultPlacement,
-		runners:     maps.Clone(opts.Runners),
-		codingAgent: opts.DefaultCodingAgent,
-		timeout:     opts.DefaultTimeout,
-		maxTurns:    max(opts.DefaultMaxTurns, 0),
-		setup:       slices.Clone(opts.DefaultSetup),
-		telemetry:   opts.Telemetry,
-	}
-	if m.codingAgent == "" {
-		m.codingAgent = DefaultCodingAgent
+		providers: maps.Clone(opts.Providers),
+		placement: opts.DefaultPlacement,
+		runners:   maps.Clone(opts.Runners),
+		timeout:   opts.DefaultTimeout,
+		maxTurns:  max(opts.DefaultMaxTurns, 0),
+		setup:     slices.Clone(opts.DefaultSetup),
+		telemetry: opts.Telemetry,
 	}
 	if m.placement == "" && len(m.providers) == 1 {
 		// One backend is not a choice, so nothing is being decided for the
 		// operator. More than one without a default is a catalogue whose
 		// EVERY CALLER NAMES ITS CELL — config validation holds that for
-		// each seat and each agent-mode entry — and it is never resolved
+		// every executor entry a seat can launch on — and it is never resolved
 		// by map order here: that order is random, so the company would
 		// run somewhere different on every restart. A caller that names
 		// none against such a catalogue is refused by [Manager.Provider]
@@ -180,12 +171,6 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 		m.pauseTTL = *opts.DefaultPauseTTL
 	} else {
 		m.pauseTTL = DefaultPauseTTL
-	}
-	// Checked here rather than at the first turn: a default naming a runner
-	// nobody registered fails only once an agent tries to do code work, which
-	// is hours after the config was applied.
-	if _, err := m.RunnerFor(m.codingAgent); err != nil {
-		return nil, err
 	}
 	return m, nil
 }
@@ -236,7 +221,7 @@ func (m *Manager) configured(placement Placement) (Provider, error) {
 		return nil, &ConfigError{msg: fmt.Sprintf(
 			"no cell named for this run and providers.sandbox names no "+
 				"default_run_in (configured: %v): set one, or name the cell "+
-				"on the seat's role.sandbox.run_in or the entry's run_in",
+				"on the executor entry's providers.llm.<key>.run_in",
 			slices.Sorted(maps.Keys(m.providers)))}
 	}
 	provider, ok := m.providers[placement]
@@ -302,9 +287,6 @@ func (m *Manager) carrying(previous *Manager) *Manager {
 	return &carried
 }
 
-// DefaultCodingAgent is the effective agent for a role that names none.
-func (m *Manager) DefaultCodingAgent() string { return m.codingAgent }
-
 // DefaultSetup are the engine-wide setup steps.
 func (m *Manager) DefaultSetup() []SetupStep { return slices.Clone(m.setup) }
 
@@ -328,9 +310,15 @@ func (m *Manager) RunnerFor(codingAgent string) (Runner, error) {
 // an explicit zero means "never pause, always re-seed from git" — two
 // genuinely different instructions that a single zero value cannot carry.
 type SpecInput struct {
-	// Placement is the seat's run_in. Empty takes the provider default.
+	// Placement is the launching executor entry's run_in. Empty takes the
+	// provider default.
 	Placement Placement
 
+	// CodingAgent is the runner the box runs: the CLI of the executor-chain
+	// member the launch picked. REQUIRED, and passed through as given — a
+	// runner chosen apart from the entry whose login and model the run
+	// carries is a run that cannot read either, so there is nothing to
+	// default it to. An empty one is refused at the launch.
 	CodingAgent string
 	Timeout     time.Duration
 	PauseTTL    *time.Duration
@@ -358,9 +346,6 @@ func (m *Manager) BuildSpec(in SpecInput) Spec {
 	}
 	if spec.Placement == "" {
 		spec.Placement = m.placement
-	}
-	if spec.CodingAgent == "" {
-		spec.CodingAgent = m.codingAgent
 	}
 	if in.Timeout > 0 {
 		spec.TimeoutSec = in.Timeout.Seconds()
@@ -451,12 +436,10 @@ func (m *Manager) discard(ctx context.Context, box Sandbox) {
 	}
 }
 
-// Reconnect reattaches to an existing (possibly paused) box for reuse.
-//
-// Used when a follow-up run_sandbox call in a resumed Execute loop reuses the
-// same box and checkout: Connect auto-resumes a paused box. No re-Install and
-// no setup re-apply — the box already carries the ask shim, the work dir, and
-// the launch's provisioning.
+// Reconnect reattaches to an existing (possibly paused) box: Connect
+// auto-resumes a paused one. No re-Install and no setup re-apply — the box
+// already carries the ask shim, the work dir and the launch's provisioning —
+// which is why a box is only ever reattached for the CLI it was installed for.
 func (m *Manager) Reconnect(ctx context.Context, placement Placement, sandboxID, codingAgent string) (Sandbox, Runner, error) {
 	runner, err := m.RunnerFor(codingAgent)
 	if err != nil {

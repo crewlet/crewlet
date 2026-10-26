@@ -129,9 +129,8 @@ roles:
     integrations:
       mattermost: {bot_token: "${MM_SWE}", username: swe-bot, channel: eng}
     sandbox:
-      enabled: true
-      run_in: container
-      coding_agent: opencode
+      max_turns: 40
+      pause_ttl_seconds: 0
       env: {GITHUB_TOKEN: "${GH}"}
       mcp: {servers: [gitlab]}
   - name: Junior
@@ -158,8 +157,9 @@ roles:
 	if seat.Placement.Node != "node-2" || seat.Placement.Labels["zone"] != "eu" {
 		t.Fatalf("placement = %+v", seat.Placement)
 	}
-	if seat.Sandbox == nil || !seat.Sandbox.Enabled || seat.Sandbox.CodingAgent != "opencode" ||
-		seat.Sandbox.RunIn != "container" {
+	if seat.Sandbox == nil || seat.Sandbox.MaxTurns == nil || *seat.Sandbox.MaxTurns != 40 ||
+		seat.Sandbox.PauseTTLSeconds == nil || *seat.Sandbox.PauseTTLSeconds != 0 ||
+		seat.Sandbox.Env["GITHUB_TOKEN"] != "${GH}" || !slices.Equal(seat.Sandbox.MCP.Servers, []string{"gitlab"}) {
 		t.Fatalf("sandbox = %+v", seat.Sandbox)
 	}
 	if seat.MCPEnv["gitlab"]["GITLAB_TOKEN"] != "${GL_SWE}" {

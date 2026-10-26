@@ -93,16 +93,13 @@ func (c *capture) kinds() []string {
 
 var _ queue.Publisher = (*capture)(nil)
 
-// guardedRunner builds a runner whose executor surface carries one required
-// skill covering the tool the model will reach for.
-func guardedRunner(t *testing.T, prov *scriptedProvider, pub queue.Publisher) *runner.Runner {
-	t.Helper()
-	return guardedRunnerWith(t, prov, pub, tools.OriginBuiltin)
-}
-
-// guardedRunnerWith is guardedRunner with the covered tool registered under
-// origin, so the same skill can cover a first-party tool or an MCP server's.
-func guardedRunnerWith(t *testing.T, prov *scriptedProvider, pub queue.Publisher, origin string) *runner.Runner {
+// guardedLaunch launches the executor's run on a seat whose surface carries
+// one required skill covering the tool the run will reach for, with the
+// covered tool registered under origin — so the same skill can cover a
+// first-party tool or an MCP server's. What the run then calls is the test's
+// to [play] against the surface it was launched with: the one every bridged
+// call is dispatched through.
+func guardedLaunch(t *testing.T, pub queue.Publisher, origin string) runner.AgentRunRequest {
 	t.Helper()
 	registry := skills.NewRegistry()
 	if _, err := registry.PutPage(skills.Skill{
@@ -115,7 +112,7 @@ func guardedRunnerWith(t *testing.T, prov *scriptedProvider, pub queue.Publisher
 		t.Fatalf("PutPage: %v", err)
 	}
 
-	models, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: prov}})
+	models, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: &scriptedProvider{}}})
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -138,10 +135,11 @@ func guardedRunnerWith(t *testing.T, prov *scriptedProvider, pub queue.Publisher
 		t.Fatalf("builtin.Register: %v", err)
 	}
 	role := &org.Role{Name: "CTO", DeclaredHandle: "cto"}
+	launcher := &playLauncher{}
 	r, err := runner.New(runner.Config{
 		Seat:     prompts.Seat{Org: &org.Organization{Name: "Acme", Roles: []*org.Role{role}}, Role: role},
 		Registry: reg, Models: models, Skills: registry,
-		Caps:      runner.Caps{ExecutorRounds: 3},
+		Launcher:  launcher,
 		Task:      "post the summary",
 		Publisher: pub,
 		Turn: runner.Turn{
@@ -161,38 +159,28 @@ func guardedRunnerWith(t *testing.T, prov *scriptedProvider, pub queue.Publisher
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
 	}
-	return r
-}
-
-// THE GUARD REFUSES A COVERED TOOL, at the dispatch point every call goes
-// through. Asking harder in the prompt does not stop a model going straight
-// for the tool.
-func TestTheExecutorIsRefusedAToolBeforeItsSkillIsLoaded(t *testing.T) {
-	t.Parallel()
-	prov := &scriptedProvider{execute: []llm.Completion{
-		submitCall(t, "slack_post", `{"text":"hi"}`),
-		text("posted"),
-	}}
-	pub := newCapture()
-	r := guardedRunner(t, prov, pub)
-
 	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
+	return launcher.last(t)
+}
+
+// THE GUARD REFUSES A COVERED TOOL, at the dispatch point every call goes
+// through — the bridge's, for an executor's run. Asking harder in the prompt
+// does not stop a model going straight for the tool.
+func TestTheExecutorIsRefusedAToolBeforeItsSkillIsLoaded(t *testing.T) {
+	t.Parallel()
+	req := guardedLaunch(t, newCapture(), tools.OriginBuiltin)
+	bridged := play(t, req, run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"hi"}`)}})
 
 	// The refusal names the exact call to make, because the error IS the
 	// recovery path.
-	var refusal string
-	for _, m := range prov.requestsFor("execute")[1].Messages {
-		if strings.Contains(m.Content, "load_tool_skill") {
-			refusal = m.Content
-		}
+	refusal := bridged[0]
+	if !refusal.Failed {
+		t.Fatalf("the covered tool ran before its skill was loaded: %q", refusal.Output)
 	}
-	if refusal == "" {
-		t.Fatal("the model was never told what to load")
-	}
-	if !strings.Contains(refusal, `load_tool_skill(key="chat-conventions")`) {
-		t.Fatalf("the refusal does not name the call:\n%s", refusal)
+	if !strings.Contains(refusal.Output, `load_tool_skill(key="chat-conventions")`) {
+		t.Fatalf("the refusal does not name the call:\n%s", refusal.Output)
 	}
 }
 
@@ -202,16 +190,9 @@ func TestTheExecutorIsRefusedAToolBeforeItsSkillIsLoaded(t *testing.T) {
 // where a block looks like any other failed call.
 func TestEveryRefusalIsPublishedForOperators(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llm.Completion{
-		submitCall(t, "slack_post", `{"text":"hi"}`),
-		text("gave up"),
-	}}
 	pub := newCapture()
-	r := guardedRunner(t, prov, pub)
-
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
+	req := guardedLaunch(t, pub, tools.OriginBuiltin)
+	play(t, req, run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"hi"}`)}})
 
 	blocked := pub.blocked()
 	if len(blocked) != 1 {
@@ -237,19 +218,14 @@ func TestEveryRefusalIsPublishedForOperators(t *testing.T) {
 // unread, under a catalogue that had called its skill required.
 func TestARequiredSkillOnAnActivatedMCPToolIsEnforced(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llm.Completion{
-		submitCall(t, runner.ActivateTool, `{"name":"slack_post"}`),
-		submitCall(t, "slack_post", `{"text":"hi"}`),
-		text("gave up"),
-	}}
 	pub := newCapture()
-	r := guardedRunnerWith(t, prov, pub, tools.Origin("slack"))
-
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	if sys := systemOf(t, prov, "execute"); !strings.Contains(sys, "`chat-conventions` (required") {
-		t.Fatalf("the catalogue does not list the skill as required:\n%s", sys)
+	req := guardedLaunch(t, pub, tools.Origin("slack"))
+	play(t, req, run{calls: []llm.ToolCall{
+		call(t, runner.ActivateTool, `{"name":"slack_post"}`),
+		call(t, "slack_post", `{"text":"hi"}`),
+	}})
+	if !strings.Contains(req.System, "`chat-conventions` (required") {
+		t.Fatalf("the catalogue does not list the skill as required:\n%s", req.System)
 	}
 	blocked := pub.blocked()
 	if len(blocked) != 1 || blocked[0].ToolName != "slack_post" {
@@ -257,22 +233,19 @@ func TestARequiredSkillOnAnActivatedMCPToolIsEnforced(t *testing.T) {
 	}
 }
 
-// LOADING UNLOCKS IT, in the same session and without another round of
-// refusals.
+// LOADING UNLOCKS IT, in the same run and without another refusal.
 func TestLoadingTheSkillUnlocksTheTool(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llm.Completion{
-		submitCall(t, builtin.LoadToolSkillTool, `{"key":"chat-conventions"}`),
-		submitCall(t, "slack_post", `{"text":"hi"}`),
-		text("posted"),
-	}}
 	pub := newCapture()
-	r := guardedRunner(t, prov, pub)
-
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
+	req := guardedLaunch(t, pub, tools.OriginBuiltin)
+	bridged := play(t, req, run{calls: []llm.ToolCall{
+		call(t, builtin.LoadToolSkillTool, `{"key":"chat-conventions"}`),
+		call(t, "slack_post", `{"text":"hi"}`),
+	}})
 	if got := pub.blocked(); len(got) != 0 {
 		t.Fatalf("a load-then-call sequence was blocked: %+v", got)
+	}
+	if posted := bridged[1]; posted.Failed || posted.Output != "posted" {
+		t.Fatalf("the unlocked tool did not run: %+v", posted)
 	}
 }

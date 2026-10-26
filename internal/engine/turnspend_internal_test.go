@@ -171,9 +171,9 @@ func TestTaskSpendNeverExceedsTheRollup(t *testing.T) {
 // A RESUMED SEGMENT PAYS WHAT THE ENGINE SPENT ON ITS JOB.
 //
 // Between the segment that launched a coding run and the one that resumes from
-// it, the engine spends on the job with no segment running: an agent-mode
-// run's bridged calls — the auxiliary rewrites its tools asked for, the workers
-// it delegated to — and the condensation of the run's account at collection.
+// it, the engine spends on the job with no segment running: a run's bridged
+// calls — the auxiliary rewrites its tools asked for, the workers it delegated
+// to — and the condensation of the run's account at collection.
 // The resume request carries it, and the resumed segment's charge adds each
 // figure where its own of the same kind goes.
 //
@@ -442,8 +442,8 @@ func TestATurnRecordSaysWhatTheSegmentDid(t *testing.T) {
 	ended := time.Unix(1_700_000_060, 0).UTC()
 	spend := segmentSpend(1)
 	spend.Review = strings.Repeat("add a test for the timeout path. ", 40)
-	spend.AllTools = []string{"create_branch", "run_sandbox", "run_sandbox",
-		"search_knowledge", "run_sandbox", runner.SubmitWorkTool}
+	spend.AllTools = []string{"create_branch", "tracker_comment", "tracker_comment",
+		"search_knowledge", "tracker_comment", runner.SubmitWorkTool}
 	res := turn.Result{
 		Decision:   phase.Done,
 		LastReview: &turn.Review{Decision: phase.Done, CompletedWork: "added the retry"},
@@ -459,7 +459,7 @@ func TestATurnRecordSaysWhatTheSegmentDid(t *testing.T) {
 			len(got.Review))
 	}
 	want := []worklet.TurnTool{
-		{Name: "create_branch", Calls: 1}, {Name: "run_sandbox", Calls: 3},
+		{Name: "create_branch", Calls: 1}, {Name: "tracker_comment", Calls: 3},
 		{Name: "search_knowledge", Calls: 1},
 	}
 	if !slices.Equal(got.Tools, want) {
@@ -629,11 +629,11 @@ func (p *cardRewriter) Complete(context.Context, llm.Request) (*llm.Completion, 
 	return &llm.Completion{Model: "aux", Content: p.answer, InputTokens: p.in, OutputTokens: p.out}, nil
 }
 
-// A RESUMED SEGMENT'S END COUNTS THE WORKERS ITS RUN DELEGATED TO. An
-// agent-mode run's workers ran over the tool bridge while no segment was
-// running, so the segment that resumes from the run is the one that pays for
-// them — and its completion is the one record of the turn that can say they
-// ran, beside the workers it delegated to itself.
+// A RESUMED SEGMENT'S END COUNTS THE WORKERS ITS RUN DELEGATED TO. A run's
+// workers ran over the tool bridge while no segment was running, so the
+// segment that resumes from the run is the one that pays for them — and its
+// completion is the one record of the turn that can say they ran, beside the
+// workers it delegated to itself.
 //
 // Mutation: leave the job's workers out of the completion, and this goes red.
 func TestAResumedSegmentsEndCountsItsRunsWorkers(t *testing.T) {

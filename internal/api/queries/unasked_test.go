@@ -280,6 +280,7 @@ func (s *stubMemory) Overview(_ context.Context, seats []memread.Seat) (memread.
 const trailCompany = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     p: {model: m}
 roles:

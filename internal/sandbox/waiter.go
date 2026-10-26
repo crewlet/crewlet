@@ -476,7 +476,7 @@ func (w *Waiter) order(runs []PendingRun) []task {
 	var work []task
 	for _, run := range runs {
 		switch {
-		case run.Status == StatusRunning && run.SandboxID != "":
+		case run.Status == StatusRunning && run.SandboxID != "" && !run.Held(now):
 			work = append(work, task{run: run})
 		case pauseExpired(run, now):
 			work = append(work, task{run: run, reap: true})
@@ -758,6 +758,19 @@ func (w *Waiter) pollOne(ctx context.Context, manager *Manager, run PendingRun) 
 	if done {
 		return pollDone
 	}
+	if run.PastDeadline(w.now()) {
+		// THE TURN'S CAP HAS PASSED, and the run is ended as if it had
+		// finished: its completion goes out, and the collection reads what
+		// it did up to now, stops it and says why — see
+		// [PendingRun.Deadline]. Kept alive above all the same, so the
+		// collection finds a box to read.
+		log.InfoContext(ctx, "sandbox_run_past_deadline",
+			"turn_id", run.TurnID, "agent", run.AgentHandle, "sandbox_id", run.SandboxID,
+			"deadline", run.Deadline.Format(time.RFC3339),
+			"detail", "the turn's wall-clock cap has passed with its run still working; "+
+				"the run is ended and its turn resumed with what it did")
+		return pollDone
+	}
 	return pollRunning
 }
 
@@ -915,7 +928,7 @@ func (w *Waiter) reapOne(ctx context.Context, manager *Manager, run PendingRun) 
 // the dashboard's broadcast stream watches that subject space, and dropping it
 // would blank the running-sandboxes panel. The per-seat control copy is a
 // COMMAND, and it goes to the seat's own topic because only the node holding
-// that seat has the suspended Execute conversation to resume — a single
+// that seat has the parked turn to resume — a single
 // fleet-wide group would hand it to a non-owner (N-1)/N of the time.
 func (w *Waiter) publishCompletion(ctx context.Context, run PendingRun) error {
 	completion := types.SandboxRunCompleted{

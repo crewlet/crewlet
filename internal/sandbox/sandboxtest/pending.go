@@ -51,6 +51,9 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AParkedRunRecordsWhoItsAudienceIs", testAParkedRunRecordsWhoItsAudienceIs},
 		{"ARequesterSurvivesTheLaunchThatRecordsIt", testARequesterSurvivesTheLaunchThatRecordsIt},
 		{"ASecondLaunchKeepsTheBoxItWillReattachTo", testASecondLaunchKeepsTheBoxItWillReattachTo},
+		{"ARelaunchsBoxMovesTheRowToItsCell", testARelaunchsBoxMovesTheRowToItsCell},
+		{"EveryLaunchRecordsTheBridgeSessionItsBoxDials", testEveryLaunchRecordsTheBridgeSessionItsBoxDials},
+		{"AHeldReleaseHoldsTheResumeUntilItsConditionLifts", testAHeldReleaseHoldsTheResumeUntilItsConditionLifts},
 		{"ASecondLaunchDropsTheFirstSuspension", testASecondLaunchDropsTheFirstSuspension},
 		{"ASecondLaunchDropsTheFirstRunsBridgedCalls", testASecondLaunchDropsTheFirstRunsBridgedCalls},
 		{"ALaunchNeedsATurnID", testALaunchNeedsATurnID},
@@ -237,14 +240,13 @@ func mustLaunched(t *testing.T, s sandbox.PendingStore, r sandbox.PendingRun) st
 	return launch
 }
 
-// suspendedState is a stand-in for the serialized Execute conversation. The
+// suspendedState is a stand-in for a parked turn's serialized state. The
 // nineteen-digit argument is the value a lossy store gets wrong: it is past
 // 2^53, so any decode of it into a float64 on the way through comes back as a
 // different number.
-const suspendedState = `{"messages":[{"Role":"assistant","ToolCalls":[{"ID":"call_1",` +
-	`"Name":"run_sandbox","Arguments":{"row":1234567890123456789}}]}],` +
-	`"pending_tool_call_id":"call_1","pending_tool_name":"run_sandbox",` +
-	`"active_tool_names":["run_sandbox","activate_tool"],"iteration":2}`
+const suspendedState = `{"version":3,"iteration_history":[{"Calls":[{"Name":"tracker_update",` +
+	`"Args":{"row":1234567890123456789}}]}],` +
+	`"active_tool_names":["tracker_update","activate_tool"],"iteration":2}`
 
 // suspension is the write that parks [suspendedState].
 func suspension() sandbox.Suspension {
@@ -322,28 +324,94 @@ func mustGet(t *testing.T, s sandbox.PendingStore, turnID string) sandbox.Pendin
 }
 
 func testASecondLaunchKeepsTheBoxItWillReattachTo(t *testing.T, s sandbox.PendingStore) {
-	// A second run_sandbox call in one turn presents the same turn id, and
-	// the box on that row is the paused checkout it is about to reattach
-	// to. A launch that erased it would re-clone the work instead.
-	mustLaunched(t, s, run("t1"))
+	// A second launch in one turn presents the same turn id, and
+	// the box on that row is the paused checkout it may reattach to. A
+	// launch that erased it would re-clone the work instead — and one that
+	// did not tell the launch which box it was would leave the launch no
+	// way to reclaim it when the next job runs elsewhere.
+	first := run("t1")
+	first.Placement = "direct"
+	mustLaunched(t, s, first)
 	if err := s.AttachSandbox(t.Context(), "t1",
-		sandbox.BoxRef{SandboxID: "box-9", CommandID: "c-1"}, sandbox.Fence{}); err != nil {
+		sandbox.BoxRef{SandboxID: "box-9", CommandID: "c-1", CodingAgent: "claude-code"},
+		sandbox.Fence{}); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
-	mustBeginLaunch(t, s, run("t1"))
+	opened, err := s.BeginLaunch(t.Context(), run("t1"), sandbox.Fence{})
+	if err != nil {
+		t.Fatalf("relaunch: %v", err)
+	}
 
-	if got := mustGet(t, s, "t1"); got.SandboxID != "box-9" {
-		t.Errorf("a second launch erased the attached box: %+v", got)
+	if got := mustGet(t, s, "t1"); got.SandboxID != "box-9" || got.Placement != "direct" {
+		t.Errorf("a second launch erased the attached box or its cell: %+v", got)
+	}
+	want := sandbox.PriorBox{SandboxID: "box-9", Placement: "direct",
+		CodingAgent: "claude-code", Status: sandbox.StatusRunning}
+	if opened.Prior != want {
+		t.Errorf("the relaunch was handed %+v as the box it found, want %+v", opened.Prior, want)
+	}
+}
+
+// A RELAUNCH'S BOX MOVES THE ROW TO ITS CELL. The next job can land in
+// another cell than the last — a fallback onto a member with a run_in of its
+// own — and every reader reaches the box through the row's cell, so the box,
+// its cell and its CLI move as one write: a row that took the new box and kept
+// the old cell sent every poll, collection and reclaim of it to a backend that
+// never made it.
+func testARelaunchsBoxMovesTheRowToItsCell(t *testing.T, s sandbox.PendingStore) {
+	first := run("t-cells")
+	first.Placement = "direct"
+	mustLaunched(t, s, first)
+	if err := s.AttachSandbox(t.Context(), "t-cells", sandbox.BoxRef{
+		SandboxID: "box-1", Placement: "direct", CodingAgent: "claude-code",
+	}, sandbox.Fence{}); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	next := run("t-cells")
+	next.Placement, next.CodingAgent = "e2b", "opencode"
+	mustBeginLaunch(t, s, next)
+	if err := s.AttachSandbox(t.Context(), "t-cells", sandbox.BoxRef{
+		SandboxID: "box-2", Placement: "e2b", CodingAgent: "opencode",
+	}, sandbox.Fence{}); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+
+	got := mustGet(t, s, "t-cells")
+	if got.SandboxID != "box-2" || got.Placement != "e2b" || got.CodingAgent != "opencode" {
+		t.Errorf("row = box %q in %q on %q, want the relaunch's box-2 in e2b on opencode",
+			got.SandboxID, got.Placement, got.CodingAgent)
+	}
+}
+
+// EVERY LAUNCH RECORDS THE BRIDGE SESSION ITS BOX DIALS, and the node that
+// opened it — the relaunch's, not the first job's: the first job's box dials a
+// session the relaunch replaced, and a node rebuilding a lost session from the
+// row must rebuild the one the live box holds a token for, on the node that
+// box's URL addresses.
+func testEveryLaunchRecordsTheBridgeSessionItsBoxDials(t *testing.T, s sandbox.PendingStore) {
+	first := run("t-bridge")
+	first.LaunchNode, first.BridgeNonce = "node-a", "nonce-1"
+	mustLaunched(t, s, first)
+	if got := mustGet(t, s, "t-bridge"); got.LaunchNode != "node-a" || got.BridgeNonce != "nonce-1" {
+		t.Fatalf("the launch recorded session %q on %q, want nonce-1 on node-a",
+			got.BridgeNonce, got.LaunchNode)
+	}
+	next := run("t-bridge")
+	next.LaunchNode, next.BridgeNonce = "node-b", "nonce-2"
+	mustBeginLaunch(t, s, next)
+	if got := mustGet(t, s, "t-bridge"); got.LaunchNode != "node-b" || got.BridgeNonce != "nonce-2" {
+		t.Errorf("the relaunch left session %q on %q, want its own nonce-2 on node-b",
+			got.BridgeNonce, got.LaunchNode)
 	}
 }
 
 func testASecondLaunchDropsTheFirstSuspension(t *testing.T, s sandbox.PendingStore) {
-	// THE RELAUNCH RESET. The previous call's suspended conversation is not
-	// this job's, and leaving it in place is worse than absent: a
-	// completion claimed before the new suspension lands would splice this
-	// run's findings into the loop the LAST call suspended, which has
-	// already moved on. The status is what says so — back to launching, so
-	// the poll leaves it alone until the new conversation is written.
+	// THE RELAUNCH RESET. The previous job's parked turn state is not this
+	// job's, and leaving it in place is worse than absent: a completion
+	// claimed before the new suspension lands would resume the turn from the
+	// park the LAST job left, which has already moved on. The status is what
+	// says so — back to launching, so the poll leaves it alone until the new
+	// park is written.
 	mustLaunched(t, s, run("t1"))
 	mustBeginLaunch(t, s, run("t1"))
 
@@ -359,7 +427,7 @@ func testASecondLaunchDropsTheFirstSuspension(t *testing.T, s sandbox.PendingSto
 // A SECOND LAUNCH UNDER ONE TURN ID IS A SECOND ROUND, and its tool log starts
 // empty.
 //
-// The bridged log is the whole record an agent-mode resume rebuilds its phase
+// The bridged log is the whole record a run's resume rebuilds its phase
 // from. A reviewer's self_iterate launches another executor run under the same
 // turn id, and the first round's log left in place is not merely stale: a
 // round that in fact submitted nothing would report the PREVIOUS round's
@@ -400,7 +468,7 @@ func testALaunchNeedsATurnID(t *testing.T, s sandbox.PendingStore) {
 
 // A LAUNCH ANSWERS THE JOB IT OPENED, on the first launch and on a relaunch
 // alike: its name and the instant it began, exactly as the row records them.
-// The answer is what an agent-mode run's bridge session is bound to before its
+// The answer is what a run's bridge session is bound to before its
 // box exists, so an answer that differed from the row — a stale name, or the
 // previous job's — would file every call the box makes under a job that is not
 // its own.
@@ -536,8 +604,8 @@ func testAttachingABoxClearsTheSnapshotStamp(t *testing.T, s sandbox.PendingStor
 }
 
 func testTheTailIsClaimedExactlyOnce(t *testing.T, s sandbox.PendingStore) {
-	// THE AT-MOST-ONCE GATE. Two nodes both splicing a result into one
-	// suspended loop produce two turns from one job — which the seat sees
+	// THE AT-MOST-ONCE GATE. Two nodes both resuming one parked turn from
+	// one job's result produce two turns from one job — which the seat sees
 	// as its own work arriving twice.
 	mustLaunched(t, s, run("t1"))
 	tail := completionOf(t, s, "t1")
@@ -1070,6 +1138,47 @@ func mustRelease(t *testing.T, s sandbox.PendingStore, claimed sandbox.PendingRu
 	}
 }
 
+// A HELD RELEASE HOLDS THE RESUME UNTIL ITS CONDITION LIFTS: the release that
+// hands back a claim its seat's conditions refused writes the hold, a lift for
+// another condition leaves it, a lift for its own clears it — and the next
+// release clears whatever an earlier one held, so no hold outlasts the attempt
+// it held back.
+func testAHeldReleaseHoldsTheResumeUntilItsConditionLifts(t *testing.T, s sandbox.PendingStore) {
+	mustLaunched(t, s, run("t1"))
+	until := time.Date(2026, time.September, 24, 0, 0, 0, 0, time.UTC)
+	held := releaseOf(mustClaim(t, s, "t1"))
+	held.Hold = &sandbox.Refusal{Condition: "budget", Until: until}
+	if released, err := s.ReleaseClaim(t.Context(), "t1", held); err != nil || !released {
+		t.Fatalf("held release: released=%v err=%v", released, err)
+	}
+	got := mustGet(t, s, "t1")
+	if got.Status != sandbox.StatusRunning || got.HeldFor != "budget" || !got.HeldUntil.Equal(until) {
+		t.Fatalf("row = %s held for %q until %v, want running and held for budget until %v",
+			got.Status, got.HeldFor, got.HeldUntil, until)
+	}
+	if !got.Held(until.Add(-time.Second)) || got.Held(until) {
+		t.Error("the row is not held exactly until its refusal lifts")
+	}
+	if lifted, err := s.LiftHold(t.Context(), "t1", "pause"); err != nil || lifted {
+		t.Fatalf("a lift for another condition: lifted=%v err=%v", lifted, err)
+	}
+	if lifted, err := s.LiftHold(t.Context(), "t1", "budget"); err != nil || !lifted {
+		t.Fatalf("a lift for its own condition: lifted=%v err=%v", lifted, err)
+	}
+	if got := mustGet(t, s, "t1"); got.HeldFor != "" || !got.HeldUntil.IsZero() {
+		t.Fatalf("the lifted row is still held for %q until %v", got.HeldFor, got.HeldUntil)
+	}
+	again := releaseOf(mustClaim(t, s, "t1"))
+	again.Hold = &sandbox.Refusal{Condition: "budget", Until: until}
+	if released, err := s.ReleaseClaim(t.Context(), "t1", again); err != nil || !released {
+		t.Fatalf("held release: released=%v err=%v", released, err)
+	}
+	mustRelease(t, s, mustClaim(t, s, "t1"))
+	if got := mustGet(t, s, "t1"); got.HeldFor != "" {
+		t.Fatalf("an ordinary release kept the earlier hold for %q", got.HeldFor)
+	}
+}
+
 func testAReleaseHandsTheClaimBackWhereItFoundIt(t *testing.T, s sandbox.PendingStore) {
 	// The retry a failed resume opens has to find the run exactly where the
 	// signal it is retrying can take it: a completion's job running, an
@@ -1096,7 +1205,7 @@ func testAReleaseHandsTheClaimBackWhereItFoundIt(t *testing.T, s sandbox.Pending
 }
 
 func testAReleaseOfAnotherLaunchIsRefused(t *testing.T, s sandbox.PendingStore) {
-	// The resumed executor called run_sandbox again, so the row holds a new
+	// The resumed turn relaunched its executor, so the row holds a new
 	// launch with the claimed job's conversation cleared. Handed back, that
 	// launch would read as a running job with nothing to resume into, and
 	// its completion would collect whatever the box still held.
@@ -2124,9 +2233,9 @@ func testExpiringAPauseClearsTheBoxInTheSameWrite(t *testing.T, s sandbox.Pendin
 
 // --- the bridged run's durable tool log ------------------------------------
 
-// A BRIDGED RUN'S CALLS HAVE NOWHERE ELSE TO LIVE. A native tool loop keeps
-// them on a surface in memory and the turn writes them when it ends; a bridged
-// run's are made by a process outside the engine and can outlive the node. A
+// A BRIDGED RUN'S CALLS HAVE NOWHERE ELSE TO LIVE. An engine phase's calls sit
+// on a surface in memory and the turn writes them when it ends; a run's are
+// made by its coding CLI, outside the engine, and can outlive the node. A
 // reviewer of a resumed run with no log judges a turn that reads as having
 // acted on nothing.
 func testBridgeCallsAreAppendedInOrder(t *testing.T, s sandbox.PendingStore) {

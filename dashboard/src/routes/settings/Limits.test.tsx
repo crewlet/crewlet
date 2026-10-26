@@ -38,7 +38,7 @@ function row(over: Partial<Row> & Pick<Row, "key" | "group">): Row {
 const LIMITS: LimitsAnswer = {
   limits: [
     row({ key: "turn_engine.max_iterations", group: "turn" }),
-    row({ key: "turn_engine.max_tool_rounds", group: "turn", value: 32, default: 24 }),
+    row({ key: "turn_engine.onboarding_max_tool_rounds", group: "turn", value: 7, default: 10 }),
     row({
       key: "notification_rate_limit",
       group: "notifications",
@@ -74,13 +74,13 @@ test("each cap carries its name, its key, its value and its source", () => {
   answer.data = LIMITS;
   render(<Limits />);
   const turn = screen.getByRole("table", { name: "Guardrails on every turn" });
-  const changed = within(turn).getByRole("row", { name: /Tool rounds per run/ });
-  expect(within(changed).getByText("turn_engine.max_tool_rounds")).toBeDefined();
+  const changed = within(turn).getByRole("row", { name: /Tool rounds on a first turn/ });
+  expect(within(changed).getByText("turn_engine.onboarding_max_tool_rounds")).toBeDefined();
   expect(
     within(changed)
       .getAllByRole("cell")
       .map((c) => c.textContent),
-  ).toEqual(["32", "Changed from 24"]);
+  ).toEqual(["7", "Changed from 10"]);
   // ONLY THE CHANGED ROW IS MARKED; a default says so in a word, never a tag.
   const resting = within(turn).getByRole("row", { name: /Review rounds per turn/ });
   expect(resting.hasAttribute("data-changed")).toBe(false);

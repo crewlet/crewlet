@@ -28,14 +28,17 @@ import (
 // embedding its own NATS server, in this one process. See
 // `go doc ./internal/solo`.
 //
-// And it is where this binary becomes the scripted model's CLI when it was
-// re-executed as one ([scriptedCLIEnv]) — FIRST, before the sink or the
-// framework, so the child's stdout is exactly the answer it prints, and as
-// a dispatch here rather than a test function, which every ordinary run would
-// otherwise report as a skip.
+// And it is where this binary becomes the scripted model's CLI, or the
+// executor's coding CLI, when it was re-executed as one ([scriptedCLIEnv],
+// [codingCLIEnv]) — FIRST, before the sink or the framework, so the child's
+// stdout is exactly what it prints, and as a dispatch here rather than a test
+// function, which every ordinary run would otherwise report as a skip.
 func TestMain(m *testing.M) {
 	if endpoint := os.Getenv(scriptedCLIEnv); endpoint != "" {
 		os.Exit(runScriptedCLI(endpoint))
+	}
+	if endpoint := os.Getenv(codingCLIEnv); endpoint != "" {
+		os.Exit(runCodingCLI(endpoint))
 	}
 	binary, err := os.Executable()
 	if err != nil {

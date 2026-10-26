@@ -5,8 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
@@ -111,6 +112,14 @@ func TestTheAskBriefNamesWhomTheParkCanResolve(t *testing.T) {
 	if !strings.Contains(brief, "crewlet-ask") {
 		t.Fatalf("the brief does not tell the coding agent how to ask:\n%s", brief)
 	}
+	// AND THE WAY THAT DOES NOT WAIT: a question the run can go on without
+	// is asked with the seat's own tools and answered in its next turn, so a
+	// run told only of the shim parks — holding its box — on every question.
+	if !strings.Contains(brief, "`"+builtin.CommentOnWorkTool+"` with `ask`") ||
+		!strings.Contains(brief, runner.SubmitWorkTool) {
+		t.Fatalf("the brief does not tell the coding agent to ask with its tools and "+
+			"finish when it can go on without the answer:\n%s", brief)
+	}
 	if !strings.Contains(brief, "Teammates you can name: cto, ada, qa.") ||
 		!strings.Contains(brief, "Your manager: cto.") {
 		t.Fatalf("the brief does not name the seat's teammates and manager by handle:\n%s", brief)
@@ -165,7 +174,7 @@ func TestALaunchedRunRecordsWhoWokeItsTurn(t *testing.T) {
 func TestTheDispatcherHandsAnAnswerByTurnToTheCoordinator(t *testing.T) {
 	t.Parallel()
 	e, _ := starting(t, refusingModels(t))
-	equipForCode(t, e, sandbox.NewCoordStore(memory.NewFleet()))
+	rigRuns(t, e, nil)
 	d := e.buildDispatcher(Options{Dispatch: &Dispatcher{NoteDeferred: func(string) {}}}, e.backends)
 	if d.AnswerByTurn == nil {
 		t.Fatal("the dispatcher has no route for an answer by turn on a node with a coordinator")

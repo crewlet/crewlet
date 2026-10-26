@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -35,8 +35,6 @@ providers:
 roles:
   - name: SWE
     handle: swe
-    sandbox:
-      enabled: true
 `
 
 // companyWithoutSandboxDoc is the same company with nothing that runs code.
@@ -48,12 +46,12 @@ roles:
 `
 
 // A NODE THAT BOOTED WITH NO COMPANY BRINGS THE CODE SANDBOX UP WITH THE FIRST
-// ONE THAT CONFIGURES IT — the coordinator, the completion poll, run_sandbox,
-// and the seat's own preparation — with no restart.
+// ONE THAT CONFIGURES IT — the coordinator, the completion poll, and the seat's
+// own preparation — with no restart.
 //
 // The coordinator was built at boot or never, so a node started the way the
-// quickstart starts one served a code-enabled company with no code tool until
-// its process restarted, and a run a peer had left on one of its seats was
+// quickstart starts one served a company with no executor runtime until its
+// process restarted, and a run a peer had left on one of its seats was
 // polled, collected and resumed by nobody here.
 func TestAFirstCompanyWithASandboxBringsTheCoordinatorUpWithoutARestart(t *testing.T) {
 	t.Parallel()
@@ -80,10 +78,6 @@ func TestAFirstCompanyWithASandboxBringsTheCoordinatorUpWithoutARestart(t *testi
 	}
 	if e.sandboxWaiter.Load() == nil {
 		t.Error("the apply started no completion poll, so no detached run ever finishes")
-	}
-	if _, ok := e.Company().Tools.Lookup(builtin.RunSandboxTool); !ok {
-		t.Error("the applied company has no run_sandbox — equip ran before the " +
-			"coordinator it registers against")
 	}
 
 	// THE SEAT, once this node takes it: its control topic attached and
@@ -274,10 +268,18 @@ func TestARevisionWithoutASandboxKeepsTheRuntimeForTheRunsInFlight(t *testing.T)
 			"runs in flight are finished through")
 	}
 	// ...AND LAUNCHES NOTHING NEW on it: the runtime outlives the catalogue
-	// only to finish what that catalogue started.
-	if _, ok := e.Company().Tools.Lookup(builtin.RunSandboxTool); ok {
-		t.Error("a company with no providers.sandbox still registers run_sandbox, " +
-			"launching on a catalogue it no longer configures")
+	// only to finish what that catalogue started, so an executor pinned to
+	// the revision without one is refused rather than given a box.
+	current := e.Company()
+	seat := current.Org.AgentSeatByHandle("swe")
+	executor, _ := executorCompany(t)
+	pinned := &Company{Config: current.Config, Org: current.Org, Models: executor.Models}
+	seat.LLM = executor.Org.Roles[0].LLM
+	l := launcherOn(e, pinned, seat, "t-after")
+	if err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err == nil ||
+		!strings.Contains(err.Error(), "providers.sandbox") {
+		t.Errorf("an executor launched for a company with no providers.sandbox (err %v), "+
+			"on a catalogue it no longer configures", err)
 	}
 }
 
@@ -286,23 +288,11 @@ func TestARevisionWithoutASandboxKeepsTheRuntimeForTheRunsInFlight(t *testing.T)
 //
 // It was built only where a coordinator already existed, so on every other
 // node a revision whose providers.sandbox could never mint a box was published,
-// and its code-enabled seats planned around one.
+// and every seat's executor launched into a catalogue that had none.
 func TestABrokenSandboxCatalogueIsRefusedOnANodeWithoutOne(t *testing.T) {
 	t.Parallel()
 	e := sandboxNode(t, nil)
-	broken := `
-name: Nimbus
-providers:
-  sandbox:
-    e2b:
-      api_key: "${CREWLET_TEST_E2B_KEY_NEVER_SET}"
-roles:
-  - name: SWE
-    handle: swe
-    sandbox:
-      enabled: true
-      run_in: e2b
-`
+	broken := e2bExecutorDoc(t, "${CREWLET_TEST_E2B_KEY_NEVER_SET}")
 	status, applied, err := e.Apply(t.Context(), parseCompany(t, broken), time.Now())
 	if err == nil || status != configplane.StatusError {
 		t.Fatalf("Apply = (%s, %v, %v), want a refusal", status, applied, err)
@@ -331,19 +321,7 @@ roles:
 // resolve from the environment alone and the stored key does not.
 func TestBuildableIsTheApplysBuildOverThisNodesChain(t *testing.T) {
 	t.Parallel()
-	company := parseCompany(t, `
-name: Nimbus
-providers:
-  sandbox:
-    e2b:
-      api_key: "${CREWLET_TEST_E2B_KEY}"
-roles:
-  - name: SWE
-    handle: swe
-    sandbox:
-      enabled: true
-      run_in: e2b
-`)
+	company := parseCompany(t, e2bExecutorDoc(t, "${CREWLET_TEST_E2B_KEY}"))
 	// AN EMPTY ENVIRONMENT, so the process's own can answer nothing here.
 	e := &Engine{environ: config.MapSource{}}
 	e.installSecrets(map[string]string{})
@@ -454,6 +432,31 @@ func newSandboxNode(t *testing.T, company *config.Company) *Engine {
 
 // sandboxDoc is [sandboxCompanyDoc] with extra lines in its providers.sandbox
 // block.
+// e2bExecutorDoc is a one-seat company whose executor's entry runs its runs in
+// the remote cell, keyed by key — the one cell whose backend a catalogue can
+// fail to build for want of a credential.
+func e2bExecutorDoc(t *testing.T, key string) string {
+	t.Helper()
+	return fmt.Sprintf(`
+name: Nimbus
+providers:
+  llm:
+    cc:
+      agent: claude-code
+      model: sonnet
+      run_in: e2b
+      state_dir: %q
+      auth: {mode: api-key, api_key: "sk-ant-not-real"}
+  sandbox:
+    e2b:
+      api_key: %q
+roles:
+  - name: SWE
+    handle: swe
+    llm: cc
+`, t.TempDir(), key)
+}
+
 func sandboxDoc(extra string) string {
 	return fmt.Sprintf(sandboxCompanyDoc, extra)
 }
@@ -500,7 +503,7 @@ func seedRunningRun(t *testing.T, e *Engine, turnID, sandboxID string) {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
 	suspended, err := store.MarkSuspended(ctx, turnID, sandbox.Suspension{State: json.RawMessage(
-		`{"version":1,"pending_tool_call_id":"call-1","pending_tool_name":"` + builtin.RunSandboxTool + `"}`)})
+		`{"version":3,"iteration":1}`)})
 	if err != nil || !suspended {
 		t.Fatalf("MarkSuspended = (%v, %v), want the run open to the poll", suspended, err)
 	}

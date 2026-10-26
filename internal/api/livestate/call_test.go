@@ -210,7 +210,7 @@ func TestAResumedPhaseComesBackOnScreen(t *testing.T) {
 	s := livestate.New()
 	s.Apply(env("agent_phase_started", base))
 	s.Apply(env("agent_phase_completed",
-		with(base, map[string]any{"notes": "suspended: run_sandbox"}),
+		with(base, map[string]any{"notes": "suspended: the executor's run is launched"}),
 		at("2026-06-14T12:00:05+00:00")))
 	s.Apply(env("agent_turn_progress",
 		with(base, map[string]any{"round_num": 4, "response": "back from the sandbox"}),
@@ -644,7 +644,7 @@ func TestAFrozenFailedCallHasNoCallInFlight(t *testing.T) {
 	s.Apply(env("agent_turn_progress", with(planCall(), map[string]any{
 		"round_num":        0,
 		"round_started_at": "2026-06-14T12:00:01Z",
-		"running_call":     map[string]any{"name": "run_sandbox"},
+		"running_call":     map[string]any{"name": "search_knowledge"},
 	}), streamOnly, at("2026-06-14T12:00:02Z")))
 	s.Apply(env("agent_phase_completed", with(planCall(), map[string]any{
 		"failed": true, "error": "boom",

@@ -367,6 +367,11 @@ type Engine struct {
 	// apply can be what starts the poll.
 	sandboxPollInterval time.Duration
 
+	// fakePlay is Options.fakePlay: what a `providers.sandbox.fake`
+	// company's runs do, nil for the double's own demonstration. Kept
+	// because every apply builds the catalogue again.
+	fakePlay fakePlayer
+
 	// sandboxSeats are the seats whose sandbox control topic this node has
 	// attached, so a seat is attached exactly once however it came to be
 	// prepared — by its own acquisition, or by the apply that brought the
@@ -417,9 +422,10 @@ type Engine struct {
 	// derived from the fleet's keyring rather than held.
 	sandboxOtel *sandbox.OtelReceiver
 
-	// bridge serves a running seat's tool surface to a coding agent over
-	// MCP. Nil where no bridge URL is configured, which is every
-	// deployment that runs no agent mode.
+	// bridge serves a running seat's tool surface to its executor's coding
+	// agent over MCP. Nil where no bridge URL is configured — which leaves
+	// every executor launch on this node refused, naming the variable, so a
+	// node that runs seats needs one.
 	bridge *mcpbridge.Bridge
 
 	// reflector is the learning write side: one dispatcher for the life of
@@ -912,8 +918,15 @@ type Options struct {
 	OtelReceiver *sandbox.OtelReceiver
 
 	// Bridge serves a seat's tools to a coding agent. Nil builds one from
-	// the environment; see [mcpbridge.Build].
+	// the environment and BridgeHostURL; see [mcpbridge.Build].
 	Bridge *mcpbridge.Bridge
+
+	// BridgeHostURL is where a box on this node's own host — the `direct`
+	// cell — reaches the bridge: the node's own listener that serves it, on
+	// loopback ([mcpbridge.Options.HostURL]). The caller that bound that
+	// listener derives it; empty where the node binds none, and then only
+	// [mcpbridge.BaseURLVar] can bridge a run.
+	BridgeHostURL string
 
 	// Backends may be supplied by a caller that already opened them and
 	// keeps their lifetime. Nil opens them from the bootstrap config, and
@@ -990,6 +1003,14 @@ type Options struct {
 	// knob exists only so a case can watch a retry bring a server up
 	// without waiting fifteen seconds for it.
 	mcpRetryBase time.Duration
+
+	// fakePlay scripts what a `providers.sandbox.fake` company's runs do
+	// ([sandbox.FakeRunner.Player]); nil plays each as the double's own
+	// demonstration ([demoRun]). UNEXPORTED for the reason usageEvery is:
+	// what a fake run does is the double's answer in a deployment, and the
+	// knob exists only so a case can drive a whole turn — the run's bridged
+	// calls included — through the engine it boots.
+	fakePlay fakePlayer
 
 	// sweepEvery is the seat host's placement cadence
 	// ([node.Config.SweepInterval]), zero for [seat.SweepInterval].
@@ -1119,7 +1140,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// keyring — which the keyring check above has already required.
 	bridge := opts.Bridge
 	if bridge == nil {
-		if bridge, err = mcpbridge.Build(getenv(environ), tokenMaterial(opts.Bootstrap)); err != nil {
+		if bridge, err = mcpbridge.Build(getenv(environ), tokenMaterial(opts.Bootstrap),
+			opts.BridgeHostURL); err != nil {
 			return nil, fmt.Errorf("engine: tool bridge: %w", err)
 		}
 	}
@@ -1206,6 +1228,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		mcpRetryBase:        opts.mcpRetryBase,
 		sandboxOtel:         otel,
 		sandboxPollInterval: opts.SandboxPollInterval,
+		fakePlay:            opts.fakePlay,
 		usageEvery:          opts.usageEvery,
 		sandboxSeats:        map[string]bool{},
 		bridge:              bridge,
@@ -1224,6 +1247,10 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// ever on the apply loop's own goroutine.
 		directoryNudge: make(chan struct{}, 1),
 	}
+	// A SESSION THIS PROCESS LOST IS REBUILT, not refused: a restart drops
+	// every bridge session while the runs they served go on, and their boxes
+	// keep dialing this node — see [Engine.reopenBridgeSession].
+	bridge.SetReopener(e.reopenBridgeSession)
 	// THE TIER A FACTS THE PROCESS HOLDS, read once and before anything below
 	// reads them — the address people and vendors reach this deployment at,
 	// this node's admin posture and the Tier A tokens it declares — because
@@ -1527,11 +1554,12 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// ([Engine.startNativeFor]) and the sandbox runtime
 	// ([Engine.startSandbox]), each before that apply equips.
 	if company != nil {
-		// BEFORE equip, because equip registers run_sandbox and only a
-		// node with a coordinator can offer it: a tool whose dependency is
-		// absent is OMITTED rather than registered-and-broken, so an
-		// engine that equipped first would build a code-enabled company
-		// whose seats have no code tool and plan around one anyway.
+		// BEFORE equip, because equip hands the artifact tools the boxes
+		// of a turn's runs only on a node with the runtime
+		// ([ArtifactToolDeps]): a dependency that is absent is OMITTED
+		// rather than registered-and-broken, so an engine that equipped
+		// first would build a company whose seats could never publish
+		// what their executors' runs built.
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := e.startSandboxFor(ctx, company); err != nil {
 			return nil, fmt.Errorf("engine: sandbox: %w", err)
@@ -2586,7 +2614,7 @@ func newObjectives(rec *metrics.Recorder) *objectives.Meter {
 //
 // This is the node's TurnFunc, exported because it is also the entry point for
 // a delivery that did not come from the seat's own subscription — a sandbox
-// run completing, which resumes a suspended Execute loop rather than waiting
+// run completing, which resumes the turn parked on it rather than waiting
 // for the broker to hand the seat something.
 func (e *Engine) Dispatch(ctx context.Context, handle string, evs []*events.Event) queue.Result {
 	return e.dispatch.Dispatch(ctx, handle, evs)
@@ -2775,7 +2803,15 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// It raises nothing at all for a trigger nobody is watching a composer
 	// for — see [chatMetadataOf] — and a nil session's every method is a
 	// no-op, so there is no branch here and none below.
-	status := e.beginWorkingStatus(ctx, req.Handle, req.WorkKey, req.Ask())
+	//
+	// HELD UNDER THE RUN, not the unit of work: the turn parks on its
+	// executor's run, and what takes the hold back is keyed by the run's row
+	// — the resume that rejoins it ([Engine.resumeWorkingStatus]) and the
+	// stop that releases it ([Engine.releaseWorkingStatus]) both read the
+	// row's turn id, which is this run's id (ADR-0017). Held under the work
+	// key, neither ever found it, and every parked turn's indicator stood
+	// until the backend's own expiry.
+	status := e.beginWorkingStatus(ctx, req.Handle, req.RunID, req.Ask())
 	// ENDED ON EVERY PATH OUT OF THIS FRAME, the runner build failing below
 	// included: that path raised an indicator and never ran a turn, and
 	// nothing else would ever take it down. `working` stays false until a
@@ -2836,11 +2872,11 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	reply := ReplyFor(req.Events)
 	turnIdentity := tel.runnerTurn(company, req.Depth, req.DelegationChain,
 		task, reply, e.WithheldContacts())
-	// The executor's runtime, from the seat's own provider chain — see
+	// The executor's launcher, over the turn's pinned company — see
 	// [Engine.agentRunFor] — and the box a person's note reaches this turn
-	// through, which that runtime decides can be read at all.
-	agentRun := e.agentRunFor(company, req.Handle, turnIdentity.Context)
-	box := steerBox(agentRun)
+	// through ([turnSteerBox]).
+	launcher := e.agentRunFor(company, req.Handle, turnIdentity.Context)
+	box := turnSteerBox()
 	r, err := company.RunnerFor(req.Handle, e.seatRegistry(company, req.Handle), RunnerInput{
 		Task:    task,
 		Compact: e.compactorFor(company),
@@ -2853,15 +2889,16 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		Conversation: e.conversationBlock(ctx, company, req.Handle, req.History, tel.aux()),
 		Publisher:    e.backends.Queue,
 		Turn:         turnIdentity,
-		AgentRun:     agentRun,
+		Launcher:     launcher,
 		Steer:        box,
 		Markers:      e.markers(),
 		Latch:        e.onboarded,
 		// The meter the context assembly was charged through — see above.
 		Budget: tel.budget.budget(),
-		// The round-cap extension judge, from the same pinned epoch. It
-		// was never supplied, so every exhaustion rescued with "no_judge"
-		// and the extension mechanism was inert.
+		// The round-cap extension judge, from the same pinned epoch, for
+		// the onboarding pass — the one engine loop with a cap above its
+		// budget. It was never supplied, so every exhaustion rescued with
+		// "no_judge" and the extension mechanism was inert.
 		Judge: e.judgeFor(company, req.Handle, tel.aux()),
 		// The seat's headroom, for a sub-agent spawn. Three-valued on
 		// purpose: nil is "no ceiling configured", and a FAILED read
@@ -2945,7 +2982,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		log.InfoContext(ctx, "onboarding_pass_ran", "handle", req.Handle)
 	}
 	if !refused {
-		res, err = turn.Run(ctx, r, company.TurnSettings(req.TimeoutSeconds),
+		res, err = turn.Run(ctx, r, company.TurnSettings(tel.deadline),
 			turnInputFor(req, reply))
 		// WHAT THE TURN ANSWERED WITHOUT BEING WOKEN FOR IT: the waiting
 		// messages its thread block showed it, which the dispatch records as
@@ -2959,8 +2996,8 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// a note, and one offered from here on is answered `closed`.
 	closeSteer(ctx)
 	// The moment the turn returns, and before its frame unwinds: the runner
-	// holds the suspended conversation only until then, and a row without
-	// one is a detached run nothing can ever resume.
+	// holds the parked turn's state only until then, and a row without it
+	// is a detached run nothing can ever resume.
 	//
 	// ITS ANSWER IS WHAT THE INDICATOR FOLLOWS, not `res.Suspended` — the
 	// intent to park and a run that can actually be resumed are different
@@ -2972,7 +3009,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	spend := r.Spend()
 	charge := tel.chargeFor(spend, res, err, time.Now().UTC())
 	if res.Suspended {
-		working = stillWorking(e.persistSuspension(ctx, r, req.RunID, tel.written, charge, tel.ask, tel.senders))
+		working = stillWorking(e.persistSuspension(ctx, r, req.RunID, tel, charge))
 	}
 	// Published on BOTH paths. An error here means a phase broke, which is
 	// precisely when a dashboard most needs the turn closed: the phase

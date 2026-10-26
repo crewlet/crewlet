@@ -355,9 +355,12 @@ func (s MarkerScope) Valid() bool {
 // LocalTools says what a profile does about the CLI's OWN tools — its shell,
 // its file editor, its browser.
 //
-// In text mode the engine uses none of them: Crewlet's tools ride the prompt
-// envelope, and a CLI editing files in its own sandbox is invisible to the
-// tool registry, the permission model, redaction and the event stream. The
+// The engine's TEXT CALLS use none of them — every phase but the executor:
+// Crewlet's tools ride the prompt envelope, and a CLI editing files in its own
+// sandbox is invisible to the tool registry, the permission model, redaction
+// and the event stream. A seat's executor is the other case: the same CLI's
+// own agentic run in a box, fully permissioned there by its in-box runner
+// (internal/sandbox/codingagent), which this stance does not reach. The
 // shell is the one that matters: hostbox isolates a seat's HOME and
 // environment, not the filesystem, so a CLI with a shell on the engine host
 // reads whatever the engine user can read. A profile therefore DENIES local
@@ -1199,8 +1202,8 @@ const modelPlaceholder = "{model}"
 //
 // ONE RENDERING FOR EVERY PLACE THE MODEL GOES, because a cli-agent entry's
 // `model` is written in its CLI's own grammar and every reader of it has to
-// see the same string: a text call's argv, an agent-mode or code-sandbox run
-// of the same CLI in a box, and the config rule that judges the value as that
+// see the same string: a text call's argv, the executor's run of the same CLI
+// in a box, and the config rule that judges the value as that
 // CLI reads it. A run that rebuilt the value its own way named one model to
 // the box and another to every text call on the same entry.
 //

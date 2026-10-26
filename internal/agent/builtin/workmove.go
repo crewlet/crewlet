@@ -147,7 +147,7 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// the recipient reads the key off the item.
 	after := before.Task
 	after.Project = target
-	opID := opIDFor(actor, t.Name(), "move", before.Task.ID, args)
+	opID := opIDFor(ctx, actor, t.Name(), "move", before.Task.ID, args)
 	got, err := t.deps.Moves(actor).MoveTaskToProject(ctx, opID, before.Task.ID,
 		target, worklet.Wake{
 			Kind: worklet.ChangeMoved, Before: before.Task, After: after,

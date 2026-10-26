@@ -1,6 +1,14 @@
 // Package cliagent drives a coding CLI the operator already pays a
 // subscription for as a headless text model behind [llm.Provider].
 //
+// It is the TEXT-CALL backend of every phase but one: the reviewer, delegated
+// workers, onboarding and the side passes call [Provider.Complete], with the
+// CLI's own shell and file tools denied by its profile. A seat's EXECUTOR is
+// not a text call — it is the same CLI's own agentic run in a box
+// (internal/sandbox/codingagent), which reads this entry's identity from here
+// ([Provider.Agent], [Provider.ModelArgument], the Sandbox* credentials) and,
+// at launch, whether the entry sits out ([Provider.SittingOut]).
+//
 // WHICH CLIs is the profile table's answer, not this comment's —
 // [cliprofile.BuiltinNames] reads the shipped table and config's tests hold it
 // to the agent names a document may write. A
@@ -72,9 +80,6 @@ type Config struct {
 	Model string
 	// Agent names the built-in profile.
 	Agent string
-	// AgentMode runs a seat's executor as the CLI's own agentic run
-	// rather than as a text completion. See [Provider.AgentMode].
-	AgentMode bool
 	// StateDir is the resolved state directory. The CLI keeps its login and
 	// its per-seat homes under <StateDir>/<Agent> ([Shared]), so entries on
 	// one directory share a login only when they drive one CLI.
@@ -106,15 +111,14 @@ type Config struct {
 
 // Provider is a coding CLI behind the language-model contract.
 type Provider struct {
-	key       string
-	model     string
-	agent     string
-	agentMode bool
-	profile   cliprofile.Profile
-	ws        *Workspace
-	env       map[string]string
-	auth      Auth
-	timeout   time.Duration
+	key     string
+	model   string
+	agent   string
+	profile cliprofile.Profile
+	ws      *Workspace
+	env     map[string]string
+	auth    Auth
+	timeout time.Duration
 
 	// termGrace is how long every child this provider starts has to exit once
 	// signalled — always [termGrace]. A field rather than the constant at each
@@ -185,7 +189,6 @@ func New(cfg Config) (*Provider, error) {
 		bundleConfigured: cfg.CredentialBundleConfigured,
 		model:            cfg.Model,
 		agent:            cfg.Agent,
-		agentMode:        cfg.AgentMode,
 		profile:          profile,
 		ws:               ws,
 		env:              cfg.Env,
@@ -220,25 +223,6 @@ func (p *Provider) Key() string { return p.key }
 // is handed too, so a box and a text call on one entry name one model.
 func (p *Provider) ModelArgument() string { return p.profile.ModelArgument(p.model) }
 
-// AgentMode reports whether this entry runs a seat's executor as the CLI's own
-// agentic run rather than as a text completion behind the engine's tool loop.
-//
-// The provider is still a full [llm.Provider] in agent mode, and deliberately:
-// every OTHER phase — the reviewer, a worker, the summariser, the round-cap
-// judge — is a text call, and a seat pointing `llm` at an agent-mode entry
-// must not lose them. Only the executor branches, and only the engine knows
-// where that branch is.
-func (p *Provider) AgentMode() bool { return p.agentMode }
-
-// CodingAgent is the sandbox runner that drives this CLI in agent mode.
-//
-// It is the CLI's own name, because the runner registry is keyed on exactly
-// that: agent mode reuses the coding-agent runners rather than growing a
-// second way to invoke the same binary with the same flags. A CLI with no
-// registered runner is refused where the run is built, by a message that
-// names what IS registered — see [sandbox.Manager.RunnerFor].
-func (p *Provider) CodingAgent() string { return p.agent }
-
 // Profile is the resolved profile, for `crewlet llm doctor`.
 func (p *Provider) Profile() cliprofile.Profile { return p.profile }
 
@@ -246,7 +230,11 @@ func (p *Provider) Profile() cliprofile.Profile { return p.profile }
 // entry on the same directory and CLI shares.
 func (p *Provider) Workspace() *Workspace { return p.ws }
 
-// Agent is which CLI this provider drives.
+// Agent is which CLI this provider drives — its profile name, which is also
+// the key the in-box runner registry is keyed on ([sandbox.Manager.RunnerFor]):
+// an executor run reuses the runner for the same binary rather than a second
+// way to invoke it, so this one name answers both "which CLI" and "which
+// runner".
 func (p *Provider) Agent() string { return p.agent }
 
 // AuthMode is how this entry signs its CLI in ([Auth.Mode]), for a caller that
@@ -293,13 +281,13 @@ func (p *Provider) routeFor(req llm.Request) cliprofile.Route {
 // Complete runs one CLI invocation and reads its answer.
 //
 // An entry its CLI last reported spent is NOT called while it sits out
-// ([Provider.benched]): the call fails at once as a rate limit, naming the
+// ([Provider.SittingOut]): the call fails at once as a rate limit, naming the
 // instant, so the seat's chain moves to its next model without a process
 // launched to learn again what the last one said. Checked as the call arrives
 // and again once it holds a slot, because a call that queued for one may have
 // waited out the very call that sat the entry out.
 func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
-	if err := p.benched(); err != nil {
+	if err := p.SittingOut(); err != nil {
 		return nil, err
 	}
 	seat := llm.SeatOf(ctx)
@@ -339,7 +327,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	// here, the queue drains at once, each call handing its slot to the next
 	// through the release deferred above. The check at the top stays: it
 	// spares a call that arrives during a sit-out the render and the queue.
-	if sitting := p.benched(); sitting != nil {
+	if sitting := p.SittingOut(); sitting != nil {
 		return nil, sitting
 	}
 
@@ -838,7 +826,7 @@ func (p *Provider) completion(
 		})
 	}
 	if len(comp.ToolCalls) > 0 {
-		// The CLI reports no stop reason of its own in text mode: the
+		// The CLI reports no stop reason of its own on a text call: the
 		// envelope it was asked for is either an answer or a set of
 		// calls, so those are the only two this backend can honestly
 		// name. A CLI that hit its own cap or refused returns that as

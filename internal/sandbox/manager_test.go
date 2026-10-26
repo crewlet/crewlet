@@ -14,9 +14,6 @@ func specManager(t *testing.T, opts ManagerOptions) *Manager {
 		opts.Providers = map[Placement]Provider{Direct: NewFakeProvider()}
 	}
 	opts.Runners = map[string]Runner{"claude-code": NewFakeRunner("claude-code")}
-	if opts.DefaultCodingAgent == "" {
-		opts.DefaultCodingAgent = "claude-code"
-	}
 	m, err := NewManager(opts)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)

@@ -16,6 +16,7 @@ import (
 const workerDoc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     default:
       model: claude-sonnet-5

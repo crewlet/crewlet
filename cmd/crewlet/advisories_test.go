@@ -154,7 +154,13 @@ func TestTheRunFlagsAreFoldedInBeforeTheAdvisoriesAreJudged(t *testing.T) {
 		omits string
 	}{
 		{"a fleet node that left its roles out", fleet, nil, nil, []string{"node.roles"}, ""},
-		{"-roles names them", fleet, nil, []string{"-roles", "data,seats,workers"}, nil, ""},
+		// A seats node binds a listener or is advised about it at api.port:
+		// its executors' tool bridge is served there and nowhere else. So
+		// the roles fold is judged beside the port's, and each is seen.
+		{"-roles names them", fleet, nil,
+			[]string{"-roles", "data,seats,workers", "-api-port", "8000"}, nil, ""},
+		{"-roles names seats with no port to serve their bridge", fleet, nil,
+			[]string{"-roles", "data,seats,workers"}, []string{"api.port"}, ""},
 		{"a verbose broker nothing records", verboseBroker, nil, nil, []string{"stream.debug"}, ""},
 		{"-debug records it", verboseBroker, []string{"-debug"}, nil, nil, ""},
 		{"-log-level debug records it", verboseBroker, []string{"-log-level", "debug"}, nil, nil, ""},

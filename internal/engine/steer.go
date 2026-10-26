@@ -292,16 +292,15 @@ func (e *Engine) stopSteer(ctx context.Context) {
 	e.stopSteerServe = nil
 }
 
-// steerBox opens the box a turn on handle runs with: one that takes notes when
-// the executor is the engine's own loop, and one that answers every note
-// `unsupported` when the executor runs as a coding CLI's own agentic loop —
-// its rounds are the CLI's, and no round boundary is the engine's to reach.
-func steerBox(agentRun runner.AgentLauncher) *steer.Box {
-	if agentRun != nil {
-		return steer.Unsupported()
-	}
-	return steer.New()
-}
+// turnSteerBox is the note box every turn runs with, which answers every note
+// `unsupported`.
+//
+// EVERY TURN, because every agent seat's executor is its coding CLI's own run:
+// the rounds a note would be read at are the CLI's, inside its own loop, and
+// no round boundary there is the engine's to hand a note to. A box that took
+// notes would answer a person `pending` for a delivery nothing makes — so the
+// box is still filed, and the refusal is an answer rather than silence.
+func turnSteerBox() *steer.Box { return steer.Unsupported() }
 
 // openSteer files a built turn's box, and returns what the turn calls on every
 // path out: close the box and record every note it took and never read.

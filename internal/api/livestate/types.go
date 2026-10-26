@@ -175,8 +175,8 @@ type LiveCall struct {
 	// call was made, how long it took, its tokens and how many tools it
 	// asked for — as the progress frame carries it ([types.PhaseRound]).
 	// Empty on the opening frame, before the phase's first provider call —
-	// and for the whole of an agent-mode executor, whose rounds run inside
-	// the coding CLI.
+	// and for the whole of an executor, whose rounds run inside its coding
+	// CLI's run.
 	Rounds []any `json:"rounds"`
 
 	// MaxRounds is the round cap currently GRANTED to this phase, which an
@@ -449,6 +449,12 @@ type SandboxEntry struct {
 	AgentHandle string `json:"agent_handle"`
 	AgentID     string `json:"agent_id"`
 	CodingAgent string `json:"coding_agent"`
+	// ProviderKey and Model are the executor-chain member the run was
+	// launched on and the model it runs under — see
+	// [types.SandboxRunStarted.ProviderKey]. Empty on a run whose
+	// announcement and record named none.
+	ProviderKey string `json:"provider_key,omitempty"`
+	Model       string `json:"model,omitempty"`
 	SandboxID   string `json:"sandbox_id"`
 	Task        string `json:"task"`
 

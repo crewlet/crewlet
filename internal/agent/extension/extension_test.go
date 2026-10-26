@@ -185,39 +185,24 @@ func TestTheJudgeIsToldWhatItMayActuallyGrant(t *testing.T) {
 	}
 }
 
+// ONBOARDING IS TOLD ITS OWN EXIT: an extended pass told to stop calling
+// tools never reaches mark_onboarded, so the marker is never stamped and the
+// pass re-runs on every turn that seat ever takes.
+//
+// AND NO PHASE A NUDGE NEVER REACHES IS GIVEN A WAY OUT. The executor is its
+// CLI's own run and the reviewer runs with no ceiling, so neither is ever
+// extended; a worker's loop has no extension at all, and the hint it was once
+// given — stop calling tools, return a plain-text summary — was the opposite
+// of its contract, which ends in a `submit_result` call.
 func TestTheFinishHintMatchesHowThePhaseEnds(t *testing.T) {
 	t.Parallel()
-	// Each phase leaves by a different door: the executor through
-	// `submit_work`, the reviewer through `submit_review`, onboarding
-	// through `mark_onboarded`. A phase told the wrong way to finish spends
-	// its granted rounds trying to leave through a door it does not have —
-	// the exact failure the extension was granted to avoid.
-	//
-	// ONBOARDING IS THE CASE THAT WAS MISSING, and the one that was silent:
-	// told to stop calling tools, an extended onboarding pass never reaches
-	// mark_onboarded, so the marker is never stamped and the pass re-runs on
-	// every turn that seat ever takes.
-	for _, tc := range []struct {
-		ph        phase.Phase
-		want, not string
-	}{
-		{phase.Execute, "submit_work", "submit_review"},
-		{phase.Review, "submit_review", "submit_work"},
-		{phase.Onboarding, "mark_onboarded", "submit_work"},
-	} {
-		hint := extension.FinishHint(tc.ph)
-		if !strings.Contains(hint, tc.want) {
-			t.Errorf("the %s hint does not name its exit: %q", tc.ph, hint)
-		}
-		if strings.Contains(hint, tc.not) {
-			t.Errorf("the %s hint names another phase's exit: %q", tc.ph, hint)
-		}
+	if hint := extension.FinishHint(phase.Onboarding); !strings.Contains(hint, "mark_onboarded") {
+		t.Errorf("the onboarding hint does not name its exit: %q", hint)
 	}
-	// A WORKER IS NEVER EXTENDED, so it is told nothing. The hint it was
-	// once given — stop calling tools, return a plain-text summary — is the
-	// opposite of its contract, which ends in a `submit_result` call.
-	if hint := extension.FinishHint(phase.Subagent); hint != "" {
-		t.Errorf("a phase the extension never reaches was given a way out: %q", hint)
+	for _, ph := range []phase.Phase{phase.Execute, phase.Review, phase.Subagent} {
+		if hint := extension.FinishHint(ph); hint != "" {
+			t.Errorf("%s, which no nudge reaches, was given a way out: %q", ph, hint)
+		}
 	}
 	if nudge := extension.Nudge(phase.Subagent, 2, "x"); strings.HasSuffix(nudge, "\n") {
 		t.Errorf("a nudge with no hint ends on a dangling line:\n%q", nudge)
@@ -226,20 +211,20 @@ func TestTheFinishHintMatchesHowThePhaseEnds(t *testing.T) {
 
 func TestTheNudgeCarriesTheGrantAndTheReason(t *testing.T) {
 	t.Parallel()
-	got := extension.Nudge(phase.Execute, 3, "making steady progress")
-	for _, want := range []string{"3 additional tool-call rounds", "making steady progress", "submit_work"} {
+	got := extension.Nudge(phase.Onboarding, 3, "making steady progress")
+	for _, want := range []string{"3 additional tool-call rounds", "making steady progress", "mark_onboarded"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the nudge is missing %q:\n%s", want, got)
 		}
 	}
 	// One round is one round. "1 rounds" in a prompt reads as a template
 	// the engine did not finish.
-	if one := extension.Nudge(phase.Execute, 1, ""); !strings.Contains(one, "1 additional tool-call round ") &&
+	if one := extension.Nudge(phase.Onboarding, 1, ""); !strings.Contains(one, "1 additional tool-call round ") &&
 		!strings.Contains(one, "1 additional tool-call round\n") {
 		t.Errorf("a single round was pluralised:\n%s", one)
 	}
 	// A judge that gave no reason still produces a readable line.
-	if none := extension.Nudge(phase.Review, 2, ""); !strings.Contains(none, "(none)") {
+	if none := extension.Nudge(phase.Onboarding, 2, ""); !strings.Contains(none, "(none)") {
 		t.Errorf("an absent reason left a dangling label:\n%s", none)
 	}
 }

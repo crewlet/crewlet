@@ -42,6 +42,7 @@ import (
 const mixedDoc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -240,6 +241,7 @@ func TestAReferenceAServerDoesNotDeclareOptionalHoldsItBack(t *testing.T) {
 	c := specCompany(t, `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -1071,6 +1073,7 @@ func TestASharedServerWhoseKeyDoesNotResolveIsNotStartedUntilItDoes(t *testing.T
 	company := specCompany(t, `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -1150,6 +1153,7 @@ func TestABoxServerNothingWillSupplyIsAWarningAndAnUnknownOneIsSaid(t *testing.T
 	c := specCompany(t, `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -1183,6 +1187,7 @@ func TestABoxIsGivenAServerByTheRuleItsOwnChildIsStartedBy(t *testing.T) {
 	company := specCompany(t, `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5

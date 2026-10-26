@@ -81,8 +81,8 @@ type TurnRef struct {
 	// ([ConversationRef.Best]). See [PendingRun].
 	//
 	// NAMED AS [turnctx.Turn] NAMES THEM, field for field, because that is
-	// where both values come from and the two launch sites copy them across
-	// one after the other. They were ConversationKey and
+	// where both values come from and the launch copies them across one
+	// after the other. They were ConversationKey and
 	// ConversationIdentity here, holding the partition and the conversation
 	// respectively — so each assignment read as its own opposite and a
 	// swapped pair looked exactly like a correct one. [PendingRun] spells
@@ -115,9 +115,14 @@ type TurnRef struct {
 	// "" for none — what a question addressed to
 	// "requester" is put to. See [PendingRun.Requester].
 	Requester string
+
+	// Deadline is when the turn's wall-clock cap ends, zero for none —
+	// written onto the row so the poll can end a run that outlasts it. See
+	// [PendingRun.Deadline].
+	Deadline time.Time
 }
 
-// LaunchRequest is everything one detached coding run needs.
+// LaunchRequest is everything one executor run needs.
 //
 // TWO TEXTS, KEPT APART to the end: what the coding agent is asked to do
 // (Brief) and how it is to work (System). The runner hands the first to its
@@ -128,41 +133,33 @@ type TurnRef struct {
 type LaunchRequest struct {
 	Turn TurnRef
 
-	// System is the run's own standing instructions, empty for none. An
-	// agent-mode executor's is the seat's system prompt; a run_sandbox job
-	// has none of its own, its executor having written everything it means
-	// into the Brief. It is FRAMED as the brief is: what the box provides,
-	// and how to ask a person, follow it ([buildSystem]).
+	// System is the run's own standing instructions: the seat's executor
+	// prompt. It is FRAMED as the brief is: what the box provides, and how
+	// to ask a person, follow it ([buildSystem]).
 	System string
 
-	// Brief is the task: an agent-mode executor's turn's ask, or the
-	// executor's own description of the code task.
+	// Brief is the task: the turn's ask, as the executor's prompt renders
+	// it, and the whole of what the CLI is prompted with.
 	Brief string
-
-	// Wider is the goal the Brief serves, framed after it ([buildBrief]): a
-	// run_sandbox job's turn task, of which its executor's brief is one
-	// step. Empty for an agent-mode executor, whose Brief IS the turn's ask
-	// — its task again under a second heading was paid for on every launch,
-	// and read as a goal beyond the one it was given.
-	Wider string
 
 	// Task is the ask the suspended turn was working on, carried onto the
 	// row so a resume has the brief when the trigger is long gone.
 	Task string
 
 	// Label is what a person sees the run named by — on the running-runs
-	// panel, live and after a restart alike ([LaunchRequest.label]). Empty
-	// takes the brief's first line, which for a run_sandbox job is the
-	// concrete code task its executor wrote. An agent-mode executor names
-	// its turn's task: its brief is the turn's whole message, which opens
-	// with a heading rather than with what the run is doing.
+	// panel, live and after a restart alike ([LaunchRequest.label]). The
+	// launch names its turn's task: the brief is the turn's whole message,
+	// which opens with a heading rather than with what the run is doing.
+	// Empty takes the brief's first line, for a turn whose task is empty.
 	Label string
 
-	// Ask is the addendum telling the coding agent how to stop and ask a
-	// person — the ask shim's usage, with the names it may address. The
-	// ENGINE composes it, because the names are the chart's and this
-	// package holds none; empty adds nothing. A standing instruction, so it
-	// rides System's channel ([buildSystem]).
+	// Ask is the addendum telling the coding agent how to get a person's
+	// answer — asked with its tools when it can go on without it, or parked
+	// with the ask shim when it cannot — with the names it may address. The
+	// ENGINE composes it, because the tools and the names are the seat's and
+	// the chart's and this package holds neither; empty adds nothing, and
+	// leaves a run that has the shim in its box and no way to know it. A
+	// standing instruction, so it rides System's channel ([buildSystem]).
 	Ask string
 
 	Spec       Spec
@@ -173,15 +170,40 @@ type LaunchRequest struct {
 	// Empty names none, and the CLI chooses its own.
 	Model string
 
-	// ReuseBox is a box this turn already has, paused from an earlier
-	// run_sandbox call. Reattaching keeps the checkout; an empty value
-	// provisions a fresh box, and the work re-seeds from the pushed branch.
-	ReuseBox string
+	// ProviderKey is the providers.llm entry the run was launched on: the
+	// member of the seat's executor chain that took it, which is not always
+	// the chain's head. Written onto the job's record ([LaunchRecord]) so
+	// the run's phase record and the resumed executor's are charged to the
+	// entry that served them, on whichever node collects the run.
+	ProviderKey string
+
+	// Continue is set when this job CONTINUES the job before it, which
+	// parked on a person's question that has now been answered — and so is
+	// the same round of the turn, carried on rather than begun again. Nil
+	// for every other launch.
+	//
+	// The job continues the asking job's own CLI session where it runs in
+	// that job's box — the session lives there — with Continue.Brief, the
+	// answer, as its next prompt ([RunRequest.ResumeSession]). Where it
+	// does not — the box was reclaimed while the question waited, or this
+	// launch runs another CLI or cell — it starts fresh with Brief, which
+	// then carries the question, the answer and the pushed branch; the
+	// decision is the launch's, made once it knows which box it has
+	// ([Coordinator.acquire]). And either way the row keeps the round's
+	// bridged calls: the ones made before the question are this round's
+	// too ([PendingRun.Continues]).
+	Continue *Continuation
+
+	// Node is this node's id and BridgeNonce the bridge session the launch
+	// opened for the job, both written onto the row so the node can serve
+	// the job's box again after a restart — see [PendingRun.BridgeNonce].
+	Node        string
+	BridgeNonce string
 
 	// Opened is told the job's name the moment the store has opened it
 	// ([PendingStore.BeginLaunch]) and BEFORE ANY BOX EXISTS, for what must
-	// name the job before its box can act: an agent-mode run's bridge
-	// session, which records every call the box makes under its own job
+	// name the job before its box can act: the run's bridge session, which
+	// records every call the box makes under its own job
 	// ([BridgeAppend.Launch]). Learned any later — from the row, say, on the
 	// session's first append — the name would be whichever job the row held
 	// by then, which for a call that outlived its job is the next one. Nil
@@ -192,12 +214,27 @@ type LaunchRequest struct {
 	Now func() time.Time
 }
 
+// Continuation is how a job continues the asking job before it — see
+// [LaunchRequest.Continue].
+type Continuation struct {
+	// SessionID is the asking job's CLI session ([PendingRun.SessionID]).
+	// Empty where its CLI named none, which continues nothing: the job
+	// starts fresh with the launch's Brief.
+	SessionID string
+	// Brief is the prompt the continued session is given: the answer, and
+	// what to do with it.
+	Brief string
+}
+
 // LaunchResult reports what a launch produced.
 type LaunchResult struct {
 	SandboxID   string
 	CommandID   string
 	CodingAgent string
-	Reused      bool
+
+	// Reused is whether the job continues in the box the turn's previous
+	// job used, rather than in a fresh one — see [PriorBox.ContinuesIn].
+	Reused bool
 }
 
 // Launch provisions a box, starts the coding agent detached, and persists the
@@ -248,6 +285,13 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	if strings.TrimSpace(req.Brief) == "" {
 		return LaunchResult{}, fmt.Errorf("sandbox: a launch needs a brief")
 	}
+	// THE RUNNER IS THE LAUNCH'S OWN, never a default: it is the CLI of the
+	// entry whose login and model the run carries, and a box running any
+	// other CLI could read neither. Refused before the row, so a request
+	// built without one costs nothing.
+	if req.Spec.CodingAgent == "" {
+		return LaunchResult{}, fmt.Errorf("sandbox: a launch needs the coding agent it runs")
+	}
 	// THE SEAT'S LEASE, which the row is stamped with and every write below
 	// carries — see [CoordinatorOptions.Lease]. A seat this node does not
 	// hold launches nothing: the turn asking is one its lease no longer
@@ -287,9 +331,17 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// Who asked, for the park that resolves a question's audience:
 		// that frame sees no trigger.
 		Requester: req.Turn.Requester,
-		// The model the run's phase record is filed under; the store keys
-		// the rest of that record on the launch it mints.
-		Launch:    LaunchRecord{Model: req.Model},
+		// The turn's cap, for the poll — see [PendingRun.Deadline].
+		Deadline: req.Turn.Deadline,
+		// Who serves the job's box its tools, and under which session —
+		// see [PendingRun.BridgeNonce].
+		LaunchNode: req.Node, BridgeNonce: req.BridgeNonce,
+		// The round carried on, whose earlier calls the row keeps — see
+		// [PendingRun.Continues].
+		Continues: req.Continue != nil,
+		// The model and the entry the run's phase record is filed under;
+		// the store keys the rest of that record on the launch it mints.
+		Launch:    LaunchRecord{Model: req.Model, ProviderKey: req.ProviderKey},
 		CreatedAt: now(),
 	}, fence)
 	if err != nil {
@@ -305,7 +357,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		req.Opened(opened.LaunchID)
 	}
 
-	box, runner, reused, err := acquire(ctx, m, req)
+	box, runner, reused, err := c.acquire(ctx, m, req, opened.Prior)
 	if err != nil {
 		// The row is open and this launch is over. Every failure past this
 		// point closes it: a run left LAUNCHING is polled by nothing and
@@ -315,19 +367,29 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		return LaunchResult{}, err
 	}
 
-	// Attached before the job starts, for the reason above.
+	// Attached before the job starts, for the reason above — WITH ITS CELL,
+	// in the same write: a relaunch may run in another cell than the job
+	// before it, and the row is how every later reader reaches the box.
 	if err = store.AttachSandbox(ctx, req.Turn.TurnID, BoxRef{
-		SandboxID: box.ID(), CodingAgent: req.Spec.CodingAgent,
-		PauseTTLSec: req.Spec.PauseTTLSec,
+		SandboxID: box.ID(), Placement: string(req.Spec.Placement),
+		CodingAgent: req.Spec.CodingAgent, PauseTTLSec: req.Spec.PauseTTLSec,
 	}, fence); err != nil {
 		c.abandon(ctx, m, req, fence, box.ID())
 		return LaunchResult{}, fmt.Errorf("sandbox: attaching the box: %w", err)
 	}
 
+	// THE ASKING JOB'S SESSION, CONTINUED, only where this job runs in the
+	// box that session lives in; anywhere else the job starts fresh, told
+	// the question and the answer in its brief ([LaunchRequest.Continue]).
+	brief, session := req.Brief, ""
+	if continued := req.Continue; continued != nil && reused && continued.SessionID != "" {
+		brief, session = continued.Brief, continued.SessionID
+	}
 	handle, err := runner.Start(ctx, box, RunRequest{
-		System: buildSystem(req),
-		Brief:  buildBrief(req),
-		Env:    withTelemetry(m, req),
+		System:        buildSystem(req),
+		Brief:         brief,
+		ResumeSession: session,
+		Env:           withTelemetry(m, req),
 		// FROM THE SPEC, which is where the provider default and the
 		// seat's override have already been reconciled. A Limits the
 		// caller passed alongside would be a second answer to the same
@@ -347,6 +409,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// completion marker nothing is ever going to write.
 	if err := store.AttachSandbox(ctx, req.Turn.TurnID, BoxRef{
 		SandboxID: box.ID(), CommandID: handle.CommandID,
+		Placement:   string(req.Spec.Placement),
 		CodingAgent: req.Spec.CodingAgent, SessionID: handle.SessionID,
 		PauseTTLSec: req.Spec.PauseTTLSec,
 	}, fence); err != nil {
@@ -364,6 +427,8 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		Agent: req.Turn.AgentID, AgentHandle: req.Turn.AgentHandle,
 		RoleName: req.Turn.Role, TurnID: req.Turn.TurnID, WorkKey: req.Turn.WorkKey,
 		SandboxID: box.ID(), CodingAgent: req.Spec.CodingAgent,
+		// THE MEMBER THAT TOOK IT — see [types.SandboxRunStarted.ProviderKey].
+		ProviderKey: req.ProviderKey, Model: req.Model,
 		// THE IDENTITY on the announcement: this event is read for
 		// display, and what a person means by "which conversation is
 		// this run for" is the durable thread rather than the batch the
@@ -398,7 +463,8 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	log.InfoContext(ctx, "sandbox_run_started",
 		"turn_id", req.Turn.TurnID, "agent", req.Turn.AgentHandle,
 		"sandbox_id", box.ID(), "placement", string(req.Spec.Placement),
-		"coding_agent", req.Spec.CodingAgent, "reused", reused)
+		"coding_agent", req.Spec.CodingAgent, "provider_key", req.ProviderKey,
+		"reused", reused, "continues_session", session != "")
 
 	return LaunchResult{
 		SandboxID: box.ID(), CommandID: handle.CommandID,
@@ -406,27 +472,87 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	}, nil
 }
 
-// acquire reattaches to this turn's existing box, or provisions a new one.
+// acquire is the box a launch runs its job in: the turn's previous box where
+// the new job may continue in it, else a fresh one — and never a fresh one
+// while the previous box is still unaccounted for.
 //
-// Reuse keeps the CHECKOUT, which is the expensive half of a coding run: a
-// second run_sandbox call in one turn continues where the first stopped rather
-// than re-cloning. A reattach that fails falls through to a fresh box rather
-// than failing the launch — the box is gone, which is exactly the case the
-// pushed branch exists for.
-func acquire(ctx context.Context, m *Manager, req LaunchRequest) (Sandbox, Runner, bool, error) {
-	if req.ReuseBox != "" {
-		box, runner, err := m.Reconnect(ctx, req.Spec.Placement, req.ReuseBox, req.Spec.CodingAgent)
-		if err == nil {
-			return box, runner, true, nil
+// CONTINUING KEEPS THE CHECKOUT, which is the expensive half of a run: a turn
+// its reviewer sent back relaunches its executor on the same work, and a job
+// that continues where the last one stopped need not clone, install and set up
+// again. Only the same CLI in the same cell, once the last job is over
+// ([PriorBox.ContinuesIn]).
+//
+// EVERY OTHER PRIOR BOX IS RECLAIMED HERE, THROUGH ITS OWN CELL, before the
+// fresh box exists. The row is about to name the new box instead — the attach
+// that follows overwrites the reference — and nothing else would ever name the
+// old one again: the turn's settle reclaims the box the row names, and the
+// pause reaper the box a row records as paused. A relaunch that provisioned
+// beside it left a paused box, a stopped process tree or a billed snapshot for
+// every send-back of a turn, reclaimed by nobody. Its own cell, because it may
+// not be this launch's: a fallback onto a member with another run_in moves the
+// run, and a box asked for through the wrong backend is a box that "vanished".
+//
+// A box that cannot be reattached is reclaimed too, then replaced: the work
+// re-seeds from the pushed branch, which is the case that branch exists for,
+// and a reattach that failed for a moment must not leave a live box behind it.
+func (c *Coordinator) acquire(ctx context.Context, m *Manager, req LaunchRequest, prior PriorBox) (Sandbox, Runner, bool, error) {
+	if prior.SandboxID != "" {
+		if prior.ContinuesIn(req.Spec) {
+			box, runner, err := m.Reconnect(ctx, req.Spec.Placement, prior.SandboxID, req.Spec.CodingAgent)
+			if err == nil {
+				return box, runner, true, nil
+			}
+			log.WarnContext(ctx, "sandbox_reuse_failed",
+				"turn_id", req.Turn.TurnID, "sandbox_id", prior.SandboxID, "error", err.Error(),
+				"detail", "the turn's previous box could not be reattached; it is reclaimed "+
+					"and the job starts in a fresh one, from the pushed branch")
 		}
-		log.WarnContext(ctx, "sandbox_reuse_failed",
-			"turn_id", req.Turn.TurnID, "sandbox_id", req.ReuseBox, "error", err.Error())
+		c.reclaimPrior(ctx, m, req, prior)
 	}
 	box, runner, err := m.Acquire(ctx, req.Spec, req.Setup)
 	if err != nil {
 		return nil, nil, false, err
 	}
 	return box, runner, false, nil
+}
+
+// reclaimPrior kills the turn's previous box through the cell that holds it.
+//
+// THROUGH THE COORDINATOR'S CATALOGUE FIRST, then the launch's. The launch's
+// is the epoch its turn pinned, which configures the cells a NEW box may go
+// to; the coordinator's is the newest one, carrying every cell a box already
+// out may still be in ([Coordinator.SetManager]) — a cell a later revision
+// dropped included, which is exactly where a run that is moving cells may have
+// left its last box.
+//
+// BEST EFFORT, and the launch goes ahead whatever it answers: a kill that
+// failed leaves the box to its own TTL and the orphan reaper, which is what any
+// unreclaimable box gets, and refusing the launch over it would cost the turn
+// as well as the box. Under a context of its own, for the reason every
+// reclaim takes one ([Coordinator.abandon]).
+func (c *Coordinator) reclaimPrior(ctx context.Context, m *Manager, req LaunchRequest, prior PriorBox) {
+	killCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
+	defer cancel()
+	provider, err := c.mgr().Provider(Placement(prior.Placement))
+	if err != nil {
+		provider, err = m.Provider(Placement(prior.Placement))
+	}
+	if err != nil {
+		log.WarnContext(ctx, "sandbox_prior_reclaim_no_backend",
+			"turn_id", req.Turn.TurnID, "sandbox_id", prior.SandboxID,
+			"placement", prior.Placement, "error", err.Error())
+		return
+	}
+	if err := provider.Kill(killCtx, prior.SandboxID); err != nil {
+		log.WarnContext(ctx, "sandbox_prior_reclaim_failed",
+			"turn_id", req.Turn.TurnID, "sandbox_id", prior.SandboxID,
+			"placement", prior.Placement, "error", err.Error())
+		return
+	}
+	log.InfoContext(ctx, "sandbox_prior_reclaimed",
+		"turn_id", req.Turn.TurnID, "sandbox_id", prior.SandboxID,
+		"placement", prior.Placement, "coding_agent", prior.CodingAgent,
+		"next_placement", string(req.Spec.Placement), "next_coding_agent", req.Spec.CodingAgent)
 }
 
 // abandon closes out a launch that could not finish: the box is reclaimed, then
@@ -510,9 +636,8 @@ func (r LaunchRequest) label() string {
 // a process that learns of the run from the record after a restart names it as
 // the announcement did, with no second rule of its own.
 //
-// The first line because the brief opens with the concrete task the executor
-// asked for (see [buildBrief]) and the rest is the goal it serves. Never cut
-// to a width: it used to be held to 120 bytes and marked, which put a
+// The first line because that is where a brief states what it is about. Never
+// cut to a width: it used to be held to 120 bytes and marked, which put a
 // sentence's first half on the run's page as its title — and a row too narrow
 // for a label is the renderer's to elide, which the dashboard's rows already
 // do, with the whole line still there to read.
@@ -521,45 +646,23 @@ func summarise(brief string) string {
 	return strings.TrimSpace(line)
 }
 
-// buildBrief assembles what the coding agent is asked to do: the prompt its
-// CLI runs.
-//
-// TWO PARTS, in the order an engineer reads them: the concrete task the
-// executor asked for, then the wider goal it serves, where it has one
-// ([LaunchRequest.Wider]). Nothing standing is here
-// — what the box provides and how to ask a person are instructions for the
-// whole run rather than part of this request, and they ride the system
-// prompt's channel ([buildSystem]).
-//
-// There is no success-criteria section any more. It came from the planning
-// phase's declared criteria, and with one phase deciding and acting there is
-// no separate plan to declare them: what "done" means is the executor's own
-// brief, written by the frame that will read the answer.
-func buildBrief(req LaunchRequest) string {
-	var b strings.Builder
-	b.WriteString(req.Brief)
-	if req.Wider != "" && req.Wider != req.Brief {
-		b.WriteString("\n\n## The wider task\n")
-		b.WriteString(req.Wider)
-	}
-	return b.String()
-}
-
 // buildSystem assembles the run's standing instructions: what its CLI adds to
 // its own system prompt ([RunRequest.System]).
 //
 // THREE PARTS, each present only where it says something: the run's own
-// instructions (an agent-mode executor's seat prompt), what the environment
-// already provides, and how to stop and ask a person. The environment is the
+// instructions (the seat's executor prompt), what the environment already
+// provides, and how to stop and ask a person. The brief is not among them:
+// what the box provides and how to ask a person hold for the whole run rather
+// than being part of its request, which is what a system prompt is for. The environment is the
 // setup steps' own briefs — the mechanism and the hint together, so the agent
 // does not spend rounds rediscovering that git auth is already wired — and,
 // like the ask, it holds for every round of the run, which is what a system
 // prompt is for. The runner adds the last standing instruction, the report
 // it must write, because only it knows the box's path for it.
 //
-// THE RUN'S OWN TEXT FIRST, the framing after it: for an agent-mode executor
-// that text is who the model is and what it answers for, and the box and the
-// ask shim are details of where it is working.
+// THE RUN'S OWN TEXT FIRST, the framing after it: that text is who the model is
+// and what it answers for, and the box and the ask shim are details of where
+// it is working.
 func buildSystem(req LaunchRequest) string {
 	names := slices.Collect(maps.Keys(req.MCPServers))
 	own := strings.TrimSpace(req.System)
@@ -574,16 +677,15 @@ func buildSystem(req LaunchRequest) string {
 	return strings.Join(slices.DeleteFunc(parts, func(p string) bool { return p == "" }), "\n\n")
 }
 
-// agentRunNote opens a run's own instructions — an agent-mode executor's seat
-// prompt — where they follow the coding CLI's system prompt.
+// agentRunNote opens a run's own instructions — the seat's executor prompt —
+// where they follow the coding CLI's system prompt.
 //
 // The vendor's prompt says what the model is, and says it first: Claude Code
 // opens with "You are Claude Code, Anthropic's official CLI for Claude", and
 // no flag removes it. A seat prompt that only implies who it is loses to that,
-// so this says outright which of the two prompts is the role. The text-mode
-// backend opens its calls with the same note
-// (internal/providers/llm/cliagent harnessNote), less the sentence about
-// Crewlet's JSON envelope: here the run's tools are its own and the seat's,
+// so this says outright which of the two prompts is the role. The engine's own
+// text calls open with the same note (internal/providers/llm/cliagent
+// harnessNote), less the sentence about Crewlet's JSON envelope: here the run's tools are its own and the seat's,
 // called the way its CLI calls any tool. Constant, so it stays part of the
 // prefix a vendor caches.
 const agentRunNote = "You are running inside a command-line coding tool as one seat of a " +

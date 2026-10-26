@@ -31,9 +31,17 @@ type SandboxRunStarted struct {
 	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017. Carried so the
 	// work-key filter answers with a run's WHOLE record rather than only
 	// its phases.
-	WorkKey         string `json:"work_key,omitempty"`
-	SandboxID       string `json:"sandbox_id"`
-	CodingAgent     string `json:"coding_agent"`
+	WorkKey     string `json:"work_key,omitempty"`
+	SandboxID   string `json:"sandbox_id"`
+	CodingAgent string `json:"coding_agent"`
+	// ProviderKey is the providers.llm entry the run was launched on, and
+	// Model the model it runs under: the member of the seat's executor
+	// chain the launch picked, which a fallback makes other than the chain's
+	// head. On the announcement because a running run is drawn from it, and
+	// which entry's plan a job is spending is what a person watching it asks
+	// — the run's own record says so only once it is collected.
+	ProviderKey     string `json:"provider_key,omitempty"`
+	Model           string `json:"model,omitempty"`
 	ConversationKey string `json:"conversation_key"`
 	// WorkItem is the item the launching turn is charged to, absent when
 	// it is on nothing. The run is part of that turn, so a running-runs
@@ -217,12 +225,12 @@ type SandboxRunFailed struct {
 // failed" would chase the wrong one.
 const (
 	// SandboxFailureCollect — the job finished but its box could not be
-	// read back, so there is no result to splice in.
+	// read back, so there is no result for its turn to judge.
 	SandboxFailureCollect = "collect_unreachable"
 
-	// SandboxFailureNoConversation — the row carried no suspended Execute
-	// conversation, so there is nothing to resume into.
-	SandboxFailureNoConversation = "no_execute_state"
+	// SandboxFailureNoExecuteState — the row carried none of its turn's
+	// parked state, so there is no turn to resume into.
+	SandboxFailureNoExecuteState = "no_execute_state"
 
 	// SandboxFailureAbandoned — a tail the previous owner of this seat left
 	// mid-flight, found by the recovery pass. Nothing will ever pick it up.
@@ -335,8 +343,8 @@ type SandboxAnswerGiven struct {
 	// identity.
 	AgentHandle string `json:"agent_handle"`
 
-	// Answer is the person's reply, verbatim. Redacted where it is spliced
-	// into the suspended conversation, like a chat reply.
+	// Answer is the person's reply, verbatim. Redacted where it is handed
+	// to the run it carries on, like a chat reply.
 	Answer string `json:"answer"`
 
 	// AnsweredBy, AnsweredByKind and OperatorID are who answered, in the

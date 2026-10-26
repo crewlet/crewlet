@@ -1035,10 +1035,12 @@ What to point where:
   [probes](../reference/api-endpoints.md#probes-on-a-node-without-ingress) on
   `api.port` and one route beside them, its seats' tool bridge, and with
   `api.public` set it binds the public port for the bridge alone — so one
-  Tier A file still serves every role, and every node's
-  `CREWLET_MCP_BRIDGE_URL` names its own public port. Its `api.port: 0` (or
-  `-api-port 0`) is still the hard off switch: it binds nothing, the public
-  port included, whatever the shared file says about `api.public`.
+  Tier A file still serves every role, a direct box dials that public port on
+  loopback, and every node's `CREWLET_MCP_BRIDGE_URL` (for a container or an
+  E2B box) names its own public port. Its `api.port: 0` (or `-api-port 0`) is
+  still the hard off switch: it binds nothing, the public port included,
+  whatever the shared file says about `api.public` — and so serves no bridge
+  and launches no executor.
 
 `api.host` may stay `0.0.0.0` where the network keeps `api.port` private — a
 container whose public Service or load balancer forwards only `api.public.port`
@@ -1084,21 +1086,25 @@ host two listeners cannot share a port, and only the ingress node's carries
 the API — the other's carries its [probes](#probes) and nothing else:
 
 ```bash
-# Terminal 1: the agents and the fleet duties — /health and /ready only
+# Terminal 1: the agents and the fleet duties — /health, /ready and the seats' tool bridge
 crewlet run -config crewlet.yaml -roles data,seats,workers -api-port 8001
 
 # Terminal 2: the webhook receiver and the dashboard
 crewlet run -config crewlet.yaml -roles data,ingress -api-host 0.0.0.0 -api-port 8000
 ```
 
-`-api-port 0` on the first binds nothing at all, which is fine on a host where
-nothing probes it.
+The first node needs its port: every agent seat's executor is its coding CLI's
+run in a box, and the box calls the seat's tools back through the node's
+[tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box),
+served on that listener. `-api-port 0` there binds nothing at all, so every
+executor launch on it is refused, naming `api.port` — and the node warns so at
+start.
 
 Give each node a distinct `node.id` (or `CREWLET_NODE_ID`) — two nodes sharing an id miscount the fleet. See [Running a Fleet](fleet.md).
 
-If any seat runs in [agent mode](../concepts/llm-backends.md#agent-mode), the seats node needs its port, and its `CREWLET_MCP_BRIDGE_URL` set to that port as a sandbox reaches it. Without the `ingress` role that listener serves the `/mcp/{token}` tool bridge beside the probes and nothing else (`api_probes_listening … tool_bridge=true`); with `-api-port 0` the node refuses every agent-mode launch, naming `api.port`.
+A `direct` box dials that listener on loopback, so the seats node needs nothing else for it. A `container` or `e2b` box cannot reach the host's loopback: for those, set the seats node's `CREWLET_MCP_BRIDGE_URL` to its port as that box reaches it. Without the `ingress` role that listener serves the `/mcp/{token}` tool bridge beside the probes and nothing else (`api_probes_listening … tool_bridge=true`).
 
-**With a [public listener](#exposing-webhooks-without-the-admin-api) on one host,** the two processes would both bind `api.public.port` — the ingress node for its webhooks, an agent-mode seats node for its bridge — and the second fails at boot. Give each process its own public port through a whole `${VAR}`, which a Tier A number accepts:
+**With a [public listener](#exposing-webhooks-without-the-admin-api) on one host,** the two processes would both bind `api.public.port` — the ingress node for its webhooks, the seats node for its bridge — and the second fails at boot. Give each process its own public port through a whole `${VAR}`, which a Tier A number accepts:
 
 ```yaml
 api:
@@ -1112,7 +1118,7 @@ CREWLET_PUBLIC_PORT=8443 crewlet run -config crewlet.yaml -roles data,ingress -a
 CREWLET_PUBLIC_PORT=8444 crewlet run -config crewlet.yaml -roles data,seats,workers
 ```
 
-The seats node binds only its public port, for its bridge; one started with `-api-port 0` binds nothing, so it needs no public port of its own.
+The seats node binds only its public port, for its bridge, and a direct box dials it there; one started with `-api-port 0` binds nothing — no public port of its own, and no bridge, so it launches no executor.
 
 `crewlet migrate` is idempotent and safe to re-run. Each node also
 auto-migrates its own store file on boot, and two nodes starting together
@@ -1154,8 +1160,7 @@ traffic:
 | A node without it | The same, with the node's half of the health envelope | Is it doing its work: also `503` while its broker link is down, it does not hold its presence lease, or — running seats — it has not been admitted to claim them |
 
 A node without `ingress` serves **nothing else** on that port — no API, no
-dashboard, no webhook — and a seats node's agent-mode tool bridge only when
-`CREWLET_MCP_BRIDGE_URL` is set. The reasons, their precedence and both bodies
+dashboard, no webhook — and, on a node that runs seats, their tool bridge. The reasons, their precedence and both bodies
 are in [Probes on a node without ingress](../reference/api-endpoints.md#probes-on-a-node-without-ingress).
 
 **While a node starts**, both kinds answer their probes the same way, because

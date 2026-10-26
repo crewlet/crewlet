@@ -178,7 +178,7 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	after.Removed = &worklet.Tombstone{
 		By: actor.Handle, Kind: actor.Kind, At: t.deps.now(),
 	}
-	opID := opIDFor(actor, t.Name(), "remove", before.Task.ID, args)
+	opID := opIDFor(ctx, actor, t.Name(), "remove", before.Task.ID, args)
 	got, err := t.deps.TrashWriter(actor).RemoveTask(ctx, opID, before.Task.ID,
 		before.Task.Project, subtree,
 		worklet.Wake{
@@ -296,7 +296,7 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 
 	after := before.Task
 	after.Removed = nil
-	opID := opIDFor(actor, t.Name(), "restore", before.Task.ID, args)
+	opID := opIDFor(ctx, actor, t.Name(), "restore", before.Task.ID, args)
 	got, err := t.deps.TrashWriter(actor).RestoreTask(ctx, opID, before.Task.ID,
 		before.Task.Project, alone,
 		worklet.Wake{

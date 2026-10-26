@@ -560,7 +560,9 @@ func (c *Company) ReferenceWarnings() []Warning {
 // company its agents run alone and a surprise for one somebody meant to sign
 // in to.
 //
-// So is a token budget a seat's ceilings leave idle ([Company.budgetWarnings]).
+// So is a seat whose executor chain holds an entry that can never run the
+// executor beside one that can ([Company.executorWarnings]), and a token
+// budget a seat's ceilings leave idle ([Company.budgetWarnings]).
 //
 // EMPTY, NEVER NIL, for the reason [Company.ReferenceWarnings] gives.
 func (c *Company) AdvisoryWarnings() []Warning {
@@ -580,6 +582,7 @@ func (c *Company) AdvisoryWarnings() []Warning {
 	}
 	out = append(out, c.peoplelessWarnings()...)
 	out = append(out, c.unreachableWarnings()...)
+	out = append(out, c.executorWarnings()...)
 	return append(out, c.budgetWarnings()...)
 }
 
@@ -796,12 +799,34 @@ func (b *Bootstrap) Warnings() []Warning {
 	// the port at run time and no file can show it: a file that leaves the
 	// port to the flag is valid, and only this file's half of the pair is
 	// visible here.
-	if b.Node.Roles != nil && b.API.Port == 0 && b.Profile("").RunsIngress() {
-		out = append(out, advisory(field("api.port"), fmt.Sprintf(
-			"is 0, so this node binds no listener although node.roles names %q: "+
-				"no webhook reaches it, it serves no dashboard and no REST API, "+
-				"and no orchestrator can probe it. Set a port, or drop %q",
-			placement.RoleIngress, placement.RoleIngress)))
+	//
+	// THE SEATS ROLE WITH NO LISTENER is the same posture with a different
+	// loss: every seat's executor is its coding CLI's run in a box, and the
+	// box calls the seat's tools through this node's tool bridge, which is
+	// served on this listener and nowhere else (a session lives in the
+	// process that opened it). A seats node that binds nothing therefore
+	// refuses every executor launch, which is every agent seat's every turn
+	// it claims. It was a satellite an operator could choose while an
+	// executor could run without a box; it no longer is.
+	if b.Node.Roles != nil && b.API.Port == 0 {
+		profile := b.Profile("")
+		switch {
+		case profile.RunsIngress():
+			out = append(out, advisory(field("api.port"), fmt.Sprintf(
+				"is 0, so this node binds no listener although node.roles names %q: "+
+					"no webhook reaches it, it serves no dashboard and no REST API, "+
+					"and no orchestrator can probe it. Set a port, or drop %q",
+				placement.RoleIngress, placement.RoleIngress)))
+		case profile.RunsSeats():
+			out = append(out, advisory(field("api.port"), fmt.Sprintf(
+				"is 0, so this node binds no listener although node.roles names %q: "+
+					"every agent seat's executor runs in a box that calls the seat's "+
+					"tools through this node's tool bridge, served on this listener, "+
+					"so every executor run this node launches is refused, and no "+
+					"orchestrator can probe it. Set a port (a private address keeps "+
+					"it unreachable from outside), or drop %q",
+				placement.RoleSeats, placement.RoleSeats)))
+		}
 	}
 
 	out = append(out, b.API.Auth.writerWarnings(field("api.auth"))...)

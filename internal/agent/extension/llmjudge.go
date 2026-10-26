@@ -45,8 +45,8 @@ const (
 	// The judge's question is "is this phase repeating itself?", which is
 	// answered by the RECENT calls: a phase thrashing does it in its last
 	// handful of rounds, and the early ones are the part that worked. The
-	// whole log of a 20-round Execute would also be the largest thing in a
-	// prompt whose point is being cheap.
+	// whole log of a phase that ran its full budget would also be the
+	// largest thing in a prompt whose point is being cheap.
 	judgeCallsShown = 12
 
 	// JudgeTaskBudget is the size the task is REWRITTEN to past it — never

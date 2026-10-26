@@ -236,7 +236,7 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		expected := uint64(version)
 		ifMatch = &expected
 	}
-	opID := opIDFor(actor, t.Name(), "prio", handle, args)
+	opID := opIDFor(ctx, actor, t.Name(), "prio", handle, args)
 	result, err := writer.WritePriorities(ctx, opID, handle, resolved, ifMatch,
 		authority)
 	if errors.Is(err, worklet.ErrStaleVersion) {
@@ -345,7 +345,7 @@ func (d WorkDeps) writePins(ctx context.Context, actor Actor, writer PersonWrite
 	if bad != "" {
 		return failed(bad)
 	}
-	opID := opIDFor(actor, worklet.SetPinsTool, "pins", handle, args)
+	opID := opIDFor(ctx, actor, worklet.SetPinsTool, "pins", handle, args)
 	result, err := writer.WritePins(ctx, opID, handle,
 		worklet.PinGesture{Views: views, Favorites: favorites}, authority)
 	if err != nil {
@@ -470,7 +470,7 @@ func (d WorkDeps) writeInbox(ctx context.Context, actor Actor, writer PersonWrit
 	if bad != "" {
 		return failed(bad)
 	}
-	opID := opIDFor(actor, worklet.MarkInboxTool, "inbox", handle, args)
+	opID := opIDFor(ctx, actor, worklet.MarkInboxTool, "inbox", handle, args)
 	result, err := writer.MarkInbox(ctx, opID, handle, gesture, authority)
 	if err != nil {
 		return writeFailure(ctx, actor, worklet.MarkInboxTool, err)

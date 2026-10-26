@@ -115,7 +115,7 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 		// its events, since each node's store holds only what it
 		// published. Never null, so "ran nowhere this read could see" is
 		// an empty list rather than a missing key.
-		"nodes": nonNilStrings(detail.Nodes),
+		"nodes": nonNil(detail.Nodes),
 	}, nil
 }
 

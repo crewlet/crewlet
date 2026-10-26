@@ -135,7 +135,7 @@ flowchart TD
         S3["3. Response: content + tool_calls [name, arguments]"]
         S4["4. Execute LOCALLY"]
         S5["5. Append tool results to message history"]
-        S6["6. Loop back to step 2 (up to max_tool_rounds)"]
+        S6["6. Loop back to step 2 (up to the phase's round cap)"]
         MCP["Per-role MCP tool?<br/>forward to MCP server<br/>(role-specific credentials, checked first)"]
         GLOBAL["Global tool?<br/>builtin function or global MCP"]
         S1 --> S2
