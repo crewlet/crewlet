@@ -336,9 +336,15 @@ type paritySources struct {
 // parityWorld builds the sources over one estate on a temporary path.
 func parityWorld(t *testing.T) paritySources {
 	t.Helper()
+	return parityWorldOf(t, rosterCompany)
+}
+
+// parityWorldOf is [parityWorld] running the company source describes.
+func parityWorldOf(t *testing.T, source string) paritySources {
+	t.Helper()
 	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "parity.db"), store.Options{}, 1)
 	t.Cleanup(func() { _ = db.Close() })
-	company, err := config.ParseCompany([]byte(rosterCompany))
+	company, err := config.ParseCompany([]byte(source))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
