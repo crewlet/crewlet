@@ -140,7 +140,7 @@ test("a question is sent with its page, streamed, and drawn with every card the 
   });
   mount();
   expect(
-    screen.getByRole("heading", { name: /^Good (morning|afternoon|evening), Ada$/ }),
+    screen.getByRole("heading", { name: /^(Hello|Good (morning|afternoon|evening)), Ada$/ }),
   ).toBeDefined();
 
   const box = screen.getByRole("textbox", { name: "Ask the assistant" });
@@ -261,7 +261,7 @@ test("a model that cannot answer is said above the composer, and Send stays off"
   expect(screen.getByText(SIGNED_OUT.body)).toBeDefined();
   // Not the offline state: the home is drawn and the composer is there.
   expect(
-    screen.getByRole("heading", { name: /^Good (morning|afternoon|evening), Ada$/ }),
+    screen.getByRole("heading", { name: /^(Hello|Good (morning|afternoon|evening)), Ada$/ }),
   ).toBeDefined();
   expect(screen.queryByRole("button", { name: "Model settings" })).toBeNull();
 

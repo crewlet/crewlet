@@ -224,7 +224,7 @@ func createTaskPreview(t Tool) proposal.Previewer {
 		case a.String("ask") != "":
 			note = company.seatName(a.String("ask")) + " is asked the question and owes an answer."
 		case a.String("assignee") != "":
-			note = company.handover(a.String("assignee"), "the new task")
+			note = company.handover(ctx, read, a.String("assignee"), "the new task")
 		}
 		return proposal.Preview{Title: "Create task", Target: a.String("title"), Note: note,
 			ApproveLabel: "Approve and create", Changes: c.rows(), Request: req}, nil
@@ -285,7 +285,7 @@ func updateTaskPreview(t Tool) proposal.Previewer {
 		if to, given := args["assignee"]; given && to != value(doc, "task.assignee") {
 			note = "Nobody is assigned to it any more."
 			if a.String("assignee") != "" {
-				note = company.handover(a.String("assignee"), "the work")
+				note = company.handover(ctx, read, a.String("assignee"), "the work")
 			}
 		}
 		return proposal.Preview{Title: "Update task", Target: key, Note: note,
@@ -317,22 +317,14 @@ func companyOf(ctx context.Context, read proposal.Read) (company, error) {
 		return company{}, fmt.Errorf("%w: the company's clock: %w", ErrPreviewRead, err)
 	}
 	out := company{zone: zone, seats: map[string]seatShown{}}
-	var walk func(node any)
-	walk = func(node any) {
+	walkUnits(doc, func(node any) {
 		roles, _ := cards.Lookup(node, "roles").([]any)
 		for _, r := range roles {
 			if handle := value(r, "handle"); handle != "" {
 				out.seats[handle] = seatShown{name: value(r, "name"), kind: value(r, "kind")}
 			}
 		}
-		for _, key := range []string{"units", "children"} {
-			units, _ := cards.Lookup(node, key).([]any)
-			for _, u := range units {
-				walk(u)
-			}
-		}
-	}
-	walk(doc)
+	})
 	return out, nil
 }
 
@@ -352,18 +344,62 @@ func (c company) seatName(handle string) string {
 	return seat.name + " (" + handle + ")"
 }
 
-// handover is the note a task handed to handle carries: an agent starts on
-// it, and a person is told about it.
-func (c company) handover(handle, what string) string {
+// handover is the note a task handed to handle carries: what happens to the
+// work once the person approves, and nothing the engine cannot stand behind.
+// A person is told about it. An agent is said to pick it up only when its
+// live state, read through the grant as the seat's own screen reads it, says
+// it takes work now; a paused seat, one out of budget, one no node runs or one
+// whose model is down is said to wait, and one whose last turn failed is
+// flagged. A seat whose state could not be read is only said to be assigned.
+//
+// THE PROMISE IS READ, NOT ASSUMED: "starts on the work once this is
+// approved" was once printed for a seat that could not onboard at all.
+func (c company) handover(ctx context.Context, read proposal.Read, handle, what string) string {
 	name := c.seatName(handle)
 	seat, held := c.seats[handle]
+	assigned := name + " is assigned " + what + " once this is approved."
 	switch {
 	case !held:
-		return name + " is assigned " + what + " once this is approved."
+		return assigned
 	case seat.kind == "human":
 		return name + " is notified of " + what + " once this is approved."
 	}
-	return name + " starts on " + what + " once this is approved."
+	doc, err := readGet(ctx, read, "GET /agents/{id}", map[string]string{"id": handle}, seatAlone)
+	if err != nil {
+		return assigned
+	}
+	switch value(doc, "live.activity") {
+	case "stopped":
+		if wait, known := stoppedWaits[value(doc, "live.stopped_reason")]; known {
+			return assigned + " " + name + wait
+		}
+		return assigned + " " + name + " cannot take work right now, so it does not start " +
+			"until it can."
+	case "working", "needs", "idle":
+		if value(doc, "live.last_turn.outcome") == "failed" {
+			return assigned + " Its last turn failed, so check it before relying on it " +
+				"to start."
+		}
+		return assigned + " It picks the work up on its next turn."
+	}
+	return assigned
+}
+
+// seatAlone asks a seat's read for its state without its call history, whose
+// payloads are whole transcripts past what one read holds; a preview reads
+// none of it.
+var seatAlone = url.Values{"history": {"false"}}
+
+// stoppedWaits are what a stopped seat waits for, by the reason its live state
+// gives (internal/api/livestate's StoppedReason), each completing a sentence
+// that starts with the seat's name.
+var stoppedWaits = map[string]string{
+	"paused": " is paused, so it does not start until somebody resumes it.",
+	"budget": " has used its token budget, so it does not start until the budget " +
+		"resets or is raised.",
+	"unplaced": " is not running on any node right now, so it does not start until it is.",
+	"provider": "'s model is unavailable right now, so it does not start until the model " +
+		"is back.",
 }
 
 // resolveDue resolves a call's due date on the company's clock as of now,
@@ -649,7 +685,7 @@ func seatPreview(pause bool) func(t Tool) proposal.Previewer {
 			}
 			a := Args(args)
 			doc, err := readGet(ctx, read, "GET /agents/{id}",
-				map[string]string{"id": a.String("handle")}, nil)
+				map[string]string{"id": a.String("handle")}, seatAlone)
 			if err != nil {
 				return proposal.Preview{}, err
 			}
