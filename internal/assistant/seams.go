@@ -90,7 +90,7 @@ type Records interface {
 	RecordMessage(ctx context.Context, w Write, turn uuid.UUID, m assistantdomain.NewMessage) error
 	RecordStep(ctx context.Context, w Write, turn uuid.UUID, s wire.StepEvent) error
 	RecordCard(ctx context.Context, w Write, turn uuid.UUID, c wire.CardEvent, apps []string) error
-	ParkTurn(ctx context.Context, w Write, turn uuid.UUID, parked []byte) error
+	ParkTurn(ctx context.Context, w Write, turn uuid.UUID, parked []byte, steps int) error
 	ResumeTurn(ctx context.Context, w Write, turn uuid.UUID, node string) error
 	CloseTurn(ctx context.Context, w Write, turn uuid.UUID, end assistantdomain.TurnEnd) error
 	// CreateProposal records a proposal a write's preview became

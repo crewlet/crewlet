@@ -67,6 +67,11 @@ type turn struct {
 	// steps, cards and messages count what the turn has written across its
 	// segments, so a resumed segment's ids continue its first one's.
 	steps, cards, messages int
+	// finished counts the steps that have ENDED, which is what a status
+	// frame's steps_done says. Not the newest step's index: the coding CLI
+	// calls tools in parallel, so steps end out of order, and the index of
+	// the one that ended last counted backwards (2, then 1) on screen.
+	finished int
 	// replies are this segment's answer messages, one per round that wrote
 	// prose, in order; the last may be a round still being written.
 	// narrated is how many of the loop's narrations they hold.
@@ -152,6 +157,7 @@ func (t *turn) stepStart(tool catalog.Tool, args map[string]any, req *wire.StepR
 	t.mu.Lock()
 	t.steps++
 	index := t.steps
+	finished := t.finished
 	parent := t.deep.parent
 	t.mu.Unlock()
 	label := oneLine(redact.Secrets(tool.StepLabel(args)))
@@ -162,7 +168,7 @@ func (t *turn) stepStart(tool catalog.Tool, args map[string]any, req *wire.StepR
 	step.StartedAt = step.started.UTC()
 	t.firstOutput()
 	t.emit(wire.Frame{Kind: wire.EventStatus, Status: &wire.StatusEvent{
-		State: wire.StatusWorking, StepsDone: index - 1}})
+		State: wire.StatusWorking, StepsDone: finished}})
 	ev := step.StepEvent
 	t.emit(wire.Frame{Kind: wire.EventStep, Step: &ev})
 	return step
@@ -178,8 +184,12 @@ func (t *turn) stepEnd(ctx context.Context, step stepClock, state wire.StepState
 	ev.State, ev.Summary, ev.Refusal = state, summary, refusal
 	ev.DurationMS = t.svc.now().Sub(step.started).Milliseconds()
 	t.emit(wire.Frame{Kind: wire.EventStep, Step: &ev})
+	t.mu.Lock()
+	t.finished++
+	finished := t.finished
+	t.mu.Unlock()
 	t.emit(wire.Frame{Kind: wire.EventStatus, Status: &wire.StatusEvent{
-		State: wire.StatusThinking, StepsDone: ev.Index}})
+		State: wire.StatusThinking, StepsDone: finished}})
 	t.record(ctx, "step", func(ctx context.Context, w Write) error {
 		return t.svc.records.RecordStep(ctx, w.Step("step", strconv.Itoa(ev.Index)), t.id, ev)
 	})
@@ -703,7 +713,7 @@ func (t *turn) park(ctx context.Context, res *toolloop.Result) error {
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
 	defer cancel()
-	return t.svc.records.ParkTurn(ctx, t.write().Step("park"), t.id, raw)
+	return t.svc.records.ParkTurn(ctx, t.write().Step("park"), t.id, raw, keep.Steps)
 }
 
 // publishAudit leaves the segment's runtime audit record: who, which steps on

@@ -13,10 +13,12 @@
  * this module only runs its effects: a request, a stream, a floor raised.
  *
  * WHAT A WRITE THE ASSISTANT MADE MOVED reaches every screen: the engine's
- * `context.invalidate` action names the log and the position its write
- * landed at, and the tab's read floors rise to it (`protocol/session.ts`),
- * exactly as a button's own write raises them, so the page under the drawer
- * reads its own change.
+ * `context.invalidate` action names the domain and the position its write
+ * landed at, where its answer named one, and arrives for every write that
+ * landed. The tab's read floor rises to the position, exactly as a button's
+ * own write raises it, and every live read asks again
+ * (`protocol/session.ts`'s EVERY_QUESTION), so the page under the drawer
+ * reads its own change whichever route made it.
  *
  * A PAGE ACTION the stream carries is taken here, once per tab, by the
  * claim, apply and report flow (`pageActions.ts`): this module knows which
@@ -45,7 +47,7 @@ import { assistantEventId, type AssistantNarrowFrame } from "~/protocol/assistan
 import { newActOpID } from "~/protocol/act.ts";
 import { RestError, isAbort } from "~/protocol/rest.ts";
 import { rereadViewer } from "~/lib/viewer.ts";
-import { session as floors, type SessionDomain } from "~/protocol/session.ts";
+import { EVERY_QUESTION, session as floors, type SessionDomain } from "~/protocol/session.ts";
 import { writeFailed } from "~/protocol/writeOutcome.ts";
 import { setAssistantActivity } from "../status.ts";
 import { writeTab } from "../tab.ts";
@@ -161,12 +163,18 @@ function modelFailed(frame: AssistantNarrowFrame): void {
   if (frame.kind === "error" && MODEL_FAILURES.has(frame.error.code)) rereadViewer();
 }
 
-/** Raise the tab's read floors to a write the engine says landed. */
+/**
+ * A write the engine says landed: the tab's read floor raised to it where it
+ * names a domain a read waits on, and every live read asked again.
+ */
 function invalidated(frame: AssistantNarrowFrame): void {
   if (frame.kind !== "action" || frame.action.name !== ASSISTANT_ACTION_CONTEXT_INVALIDATE) return;
   const write = frame.action.invalidate;
-  if (!write || !Object.hasOwn(SESSION_QUERIES, write.domain)) return;
-  floors.written(write.domain as SessionDomain, write.position, []);
+  if (!write) return;
+  const domain = Object.hasOwn(SESSION_QUERIES, write.domain)
+    ? (write.domain as SessionDomain)
+    : null;
+  floors.written(domain, write.position === "" ? null : write.position, [EVERY_QUESTION]);
 }
 
 /** The turns this tab asked, so a page action answering one of them is this tab's to apply. */

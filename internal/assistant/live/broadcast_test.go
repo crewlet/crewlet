@@ -98,6 +98,8 @@ type server struct {
 	mu      sync.Mutex
 	frames  map[uuid.UUID][]wire.Frame
 	stopped []uuid.UUID
+	// ended are the turns whose segment has ended (its done told).
+	ended map[uuid.UUID]bool
 }
 
 func (s *server) ReplayHere(_ context.Context, who, turn uuid.UUID, after uint64) ([]wire.Frame,
@@ -118,7 +120,7 @@ func (s *server) ReplayHere(_ context.Context, who, turn uuid.UUID, after uint64
 			out = append(out, f)
 		}
 	}
-	return out, false, nil
+	return out, s.ended[turn], nil
 }
 
 func (s *server) LastHere(_ context.Context, who, turn uuid.UUID) (uint64, error) {
@@ -449,4 +451,35 @@ func sealWith(t *testing.T, w *signedask.OneWay[Sealed], cipher secrets.Cipher,
 		t.Fatal(err)
 	}
 	return sealed
+}
+
+// A SEGMENT THAT ENDED BEFORE THE STREAM RESUMED IS CAUGHT UP, NOT SERVED
+// EMPTY: a stream following a turn on another node, resumed after the frame
+// that ended its segment (a parked turn reopened from the transcript), answers
+// ErrCaughtUp having written nothing, which the HTTP surface answers 204. A
+// stream resumed inside the segment is served to its end as before.
+//
+// Mutation: return ReachServed and nil for an ended segment with nothing
+// after, and the follower is answered an empty stream it reads as a drop.
+func TestAnEndedSegmentFollowedFromItsEndIsCaughtUp(t *testing.T) {
+	t.Parallel()
+	b := memory.NewBroker()
+	fleet := keysOf(t, "fleet-material", 1)
+	srv := &server{frames: map[uuid.UUID][]wire.Frame{turnB: {frameOf(turnB, 1, wire.EventDelta),
+		frameOf(turnB, 2, wire.EventDone)}}, ended: map[uuid.UUID]bool{turnB: true}}
+	node(t, b, "node-a", fleet, srv)
+	follower, _ := node(t, b, "node-b", fleet, &server{})
+
+	c := &collector{}
+	reach, err := follower.Follow(t.Context(), owner, turnB, "node-a", 2, c)
+	if reach != ReachServed || !errors.Is(err, ErrCaughtUp) || len(c.drawn()) != 0 {
+		t.Fatalf("a follow from the segment's end = %q %v, %d frames; want served, caught up, "+
+			"nothing written", reach, err, len(c.drawn()))
+	}
+	c = &collector{}
+	reach, err = follower.Follow(t.Context(), owner, turnB, "node-a", 1, c)
+	if reach != ReachServed || err != nil || len(c.drawn()) != 1 || c.drawn()[0].Seq != 2 {
+		t.Fatalf("a follow from inside the segment = %q %v %+v; want the done frame alone",
+			reach, err, c.drawn())
+	}
 }
