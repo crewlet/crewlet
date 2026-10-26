@@ -187,8 +187,8 @@ func sweepThrough(ctx context.Context, tx *sql.Tx, repoID string, cutoff int64) 
 	return due[whole-1], whole, true, nil
 }
 
-// retiredCursor is where a page of the retired listing ended: its last row's
-// retired_at, as stored, and its repository.
+// retiredCursor is where a page of the retired listing ended: its last
+// entry's retired_at, as stored, and its repository.
 type retiredCursor struct {
 	at   int64
 	repo string
@@ -196,22 +196,22 @@ type retiredCursor struct {
 
 // retiredQuery asks for one page of the retired listing.
 type retiredQuery struct {
-	// cutoff is now less RetireGrace: a row is listed only once its
+	// cutoff is now less RetireGrace: a retirement is listed only once its
 	// retired_at is at or before it.
 	cutoff time.Time
 
-	// after is the last row of the page before; nil for the first.
+	// after is the last entry of the page before; nil for the first.
 	after *retiredCursor
 
-	// limit is the most rows the page reads.
+	// limit is the most entries — retiring records — the page names.
 	limit int
 }
 
 // retiredPage is one page of the retired listing.
 type retiredPage struct {
-	// repos is the repository of every row the page read, in their order —
-	// one repository as often as it has rows on the page, which the pass
-	// steps once.
+	// repos is the repository of every retiring record the page names, in
+	// their order — a repository once for each of its records on the page,
+	// which the pass steps once.
 	repos []string
 
 	// next is where the next page resumes; nil when this page ended the
@@ -219,18 +219,25 @@ type retiredPage struct {
 	next *retiredCursor
 }
 
-// retiredDue lists one page of the repositories holding retired pack rows
-// past the grace, oldest retirement first, resuming after q.after.
+// retiredDue lists one page of the records whose retired pack rows are past
+// the grace, oldest retirement first, resuming after q.after: the repository
+// of each.
+//
+// ONE ENTRY A RETIRING RECORD, never a row: a record's rows share its broker
+// instant and its repository, so the statement groups them by the pair, in
+// code_packs_retired_due_idx's own order, and answers one row for each. A
+// sweep step removes a record's rows whole, so an entry is at most one step
+// of the pass's and a page is a page of its work — where a page of ROWS was
+// one record's alone once a record retired a page of packs, and every other
+// row of it a repository the pass had already stepped. The keyset on the same
+// pair resumes after the last record a page named.
 //
 // A STALE READ of this node's rows, as the purge listing is: every step
 // decides again in its own snapshot, so a row a sweep removed since the
-// listing is answered there. ONE STATEMENT over code_packs_retired_due_idx,
-// keyset on (retired_at, repo_id) — a retiring record's rows share both, so a
-// page resuming after one skips the rest of that record's rows rather than
-// reading them again.
+// listing is answered there.
 func (r *Reader) retiredDue(ctx context.Context, q retiredQuery) (retiredPage, error) {
 	if q.limit <= 0 {
-		return retiredPage{}, fmt.Errorf("%w: a page of the retired listing reads at least one row", ErrInvalid)
+		return retiredPage{}, fmt.Errorf("%w: a page of the retired listing names at least one record", ErrInvalid)
 	}
 	after := retiredCursor{at: math.MinInt64}
 	if q.after != nil {
@@ -279,11 +286,14 @@ const (
 	retiredOldestSQL = `SELECT retired_position, retired_at FROM code_packs_retired
 		INDEXED BY code_packs_retired_repo_idx WHERE repo_id = ?
 		ORDER BY retired_position, pack_id, part LIMIT ?`
-	// retiredDueSQL is the code-retention pass's listing: the >= beside the OR
-	// is what keeps the index's range seek, which a bare OR of the two terms
-	// would give up (planner.go).
+	// retiredDueSQL is the code-retention pass's listing, one row a retiring
+	// record: grouped by the index's own two columns, so the plan reads the
+	// groups in its order and sorts nothing (plan_test.go holds it to that),
+	// and the >= beside the OR is what keeps the index's range seek, which a
+	// bare OR of the two terms would give up (planner.go).
 	retiredDueSQL = `SELECT repo_id, retired_at FROM code_packs_retired
 		INDEXED BY code_packs_retired_due_idx
 		WHERE retired_at <= ? AND retired_at >= ? AND (retired_at > ? OR repo_id > ?)
+		GROUP BY retired_at, repo_id
 		ORDER BY retired_at, repo_id LIMIT ?`
 )

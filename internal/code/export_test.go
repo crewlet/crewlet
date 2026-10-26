@@ -31,6 +31,25 @@ func SetRetentionPace(r *Retention, clock func() time.Time, sleep func(context.C
 // it.
 const RetentionIdlePerStep = retentionIdlePerStep
 
+// RetiredDuePages is every page of the retention pass's retired listing over
+// r, read limit entries a page as the pass reads it past cutoff: the
+// repositories each page names, in order.
+func RetiredDuePages(ctx context.Context, r *Reader, cutoff time.Time, limit int) ([][]string, error) {
+	q := retiredQuery{cutoff: cutoff, limit: limit}
+	var pages [][]string
+	for {
+		page, err := r.retiredDue(ctx, q)
+		if err != nil {
+			return pages, err
+		}
+		pages = append(pages, page.repos)
+		if page.next == nil {
+			return pages, nil
+		}
+		q.after = page.next
+	}
+}
+
 // SetCommitterIdle has c's repository goroutines exit after d with nothing
 // queued, rather than CommitterIdle — set before c's first proposal.
 func SetCommitterIdle(c *Committer, d time.Duration) { c.idle = d }

@@ -34,7 +34,8 @@ import (
 // the grace are left. Sweeps go first because each is cheap and every hour a
 // retired row outlives its grace is an object the collector cannot take;
 // purges keep their order behind them. The listing is a page at a time over
-// its own index, oldest retirement first.
+// its own index, oldest retirement first, one entry a retiring record rather
+// than a row.
 //
 // Then every PURGING repository, whatever the retention: a purge once begun
 // is always finished, because its rows are already partly gone, its name is
@@ -76,10 +77,14 @@ import (
 // node, or a process that dies, leaves it to the next activation's reconcile.
 
 // retentionPage is how many repositories one read of the purge listing names,
-// and how many rows one read of the retired listing reads: a pass that steps
-// one-step repositories at the measured 83 ms a part reaches about 240 of them
-// in RetentionPassBudget at RetentionLaneShare, so a page is about what one
-// pass consumes, read as one statement over an index.
+// and how many retiring records one read of the retired listing names — each
+// at most one sweep step: a pass that steps one-step repositories at the
+// measured 83 ms a part reaches about 240 of them in RetentionPassBudget at
+// RetentionLaneShare, and one sweeping at the code host's design point meets
+// some 370 retiring records (limits.go), so a page is about what one pass
+// consumes of either listing, read as one statement over an index. A burst of
+// sweeps reads further pages of the same statement — sixteen at most in a
+// pass, which takes about four thousand steps of a few rows.
 const retentionPage = 256
 
 // retentionIdlePerStep is how many times a step's own duration the pass
@@ -264,8 +269,9 @@ func (r *Retention) Pass(ctx context.Context) (report RetentionReport, err error
 }
 
 // sweep steps every repository the retired listing names — once each, however
-// many of its rows the listing reads — until nothing past the grace is left,
-// the pass's budget runs out (stop) or the context ends (the error).
+// many of its retiring records the listing names — until nothing past the
+// grace is left, the pass's budget runs out (stop) or the context ends (the
+// error).
 //
 // The listing is a stale read and each step decides again inside its own
 // snapshot, so a repository whose rows a sweep removed since the listing read

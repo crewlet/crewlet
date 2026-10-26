@@ -320,6 +320,36 @@ func TestAFailedSweepIsReportedByTheRepositorysName(t *testing.T) {
 	}
 }
 
+// THE RETIRED LISTING NAMES EACH RETIRING RECORD ONCE, however many packs it
+// retired: a record's rows share its broker instant and its repository, and a
+// sweep step removes a record whole, so an entry a record is at most one step
+// of the pass's and a page of the listing is a page of the pass's work rather
+// than of one record's rows. Read two entries a page, a record that retired
+// five packs is one entry, the records after it fill the page in their
+// instants' order, and a record still inside the grace is no entry at all.
+//
+// Mutation: list the rows rather than the records, and the first page names
+// the five-pack record twice; drop the cutoff, and the record inside the
+// grace is listed.
+func TestTheRetiredListingNamesEachRetiringRecordOnce(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	a, b := seededRepo(t, n, "a"), seededRepo(t, n, "b")
+	old := harnessAt.Add(-code.RetireGrace - time.Hour)
+	n.seedRetired(a, 1, old, 5)
+	n.seedRetired(b, 2, old.Add(time.Minute), 1)
+	n.seedRetired(a, 3, old.Add(2*time.Minute), 2)
+	n.seedRetired(b, 4, harnessAt.Add(-time.Hour), 1)
+	pages, err := code.RetiredDuePages(t.Context(), n.reader, harnessAt.Add(-code.RetireGrace), 2)
+	if err != nil {
+		t.Fatalf("RetiredDuePages: %v", err)
+	}
+	if want := [][]string{{a, b}, {a}}; !slices.EqualFunc(pages, want, slices.Equal[[]string]) {
+		t.Fatalf("the listing read %v two entries a page, want %v: one entry for each retiring "+
+			"record past the grace, oldest first", pages, want)
+	}
+}
+
 // A PURGE REMOVES A REPOSITORY'S RETIRED ROWS, whatever their grace — no read
 // begins on a deleted repository — and counts them toward its parts: a deleted
 // repository holding nothing but retired packs, one past a part's rows, is
