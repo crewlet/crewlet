@@ -226,7 +226,9 @@ const (
 	// CardNotice is a line the engine adds: a truncation, a withheld
 	// result.
 	CardNotice CardKind = "notice"
+
 	// --- deep work (im-deep) ---
+
 	// CardFile is the files a deep run delivered (ADR-0053).
 	CardFile CardKind = "file"
 )

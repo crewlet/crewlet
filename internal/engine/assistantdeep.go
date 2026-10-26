@@ -294,9 +294,9 @@ func (d *assistantDeep) Run(ctx context.Context, r assistant.DeepRun) (assistant
 	}
 	out := assistant.DeepOutcome{Box: assistant.DeepBox{Placement: string(placement),
 		Sandbox: box.ID(), Agent: codingagent.ClaudeCodeName, Session: session}}
-	if err := placeInputs(ctx, box, r.Inputs); err != nil {
+	if placeErr := placeInputs(ctx, box, r.Inputs); placeErr != nil {
 		d.discard(ctx, t.manager, placement, box.ID())
-		return assistant.DeepOutcome{}, err
+		return assistant.DeepOutcome{}, placeErr
 	}
 	started := d.e.now()
 	handle, err := runner.Start(ctx, box, sandbox.RunRequest{System: r.System, Brief: r.Brief,
@@ -334,8 +334,8 @@ func (d *assistantDeep) acquire(ctx context.Context, t deepTarget, spec sandbox.
 		box, runner, err := t.manager.Reconnect(ctx, sandbox.Placement(c.Placement), c.Sandbox,
 			codingagent.ClaudeCodeName)
 		if err == nil {
-			if err := box.SetTimeout(ctx, spec.TimeoutSec); err != nil {
-				return nil, nil, "", err
+			if timeoutErr := box.SetTimeout(ctx, spec.TimeoutSec); timeoutErr != nil {
+				return nil, nil, "", timeoutErr
 			}
 			return box, runner, c.Session, nil
 		}
@@ -380,7 +380,7 @@ func (d *assistantDeep) watch(ctx context.Context, box sandbox.Sandbox, runner s
 				r.Progress(assistant.DeepProgress{Lines: lines(read.Text), Spent: read.Spent})
 			}
 			if r.Tokens > 0 && read.Spent > r.Tokens {
-				stopJob(box)
+				stopJob(ctx, box)
 				return assistant.DeepEndTokens
 			}
 		}
@@ -389,7 +389,7 @@ func (d *assistantDeep) watch(ctx context.Context, box sandbox.Sandbox, runner s
 		}
 		select {
 		case <-ctx.Done():
-			stopJob(box)
+			stopJob(ctx, box)
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				return assistant.DeepEndTimeout
 			}
@@ -401,8 +401,11 @@ func (d *assistantDeep) watch(ctx context.Context, box sandbox.Sandbox, runner s
 
 // stopJob ends a run's job and keeps nothing running in its box: the box
 // itself is the caller's to keep or discard.
-func stopJob(box sandbox.Sandbox) {
-	ctx, cancel := context.WithTimeout(context.Background(), deepGrace)
+//
+// ON A CONTEXT OF ITS OWN, keeping the caller's values: the stop is often the
+// caller's own cancellation, which a stop that inherited it would skip.
+func stopJob(ctx context.Context, box sandbox.Sandbox) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), deepGrace)
 	defer cancel()
 	if err := box.Pause(ctx); err != nil {
 		log.Warn("assistant_deep_job_unstopped", "sandbox_id", box.ID(), "error", err.Error())

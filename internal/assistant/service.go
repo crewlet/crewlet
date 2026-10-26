@@ -332,9 +332,9 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	}
 	input = redact.Secrets(input)
 	ts.Page = redactedPage(ts.Page)
-	attached, err := s.attachmentsOf(ctx, ts)
-	if err != nil {
-		return wire.TurnAccepted{}, err
+	attached, attachErr := s.attachmentsOf(ctx, ts)
+	if attachErr != nil {
+		return wire.TurnAccepted{}, attachErr
 	}
 	id := TurnID(ts.Key)
 	accepted := wire.TurnAccepted{TurnID: id, StreamURL: StreamPath(ts.Conversation, id)}

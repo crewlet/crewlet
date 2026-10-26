@@ -693,7 +693,7 @@ func (b *deepBridge) Execute(reqCtx context.Context, call llm.ToolCall) (toolloo
 	defer cancel()
 	stop := context.AfterFunc(reqCtx, cancel)
 	defer stop()
-	res, err := b.inner.Execute(ctx, call)
+	res, err := b.inner.Execute(ctx, call) //nolint:contextcheck // the run's own context, ended by the box's request too; see above
 	if err != nil {
 		b.mu.Lock()
 		b.fatal = err

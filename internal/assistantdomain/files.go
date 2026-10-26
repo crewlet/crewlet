@@ -234,8 +234,8 @@ func (s *FileStore) content(ctx context.Context, f File) ([]byte, error) {
 		return nil, fmt.Errorf("assistantdomain: fetch file %s: %w", f.ID, err)
 	}
 	sealed, readErr := io.ReadAll(io.LimitReader(body, f.object.Size+1))
-	if err := errors.Join(readErr, body.Close()); err != nil {
-		return nil, fmt.Errorf("assistantdomain: fetch file %s: %w", f.ID, err)
+	if closeErr := errors.Join(readErr, body.Close()); closeErr != nil {
+		return nil, fmt.Errorf("assistantdomain: fetch file %s: %w", f.ID, closeErr)
 	}
 	plain, err := s.reader.sealer.Open(string(sealed),
 		AAD(f.Conversation, RecordFile, f.ID, ColumnContent))

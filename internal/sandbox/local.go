@@ -919,10 +919,10 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 
 	if l.opts.Placement == Direct {
 		localLog.Info("local_sandbox_created", "sandbox_id", id, "placement", string(Direct), "home", layout.home())
-		confine, err := l.confinedRules(layout)
-		if err != nil {
+		confine, confineErr := l.confinedRules(layout)
+		if confineErr != nil {
 			_ = os.RemoveAll(layout.root)
-			return nil, err
+			return nil, confineErr
 		}
 		return &directBox{layout: layout, env: spec.Env, credentials: seeded, confine: confine}, nil
 	}
