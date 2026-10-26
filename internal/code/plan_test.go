@@ -23,13 +23,16 @@ import (
 // and writes (the tombstones a push sweeps, oldest first, among them), the
 // lifecycle store's decides, the push decide's reads, the reader's pages in their
 // first and keyset forms — a snapshot's retired phase among them — and its
-// bounded counts, the purge's bounded count, a sweep's decide, apply and
-// listing over the retired packs, and the object store's statements over
-// code_packs and code_packs_retired — and holds each to the EXACT seek it names:
-// the index and every column of it the statement bounds. Seeking an index is
-// not enough — a lookup of one ref that sought repo_id alone read every ref
-// its repository holds (planner.go). The statements are the package's own
-// constants: there is no copy here to drift from what runs.
+// bounded counts, the purge's bounded count and its statements over a
+// repository's changes, a sweep's decide, apply and listing over the retired
+// packs, and the object store's statements over code_packs and
+// code_packs_retired — and holds each to the EXACT seek it names: the index
+// and every column of it the statement bounds. Seeking an index is not enough
+// — a lookup of one ref that sought repo_id alone read every ref its
+// repository holds (planner.go). The statements are the package's own
+// constants: there is no copy here to drift from what runs. An index no
+// statement reads yet is held to the read its migration claims for it
+// ([claimedReads]), until a statement does.
 //
 // NO ANALYZE, because no deployment runs one: statistics choose differently,
 // and a fixture that gathered them certified plans no node ever ran.
@@ -48,56 +51,77 @@ import (
 // from code_pushes_repo_idx and the purge's and the horizon's reads stop
 // covering; order the push listing by `at` again, which replicated 0056 moved
 // out of code_pushes_repo_idx's key, and it sorts every push of the
-// repository.
+// repository; order the purge's walk of a repository's changes by `c.number,
+// r.n` and it sorts every revision the repository holds; write a claim's live
+// states in another order and it seeks code_changes_state_idx.
 func TestEveryCodeIndexServesARegisteredQuery(t *testing.T) {
 	t.Parallel()
 	db := seededPlanEstate(t)
 	covered := []string{"code_repos", "code_names", "code_refs", "code_packs",
-		"code_pushes", "code_protections", "code_packs_retired"}
+		"code_pushes", "code_protections", "code_packs_retired",
+		"code_changes", "code_change_authors", "code_revisions"}
+	// held plans one statement and answers the indexes its plan reaches.
+	held := func(t *testing.T, name string, st statement) []string {
+		plan := explain(t, db, st.sql, st.args)
+		for _, table := range covered {
+			if scansHeap(plan, table) {
+				t.Errorf("%s reads %s with no index:\n%s", name, table, strings.Join(plan, "\n"))
+			}
+		}
+		if len(st.seeks) == 0 {
+			t.Fatalf("%s names no seek — every registered statement is held to one", name)
+		}
+		for _, seek := range st.seeks {
+			if !slices.ContainsFunc(plan, func(line string) bool { return strings.Contains(line, seek) }) {
+				t.Errorf("%s does not seek %q:\n%s", name, seek, strings.Join(plan, "\n"))
+			}
+		}
+		// AND THE ORDER IS THE SEEK'S: a statement whose ORDER BY the index
+		// it seeks does not serve SORTS every row the seek finds before its
+		// LIMIT takes one — a push listing still ordered by the instant
+		// replicated 0056 moved out of code_pushes_repo_idx's key would read
+		// every push of the repository, its 181 days, on every page.
+		// Two-sided: a statement declared to sort that no longer does loses
+		// the declaration.
+		sorts := slices.ContainsFunc(plan, func(line string) bool {
+			return strings.Contains(line, "USE SORTER") || strings.Contains(line, "TEMP B-TREE")
+		})
+		why, declared := sortingStatements[name]
+		switch {
+		case sorts && !declared:
+			t.Errorf("%s sorts what it seeks rather than reading it in its index's order:\n%s",
+				name, strings.Join(plan, "\n"))
+		case !sorts && declared:
+			t.Errorf("%s is declared to sort (%s) and its plan reads in its index's order: "+
+				"drop the declaration:\n%s", name, why, strings.Join(plan, "\n"))
+		}
+		return indexesIn(plan)
+	}
 	used := map[string]bool{}
 	for name, st := range registeredStatements() {
 		t.Run(name, func(t *testing.T) {
-			plan := explain(t, db, st.sql, st.args)
-			for _, index := range indexesIn(plan) {
+			for _, index := range held(t, name, st) {
 				used[index] = true
-			}
-			for _, table := range covered {
-				if scansHeap(plan, table) {
-					t.Errorf("%s reads %s with no index:\n%s", name, table, strings.Join(plan, "\n"))
-				}
-			}
-			if len(st.seeks) == 0 {
-				t.Fatalf("%s names no seek — every registered statement is held to one", name)
-			}
-			for _, seek := range st.seeks {
-				if !slices.ContainsFunc(plan, func(line string) bool { return strings.Contains(line, seek) }) {
-					t.Errorf("%s does not seek %q:\n%s", name, seek, strings.Join(plan, "\n"))
-				}
-			}
-			// AND THE ORDER IS THE SEEK'S: a statement whose ORDER BY
-			// the index it seeks does not serve SORTS every row the seek
-			// finds before its LIMIT takes one — a push listing still
-			// ordered by the instant replicated 0056 moved out of
-			// code_pushes_repo_idx's key would read every push of the
-			// repository, its 181 days, on every page. Two-sided: a
-			// statement declared to sort that no longer does loses the
-			// declaration.
-			sorts := slices.ContainsFunc(plan, func(line string) bool {
-				return strings.Contains(line, "USE SORTER") || strings.Contains(line, "TEMP B-TREE")
-			})
-			why, declared := sortingStatements[name]
-			switch {
-			case sorts && !declared:
-				t.Errorf("%s sorts what it seeks rather than reading it in its index's order:\n%s",
-					name, strings.Join(plan, "\n"))
-			case !sorts && declared:
-				t.Errorf("%s is declared to sort (%s) and its plan reads in its index's order: "+
-					"drop the declaration:\n%s", name, why, strings.Join(plan, "\n"))
 			}
 		})
 	}
+	claimed := map[string]bool{}
+	for index, st := range claimedReads() {
+		name := "the read claimed for " + index
+		t.Run(name, func(t *testing.T) {
+			if !slices.Contains(held(t, name, st), index) {
+				t.Errorf("%s's claimed read reaches another index: the read its comment names "+
+					"does not use it", index)
+			}
+			claimed[index] = true
+		})
+	}
 	for _, index := range indexesOn(t, db, covered) {
-		if !used[index] {
+		switch {
+		case used[index] && claimed[index]:
+			t.Errorf("%s is read by a registered statement and still carries a claimed read — "+
+				"the statement holds the index now: drop the claim from claimedReads", index)
+		case !used[index] && !claimed[index]:
 			t.Errorf("no registered statement's plan reaches %s — an index is a write cost "+
 				"on every push on every node, so one no plan uses is deleted", index)
 		}
@@ -157,6 +181,45 @@ func TestTheRefConflictProbesStepOverNoTombstone(t *testing.T) {
 	}
 }
 
+// THE LIVE INDEXES HOLD THE LIVE STATES, SPELLED AS THEIR READERS SPELL THEM.
+// code_changes_open_idx and code_changes_target_idx are each declared partial
+// on [liveChanges] exactly, and [liveChanges] lists every [ChangeState.Live]
+// state, in [ChangeStates]' order, and no other — so a state added to the set
+// is a decision about the two indexes, and a statement that repeats the
+// constant reaches them, since the pinned planner matches the list as it is
+// written (planner.go): a statement listing the states in another order, or
+// naming one of them, reads code_changes_state_idx or the table instead.
+//
+// Mutation: declare either index on `state IN ('open', 'draft')`, or make a
+// closed change live, and this fails.
+func TestTheLiveIndexesHoldTheLiveStates(t *testing.T) {
+	t.Parallel()
+	var live []string
+	for _, s := range ChangeStates() {
+		if s.Live() {
+			live = append(live, "'"+string(s)+"'")
+		}
+	}
+	if want := "state IN (" + strings.Join(live, ", ") + ")"; liveChanges != want {
+		t.Fatalf("liveChanges is %q, and the live states in ChangeStates' order spell %q", liveChanges, want)
+	}
+	node, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
+	t.Cleanup(func() { _ = node.Close() })
+	for _, index := range []string{"code_changes_open_idx", "code_changes_target_idx"} {
+		var declared string
+		if err := db.Read(t.Context(), func(tx *sql.Tx) error {
+			return tx.QueryRowContext(t.Context(),
+				`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?`, index).Scan(&declared)
+		}); err != nil {
+			t.Fatalf("read %s's declaration: %v", index, err)
+		}
+		if got := strings.Join(strings.Fields(declared), " "); !strings.HasSuffix(got, " WHERE "+liveChanges) {
+			t.Errorf("%s is declared\n\t%s\nand its readers repeat\n\tWHERE %s\n— a predicate they do "+
+				"not spell is one the planner never matches", index, got, liveChanges)
+		}
+	}
+}
+
 // statement is one registered statement, arguments that make it plannable,
 // and the seeks its plan must contain — each an index and the columns of it the
 // statement bounds, as the plan prints them.
@@ -183,6 +246,9 @@ const (
 	protectionKey = "sqlite_autoindex_code_protections_1"
 	deletionKey   = "sqlite_autoindex_code_deletions_1"
 	retiredKey    = "sqlite_autoindex_code_packs_retired_1"
+	changeKey     = "sqlite_autoindex_code_changes_1"
+	authorKey     = "sqlite_autoindex_code_change_authors_1"
+	revisionKey   = "sqlite_autoindex_code_revisions_1"
 )
 
 // registeredStatements is every statement this package issues against the
@@ -197,6 +263,7 @@ func registeredStatements() map[string]statement {
 	}
 	sweep := "[" + strings.Join(stones, ",") + "]"
 	ids := `["repo-1-push-000001","repo-1-push-000002"]`
+	changeIDs := `["repo-1-change-000001","repo-1-change-000002"]`
 	out := map[string]statement{
 		"guard repo":          {guardRepoSQL, []any{"repo-1", "repo-1"}, []string{deletionKey + " (repo_id=?)", repoKey + " (id=?)"}},
 		"guard name":          {guardNameSQL, []any{"token"}, []string{nameKey + " (token=?)"}},
@@ -228,7 +295,7 @@ func registeredStatements() map[string]statement {
 		"purge all packs":     {purgeAllPacksSQL, []any{"repo-1"}, []string{packsKey + " (repo_id=?)"}},
 		"remove repo":         {removeRepoSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"repo name":           {repoNameSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
-		"remaining":           {remainingSQL, []any{"repo-1", PurgePartRows + 1, "repo-1", PurgePartRows + 1, "repo-1", PurgePartRows + 1, "repo-1", PurgePartRows + 1, "repo-1", PurgePartRows + 1}, []string{"COVERING INDEX code_pushes_repo_idx (repo_id=?)", refsKey + " (repo_id=?)", packsKey + " (repo_id=?)", retiredKey + " (repo_id=?)"}},
+		"remaining":           {remainingSQL, []any{"repo-1", PurgePartRows + 1}, []string{"COVERING INDEX code_pushes_repo_idx (repo_id=?)", refsKey + " (repo_id=?)", packsKey + " (repo_id=?)", retiredKey + " (repo_id=?)", changesNumberKey + " (repo_id=?)", revisionKey + " (change_id=?)", authorKey + " (change_id=?)"}},
 		"claim":               {claimSQL, []any{"token"}, []string{nameKey + " (token=?)"}},
 		"claims":              {claimsSQL, []any{`["token","other"]`}, []string{nameKey + " (token=?)"}},
 		"repos rows":          {reposRowsSQL, []any{`["repo-1","repo-2"]`}, []string{repoKey + " (id=?)"}},
@@ -277,6 +344,28 @@ func registeredStatements() map[string]statement {
 		"retired due":       {retiredDueSQL, []any{15, -1, -1, "", retentionPage}, []string{"code_packs_retired_due_idx (retired_at>=? AND retired_at<=?)"}},
 		"purge retired":     {purgeRetiredSQL, []any{"repo-1", PurgePartRows}, []string{retiredRepoIdx + " (repo_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"purge all retired": {purgeAllRetiredSQL, []any{"repo-1"}, []string{retiredRepoIdx + " (repo_id=?)"}},
+		// A PURGE'S CHANGES: the walk in number order, each change's
+		// dependents counted by its key; the whole changes' rows by the list
+		// of their ids; the cut change's in its key's order; and the final
+		// purge's, the dependents through their changes.
+		"purge change walk": {purgeChangeWalkSQL, []any{"repo-1", PurgePartRows},
+			[]string{changesNumberKey + " (repo_id=?)", revisionKey + " (change_id=?)", authorKey + " (change_id=?)"}},
+		"purge changes' revisions": {purgeChangeRevisionsSQL, []any{changeIDs},
+			[]string{"SCAN json_each AS j", revisionKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"purge changes' authors": {purgeChangeAuthorsSQL, []any{changeIDs},
+			[]string{"SCAN json_each AS j", authorKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"purge changes' rows": {purgeChangeRowsSQL, []any{changeIDs},
+			[]string{"SCAN json_each AS j", changeKey + " (id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"purge a cut change's revisions": {purgeCutRevisionsSQL, []any{"repo-1-change-000001", PurgePartRows},
+			[]string{revisionKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"purge a cut change's authors": {purgeCutAuthorsSQL, []any{"repo-1-change-000001", PurgePartRows},
+			[]string{authorKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"purge all revisions": {purgeAllRevisionsSQL, []any{"repo-1"},
+			[]string{changesNumberKey + " (repo_id=?)", revisionKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"purge all authors": {purgeAllAuthorsSQL, []any{"repo-1"},
+			[]string{changesNumberKey + " (repo_id=?)", authorKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"purge all changes": {purgeAllChangesSQL, []any{"repo-1"},
+			[]string{"COVERING INDEX " + changesNumberKey + " (repo_id=?)"}},
 	}
 	among, err := PackReferences.ObjectsAmong(3)
 	if err != nil {
@@ -302,14 +391,55 @@ func registeredStatements() map[string]statement {
 	return out
 }
 
+// claimedReads is every index on a covered table that no statement this
+// package issues reads YET, by name, with the read its migration's `-- <reader>`
+// comment claims for it — planned here, so the claim is the planner's from the
+// migration that declares the index rather than from whichever change first
+// issues the read. A change's indexes land with its tables (replicated 0058),
+// one migration for the rows rather than one an index, and their reads — the
+// lifecycle's, the listings', a commit's page — are each a change's of its own.
+//
+// TWO-SIDED, as every allowance here is: a claim whose index a registered
+// statement reaches fails, because the change that issues the read registers
+// its own statement and a claim beside it would be a second copy of what runs;
+// and an index that neither a statement nor a claim reaches fails as it always
+// has. Each read is written in the claim's own terms — the live states as
+// [liveChanges] spells them, a listing newest first by the order its index
+// keeps — and is held to the exact seek, no heap scan and no sort, like any
+// registered statement.
+func claimedReads() map[string]statement {
+	return map[string]statement{
+		"code_changes_open_idx": {`SELECT id FROM code_changes WHERE repo_id = ? AND source_ref = ? AND ` +
+			liveChanges, []any{"repo-1", "refs/heads/f000001"},
+			[]string{"code_changes_open_idx (repo_id=? AND source_ref=?)"}},
+		"code_changes_target_idx": {`SELECT id FROM code_changes WHERE repo_id = ? AND target_ref = ?
+			AND head_oid = ? AND ` + liveChanges, []any{"repo-1", "refs/heads/main", oid("head-1-1")},
+			[]string{"code_changes_target_idx (repo_id=? AND target_ref=? AND head_oid=?)"}},
+		"code_changes_state_idx": {`SELECT id FROM code_changes WHERE state = ?
+			ORDER BY opened_position DESC, id DESC LIMIT ?`, []any{string(ChangeStateOpen), 50},
+			[]string{"code_changes_state_idx (state=?)"}},
+		"code_changes_owner_idx": {`SELECT id FROM code_changes WHERE owner = ? AND state = ?
+			ORDER BY opened_position DESC, id DESC LIMIT ?`, []any{"seat-1", string(ChangeStateOpen), 50},
+			[]string{"code_changes_owner_idx (owner=? AND state=?)"}},
+		"code_changes_work_idx": {`SELECT id FROM code_changes WHERE work_backend = ? AND work_id = ?
+			AND work_id != ''`, []any{"native", "work-3"},
+			[]string{"code_changes_work_idx (work_backend=? AND work_id=?)"}},
+		"code_changes_merge_idx": {`SELECT id FROM code_changes WHERE repo_id = ? AND merge_oid = ?
+			AND merge_oid != ''`, []any{"repo-1", oid("head-3-3")},
+			[]string{"code_changes_merge_idx (repo_id=? AND merge_oid=?)"}},
+		"code_revisions_head_idx": {`SELECT change_id, n FROM code_revisions WHERE head_oid = ?`,
+			[]any{oid("head-1-1")}, []string{"code_revisions_head_idx (head_oid=?)"}},
+	}
+}
+
 // retiredRepoIdx is code_packs_retired_repo_idx, (repo_id, retired_position,
 // pack_id, part): the order every statement over a repository's retired rows
 // names, so a sweep and a purge remove them alike on every node.
 const retiredRepoIdx = "code_packs_retired_repo_idx"
 
 // seededPlanEstate is an estate holding five repositories of 500 refs, 50
-// packs, 200 pushes and 200 retired packs each, with no statistics gathered —
-// the state every node's estate is in.
+// packs, 200 pushes, 200 retired packs and 50 changes each, with no statistics
+// gathered — the state every node's estate is in.
 func seededPlanEstate(t *testing.T) store.ReplicatedHandle {
 	t.Helper()
 	node, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
@@ -376,6 +506,53 @@ func seededPlanEstate(t *testing.T) store.ReplicatedHandle {
 				func(i int) []any {
 					return []any{id, fmt.Sprintf("retired-%06d", i),
 						fmt.Sprintf("%s-retired-object-%06d", id, i), i, 1000 + i/10, i / 10}
+				}); err != nil {
+				return err
+			}
+			// FIFTY CHANGES ACROSS EVERY STATE, each of three revisions and
+			// two authors, a work item on every third and every merged one
+			// naming the commit it was merged at.
+			states := ChangeStates()
+			if _, err := store.InsertRows(ctx, tx, vars,
+				`INSERT INTO code_changes (id, repo_id, number, title, state, source_ref, target_ref,
+					head_oid, revision, owner, owner_kind, work_backend, work_id, opened_at,
+					opened_position, closed_at, merged_at, merged_via, merge_oid, version, position) VALUES `,
+				`(?, ?, ?, 'a change', ?, ?, 'refs/heads/main', ?, 3, ?, 'agent', ?, ?, ?, ?, ?, ?, ?, ?, 3, ?)`,
+				``, 50, func(i int) []any {
+					state := states[i%len(states)]
+					var backend, work, via, merge string
+					if i%3 == 0 {
+						backend, work = "native", fmt.Sprintf("work-%d", i)
+					}
+					closed := sql.NullInt64{Int64: int64(i), Valid: state == ChangeStateClosed}
+					merged := sql.NullInt64{Int64: int64(i), Valid: state == ChangeStateMerged}
+					if merged.Valid {
+						via, merge = string(MergedViaPush), oid(fmt.Sprintf("head-%d-3", i))
+					}
+					return []any{fmt.Sprintf("%s-change-%06d", id, i+1), id, i + 1, string(state),
+						fmt.Sprintf("refs/heads/f%06d", i), oid(fmt.Sprintf("head-%d-3", i)),
+						fmt.Sprintf("seat-%d", i%7), backend, work, i, 2000 + i, closed, merged, via, merge,
+						2000 + i}
+				}); err != nil {
+				return err
+			}
+			if _, err := store.InsertRows(ctx, tx, vars,
+				`INSERT INTO code_revisions (change_id, n, head_oid, pusher, pusher_kind, push_id, position,
+					at) VALUES `, `(?, ?, ?, ?, 'agent', ?, ?, ?)`, ``, 150,
+				func(i int) []any {
+					change, n := i/3, i%3+1
+					return []any{fmt.Sprintf("%s-change-%06d", id, change+1), n,
+						oid(fmt.Sprintf("head-%d-%d", change, n)), fmt.Sprintf("seat-%d", change%7),
+						fmt.Sprintf("%s-push-%06d", id, i), 2000 + i, i}
+				}); err != nil {
+				return err
+			}
+			if _, err := store.InsertRows(ctx, tx, vars,
+				`INSERT INTO code_change_authors (change_id, author, author_kind, first_revision,
+					position) VALUES `, `(?, ?, 'agent', ?, ?)`, ``, 100,
+				func(i int) []any {
+					return []any{fmt.Sprintf("%s-change-%06d", id, i/2+1), fmt.Sprintf("seat-%d", i), i%2 + 1,
+						2000 + i}
 				}); err != nil {
 				return err
 			}

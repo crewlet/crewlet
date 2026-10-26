@@ -50,9 +50,11 @@ This is the product's current shape, not a configuration choice:
   yet, so agents do not push. The rule that will decide what each seat may
   read and push is already the one a person's push is judged by ([Who may
   read and push](#who-may-read-and-push)).
-- **There are no changes, reviews or checks** — no merge request, no review
-  and no CI gate in front of a protected branch. A protection rule decides
-  what a push may do to a ref, and nothing else stands in front of one.
+- **Nothing opens a change yet, and there are no reviews or checks.** A
+  [change](#changes) has the rows it is kept in, but no merge request is
+  opened, reviewed or gated in front of a protected branch in this release.
+  A protection rule decides what a push may do to a ref, and nothing else
+  stands in front of one.
 - **Nothing compacts a repository.** Every push adds one pack, and a
   repository's packs are only ever removed with the repository.
 
@@ -369,6 +371,43 @@ would sit beside each other, the first stands and the second is refused.
 
 ---
 
+## Changes
+
+A **change** — `web!42`, the 42nd change opened on the repository `web` —
+proposes that one branch of a repository, its **source**, be merged into
+another, its **target**. It is rows on the code log like the refs it names,
+and every record that moves it is on the repository's own subject, beside the
+pushes that move its branches: the repository's one
+[committer](#the-committer) decides them in order and the broker arbitrates
+them together, so a change is never both merged and closed.
+
+Three tables hold a change, on every data node:
+
+| Table | A row for | What it holds |
+|---|---|---|
+| `code_changes` | each change | Its number, title and description; its state; its source and target branches; the head of its latest revision; who opened it — a seat, or a person by the human seat they hold, with the credential they used; the work item it carries; and when it was opened, closed and merged, and how |
+| `code_change_authors` | each of its authors | Who wrote the change: whoever opened it, and everyone whose push moved its head, each from the revision they first wrote. An author's approval of their own change counts for nothing |
+| `code_revisions` | each time its head moved while it was live | The new head, who pushed it and the push that did. Revision 1 is the source branch's head when the change was opened |
+
+- **A number is the repository's own**, counted from 1 in the order the code
+  log applies the records that open changes, so two changes of a repository
+  never share one and none is skipped.
+- **A state is one of four.** A `draft` or `open` change is **live**: the
+  moves of its source branch's head are its revisions, and the branch is the
+  source of no other live change. A `closed` change was closed without being
+  merged, and may be opened again while its source branch is live. A `merged`
+  change reached its target and stays merged; it says how (`push`: a push set
+  its target to its head, or moved the target past it) and the commit its
+  target was merged at.
+- **A revision is a row, never a ref.** Nothing a client fetches advertises
+  one, so a clone holds the repository's branches and tags and nothing more.
+- **A change has no horizon of its own.** It is kept as long as its
+  repository, and the repository's [purge](#deletion-and-purge) removes it:
+  each change whole, its revisions and authors before its row, in the same
+  bounded steps as the rest of the repository's rows.
+
+---
+
 ## Retention and history
 
 Three horizons, each kept by the record that applies it inside its own
@@ -420,9 +459,12 @@ the log can replay), the fleet-singleton `code-retention` duty purges it (see
   then finishes every purge already begun — whatever the retention, since a
   purge has no undo — then purges the repositories deleted longest ago first;
 - each purge is a sequence of bounded **steps**, each one record removing a
-  bounded part of the repository's rows, and the last leaves only a
-  **deletion marker**, which drops every later record about the repository on
-  every node, for ever ([the deletion gate](../guides/replication.md#applied-is-not-permanent));
+  bounded part of the repository's rows — its push history, its refs, its
+  packs and the ones a compaction retired, then its [changes](#changes), each
+  whole: a change's revisions and authors, then its row — and the last leaves
+  only a **deletion marker**, which drops every later record about the
+  repository on every node, for ever
+  ([the deletion gate](../guides/replication.md#applied-is-not-permanent));
 - every data node applies every step on its one write lane, so the duty paces
   itself: after each step it waits twice the step's duration, a third of the
   lane, and a pass stops after a minute of steps and the next resumes from

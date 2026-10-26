@@ -102,8 +102,7 @@ func (s *Store) PurgeStep(ctx context.Context, repoID string, retention time.Dur
 			}
 			var remaining int
 			var pushBytes int64
-			if countErr := tx.QueryRowContext(ctx, remainingSQL, repoID, PurgePartRows+1, repoID,
-				PurgePartRows+1, repoID, PurgePartRows+1, repoID, PurgePartRows+1, repoID,
+			if countErr := tx.QueryRowContext(ctx, remainingSQL, repoID,
 				PurgePartRows+1).Scan(&remaining, &pushBytes); countErr != nil {
 				return statelog.Decision{}, fmt.Errorf("code: count %s's rows: %w", repoID, countErr)
 			}
@@ -148,20 +147,32 @@ func (s *Store) repoName(ctx context.Context, id string) (string, bool, error) {
 
 // The purge's decide statements. remainingSQL is the tracker's BOUNDED COUNT:
 // the decide needs "more than PurgePartRows", never the total, so each table
-// a part deletes from — the pushes, the refs, the packs and the retired packs
-// — is counted at most PurgePartRows + 1 deep, and beside them what the push
-// rows among them weigh, summed over the same depth from code_pushes_repo_idx,
-// which carries every row's width: past PurgePartRows pushes the count alone
-// already forms a part, and short of it the sum is the whole. A table left out
-// of the count is one the final purge's unbounded statement would delete
-// whatever it held.
+// a part deletes from — the pushes, the refs, the packs, the retired packs and
+// the changes' revisions, authors and rows — is counted at most
+// PurgePartRows + 1 deep (?2, against the repository ?1), and beside them what
+// the push rows among them weigh, summed over the same depth from
+// code_pushes_repo_idx, which carries every row's width: past PurgePartRows
+// pushes the count alone already forms a part, and short of it the sum is the
+// whole. A table left out of the count is one the final purge's unbounded
+// statement would delete whatever it held.
+//
+// A CHANGE'S REVISIONS AND AUTHORS ARE COUNTED THROUGH THEIR CHANGE, the
+// changes in number order ([changesNumberKey]) and each one's rows by its key —
+// the dependents carry no repo_id — which is also how the final purge reaches
+// them, so the count is of exactly the rows it would delete.
 const (
 	repoNameSQL  = `SELECT name FROM code_repos WHERE id = ?`
 	remainingSQL = `SELECT
-		(SELECT COUNT(*) FROM (SELECT 1 FROM code_pushes WHERE repo_id = ? LIMIT ?))
-		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_refs WHERE repo_id = ? LIMIT ?))
-		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_packs WHERE repo_id = ? LIMIT ?))
-		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_packs_retired WHERE repo_id = ? LIMIT ?)),
+		(SELECT COUNT(*) FROM (SELECT 1 FROM code_pushes WHERE repo_id = ?1 LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_refs WHERE repo_id = ?1 LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_packs WHERE repo_id = ?1 LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_packs_retired WHERE repo_id = ?1 LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes AS c INDEXED BY ` + changesNumberKey + `
+			CROSS JOIN code_revisions AS r WHERE c.repo_id = ?1 AND r.change_id = c.id LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes AS c INDEXED BY ` + changesNumberKey + `
+			CROSS JOIN code_change_authors AS a WHERE c.repo_id = ?1 AND a.change_id = c.id LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes INDEXED BY ` + changesNumberKey + `
+			WHERE repo_id = ?1 LIMIT ?2)),
 		(SELECT COALESCE(SUM(row_bytes), 0) FROM
-			(SELECT row_bytes FROM code_pushes WHERE repo_id = ? LIMIT ?))`
+			(SELECT row_bytes FROM code_pushes WHERE repo_id = ?1 LIMIT ?2))`
 )

@@ -1852,10 +1852,12 @@ that apply to it, never by a sweep: a push row expires **181 days** after its
 push, the same half year as the [usage history](#old-data-is-not-cold-data),
 and a deleted ref's tombstone after **48 hours**, or sooner, oldest first, once
 the repository holds 100 000 of them (see
-[ref tombstones](../concepts/code-host.md#retention-and-history)). The code log
-itself is trimmed by the same six terms as every other log; a push record names
-its pack and never carries it, so trimming the log removes no repository's
-bytes.
+[ref tombstones](../concepts/code-host.md#retention-and-history)). A
+[change](../concepts/code-host.md#changes) and its revisions have no horizon of
+their own: they are kept as long as their repository is, and its purge removes
+them with the rest of its rows. The code log itself is trimmed by the same six
+terms as every other log; a push record names its pack and never carries it, so
+trimming the log removes no repository's bytes.
 
 ## The configuration archive, and the one thing a purge cannot reach
 

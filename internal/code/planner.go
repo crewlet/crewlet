@@ -44,6 +44,21 @@ package code
 // [MaxTombstonesPerRepo] under a deep chain of creates. Such a statement
 // names [liveRefsKey] instead, whose rows are the live refs alone, and repeats
 // its predicate verbatim so the planner may use it at all.
+//
+// A PARTIAL INDEX'S IN-LIST IS MATCHED AS WRITTEN, NOT AS A SET. The two
+// indexes partial on a change's live states are used only by a statement that
+// repeats [liveChanges] — the states in its order: `state IN ('open', 'draft')`
+// sought code_changes_state_idx instead, and `state = 'open'`, which implies
+// the predicate, sought neither (measured on the pinned driver). So every
+// statement over them is written with the constant rather than with a
+// spelling of its own.
+//
+// TWO ORDERED LOOPS SORT. An ORDER BY over a join that names the inner table's
+// key after the outer's (`c.number, r.n`) is sorted whole, every row the join
+// finds before its LIMIT takes one — the outer index is not UNIQUE, and the
+// schema refuses one that is — while the outer's order alone is read in index
+// order. So a bounded walk over a repository's changes orders by the change
+// and takes each change whole ([purgeChanges]).
 const (
 	// refsKey is code_refs' PRIMARY KEY index, (repo_id, ref).
 	refsKey = "sqlite_autoindex_code_refs_1"
@@ -52,4 +67,13 @@ const (
 	liveRefsKey = "code_refs_live_idx"
 	// packsKey is code_packs' PRIMARY KEY index, (repo_id, pack_id, part).
 	packsKey = "sqlite_autoindex_code_packs_1"
+	// changesNumberKey is code_changes_number_idx, (repo_id, number)
+	// (replicated migration 0058): a repository's changes in number order,
+	// which is the only way to a repository's revisions and authors — they
+	// carry no repo_id of their own.
+	changesNumberKey = "code_changes_number_idx"
+	// liveChanges is the predicate code_changes_open_idx and
+	// code_changes_target_idx are partial on: a change in a [ChangeState.Live]
+	// state, spelled in [ChangeStates]' order.
+	liveChanges = `state IN ('draft', 'open')`
 )

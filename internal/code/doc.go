@@ -52,6 +52,23 @@
 // already makes. A NAME is claimed on name.<token>, so two creates of one name
 // contend there, where two fresh repository ids never would ([NameToken]).
 //
+// # A change is rows on its repository's subject
+//
+// A change (web!42) is code_changes, code_change_authors and code_revisions
+// (replicated migration 0058), written by records on its REPOSITORY's subject
+// and on no subject of its own, so its lifecycle and the pushes that move its
+// branches meet at one committer and one arbitration, and its number — the
+// repository's code_repos.next_change, read and advanced by the apply that
+// opens it — follows the log's order and never repeats. A table is written by
+// the records of one subject only: what is said about a change on a subject of
+// its own goes to tables of its own. Its state is a [ChangeState], the live
+// ones the predicate two partial indexes hold ([ChangeState.Live]), and a
+// merged one names how in a [MergedVia]. The revisions and authors carry no
+// repo_id, reached by their change's key, so a purge takes a repository's
+// changes WHOLE in number order, each one's revisions and authors before its
+// row, and the bounded count reaches them as the final purge does
+// ([purgeChanges]).
+//
 // # Group commit
 //
 // Because every push to a repository contends on its one subject, a
@@ -381,18 +398,20 @@
 //     the repository keeps reads what is left, never every deletion);
 //   - A PURGE, in bounded parts: a repository deleted longer ago than its
 //     retention is removed [PurgePartRows] rows a record, its push rows only
-//     until their bytes reach [PurgePartBytes] ([Store.PurgeStep]), and the
-//     final record — formed only once what is left fits a part — leaves only
-//     its deletion marker, which drops every later record about the
-//     repository on every node, for ever. It is a horizon no record of the
-//     repository's own can reach, since nothing else is written to a
-//     deleted repository, so the code-retention duty's pass ([Retention])
-//     publishes its steps: every purge already begun first, whatever the
-//     retention, then the deleted oldest first. It publishes RECORDS and
-//     never touches a row, so the applier is still the estate's only
-//     writer, and it PACES them, because every data node applies every one
-//     on its single write lane: a pass waits twice a step's duration after
-//     each ([RetentionLaneShare], a third of the lane) and takes steps for
+//     until their bytes reach [PurgePartBytes] ([Store.PurgeStep]), its
+//     changes last and each whole, a change's revisions and authors before
+//     its row ([purgeChanges]), and the final record — formed only once what
+//     is left fits a part — leaves only its deletion marker, which drops
+//     every later record about the repository on every node, for ever. It
+//     is a horizon no record of the repository's own can reach, since
+//     nothing else is written to a deleted repository, so the
+//     code-retention duty's pass ([Retention]) publishes its steps: every
+//     purge already begun first, whatever the retention, then the deleted
+//     oldest first. It publishes RECORDS and never touches a row, so the
+//     applier is still the estate's only writer, and it PACES them,
+//     because every data node applies every one on its single write lane:
+//     a pass waits twice a step's duration after each
+//     ([RetentionLaneShare], a third of the lane) and takes steps for
 //     [RetentionPassBudget] at most, so a node up to three times slower
 //     than the holder keeps up with no queue and one up to six times
 //     slower ends a pass at most statelog.StallGrace behind. A pass cut
@@ -497,7 +516,13 @@
 // about 2.4 ms a megabyte, and one of [PurgePartRows] about three seconds;
 // 76–103 ms for the most one part can take, the widest rows short of
 // PurgePartBytes and refs for the rest of the rows; and 57–65 ms for the
-// final purge over the same, with [MaxProtectionsPerRepo] rules.
+// final purge over the same, with [MaxProtectionsPerRepo] rules. A part of a
+// repository's CHANGES (its changes and cut arms, three iterations of one
+// count beside its narrow arm, on four E-cores shared with another session's
+// runs, where narrow took 84 ms): 37 ms for a thousand changes of one
+// revision and one author each, taken whole — the most a part's walk counts
+// and its three deletes take — and 84 ms for a part that cuts one change of
+// [PurgePartRows] revisions, oldest first.
 //
 // A RETIRE SWEEP (BenchmarkApplyARetireSweep, the record applied and
 // committed; BenchmarkRetireSweepStep, the whole step — the decide's read,

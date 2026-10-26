@@ -27,6 +27,12 @@ var ReproducibleTables = []string{
 	// rebuilds like any other.
 	"code_packs_retired",
 
+	// A repository's changes, each with who wrote it and every revision of
+	// its head — written by the records on the repository's own subject,
+	// like its refs, and removed with the repository, a change's revisions
+	// and authors before its row.
+	"code_changes", "code_change_authors", "code_revisions",
+
 	// The activation fence: the configuration activation every
 	// config-managed record is held to.
 	"code_activation",

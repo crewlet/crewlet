@@ -450,9 +450,10 @@ func (a *Applier) sweepTombstones(ctx context.Context, tx *sql.Tx, at applyConte
 
 // applyPurgePart deletes one bounded part of a deleted repository's rows, in a
 // fixed order — its pushes, then its refs, then its packs, then the packs a
-// record retired — so every node deletes the same rows. THE PART IS THE
-// GUARD: only the row's purge_parts + 1 deletes anything, so a redelivered or
-// stale part deletes nothing more.
+// record retired, then its changes, each whole: its revisions, its authors and
+// then its row ([purgeChanges]) — so every node deletes the same rows. THE PART
+// IS THE GUARD: only the row's purge_parts + 1 deletes anything, so a
+// redelivered or stale part deletes nothing more.
 //
 // BOUNDED BY ROWS AND BY BYTES: at most PurgePartRows rows, and push rows
 // only until their row_bytes reach PurgePartBytes — a push row is the
@@ -589,6 +590,14 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 		}
 		n, _ := res.RowsAffected()
 		deleted += int(n)
+		budget -= int(n)
+	}
+	if budget > 0 {
+		n, err := purgeChanges(ctx, tx, p.RepoID, budget)
+		if err != nil {
+			return 0, err
+		}
+		deleted += n
 	}
 	if _, err := tx.ExecContext(ctx, purgeCountersSQL, p.Part, gone.live, gone.branches, gone.tags,
 		gone.tombstones, livePacksGone, liveBytesGone, liveObjectsGone, at.packed, p.RepoID); err != nil {
@@ -603,15 +612,18 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 // redelivery of the marker's own record, which its gate lets through by op id,
 // deletes nothing and inserts nothing. Unbounded statements are safe because
 // the decide forms a purge only once at most PurgePartRows of the
-// repository's pushes, refs, packs and retired packs remain AND the pushes
-// among them weigh at most PurgePartBytes — a part's own bounds — and it holds
-// at most MaxProtectionsPerRepo rules: with the name claim, the row and the
-// marker that is PurgePartRows + MaxProtectionsPerRepo + 3 rows, which the
-// limits test holds within MaxRecordRows.
+// repository's pushes, refs, packs, retired packs and changes' revisions,
+// authors and rows remain AND the pushes among them weigh at most
+// PurgePartBytes — a part's own bounds — and it holds at most
+// MaxProtectionsPerRepo rules: with the name claim, the row and the marker
+// that is PurgePartRows + MaxProtectionsPerRepo + 3 rows, which the limits
+// test holds within MaxRecordRows. A change's revisions and authors go before
+// the changes, through which alone they are found.
 func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p Purge) (int, error) {
 	deleted := 0
 	for _, stmt := range []string{
-		purgeAllPushesSQL, purgeAllRefsSQL, purgeAllPacksSQL, purgeAllRetiredSQL, clearProtectionsSQL,
+		purgeAllPushesSQL, purgeAllRefsSQL, purgeAllPacksSQL, purgeAllRetiredSQL,
+		purgeAllRevisionsSQL, purgeAllAuthorsSQL, purgeAllChangesSQL, clearProtectionsSQL,
 	} {
 		res, err := tx.ExecContext(ctx, stmt, p.RepoID)
 		if err != nil {
