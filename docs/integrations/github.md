@@ -308,7 +308,7 @@ Together the page is normally correct by the time you switch back to it. If it i
 | `redirect_url` | `<webhook address>/webhooks/github-app` |
 | `setup_url` | `<webhook address>/webhooks/github-app?installed=<handle>` |
 | `default_events` | `issues`, `issue_comment`, `pull_request`, `pull_request_review`, `pull_request_review_comment` |
-| `default_permissions` | The seat's tier, below |
+| `default_permissions` | The seat's tier, below, plus `workflows: write` where the seat [opts in to workflow writes](#workflow-writes-an-opt-in-for-full-access) |
 
 `<webhook address>` is the one above: the public listener's
 `api.public.external_url` where `api.public` is set — the return and the
@@ -349,6 +349,56 @@ token minted for that app carries.
   naming the field, and a reader that takes the value anyway falls back to
   `read_only` rather than to something wider. A hyphen is not a typo:
   `full-access` and `full_access` are the same tier.
+- **`actions: read` is on every tier, and `actions: write` is on none.** Read
+  is what lets an agent list a pull request's workflow runs and read a failed
+  job's log, which is most of what fixing a red check takes. Write re-runs,
+  cancels and dispatches workflows, a deploy among them, and merging and
+  releasing stay a person's acts.
+
+### Workflow writes, an opt-in for full access
+
+GitHub refuses any push whose commits add, change or delete a file under
+`.github/workflows` unless the token carries `workflows: write`, whatever else
+it holds. No tier carries it. A `full_access` seat that has to change CI opts
+in on its own block:
+
+```yaml
+roles:
+  - name: Platform Engineer
+    integrations:
+      github:
+        tier: full_access
+        workflows: true           # off unless written; refused on every other tier
+```
+
+- **Only `full_access`.** Config validation refuses `workflows: true` on a
+  `read_only` or `review` seat (or one with no tier), naming the field: a seat
+  that cannot push code has nothing to push a workflow with. The engine asks
+  the tier again when it mints, so a document that skipped validation still
+  cannot hand the grant to a seat below full access.
+- **The risk.** The same grant lets the agent's branch run a workflow it
+  rewrote. A workflow triggered by a push to that branch runs the branch's own
+  copy of the file, with the secrets the repository hands its runs, so an
+  opted-in seat can reach any repository or organization secret a workflow on
+  an unprotected branch can read. Pair it with **branch protection** (required
+  reviews on the default branch and on release branches, so a modified
+  workflow reaches nothing that deploys until a person merges it) and
+  **environment-scoped secrets** (deployment credentials in an environment with
+  required reviewers or a branch policy, never repository-wide), so what a
+  branch can run with is what you would hand an unreviewed branch anyway.
+- **Asked for at creation.** An app created for a seat that already opts in is
+  created with `workflows: write` in its manifest.
+- **An app created before the opt-in does not hold it.** A manifest is read
+  once, so GitHub only adds the permission when the app's owner adds
+  **Workflows: Read and write** on the app's permissions page and the
+  organization then approves the request on the installation. Until the
+  installation holds it, GitHub refuses every token the seat asks for, since a
+  token request naming a permission the installation was not granted mints
+  nothing. The card reports it as a `grant_short` finding on that seat, linked
+  to the app's permissions page. To change an existing seat with no gap, widen
+  the app at GitHub and approve it first, then set `workflows: true`: an
+  installation holding the permission before the seat asks for it is not a
+  finding.
 
 ### What no tier grants
 
@@ -384,6 +434,7 @@ roles:
       github:
         tier: review              # read_only (default) | review | full_access
         repos: [acme/api]         # empty means every repository the installation covers
+        # workflows: true         # full_access only; see Workflow writes above
         # Written by the engine, never typed in:
         app_id: 1234567
         app_slug: acme-senior-engineer
@@ -392,7 +443,7 @@ roles:
         webhook_secret: "${GITHUB_APP_WEBHOOK_SECRET_SENIOR_ENGINEER}"
 ```
 
-`tier` and `repos` are the two fields a person writes. `app_id`, `app_slug`,
+`tier`, `repos` and `workflows` are the fields a person writes. `app_id`, `app_slug`,
 `private_key` and `webhook_secret` are written when the app is created, and the slug is what the
 bot login derives from, so it is what an `@mention` of this agent resolves
 through. `installation_id` is written as `0` at that moment, because creating
@@ -506,8 +557,9 @@ a recipe shared by several seats belongs on each seat's own `sandbox.setup`.
   variable is not set; a shared server never sees any of them. An app's
   identity stays with the agent it was created for, by construction
   ([ADR-0057](https://github.com/crewlet/crewlet/blob/main/adr/0057-a-seats-github-app-token-is-issued-at-use-and-read-only-by-that-seat.md)).
-- **Scoped at mint time.** The token carries the seat's tier's permissions and
-  nothing else, narrowed to the seat's `repos` where it names any. A `review`
+- **Scoped at mint time.** The token carries the seat's tier's permissions
+  (and `workflows: write` where the seat opts in) and nothing else, narrowed to
+  the seat's `repos` where it names any. A `review`
   seat's token cannot push, whatever the installation allows.
 - **Never sealed, never logged.** The token lives in the engine's memory, one
   per installation and scope, and is minted again by any node that holds the
@@ -539,7 +591,7 @@ as the agent's own app.
 | The seat's app | What a value naming the token does |
 |---|---|
 | Not created, not installed, or its key does not resolve | **Waits.** The variable is the GitHub integration's to issue, so a tool server naming it is held back as waiting for the app's installation (or as stopped until a person acts, by what the seat-app pass last recorded), and a coding run is refused with a sentence saying so. The reconcile records the installation within a tick of it, which applies a revision, and every read runs again |
-| Installed, and GitHub refuses the mint (a suspended installation, a revoked key) or cannot be reached | **Fails, with GitHub's reason**, and is retried: the seat's tool servers on their restart schedule, a coding run at the seat's next attempt |
+| Installed, and GitHub refuses the mint (a suspended installation, a revoked key, an installation that has not approved a permission the seat asks for) or cannot be reached | **Fails, with GitHub's reason**, and is retried: the seat's tool servers on their restart schedule, a coding run at the seat's next attempt |
 | `integrations.github` is off | **Nothing will issue it**, and it is reported as a variable nothing sets |
 
 ### Running locally, with no public address
@@ -679,10 +731,11 @@ and ready.
   carry the name that was asked for. That is why the install link is built from
   the slug the conversion returned rather than from the name that was
   requested.
-- **Permissions are frozen at creation.** Raising a seat's tier afterwards
-  means editing the app's permissions at GitHub, where every installation has
-  to approve the change before it takes effect. Choosing the tier before the
-  app is created is the cheap moment to get it right.
+- **Permissions are frozen at creation.** Raising a seat's tier or opting it in
+  to workflow writes afterwards means editing the app's permissions at GitHub,
+  where every installation has to approve the change before it takes effect,
+  and GitHub refuses the seat's tokens until it has. Choosing the tier and the
+  opt-in before the app is created is the cheap moment to get them right.
 - **The creation code is single use and lives one hour.** A code that has been
   converted or has expired is reported as exactly that, and the flow starts
   again from the begin route. The engine's own state is shorter still, at 15
