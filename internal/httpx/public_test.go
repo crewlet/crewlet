@@ -1,17 +1,79 @@
 package httpx_test
 
 import (
+	"context"
+	"errors"
+	"net"
 	"net/netip"
+	"slices"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/httpx"
 )
 
-// public is the rule's verdict on one address, the one call every case below
-// makes.
+// network is a resolver answering from a table, and reaching nothing: a name
+// it holds no address for (of the family asked) answers as Go's resolver
+// answers NODATA and NXDOMAIN, a not-found error. So ipv4only.arpa has no AAAA
+// record unless a case gives it some, as on a network with no DNS64.
+type network struct {
+	answers map[string][]string
+	fail    map[string]error
+
+	mu    sync.Mutex
+	asked []string
+}
+
+func (n *network) LookupNetIP(_ context.Context, family, host string) ([]netip.Addr, error) {
+	n.mu.Lock()
+	n.asked = append(n.asked, family+" "+host)
+	n.mu.Unlock()
+	if err := n.fail[host]; err != nil {
+		return nil, err
+	}
+	var addrs []netip.Addr
+	for _, raw := range n.answers[host] {
+		addr := netip.MustParseAddr(raw)
+		if family == "ip" || (family == "ip6") == (addr.Is6() && !addr.Is4In6()) {
+			addrs = append(addrs, addr)
+		}
+	}
+	if len(addrs) == 0 {
+		return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
+	}
+	return addrs, nil
+}
+
+// dns64 is a network whose resolver synthesizes AAAA records, answering
+// ipv4only.arpa with answers: each an address a DNS64 resolver writes for one
+// of the name's A records (192.0.0.170, 192.0.0.171) under a prefix it
+// translates through. Every case spells them out by hand, at the position RFC
+// 6052 section 2.2 fixes, rather than building them with the code they test.
+func dns64(answers ...string) *network {
+	return &network{answers: map[string][]string{"ipv4only.arpa.": answers}}
+}
+
+// public is the rule's verdict on one address, written as a host, on a
+// network with no DNS64: the one call the cases holding the blocks make.
 func public(t *testing.T, addr netip.Addr) bool {
 	t.Helper()
-	return httpx.Public(addr)
+	return publicOn(t, &network{}, addr)
+}
+
+// publicOn is the rule's verdict on addr, written as a host, on network n.
+func publicOn(t *testing.T, n *network, addr netip.Addr) bool {
+	t.Helper()
+	judged, err := httpx.ResolvePublic(t.Context(), n, addr.String())
+	switch {
+	case errors.Is(err, httpx.ErrNotPublic):
+		return false
+	case err != nil:
+		t.Fatalf("judging %s: %v", addr, err)
+	case len(judged) != 1 || judged[0] != addr.Unmap():
+		t.Fatalf("judging %s answered %v, want the address unmapped", addr, judged)
+	}
+	return true
 }
 
 // ends is the first and the last address of a block, each judged by a case
@@ -167,7 +229,9 @@ func TestEveryReservedRangeIsNotPublic(t *testing.T) {
 // A BLOCK IANA MARKS GLOBALLY REACHABLE IS PUBLIC, from its first address to
 // its last, unless it sits inside a block the rule refuses whole (the rows
 // above give each one's reason): the rule refuses what is special-purpose,
-// never the internet's own anycast services.
+// never the internet's own anycast services. The one other such block, the
+// NAT64 well-known prefix, is judged address by address, by the IPv4 address
+// each carries (TestANAT64AddressIsJudgedByTheIPv4AddressItCarries).
 func TestAGloballyReachableBlockIsPublic(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct{ block, why string }{
@@ -182,4 +246,176 @@ func TestAGloballyReachableBlockIsPublic(t *testing.T) {
 			}
 		}
 	}
+}
+
+// AN ADDRESS IN A NAT64 PREFIX IS JUDGED BY THE IPv4 ADDRESS IT CARRIES, and by
+// nothing else, read at the position RFC 6052 section 2.2 fixes for the
+// prefix's length (past the u octet, for the lengths whose IPv4 address
+// straddles it).
+//
+// The well-known prefix counts on every network, named or not. A
+// network-specific one counts where the network's resolver names it, and
+// each 3ffe row's prefix lies inside 2000::/3 (3ffe::/16 was the 6bone's,
+// returned to IANA in 2006: global unicast that names nobody's network).
+// Where such a prefix is not named the allowlist judges the same addresses
+// and calls the one carrying 10.0.0.5 public, which is why discovery is part
+// of the rule. The last row's prefix is in RFC 8215's local-use block, which
+// the allowlist refuses whole where nothing names a prefix in it.
+func TestANAT64AddressIsJudgedByTheIPv4AddressItCarries(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		addr string
+		want bool
+	}{
+		{"64:ff9b::6810:1", true},     // 104.16.0.1
+		{"64:ff9b::a00:5", false},     // 10.0.0.5
+		{"64:ff9b::a9fe:a9fe", false}, // 169.254.169.254, the cloud metadata address
+		{"64:ff9b::7f00:1", false},    // 127.0.0.1
+		{"64:ff9b::", false},          // 0.0.0.0, the prefix's first address
+		{"64:ff9b::ffff:ffff", false}, // 255.255.255.255, its last
+	} {
+		for _, n := range []*network{{}, dns64("64:ff9b::c000:aa", "64:ff9b::c000:ab")} {
+			if got := publicOn(t, n, netip.MustParseAddr(c.addr)); got != c.want {
+				t.Errorf("%s is judged public=%v, want %v (prefixes named: %v)", c.addr, got, c.want, n.answers)
+			}
+		}
+	}
+	for _, c := range []struct {
+		prefix      string
+		synthesized [2]string // what a DNS64 resolver answers ipv4only.arpa with under prefix
+		public      string    // 104.16.0.1 under prefix
+		private     string    // 10.0.0.5 under prefix
+		unnamed     bool      // the allowlist's verdict on both where nothing names prefix
+	}{
+		{"3ffe:64::/32", [2]string{"3ffe:64:c000:aa::", "3ffe:64:c000:ab::"},
+			"3ffe:64:6810:1::", "3ffe:64:a00:5::", true},
+		{"3ffe:64:6400::/40", [2]string{"3ffe:64:64c0:0:aa::", "3ffe:64:64c0:0:ab::"},
+			"3ffe:64:6468:1000:1::", "3ffe:64:640a:0:5::", true},
+		{"3ffe:64:64::/48", [2]string{"3ffe:64:64:c000:0:aa00::", "3ffe:64:64:c000:0:ab00::"},
+			"3ffe:64:64:6810:0:100::", "3ffe:64:64:a00:0:500::", true},
+		{"3ffe:64:64:6400::/56", [2]string{"3ffe:64:64:64c0:0:aa::", "3ffe:64:64:64c0:0:ab::"},
+			"3ffe:64:64:6468:10:1::", "3ffe:64:64:640a:0:5::", true},
+		{"3ffe:64:64:64::/64", [2]string{"3ffe:64:64:64:c0:0:aa00:0", "3ffe:64:64:64:c0:0:ab00:0"},
+			"3ffe:64:64:64:68:1000:100:0", "3ffe:64:64:64:a:0:500:0", true},
+		{"3ffe:64:64:96::/96", [2]string{"3ffe:64:64:96::c000:aa", "3ffe:64:64:96::c000:ab"},
+			"3ffe:64:64:96::6810:1", "3ffe:64:64:96::a00:5", true},
+		{"64:ff9b:1::/96", [2]string{"64:ff9b:1::c000:aa", "64:ff9b:1::c000:ab"},
+			"64:ff9b:1::6810:1", "64:ff9b:1::a00:5", false},
+	} {
+		named := dns64(c.synthesized[0], c.synthesized[1])
+		pub, priv := netip.MustParseAddr(c.public), netip.MustParseAddr(c.private)
+		if !publicOn(t, named, pub) {
+			t.Errorf("%s, carrying 104.16.0.1 under the named %s, is judged not public", pub, c.prefix)
+		}
+		if publicOn(t, named, priv) {
+			t.Errorf("%s, carrying 10.0.0.5 under the named %s, is judged public", priv, c.prefix)
+		}
+		for _, addr := range []netip.Addr{pub, priv} {
+			if got := publicOn(t, &network{}, addr); got != c.unnamed {
+				t.Errorf("%s, under %s with nothing naming it, is judged public=%v, want the allowlist's %v",
+					addr, c.prefix, got, c.unnamed)
+			}
+		}
+	}
+	// An address two named prefixes hold is public only when the address it
+	// carries is public read at both positions.
+	both := dns64("3ffe:64:64:64:c0:0:aa00:0", "3ffe:64:64:64:c0:0:ab00:0",
+		"3ffe:64:64:64::c000:aa", "3ffe:64:64:64::c000:ab")
+	if addr := netip.MustParseAddr("3ffe:64:64:64::6810:1"); publicOn(t, both, addr) {
+		t.Errorf("%s, carrying 104.16.0.1 under the /96 and 0.0.0.104 under the /64, is judged public", addr)
+	}
+	if addr := netip.MustParseAddr("3ffe:64:64:64:68:1000:100:0"); !publicOn(t, both, addr) {
+		t.Errorf("%s, carrying 104.16.0.1 under the /64 alone, is judged not public", addr)
+	}
+}
+
+// THE NETWORK'S OWN PREFIXES ARE READ FROM ITS RESOLVER'S ANSWER FOR
+// ipv4only.arpa (RFC 7050), and nothing else names one: no record is no
+// DNS64, an answer carrying neither of the name's two addresses was not
+// synthesized, and a prefix whose own bits hold 192.0.0.170 is read from the
+// answer for 192.0.0.171, in either order. A lookup that fails, rather than
+// finding no record, fails the resolve with the resolver's own error.
+func TestTheNetworksPrefixesAreReadFromIpv4onlyArpa(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name  string
+		n     *network
+		probe string // an address the answer's prefix holds, carrying 10.0.0.5
+		want  bool   // the verdict on probe: public only where nothing names its prefix
+	}{
+		{"the well-known prefix names no other",
+			dns64("64:ff9b::c000:aa", "64:ff9b::c000:ab"), "3ffe:64:64:96::a00:5", true},
+		{"a /96", dns64("3ffe:64:64:96::c000:aa", "3ffe:64:64:96::c000:ab"), "3ffe:64:64:96::a00:5", false},
+		{"a /64, read past the u octet",
+			dns64("3ffe:64:64:64:c0:0:aa00:0", "3ffe:64:64:64:c0:0:ab00:0"), "3ffe:64:64:64:a:0:500:0", false},
+		{"no record names none", &network{}, "3ffe:64:64:96::a00:5", true},
+		{"an answer carrying neither address names none",
+			dns64("3ffe:64:64:96::c000:ac", "3ffe:64:64:96::c0a8:aa"), "3ffe:64:64:96::a00:5", true},
+		{"an answer carrying 192.0.0.171 alone names its prefix",
+			dns64("3ffe:64:64:96::c000:ab"), "3ffe:64:64:96::a00:5", false},
+		{"a prefix holding 192.0.0.170 is read from 192.0.0.171's answer",
+			dns64("3ffe:64:c000:aa::c000:aa", "3ffe:64:c000:aa::c000:ab"), "3ffe:64:c000:aa::a00:5", false},
+		{"and its own bits name no /32",
+			dns64("3ffe:64:c000:aa::c000:aa", "3ffe:64:c000:aa::c000:ab"), "3ffe:64:a00:5::", true},
+		{"in either order",
+			dns64("3ffe:64:c000:aa::c000:ab", "3ffe:64:c000:aa::c000:aa"), "3ffe:64:a00:5::", true},
+	} {
+		if got := publicOn(t, c.n, netip.MustParseAddr(c.probe)); got != c.want {
+			t.Errorf("%s: %s is judged public=%v, want %v", c.name, c.probe, got, c.want)
+		}
+	}
+
+	misbehaving := &net.DNSError{Err: "server misbehaving", Name: "ipv4only.arpa.", Server: "192.0.2.53:53",
+		IsTemporary: true}
+	n := &network{answers: map[string][]string{"cdn.example": {"104.16.0.1"}},
+		fail: map[string]error{"ipv4only.arpa.": misbehaving}}
+	for _, host := range []string{"cdn.example", "104.16.0.1", "2606:4700::1"} {
+		judged, err := httpx.ResolvePublic(t.Context(), n, host)
+		if err == nil || errors.Is(err, httpx.ErrNotPublic) || !errors.Is(err, misbehaving) ||
+			!strings.Contains(err.Error(), "ipv4only.arpa.") {
+			t.Errorf("%s, with the resolver failing ipv4only.arpa, answered %v and %v, want the failure, "+
+				"naming the lookup", host, judged, err)
+		}
+	}
+}
+
+// A NAME IS PUBLIC ONLY WHEN EVERY ADDRESS IT RESOLVES TO IS, and comes back as
+// the addresses to dial, an IPv4 one written in IPv6 form unmapped. One that
+// is not refuses the name, naming the address. A name that resolves to no
+// address, or not at all, is refused by its own lookup, never judged. And the
+// network's prefixes are asked of the resolver the name is resolved with.
+func TestANameIsPublicOnlyWhenEveryAddressItResolvesToIs(t *testing.T) {
+	t.Parallel()
+	n := &network{answers: map[string][]string{
+		"cdn.example":   {"104.16.0.1", "::ffff:151.101.1.1", "2606:4700::1"},
+		"split.example": {"104.16.0.1", "64:ff9b::a00:5"},
+	}}
+	judged, err := httpx.ResolvePublic(t.Context(), n, "cdn.example")
+	want := []netip.Addr{netip.MustParseAddr("104.16.0.1"), netip.MustParseAddr("151.101.1.1"),
+		netip.MustParseAddr("2606:4700::1")}
+	if err != nil || !slices.Equal(judged, want) {
+		t.Errorf("cdn.example answered %v and %v, want %v", judged, err, want)
+	}
+	if !slices.Contains(n.asked, "ip6 ipv4only.arpa.") {
+		t.Errorf("the network's prefixes were not asked of the name's own resolver: it was asked %v", n.asked)
+	}
+	if _, err := httpx.ResolvePublic(t.Context(), n, "split.example"); !errors.Is(err, httpx.ErrNotPublic) ||
+		!strings.Contains(err.Error(), "split.example resolves to 64:ff9b::a00:5") {
+		t.Errorf("split.example, one of whose addresses carries 10.0.0.5, answered %v", err)
+	}
+	if _, err := httpx.ResolvePublic(t.Context(), n, "missing.example"); err == nil ||
+		errors.Is(err, httpx.ErrNotPublic) {
+		t.Errorf("missing.example, which does not resolve, answered %v, want its lookup's error", err)
+	}
+	var none resolverFunc = func(context.Context, string, string) ([]netip.Addr, error) { return nil, nil }
+	if judged, err := httpx.ResolvePublic(t.Context(), none, "empty.example"); err == nil {
+		t.Errorf("empty.example, which resolves to no address, answered %v", judged)
+	}
+}
+
+// resolverFunc is a resolver written as one function.
+type resolverFunc func(ctx context.Context, network, host string) ([]netip.Addr, error)
+
+func (f resolverFunc) LookupNetIP(ctx context.Context, network, host string) ([]netip.Addr, error) {
+	return f(ctx, network, host)
 }
