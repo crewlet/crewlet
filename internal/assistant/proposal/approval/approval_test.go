@@ -444,7 +444,10 @@ func TestAnAppliedWriteHandsTheTurnItsReceipt(t *testing.T) {
 		// receipt, so the card says which task landed rather than
 		// "Applied".
 		t.Errorf("the receipt is %+v", r.Receipt)
-	case r.Invalidate == nil || r.Invalidate.Domain != "CREWLET_TRACKER_LOG":
+	case r.Invalidate == nil || r.Invalidate.Domain != "tracker" ||
+		r.Invalidate.Position != "CREWLET_TRACKER_LOG@1:42":
+		// NAMED BY THE DOMAIN, the key a screen's read floors are kept
+		// under: the stream's name raised no floor on any screen.
 		t.Errorf("the invalidation is %+v", r.Invalidate)
 	case r.Card.Proposal.State != wire.ProposalApplied || r.ClientReported:
 		t.Errorf("the card is %s and client-reported %v", r.Card.Proposal.State, r.ClientReported)
@@ -453,6 +456,32 @@ func TestAnAppliedWriteHandsTheTurnItsReceipt(t *testing.T) {
 	}
 	if x := f.Grants.Execs(); len(x) != 1 || x[0].Request.Path != p.Path || x[0].Proposal != p.ID {
 		t.Errorf("the exec grant was not derived for the stored request: %+v", x)
+	}
+}
+
+// A WRITE THAT LANDED WITHOUT NAMING A POSITION STILL MOVES THE SCREENS: a
+// route outside the act surface (a brand adopted, a seat changed through the
+// configuration) answers no position, and the page behind the drawer kept
+// drawing what it held before the write until it was reloaded. The turn is
+// handed an invalidation all the same, with no floor to wait for.
+//
+// Mutation: emit an invalidation only for an answer that names a position,
+// and this turn is handed none.
+func TestAWriteWithNoPositionStillInvalidatesTheScreens(t *testing.T) {
+	t.Parallel()
+	f := approvaltest.NewFleet()
+	ada := approvaltest.Person(approvaltest.Noon.Add(time.Hour))
+	p := f.Propose(t, ada, nil)
+	f.API.AnswerNext(exec.Response{Status: http.StatusOK, Body: []byte(`{"version":4}`)})
+	if _, err := f.Node(t).Approve(approvaltest.As(t.Context(), ada),
+		approvaltest.Approve(p)); err != nil {
+		t.Fatal(err)
+	}
+	r := f.Turns.Resumed()[0]
+	if r.State != wire.ProposalApplied || r.Invalidate == nil ||
+		*r.Invalidate != (wire.Invalidate{}) {
+		t.Fatalf("the resumed turn is %s with invalidation %+v, want applied with an "+
+			"invalidation naming no position", r.State, r.Invalidate)
 	}
 }
 
