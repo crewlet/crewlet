@@ -475,7 +475,11 @@ func readTools() []Tool {
 			Cards: one(cards.Spec{Table: &cards.Table{Title: "Coding runs", Rows: "runs",
 				Brief: []string{"agent", "status", "task", "started"},
 				Columns: []cards.Column{col("agent", "Seat", "agent_handle", tText),
-					col("status", "Status", "status", tLabel), col("task", "Task", "work_key", tText),
+					// THE TASK IS THE ITEM THE LAUNCHING TURN WAS CHARGED TO
+					// (`work_item`); `work_key` is the turn's delivery identity
+					// (internal/workkey), which no person reads as a task.
+					col("status", "Status", "status", tLabel),
+					col("task", "Task", "work_item.key", tText),
 					col("coding_agent", "Agent", "coding_agent", tText),
 					col("started", "Started", "started_at", tDatetime),
 					col("updated", "Updated", "updated_at", tDatetime),
