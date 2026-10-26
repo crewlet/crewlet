@@ -231,9 +231,11 @@ func readTools() []Tool {
 		{
 			Name: "get_my_work", Phrase: "read your work",
 			Description: "The person's own work: what is assigned to them, their priority order, " +
-				"the questions asked of them, or their inbox.",
+				"the questions asked of them, or their task notices (inbox: mentions, assignments " +
+				"and comments, the Inbox screen's Updates). The Inbox screen's Needs you is not " +
+				"here: read list_decisions and list_agents for it.",
 			schema: object(nil, map[string]*schema{
-				"section": oneOf("Which part. Default assigned.", "assigned", "priorities", "asked", "inbox"),
+				"section": oneOf("Which part. Default assigned. inbox is the task notices.", "assigned", "priorities", "asked", "inbox"),
 				"unread":  flag("Inbox only: just what is unread."),
 			}),
 			Routes: []string{"GET /worklet/my-work", "GET /worklet/inbox"}, Apps: workletApp, Fence: true,
@@ -342,7 +344,8 @@ func readTools() []Tool {
 		{
 			Name: "list_decisions", Phrase: "list what waits on you",
 			Description: "What is waiting on the person: questions asked of them on tasks, and " +
-				"coding runs parked on a question for them.",
+				"coding runs parked on a question for them. With list_agents' stopped seats, this " +
+				"is the Inbox screen's Needs you.",
 			schema: object(nil, map[string]*schema{}),
 			Routes: []string{"GET /worklet/decisions"}, Fence: true,
 			// An ask is a colleague's; a coding run's question is not (see
@@ -365,8 +368,9 @@ func readTools() []Tool {
 		{
 			Name: "list_agents", Phrase: "list the agents",
 			Description: "Every seat with what it is doing now: working, idle, or stopped and " +
-				"why (paused, out of budget, no node, its model unavailable), its current phase, " +
-				"its last turn's outcome and the last error it hit.",
+				"why (paused, and by whom and why; out of budget; no node; its model unavailable), " +
+				"its current phase, its last turn's outcome and the last error it hit. A stopped " +
+				"seat is listed in the Inbox screen's Needs you.",
 			schema: object(nil, map[string]*schema{}),
 			// FENCED: a pause's reason is its author's words, and a seat's
 			// last error can carry a provider's.
