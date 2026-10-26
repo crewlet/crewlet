@@ -1189,8 +1189,12 @@ const (
 	// refuses a doubled baseline. Merging main's MCP tool route (#371) beside
 	// the assistant's card rendering took it to 4499.8 KiB: the live view's
 	// CLI runs, their calls in flight and a run drawn before its first round.
-	// 4501 KiB, which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 405<<10
+	// 4501 KiB, which still refuses a doubled baseline. uilet 0.64.0 and a
+	// card value drawn as what it is (a list as its items, a body as code,
+	// page text as an inert preview, a colour beside its chip) took it to
+	// 4503.4 KiB, in the panel's chunk and ChangeList's block rules in the one
+	// sheet. 4504 KiB, which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 408<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
