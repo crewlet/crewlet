@@ -59,6 +59,18 @@ type Column struct {
 	// Prose marks text a person or an agent wrote (a title, a question, a
 	// snippet), which a model reads fenced.
 	Prose bool
+	// Seat marks a text column whose value is a seat's handle, drawn by the
+	// seat's name where the build is told it ([Options.SeatName]): a person
+	// knows "QA Engineer", not "qa", and the model reads what the person
+	// sees, which the catalogue's resolver takes back as a name.
+	Seat bool
+}
+
+// Options are what a build is told beyond the spec and the answer.
+type Options struct {
+	// SeatName is a seat's name by its handle, false where it is not
+	// known; nil draws every seat column by its handle.
+	SeatName func(handle string) (string, bool)
 }
 
 // MaxBrief is the most columns a table draws in the drawer: what its narrowest
@@ -215,6 +227,9 @@ func (s Spec) Validate() error {
 				return fmt.Errorf("cards: table column %q is not a unique key with a "+
 					"label, a path and a type", c.Key)
 			}
+			if c.Seat && c.Type != wire.ColumnText {
+				return fmt.Errorf("cards: table column %q names a seat and is not text", c.Key)
+			}
 			keys[c.Key] = true
 		}
 		if len(t.Brief) > MaxBrief {
@@ -300,6 +315,11 @@ var ErrNotJSON = errors.New("cards: the answer is not JSON")
 // count, and a notice names how many rows were shown. A field the answer does
 // not hold is an empty cell, never a guess.
 func Build(spec Spec, answer []byte, now time.Time) (Built, error) {
+	return BuildWith(spec, answer, now, Options{})
+}
+
+// BuildWith is [Build] told what o says.
+func BuildWith(spec Spec, answer []byte, now time.Time, o Options) (Built, error) {
 	if err := spec.Validate(); err != nil {
 		return Built{}, err
 	}
@@ -309,7 +329,7 @@ func Build(spec Spec, answer []byte, now time.Time) (Built, error) {
 	}
 	var built Built
 	if spec.Table != nil {
-		built, err = buildTable(spec.Table, doc, now)
+		built, err = buildTable(spec.Table, doc, now, o)
 	} else {
 		built, err = buildEntity(spec.Entity, doc)
 	}
@@ -336,7 +356,7 @@ func decode(answer []byte) (any, error) {
 	return doc, nil
 }
 
-func buildTable(t *Table, doc any, now time.Time) (Built, error) {
+func buildTable(t *Table, doc any, now time.Time, o Options) (Built, error) {
 	rows, _ := lookup(doc, t.Rows).([]any)
 	if t.Expand != "" {
 		rows = expand(rows, t.Expand)
@@ -356,6 +376,12 @@ func buildTable(t *Table, doc any, now time.Time) (Built, error) {
 		cells := make([]any, len(columns))
 		for i, c := range columns {
 			cells[i] = cell(c.Type, lookup(row, c.Path))
+			if handle, ok := cells[i].(string); ok && c.Seat && handle != "" &&
+				o.SeatName != nil {
+				if name, known := o.SeatName(handle); known {
+					cells[i] = name
+				}
+			}
 		}
 		card.Rows = append(card.Rows, cells)
 	}
