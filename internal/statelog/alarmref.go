@@ -168,12 +168,15 @@ const alarmHeader = `# Alarms
 Every condition the engine raises about itself, what it means, and what to do
 about it.
 
-An alarm reaches you three ways, and they are the same table evaluated once: a
+An alarm reaches you four ways, and they are the same table evaluated once: a
 ` + "`crewlet.alarm.active{kind}`" + ` gauge your collector scrapes, a named ` + "`WARN`" + `
 line when it starts and another when it clears, carrying how long it was up,
-and a count on the node's health envelope (` + "`GET /health`" + ` and the
+a count on the node's health envelope (` + "`GET /health`" + ` and the
 dashboard's health push carry ` + "`alarms: {count, worst}`" + `, where ` + "`worst`" + `
-is the alarm that has been firing longest). Nothing has to be polled for any
+is the alarm that has been firing longest), and the node's row on the fleet
+view: each node's presence heartbeat carries every alarm firing on it with when
+it was raised, and ` + "`GET /fleet`" + ` lists them per node (` + "`alarms`" + `), so
+one read covers every node. Nothing has to be polled for any
 of them: every node running a state log, which is every data node, evaluates
 the whole table on its own position heartbeat, every %s, and again the moment
 the measurements it takes every %s (each log's daily intake, the vector

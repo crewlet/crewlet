@@ -72,6 +72,66 @@ func TestTheHealthAlarmsAreTheRetentionAlarms(t *testing.T) {
 	}
 }
 
+// THE HEARTBEAT CARRIES WHAT THE NODE'S OWN TABLE HAS FIRING, as a peer reads
+// it off the presence lease: the alarms the health envelope names, in its
+// order, each dated by the instant the tracker raised it — and nothing at all
+// where no evaluation has run, on a node with no table or one whose table has
+// not been evaluated yet, so a peer never reads a node that cannot say as a
+// quiet one.
+//
+// Mutation: leave the alarms off the status, publish them as evaluated before
+// the first evaluation, or date them by the beat rather than the raise, and
+// this fails.
+func TestTheHeartbeatCarriesTheAlarmsFiringOnTheNode(t *testing.T) {
+	t.Parallel()
+	raised := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	r := &retention{
+		fleet:  coordmem.NewFleet(),
+		state:  &stateLog{},
+		nodeID: "node-a",
+		alarms: statelog.NewTracker(nil, func() time.Time { return raised }),
+		pooled: map[string]poolCounters{},
+	}
+	e := &Engine{}
+	heard := func() coord.NodeStatus {
+		t.Helper()
+		got, ok := coord.StatusFromMeta(map[string]any{coord.StatusKey: e.nodeStatus(t.Context()).Meta()})
+		if !ok {
+			t.Fatal("the heartbeat carried no status")
+		}
+		return got
+	}
+	if got := heard(); got.AlarmsEvaluated || got.Alarms != nil {
+		t.Fatalf("a node running no alarm table published (%v, %+v)", got.AlarmsEvaluated, got.Alarms)
+	}
+	e.alarms.Store(r.alarms)
+	if got := heard(); got.AlarmsEvaluated || got.Alarms != nil {
+		t.Fatalf("a table not yet evaluated published (%v, %+v)", got.AlarmsEvaluated, got.Alarms)
+	}
+
+	r.beat(t.Context())
+	standing, _ := e.Alarms()
+	// A FLOOR: a fleet with no backup recorded raises `backup_age`, so a
+	// comparison of two empty lists cannot pass as agreement here.
+	if len(standing) == 0 {
+		t.Fatal("the beat raised no alarm, so this compares nothing")
+	}
+	got := heard()
+	if !got.AlarmsEvaluated {
+		t.Fatal("an evaluated table published its alarms as not evaluated")
+	}
+	kinds := make([]statelog.Kind, 0, len(got.Alarms))
+	for _, m := range got.Alarms {
+		kinds = append(kinds, statelog.Kind(m.Kind))
+		if !m.Since.Equal(raised) {
+			t.Errorf("%s is marked since %v, want %v: the instant the tracker raised it", m.Kind, m.Since, raised)
+		}
+	}
+	if !slices.Equal(kinds, standing) {
+		t.Errorf("the heartbeat names %v and the health envelope %v, in that order", kinds, standing)
+	}
+}
+
 // ONE ENTRY PER KIND ON A RUNNING NODE, however many logs the kind stands on:
 // two logs whose floor this node cannot use raise ONE `floor_unknown` listing
 // both, and the health envelope counts it once — the count a person reads

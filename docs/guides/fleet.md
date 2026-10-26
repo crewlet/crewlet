@@ -750,6 +750,16 @@ again before you start restoring, rebuilding or adding nodes.
   started — one row per server, counting the
   instances that started and failed, with one failure's reason. See
   [What a node says about itself](../concepts/coordination.md#what-a-node-says-about-itself).
+- **What is firing on each node** rides the same heartbeat: every
+  [alarm](../reference/alarms.md) the node's own table has up, by its kind
+  and with when the node raised it, the longest-standing first. `GET /fleet`
+  lists them on each node's row (`alarms`), so one read says what is wrong
+  anywhere in the fleet, where `/health` counts only the alarms of the node
+  that answered it. A node that evaluated its table and found nothing lists
+  none (`[]`); a node with no table to evaluate, which is any node without
+  `data`, or one whose first evaluation has not run yet, carries no `alarms`
+  at all, which reads as not saying rather than as healthy. Read the measurement
+  and the remedy on that node's own `alarm_raised` line.
 
 A node whose applied config epoch lags the fleet's is not an error on its
 own — every rollout produces lag. See

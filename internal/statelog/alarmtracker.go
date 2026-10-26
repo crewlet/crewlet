@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -233,10 +234,44 @@ func compareInstances(a, b instance) int {
 // yet (mid-boot, or running no state log at all) cannot say, and an empty
 // list here would tell a health card it is healthy.
 func (t *Tracker) Standing() ([]Kind, bool) {
+	kinds, _, observed := t.standing()
+	return kinds, observed
+}
+
+// Marks is [Tracker.Standing] with each kind's start: the kinds the latest
+// evaluation found firing, one mark per kind, the longest-standing first, each
+// dated by the instant it was raised — its oldest instance's, for a kind
+// standing on several logs — and false before any evaluation has run.
+//
+// For the fifth surface, the node's presence heartbeat
+// ([coord.NodeStatus.Alarms]), which every peer reads, so that "what is wrong
+// on that node" is answered by the evaluation the node's own gauge, log lines
+// and health count were fed rather than by a second one. ONE COMPUTATION
+// BEHIND BOTH, so the heartbeat cannot name a different set, or a different
+// longest-standing alarm, from the health card of the same node.
+func (t *Tracker) Marks() ([]coord.AlarmMark, bool) {
+	kinds, since, observed := t.standing()
+	if !observed {
+		return nil, false
+	}
+	out := make([]coord.AlarmMark, 0, len(kinds))
+	for _, kind := range kinds {
+		out = append(out, coord.AlarmMark{Kind: string(kind), Since: since[kind]})
+	}
+	return out, true
+}
+
+// standing is the latest evaluation's firing kinds, the longest-standing
+// first, with the instant each has stood since, and whether any evaluation has
+// run.
+//
+// A kind has stood since its OLDEST instance was raised: one cause standing on
+// four logs is one alarm, and a log joining it does not make it newer.
+func (t *Tracker) standing() ([]Kind, map[Kind]time.Time, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !t.observed {
-		return nil, false
+		return nil, nil, false
 	}
 	since := make(map[Kind]time.Time, len(t.order))
 	for key, f := range t.firing {
@@ -248,7 +283,7 @@ func (t *Tracker) Standing() ([]Kind, bool) {
 	slices.SortStableFunc(out, func(a, b Kind) int {
 		return since[a].Compare(since[b])
 	})
-	return out, true
+	return out, since, true
 }
 
 // Firing reports how long each kind currently up has been up: the longest of

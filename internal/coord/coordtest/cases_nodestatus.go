@@ -2,6 +2,7 @@ package coordtest
 
 import (
 	"reflect"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -12,11 +13,12 @@ import (
 // nodeStatusCases certify [coord.NodeStatus] across a real store round trip.
 //
 // In the suite rather than beside the decoder because its whole input is what
-// a BACKEND hands back from a presence lease's Meta — and the two shipped
-// backends hand it back in different Go types (the twin what was written, the
-// KV a JSON round trip's []any and float64). A decoder tested only against the
-// twin would pass and then read every peer on the real store as reporting
-// nothing.
+// a BACKEND hands back from a presence lease's Meta, and that is never what
+// was written: the KV stores it as JSON, and the twin puts it through the same
+// encoding at its door (memory's wireCopy), so an int comes back a float64, a
+// typed slice an []any and a nil slice null. A decoder tested only against the
+// Go values it was handed would pass and then read every peer on a real store
+// as reporting nothing.
 var nodeStatusCases = []testCase{
 	{"a_node_status_round_trips_through_presence", func(h *harness) {
 		want := coord.NodeStatus{
@@ -47,6 +49,52 @@ var nodeStatusCases = []testCase{
 			}
 			if !reflect.DeepEqual(got, want) {
 				h.t.Fatalf("%s: status read back as %+v, want %+v", what, got, want)
+			}
+		}
+	}},
+
+	{"a_status_carries_its_firing_alarms", func(h *harness) {
+		// What is firing on each node is read by every peer off this
+		// lease, so the marks have to come back from the store exactly as
+		// published — kind, start and the longest-standing-first order —
+		// and the three states have to stay three across it: an evaluated
+		// table with nothing firing is an EMPTY list (which the store's
+		// encoding hands back as an []any of nothing, where a nil list
+		// would come back null, and a reader must still see as a list),
+		// and a node with no table it has evaluated is no list at all,
+		// never a quiet node.
+		since := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+		want := map[string]coord.NodeStatus{
+			"n1": {InFlight: 1, AlarmsEvaluated: true, Alarms: []coord.AlarmMark{
+				{Kind: "backup_age", Since: since},
+				{Kind: "apply_lag", Since: since.Add(2 * time.Minute)},
+			}},
+			"n2": {InFlight: 1, AlarmsEvaluated: true},
+			"n3": {InFlight: 1},
+		}
+		for _, node := range []string{"n1", "n2", "n3"} {
+			h.present(node, node+":a", want[node].Meta())
+		}
+		read := map[string]coord.Lease{}
+		for _, node := range []string{"n1", "n2", "n3"} {
+			read["Get "+node] = *h.mustHold(coord.NodeResource(node), node+":a")
+		}
+		for _, lease := range h.listLive(coord.ClassNode) {
+			node, _ := coord.ClassNode.Name(lease.Resource)
+			read["ListLive "+node] = lease
+		}
+		if len(read) != 2*len(want) {
+			h.t.Fatalf("read %d leases, want each of the %d nodes by Get and by ListLive",
+				len(read), len(want))
+		}
+		for what, lease := range read {
+			node, _ := coord.ClassNode.Name(lease.Resource)
+			got, ok := coord.StatusFromMeta(lease.Meta)
+			if !ok {
+				h.t.Fatalf("%s: a published status read back as absent", what)
+			}
+			if !reflect.DeepEqual(got, want[node]) {
+				h.t.Errorf("%s: status read back as %+v, want %+v", what, got, want[node])
 			}
 		}
 	}},

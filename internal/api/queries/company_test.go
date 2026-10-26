@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -3093,6 +3094,64 @@ func TestTheFleetReportsEachNodesAdminPosture(t *testing.T) {
 	if _, present := byID["node-c"]["admin"]; present {
 		t.Error("a node that serves no API carries an admin posture anyway, so " +
 			"a worker binding no API reads as a node that refuses")
+	}
+}
+
+// EACH NODE'S ROW SAYS WHAT IS FIRING ON IT, which is the one place a person
+// reads every node's alarms at once: the health envelope names those of
+// whichever node a load balancer sent the request to.
+//
+// The marks come off the node's own heartbeat, in its order (the
+// longest-standing first) and each with when it was raised. A node that
+// evaluated its table and found nothing carries an EMPTY list, and one with no
+// table it has evaluated carries none at all — a blank drawn as "no alarms"
+// would call a node healthy that cannot say.
+//
+// Mutation: publish the field whatever the node said, or drop its since, and
+// this goes red.
+func TestTheFleetSaysWhatIsFiringOnEachNode(t *testing.T) {
+	t.Parallel()
+	backend := coordmemory.New()
+	claim := func(node string, status coord.NodeStatus) {
+		t.Helper()
+		if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource(node),
+			coord.AcquireOptions{
+				Owner: node + ":1", TTL: time.Minute,
+				Meta: map[string]any{coord.StatusKey: status.Meta()},
+			},
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	since := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	claim("node-a", coord.NodeStatus{AlarmsEvaluated: true, Alarms: []coord.AlarmMark{
+		{Kind: "backup_age", Since: since},
+		{Kind: "apply_lag", Since: since.Add(2 * time.Minute)},
+	}})
+	claim("node-b", coord.NodeStatus{AlarmsEvaluated: true})
+	claim("node-c", coord.NodeStatus{})
+
+	body := asMap(t, answer(t, queries.Sources{
+		Coord: backend, NodeID: "node-a",
+	}, "fleet", nil))
+	byID := map[string]map[string]any{}
+	for _, row := range rows(t, body["nodes"]) {
+		byID[fmt.Sprint(row["id"])] = row
+	}
+	want := []any{
+		map[string]any{"kind": "backup_age", "since": "2026-03-04T05:06:07Z"},
+		map[string]any{"kind": "apply_lag", "since": "2026-03-04T05:08:07Z"},
+	}
+	if got := byID["node-a"]["alarms"]; !reflect.DeepEqual(got, want) {
+		t.Errorf("node-a reports its alarms as %#v, want %#v", got, want)
+	}
+	if got, present := byID["node-b"]["alarms"]; !present || !reflect.DeepEqual(got, []any{}) {
+		t.Errorf("a node that found nothing firing reports %#v (present %v), want an empty list",
+			got, present)
+	}
+	if got, present := byID["node-c"]["alarms"]; present {
+		t.Errorf("a node with no evaluated table reports alarms %#v, so a node that cannot "+
+			"say reads as one with nothing firing", got)
 	}
 }
 

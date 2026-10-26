@@ -3117,6 +3117,15 @@ func (e *Engine) nodeStatus(ctx context.Context) coord.NodeStatus {
 			status.ProjectionsReady++
 		}
 	}
+	// WHAT IS FIRING ON THIS NODE, off the tracker the health envelope
+	// reads ([Engine.Alarms]): the evaluation this node's gauge and alarm
+	// log lines were fed, never a second one, and memory, so it costs the
+	// beat nothing. A node with no tracker, or one that has not evaluated
+	// yet, publishes no alarms at all, which a peer reads as "not saying"
+	// rather than as a quiet node — see [coord.NodeStatus.AlarmsEvaluated].
+	if tracker := e.alarms.Load(); tracker != nil {
+		status.Alarms, status.AlarmsEvaluated = tracker.Marks()
+	}
 	if fn := e.posture.Load(); fn != nil {
 		posture := (*fn)(ctx)
 		// A posture read that ran out of the beat's budget did not

@@ -155,6 +155,25 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 			if live.AdminPosture != "" {
 				row["admin"] = live.AdminPosture
 			}
+			// WHAT IS WRONG ON THAT NODE, as its own alarm table found
+			// it at its last beat: each alarm firing there, the
+			// longest-standing first, with when it was raised. The one
+			// place a person reads every node's alarms at once — the
+			// health envelope names those of whichever node served it.
+			//
+			// AN EMPTY LIST IS A NODE THAT LOOKED AND FOUND NOTHING, and
+			// absent is a node with no table it has evaluated (one
+			// running no state log, or one mid-boot): a blank drawn as
+			// "no alarms" would call a node healthy that cannot say.
+			if live.AlarmsEvaluated {
+				marks := make([]map[string]any, 0, len(live.Alarms))
+				for _, m := range live.Alarms {
+					marks = append(marks, map[string]any{
+						"kind": m.Kind, "since": isoOrEmpty(m.Since),
+					})
+				}
+				row["alarms"] = marks
+			}
 		}
 		nodeRows = append(nodeRows, row)
 	}

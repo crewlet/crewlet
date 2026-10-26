@@ -7620,13 +7620,29 @@ tenure's start, stamped when the lease's `epoch` was minted and carried
 unchanged through every renewal, so it moves exactly when `epoch` does: on
 a takeover, and on the same node re-claiming after its own lease lapsed.
 
+Each node row carries `alarms` — **what is firing on that node**, off the
+same heartbeat: every [alarm](alarms.md) its own table has up, one entry per
+kind, each `{"kind", "since"}`, `since` being when the node raised it, an
+RFC 3339 UTC time on that node's clock, to the second (for a kind standing on
+several logs, the oldest of them). The longest-standing comes first, the alarm
+that node's own `/health` names as `worst`. It is the one answer that holds
+every node's alarms at once, since `/health` counts only those of the node
+that served it. An empty list is a node that evaluated its table and found
+nothing firing. A node with no table it has evaluated, which is one running no
+state log (any node without `data`) or one whose first evaluation has not run,
+has no `alarms` field at all, and that is "not saying", never "nothing is
+firing". The measurement and the remedy are not here: they are on the node's
+own `alarm_raised` log line.
+
 ```json
 {
   "nodes": [
     {
       "id": "core-1", "roles": ["data", "ingress", "seats", "workers"], "broker": "member", "labels": {},
       "owner": "core-1:8f2a", "protocol": 1, "seats": 4, "expires_in": 41.2,
-      "config_epoch": 7, "config_status": "ok", "config_error": ""
+      "config_epoch": 7, "config_status": "ok", "config_error": "",
+      "in_flight": 1, "draining": false, "started_at": "2026-09-23T07:31:40Z",
+      "alarms": [{"kind": "backup_age", "since": "2026-09-23T07:40:02Z"}]
     }
   ],
   "seats": [

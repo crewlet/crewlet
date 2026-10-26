@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -1005,6 +1006,87 @@ func TestTheStandingAlarmsAreTheLatestEvaluationsOldestFirst(t *testing.T) {
 		t.Errorf("after an evaluation that raised nothing Standing = (%v, %v), "+
 			"want an empty list that is known", standing, known)
 	}
+}
+
+// A FIRING ALARM IS MARKED SINCE IT WAS RAISED, and the marks are the standing
+// alarms: the same kinds in the same order, so the presence heartbeat every
+// peer reads can never name a different set, or a different longest-standing
+// alarm, from the node's own health card.
+//
+// A kind standing on several logs is dated by its OLDEST log, which a later log
+// joining it does not move and which moves to the oldest log still standing
+// when that one leaves; a kind that stays up keeps its start however its detail
+// changes; and before any evaluation there is nothing to mark, which is not a
+// node with nothing firing.
+//
+// Mutation: date a kind by its newest log, re-date it on every evaluation, mark
+// in the table's order, or answer (nil, true) before an evaluation, and this
+// fails.
+func TestAFiringAlarmIsMarkedSinceItWasRaised(t *testing.T) {
+	t.Parallel()
+	t0 := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	clock := t0
+	tracker := statelog.NewTracker(nil, func() time.Time { return clock })
+
+	if marks, known := tracker.Marks(); known || marks != nil {
+		t.Fatalf("before any evaluation Marks = (%v, %v), want (nil, false)", marks, known)
+	}
+
+	lag := func(detail string) statelog.Alarm {
+		return statelog.Alarm{Kind: statelog.KindApplyLag, Detail: detail}
+	}
+	wal := statelog.Alarm{Kind: statelog.KindWALLarge, Detail: "the write-ahead log is 2.0 GiB"}
+	blocked := func(logs ...string) statelog.Alarm {
+		a := statelog.Alarm{Kind: statelog.KindTrimBlocked, Detail: "the trim has not advanced"}
+		for _, domain := range logs {
+			a.Domains = append(a.Domains, statelog.AlarmDomain{Domain: domain,
+				Detail: "the trim has not advanced"})
+		}
+		return a
+	}
+	marked := func(when string, want []coord.AlarmMark) {
+		t.Helper()
+		marks, known := tracker.Marks()
+		if !known || !slices.Equal(marks, want) {
+			t.Errorf("%s: Marks = (%v, %v), want (%v, true)", when, marks, known, want)
+		}
+		standing, _ := tracker.Standing()
+		kinds := make([]statelog.Kind, 0, len(marks))
+		for _, m := range marks {
+			kinds = append(kinds, statelog.Kind(m.Kind))
+		}
+		if !slices.Equal(kinds, standing) {
+			t.Errorf("%s: the marks name %v and the standing alarms %v", when, kinds, standing)
+		}
+	}
+
+	// The knowledge base's blocked trim is raised first, the WAL alarm two
+	// minutes later, and apply lag (which the table lists ahead of both)
+	// with the tracker's blocked trim three minutes after that.
+	tracker.Observe(t.Context(), []statelog.Alarm{blocked("pages")})
+	clock = t0.Add(2 * time.Minute)
+	tracker.Observe(t.Context(), []statelog.Alarm{blocked("pages"), wal})
+	clock = t0.Add(5 * time.Minute)
+	tracker.Observe(t.Context(), []statelog.Alarm{lag("2m behind"), blocked("tracker", "pages"), wal})
+	marked("with three alarms up", []coord.AlarmMark{
+		{Kind: string(statelog.KindTrimBlocked), Since: t0},
+		{Kind: string(statelog.KindWALLarge), Since: t0.Add(2 * time.Minute)},
+		{Kind: string(statelog.KindApplyLag), Since: t0.Add(5 * time.Minute)},
+	})
+
+	// THE OLDEST LOG LEAVES, and the lag grows: the blocked trim now dates
+	// from the tracker's log, and the lag keeps its start.
+	clock = t0.Add(6 * time.Minute)
+	tracker.Observe(t.Context(), []statelog.Alarm{lag("3m behind"), blocked("tracker"), wal})
+	marked("after the oldest log left", []coord.AlarmMark{
+		{Kind: string(statelog.KindWALLarge), Since: t0.Add(2 * time.Minute)},
+		{Kind: string(statelog.KindApplyLag), Since: t0.Add(5 * time.Minute)},
+		{Kind: string(statelog.KindTrimBlocked), Since: t0.Add(5 * time.Minute)},
+	})
+
+	clock = t0.Add(7 * time.Minute)
+	tracker.Observe(t.Context(), statelog.Evaluate(statelog.Reading{}))
+	marked("after an evaluation that raised nothing", []coord.AlarmMark{})
 }
 
 func find(alarms []statelog.Alarm, kind statelog.Kind) (statelog.Alarm, bool) {
