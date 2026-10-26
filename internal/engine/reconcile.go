@@ -235,11 +235,6 @@ func (e *Engine) NewReconciler(opts ReconcilerOptions) (*Reconciler, error) {
 		onApply: opts.OnApply,
 		now:     now,
 	}
-	// RECORDED ON THE ENGINE, because the reconciler is the only thing that
-	// knows which activation the engine's epoch was applied from, and the
-	// mailbox sweep must not judge a seat absent against a revision the
-	// fleet has already replaced. See [Engine.activeSeatHandles].
-	e.reconciler.Store(r)
 	return r, nil
 }
 

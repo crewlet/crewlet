@@ -709,12 +709,6 @@ type Engine struct {
 	// and nothing retired.
 	mailboxes *maintenance.Mailboxes
 
-	// reconciler is the loop converging this engine on the activation
-	// pointer, recorded by [Engine.NewReconciler]. The mailbox sweep reads
-	// which activation this engine's epoch came from through it, because
-	// nothing else knows: an apply is handed a document, not an epoch.
-	reconciler atomic.Pointer[Reconciler]
-
 	// rewired remembers what the last seat-identity retry resolved on each
 	// surface, so the recovery is logged on the TRANSITION rather than on
 	// every pass of every surface for the life of the deployment. See
