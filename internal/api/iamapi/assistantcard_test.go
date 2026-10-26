@@ -41,7 +41,7 @@ func TestTheSeatsCardReadsTheSeatsAnswer(t *testing.T) {
 		t.Fatalf("GET /iam/seats answered %d %v", got.status, got.body)
 	}
 	held, _ := assistanttest.HoldCard(t, "get_org_chart/seats", tool.Cards["seats"],
-		map[string]any(got.body),
+		got.body,
 		assistanttest.ValueTypes{"row": reflect.TypeFor[iamapi.SeatRow]()})
 	if held == 0 {
 		t.Error("the seats card reads no path; the walk is not reading its spec")
