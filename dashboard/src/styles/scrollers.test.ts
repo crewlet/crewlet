@@ -136,8 +136,6 @@ const KEEPS_THE_WHEEL: Record<string, string> = {};
  * than a guess at a box inside one.
  */
 const LITERAL_BOUND: Record<string, string> = {
-  "components.css .input-suggest-list":
-    "an absolutely positioned completion list over the field that opened it, in a dialog: an overlay, never a box in the page's flow",
   "screens.css .work-menu-list":
     "the list inside a filter menu's Popover: an overlay, never a box in the page's flow",
   "screens.css .composer-picklist":

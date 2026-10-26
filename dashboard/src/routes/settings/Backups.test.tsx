@@ -337,7 +337,7 @@ test("a directory the host cannot create is said on the field", async () => {
   // THE FIELD SAYS IT: the message sits in the Directory field, whose paths
   // are drawn as chips — so its text is read whole rather than per node.
   const dialog = screen.getByRole("dialog");
-  const field = screen.getByLabelText(/Directory/).closest(".field, .crewlet-field") as HTMLElement;
+  const field = screen.getByLabelText(/Directory/).closest(".crewlet-form-field") as HTMLElement;
   expect(field?.textContent ?? "").toMatch(/mkdir \/etc\/passwd: not a directory/);
   expect(within(dialog).queryByRole("alert")?.textContent ?? "").not.toMatch(/log/);
   expect(screen.queryByText(/api_backup_failed/)).toBeNull();
@@ -425,7 +425,7 @@ test("under StrictMode a refused directory is said on the field", async () => {
   });
   fireEvent.click(screen.getByRole("button", { name: "Take backup" }));
   await settle();
-  const field = screen.getByLabelText(/Directory/).closest(".field, .crewlet-field") as HTMLElement;
+  const field = screen.getByLabelText(/Directory/).closest(".crewlet-form-field") as HTMLElement;
   expect(field?.textContent ?? "").toMatch(/unusable destination: not empty/);
   expect(screen.getByRole("button", { name: "Take backup" })).toBeTruthy();
   expect(screen.queryByText("No backup was written to /var/backups/full")).toBeNull();

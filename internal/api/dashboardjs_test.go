@@ -1103,8 +1103,14 @@ const (
 	// dashboard source: the design system's one stylesheet, which first paint
 	// carries whole, gained the proposal card's decision refusal and
 	// unconfirmed outcome, the non-modal overlay aside and table cells that
-	// wrap. 339 KiB, still under two seconds on that link.
-	initialBudget = 339 << 10
+	// wrap. 339 KiB, still under two seconds on that link. uilet 0.63.0
+	// measured 340.4 KiB with the same dashboard source: the deep work card,
+	// the file list and the attachment chip join the one stylesheet, and the
+	// labelled value field moves the form field, the text area and the
+	// character count into the shared chunk the entry already loads. Moving
+	// the setup form and its dialogs onto that field took it to 340.3 KiB.
+	// 341 KiB, still under two seconds on that link.
+	initialBudget = 341 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1169,8 +1175,13 @@ const (
 	// field list, help and setters in that screen's chunk (about thirty
 	// screens), the card's file thumbnail in the panel's, and the brand and
 	// integration field lists. 4480 KiB, which still refuses a doubled
-	// baseline.
-	treeBudget = 4<<20 + 384<<10
+	// baseline. uilet 0.63.0 measured 4483.0 KiB with the same dashboard
+	// source: the assistant's deep work card, file list and attachment chip,
+	// and their rules in the one sheet. Moving the dashboard's own labelled
+	// field and its secret completion onto uilet's ValueField took it back
+	// to 4480.0 KiB (the field, its completion helper and its list's rules
+	// leave the bundle). 4481 KiB, which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 385<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

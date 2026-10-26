@@ -40,10 +40,18 @@
  */
 
 import { Fragment, useCallback, useId, useMemo, useRef, useState } from "react";
-import { Button, Callout, InlineCode, StatusDot, Tag, useToast } from "@crewlethq/ui";
+import {
+  Button,
+  Callout,
+  InlineCode,
+  StatusDot,
+  Tag,
+  useToast,
+  ValueField,
+  type ValueFieldKind,
+} from "@crewlethq/ui";
 import { CopyGlyph, FileTextGlyph, LinkGlyph } from "@crewlethq/icons/glyphs";
-import { Field, type FieldKind } from "~/ui/Field.tsx";
-import { marked, paths, Problems } from "~/ui/Problems.tsx";
+import { marked, paths, Problems, withProblems } from "~/ui/Problems.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 import { isWholeReference } from "~/lib/references.ts";
 import { useSecretNames } from "~/lib/useSecretNames.ts";
@@ -1203,9 +1211,13 @@ export function SetupForm({
     return (
       <div key={key} className="col gap-1">
         {editable(section, r) ? (
-          <Field
+          <ValueField
+            // OUR OWN CLASS ON THE PACKAGE'S COMPONENT: `.int-form .field > label`
+            // sets this form's questions in sentence case, and a class we write
+            // is a better anchor for that rule than one the package owns.
+            className="field"
             label={r.label}
-            kind={r.kind === "toggle" ? "choice" : (r.kind as FieldKind)}
+            kind={r.kind === "toggle" ? "choice" : (r.kind as ValueFieldKind)}
             value={values[key] ?? ""}
             onChange={(v) => {
               setValues((c) => ({ ...c, [key]: v }));
@@ -1222,8 +1234,10 @@ export function SetupForm({
             // placeholder is not a value, so any keystroke produces
             // exactly what was typed. See [HELD].
             placeholder={r.kind === "secret" && !r.value && r.present ? HELD : undefined}
-            secrets={secretNames}
-            onSecretsNeeded={refreshSecrets}
+            references={secretNames}
+            onReferencesNeeded={refreshSecrets}
+            // THE ENGINE'S GRAMMAR decides what reads as a sealed entry's name.
+            isReference={isWholeReference}
             // WHAT THE APP SAYS, and nothing about which button opened the
             // form. Marking a connect field required while connecting and
             // optional afterwards made one field wear two labels in two
@@ -1247,7 +1261,7 @@ export function SetupForm({
             // thing standing between the answer above it and its working.
             // Required is the unmarked default everywhere else.
             markRequired={r.required_when !== undefined}
-            error={fieldErrors[key]}
+            error={withProblems(fieldErrors[key])}
             choices={
               r.kind === "toggle"
                 ? [

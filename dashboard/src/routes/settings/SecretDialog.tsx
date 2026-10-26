@@ -23,9 +23,9 @@
  */
 
 import { useState } from "react";
-import { Button, Callout, InlineCode, Modal } from "@crewlethq/ui";
+import { Button, Callout, InlineCode, Modal, ValueField } from "@crewlethq/ui";
 import { KeyGlyph } from "@crewlethq/icons/glyphs";
-import { Field } from "~/ui/Field.tsx";
+import { isWholeReference } from "~/lib/references.ts";
 import { rest, RestError } from "~/protocol/index.ts";
 
 export function SecretDialog({
@@ -110,7 +110,7 @@ export function SecretDialog({
           Replaces <InlineCode>{editing}</InlineCode> on every node.
         </p>
       ) : (
-        <Field
+        <ValueField
           label="Name"
           value={name}
           onChange={setName}
@@ -123,9 +123,10 @@ export function SecretDialog({
         />
       )}
 
-      <Field
+      <ValueField
         label={editing ? "New value" : "Value"}
         kind="secret"
+        isReference={isWholeReference}
         value={value}
         onChange={setValue}
         autoFocus={Boolean(editing)}

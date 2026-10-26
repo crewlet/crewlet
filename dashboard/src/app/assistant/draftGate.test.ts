@@ -9,7 +9,8 @@
  * nothing. So the tree is read for the marks of editing state, the dashboard's
  * own and the design system's: a leave guard (`useLeaveGuard`,
  * `useUnloadGuard`), an editing status, a setup wizard, a rich, inline or list
- * editor, a form field or a text area. A module with any of them must either
+ * editor, a form field, a value field or a text area. A module with any of
+ * them must either
  *
  *  - declare its draft itself (`useAssistantDraft`, `draft.ts`),
  *  - be listed in [PART_OF] as a piece of a screen that declares it (the
@@ -40,14 +41,11 @@ const EDITING_ELEMENTS = new Set([
   "InlineEditor",
   "ListInput",
   "FormField",
+  // uilet's labelled value (FormField with its control), which every
+  // configuration form and the dialogs that hold a value draw.
+  "ValueField",
   "Textarea",
 ]);
-
-/**
- * The dashboard's own labelled field (`ui/Field.tsx`, on uilet's FormField),
- * a mark only where it is that module's: `Field` is a common name.
- */
-const LOCAL_FIELD = "ui/Field.tsx";
 
 /** The call that declares a draft. */
 const DECLARES = "useAssistantDraft";
@@ -111,8 +109,6 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
   "routes/home/board/settings.tsx": "modal: a widget's settings, in a sheet over the board",
   "routes/org/builder/NodeEditor.tsx": "modal: a unit or seat, in a side sheet over the builder",
   "routes/org/builder/dialogParts.tsx": "modal: the fields of the builder's dialogs",
-  "ui/Field.tsx":
-    "not an editor: the labelled field screens compose; the screen that renders it declares",
   "routes/signin/SignIn.tsx": "signed out: there is no assistant before a sign-in",
   "routes/signin/Invite.tsx": "signed out: accepting an invitation",
   "routes/signin/NewPassword.tsx": "signed out: a password reset",
@@ -128,12 +124,7 @@ interface Reading {
 function read(module: Module): Reading {
   const marks = new Set<string>();
   let declares = false;
-  let localField = false;
   walk(parse(module.text, module.lang), (node: Node) => {
-    if (node.type === "ImportDeclaration") {
-      const source = String((node.source as Node).value);
-      if (source.endsWith(LOCAL_FIELD)) localField = true;
-    }
     if (node.type === "CallExpression") {
       const callee = node.callee as Node;
       const name = callee.type === "Identifier" ? String(callee.name) : null;
@@ -144,8 +135,6 @@ function read(module: Module): Reading {
       const name = node.name as Node;
       const tag = name.type === "JSXIdentifier" ? String(name.name) : "";
       if (EDITING_ELEMENTS.has(tag)) marks.add(`<${tag}>`);
-      // IMPORTS ARE HOISTED, so a file's import is read before its JSX.
-      if (tag === "Field" && localField) marks.add("<Field>");
     }
   });
   return { marks: [...marks].sort(), declares };
@@ -195,6 +184,20 @@ describe("the draft gate", () => {
       "routes/probe/Probe.tsx (<FormField>, <Textarea>)",
     ]);
     expect(undeclared(new Map([[declared.path, read(declared)]]))).toEqual([]);
+
+    // A VALUE FIELD IS A FORM FIELD. A dialog or screen that holds a value
+    // through uilet's ValueField edits something, exactly as one drawing the
+    // FormField it is built on.
+    const valued: Module = {
+      path: "routes/probe/Valued.tsx",
+      lang: "tsx",
+      text:
+        'import { ValueField } from "@crewlethq/ui";\n' +
+        "export function Valued() { return <ValueField label='Name' value='' onChange={() => {}} />; }",
+    };
+    expect(undeclared(new Map([[valued.path, read(valued)]]))).toEqual([
+      "routes/probe/Valued.tsx (<ValueField>)",
+    ]);
   });
 
   test("every module with draft or form state declares its draft, or says why not", () => {

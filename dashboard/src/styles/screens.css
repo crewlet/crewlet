@@ -4241,9 +4241,9 @@ a.int-feed-what:hover {
    in sentence case. Scoped rather than changed globally, because every other
    form in the dashboard is a settings table where the micro-label belongs.
 
-   THE LABEL IS uilet's `.crewlet-label` NOW — `ui/Field.tsx` draws a
-   `FormField` — and `.field` is the class that file still puts on it, so the
-   selector reaches the same element it always did. Specificity is what makes
+   THE LABEL IS uilet's `.crewlet-label` NOW. The setup form draws uilet's
+   `ValueField` and puts `.field` on it, so the selector reaches the same
+   element it always did. Specificity is what makes
    this land: `(0,2,1)` here against the package's `(0,1,0)`. */
 .int-form .field > label {
   font-size: var(--font-size-compact);
