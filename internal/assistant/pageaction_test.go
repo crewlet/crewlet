@@ -33,7 +33,8 @@ func pageRig(t *testing.T, action string) (*assistanttest.Rig, []wire.Frame) {
 			evals.Say("Done.")}})
 	page := &wire.PageContext{Screen: "work", Title: "Worklet › Tasks",
 		Params: map[string]string{}, Query: map[string]string{}, Resources: []wire.Resource{},
-		SourceRevision: "work@3", Accepts: []string{action}}
+		SourceRevision: "work@3", Accepts: []string{action},
+		ActionArgs: map[string]*wire.ActionArgs{action: assistanttest.StatusFilterArgs()}}
 	accepted, err := f.Ask("page", "Show only what is still to do", page)
 	if err != nil {
 		t.Fatal(err)
@@ -458,5 +459,107 @@ func TestADraftChangeIsNamedByTheScreensLabels(t *testing.T) {
 	}
 	if got := rows["Avoid"].Items; !slices.Equal(got, []string{"Jargon", "Exclamation marks"}) {
 		t.Errorf("the list field's items are %q, want each line its own item", got)
+	}
+}
+
+// budgetsPage is the Budgets screen as it declares itself: the ceiling it
+// fills in for the person, taking a seat it draws or none for the company, a
+// window and a value, and that action's own revision.
+func budgetsPage() *wire.PageContext {
+	closed := false
+	return &wire.PageContext{Screen: "budgets", Title: "Company › Budgets",
+		Params: map[string]string{}, Query: map[string]string{}, Resources: []wire.Resource{},
+		SourceRevision: "budgets@page", Accepts: []string{"budgets.ceiling.prefill"},
+		ActionArgs: map[string]*wire.ActionArgs{"budgets.ceiling.prefill": {
+			Type: wire.ArgTypes{wire.ArgObject}, AdditionalProperties: &closed,
+			Required: []string{"period", "ceiling"},
+			Properties: map[string]*wire.ActionArgs{
+				"seat":    {Type: wire.ArgTypes{wire.ArgString}, Enum: []string{"qa", "engineer"}},
+				"period":  {Type: wire.ArgTypes{wire.ArgString}, Enum: []string{"day", "week", "month"}},
+				"ceiling": {Type: wire.ArgTypes{wire.ArgString, wire.ArgNull}},
+			}}},
+		ActionRevisions: map[string]string{"budgets.ceiling.prefill": "budgets@ceilings"}}
+}
+
+// A PAGE ACTION IS HELD TO THE SCREEN'S ARGUMENTS BEFORE IT IS CARDED.
+//
+// The QA run on Budgets: the model guessed the ceiling's keys twice, and each
+// guess became a card the person approved and the screen then refused, three
+// cards for one change. Held to the arguments the screen declares, each guess
+// is a refused step whose answer names the members the screen takes, no card
+// is drawn for it, and the call the model then makes is the one card, bound
+// to the action's own revision rather than the page's. Mutation: skip the
+// check in PageActionFor and three proposals are recorded; bind to
+// SourceRevision and the card is stale the moment a peek opens.
+func TestAPageActionIsHeldToTheScreensArgumentsBeforeItIsCarded(t *testing.T) {
+	t.Parallel()
+	f := assistanttest.NewRig(t, evals.RigOptions{
+		Tools: []catalog.Tool{assistanttest.Tool(t, "propose_page_change")},
+		Rounds: []evals.Round{
+			evals.Call("c1", "propose_page_change", map[string]any{
+				"action": "budgets.ceiling.prefill",
+				"args":   map[string]any{"handle": "qa", "limit": 1500000.0, "window": "day"}}),
+			evals.Call("c2", "propose_page_change", map[string]any{
+				"action": "budgets.ceiling.prefill",
+				"args":   map[string]any{"scope": "qa", "value": "1.5M", "window": "day"}}),
+			evals.Call("c3", "propose_page_change", map[string]any{
+				"action": "budgets.ceiling.prefill",
+				"args":   map[string]any{"seat": "qa", "period": "day", "ceiling": "1.5M"}}),
+			evals.Say("Done.")}})
+	accepted, err := f.Ask("page", "Set the QA Engineer's daily token budget to 1.5M", budgetsPage())
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames := f.Follow(accepted.TurnID, 0)
+	for _, id := range []string{"c1", "c2"} {
+		res, ok := f.Model.Answer(id)
+		if !ok || !res.Failed || !strings.Contains(res.Output, "it takes ceiling, period, seat") {
+			t.Errorf("the guess %s was answered %+v, want a refusal naming what the screen takes",
+				id, res)
+		}
+	}
+	proposals := f.Store.Proposals()
+	if len(proposals) != 1 {
+		t.Fatalf("recorded %d proposals, want only the well-formed one", len(proposals))
+	}
+	if got := proposals[0].SourceRevision; got != "budgets@ceilings" {
+		t.Errorf("the proposal is bound to %q, want the action's own revision", got)
+	}
+	cards := 0
+	for _, fr := range frames {
+		if fr.Kind == wire.EventCard && fr.Card.Card.Type == wire.CardProposal {
+			cards++
+		}
+	}
+	if cards != 1 {
+		t.Errorf("drew %d proposal cards, want 1", cards)
+	}
+}
+
+// AN ACTION THE SCREEN DECLARES NO ARGUMENTS FOR IS NEVER PROPOSED.
+//
+// Every accepted action but draft.set carries its arguments; one that does
+// not is refused rather than taken on trust, so a screen cannot ship an
+// action the model has to guess at. Mutation: accept a missing declaration as
+// freeform and the proposal is recorded.
+func TestAnActionWithNoDeclaredArgumentsIsNeverProposed(t *testing.T) {
+	t.Parallel()
+	page := budgetsPage()
+	page.ActionArgs = nil
+	f := assistanttest.NewRig(t, evals.RigOptions{
+		Tools: []catalog.Tool{assistanttest.Tool(t, "propose_page_change")},
+		Rounds: []evals.Round{
+			evals.Call("c1", "propose_page_change", map[string]any{
+				"action": "budgets.ceiling.prefill",
+				"args":   map[string]any{"seat": "qa", "period": "day", "ceiling": "1.5M"}}),
+			evals.Say("I could not prepare it.")}})
+	accepted, err := f.Ask("page", "Set the QA Engineer's daily token budget to 1.5M", page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Follow(accepted.TurnID, 0)
+	if proposals := f.Store.Proposals(); len(proposals) != 0 {
+		t.Errorf("recorded %d proposals for an action the screen declares nothing for",
+			len(proposals))
 	}
 }

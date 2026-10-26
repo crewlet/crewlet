@@ -77,6 +77,21 @@ type Request struct {
 	// the way IfMatch is, from the proposal's source revision, and never
 	// beside it: the two describe two different resources.
 	IfNoneMatch string
+	// ReadLimit is how much of the answer a read keeps: zero for a step's
+	// own read ([MaxResponseBytes]), and [PreviewMaxResponseBytes] for the
+	// read a write's preview diffs against. Never more than that, whatever
+	// a caller asks.
+	ReadLimit int
+}
+
+// Bound is how much of r's answer is kept: a step's bound, or the larger one
+// a preview's read asks ([Request.ReadLimit]), and never more than that. The
+// one rule every [Dispatcher] cuts an answer by.
+func (r Request) Bound() int {
+	if r.ReadLimit <= 0 {
+		return MaxResponseBytes
+	}
+	return min(r.ReadLimit, PreviewMaxResponseBytes)
 }
 
 // AnyRepresentation is the one If-None-Match value a write here carries: `*`,
@@ -145,6 +160,17 @@ type Response struct {
 // keeps a turn's steps inside the model's context) and the cards' (256 KiB per
 // card) apply.
 const MaxResponseBytes = 64 << 10
+
+// PreviewMaxResponseBytes is the most of one answer a write's PREVIEW reads:
+// one mebibyte. A preview decodes the record it diffs against (a seat, a
+// unit, an agent with its fifty phases of history, the company document) and
+// draws only the fields that move, so nothing of the answer reaches a model
+// or a card whole, and the step's bound, which exists to keep a turn's steps
+// inside the model's context, is the wrong bound for it: an agent with a
+// long history was past sixty-four kibibytes, and every pause of it was
+// refused before a card was drawn. A mebibyte holds the largest of those
+// records many times over and still bounds what one preview holds in memory.
+const PreviewMaxResponseBytes = 1 << 20
 
 // Dispatcher sends a request through the API's own handler chain as the
 // person the grant was derived from. internal/api/auth implements it; the

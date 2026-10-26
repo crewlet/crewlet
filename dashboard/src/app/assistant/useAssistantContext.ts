@@ -32,7 +32,11 @@ export function useAssistantContext(registration: AssistantPageRegistration): vo
     registration.resources ?? [],
     registration.selection ?? null,
     registration.dataVersion ?? "",
-    Object.keys(registration.actions ?? {}).sort(),
+    // WHAT EACH ACTION TAKES AND TRACKS is part of what the page says: a
+    // screen whose seats or windows changed declares new arguments.
+    Object.entries(registration.actions ?? {})
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([id, spec]) => [id, spec?.args ?? null, spec?.tracks ?? null]),
     registration.draft ?? null,
   ]);
   useEffect(() => {
@@ -44,6 +48,8 @@ export function useAssistantContext(registration: AssistantPageRegistration): vo
       const first = at()!;
       actions[id] = {
         scope: first.scope,
+        args: first.args,
+        ...(first.tracks === undefined ? {} : { tracks: first.tracks }),
         parse: (raw) => at()?.parse(raw) ?? { ok: false, reason: "The page no longer takes it." },
         preview: (value) => at()?.preview(value) ?? [],
         blocked: (value) => (at() ? at()!.blocked(value) : "The page no longer takes it."),
