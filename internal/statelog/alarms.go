@@ -593,10 +593,10 @@ type Reading struct {
 	// the constant is the object store's, which this framework does not
 	// import, and the alarm fires at that decision rather than at a number
 	// of its own (ADR-0015). Both zero on a node that measured nothing — no
-	// heartbeat yet, or none that could read its row for two beats — and a
-	// zero bound judges nothing, the BackupAge/BackupMaxAge pair's shape: a
-	// measure is a magnitude, so a zero skew is a clock in time with its
-	// broker's, never an alarm.
+	// beat yet, two beats in a row that could not read its row, or a
+	// heartbeat that has stopped — and a zero bound judges nothing, the
+	// BackupAge/BackupMaxAge pair's shape: a measure is a magnitude, so a
+	// zero skew is a clock in time with its broker's, never an alarm.
 	ClockSkew, ClockSkewBound time.Duration
 
 	// CodeMaintenanceRefused is how many repositories this node's git cache

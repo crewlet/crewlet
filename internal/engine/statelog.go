@@ -323,9 +323,15 @@ type stateLog struct {
 
 	// skew is how far this node's clock stood from its broker's at the
 	// position heartbeat's last measure ([stateLog.measureSkew]), nil until
-	// a beat has measured — written by the heartbeat and read by the alarm
-	// reading on another loop, hence atomic (clockskew.go).
+	// a beat has measured and again once two beats in a row could not, or
+	// the heartbeat has stopped — written by the heartbeat and read by the
+	// alarm reading on another loop, hence atomic (clockskew.go).
 	skew atomic.Pointer[skewMeasure]
+
+	// skewMisses is how many publishes in a row measured nothing, which is
+	// what drops [stateLog.skew] ([stateLog.recordSkew]). Guarded by
+	// publishing, the one lock every publish holds.
+	skewMisses int
 
 	// clustered is whether the broker has peers, which is what a replicated
 	// create's budget branches on — and so how long a reanchor's steps after
@@ -4385,8 +4391,14 @@ func (s *stateLog) startPositionHeartbeat() {
 // The publish is a PARAMETER so the loop's own schedule — the re-invocation on
 // every tick and every nudge, which is what notices a running node fall below
 // the floor — is exercised under an interval a test can wait out.
+//
+// AND A LOOP THAT HAS ENDED HOLDS NO CLOCK MEASURE: the measure a publish
+// keeps stands until the heartbeat says otherwise, and a heartbeat that has
+// stopped says nothing more, so its last measure would be reported by an alarm
+// reading that outlived it (clockskew.go).
 func (s *stateLog) beat(ctx context.Context, interval time.Duration,
 	publish func(context.Context)) {
+	defer s.forgetSkew()
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	for {
@@ -4475,14 +4487,18 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 	rows, rowsErr := s.fleet.Positions(ctx)
 	floors := s.readFloors(ctx)
 	generations, unreadGen := map[string]uint32(nil), map[string]error{}
+	var clocks *skewMeasure
 	if rowsErr == nil {
 		generations, unreadGen = s.fleetGenerations(ctx, rows, floors, s.openLogs(), above)
 		// AND HOW FAR THIS NODE'S CLOCK STANDS FROM ITS BROKER'S, off the
 		// row the previous beat wrote — its stamp against the instant the
 		// broker stored it — from the reading just taken, so `clock_skew`
 		// costs no read of its own (clockskew.go).
-		s.measureSkew(rows, row.At)
+		clocks = s.measureSkew(rows)
 	}
+	// RECORDED ON EVERY PUBLISH, a reading that failed included: a publish
+	// that measured nothing is a miss, and two in a row drop the measure.
+	s.recordSkew(clocks)
 	genErr := func(name string) error {
 		if rowsErr != nil {
 			return rowsErr
