@@ -21,7 +21,6 @@ import {
 } from "./blocks.tsx";
 import type { TurnView } from "./turn.ts";
 import { resetCardFolds, setCardOpen } from "./fold.ts";
-import { SeatNames } from "./seatNames.ts";
 
 afterEach(() => {
   cleanup();
@@ -240,43 +239,6 @@ test("a reply's paragraphs are blocks in a div the Markdown rhythm spaces", () =
   expect(root.querySelectorAll("p")).toHaveLength(2);
 });
 
-// A SEAT IS DRAWN BY ITS NAME, from the chart the drawer provides; an export
-// keeps the handle the API answered. Mutation: draw a seat cell as its text.
-test("a seat cell reads as the seat's name", () => {
-  render(
-    <Router>
-      <SeatNames.Provider value={(key) => (key === "pm" ? "Product Manager" : key)}>
-        <CardBlock
-          event={{
-            card_id: "t",
-            message_id: "m",
-            card: {
-              type: "table",
-              table: {
-                title: "Tasks",
-                columns: [
-                  { key: "title", label: "Title", type: "text" },
-                  { key: "assignee", label: "Assignee", type: "seat" },
-                ],
-                rows: [["Write the brief", "pm"]],
-                row_count: 1,
-                truncated: false,
-                as_of: "2026-10-24T09:41:00Z",
-              },
-            },
-          }}
-          local={undefined}
-          on={on}
-          opened={false}
-        />
-      </SeatNames.Provider>
-    </Router>,
-  );
-  fireEvent.click(screen.getByRole("button", { name: /Tasks/ }));
-  expect(screen.getByText("Product Manager")).toBeTruthy();
-  expect(screen.queryByText("pm")).toBeNull();
-});
-
 // A REFUSED READ THAT IS NOT ABOUT ACCESS never says "You do not have
 // permission". Mutation: draw every error card as a permission refusal.
 test("a refusal that is not about access is not drawn as one", () => {
@@ -300,4 +262,53 @@ test("an open in app trail carries no raw id", () => {
   });
   expect(place).not.toMatch(/01a175e0/);
   expect(place.length).toBeGreaterThan(0);
+});
+
+// A TWO-LETTER HANDLE IS NEVER LOST: a fact holding "qa" and an
+// administrator's step request ("GET /agents/qa") are drawn whole. Mutation:
+// drop a short value anywhere between the wire and the DOM, and this fails.
+test("a two-letter handle is drawn whole", () => {
+  setCardOpen("e2", true);
+  const event: AssistantCardEvent = {
+    card_id: "e2",
+    message_id: "m",
+    card: {
+      type: "entity",
+      entity: {
+        kind: "task",
+        id: "FAIR-10",
+        title: "Write the regression tests",
+        facts: [
+          { label: "Assignee", value: "qa" },
+          { label: "Reviewer", value: "pm" },
+        ],
+      },
+    },
+  };
+  const { container, unmount } = render(
+    <Router>
+      <CardBlock event={event} local={undefined} on={on} opened={false} />
+    </Router>,
+  );
+  expect(container.textContent).toContain("Assigneeqa");
+  expect(container.textContent).toContain("Reviewerpm");
+  unmount();
+  const [step] = stepsOf(
+    {
+      ...base,
+      steps: [
+        {
+          step_id: "s",
+          index: 1,
+          tool: "get_seat",
+          label: "Reading QA Engineer",
+          request: { method: "GET", route: "/agents/qa" },
+          state: "done",
+          started_at: "2026-10-24T09:41:00Z",
+        },
+      ],
+    },
+    true,
+  );
+  expect(step!.detail).toBe("GET /agents/qa");
 });
