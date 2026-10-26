@@ -2,6 +2,7 @@ package jetstream
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -215,46 +216,102 @@ func TestAGroupAckFloorAMemberDropsIsAskedAgain(t *testing.T) {
 	}
 }
 
-// A SUBSCRIPTION LISTING WHOSE PAGES A MEMBER DROPS IS ASKED AGAIN.
+// A SUBSCRIPTION LISTING'S PAGES A MEMBER DROPS ARE ASKED AGAIN FOR AS LONG
+// AS ITS CALLER WAITS — and a caller that sets no deadline waits the client's
+// five seconds on a consumers page, as it did when the page was one request.
 //
 // Both listings it reads — the stream names, and each stream's consumers —
 // only the metadata leader answers, and a member that still believes in a
-// leader the group has just lost drops a page without a word. The client's
-// listers asked each page once and held it for the client's five seconds, and
-// the mailbox sweep failed for the tick over a reply nobody would send. Each
-// interception drops exactly its own first request, so neither listing's
-// re-ask is the other's.
+// leader the group has just lost drops a page without a word. A names page is
+// presumed lost after the read term and asked again two seconds after it was
+// sent, whoever the caller. A consumers page is given the four seconds the
+// metadata leader waits for the consumers' own leaders beside the read term,
+// five seconds, which is the client's whole default: a caller whose deadline
+// outlasts that and a re-ask has the page asked again, and one with none — the
+// mailbox sweep, on the maintenance worker's lifetime — asks it once and fails
+// its tick when a member drops it. Each interception is of its own listing's
+// subject, so neither listing's re-ask is the other's.
 func TestASubscriptionListingAMemberDropsIsAskedAgain(t *testing.T) {
 	t.Parallel()
-	ns, q := accountQueue(t, probeDomain())
-	if _, err := q.EnsureSubscription(t.Context(), "dropped.alpha", "grp"); err != nil {
-		t.Fatalf("EnsureSubscription: %v", err)
+	// listing is a queue holding one subscription, and the stream it is on.
+	listing := func(t *testing.T) (*server.Server, *Queue, string) {
+		t.Helper()
+		ns, q := accountQueue(t, probeDomain())
+		if _, err := q.EnsureSubscription(t.Context(), "dropped.alpha", "grp"); err != nil {
+			t.Fatalf("EnsureSubscription: %v", err)
+		}
+		stream, err := q.streamFor(t.Context(), "dropped.alpha")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ns, q, stream
 	}
-	stream, err := q.streamFor(t.Context(), "dropped.alpha")
-	if err != nil {
-		t.Fatal(err)
-	}
-	names := jsapitest.DropFirst(t, ns, jsapitest.StreamNames(), 1)
-	consumers := jsapitest.DropFirst(t, ns, jsapitest.ConsumerList(stream), 1)
+	want := queue.Subscription{Topic: "dropped.alpha", Group: "grp"}
 
-	// A dropped names page costs a term and a re-ask; a dropped consumers
-	// page the four seconds the metadata leader waits for a consumer's own
-	// leaders besides.
-	timing := q.provisioning()
-	ctx, cancel := context.WithTimeout(t.Context(), 3*(timing.ReadTerm+timing.ReAsk)+4*time.Second)
-	defer cancel()
-	got, err := q.ListSubscriptions(ctx, "dropped.>")
-	if err != nil {
-		t.Fatalf("a listing whose pages the broker dropped once failed rather than "+
-			"asking again: %v", err)
-	}
-	if want := (queue.Subscription{Topic: "dropped.alpha", Group: "grp"}); len(got) != 1 || got[0] != want {
-		t.Errorf("listed %v, want [%v]", got, want)
-	}
-	if n, m := names.Count(), consumers.Count(); n != 1 || m != 1 {
-		t.Errorf("the broker held %d stream-name and %d consumer pages, want the 1 "+
-			"of each it dropped", n, m)
-	}
+	t.Run("a caller with a deadline past a consumers page and a re-ask", func(t *testing.T) {
+		t.Parallel()
+		ns, q, stream := listing(t)
+		names := jsapitest.DropFirst(t, ns, jsapitest.StreamNames(), 1)
+		consumers := jsapitest.DropFirst(t, ns, jsapitest.ConsumerList(stream), 1)
+
+		// A dropped names page costs a term and a re-ask; a dropped
+		// consumers page the four seconds the metadata leader waits for a
+		// consumer's own leaders besides.
+		timing := q.provisioning()
+		ctx, cancel := context.WithTimeout(t.Context(), 3*(timing.ReadTerm+timing.ReAsk)+4*time.Second)
+		defer cancel()
+		got, err := q.ListSubscriptions(ctx, "dropped.>")
+		if err != nil {
+			t.Fatalf("a listing whose pages the broker dropped once failed rather than "+
+				"asking again: %v", err)
+		}
+		if len(got) != 1 || got[0] != want {
+			t.Errorf("listed %v, want [%v]", got, want)
+		}
+		if n, m := names.Count(), consumers.Count(); n != 1 || m != 1 {
+			t.Errorf("the broker held %d stream-name and %d consumer pages, want the 1 "+
+				"of each it dropped", n, m)
+		}
+	})
+
+	t.Run("no deadline: a names page dropped is asked again", func(t *testing.T) {
+		t.Parallel()
+		ns, q, _ := listing(t)
+		names := jsapitest.DropFirst(t, ns, jsapitest.StreamNames(), 1)
+		got, err := q.ListSubscriptions(context.Background(), "dropped.>")
+		if err != nil {
+			t.Fatalf("a deadline-less listing whose names page the broker dropped once "+
+				"failed rather than asking again: %v", err)
+		}
+		if len(got) != 1 || got[0] != want {
+			t.Errorf("listed %v, want [%v]", got, want)
+		}
+		if n := names.Count(); n != 1 {
+			t.Errorf("the broker held %d stream-name pages, want the 1 it dropped", n)
+		}
+	})
+
+	t.Run("no deadline: a consumers page is asked once, inside the client's default", func(t *testing.T) {
+		t.Parallel()
+		ns, q, stream := listing(t)
+		consumers := jsapitest.Hold(t, ns, jsapitest.ConsumerList(stream))
+		bound := q.js.Options().DefaultTimeout
+		start := time.Now()
+		got, err := q.ListSubscriptions(context.Background(), "dropped.>")
+		took := time.Since(start)
+		if !errors.Is(err, queue.ErrUnavailable) {
+			t.Fatalf("a deadline-less listing whose consumers page nobody answered = (%v, %v), "+
+				"want the broker unavailable", got, err)
+		}
+		if n := consumers.Count(); n != 1 {
+			t.Errorf("the consumers page was asked %d times inside the client's %v, want 1: "+
+				"its term is the metadata leader's four-second wait beside the read term, "+
+				"which is the whole of that default", n, bound)
+		}
+		if took < bound || took > bound+jsprovision.ReadTerm {
+			t.Errorf("the listing ended %v in, want the client's %v default", took, bound)
+		}
+	})
 }
 
 // AN ACCOUNT LIMIT A MEMBER DROPS IS ASKED AGAIN.

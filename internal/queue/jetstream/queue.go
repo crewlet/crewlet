@@ -1608,15 +1608,22 @@ func carriesSubscriptions(stream string) bool {
 // configuration at all, is logged and left out rather than listed under a
 // guessed pair.
 //
-// EVERY PAGE OF BOTH LISTINGS IS ITS OWN READ, asked again while nobody
-// answers it ([jsapi.Meta]): only the metadata leader answers either, so a
-// member that still believes in a leader the group has just lost drops the
-// request without a word — and the client's listers asked each page once and
-// held it for the client's five-second default, which failed the mailbox
-// sweep for the tick over a reply nobody would send. And a consumer the
-// metadata leader could not get an answer about fails the listing rather than
-// being left out of it, so a mailbox is never judged absent because its
-// leader was slow ([jsapi.UnreadError]).
+// EVERY PAGE OF BOTH LISTINGS IS ITS OWN READ ([jsapi.Meta]): only the
+// metadata leader answers either, so a member that still believes in a leader
+// the group has just lost drops a page without a word, and the client's
+// listers asked each page once and held it for the client's five-second
+// default. A stream names page is presumed lost after the read term and asked
+// again two seconds after it was sent, for every caller. A consumers page is
+// not presumed lost until the four seconds the metadata leader waits for the
+// consumers' own leaders have passed beside the read term — five seconds, the
+// client's whole default — so it is asked again only for a caller whose
+// deadline outlasts that and a re-ask. A caller that sets none asks each
+// consumers page ONCE, as the client did: the mailbox sweep, which runs on the
+// maintenance worker's lifetime, still fails its tick over a consumers page a
+// member drops, and lists again at its next. And a consumer the metadata
+// leader could not get an answer about fails the listing rather than being
+// left out of it, so a mailbox is never judged absent because its leader was
+// slow ([jsapi.UnreadError]).
 func (q *Queue) ListSubscriptions(ctx context.Context, topicPattern string) ([]queue.Subscription, error) {
 	if q.isClosed() {
 		return nil, ErrClosed
