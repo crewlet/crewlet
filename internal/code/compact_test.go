@@ -146,6 +146,54 @@ func TestACompactionAskedTwiceIsOneCompaction(t *testing.T) {
 	}
 }
 
+// A COMPACTION RETRIED AFTER ITS OUTPUTS WERE RETIRED IS APPLIED: a later
+// compaction may merge its outputs before its builder hears back — its answer
+// lost, its builder's router asking the runner-up under the same id — and the
+// ledger collapses the asking onto the record that landed, whose outputs are
+// rows of code_packs_retired by then, which keep the position each was added
+// at. It is answered applied at that record, from those rows, with no record
+// appended and nothing logged as a domain that lies.
+//
+// Mutation: answer from code_packs alone, and the asking is answered unknown
+// and logged code_compaction_unanswerable at ERROR — and the node that built
+// the compaction adopts nothing.
+func TestACompactionRetriedAfterItsOutputsWereRetiredIsApplied(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo, ids := packedRepo(t, n, "web", 3)
+	logs := &lineLog{}
+	c, _ := committerOn(t, n, n.pub, func(o *code.CommitterOptions) {
+		o.Logger = slog.New(slog.NewJSONHandler(logs, nil))
+	})
+	p := compactionOf(n, repo, ids[:2], 2, harnessAt)
+	first, err := c.ProposeCompaction(t.Context(), p)
+	requireApplied(t, first, err)
+	out := p.Compaction.Add[0].PackID
+	later := compactionOf(n, repo, sorted(out, ids[2]), 3, harnessAt)
+	res, err := c.ProposeCompaction(t.Context(), later)
+	requireApplied(t, res, err)
+	if got, want := n.livePacks(repo), []string{later.Compaction.Add[0].PackID}; !slices.Equal(got, want) ||
+		n.count(`SELECT COUNT(*) FROM code_packs_retired WHERE repo_id = ? AND pack_id = ?`, repo, out) != 1 {
+		t.Fatalf("the premise: the live packs are %v, want only the later output %v, and the first "+
+			"compaction's output %s retired", got, want, out)
+	}
+
+	before := n.end()
+	again, err := c.ProposeCompaction(t.Context(), p)
+	requireApplied(t, again, err)
+	if again.Position != first.Position {
+		t.Fatalf("asked again it answered at %v, and the first at %v — one compaction, one record",
+			again.Position, first.Position)
+	}
+	if got := n.end(); got != before {
+		t.Fatalf("asking again appended %d records, want none", got-before)
+	}
+	if lines := logs.lines("code_compaction_unanswerable"); len(lines) != 0 {
+		t.Fatalf("asking again logged %v; an output a later compaction retired is a row this node holds",
+			lines)
+	}
+}
+
 // A COMPACTION OF A PACK NO LONGER LIVE IS STALE, and so is one of a pack that
 // is full or split into parts: every input is held to the rows of the
 // committer's snapshot — one row, of part `pack`, live and not full
