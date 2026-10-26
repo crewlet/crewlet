@@ -970,6 +970,18 @@ applies — and the collector's next pass deletes their objects. A deleted
 repository's purge takes its retired rows with the rest. The decision is
 [ADR-0051](https://github.com/crewlet/crewlet/blob/main/adr/0051-a-retired-reference-keeps-its-object-for-a-grace.md).
 
+The first derived rows are the code host's too: `code_layer_parts`, the
+stored bytes of each repository's **published layers** — a multi-pack-index
+layer, its bitmap and the commit-graph layer over the same packs, written once
+for the fleet rather than by every git node over the repository's whole
+history. Any git node can build a layer again from the repository's packs,
+which are live rows, so a lost part costs a rebuild and nothing else: it
+raises no `objects_missing`, and a backup leaves the parts out. A layer's bytes
+are cut into parts of at most **1 GiB**, every part of a layer uploaded at
+once, so each is named on the log well inside the twelve hours a write may
+take; a repository's chain holds at most **32** layers of at most **16** parts
+each, and a publication that replaces a layer removes its rows at once.
+
 ### Unfinished uploads
 
 An upload that died part of the way through — a node killed mid-upload, or a

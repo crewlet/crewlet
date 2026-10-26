@@ -88,8 +88,11 @@ type StateQuery struct {
 	RetiredSince statelog.Position `json:"retired_since,omitzero"`
 }
 
-// The snapshot's phases, in the order a snapshot serves them.
+// The snapshot's phases, in the order a snapshot serves them. The LAYERS
+// phase comes first and is served whole on page 1 alone, so no cursor names
+// it: a cursor that does is refused, since nothing resumes it.
 const (
+	phaseLayers  = "layers"
 	phasePacks   = "packs"
 	phaseRefs    = "refs"
 	phasePushes  = "pushes"
@@ -142,8 +145,21 @@ type RepoSnapshot struct {
 	// StreamCreated is page 1's checkpoint's stream identity, on every page.
 	StreamCreated time.Time `json:"stream_created"`
 	Full          bool      `json:"full"`
-	Packs         []PackRow `json:"packs,omitempty"`
-	Refs          []RefRow  `json:"refs,omitempty"`
+	// Layers is the repository's WHOLE published chain as of Position, root
+	// first, served on page 1 when LayersServed — the snapshot's first phase,
+	// read in page 1's own transaction, never continued on a later page: a
+	// chain is at most MaxPublishedLayers rows, which fit beside a page of
+	// packs. Every pack a layer names is live at Position, since nothing
+	// retires a published pack but the record that replaces its layer; a
+	// publication after Position is the next delta's to serve.
+	Layers []LayerRow `json:"layers,omitempty"`
+	// LayersServed reports that Layers is the whole chain — on every full
+	// answer, an empty chain included, and on a delta exactly when the chain
+	// changed above its floor. A cache replaces the chain it holds only when
+	// it is set.
+	LayersServed bool      `json:"layers_served,omitempty"`
+	Packs        []PackRow `json:"packs,omitempty"`
+	Refs         []RefRow  `json:"refs,omitempty"`
 	// Pushes is the pushes phase's rows on a delta that asked for them:
 	// every push applied in (Since, Position], in log order, each once
 	// across the snapshot's pages — none above Position, which the next
@@ -201,6 +217,16 @@ func (r PackRow) Ref() PackRef {
 // its pack section well short of seven eighths of the nominal cut.
 func (r PackRow) Full() bool {
 	return r.Ref().PackBytes() >= FullPackBytes || r.Size >= FullBundleBytes
+}
+
+// LayerRow is one published layer as the rows hold it: its place in the chain
+// (Seq, 1.. root first and contiguous), the layer — Replaces empty, since a
+// row is a layer rather than a replacement — and the position of the record
+// that added it.
+type LayerRow struct {
+	Seq   int               `json:"seq"`
+	Layer LayerRef          `json:"layer"`
+	Added statelog.Position `json:"added"`
 }
 
 // RefRow is one ref, or — in a delta — a tombstone (an empty OID).
@@ -379,11 +405,19 @@ const (
 	// the repositories a compaction may be due in — the engine's own read,
 	// which no principal makes, as `introduced` is.
 	ReadCompactionDue ReadKind = "compaction_due"
+	// ReadPublicationDue is the repositories holding a live pack no
+	// published layer covers, LEAST RECENTLY PUBLISHED FIRST — one never
+	// published before any other — each with what a publication is due by:
+	// the listing a repository's maintainer polls for the repositories a
+	// publication may be due in. The engine's own read, as `compaction_due`
+	// is.
+	ReadPublicationDue ReadKind = "publication_due"
 )
 
 // ReadKinds is the closed set.
 func ReadKinds() []ReadKind {
-	return []ReadKind{ReadRepos, ReadRepo, ReadPushes, ReadRefs, ReadIntroduced, ReadCompactionDue}
+	return []ReadKind{ReadRepos, ReadRepo, ReadPushes, ReadRefs, ReadIntroduced, ReadCompactionDue,
+		ReadPublicationDue}
 }
 
 // Valid reports a kind this build knows.
@@ -398,9 +432,9 @@ type ReadQuery struct {
 	// repository the asker may not read, and a read of one answers
 	// [ErrNotPermitted]. Required rather than defaulted, because a default
 	// would be a reader nobody named, and an optional asker is a hole any
-	// caller that forgot it opens. REFUSED on `introduced` and on
-	// `compaction_due`, which no principal makes: an asker there would be
-	// judged by nothing.
+	// caller that forgot it opens. REFUSED on `introduced`, on
+	// `compaction_due` and on `publication_due`, which no principal makes:
+	// an asker there would be judged by nothing.
 	Asker Principal `json:"asker"`
 	// Repo is the repository's NAME, for repo, pushes and refs.
 	Repo string `json:"repo,omitempty"`
@@ -420,33 +454,59 @@ type ReadQuery struct {
 	Cursor   string `json:"cursor,omitempty"`
 	// Limit is repos 1..500 (0 = 100), pushes 1..200 (0 = 50), refs
 	// 1..1 000 (0 = 200) and introduced 1..MaxSnapshotItems (0 = the most);
-	// a `compaction_due` page is MaxSnapshotItems and names none.
+	// a `compaction_due` page and a `publication_due` page are
+	// MaxSnapshotItems and name none.
 	Limit int                `json:"limit,omitempty"`
 	Fresh statelog.Freshness `json:"fresh"`
 }
 
 // ReadAnswer is a [ReadQuery]'s answer.
 type ReadAnswer struct {
-	Repos      []RepoSummary         `json:"repos,omitempty"`
-	Repo       *RepoDetail           `json:"repo,omitempty"`
-	Pushes     []PushRow             `json:"pushes,omitempty"`
-	Refs       []RefRow              `json:"refs,omitempty"`
-	Introduced []IntroducedRow       `json:"introduced,omitempty"`
-	Due        []CompactionCandidate `json:"due,omitempty"`
-	Next       string                `json:"next,omitempty"`
-	Position   statelog.Position     `json:"position"`
-	Level      statelog.ReadLevel    `json:"level"`
+	Repos      []RepoSummary          `json:"repos,omitempty"`
+	Repo       *RepoDetail            `json:"repo,omitempty"`
+	Pushes     []PushRow              `json:"pushes,omitempty"`
+	Refs       []RefRow               `json:"refs,omitempty"`
+	Introduced []IntroducedRow        `json:"introduced,omitempty"`
+	Due        []CompactionCandidate  `json:"due,omitempty"`
+	Publish    []PublicationCandidate `json:"publish,omitempty"`
+	Next       string                 `json:"next,omitempty"`
+	Position   statelog.Position      `json:"position"`
+	Level      statelog.ReadLevel     `json:"level"`
 }
 
 // CompactionCandidate is one repository a `compaction_due` read lists: its id
-// and name, how many live packs it holds, and the version its row was read at
-// — what a compactor keys its memory of a plan found not due by, so a
-// repository whose row has not moved since is not planned again.
+// and name, how many live packs it holds and the objects they hold — what a
+// compaction's memory charge is stated by before anything is synced — and the
+// version its row was read at — what a compactor keys its memory of a plan
+// found not due by, so a repository whose row has not moved since is not
+// planned again.
 type CompactionCandidate struct {
-	ID        string            `json:"id"`
-	Name      string            `json:"name"`
-	LivePacks int64             `json:"live_packs"`
-	Version   statelog.Position `json:"version"`
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	LivePacks   int64             `json:"live_packs"`
+	LiveObjects int64             `json:"live_objects"`
+	Version     statelog.Position `json:"version"`
+}
+
+// PublicationCandidate is one repository a `publication_due` read lists: what
+// a publication's due rule reads before anything is synced — the live packs
+// and objects beside the published ones, so the tail no layer covers is their
+// difference, the last push and the last publication with how long its build
+// took, which paces the next — and the version its row was read at.
+type PublicationCandidate struct {
+	ID               string `json:"id"`
+	Name             string `json:"name"`
+	LivePacks        int64  `json:"live_packs"`
+	PublishedPacks   int64  `json:"published_packs"`
+	LiveObjects      int64  `json:"live_objects"`
+	PublishedObjects int64  `json:"published_objects"`
+	// LastPushAt is zero for a repository nobody pushed to, and PublishedAt
+	// for one never published.
+	LastPushAt  time.Time `json:"last_push_at,omitzero"`
+	PublishedAt time.Time `json:"published_at,omitzero"`
+	// PublishTook is the last publication's build.
+	PublishTook time.Duration     `json:"publish_took"`
+	Version     statelog.Position `json:"version"`
 }
 
 // CompactionProposal is what the node that built a compaction asks the

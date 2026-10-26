@@ -190,6 +190,9 @@ type repoView struct {
 	// repository's retired rows at or below: below it, the rows that told of
 	// a retirement may be gone.
 	retiredThrough int64
+	// layersPosition is the position of the last record that changed the
+	// repository's published chain: a delta from below it serves the chain.
+	layersPosition int64
 	pushes         int64
 	lastPushAt     sql.NullInt64
 	createdAt      int64
@@ -214,7 +217,7 @@ func repoViewIn(ctx context.Context, tx *sql.Tx, id string, cp statelog.Position
 	err := tx.QueryRowContext(ctx, repoViewSQL, id).Scan(&v.ref.ID, &v.ref.Name, &status, &managed,
 		&owners, &v.ref.Owner.Ref, &visibility, &v.ref.DefaultBranch, &v.ref.Description, &deleted, &v.ref.Refs,
 		&v.branches, &v.tags, &v.tombstones, &v.ref.LivePacks, &v.ref.LiveBytes, &v.ref.LiveObjects,
-		&v.tombstonesThrough, &v.retiredThrough, &v.pushes, &v.lastPushAt, &v.createdAt)
+		&v.tombstonesThrough, &v.retiredThrough, &v.layersPosition, &v.pushes, &v.lastPushAt, &v.createdAt)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return repoView{}, false, nil
@@ -324,6 +327,21 @@ func (p *page) left() int { return p.maxRows - p.rows }
 // full answer serves them only when it can serve EVERY one ([choose]), and
 // RetiredFrom says whether it did.
 //
+// # Published layers
+//
+// The repository's published chain is the FIRST phase, served WHOLE on page 1
+// alone, read in page 1's own transaction: on every full answer, an empty
+// chain included, and on a delta exactly when a record changed the chain above
+// its floor (the repository's layers_position), and LayersServed says which.
+// It is never continued, so no cursor names it and a later page serves none:
+// the widest chain the bounds admit is MaxPublishedLayers rows and at most
+// MaxPacksPerRepo checksums across them, well under a page, and charged to
+// page 1's budget, so the packs after it get what is left. Read at page 1's
+// checkpoint it is consistent with the packs the snapshot serves — every pack
+// a layer names is live there, because nothing retires a published pack but
+// the record that replaces its layer — and a publication after it is the next
+// delta's to serve, as a retirement after it is.
+//
 // # One monotone history across pages
 //
 // A snapshot of more than one page is read in several transactions, possibly
@@ -412,7 +430,8 @@ func (r *Reader) Snapshot(ctx context.Context, q StateQuery) (RepoSnapshot, erro
 		}
 		out.Repo, out.Position, out.StreamCreated, out.Full = v.ref, cur.From, cur.Stream, cur.Full
 		out.RetiredFrom = cur.RetiredFrom
-		next, err := r.fill(ctx, tx, q.RepoID, &out, cur, first)
+		layers := first && (cur.Full || v.layersPosition > cur.Since.Packed())
+		next, err := r.fill(ctx, tx, q.RepoID, &out, cur, first, layers)
 		if err != nil {
 			return err
 		}
@@ -610,11 +629,23 @@ func deltaOutweighs(ctx context.Context, tx *sql.Tx, repoID string, since, retir
 
 // fill serves the snapshot's phases from cur, in order, until the page is
 // full or the last phase completes, and answers where the next page resumes —
-// nil when the snapshot is complete.
+// nil when the snapshot is complete. layers serves the published chain first,
+// whole, which only page 1 is asked to.
 func (r *Reader) fill(ctx context.Context, tx *sql.Tx, repoID string, out *RepoSnapshot,
-	cur StateCursor, first bool) (*StateCursor, error) {
+	cur StateCursor, first, layers bool) (*StateCursor, error) {
 
 	pg := page{maxRows: r.pageRows, maxB: r.pageBytes}
+	if layers {
+		if err := r.layersPhase(ctx, tx, repoID, out, &pg); err != nil {
+			return nil, err
+		}
+		if pg.full() {
+			// ONLY UNDER A TEST'S PAGE: the widest chain fits a page with
+			// room, and a page the chain filled resumes at its packs.
+			next := cur
+			return &next, nil
+		}
+	}
 	for {
 		var done bool
 		var err error
@@ -662,6 +693,65 @@ func (r *Reader) fill(ctx context.Context, tx *sql.Tx, repoID string, out *RepoS
 			return nil, nil
 		}
 	}
+}
+
+// layersPhase serves the repository's whole published chain onto page 1, its
+// parts joined to their layers, and charges every row to the page — whole
+// whatever the page has left, since the phase never resumes, and the widest
+// chain the bounds admit is far under a page (TestTheLayersPhaseFitsPageOne).
+func (r *Reader) layersPhase(ctx context.Context, tx *sql.Tx, repoID string, out *RepoSnapshot,
+	pg *page) error {
+
+	chain, err := layersOf(ctx, tx, repoID)
+	if err != nil {
+		return err
+	}
+	if len(chain) > 0 {
+		at := make(map[string]int, len(chain))
+		for i, row := range chain {
+			at[row.Layer.LayerID] = i
+		}
+		rows, err := tx.QueryContext(ctx, layerPartsOfSQL, repoID)
+		if err != nil {
+			return fmt.Errorf("code: read %s's published layers' parts: %w", repoID, err)
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var (
+				id, object, hash string
+				n                int
+				size             int64
+			)
+			if err := rows.Scan(&id, &n, &object, &hash, &size); err != nil {
+				return fmt.Errorf("code: read %s's published layers' parts: %w", repoID, err)
+			}
+			i, ok := at[id]
+			if !ok {
+				// A PART OF NO LAYER OF THE CHAIN: the apply removes a
+				// layer's parts with its row, so this is rows no record
+				// wrote, which no snapshot may answer as a chain.
+				return fmt.Errorf("code: %s holds part %d of layer %s, which its chain does not", repoID, n, id)
+			}
+			k, err := objstore.ParseKey(object)
+			if err != nil {
+				return fmt.Errorf("code: part %d of %s's layer %s names %q: %w", n, repoID, id, object, err)
+			}
+			if n != len(chain[i].Layer.Parts) {
+				return fmt.Errorf("code: %s's layer %s holds part %d where part %d was due", repoID, id, n,
+					len(chain[i].Layer.Parts))
+			}
+			chain[i].Layer.Parts = append(chain[i].Layer.Parts, LayerPart{Object: k, Hash: objstore.Hash(hash),
+				Size: size})
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("code: read %s's published layers' parts: %w", repoID, err)
+		}
+	}
+	for _, row := range chain {
+		pg.add(row.encodedBytes())
+	}
+	out.Layers, out.LayersServed = chain, true
+	return nil
 }
 
 // packsFull serves a full snapshot's packs in primary-key order.
@@ -925,6 +1015,8 @@ func (r *Reader) retiredPhase(ctx context.Context, tx *sql.Tx, repoID string, ou
 func checkCursor(c *StateCursor) error {
 	bad := func(why string) error { return fmt.Errorf("%w: %s", ErrBadCursor, why) }
 	switch {
+	case c.Phase == phaseLayers:
+		return bad("the layers phase is served whole on a snapshot's first page, and no page resumes it")
 	case c.Phase != phasePacks && c.Phase != phaseRefs && c.Phase != phasePushes && c.Phase != phaseRetired &&
 		c.Phase != phaseTail:
 		return bad(fmt.Sprintf("phase %q", c.Phase))
@@ -1202,6 +1294,12 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		// the committer's own snapshot, which holds every input to them.
 		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.compactionDue(ctx, tx, q, &out) }
+	case ReadPublicationDue:
+		// A SET READ OF THE DOMAIN, as the compaction's listing is, for the
+		// same reason: the publication that follows is decided again from
+		// the committer's own snapshot.
+		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
+		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.publicationDue(ctx, tx, q, &out) }
 	}
 	answer, err := r.log.Read(ctx, query, func(tx *sql.Tx) error {
 		out = ReadAnswer{}
@@ -1234,6 +1332,8 @@ func (q ReadQuery) validate() error {
 		return q.validateIntroduced()
 	case ReadCompactionDue:
 		return q.validateCompactionDue()
+	case ReadPublicationDue:
+		return q.validatePublicationDue()
 	}
 	// WHO ASKS IS NAMED, or nothing is read: an answer is held to the
 	// asker's grant, and an absent asker would be judged as somebody nobody
@@ -1350,12 +1450,38 @@ func (q ReadQuery) validateCompactionDue() error {
 	return nil
 }
 
+// validatePublicationDue is [ReadQuery.validate] for a `publication_due` read:
+// the engine's own — a git node's publisher polling for the repositories a
+// publication may be due in — so it names NO asker, for the `compaction_due`
+// read's reason, and nothing else at all: no repository, no filter, no range,
+// no floor and no limit, since its partial index holds exactly the
+// repositories it lists and a page is MaxSnapshotItems of them.
+func (q ReadQuery) validatePublicationDue() error {
+	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	if q.Asker != (Principal{}) {
+		return refused("asker", "a publication_due read is the engine's own, which no principal makes")
+	}
+	for _, f := range []struct {
+		field string
+		set   bool
+	}{
+		{"repo", q.Repo != ""}, {"status", len(q.Status) > 0}, {"prefix", q.Prefix != ""},
+		{"introduced", q.Introduced != nil}, {"min_packs", q.MinPacks != 0}, {"limit", q.Limit != 0},
+	} {
+		if f.set {
+			return refused(f.field, "a publication_due read lists every repository holding a pack no "+
+				"published layer covers, a page of MaxSnapshotItems at a time, and names nothing else")
+		}
+	}
+	return nil
+}
+
 // freshness is the level a read is served at: for every kind a principal
-// reads, and for the duty listing `compaction_due`, one of [ReadLevels], stale
-// unless asked; for the engine's own `introduced`, any level a point read
-// serves ([pointLevel]) — named, since whoever builds an index names the level
-// its pages must be read at, and a session read with the position it must
-// include.
+// reads, and for the duty listings `compaction_due` and `publication_due`, one
+// of [ReadLevels], stale unless asked; for the engine's own `introduced`, any
+// level a point read serves ([pointLevel]) — named, since whoever builds an
+// index names the level its pages must be read at, and a session read with the
+// position it must include.
 func (q ReadQuery) freshness() (statelog.Freshness, error) {
 	fresh := q.Fresh
 	switch {
@@ -1784,7 +1910,7 @@ func (r *Reader) compactionDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out
 			c       CompactionCandidate
 			version int64
 		)
-		if err := rows.Scan(&c.ID, &c.Name, &c.LivePacks, &version); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.LivePacks, &c.LiveObjects, &version); err != nil {
 			return fmt.Errorf("code: list the repositories a compaction may be due in: %w", err)
 		}
 		c.Version = unpacked(version)
@@ -1814,6 +1940,84 @@ func cutDueCursor(s string) (int64, string, bool) {
 		return 0, "", false
 	}
 	return packs, id, true
+}
+
+// publicationDue serves one page of a `publication_due` read: the active and
+// archived repositories holding a live pack no published layer covers — their
+// live packs past their published ones — LEAST RECENTLY PUBLISHED FIRST, one
+// never published before every other, then by id, each with what a
+// publication's due rule reads and the version its row was read at.
+//
+// ONE WALK of code_repos_unpublished_idx (replicated 0061), its partial
+// predicate repeated verbatim, which holds exactly the repositories it lists:
+// a repository whose every pack a layer covers costs the listing nothing,
+// however many there are. LEAST RECENTLY PUBLISHED FIRST, so the repository
+// that has waited longest is planned first, and a page cut at MaxSnapshotItems
+// ends at the most recently published. A FULL LISTING, never a delta from the
+// last poll's, for the compaction's listing's reason.
+func (r *Reader) publicationDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	switch at, id, keyed := cutPublishCursor(q.Cursor); {
+	case q.Cursor != "" && !keyed:
+		return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
+	case q.Cursor == "":
+		rows, err = tx.QueryContext(ctx, publicationDueFirstSQL, r.pageRows)
+	default:
+		rows, err = tx.QueryContext(ctx, publicationDueAfterSQL, at, at, id, r.pageRows)
+	}
+	if err != nil {
+		return fmt.Errorf("code: list the repositories a publication may be due in: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	pg := page{maxRows: r.pageRows, maxB: r.pageBytes}
+	for rows.Next() {
+		var (
+			c                    PublicationCandidate
+			lastPush             sql.NullInt64
+			published, tookMs, v int64
+		)
+		if err := rows.Scan(&c.ID, &c.Name, &c.LivePacks, &c.PublishedPacks, &c.LiveObjects,
+			&c.PublishedObjects, &lastPush, &published, &tookMs, &v); err != nil {
+			return fmt.Errorf("code: list the repositories a publication may be due in: %w", err)
+		}
+		if lastPush.Valid {
+			c.LastPushAt = store.DecodeTime(lastPush.Int64)
+		}
+		// ZERO IS NEVER: the column's default, and no publication's broker
+		// instant.
+		if published != 0 {
+			c.PublishedAt = store.DecodeTime(published)
+		}
+		c.PublishTook, c.Version = time.Duration(tookMs)*time.Millisecond, unpacked(v)
+		out.Publish = append(out.Publish, c)
+		if pg.add(c.encodedBytes()) {
+			out.Next = publishCursor(published, c.ID)
+			break
+		}
+	}
+	return rows.Err()
+}
+
+// publishCursor is "<published_at>/<id>", the instant as the column stores it:
+// a repository's place in a `publication_due` listing's order.
+func publishCursor(publishedAt int64, id string) string {
+	return strconv.FormatInt(publishedAt, 10) + "/" + id
+}
+
+// cutPublishCursor reads a [publishCursor].
+func cutPublishCursor(s string) (int64, string, bool) {
+	at, id, ok := strings.Cut(s, "/")
+	if !ok || id == "" {
+		return 0, "", false
+	}
+	published, err := strconv.ParseInt(at, 10, 64)
+	if err != nil || published < 0 {
+		return 0, "", false
+	}
+	return published, id, true
 }
 
 // ResolveRef answers one ref of one repository at the level the query names,
@@ -2163,7 +2367,7 @@ func (r *Reader) purgedAt(ctx context.Context, id string, at statelog.Position) 
 const (
 	repoViewSQL = `SELECT id, name, status, managed_by, owner_kind, owner, visibility, default_branch,
 		description, deleted_at, refs, branches, tags, tombstones, live_packs, live_bytes,
-		live_objects, tombstones_through, retired_through, pushes, last_push_at, created_at
+		live_objects, tombstones_through, retired_through, layers_position, pushes, last_push_at, created_at
 		FROM code_repos WHERE id = ?`
 	packColumns       = `pack_id, part, object, hash, size, index_bytes, reverse_bytes, git_checksum, objects, kind, state, added_position`
 	packsFullFirstSQL = `SELECT ` + packColumns + ` FROM code_packs WHERE repo_id = ?
@@ -2269,13 +2473,33 @@ const (
 	// code_repos_packs_idx walked from its top — its partial predicate
 	// repeated verbatim — and after a cursor with the <= beside the OR that
 	// keeps the range seek (planner.go).
-	compactionDueFirstSQL = `SELECT id, name, live_packs, version FROM code_repos
+	compactionDueFirstSQL = `SELECT id, name, live_packs, live_objects, version FROM code_repos
 		INDEXED BY code_repos_packs_idx
 		WHERE status IN ('active', 'archived') AND live_packs >= ?
 		ORDER BY live_packs DESC, id DESC LIMIT ?`
-	compactionDueAfterSQL = `SELECT id, name, live_packs, version FROM code_repos
+	compactionDueAfterSQL = `SELECT id, name, live_packs, live_objects, version FROM code_repos
 		INDEXED BY code_repos_packs_idx
 		WHERE status IN ('active', 'archived') AND live_packs >= ? AND live_packs <= ?
 			AND (live_packs < ? OR id < ?)
 		ORDER BY live_packs DESC, id DESC LIMIT ?`
+	// THE PUBLISHER'S DUE LISTING, least recently published first and then by
+	// id, over code_repos_unpublished_idx — its partial predicate repeated
+	// verbatim — from the index's start, the column's floor (0, a repository
+	// never published: no row holds less), and after a cursor with the >=
+	// beside the OR that keeps the range seek (planner.go).
+	publicationDueColumns = `id, name, live_packs, published_packs, live_objects, published_objects,
+		last_push_at, published_at, publish_took_ms, version`
+	publicationDueFirstSQL = `SELECT ` + publicationDueColumns + ` FROM code_repos
+		INDEXED BY code_repos_unpublished_idx
+		WHERE live_packs > published_packs AND status IN ('active', 'archived') AND published_at >= 0
+		ORDER BY published_at, id LIMIT ?`
+	publicationDueAfterSQL = `SELECT ` + publicationDueColumns + ` FROM code_repos
+		INDEXED BY code_repos_unpublished_idx
+		WHERE live_packs > published_packs AND status IN ('active', 'archived')
+			AND published_at >= ? AND (published_at > ? OR id > ?)
+		ORDER BY published_at, id LIMIT ?`
+	// A SNAPSHOT'S LAYERS PHASE: every part of a repository's chain, in its
+	// key's order, joined to its layer (layersOfSQL) in Go.
+	layerPartsOfSQL = `SELECT layer_id, part, object, hash, size FROM code_layer_parts
+		WHERE repo_id = ? ORDER BY layer_id, part`
 )

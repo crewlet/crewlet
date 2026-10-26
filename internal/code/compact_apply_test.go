@@ -66,9 +66,10 @@ func TestACompactionRetiresItsInputsAndAddsItsOutputs(t *testing.T) {
 	compaction := compactOf(t, "repo-a", cid, retire, out)
 
 	at := codeAt(e.next)
-	if rows := e.applyCounting(compaction); rows != 3+3+1+1 || rows > compactDecidedRows(3, 1) {
+	if rows := e.applyCounting(compaction); rows != 3+3+1+1 || rows > compactDecidedRows(3, 1, nil) {
 		t.Fatalf("the compaction reported %d rows, want its three retirements, three removals, one "+
-			"output and the counters — at most compactDecidedRows(3, 1) = %d", rows, compactDecidedRows(3, 1))
+			"output and the counters — at most compactDecidedRows(3, 1, nil) = %d", rows,
+			compactDecidedRows(3, 1, nil))
 	}
 	for _, id := range retire {
 		if n := e.num(`SELECT COUNT(*) FROM code_packs WHERE repo_id = 'repo-a' AND pack_id = ?`, id); n != 0 {
@@ -237,13 +238,19 @@ func TestACompactionOutputUploadedTooLongAgoIsRefused(t *testing.T) {
 // takes no more than MaxCompactInputs inputs and MaxCompactOutputs outputs —
 // Validate refuses one more of either, naming it — and the largest compaction
 // it takes fits one record whole, in rows (compactDecidedRows within
-// MaxRecordRows, the framework's transaction budget) and in bytes.
+// MaxRecordRows, the framework's transaction budget) and in bytes. So does
+// the widest PUBLICATION it takes — those inputs and outputs, and a layer of
+// MaxPacksPerRepo packs in MaxLayerParts parts replacing MaxPublishedLayers −
+// 1 layers, its record under 200 KiB — and one more replaced layer or one more
+// part is refused, naming it.
 //
 // Mutation: raise MaxCompactInputs past the row budget, and the largest
-// compaction the committer takes no longer fits its record.
+// compaction the committer takes no longer fits its record; let Validate take
+// as many replaced layers as a chain holds, and the arm naming layer.replaces
+// passes.
 func TestACompactionPastTheRowBudgetIsRefusedBeforeItsRecord(t *testing.T) {
 	t.Parallel()
-	if rows := compactDecidedRows(MaxCompactInputs, MaxCompactOutputs); rows > MaxRecordRows {
+	if rows := compactDecidedRows(MaxCompactInputs, MaxCompactOutputs, nil); rows > MaxRecordRows {
 		t.Fatalf("the largest compaction the committer takes writes %d rows, past MaxRecordRows (%d)",
 			rows, MaxRecordRows)
 	}
@@ -291,5 +298,89 @@ func TestACompactionPastTheRowBudgetIsRefusedBeforeItsRecord(t *testing.T) {
 			!strings.Contains(err.Error(), tc.field+":") {
 			t.Errorf("%s: Validate = %v, want ErrInvalidProposal naming %s", name, err, tc.field)
 		}
+	}
+
+	// THE WIDEST PUBLICATION, every bound at once.
+	widest := func() CompactionProposal {
+		w := largest(MaxCompactInputs, MaxCompactOutputs)
+		packs := make([]string, 0, MaxPacksPerRepo)
+		for _, out := range w.Compaction.Add {
+			packs = append(packs, out.GitChecksum)
+		}
+		for i := len(packs); i < MaxPacksPerRepo; i++ {
+			packs = append(packs, oid(fmt.Sprint("covered", i)))
+		}
+		slices.Sort(packs)
+		replaces := make([]string, MaxPublishedLayers-1)
+		for i := range replaces {
+			replaces[i] = oid(fmt.Sprint("replaced", i))
+		}
+		parts := make([]LayerPart, MaxLayerParts)
+		for i := range parts {
+			parts[i] = LayerPart{Object: objstore.KeyAt(time.Now()), Hash: objstore.HashOf([]byte(fmt.Sprint(i))),
+				Size: LayerPartBytes}
+		}
+		w.Compaction.Layer = &LayerRef{LayerID: oid("widest"), BaseID: oid("base"), Replaces: replaces,
+			GraphID: oid("graph"), Packs: packs, Parts: parts,
+			MidxBytes: MaxLayerParts*LayerPartBytes - 2<<20, BitmapBytes: 1 << 20, GraphBytes: 1 << 20,
+			Objects: 300_000_000, Commits: 90_000_000, Git: "2.56.0", TookMs: 3_600_000}
+		return w
+	}
+	w := widest()
+	bytes, err = w.measure()
+	if err != nil {
+		t.Fatalf("the widest publication the committer takes is refused: %v", err)
+	}
+	decision, err = recordFor(statelog.Stamp{Writer: "node-a", Gen: 1}, RepoSubject(w.Compaction.RepoID),
+		OpCompact, []string{RepoPath(w.Compaction.RepoID)}, w.Compaction.CompactionID,
+		Actor{ID: "node-a", Kind: ActorSystem}, w.Compaction, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := withinCompaction(decision, w.Compaction); err != nil {
+		t.Fatalf("the widest publication's record (%d bytes, %d of them the compaction) does not fit: %v",
+			len(decision.Payload), bytes, err)
+	}
+	if len(decision.Payload) >= 200<<10 {
+		t.Errorf("the widest publication's record is %d bytes, past the 200 KiB it is sized at",
+			len(decision.Payload))
+	}
+	if rows := compactDecidedRows(MaxCompactInputs, MaxCompactOutputs, w.Compaction.Layer); rows != 2_609 ||
+		rows > MaxRecordRows {
+		t.Errorf("the widest publication writes %d rows, want the 2 609 compactDecidedRows' doc states, under "+
+			"MaxRecordRows (%d)", rows, MaxRecordRows)
+	}
+	t.Logf("the widest publication's record is %d bytes of the %d a record may be", len(decision.Payload),
+		MaxRecordBytes)
+	for name, tc := range map[string]struct {
+		edit  func(*Compaction)
+		field string
+	}{
+		"one replaced layer more": {func(c *Compaction) {
+			c.Layer.Replaces = append(c.Layer.Replaces, oid("one more"))
+		}, "layer.replaces:"},
+		"one part more": {func(c *Compaction) {
+			c.Layer.Parts = append(c.Layer.Parts, c.Layer.Parts[0])
+		}, "layer: " + ErrInvalidLayer.Error() + ": parts:"},
+		"an output the layer does not cover": {func(c *Compaction) {
+			c.Layer.Packs = slices.DeleteFunc(c.Layer.Packs, func(s string) bool { return s == c.Add[3].GitChecksum })
+		}, "add[3].git_checksum:"},
+	} {
+		p := widest()
+		tc.edit(&p.Compaction)
+		if err := p.Validate(); !errors.Is(err, ErrInvalidProposal) || !strings.Contains(err.Error(), tc.field) {
+			t.Errorf("%s: Validate = %v, want ErrInvalidProposal naming %s", name, err, tc.field)
+		}
+	}
+	// AND A LAYER-ONLY PUBLICATION is a proposal, where a compaction with no
+	// inputs is none.
+	only := widest()
+	only.Compaction.Retire, only.Compaction.Add = nil, nil
+	if err := only.Validate(); err != nil {
+		t.Errorf("a publication with no repack: %v", err)
+	}
+	only.Compaction.Layer = nil
+	if err := only.Validate(); !errors.Is(err, ErrInvalidProposal) || !strings.Contains(err.Error(), "retire:") {
+		t.Errorf("a compaction with no inputs: %v, want ErrInvalidProposal naming retire", err)
 	}
 }

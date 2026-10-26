@@ -993,7 +993,7 @@ func (w *working) decide(push int, p Proposal, v *verdicts, limits Limits) []Com
 		c.Result = ResultOK
 	}
 	if p.Pack != nil && slices.ContainsFunc(cmds, isOK) {
-		detail, expired := uploadExpired(p.Pack.Object, w.now, "run git push again")
+		detail, expired := uploadExpired("the pack", p.Pack.Object, w.now, "run git push again")
 		switch {
 		case expired:
 			refuseOK(cmds, RefusalUploadExpired, detail)
@@ -1008,19 +1008,21 @@ func (w *working) decide(push int, p Proposal, v *verdicts, limits Limits) []Com
 	return cmds
 }
 
-// uploadExpired is the one rule a decide holds a stored bundle's key to: a
-// bundle whose key was minted objstore.RecordWithin or more before the
+// uploadExpired is the one rule a decide holds a stored object's key to: an
+// object whose key was minted objstore.RecordWithin or more before the
 // decision may no longer be named by a record — a collection may already have
 // judged so old a key unnamed and deleted its bytes, and a row naming it would
-// name bytes that are gone — and the sentence that says so, ending in again,
-// what its asker does next. ONE RULE AND ONE SENTENCE for every decide that
-// names a stored pack (ADR-0008): a push's pack and a compaction's outputs.
-func uploadExpired(object objstore.Key, now time.Time, again string) (string, bool) {
+// name bytes that are gone — and the sentence that says so, beginning with
+// what, the object it names, and ending in again, what its asker does next.
+// ONE RULE AND ONE SENTENCE for every decide that names a stored object
+// (ADR-0008): a push's pack, a compaction's outputs and a publication's layer
+// parts.
+func uploadExpired(what string, object objstore.Key, now time.Time, again string) (string, bool) {
 	minted := object.Minted()
 	if now.Sub(minted) < objstore.RecordWithin {
 		return "", false
 	}
-	return fmt.Sprintf("the pack was uploaded at %s, %s or more before this decision; %s",
+	return fmt.Sprintf("%s was uploaded at %s, %s or more before this decision; %s", what,
 		minted.UTC().Format(time.RFC3339), objstore.RecordWithin, again), true
 }
 

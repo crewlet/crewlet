@@ -155,6 +155,37 @@ func TestARecordNamesThePackRowsItsApplyWrites(t *testing.T) {
 			compacted)
 	}
 
+	// A PUBLICATION writes code_packs exactly as a compaction does — its
+	// repack's outputs named, its inputs removed — and a layer-only one none:
+	// the layer names its objects in code_layer_parts, a Derived table no
+	// backup reads.
+	layer := &code.LayerRef{LayerID: oidOf("layer"), Packs: []string{outputs[0].GitChecksum},
+		Parts:     []code.LayerPart{{Object: keyOf("part"), Hash: objstore.HashOf([]byte("part")), Size: 3}},
+		MidxBytes: 2, BitmapBytes: 1, Objects: 2, Git: "2.56.0"}
+	for name, tc := range map[string]struct {
+		c    code.Compaction
+		want []objstore.RecordReference
+	}{
+		"a publication with a repack": {code.Compaction{RepoID: "repo-a", CompactionID: cid, Node: "node-a",
+			Seen:   statelog.Position{Stream: code.Domain{}.Stream().Name, Generation: 1, Seq: 4},
+			Retire: []string{"push-a", "push-b", "push-c"}, Add: outputs, Layer: layer}, compacted},
+		"a layer-only publication": {code.Compaction{RepoID: "repo-a", CompactionID: cid, Node: "node-a",
+			Seen:  statelog.Position{Stream: code.Domain{}.Stream().Name, Generation: 1, Seq: 4},
+			Layer: layer}, nil},
+	} {
+		body, err := json.Marshal(tc.c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := records(mustEncode(t, code.MutationRecord{RecordEnvelope: code.RecordEnvelope{
+			OpID: tc.c.CompactionID, Subject: code.RepoSubject("repo-a"), Op: code.OpCompact, Gen: 1,
+			Scope: code.Scope{code.RepoPath("repo-a")},
+		}, Mutation: body}))
+		if err != nil || !slices.Equal(got, tc.want) {
+			t.Errorf("%s's references = %+v, %v; want %+v", name, got, err, tc.want)
+		}
+	}
+
 	// A NEWER BUILD'S PUSH: it may name a pack, and this build cannot say
 	// which.
 	future, err := encodeSuiteRecord(string(code.KindRepo), "repo-a", "op-2", code.RecordVersion+1)

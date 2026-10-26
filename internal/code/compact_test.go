@@ -620,7 +620,7 @@ func TestTheDueListingIsMostPacksFirst(t *testing.T) {
 	ids := map[string]string{}
 	for name, count := range packs {
 		ids[name] = n.ensure(name, suiteSettings(), t1).RepoID
-		n.exec(`UPDATE code_repos SET live_packs = ? WHERE id = ?`, count, ids[name])
+		n.exec(`UPDATE code_repos SET live_packs = ?, live_objects = ? WHERE id = ?`, count, 1000*count, ids[name])
 	}
 	// AN ARCHIVED ONE IS LISTED, a deleted one never.
 	n.exec(`UPDATE code_repos SET status = 'archived' WHERE id = ?`, ids["d"])
@@ -670,9 +670,10 @@ func TestTheDueListingIsMostPacksFirst(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		if c.Version.Packed() != version || c.Name == "" || int(c.LivePacks) != packs[c.Name] {
-			t.Errorf("%s is listed as %+v, want its name, its %d live packs and its row's version %d",
-				c.ID, c, packs[c.Name], version)
+		if c.Version.Packed() != version || c.Name == "" || int(c.LivePacks) != packs[c.Name] ||
+			int(c.LiveObjects) != 1000*packs[c.Name] {
+			t.Errorf("%s is listed as %+v, want its name, its %d live packs holding %d objects and its row's "+
+				"version %d", c.ID, c, packs[c.Name], 1000*packs[c.Name], version)
 		}
 	}
 	if !slices.Equal(listed, want) {
@@ -690,13 +691,15 @@ func TestTheDueListingIsMostPacksFirst(t *testing.T) {
 	}
 }
 
-// A DUTY LISTING NAMES NO ASKER: the compactor's `compaction_due` read is the
-// engine's own, so the domain refuses it with an asker — the one place every
-// surface a principal reads the code host through meets — answers it with
-// none, and still refuses a principal's read that names none.
+// A DUTY LISTING NAMES NO ASKER: the compactor's `compaction_due` read and the
+// publisher's `publication_due` read are the engine's own, so the domain
+// refuses either with an asker — the one place every surface a principal reads
+// the code host through meets — answers it with none, and still refuses a
+// principal's read that names none; and each takes nothing its listing does
+// not read.
 //
-// Mutation: accept an asker on compaction_due, and a principal's read could
-// list every repository's pack count past its grant.
+// Mutation: accept an asker on either duty listing, and a principal's read
+// could list every repository's packs past its grant.
 func TestADutyListingNamesNoAsker(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -712,6 +715,14 @@ func TestADutyListingNamesNoAsker(t *testing.T) {
 			"min_packs"},
 		"a duty listing naming a limit": {code.ReadQuery{Kind: code.ReadCompactionDue, MinPacks: 1, Limit: 5,
 			Fresh: stale}, "limit"},
+		"a publication listing naming an asker": {code.ReadQuery{Kind: code.ReadPublicationDue, Asker: asker,
+			Fresh: stale}, "asker"},
+		"a publication listing naming a floor": {code.ReadQuery{Kind: code.ReadPublicationDue, MinPacks: 1,
+			Fresh: stale}, "min_packs"},
+		"a publication listing naming a limit": {code.ReadQuery{Kind: code.ReadPublicationDue, Limit: 5,
+			Fresh: stale}, "limit"},
+		"a publication listing naming a repository": {code.ReadQuery{Kind: code.ReadPublicationDue, Repo: "web",
+			Fresh: stale}, "repo"},
 		"a principal's listing naming no asker": {code.ReadQuery{Kind: code.ReadRepos, Fresh: stale}, "asker"},
 		"a principal's listing naming a floor": {code.ReadQuery{Kind: code.ReadRepos, Asker: asker, MinPacks: 1,
 			Fresh: stale}, "min_packs"},
@@ -721,12 +732,16 @@ func TestADutyListingNamesNoAsker(t *testing.T) {
 			t.Errorf("%s: Read = %v, want ErrInvalid naming %s", name, err, tc.field)
 		}
 	}
-	if _, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadCompactionDue, MinPacks: 1,
-		Fresh: stale}); err != nil {
-		t.Fatalf("a duty listing naming no asker: %v", err)
-	}
-	if _, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadCompactionDue, MinPacks: 1,
-		Cursor: "not-a-cursor", Fresh: stale}); !errors.Is(err, code.ErrBadCursor) {
-		t.Fatalf("a duty listing with a cursor it never issued: %v, want ErrBadCursor", err)
+	for _, q := range []code.ReadQuery{
+		{Kind: code.ReadCompactionDue, MinPacks: 1, Fresh: stale},
+		{Kind: code.ReadPublicationDue, Fresh: stale},
+	} {
+		if _, err := n.reader.Read(t.Context(), q); err != nil {
+			t.Fatalf("a %s listing naming no asker: %v", q.Kind, err)
+		}
+		q.Cursor = "not-a-cursor"
+		if _, err := n.reader.Read(t.Context(), q); !errors.Is(err, code.ErrBadCursor) {
+			t.Fatalf("a %s listing with a cursor it never issued: %v, want ErrBadCursor", q.Kind, err)
+		}
 	}
 }

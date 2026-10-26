@@ -586,9 +586,47 @@
 //
 // A git node finds the repositories a compaction may be due in by the
 // [ReadCompactionDue] listing: the active and archived repositories holding
-// at least MinPacks live packs, MOST FIRST, each with its row's version, one
-// backward walk of code_repos_packs_idx (replicated 0060) — the engine's own
-// read, which names no asker.
+// at least MinPacks live packs, MOST FIRST, each with its row's version and
+// the objects its packs hold, one backward walk of code_repos_packs_idx
+// (replicated 0060) — the engine's own read, which names no asker.
+//
+// # A publication puts a published layer on the chain, decided as a compaction
+//
+// A git node serving a repository answers a fetch from a multi-pack-index and
+// its bitmap, and writing them costs the history whatever was added since — so
+// the code host writes them ONCE for the fleet and every git node installs
+// them: a repository's PUBLISHED CHAIN, git's own incremental multi-pack-index
+// layers with their bitmaps and commit-graph layers, root first, its rows in
+// code_layers and its bytes the parts code_layer_parts names
+// ([LayerReferences], DERIVED under ADR-0051: kept while named, never audited,
+// never carried by a backup, since any git node can build a layer again). A
+// layer is put on the chain by a PUBLICATION: a compaction carrying a
+// [LayerRef] ([Compaction.Layer]), so the repository's committer — the one
+// writer of its packs — is the one writer of its chain, its repack (when it
+// has one) and its layer in one record. Its rules are publication.go's: no
+// compaction retires a pack a layer names unless it replaces that layer; the
+// layers it replaces are the chain's top and its base the one below; the
+// chain it leaves at most [MaxPublishedLayers]; every pack it names live; and
+// every pack live at its plan ([Compaction.Seen]) that its base does not
+// name, it names — the closure git's bitmap needs, since a layer over fewer
+// packs, a cut's full packs alone among them, is refused by git and writes no
+// bitmap. Its parts are held to the push's upload rule, at most
+// [MaxLayerParts] of [LayerPartBytes] each.
+//
+// THE APPLY REPLACES THE TOP: the replaced layers and their parts go — at
+// once, a derived row owes no grace — the layer takes its base's place plus
+// one, and the repository's published packs and objects are RECOUNTED from the
+// rows, so live_packs − published_packs is the tail no layer covers. A
+// publication that does not fit the chain it meets applies as nothing, whole,
+// on every node; one applied already finds its layer and changes nothing. A
+// snapshot serves the chain WHOLE on page 1, first, whenever it moved above
+// the delta's floor ([RepoSnapshot.Layers]), and the publisher finds the
+// repositories a publication may be due in by the [ReadPublicationDue]
+// listing — every active and archived repository holding a pack no layer
+// covers, LEAST RECENTLY PUBLISHED FIRST, one walk of
+// code_repos_unpublished_idx (replicated 0061), the engine's own read. A purge
+// removes the chain with the rest of a repository, in its final record: the
+// chain is bounded apart from what a part counts.
 //
 // # Measured
 //

@@ -57,7 +57,7 @@ func BenchmarkServeASnapshotPage(b *testing.B) {
 	serve := func(b *testing.B, e *estate) RepoSnapshot {
 		var out RepoSnapshot
 		if err := e.db.Reader().Read(ctx, func(tx *sql.Tx) error {
-			_, err := r.fill(ctx, tx, "repo-a", &out, cursor, true)
+			_, err := r.fill(ctx, tx, "repo-a", &out, cursor, true, false)
 			return err
 		}); err != nil {
 			b.Fatal(err)

@@ -540,7 +540,7 @@ func BenchmarkApplyACompaction(b *testing.B) {
 				for k := range add {
 					add[k] = outputOf(cid, k, 1, applyClock)
 				}
-				e.applyTimed(b, a, compactOf(b, repo, cid, retire, add...), compactDecidedRows(inputs, outputs))
+				e.applyTimed(b, a, compactOf(b, repo, cid, retire, add...), compactDecidedRows(inputs, outputs, nil))
 				if left := e.num(`SELECT live_packs FROM code_repos WHERE id = ?`, repo); left !=
 					int64(MaxPacksPerRepo-inputs+outputs) {
 					b.Fatalf("the compaction left %d live packs, want %d", left, MaxPacksPerRepo-inputs+outputs)

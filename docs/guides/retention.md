@@ -1857,9 +1857,13 @@ whose record has room for it (see
 [ref tombstones and ref drops](../concepts/code-host.md#retention-and-history)). A
 [change](../concepts/code-host.md#changes) and its revisions have no horizon of
 their own: they are kept as long as their repository is, and its purge removes
-them with the rest of its rows. The code log itself is trimmed by the same six
-terms as every other log; a push record names its pack and never carries it, so
-trimming the log removes no repository's bytes.
+them with the rest of its rows. Nor do a repository's published layers, and
+they need none: `code_layers` holds at most 32 rows a repository and
+`code_layer_parts` at most 16 a layer, each publication replacing the rows it
+supersedes in place, so neither grows with pushes — at most 544 rows a
+repository, which its purge removes with the rest. The code log itself is
+trimmed by the same six terms as every other log; a push record names its pack
+and never carries it, so trimming the log removes no repository's bytes.
 
 ## The configuration archive, and the one thing a purge cannot reach
 

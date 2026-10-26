@@ -901,8 +901,71 @@ const (
 	MaxCompactOutputs = 16
 )
 
+// THE PUBLISHED LAYERS' BOUNDS: how long a repository's published chain may
+// grow, and how its bytes are cut into stored objects. A layer is published as
+// a compaction carrying it ([Compaction.Layer], [LayerRef]); these bound what
+// such a record names and writes.
+const (
+	// MaxPublishedLayers is the most layers a repository's published chain
+	// holds: a publication that would leave more is no record a committer
+	// forms ([CompactionProposal.Validate], and the decide's own count).
+	//
+	// THIRTY-TWO, A JUDGMENT CALL. A publisher that merges the chain's top
+	// layers geometrically — each layer at least twice the objects of the
+	// layers above it together, git's own repack.midxSplitFactor — keeps at
+	// most about log₂(history ÷ one publication) of them: eleven for the
+	// largest repository the defaults admit (some 60 million objects,
+	// DefaultRepoMaxBytes) published 32 000 objects at a time, and
+	// twenty-one were each publication as small as thirty-two objects —
+	// under thirty-two either way. What the bound costs is a lookup's: an
+	// object is looked for in every layer above the one that holds it, so a
+	// deeper chain is a slower answer on every git node, which a lookup
+	// through a chain of that depth (BenchmarkPackLookup) is what measures;
+	// past it a publisher merges the top layers whatever their sizes.
+	MaxPublishedLayers = 32
+
+	// LayerPartBytes is the most bytes one stored object of a layer holds:
+	// a layer's bytes are cut into parts of exactly this, the last at most
+	// it ([LayerRef.Parts]), each a stored object of its own.
+	//
+	// ONE GIBIBYTE, the push ceiling (config.CodeMaxPushBytesCeiling),
+	// because every part of a layer is uploaded AT ONCE and its key is
+	// minted as its upload begins: a part at the store's pacing floor lands
+	// within objstore.ReadBase + objstore.PaceFor(LayerPartBytes), about
+	// 8 h 33 min, under objstore.RecordWithin (12 h) however many parts
+	// there are — which internal/objstore/references pins beside the
+	// largest object every other declaring domain stores. A layer of the
+	// largest repository the defaults admit is some 2.6 GB (37 bytes an
+	// object for its multi-pack-index and bitmap, 69 a commit for its
+	// commit-graph layer, measured on git 2.56.0), which one object could
+	// not hold within that bound.
+	LayerPartBytes = config.CodeMaxPushBytesCeiling
+
+	// MaxLayerParts is the most parts one layer is cut into: 16 GiB of
+	// layer, some 300 million objects at those two figures — five times the
+	// largest repository the defaults admit — whose publication no git
+	// node this release sizes has the memory to build. Sixteen bounds the
+	// uploads' transient memory too: sixteen PUTs at once, each holding one
+	// first buffer of an S3 part (8 MiB), 128 MiB, as MaxCompactOutputs
+	// bounds a compaction's.
+	MaxLayerParts = 16
+)
+
 // compactDecidedRows is the most rows a compaction of n inputs into m outputs
 // makes its record's apply touch: each input's retired row and its deletion,
-// each output's row, and the repository's counters — the bound the committer
-// holds a compaction's decision to, as [withinRecord] holds a push batch's.
-func compactDecidedRows(n, m int) int { return 2*n + m + 1 }
+// each output's row, and the repository's counters — and, for a PUBLICATION
+// (l is its layer), the layer's row and each of its parts, and every replaced
+// layer's row with up to [MaxLayerParts] parts, which the proposal does not
+// carry — the bound the committer holds a compaction's decision to, as
+// [withinRecord] holds a push batch's. The repository's row is written once
+// either way: a publication's recount rides the counters' update. At every
+// bound — MaxCompactInputs inputs into MaxCompactOutputs outputs, a layer of
+// MaxLayerParts parts replacing MaxPublishedLayers − 1 layers — that is 2 609
+// rows, about two thirds of MaxRecordRows.
+func compactDecidedRows(n, m int, l *LayerRef) int {
+	rows := 2*n + m + 1
+	if l != nil {
+		rows += 1 + len(l.Parts) + len(l.Replaces)*(1+MaxLayerParts)
+	}
+	return rows
+}

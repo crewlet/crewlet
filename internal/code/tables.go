@@ -39,6 +39,11 @@ var ReproducibleTables = []string{
 	// and authors before its row.
 	"code_changes", "code_change_authors", "code_revisions",
 
+	// A repository's published chain and the objects its layers are stored
+	// in — written by the compaction records that carry a layer, each
+	// replacing the chain's top, and removed whole by its purge.
+	"code_layers", "code_layer_parts",
+
 	// The activation fence: the configuration activation every
 	// config-managed record is held to.
 	"code_activation",

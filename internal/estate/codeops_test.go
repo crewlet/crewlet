@@ -347,16 +347,18 @@ func serveDesk(t *testing.T, f *fleet, d *codeDesk) {
 	f.git.set(func(p *fakePlacement) { p.nodes = []string{"data-d"} })
 }
 
-// EVERY CODE OPERATION CROSSES WHOLE: a push's proposal and a compaction's,
-// the admission's resolve, a cache's snapshot page, the receiver's pending
-// wait, the REST routes' listing, a seat's refs listing, a git node's
-// introduced pages and its compactor's due listing, and a seat's resolve of a
-// ref reach a data node from a node that holds no data —
+// EVERY CODE OPERATION CROSSES WHOLE: a push's proposal and a compaction's —
+// a publication's, its layer whole — the admission's resolve, a cache's
+// snapshot page, the receiver's pending wait, the REST routes' listing, a
+// seat's refs listing, a git node's introduced pages and its compactor's and
+// publisher's due listings, and a seat's resolve of a ref reach a data node
+// from a node that holds no data —
 // and a read by object id the git node — with their arguments as they were
-// sent, their answers come back as they were given — a snapshot's packs,
-// refs, pushes, retirements and cursor, a repository's detail and its limits,
-// the refs and the introducing pushes, a resolved ref, a page of a diff — and
-// a refusal keeps the identity the host and the cache branch on.
+// sent, their answers come back as they were given — a snapshot's layers,
+// packs, refs, pushes, retirements and cursor, a repository's detail and its
+// limits, the refs and the introducing pushes, the due listings, a resolved
+// ref, a page of a diff — and a refusal keeps the identity the host and the
+// cache branch on.
 func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -385,6 +387,19 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			New: "6666666666666666666666666666666666666666", Forced: true}},
 		Introduced: []string{"6666666666666666666666666666666666666666"}, Count: 2,
 	}
+	// A PUBLISHED LAYER, every field of it: what a publication carries and
+	// what a snapshot's layers phase serves.
+	layer := code.LayerRef{LayerID: "9999999999999999999999999999999999999999",
+		BaseID:   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Replaces: []string{"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+		GraphID:  "cccccccccccccccccccccccccccccccccccccccc",
+		Packs:    []string{"5555555555555555555555555555555555555555", "8888888888888888888888888888888888888888"},
+		Parts: []code.LayerPart{{Object: objstore.KeyAt(created), Hash: objstore.HashOf([]byte("l1")),
+			Size: 300}},
+		MidxBytes: 200, BitmapBytes: 60, GraphBytes: 40, Objects: 4, Commits: 2, Git: "2.56.0", TookMs: 1_200,
+	}
+	row := layer
+	row.Replaces = nil
 	d := &codeDesk{codeAnswers: codeAnswers{
 		pos: at, ref: ref, out: code.PushOutcome{Found: true, Position: at,
 			Push: code.PushRow{PushID: "push-1", RepoID: ref.ID, Position: at, At: created,
@@ -393,6 +408,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 					New: "6666666666666666666666666666666666666666", Result: code.ResultOK}},
 				ReceivedAt: created}},
 		snap: code.RepoSnapshot{Repo: ref, Position: at, StreamCreated: created,
+			Layers: []code.LayerRow{{Seq: 2, Layer: row, Added: at}}, LayersServed: true,
 			Packs: []code.PackRow{pack},
 			Refs: []code.RefRow{{Ref: "refs/heads/main", OID: "6666666666666666666666666666666666666666",
 				Position: at}},
@@ -407,7 +423,11 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			Limits: code.Limits{MaxPushBytes: 1 << 20, MaxBlobBytes: 1 << 10, RepoMaxBytes: 1 << 30},
 		}, Refs: []code.RefRow{{Ref: "refs/heads/main", OID: "6666666666666666666666666666666666666666",
 			Position: at}}, Introduced: []code.IntroducedRow{introduced},
-			Due:  []code.CompactionCandidate{{ID: ref.ID, Name: "app", LivePacks: 40, Version: at}},
+			Due: []code.CompactionCandidate{{ID: ref.ID, Name: "app", LivePacks: 40, LiveObjects: 4_000,
+				Version: at}},
+			Publish: []code.PublicationCandidate{{ID: ref.ID, Name: "app", LivePacks: 40, PublishedPacks: 30,
+				LiveObjects: 4_000, PublishedObjects: 3_000, LastPushAt: created, PublishedAt: created,
+				PublishTook: 1200 * time.Millisecond, Version: at}},
 			Next: "c-2", Position: at, Level: statelog.ReadSession},
 	}}
 	serveDesk(t, f, d)
@@ -426,13 +446,15 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		t.Errorf("the committer was proposed %+v, want %+v", got, proposal)
 	}
 
-	// A COMPACTION'S PROPOSAL, every field of it and of its answer.
+	// A COMPACTION'S PROPOSAL, every field of it and of its answer — a
+	// publication's, so its layer crosses too.
 	compaction := code.CompactionProposal{Compaction: code.Compaction{
 		RepoID: ref.ID, CompactionID: "019a0c2e-0000-7000-8000-0000000000c1", Node: "git-a", Seen: at,
 		Retire: []string{"push-0", "push-1"},
 		Add: []code.PackRef{{PackID: "019a0c2e-0000-7000-8000-0000000000c2", Object: objstore.KeyAt(created),
 			Hash: objstore.HashOf([]byte("c2")), Size: 1_300, IndexBytes: 1_100, ReverseBytes: 60,
 			GitChecksum: "8888888888888888888888888888888888888888", Objects: 2}},
+		Layer: &layer,
 	}}
 	d.mu.Lock()
 	d.compacted = code.CompactResult{Outcome: statelog.OutcomePending, Refusal: code.RefusalStale,
@@ -488,6 +510,8 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		{Kind: code.ReadIntroduced, Introduced: &code.IntroducedQuery{RepoID: ref.ID, Descending: true,
 			Before: at}, Fresh: statelog.Freshness{Level: statelog.ReadStale}},
 		{Kind: code.ReadCompactionDue, MinPacks: 8, Cursor: "40/" + ref.ID,
+			Fresh: statelog.Freshness{Level: statelog.ReadStale}},
+		{Kind: code.ReadPublicationDue, Cursor: "1700000000000000/" + ref.ID,
 			Fresh: statelog.Freshness{Level: statelog.ReadStale}},
 	} {
 		if got, err := seam.Read(ctx, q); err != nil || !reflect.DeepEqual(got, d.read) {

@@ -44,6 +44,25 @@ var RetiredPackReferences = objstore.ReferenceTable{
 	Standing: objstore.Retired,
 }
 
+// LayerReferences declares code_layer_parts: the objects a published layer's
+// bytes are stored in. DERIVED (ADR-0051): any git node can build the layer
+// again from the packs code_packs names, so the collector keeps a part while a
+// row names it, the audit never reads the table — a lost part costs a
+// publication, never data, and `objects_missing` is the alarm for lost data —
+// and a backup copies, counts or asks after none (on nats they ride the
+// bucket's stream snapshot uncounted), while a store move copies them, since
+// every node of a moved fleet would otherwise build them again. A publication
+// that replaces a layer removes its rows at once, with no grace: a git node
+// whose fetch of a part finds it gone reads the rows again for what replaced
+// it. It declares no Log, Deferred or Records, which a backup reads of a
+// Required table alone.
+var LayerReferences = objstore.ReferenceTable{
+	Domain: Domain{}.Name(), Table: "code_layer_parts",
+	Key: "object", Hash: "hash", Size: "size",
+	Owner:    []string{"repo_id", "layer_id", "part"},
+	Standing: objstore.Derived,
+}
+
 // packRecordReferences answers the code_packs rows one record of the code log
 // writes, and the object each names once the record applies —
 // [objstore.ReferenceTable.Records] for [PackReferences].
@@ -52,7 +71,9 @@ var RetiredPackReferences = objstore.ReferenceTable{
 // writes the table, one row per entry carrying a pack, and a COMPACTION writes
 // a row per output it adds and removes the rows of the packs it retires,
 // which it answers as rows that name nothing once it applies (their objects
-// are kept for a grace by code_packs_retired, which no backup carries). Every
+// are kept for a grace by code_packs_retired, which no backup carries) — a
+// publication's repack among them; the layer a publication adds names its
+// objects in code_layer_parts, a Derived table no backup reads. Every
 // entry and output is answered whether or not this node's applier would skip
 // it as already applied — a backup reads a superset of what a restore's rows
 // name, never a subset. A purge REMOVES rows the record does not list (a part

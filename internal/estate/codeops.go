@@ -146,17 +146,18 @@ var opCodePushOutcome = define("code.push_outcome", opRead, codeDomain, false,
 // routes' repository listing, one repository's detail and its push history,
 // which the operator's CLI reads too; a repository's refs; its pushes in log
 // order, which a git node's index of which push introduced each commit is
-// built from; and the repositories a compaction may be due in, most live packs
-// first, which a git node polls for the ones it is home for. A seat's read on
-// a node that holds no chart is that node's code.ErrNotServing — it ran
-// nothing — so the walk asks the next.
+// built from; the repositories a compaction may be due in, most live packs
+// first, which a git node polls for the ones it is home for; and the
+// repositories a publication may be due in, least recently published first. A
+// seat's read on a node that holds no chart is that node's
+// code.ErrNotServing — it ran nothing — so the walk asks the next.
 //
 // A SEAT'S READ JUDGES ITS GRANT from the serving node's chart (which
 // repositories it lists, and whether it reads one: code.GrantOf), so a node
 // behind the company's configuration answers none of it ([op.judgesGrant]); a
-// person's or a token's consults no chart, and an `introduced` page and a
-// `compaction_due` listing name no asker at all, so each is answered there as a
-// last resort.
+// person's or a token's consults no chart, and an `introduced` page and the
+// `compaction_due` and `publication_due` listings name no asker at all, so each
+// is answered there as a last resort.
 var opCodeRead = define("code.read", opRead, codeDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q code.ReadQuery) (code.ReadAnswer, error) {
 		if b.Code == nil {

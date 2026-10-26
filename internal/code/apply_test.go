@@ -753,18 +753,26 @@ func TestAPushRowRecordsWhatItWeighs(t *testing.T) {
 	}
 }
 
-// A PURGE LEAVES ONLY ITS MARKER: every row of the repository goes, its name
-// returns, and the marker drops every later record about it — counted — while
-// the purge's own record, redelivered, changes nothing.
+// A PURGE LEAVES ONLY ITS MARKER: every row of the repository goes — its
+// published chain and the parts of every layer among them — its name returns,
+// and the marker drops every later record about it — counted — while the
+// purge's own record, redelivered, changes nothing.
+//
+// Mutation: drop the chain's two statements from the purge, and its layer and
+// its part outlive the repository.
 func TestAPurgeLeavesOnlyItsMarker(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
 	e.apply(create(t, "repo-a", "a"),
 		pushOf(t, "repo-a", pushEntry("p1", move("refs/heads/main", ZeroOID, oid("A")))),
+		recordOf(t, publication("repo-a", 2, layerOver("root", "", nil, applyClock, packOf("p1").GitChecksum), nil)),
 		rec(t, RepoSubject("repo-a"), OpSettings, Scope{RepoPath("repo-a")},
 			SettingsRecord{RepoID: "repo-a", Settings: settingsFor("", "refs/heads/main")}),
 		rec(t, RepoSubject("repo-a"), OpDelete, Scope{RepoPath("repo-a")},
 			LifecycleRecord{RepoID: "repo-a", ConfigEpoch: 1}))
+	if n := e.num(`SELECT COUNT(*) FROM code_layer_parts WHERE repo_id = 'repo-a'`); n != 1 {
+		t.Fatalf("the premise: the repository's chain holds %d parts, want its layer's one", n)
+	}
 	// A RETIRED PACK STILL INSIDE ITS GRACE goes with its repository: no read
 	// begins on a deleted one. SO DOES A REF DROP inside its own: the packs
 	// whose objects it keeps go too.
@@ -775,7 +783,7 @@ func TestAPurgeLeavesOnlyItsMarker(t *testing.T) {
 		Purge{RepoID: "repo-a", Name: "a", Reason: "past retention"})
 	e.apply(purge)
 	for _, table := range []string{"code_repos", "code_refs", "code_packs", "code_pushes", "code_protections",
-		"code_packs_retired", "code_ref_drops"} {
+		"code_packs_retired", "code_ref_drops", "code_layers", "code_layer_parts"} {
 		column := "repo_id"
 		if table == "code_repos" {
 			column = "id"

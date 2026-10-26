@@ -32,9 +32,11 @@ import (
 //     an archived repository is still read and every read of it pays for
 //     every pack it holds;
 //  2. every input: exactly one row, of part `pack`, live and not full
-//     ([PackRow.Full]) — else stale, naming the first that is not: a
-//     compaction or a purge moved it first, or a pack grew full under the
-//     plan's feet, and the next pass plans again from the rows;
+//     ([PackRow.Full]), and named by no published layer the record does not
+//     replace — else stale, naming the first that is not: a compaction or a
+//     purge moved it first, a pack grew full under the plan's feet, or a
+//     publication put it in a layer, and the next pass plans again from the
+//     rows;
 //  3. every output: a bundle [PackRef.Check] admits — the pack and both its
 //     indexes within MaxPackBytes, the one rule every holder of a row applies
 //     — else pack_too_large, and its key minted within objstore.RecordWithin
@@ -49,8 +51,11 @@ import (
 //     whole — moves a repository already near its ceiling by an object, where
 //     refusing it would leave that repository unable to compact at all.
 //
-// Nothing else is read — no ref, no protection, no push — so a decide costs
-// the repository's row and a seek of the key an input, and the rows of two
+// A compaction that carries a published layer — a PUBLICATION — is then held
+// to the layer's own six rules (publication.go). Nothing else is read — no
+// ref, no protection, no push — so a decide costs the repository's row, its
+// published chain (at most MaxPublishedLayers rows, by the key) and a seek of
+// the key an input, and a publication its live packs besides; the rows of two
 // snapshots are never paired.
 //
 // # A merge makes no reachability judgement
@@ -69,8 +74,12 @@ import (
 // MaxCompactInputs, outputs that number none, more than MaxCompactOutputs or
 // more than the inputs, an output whose pack id is not its derivation
 // ([DeriveCompactionPackID]) or whose bundle [PackRef.Check] refuses, and a
-// compaction past what one record may carry. What the inputs hold is the
-// decide's to judge, from the rows: the proposal does not carry it.
+// compaction past what one record may carry. A PUBLICATION — one carrying a
+// Layer — may carry no inputs and no outputs at all, and is refused for a
+// layer [LayerRef.Check] refuses (with [ErrInvalidLayer] beside it), an
+// output that is not one of the layer's packs, or as many replaced layers as
+// a chain holds. What the inputs and the chain hold is the decide's to judge,
+// from the rows: the proposal does not carry it.
 func (p CompactionProposal) Validate() error {
 	_, err := p.measure()
 	return err
@@ -117,6 +126,9 @@ func (p CompactionProposal) validFields() error {
 			topics.CodeLogStream)
 	case c.Seen.Valid() != nil:
 		return fmt.Errorf("%w: seen: %w", ErrInvalidProposal, c.Seen.Valid())
+	case c.Layer != nil && len(c.Retire) == 0 && len(c.Add) == 0:
+		// A LAYER OVER THE PACKS AS THEY STAND: a publication with no repack
+		// retires nothing and writes nothing but its layer.
 	case len(c.Retire) < 2:
 		return bad("retire", "%d packs; a compaction merges two at the least", len(c.Retire))
 	case len(c.Retire) > MaxCompactInputs:
@@ -151,6 +163,9 @@ func (p CompactionProposal) validFields() error {
 			return fmt.Errorf("%w: add[%d].%w", ErrInvalidProposal, i, err)
 		}
 	}
+	if c.Layer != nil {
+		return c.validLayerFields()
+	}
 	return nil
 }
 
@@ -174,8 +189,8 @@ func (c *Committer) ProposeCompaction(ctx context.Context, p CompactionProposal)
 	}
 	deadline, _ := ctx.Deadline()
 	a := c.queue(ctx, &queued{compaction: &p, bytes: bytes,
-		rows: compactDecidedRows(len(p.Compaction.Retire), len(p.Compaction.Add)), arrived: c.clock(),
-		deadline: deadline, gone: ctx.Done(), answer: make(chan answered, 1)})
+		rows:    compactDecidedRows(len(p.Compaction.Retire), len(p.Compaction.Add), p.Compaction.Layer),
+		arrived: c.clock(), deadline: deadline, gone: ctx.Done(), answer: make(chan answered, 1)})
 	return a.compact, a.err
 }
 
@@ -189,11 +204,11 @@ type compactDecision struct {
 }
 
 // decideCompaction is one round's decision of c over the rows tx holds — see
-// this file's head for the rules, in their order. Pure over (the rows, c,
-// retention, now): retention is the deciding epoch's
-// code.deleted_retention_days, which a repo_deleted refusal names the purge's
-// earliest instant by, and now the decide's clock, which an output's key is
-// judged by.
+// this file's head for the rules, in their order, and publication.go's for a
+// publication's. Pure over (the rows, c, retention, now): retention is the
+// deciding epoch's code.deleted_retention_days, which a repo_deleted refusal
+// names the purge's earliest instant by, and now the decide's clock, which an
+// output's key and a layer part's are judged by.
 func decideCompaction(ctx context.Context, tx *sql.Tx, c Compaction, retention time.Duration,
 	now time.Time) (compactDecision, error) {
 
@@ -210,6 +225,18 @@ func decideCompaction(ctx context.Context, tx *sql.Tx, c Compaction, retention t
 		return d, nil
 	}
 
+	// THE PUBLISHED CHAIN, READ FOR EVERY COMPACTION: no input may be a pack
+	// a layer names, unless the record replaces that layer.
+	chain, err := layersOf(ctx, tx, c.RepoID)
+	if err != nil {
+		return compactDecision{}, err
+	}
+	var replaces []string
+	if c.Layer != nil {
+		replaces = c.Layer.Replaces
+	}
+	published := publishedBy(chain, replaces)
+
 	inputs, err := namedPackRows(ctx, tx, c.RepoID, c.Retire)
 	if err != nil {
 		return compactDecision{}, fmt.Errorf("code: read the packs compaction %s retires: %w", c.CompactionID, err)
@@ -219,6 +246,7 @@ func decideCompaction(ctx context.Context, tx *sql.Tx, c Compaction, retention t
 		rows[p.id] = append(rows[p.id], p)
 	}
 	var held int64
+	retired := make(map[string]bool, len(c.Retire))
 	for _, id := range c.Retire {
 		var why string
 		switch named := rows[id]; {
@@ -228,8 +256,12 @@ func decideCompaction(ctx context.Context, tx *sql.Tx, c Compaction, retention t
 			why = "is split into parts"
 		case named[0].row().Full():
 			why = "is full"
+		case published[named[0].checksum] != "":
+			why = fmt.Sprintf("is in published layer %s, and a compaction retires a published pack only with "+
+				"the layer it replaces", published[named[0].checksum])
 		default:
 			held += named[0].objects
+			retired[id] = true
 			continue
 		}
 		d.refusal, d.detail = RefusalStale, fmt.Sprintf("pack %s %s; the next pass plans again", id, why)
@@ -242,7 +274,7 @@ func decideCompaction(ctx context.Context, tx *sql.Tx, c Compaction, retention t
 			d.refusal, d.detail = RefusalPackTooLarge, fmt.Sprintf("output %d (pack %s): %v", i, out.PackID, err)
 			return d, nil
 		}
-		if detail, expired := uploadExpired(out.Object, now, "the next pass builds it again"); expired {
+		if detail, expired := uploadExpired("the pack", out.Object, now, "the next pass builds it again"); expired {
 			d.refusal, d.detail = RefusalUploadExpired, fmt.Sprintf("output %d (pack %s): %s", i, out.PackID,
 				detail)
 			return d, nil
@@ -254,6 +286,11 @@ func decideCompaction(ctx context.Context, tx *sql.Tx, c Compaction, retention t
 			"replace %d — a merge writes no object its inputs did not hold", ErrInvalidProposal, made,
 			len(c.Retire), held)
 	}
+	if c.Layer != nil {
+		if d.refusal, d.detail, err = decideLayer(ctx, tx, c, chain, retired, now); err != nil {
+			return compactDecision{}, err
+		}
+	}
 	return d, nil
 }
 
@@ -261,7 +298,7 @@ func decideCompaction(ctx context.Context, tx *sql.Tx, c Compaction, retention t
 // [CompactionProposal.Validate]'s bounds keep from ever forming — the check
 // makes the invariant the record's own, as [withinRecord] does a push batch's.
 func withinCompaction(d statelog.Decision, c Compaction) error {
-	switch rows := compactDecidedRows(len(c.Retire), len(c.Add)); {
+	switch rows := compactDecidedRows(len(c.Retire), len(c.Add), c.Layer); {
 	case len(d.Payload) > MaxRecordBytes:
 		return fmt.Errorf("%w: %d bytes, past MaxRecordBytes (%d)", ErrRecordCap, len(d.Payload), MaxRecordBytes)
 	case rows > MaxRecordRows:
@@ -356,12 +393,16 @@ func (c *Committer) compactAnswer(ctx context.Context, comp Compaction, last com
 // appliedCompaction answers a compaction whose record applied at at, FROM THE
 // ROWS: every output a row of part `pack` added at at — in code_packs, or in
 // code_packs_retired where a later compaction has since retired it, which
-// moves the row and keeps when it was added. One read, in one transaction.
+// moves the row and keeps when it was added — and a publication's layer a row
+// of code_layers added at at. One read, in one transaction.
 //
-// An output that is in neither is a record that applied and wrote rows this
-// node does not hold: no committer of this domain forms that, so it is logged
-// at ERROR and answered unknown — never applied, which would hand its builder
-// outputs to adopt that no row names.
+// An output or a layer that is in none is a record that applied and wrote
+// rows this node does not hold: no committer of this domain forms that, so it
+// is logged at ERROR and answered unknown — never applied, which would hand
+// its builder outputs and a layer to adopt that no row names. A layer a later
+// publication replaced before this answer read the rows is answered so too:
+// its rows are gone, since a replaced layer keeps none, and the one publisher
+// of a repository plans its next publication only once this one is answered.
 func (c *Committer) appliedCompaction(ctx context.Context, comp Compaction, at statelog.Position) (CompactResult,
 	error) {
 
@@ -381,7 +422,8 @@ func (c *Committer) appliedCompaction(ctx context.Context, comp Compaction, at s
 		c.log.ErrorContext(ctx, "code_compaction_unanswerable", "repo", comp.RepoID,
 			"compaction_id", comp.CompactionID, "position", at.String(), "missing", missing)
 		return CompactResult{Outcome: statelog.OutcomeUnknown, Detail: fmt.Sprintf("the compaction's record "+
-			"applied at %s and its outputs are not in the rows this node holds", at)}, nil
+			"applied at %s and what it wrote is not in the rows this node holds: %s", at,
+			strings.Join(missing, ", "))}, nil
 	}
 	return CompactResult{Outcome: statelog.OutcomeApplied, Position: at}, nil
 }
@@ -393,9 +435,15 @@ func (c *Committer) refusedCompaction(ctx context.Context, comp Compaction, err 
 	var refusal *statelog.Unavailable
 	switch {
 	case errors.Is(err, ErrInvalidProposal):
-		// THE BUILDER'S BUG, the decide's rule 4: refused before any
-		// record, and said where an operator reads the node that decided.
-		c.log.ErrorContext(ctx, "code_compaction_invalid", "repo", comp.RepoID,
+		// THE BUILDER'S BUG, the decide's rule 4 — or a publication's 6b or
+		// 6e, its planner's: refused before any record, and said where an
+		// operator reads the node that decided, under the name of what built
+		// it.
+		msg := "code_compaction_invalid"
+		if comp.Layer != nil {
+			msg = "code_publication_invalid"
+		}
+		c.log.ErrorContext(ctx, msg, "repo", comp.RepoID,
 			"compaction_id", comp.CompactionID, "node", comp.Node, "error", err)
 		return CompactResult{}, err
 	case errors.Is(err, statelog.ErrConflict):
@@ -486,11 +534,36 @@ func distinct(ids []string) []string {
 	return out
 }
 
-// outputsMissing is every output of comp whose row added at at no table holds:
-// not in code_packs, and not in code_packs_retired, where a row a later
-// compaction retired keeps the position it was added at. The retired table is
-// read only for the outputs code_packs lacks.
+// outputsMissing is everything comp wrote at at that no table holds, each
+// named ("output <pack id>", "layer <layer id>"): an output not in code_packs
+// and not in code_packs_retired, where a row a later compaction retired keeps
+// the position it was added at — the retired table read only for the outputs
+// code_packs lacks — and a publication's layer not in code_layers as added at
+// at.
 func outputsMissing(ctx context.Context, tx *sql.Tx, comp Compaction, at statelog.Position) ([]string, error) {
+	var missing []string
+	if comp.Layer != nil {
+		chain, err := layersOf(ctx, tx, comp.RepoID)
+		if err != nil {
+			return nil, err
+		}
+		if !layerApplied(chain, comp, at) {
+			missing = append(missing, "layer "+comp.Layer.LayerID)
+		}
+	}
+	lacking, err := outputsLacking(ctx, tx, comp, at)
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range lacking {
+		missing = append(missing, "output "+id)
+	}
+	return missing, nil
+}
+
+// outputsLacking is every output of comp whose row added at at no pack table
+// holds, by pack id — [outputsMissing]'s half for the packs.
+func outputsLacking(ctx context.Context, tx *sql.Tx, comp Compaction, at statelog.Position) ([]string, error) {
 	ids := make([]string, len(comp.Add))
 	for i, out := range comp.Add {
 		ids[i] = out.PackID

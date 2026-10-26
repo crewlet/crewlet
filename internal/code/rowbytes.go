@@ -209,8 +209,81 @@ func (c CompactionCandidate) encodedBytes() int {
 	return 2 + field("id", stringBytes(c.ID), true) +
 		field("name", stringBytes(c.Name), false) +
 		field("live_packs", intBytes(c.LivePacks), false) +
+		field("live_objects", intBytes(c.LiveObjects), false) +
 		field("version", positionBytes(c.Version), false)
 }
+
+// encodedBytes is the length of the candidate's JSON encoding.
+func (c PublicationCandidate) encodedBytes() int {
+	n := 2 + field("id", stringBytes(c.ID), true) +
+		field("name", stringBytes(c.Name), false) +
+		field("live_packs", intBytes(c.LivePacks), false) +
+		field("published_packs", intBytes(c.PublishedPacks), false) +
+		field("live_objects", intBytes(c.LiveObjects), false) +
+		field("published_objects", intBytes(c.PublishedObjects), false)
+	if !c.LastPushAt.IsZero() {
+		n += field("last_push_at", timeBytes(c.LastPushAt), false)
+	}
+	if !c.PublishedAt.IsZero() {
+		n += field("published_at", timeBytes(c.PublishedAt), false)
+	}
+	return n + field("publish_took", intBytes(int64(c.PublishTook)), false) +
+		field("version", positionBytes(c.Version), false)
+}
+
+// encodedBytes is the length of the layer row's JSON encoding: its layer
+// whole, its parts and packs among them.
+func (r LayerRow) encodedBytes() int {
+	return 2 + field("seq", intBytes(int64(r.Seq)), true) +
+		field("layer", r.Layer.encodedBytes(), false) +
+		field("added", positionBytes(r.Added), false)
+}
+
+// encodedBytes is the length of the layer's JSON encoding. Packs and Parts are
+// never omitted, so a nil one is written null.
+func (l LayerRef) encodedBytes() int {
+	n := 2 + field("layer_id", stringBytes(l.LayerID), true)
+	if l.BaseID != "" {
+		n += field("base_id", stringBytes(l.BaseID), false)
+	}
+	if len(l.Replaces) > 0 {
+		n += field("replaces", stringsBytes(l.Replaces), false)
+	}
+	if l.GraphID != "" {
+		n += field("graph_id", stringBytes(l.GraphID), false)
+	}
+	packs := nullBytes
+	if l.Packs != nil {
+		packs = stringsBytes(l.Packs)
+	}
+	parts := nullBytes
+	if l.Parts != nil {
+		parts = 2 + max(len(l.Parts)-1, 0)
+		for _, p := range l.Parts {
+			parts += p.encodedBytes()
+		}
+	}
+	return n + field("packs", packs, false) + field("parts", parts, false) +
+		field("midx_bytes", intBytes(l.MidxBytes), false) +
+		field("bitmap_bytes", intBytes(l.BitmapBytes), false) +
+		field("graph_bytes", intBytes(l.GraphBytes), false) +
+		field("objects", intBytes(l.Objects), false) +
+		field("commits", intBytes(l.Commits), false) +
+		field("git", stringBytes(l.Git), false) +
+		field("took_ms", intBytes(l.TookMs), false)
+}
+
+// encodedBytes is the length of the part's JSON encoding. The object is a
+// key's canonical spelling, thirty-six bytes, quoted.
+func (p LayerPart) encodedBytes() int {
+	return 2 + field("object", len(p.Object.String())+2, true) +
+		field("hash", stringBytes(string(p.Hash)), false) +
+		field("size", intBytes(p.Size), false)
+}
+
+// nullBytes is the length of a JSON null: what a nil slice no omitempty
+// leaves out is written as.
+const nullBytes = len("null")
 
 // encodedBytes is the length of the retirement's JSON encoding.
 func (r RetiredRow) encodedBytes() int {

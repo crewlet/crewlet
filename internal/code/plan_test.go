@@ -24,13 +24,16 @@ import (
 // sweeps and the ref drops it forgets past their grace, each oldest first,
 // among them, and the fences it reads: an eviction's, the activation's), the
 // lifecycle store's decides, the push decide's reads, the reader's pages in
-// their first and keyset forms — a snapshot's retired phase among them — and
-// its bounded counts, the purge's bounded count, its parts and its statements
-// over a repository's changes, a sweep's decide, apply and listing over the
-// retired packs, a compaction's decide, apply and answer, the compactor's due
-// listing, the trim's listing of who was evicted from the log, and every
-// statement the object store builds over code_packs and code_packs_retired
-// ([planShapes]) — and holds each to the EXACT seek it names: the index and
+// their first and keyset forms — a snapshot's retired phase and its layers
+// phase among them — and its bounded counts, the purge's bounded count, its
+// parts and its statements over a repository's changes and its published
+// chain, a sweep's decide, apply and listing over the retired packs, a
+// compaction's decide, apply and answer, a publication's reads of the chain
+// and the live packs and its replacement of the chain's top, the compactor's
+// and the publisher's due listings, the trim's listing of who was evicted from
+// the log, and every statement the object store builds over code_packs,
+// code_packs_retired and code_layer_parts ([planShapes]) — and holds each to
+// the EXACT seek it names: the index and
 // every column of it the statement bounds. Seeking an index is not enough — a
 // lookup of one ref that sought repo_id alone read every ref its repository
 // holds (planner.go). The statements are the package's own constants: there
@@ -288,6 +291,8 @@ const (
 	revisionKey   = "sqlite_autoindex_code_revisions_1"
 	activationKey = "sqlite_autoindex_code_activation_1"
 	evictionKey   = "sqlite_autoindex_code_evictions_1"
+	layersKey     = "sqlite_autoindex_code_layers_1"
+	layerPartsKey = "sqlite_autoindex_code_layer_parts_1"
 )
 
 // registeredStatements is every statement this package spells against its
@@ -441,6 +446,23 @@ func registeredStatements() map[string]statement {
 		"compact counters":     {compactCountersSQL, []any{1, 1, 1, 1, 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"compaction due first": {compactionDueFirstSQL, []any{CompactMinMerge, MaxSnapshotItems}, []string{"code_repos_packs_idx (live_packs>=?)"}},
 		"compaction due after": {compactionDueAfterSQL, []any{CompactMinMerge, 30, 30, "repo-2", MaxSnapshotItems}, []string{"code_repos_packs_idx (live_packs<=? AND live_packs>=?)"}},
+		// A PUBLICATION'S: the chain whole and the live packs, each by the
+		// key — the decide's, the apply's guard and recount, an answer's
+		// and a snapshot's — the replaced top by the key's range above its
+		// base and its parts by theirs, driven from the list of the layers'
+		// ids, the counters with the recount, the final purge's two, a
+		// snapshot's parts, and the publisher's due listing, least recently
+		// published first.
+		"layers of":             {layersOfSQL, []any{"repo-1"}, []string{layersKey + " (repo_id=?)"}},
+		"live packs":            {livePacksSQL, []any{"repo-1"}, []string{packsKey + " (repo_id=?)"}},
+		"delete layers above":   {deleteLayersAboveSQL, []any{"repo-1", 1}, []string{layersKey + " (repo_id=? AND seq>?)"}},
+		"delete layer parts":    {deleteLayerPartsSQL, []any{"repo-1", `["layer-000001","layer-000002"]`}, []string{"SCAN json_each AS j", layerPartsKey + " (repo_id=? AND layer_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"publish counters":      {publishCountersSQL, []any{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"purge all layer parts": {purgeAllLayerPartsSQL, []any{"repo-1"}, []string{layerPartsKey + " (repo_id=?)"}},
+		"purge all layers":      {purgeAllLayersSQL, []any{"repo-1"}, []string{layersKey + " (repo_id=?)"}},
+		"layer parts of":        {layerPartsOfSQL, []any{"repo-1"}, []string{layerPartsKey + " (repo_id=?)"}},
+		"publication due first": {publicationDueFirstSQL, []any{MaxSnapshotItems}, []string{"code_repos_unpublished_idx (published_at>=?)"}},
+		"publication due after": {publicationDueAfterSQL, []any{30, 30, "repo-2", MaxSnapshotItems}, []string{"code_repos_unpublished_idx (published_at>=?)"}},
 	}
 	return out
 }
@@ -463,17 +485,20 @@ var referenceBuilders = map[string]func(objstore.ReferenceTable, int) (string, e
 var referenceTables = map[string]objstore.ReferenceTable{
 	"PackReferences":        PackReferences,
 	"RetiredPackReferences": RetiredPackReferences,
+	"LayerReferences":       LayerReferences,
 }
 
 // planShapes is every statement a builder assembles at run time, by name:
 // the statements no constant here spells whole, registered by what the
 // builder spells. Today they are objstore's, built over this package's
 // declarations — so whether each finds its rows by an index is this
-// package's schema's to answer: the collector's batch question of both
-// tables, and of the live one the audit's and a backup's walk, a backup's
-// question of the keys its log names and its walk of the records that log
-// deferred; a retired declaration's standing refuses the rest. One shape for
-// each builder each declaration's standing admits, keyed "<builder> <table>".
+// package's schema's to answer: the collector's batch question of every
+// table; of the live one the walk the audit, a backup and a store move read,
+// a backup's question of the keys its log names and its walk of the records
+// that log deferred; and of the derived one a store move's walk. A retired
+// declaration's standing refuses the rest of them, and a derived one's the
+// backup's two. One shape for each builder each declaration's standing
+// admits, keyed "<builder> <table>".
 //
 // AT A FEW KEYS AND A PAGE OF A HUNDRED, not at the callers' widths (the
 // collector's batch and a walk's page of 500 keys, a backup's deferred page
@@ -502,6 +527,11 @@ func planShapes() map[string]shape {
 	// backup's walk, and a backup's question, are refused for a retired
 	// declaration, so this is all the object store asks of it.
 	reference("ObjectsAmong", RetiredPackReferences, 3, keys, "code_packs_retired_object_idx (object=?)")
+	// THE DERIVED TABLE'S TWO: the collector's question, and a store move's
+	// walk — the one pass that walks a derived table, which the audit and a
+	// backup never do.
+	reference("ObjectsAmong", LayerReferences, 3, keys, "code_layer_parts_object_idx (object=?)")
+	reference("ReferencesAfter", LayerReferences, 100, []any{""}, "code_layer_parts_object_idx (object>?)")
 	return out
 }
 
@@ -557,8 +587,9 @@ func claimName(index string) string { return "the read claimed for " + index }
 const retiredRepoIdx = "code_packs_retired_repo_idx"
 
 // seededPlanEstate is an estate holding five repositories of 500 refs, 50
-// packs, 200 pushes, 200 retired packs, 200 ref drops and 50 changes each,
-// with no statistics gathered — the state every node's estate is in.
+// packs, 200 pushes, 200 retired packs, 200 ref drops, 50 changes and a
+// published chain of three layers of two parts each, with no statistics
+// gathered — the state every node's estate is in.
 func seededPlanEstate(t *testing.T) store.ReplicatedHandle {
 	t.Helper()
 	node, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
@@ -684,6 +715,34 @@ func seededPlanEstate(t *testing.T) store.ReplicatedHandle {
 					return []any{fmt.Sprintf("%s-change-%06d", id, i/2+1), fmt.Sprintf("seat-%d", i), i%2 + 1,
 						2000 + i}
 				}); err != nil {
+				return err
+			}
+			// A CHAIN OF THREE LAYERS OVER THE FIRST THIRTY PACKS, ten each,
+			// each layer's bytes in two parts.
+			if _, err := store.InsertRows(ctx, tx, vars,
+				`INSERT INTO code_layers (repo_id, seq, layer_id, base_id, graph_id, packs, midx_bytes,
+					bitmap_bytes, graph_bytes, objects, commits, git, took_ms, added_position) VALUES `,
+				`(?, ?, ?, ?, '', '["c"]', 10, 10, 0, 10, 0, '2.56.0', 100, ?)`, ``, 3,
+				func(i int) []any {
+					base := ""
+					if i > 0 {
+						base = fmt.Sprintf("layer-%06d", i)
+					}
+					return []any{id, i + 1, fmt.Sprintf("layer-%06d", i+1), base, 3000 + i}
+				}); err != nil {
+				return err
+			}
+			if _, err := store.InsertRows(ctx, tx, vars,
+				`INSERT INTO code_layer_parts (repo_id, layer_id, part, object, hash, size) VALUES `,
+				`(?, ?, ?, ?, 'h', 10)`, ``, 6,
+				func(i int) []any {
+					return []any{id, fmt.Sprintf("layer-%06d", i/2+1), i % 2,
+						fmt.Sprintf("%s-layer-object-%06d", id, i)}
+				}); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE code_repos SET published_packs = 30,
+				published_objects = 30, published_at = ?, live_packs = 50 WHERE id = ?`, r, id); err != nil {
 				return err
 			}
 		}

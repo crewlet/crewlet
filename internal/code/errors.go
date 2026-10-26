@@ -60,6 +60,13 @@ var (
 	// client's words.
 	ErrInvalidProposal = errors.New("code: not a proposal this domain can decide")
 
+	// ErrInvalidLayer is a published layer's row that is not one
+	// ([LayerRef.Check]), wrapped with the field and the reason: what every
+	// holder of a layer row refuses before any byte moves — the committer
+	// deciding a publication, where it is the proposal's fault too
+	// ([ErrInvalidProposal] beside it), and a git node about to install one.
+	ErrInvalidLayer = errors.New("code: a published layer is malformed")
+
 	// ErrNotServing is a node's code half that RAN NOTHING: a committer that
 	// decided nothing for this proposal and appended nothing — it is
 	// stopping, its node publishes nothing (a maintenance mode, [Served]),

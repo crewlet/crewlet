@@ -775,15 +775,24 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 // repository's pushes, refs, packs, retired packs, ref drops and changes'
 // revisions, authors and rows remain AND the pushes among them weigh at most
 // PurgePartBytes — a part's own bounds — and it holds at most
-// MaxProtectionsPerRepo rules: with the name claim, the row and the marker
-// that is PurgePartRows + MaxProtectionsPerRepo + 3 rows, which the limits
-// test holds within MaxRecordRows. A change's revisions and authors go before
-// the changes, through which alone they are found.
+// MaxProtectionsPerRepo rules and a published chain of at most
+// MaxPublishedLayers layers of MaxLayerParts parts each: with the name claim,
+// the row and the marker that is PurgePartRows + MaxProtectionsPerRepo +
+// MaxPublishedLayers × (1 + MaxLayerParts) + 3 rows, which the limits test
+// holds within MaxRecordRows. A change's revisions and authors go before the
+// changes, through which alone they are found.
+//
+// NO PART REMOVES A LAYER: the chain is bounded apart from the rows a part
+// counts, and a layer row naming a pack a part already removed harms no
+// reader, since a deleted repository serves nothing and every cache drops it
+// whole. The collector takes the parts' objects at its first pass after this
+// record, since a derived row keeps its object only while it stands.
 func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p Purge) (int, error) {
 	deleted := 0
 	for _, stmt := range []string{
 		purgeAllPushesSQL, purgeAllRefsSQL, purgeAllPacksSQL, purgeAllRetiredSQL, purgeAllDropsSQL,
-		purgeAllRevisionsSQL, purgeAllAuthorsSQL, purgeAllChangesSQL, clearProtectionsSQL,
+		purgeAllRevisionsSQL, purgeAllAuthorsSQL, purgeAllChangesSQL, purgeAllLayerPartsSQL, purgeAllLayersSQL,
+		clearProtectionsSQL,
 	} {
 		res, err := tx.ExecContext(ctx, stmt, p.RepoID)
 		if err != nil {
@@ -978,8 +987,11 @@ const (
 	purgeAllRetiredSQL = `DELETE FROM code_packs_retired INDEXED BY code_packs_retired_repo_idx
 		WHERE repo_id = ?`
 	purgeAllDropsSQL = `DELETE FROM code_ref_drops INDEXED BY ` + dropsKey + ` WHERE repo_id = ?`
-	removeRepoSQL    = `DELETE FROM code_repos WHERE id = ?`
-	markSQL          = `INSERT INTO code_deletions
+	// THE PUBLISHED CHAIN, the final purge's alone, each table by its key.
+	purgeAllLayerPartsSQL = `DELETE FROM code_layer_parts WHERE repo_id = ?`
+	purgeAllLayersSQL     = `DELETE FROM code_layers WHERE repo_id = ?`
+	removeRepoSQL         = `DELETE FROM code_repos WHERE id = ?`
+	markSQL               = `INSERT INTO code_deletions
 			(repo_id, name, at, by, reason, purge_record_id, rejects, last_reject_at, version)
 		VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?)
 		ON CONFLICT (repo_id) DO NOTHING`

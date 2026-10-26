@@ -467,7 +467,108 @@ type Compaction struct {
 	// — the n-th's pack id [DeriveCompactionPackID] of CompactionID and n,
 	// in the order the build wrote them.
 	Add []PackRef `json:"add"`
+	// Layer is the published layer this record adds to the repository's
+	// chain, or nil. A compaction carrying one is a PUBLICATION: its Retire
+	// and Add, when present, are the repack of the non-full packs the new
+	// layer gathers, and every Add is one of the layer's packs — or both are
+	// empty, a record that publishes a layer over the packs as they stand.
+	//
+	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
+	// domain has run without this field — none of the domain is on main, so
+	// no image and no release holds it — and while that is so, every build
+	// that meets a publication reads its layer. Once a build without it has
+	// run, a new field is a versionedFields row, and this one takes {Name:
+	// "Compaction.Layer", Since: <the version after the table's highest>,
+	// Op: string(OpCompact), Path: []string{"mutation", "layer"}}, with
+	// RecordVersion moved to it and its line under "What each version
+	// added", a Carrying record — a compaction carrying a Layer — in the
+	// statelogtest candidate, and a publication and a plain compaction in
+	// the stamp test. omitempty, so only a publication carries the key: an
+	// older build would apply every plain compaction and RETAIN every
+	// publication rather than move its packs without its layer.
+	Layer *LayerRef `json:"layer,omitempty"`
 }
+
+// LayerRef is ONE published layer of a repository's multi-pack-index chain:
+// git's own incremental multi-pack-index layer, its bitmap, and the
+// commit-graph layer over the same packs, written ONCE by the repository's
+// maintainer and installed by every git node (ADR-0051's Derived standing).
+// Its bytes are the three files back to back — the multi-pack-index, its
+// bitmap, the commit-graph layer — cut into Parts, each one stored object.
+//
+// A LAYER IS CLOSED TOGETHER WITH ITS BASE: it covers every pack live at its
+// plan's position (its compaction's Seen) that no layer below it covers,
+// because git writes a bitmap only over a chain whose packs hold everything
+// their commits reach — measured on git 2.56.0: a layer over all of a
+// history's packs but one is refused ("Packfile doesn't have full closure")
+// and writes no bitmap, and so is a layer over a cut's full packs alone. A
+// pack that lands after the plan stays outside the chain until the next
+// publication, which git reads beside it. The decide holds both halves
+// (compaction.go): every pack the layer names live, and every pack live at
+// the plan that its base does not name in it.
+type LayerRef struct {
+	// LayerID is the multi-pack-index layer's own trailing checksum, 40
+	// lowercase hex digits: the name git gives the layer's files
+	// (multi-pack-index-<id>.midx and .bitmap) and its line of the chain
+	// file.
+	LayerID string `json:"layer_id"`
+	// BaseID is the layer directly below it in the chain the record leaves,
+	// "" for the chain's root. A layer file does not name its base — the
+	// chain's order is the only thing that does, which is why the rows'
+	// order is the chain's authority.
+	BaseID string `json:"base_id,omitempty"`
+	// Replaces are the ids of the TOP layers this one replaces, in chain
+	// order, lowest first: the publisher's geometric merge of the layers
+	// above BaseID. Empty for a layer placed on the whole chain.
+	Replaces []string `json:"replaces,omitempty"`
+	// GraphID is the commit-graph layer's trailing checksum, 40 lowercase
+	// hex digits — its file's name (graph-<id>.graph) and its line of
+	// commit-graph-chain — or "" where the layer's packs hold no commit the
+	// base's graph layers lack (GraphBytes and Commits are then 0).
+	GraphID string `json:"graph_id,omitempty"`
+	// Packs are the git checksums of every pack the layer covers, sorted and
+	// distinct.
+	Packs []string `json:"packs"`
+	// Parts are the stored objects holding the layer's bytes, in byte order:
+	// every part but the last exactly LayerPartBytes, the last at most that.
+	Parts []LayerPart `json:"parts"`
+	// MidxBytes, BitmapBytes and GraphBytes are the three sections, which
+	// the parts cut: their sum is the parts' sizes'. There is no reverse
+	// index section: a git of the node floor writes a multi-pack-index's
+	// reverse index as its RIDX chunk, and a .rev file only under a test
+	// variable.
+	MidxBytes   int64 `json:"midx_bytes"`
+	BitmapBytes int64 `json:"bitmap_bytes"`
+	GraphBytes  int64 `json:"graph_bytes"`
+	// Objects is how many objects the multi-pack-index layer holds (the last
+	// entry of its OIDF fanout), and Commits how many commits the graph
+	// layer holds: what a git node's per-object charges for the layer read.
+	Objects int64 `json:"objects"`
+	Commits int64 `json:"commits"`
+	// Git is the release of git that wrote it, as git's own version line
+	// spells its first three numbers ("2.56.0"): a git node whose git is
+	// older installs none of it.
+	Git string `json:"git"`
+	// TookMs is how long its build took, in milliseconds — the repack, the
+	// multi-pack-index and the graph together: the duty cycle the next
+	// publication of the repository is paced by.
+	TookMs int64 `json:"took_ms"`
+}
+
+// LayerPart is one stored object of a layer's bytes.
+type LayerPart struct {
+	Object objstore.Key  `json:"object"`
+	Hash   objstore.Hash `json:"hash"`
+	Size   int64         `json:"size"`
+}
+
+// Content is the object a read of the part is checked against.
+func (p LayerPart) Content() objstore.Object {
+	return objstore.Object{Key: p.Object, Hash: p.Hash, Size: p.Size}
+}
+
+// Size is the layer's bytes: its three sections, which its parts cut.
+func (l LayerRef) Size() int64 { return l.MidxBytes + l.BitmapBytes + l.GraphBytes }
 
 // RetireSweep removes a repository's retired pack rows at or below Through,
 // oldest first — the code-retention duty's sweep of what a record retired,
