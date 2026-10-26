@@ -5471,7 +5471,7 @@ export interface BrandAnswer {
     adopted_at: string;
     /**
      * The newest version of the adopted kit, when it is newer than the
-     * adopted one: the "Review and adopt" banner. Answered only to a reader
+     * adopted one: the Brand page's draft notice. Answered only to a reader
      * who can see the kit or is an administrator.
      */
     newer_version?: number;

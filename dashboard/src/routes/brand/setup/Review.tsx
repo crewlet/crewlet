@@ -14,7 +14,7 @@
  * one-line name.
  *
  * On the right, the column a person decides in, ending above the finish
- * action: the preview at a fixed proportion, then "Before you adopt" with
+ * action: the preview at a fixed proportion, then "Before you publish" with
  * each low-contrast pair to confirm and what adopting does (`WhenYouAdopt`).
  * Where the step is narrow the column follows the summary, so it still ends
  * where the finish is.
@@ -258,7 +258,7 @@ export function ReviewStep({
 }: {
   edit: BrandEdit;
   assets: BrandAssets;
-  /** An administrator adopts; an editor of the kit saves it for review. */
+  /** An administrator publishes; an editor of the kit saves it for review. */
   admin: boolean;
   onEditStep: (step: SetupStepId) => void;
   acknowledged: ReadonlySet<string>;
@@ -280,8 +280,8 @@ export function ReviewStep({
   // THE FIRST THING THAT HOLDS, in reading order, is where focus goes.
   const firstHeld = PARTS.find(({ part }) => problems.get(part))?.part;
   const firstOpen = unconfirmed[0] ? warningKey(unconfirmed[0]) : undefined;
-  const finish = admin ? "adopt" : "save it for review";
-  const before = admin ? "Before you adopt" : "Before you save for review";
+  const finish = admin ? "publish" : "save it for review";
+  const before = admin ? "Before you publish" : "Before you save for review";
   return (
     <div className="brand-review">
       <div className="brand-review-grid">
@@ -318,7 +318,7 @@ export function ReviewStep({
           <BrandPreview
             document={doc}
             assets={assets}
-            draft
+            drawn="changes"
             title="Preview of your draft"
             placement="inline"
           />

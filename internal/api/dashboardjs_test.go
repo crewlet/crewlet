@@ -1227,7 +1227,11 @@ const (
 	// ProposalCard's danger tone and details, the thread's jumps and
 	// near-future times) and choosing screen shapes by the screen's width took
 	// it to 4545.4 KiB. 4546 KiB, which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 450<<10
+	// Drawing a brand draft in its own cards with one next step, who last
+	// changed it and a confirmed discard, in the Brand page's chunk less the
+	// kit view's copy of the cards, which now shares the page's board, took it
+	// to 4547.1 KiB. 4548 KiB, which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 452<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

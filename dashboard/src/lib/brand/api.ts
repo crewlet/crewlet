@@ -268,7 +268,7 @@ export async function saveBrand(save: BrandSave, keys: BrandSaveKeys): Promise<B
       return {
         kind: "published",
         ...landed,
-        text: `Version ${landed.version} of the brand kit is saved and not adopted yet. ${adopted.text}`,
+        text: `Version ${landed.version} of the brand kit is saved and not published yet. ${adopted.text}`,
       };
   }
 }
