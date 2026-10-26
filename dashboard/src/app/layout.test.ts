@@ -13,6 +13,7 @@
 import { describe, expect, test } from "vitest";
 import { density, size, spacing } from "@crewlethq/tokens";
 import {
+  assistantCounted,
   ASSISTANT_MAX,
   ASSISTANT_MIN,
   ASSISTANT_WIDTH,
@@ -103,6 +104,18 @@ describe("the assistant's track, as one more term of every other width", () => {
   test("Settings' column folds to its picker sooner while the assistant is a column", () => {
     expect(sectionColumnMin(0)).toBe(SECTION_COLUMN_MIN);
     expect(sectionColumnMin(track)).toBe(SECTION_COLUMN_MIN + ASSISTANT_WIDTH + inset);
+  });
+
+  test("every threshold counts the width the reader dragged, inside the drag's range", () => {
+    expect(assistantCounted(null)).toBe(ASSISTANT_WIDTH);
+    expect(assistantCounted(640)).toBe(640);
+    expect(assistantCounted(9999)).toBe(ASSISTANT_MAX);
+    expect(assistantCounted(10)).toBe(ASSISTANT_MIN);
+    // Beside a 640 panel at 1700, Settings folds: counting the resting 420
+    // kept the column over a section narrower than its floor.
+    const dragged = assistantTrack(assistantCounted(640), scale);
+    expect(1700 >= sectionColumnMin(track)).toBe(true);
+    expect(1700 >= sectionColumnMin(dragged)).toBe(false);
   });
 
   test("the page's sheet keeps the list, and a peek column where there is one", () => {
