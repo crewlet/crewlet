@@ -26,6 +26,15 @@ import { faceDrawing } from "~/lib/brand/brand.ts";
 import "~/styles/brand.css";
 import type { BrandAssets } from "~/lib/brand/useBrand.ts";
 
+/** What the preview draws: the brand as published (or a kit's version as it is), or an edit not yet saved. */
+export type BrandPreviewDrawn = "brand" | "changes";
+
+/** The note under the sample, by what it draws. */
+const NOTES: Readonly<Record<BrandPreviewDrawn, string>> = {
+  brand: "A sample drawn with this brand, not a real artifact.",
+  changes: "A sample drawn with your changes, not a real artifact.",
+};
+
 const KINDS = [
   { value: "doc", label: "Doc" },
   { value: "slide", label: "Slide" },
@@ -63,14 +72,14 @@ export function BrandSampleOf({
 export function BrandPreview({
   document,
   assets,
-  draft,
+  drawn,
   title = "Preview",
   placement = "sticky",
 }: {
   document: BrandDocument;
   assets: BrandAssets;
-  /** The sample draws an edit not yet saved, and says so. */
-  draft: boolean;
+  /** What the sample draws, which its note says. */
+  drawn: BrandPreviewDrawn;
   /** The card's title, which also names its region. */
   title?: string;
   /**
@@ -110,9 +119,7 @@ export function BrandPreview({
       <Card.Body>
         <BrandSampleOf document={document} assets={assets} kind={kind} mode={mode} />
         <Text as="p" variant="caption" tone="secondary" className="brand-preview-note">
-          {draft
-            ? "A sample drawn with your changes, not a real artifact."
-            : "A sample drawn with this brand, not a real artifact."}
+          {NOTES[drawn]}
         </Text>
       </Card.Body>
     </Card>

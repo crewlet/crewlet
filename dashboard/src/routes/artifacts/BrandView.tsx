@@ -13,14 +13,7 @@
  */
 
 import { useState } from "react";
-import {
-  AsideLayout,
-  Button,
-  ButtonLink,
-  Callout,
-  HeadingLevelProvider,
-  Skeleton,
-} from "@crewlethq/ui";
+import { Button, ButtonLink, Callout, Skeleton } from "@crewlethq/ui";
 import type { ArtifactDetail } from "~/protocol/index.ts";
 import { href } from "~/app/router.tsx";
 import { useViewer } from "~/lib/viewer.ts";
@@ -28,14 +21,7 @@ import { mayAdoptBrand } from "~/lib/brand/brand.ts";
 import { useBrand, useBrandAssets } from "~/lib/brand/useBrand.ts";
 import { useBrandVersion } from "~/lib/brand/useBrandVersion.ts";
 import { draftReadiness } from "~/lib/brand/validate.ts";
-import {
-  BrandCard,
-  ColoursBody,
-  LogosBody,
-  TypographyBody,
-  VoiceBody,
-} from "~/routes/brand/BrandCards.tsx";
-import { BrandPreview } from "~/routes/brand/BrandPreview.tsx";
+import { BrandBoard } from "~/routes/brand/BrandBoard.tsx";
 import { ReviewAdopt } from "~/routes/brand/ReviewAdopt.tsx";
 import { BRAND_PAGE } from "~/components/brand.tsx";
 
@@ -91,25 +77,7 @@ export function BrandView({ detail, version }: { detail: ArtifactDetail; version
           An administrator adopts the company's brand on Company › Brand.
         </Callout>
       )}
-      <AsideLayout
-        asideLabel="Preview"
-        aside={<BrandPreview document={doc} assets={assets} draft={false} />}
-      >
-        <HeadingLevelProvider level={3}>
-          <BrandCard card="logos">
-            <LogosBody document={doc} assets={assets} />
-          </BrandCard>
-          <BrandCard card="colours">
-            <ColoursBody colors={doc.colors} />
-          </BrandCard>
-          <BrandCard card="type">
-            <TypographyBody type={doc.type} assets={assets} />
-          </BrandCard>
-          <BrandCard card="voice">
-            <VoiceBody voice={doc.voice} />
-          </BrandCard>
-        </HeadingLevelProvider>
-      </AsideLayout>
+      <BrandBoard document={doc} assets={assets} drawn="brand" />
       {reviewing ? (
         <ReviewAdopt
           kit={detail.id}

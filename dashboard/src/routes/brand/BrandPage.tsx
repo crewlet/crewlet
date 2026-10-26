@@ -37,14 +37,12 @@
 
 import { useMemo, useState } from "react";
 import {
-  AsideLayout,
   Button,
   ButtonLink,
   Callout,
   Card,
   ConfirmModal,
   EmptyState,
-  HeadingLevelProvider,
   Menu,
   Skeleton,
   Stack,
@@ -92,16 +90,7 @@ import {
 import { useBrandSave } from "~/lib/brand/useBrandSave.ts";
 import { draftReadiness } from "~/lib/brand/validate.ts";
 import { BRAND_SETUP } from "~/components/brand.tsx";
-import {
-  BRAND_CARDS,
-  BrandCard,
-  ColoursBody,
-  LogosBody,
-  TypographyBody,
-  VoiceBody,
-  type BrandCardEdit,
-  type BrandCardKey,
-} from "./BrandCards.tsx";
+import { BRAND_CARDS, type BrandCardEdit, type BrandCardKey } from "./BrandCards.tsx";
 import {
   ColoursEditor,
   LogosEditor,
@@ -110,7 +99,7 @@ import {
   cardProblem,
   type BrandEditorProps,
 } from "./BrandEditors.tsx";
-import { BrandPreview } from "./BrandPreview.tsx";
+import { BrandBoard } from "./BrandBoard.tsx";
 import { AdoptDialog } from "./AdoptDialog.tsx";
 import { ReviewAdopt } from "./ReviewAdopt.tsx";
 import { useCompanyKit, type CompanyKit } from "./useCompanyKit.ts";
@@ -591,27 +580,12 @@ function Cards({
     };
   };
   return (
-    <AsideLayout
-      asideLabel="Preview"
-      aside={<BrandPreview document={document} assets={assets} draft={editing !== null} />}
-    >
-      {/* ONE LEVEL UNDER THE PAGE'S TITLE: every card's title heads a part of
-          the page the title names. */}
-      <HeadingLevelProvider level={3}>
-        <BrandCard card="logos" edit={cardEdit("logos")}>
-          <LogosBody document={document} assets={assets} />
-        </BrandCard>
-        <BrandCard card="colours" edit={cardEdit("colours")}>
-          <ColoursBody colors={document.colors} />
-        </BrandCard>
-        <BrandCard card="type" edit={cardEdit("type")}>
-          <TypographyBody type={document.type} assets={assets} />
-        </BrandCard>
-        <BrandCard card="voice" edit={cardEdit("voice")}>
-          <VoiceBody voice={document.voice} />
-        </BrandCard>
-      </HeadingLevelProvider>
-    </AsideLayout>
+    <BrandBoard
+      document={document}
+      assets={assets}
+      drawn={editing ? "changes" : "brand"}
+      edit={cardEdit}
+    />
   );
 }
 

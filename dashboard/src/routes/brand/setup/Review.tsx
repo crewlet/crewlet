@@ -318,7 +318,7 @@ export function ReviewStep({
           <BrandPreview
             document={doc}
             assets={assets}
-            draft
+            drawn="changes"
             title="Preview of your draft"
             placement="inline"
           />

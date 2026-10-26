@@ -424,7 +424,7 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
                 <BrandPreview
                   document={edit.document}
                   assets={assets}
-                  draft
+                  drawn="changes"
                   title="Preview of your draft"
                 />
               ),
