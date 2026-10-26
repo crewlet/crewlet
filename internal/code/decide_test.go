@@ -603,6 +603,98 @@ func TestAPushIsJudgedWhole(t *testing.T) {
 	})
 }
 
+// A PUSH PAST THE PACK BOUND IS REFUSED compaction_behind, WHOLE AND
+// UNDECIDED: a repository whose compaction has not caught up with its pushes
+// takes no more packs. At MaxPacksPerRepo − 1 live packs a batch's first push
+// carrying a pack is the last one the repository takes, and every later push
+// carrying one is refused whole — every command the receiver did not refuse,
+// the ones the decide found ok among them, under the one sentence that names
+// the packs the repository would hold — and is no entry of the record; a push
+// carrying no pack adds none, and is decided as ever. What the bound counts is
+// the repository's packs and its batch's ENTRIES' — a push carrying a pack
+// that is no entry, refused for a reason of its own, adds nothing, and nor
+// does one the bound refused. A repository already past the bound, as a
+// later build's committer may have left it, is refused the same, its sentence
+// naming what it holds.
+//
+// Mutation: drop the bound and the third and fourth pushes are entries; count
+// the pack of a push that is no entry (the stale one) and the second is
+// refused too; count the pack of a push the bound refused and the fourth's
+// sentence names a pack more than the repository would hold.
+func TestAPushPastThePackBoundIsRefusedCompactionBehind(t *testing.T) {
+	t.Parallel()
+	size := 32 + IndexBytesFor(1) + ReverseBytesFor(1)
+	// behind holds answer a to a refusal of the whole push under the
+	// sentence detail, every command but the receiver's own refusals under
+	// it, and a out of the record.
+	behind := func(t *testing.T, name string, a decided, detail string) {
+		t.Helper()
+		if a.refused != RefusalCompactionBehind || a.detail != detail || a.inRecord {
+			t.Fatalf("%s: answered %q (%q), in the record: %v; want compaction_behind (%q), out of it", name,
+				a.refused, a.detail, a.inRecord, detail)
+		}
+		for _, c := range a.commands {
+			if c.Reason == RefusalBlobTooLarge {
+				continue
+			}
+			if c.Result != ResultNG || c.Reason != RefusalCompactionBehind || c.Detail != detail {
+				t.Errorf("%s: %s is %s %s (%q), want ng compaction_behind under the push's sentence", name,
+					c.Ref, c.Result, c.Reason, c.Detail)
+			}
+		}
+	}
+	t.Run("the last pack and every one after it", func(t *testing.T) {
+		t.Parallel()
+		e := decideEstate(t)
+		e.exec(`UPDATE code_repos SET live_packs = ? WHERE id = ?`, MaxPacksPerRepo-1, decideRepo)
+		prefilled := cmd("refs/heads/big", ZeroOID, oid("G"))
+		prefilled.Result, prefilled.Reason, prefilled.Detail = ResultNG, RefusalBlobTooLarge, "a blob of 2 GiB"
+		last := withPack(proposalOf(cmd("refs/heads/one", ZeroOID, oid("1"))), size, decideAt)
+		deletion := proposalOf(cmd("refs/heads/feature", oid("F"), ZeroOID))
+		entries, answers := decideIn(t, e, DefaultLimits(),
+			withPack(proposalOf(cmd("refs/heads/main", oid("Z"), oid("B"))), size, decideAt),
+			last,
+			withPack(proposalOf(cmd("refs/heads/two", ZeroOID, oid("2")),
+				cmd("refs/heads/main", oid("A"), oid("C"))), size, decideAt),
+			withPack(proposalOf(prefilled, cmd("refs/heads/three", ZeroOID, oid("3"))), size, decideAt),
+			deletion)
+		if got := answers[0]; got.commands[0].Reason != RefusalStale || got.refused != "" || got.inRecord {
+			t.Fatalf("a stale push carrying a pack is %s %s (whole: %q), want stale and out of the record",
+				got.commands[0].Result, got.commands[0].Reason, got.refused)
+		}
+		if got := answers[1]; got.commands[0].Result != ResultOK || !got.inRecord {
+			t.Fatalf("the push carrying the last pack the repository takes is %s %s (whole: %q, %q), want ok",
+				got.commands[0].Result, got.commands[0].Reason, got.refused, got.detail)
+		}
+		at := BehindDetail("web", MaxPacksPerRepo)
+		behind(t, "a push past the bound", answers[2], at)
+		behind(t, "the push after it", answers[3], at)
+		if got := answers[3].commands[0]; got.Reason != RefusalBlobTooLarge || got.Detail != "a blob of 2 GiB" {
+			t.Errorf("the receiver's own refusal became %s %q", got.Reason, got.Detail)
+		}
+		if got := answers[4]; got.commands[0].Result != ResultOK || !got.inRecord {
+			t.Fatalf("a push carrying no pack is %s %s (whole: %q), want ok", got.commands[0].Result,
+				got.commands[0].Reason, got.refused)
+		}
+		if len(entries) != 2 || entries[0].PushID != last.PushID || entries[1].PushID != deletion.PushID {
+			t.Fatalf("the record's entries are %d, want the last pack's push and the deletion", len(entries))
+		}
+	})
+	t.Run("past the bound", func(t *testing.T) {
+		t.Parallel()
+		e := decideEstate(t)
+		e.exec(`UPDATE code_repos SET live_packs = ? WHERE id = ?`, MaxPacksPerRepo+3, decideRepo)
+		entries, answers := decideIn(t, e, DefaultLimits(),
+			withPack(proposalOf(cmd("refs/heads/one", ZeroOID, oid("1"))), size, decideAt),
+			proposalOf(cmd("refs/heads/feature", oid("F"), ZeroOID)))
+		behind(t, "a push past the bound", answers[0], BehindDetail("web", MaxPacksPerRepo+3))
+		if got := answers[1]; got.commands[0].Result != ResultOK || len(entries) != 1 {
+			t.Fatalf("a push carrying no pack is %s %s with %d entries, want ok, the record's one",
+				got.commands[0].Result, got.commands[0].Reason, len(entries))
+		}
+	})
+}
+
 // A PUSH THAT LANDED IS ANSWERED FROM ITS ROW, whatever became of the
 // repository since; one named twice in a batch is decided once; and one whose
 // id names another repository's push is no push this decide can answer.

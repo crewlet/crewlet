@@ -42,8 +42,9 @@ import (
 // landing is one push as whoever built its pack hands it to land.
 type landing struct {
 	// Synced is the pinned incarnation Scratch leans on. Its Repo is the
-	// linearizable row the push is judged on — its status and its
-	// protections included — and its Position is the proposal's Seen.
+	// linearizable row the push is judged on — its status, its protections
+	// and its live packs included, the last read again before it refuses
+	// anything (behind) — and its Position is the proposal's Seen.
 	Synced cache.Synced
 	// Scratch is the repository the push's objects were written into,
 	// leaning on Synced (cache.Cache.NewScratch, named PushID): it holds
@@ -129,13 +130,16 @@ func unchecked(err error) error {
 //  4. ATOMIC: a push refused in part is refused whole.
 //  5. NOTHING LEFT: every command refused, so nothing is stored.
 //  6. THE SIZE: a bundle past code.MaxPackBytes is refused before its upload.
-//  7. THE BUNDLE AND THE LISTING TOGETHER (introduceAndStore): the bundle
+//  7. THE PACK BOUND: a push carrying a pack into a repository at
+//     code.MaxPacksPerRepo live packs is refused compaction_behind before its
+//     upload (behind) — on its synced row, read once more before it refuses.
+//  8. THE BUNDLE AND THE LISTING TOGETHER (introduceAndStore): the bundle
 //     stored and sealed while the commits the push introduces are listed,
 //     and the proposal held to every rule its committer will hold it to.
-//  8. THE PROPOSAL, to the repository's committer through the estate router.
-//  9. THE OUTCOME, `ok` only from the push's applied row (decided,
+//  9. THE PROPOSAL, to the repository's committer through the estate router.
+//  10. THE OUTCOME, `ok` only from the push's applied row (decided,
 //     awaitPending).
-//  10. THE ADOPTION: the pack linked into this node's cache once its row has
+//  11. THE ADOPTION: the pack linked into this node's cache once its row has
 //     applied, so the node that took the push does not download it back —
 //     unless a round that read its row had already begun that pack's GET, or
 //     a link fails (code_pack_adopt_failed; its next sync downloads it). Its
@@ -270,7 +274,18 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 		return landed{Commands: cmds, Result: result}, nil
 	}
 
-	// 7 THE BUNDLE AND THE LISTING TOGETHER: the commits every update still
+	// 7 THE PACK BOUND, before a byte is uploaded: every retry of a push its
+	// committer would refuse compaction_behind would otherwise store a bundle
+	// no row names, for the collector to remove.
+	if ref != nil {
+		if detail, refused := s.behind(ctx, &l); refused {
+			cmds = refuseRest(cmds, code.RefusalCompactionBehind, detail)
+			result.outcome, result.refusal = types.AuditRefused, AuditRefusal(code.RefusalCompactionBehind)
+			return landed{Commands: cmds, Result: result}, nil
+		}
+	}
+
+	// 8 THE BUNDLE AND THE LISTING TOGETHER: the commits every update still
 	// standing introduces, and the bundle stored before anything names it —
 	// the proposal held to every rule its committer will hold it to once the
 	// listing answers, before the upload completes. Every ref is proposed in
@@ -339,7 +354,7 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 		}
 	}
 
-	// 8 THE PROPOSAL, to the repository's committer, under the caller's
+	// 9 THE PROPOSAL, to the repository's committer, under the caller's
 	// context: cancellation and no deadline of its own — each data node gets
 	// the router's write attempt.
 	l.Progress("committing the push")
@@ -348,7 +363,7 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 		return landed{}, unchecked(err)
 	}
 
-	// 9 THE OUTCOME, from the push's own row.
+	// 10 THE OUTCOME, from the push's own row.
 	v := s.decided(ctx, &l, proposed, res, perr)
 	result.outcome, result.refusal, result.position = v.outcome, v.refusal, v.position
 	for _, c := range v.commands {
@@ -358,7 +373,7 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 	}
 	out := landed{Commands: withRefs(v.commands, named), Result: result}
 
-	// 10 THE ADOPTION, once the row has applied: a pack linked in before
+	// 11 THE ADOPTION, once the row has applied: a pack linked in before
 	// it would be an object no row names (cache.Cache.Adopt).
 	if v.applied && ref != nil && result.ok > 0 {
 		if err := s.fault(ctx, codefault.HostBeforeAdopt, 0); err != nil {
@@ -401,6 +416,55 @@ func protectAfterForce(cmds []code.Command, rules code.Protections, judged map[j
 		}
 	}
 	return asked
+}
+
+// behind is the landing's PRECHECK OF THE PACK BOUND for a push carrying a
+// pack: true, with the sentence its every undecided command is refused
+// compaction_behind with (code.BehindDetail), when the repository holds
+// code.MaxPacksPerRepo live packs or more — so the push stores no bundle that
+// its committer, whose decide is the authority on the bound, would refuse.
+//
+// JUDGED ON THE PUSH'S OWN SYNCED ROW, and on a row at the bound only once
+// that row has been READ AGAIN. The synced row is the one the push was
+// received over, and the committer's count may have moved either way since:
+// pushes landed since raise it, which a precheck that passes only costs a
+// bundle the decide refuses and the collector removes; and a compaction
+// applied since lowers it, which a precheck refusing on the synced figure
+// would turn into a refusal the decide would never make, for as long as the
+// push takes. So before refusing it asks the estate once — the repository by
+// its name, at SESSION floored at the landing's pin (Synced.Position): one
+// read of a data node's row at or past what the push was received over, with
+// no barrier, made only on this path — and refuses only when that row still
+// holds the bound. A compaction applied after that read is met by the push's
+// next run.
+//
+// NEVER A Cache.Sync: the cache answers a session sync at once from the copy
+// it converged on, with no estate call (cache.Cache.Sync), and the pinned copy
+// has reached the pin by definition — so a sync would answer the very figure
+// it was asked to check. NO BARRIER, because the precheck only spares an
+// upload: a repository at its bound meets a push again every time its client
+// runs it, and a linearizable read would append a record to the code log for
+// each.
+//
+// A READ THAT ESTABLISHES NOTHING REFUSES NOTHING, and leaves the push to its
+// committer, which judges it on its own rows: one that fails — the estate
+// unreachable, the name claimed by nothing — one answering another
+// repository, which a name claimed since the push's sync does (the read is by
+// name; the landing is about an id), and one finding the repository no longer
+// active, deleted or archived since the sync, whose push the decide refuses
+// for that, in the sentence of the state it is in, before it judges any
+// bound.
+func (s *Server) behind(ctx context.Context, l *landing) (string, bool) {
+	if l.Synced.Repo.LivePacks < code.MaxPacksPerRepo {
+		return "", false
+	}
+	now, err := s.o.Estate.Resolve(ctx, code.ResolveQuery{Name: l.Synced.Repo.Name,
+		Fresh: statelog.Freshness{Level: statelog.ReadSession, MinPosition: l.Synced.Position}})
+	if err != nil || now.ID != l.Synced.Repo.ID || now.Status != code.RepoStatusActive ||
+		now.LivePacks < code.MaxPacksPerRepo {
+		return "", false
+	}
+	return code.BehindDetail(now.Name, now.LivePacks), true
 }
 
 // introduceAndStore lists the commits the push's updates still standing

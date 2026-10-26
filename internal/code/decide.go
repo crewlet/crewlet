@@ -46,7 +46,27 @@ import (
 // still name it is refused upload_expired, and one that takes the repository
 // past code.limits.repo_max_bytes repo_size; and an --atomic push with any
 // refusal is refused whole ([Atomic]). A push with an ok command left is an
-// entry of the record; one with none is answered here and writes nothing.
+// entry of the record — unless the pack bound refuses it whole (below); one
+// with none is answered here and writes nothing.
+//
+// # The pack bound refuses a push whole, and decides nothing of it
+//
+// A repository's pushes outrun its compaction only so far: a push that would
+// be an entry and CARRIES A PACK, into a repository holding MaxPacksPerRepo
+// live packs or more — its batch's earlier entries' packs counted in
+// ([working.behind]) — is refused WHOLE, compaction_behind, every command the
+// receiver did not refuse under one sentence ([BehindDetail]), the ones this
+// decide found ok among them; it is no entry, nothing of it is decided, and it
+// lands when it is run again once a compaction has merged the packs. Judged
+// LAST, after every rule of the push's own: a push refused for a reason of its
+// own — stale, a protection, its pack's size — is told that reason, which
+// running it again would not change, and adds no pack, so it counts for
+// nothing; and a push carrying no pack adds none, so a deletion, or a ref
+// moved onto a commit the repository already holds, is decided as ever, at the
+// bound or past it. The receiver refuses the same push before it uploads the
+// push's bundle, from its own synced row read again (internal/code/host's
+// precheck), which spares every refused retry an upload; this decide, from the
+// rows of its one snapshot, is the authority.
 //
 // # A push that already landed is answered from its row
 //
@@ -251,8 +271,9 @@ type decided struct {
 	inRecord bool
 	// collapsed is the row an earlier record applied this push as.
 	collapsed *PushRow
-	// refused is a refusal of the whole push — repo_deleted, repo_archived —
-	// and detail its sentence, which every command it covers carries too.
+	// refused is a refusal of the whole push — repo_deleted, repo_archived,
+	// compaction_behind — and detail its sentence, which every command it
+	// covers carries too.
 	refused Refusal
 	detail  string
 	// err is a proposal no rule decides: its push id names a push to
@@ -354,6 +375,14 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		if !slices.ContainsFunc(cmds, isOK) {
 			continue
 		}
+		// THE PACK BOUND, LAST: the push whole — what the receiver refused
+		// kept, every other command under the bound's sentence, the ones found
+		// ok here among them, since nothing of it is decided.
+		if detail, behind := w.behind(p); behind {
+			answers[i].refused, answers[i].detail = RefusalCompactionBehind, detail
+			answers[i].commands = refuseEvery(p.Commands, RefusalCompactionBehind, detail)
+			continue
+		}
 		w.apply(p, cmds)
 		answers[i].inRecord = true
 		entries = append(entries, p.entryWith(cmds))
@@ -383,6 +412,9 @@ type pushRepo struct {
 	status    RepoStatus
 	refs      int
 	liveBytes int64
+	// livePacks is the repository's live packs, which the pack bound
+	// judges a push carrying one by ([working.behind]).
+	livePacks int64
 	version   int64
 	// deletedAt is when a deleted or purging repository was deleted, and
 	// zero for any other.
@@ -395,7 +427,7 @@ func pushRepoIn(ctx context.Context, tx *sql.Tx, id string) (pushRepo, bool, err
 	var status string
 	var deleted sql.NullInt64
 	err := tx.QueryRowContext(ctx, decideRepoSQL, id).Scan(&r.name, &status, &r.refs,
-		&r.liveBytes, &r.version, &deleted)
+		&r.liveBytes, &r.livePacks, &r.version, &deleted)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return pushRepo{}, false, nil
@@ -494,6 +526,10 @@ type working struct {
 	live int
 	// bytes is the packs the repository holds.
 	bytes int64
+	// packs is the repository's live packs, the batch's earlier entries'
+	// counted in: what the pack bound judges a push carrying one by
+	// ([working.behind]).
+	packs int64
 }
 
 // newWorking reads the refs every open proposal's commands name, in ONE
@@ -524,7 +560,7 @@ func newWorking(ctx context.Context, tx *sql.Tx, repoID string, repo pushRepo, b
 		return nil, fmt.Errorf("code: read the refs a batch names: %w", err)
 	}
 	w := &working{name: repo.name, now: now, targets: targets, live: repo.refs, bytes: repo.liveBytes,
-		occupied: map[string]string{}}
+		packs: repo.livePacks, occupied: map[string]string{}}
 	if err := w.readAround(ctx, tx, repoID, batch, open, seen, deleted); err != nil {
 		return nil, err
 	}
@@ -1029,7 +1065,24 @@ func (w *working) apply(p Proposal, cmds []Command) {
 	}
 	if p.Pack != nil {
 		w.bytes += p.Pack.Size
+		w.packs++
 	}
+}
+
+// behind is the pack bound over p, a push with an ok command left — an entry
+// of the record unless this refuses it: true, with the sentence of its
+// refusal, when p carries a pack and the repository holds MaxPacksPerRepo live
+// packs or more with the batch's earlier entries' packs counted in. Asked
+// LAST, so a push refused for a reason of its own is told that reason and
+// counts no pack; and only of a push carrying a pack, since one carrying
+// none adds none — a deletion, or a ref moved onto a commit the repository
+// already holds, is decided at the bound and past it as ever. A push it
+// refuses is never applied, so its pack is counted for no later push.
+func (w *working) behind(p Proposal) (string, bool) {
+	if p.Pack == nil || w.packs < MaxPacksPerRepo {
+		return "", false
+	}
+	return BehindDetail(w.name, w.packs), true
 }
 
 // refuse sets one command ng under code with detail.
@@ -1114,7 +1167,7 @@ func UnheldDetail(old string) string {
 // The push decide's statements, each registered in plan_test.go. The refs a
 // batch names are read by the applier's own statement (refsNamedSQL).
 const (
-	decideRepoSQL = `SELECT name, status, refs, live_bytes, version, deleted_at
+	decideRepoSQL = `SELECT name, status, refs, live_bytes, live_packs, version, deleted_at
 		FROM code_repos WHERE id = ?`
 	decideDeletionSQL = `SELECT name FROM code_deletions WHERE repo_id = ?`
 	pushesNamedSQL    = `SELECT ` + pushColumns + ` FROM code_pushes

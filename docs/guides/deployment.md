@@ -1743,8 +1743,11 @@ cache on its own disk. What such a node needs from its host:
   a cache sync: warm, a few
   milliseconds; on a node that has never served the repository, or whose budget
   evicted it, a **cold** sync downloads one object for every push the
-  repository ever took (about 70 to 130 s at 10 000 pushes from S3, which
-  answers each request in about 100 to 200 ms), and on a node bringing up
+  repository ever took that carried objects — at most 2 048 of them, the live
+  packs a repository may hold
+  ([the pack bound](../concepts/code-host.md#limits)), since 10 000 would take
+  about 70 to 130 s from S3, which answers each request in about 100 to
+  200 ms — and on a node bringing up
   hundreds of repositories at once it first waits its repository's turn to
   read the rows, eight a node at a time
   ([many repositories at once](../concepts/code-host.md#the-cache-on-a-git-node)):
@@ -1808,14 +1811,15 @@ cache on its own disk. What such a node needs from its host:
   up to 55 s each, and a lane's width of git transfer slots of them may wait
   at once — 16 on a four-core node, past which the excess is answered 503 at
   once. How long they wait is how long the ones ahead of them hold their
-  room: a moment on a node that holds the repository, and the cold sync above
-  on one that does not — longer than the wait, which stays 55 s whatever idle
-  timeout the balancer is given, so on a cold node the fetches past a token's
-  quarter are answered 503, and git does not retry a lazy fetch, so those
-  checkouts fail. N runners behind one token, each asking for
+  room: a moment on a node that holds the repository, and on one that does
+  not the cold sync above with each fetch's pack-objects — which can outlast
+  the wait, and the wait stays 55 s whatever idle timeout the balancer is
+  given, so on a cold node where it does the fetches past a token's quarter
+  are answered 503, and git does not retry a lazy fetch, so those checkouts
+  fail. N runners behind one token, each asking for
   B bytes at once, meet that once N × B passes the quarter: thirteen lazy
   fetches of 20 MB fill a four-core node's 256 MiB, and the fourteenth and
-  every one after it fail on a cold sync. Give each runner a token of its
+  every one after it fail on such a cold sync. Give each runner a token of its
   own, and the limit is the node's whole room — fifty-three such fetches on a
   four-core node's gibibyte, which a cold sync can fill too; routing by
   repository, above, keeps the syncs warm. A fetch whose body is still

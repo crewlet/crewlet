@@ -574,6 +574,16 @@
 // or [FullBundleBytes] of bundle; and the plan's own, [CompactFactor],
 // [CompactMinMerge], [CompactTargetPacks] and [MaxPacksPerRepo].
 //
+// THE BOUND HOLDS PUSHES BACK, never a compaction: a push carrying a pack into
+// a repository that holds [MaxPacksPerRepo] live packs, its batch's earlier
+// entries' packs counted in, is refused [RefusalCompactionBehind] WHOLE and
+// undecided by the push decide (decide.go's pack bound) — and before its
+// bundle is uploaded by the receiver, which reads the row again before it
+// refuses (internal/code/host) — so a repository's pack count, and with it
+// every cold sync's GETs and every request's pack lookups, stays bounded
+// whatever its pushes do. A compaction adds no pack and is decided at the
+// bound as below it: it is what makes room.
+//
 // A git node finds the repositories a compaction may be due in by the
 // [ReadCompactionDue] listing: the active and archived repositories holding
 // at least MinPacks live packs, MOST FIRST, each with its row's version, one

@@ -16,7 +16,7 @@ import (
 type Refusal string
 
 // The codes. The first seventeen may be RECORDED on a command ([Refusal.Recorded]);
-// the last six are answers ABOUT a push, never part of one.
+// the last seven are answers ABOUT a push, never part of one.
 const (
 	// RefusalStale is a ref that is not where the client thought.
 	RefusalStale Refusal = "stale"
@@ -69,6 +69,25 @@ const (
 	// RefusalBusy is a repository taking pushes faster than one node
 	// commits them.
 	RefusalBusy Refusal = "busy"
+	// RefusalCompactionBehind is a push carrying a pack into a repository
+	// that holds MaxPacksPerRepo live packs or more: its compaction has not
+	// caught up with its pushes, nothing of the push was decided, and it
+	// lands when it is run again once a compaction has merged the packs. A
+	// push carrying no pack — deletions, refs moved onto commits the
+	// repository holds — adds none, and is never refused for it.
+	//
+	// The push decide refuses it, from the rows, counting the packs of its
+	// batch's earlier entries ([working.behind]), and the receiver before it
+	// uploads the push's bundle, from the row it read again — one sentence
+	// for both ([BehindDetail]).
+	//
+	// AN ANSWER ABOUT A PUSH, never recorded on a command ([Refusal.Recorded]):
+	// the decide refuses the whole push and its record carries nothing of it,
+	// so it is no field of the code domain's records and takes no
+	// versionedFields row. The estate router carries it from a committer to
+	// the receiver in [PushAnswer.Refused], where a build that does not know
+	// the code says it by its name, beside the decide's sentence.
+	RefusalCompactionBehind Refusal = "compaction_behind"
 	// RefusalUnavailable is the code log or the object store refusing.
 	RefusalUnavailable Refusal = "unavailable"
 	// RefusalStoreFull is a push whose bundle the object store refused
@@ -103,8 +122,8 @@ func Refusals() []Refusal {
 		RefusalProtectedDirect, RefusalTagMoved, RefusalReservedRef, RefusalNotPermitted, RefusalBadRef,
 		RefusalRepoArchived, RefusalRepoDeleted, RefusalRepoSize, RefusalRepoRefs, RefusalRefConflict,
 		RefusalUploadExpired, RefusalAtomic, RefusalBlobTooLarge, RefusalPackTooLarge,
-		RefusalBusy, RefusalUnavailable, RefusalStoreFull, RefusalNotApplied, RefusalUnknown,
-		RefusalPending,
+		RefusalBusy, RefusalCompactionBehind, RefusalUnavailable, RefusalStoreFull, RefusalNotApplied,
+		RefusalUnknown, RefusalPending,
 	}
 }
 
@@ -112,12 +131,12 @@ func Refusals() []Refusal {
 func (r Refusal) Valid() bool { return slices.Contains(Refusals(), r) }
 
 // Recorded reports a code that may appear on a recorded command: every one but
-// the six that are answers ABOUT a push — whether it could be committed at
+// the seven that are answers ABOUT a push — whether it could be committed at
 // all — rather than a verdict on one of its commands.
 func (r Refusal) Recorded() bool {
 	switch r {
-	case RefusalBusy, RefusalUnavailable, RefusalStoreFull, RefusalNotApplied, RefusalUnknown,
-		RefusalPending:
+	case RefusalBusy, RefusalCompactionBehind, RefusalUnavailable, RefusalStoreFull, RefusalNotApplied,
+		RefusalUnknown, RefusalPending:
 		return false
 	}
 	return r.Valid()
@@ -146,7 +165,9 @@ var sentences = map[Refusal]string{
 	RefusalBlobTooLarge:  "a blob is larger than code.limits.max_blob_bytes; keep large binaries in tracker files",
 	RefusalPackTooLarge: "the pack this push stores — completed against the repository and " +
 		"indexed — is larger than one push may store; push fewer commits at once",
-	RefusalBusy:        "the repository is taking pushes faster than they are committed; run git push again",
+	RefusalBusy: "the repository is taking pushes faster than they are committed; run git push again",
+	RefusalCompactionBehind: "the repository holds as many live packs as one may until compaction catches up, " +
+		"and nothing was decided; run git push again in a minute",
 	RefusalUnavailable: "the code log or the object store refused the write; run git push again",
 	RefusalNotApplied:  "the push was durable and applied nowhere; run git push again",
 	RefusalUnknown:     "the push's outcome is unknown; fetch, then run git push again",
@@ -235,6 +256,27 @@ func (g RepoGone) Detail() string {
 func ArchivedDetail(name string) string {
 	return fmt.Sprintf("repository %s is archived and read-only (code.repos archived: true): "+
 		"it is fetched, and takes no push", name)
+}
+
+// BehindDetail is the sentence of a push refused compaction_behind: which
+// repository, how many live packs it holds, the most a push may take it to
+// ([MaxPacksPerRepo]), and that nothing was decided. ONE SPELLING for the two
+// places that refuse it (ADR-0008) — the push decide, from the rows and the
+// packs of its batch's earlier entries, and the code host before it uploads a
+// push's bundle, from the row it read again.
+//
+// It names the count the repository holds beside the bound rather than
+// calling the count the most it may hold, because a repository can hold more
+// than this build's bound — a later build may raise it, and a fleet in the
+// middle of its upgrade hands the repository back to a committer of this one
+// — and "the most it may hold" beside a larger count says what is not so. It
+// asks for the push again in a minute rather than at once, as busy does not:
+// only a repository whose pushes outran its compaction meets the bound, and a
+// retry within seconds meets it again — uploading nothing, but costing the
+// receiver its read of the row and the client its whole pack's send.
+func BehindDetail(name string, held int64) string {
+	return fmt.Sprintf("%s holds %d live packs, and a push adds none past %d until compaction catches up: "+
+		"nothing was decided; run git push again in a minute", name, held, MaxPacksPerRepo)
 }
 
 // StatelessRefusal is the rules of the push decide that no state decides —

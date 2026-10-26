@@ -183,10 +183,10 @@ quarter of a node's room for large requests — 256 MiB on a four-core node —
 and the checkouts past that wait their turn, up to 55 s, behind the ones
 ahead of them. Those hold their room until the node has synced the repository
 and git has read them, so on a node that has not served the repository
-lately — a cold sync of a minute or two — the ones waiting past the quarter
-fail: thirteen lazy fetches of 20 MB fill a four-core node's quarter, and the
-fourteenth and every later one fail their checkouts. A token per runner lifts
-that to the node's whole room, and routing each repository to the nodes that
+lately, whose cold sync can outlast that wait, the ones waiting past the
+quarter fail: thirteen lazy fetches of 20 MB fill a four-core node's quarter,
+and the fourteenth and every later one fail their checkouts. A token per
+runner lifts that to the node's whole room, and routing each repository to the nodes that
 hold it keeps the syncs warm ([Deployment](deployment.md)). A runner's token
 is also its own turn when the node's transfer slots are all busy: a credential
 bound to no seat — a Tier A token, or a service account's machine token — is a

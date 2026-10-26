@@ -56,7 +56,10 @@ This is the product's current shape, not a configuration choice:
   A protection rule decides what a push may do to a ref, and nothing else
   stands in front of one.
 - **Nothing compacts a repository.** Every push adds one pack, and a
-  repository's packs are only ever removed with the repository.
+  repository's packs are only ever removed with the repository — so one that
+  reaches the 2 048 live packs a repository may hold ([Limits](#limits))
+  refuses every push carrying objects from then on, `compaction_behind`,
+  with nothing in this build to merge its packs and make room.
 - **Nothing drops an object a push stored.** A force-push or a deletion
   leaves the history behind it in the repository's packs, fetchable by its
   id, for as long as the repository lives. The object each such push left is
@@ -330,6 +333,24 @@ A deletion never counts against the live refs, and never refuses a push: a
 push that deletes refs and creates others is judged on what it leaves, so at
 the limit `git push origin :old new` — or a `--prune` push — goes through.
 
+A repository also holds at most **2 048 live packs**: every push that carries
+objects stores one, and they stay until a compaction merges them. The bound is
+a cold read's: a git node that has never served the repository downloads one
+object for every live pack before it answers, sixteen at a time, and at the
+76 a second a cold read took from an S3 fake answering each request 200 ms
+late, 2 048 of them take about 27 s — half of 55 s, the minute of quiet a
+balancer allows a git request ([Deployment](../guides/deployment.md)) less a
+keepalive, with the other half left for indexing what arrived. A push
+carrying a pack into a repository that holds that many is refused
+**`compaction_behind`**, whole: nothing of it is decided or stored, and it
+lands when it is run again once a compaction has merged the repository's
+packs. A push that carries no pack — deletions, or refs moved onto commits
+the repository already holds — adds none, and is never refused for it. The
+node that received the push refuses it before uploading anything, once it has
+read the repository's row again; the repository's
+[committer](#the-committer) decides it for good, counting the packs of the
+pushes it commits in the same batch ahead of it.
+
 A push's ref updates must also fit the one record its committer writes for
 it: about 1 MiB of them, as the code log spells them. A thousand plain refs of
 the longest, 255 bytes, take under half of that. A ref whose characters the
@@ -591,10 +612,11 @@ node's git indexed it — a push stores its pack together with its index, so no
 other node spends a core re-indexing it, and a cold sync is bound by the
 object store rather than the CPU. S3 answers each request in about 100 to
 200 ms, and from a fake answering that late a cold sync read about 75 to 150
-small packs a second: a repository of 10 000 pushes — one pack each, since
-nothing compacts them yet — comes up in about 70 to 130 seconds before its
-first request is answered (about 22 seconds from the same fake answering in
-30 ms).
+small packs a second: 10 000 of them — as many pushes, one pack each, were
+nothing to bound them — come up in about 70 to 130 seconds before the first
+request is answered (about 22 seconds from the same fake answering in 30 ms),
+which is why a repository holds at most 2 048 live packs
+([Limits](#limits)).
 
 The first fetch of a repository after a node restarts reads the whole of its
 rows once, reusing every pack the cache already holds, which is what makes a
@@ -1523,9 +1545,16 @@ branch is answered `protected_force` even when its pack also carries a blob
 over the limit, and a push every ref of which is refused by then is not
 scanned for blobs at all. A blob over the limit refuses every ref still
 standing, since the pack is stored whole or not at all, and names the path any
-ref of the push reaches it by. Only a push that passes every check is
-uploaded, as **one** object: its pack with the indexes the receiving git
-wrote.
+ref of the push reaches it by. A push carrying objects into a repository that
+holds the most live packs one may ([Limits](#limits)) is refused
+`compaction_behind` before anything is uploaded too, so a retry the bound
+would refuse uploads nothing — but only once the node has read the
+repository's row again, at least as new as the sync the push was received
+over: a compaction that merged the packs since that sync never refuses it,
+and a read that cannot be made, or finds the name claimed by another
+repository or the repository archived or deleted since, leaves the push to
+its committer, which judges it for good. Only a push that passes every check is uploaded, as **one** object: its
+pack with the indexes the receiving git wrote.
 
 **A clock that is behind.** git walks a repository's commits newest first by
 date wherever it has no generation number to stop on, so a commit dated before
@@ -1647,11 +1676,15 @@ A spooled request holds its room until the answer's first byte — through its
 sync, git's read of it, and, for a fetch, its `pack-objects` before the pack
 begins (at most a progress line or one keepalive, 5 s, for a client using
 side-band) — so what a request behind it waits for is that sync: a moment on a
-node that holds the repository, and on a node that does not, a **cold** sync of
-about 70 to 130 s at 10 000 pushes, longer than the wait, plus each fetch's
-pack-objects. Behind one token, as many checkouts large enough to spool run at once
-as their requests fit in the token's quarter of the room, and the rest wait
-for them; on a cold node the ones past the quarter fail. N runners asking for
+node that holds the repository, and on a node that does not, a **cold** sync —
+about 27 s of downloads alone at the 2 048 live packs a repository may hold
+([Limits](#limits)) from S3's slower first bytes, and more over a large
+repository's bytes or a restarted node's checks of its indexes, where 10 000
+packs took 70 to 130 s — plus each fetch's pack-objects, which together can
+outlast the wait. Behind one token, as many checkouts large enough to spool run
+at once as their requests fit in the token's quarter of the room, and the rest
+wait for them; on a cold node, once that outlasts the wait, the ones past the
+quarter fail. N runners asking for
 B bytes each fail their checkouts there once N × B passes the quarter:
 thirteen lazy fetches of 20 MB fill a four-core node's 256 MiB, and the
 fourteenth and every one after it are answered 503. So one token behind many
@@ -1837,6 +1870,7 @@ words, since git does not read the header.
 | The outcome is unknown | `(unknown: outcome unknown (op …); fetch, then re-run git push)` | Fetch, then push again. |
 | The push was recorded and every node dropped it | `(not_applied: the push was durable at <position> and applied nowhere; re-run git push)` | Run the push again; nothing landed ([what a refusal names](#a-push-end-to-end)). |
 | The repository is taking pushes faster than its committer commits them | `(busy: <n> pushes are queued for this repository on this node, the most it holds)`, or the same of the bytes queued for it or held across the node's repositories; `(busy: the push's asker stops waiting in <t>, and a batch started now may take 30s and its answer 1s more; run git push again)`, or `(busy: the push waited <t> behind this repository's earlier pushes on this node, …)`; or `(busy: the repository kept changing for every round the write may take; run git push again)` | Run the push again; nothing of it landed. One repository's pushes meet at one node, which commits them a batch at a time ([The committer](#the-committer)). |
+| A push carrying objects into a repository holding the most live packs one may until a compaction merges them — 2 048 ([Limits](#limits)) | `(compaction_behind: <repo> holds <n> live packs, and a push adds none past 2048 until compaction catches up: nothing was decided; run git push again in a minute)` | Nothing of the push was decided or stored, and it lands once a compaction has merged the repository's packs — which nothing in this build does yet ([what it does not do yet](#what-it-does-not-do-yet)), so until a build that compacts, the repository takes no push carrying objects. A push carrying none — deletions, refs moved onto commits the repository already holds — still lands. |
 | Nothing took the push | `(unavailable: no data node took push <id>: …)` | Nothing landed; push again, or once the fleet has a data node serving. |
 | The object store has no room — the fleet's NATS bucket holds as many bytes as it [reserves](object-store.md#its-byte-reservation), or an S3-compatible bucket's provider [refuses the write for room](object-store.md#an-s3-bucket--s3) | `(store_full: the object store has no room for the <size> this push stores, and nothing was stored; it lands only once <room>)`, the room the store names: on NATS, `an operator makes room — moves the files to a bucket (crewlet objects migrate -to s3), raises the bucket's byte reservation on an external broker, or lets the collector remove what nothing names`; on S3, `an operator makes room in the bucket — frees space on the storage its provider keeps it on, or raises the quota the provider holds it to — or lets the collector remove what nothing names` | Nothing was stored, and pushing again is refused the same until room is made: tell an operator. The node logs `code_push_store_full` at `WARN` with the store's own answer; on NATS, the [`objects_bucket_near_ceiling`](object-store.md#alarms) alarm says how full the bucket is. |
 | The object store failed | `(unavailable: object store unavailable: …)` | Nothing was stored; push again. |

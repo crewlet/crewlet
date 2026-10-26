@@ -28,7 +28,11 @@
 // rules and the protections of what Forced changes; the blob scan over the
 // push's own pack, while any command is left to decide, refusing only those,
 // so a refusal that came first is the one the pusher reads; --atomic; nothing
-// left to land; the stored size against code.MaxPackBytes; the bundle
+// left to land; the stored size against code.MaxPackBytes; the repository's
+// pack bound (code.MaxPacksPerRepo), a push carrying a pack refused
+// compaction_behind only once the repository's row, read again, still holds
+// the bound, so that every retry the committer would refuse uploads nothing
+// while the committer's decide stays the authority; the bundle
 // uploaded and sealed while the commits it introduces are listed, and the
 // proposal held to every rule its committer will hold it to; the proposal
 // itself, through the estate router; the outcome, `ok` only from the push's
@@ -138,8 +142,8 @@
 // request waiting to start holding its head in a place of the waiting room and
 // nothing more, and a wait ending, unserved, a keepalive short of the minute
 // a balancer is told to allow a quiet git request (spool.go) — which a cold
-// sync of the requests ahead outlasts, so a token whose spooled requests pass
-// its quarter fails the rest on a cold node. The wants are read back from
+// sync of the requests ahead can outlast, so on a cold node where it does a
+// token whose spooled requests pass its quarter fails the rest. The wants are read back from
 // wherever the request is, as a stream, by the negotiation's parse and by the
 // cache's check of what it lacks, and never held whole; and the request is
 // GIVEN BACK when the answer's FIRST BYTE is written, since a retry over it
@@ -158,7 +162,11 @@
 // only after the request body is read to its end, because a response sent
 // while git is still uploading is lost to a broken pipe (measured). Refusals
 // are never decided on a stale read: anything that would refuse is read again
-// through the barrier first.
+// through the barrier first — but for the pack bound, whose push was received
+// over a row read through the barrier already and is read again at SESSION
+// floored there (land.go's behind): that read only has to see a compaction
+// applied since, and a barrier would append a record to the code log for
+// every retry a repository at its bound meets.
 //
 // # A damaged cache is repaired under the request that found it
 //

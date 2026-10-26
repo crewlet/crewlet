@@ -803,8 +803,10 @@ const (
 // that builds it is the repository's home.
 const (
 	// MaxPacksPerRepo is the most LIVE packs a repository holds: a push that
-	// would carry one more is answered compaction_behind, undecided, until
-	// its home's compaction has caught up.
+	// would carry one more is answered compaction_behind, undecided — by the
+	// push decide ([working.behind]), and by the receiver before it uploads
+	// the push's bundle — until a compaction has merged the repository's
+	// packs.
 	//
 	// 2 048, from a cold sync of every live pack at ONE sync's width (the
 	// cache's FetchConcurrency, sixteen GETs in flight) at S3's slow first

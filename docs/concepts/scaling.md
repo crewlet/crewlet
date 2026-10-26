@@ -240,8 +240,9 @@ node), past which it answers `SlowDown` until it has partitioned the prefix.
 Each node's client then slows every request it sends to the bucket rather than
 failing it ([the object store](object-store.md#an-s3-bucket--s3)), so those syncs slow
 down and nothing they hold is wrong, and routing by repository is again what
-bounds it. What shortens a cold sync is fewer packs: at one a push, a
-repository of 10 000 pushes comes up in about 70 to 130 seconds.
+bounds it. What shortens a cold sync is fewer packs: at one a push, 10 000
+pushes' packs come up in about 70 to 130 seconds, which is why a repository
+holds at most 2 048 live packs ([Limits](code-host.md#limits)).
 
 **A git node is sized by its memory before its disk.** Every git process a
 node runs over a whole repository holds memory in proportion to the
@@ -352,9 +353,10 @@ and a push's bytes are never on the log — they are the object store's.
 **What this release does not scale yet**, stated as the product's shape:
 packs accumulate — nothing compacts a repository, so its cold sync, its
 objects and its pack rows grow with its pushes, the background index keeping
-its lookups fast — and agents do not push: the rates in the table are what the
-code host is built for, where this release's pushes are people's and their
-CI's.
+its lookups fast, until it holds the 2 048 live packs one may and refuses
+every push carrying objects ([Limits](code-host.md#limits)) — and agents do
+not push: the rates in the table are what the code host is built for, where
+this release's pushes are people's and their CI's.
 
 ### How a request reaches the estate
 
