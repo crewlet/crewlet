@@ -282,8 +282,8 @@ OpenAI-compatible one; left unset, the CLI falls back to an endpoint of its own.
 ## Configuration reference
 
 An entry is the CLI's own settings and nothing else: which CLI, which model in
-that CLI's grammar, whether it runs on this host turn by turn or as the executor
-detached in a box, where its login and per-seat homes live, and how it signs in.
+that CLI's grammar, where a seat's executor launched on it runs (`run_in`),
+where its login and per-seat homes live, and how it signs in.
 
 ```yaml
 providers:
@@ -312,8 +312,10 @@ providers:
       # files rather than a secret (the same reason the store path is a
       # Tier A field).
 
-      timeout_seconds: 600           # one stretch of the CLI's own work, wall clock (default 600)
-      max_concurrent: 4              # live CLI processes at once (default 4)
+      timeout_seconds: 600           # one stretch of a CLI run on this host, wall clock (default 600);
+                                     #   an executor run is bounded by its turn cap instead
+      max_concurrent: 4              # live CLI processes on this host (default 4); executor
+                                     #   runs are not counted: each seat runs at most one
 
       env:                           # extra child environment, ${VAR}-resolved
         OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"
@@ -352,7 +354,10 @@ exactly the calls doing the most work; the launch comes on top of the first
 stretch. On breach the process *group* is terminated (so the runtime's helpers
 go too) and the call is reported as `timeout`, which the seat's fallback chain
 carries to its next entry. A value of `0` takes the default; a negative one is
-refused.
+refused. It bounds the **phases on this host** only — the reviewer, a worker,
+the onboarding pass, a side pass: an executor run is its CLI's own detached run
+in a box, bounded by its turn cap (`role.sandbox.max_turns`, else
+`providers.sandbox.default_max_turns`) rather than a clock.
 
 **`max_concurrent: 4`** bounds the entry's **live CLI processes**, and keeps
 peak memory near 1.5 GB: each CLI is a full Node or Rust runtime at roughly
@@ -367,7 +372,9 @@ API key allows, so a much higher number mostly buys rate-limit errors. A call
 waiting for a slot gives up when its turn is cancelled rather than launching a
 process nobody is waiting for. Raise it on a large host with an account that
 permits it; it is per entry, so size entries together (see [Per-phase
-models](#per-phase-models)).
+models](#per-phase-models)). Like `timeout_seconds` it counts the phases on this
+host only: an executor run is a process in its own box, not counted against
+it, and each seat runs at most one at a time.
 
 **`env`** is the one way to give the CLI anything beyond `PATH`, locale, TLS
 trust and proxy settings, because the child gets an
@@ -590,8 +597,10 @@ runs the entry signed out until then.
 `llm_auxiliary` serves the calls around a turn: the turn-start prefetch (the
 knowledge query, the relevance filter, a recalled turn's rewrite), the
 condensing of a tool result too large for the conversation, and every
-reflection and learning pass after it. `llm_judge` serves the round-cap
-[extension judge](turn-engine.md#round-cap-extension-judge). Each of those calls
+reflection and learning pass after it. `llm_judge` serves the onboarding pass's
+round-cap [extension judge](turn-engine.md#round-cap-extension-judge), the one
+pass the engine extends: the executor is its CLI's own run, capped by its
+`max_turns`. Each of those calls
 is one CLI process, so each pays a launch before its model starts — and each has
 a **fixed deadline**, which no entry setting widens:
 
@@ -922,10 +931,10 @@ never get.
 
 ```mermaid
 sequenceDiagram
-    participant P as Executor (seat A)
+    participant P as Reviewer (seat A)
     participant W as Workspace
-    participant S as Worker (seat A)
-    participant B as Executor (seat B)
+    participant S as Worker (seat A, delegated by its executor run)
+    participant B as Reviewer (seat B)
     P->>W: acquire(A) — in-flight 0→1
     W->>W: prune A/home, seed settings + credentials
     S->>W: acquire(A) — in-flight 1→2 (same home, no prune)
@@ -1004,8 +1013,9 @@ so an entry can be reached without any seat naming it — but a **human seat**
 never resolves one at all: it is addressable and never spawned, so it runs no
 executor and reaches no entry.
 
-**Fallback is per launch.** Each launch — the turn's first and every
-relaunch after an answer — walks the seat's executor chain, from the
+**Fallback is per launch.** Each launch — the turn's first, every relaunch
+after a reviewer's `self_iterate`, and every relaunch that carries a run on
+with a person's answer — walks the seat's executor chain, from the
 configuration the turn started under, for the first member whose CLI has a
 runner and that is not [sitting out](#falling-back-between-entries) a spent
 plan on this node. A member with no runner is skipped, and a chain that holds
@@ -1014,7 +1024,9 @@ to it. A run that hits its plan's limit mid-run is not relaunched on the next
 member — the run is the CLI's own, hours long, with no call to hand over — but
 its entry sits out on the node that collects it, so the next launch skips it.
 Every runner member sitting out fails the launch the way a chain that ran out
-fails a call on this host.
+fails a call on this host: a `*chain.Error`, published as `llm_unavailable`,
+the seat reading as stopped on its provider. A member the launch hands off
+from is announced against the turn as `provider_fallback`, as a call's is.
 
 The credential guard that refuses a remote run nothing signs in, and names
 the remedy the entry's `auth.mode` reads (see
@@ -1050,7 +1062,7 @@ OpenCode's `auth export` prints, imported into the box's OpenCode before the
 run and exported back over it after — and it never follows a run to a
 remote box.
 
-The run is **detached**: the turn suspends at launch, the run's state goes on
+The run is **detached**: the turn parks at launch, the turn's state goes on
 a durable row in the [coordination store](coordination.md), the completion
 poll collects it, and the *same turn* resumes — possibly in another process
 on another node, days later; see
@@ -1061,7 +1073,7 @@ seat's system prompt — its identity, policies, roster and memory — goes on t
 in-box CLI's **append channel**, after the CLI's own system prompt, which
 stays whole: that prompt is the harness the executor runs to use, its shell,
 its editor and how it works through a task. The brief — the prompt the CLI
-runs — carries the turn's task and nothing else. The seat's prompt opens with
+runs — carries the turn's task, with its earlier rounds where a reviewer sent it back. The seat's prompt opens with
 one constant note, the [harness note](#the-harness-note) a call on this host
 sends where the CLI's own prompt stays in force, less the sentence that tells a
 model on this host to act through the `crewlet` server's tools and never the
@@ -1089,8 +1101,9 @@ the phase follows with another, opened by a corrective naming `submit_work`,
 up to twice (see [Turn Engine](turn-engine.md#round-cap-extension-judge)).
 What the executor's run has instead is the seat's system prompt, which tells
 it the run ends with that call. Its rounds are bounded by the CLI's own turn
-cap, `providers.sandbox.default_max_turns` (or the seat's
-`role.sandbox.max_turns`).
+cap on both runners — Claude Code's `--max-turns`, OpenCode's agent `steps` —
+set from the seat's `role.sandbox.max_turns`, else
+`providers.sandbox.default_max_turns`: 96 unless set, `0` uncapped.
 
 #### The tool bridge
 
@@ -2313,7 +2326,7 @@ as an answer of nothing rather than dressing it as an outage:
 - **The tool loop asks again.** A run whose model stopped with nothing — or,
   in a phase that finishes by a call, with prose and no call — is followed by
   another run, opened by a corrective. In every phase that finishes by a call —
-  the executor, the reviewer, onboarding, a worker — it is the
+  the reviewer, onboarding, a worker — it is the
   finishing corrective naming the phase's submission, up to twice in a
   row on one allowance with a round that answered in prose: there, a
   round without the call ends the phase only into its rescue, so a
@@ -3451,7 +3464,6 @@ endpoint that reports its own clock and applies the same test:
 ```
 provider      : default
 cli agent     : claude-code
-mode          : host (the CLI runs on this host, turn by turn)
 model         : sonnet
 binary        : /usr/local/bin/claude
 version       : 2.1.310 (Claude Code)
@@ -3689,4 +3701,4 @@ that runs often — it skips all three and says so on each line.
 - [Overview — Provider Layer](overview.md#provider-layer)
 - [Turn Engine — per-phase LLM models](turn-engine.md#per-phase-llm-models)
 - [Secret Store](secret-store.md) — where tokens, keys and credential bundles live
-- [Code Sandbox](code-sandbox.md) — the *other* place Crewlet runs a coding agent
+- [Code Sandbox](code-sandbox.md) — where every agent seat's executor runs: the cells, a run's lifecycle, parking on a question and answering one

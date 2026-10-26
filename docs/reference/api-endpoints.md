@@ -3198,7 +3198,7 @@ coding run is a row of its own, `phase: sandbox`, published when the run is
 collected: its tokens, its `launch_id` (a turn can launch two runs in one
 iteration, so the launch is part of that row's identity), its report as
 `response` and its `activity_transcript` — see
-[each run is published as a phase](../concepts/code-sandbox.md#runs-are-uncapped-each-run-is-published-as-a-phase).
+[each run is published as a phase](../concepts/code-sandbox.md#a-run-is-bounded-by-its-rounds-each-run-is-published-as-a-phase).
 A finished row also carries `duration_ms`, which a live one cannot: it is the
 engine's own measurement of the phase, published on the record rather than
 reconstructed by pairing it with the `agent_phase_started` that shares its key.
