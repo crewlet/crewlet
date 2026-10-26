@@ -315,7 +315,7 @@ func readAnswer(ctx context.Context, read proposal.Read, req exec.Request) (exec
 		return exec.Response{}, nil, fmt.Errorf("%w: %s (%s)", ErrPreviewRead, r.Message, r.Code)
 	}
 	if resp.Truncated {
-		return exec.Response{}, nil, fmt.Errorf("%w: the answer is larger than one step "+
+		return exec.Response{}, nil, fmt.Errorf("%w: the answer is larger than a change's preview "+
 			"reads", ErrPreviewRead)
 	}
 	doc, err := cards.Decode(resp.Body)
