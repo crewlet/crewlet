@@ -1141,10 +1141,10 @@ func TestAnAccountWithNoLoginIsRefused(t *testing.T) {
 func TestAHookIsCreatedWithTheShapeTheEdgeReads(t *testing.T) {
 	t.Parallel()
 	client, rec := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"id": 1, "config": {"url": "https://x/webhooks/github"}}`))
+		_, _ = w.Write([]byte(`{"id": 1, "config": {"url": "https://x.example.com/webhooks/github"}}`))
 	})
 	if _, err := client.CreateRepoWebhook(context.Background(), "acme", "api",
-		"https://x/webhooks/github", "s3cret"); err != nil {
+		"https://x.example.com/webhooks/github", "s3cret"); err != nil {
 		t.Fatal(err)
 	}
 	body := rec.postedTo(t, "/repos/acme/api/hooks")
@@ -1365,7 +1365,7 @@ func TestASeatThatNamesNoCredentialIsNotAFinding(t *testing.T) {
 			Name:  "Acme",
 			Roles: []*org.Role{{Name: "SRE Lead", DeclaredHandle: "sre-lead"}},
 		},
-		Value: func(v string) string { return v }, WebhookBase: "https://x",
+		Value: func(v string) string { return v }, WebhookBase: "https://x.example.com",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1410,7 +1410,7 @@ func TestASeatWhoseNamedCredentialResolvesToNothingIsAFinding(t *testing.T) {
 		},
 		// The variable is unset, which is the whole case: the document
 		// names a credential and the environment does not answer.
-		Value: func(string) string { return "" }, WebhookBase: "https://x",
+		Value: func(string) string { return "" }, WebhookBase: "https://x.example.com",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1456,7 +1456,7 @@ func TestOneOrgHookReplacesThePerRepositoryOnes(t *testing.T) {
 	t.Parallel()
 	client, rec := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
-			_, _ = w.Write([]byte(`{"id": 1, "config": {"url": "https://x/webhooks/github"}}`))
+			_, _ = w.Write([]byte(`{"id": 1, "config": {"url": "https://x.example.com/webhooks/github"}}`))
 			return
 		}
 		_, _ = w.Write([]byte(`[]`))
@@ -1471,7 +1471,7 @@ func TestOneOrgHookReplacesThePerRepositoryOnes(t *testing.T) {
 			},
 		},
 		Value:       func(v string) string { return v },
-		WebhookBase: "https://x",
+		WebhookBase: "https://x.example.com",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1498,7 +1498,7 @@ func TestAnOrgHookRefusalFallsBackToRepositories(t *testing.T) {
 		}
 		switch {
 		case r.Method == http.MethodPost:
-			_, _ = w.Write([]byte(`{"id": 1, "config": {"url": "https://x/webhooks/github"}}`))
+			_, _ = w.Write([]byte(`{"id": 1, "config": {"url": "https://x.example.com/webhooks/github"}}`))
 		case strings.HasSuffix(r.URL.Path, "/hooks"):
 			_, _ = w.Write([]byte(`[]`))
 		default:
@@ -1514,7 +1514,7 @@ func TestAnOrgHookRefusalFallsBackToRepositories(t *testing.T) {
 	}
 	res, err := github.Reconcile(context.Background(), github.Options{
 		Client: client, Config: cfg,
-		Value: func(v string) string { return v }, WebhookBase: "https://x",
+		Value: func(v string) string { return v }, WebhookBase: "https://x.example.com",
 	})
 	if err != nil {
 		t.Fatalf("auto failed instead of falling back: %v", err)
@@ -1541,7 +1541,7 @@ func TestAnOrgHookRefusalFallsBackToRepositories(t *testing.T) {
 	cfg.Provisioning.OrgWebhook = config.ContainerWebhookRequire
 	if _, err := github.Reconcile(context.Background(), github.Options{
 		Client: client, Config: cfg,
-		Value: func(v string) string { return v }, WebhookBase: "https://x",
+		Value: func(v string) string { return v }, WebhookBase: "https://x.example.com",
 	}); err == nil {
 		t.Fatal("org_webhook: true accepted a deployment with no org hook")
 	}
@@ -1564,7 +1564,7 @@ func TestOneUnhookableRepositoryDoesNotStopTheRest(t *testing.T) {
 		case strings.Contains(r.URL.Path, "/repos/acme/old"):
 			_, _ = w.Write([]byte(`{"full_name": "acme/old", "archived": true, "permissions": {"admin": true}}`))
 		case r.Method == http.MethodPost:
-			_, _ = w.Write([]byte(`{"id": 1, "config": {"url": "https://x/webhooks/github"}}`))
+			_, _ = w.Write([]byte(`{"id": 1, "config": {"url": "https://x.example.com/webhooks/github"}}`))
 		case strings.HasSuffix(r.URL.Path, "/hooks"):
 			_, _ = w.Write([]byte(`[]`))
 		default:
@@ -1580,7 +1580,7 @@ func TestOneUnhookableRepositoryDoesNotStopTheRest(t *testing.T) {
 				Repos: []string{"acme/gone", "acme/readonly", "acme/old", "acme/api"},
 			},
 		},
-		Value: func(v string) string { return v }, WebhookBase: "https://x",
+		Value: func(v string) string { return v }, WebhookBase: "https://x.example.com",
 	})
 	if err != nil {
 		t.Fatalf("one bad repository failed the whole run: %v", err)
@@ -1620,7 +1620,7 @@ func TestAWorkingSecretIsNotReminted(t *testing.T) {
 	t.Parallel()
 	client, rec := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
-			_, _ = w.Write([]byte(`{"id": 1, "config": {"url": "https://x/webhooks/github"}}`))
+			_, _ = w.Write([]byte(`{"id": 1, "config": {"url": "https://x.example.com/webhooks/github"}}`))
 			return
 		}
 		_, _ = w.Write([]byte(`[]`))
@@ -1639,7 +1639,7 @@ func TestAWorkingSecretIsNotReminted(t *testing.T) {
 			}
 			return v
 		},
-		Sink: sink, WebhookBase: "https://x",
+		Sink: sink, WebhookBase: "https://x.example.com",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1659,7 +1659,7 @@ func TestAnUnsetSecretIsMintedIntoItsOwnVariable(t *testing.T) {
 	t.Parallel()
 	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
-			_, _ = w.Write([]byte(`{"id": 1, "config": {"url": "https://x/webhooks/github"}}`))
+			_, _ = w.Write([]byte(`{"id": 1, "config": {"url": "https://x.example.com/webhooks/github"}}`))
 			return
 		}
 		_, _ = w.Write([]byte(`[]`))
@@ -1675,7 +1675,7 @@ func TestAnUnsetSecretIsMintedIntoItsOwnVariable(t *testing.T) {
 		// Resolves to nothing, which is the mid-setup state: the config
 		// names a variable and nobody has set it.
 		Value: func(string) string { return "" },
-		Sink:  sink, WebhookBase: "https://x",
+		Sink:  sink, WebhookBase: "https://x.example.com",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1714,7 +1714,7 @@ func TestALiteralSecretWithNoValueIsRefused(t *testing.T) {
 			Provisioning: &config.GitHubProvisioning{Org: "acme"},
 		},
 		Value: func(string) string { return "" },
-		Sink:  &recordingSink{}, WebhookBase: "https://x",
+		Sink:  &recordingSink{}, WebhookBase: "https://x.example.com",
 	})
 	if err == nil {
 		t.Fatal("an unmintable secret registered a hook anyway")
@@ -1756,7 +1756,7 @@ func TestRecreatingHooksOverALiteralSecretNamesTheSwitchAndBothWaysOn(t *testing
 				},
 				Value:            func(v string) string { return v },
 				Sink:             sink,
-				WebhookBase:      "https://x",
+				WebhookBase:      "https://x.example.com",
 				RecreateWebhooks: fresh,
 			})
 			if err == nil {
@@ -1934,7 +1934,7 @@ func TestOnlyAnAskAddressesTheSeat(t *testing.T) {
 func TestAPassWithNoOrgTokenReportsNothing(t *testing.T) {
 	t.Parallel()
 	res, err := github.Reconcile(t.Context(), github.Options{
-		Config: &config.GitHub{Enabled: true}, WebhookBase: "https://x",
+		Config: &config.GitHub{Enabled: true}, WebhookBase: "https://x.example.com",
 	})
 	if err != nil {
 		t.Fatalf("a pass with no credential failed: %v", err)
@@ -2106,7 +2106,7 @@ func TestAConvergedPassRewritesNoWebhook(t *testing.T) {
 	t.Parallel()
 	events, _ := json.Marshal(github.WebhookEvents)
 	existing := fmt.Sprintf(
-		`[{"id":1,"active":true,"events":%s,"config":{"url":"https://x/webhooks/github"}}]`,
+		`[{"id":1,"active":true,"events":%s,"config":{"url":"https://x.example.com/webhooks/github"}}]`,
 		events)
 
 	var writes atomic.Int64
@@ -2128,7 +2128,7 @@ func TestAConvergedPassRewritesNoWebhook(t *testing.T) {
 			Enabled: true, WebhookSecret: "s3cret",
 			Provisioning: &config.GitHubProvisioning{Repos: []string{"acme/api"}},
 		},
-		Value: func(v string) string { return v }, WebhookBase: "https://x",
+		Value: func(v string) string { return v }, WebhookBase: "https://x.example.com",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2148,7 +2148,7 @@ func TestADisabledWebhookIsRewritten(t *testing.T) {
 	t.Parallel()
 	events, _ := json.Marshal(github.WebhookEvents)
 	existing := fmt.Sprintf(
-		`[{"id":1,"active":false,"events":%s,"config":{"url":"https://x/webhooks/github"}}]`,
+		`[{"id":1,"active":false,"events":%s,"config":{"url":"https://x.example.com/webhooks/github"}}]`,
 		events)
 
 	var writes atomic.Int64
@@ -2170,7 +2170,7 @@ func TestADisabledWebhookIsRewritten(t *testing.T) {
 			Enabled: true, WebhookSecret: "s3cret",
 			Provisioning: &config.GitHubProvisioning{Repos: []string{"acme/api"}},
 		},
-		Value: func(v string) string { return v }, WebhookBase: "https://x",
+		Value: func(v string) string { return v }, WebhookBase: "https://x.example.com",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -2213,5 +2213,51 @@ func TestAPullRequestIsOneWorkItemWhicheverFaceWokeTheTurn(t *testing.T) {
 		if !ok || got != want {
 			t.Errorf("the %s face names %+v (%v), want %+v", name, got, ok, want)
 		}
+	}
+}
+
+// A LOCAL ENGINE HEARS NOTHING FROM GITHUB, AND THAT IS SAID ON A READY CARD.
+//
+// An engine a person reaches at `http://localhost:8200` has an address, and
+// GitHub cannot deliver to it. Registering a hook there would fail every
+// delivery while reading as registered, and reporting it as ingress_blocked
+// would put Action required over agents that push, open pull requests and
+// review perfectly well through their own apps. So nothing is registered, and
+// one advisory says what does not arrive and which setting makes it arrive.
+func TestAnAddressGitHubCannotReachRegistersNothingAndIsAnAdvisory(t *testing.T) {
+	t.Parallel()
+	client, rec := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[]`))
+	})
+	res, err := github.Reconcile(context.Background(), github.Options{
+		Client: client,
+		Config: &config.GitHub{
+			Enabled: true, WebhookSecret: "s3cret",
+			Provisioning: &config.GitHubProvisioning{
+				Org: "gophrase", OrgWebhook: "true",
+			},
+		},
+		Value:          func(v string) string { return v },
+		WebhookBase:    "http://localhost:8200",
+		WebhookBaseKey: "api.external_url",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created := rec.posted(); len(created) != 0 {
+		t.Fatalf("hooks were registered at an unreachable address: %v", created)
+	}
+	findings := res.Findings()
+	if len(findings) != 1 || findings[0].Kind != integration.FindingCoveragePartial ||
+		findings[0].Subject != "api.external_url" {
+		t.Fatalf("findings = %+v, want one coverage advisory on api.external_url", findings)
+	}
+	for _, says := range []string{"http://localhost:8200", "push", "webhooks off"} {
+		if !strings.Contains(findings[0].Detail, says) {
+			t.Errorf("the advisory does not say %q: %s", says, findings[0].Detail)
+		}
+	}
+	if phase := integration.Classify(findings).Phase; phase != integration.PhaseReady {
+		t.Errorf("the card reads %s, want ready: the agents are working", phase)
 	}
 }

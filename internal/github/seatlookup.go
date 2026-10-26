@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"time"
 )
 
 // SeatLookup reads a thread's participants through the agents' own apps.
@@ -35,12 +34,13 @@ type SeatLookup struct {
 	// so the roster follows without a restart.
 	Opts SeatAppOptions
 
-	// Now is the clock the token freshness is judged on. Nil takes the
-	// wall clock.
-	Now func() time.Time
+	// Issuer is where each seat's token comes from: the process's own,
+	// shared with every other reader of a seat's token, so the parser a
+	// revision rebuilds starts with the tokens the last one held. Nil
+	// gives this lookup one of its own.
+	Issuer *Issuer
 
-	mu     sync.Mutex
-	tokens map[int64]*InstallationToken
+	own sync.Once
 }
 
 // ErrNoSeatCanRead reports a company whose agents can answer nothing yet.
@@ -48,39 +48,27 @@ var ErrNoSeatCanRead = errors.New(
 	"github: no agent's app could read this thread, so its other participants " +
 		"are not looked up")
 
-func (l *SeatLookup) now() time.Time {
-	if l.Now != nil {
-		return l.Now().UTC()
-	}
-	return time.Now().UTC()
+// issuer is the [Issuer] this lookup reads tokens through.
+func (l *SeatLookup) issuer() *Issuer {
+	l.own.Do(func() {
+		if l.Issuer == nil {
+			l.Issuer = &Issuer{}
+		}
+	})
+	return l.Issuer
 }
 
-// token is a fresh installation token for one seat, minted at most once per
-// hour per installation.
+// token is a token for one seat good for [ToolTokenLife].
 //
-// CACHED, because this is the inbound hot path: a busy repository produces a
-// delivery per app per comment, and minting a token for each would spend one
-// request per delivery to learn something that is valid for an hour. The
-// cache is keyed on the INSTALLATION rather than the seat, since that is what
-// the token is issued against.
+// CACHED by the issuer, because this is the inbound hot path: a busy
+// repository produces a delivery per app per comment, and minting a token
+// for each would spend one request per delivery to learn something that is
+// valid for an hour.
 func (l *SeatLookup) token(ctx context.Context, seat SeatApp) (string, error) {
-	l.mu.Lock()
-	held, ok := l.tokens[seat.InstallationID]
-	l.mu.Unlock()
-	if ok && held.Fresh(l.now()) {
-		return held.Token, nil
-	}
-
-	minted, err := TokenFor(ctx, l.Opts, seat)
+	minted, err := l.issuer().Token(ctx, l.Opts, seat, ToolTokenLife)
 	if err != nil {
 		return "", err
 	}
-	l.mu.Lock()
-	if l.tokens == nil {
-		l.tokens = map[int64]*InstallationToken{}
-	}
-	l.tokens[seat.InstallationID] = minted
-	l.mu.Unlock()
 	return minted.Token, nil
 }
 
@@ -90,7 +78,7 @@ func (l *SeatLookup) Of(
 ) ([]string, error) {
 	var last error
 	for _, seat := range l.Opts.Seats {
-		if seat.InstallationID == 0 || seat.Key == "" {
+		if !Issuable(seat) {
 			continue
 		}
 		token, err := l.token(ctx, seat)

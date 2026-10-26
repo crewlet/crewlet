@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -238,6 +239,64 @@ func BuildManifest(opts ManifestOptions) Manifest {
 		DefaultPerms:   opts.Tier.Permissions(),
 	}
 }
+
+// Deliverable reports whether GitHub can deliver a webhook to base, this
+// deployment's webhook address ([config.API.WebhookBase]). enterprise is
+// whether the company runs Enterprise Server rather than github.com.
+//
+// AN APP'S DELIVERY ADDRESS IS BAKED IN AT CREATION, and only a person at
+// GitHub changes it afterwards. So an address GitHub can never reach is not
+// written into a manifest at all: the app is created with its webhook
+// switched off ([BuildManifest]), which is a state GitHub's own settings page
+// shows, rather than pointed at an address that fails every delivery while
+// the app reads as healthy. That is what a local engine is: one a person
+// reaches at `http://localhost:8200`, whose agents act on GitHub perfectly
+// well through their apps and hear nothing back from it.
+//
+// TWO READINGS OF "REACHABLE", because the two products sit in different
+// places. github.com delivers from the public internet, so it reaches no
+// loopback, private, link-local or unspecified address and no name that is
+// not a public domain: a single label (`devbox`), `localhost` and the
+// `.localhost`, `.local`, `.internal`, `.lan` and `.home.arpa` suffixes,
+// which no public resolver answers. An Enterprise Server runs inside the
+// company's own network and routinely delivers to private addresses, so
+// there only an address that names the server's own host (loopback, an
+// unspecified address, `localhost`) is refused. Either way the scheme is
+// http or https, which is what GitHub accepts for a hook.
+func Deliverable(base string, enterprise bool) bool {
+	u, err := url.Parse(strings.TrimSpace(base))
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
+		return false
+	}
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if host == "" || host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() || ip.IsUnspecified() {
+			return false
+		}
+		return enterprise || !(ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+			ip.IsLinkLocalMulticast() || ip.IsInterfaceLocalMulticast())
+	}
+	if enterprise {
+		return true
+	}
+	if !strings.Contains(host, ".") {
+		return false
+	}
+	for _, private := range privateSuffixes {
+		if strings.HasSuffix(host, private) {
+			return false
+		}
+	}
+	return true
+}
+
+// privateSuffixes are the name suffixes no public resolver answers: mDNS's
+// `.local`, and the names reserved or conventional for private networks
+// (RFC 8375's `.home.arpa`, ICANN's `.internal`, the routers' `.lan`).
+var privateSuffixes = []string{".local", ".internal", ".lan", ".home.arpa"}
 
 // ActionURL is where the operator's browser POSTs the manifest.
 //

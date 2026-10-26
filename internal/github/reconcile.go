@@ -326,6 +326,19 @@ type Result struct {
 	// note is dropped before anything renders it, so a person learns what
 	// their integration does not see only by noticing its absence.
 	Coverage string
+
+	// Undeliverable says why GitHub can deliver nothing to this deployment
+	// although it HAS an address: the address is one GitHub cannot reach
+	// ([Deliverable]), which is what a local engine's is. Empty otherwise.
+	//
+	// AN ADVISORY, NOT A BLOCK. Such a deployment registers no hook, and its
+	// agents' apps are created with their webhooks off ([BuildManifest]),
+	// but the agents act on GitHub perfectly well through those apps:
+	// pushing, opening pull requests and reviewing are all outbound. So it
+	// is reported as [integration.FindingCoveragePartial] on a ready card,
+	// saying what does not arrive and what makes it arrive, rather than as
+	// Action required over agents that are working.
+	Undeliverable string
 }
 
 // Routing reports the seats whose inbound events can reach them.
@@ -394,8 +407,9 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			// and not only from [ensureWebhooks]: a company hooking each
 			// agent's own app has no organization credential by design, so
 			// the pass returns above ever registering anything.
-			Coverage:     coverageFor(opts, nil),
-			NoIngressKey: opts.WebhookBaseKey,
+			Coverage:      coverageFor(opts, nil),
+			Undeliverable: undeliverableReason(opts),
+			NoIngressKey:  opts.WebhookBaseKey,
 		}, nil
 	}
 	login, err := opts.Client.Me(ctx)
@@ -417,6 +431,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	// and missed the other — see the nil-client return above.
 	res.Coverage = coverageFor(opts, res.Hooks)
 	res.NoIngress = noIngressReason(opts)
+	res.Undeliverable = undeliverableReason(opts)
 	if err == nil {
 		// AND AGAIN AT THE END, because a pass cancelled halfway does not
 		// stop halfway: every read between here and the probe reports its
@@ -590,6 +605,37 @@ func noIngressReason(opts Options) string {
 		"GitHub has an address to deliver to and no event reaches this deployment"
 }
 
+// undeliverableReason says why GitHub can reach this deployment at none of
+// the address it has, or "" when it has none ([noIngressReason]'s case) or
+// one GitHub reaches.
+func undeliverableReason(opts Options) string {
+	base := strings.TrimRight(strings.TrimSpace(opts.WebhookBase), "/")
+	if base == "" || Deliverable(base, enterprise(opts)) {
+		return ""
+	}
+	key := setup.BaseKey(opts.WebhookBaseKey)
+	return key + " is " + base + ", an address GitHub cannot deliver to, so no " +
+		"GitHub event reaches this deployment and no hook is registered. The " +
+		"agents still push, open pull requests and review through their own " +
+		"apps, which are created with their webhooks off; set " + key + " to an " +
+		"address GitHub reaches to hear back from it"
+}
+
+// enterprise reports a company on Enterprise Server rather than github.com,
+// which decides what [Deliverable] counts as reachable. The address is read
+// through the run's resolver, because it is a `${VAR}` as often as a literal
+// and one that resolves to nothing is github.com.
+func enterprise(opts Options) bool {
+	if opts.Config == nil {
+		return false
+	}
+	url := opts.Config.URL
+	if opts.Value != nil {
+		url = opts.Value(url)
+	}
+	return strings.TrimSpace(url) != ""
+}
+
 // noRegistrarReason says why a run with no organization credential could
 // register nothing that the company ASKED FOR, or "" when it asked for
 // nothing this credential is needed for.
@@ -725,6 +771,14 @@ func ensureWebhooks(ctx context.Context, opts Options) (ingress, error) {
 				"to register one, or add it by hand — without it GitHub " +
 				"delivers nothing and the integration looks idle rather than " +
 				"unconfigured"}}, nil
+	}
+	if !Deliverable(opts.WebhookBase, enterprise(opts)) {
+		// NO HOOK AT AN ADDRESS GITHUB CANNOT REACH: it would fail every
+		// delivery while reading as registered. [undeliverableReason] is
+		// the finding that says so.
+		return ingress{Notes: []string{
+			"no webhook was registered: " + target + " is not an address " +
+				"GitHub can deliver to"}}, nil
 	}
 	pv := opts.Config.Provisioning
 	if pv == nil {
