@@ -1636,9 +1636,20 @@ func TestOneDomainsUnreadableFloorStopsThatDomainsTrimAlone(t *testing.T) {
 	e, back, _ := trimmedTracker(t)
 	unread := pages.Domain{}.Name()
 	fleet := &oneFloorUnread{fleetRegister: back.Fleet, domain: unread}
+	// A ROW IS JUDGED BY WHO WROTE IT, NEVER BY WHEN. The node's own trim
+	// publishes every domain's floor on its boot tick, before trimmedTracker
+	// stops it, and under load that tick ends as late as the stop that waits
+	// it out. Judged by a window of rows newer than this case's start, its
+	// rows were taken for this tick's: the knowledge base failed on the boot
+	// tick's row, and every other log passed whether or not this tick
+	// published. Only this case's loop publishes under its own node id
+	// ([coord.TrimFloor.By]), so it must not be the node's.
 	r := &retention{fleet: fleet, state: e.core.Load().log, nodeID: "node-a",
 		cfg: config.TrackerRetention{MinAgeRaw: "1ns"}}
-	before := time.Now().UTC().Add(-time.Second)
+	if own := e.core.Load().log.nodeID; own == r.nodeID {
+		t.Fatalf("the node is named %s, as this case's tick is, so its boot tick's "+
+			"rows would pass for this tick's", own)
+	}
 	r.tick(t.Context())
 
 	for _, running := range e.core.Load().log.running() {
@@ -1647,14 +1658,14 @@ func TestOneDomainsUnreadableFloorStopsThatDomainsTrimAlone(t *testing.T) {
 			continue
 		}
 		row, found, err := back.Fleet.Floor(t.Context(), name)
-		if err != nil || !found || row.At.Before(before) {
+		if err != nil || !found || row.By != r.nodeID {
 			t.Fatalf("%s's trim published (%+v, found %v, %v) on a tick beside a "+
-				"knowledge base floor that does not read, want a row from this tick",
-				name, row, found, err)
+				"knowledge base floor that does not read, want a row this tick wrote "+
+				"as %s", name, row, found, err, r.nodeID)
 		}
 	}
 	if row, found, err := back.Fleet.Floor(t.Context(), unread); err != nil ||
-		(found && !row.At.Before(before)) {
+		(found && row.By == r.nodeID) {
 		t.Fatalf("the knowledge base's trim published %+v over a floor it could not "+
 			"read (%v)", row, err)
 	}
