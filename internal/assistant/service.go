@@ -343,19 +343,19 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	if s.runningHere(id) {
 		return accepted, nil
 	}
-	switch _, err := s.transcripts.Turn(ctx, ts.Person.ID, id); {
-	case err == nil:
+	switch _, turnErr := s.transcripts.Turn(ctx, ts.Person.ID, id); {
+	case turnErr == nil:
 		return accepted, nil
-	case !errors.Is(err, assistantdomain.ErrNotFound):
-		return wire.TurnAccepted{}, &Unavailable{RetryAfter: 2 * time.Second, Cause: err}
+	case !errors.Is(turnErr, assistantdomain.ErrNotFound):
+		return wire.TurnAccepted{}, &Unavailable{RetryAfter: 2 * time.Second, Cause: turnErr}
 	}
 	// A MODEL KNOWN UNUSABLE REFUSES THE QUESTION HERE, before anything is
 	// recorded or counted, in the words a failed round would have used
 	// ([Service.ModelNotice] is the same reading for `/viewer`). After the
 	// retry check above, so a retry of a question that already started is
 	// answered with its turn whatever the model's state now.
-	if err := s.modelRefusal(ctx, ts.Person); err != nil {
-		return wire.TurnAccepted{}, err
+	if refusal := s.modelRefusal(ctx, ts.Person); refusal != nil {
+		return wire.TurnAccepted{}, refusal
 	}
 
 	history, err := s.transcripts.Transcript(ctx, ts.Person.ID, ts.Conversation)
