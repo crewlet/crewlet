@@ -293,9 +293,9 @@ func serveDesk(t *testing.T, f *fleet, d *codeDesk) {
 // routes' listing, a seat's refs listing and a git node's introduced pages
 // reach a data node from a node that holds no data with their arguments as
 // they were sent, their answers come back as they were given — a snapshot's
-// packs, refs, pushes and cursor, a repository's detail and its limits, the
-// refs and the introducing pushes — and a refusal keeps the identity the host
-// and the cache branch on.
+// packs, refs, pushes, retirements and cursor, a repository's detail and its
+// limits, the refs and the introducing pushes — and a refusal keeps the
+// identity the host and the cache branch on.
 func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -314,7 +314,9 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		Objects: 2, Kind: "push", State: "live", Added: at,
 	}
 	cursor := &code.StateCursor{Phase: "pushes", Pushes: true, From: at, Since: at, Seen: at, Stream: created,
-		After: "1000041/push-1"}
+		RetiredFrom: at, After: "1000041/push-1"}
+	retired := code.RetiredRow{PackID: "push-0", Part: "pack",
+		GitChecksum: "7777777777777777777777777777777777777777", RetiredAt: created, Position: at}
 	introduced := code.IntroducedRow{
 		PushedBy: code.PushedBy{PushID: "push-1", Position: at, At: created, Via: code.ViaGit,
 			Principal: code.Principal{Kind: code.PrincipalOperator, OperatorID: "pat:7", Seat: "founder"}},
@@ -333,8 +335,10 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			Packs: []code.PackRow{pack},
 			Refs: []code.RefRow{{Ref: "refs/heads/main", OID: "6666666666666666666666666666666666666666",
 				Position: at}},
-			Pushes: []code.IntroducedRow{introduced},
-			Next:   cursor},
+			Pushes:      []code.IntroducedRow{introduced},
+			Retired:     []code.RetiredRow{retired},
+			RetiredFrom: at,
+			Next:        cursor},
 		read: code.ReadAnswer{Repo: &code.RepoDetail{
 			RepoSummary: code.RepoSummary{RepoRef: ref, Head: "6666666666666666666666666666666666666666",
 				Pushes: 7, LastPushAt: created},
@@ -368,7 +372,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		t.Errorf("resolve asked %+v, want %+v", got, resolveQ)
 	}
 
-	stateQ := code.StateQuery{RepoID: ref.ID, Since: at, Cursor: cursor, Pushes: true,
+	stateQ := code.StateQuery{RepoID: ref.ID, Since: at, Cursor: cursor, Pushes: true, RetiredSince: at,
 		Fresh: statelog.Freshness{Level: statelog.ReadSession, MinPosition: at}}
 	if got, err := seam.RepoState(ctx, stateQ); err != nil || !reflect.DeepEqual(got, d.snap) {
 		t.Errorf("repo state = (%+v, %v), want %+v", got, err, d.snap)

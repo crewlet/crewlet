@@ -26,16 +26,28 @@ import (
 // and its broker instant at — and answers the objects they name.
 func (n *node) seedRetired(repoID string, position int64, at time.Time, count int) []objstore.Key {
 	n.t.Helper()
+	packs := make([]string, count)
+	for i := range packs {
+		packs[i] = uuid.NewString()
+	}
+	return n.seedRetiredPacks(repoID, position, at, packs...)
+}
+
+// seedRetiredPacks is [node.seedRetired] for packs a case names: one retired
+// row a pack, part `pack`, its object keyOf and its git checksum oidOf the
+// pack's id.
+func (n *node) seedRetiredPacks(repoID string, position int64, at time.Time, packs ...string) []objstore.Key {
+	n.t.Helper()
 	ctx := n.t.Context()
-	keys := make([]objstore.Key, count)
+	keys := make([]objstore.Key, len(packs))
 	if err := n.db.Tx(ctx, func(tx *sql.Tx) error {
 		_, err := store.InsertRows(ctx, tx, n.db.Caps().MaxVariables,
 			`INSERT INTO code_packs_retired (repo_id, pack_id, part, object, hash, size, index_bytes,
 				reverse_bytes, git_checksum, objects, kind, added_position, retired_position,
 				retired_at) VALUES `,
-			`(?, ?, 'pack', ?, ?, 100, 0, 0, ?, 1, 'push', 1, ?, ?)`, ``, count,
+			`(?, ?, 'pack', ?, ?, 100, 0, 0, ?, 1, 'push', 1, ?, ?)`, ``, len(packs),
 			func(i int) []any {
-				pack := uuid.NewString()
+				pack := packs[i]
 				keys[i] = keyOf(pack)
 				return []any{repoID, pack, keys[i].String(), string(objstore.HashOf([]byte(pack))),
 					oidOf(pack), position, store.EncodeTime(at)}

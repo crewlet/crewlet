@@ -398,6 +398,13 @@ repository, never by a sweep:
   and downloads nothing again.
 - **A purge** — below.
 
+A pack a compaction retires is kept a day as a retired row, which the
+`code-retention` duty then removes ([below](#deletion-and-purge)). Until then
+the row is how a node bringing the repository up to date learns of the
+retirement; a node last brought up to date before its removal reads the
+repository whole at its next sync, as after a forgotten deletion, and
+downloads nothing again.
+
 ### Deletion and purge
 
 A repository removed from `code.repos` is **deleted**, softly: its rows and

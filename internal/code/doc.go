@@ -419,7 +419,12 @@
 //     duty's clock against the broker's is what the grace's margin past the
 //     longest read is for. A purge takes a repository's retired rows with
 //     the rest, whatever their grace, since no read begins on a deleted
-//     repository.
+//     repository. Until its sweep a retirement is what a cache holding the
+//     pack learns it from: a snapshot serves it in a RETIRED phase — a delta
+//     every retirement above its floor, a full answer those above its
+//     caller's [StateQuery.RetiredSince] when it can serve every one — and
+//     the mark is the one past which a delta is no longer complete, so a
+//     delta from below it is answered in full, as below the tombstone mark.
 //
 // # Measured
 //
@@ -591,7 +596,10 @@
 // full answer costs, at its dearest — a delta from below every row of that
 // repository, counted one row past the full answer deep before the full
 // answer is served — 8.5–10.8 ms, a sixth of one page of what it then
-// serves, and after a push a handful of index entries. Measuring the page's rows costs
-// 0.08–0.09 µs a ref and no allocation, where encoding each one to measure it
-// cost 0.78–0.83 µs and three (BenchmarkServeASnapshotPage).
+// serves, and after a push a handful of index entries; the arm holds no
+// retired pack, so its count of retirements is one seek of an empty range,
+// and a repository holding them pays that count too, held to the same depth.
+// Measuring the page's rows costs 0.08–0.09 µs a ref and no allocation, where
+// encoding each one to measure it cost 0.78–0.83 µs and three
+// (BenchmarkServeASnapshotPage).
 package code

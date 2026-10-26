@@ -186,9 +186,13 @@ type repoView struct {
 	branches, tags    int64
 	tombstones        int64
 	tombstonesThrough int64
-	pushes            int64
-	lastPushAt        sql.NullInt64
-	createdAt         int64
+	// retiredThrough is the highest position a retire_sweep removed the
+	// repository's retired rows at or below: below it, the rows that told of
+	// a retirement may be gone.
+	retiredThrough int64
+	pushes         int64
+	lastPushAt     sql.NullInt64
+	createdAt      int64
 }
 
 // summary is the view as a listing renders it.
@@ -210,7 +214,7 @@ func repoViewIn(ctx context.Context, tx *sql.Tx, id string, cp statelog.Position
 	err := tx.QueryRowContext(ctx, repoViewSQL, id).Scan(&v.ref.ID, &v.ref.Name, &status, &managed,
 		&owners, &v.ref.Owner.Ref, &visibility, &v.ref.DefaultBranch, &v.ref.Description, &deleted, &v.ref.Refs,
 		&v.branches, &v.tags, &v.tombstones, &v.ref.LivePacks, &v.ref.LiveBytes, &v.ref.LiveObjects,
-		&v.tombstonesThrough, &v.pushes, &v.lastPushAt, &v.createdAt)
+		&v.tombstonesThrough, &v.retiredThrough, &v.pushes, &v.lastPushAt, &v.createdAt)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return repoView{}, false, nil
@@ -297,16 +301,31 @@ func (p *page) full() bool { return p.rows >= p.maxRows || p.bytes >= p.maxB }
 func (p *page) left() int { return p.maxRows - p.rows }
 
 // Snapshot answers one page of a repository's refs and packs: in full — every
-// pack and every live ref — or as a delta from q.Since — the packs added and
-// the refs moved (tombstones included) above it. Page 1 decides which: a delta
-// only from a position on this generation of the log, at or past the
-// repository's tombstone mark, and carrying no more rows than the full answer
-// ([deltaOutweighs]).
+// pack and every live ref — or as a delta from q.Since — the packs added, the
+// refs moved (tombstones included) and the packs retired above it. Page 1
+// decides which: a delta only from a position on this generation of the log,
+// at or past the repository's tombstone mark and its retired mark, and
+// carrying no more rows than the full answer ([deltaOutweighs]).
+//
+// # Retirements
+//
+// A pack a record retires leaves code_packs for code_packs_retired, so a cache
+// holding its file learns of it only from a RETIRED phase, served after the
+// refs (and a delta's pushes): every retirement in (the phase's floor, page
+// 1's checkpoint], in (position, pack id, part) order. A delta's floor is its
+// own Since. A full answer's is q.RetiredSince, the caller's own position —
+// what the full answer stands in for a delta from — so a cache reading the
+// whole of a repository, as every git node does at its first round after a
+// restart, can still tell a pack file a compaction retired from one no row
+// accounts for, and keep what a merge leaves whole (its commit-graph) rather
+// than drop it for every repository compacted while the node was down. A
+// full answer serves them only when it can serve EVERY one ([retiredFloor]),
+// and RetiredFrom says whether it did.
 //
 // # One monotone history across pages
 //
 // A snapshot of more than one page is read in several transactions, possibly
-// on several nodes, while the repository is pushed to. Three rules keep its
+// on several nodes, while the repository is pushed to. Four rules keep its
 // pages one history:
 //
 //   - A ref a later page serves may name a commit whose pack was added after
@@ -319,11 +338,18 @@ func (p *page) left() int { return p.maxRows - p.rows }
 //     answers has applied at least what every earlier page was read at, or
 //     refuses `behind` and the router asks another — and the tail's last read
 //     is at or past every refs read.
+//   - The retired phase has NO TAIL: it stops at page 1's checkpoint, and a
+//     pack retired after it is the next delta's to serve, from a floor that
+//     checkpoint names. A later page that no longer finds such a pack among
+//     the packs costs no ref an object, because the record that retired it
+//     added the packs holding its objects (a merge drops none), after the
+//     checkpoint, which the tail serves.
 //   - A later page re-checks, in its own transaction, that the history did
-//     not move under the snapshot: the same stream, the same generation, and
-//     for a delta no tombstone above its floor swept. Any failure is
-//     [ErrSnapshotMoved], and the consumer reads the snapshot again from its
-//     first page, which decides full or delta afresh.
+//     not move under the snapshot: the same stream, the same generation, for
+//     a delta no tombstone above its floor swept, and no retirement above
+//     the retired phase's floor swept. Any failure is [ErrSnapshotMoved], and
+//     the consumer reads the snapshot again from its first page, which
+//     decides full or delta afresh.
 //
 // The answer's Position is ALWAYS page 1's checkpoint — the position the whole
 // snapshot is complete as of, which a cache records once it applied every page.
@@ -363,8 +389,13 @@ func (r *Reader) Snapshot(ctx context.Context, q StateQuery) (RepoSnapshot, erro
 		}
 		var cur StateCursor
 		if first {
+			// BELOW EITHER MARK A DELTA IS INCOMPLETE: a sweep removed the
+			// tombstones that told of the deletions at or below the one, and
+			// the retired rows that told of the retirements at or below the
+			// other.
 			full := q.Since.IsZero() || q.Since.Stream != topics.CodeLogStream ||
-				q.Since.Generation != cp.At.Generation || q.Since.Packed() < v.tombstonesThrough
+				q.Since.Generation != cp.At.Generation || q.Since.Packed() < v.tombstonesThrough ||
+				q.Since.Packed() < v.retiredThrough
 			if !full {
 				if full, err = deltaOutweighs(ctx, tx, q.RepoID, q.Since.Packed(), v); err != nil {
 					return err
@@ -372,7 +403,9 @@ func (r *Reader) Snapshot(ctx context.Context, q StateQuery) (RepoSnapshot, erro
 			}
 			cur = StateCursor{Full: full, Phase: phasePacks, From: cp.At, Seen: cp.At, Stream: cp.KeyedTo}
 			if !full {
-				cur.Since, cur.Pushes = q.Since, q.Pushes
+				cur.Since, cur.Pushes, cur.RetiredFrom = q.Since, q.Pushes, q.Since
+			} else if cur.RetiredFrom, err = retiredFloor(ctx, tx, q.RepoID, q.RetiredSince, cp.At, v); err != nil {
+				return err
 			}
 		} else {
 			cur = *q.Cursor
@@ -381,10 +414,13 @@ func (r *Reader) Snapshot(ctx context.Context, q StateQuery) (RepoSnapshot, erro
 				return fmt.Errorf("%w: the log under %s was recreated or reanchored", ErrSnapshotMoved, q.RepoID)
 			case !cur.Full && cur.Since.Packed() < v.tombstonesThrough:
 				return fmt.Errorf("%w: a deletion %s's delta needed was swept", ErrSnapshotMoved, q.RepoID)
+			case !cur.RetiredFrom.IsZero() && cur.RetiredFrom.Packed() < v.retiredThrough:
+				return fmt.Errorf("%w: a retirement %s's snapshot serves was swept", ErrSnapshotMoved, q.RepoID)
 			}
 			cur.Seen = cp.At
 		}
 		out.Repo, out.Position, out.StreamCreated, out.Full = v.ref, cur.From, cur.Stream, cur.Full
+		out.RetiredFrom = cur.RetiredFrom
 		next, err := r.fill(ctx, tx, q.RepoID, &out, cur, first)
 		if err != nil {
 			return err
@@ -422,14 +458,25 @@ func (r *Reader) Snapshot(ctx context.Context, q StateQuery) (RepoSnapshot, erro
 // repository of many packs keeps its delta past a clean-up a repository of
 // few would not, which a comparison of the refs alone would answer in full
 // for a fraction of the rows. The full answer's size is the repository's own
-// counters, kept as the rows move (live_packs is every pack row: every pack
-// this build stores is live); the delta's is COUNTED, each table at most one
-// row past the full answer deep, over the index the delta's pages read
-// (code_refs_changed_idx, code_packs_added_idx) — so the usual delta after a
-// push reads a handful of index entries, and the count never reads more of
-// either index than the larger answer would. A tie is a delta: a cache
-// applies a delta in place, where a full answer sweeps its directory to the
-// snapshot's image.
+// counters, kept as the rows move (live_packs is every pack row: a retired
+// pack leaves code_packs for code_packs_retired); the delta's is COUNTED, each
+// table at most one row past the full answer deep, over the index the delta's
+// pages read (code_refs_changed_idx, code_packs_added_idx,
+// code_packs_retired_repo_idx) — so the usual delta after a push reads a
+// handful of index entries, and the count never reads more of any index than
+// the larger answer would. A tie is a delta: a cache applies a delta in
+// place, where a full answer sweeps its directory to the snapshot's image.
+//
+// # Retirements count on the delta's side alone
+//
+// A delta carries every pack retired above its floor; the full answer it
+// stands in for carries none of its own — what it serves of them is its
+// caller's RetiredSince's, and only while they fit beside its rows
+// ([retiredFloor]). So they are counted with the delta's other rows and
+// never with the full answer's: a cache two thousand compactions behind reads
+// the fifty packs its repository holds rather than twenty thousand
+// retirements, and gives up only telling a retired pack file from one no row
+// accounts for.
 //
 // # Rows, and what that leaves in bytes
 //
@@ -455,6 +502,42 @@ func deltaOutweighs(ctx context.Context, tx *sql.Tx, repoID string, since int64,
 	return delta > whole, nil
 }
 
+// retiredFloor is the floor a FULL answer serves retirements above: since —
+// the caller's StateQuery.RetiredSince — where the answer can serve every
+// retirement above it, else zero, which serves none. All three must hold:
+//
+//   - since is a position on this generation of the code log, the test a
+//     delta's Since passes, because a position from another number space
+//     compares as nothing in this one;
+//   - it is at or past the repository's retired mark, because below the mark
+//     a sweep removed rows that told of retirements above since;
+//   - the retirements above it are no more than the full answer's own rows,
+//     counted by the statement that counts them for a delta, one row past
+//     that deep — the bound [deltaOutweighs] holds a delta's to, so serving
+//     them at most doubles the answer.
+//
+// Short of any of them the full answer serves no retirement rather than some,
+// so a RetiredFrom it answers always names a floor its retirements are
+// COMPLETE above: a cache handed none treats every file no row names as one
+// no row accounts for, which is correct and only dearer.
+func retiredFloor(ctx context.Context, tx *sql.Tx, repoID string, since, at statelog.Position,
+	v repoView) (statelog.Position, error) {
+
+	if since.IsZero() || since.Stream != topics.CodeLogStream || since.Generation != at.Generation ||
+		since.Packed() < v.retiredThrough {
+		return statelog.Position{}, nil
+	}
+	whole := v.ref.Refs + v.ref.LivePacks
+	var retired int64
+	if err := tx.QueryRowContext(ctx, retiredAboveSQL, repoID, since.Packed(), whole+1).Scan(&retired); err != nil {
+		return statelog.Position{}, fmt.Errorf("code: count %s's retirements above %s: %w", repoID, since, err)
+	}
+	if retired > whole {
+		return statelog.Position{}, nil
+	}
+	return since, nil
+}
+
 // fill serves the snapshot's phases from cur, in order, until the page is
 // full or the last phase completes, and answers where the next page resumes —
 // nil when the snapshot is complete.
@@ -477,6 +560,8 @@ func (r *Reader) fill(ctx context.Context, tx *sql.Tx, repoID string, out *RepoS
 			done, err = r.refs(ctx, tx, repoID, out, &cur, &pg)
 		case phasePushes:
 			done, err = r.pushesPhase(ctx, tx, repoID, out, &cur, &pg)
+		case phaseRetired:
+			done, err = r.retiredPhase(ctx, tx, repoID, out, &cur, &pg)
 		case phaseTail:
 			done, err = r.packsAfter(ctx, tx, repoID, cur.From.Packed(), out, &cur, &pg)
 		default:
@@ -496,7 +581,9 @@ func (r *Reader) fill(ctx context.Context, tx *sql.Tx, repoID string, out *RepoS
 			cur.Phase, cur.After = phaseRefs, ""
 		case cur.Phase == phaseRefs && cur.Pushes:
 			cur.Phase, cur.After = phasePushes, ""
-		case (cur.Phase == phaseRefs || cur.Phase == phasePushes) && !first:
+		case (cur.Phase == phaseRefs || cur.Phase == phasePushes) && !cur.RetiredFrom.IsZero():
+			cur.Phase, cur.After = phaseRetired, ""
+		case (cur.Phase == phaseRefs || cur.Phase == phasePushes || cur.Phase == phaseRetired) && !first:
 			cur.Phase, cur.After = phaseTail, ""
 		default:
 			// THE LAST PHASE COMPLETED — and on page 1 there is no tail,
@@ -706,11 +793,67 @@ func (r *Reader) pushesPhase(ctx context.Context, tx *sql.Tx, repoID string, out
 	return served < asked, nil
 }
 
+// retiredPhase serves the retired phase: every pack a record retired in
+// (RetiredFrom, From] — above the phase's floor and at or below page 1's
+// checkpoint — in (position, pack id, part) order, the order of
+// code_packs_retired_repo_idx, keyset after the last one served.
+//
+// BOUNDED ABOVE BY PAGE 1'S CHECKPOINT, never by the page's own, for the
+// pushes phase's reason: the snapshot is complete as of From, which the cache
+// records as its position, so a pack retired after it is the NEXT delta's to
+// serve, from that position — served here too, it would be served twice, and
+// as of a position at which the rows still named it live. And bounded BELOW
+// exclusively: a retirement at the floor is one the round that synced to it
+// already took.
+func (r *Reader) retiredPhase(ctx context.Context, tx *sql.Tx, repoID string, out *RepoSnapshot,
+	cur *StateCursor, pg *page) (bool, error) {
+
+	var rows *sql.Rows
+	var err error
+	if cur.After == "" {
+		rows, err = tx.QueryContext(ctx, retiredFirstSQL, repoID, cur.RetiredFrom.Packed(), cur.From.Packed(),
+			pg.left())
+	} else {
+		at, id, part, ok := cutPackKey(cur.After)
+		if !ok {
+			return false, fmt.Errorf("%w: after %q", ErrBadCursor, cur.After)
+		}
+		rows, err = tx.QueryContext(ctx, retiredAfterSQL, repoID, at, cur.From.Packed(), at, id, id, part,
+			pg.left())
+	}
+	if err != nil {
+		return false, fmt.Errorf("code: read %s's retired packs above %s: %w", repoID, cur.RetiredFrom, err)
+	}
+	defer func() { _ = rows.Close() }()
+	asked, served := pg.left(), 0
+	for rows.Next() {
+		var (
+			row                 RetiredRow
+			retiredAt, position int64
+		)
+		if err := rows.Scan(&row.PackID, &row.Part, &row.GitChecksum, &retiredAt, &position); err != nil {
+			return false, fmt.Errorf("code: read %s's retired packs above %s: %w", repoID, cur.RetiredFrom, err)
+		}
+		row.RetiredAt, row.Position = store.DecodeTime(retiredAt), unpacked(position)
+		out.Retired = append(out.Retired, row)
+		served++
+		cur.After = strconv.FormatInt(position, 10) + "/" + row.PackID + "/" + row.Part
+		if pg.add(row.encodedBytes()) {
+			return false, rows.Err()
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("code: read %s's retired packs above %s: %w", repoID, cur.RetiredFrom, err)
+	}
+	return served < asked, nil
+}
+
 // checkCursor refuses a cursor this reader did not issue.
 func checkCursor(c *StateCursor) error {
 	bad := func(why string) error { return fmt.Errorf("%w: %s", ErrBadCursor, why) }
 	switch {
-	case c.Phase != phasePacks && c.Phase != phaseRefs && c.Phase != phasePushes && c.Phase != phaseTail:
+	case c.Phase != phasePacks && c.Phase != phaseRefs && c.Phase != phasePushes && c.Phase != phaseRetired &&
+		c.Phase != phaseTail:
 		return bad(fmt.Sprintf("phase %q", c.Phase))
 	case c.From.Stream != topics.CodeLogStream || c.From.IsZero():
 		return bad("it names no position on the code log")
@@ -726,6 +869,13 @@ func checkCursor(c *StateCursor) error {
 		return bad("a full snapshot serves no pushes phase")
 	case c.Phase == phasePushes && !c.Pushes:
 		return bad("its first page asked for no pushes phase")
+	case !c.Full && c.RetiredFrom != c.Since:
+		return bad("a delta serves the retirements above its own floor")
+	case !c.RetiredFrom.IsZero() &&
+		(c.RetiredFrom.Stream != topics.CodeLogStream || c.RetiredFrom.Generation != c.From.Generation):
+		return bad("its retired floor is not a position on the generation it was read on")
+	case c.Phase == phaseRetired && c.RetiredFrom.IsZero():
+		return bad("its first page served no retirements")
 	}
 	if c.After == "" {
 		return nil
@@ -735,7 +885,7 @@ func checkCursor(c *StateCursor) error {
 		if _, _, ok := strings.Cut(c.After, "/"); !ok {
 			return bad("after " + c.After)
 		}
-	case c.Phase == phasePacks, c.Phase == phaseTail:
+	case c.Phase == phasePacks, c.Phase == phaseRetired, c.Phase == phaseTail:
 		if _, _, _, ok := cutPackKey(c.After); !ok {
 			return bad("after " + c.After)
 		}
@@ -1778,7 +1928,8 @@ func (r *Reader) purgedAt(ctx context.Context, id string, at statelog.Position) 
 const (
 	repoViewSQL = `SELECT id, name, status, managed_by, owner_kind, owner, visibility, default_branch,
 		description, deleted_at, refs, branches, tags, tombstones, live_packs, live_bytes,
-		live_objects, tombstones_through, pushes, last_push_at, created_at FROM code_repos WHERE id = ?`
+		live_objects, tombstones_through, retired_through, pushes, last_push_at, created_at
+		FROM code_repos WHERE id = ?`
 	packColumns       = `pack_id, part, object, hash, size, index_bytes, reverse_bytes, git_checksum, objects, kind, state, added_position`
 	packsFullFirstSQL = `SELECT ` + packColumns + ` FROM code_packs WHERE repo_id = ?
 		ORDER BY pack_id, part LIMIT ?`
@@ -1798,12 +1949,30 @@ const (
 		ORDER BY position, ref LIMIT ?`
 	refsDeltaAfterSQL = `SELECT ref, target, position FROM code_refs WHERE repo_id = ?
 		AND position >= ? AND (position > ? OR ref > ?) ORDER BY position, ref LIMIT ?`
+	// retiredAboveSQL is a BOUNDED COUNT of a repository's retirements above
+	// ?2, at most ?3 deep over the index the retired phase reads: a full
+	// answer's test of what it can serve above its caller's RetiredSince
+	// (retiredFloor), and a delta's third term.
+	retiredAboveSQL = `SELECT COUNT(*) FROM (SELECT 1 FROM code_packs_retired
+		INDEXED BY code_packs_retired_repo_idx WHERE repo_id = ?1 AND retired_position > ?2 LIMIT ?3)`
 	// deltaRowsSQL is a BOUNDED COUNT of the rows a delta from ?2 carries,
 	// each table counted at most ?3 deep over the index the delta's pages
 	// read (deltaOutweighs).
 	deltaRowsSQL = `SELECT
 		(SELECT COUNT(*) FROM (SELECT 1 FROM code_refs WHERE repo_id = ?1 AND position > ?2 LIMIT ?3))
-		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_packs WHERE repo_id = ?1 AND added_position > ?2 LIMIT ?3))`
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_packs WHERE repo_id = ?1 AND added_position > ?2 LIMIT ?3))
+		+ (` + retiredAboveSQL + `)`
+	// THE RETIRED PHASE, over code_packs_retired_repo_idx in its order —
+	// those in (?2, ?3] first, and after a cursor (?3 the upper bound, ?4 to
+	// ?7 the cursor) with the >= beside the OR that keeps the range seek.
+	retiredColumns  = `pack_id, part, git_checksum, retired_at, retired_position`
+	retiredFirstSQL = `SELECT ` + retiredColumns + ` FROM code_packs_retired
+		INDEXED BY code_packs_retired_repo_idx WHERE repo_id = ? AND retired_position > ?
+		AND retired_position <= ? ORDER BY retired_position, pack_id, part LIMIT ?`
+	retiredAfterSQL = `SELECT ` + retiredColumns + ` FROM code_packs_retired
+		INDEXED BY code_packs_retired_repo_idx WHERE repo_id = ? AND retired_position >= ?
+		AND retired_position <= ? AND (retired_position > ? OR pack_id > ? OR (pack_id = ? AND part > ?))
+		ORDER BY retired_position, pack_id, part LIMIT ?`
 	pushColumns = `push_id, repo_id, position, at, actor, actor_kind, actor_seat, node, atomic,
 		commands, pack_id, pack_bytes, introduced, introduced_count, received_at`
 	pushSQL        = `SELECT ` + pushColumns + ` FROM code_pushes WHERE push_id = ?`

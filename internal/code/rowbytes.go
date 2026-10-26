@@ -204,6 +204,15 @@ func (r PackRow) encodedBytes() int {
 		field("added", positionBytes(r.Added), false)
 }
 
+// encodedBytes is the length of the retirement's JSON encoding.
+func (r RetiredRow) encodedBytes() int {
+	return 2 + field("pack_id", stringBytes(r.PackID), true) +
+		field("part", stringBytes(r.Part), false) +
+		field("git_checksum", stringBytes(r.GitChecksum), false) +
+		field("retired_at", timeBytes(r.RetiredAt), false) +
+		field("position", positionBytes(r.Position), false)
+}
+
 // encodedBytes is the length of the protection's JSON encoding.
 func (p Protection) encodedBytes() int {
 	n := 2 + field("pattern", stringBytes(p.Pattern), true)

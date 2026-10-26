@@ -70,14 +70,27 @@ type StateQuery struct {
 	// read instead. READ ON THE FIRST PAGE ONLY, as Since is: a later page
 	// carries it in its cursor.
 	Pushes bool `json:"pushes,omitempty"`
+	// RetiredSince asks a FULL answer for the retirements above it — the
+	// caller's own synced position, which a full answer stands in for a
+	// delta from: every pack a record retired in (RetiredSince, the
+	// snapshot's position], so a full round can tell a pack file a
+	// compaction retired from one no row accounts for. Served only when the
+	// reader can serve all of them (Snapshot: on this generation, at or past
+	// the repository's retired mark, and no more of them than the full
+	// answer's rows), and the answer's RetiredFrom says whether it did.
+	// Ignored by a delta, whose retirements are always those above its own
+	// Since; zero asks for none. READ ON THE FIRST PAGE ONLY, as Since is: a
+	// later page carries the floor it decided in its cursor.
+	RetiredSince statelog.Position `json:"retired_since,omitzero"`
 }
 
 // The snapshot's phases, in the order a snapshot serves them.
 const (
-	phasePacks  = "packs"
-	phaseRefs   = "refs"
-	phasePushes = "pushes"
-	phaseTail   = "tail"
+	phasePacks   = "packs"
+	phaseRefs    = "refs"
+	phasePushes  = "pushes"
+	phaseRetired = "retired"
+	phaseTail    = "tail"
 )
 
 // StateCursor is where a snapshot resumes. OPAQUE to its caller, which hands
@@ -86,8 +99,9 @@ const (
 type StateCursor struct {
 	Full bool `json:"full"`
 	// Phase is "packs", then "refs", then — on a delta whose first page
-	// asked for it — "pushes", then — on a snapshot of more than one page —
-	// "tail".
+	// asked for it — "pushes", then — on a delta, and on a full answer that
+	// serves retirements — "retired", then — on a snapshot of more than one
+	// page — "tail".
 	Phase string `json:"phase"`
 	// Pushes is page 1's StateQuery.Pushes on a delta, carried to every
 	// later page; false on a full answer, which serves no pushes phase.
@@ -97,6 +111,11 @@ type StateCursor struct {
 	From statelog.Position `json:"from"`
 	// Since is page 1's q.Since: what a delta is a delta from.
 	Since statelog.Position `json:"since"`
+	// RetiredFrom is the floor of the snapshot's retired phase, decided on
+	// page 1 and carried to every later page: Since on a delta, the
+	// StateQuery.RetiredSince a full answer honoured, and zero on a full
+	// answer that serves no retirements.
+	RetiredFrom statelog.Position `json:"retired_from,omitzero"`
 	// Seen is the highest checkpoint a page of this snapshot was read at;
 	// the next page reads at session with MinPosition = Seen, so pages read
 	// on whatever node answers are never read behind one another.
@@ -126,7 +145,20 @@ type RepoSnapshot struct {
 	// across the snapshot's pages — none above Position, which the next
 	// delta serves.
 	Pushes []IntroducedRow `json:"pushes,omitempty"`
-	Next   *StateCursor    `json:"next,omitempty"`
+	// Retired is the retired phase's rows: every pack a record retired in
+	// (RetiredFrom, Position], in (position, pack id, part) order, each once
+	// across the snapshot's pages — none above Position, whose retirement
+	// the next delta serves. It names what a cache holding the retired pack
+	// drops, and a delta serves a pack added above its floor and retired by
+	// Position too, which its packs never served: a cache that never held
+	// one has nothing to drop.
+	Retired []RetiredRow `json:"retired,omitempty"`
+	// RetiredFrom is the floor Retired is complete above, the same on every
+	// page: Since on a delta; on a full answer the StateQuery.RetiredSince
+	// it honoured, or ZERO when it served no retirements — a cache then
+	// reads every pack file no row names as one no row accounts for.
+	RetiredFrom statelog.Position `json:"retired_from,omitzero"`
+	Next        *StateCursor      `json:"next,omitempty"`
 }
 
 // PackRow is one pack bundle a repository's rows name.
@@ -159,6 +191,18 @@ type RefRow struct {
 	Ref      string            `json:"ref"`
 	OID      string            `json:"oid,omitempty"`
 	Position statelog.Position `json:"position"`
+}
+
+// RetiredRow is one pack a record retired, as a snapshot's retired phase
+// serves it: which pack — its id and part, the table's key and the phase's
+// keyset — the git checksum its files are named by, which is what a cache
+// drops, and the instant and the position of the record that retired it.
+type RetiredRow struct {
+	PackID      string            `json:"pack_id"`
+	Part        string            `json:"part"`
+	GitChecksum string            `json:"git_checksum"`
+	RetiredAt   time.Time         `json:"retired_at"`
+	Position    statelog.Position `json:"position"`
 }
 
 // OutcomeQuery asks what became of one push.

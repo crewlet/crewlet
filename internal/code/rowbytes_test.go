@@ -55,6 +55,10 @@ func TestARowsComputedSizeIsItsEncodingsLength(t *testing.T) {
 		var introduced IntroducedRow
 		fill(rng, reflect.ValueOf(&introduced).Elem())
 		check("introducing push", introduced, introduced.encodedBytes())
+
+		var retired RetiredRow
+		fill(rng, reflect.ValueOf(&retired).Elem())
+		check("retirement", retired, retired.encodedBytes())
 	}
 }
 

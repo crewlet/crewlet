@@ -163,12 +163,17 @@ func TestASnapshotIsFullAfterTombstonesAreSwept(t *testing.T) {
 // push's change, is still a delta. And the comparison is of every row each
 // answer carries, PACKS INCLUDED: a delta's packs are only those added since
 // it, a full answer's every pack, so a repository with many packs keeps its
-// delta past a clean-up a repository with few would not.
+// delta past a clean-up a repository with few would not. RETIREMENTS count on
+// the delta's side: a delta carries every pack retired above its floor, which
+// the full answer it stands in for serves only when they fit beside its own
+// rows, so a delta from below more retirements than that is answered in full.
 //
 // Mutation: drop the count, and the delta from below the clean-up is a delta
 // of sixty tombstones beside a full answer of forty refs; compare the refs
 // alone, and the repository of many packs is answered in full — 343 rows — for
-// a delta of 63, under a fifth of its size.
+// a delta of 63, under a fifth of its size; leave the retirements out of the
+// count, and a delta of a ref, a pack and two retirements stands in for a full
+// answer of three rows.
 func TestADeltaLargerThanTheFullAnswerIsAnsweredInFull(t *testing.T) {
 	t.Parallel()
 	const made, deleted = 100, 60
@@ -239,6 +244,26 @@ func TestADeltaLargerThanTheFullAnswerIsAnsweredInFull(t *testing.T) {
 			t.Fatalf("the delta serves %d refs and %d packs, want the %d the clean-up deleted with "+
 				"the one moved after it, and the 2 packs added since", len(u.refs), len(u.packs),
 				deleted+1)
+		}
+	})
+
+	t.Run("many retirements", func(t *testing.T) {
+		t.Parallel()
+		// A full answer of one ref and two packs; a delta from after the
+		// first push of the ref, the second push's pack and its retirements.
+		n := newNode(t)
+		id := seededRepo(t, n, "app")
+		since := n.push(id, entry("p1", set("refs/heads/main", code.ZeroOID, oidOf("c1")))).Position
+		retiring := n.push(id, entry("p2", set("refs/heads/main", oidOf("c1"), oidOf("c2")))).Position
+		n.seedRetiredPacks(id, retiring.Packed(), harnessAt, "retired-1")
+		if pages := snapshot(t, n.reader, id, since); pages[0].Full {
+			t.Fatal("a delta of a ref, a pack and a retirement — three rows, the full answer's three — " +
+				"was answered in full")
+		}
+		n.seedRetiredPacks(id, retiring.Packed(), harnessAt, "retired-2")
+		if pages := snapshot(t, n.reader, id, since); !pages[0].Full {
+			t.Fatalf("a delta of a ref, a pack and two retirements beside a full answer of three rows "+
+				"was answered as a delta serving %v", retiredOf(pages))
 		}
 	})
 }
@@ -464,13 +489,22 @@ func TestAReanchorUnderASnapshotRestartsIt(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
 	id := seededRepo(t, n, "app")
+	var since statelog.Position
 	for i := range 4 {
-		n.push(id, entry(fmt.Sprintf("p%d", i), set(fmt.Sprintf("refs/heads/r%d", i), code.ZeroOID, oidOf(fmt.Sprint(i)))))
+		at := n.push(id, entry(fmt.Sprintf("p%d", i), set(fmt.Sprintf("refs/heads/r%d", i), code.ZeroOID, oidOf(fmt.Sprint(i))))).Position
+		if i == 0 {
+			since = at
+		}
 	}
 	code.SetPageLimits(n.reader, 2, code.MaxPageBytes)
 	page, err := n.reader.Snapshot(t.Context(), code.StateQuery{RepoID: id, Fresh: stale})
 	if err != nil || page.Next == nil {
 		t.Fatalf("page 1: %v", err)
+	}
+	delta, err := n.reader.Snapshot(t.Context(), code.StateQuery{RepoID: id, Since: since, Fresh: stale})
+	if err != nil || delta.Full || delta.Next == nil {
+		t.Fatalf("page 1 of a delta = full %v, next %v, %v; want a delta with more to come", delta.Full,
+			delta.Next, err)
 	}
 
 	recreated := *page.Next
@@ -484,8 +518,28 @@ func TestAReanchorUnderASnapshotRestartsIt(t *testing.T) {
 		"a phase nobody serves":     func(c *code.StateCursor) { c.Phase = "objects" },
 		"a delta with no floor":     func(c *code.StateCursor) { c.Full = false },
 		"a key of another shape":    func(c *code.StateCursor) { c.Phase, c.After = "tail", "not-a-key" },
+		// A FULL ANSWER SERVES A RETIRED PHASE only from the floor its first
+		// page honoured, a position on the code log.
+		"retiring with no floor": func(c *code.StateCursor) { c.Phase, c.After = "retired", "" },
+		"retiring from another log": func(c *code.StateCursor) {
+			c.RetiredFrom = statelog.Position{Stream: "CREWLET_TRACKER_LOG", Generation: c.From.Generation, Seq: 1}
+		},
+		"retiring past a key of another shape": func(c *code.StateCursor) {
+			c.Phase, c.RetiredFrom, c.After = "retired", c.From, "not-a-key"
+		},
 	} {
 		bad := *page.Next
+		mangle(&bad)
+		if _, err := n.reader.Snapshot(t.Context(), code.StateQuery{RepoID: id, Cursor: &bad}); !errors.Is(err, code.ErrBadCursor) {
+			t.Errorf("a cursor %s = %v, want ErrBadCursor", name, err)
+		}
+	}
+	// A DELTA'S RETIREMENTS ARE FROM ITS OWN FLOOR, always.
+	for name, mangle := range map[string]func(*code.StateCursor){
+		"a delta retiring from elsewhere": func(c *code.StateCursor) { c.RetiredFrom = c.From },
+		"a delta retiring nothing":        func(c *code.StateCursor) { c.RetiredFrom = statelog.Position{} },
+	} {
+		bad := *delta.Next
 		mangle(&bad)
 		if _, err := n.reader.Snapshot(t.Context(), code.StateQuery{RepoID: id, Cursor: &bad}); !errors.Is(err, code.ErrBadCursor) {
 			t.Errorf("a cursor %s = %v, want ErrBadCursor", name, err)

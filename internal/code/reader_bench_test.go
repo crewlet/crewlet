@@ -25,7 +25,9 @@ import (
 // one prefix: the first page walks the whole cluster). Its `decide` arm
 // prices page 1's choice between a full answer and a delta (deltaOutweighs)
 // at its dearest: a delta from below every row of the interleaved
-// repository, which the count reads one row past the full answer deep. Its
+// repository, which the count reads one row past the full answer deep — a
+// repository holding no retired pack, so the count's third term, the
+// retirements, is one seek of an empty range. Its
 // `measure` sub-benchmarks price the measure alone over the same page, computed
 // (rowbytes.go) against the encoding it replaced, which every row of every
 // page on the serving node used to pay.
