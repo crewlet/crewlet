@@ -535,8 +535,8 @@
 // instant; each output joins code_packs, a live pack of kind compact; and the
 // repository's counters move by the rows the apply found and wrote, never by
 // the record's lists, so a replay moves nothing. A retired pack keeps its
-// object for [RetireGrace] (the fourth horizon above), so a reader that began
-// on it before the compaction finishes it.
+// object for [RetireGrace] (the RETIRED PACKS horizon above), so a reader
+// that began on it before the compaction finishes it.
 //
 // A MERGE MAKES NO REACHABILITY JUDGEMENT: every object of the inputs is in
 // the outputs, so a push decided against the inputs never lands a ref whose
