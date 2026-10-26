@@ -19,10 +19,11 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// relayName scopes the bridge's relay on the broker: its subjects are
+// RelayName scopes the bridge's relay on the broker: its subjects are
 // `crewlet.mcpbridge.…` and its signed channels `mcpbridge.open` and
-// `mcpbridge.frame` (internal/httprelay).
-const relayName = "mcpbridge"
+// `mcpbridge.frame` (internal/httprelay). Exported for the engine's gate that
+// holds every signed channel's key domains apart.
+const RelayName = "mcpbridge"
 
 // Leases reads which incarnation holds a seat: the half of the coordination
 // store routing a call needs.
@@ -92,7 +93,7 @@ func (b *Bridge) Join(ctx context.Context, opts FleetOptions) (queue.Unsubscribe
 	mux := http.NewServeMux()
 	mux.Handle(PathPrefix+"{token}", b.streamable)
 	relay, err := httprelay.New(httprelay.Options{
-		Fabric: opts.Fabric, Name: relayName, Node: opts.Node, Owner: opts.Owner,
+		Fabric: opts.Fabric, Name: RelayName, Node: opts.Node, Owner: opts.Owner,
 		Keyring: opts.Keyring, Admit: b.admitRelayed, Handler: mux,
 	})
 	if err != nil {
