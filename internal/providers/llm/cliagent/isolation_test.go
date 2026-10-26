@@ -748,3 +748,23 @@ func TestDoctorReportsAFileReadAfterTheShellWasRefused(t *testing.T) {
 		t.Errorf("the problem does not say the file tools are on:\n%s", joined)
 	}
 }
+
+// QUICK MODE'S ARGV IS PINNED WHOLE, beside deep work (ADR-0053): the
+// assistant's own model runs Claude Code with no tool of its own, no session
+// and no tool server, and deep work, which runs the same CLI with its harness
+// in a box, never reaches this argv. A flag added to it, or a tool given back,
+// is a change to what a quick answer can reach, made on purpose here or not at
+// all. Mutation: drop "--tools" "" and this fails beside the test above.
+func TestTheAssistantsQuickModeArgvIsUnchanged(t *testing.T) {
+	t.Parallel()
+	claude, err := cliprofile.Load("claude-code", map[string]any{"web_tools": "denied"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"-p", "--output-format", "json", "--no-session-persistence", "--safe-mode",
+		"--strict-mcp-config", "--disable-slash-commands", "--tools", "", "--disallowedTools",
+		"Bash", "Read", "Write", "Edit", "NotebookEdit", "Agent", "WebFetch", "WebSearch"}
+	if !slices.Equal(claude.CompleteArgs, want) {
+		t.Fatalf("the assistant's quick-mode argv changed:\n got %q\nwant %q", claude.CompleteArgs, want)
+	}
+}
