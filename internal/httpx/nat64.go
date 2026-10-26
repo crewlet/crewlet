@@ -46,7 +46,7 @@ var wellKnownIPv4Only = [...]netip.Addr{
 // which prefixes are translated, and a resolver that cannot answer this
 // cannot be relied on for the host's own answer either.
 //
-// It is asked on every resolve rather than kept: one AAAA lookup beside the
+// It is asked for every dial rather than kept: one AAAA lookup beside the
 // host's own, against a dial that is about to fetch a file or a repository,
 // is cheaper than a cache whose lifetime would have to track the network's.
 func discoverNAT64(ctx context.Context, r Resolver) ([]netip.Prefix, error) {

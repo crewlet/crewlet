@@ -64,8 +64,10 @@ var notGlobal6 = []netip.Prefix{
 	netip.MustParsePrefix("3fff::/20"),     // documentation (RFC 9637)
 }
 
-// ErrNotPublic is a host [ResolvePublic] refused: it is, or it resolves to,
-// an address that is not on the public internet.
+// ErrNotPublic is an address the rule refuses: one that is not on the public
+// internet. [ResolvePublic] answers it for a host that is, or resolves to,
+// such an address; a dialer that judges each address at its socket with
+// [Rule.Public] wraps it naming the address it refused.
 var ErrNotPublic = errors.New("httpx: not an address on the public internet")
 
 // Resolver is what the rule asks of a resolver: the addresses a name has, of
@@ -76,28 +78,76 @@ type Resolver interface {
 	LookupNetIP(ctx context.Context, network, host string) ([]netip.Addr, error)
 }
 
-// ResolvePublic returns the addresses host names, once each is judged to be on
-// the public internet: host itself where it is an address, and otherwise every
-// address r resolves it to. Each comes back as the address to dial, an IPv4
-// address written in IPv6 form unmapped. One that is not public refuses the
-// host with [ErrNotPublic]: a name answering both ways is one its owner can
-// point either way between this call and the next.
+// Rule is the public-address rule as it holds on one network: which addresses
+// are on the public internet there, given the NAT64 prefixes the network
+// translates IPv6 to IPv4 through. [DiscoverRule] is the only way to a Rule
+// that calls any address public, so no address is judged without the
+// network's prefixes: an address in a network-specific prefix inside
+// 2000::/3 that carries a private IPv4 address would otherwise be called
+// public. The zero Rule asked no network anything, and refuses every address.
+type Rule struct {
+	// nat64 are the network-specific NAT64 prefixes the network's resolver
+	// named. The well-known prefix counts on every network, and is not among
+	// them.
+	nat64 []netip.Prefix
+
+	// discovered is set by DiscoverRule alone, which is what keeps the zero
+	// Rule from judging an address with no prefixes asked for.
+	discovered bool
+}
+
+// DiscoverRule asks r for the NAT64 prefixes of the network it resolves on
+// (RFC 7050; discoverNAT64 says how) and returns the rule on that network. r
+// must be the resolver the host to be judged is resolved with, since only a
+// network's own resolver names the prefixes it translates through. A lookup
+// that fails, rather than answering that there is no record, fails the
+// discovery, so the rule is never applied on a guess. It is asked for every
+// dial and never kept (discoverNAT64 says why).
+func DiscoverRule(ctx context.Context, r Resolver) (Rule, error) {
+	nat64, err := discoverNAT64(ctx, r)
+	if err != nil {
+		return Rule{}, err
+	}
+	return Rule{nat64: nat64, discovered: true}, nil
+}
+
+// Public reports whether ip is an address on the public internet on the
+// rule's network (public says which addresses those are).
 //
-// It is the one way a dialer judges a host somebody else named, and the only
-// door to the rule (the package doc says why there is one rule). What makes it
-// a wall is how the dialer uses it: the dial goes to an address it returned,
-// never to the name again, so a resolver that answers twice (once public, once
-// internal) cannot slip between the judgment and the dial. The CDN fetch's
-// dialer (internal/artifactupload/vendor.Guarded) is the worked example, and
-// passes the resolver it resolves with.
+// It judges ONE address, and what makes it a wall is where a dialer asks it:
+// of the very address each connection is made to, once the name is resolved,
+// so a resolver that answers twice (once public, once internal) cannot slip
+// between the judgment and the dial. A dialer in this process asks it in its
+// net.Dialer's ControlContext, which is handed each address the dialer is
+// about to connect to, before the connection is made. Asked there, the dial
+// stays net.Dialer's own: it resolves the name, races its address families
+// and splits its bound across a family's addresses, all of which a dialer
+// handing it one judged address at a time forgoes. The CDN fetch's dialer
+// (internal/artifactupload/vendor.Guarded) is the worked example: it discovers
+// the rule through the resolver its net.Dialer resolves with, once a dial.
+func (r Rule) Public(ip netip.Addr) bool {
+	return r.discovered && public(ip, r.nat64)
+}
+
+// ResolvePublic returns the addresses host names, once each is judged to be on
+// the public internet by the rule on r's network ([DiscoverRule]): host itself
+// where it is an address, and otherwise every address r resolves it to. Each
+// comes back as the address to dial, an IPv4 address written in IPv6 form
+// unmapped. One that is not public refuses the host with [ErrNotPublic]: a
+// name answering both ways is one its owner can point either way between this
+// call and the next.
+//
+// It is the door for a dialer that cannot judge an address at a socket of its
+// own, because it hands the address to another program to connect to. What
+// makes it a wall is how such a dialer uses it: the dial goes to an address it
+// returned, never to the name again, so a resolver that answers twice (once
+// public, once internal) cannot slip between the judgment and the dial. A
+// dialer that makes its connections itself judges each at its socket with
+// [Rule.Public] instead, and keeps net.Dialer's own resolution and races.
 //
 // THE NAT64 PREFIXES ARE DISCOVERED ON EVERY CALL, through r itself, the
-// resolver the host is resolved with (RFC 7050; discoverNAT64 says how). A
-// lookup that fails, rather than answering that there is no record, fails the
-// call: the rule is never applied on a guess about which prefixes the network
-// translates through. There is no door that judges without them, since an
-// address in a network-specific prefix inside 2000::/3 that carries a private
-// IPv4 address would be called public.
+// resolver the host is resolved with, and a discovery that fails fails the
+// call ([DiscoverRule] says why).
 func ResolvePublic(ctx context.Context, r Resolver, host string) ([]netip.Addr, error) {
 	var addrs []netip.Addr
 	literal, err := netip.ParseAddr(host)
@@ -111,14 +161,14 @@ func ResolvePublic(ctx context.Context, r Resolver, host string) ([]netip.Addr, 
 			return nil, fmt.Errorf("httpx: %s resolves to no address", host)
 		}
 	}
-	nat64, err := discoverNAT64(ctx, r)
+	rule, err := DiscoverRule(ctx, r)
 	if err != nil {
 		return nil, err
 	}
 	judged := make([]netip.Addr, 0, len(addrs))
 	for _, ip := range addrs {
 		ip = ip.Unmap()
-		if !public(ip, nat64) {
+		if !rule.Public(ip) {
 			if literal.IsValid() {
 				return nil, fmt.Errorf("%w: %s", ErrNotPublic, host)
 			}

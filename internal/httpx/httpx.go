@@ -45,14 +45,22 @@
 // and checked by nobody, this rule had four prose copies and seven packages
 // violating it.
 //
-// THE PUBLIC-ADDRESS RULE ([ResolvePublic]) is here for the same ADR-0008
-// reason. A dial to a host the engine did not choose (a CDN URL a page wrote)
-// must never reach the network the engine runs in, and which addresses are on
-// the public internet is one rule: kept by each dialer that refuses an
-// address, the copies would drift and nothing would compare them. Only the
-// rule is here. Each dialer stays with its caller, since what it trusts beside
-// the rule is the caller's to say: the CDN fetch's dialer dials an operator's
-// proxy as itself.
+// THE PUBLIC-ADDRESS RULE ([Rule]) is here for the same ADR-0008 reason. A
+// dial to a host the engine did not choose (a CDN URL a page wrote) must never
+// reach the network the engine runs in, and which addresses are on the public
+// internet is one rule: kept by each dialer that refuses an address, the
+// copies would drift and nothing would compare them. Only the rule is here.
+// Each dialer stays with its caller, since what it trusts beside the rule is
+// the caller's to say: the CDN fetch's dialer dials an operator's proxy as
+// itself.
+//
+// A dialer reaches the rule through one of two doors, and both ask the
+// network's resolver for its NAT64 prefixes first. A dialer that makes its
+// connections itself takes [DiscoverRule]'s [Rule] once a dial and asks it of
+// each address at the socket made for it, before the connect, so net.Dialer
+// still resolves the name and races its addresses. A dialer that hands an
+// address to another program to connect to takes it from [ResolvePublic],
+// which returns a host's addresses only when every one is public.
 //
 // The rule holds IPv4 to the blocks IANA's special-purpose registry reserves,
 // and IPv6 to an ALLOWLIST: global unicast (2000::/3), less the blocks in it
@@ -66,8 +74,8 @@
 // An IPv6 address in a NAT64 prefix is judged by the IPv4 address it carries,
 // where a translator delivers it, and by nothing else: the well-known prefix
 // (64:ff9b::/96) on every network, and the network-specific ones the node's
-// own resolver names when asked for ipv4only.arpa (RFC 7050), discovered on
-// every resolve. Discovery is the one thing the rule takes on the resolver's
+// own resolver names when asked for ipv4only.arpa (RFC 7050), discovered for
+// every dial. Discovery is the one thing the rule takes on the resolver's
 // word. A host's own DNS records decide nothing, since every address they give
 // is judged; which prefixes the network translates through, only the network
 // can say. public.go holds the blocks and the reason for each.

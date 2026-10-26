@@ -446,6 +446,54 @@ func TestANameIsPublicOnlyWhenEveryAddressItResolvesToIs(t *testing.T) {
 	}
 }
 
+// A RULE IS HAD ONLY FROM THE NETWORK IT JUDGES ON. DiscoverRule asks the
+// resolver for the network's NAT64 prefixes and judges each address with
+// them, as ResolvePublic does; a discovery that fails gives no rule, with the
+// resolver's own error. The zero Rule asked no network anything and calls no
+// address public, so a dialer that never asked for the prefixes dials nothing
+// rather than judging without them.
+func TestARuleJudgesWithTheNetworksOwnPrefixes(t *testing.T) {
+	t.Parallel()
+	n := dns64("3ffe:64:64:96::c000:aa", "3ffe:64:64:96::c000:ab")
+	rule, err := httpx.DiscoverRule(t.Context(), n)
+	if err != nil {
+		t.Fatalf("discovering the rule on a network with DNS64: %v", err)
+	}
+	for _, c := range []struct {
+		addr string
+		want bool
+	}{
+		{"104.16.0.1", true},
+		{"::ffff:104.16.0.1", true},
+		{"2606:4700::1", true},
+		{"64:ff9b::6810:1", true},       // 104.16.0.1 under the well-known prefix
+		{"3ffe:64:64:96::6810:1", true}, // 104.16.0.1 under the network's own
+		{"3ffe:64:64:96::a00:5", false}, // 10.0.0.5 under it, which the allowlist alone calls public
+		{"10.0.0.5", false},
+		{"2606:4700::1%eth0", false},
+	} {
+		addr := netip.MustParseAddr(c.addr)
+		if got := rule.Public(addr); got != c.want {
+			t.Errorf("the network's rule judges %s public=%v, want %v", addr, got, c.want)
+		}
+		if got := publicOn(t, n, addr); got != c.want {
+			t.Errorf("ResolvePublic on the same network judges %s public=%v, want %v", addr, got, c.want)
+		}
+		if (httpx.Rule{}).Public(addr) {
+			t.Errorf("the zero Rule calls %s public", addr)
+		}
+	}
+
+	misbehaving := &net.DNSError{Err: "server misbehaving", Name: "ipv4only.arpa.", Server: "192.0.2.53:53",
+		IsTemporary: true}
+	failing := &network{fail: map[string]error{"ipv4only.arpa.": misbehaving}}
+	failed, err := httpx.DiscoverRule(t.Context(), failing)
+	if called := failed.Public(netip.MustParseAddr("104.16.0.1")); !errors.Is(err, misbehaving) || called {
+		t.Errorf("discovery through a resolver failing ipv4only.arpa answered %v, and a rule that calls "+
+			"104.16.0.1 public=%v; want the failure and no rule", err, called)
+	}
+}
+
 // resolverFunc is a resolver written as one function.
 type resolverFunc func(ctx context.Context, network, host string) ([]netip.Addr, error)
 

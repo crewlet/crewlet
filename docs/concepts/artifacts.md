@@ -445,17 +445,19 @@ sequenceDiagram
   references on the allowed CDNs, as a script or link element, a module import
   or an import map entry, are copied into the version when it is published,
   integrity-checked, so viewing works without the CDN and the CDN never sees a
-  viewer. The node fetches each file itself and dials only an address on the
-  public internet: none in a block IANA reserves for a special purpose, and an
-  IPv6 one only in global unicast (`2000::/3`), so a CDN name that resolves
-  into the network the engine runs in is refused rather than fetched. On a
-  network that reaches IPv4 through NAT64, an address under its translation
-  prefix is judged by the IPv4 address it carries; the node learns the
-  network's own prefixes by asking its resolver for `ipv4only.arpa`
+  viewer. The node fetches each file itself and connects only to an address on
+  the public internet: none in a block IANA reserves for a special purpose, and
+  an IPv6 one only in global unicast (`2000::/3`). Each address a CDN name
+  resolves to is judged as the connection to it is made, so a name that
+  resolves into the network the engine runs in is refused rather than fetched,
+  and one that resolves both ways is fetched from its public addresses alone.
+  On a network that reaches IPv4 through NAT64, an address under its
+  translation prefix is judged by the IPv4 address it carries; the node learns
+  the network's own prefixes by asking its resolver for `ipv4only.arpa`
   (RFC 7050) each time it connects, so a resolver that fails that lookup,
   rather than answering it has no record, fails the copy. Any other remote
-  script a page states is refused. What the linter
-  cannot read is a script the page's own script builds at run time:
+  script a page states is refused. What the linter cannot read is a script the
+  page's own script builds at run time:
   `'strict-dynamic'` trusts it from any host, so a page whose author means to
   can send what a viewer may read to another site. Only an `editor` publishes,
   and every version names who did; share `editor` accordingly (see
