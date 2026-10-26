@@ -28,9 +28,9 @@ func namedWorld() map[string]any {
 	world["/worklet/projects"] = map[string]any{"projects": []any{
 		map[string]any{"key": "ENG", "name": "Engineering"},
 		map[string]any{"key": "MKT", "name": "Marketing"}}}
+	// World already holds the seat qa, "QA Engineer"; qa-web shares its name.
 	org := world["/org"].(map[string]any)
 	org["roles"] = append(org["roles"].([]any),
-		map[string]any{"handle": "qa", "name": "QA Engineer", "kind": "agent"},
 		map[string]any{"handle": "qa-web", "name": "QA engineer", "kind": "agent"})
 	return world
 }
