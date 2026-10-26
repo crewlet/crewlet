@@ -214,9 +214,15 @@ A run goes to the first of these the company configures:
    (`apt install bubblewrap`) or run on a kernel with Landlock, or configure a
    cell above.
 
-On the engine host, point `CREWLET_MCP_BRIDGE_URL` at the node's loopback
-address (`http://127.0.0.1:<api.port>`): the run's bridge token is then
-admitted from loopback only.
+A run dials `CREWLET_MCP_BRIDGE_URL`, the fleet's address for the tool bridge
+([Code Sandbox](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)),
+and its call is relayed to the node that opened its session wherever it lands.
+Where every box runs on the engine host, as on a single node with no sandbox
+cell, point that variable at the node's loopback address
+(`http://127.0.0.1:<api.port>`). A confined run's bridge token is then admitted
+from that host's loopback only, and never relayed to another node. Don't do
+this where seats run boxes elsewhere: they are given the same address, and a
+box on another machine cannot dial it.
 
 ## Retention and erasure
 

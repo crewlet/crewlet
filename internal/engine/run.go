@@ -425,8 +425,10 @@ type Engine struct {
 
 	// bridge serves a running seat's tool surface to a coding agent over
 	// MCP. Nil where no bridge URL is configured, which is every
-	// deployment that runs no box mode.
-	bridge *mcpbridge.Bridge
+	// deployment that runs no box mode. leaveBridgeFleet withdraws it from
+	// the fleet it joined — see bridgefleet.go.
+	bridge           *mcpbridge.Bridge
+	leaveBridgeFleet queue.Unsubscribe
 
 	// sessions is where every phase's tools are served to the CLI that runs
 	// it, on this host: this PROCESS's one [toolsession.Host], a directory
@@ -1778,6 +1780,11 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err = e.armSandboxTails(ctx); err != nil {
 		return nil, fmt.Errorf("engine: serve coding runs' live output: %w", err)
 	}
+	// AND THE TOOL BRIDGE OF THE BOX-MODE RUNS ITS SEATS LAUNCH, wherever a
+	// box's call lands — see bridgefleet.go.
+	if err = e.joinBridgeFleet(ctx, opts.Bootstrap); err != nil {
+		return nil, fmt.Errorf("engine: serve the tool bridge to the fleet: %w", err)
+	}
 
 	// EVERYTHING BELOW THIS LINE PUBLISHES, and a maintenance-mode node
 	// starts none of it: every duty, the scheduler, the change feeds, the
@@ -2522,6 +2529,9 @@ func (e *Engine) teardown(ctx context.Context) {
 	// And a run's live output, read from boxes this node is about to stop
 	// driving.
 	e.stopSandboxTails(ctx)
+	// And the bridge's relay, whose exchanges serve sessions this node is
+	// about to stop holding.
+	e.stopBridgeFleet(ctx)
 	// AND THEN THE CORE, whose logs are the last thing standing — see the
 	// comment above stopNative.
 	e.stopCore()

@@ -1108,48 +1108,38 @@ run is collected and its turn resumes:
   it took and which server answered it (below).
 
 The endpoint names the run's **job** — the launch the run's durable row records
-— in a token signed under the fleet's keyring and expiring with the run, and
-the session is closed the moment the run ends, whatever ended it. Set
-**`CREWLET_MCP_BRIDGE_URL`** to a URL a sandbox can reach;
-without it box mode is **refused** at launch rather than started — a
-coding agent with none of the seat's tools cannot answer anybody, cannot
-touch a ticket and cannot submit its work. The URL has to reach a
-listener, so the node also needs `api.port`: a node that binds none
-(`api.port: 0`) refuses box mode by naming `api.port`, rather than
-handing a box an endpoint nothing answers. With `api.public.port` set the
-bridge is served on that public listener and nowhere else, so the URL
-names it. Host mode needs none of this.
+— and the seat it acts as, in a token signed under the fleet's keyring and
+expiring with the run, and the session is closed the moment the run ends,
+whatever ended it. Set **`CREWLET_MCP_BRIDGE_URL`** to a URL a sandbox can
+reach; without it box mode is **refused** at launch rather than started — a
+coding agent with none of the seat's tools cannot answer anybody, cannot touch
+a ticket and cannot submit its work. The URL has to reach a listener: an
+`ingress` node with `api.port: 0` binds none for the route, so box mode is
+refused for its seats by naming `api.port` rather than handing a box an
+endpoint nothing answers (a node without `ingress` is reached through the
+ingress nodes, whatever its own port). With `api.public.port` set the bridge
+is served on that public listener and nowhere else, so the URL names it. Host
+mode needs none of this.
 
-> **In a fleet, that URL must address the node itself, not a load
-> balancer in front of several.** A
-> session is a live tool surface: the seat's MCP children, its skill
-> guard, its per-turn recording, all objects in the process that holds
-> the seat. Signing shares *authentication* across a fleet; it does not
-> and could not share the surface. Each node mints its endpoint from its
-> own value, so a per-node-addressable one is correct and a shared one
-> sends calls to peers that never held the session. Those answer 401,
-> and the response deliberately cannot say why — but the log
-> can, and does: `mcp_bridge_unresolved` names this setting when the
-> token is one the fleet signed.
+> **In a fleet, that URL is the fleet's, the same on every node.** A session
+> is a live tool surface — the seat's MCP children, its skill guard, its
+> per-turn recording, all objects in the process that holds the seat — but
+> the box need not dial that process. Any node that serves the API takes the
+> call, reads the seat's lease (the token names the seat), and relays the
+> whole exchange to the node holding the seat over the broker, event stream
+> included. So the URL can be a load balancer in front of every `ingress`
+> node, and a seat on a node that serves no API at all runs in box mode as
+> well as one on a node that does. See [Code Sandbox](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box).
 
-**A run outlives the process that launched it.** The token names the job, never
-a process, so a node that restarts while a box is running re-opens the run's
-session as it recovers the seat — the surface rebuilt from the run's own row:
-the tools and skills it launched with, those the run activated or loaded over
-the bridge, its call log and what its bridged calls have cost — and the box's
-token, unchanged, resolves again. A relaunch is a new job, and the old box's
-token stops resolving. A session that cannot be re-opened logs
-`bridge_not_reopened` and never fails the recovery.
-
-**A run a peer takes over is the case that does not carry over.** The token
-carries no address: the box dials the URL it was launched with, the launching
-node's own. The peer that takes the seat re-opens the session, but the box
-still calls the node it was given. While that node is up and has not
-restarted, it answers every call that the run's tools are closed and its CLI
-should end its turn, so the run ends and the seat's new holder collects it; a
-node that has restarted since answers 401, and one that is gone answers
-nothing — either way the rest of the run's calls fail until it ends, and the
-run is collected and judged on what it did before.
+**A run outlives the node that launched it.** The token names the job, never
+a process, so whichever node takes the seat over — the same node after a
+restart, or a peer — re-opens the run's session as it recovers the seat: the
+surface rebuilt from the run's own row: the tools and skills it launched with,
+those the run activated or loaded over the bridge, its call log and what its
+bridged calls have cost. The box's token, unchanged, reaches it there through
+the same URL. A relaunch is a new job, and the old box's token stops
+resolving. A session that cannot be re-opened logs `bridge_not_reopened` and
+never fails the recovery.
 
 The run ends by calling `submit_work` over that bridge, exactly as a
 native loop ends by calling it locally, so the outcome vocabulary and the

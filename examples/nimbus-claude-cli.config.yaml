@@ -189,10 +189,10 @@ api:
   # CREWLET_MCP_BRIDGE_URL to a URL the box can dial — for a `direct` box
   # on this machine that is http://127.0.0.1:<this port>.  Change the port
   # and change that variable with it; without it box mode is refused at
-  # launch rather than started with no tools.  In a fleet the URL must
-  # address the NODE and never a load balancer: a bridge session is a live
-  # tool surface in one process, and a peer that never held it answers 401
-  # for ever.
+  # launch rather than started with no tools.  In a fleet the URL is the
+  # fleet's, the same on every node: any node serving the API, a load
+  # balancer in front of several included, relays each call to the node
+  # holding the seat.
   #
   # 8000 rather than 80, deliberately.  The only reason to bind the plain
   # http port is so a webhook URL an external service registers needs no

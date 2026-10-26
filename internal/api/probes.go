@@ -8,7 +8,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
-	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/version"
@@ -25,8 +24,8 @@ import (
 // nor wait on during a rollout: a node that has not yet joined the fleet reads
 // exactly like one that has, and the next one is replaced while the first is
 // still claiming nothing. So api.port on such a node carries /health and /ready
-// and nothing else — plus, on a node running seats with a bridge URL, the
-// box-mode tool bridge, which was never ingress's to serve ([mountBridge]).
+// and nothing else — its box-mode seats' tool bridge included, which a box
+// reaches through the nodes that serve the API (internal/api/mcpbridge).
 // api.port 0 binds nothing, here as everywhere.
 //
 // # The same answers, sized to the node
@@ -134,9 +133,6 @@ type ProbeOptions struct {
 
 	// QueueBackend names the event queue's backend, for display.
 	QueueBackend string
-
-	// Bridge is the node's box-mode tool bridge. Nil serves none.
-	Bridge *mcpbridge.Bridge
 }
 
 // probes serves the probe surface.
@@ -147,8 +143,8 @@ type probes struct {
 	queueBackend string
 }
 
-// Probes is the HTTP handler of a node without the ingress role: /health,
-// /ready and, where there is one, the tool bridge — and no other route.
+// Probes is the HTTP handler of a node without the ingress role: /health and
+// /ready, and no other route.
 //
 // It is wrapped in the same guard and security headers as the full [App], so a
 // request for any other path is refused or answered 404 exactly as the full
@@ -173,11 +169,8 @@ func Probes(opts ProbeOptions) (http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.Handle("GET /health", http.HandlerFunc(p.serveHealth))
 	mux.Handle("GET /ready", http.HandlerFunc(p.serveReady))
-	mountBridge(mux, opts.Bridge)
-	// NO CSRF GATE HERE, for [BridgeOnly]'s reason: the probes are reads, and
-	// the bridge's credential is a signed token in its own path rather than
-	// anything a browser attaches, so there is no cross-site request for a
-	// check to refuse.
+	// NO CSRF GATE HERE: the probes are reads, so there is no cross-site
+	// request for a check to refuse.
 	return pagepolicy.Apply(auth.New(opts.Bootstrap).Middleware(httpjson.Mux(mux)),
 		servedOverHTTPS(opts.Bootstrap, false)), nil
 }
