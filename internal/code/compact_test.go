@@ -490,14 +490,20 @@ func (l *lineLog) lines(msg string) []map[string]any {
 // holding at least the floor of live packs, the most first and then by id,
 // each with the version its row holds — paged by its cursor, a page's rows in
 // that order across the pages — and never a deleted one, nor one under the
-// floor.
+// floor. THREE REPOSITORIES TIE for the most, so a page of two ends INSIDE
+// the tie, and the next resumes within it: after the cursor's id among the
+// repositories at the cursor's count, then below that count, each listed
+// once.
 //
-// Mutation: order the listing by id, and a repository near the bound waits
-// behind every barely due one.
+// Mutations: order the listing by id, and a repository near the bound waits
+// behind every barely due one; drop or blank the cursor's `id < ?` arm, and
+// the page after the cursor skips the rest of the tie, passed over for a
+// poll however near MaxPacksPerRepo it stands; resume by `id > ?`, and the
+// page lists the tie's first again in place of its rest.
 func TestTheDueListingIsMostPacksFirst(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
-	packs := map[string]int{"a": 9, "b": 30, "c": 30, "d": 12, "e": 3, "f": 50, "g": 20}
+	packs := map[string]int{"a": 9, "b": 30, "c": 30, "d": 12, "e": 3, "f": 50, "g": 20, "h": 30}
 	ids := map[string]string{}
 	for name, count := range packs {
 		ids[name] = n.ensure(name, suiteSettings(), t1).RepoID
@@ -513,6 +519,8 @@ func TestTheDueListingIsMostPacksFirst(t *testing.T) {
 	var (
 		got   []code.CompactionCandidate
 		pages int
+		// onPage is the page each repository was listed on.
+		onPage = map[string]int{}
 	)
 	q := code.ReadQuery{Kind: code.ReadCompactionDue, MinPacks: code.CompactMinMerge,
 		Fresh: statelog.Freshness{Level: statelog.ReadStale}}
@@ -522,6 +530,9 @@ func TestTheDueListingIsMostPacksFirst(t *testing.T) {
 			t.Fatalf("page %d: %v", pages, err)
 		}
 		pages++
+		for _, c := range page.Due {
+			onPage[c.ID] = pages
+		}
 		got = append(got, page.Due...)
 		if page.Next == "" {
 			break
@@ -531,14 +542,11 @@ func TestTheDueListingIsMostPacksFirst(t *testing.T) {
 			t.Fatal("the listing did not end")
 		}
 	}
-	var want []string
-	for _, name := range []string{"b", "c", "g", "d", "a"} {
-		want = append(want, ids[name])
-	}
-	// THE TIE AT THIRTY, by id descending.
-	if ids["b"] < ids["c"] {
-		want[0], want[1] = want[1], want[0]
-	}
+	// THE TIE AT THIRTY, by id descending, and then the rest by their counts.
+	want := []string{ids["b"], ids["c"], ids["h"]}
+	slices.Sort(want)
+	slices.Reverse(want)
+	want = append(want, ids["g"], ids["d"], ids["a"])
 	var listed []string
 	for _, c := range got {
 		listed = append(listed, c.ID)
@@ -555,8 +563,14 @@ func TestTheDueListingIsMostPacksFirst(t *testing.T) {
 		}
 	}
 	if !slices.Equal(listed, want) {
-		t.Fatalf("the due listing is %v, want %v: most live packs first, then by id, no deleted repository "+
-			"and none under the floor", listed, want)
+		t.Fatalf("the due listing is %v, want %v: most live packs first, then by id, each once, no deleted "+
+			"repository and none under the floor", listed, want)
+	}
+	// THE PREMISE: a page ended inside the tie, so a page began after a
+	// cursor whose count the rest of the tie shares.
+	if onPage[want[1]] == onPage[want[2]] {
+		t.Fatalf("the tie at thirty was listed on one page (%d); the case needs a page to end inside it",
+			onPage[want[1]])
 	}
 	if pages < 3 {
 		t.Fatalf("the listing took %d pages of two, want at least three", pages)
