@@ -209,6 +209,24 @@ test("every scope states its three windows, the company's first", async () => {
   expect(screen.getByText(/last refused a call/i)).toBeTruthy();
 });
 
+// A MONTH IS NAMED BY ITS LABEL, as the day and the week are: the engine cut
+// it on the company's clock, so naming it needs no clock here. Read from the
+// window's first instant, it needed the company's zone, and a browser whose
+// own time-zone data predates the name cannot build a formatter in it (the
+// engine admits any name Go's database holds): the screen threw instead of
+// drawing. Read in UTC instead, that instant names the month before for a
+// company east of Greenwich, whose September starts on August 31 in UTC.
+test("a month is named by its label, even in a zone this browser cannot read", async () => {
+  const month = win("month", {
+    starts_at: "2026-08-31T15:00:00Z",
+    resets_at: "2026-09-30T15:00:00Z",
+  });
+  mount(answer({ timezone: "Not/A_Zone", org: { windows: [win("day"), win("week"), month] } }));
+  await settle();
+  const tile = screen.getByRole("region", { name: "The company this month" });
+  expect(within(tile).getByText("September")).toBeTruthy();
+});
+
 // THE SEATS' TABLE IS ITS CARD'S BODY: a table in a bordered box of its own
 // inside the card drew two edges a pixel apart (styles/frame.test.ts holds
 // the flush form and the one rule under the card's header).

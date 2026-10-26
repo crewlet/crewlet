@@ -16,6 +16,7 @@ import { EMPTY_VALUE } from "@crewlethq/ui";
 import {
   fmtSetting,
   asSentence,
+  companyMonthLabel,
   configValueKind,
   elapsedMs,
   eventHistoryLabel,
@@ -75,6 +76,17 @@ describe("timestamps", () => {
     expect(newestFirst(b, a)).toBeLessThan(0);
     expect(newestFirst(a, { ...a })).toBe(0);
     expect(oldestFirst(a, b)).toBeLessThan(0);
+  });
+
+  // A MONTH THE ENGINE CUT ON THE COMPANY'S CLOCK is named from its label,
+  // which reads no clock: the suite's Berlin, and any zone a browser cannot
+  // read, name it alike. Anything that is not a month is drawn as it came.
+  test("a company month label names its month without reading a clock", () => {
+    expect(companyMonthLabel("2026-09")).toBe("September");
+    expect(companyMonthLabel("2026-01")).toBe("January");
+    expect(companyMonthLabel("2026-13")).toBe("2026-13");
+    expect(companyMonthLabel("2026-09-29")).toBe("2026-09-29");
+    expect(companyMonthLabel("")).toBe("");
   });
 
   test("a sort through newestFirst is stable and idempotent", () => {

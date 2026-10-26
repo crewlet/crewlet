@@ -173,6 +173,25 @@ export function companyDateLabel(date: string): string {
   return dateTimeFormat(undefined, "UTC", { month: "short", day: "numeric" }).format(at);
 }
 
+/**
+ * "September", from a COMPANY MONTH LABEL (`2026-09`) — a month the engine cut
+ * on the company's clock, named from the label for the reason
+ * [companyDateLabel] names a day from its own: read at noon UTC of its first
+ * day and formatted in UTC, so no clock is read and no zone moves it. Named
+ * from the month's first instant instead, it needs the company's zone, which
+ * a browser whose own time-zone data predates the name cannot read (the
+ * engine admits any name Go's database holds); and read in UTC, that instant
+ * falls in the month before for a company east of Greenwich. The label as it
+ * came where it is not a month.
+ */
+export function companyMonthLabel(month: string): string {
+  const at = Date.parse(`${month}-01T12:00:00Z`);
+  if (!Number.isFinite(at)) return month;
+  return dateTimeFormat(undefined, "UTC", MONTH).format(at);
+}
+
+const MONTH: DateShape = { month: "long" };
+
 /** Which calendar year an instant falls in, IN THE VIEWER'S ZONE. */
 function calendarYear(at: Date): string {
   return dateTimeFormat("en-US", zone(), { year: "numeric" }).format(at);
