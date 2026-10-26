@@ -163,3 +163,67 @@ test("a change that removes nothing says nothing about removing", () => {
   });
   expect(screen.queryByText(/This also removes/)).toBeNull();
 });
+
+// A VALUE IS DRAWN AS WHAT IT IS (changeValue.tsx): a list as a list, never
+// one line joined with commas; text across lines as a preview of the page,
+// its headings and bullets kept and no live link; a request's body as code;
+// a colour as its chip beside the hex a screen reader hears. Mutation: draw
+// a row's `to` as its text, or drop the block.
+test("a list, a page of text, a body and a colour each read as what they are", () => {
+  draw({
+    scope: "server",
+    tool: "propose_api_change",
+    title: "Change through the API",
+    changes: [
+      {
+        kind: "added",
+        field: "roles.qa.responsibilities",
+        label: "Roles › qa › responsibilities",
+        to: "Review the tests, Approve or send back",
+        items: ["Review the tests", "Approve or send back"],
+      },
+      {
+        kind: "added",
+        field: "content",
+        label: "Page",
+        to: "# Proposed team\n\n## Roles\n\n- **Product Manager**: owns the brief\n- [a link](https://example.com)",
+      },
+      { kind: "fact", field: "request.body", label: "Request body", to: '{\n  "name": "QA"\n}' },
+      {
+        kind: "changed",
+        field: "colors.ground",
+        label: "Dark ground colour",
+        from: "#090019",
+        to: "#14102B",
+      },
+    ],
+  });
+  const rows = [...document.querySelectorAll(".crewlet-change-list__row")];
+  const row = (label: string) => rows.find((r) => r.querySelector("dt")?.textContent === label)!;
+
+  const list = row("Roles › qa › responsibilities");
+  expect(list.classList.contains("crewlet-change-list__row--block")).toBe(true);
+  expect([...list.querySelectorAll("li")].map((li) => li.textContent)).toEqual([
+    "Review the tests",
+    "Approve or send back",
+  ]);
+
+  const page = row("Page");
+  // THE DRAWER'S OWN HEADING RHYTHM: a heading of the page is a heading
+  // line, never a heading of the dashboard's outline.
+  expect([...page.querySelectorAll(".md-heading")].map((h) => h.textContent)).toEqual([
+    "Proposed team",
+    "Roles",
+  ]);
+  expect(page.querySelectorAll("li")).toHaveLength(2);
+  expect(page.querySelector("a")).toBeNull();
+
+  const body = row("Request body");
+  expect(body.classList.contains("crewlet-change-list__row--block")).toBe(true);
+  expect(body.querySelector("pre, code")?.textContent).toContain('"name": "QA"');
+
+  const colour = row("Dark ground colour");
+  expect(colour.querySelectorAll(".crewlet-color-chip")).toHaveLength(2);
+  expect(colour.querySelector("ins")?.textContent).toContain("#14102B");
+  expect(colour.classList.contains("crewlet-change-list__row--block")).toBe(false);
+});

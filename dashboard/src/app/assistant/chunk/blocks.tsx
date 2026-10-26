@@ -79,6 +79,7 @@ import { useCardOpen } from "./fold.ts";
 import { pageActionPreview, usePageSnapshot, type PageActionPreview } from "../context.ts";
 import { changedNothing, type ActionLocal, type ActionLocalState } from "./pageActions.ts";
 import { DraftFile } from "./DraftFile.tsx";
+import { drawValue } from "./changeValue.tsx";
 import type { ProposalLocal, TurnPhase, TurnView } from "./turn.ts";
 import { FilesCard } from "./files.tsx";
 
@@ -469,15 +470,25 @@ export function changeRowsOf(proposal: AssistantProposalCard): ChangeListRow[] {
   const rows = proposal.changes.map((change): ChangeListRow => {
     const note = change.note;
     const base = note === undefined ? { label: change.label } : { label: change.label, note };
+    const to = drawValue(change.to ?? "", change.items);
+    const from = drawValue(change.from ?? "", change.from_items);
     switch (CHANGE_KIND[change.kind]) {
-      case "fact":
-        return { ...base, kind: "fact", value: change.to ?? change.from ?? "" };
+      case "fact": {
+        const value = change.to === undefined && change.from !== undefined ? from : to;
+        return { ...base, kind: "fact", value: value.node, block: value.block };
+      }
       case "changed":
-        return { ...base, kind: "changed", from: change.from ?? "", to: change.to ?? "" };
+        return {
+          ...base,
+          kind: "changed",
+          from: from.node,
+          to: to.node,
+          block: from.block || to.block,
+        };
       case "added":
-        return { ...base, kind: "added", to: change.to ?? "", isNew: change.new === true };
+        return { ...base, kind: "added", to: to.node, isNew: change.new === true, block: to.block };
       case "removed":
-        return { ...base, kind: "removed", from: change.from ?? "" };
+        return { ...base, kind: "removed", from: from.node, block: from.block };
       case "text":
         return {
           ...base,
@@ -585,12 +596,23 @@ export function ActionReceipt({
 /** A screen's preview row in `ChangeList`'s grammar: what it sets, from what. */
 function previewRow(row: PageActionPreview["rows"][number]): ChangeListRow {
   // A PROPOSED FILE IS DRAWN, by its name, its type and a thumbnail.
-  const to = row.file ? <DraftFile file={row.file} /> : row.next;
+  const next = row.file
+    ? { node: <DraftFile file={row.file} />, block: false }
+    : drawValue(row.next, row.items);
   if (row.current === null || (row.file && row.current === "(empty)")) {
-    return { kind: "added", label: row.field, to, isNew: false };
+    return { kind: "added", label: row.field, to: next.node, isNew: false, block: next.block };
   }
-  if (!row.file && row.current === row.next) return { kind: "fact", label: row.field, value: to };
-  return { kind: "changed", label: row.field, from: row.current, to };
+  if (!row.file && row.current === row.next) {
+    return { kind: "fact", label: row.field, value: next.node, block: next.block };
+  }
+  const current = drawValue(row.current, row.currentItems);
+  return {
+    kind: "changed",
+    label: row.field,
+    from: current.node,
+    to: next.node,
+    block: current.block || next.block,
+  };
 }
 
 /**
