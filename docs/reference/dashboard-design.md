@@ -9225,9 +9225,10 @@ to.
    tell two things apart, use their names. The third-party app marks in
    `@crewlethq/icons`, the org charts' toned agent nodes (Company › Org chart
    and Edit org), an agent's own profile icon, a Crewlet character in the
-   colour its author chose, and a QR code's black on white (`@crewlethq/ui`'s
-   `QrCode`, whose two inks are the fixed `color.qr` tokens) are
-   the four bounded exceptions (see "The one rule" above); nothing else is. The character and colour lists are the
+   colour its author chose, a QR code's black on white (`@crewlethq/ui`'s
+   `QrCode`, whose two inks are the fixed `color.qr` tokens) and a
+   collaborator's presence colour in an artifact are
+   the five bounded exceptions (see "The one rule" above); nothing else is. The character and colour lists are the
    contract's (`contract/avatar.ts`), held to the engine's and to the design
    system's, and one reading of them (`lib/avatar.ts`'s `avatarOf`) draws a
    part this build does not know as the default part rather than as nothing.
