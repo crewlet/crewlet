@@ -972,7 +972,7 @@ func (c *Cache) vouchedRun(e *entry, inc *incarnation, r provenanceRun) bool {
 // is above From, the two are retired with no run in their place. It answers
 // the files the stored record no longer names, and whether it stored. Each
 // input is mapped for the merge alone and read in order: the merge streams
-// (mergeRuns), holding nothing a push.
+// (mergeRuns), holding nothing a push or a ref.
 func (c *Cache) mergePair(ctx context.Context, e *entry, inc *incarnation, gen uint64, rec *provenanceState,
 	i int) ([]string, bool, error) {
 
@@ -1009,7 +1009,9 @@ func (c *Cache) mergePair(ctx context.Context, e *entry, inc *incarnation, gen u
 		})
 		return retired, ok, nil
 	}
-	s, err := c.stageRun(func(w io.Writer) (runHeader, error) { return mergeRuns(w, ma.file, mb.file, rec.From) })
+	s, err := c.stageRun(func(w io.Writer) (runHeader, error) {
+		return mergeRuns(w, []runFile{ma.file, mb.file}, rec.From)
+	})
 	if err != nil {
 		return nil, false, err
 	}

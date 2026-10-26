@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"runtime"
 	"strconv"
 	"sync/atomic"
 	"testing"
@@ -44,6 +46,11 @@ import (
 //     answer, the data node's read and the whole step a page in ms, and the
 //     seconds the history took (s/op). 300 000 pushes run only under
 //     gittest.LargeEnv.
+//   - op=merge/refs=R is a merge of two runs of mergePushes pushes each, in
+//     memory, every push moving the one branch (one) or a ref of its own
+//     (each) — a repository whose seats push a branch apiece — in ns a push
+//     and bytes allocated a ref (B/ref): what the merge holds of the refs,
+//     which streamed a key at a time does not grow with them.
 func BenchmarkProvenance(b *testing.B) {
 	quiet(b)
 	for _, bucket := range []string{"memobj", "fake"} {
@@ -51,6 +58,9 @@ func BenchmarkProvenance(b *testing.B) {
 	}
 	for _, runs := range []int{1, 8, 32, 64} {
 		b.Run(fmt.Sprintf("op=lookup/runs=%d", runs), func(b *testing.B) { benchLookup(b, runs) })
+	}
+	for _, refs := range []string{"one", "each"} {
+		b.Run("op=merge/refs="+refs, func(b *testing.B) { benchMerge(b, refs == "each") })
 	}
 	for _, pushes := range []int{30_000, 300_000} {
 		b.Run(fmt.Sprintf("op=backfill/pushes=%d", pushes), func(b *testing.B) {
@@ -154,6 +164,31 @@ func benchLookup(b *testing.B, runs int) {
 	}
 	b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*lookupsPerOp), "ns/lookup")
 	b.ReportMetric(float64(size)/float64(shapePushes*shapeCommits), "bytes/commit")
+}
+
+// mergePushes is each run's pushes in op=merge: two runs of 100 000, so the
+// arm that moves a ref a push merges 200 000 refs — a large repository's
+// seat branches over a few weeks of churn.
+const mergePushes = 100_000
+
+// benchMerge is op=merge, every push moving a ref of its own where eachRef.
+func benchMerge(b *testing.B, eachRef bool) {
+	merge := cache.SyntheticMerge(b, mergePushes, eachRef)
+	refs := 1
+	if eachRef {
+		refs = 2 * mergePushes
+	}
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for b.Loop() {
+		if err := merge(io.Discard); err != nil {
+			b.Fatal(err)
+		}
+	}
+	runtime.ReadMemStats(&after)
+	b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*2*mergePushes), "ns/push")
+	b.ReportMetric(float64(after.TotalAlloc-before.TotalAlloc)/float64(b.N*refs), "B/ref")
 }
 
 // backfillDeadline is how long op=backfill waits for a history to be read

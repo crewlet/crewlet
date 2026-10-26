@@ -1022,6 +1022,12 @@
 // process — read four pages of about 7 500 pushes, each about 3.9 MB, the
 // read's 4 MiB bound reached before its 10 000 rows: 115 ms of the data node's
 // read and about 148 ms a step, and 1.78 s in all at [BackfillIdle]'s pace.
+// A merge of two runs of 100 000 pushes each (op=merge, three operations on
+// two E-cores of the same machine, without the race detector) takes 134 ns a
+// push where every push moves one branch and 665 ns where each moves a ref of
+// its own, allocating 294 KB either way — the writer's buffer and one key's
+// ordinals — where the merge that held both runs' refs by name took 2.1 µs a
+// push and 519 bytes a ref (its review's measure, 198 MB for 400 000 refs).
 //
 // The MULTI-PACK-INDEX, over a source repository's composition — every commit
 // four files of one directory, so commits are a seventh of the objects

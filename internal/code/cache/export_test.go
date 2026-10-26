@@ -1363,6 +1363,31 @@ func SyntheticIndex(tb testing.TB, runs, pushes, perPush int) (Provenance, int64
 	return Provenance{runs: files, from: base - 1, indexed: true}, size
 }
 
+// SyntheticMerge is two adjacent runs of pushes synthetic pushes each — every
+// push moving one branch, or with eachRef a ref of its own, and introducing
+// one commit — built, written and read back in memory as a git node's are,
+// and a merge of the two into w: what BenchmarkProvenance's merge arm times.
+func SyntheticMerge(tb testing.TB, pushes int, eachRef bool) func(w io.Writer) error {
+	tb.Helper()
+	base := statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 1}.Packed()
+	var runs []runFile
+	for k := range 2 {
+		rows := make([]code.IntroducedRow, 0, pushes)
+		for i := k * pushes; i < (k+1)*pushes; i++ {
+			ref := "refs/heads/main"
+			if eachRef {
+				ref = fmt.Sprintf("refs/heads/seat/%08d", i)
+			}
+			rows = append(rows, synthetic(base, i, ref))
+		}
+		runs = append(runs, runOf(tb, base+int64(k*pushes)-1, base+int64((k+1)*pushes)-1, rows))
+	}
+	return func(w io.Writer) error {
+		_, err := mergeRuns(w, runs, base-1)
+		return err
+	}
+}
+
 // DrawnOID is an object id drawn from name as git's are, uniformly: its
 // SHA-1.
 func DrawnOID(name string) string {

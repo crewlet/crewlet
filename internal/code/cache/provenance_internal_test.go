@@ -2,8 +2,12 @@ package cache
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
+	"math/rand/v2"
+	"runtime"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -152,7 +156,7 @@ func TestTwoRefsSharingAKeyKeepTheirOwnMoves(t *testing.T) {
 	a := runKeyed(t, base-1, base+3, first, same)
 	b := runKeyed(t, base+3, base+7, second, same)
 	var buf bytes.Buffer
-	if _, err := mergeRuns(&buf, a, b, base-1); err != nil {
+	if _, err := mergeRuns(&buf, []runFile{a, b}, base-1); err != nil {
 		t.Fatal(err)
 	}
 	merged, err := openRunBytes(buf.Bytes())
@@ -256,7 +260,7 @@ func TestAMergeKeepsEveryPushAboveItsFloor(t *testing.T) {
 	b := runOf(t, base+4, base+9, rows[5:])
 	floor := base + 2 // pushes 0, 1 and 2 are at or below it
 	var buf bytes.Buffer
-	h, err := mergeRuns(&buf, a, b, floor)
+	h, err := mergeRuns(&buf, []runFile{a, b}, floor)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,6 +290,191 @@ func TestAMergeKeepsEveryPushAboveItsFloor(t *testing.T) {
 		if m := v.At(i); m.By.PushID != rows[i+3].PushID || m.New != oidOf(i+4) {
 			t.Errorf("the merge's move %d is %+v, want push %d's", i, m, i+3)
 		}
+	}
+}
+
+// A MERGE IS THE RUN ITS KEPT ROWS BUILD, byte for byte: of any number of
+// adjacent runs, over histories whose pushes share refs across the runs and
+// move refs of their own, land several pushes at one position — two of them
+// moving one ref, which their chain orders — bring a commit back that an
+// earlier push introduced, and file their refs under a handful of keys, so
+// every key is shared by many names; at any floor, from below the first run
+// to inside the last. The merge streams one key at a time, and the run built
+// whole from the rows above the floor is what it must write.
+//
+// Mutation: keep a ref whose every move is at or below the floor (refGroups
+// keeping every name) — the merged run names refs its rows do not move.
+func TestAMergeIsTheRunItsKeptRowsBuild(t *testing.T) {
+	t.Parallel()
+	few := func(ref string) [runKeyBytes]byte {
+		sum := sha256.Sum256([]byte(ref))
+		return [runKeyBytes]byte{sum[0] % 4}
+	}
+	base := statelog.Position{Stream: topics.CodeLogStream, Generation: 2, Seq: 1}.Packed()
+	for seed := range uint64(40) {
+		rng := rand.New(rand.NewPCG(seed, 7))
+		rows, records := historyOf(rng, base, 120)
+		for _, inputs := range []int{2, 3, 5, 8} {
+			// Cut the history at record boundaries into inputs runs.
+			cuts := []int{0}
+			for _, at := range rng.Perm(len(records) - 1)[:inputs-1] {
+				cuts = append(cuts, at+1)
+			}
+			cuts = append(cuts, len(records))
+			slices.Sort(cuts)
+			var runs []runFile
+			from := base - 1
+			for k := range inputs {
+				lo, hi := records[cuts[k]], len(rows)
+				if cuts[k+1] < len(records) {
+					hi = records[cuts[k+1]]
+				}
+				through := rows[hi-1].Position.Packed()
+				runs = append(runs, runKeyed(t, from, through, rows[lo:hi], few))
+				from = through
+			}
+			floor := base - 1 + int64(rng.IntN(int(from-base+1)))
+			var kept []code.IntroducedRow
+			for _, r := range rows {
+				if r.Position.Packed() > floor {
+					kept = append(kept, r)
+				}
+			}
+			if len(kept) == 0 {
+				continue
+			}
+			var got bytes.Buffer
+			if _, err := mergeRuns(&got, runs, floor); err != nil {
+				t.Fatalf("seed %d, %d runs, floor %d: %v", seed, inputs, floor, err)
+			}
+			built, err := buildRunKeyed(max(base-1, floor), from, kept, few)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var want bytes.Buffer
+			if _, err := built.write(&want); err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got.Bytes(), want.Bytes()) {
+				g, _ := openRunBytes(got.Bytes())
+				t.Fatalf("seed %d: the merge of %d runs above %d is %d bytes (%+v), and the run its %d kept rows "+
+					"build is %d (%+v)", seed, inputs, floor, got.Len(), g.h, len(kept), want.Len(), built.header())
+			}
+		}
+	}
+}
+
+// historyOf is a synthetic history of n pushes from base: records of one to
+// three pushes at one position, each push moving one or two refs — one of a
+// few shared by the whole history, or one of its own — two pushes of a
+// record now and then moving one ref one after the other, and now and then
+// introducing a commit an earlier push introduced. It answers the rows in
+// (position, push id) order, and the index of each record's first row.
+func historyOf(rng *rand.Rand, base int64, n int) ([]code.IntroducedRow, []int) {
+	value := map[string]string{}
+	oid := 0
+	fresh := func() string {
+		oid++
+		return oidOf(1_000_000 + oid)
+	}
+	move := func(ref string, forced bool) code.RefMove {
+		old := value[ref]
+		if old == "" {
+			old = code.ZeroOID
+		}
+		m := code.RefMove{Ref: ref, Old: old, New: fresh(), Forced: forced && old != code.ZeroOID}
+		if rng.IntN(20) == 0 && old != code.ZeroOID {
+			m.New = code.ZeroOID // a deletion
+		}
+		if m.New == code.ZeroOID {
+			delete(value, ref)
+		} else {
+			value[ref] = m.New
+		}
+		return m
+	}
+	var rows []code.IntroducedRow
+	var records []int
+	var introduced []string
+	position := base
+	for len(rows) < n {
+		records = append(records, len(rows))
+		size := 1 + rng.IntN(3)
+		var group []code.IntroducedRow
+		chained := ""
+		if size > 1 && rng.IntN(3) == 0 {
+			chained = fmt.Sprintf("refs/heads/shared-%d", rng.IntN(3))
+		}
+		for range size {
+			i := len(rows) + len(group)
+			row := synthetic(base, i, "")
+			row.Position = statelog.Unpack(topics.CodeLogStream, position)
+			row.Moves = nil
+			switch {
+			case chained != "":
+				row.Moves = append(row.Moves, move(chained, rng.IntN(4) == 0))
+			case rng.IntN(2) == 0:
+				row.Moves = append(row.Moves, move(fmt.Sprintf("refs/heads/shared-%d", rng.IntN(3)), rng.IntN(4) == 0))
+			default:
+				row.Moves = append(row.Moves, move(fmt.Sprintf("refs/heads/own-%d", i), false))
+			}
+			if rng.IntN(3) == 0 {
+				row.Moves = append(row.Moves, move(fmt.Sprintf("refs/tags/t-%d", i), false))
+			}
+			row.Introduced = []string{fresh()}
+			if len(introduced) > 0 && rng.IntN(5) == 0 {
+				row.Introduced = append(row.Introduced, introduced[rng.IntN(len(introduced))])
+			}
+			introduced = append(introduced, row.Introduced[0])
+			row.Count = len(row.Introduced)
+			group = append(group, row)
+		}
+		// A record's rows are read in push id order; the moves' chain says
+		// which landed first.
+		slices.SortFunc(group, func(a, b code.IntroducedRow) int { return strings.Compare(a.PushID, b.PushID) })
+		rows = append(rows, group...)
+		position += 1 + int64(rng.IntN(3))
+	}
+	return rows, records
+}
+
+// A MERGE HOLDS ONE KEY'S REFS, NOT A RUN'S. The refs of two runs — every
+// name either holds, a repository whose every push moves a ref of its own
+// holding as many as it has pushes — are merged a key at a time, so what a
+// merge allocates does not grow with them: four times the refs cost the merge
+// no more than a megabyte more. Held whole by name, as the first merge held
+// them, the refs of 40 000 pushes cost some 20 MB, 519 bytes a ref.
+//
+// Not parallel: it reads what the process allocated across the merge, which
+// a case running beside it would add to.
+//
+// Mutation: hold every input's names in maps across the merge (mergeRuns'
+// first shape) — four times the refs allocate some 15 MB more.
+func TestAMergeHoldsOneKeysRefsNotARunsRefs(t *testing.T) {
+	alloc := func(pushes int) uint64 {
+		t.Helper()
+		base := statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 1}.Packed()
+		var runs []runFile
+		for k := range 2 {
+			rows := make([]code.IntroducedRow, 0, pushes)
+			for i := k * pushes; i < (k+1)*pushes; i++ {
+				rows = append(rows, synthetic(base, i, fmt.Sprintf("refs/heads/seat/%07d", i)))
+			}
+			runs = append(runs, runOf(t, base+int64(k*pushes)-1, base+int64((k+1)*pushes)-1, rows))
+		}
+		runtime.GC()
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		if _, err := mergeRuns(io.Discard, runs, base-1); err != nil {
+			t.Fatal(err)
+		}
+		runtime.ReadMemStats(&after)
+		return after.TotalAlloc - before.TotalAlloc
+	}
+	small, large := alloc(5_000), alloc(20_000)
+	if large > small+1<<20 {
+		t.Errorf("a merge of 40 000 refs allocated %d bytes, and of 10 000 %d: what a merge holds grows with "+
+			"its refs", large, small)
 	}
 }
 

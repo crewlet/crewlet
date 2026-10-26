@@ -613,7 +613,8 @@ func DerivedFiles() []Derived {
 					"the run's commits and moves sorted in memory, at most the delta's own rows"},
 			{Step: StepProvenance, Trigger: TriggerBackfill, Writer: Writer{File: provenanceFile},
 				Charge: "a page of push rows (code.MaxPageBytes) as one run, or a merge of adjacent runs streamed " +
-					"from their mapped files through one buffer — nothing held a push"},
+					"from their mapped files through one buffer — nothing held a push or a ref, but one key's " +
+					"ordinals"},
 		},
 		Owns:      []Owned{{FilePattern: FilePattern{engineRoot, provenanceRunName}, File: "provenance"}},
 		Check:     CheckRunTrailer,

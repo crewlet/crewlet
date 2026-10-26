@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -647,37 +648,41 @@ func (f runFile) firstAbove(floor int64) int {
 	return i
 }
 
-// refEntry is ref entry i: its key, its name and its ordinal.
-func (f runFile) refEntry(i int) ([runKeyBytes]byte, string, uint8) {
-	e := f.data[f.l.refs+int64(i)*runRefBytes:]
-	var key [runKeyBytes]byte
-	copy(key[:], e[:8])
+// refRec is ref entry i's bytes: its key, its name's offset and length, and
+// its ordinal.
+func (f runFile) refRec(i int) []byte {
+	return f.data[f.l.refs+int64(i)*runRefBytes : f.l.refs+int64(i+1)*runRefBytes]
+}
+
+// refName is ref entry i's name, as the run's bytes hold it.
+func (f runFile) refName(i int) []byte {
+	e := f.refRec(i)
 	off, n := int64(binary.BigEndian.Uint32(e[8:])), int64(binary.BigEndian.Uint16(e[12:]))
-	return key, string(f.data[f.l.names+off : f.l.names+off+n]), e[14]
+	return f.data[f.l.names+off : f.l.names+off+n]
 }
 
 // refOrdinal is ref's key and its ordinal in f, or false where f holds no
-// move of ref.
+// move of ref: a binary search of the refs by key, reading their bytes in
+// place.
 func (f runFile) refOrdinal(ref string) ([runKeyBytes]byte, uint8, bool) {
 	key := f.keyOf(ref)
 	n := int(f.h.refs)
 	i, j := 0, n
 	for i < j {
 		h := int(uint(i+j) >> 1)
-		k, _, _ := f.refEntry(h)
-		if bytes.Compare(k[:], key[:]) < 0 {
+		if bytes.Compare(f.refRec(h)[:runKeyBytes], key[:]) < 0 {
 			i = h + 1
 		} else {
 			j = h
 		}
 	}
 	for ; i < n; i++ {
-		k, name, ord := f.refEntry(i)
-		if k != key {
+		e := f.refRec(i)
+		if !bytes.Equal(e[:runKeyBytes], key[:]) {
 			break
 		}
-		if name == ref {
-			return key, ord, true
+		if string(f.refName(i)) == ref {
+			return key, e[14], true
 		}
 	}
 	return key, 0, false
@@ -686,6 +691,11 @@ func (f runFile) refOrdinal(ref string) ([runKeyBytes]byte, uint8, bool) {
 // moveRec is move record i's bytes.
 func (f runFile) moveRec(i int) []byte {
 	return f.data[f.l.moves+int64(i)*runMoveBytes : f.l.moves+int64(i+1)*runMoveBytes]
+}
+
+// commitRec is commit record i's bytes.
+func (f runFile) commitRec(i int) []byte {
+	return f.data[f.l.commits+int64(i)*runCommitBytes : f.l.commits+int64(i+1)*runCommitBytes]
 }
 
 // moveSpan is the moves of the ref filed under key and ordinal with a
@@ -744,109 +754,79 @@ func (f runFile) commitPush(oid [runOIDBytes]byte, floor int64) (int, bool) {
 	return best, best >= 0
 }
 
-// mergeRuns writes to w the run of a and b, two adjacent runs — a's range
-// below b's, nothing between them but positions with no push — without the
-// pushes at or below floor (the index's horizon) and what they moved and
-// introduced, and answers its header.
+// mergeRuns writes to w the run of ins — adjacent runs in position order, each
+// one's range below the next's, nothing between them but positions with no
+// push — without the pushes at or below floor (the index's horizon) and what
+// they moved and introduced, and answers its header.
 //
-// STREAMED, holding nothing a push: the inputs' pushes are each in (position,
-// push id) order over disjoint ranges, so the merged run's are a's then b's
-// and a push's new index is its old one moved by a constant; the moves and
-// the commits are each sorted, so each section is one two-way merge; and only
-// the refs — the names a run holds — are built in memory. A merge writes each
-// record once and reads each input in order, from its mapped file.
-func mergeRuns(w io.Writer, a, b runFile, floor int64) (runHeader, error) {
-	ins := [2]runFile{a, b}
+// STREAMED, holding nothing a push or a ref: the inputs' pushes are each in
+// (position, push id) order over disjoint ranges, so the merged run's are
+// theirs one after another and a push's new index is its old one moved by a
+// constant; the commits are each sorted, and merge in one pass; and the refs —
+// every name a run holds, which a repository whose every push moves a ref of
+// its own holds by the hundred thousand — are merged ONE KEY AT A TIME
+// (refGroups), every input's refs of the key beside every input's moves of
+// it, since both sections are in key order, so all a merge holds of them is
+// one key's ordinals: at most 256 an input. Held whole, by name, the refs of
+// two runs of 200 000 pushes each moving a ref of its own took 198 MB, and a
+// repository at code.MaxRefsPerRepo churning its seat branches every 14 days
+// would have taken some 0.7 GB a merge. A merge reads each input in order from
+// its mapped file — once to count what it writes, then once a section — and
+// writes each record once.
+func mergeRuns(w io.Writer, ins []runFile, floor int64) (runHeader, error) {
+	if len(ins) < 2 {
+		return runHeader{}, fmt.Errorf("cache: a merge of %d runs: a merge reads two at least", len(ins))
+	}
 	var (
-		// skip is the pushes at or below floor each drops: a prefix of each.
-		skip [2]int
-		// base is the merged index of each input's first kept push, and
-		// start the offset of that push in the input's push section.
-		base  [2]int
-		start [2]uint64
+		// skip is the pushes at or below floor each drops: a prefix of
+		// each. base is the merged index of each input's first kept push,
+		// and start the offset of that push in the input's push section.
+		skip  = make([]int, len(ins))
+		base  = make([]int, len(ins))
+		start = make([]uint64, len(ins))
 		h     runHeader
+		kept  int
 	)
-	h.from, h.through = max(a.h.from, floor), b.h.through
+	h.from, h.through = max(ins[0].h.from, floor), ins[len(ins)-1].h.through
 	for k, in := range ins {
 		skip[k] = in.firstAbove(floor)
 		start[k] = in.h.pushBytes
 		if skip[k] < in.pushCount() {
 			start[k] = binary.BigEndian.Uint64(in.data[in.l.offsets+int64(skip[k])*runOffsetBytes:])
 		}
-		h.pushes += uint32(in.pushCount() - skip[k])
+		base[k] = kept
+		kept += in.pushCount() - skip[k]
 		h.pushBytes += in.h.pushBytes - start[k]
-	}
-	base[1] = a.pushCount() - skip[0]
-
-	// THE REFS: every ref a kept move names, each its key's ordinal by name;
-	// and what each input's ordinals are among them.
-	type keyOrd struct {
-		key [runKeyBytes]byte
-		ord uint8
-	}
-	nameOf := [2]map[keyOrd]string{{}, {}}
-	for k, in := range ins {
-		for r := range int(in.h.refs) {
-			key, name, ord := in.refEntry(r)
-			nameOf[k][keyOrd{key, ord}] = name
-		}
-	}
-	moveOf := func(rec []byte) keyOrd {
-		var ko keyOrd
-		copy(ko.key[:], rec[:runKeyBytes])
-		ko.ord = rec[runKeyBytes]
-		return ko
-	}
-	keptName := map[string][runKeyBytes]byte{}
-	for k, in := range ins {
-		for i := range int(in.h.moves) {
-			rec := in.moveRec(i)
-			if int(binary.BigEndian.Uint32(rec[17:])) < skip[k] {
-				continue
-			}
-			h.moves++
-			ko := moveOf(rec)
-			name, ok := nameOf[k][ko]
-			if !ok {
-				return runHeader{}, fmt.Errorf("%w: a move names a ref the run does not hold", errRunMalformed)
-			}
-			keptName[name] = ko.key
-		}
 		for i := range int(in.h.commits) {
-			rec := in.data[in.l.commits+int64(i)*runCommitBytes:]
-			if int(binary.BigEndian.Uint32(rec[runOIDBytes:])) >= skip[k] {
+			if int(binary.BigEndian.Uint32(in.commitRec(i)[runOIDBytes:])) >= skip[k] {
 				h.commits++
 			}
 		}
 	}
-	type named struct {
-		key  [runKeyBytes]byte
-		name string
+	switch {
+	case kept == 0:
+		return runHeader{}, fmt.Errorf("cache: a merge keeping no push: every push of its %d runs is at or below %d",
+			len(ins), floor)
+	case kept > math.MaxUint32:
+		return runHeader{}, fmt.Errorf("cache: a merge of %d pushes, past the %d a run holds", kept,
+			uint64(math.MaxUint32))
 	}
-	names := make([]named, 0, len(keptName))
-	for name, key := range keptName {
-		names = append(names, named{key, name})
+	h.pushes = uint32(kept)
+	g := newRefGroups(ins, floor)
+	refs := 0
+	for g.next() {
+		refs += g.kept
+		h.nameBytes += g.keptNameBytes
+		h.moves += g.keptMoves
 	}
-	slices.SortFunc(names, func(x, y named) int {
-		return cmp.Or(bytes.Compare(x.key[:], y.key[:]), strings.Compare(x.name, y.name))
-	})
-	newOrd := make(map[string]uint8, len(names))
-	refs := make([]builtRef, 0, len(names))
-	var nameBytes []byte
-	for i, n := range names {
-		ord := 0
-		if i > 0 && names[i-1].key == n.key {
-			ord = int(newOrd[names[i-1].name]) + 1
-		}
-		if ord > 255 {
-			return runHeader{}, fmt.Errorf("cache: %d refs of one run share the key of %s, past the 256 a run "+
-				"holds", ord+1, n.name)
-		}
-		newOrd[n.name] = uint8(ord)
-		refs = append(refs, builtRef{key: n.key, name: n.name, ordinal: uint8(ord), off: uint32(len(nameBytes))})
-		nameBytes = append(nameBytes, n.name...)
+	switch {
+	case g.err != nil:
+		return runHeader{}, g.err
+	case refs > math.MaxUint32 || h.nameBytes > math.MaxUint32:
+		return runHeader{}, fmt.Errorf("cache: a merge of %d refs named in %d bytes, past what a run holds", refs,
+			h.nameBytes)
 	}
-	h.refs, h.nameBytes = uint32(len(refs)), uint64(len(nameBytes))
+	h.refs = uint32(refs)
 
 	out := newRunWriter(w)
 	out.put(h.encode())
@@ -861,92 +841,286 @@ func mergeRuns(w io.Writer, a, b runFile, floor int64) (runHeader, error) {
 	for k, in := range ins {
 		out.put(in.data[in.l.pushes+int64(start[k]) : in.l.pushes+int64(in.h.pushBytes)])
 	}
-	for _, r := range refs {
-		out.ref(r.key, r.off, uint16(len(r.name)), r.ordinal)
+	// THE REFS, then their names: each kept ref of each key in name order,
+	// its ordinal the next of its key.
+	var nameAt uint32
+	for g = newRefGroups(ins, floor); g.next(); {
+		for o := range g.kept {
+			name := g.name(o)
+			out.ref(g.key, nameAt, uint16(len(name)), uint8(o))
+			nameAt += uint32(len(name))
+		}
 	}
-	out.put(nameBytes)
-
-	// THE MOVES, merged by (key, ordinal, position): within one ref a's — the
-	// lower positions — come first, each input's chain order kept.
-	keptMove := func(k, i int) int {
-		for ; i < int(ins[k].h.moves); i++ {
-			if int(binary.BigEndian.Uint32(ins[k].moveRec(i)[17:])) >= skip[k] {
-				break
+	for g = newRefGroups(ins, floor); g.next(); {
+		for o := range g.kept {
+			out.put(g.name(o))
+		}
+	}
+	// THE MOVES, by (key, ordinal, position): one ref's moves the inputs' in
+	// order — the lower positions first — each input's chain order kept.
+	for g = newRefGroups(ins, floor); g.next(); {
+		for o := range g.kept {
+			for k, in := range ins {
+				ord := g.inv[k][o]
+				if ord < 0 {
+					continue
+				}
+				for i := g.spanLo[k][ord]; i < g.spanHi[k][ord]; i++ {
+					rec := in.moveRec(int(i))
+					position := int64(binary.BigEndian.Uint64(rec[9:]))
+					if position <= floor {
+						continue
+					}
+					var old, nw [runOIDBytes]byte
+					copy(old[:], rec[21:41])
+					copy(nw[:], rec[41:61])
+					push := uint32(base[k] + int(binary.BigEndian.Uint32(rec[17:])) - skip[k])
+					out.move(g.key, uint8(o), position, push, old, nw, rec[61])
+				}
 			}
 		}
-		return i
 	}
-	sortKey := func(k, i int) ([runKeyBytes]byte, uint8, int64) {
-		rec := ins[k].moveRec(i)
-		ko := moveOf(rec)
-		return ko.key, newOrd[nameOf[k][ko]], int64(binary.BigEndian.Uint64(rec[9:]))
+	if g.err != nil {
+		return runHeader{}, g.err
 	}
-	at0, at1 := keptMove(0, 0), keptMove(1, 0)
-	for at0 < int(a.h.moves) || at1 < int(b.h.moves) {
-		k := 0
-		if at0 >= int(a.h.moves) {
-			k = 1
-		} else if at1 < int(b.h.moves) {
-			ka, oa, pa := sortKey(0, at0)
-			kb, ob, pb := sortKey(1, at1)
-			if cmp.Or(bytes.Compare(ka[:], kb[:]), cmp.Compare(oa, ob), cmp.Compare(pa, pb)) > 0 {
-				k = 1
-			}
-		}
-		i := at0
-		if k == 1 {
-			i = at1
-		}
-		rec := ins[k].moveRec(i)
-		key, ord, pos := sortKey(k, i)
-		var old, nw [runOIDBytes]byte
-		copy(old[:], rec[21:41])
-		copy(nw[:], rec[41:61])
-		push := uint32(base[k] + int(binary.BigEndian.Uint32(rec[17:])) - skip[k])
-		out.move(key, ord, pos, push, old, nw, rec[61])
-		if k == 0 {
-			at0 = keptMove(0, at0+1)
-		} else {
-			at1 = keptMove(1, at1+1)
-		}
-	}
-
-	// THE COMMITS, merged by id: one id's entries a's first, which keeps them
-	// in merged push order.
-	commitRec := func(k, i int) []byte {
-		in := ins[k]
-		return in.data[in.l.commits+int64(i)*runCommitBytes : in.l.commits+int64(i+1)*runCommitBytes]
-	}
+	// THE COMMITS, merged by id: one id's entries the lower input's first,
+	// which keeps them in merged push order.
+	next := make([]int, len(ins))
 	keptCommit := func(k, i int) int {
 		for ; i < int(ins[k].h.commits); i++ {
-			if int(binary.BigEndian.Uint32(commitRec(k, i)[runOIDBytes:])) >= skip[k] {
+			if int(binary.BigEndian.Uint32(ins[k].commitRec(i)[runOIDBytes:])) >= skip[k] {
 				break
 			}
 		}
 		return i
 	}
-	c0, c1 := keptCommit(0, 0), keptCommit(1, 0)
-	for c0 < int(a.h.commits) || c1 < int(b.h.commits) {
-		k := 0
-		if c0 >= int(a.h.commits) {
-			k = 1
-		} else if c1 < int(b.h.commits) &&
-			bytes.Compare(commitRec(0, c0)[:runOIDBytes], commitRec(1, c1)[:runOIDBytes]) > 0 {
-			k = 1
+	for k := range ins {
+		next[k] = keptCommit(k, 0)
+	}
+	for {
+		best := -1
+		for k, in := range ins {
+			if next[k] >= int(in.h.commits) {
+				continue
+			}
+			if best < 0 || bytes.Compare(in.commitRec(next[k])[:runOIDBytes],
+				ins[best].commitRec(next[best])[:runOIDBytes]) < 0 {
+				best = k
+			}
 		}
-		i := c0
-		if k == 1 {
-			i = c1
+		if best < 0 {
+			break
 		}
-		rec := commitRec(k, i)
+		rec := ins[best].commitRec(next[best])
 		var oid [runOIDBytes]byte
 		copy(oid[:], rec[:runOIDBytes])
-		out.commit(oid, uint32(base[k]+int(binary.BigEndian.Uint32(rec[runOIDBytes:]))-skip[k]))
-		if k == 0 {
-			c0 = keptCommit(0, c0+1)
-		} else {
-			c1 = keptCommit(1, c1+1)
-		}
+		out.commit(oid, uint32(base[best]+int(binary.BigEndian.Uint32(rec[runOIDBytes:]))-skip[best]))
+		next[best] = keptCommit(best, next[best]+1)
 	}
 	return h, out.close()
+}
+
+// refGroups is a merge's walk of its inputs' refs ONE KEY AT A TIME, in key
+// order (mergeRuns): each input's refs filed under the key and its moves of
+// them — both sections keep a key's records together, and in key order — and
+// the refs of every input merged by name, a name several inputs hold being
+// one ref of the merged run, KEPT where a move of it in any input is above
+// the floor, its ordinal the next of its key in name order. What it holds is
+// a key's ordinals, at most 256 an input: a few kilobytes, however many refs
+// the runs hold. A run whose sections do not agree — a move of a key or an
+// ordinal no ref holds, names out of order, a key's refs past 256 — is no run
+// this build wrote (errRunMalformed).
+type refGroups struct {
+	ins   []runFile
+	floor int64
+	// ref and move are each input's next ref entry and move record.
+	ref, move []int
+	// key is the group's key; kept, keptNameBytes and keptMoves what it
+	// keeps: refs, the bytes of their names, and moves above the floor.
+	key           [runKeyBytes]byte
+	kept          int
+	keptNameBytes uint64
+	keptMoves     uint64
+	// By each input's ORDINAL in the group: its ref entry (entryOf, -1 for
+	// none), whether a move of it is above the floor (above), and its moves'
+	// span (spanLo, spanHi). By the merged ref's ordinal: each input's
+	// ordinal of its name (inv, -1 for none), and the input and entry its
+	// name is read from (src).
+	entryOf        [][256]int32
+	above          [][256]bool
+	spanLo, spanHi [][256]int32
+	inv            [][256]int16
+	src            [256]refSrc
+	// ords is each input's ordinals in the group, in name order, which the
+	// next group's start resets; at is each input's place among them as
+	// the group's names are merged.
+	ords [][]uint8
+	at   []int
+	err  error
+}
+
+// refSrc is where a merged ref's name is read from: an input, and its entry.
+type refSrc struct {
+	k     int
+	entry int32
+}
+
+// newRefGroups is a walk of ins's refs, before its first key.
+func newRefGroups(ins []runFile, floor int64) *refGroups {
+	g := &refGroups{ins: ins, floor: floor, ref: make([]int, len(ins)), move: make([]int, len(ins)),
+		entryOf: make([][256]int32, len(ins)), above: make([][256]bool, len(ins)),
+		spanLo: make([][256]int32, len(ins)), spanHi: make([][256]int32, len(ins)),
+		inv: make([][256]int16, len(ins)), ords: make([][]uint8, len(ins)), at: make([]int, len(ins))}
+	for k := range ins {
+		for o := range 256 {
+			g.entryOf[k][o], g.inv[k][o] = -1, -1
+		}
+	}
+	return g
+}
+
+// name is the name of the group's kept ref o, as its input holds it.
+func (g *refGroups) name(o int) []byte {
+	s := g.src[o]
+	return g.ins[s.k].refName(int(s.entry))
+}
+
+// malformed stops the walk at a run that is no run this build wrote.
+func (g *refGroups) malformed(format string, args ...any) bool {
+	g.err = fmt.Errorf("%w: "+format, append([]any{errRunMalformed}, args...)...)
+	return false
+}
+
+// next moves the walk to its next key, answering false at the end of every
+// input's refs, or at a run that is malformed (err).
+func (g *refGroups) next() bool {
+	if g.err != nil {
+		return false
+	}
+	// The last group's marks, reset where they were set.
+	for k := range g.ins {
+		for _, o := range g.ords[k] {
+			g.entryOf[k][o], g.above[k][o], g.spanLo[k][o], g.spanHi[k][o] = -1, false, 0, 0
+		}
+		g.ords[k] = g.ords[k][:0]
+		for o := range g.kept {
+			g.inv[k][o] = -1
+		}
+	}
+	g.kept, g.keptNameBytes, g.keptMoves = 0, 0, 0
+	have := false
+	for k, in := range g.ins {
+		if g.ref[k] < int(in.h.refs) {
+			if key := in.refRec(g.ref[k])[:runKeyBytes]; !have || bytes.Compare(key, g.key[:]) < 0 {
+				copy(g.key[:], key)
+				have = true
+			}
+		}
+	}
+	if !have {
+		for k, in := range g.ins {
+			if g.move[k] < int(in.h.moves) {
+				return g.malformed("a move names a ref the run does not hold")
+			}
+		}
+		return false
+	}
+	for k, in := range g.ins {
+		// The input's refs of the key, each ordinal once, in name order.
+		lo := g.ref[k]
+		hi := lo
+		for ; hi < int(in.h.refs); hi++ {
+			e := in.refRec(hi)
+			if !bytes.Equal(e[:runKeyBytes], g.key[:]) {
+				break
+			}
+			o := e[14]
+			switch {
+			case g.entryOf[k][o] >= 0:
+				return g.malformed("two refs of one key hold ordinal %d", o)
+			case hi > lo && bytes.Compare(in.refName(hi-1), in.refName(hi)) >= 0:
+				return g.malformed("the refs of one key are out of name order")
+			}
+			g.entryOf[k][o] = int32(hi)
+			g.ords[k] = append(g.ords[k], o)
+		}
+		g.ref[k] = hi
+		// Its moves of the key, each ordinal's together and in position
+		// order: their spans, and which are above the floor.
+		mi := g.move[k]
+		if mi < int(in.h.moves) && bytes.Compare(in.moveRec(mi)[:runKeyBytes], g.key[:]) < 0 {
+			return g.malformed("a move names a ref the run does not hold")
+		}
+		prev := -1
+		for ; mi < int(in.h.moves); mi++ {
+			rec := in.moveRec(mi)
+			if !bytes.Equal(rec[:runKeyBytes], g.key[:]) {
+				break
+			}
+			o := int(rec[runKeyBytes])
+			switch {
+			case g.entryOf[k][o] < 0:
+				return g.malformed("a move names ordinal %d of a key whose refs do not hold it", o)
+			case o < prev:
+				return g.malformed("the moves of one key are out of ordinal order")
+			case o != prev:
+				g.spanLo[k][o] = int32(mi)
+			}
+			g.spanHi[k][o], prev = int32(mi+1), o
+			if int64(binary.BigEndian.Uint64(rec[9:])) > g.floor {
+				g.above[k][o] = true
+				g.keptMoves++
+			}
+		}
+		g.move[k] = mi
+	}
+	// The refs merged by name: each name once, kept where any input's moves
+	// of it are above the floor.
+	at := g.at
+	for k := range at {
+		at[k] = 0
+	}
+	for {
+		least := -1
+		var name []byte
+		for k, in := range g.ins {
+			if at[k] >= len(g.ords[k]) {
+				continue
+			}
+			n := in.refName(int(g.entryOf[k][g.ords[k][at[k]]]))
+			if least < 0 || bytes.Compare(n, name) < 0 {
+				least, name = k, n
+			}
+		}
+		if least < 0 {
+			return true
+		}
+		keep := false
+		for k, in := range g.ins {
+			if at[k] < len(g.ords[k]) && bytes.Equal(in.refName(int(g.entryOf[k][g.ords[k][at[k]]])), name) {
+				keep = keep || g.above[k][g.ords[k][at[k]]]
+			}
+		}
+		if keep && g.kept == 256 {
+			return g.malformed("257 refs of one run share the key of %s, past the 256 a run holds", name)
+		}
+		for k, in := range g.ins {
+			if at[k] >= len(g.ords[k]) {
+				continue
+			}
+			o := g.ords[k][at[k]]
+			if !bytes.Equal(in.refName(int(g.entryOf[k][o])), name) {
+				continue
+			}
+			if keep {
+				g.inv[k][g.kept] = int16(o)
+			}
+			at[k]++
+		}
+		if keep {
+			g.src[g.kept] = refSrc{k: least, entry: g.entryOf[least][g.ords[least][at[least]-1]]}
+			g.keptNameBytes += uint64(len(name))
+			g.kept++
+		}
+	}
 }
