@@ -3,13 +3,14 @@ package setupapi_test
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
@@ -124,10 +125,10 @@ func TestASecretNameIsReferenceableForEverySeatHandle(t *testing.T) {
 	for _, handle := range []string{
 		"7th-engineer", "1", "sre-lead", "_leading", "n0va", "Ops Lead",
 	} {
-		for _, field := range []string{"APP_KEY", "APP_WEBHOOK_SECRET"} {
-			name := setup.SecretNameFor(integration.KindGitHub, setup.Requirement{
-				Field: field, Seat: handle,
-			})
+		for _, field := range []string{
+			github.FieldAppKey, github.FieldAppWebhookSecret, github.FieldAppToken,
+		} {
+			name := github.SeatVar(handle, field)
 			if !setup.ValidSecretName(name) {
 				t.Errorf("the name for %q/%s is %q, which no ${VAR} can reference",
 					handle, field, name)
@@ -141,11 +142,58 @@ func TestASecretNameIsReferenceableForEverySeatHandle(t *testing.T) {
 // seats would then authenticate as whichever app was created last.
 func TestTwoSeatsDoNotShareASecretName(t *testing.T) {
 	t.Parallel()
-	first := setup.SecretNameFor(integration.KindGitHub,
-		setup.Requirement{Field: "APP_KEY", Seat: "sre-lead"})
-	second := setup.SecretNameFor(integration.KindGitHub,
-		setup.Requirement{Field: "APP_KEY", Seat: "platform-lead"})
-	if first == second {
-		t.Errorf("both seats seal their app key under %q", first)
+	for _, field := range []string{
+		github.FieldAppKey, github.FieldAppWebhookSecret, github.FieldAppToken,
+	} {
+		first, second := github.SeatVar("sre-lead", field), github.SeatVar("platform-lead", field)
+		if first == second {
+			t.Errorf("both seats keep their %s under %q", field, first)
+		}
+	}
+}
+
+// AN ENGINE GITHUB CANNOT REACH STILL CREATES ITS AGENTS' APPS, WITH THEIR
+// WEBHOOKS OFF.
+//
+// A local engine at `http://localhost:8200` has an address the operator's
+// browser reaches and GitHub does not. The browser is all the two acts need,
+// so the app is created, and only its delivery is off: refusing would leave
+// the agent unable to push or open a pull request for want of an inbound path
+// it does not use, and pointing the hook at localhost would fail every
+// delivery while the app reads as healthy.
+func TestAnAppForAnUnreachableEngineIsCreatedWithItsWebhookOff(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		base   string
+		active bool
+	}{
+		"a local engine":  {"http://localhost:8200", false},
+		"a public engine": {fixtureWebhookBase, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := newSurfaceWithApps(t, nil, c.base)
+			s.seedGitHubApps(t)
+			res := s.do(t, http.MethodPost, "/setup/integrations/github/app", `{"seat":"builder"}`, nil)
+			if res.Code != http.StatusOK {
+				t.Fatalf("begin = %d: %s", res.Code, res.Body)
+			}
+			begin := decode(t, res)
+			if begin["webhook_active"] != c.active {
+				t.Errorf("webhook_active = %v, want %v", begin["webhook_active"], c.active)
+			}
+			manifest, _ := begin["manifest"].(map[string]any)
+			hook, _ := manifest["hook_attributes"].(map[string]any)
+			if hook["active"] != c.active {
+				t.Errorf("hook_attributes = %v, want active %v", hook, c.active)
+			}
+			if url, has := hook["url"]; has != c.active ||
+				(c.active && url != c.base+"/webhooks/github/builder") {
+				t.Errorf("hook url = %v, want one only where GitHub can deliver", url)
+			}
+			if manifest["redirect_url"] != c.base+"/webhooks/github-app" {
+				t.Errorf("redirect_url = %v, want the engine's own return", manifest["redirect_url"])
+			}
+		})
 	}
 }

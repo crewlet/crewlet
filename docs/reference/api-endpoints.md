@@ -3022,7 +3022,8 @@ curl -X POST https://engine.example.com/setup/integrations/github/app \
   "tier": "review",
   "action_url": "https://github.com/organizations/acme/settings/apps/new",
   "manifest": {"name": "Acme Senior Engineer", "public": false, "...": "..."},
-  "state": "<sealed token naming the seat and who began the creation>"
+  "state": "<sealed token naming the seat and who began the creation>",
+  "webhook_active": true
 }
 ```
 
@@ -3039,13 +3040,23 @@ organization's own app registration page whenever
 under a person's account cannot be installed on the organization that owns the
 repositories.
 
+`webhook_active` says whether the app will deliver events here. It is `false`
+when the webhook address is one GitHub cannot reach, which is what a local
+engine's `http://localhost:8200` is: the manifest then creates the app with its
+webhook switched off rather than pointed at an address that fails every
+delivery. The app still works for everything the agent does on GitHub, which
+is outbound; see [Running locally, with no public
+address](../integrations/github.md#running-locally-with-no-public-address).
+
 Refusals: `400 invalid_body`, `400 seat_required`, `409 no_active_revision`,
 `404 no_such_seat`, and `409 no_external_url` when the webhook address is
 unset — `api.public.external_url` behind a [public listener](#which-listener-serves-what), `api.external_url`
 otherwise, named in `config_path`. The last one matters more than it
-looks: an app is created with its delivery, redirect and setup addresses baked
-in, and only a person at GitHub can change them afterwards, so creating one
-now would mean creating it again later.
+looks: an app is created with its redirect and setup addresses baked in, and
+only a person at GitHub can change them afterwards, so creating one now would
+mean creating it again later. An address that is set and that GitHub cannot
+deliver to is not refused: the operator's browser is all the redirect and the
+setup page need.
 
 **`GET /webhooks/github-app`** is where GitHub returns the browser, twice. It is
 unauthenticated because a redirect carries no engine credential; the `state` is
