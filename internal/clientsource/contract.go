@@ -228,6 +228,8 @@ var contract = []Entry{
 	{"MAX_LOGIN", ReadScalar, "internal/api/iamapi.TestTheDashboardChecksALoginByTheEnginesGrammar"},
 	{"CREDENTIAL_CLASSES", ReadLiteral,
 		"internal/api/iamapi.TestTheDashboardChecksALoginByTheEnginesGrammar"},
+	{"ASSIST_CREDENTIAL_PREFIX", ReadScalar,
+		"internal/api/iamapi.TestTheDashboardKnowsTheAssistantsCredentialClass"},
 	{"TOKEN_DEFAULT_DAYS", ReadScalar,
 		"internal/api/iamapi.TestTheDashboardMintsWithinTheEnginesTokenLifetimes"},
 	{"TOKEN_MAX_DAYS", ReadScalar,
