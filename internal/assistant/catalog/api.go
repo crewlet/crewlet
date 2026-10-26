@@ -307,11 +307,13 @@ func (g generic) describe() Tool {
 			"search": text("Words to narrow the list by, matched against each route's "+
 				"path and documentation.", lineBytes),
 		}),
+		// IN THE PERSON'S WORDS: what is being looked up is the engine's
+		// own reference, which a step never names by its route.
 		Label: func(a map[string]any) string {
 			if route := Args(a).String("route"); route != "" && len(route) <= 160 {
-				return "Reading the documentation of " + route
+				return "Looking up how to work with " + lowerFirst(RequestTitle(route, nil))
 			}
-			return "Looking up the API"
+			return "Looking up what can be done"
 		},
 		Docs: g.document,
 	}
@@ -350,8 +352,8 @@ func (g generic) change() Tool {
 		Description: "Propose any change this person can make in the engine's API: a " +
 			"POST, PUT, PATCH or DELETE on any route describe_api lists, with its path " +
 			"values, query parameters and JSON body exactly as the route's documentation " +
-			"states them. Nothing is sent until the person approves: they are shown the " +
-			"request, and the resource as it is now beside what the change makes of it. " +
+			"states them. Nothing is sent until the person approves: they are shown, in " +
+			"plain words, what the change does to the resource as it is now. " +
 			"Use a dedicated write tool whenever one makes the change (filing or updating a " +
 			"task, a page, a share, the principles), since its preview is shaped for it; use " +
 			"this for everything else. Read the resource first, and send its whole new value " +
@@ -380,7 +382,7 @@ func genericLabel(doing string) func(map[string]any) string {
 	return func(a map[string]any) string {
 		route := Args(a).String("route")
 		if route == "" || len(route) > 160 {
-			return doing + " an API route"
+			return doing + " a record"
 		}
 		return doing + " " + lowerFirst(callTitle(Args(a)))
 	}

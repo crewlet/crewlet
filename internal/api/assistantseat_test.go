@@ -376,7 +376,7 @@ func TestASeatTheUnitWouldRefuseIsRefusedBeforeThePersonSeesIt(t *testing.T) {
 	_, err = propose(resolved, "")
 	var refused *catalog.PreviewRefusal
 	if !errors.As(err, &refused) || refused.Status != http.StatusBadRequest ||
-		!strings.Contains(refused.Refusal.Message, "tool_sources") {
+		!strings.Contains(refused.Refusal.ForModel(), "tool_sources") {
 		t.Fatalf("a seat with fields the unit does not take previewed %v, want the "+
 			"route's refusal naming them", err)
 	}

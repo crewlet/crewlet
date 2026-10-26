@@ -269,7 +269,11 @@ type prepared struct {
 	base     string
 	document []byte
 	warnings []config.Warning
-	derived  config.Derived
+	// held are the warnings the active revision already carries, by
+	// [warningKey]: what a dry run tells apart from the ones this write
+	// introduces ([checkedWarnings]).
+	held    map[warningKey]bool
+	derived config.Derived
 	// by is the draft's party, carried rather than passed again to
 	// [Service.commit], so the author stored is the one prepare judged.
 	by iam.Actor
@@ -366,7 +370,7 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	}
 	p := &prepared{
 		document: document, warnings: company.Warnings(), derived: derived, by: d.by,
-		source: cmp.Or(d.source, revisionSource),
+		source: cmp.Or(d.source, revisionSource), held: heldWarnings(b.prior),
 	}
 	if found {
 		p.base = active.ID
@@ -742,4 +746,51 @@ func (s *Service) Reload(ctx context.Context, summary string, by iam.Actor) (App
 		summary = "reload configuration"
 	}
 	return s.commit(ctx, prepared, summary)
+}
+
+// warningKey is what one warning is, wherever it sits: its kind, the seat,
+// unit and reference it is about, and its words. NOT ITS PATH, which is a
+// list index (`units[0].roles[2]`) a write moves by adding or removing a seat
+// before it, so the same advisory about the same seat would read as new.
+type warningKey struct {
+	kind, ref, seat, unit, from, to, message string
+}
+
+func keyOf(w config.Warning) warningKey {
+	return warningKey{kind: w.Kind, ref: w.Ref, seat: w.Seat, unit: w.Unit, from: w.From,
+		to: w.To, message: w.Message}
+}
+
+// heldWarnings are the warnings the active document carries, nil when nothing
+// is active (every warning of a first write is its own).
+func heldWarnings(prior *config.Company) map[warningKey]bool {
+	if prior == nil {
+		return nil
+	}
+	held := map[warningKey]bool{}
+	for _, w := range prior.Warnings() {
+		held[keyOf(w)] = true
+	}
+	return held
+}
+
+// checkedWarning is one warning as a dry run answers it: the warning, and
+// whether the write introduces it rather than the active revision already
+// carrying it.
+type checkedWarning struct {
+	config.Warning
+	Introduced bool `json:"introduced"`
+}
+
+// checkedWarnings are a prepared write's warnings, each marked with whether
+// the write introduces it. A client showing the person what THIS change means
+// (the Dashboard Assistant's proposal card) shows the introduced ones: a
+// human seat that had no chat contact before the change is not news about a
+// change that added somebody else.
+func checkedWarnings(p *prepared) []checkedWarning {
+	out := make([]checkedWarning, 0, len(p.warnings))
+	for _, w := range p.warnings {
+		out = append(out, checkedWarning{Warning: w, Introduced: !p.held[keyOf(w)]})
+	}
+	return out
 }

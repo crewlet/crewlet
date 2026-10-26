@@ -75,6 +75,12 @@ export interface ThreadProps {
   retryDisabledReason?: string | undefined;
   /** Dial the running turn's stream again. */
   onReconnect: () => void;
+  /**
+   * Whether the reader administers the company, and so is shown each step's
+   * request beside its sentence (`stepDetail`). Optional only for a suite
+   * that draws a thread by itself; the drawer always says.
+   */
+  technical?: boolean;
 }
 
 /** The page a question carried, as the read-only chip under its bubble. */
@@ -130,6 +136,7 @@ function Turn({
   opened,
   onRetry,
   retryDisabledReason,
+  technical,
 }: {
   turn: TurnView;
   now: number;
@@ -137,10 +144,11 @@ function Turn({
   opened: ReadonlySet<string>;
   onRetry: (text: string, attachments: readonly AssistantFileRef[]) => void;
   retryDisabledReason: string | undefined;
+  technical: boolean;
 }) {
   const open = isOpen(turn.phase);
   const chip = runChipOf(turn, now);
-  const steps = stepsOf(turn);
+  const steps = stepsOf(turn, technical);
   const deepRuns = deepRunsOf(turn);
   const thinking = thinkingOf(turn);
   const placed = new Set(turn.replies.map((r) => r.id));
@@ -202,7 +210,7 @@ function Turn({
         </RunChip>
       ) : null}
       {deepRuns.map((run) => (
-        <DeepRunBlock key={run.step.step_id} run={run} now={now} />
+        <DeepRunBlock key={run.step.step_id} run={run} now={now} technical={technical} />
       ))}
       {turn.replies.map((reply) => (
         <Stack key={reply.id} gap={3}>
@@ -335,6 +343,7 @@ export function Thread({
   onRetry,
   retryDisabledReason,
   onReconnect,
+  technical = false,
 }: ThreadProps) {
   useAnnouncements(view);
   const reconnecting = view.stream === "reconnecting";
@@ -352,6 +361,7 @@ export function Thread({
           opened={opened}
           onRetry={onRetry}
           retryDisabledReason={retryDisabledReason}
+          technical={technical}
         />
       ))}
       {reconnecting ? (
