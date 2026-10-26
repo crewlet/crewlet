@@ -326,7 +326,12 @@ type repairMark struct {
 	// its install failing on a pack it adds, a finding's own download
 	// failing — leaves them to the next, as a scrub's. checkedFile.scrubbed
 	// tells the two apart: only a SCRUB's findings stand for a scrub's answer
-	// (scrubWaits) — a check reads no pack body.
+	// (scrubWaits) — a check reads no pack body. A FINDING FOUND AGAIN STAYS
+	// AS IT WAS FOUND: a check that finds a file failing at the identity its
+	// finding here names leaves that finding be — the same damage, a scrub's
+	// staying a scrub's — and replaces only one at another identity, damage
+	// newer than it (recordCheck); a scrub's replaces whatever is here for
+	// its file (runScrub).
 	found map[string]checkedFile
 	// forces is how many in-place repairs of a pack's or an object's damage
 	// — a failed request's ([Cache.Rebuild]) or a round's own git's

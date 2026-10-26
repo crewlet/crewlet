@@ -120,10 +120,11 @@ import (
 //     verdict stands — beside either, what a round's check has found since
 //     that still waits for its repair, the answer too, its pack none the
 //     rebuild links (recordCheck). A check's finding alone answers nothing
-//     here: a check reads no pack body. It runs as soon as the scrub in flight
-//     lets go of the node's one scrub, ahead of every scrub the scrubber has
-//     due, and a routine scrub in flight is ended for it (scrub.go's
-//     scrubSlot).
+//     here: a check reads no pack body — and step 2's check finding one of a
+//     scrub's files failing again leaves it that scrub's finding, which goes
+//     on answering. It runs as soon as the scrub in flight lets go of the
+//     node's one scrub, ahead of every scrub the scrubber has due, and a
+//     routine scrub in flight is ended for it (scrub.go's scrubSlot).
 //  4. THE WHOLE REBUILD, last, under the rules below — SEEDED with every pack
 //     the scrub found whole (seedRebuild), so it downloads only what no scrub
 //     vouched for: nothing at all when the damage is in the rows. NOT ASKED

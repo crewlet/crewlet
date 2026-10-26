@@ -864,12 +864,17 @@ failing on one damaged copy cost one repair. How depends on the damage:
   git 2.55 and later name the pack of a corrupt object, which the node hashes
   against what the push stored before it believes it. A damaged
   pack body no index shows is found by scrubbing the copy at once for that
-  request. Only when neither finds anything to fetch again is the repository
-  read whole from the rows and the object store into a new directory beside
-  the damaged one, which replaces it once it is complete — linking every pack
-  the scrub found whole rather than downloading it, so a copy whose rows are
-  the damage costs no download at all. Requests already reading the old copy
-  finish on it. A request whose git began before the node last wrote a repair
+  request — unless a scrub of the copy has already said: one whose findings
+  still wait for their repair is the answer, however often a request's own
+  read finds the same files failing again, and so is one that found nothing,
+  if it began after the request's git or ended within the hour with nothing
+  repaired in the copy since. Only when neither finds anything to fetch again
+  is the repository read whole from the rows and the object store into a new
+  directory beside the damaged one, which replaces it once it is complete —
+  linking every pack the scrub found whole rather than downloading it, so a
+  copy whose rows are the damage costs no download at all. Requests already
+  reading the old copy finish on it.
+  A request whose git began before the node last wrote a repair
   into the copy — a pack fetched again or put back, a derived file dropped,
   before the request's own repair or while it runs — is not repaired any
   further: it may have failed on what the repair replaced, so it is run once

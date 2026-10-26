@@ -1210,6 +1210,131 @@ func TestAPackACheckFoundDamagedIsLinkedByNoRebuild(t *testing.T) {
 	}
 }
 
+// A FINDING FOUND AGAIN STAYS AS IT WAS FOUND. A scrub finds one pack's
+// reverse index damaged in place, and the object store will not hand that
+// pack over, so the finding waits on the repair mark under its backoff
+// (TestARepairTheStoreCannotServeLeavesTheCopyServing). A request failing on
+// the damage meanwhile takes its forced round, whose check holds every index
+// file to its trailer and finds that reverse index failing again at the same
+// identity: the same damage, which the mark already names. It stays the
+// SCRUB's finding — and a scrub's finding still waiting is what answers a
+// request's scrub in that scrub's place and covers a report within its
+// cooldown (scrubWaits). Taken for the check's, it answered neither: every
+// crash of a clone over the damage within the hour asked for another scrub of
+// the whole copy, and every request's step 3 read the whole copy again —
+// about 1.13 times its pack bytes, some 24 GB for the largest repository the
+// defaults admit — once an hour for as long as the store refused the pack.
+//
+// The forced round fails at its install, on a push whose bundle the store
+// refuses as well, so no scrub of the request's runs after it: a crash after
+// it is `covered`, and the next request — within the hour of that forced
+// round, so it takes no forced round of its own (forcedLately) — is answered
+// at its step 3 by the scrub's finding, hashing nothing. Once the store
+// answers and the backoff has passed, a sync installs the pack again as the
+// scrub found it.
+//
+// Mutation: a check's finding replaces whatever the mark holds for its file
+// (recordCheck) — the crash makes a scrub due, the next request's step 3
+// scrubs the whole copy, and the reinstall is logged as that scrub found it
+// (trigger=request).
+func TestAFindingFoundAgainStaysAsItWasFound(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	h := w.measured(t)
+	c := w.open(t, clk.on)
+	s := w.sync(t, c, h.repo)
+	gittest.DamageInPlace(t, s.Dir, gittest.RevTrailer, h.commits[3])
+	down := errors.New("the object store is down")
+	refuse := func(objects ...objstore.Key) {
+		w.objects.mu.Lock()
+		defer w.objects.mu.Unlock()
+		w.objects.fail = func(k objstore.Key) error {
+			if slices.Contains(objects, k) {
+				return down
+			}
+			return nil
+		}
+	}
+	refuse(h.newer.Object)
+	crash := func() {
+		cache.Report(c, gitproc.Ran{Dir: w.dir(t, c, h.repo), Result: gitproc.Result{Crashed: true}})
+	}
+	repair := func(what string) {
+		t.Helper()
+		clk.Add(time.Minute)
+		if _, err := c.Rebuild(t.Context(), s, cache.Failure{Reason: cache.RebuildCorrupt,
+			Began: time.Now()}); !errors.Is(err, down) {
+			t.Fatalf("%s: %v, want its round failing on the store's refusal of the push", what, err)
+		}
+	}
+	forced := func() uint64 {
+		return counterOf(w.rec, metrics.CodeCacheChecks, map[string]string{"trigger": "forced"})
+	}
+	scrubbed := func() uint64 {
+		return counterOf(w.rec, metrics.CodeCacheChecks, map[string]string{"trigger": "request"})
+	}
+	rev := filepath.Join("objects", "pack", "pack-"+h.newer.GitChecksum+".rev")
+
+	crash()
+	if done := cache.ScrubPass(c); !slices.Equal(done, []string{h.repo}) {
+		t.Fatalf("the crash's scrub pass scrubbed %v, want %s", done, h.repo)
+	}
+	eventually(t, "the repair round the store refused", func() bool { return cache.HeldOff(c, h.repo) })
+	if got := cache.Findings(c, h.repo); !slices.Equal(got, []string{rev}) {
+		t.Fatalf("the repair mark holds %v once the store refused the pack, want the scrub's finding %s", got, rev)
+	}
+
+	_, push := w.push(t, h.repo, "refs/heads/main", nil)
+	refuse(h.newer.Object, push.Object)
+	repair("the request")
+	if got := checks(w, "rev", "damaged", "forced"); got != 1 {
+		t.Fatalf("checks{file=rev,outcome=damaged,trigger=forced} = %d, want the request's forced round finding "+
+			"the reverse index again", got)
+	}
+	if got := cache.Findings(c, h.repo); !slices.Equal(got, []string{rev}) {
+		t.Errorf("the repair mark holds %v once the forced round failed, want the one finding %s", got, rev)
+	}
+
+	covered := reports(w, "crash", "covered")
+	clk.Add(time.Minute)
+	crash()
+	if got := reports(w, "crash", "covered") - covered; got != 1 {
+		t.Errorf("reports{part=crash,outcome=covered} grew by %d, want the crash covered by the scrub's finding "+
+			"still waiting", got)
+	}
+	if why, _ := cache.ScrubDue(c, h.repo); why != "" {
+		t.Errorf("the crash made the copy's scrub due for %q, want none: the scrub's finding answers it", why)
+	}
+
+	before, hashed := forced(), scrubbed()
+	repair("the next request")
+	if got := forced() - before; got != 0 {
+		t.Fatalf("the next request held %d index files to their trailers in a forced round, want none within the "+
+			"hour of the last: the case would not reach its step 3", got)
+	}
+	if got := scrubbed() - hashed; got != 0 {
+		t.Errorf("the next request's scrub hashed %d files, want none: the scrub's finding still waiting answers it",
+			got)
+	}
+
+	refuse()
+	clk.Add(cache.RebuildCooldown)
+	r := w.sync(t, c, h.repo)
+	lines := w.logs.lines(t, "code_cache_pack_reinstalled")
+	if len(lines) != 1 || lines[0]["pack_id"] != h.newer.PackID || lines[0]["found"] != "trailer" ||
+		lines[0]["trigger"] != "report" {
+		t.Errorf("code_cache_pack_reinstalled = %v, want the damaged pack installed again as the scrub found it",
+			lines)
+	}
+	if got := cache.Findings(c, h.repo); len(got) != 0 {
+		t.Errorf("the repair mark still holds %v once its pack is installed again", got)
+	}
+	if bad, err := cache.Unsound(r.Dir); err != nil || len(bad) != 0 {
+		t.Errorf("once the store answers, %v fail their trailers (%v)", bad, err)
+	}
+}
+
 // derivedIdentities is the identity of the copy's multi-pack-index, its
 // bitmap and its commit-graph, by name.
 func derivedIdentities(t *testing.T, dir string) map[string][4]int64 {

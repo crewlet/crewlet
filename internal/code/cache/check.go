@@ -747,25 +747,49 @@ func (c *Cache) checkIndexes(ctx context.Context, e *entry, inc *incarnation, sn
 //     keeps its identity and the vouch an earlier check gave it, which no
 //     check but a forced one reads past, so the round that can at last
 //     install its pack again knows of it only from the mark.
+//   - A FINDING FOUND AGAIN STAYS AS IT WAS FOUND. A file the mark already
+//     holds at the identity this check found it failing at is the same
+//     damage, and the finding the mark holds — what found it, a SCRUB above
+//     all — stands; only a finding at ANOTHER identity, newer damage in a
+//     file put there since, replaces it, the one the mark holds naming a file
+//     no longer there (checked.still). A scrub's finding still waiting is
+//     what answers a request's scrub in that scrub's place and covers a
+//     report within its cooldown (scrubWaits), which a check's never does —
+//     a check reads no pack body. Written over by the forced check of a
+//     request failing on that very damage, its pack held off by an object
+//     store that will not hand it over, it answered neither: the request's
+//     step 3 read the whole copy again, about 1.13 times its pack bytes, as
+//     did the report of every clone crashing over it within the hour — once
+//     an hour for as long as the store refused the pack. A scrub's own
+//     finding replaces whatever the mark holds for its file (runScrub): it
+//     read every byte, the pack bodies a check never does among them.
 //   - The round repairs every finding on the mark — this check's, and what an
 //     earlier round's check or a scrub found that still waits — but only this
 //     check's while a check of the repository is admitted (entry.verifying):
 //     a repair between that check's listing and its hashing would move a file
 //     it admitted, so the rest wait for its release, which asks the round
 //     again. This check's own are the round's to act on either way, as they
-//     always were.
+//     always were — each handed to it as the mark holds it, so the round's
+//     repair is logged as what found the damage first.
 func (c *Cache) recordCheck(e *entry, inc *incarnation, forces int, damaged []checkedFile) []checkedFile {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	inc.repair.forces = max(inc.repair.forces-forces, 0)
 	for _, f := range damaged {
+		if have, ok := inc.repair.found[f.rel]; ok && have.id == f.id {
+			continue
+		}
 		if inc.repair.found == nil {
 			inc.repair.found = map[string]checkedFile{}
 		}
 		inc.repair.found[f.rel] = f
 	}
 	if e.verifying > 0 {
-		return slices.Clone(damaged)
+		own := make([]checkedFile, 0, len(damaged))
+		for _, f := range damaged {
+			own = append(own, inc.repair.found[f.rel])
+		}
+		return own
 	}
 	found := make([]checkedFile, 0, len(inc.repair.found))
 	for _, f := range inc.repair.found {

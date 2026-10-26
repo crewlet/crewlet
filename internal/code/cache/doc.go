@@ -318,7 +318,10 @@
 // dropped it — so a round that cannot act on it, its install failing on a
 // pack it adds or the finding's own download failing, leaves it to the next
 // round rather than to the next check, which skips a file damaged in place
-// after this process vouched for it.
+// after this process vouched for it. A file the mark already names at the
+// identity a check finds it failing at keeps the finding it has: a check
+// that finds it again adds nothing, so a scrub's finding stays the scrub's,
+// which answers for that scrub while it waits (below).
 //
 // A file this process wrote or checked is VOUCHED for, in memory and never
 // persisted, by its IDENTITY: device and inode, size and modification time —
@@ -499,8 +502,10 @@
 //     body no index shows; a scrub begun after the failing process, or within
 //     [ScrubCooldown] with no repair written since, answers from its verdict,
 //     and what an earlier scrub found that still waits for its repair is
-//     answered by that repair — either beside what a round's check has found
-//     since that waits too, its pack none a rebuild past them links.
+//     answered by that repair — its files the forced round found failing
+//     again staying the scrub's findings (above) — either beside what a
+//     round's check has found since that waits too, its pack none a rebuild
+//     past them links.
 //     Only when neither finds anything to fetch again is the repository read
 //     whole at the log's head into the NEXT incarnation, beside the one its
 //     readers hold, which replaces it once converged — seeded with every pack

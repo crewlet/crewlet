@@ -434,7 +434,10 @@ func (c *Cache) firstScrub(inc *incarnation) {
 // copy meanwhile is not left to the interval. Only the SCRUB's findings cover
 // a report (scrubWaits): what a round's check found since waits on the same
 // mark, but a check reads no pack body, so its finding says nothing of the
-// bytes a report may be about.
+// bytes a report may be about — and a check that finds one of the scrub's
+// files failing again, at the identity the scrub found it at, leaves it the
+// scrub's (recordCheck), so the forced round of a request failing on that
+// very damage uncovers nothing.
 func (c *Cache) scrubAsked(inc *incarnation) reportOutcome {
 	now := c.now()
 	recent := !inc.scrubbedAt.IsZero() && now.Sub(inc.scrubbedAt) < ScrubCooldown
@@ -560,7 +563,13 @@ func (c *Cache) scrubFor(e *entry, inc *incarnation, began time.Time) (scrubbed,
 		// place after the scrub read it (recordCheck), whose repair is the
 		// answer as the scrub's findings' is. A check's finding alone answers
 		// nothing here: the scrub is asked for the pack bodies a check never
-		// reads. THE PACKS THE LAST SCRUB FOUND WHOLE answer with them, less
+		// reads. Nor does a check that finds a scrub's file failing again make
+		// it the check's: the forced round of the very request this answers
+		// held every index file to its trailer and met the scrub's files as
+		// they were, and the scrub's findings stayed the scrub's (recordCheck)
+		// — taken for the check's, they answered nothing here, and the request
+		// read the whole copy again to find the files the mark already named.
+		// THE PACKS THE LAST SCRUB FOUND WHOLE answer with them, less
 		// every pack a finding still waiting names — the scrub's or a
 		// check's: what a rebuild past the findings' repair links rather
 		// than downloads (seedRebuild), exactly as when that scrub ran for
