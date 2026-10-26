@@ -221,6 +221,26 @@ describe("the figures", () => {
     );
   });
 
+  // THE COMPANY'S CLOCK WHERE THIS BROWSER CANNOT READ IT is UTC, as every
+  // reading of it is (`range.ts`'s companyZone), and so is a company with no
+  // zone, as the engine reads one: the weekday is the day Company › Budgets
+  // names for the same reset, never the browser's own (the suite's Berlin).
+  test("the reset's weekday is read in UTC where the company's zone cannot be", () => {
+    const week: BudgetWindow = {
+      period: "week",
+      window: "2026-W43",
+      starts_at: "2026-10-18T23:30:00Z",
+      // A Sunday in UTC, and already Monday in Berlin.
+      resets_at: "2026-10-25T23:30:00Z",
+      used: 630,
+      limit: 1000,
+      state: "ok",
+    };
+    for (const zone of ["Not/AZone", "", undefined]) {
+      expect(joinParts(budgetCaption(week, zone))).toBe("63% of this week's budget · resets Sun");
+    }
+  });
+
   // A STOPPED SEAT WAITS ON A READER ONLY WHERE THEY CAN TAKE A WAY OUT:
   // raise the ceiling (a `/config` write — `mayChangeConfig`: Admin
   // and, on a managed document, one of its writers — or a seat's own window

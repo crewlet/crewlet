@@ -1404,6 +1404,18 @@ hours from its first, and its "previous" window is the same span before
 midnight. A screen offers it like any other window; the control draws it
 first.
 
+**A company zone this browser cannot read is read as UTC.** The engine takes
+any zone Go's time-zone database names, and a browser's own time-zone data can
+be older than the name. Every reading of the company's clock then reads UTC
+in its place (`lib/range.ts`'s `companyZone`): the day and the time a row is
+listed under, the days a window covers, the day a budget resets on (Home's
+"resets Mon" among them) and the snooze menu's tomorrow and next Monday, so
+none of them disagrees with another. A window the engine cut is named by its
+label (`2026-09` is September), which needs no clock at all. A schedule's next
+runs are the one exception, and are not listed at all: instants worked out on
+a clock the engine does not fire on would be wrong (see
+[A cron expression is read, not printed](#a-cron-expression-is-read-not-printed)).
+
 **The offered set is the screen's, not the vocabulary's.** A spend chart has
 nothing useful to say about fifteen minutes; a strip folded from the events the
 browser is holding has nothing to say about ninety days, and no honest answer at

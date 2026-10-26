@@ -27,8 +27,8 @@ import type {
   WorkFlowPoint,
 } from "~/protocol/index.ts";
 import { plural, toWall } from "~/lib/format.ts";
-import { dateTimeFormat, knownZone, type DateShape } from "~/lib/formatters.ts";
-import { browserZone } from "~/lib/prefs.ts";
+import { dateTimeFormat, type DateShape } from "~/lib/formatters.ts";
+import { companyZone } from "~/lib/range.ts";
 
 /** The three windows the screen reads over, and what each is called. */
 export const HOME_RANGES = [
@@ -172,10 +172,12 @@ export function budgetCaption(week: BudgetWindow, zone: string | undefined): str
 function weekday(at: string, zone: string | undefined): string {
   const t = Date.parse(at);
   if (!Number.isFinite(t)) return "";
-  // A COMPANY WITH NO ZONE, or one this runtime cannot read, is read on the
-  // browser's clock, as a formatter given no zone reads it.
-  const own = browserZone();
-  return dateTimeFormat(undefined, knownZone(zone || own) ?? own, WEEKDAY).format(t);
+  // ON THE COMPANY'S CLOCK AS EVERY READING OF IT IS (`range.ts`'s
+  // companyZone): UTC for a company with no zone, the engine's own reading of
+  // one, and for a zone this runtime cannot read — so the weekday is the day
+  // Company › Budgets says the week resets on, never the browser's own clock,
+  // which is no reading of the company's.
+  return dateTimeFormat(undefined, companyZone(zone), WEEKDAY).format(t);
 }
 
 const WEEKDAY: DateShape = { weekday: "short" };
