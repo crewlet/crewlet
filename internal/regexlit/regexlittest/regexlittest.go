@@ -13,11 +13,11 @@
 // the surrounding text breaks (`\b`, `^`) can undo one.
 //
 // ONE GENERATOR for every package that certifies a derivation of the same
-// expressions — regexlit's prefilter first among them — because two copies
-// of it drift, and a copy that stopped writing the long s or a byte that is
-// not UTF-8 would leave its suite passing without ever meeting the case it
-// was written for (ADR-0008). Each caller keeps its own [Vocabulary]: what
-// its derivation finds hard is its own.
+// expressions — regexlit's prefilter, and codeindex's plan over an index of
+// trigrams — because two copies of it drift, and a copy that stopped writing
+// the long s or a byte that is not UTF-8 would leave its suite passing
+// without ever meeting the case it was written for (ADR-0008). Each caller
+// keeps its own [Vocabulary]: what its derivation finds hard is its own.
 package regexlittest
 
 import (
