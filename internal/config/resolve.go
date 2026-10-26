@@ -96,6 +96,26 @@ func EnvOnly() *Resolver { return NewResolver(EnvSource{}) }
 // behind it.
 func WithStore(store Source) *Resolver { return NewResolver(store, EnvSource{}) }
 
+// Ahead is a chain with first answering before every source of r: r's own
+// chain, with one source laid in front of it.
+//
+// FOR A VALUE ONE CALLER ALONE MAY READ. A seat's own credential that the
+// engine issues at use rather than seals (its GitHub App's installation
+// token) is answered by a source built for that seat and laid in front of
+// the company's chain for that seat's resolution only, so no other seat's
+// values can name it. The chain r keeps is shared, never changed.
+//
+// A nil r is the environment alone, as everywhere else here.
+func (r *Resolver) Ahead(first Source) *Resolver {
+	sources := []Source{first}
+	if r == nil {
+		sources = append(sources, EnvSource{})
+	} else {
+		sources = append(sources, r.sources...)
+	}
+	return NewResolver(sources...)
+}
+
 // LookupOK answers one variable by NAME, reporting whether any source held
 // it.
 //
