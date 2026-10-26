@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/artifactdata"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/signedask"
@@ -99,14 +101,32 @@ func (e *Engine) SetOnArtifactsServing(fn func(serving bool)) {
 	e.onArtifactsServing.Store(&fn)
 }
 
+// artifactCopies are the domains whose appliers the socket's artifact rooms are
+// pushed from — `artifact_changed` from the artifacts log's, `artifact_data`
+// from the datastore's — and so the copies whose service the rooms follow.
+var artifactCopies = []string{artifactsdomain.Domain{}.Name(), artifactdata.Domain{}.Name()}
+
+// artifactCopiesServe reports whether this node's copy of every log the rooms
+// are pushed from is in service ([localEstate.outOfService]).
+//
+// THOSE TWO AND NO OTHER. The rooms withhold both appliers' pushes while it
+// is false, so a wrong copy of either is one whose pushes describe rows
+// nobody vouches for — and a wrong copy of any other domain leaves both
+// complete. It read the TRACKER's verdict, the inbox relay's question, so a
+// wrong artifacts copy went on pushing to every room while a wrong tracker
+// copy withheld every room's sound pushes and sent each a re-read.
+func (e *Engine) artifactCopiesServe(ctx context.Context) bool {
+	return len(e.local.outOfService(ctx, artifactCopies...)) == 0
+}
+
 // watchArtifactCopies tells [Engine.SetOnArtifactsServing]'s listener every
-// time this node's copy leaves or returns to service, judged on the copy's
-// own verdict at its own cadence ([servingRecheck]), until ctx ends. Only a
-// data node holds a copy, so only a data node watches.
+// time this node's artifact copies leave or return to service, judged on the
+// copies' own verdict at its own cadence ([servingRecheck]), until ctx ends.
+// Only a data node holds a copy, so only a data node watches.
 func (e *Engine) watchArtifactCopies(ctx context.Context) {
 	serving := true
 	for {
-		faulted := e.local.faultedUnasked(ctx)
+		faulted := !e.artifactCopiesServe(ctx)
 		if faulted == serving {
 			serving = !faulted
 			log.InfoContext(ctx, "artifact_copies_serving", "serving", serving,

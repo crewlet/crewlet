@@ -152,7 +152,7 @@ type inboxRelay struct {
 	roster func(context.Context) ([]string, error)
 
 	// faulted reports whether this node's own copy is out of service, as
-	// far as it can tell without waiting ([localEstate.faultedUnasked]).
+	// far as it can tell without waiting ([localEstate.trackerOutOfService]).
 	faulted func(context.Context) bool
 
 	// listening reports whether anything on this node hears movements at
@@ -425,21 +425,12 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// faultedUnasked reports whether this node's TRACKER copy is OUT OF SERVICE as
-// far as it can tell without waiting: a verdict read and found that domain's
-// copy wrong (ADR-0049). The tracker's alone, because the inbox movements come
-// from the tracker's applier: a wrong copy of any other domain leaves this
-// node's own announcements complete. A copy nobody has judged yet and a node
-// whose core is not up are not — [localEstate.For] serves both — and a stale
-// verdict answers while the read that replaces it runs, exactly as a request
-// is answered.
-func (l *localEstate) faultedUnasked(ctx context.Context) bool {
-	c := l.e.core.Load()
-	if c == nil || c.log == nil {
-		return false
-	}
-	v, known, _ := l.peek(ctx, c)
-	return known && !v.serves(tracker.Domain{}.Name())
+// trackerOutOfService reports whether this node's TRACKER copy is out of
+// service ([localEstate.outOfService]). The tracker's alone, because the inbox
+// movements come from the tracker's applier: a wrong copy of any other domain
+// leaves this node's own announcements complete.
+func (l *localEstate) trackerOutOfService(ctx context.Context) bool {
+	return len(l.outOfService(ctx, tracker.Domain{}.Name())) > 0
 }
 
 // armInboxRelay makes this data node a server of its inbox relay and starts
@@ -451,7 +442,7 @@ func (e *Engine) armInboxRelay(ctx context.Context) error {
 		return nil
 	}
 	relay := newInboxRelay(e.id, e.backends.Queue, e.dataRoster,
-		e.local.faultedUnasked, e.inboxListening, e.deliverInbox, e.inboxGap)
+		e.local.trackerOutOfService, e.inboxListening, e.deliverInbox, e.inboxGap)
 	stop, err := relay.serve(ctx)
 	if err != nil {
 		return fmt.Errorf("engine: serve the inbox relay: %w", err)

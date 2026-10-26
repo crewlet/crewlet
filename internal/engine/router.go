@@ -435,6 +435,38 @@ func (l *localEstate) servesUnasked(ctx context.Context) bool {
 	return !known || v.serves(estate.SeatCopy)
 }
 
+// outOfService is which of domains this node's copy holds OUT OF SERVICE as far
+// as it can tell without waiting — a verdict read found that domain's copy
+// wrong (ADR-0049), or found the estate file shut, which takes every domain's
+// copy with it — in the order domains names them, and nil for none.
+//
+// FOR A WATCH OVER ONE SUBSYSTEM'S APPLIERS — the inbox relay's sources, the
+// artifact rooms' two logs — each of which withholds what those appliers
+// announce while their copy is out, and so NAMES THE DOMAINS IT WATCHES: a
+// wrong copy of any other domain leaves their announcements complete, and a
+// watch that read another domain's verdict withheld a sound copy's pushes and
+// delivered a wrong one's. A copy nobody has judged yet and a node whose core
+// is not up are not out of service — [localEstate.For] serves both — and a
+// stale verdict answers while the read that replaces it runs, exactly as a
+// request is answered.
+func (l *localEstate) outOfService(ctx context.Context, domains ...string) []string {
+	c := l.e.core.Load()
+	if c == nil || c.log == nil {
+		return nil
+	}
+	v, known, _ := l.peek(ctx, c)
+	if !known {
+		return nil
+	}
+	var out []string
+	for _, domain := range domains {
+		if !v.serves(domain) {
+			out = append(out, domain)
+		}
+	}
+	return out
+}
+
 // refresh reads the copy's verdict once and stores it, stamped with the
 // instant the read LANDED: stamped with the instant it began, a read slower
 // than [servingRecheck] would be stale the moment it was stored, and the next

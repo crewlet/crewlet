@@ -2,7 +2,11 @@ package engine
 
 import (
 	"context"
+	"slices"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
@@ -92,4 +96,66 @@ func TestANodeWithNoBrokerRunsNoPresence(t *testing.T) {
 	if deps := ArtifactDataToolDeps(e); deps.Store != nil || deps.Turns != nil {
 		t.Fatalf("a node with no router was handed datastore tool deps %+v", deps)
 	}
+}
+
+// THE ARTIFACT ROOMS FOLLOW THE ARTIFACT COPIES' OWN VERDICT, and no other
+// domain's.
+//
+// The rooms withhold both artifact appliers' pushes while this node's copy of
+// either log is out of service, and tell every room to re-read at each switch.
+// The watch read the TRACKER's verdict — the inbox relay's question — so a
+// wrong artifacts or datastore copy went on pushing what it applied to every
+// room, while a wrong tracker copy, which describes nothing a room shows,
+// withheld every room's sound pushes. Each step here holds one verdict for a
+// few rechecks on the bubble's clock and reads what the rooms were told.
+//
+// Mutation: watch the tracker's copy again, or either artifact log alone, and
+// a step hears the wrong switch.
+func TestTheArtifactRoomsFollowTheArtifactCopiesOwnVerdict(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		var verdict atomic.Pointer[copyVerdict]
+		set := func(v copyVerdict) { verdict.Store(&v) }
+		set(soundCopy())
+		e := &Engine{}
+		withCore(e)
+		e.local = localWith(e, time.Now, func(context.Context, *core) copyVerdict {
+			return *verdict.Load()
+		})
+		var mu sync.Mutex
+		var told []bool
+		e.SetOnArtifactsServing(func(serving bool) {
+			mu.Lock()
+			told = append(told, serving)
+			mu.Unlock()
+		})
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			e.watchArtifactCopies(ctx)
+		}()
+		defer func() { cancel(); <-done }()
+
+		for _, step := range []struct {
+			name string
+			now  copyVerdict
+			want []bool
+		}{
+			{"a wrong tracker copy", wrongOn(trackerName), nil},
+			{"a wrong artifacts copy", wrongOn(artifactCopies[0]), []bool{false}},
+			{"both copies back", soundCopy(), []bool{false, true}},
+			{"a wrong datastore copy", wrongOn(artifactCopies[1]), []bool{false, true, false}},
+		} {
+			set(step.now)
+			time.Sleep(3 * servingRecheck)
+			synctest.Wait()
+			mu.Lock()
+			got := slices.Clone(told)
+			mu.Unlock()
+			if !slices.Equal(got, step.want) {
+				t.Fatalf("after %s the rooms were told %v, want %v", step.name, got, step.want)
+			}
+		}
+	})
 }
