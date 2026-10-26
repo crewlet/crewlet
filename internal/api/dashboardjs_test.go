@@ -1181,7 +1181,13 @@ const (
 	// field and its secret completion onto uilet's ValueField took it back
 	// to 4480.0 KiB (the field, its completion helper and its list's rules
 	// leave the bundle). 4481 KiB, which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 385<<10
+	// The assistant's deep work, delivered files and image attachments took
+	// it from 4480.0 KiB to 4491.9 KiB on uilet 0.63.0: in the panel's chunk,
+	// the run card's mapping and its nested steps, the file card, the
+	// composer's pick, drop and paste with their bounds and uploads, and the
+	// preview hook the draft file card now shares. 4493 KiB, which still
+	// refuses a doubled baseline.
+	treeBudget = 4<<20 + 397<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
