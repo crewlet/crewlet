@@ -141,11 +141,11 @@ type ManifestOptions struct {
 	// which is a separate act from creating the app.
 	SetupURL string
 
-	// Tier is how much this seat may do, which decides the permissions the
-	// app is created with. An app cannot be widened later without every
-	// operator re-approving it, so this is the one field worth getting
-	// right at creation.
-	Tier Tier
+	// Access is how much this seat may do, which decides the permissions
+	// the app is created with. An app cannot be widened later without its
+	// installation approving the change, so this is the one field worth
+	// getting right at creation.
+	Access Access
 
 	// Homepage is the `url` field, which GitHub requires. It is the only
 	// required field in the whole manifest.
@@ -236,7 +236,7 @@ func BuildManifest(opts ManifestOptions) Manifest {
 		SetupOnUpdate:  true,
 		HookAttributes: hook,
 		DefaultEvents:  ManifestEvents,
-		DefaultPerms:   opts.Tier.Permissions(),
+		DefaultPerms:   opts.Access.Permissions(),
 	}
 }
 
@@ -426,6 +426,17 @@ func InstallURL(webBase, org, slug string) string {
 // the operator one tab away from the one thing they came to do.
 func ManageURL(webBase, org, slug string) string {
 	return appSettingsPage(webBase, org, slug, "advanced")
+}
+
+// PermissionsURL is the app's permissions page, where its owner changes what
+// the app asks every installation for.
+//
+// THE ONLY PLACE AN APP IS WIDENED. A manifest is read once, at creation, so
+// an app created before its seat opted in to more never asks for it on its
+// own: its owner adds the permission here, and GitHub then asks the
+// installation to approve it before any token can carry it.
+func PermissionsURL(webBase, org, slug string) string {
+	return appSettingsPage(webBase, org, slug, "permissions")
 }
 
 // appSettingsPage is one page of an app's settings, or "" when there is no
@@ -636,20 +647,23 @@ func (c *AppClient) Installation(ctx context.Context, id int64) (*Installation, 
 	return out, nil
 }
 
-// MintToken issues a token for one installation, scoped to the tier.
+// MintToken issues a token for one installation, scoped to the access.
 //
 // SCOPED DOWN AT MINT TIME, which is where the tier becomes real. The app may
-// hold more than the tier asks for, because a person installed it and a
-// person can widen it; the token carries only what the tier lists, so a
-// read-only seat cannot write even on an installation that could.
+// hold more than the access asks for, because a person installed it and a
+// person can widen it; the token carries only what the access lists, so a
+// read-only seat cannot write even on an installation that could. The other
+// direction is GitHub's to refuse: a request naming a permission the
+// installation does not hold mints nothing, which the seat-app pass reports
+// as the seat's shortfall ([Shortfall]).
 //
 // Repositories narrow it further where the seat names any. Empty means every
 // repository the installation covers, which is what the operator chose when
 // they installed it.
 func (c *AppClient) MintToken(
-	ctx context.Context, installationID int64, tier Tier, repos []string,
+	ctx context.Context, installationID int64, access Access, repos []string,
 ) (*InstallationToken, error) {
-	body := map[string]any{"permissions": tier.Permissions()}
+	body := map[string]any{"permissions": access.Permissions()}
 	if names := repoNames(repos); len(names) > 0 {
 		body["repositories"] = names
 	}

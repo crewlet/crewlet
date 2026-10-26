@@ -318,7 +318,8 @@ func githubSeatApp(seat *org.Role, env *config.Resolver) github.SeatApp {
 	tier, _ := github.ParseTier(app.Tier)
 	return github.SeatApp{
 		Handle: seat.Handle(), Name: seat.Name, Tier: tier, Repos: app.Repos,
-		AppID: app.AppID, Slug: app.AppSlug,
+		Workflows: app.Workflows,
+		AppID:     app.AppID, Slug: app.AppSlug,
 		InstallationID: app.InstallationID,
 		Key:            strings.TrimSpace(env.Value(app.PrivateKey)),
 	}

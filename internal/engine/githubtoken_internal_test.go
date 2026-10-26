@@ -24,6 +24,9 @@ type appGitHub struct {
 	mints  int
 	refuse bool
 	url    string
+
+	// asked is the permissions each mint requested, in order.
+	asked []map[string]string
 }
 
 func newAppGitHub(t *testing.T) *appGitHub {
@@ -41,6 +44,13 @@ func newAppGitHub(t *testing.T) *appGitHub {
 			_, _ = w.Write([]byte(`{"message":"This installation has been suspended"}`))
 			return
 		}
+		var body struct {
+			Permissions map[string]string `json:"permissions"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("a mint request was not the token endpoint's JSON: %v", err)
+		}
+		g.asked = append(g.asked, body.Permissions)
 		g.mints++
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -64,6 +74,13 @@ func (g *appGitHub) minted() int {
 // installed yet. Both name their own token for the GitHub MCP server, and
 // `builder` also names `planner`'s, which must answer nothing for it.
 func appCompany(t *testing.T, server string, enabled bool) *Company {
+	t.Helper()
+	return appCompanyWith(t, server, enabled, "")
+}
+
+// appCompanyWith is [appCompany] with builderGitHub appended to `builder`'s
+// own `integrations.github` block.
+func appCompanyWith(t *testing.T, server string, enabled bool, builderGitHub string) *Company {
 	t.Helper()
 	state := "true"
 	if !enabled {
@@ -111,7 +128,7 @@ roles:
         app_slug: gophrase-builder
         installation_id: 9001
         private_key: "${GITHUB_APP_KEY_BUILDER}"
-  - name: Planner
+`+builderGitHub+`  - name: Planner
     handle: planner
     llm: zulu
     mcp_env:
@@ -407,5 +424,43 @@ func TestARenewalIsArmedOnlyForAnIssuedToken(t *testing.T) {
 	e.armRenewal(s, nil)
 	if s.renew != nil {
 		t.Error("a pass that issued nothing left a renewal armed")
+	}
+}
+
+// A SEAT'S OPT-IN TO WORKFLOW WRITES REACHES THE MINT, and its silence does
+// too. The document is the one place the opt-in is written, and a token is
+// the one place GitHub reads it: a seat that opted in and is minted without it
+// has every push touching `.github/workflows` refused, and one that did not
+// opt in must never be handed it.
+func TestASeatsWorkflowsOptInIsWhatItsTokenAsksFor(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		builder string
+		want    string
+	}{
+		"opted in": {"        workflows: true\n", "write"},
+		"silent":   {"", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			gh := newAppGitHub(t)
+			company := appCompanyWith(t, gh.url, true, c.builder)
+			e := appEngine(t, company)
+			env, _ := e.seatResolver(t.Context(), company, company.Org.AgentSeatByHandle("builder"), github.ToolTokenLife)
+			if token := env.Value("${GITHUB_APP_TOKEN_BUILDER}"); token == "" {
+				t.Fatal("the seat's own token did not resolve")
+			}
+			gh.mu.Lock()
+			defer gh.mu.Unlock()
+			if len(gh.asked) != 1 {
+				t.Fatalf("%d mints, want one", len(gh.asked))
+			}
+			if got := gh.asked[0][github.PermissionWorkflows]; got != c.want {
+				t.Errorf("the mint asked for workflows=%q, want %q", got, c.want)
+			}
+			if got := gh.asked[0]["contents"]; got != "write" {
+				t.Errorf("a full_access mint asked for contents=%q", got)
+			}
+		})
 	}
 }

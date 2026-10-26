@@ -345,7 +345,7 @@ func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
 		DeliveryURL: delivery,
 		RedirectURL: base + "/webhooks/github-app",
 		SetupURL:    base + "/webhooks/github-app?installed=" + handle,
-		Tier:        tier,
+		Access:      github.Access{Tier: tier, Workflows: seatWorkflows(seat)},
 	})
 	httpjson.Write(w, http.StatusOK, map[string]any{
 		"seat": handle,
@@ -570,6 +570,13 @@ func seatTier(seat *org.Role) string {
 		return ""
 	}
 	return seat.GitHub.Tier
+}
+
+// seatWorkflows is whether this seat opts in to workflow writes, as written
+// down. [github.Access] decides what that grants at the seat's tier, so the
+// raw value is all a caller needs.
+func seatWorkflows(seat *org.Role) bool {
+	return seat != nil && seat.GitHub != nil && seat.GitHub.Workflows
 }
 
 // orgOf is the organization whose repositories these agents work in.

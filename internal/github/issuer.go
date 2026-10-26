@@ -138,11 +138,11 @@ type Issuer struct {
 // issueKey is what one token is valid FOR: the app and installation it was
 // minted against, and the scope it was narrowed to. Two seats can share an
 // installation only by sharing an app, which the engine never creates, but
-// the scope is in the key regardless: a token narrowed to one tier or one set
-// of repositories must never be handed to a caller asking for another.
+// the scope is in the key regardless: a token narrowed to one access or one
+// set of repositories must never be handed to a caller asking for another.
 type issueKey struct {
 	app, installation int64
-	tier              Tier
+	access            Access
 	repos             string
 }
 
@@ -154,7 +154,7 @@ func keyOf(seat SeatApp) issueKey {
 	slices.Sort(repos)
 	return issueKey{
 		app: seat.AppID, installation: seat.InstallationID,
-		tier: seat.Tier, repos: strings.Join(slices.Compact(repos), ","),
+		access: seat.Access(), repos: strings.Join(slices.Compact(repos), ","),
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -193,6 +194,42 @@ func TestAnAppForAnUnreachableEngineIsCreatedWithItsWebhookOff(t *testing.T) {
 			}
 			if manifest["redirect_url"] != c.base+"/webhooks/github-app" {
 				t.Errorf("redirect_url = %v, want the engine's own return", manifest["redirect_url"])
+			}
+		})
+	}
+}
+
+// AN OPTED-IN SEAT'S APP IS CREATED ASKING FOR WORKFLOW WRITES.
+//
+// The manifest is read once, at creation, so the begin route is the cheap
+// moment to ask: an app created without the permission gains it only when its
+// owner adds it at GitHub and the installation approves it. A seat that did
+// not opt in asks for nothing of the kind.
+func TestAnOptedInSeatsAppIsCreatedAskingForWorkflowWrites(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		doc  string
+		want any
+	}{
+		"opted in": {strings.Replace(githubAppsDoc, `"tier": "full_access"`,
+			`"tier": "full_access", "workflows": true`, 1), "write"},
+		"silent": {githubAppsDoc, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := newSurfaceWithApps(t, nil, fixtureWebhookBase)
+			s.seedDocument(t, c.doc)
+			res := s.do(t, http.MethodPost, "/setup/integrations/github/app", `{"seat":"builder"}`, nil)
+			if res.Code != http.StatusOK {
+				t.Fatalf("begin = %d: %s", res.Code, res.Body)
+			}
+			manifest, _ := decode(t, res)["manifest"].(map[string]any)
+			perms, _ := manifest["default_permissions"].(map[string]any)
+			if perms["contents"] != "write" {
+				t.Fatalf("a full_access app was created with %v", perms)
+			}
+			if got := perms[github.PermissionWorkflows]; got != c.want {
+				t.Errorf("workflows = %v, want %v", got, c.want)
 			}
 		})
 	}

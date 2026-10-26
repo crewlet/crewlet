@@ -129,9 +129,9 @@ func TestAnIssuerHandsOutTheHeldTokenUntilItRunsShort(t *testing.T) {
 	}
 }
 
-// A TOKEN IS NEVER HANDED TO A SCOPE IT WAS NOT MINTED FOR. A seat's tier or
-// repositories changed by a revision must be issued a token narrowed to the
-// new scope, never the one the old scope was cut to.
+// A TOKEN IS NEVER HANDED TO A SCOPE IT WAS NOT MINTED FOR. A seat's tier,
+// workflows opt-in or repositories changed by a revision must be issued a
+// token narrowed to the new scope, never the one the old scope was cut to.
 func TestAnIssuedTokenIsScopedToTheTierAndRepositoriesItWasMintedFor(t *testing.T) {
 	t.Parallel()
 	c := &clock{at: time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)}
@@ -158,9 +158,26 @@ func TestAnIssuedTokenIsScopedToTheTierAndRepositoriesItWasMintedFor(t *testing.
 	if again, _ := issuer.Token(t.Context(), opts, seat, github.ToolTokenLife); again.Token != writer.Token {
 		t.Error("one repository spelt differently was minted a second token")
 	}
+	seat.Workflows = true
+	workflows, err := issuer.Token(t.Context(), opts, seat, github.ToolTokenLife)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	if workflows.Token == writer.Token {
+		t.Fatal("a seat opted in to workflow writes was handed the token minted without them")
+	}
 
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
+	if len(srv.scopes) != 3 {
+		t.Fatalf("%d mints, want review, full_access and full_access with workflows", len(srv.scopes))
+	}
+	for i, want := range []string{"", "", "write"} {
+		perms, _ := srv.scopes[i]["permissions"].(map[string]any)
+		if got, _ := perms[github.PermissionWorkflows].(string); got != want {
+			t.Errorf("mint %d asked for workflows=%q, want %q", i, got, want)
+		}
+	}
 	perms, _ := srv.scopes[0]["permissions"].(map[string]any)
 	if perms["contents"] != "read" || perms["pull_requests"] != "write" {
 		t.Errorf("the review mint asked for %v, want the review tier's permissions", perms)
@@ -293,7 +310,7 @@ func TestAManifestWithNoDeliveryAddressHasItsWebhookOff(t *testing.T) {
 		Seat: "pm", Name: "GoPhrase Product Manager",
 		RedirectURL: "http://localhost:8200/webhooks/github-app",
 		SetupURL:    "http://localhost:8200/webhooks/github-app?installed=pm",
-		Tier:        github.TierReview,
+		Access:      github.Access{Tier: github.TierReview},
 	})
 	if off.HookAttributes["active"] != false {
 		t.Errorf("hook = %v, want it inactive", off.HookAttributes)
@@ -306,7 +323,7 @@ func TestAManifestWithNoDeliveryAddressHasItsWebhookOff(t *testing.T) {
 	}
 	on := github.BuildManifest(github.ManifestOptions{
 		Seat: "pm", DeliveryURL: "https://hooks.example.com/webhooks/github/pm",
-		Tier: github.TierReview,
+		Access: github.Access{Tier: github.TierReview},
 	})
 	if on.HookAttributes["active"] != true || on.HookAttributes["url"] == nil {
 		t.Errorf("hook = %v, want it active at its address", on.HookAttributes)

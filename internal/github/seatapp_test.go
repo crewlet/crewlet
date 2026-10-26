@@ -2,6 +2,7 @@ package github_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -129,8 +130,8 @@ func TestTheInstallationIsComparedAgainstTheTierInBothDirections(t *testing.T) {
 		t.Fatalf("Excess = %v, want the denied grant", excess)
 	}
 	// A review seat cannot write what it was set up to write, and GitHub
-	// would only say so at the call site.
-	short := github.Shortfall(github.TierReview, held)
+	// would only say so by refusing its every token.
+	short := github.Shortfall(github.Access{Tier: github.TierReview}, held)
 	if len(short) == 0 {
 		t.Fatal("a review seat on a read-only installation reports no shortfall")
 	}
@@ -388,5 +389,78 @@ func TestAStaleInstallationThatCannotBeClearedSaysSo(t *testing.T) {
 	}
 	if detail := res.Findings[0].Detail; !strings.Contains(detail, boom.Error()) {
 		t.Errorf("the finding does not name the write that failed: %q", detail)
+	}
+}
+
+// AN APP CREATED BEFORE ITS SEAT OPTED IN TO WORKFLOWS SAYS WHERE TO WIDEN IT.
+//
+// A manifest is read once, at creation, so the opt-in written afterwards asks
+// for a grant the app never requested. GitHub then refuses every token the
+// seat asks for, and the card has to say that the widening starts on the app's
+// permissions page and ends with the installation's approval, rather than send
+// a person to an installation that has nothing to approve yet.
+func TestAWorkflowsOptInTheAppLacksSendsItsOwnerToThePermissionsPage(t *testing.T) {
+	t.Parallel()
+	_, pem := testKey(t)
+	// THE RECORDED INSTALLATION, read back by id, which is the call a seat
+	// that already names one makes; a list answers the discovery call.
+	installedWith := func(perms map[string]string) string {
+		one := map[string]any{
+			"id": 42, "account": map[string]any{"login": "acme", "type": "Organization"},
+			"repository_selection": "all", "permissions": perms,
+		}
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			var body any = []any{one}
+			switch r.URL.Path {
+			case "/app":
+				body = map[string]any{"id": 7, "slug": "acme-sre-lead"}
+			case "/app/installations/42":
+				body = one
+			}
+			if err := json.NewEncoder(w).Encode(body); err != nil {
+				t.Error(err)
+			}
+		}))
+		t.Cleanup(server.Close)
+		return server.URL
+	}
+	seat := github.SeatApp{
+		Handle: "sre-lead", AppID: 7, Slug: "acme-sre-lead", InstallationID: 42,
+		Key: pem, Tier: github.TierFullAccess, Workflows: true,
+	}
+	reconcile := func(held map[string]string) *github.SeatAppResult {
+		t.Helper()
+		res, err := github.ReconcileSeatApps(context.Background(), github.SeatAppOptions{
+			APIBase: installedWith(held), WebBase: "https://github.com", Org: "acme",
+			Seats: []github.SeatApp{seat},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+
+	res := reconcile(github.TierFullAccess.Permissions())
+	if got := kinds(res.Findings); len(got) != 1 || got[0] != string(integration.FindingGrantShort) {
+		t.Fatalf("findings = %v, want the missing workflows grant", got)
+	}
+	want := "https://github.com/organizations/acme/settings/apps/acme-sre-lead/permissions"
+	if url := res.Findings[0].ActionURL; url != want {
+		t.Errorf("action link = %q, want the app's permissions page %q", url, want)
+	}
+	for _, step := range []string{"Workflows", "permissions page", "approves"} {
+		if !strings.Contains(res.Findings[0].Detail, step) {
+			t.Errorf("the finding does not name %q: %q", step, res.Findings[0].Detail)
+		}
+	}
+	if len(res.Ready) != 0 {
+		t.Errorf("a seat GitHub refuses every token for was reported ready: %v", res.Ready)
+	}
+
+	granted := github.TierFullAccess.Permissions()
+	granted[github.PermissionWorkflows] = "write"
+	if res := reconcile(granted); len(res.Findings) != 0 || len(res.Ready) != 1 {
+		t.Errorf("an installation holding the opt-in: findings %v, ready %v", kinds(res.Findings), res.Ready)
 	}
 }
