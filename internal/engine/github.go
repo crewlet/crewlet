@@ -211,9 +211,19 @@ func (e *Engine) startGitHub(ctx context.Context, c *Company, cfg *config.GitHub
 	registered := e.intoLiveRegistry(func(reg *notify.Registry) int {
 		return e.notify.github.register(reg, c, env)
 	})
-	if registered == 0 {
-		// Enabled with no seat identity is a company mid-setup —
-		// `crewlet github provision` has not run — or a deployment that
+	switch pending := githubAppsPending(c); {
+	case registered == 0 && len(pending) > 0:
+		// A COMPANY WHOSE AGENTS ARE GETTING THEIR OWN APPS, which is a
+		// step a person is part way through rather than a fault: each of
+		// these seats' identity is its app's slug, written when the app is
+		// created, and the card names the click that is left. Said once
+		// per wiring, at info, so it reads as the wait it is.
+		log.InfoContext(ctx, "github_seat_identities_waiting", "api", api, "seats", pending,
+			"detail", "each of these agents acts on GitHub as its own app, which is not "+
+				"created yet; its identity is registered once the app exists")
+	case registered == 0:
+		// Enabled with no seat identity is a company mid-setup
+		// (`crewlet github provision` has not run) or a deployment that
 		// refused every lookup. Logged loudly either way, because the
 		// integration is completely inert in this state and nothing else
 		// will say so.
@@ -323,6 +333,24 @@ func githubSeatApp(seat *org.Role, env *config.Resolver) github.SeatApp {
 		InstallationID: app.InstallationID,
 		Key:            strings.TrimSpace(env.Value(app.PrivateKey)),
 	}
+}
+
+// githubAppsPending is every agent seat that is set up to act as its own
+// GitHub App and whose app does not exist yet, sorted: the seats whose
+// identity waits on a person creating the app ([githubIdentities.register]
+// registers each one's slug the moment there is one).
+func githubAppsPending(c *Company) []string {
+	var out []string
+	if c == nil || c.Org == nil {
+		return out
+	}
+	for seat := range c.Org.AllRoles() {
+		if seat.IsAgent() && seat.GitHub != nil && github.NormalizeLogin(seat.GitHub.AppSlug) == "" {
+			out = append(out, seat.Handle())
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // githubPrompt is the hosted code host's trigger builder. A value, held by

@@ -2261,3 +2261,88 @@ func TestAnAddressGitHubCannotReachRegistersNothingAndIsAnAdvisory(t *testing.T)
 		t.Errorf("the card reads %s, want ready: the agents are working", phase)
 	}
 }
+
+// A SEAT'S OWN APP TOKEN IS ITS APP ACTING, NOT AN ACCOUNT TO LOOK UP.
+//
+// `Bearer ${GITHUB_APP_TOKEN_<HANDLE>}` is the documented GitHub tool
+// credential of a seat with its own app. Read as a personal credential, it
+// was sent to GET /user before the app existed (the variable unissued, so the
+// request carried the word "Bearer" and came back 401), and after the app
+// existed it would be refused anyway, since GitHub answers GET /user for no
+// installation token. The app's account is its slug, so the scan passes the
+// key over: no lookup, no reveal asked for, and no "resolved to nothing"
+// fault for a seat that is waiting for its app.
+func TestASeatsOwnAppTokenIsNeverLookedUpAsAnAccount(t *testing.T) {
+	t.Parallel()
+	ownToken := "Bearer ${" + github.SeatVar("backend-engineer", github.FieldAppToken) + "}"
+	seat := &org.Role{Name: "Backend Engineer", DeclaredHandle: "backend-engineer",
+		MCPEnv: map[string]map[string]string{github.SeatEnv: {"Authorization": ownToken}}}
+	issued := func(v string) string {
+		// As the seat's own resolution would answer it once issued: the
+		// scan must not look it up even then.
+		return strings.ReplaceAll(v, "${"+github.SeatVar("backend-engineer", github.FieldAppToken)+"}", "ghs_issued")
+	}
+	if got := github.CredentialOf(seat, issued); got != "" {
+		t.Errorf("the seat's own app token was read as a personal credential: %q", got)
+	}
+	if reads := github.CredentialReads(&org.Organization{Name: "Acme", Roles: []*org.Role{seat}}); len(reads) != 0 {
+		t.Errorf("the scan asks to read %v for a seat whose only credential is its app's", reads)
+	}
+
+	// A PERSONAL CREDENTIAL BESIDE IT IS STILL ONE, under another key.
+	both := &org.Role{Name: "Backend Engineer", DeclaredHandle: "backend-engineer",
+		MCPEnv: map[string]map[string]string{github.SeatEnv: {
+			"Authorization": ownToken, "GH_TOKEN": "ghp_person",
+		}}}
+	if got := github.CredentialOf(both, issued); got != "ghp_person" {
+		t.Errorf("a personal credential beside the app token = %q, want it read", got)
+	}
+
+	// ANOTHER SEAT'S APP TOKEN IS NOT THIS SEAT'S, and is read like any
+	// other reference: here it resolves to nothing, so it is no credential.
+	borrowed := &org.Role{Name: "Planner", DeclaredHandle: "planner",
+		MCPEnv: map[string]map[string]string{github.SeatEnv: {"Authorization": ownToken}}}
+	if got := github.CredentialOf(borrowed, func(string) string { return "Bearer " }); got != "" {
+		t.Errorf("a scheme with nothing after it was read as a credential: %q", got)
+	}
+
+	// AND THE PROVISIONING REPORT CALLS THE WAITING SEAT NO FAULT.
+	client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[]`))
+	})
+	res, err := github.Reconcile(context.Background(), github.Options{
+		Client: client,
+		Config: &config.GitHub{Enabled: true, WebhookSecret: "s3cret"},
+		Org:    &org.Organization{Name: "Acme", Roles: []*org.Role{seat}},
+		Value:  func(string) string { return "" }, WebhookBase: "https://x.example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if findings := res.Findings(); len(findings) != 0 {
+		t.Errorf("a seat waiting for its own app produced %+v", findings)
+	}
+}
+
+// A SCHEME WITH NOTHING AFTER IT IS NO CREDENTIAL. `Bearer ${TOKEN}` with
+// TOKEN unset resolves to "Bearer ", and reading the word as the token sent
+// GitHub a request it could only refuse, reported as a bad credential rather
+// than as the variable nobody set.
+func TestAnEmptySchemeIsNoCredential(t *testing.T) {
+	t.Parallel()
+	for value, want := range map[string]string{
+		"Bearer ":           "",
+		"  bearer  ":        "",
+		"token":             "",
+		"Bearer ghp_a":      "ghp_a",
+		"token  ghp_b ":     "ghp_b",
+		"ghp_c":             "ghp_c",
+		"Bearer ghp_d junk": "",
+	} {
+		seat := &org.Role{Name: "Engineer", DeclaredHandle: "eng",
+			MCPEnv: map[string]map[string]string{github.SeatEnv: {"Authorization": value}}}
+		if got := github.CredentialOf(seat, func(v string) string { return v }); got != want {
+			t.Errorf("%q: credential = %q, want %q", value, got, want)
+		}
+	}
+}

@@ -187,6 +187,19 @@ list of things to fix. The three outcomes a seat can have are therefore
 expected) and **refused** (a token this run could not turn into an account,
 and the only one that becomes a finding).
 
+**A seat's own app token is never looked up.** A seat that acts as its app
+names `Bearer ${GITHUB_APP_TOKEN_<HANDLE>}` for its GitHub tool server
+([Acting as the app](#acting-as-the-app-the-seats-token)). That value is the
+app acting, not an account to learn: GitHub answers `GET /user` for no
+installation token, and the app's account is its slug. So the scan passes that
+key over, the seat counts as unclaimed exactly like one that names nothing,
+and its identity is its app's (see
+[How a seat's app is recognised](#how-a-seats-app-is-recognised)). Until the
+app exists, a company whose only identities are such seats logs
+`github_seat_identities_waiting` naming them, at info, rather than
+`github_has_no_seat_identities`. A scheme with nothing after it (`Bearer ${TOKEN}`
+with `TOKEN` unset) is no credential either, and is never sent.
+
 That distinction was missing, and its absence was loud: every agent seat in a
 company on the app design was reported as a failed identity, permanently
 degraded, with the integration card saying each of them could receive no
