@@ -507,6 +507,7 @@ func TestAnUnrecordableSuspensionReclaimsTheRunsBox(t *testing.T) {
 	// coordinator refuses to be built without one.
 	e := &Engine{}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Answers:  testAnswers(),
 		Audience: noAudience{},
 		Queue:    queue, Pending: store, Manager: manager, Resume: &resumer{engine: e},
 	})
@@ -667,6 +668,7 @@ func newChargeRig(t *testing.T, tokens, orgCap, seatCap int, resume sandbox.Resu
 		t.Fatalf("NewManager: %v", err)
 	}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Answers:  testAnswers(),
 		Audience: noAudience{},
 		Queue:    discardQueue{}, Pending: store, Manager: manager, Resume: resume,
 		Account: accountant(fleet, dayCap(orgCap), dayCap(seatCap)),
@@ -855,6 +857,7 @@ func TestRetiringASeatEndsItsRunsOrRefusesWithoutACoordinator(t *testing.T) {
 	}
 	equipped := &Engine{backends: &Backends{Fleet: fleet}}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Answers:  testAnswers(),
 		Audience: noAudience{},
 		Queue:    &publishRecorder{}, Pending: store, Manager: manager,
 		Resume: &resumer{engine: equipped},

@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/statelog`
-- **Enforced-by:** `internal/statelog.TestTheApplierIsHandedTheBodyAndTheTableTheFrame`, `internal/statelog.TestATamperedRecordIsRefusedPermanently`, `internal/engine.TestTheChangeFeedOpensTheFrameBeforeADomainDecodes`, `internal/estate.TestARequestTheFleetDidNotSignRunsNothing`, `internal/estate.TestARequestUnderAKeyThisNodeDoesNotHoldIsAskedElsewhere`, `internal/estate.TestAReplyTheRouterCannotBelieveIsNoAnswer`, `internal/estate.TestEnvelopeDomainsNeverVerifyAsEachOther`, `internal/signedask.TestARequestTheFleetDidNotSignIsBelievedInNothing`, `internal/signedask.TestAReplyIsBelievedOnlyWhenBoundToTheQuestion`, `internal/engine.TestARemovalTheFleetDidNotSignRemovesNothing`, `internal/engine.TestOnlyANoteTheFleetSignedReachesATurn`, `internal/engine.TestEveryInstructionChannelSignsInDomainsOfItsOwn`
+- **Enforced-by:** `internal/statelog.TestTheApplierIsHandedTheBodyAndTheTableTheFrame`, `internal/statelog.TestATamperedRecordIsRefusedPermanently`, `internal/engine.TestTheChangeFeedOpensTheFrameBeforeADomainDecodes`, `internal/estate.TestARequestTheFleetDidNotSignRunsNothing`, `internal/estate.TestARequestUnderAKeyThisNodeDoesNotHoldIsAskedElsewhere`, `internal/estate.TestAReplyTheRouterCannotBelieveIsNoAnswer`, `internal/estate.TestEnvelopeDomainsNeverVerifyAsEachOther`, `internal/signedask.TestARequestTheFleetDidNotSignIsBelievedInNothing`, `internal/signedask.TestAReplyIsBelievedOnlyWhenBoundToTheQuestion`, `internal/engine.TestARemovalTheFleetDidNotSignRemovesNothing`, `internal/engine.TestOnlyANoteTheFleetSignedReachesATurn`, `internal/engine.TestEveryInstructionChannelSignsInDomainsOfItsOwn`, `internal/sandbox.TestAnAnswerOpensOnlyAsTheAnswerToTheQuestionItWasSealedFor`, `internal/sandbox.TestAnAnswerWhoseSealDoesNotOpenIsHandedToNoTurn`, `internal/sandbox.TestAnAnswerUnderAKeyThisNodeDoesNotHoldWaitsForANodeThatHoldsIt`
 - **Cost-when-tried:** both readers shipped handing the frame on, and neither failed as a signature bug. The applier put the framed bytes on `Record.Payload`, which every domain decodes, so every record came back `invalid character 'c' looking for beginning of value` from inside the apply transaction — the position never moved, health read the node as BEHIND rather than broken, and it shed its seats to a peer that would have done the same. The change feed read the same bytes and acknowledged each one under its own rule for a record it cannot decode, so every notification in the company stopped.
 - **Tag-status:** unreleased
 
@@ -133,3 +133,21 @@ broadcasts is sealed one way under the fleet keyring, in a key domain of its
 own, with a short validity inside the seal, through the same
 `internal/signedask` implementation (which gains a one-way form beside request
 and reply); a frame that does not open shows nobody.
+
+## Amendment: an answer to a parked run is sealed on its row
+
+The coordination store stays outside the rule as a store: its writes are the
+coordinator's bookkeeping, decided between writers by compare-and-set. One
+value it holds is not bookkeeping. A person's answer to a coding run parked on
+a question waits on the run's row until a node resumes the run, and the resumed
+turn hands it to the run's coding CLI as that person's words and names who gave
+them — an instruction, the same as a note to a running turn. So the node that
+records it seals it under the fleet keyring, in a key domain of its own
+(`seat.run.answer`), bound to the run, the question it answers and the
+deliveries it was made of, and the row carries the words and the answerer only
+inside that seal. Every reader opens it before using anything of it, with the
+two failures' dispositions: a key the node does not hold leaves the answer
+recorded and owed until a node that holds it takes the seat, and a seal that
+does not open as an answer to that question is never handed to a turn or
+attributed to anybody — it is logged at error and let go of, and the run waits
+on its question again. The detail is `internal/sandbox`'s (answerseal.go).

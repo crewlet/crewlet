@@ -164,7 +164,7 @@ func TestTheFirstQualifyingReplyIsTheAnswerWhateverTheResumeDoes(t *testing.T) {
 			"and never a reason to hand the person's message back", disposition, err, AnswerConsumed)
 	}
 	got := rig.get("t1")
-	if got.Status != StatusAnswered || got.Answer == nil || got.Answer.Text != "use main" {
+	if got.Status != StatusAnswered || got.Answer == nil || openedOn(t, got).Text != "use main" {
 		t.Fatalf("run = %q with answer %+v, want R1 recorded and its resume owed",
 			got.Status, got.Answer)
 	}
@@ -413,8 +413,9 @@ func TestAnAnswerARecoveredSeatOwesIsResumedByItsNewHolder(t *testing.T) {
 	asked := rig.get("t1").AskedAt
 	run := rig.get("t1")
 	r1 := replyAt("use main", asked.Add(time.Minute))
+	words, answer := chatReply(answerOnTheDM, "use main", r1).answerOf(rig.now)
 	if _, won, err := rig.pending.RecordAnswer(t.Context(), "t1", run.LaunchID,
-		chatReply(answerOnTheDM, "use main", r1).answerOf(rig.now), rigLease); err != nil || !won {
+		sealedOnto(t, rigAnswers(), run, words, answer), rigLease); err != nil || !won {
 		t.Fatalf("RecordAnswer = %v, %v", won, err)
 	}
 

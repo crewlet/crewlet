@@ -326,6 +326,13 @@ type CoordinatorOptions struct {
 	// end.
 	Audience AudienceResolver
 
+	// Answers seals a person's answer onto the run it answers and opens it
+	// again before a resume reads it ([NewAnswerSeal], over the fleet
+	// keyring). Required: the words of an answer live on the row only
+	// inside the seal, so a coordinator without it could neither record an
+	// answer nor resume with one. See answerseal.go.
+	Answers *AnswerSeal
+
 	// Ended is called once for every run this node finishes with, whatever
 	// finished it: collected, failed, torn down or reaped.
 	//
@@ -604,6 +611,8 @@ type Coordinator struct {
 	account Accountant
 	// audience is [CoordinatorOptions.Audience].
 	audience AudienceResolver
+	// answers is [CoordinatorOptions.Answers].
+	answers  *AnswerSeal
 	condense Condenser
 	ended    func(runID string)
 	// recovered is [CoordinatorOptions.Recovered].
@@ -727,6 +736,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		{"Manager", opts.Manager == nil},
 		{"Resume", opts.Resume == nil},
 		{"Audience", opts.Audience == nil},
+		{"Answers", opts.Answers == nil},
 	} {
 		if field.absent {
 			missing = append(missing, "CoordinatorOptions."+field.name)
@@ -735,12 +745,13 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("sandbox: a coordinator needs %s: a detached run is "+
 			"published, recorded, reconnected to, resumed and put to its "+
-			"answerers through them",
+			"answerers through them, and its answers sealed and opened",
 			strings.Join(missing, ", "))
 	}
 	c := &Coordinator{
 		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager,
 		resume: opts.Resume, account: opts.Account, audience: opts.Audience,
+		answers:      opts.Answers,
 		condense:     opts.Condense,
 		ended:        opts.Ended,
 		recovered:    opts.Recovered,
@@ -2003,7 +2014,8 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.SandboxAnswe
 			answered(run, types.AnswerNotAwaiting)
 			return AnswerNotMine, nil
 		}
-		recorded, won, err := c.record(ctx, run, answerGivenOf(given, trigger, c.now()))
+		words, answer := answerGivenOf(given, trigger, c.now())
+		recorded, won, err := c.record(ctx, run, words, answer)
 		if err != nil {
 			// THE RECORD MAY HAVE LANDED — the chat route's ambiguous case,
 			// resolved the same way: towards the run. If it did land, the
@@ -2056,16 +2068,21 @@ func declinedCopy(declined []string, delivery string) bool {
 	return false
 }
 
-// answerGivenOf is what recording an answer by turn writes: the answer as the
-// person gave it, who gave it as iam.ActorFor named them — author, kind and
-// credential — and the one delivery it arrived in — the [types.SandboxAnswerGiven] event itself, carried so a copy
-// of it can be handed back to the seat should the answer be let go of.
-func answerGivenOf(given types.SandboxAnswerGiven, trigger *events.Event, now time.Time) RecordedAnswer {
-	answer := RecordedAnswer{
+// answerGivenOf is what recording an answer by turn writes: the words the seal
+// carries — the answer as the person gave it, and who gave it as iam.ActorFor
+// named them, author, kind and credential — and the record they are sealed
+// onto ([Coordinator.record]), with the one delivery the answer arrived in —
+// the [types.SandboxAnswerGiven] event itself, carried so a copy of it can be
+// handed back to the seat should the answer be let go of.
+func answerGivenOf(given types.SandboxAnswerGiven, trigger *events.Event, now time.Time,
+) (AnswerWords, RecordedAnswer) {
+	words := AnswerWords{
 		// Redacted HERE, as a chat reply is: it is spliced into a phase
 		// record verbatim.
 		Text: redact.Secrets(given.Answer), Via: types.AnswerViaOperator,
 		By: given.AnsweredBy, ByKind: given.AnsweredByKind, OperatorID: given.OperatorID,
+	}
+	answer := RecordedAnswer{
 		EventIDs: []string{trigger.ID.String()}, PostedAt: trigger.Timestamp, RecordedAt: now,
 	}
 	raw, err := json.Marshal(trigger)
@@ -2074,10 +2091,10 @@ func answerGivenOf(given types.SandboxAnswerGiven, trigger *events.Event, now ti
 		// text, and an event that cannot be carried costs only the copy a
 		// let-go would hand back.
 		log.Warn("sandbox_answer_event_unencodable", "event_id", trigger.ID.String(), "error", err.Error())
-		return answer
+		return words, answer
 	}
 	answer.Events = []json.RawMessage{raw}
-	return answer
+	return words, answer
 }
 
 // answeredAs is what a settled answer became, from what the resume left the
@@ -4095,8 +4112,9 @@ type AskedRun struct {
 	BoxKept bool
 }
 
-// askedRun is what run's recorded answer resumes it with.
-func askedRun(run PendingRun, answer RecordedAnswer) *AskedRun {
+// askedRun is what run's recorded answer resumes it with: the words its seal
+// opened to ([AnswerSeal.Open]), never anything else on the row about them.
+func askedRun(run PendingRun, answer AnswerWords) *AskedRun {
 	return &AskedRun{
 		Question: redact.Secrets(run.Question), Answer: redact.Secrets(answer.Text),
 		By: answer.attribution(), Branch: run.Branch, SessionID: run.SessionID,

@@ -1958,6 +1958,9 @@ func (e *Engine) sandboxRuntimeOn(pending sandbox.PendingStore, manager *sandbox
 		// Who a parked question is put to, resolved against the live
 		// chart at the park — see audience.go.
 		Audience: audienceResolver{engine: e},
+		// A person's answer is sealed onto the run it answers and opened
+		// before a resume reads it — see [Engine.answers].
+		Answers: e.answers,
 		// A report, a failure or a question past what the run's record
 		// carries is condensed by the seat's auxiliary model rather than cut.
 		Condense: runCondenser{engine: e},

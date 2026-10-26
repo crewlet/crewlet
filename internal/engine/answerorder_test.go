@@ -274,6 +274,7 @@ func runAnswerOrder(t *testing.T, q queue.EventQueue) {
 	resumer := &answerResumer{store: store}
 	clock := &handCranked{}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Answers:  fleetAnswers(),
 		Audience: noAudience{}, Queue: q, Pending: store, Manager: manager,
 		Resume: resumer, Hold: inboxHold{q: q}, After: clock.after,
 		// THE SEAT HELD UNDER THE LEASE IT IS RECOVERED WITH BELOW, as a
@@ -359,9 +360,12 @@ func runAnswerOrder(t *testing.T, q queue.EventQueue) {
 		t.Fatalf("Publish R2: %v", err)
 	}
 	settle()
-	if got := get(); got.Status != sandbox.StatusAnswered || got.Answer == nil ||
-		!strings.Contains(got.Answer.Text, "release branch") {
+	got := get()
+	if got.Status != sandbox.StatusAnswered || got.Answer == nil {
 		t.Fatalf("run = %q with answer %+v, want R1 still the recorded answer", got.Status, got.Answer)
+	}
+	if words, err := fleetAnswers().Open(got); err != nil || !strings.Contains(words.Text, "release branch") {
+		t.Fatalf("the recorded answer opens to %+v, %v, want R1", words, err)
 	}
 	if ran := ordinary.ran(); len(ran) != 0 {
 		t.Fatalf("R2 was worked as a turn (%q) while R1's resume was still owed: the seat's "+

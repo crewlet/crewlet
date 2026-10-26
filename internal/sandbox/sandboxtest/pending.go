@@ -14,6 +14,7 @@
 package sandboxtest
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -114,6 +115,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ListingsAreStable", testListingsAreStable},
 		{"TheFirstReplyRecordedIsTheAnswer", testTheFirstReplyRecordedIsTheAnswer},
 		{"AnAnswerIsRecordedWithItsRoute", testAnAnswerIsRecordedWithItsRoute},
+		{"AnAnswerIsRecordedOnlySealed", testAnAnswerIsRecordedOnlySealed},
 		{"AnAnswerIsRecordedOnlyOnTheQuestionThatAsked", testAnAnswerIsRecordedOnlyOnTheQuestionThatAsked},
 		{"AnAnswerIsResumedFromItsRecord", testAnAnswerIsResumedFromItsRecord},
 		{"ADeclinedAnswerReopensTheQuestionAndIsNeverRecordedAgain", testADeclinedAnswerReopensTheQuestionAndIsNeverRecordedAgain},
@@ -2303,7 +2305,7 @@ func testAnAnswerWaitingOnItsResumeStillExpiresTheBox(t *testing.T, s sandbox.Pe
 		t.Fatalf("ExpirePause = %v, %v: the box of an answer waiting on its resume was never reclaimed", won, err)
 	}
 	got := mustGet(t, s, "t1")
-	if got.Status != sandbox.StatusAnswered || got.Answer == nil || got.Answer.Text != "use main" {
+	if got.Status != sandbox.StatusAnswered || got.Answer == nil || !bytes.Equal(got.Answer.Sealed, sealOf("use main")) {
 		t.Fatalf("run = %q answer %+v, want the answer still recorded and owed", got.Status, got.Answer)
 	}
 	if got.SandboxID != "" || got.CommandID != "" || !got.PausedAt.IsZero() {
@@ -2889,10 +2891,17 @@ func testCollectPublishesThePhase(t *testing.T, s sandbox.PendingStore) {
 	}
 }
 
-// answerOf is a recorded answer made of one delivery.
+// answerOf is a recorded answer made of one delivery, carrying text's stand-in
+// seal ([sealOf]).
 func answerOf(id, text string) sandbox.RecordedAnswer {
-	return sandbox.RecordedAnswer{Text: text, Via: types.AnswerViaChat, EventIDs: []string{id}, RecordedAt: base}
+	return sandbox.RecordedAnswer{Sealed: sealOf(text), Via: types.AnswerViaChat, EventIDs: []string{id},
+		RecordedAt: base}
 }
+
+// sealOf stands in for the seal a coordinator puts on an answer: the store keeps
+// a seal as the bytes it was handed and opens nothing, so any bytes that name
+// the text tell one recorded answer from another here.
+func sealOf(text string) []byte { return []byte("sealed: " + text) }
 
 // copyOf is the hand-back a decline of delivery id owes the seat: one copy,
 // under id + "-copy".
@@ -2974,15 +2983,34 @@ func testAnAnswerIsRecordedWithItsRoute(t *testing.T, s sandbox.PendingStore) {
 	}
 	byTurn := answerOf("r1", "use main")
 	byTurn.Via = types.AnswerViaOperator
-	byTurn.By, byTurn.ByKind, byTurn.OperatorID = "founder", "human", "pat:founder-token"
 	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, byTurn, sandbox.Fence{}); err != nil || !ok {
 		t.Fatalf("an answer by turn = %v, %v", ok, err)
 	}
 	got := mustGet(t, s, "t1").Answer
-	if got == nil || got.Via != types.AnswerViaOperator || got.By != "founder" ||
-		got.ByKind != "human" || got.OperatorID != "pat:founder-token" {
-		t.Fatalf("recorded %+v, want the answer by turn with its author, their kind and the "+
-			"credential it came through", got)
+	if got == nil || got.Via != types.AnswerViaOperator || !bytes.Equal(got.Sealed, sealOf("use main")) {
+		t.Fatalf("recorded %+v, want the answer by turn with its seal, kept as it was handed", got)
+	}
+}
+
+// AN ANSWER IS RECORDED SEALED, and one that carries no seal is refused: its
+// words live on the row only inside the seal ([sandbox.RecordedAnswer.Sealed]),
+// so a record without one would be an answer no reader could resume with.
+func testAnAnswerIsRecordedOnlySealed(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	mustLaunched(t, s, run("t1"))
+	park(t, s, "t1")
+	launch := mustGet(t, s, "t1").LaunchID
+	unsealed := answerOf("r1", "use main")
+	unsealed.Sealed = nil
+	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, unsealed, sandbox.Fence{}); err == nil || ok {
+		t.Fatalf("an answer carrying no seal = %v, %v, want refused", ok, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Answer != nil || got.Status != sandbox.StatusAwaiting {
+		t.Fatalf("after a refused record the run is %q with answer %+v, want it still waiting "+
+			"with none", got.Status, got.Answer)
+	}
+	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, answerOf("r1", "use main"), sandbox.Fence{}); err != nil || !ok {
+		t.Fatalf("the sealed answer = %v, %v, want it recorded", ok, err)
 	}
 }
 
@@ -3002,7 +3030,7 @@ func testAnAnswerIsRecordedOnlyOnTheQuestionThatAsked(t *testing.T, s sandbox.Pe
 	if _, ok, err := s.RecordAnswer(ctx, "gone", launch, answerOf("r1", "use main"), sandbox.Fence{}); err != nil || ok {
 		t.Fatalf("an answer to a missing run = %v, %v, want false and no error", ok, err)
 	}
-	if _, _, err := s.RecordAnswer(ctx, "t1", launch, sandbox.RecordedAnswer{Text: "x"}, sandbox.Fence{}); err == nil {
+	if _, _, err := s.RecordAnswer(ctx, "t1", launch, sandbox.RecordedAnswer{Sealed: sealOf("x")}, sandbox.Fence{}); err == nil {
 		t.Fatal("an answer naming no delivery was recorded")
 	}
 	// A RESEED IS STILL WAITING: the box was reaped, the question was not.
@@ -3041,7 +3069,7 @@ func testAnAnswerIsResumedFromItsRecord(t *testing.T, s sandbox.PendingStore) {
 		t.Fatalf("ReleaseClaim = %v, %v", released, err)
 	}
 	got := mustGet(t, s, "t1")
-	if got.Status != sandbox.StatusAnswered || got.Answer == nil || got.Answer.Text != "use main" {
+	if got.Status != sandbox.StatusAnswered || got.Answer == nil || !bytes.Equal(got.Answer.Sealed, sealOf("use main")) {
 		t.Fatalf("run = %q with answer %+v, want the answer still owed", got.Status, got.Answer)
 	}
 }
@@ -3112,7 +3140,7 @@ func testADeclinedAnswerReopensTheQuestionAndIsNeverRecordedAgain(t *testing.T, 
 		copies = append(copies, copyOf(id))
 	}
 	if _, ok, err := s.RecordAnswer(ctx, "t1", launch, sandbox.RecordedAnswer{
-		Text: "a long batch", Via: types.AnswerViaChat, EventIDs: batch, RecordedAt: base}, sandbox.Fence{}); err != nil || !ok {
+		Sealed: sealOf("a long batch"), Via: types.AnswerViaChat, EventIDs: batch, RecordedAt: base}, sandbox.Fence{}); err != nil || !ok {
 		t.Fatalf("RecordAnswer of a batch = %v, %v", ok, err)
 	}
 	if _, ok, err := s.DeclineAnswer(ctx, "t1", launch, batch, copies, sandbox.Fence{}); err != nil || !ok {
@@ -3645,7 +3673,7 @@ func testADeadClaimsAnswerIsRevivedOnceFencedAndCounted(t *testing.T, s sandbox.
 		t.Fatalf("run %q owned by %q at %d, want it answered again under the reviving lease",
 			got.Status, got.Owner, got.OwnerEpoch)
 	}
-	if a := got.Answer; a == nil || a.Text != "use main" || a.Taken() || a.LostClaims != 1 ||
+	if a := got.Answer; a == nil || !bytes.Equal(a.Sealed, sealOf("use main")) || a.Taken() || a.LostClaims != 1 ||
 		a.FirstLostAt.IsZero() {
 		t.Fatalf("answer %+v, want the same answer, untaken, its lost claim counted", a)
 	}

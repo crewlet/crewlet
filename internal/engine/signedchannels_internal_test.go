@@ -4,19 +4,23 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // EVERY CHANNEL A NODE CARRIES OUT A REQUEST ON SIGNS IN DOMAINS OF ITS OWN (the
 // estate service, the fleet broker's membership and a note to a running turn),
-// and none of them in a state log's. And so does the one sealed frame
+// and none of them in a state log's. So does a person's answer to a parked
+// run, sealed onto the run's row and handed to the resumed run as their words.
+// And so does the one sealed frame
 // that is no instruction, presence, which a node displays as a person in a
 // room: a domain shared with any of the others would let a captured frame of
 // one verify as the other. The domain is in the derived key
 // and in the MAC, so two channels sharing one would each verify the other's
 // frames: a captured estate reply sent to a member as a broker request, or a
-// state-log record replayed as a note. The names live in three packages and
-// nothing else compares them; this does, here, where all of them are built.
+// state-log record replayed as a note. The names live in the packages that
+// build them and nothing else compares them; this does, here, where all of
+// them are built.
 func TestEveryInstructionChannelSignsInDomainsOfItsOwn(t *testing.T) {
 	t.Parallel()
 	ring := statelog.OneKey("k1", "the channel gate's fleet key material")
@@ -33,6 +37,10 @@ func TestEveryInstructionChannelSignsInDomainsOfItsOwn(t *testing.T) {
 		t.Fatal(err)
 	}
 	presenceWire, err := newPresenceWire(ring)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answers, err := sandbox.NewAnswerSeal(ring)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +63,8 @@ func TestEveryInstructionChannelSignsInDomainsOfItsOwn(t *testing.T) {
 		claim(domains[1], name+"'s replies")
 	}
 	claim(presenceWire.Domain(), "a presence frame")
-	if len(owner) != len(registeredDomains())+7 {
+	claim(answers.Domain(), "an answer to a parked run")
+	if len(owner) != len(registeredDomains())+8 {
 		t.Fatalf("%d domains claimed: %v", len(owner), owner)
 	}
 }

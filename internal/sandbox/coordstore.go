@@ -400,6 +400,11 @@ func (s *CoordStore) RecordAnswer(ctx context.Context, turnID, launch string, an
 		return PendingRun{}, false, fmt.Errorf("sandbox: an answer to run %s names no route it came by "+
 			"(via %q)", turnID, answer.Via)
 	}
+	if len(answer.Sealed) == 0 {
+		// The words live only inside the seal ([RecordedAnswer.Sealed]), so
+		// an answer without one is no answer any reader could resume with.
+		return PendingRun{}, false, fmt.Errorf("sandbox: an answer to run %s carries no seal", turnID)
+	}
 	if answer.RecordedAt.IsZero() {
 		answer.RecordedAt = s.clock()
 	}

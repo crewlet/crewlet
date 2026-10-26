@@ -802,6 +802,12 @@ type Engine struct {
 	presenceWire *presence.Wire
 	presence     *presence.Hub
 
+	// answers seals a person's answer onto the parked run it answers, and
+	// opens it before a resume reads it: the coordinator's, built here over
+	// the fleet keyring like every other instruction channel
+	// ([sandbox.CoordinatorOptions.Answers]).
+	answers *sandbox.AnswerSeal
+
 	// dataTurns is this node's tally of each turn segment's datastore ops,
 	// shared by every registry it builds ([builtin.DataTurns]).
 	dataTurns *builtin.DataTurns
@@ -1137,6 +1143,14 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err != nil {
 		return nil, err
 	}
+	// AND A PERSON'S ANSWER TO A PARKED RUN, which waits on the run's row in
+	// the coordination store and is handed to the resumed run as their
+	// words: sealed there, like every other instruction (internal/sandbox,
+	// answerseal.go).
+	answers, err := sandbox.NewAnswerSeal(recordKeyring(opts.Bootstrap))
+	if err != nil {
+		return nil, err
+	}
 	// THE COMPLETION POLL'S CADENCE, whether or not this node will ever run a
 	// sandbox: an apply can bring it its first, and the poll starts there.
 	// See [checkSandboxPollInterval].
@@ -1285,6 +1299,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		auxSpend:            auxspend.NewLedger(backends.Queue),
 		steers:              steers,
 		presenceWire:        presenceWire,
+		answers:             answers,
 		dataTurns:           builtin.NewDataTurns(nil),
 		folderTurns:         builtin.NewFolderTurns(nil),
 		mcpRetryBase:        opts.mcpRetryBase,

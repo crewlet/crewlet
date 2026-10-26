@@ -337,8 +337,9 @@ var placements = map[string]func(t *testing.T, rig *coordRig){
 		// still owed — which a node that stopped between the two leaves
 		// for the seat's next holder.
 		run := rig.get("t1")
+		words, answer := chatReply(answerOnTheDM, "the release branch", nil).answerOf(rig.now)
 		if _, won, err := rig.pending.RecordAnswer(t.Context(), "t1", run.LaunchID,
-			chatReply(answerOnTheDM, "the release branch", nil).answerOf(rig.now), rigLease); err != nil || !won {
+			sealedOnto(t, rigAnswers(), run, words, answer), rigLease); err != nil || !won {
 			t.Fatalf("RecordAnswer = %v, %v", won, err)
 		}
 	},

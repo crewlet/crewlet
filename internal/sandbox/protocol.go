@@ -75,9 +75,16 @@
 // ([Coordinator.AnswerByTurn]).
 //
 // WHO ANSWERED is recorded as iam.ActorFor makes it of a principal — the
-// author, its kind and the credential it came through ([RecordedAnswer.By]) —
+// author, its kind and the credential it came through ([AnswerWords]) —
 // on the row and on every announcement of what became of the answer, never as a
 // seat beside an actor.
+//
+// AND THE ANSWER IS SEALED: its words and who gave them are on the row only
+// inside a seal under the fleet keyring, bound to the run's turn, the question
+// it answers and its deliveries, like every other instruction channel
+// (ADR-0031), and every reader opens it before anything of it is used. An answer
+// whose seal does not open is never handed to a turn or attributed to anybody.
+// See answerseal.go.
 //
 // AND A BOX IN A `direct` OR `container` CELL IS TOUCHED ONLY ON ITS LAUNCHING
 // NODE'S HOST ([PendingRun.LaunchNode], ADR-0057): that node's own waiter polls,

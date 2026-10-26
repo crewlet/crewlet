@@ -63,7 +63,8 @@ func hostFleet(t *testing.T) (store sandbox.PendingStore, a, b *hostNode) {
 		}
 		n.reads.budget = 2 * time.Second
 		if n.coordinator, err = sandbox.NewCoordinator(sandbox.CoordinatorOptions{
-			Queue: q, Pending: store, Manager: manager, Resume: nilResumer{},
+			Answers: testAnswers(),
+			Queue:   q, Pending: store, Manager: manager, Resume: nilResumer{},
 			Audience: nobodyAudience{}, Node: id, Boxes: n.reads,
 		}); err != nil {
 			t.Fatalf("NewCoordinator: %v", err)

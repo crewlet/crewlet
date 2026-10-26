@@ -103,7 +103,7 @@ func TestTheEngineRevivesAClaimThatDiedBeforeItsTurn(t *testing.T) {
 	retries := &capturedRetries{}
 	resumer := &resumeSpy{}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
-		Audience: noAudience{}, Queue: e.backends.Queue, Pending: rt.pending,
+		Audience: noAudience{}, Answers: e.answers, Queue: e.backends.Queue, Pending: rt.pending,
 		Manager: rt.coordinator.Manager(), Resume: resumer,
 		Hold: seatHold{engine: e}, Admit: e.mayResumeAnswer, After: retries.after,
 		Lease: e.launchFence,
@@ -261,10 +261,15 @@ func seedClaimedAnswer(t *testing.T, e *Engine, turnID string, reply *events.Eve
 	if err != nil || !found {
 		t.Fatalf("Get = %v, %v", found, err)
 	}
-	if _, ok, err := store.RecordAnswer(ctx, turnID, run.LaunchID, sandbox.RecordedAnswer{
-		Text: "use main", Via: types.AnswerViaChat, EventIDs: []string{reply.ID.String()},
-		Events: []json.RawMessage{raw}, PostedAt: asked.Add(time.Minute),
-	}, sandbox.Fence{}); err != nil || !ok {
+	answer, err := e.answers.Seal(run, sandbox.AnswerWords{Text: "use main", Via: types.AnswerViaChat,
+		By: "ana", ByKind: "human"}, sandbox.RecordedAnswer{
+		EventIDs: []string{reply.ID.String()}, Events: []json.RawMessage{raw},
+		PostedAt: asked.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("Seal: %v", err)
+	}
+	if _, ok, err := store.RecordAnswer(ctx, turnID, run.LaunchID, answer, sandbox.Fence{}); err != nil || !ok {
 		t.Fatalf("RecordAnswer = %v, %v", ok, err)
 	}
 	if _, ok, err := store.ClaimForResume(ctx, turnID, sandbox.RecordedAnswerTail(run.LaunchID),

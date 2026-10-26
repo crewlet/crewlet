@@ -1563,6 +1563,11 @@ type PendingStore interface {
 	// answer on a run its successor had recovered as awaiting, and nothing
 	// drove it until the seat moved again. The lease is not stamped:
 	// recording is not a claim of the run.
+	//
+	// An answer that names no delivery, no valid route or carries no seal
+	// ([RecordedAnswer.Sealed]) is an error, never a record. The store keeps
+	// the seal as the bytes it was handed and opens nothing: sealing and
+	// opening are the coordinator's ([AnswerSeal]).
 	RecordAnswer(ctx context.Context, turnID, launch string, answer RecordedAnswer, fence Fence,
 	) (PendingRun, bool, error)
 
@@ -1837,8 +1842,16 @@ type Clarification struct {
 // the delivery is acknowledged, and retrying the resume is the coordinator's
 // job ([Coordinator.retryOwed]) rather than the inbox's.
 type RecordedAnswer struct {
-	// Text is the reply as the resumed turn is handed it.
-	Text string `json:"text"`
+	// Sealed is the answer itself: its text and who gave it, bound to the
+	// run, the question and the deliveries it answers, and sealed under the
+	// fleet keyring by the node that recorded it ([AnswerSeal]). Required,
+	// and refused by [PendingStore.RecordAnswer] when absent.
+	//
+	// THE ANSWER'S ONLY COPY of its words and its answerer: no field here
+	// carries either in the clear, so a reader has them only by opening the
+	// seal ([AnswerSeal.Open]) — see answerseal.go for why. The deliveries
+	// below are the messages they are, and nothing reads the answer off them.
+	Sealed []byte `json:"sealed"`
 
 	// Via is the route the answer came by: a chat reply matched on its
 	// conversation, or an answer by turn that named the run. Required, and
@@ -1847,22 +1860,10 @@ type RecordedAnswer struct {
 	// answer's record says, and what a copy of it becomes when it is let go
 	// of — a chat reply becomes the ordinary message it is, while an answer
 	// by turn has no ordinary form, and its copy is spent by the node holding
-	// the seat as an answer the run no longer takes.
+	// the seat as an answer the run no longer takes. IN THE CLEAR because the
+	// store and the hand-back decide on it, and inside the seal too, where
+	// a reader holds the two to each other.
 	Via types.AnswerVia `json:"via"`
-
-	// By, ByKind and OperatorID are who gave it, in the three halves
-	// iam.ActorFor makes of a principal — the author, what sort of author
-	// that is, and the credential the answer came through — exactly as the
-	// answer's own record states them ([types.SandboxRunAnswered]). For a
-	// chat reply, the sender as the delivery's envelope names them, a
-	// person, and no credential: the chat surface vouched for the sender and
-	// nothing of this engine's was presented ([chatAnswerer]). For an answer
-	// by turn, the author is the seat of a principal the identity directory
-	// binds to one and the login of anybody else, and the credential is the
-	// one the answer was given under.
-	By         string `json:"by,omitempty"`
-	ByKind     string `json:"by_kind,omitempty"`
-	OperatorID string `json:"operator_id,omitempty"`
 
 	// EventIDs are the deliveries the answer was made of. A copy of one of
 	// them reaching the seat again is the same answer, already recorded —
@@ -1933,23 +1934,6 @@ type RecordedAnswer struct {
 // Taken reports whether a resumed turn took this answer — see
 // [RecordedAnswer.TakenAt].
 func (a RecordedAnswer) Taken() bool { return !a.TakenAt.IsZero() }
-
-// attribution is who the resumed turn is told gave this answer: the author an
-// answer by turn names — the seat of a bound principal, the login of anybody
-// else, as iam.ActorFor named them — and nobody for a chat reply, whose sender
-// is already in the conversation the resumed turn reports back to.
-func (a RecordedAnswer) attribution() string {
-	if a.Via != types.AnswerViaOperator {
-		return ""
-	}
-	return a.By
-}
-
-// answerer is who gave this answer, as its record announces them
-// ([Coordinator.announceAnswered]).
-func (a RecordedAnswer) answerer() answerer {
-	return answerer{by: a.By, kind: a.ByKind, operatorID: a.OperatorID}
-}
 
 // HandedBack is one copy of a declined answer's delivery, owed to the seat's
 // inbox as the ordinary message it is — see [PendingRun.HandBack].

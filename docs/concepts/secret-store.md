@@ -225,8 +225,9 @@ whatever it was written to precede.
 ### Rotating the keyring, with nothing in flight lost
 
 The keyring seals the company's secrets and also signs the two **per-run
-tokens** a sandbox carries — the OTLP receiver's and the MCP bridge's — and
-every **session cookie** a signed-in browser holds. The tokens travel in a URL
+tokens** a sandbox carries — the OTLP receiver's and the MCP bridge's — every
+**session cookie** a signed-in browser holds, and every person's **answer to a
+parked coding run** while it waits on the run's record. The tokens travel in a URL
 path, are minted on the node that starts a run and verified on whichever node
 the box can reach, and a detached coding run holds one for as long as the run
 lasts, which outlives a rollout. A cookie is the same shape of problem with a
@@ -284,7 +285,11 @@ That makes the rotation a runbook with no window in it:
    or lapses within a week of being issued. It must also report no Dashboard
    Assistant value under it: dropped while a conversation is still sealed under
    it, that conversation no longer opens for its owner for the rest of its
-   retention.
+   retention. And no answer to a parked coding run recorded before step 3 may
+   still be waiting on its resume — one is resumed within minutes unless its
+   seat is paused or held for budget, and a node that cannot open one logs
+   `sandbox_answer_key_unknown`: dropped under it, that answer waits, with its
+   seat's mail behind it, until the key is back on the ring.
    From that moment a token, a record or a cookie signed under it is refused,
    which is the point. Dropping it while a log still holds such records leaves
    those records unappliable on a node replaying from the floor, which reports

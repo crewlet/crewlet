@@ -474,8 +474,10 @@ func TestSandboxRunsNarrowsToOnePersonsAudience(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
+	// THE SEAL IS OPAQUE HERE: the board reads a run's status and never its
+	// answer, so any sealed bytes stand for the one a coordinator records.
 	if _, won, err := store.RecordAnswer(t.Context(), "to-ana", run.LaunchID, sandbox.RecordedAnswer{
-		Text: "use main", Via: types.AnswerViaChat, EventIDs: []string{"reply-1"},
+		Sealed: []byte("an answer ana gave, sealed"), Via: types.AnswerViaChat, EventIDs: []string{"reply-1"},
 	}, sandbox.Fence{Owner: run.Owner, Epoch: run.OwnerEpoch}); err != nil || !won {
 		t.Fatalf("RecordAnswer = %v, %v", won, err)
 	}

@@ -312,16 +312,17 @@ func (r Reply) recordedOn(runs []PendingRun) (PendingRun, bool) {
 	return PendingRun{}, false
 }
 
-// answerOf is what recording this delivery writes.
-func (r Reply) answerOf(now time.Time) RecordedAnswer {
+// answerOf is what recording this delivery writes: the words the seal carries
+// and the record they are sealed onto ([Coordinator.record]).
+func (r Reply) answerOf(now time.Time) (AnswerWords, RecordedAnswer) {
 	who := chatAnswerer(r.trigger())
-	answer := RecordedAnswer{
+	words := AnswerWords{
 		// Redacted HERE, at the one place the reply becomes a record a
 		// second store keeps: it is spliced into a phase record verbatim.
 		Text: redact.Secrets(r.Text), Via: types.AnswerViaChat,
 		By: who.by, ByKind: who.kind, OperatorID: who.operatorID,
-		EventIDs: r.ids(), PostedAt: r.Posted(), RecordedAt: now,
 	}
+	answer := RecordedAnswer{EventIDs: r.ids(), PostedAt: r.Posted(), RecordedAt: now}
 	for _, ev := range r.Events {
 		if ev == nil {
 			continue
@@ -337,7 +338,7 @@ func (r Reply) answerOf(now time.Time) RecordedAnswer {
 		}
 		answer.Events = append(answer.Events, raw)
 	}
-	return answer
+	return words, answer
 }
 
 // decodedEvents are a recorded answer's deliveries, as events again.
@@ -459,7 +460,8 @@ func (r *answerRetry) spent(now time.Time) bool {
 // recordAnswer records a chat delivery as the answer to the run it qualifies
 // for — see [Coordinator.record].
 func (c *Coordinator) recordAnswer(ctx context.Context, run PendingRun, reply Reply) (PendingRun, bool, error) {
-	recorded, won, err := c.record(ctx, run, reply.answerOf(c.now()))
+	words, answer := reply.answerOf(c.now())
+	recorded, won, err := c.record(ctx, run, words, answer)
 	if err != nil || !won {
 		return PendingRun{}, won, err
 	}
@@ -474,6 +476,11 @@ func (c *Coordinator) recordAnswer(ctx context.Context, run PendingRun, reply Re
 // record records an answer on the run it answers, on either route, and makes
 // the run owe the resume it drives ([StatusAnswered]).
 //
+// SEALED HERE, onto the question the caller matched: words are bound to the
+// run's turn, the launch whose question they answer and the deliveries they
+// were made of, under this node's active key ([AnswerSeal]), and the record
+// carries them only inside that seal.
+//
 // The resume's first attempt runs INLINE, on the caller's delivery, which is
 // what keeps the ordinary case as immediate as it ever was; whatever it
 // concludes, the delivery is spent — the answer is on the row, and from here
@@ -486,10 +493,15 @@ func (c *Coordinator) recordAnswer(ctx context.Context, run PendingRun, reply Re
 // successor had already recovered as awaiting — recorded, and driven by
 // nobody until the seat moved again. The store refuses a lease a newer one has
 // overtaken the same way, for a node that has not noticed yet.
-func (c *Coordinator) record(ctx context.Context, run PendingRun, answer RecordedAnswer) (PendingRun, bool, error) {
+func (c *Coordinator) record(ctx context.Context, run PendingRun, words AnswerWords, answer RecordedAnswer,
+) (PendingRun, bool, error) {
 	fence, held := c.leaseOf(run.AgentHandle)
 	if !held {
 		return PendingRun{}, false, notHeld(ctx, run.AgentHandle, run.TurnID, "recording an answer")
+	}
+	answer, err := c.answers.Seal(run, words, answer)
+	if err != nil {
+		return PendingRun{}, false, err
 	}
 	recorded, won, err := c.pending.RecordAnswer(ctx, run.TurnID, run.LaunchID, answer, fence)
 	if err != nil || !won {
@@ -550,6 +562,20 @@ func (c *Coordinator) attemptOwed(ctx context.Context, run PendingRun) {
 		c.dropOwed(ctx, run.AgentHandle, run.TurnID)
 		return
 	}
+	// OPENED BEFORE THE CLAIM, and only what the seal carries goes on: the
+	// words the turn is handed and the answerer it and the announcement
+	// name. An answer that does not open is claimed for nothing — it waits
+	// for a key this node does not hold, or is let go of — so no turn is
+	// ever resumed with it. See answerseal.go.
+	words, err := c.answers.Open(run)
+	switch {
+	case errors.Is(err, ErrAnswerKeyUnknown):
+		c.awaitAnswerKey(ctx, run, err)
+		return
+	case err != nil:
+		c.dropUnopened(ctx, run, err)
+		return
+	}
 	claimed, won, err := c.pending.ClaimForResume(ctx, run.TurnID, RecordedAnswerTail(run.LaunchID), fence)
 	if err != nil {
 		// THE CLAIM MAY HAVE LANDED, and one that did is a claim nothing on
@@ -580,7 +606,7 @@ func (c *Coordinator) attemptOwed(ctx context.Context, run PendingRun) {
 		CacheReadTokens:  claimed.ParkedCacheReadTokens,
 		CacheWriteTokens: claimed.ParkedCacheWriteTokens,
 		Engine:           parkedEngineSpend(claimed),
-		Asked:            askedRun(claimed, *answer),
+		Asked:            askedRun(claimed, words),
 	})
 	if disposition == AnswerDeferred {
 		// The claim went back: the run is [StatusAnswered] again with
@@ -605,7 +631,74 @@ func (c *Coordinator) attemptOwed(ctx context.Context, run PendingRun) {
 		// survives a crash, rather than here and again there.
 		return
 	}
-	c.announceAnswered(ctx, claimed, answer.Via, outcome, answer.answerer())
+	c.announceAnswered(ctx, claimed, words.Via, outcome, words.answerer())
+}
+
+// awaitAnswerKey keeps an owed answer sealed under a key this node does not
+// hold waiting for it ([ConditionAnswerKey]): recorded, owed, uncounted and
+// never let go of on that account, with the seat's inbox held behind it — the
+// key is a fact about this node, and the answer is the person's whichever node
+// can read it. Re-checked on [answerWaitBackstop], which says again which keys
+// this node holds.
+func (c *Coordinator) awaitAnswerKey(ctx context.Context, run PendingRun, cause error) {
+	log.WarnContext(ctx, "sandbox_answer_key_unknown",
+		"turn_id", run.TurnID, "agent", run.AgentHandle, "launch_id", run.LaunchID,
+		"node_holds", c.answers.KeyIDs(), "error", cause.Error(),
+		"detail", "the answer recorded on this run is sealed under a key this node does not "+
+			"hold; it stays recorded and owed, the seat's mail waits behind it, and it is "+
+			"resumed once a node holding the key takes the seat or this node is restarted "+
+			"with the key in secrets.keys")
+	c.mu.Lock()
+	if _, ok := c.retries[run.TurnID]; !ok {
+		c.retries[run.TurnID] = &answerRetry{handle: run.AgentHandle, launch: run.LaunchID,
+			first: c.now(), window: answerWindow(run)}
+	}
+	c.mu.Unlock()
+	c.waitOwed(ctx, run.TurnID, Refusal{Condition: ConditionAnswerKey,
+		Reason: "the answer is sealed under a key this node does not hold"}, nil)
+}
+
+// dropUnopened lets go of an answer whose seal does not open as the answer to
+// this run's question: logged at error, handed to no turn and attributed to
+// nobody — no announcement names an answerer, and nothing of it is handed back
+// to the seat or recorded as worked, because nothing on the row about it can be
+// attributed either. The run goes back to waiting on its question
+// ([PendingStore.DeclineAnswer], with nothing owed), where the next qualifying
+// reply answers it.
+func (c *Coordinator) dropUnopened(ctx context.Context, run PendingRun, cause error) {
+	answer := run.Answer
+	log.ErrorContext(ctx, "sandbox_answer_unverified",
+		"turn_id", run.TurnID, "agent", run.AgentHandle, "launch_id", run.LaunchID,
+		"node_holds", c.answers.KeyIDs(), "error", cause.Error(),
+		"detail", "the answer recorded on this run does not open as an answer to its question "+
+			"under the fleet keyring; it is not handed to the run or attributed to anybody, and "+
+			"the run waits on its question again")
+	if len(answer.EventIDs) == 0 {
+		// NOTHING TO LET GO OF BY: the store refuses an answer that names no
+		// delivery, so this row was written by something this build does not
+		// understand. Left recorded, and resumed with nothing.
+		c.settleOwed(ctx, run.AgentHandle, run.TurnID)
+		return
+	}
+	_, let, err := c.pending.DeclineAnswer(ctx, run.TurnID, run.LaunchID, answer.EventIDs, nil, fenceOf(run))
+	if err != nil {
+		// THE WRITE MAY HAVE LANDED: the retry reads the row again, and finds
+		// the run waiting on its question or this answer still on it.
+		log.ErrorContext(ctx, "sandbox_answer_decline_failed",
+			"turn_id", run.TurnID, "agent", run.AgentHandle, "error", err.Error())
+		c.mu.Lock()
+		if _, ok := c.retries[run.TurnID]; !ok {
+			c.retries[run.TurnID] = &answerRetry{handle: run.AgentHandle, launch: run.LaunchID,
+				first: c.now(), window: answerWindow(run)}
+		}
+		c.mu.Unlock()
+		c.scheduleOwed(run.TurnID, answerRetryCeiling)
+		return
+	}
+	if let {
+		c.moveRun(run.AgentHandle, StatusAnswered, answer.declinedTo())
+	}
+	c.settleOwed(ctx, run.AgentHandle, run.TurnID)
 }
 
 // owedFailed counts one failed resume of an owed answer, and schedules the next

@@ -730,9 +730,10 @@ func TestTheReaperReclaimsTheBoxOfAnAnswerStillWaitingOnItsResume(t *testing.T) 
 	rig := newWaiterRig(t)
 	run := rig.launch("t1")
 	rig.park("t1")
-	if _, ok, err := rig.pending.RecordAnswer(t.Context(), "t1", rig.get("t1").LaunchID, RecordedAnswer{
-		Text: "use main", Via: types.AnswerViaChat, EventIDs: []string{"r1"}, RecordedAt: rig.now,
-	}, rigLease); err != nil || !ok {
+	parked := rig.get("t1")
+	if _, ok, err := rig.pending.RecordAnswer(t.Context(), "t1", parked.LaunchID, sealedOnto(t, rigAnswers(),
+		parked, chatWords("use main"), RecordedAnswer{EventIDs: []string{"r1"}, RecordedAt: rig.now},
+	), rigLease); err != nil || !ok {
 		t.Fatalf("RecordAnswer = %v, %v", ok, err)
 	}
 

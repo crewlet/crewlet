@@ -450,11 +450,14 @@ func TestAnAnswerByTurnWhoseResumeFailedIsRetriedFromItsRecord(t *testing.T) {
 	}
 	got := rig.get("t1")
 	if got.Status != StatusAnswered || got.Answer == nil || got.Answer.Via != types.AnswerViaOperator ||
-		got.Answer.By != "founder" || got.Answer.ByKind != "human" ||
-		got.Answer.OperatorID != "pat:founder-token" ||
 		!slices.Equal(got.Answer.EventIDs, []string{ev.ID.String()}) {
 		t.Fatalf("run %q answer %+v, want the answer by turn recorded on it, owed its resume",
 			got.Status, got.Answer)
+	}
+	if words := openedOn(t, got); words.Via != types.AnswerViaOperator || words.By != "founder" ||
+		words.ByKind != "human" || words.OperatorID != "pat:founder-token" {
+		t.Fatalf("the recorded answer opens to %+v, want the answer by turn with its author, "+
+			"their kind and the credential it came through", words)
 	}
 	if records := rig.answeredRecords(); len(records) != 0 {
 		t.Fatalf("announced %+v for an answer whose resume is still owed", records)
@@ -717,7 +720,7 @@ func TestAnAnswerByTurnOutlivesItsClaimsNode(t *testing.T) {
 
 	next := reaper(t.Context(), t, rig, rig.pending, 2, nil)
 	revivedUnder(t, rig, 2, 1)
-	if got := rig.get("t1").Answer; got.Via != types.AnswerViaOperator || got.By != given.AnsweredBy ||
+	if got := openedOn(t, rig.get("t1")); got.Via != types.AnswerViaOperator || got.By != given.AnsweredBy ||
 		got.ByKind != given.AnsweredByKind || got.OperatorID != given.OperatorID {
 		t.Fatalf("revived answer %+v, want the answer by turn with who gave it", got)
 	}

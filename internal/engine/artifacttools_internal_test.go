@@ -196,7 +196,8 @@ func TestARunsBoxOnAnotherNodesHostIsNoBoxHere(t *testing.T) {
 			Placement: string(sandbox.Direct), CodingAgent: "claude-code",
 			Status: sandbox.StatusResumed, LaunchNode: tc.launchedBy}
 		coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
-			Queue: queuemem.NewBroker().Client(), Pending: oneRow{row: row}, Manager: manager,
+			Answers: testAnswers(),
+			Queue:   queuemem.NewBroker().Client(), Pending: oneRow{row: row}, Manager: manager,
 			Resume: nilResumer{}, Audience: nobodyAudience{}, Node: "node-b",
 		})
 		if err != nil {

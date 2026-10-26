@@ -111,7 +111,7 @@ func TestADeliveryThatReachesAHeldSeatTakesTheHoldTheQueueRefused(t *testing.T) 
 	rt := e.sandbox.Load()
 	hold := &refusedOnce{inner: seatHold{engine: e}}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
-		Audience: noAudience{}, Queue: e.backends.Queue, Pending: rt.pending,
+		Audience: noAudience{}, Answers: e.answers, Queue: e.backends.Queue, Pending: rt.pending,
 		Manager: rt.coordinator.Manager(), Resume: &resumeSpy{}, Hold: hold,
 		Lease: e.launchFence,
 	})
@@ -281,7 +281,7 @@ func TestAPausedAnswerResumesWhenThePersonResumesTheSeat(t *testing.T) {
 	swe := seatIn(t, e, "swe")
 	e.applySeatPause(t.Context(), coord.SeatPauseUpdate{Seat: swe,
 		Pause: &coord.SeatPause{Seat: swe, By: "ana"}})
-	answeredRun(t, e.sandbox.Load().pending, "t-paused")
+	answeredRun(t, e.answers, e.sandbox.Load().pending, "t-paused")
 	recoverHeld(t, e, coordinator, "swe")
 	time.Sleep(200 * time.Millisecond)
 	if n := resumer.count(); n != 0 {
@@ -320,7 +320,7 @@ func spyRuntime(t *testing.T, e *Engine) (*sandbox.Coordinator, *resumeSpy) {
 	}
 	resumer := &resumeSpy{}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
-		Audience: noAudience{}, Queue: e.backends.Queue, Pending: rt.pending,
+		Audience: noAudience{}, Answers: e.answers, Queue: e.backends.Queue, Pending: rt.pending,
 		Manager: rt.coordinator.Manager(), Resume: resumer,
 		Hold: seatHold{engine: e}, Admit: e.mayResumeAnswer, Lease: e.launchFence,
 	})
@@ -340,7 +340,7 @@ func TestAnAnswerWaitingOnAModelResumesWithTheApplyThatBringsOne(t *testing.T) {
 	applyOK(t, e, sandboxDoc(""))
 	waitHeld(t, e, "swe")
 	coordinator, resumer := spyRuntime(t, e)
-	answeredRun(t, e.sandbox.Load().pending, "t-model")
+	answeredRun(t, e.answers, e.sandbox.Load().pending, "t-model")
 	recoverHeld(t, e, coordinator, "swe")
 	time.Sleep(200 * time.Millisecond)
 	if n := resumer.count(); n != 0 {
@@ -365,7 +365,7 @@ func TestAnAnswerThePostureHeldBackResumesOnTheTickThatAdmitsWork(t *testing.T) 
 	e.notify.admits = admitting.Load
 	e.notify.mu.Unlock()
 	coordinator, resumer := spyRuntime(t, e)
-	answeredRun(t, e.sandbox.Load().pending, "t-posture")
+	answeredRun(t, e.answers, e.sandbox.Load().pending, "t-posture")
 	recoverHeld(t, e, coordinator, "swe")
 	time.Sleep(200 * time.Millisecond)
 	if n := resumer.count(); n != 0 {
@@ -425,7 +425,7 @@ func TestAnInheritedAnswerResumesAsItsSeatIsEstablished(t *testing.T) {
 		return refusal, refused
 	}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
-		Audience: noAudience{}, Queue: e.backends.Queue, Pending: store,
+		Audience: noAudience{}, Answers: e.answers, Queue: e.backends.Queue, Pending: store,
 		Manager: rt.coordinator.Manager(), Resume: resumer,
 		Hold: seatHold{engine: e}, Admit: admit, After: retries.after, Lease: e.launchFence,
 	})
@@ -436,8 +436,8 @@ func TestAnInheritedAnswerResumesAsItsSeatIsEstablished(t *testing.T) {
 	e.sandbox.Store(&sandboxRuntime{pending: store, coordinator: coordinator})
 
 	// TWO ANSWERS THE SEAT'S LAST HOLDER RECORDED, and the seat changes hands.
-	answeredRun(t, rt.pending, "t-first")
-	answeredRun(t, rt.pending, "t-second")
+	answeredRun(t, e.answers, rt.pending, "t-first")
+	answeredRun(t, e.answers, rt.pending, "t-second")
 	if !host.Release(t.Context(), "swe", seat.ReasonPlacement) {
 		t.Fatal("the seat was not released")
 	}
@@ -545,7 +545,7 @@ func TestStoppingTheSandboxStopsTheAnswersItWasRetrying(t *testing.T) {
 	resumer.mu.Lock()
 	resumer.failing = 1
 	resumer.mu.Unlock()
-	answeredRun(t, e.sandbox.Load().pending, "t-stop")
+	answeredRun(t, e.answers, e.sandbox.Load().pending, "t-stop")
 	recoverHeld(t, e, coordinator, "swe")
 	eventually(t, "the first attempt to fail", func() bool { return resumer.count() == 1 })
 
@@ -561,8 +561,9 @@ func TestStoppingTheSandboxStopsTheAnswersItWasRetrying(t *testing.T) {
 const answerRetryFirst = time.Second
 
 // answeredRun records a run on the swe seat that asked a question and whose
-// answer is recorded and owed its resume.
-func answeredRun(t *testing.T, store sandbox.PendingStore, turnID string) {
+// answer is recorded and owed its resume, sealed under seal as the node that
+// recorded it would have.
+func answeredRun(t *testing.T, seal *sandbox.AnswerSeal, store sandbox.PendingStore, turnID string) {
 	t.Helper()
 	ctx := t.Context()
 	if _, err := store.BeginLaunch(ctx, sandbox.PendingRun{
@@ -591,10 +592,15 @@ func answeredRun(t *testing.T, store sandbox.PendingStore, turnID string) {
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	if _, won, err := store.RecordAnswer(ctx, turnID, run.LaunchID, sandbox.RecordedAnswer{
-		Text: "use main", Via: types.AnswerViaChat, EventIDs: []string{reply.ID.String()},
-		Events: []json.RawMessage{raw}, PostedAt: reply.Timestamp, RecordedAt: time.Now().UTC(),
-	}, sandbox.Fence{}); err != nil || !won {
+	answer, err := seal.Seal(run, sandbox.AnswerWords{Text: "use main", Via: types.AnswerViaChat,
+		By: "ana", ByKind: "human"}, sandbox.RecordedAnswer{
+		EventIDs: []string{reply.ID.String()}, Events: []json.RawMessage{raw},
+		PostedAt: reply.Timestamp, RecordedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("Seal: %v", err)
+	}
+	if _, won, err := store.RecordAnswer(ctx, turnID, run.LaunchID, answer, sandbox.Fence{}); err != nil || !won {
 		t.Fatalf("RecordAnswer = %v, %v", won, err)
 	}
 }

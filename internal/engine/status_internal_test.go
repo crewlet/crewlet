@@ -794,6 +794,7 @@ func TestASettledRunTakesItsIndicatorDown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildSandbox: %v", err)
 	}
+	e.answers = testAnswers()
 	if started, err := e.startSandbox(t.Context(), manager); err != nil || !started {
 		t.Fatalf("startSandbox = (%v, %v), want a runtime brought up", started, err)
 	}

@@ -130,6 +130,12 @@ func rigRunsOn(t *testing.T, e *Engine, pending sandbox.PendingStore, play fakeP
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
+	if e.answers == nil {
+		// THE SEAL EVERY ENGINE `crewlet run` builds holds, over its
+		// keyring ([Engine.answers]): an engine a case builds by hand has
+		// none, and its coordinator would refuse to be built without one.
+		e.answers = testAnswers()
+	}
 	rt, err := e.sandboxRuntimeOn(pending, manager)
 	if err != nil {
 		t.Fatalf("sandboxRuntimeOn: %v", err)

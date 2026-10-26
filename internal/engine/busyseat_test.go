@@ -102,6 +102,7 @@ func runBusySeat(t *testing.T, q queue.EventQueue) {
 	}
 	resumer := &resumes{}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Answers:  fleetAnswers(),
 		Audience: noAudience{}, Queue: q, Pending: store, Manager: manager,
 		Resume: resumer, Hold: inboxHold{q: q}, After: (&handCranked{}).after,
 	})

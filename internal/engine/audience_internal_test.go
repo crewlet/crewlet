@@ -3,6 +3,7 @@ package engine
 import (
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
@@ -12,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // noAudience resolves every question to nobody: the coordinators built with
@@ -21,6 +23,17 @@ type noAudience struct{}
 func (noAudience) ResolveAudience(sandbox.PendingRun, string) sandbox.Audience {
 	return sandbox.Audience{}
 }
+
+// testAnswers is the seal a coordinator a case builds by hand seals and opens
+// answers under ([sandbox.CoordinatorOptions.Answers]): one fleet keyring for
+// every such coordinator, as a fleet shares one.
+var testAnswers = sync.OnceValue(func() *sandbox.AnswerSeal {
+	seal, err := sandbox.NewAnswerSeal(statelog.OneKey("answers", "the engine cases' fleet key material"))
+	if err != nil {
+		panic(err)
+	}
+	return seal
+})
 
 // audienceChart is a founder over one unit: its lead, the seat whose runs ask
 // the questions, a person beside it, and another agent.
