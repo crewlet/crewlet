@@ -103,9 +103,10 @@ type Company struct {
 	// roster is this epoch's chart as the code host reads a seat's grant
 	// ([codeRoster]), built at its first question — stamped when the epoch is
 	// installed ([Engine.installEpoch], [rosterOf]). Nil on an epoch never
-	// installed, which [Engine.codeRoster] answers as no chart: every seat
-	// stands nowhere. A function rather than the value, so an epoch copied
-	// whole copies no lock.
+	// installed, which [Engine.codeRoster] answers as no chart: a node that
+	// cannot judge a seat, whose code reads refuse it about themselves so
+	// another node is asked — never a seat that stands nowhere. A function
+	// rather than the value, so an epoch copied whole copies no lock.
 	roster func() codeRoster
 }
 

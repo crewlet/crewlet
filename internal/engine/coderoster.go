@@ -151,8 +151,14 @@ func rosterOf(c *Company) func() codeRoster {
 // codeRoster is the CURRENT epoch's chart as the code host reads a seat's
 // grant — read per call, so a revision that moves a seat or a lead is in force
 // from its activation on this node, with no restart — or nil where no epoch is
-// installed, which holds every seat to none ([code.GrantOf]), never "every
-// seat reads".
+// installed: NO CHART, which says nothing about the seat. Its two readers
+// refuse a seat's read on nil as a refusal about THIS NODE — the code reader
+// [code.ErrNotServing] ([code.ReaderOptions.Roster]), so the estate's walk
+// asks a data node that holds a chart, and the git reads [code.ErrGitUnready]
+// with [code.UnreadyNoChart], so another git node is asked — and never answer
+// that the seat stands nowhere, which only a chart that denies it may answer,
+// nor that every seat reads. [code.GrantOf] itself still holds an agent to
+// none on a nil roster, for a judge that asks it with no chart.
 func (e *Engine) codeRoster() code.Roster {
 	c := e.Company()
 	if c == nil || c.roster == nil {
