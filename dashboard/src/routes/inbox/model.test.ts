@@ -218,6 +218,16 @@ describe("the snooze presets", () => {
     expect(presets[1]!.day).toBe("Mon, Oct 12");
   });
 
+  // A COMPANY ZONE THIS BROWSER CANNOT READ is read as UTC, the day a preset
+  // lands on and the instant it names alike, as every company-clock reading
+  // is (`range.ts`'s companyZone): never a menu that fails to draw.
+  test("read a company zone this browser cannot read as UTC", () => {
+    expect(snoozePresets(now, "Not/AZone", undefined)).toEqual(
+      snoozePresets(now, "UTC", undefined),
+    );
+    expect(snoozePresets(now, "Not/AZone", undefined)[1]!.until).toBe("2026-09-24T09:00:00.000Z");
+  });
+
   // THE ENGINE'S BOUND: a preset it refuses is not offered.
   test("offers nothing past the engine's max_snooze_ahead", () => {
     const keys = (ahead: number) => snoozePresets(now, "UTC", ahead).map((p) => p.key);

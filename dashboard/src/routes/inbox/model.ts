@@ -28,6 +28,7 @@
 import { firstLine, fmtDateCompact, toWall, zoneOffset } from "~/lib/format.ts";
 import { dateTimeFormat, type DateShape } from "~/lib/formatters.ts";
 import { zone } from "~/lib/prefs.ts";
+import { companyZone } from "~/lib/range.ts";
 import { plainText } from "~/lib/markdown.ts";
 import { reasonPhrase, reasonWhy } from "~/lib/reasons.ts";
 import {
@@ -525,7 +526,9 @@ export function snoozePresets(
   zone: string | undefined,
   maxAheadSeconds: number | undefined,
 ): SnoozePreset[] {
-  const tz = zone || "UTC";
+  // ONE CLOCK FOR THE WHOLE MENU, the company's as this runtime reads it, so
+  // the day a preset lands on and the instant it names are read on one.
+  const tz = companyZone(zone);
   const civil = civilDate(now, tz);
   const tomorrow = addDays(civil, 1);
   // Monday is 1; a reader on a Monday means the one after.
@@ -555,13 +558,9 @@ interface Civil {
 
 const CIVIL: DateShape = { year: "numeric", month: "2-digit", day: "2-digit" };
 
+/** The civil date an instant falls on in `tz`, a zone this runtime reads ([companyZone]). */
 function civilDate(at: number, tz: string): Civil {
-  let parts: Intl.DateTimeFormatPart[];
-  try {
-    parts = dateTimeFormat("en-CA", tz, CIVIL).formatToParts(at);
-  } catch {
-    parts = dateTimeFormat("en-CA", "UTC", CIVIL).formatToParts(at);
-  }
+  const parts = dateTimeFormat("en-CA", tz, CIVIL).formatToParts(at);
   const get = (type: string) => Number(parts.find((p) => p.type === type)?.value);
   return { y: get("year"), m: get("month"), d: get("day") };
 }
@@ -581,18 +580,12 @@ function addDays(c: Civil, days: number): Civil {
 }
 
 /**
- * 09:00 on a civil date in a zone, as an instant. The zone's offset is read at
- * the guess and again at the answer, because the two differ exactly on the
- * day a clock moves.
+ * 09:00 on a civil date in `tz`, a zone this runtime reads ([companyZone]),
+ * as an instant. The zone's offset is read at the guess and again at the
+ * answer, because the two differ exactly on the day a clock moves.
  */
 function atNine(c: Civil, tz: string): string {
   const wall = Date.UTC(c.y, c.m - 1, c.d, 9, 0, 0);
-  let offset: number;
-  try {
-    offset = zoneOffset(wall, tz);
-    offset = zoneOffset(wall - offset, tz);
-  } catch {
-    offset = 0;
-  }
-  return new Date(wall - offset).toISOString();
+  const guess = zoneOffset(wall, tz);
+  return new Date(wall - zoneOffset(wall - guess, tz)).toISOString();
 }

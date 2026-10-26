@@ -3,9 +3,10 @@
  *
  * What these protect: a formatter is built once per locale, zone and shape and
  * handed out after, a different zone or shape is a different formatter (never
- * one built for another zone), a zone `Intl` cannot read keeps nothing, and
- * the one input no key holds — the browser's language — drops every formatter
- * when it changes.
+ * one built for another zone), a zone `Intl` cannot read keeps no formatter
+ * and is asked about once, so a page on it builds nothing a row, and the one
+ * input no key holds — the browser's language — drops every formatter when it
+ * changes.
  */
 
 import { afterEach, expect, test, vi } from "vitest";
@@ -14,6 +15,7 @@ import {
   dateTimeFormat,
   forgetFormatters,
   keptFormattersForTest,
+  knownZone,
   numberFormat,
 } from "./formatters.ts";
 import {
@@ -27,11 +29,12 @@ import {
   toWall,
 } from "./format.ts";
 import { cellText, formatDay, formatNumber, scaleFormat } from "./artifacts/dashboard.ts";
-import { clockIn, companyDays } from "./range.ts";
+import { nextFires } from "./cron.ts";
+import { clockIn, companyDays, companyMidnight, dayLabelIn } from "./range.ts";
 import { monthDay } from "./timeline.ts";
 import { monthLabel, targetLabel } from "./work.ts";
 import { budgetCaption } from "~/routes/home/model.ts";
-import { shortWhen } from "~/routes/inbox/model.ts";
+import { shortWhen, snoozePresets } from "~/routes/inbox/model.ts";
 
 afterEach(() => {
   forgetFormatters();
@@ -83,11 +86,27 @@ test("a collation is built once, kept apart from the formatters, and orders a wh
 });
 
 // A ZONE OFF THE WIRE — a company's — can be one this runtime cannot read: the
-// build throws as `Intl` does, so its caller can fall back, and nothing is kept
-// to be handed out later in its place.
+// build throws as `Intl` does, and nothing is kept to be handed out later in
+// its place. Such a zone reaches a formatter through knownZone, below.
 test("a zone Intl cannot read throws, and keeps nothing", () => {
   expect(() => dateTimeFormat(undefined, "Not/AZone", { weekday: "short" })).toThrow(RangeError);
   expect(keptFormattersForTest()).toBe(0);
+});
+
+// WHETHER THIS RUNTIME READS A ZONE IS ASKED ONCE. A caller that caught the
+// throw built a formatter and threw it away on every call, so a list on a
+// clock this browser cannot read built one a row; the answer is kept instead,
+// a zone it reads and one it refuses alike.
+test("whether Intl reads a zone is asked once, and answered from then on", () => {
+  const built = vi.spyOn(Intl, "DateTimeFormat");
+  for (let n = 0; n < 100; n++) expect(knownZone("Not/AZone")).toBeNull();
+  expect(built).toHaveBeenCalledTimes(1);
+  for (let n = 0; n < 100; n++) expect(knownZone("Asia/Tokyo")).toBe("Asia/Tokyo");
+  expect(built).toHaveBeenCalledTimes(2);
+  // And the answers go with the formatters, so a case starts from none.
+  forgetFormatters();
+  expect(knownZone("Not/AZone")).toBeNull();
+  expect(built).toHaveBeenCalledTimes(3);
 });
 
 // THE BROWSER'S LANGUAGE is what an undefined locale resolves from when the
@@ -177,4 +196,44 @@ test("a page of rows builds each formatter once, not once a row", () => {
   // AND THE CACHE HOLDS SHAPES, NOT ROWS: the hundred rows added nothing.
   expect(keptFormattersForTest()).toBe(kept);
   expect(kept).toBeLessThan(40);
+});
+
+/** A zone off the wire that this runtime does not know. */
+const UNREADABLE = "Not/AZone";
+
+/** One row of everything a screen reads on a company's or a schedule's clock. */
+function rowOnItsClock(zone: string, at: number, now: number): unknown[] {
+  const iso = new Date(at).toISOString();
+  const week = {
+    period: "week" as const,
+    window: "2026-W43",
+    starts_at: iso,
+    resets_at: iso,
+    used: 10,
+    limit: 100,
+    state: "ok" as const,
+  };
+  return [
+    clockIn(at, zone),
+    dayLabelIn(at, zone),
+    companyMidnight(at, zone),
+    companyDays({ from: at, to: at + 86_400_000 }, zone).until,
+    ...budgetCaption(week, zone),
+    ...snoozePresets(now, zone, undefined).map((p) => p.until),
+    nextFires("0 9 * * 1-5", new Date(at), zone),
+  ];
+}
+
+// A CLOCK THIS RUNTIME CANNOT READ COSTS A LOOKUP A ROW, NOT A BUILD. Each
+// reader of a company's or a schedule's zone caught the throw and fell back,
+// so a list on a zone this browser does not know built a formatter, and threw
+// it away, on every row of every render. Whether it reads the zone is asked
+// once instead (knownZone), and the hundred rows after the first build nothing.
+test("a page of rows on a clock this runtime cannot read builds nothing a row", () => {
+  const now = Date.parse("2026-10-20T12:00:00Z");
+  const at = (n: number) => now - n * 3_600_000;
+  rowOnItsClock(UNREADABLE, at(0), now);
+  const built = countFormatterBuilds();
+  for (let n = 0; n < 100; n++) rowOnItsClock(UNREADABLE, at(n), now);
+  expect(built()).toBe(0);
 });

@@ -29,7 +29,7 @@
 import { useMemo } from "react";
 import { useParam } from "~/app/router.tsx";
 import { fmtMinute, parseUTC } from "~/lib/format.ts";
-import { dateTimeFormat, type DateShape } from "~/lib/formatters.ts";
+import { dateTimeFormat, knownZone, type DateShape } from "~/lib/formatters.ts";
 
 /** The windows every time-ranged screen offers, in the order a control reads. */
 export const RANGES = ["15m", "1h", "6h", "1d", "7d", "30d", "90d"] as const;
@@ -555,8 +555,9 @@ export const MAX_BARS = 90;
  * So the date `now` falls on is read in the zone, and the earliest instant
  * that reads as the same date is searched for across the day before it: the
  * date an instant falls on only moves forward as the instant does, which is
- * what a binary search needs. A zone this runtime cannot format in falls back
- * to UTC rather than throwing on a screen that only wanted a label.
+ * what a binary search needs. A zone this runtime cannot format in is read as
+ * UTC ([companyZone]) rather than throwing on a screen that only wanted a
+ * label.
  */
 export function companyMidnight(now: number, zone: string | undefined): number {
   const day = dateIn(zone);
@@ -595,23 +596,29 @@ export function dayLabelIn(at: number, zone: string | undefined): string {
  * only the clock is the company's. `hourCycle: "h23"` for the reason
  * `zoneOffset` in `format.ts` gives: `hour12: false` selects h24 in some
  * engines and writes five past midnight as "24:05". A zone this runtime
- * cannot read is UTC, as [companyMidnight] reads it, so a time and the day it
- * is listed under never disagree.
+ * cannot read is UTC, as [companyMidnight] reads it ([companyZone]), so a
+ * time and the day it is listed under never disagree.
  */
 export function clockIn(at: number, zone: string | undefined): string {
-  return clockFormat(zone).format(at);
-}
-
-/** One formatter per zone, through `formatters.ts`: a list draws a time per row, on one clock. */
-function clockFormat(zone: string | undefined): Intl.DateTimeFormat {
-  try {
-    return dateTimeFormat(undefined, zone || "UTC", CLOCK);
-  } catch {
-    return dateTimeFormat(undefined, "UTC", CLOCK);
-  }
+  return dateTimeFormat(undefined, companyZone(zone), CLOCK).format(at);
 }
 
 const CLOCK: DateShape = { hour: "2-digit", minute: "2-digit", hourCycle: "h23" };
+
+/**
+ * The zone this runtime reads the company's clock in: `zone` itself, or UTC
+ * where it names none — the engine's own reading of an empty name
+ * (`internal/period`'s `LoadZone`) — or names one this runtime's `Intl` does
+ * not know ([knownZone], whose module says how such a name reaches a page).
+ *
+ * ONE RULE for every reading of the company's clock, so a time and the day it
+ * is listed under, or a window and the day it resets, are read on one clock
+ * even where that clock is the fallback; and asked once a zone, so a list of
+ * rows on a clock this runtime cannot read builds nothing a row.
+ */
+export function companyZone(zone: string | undefined): string {
+  return knownZone(zone || "UTC") ?? "UTC";
+}
 
 /**
  * The first instant of the company date `label` in `zone`, or null for a
@@ -678,12 +685,7 @@ const YMD: DateShape = { year: "numeric", month: "2-digit", day: "2-digit" };
 
 /** A function reading the `YYYY-MM-DD` an instant falls on in `zone`. */
 function dateIn(zone: string | undefined): (at: number) => string {
-  let format: Intl.DateTimeFormat;
-  try {
-    format = dateTimeFormat("en-CA", zone || "UTC", YMD);
-  } catch {
-    format = dateTimeFormat("en-CA", "UTC", YMD);
-  }
   // `en-CA` writes a date as `YYYY-MM-DD`, which sorts as the date does.
+  const format = dateTimeFormat("en-CA", companyZone(zone), YMD);
   return (at) => format.format(at);
 }

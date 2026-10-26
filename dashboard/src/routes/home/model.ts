@@ -27,7 +27,7 @@ import type {
   WorkFlowPoint,
 } from "~/protocol/index.ts";
 import { plural, toWall } from "~/lib/format.ts";
-import { dateTimeFormat, type DateShape } from "~/lib/formatters.ts";
+import { dateTimeFormat, knownZone, type DateShape } from "~/lib/formatters.ts";
 import { browserZone } from "~/lib/prefs.ts";
 
 /** The three windows the screen reads over, and what each is called. */
@@ -174,11 +174,8 @@ function weekday(at: string, zone: string | undefined): string {
   if (!Number.isFinite(t)) return "";
   // A COMPANY WITH NO ZONE, or one this runtime cannot read, is read on the
   // browser's clock, as a formatter given no zone reads it.
-  try {
-    return dateTimeFormat(undefined, zone || browserZone(), WEEKDAY).format(t);
-  } catch {
-    return dateTimeFormat(undefined, browserZone(), WEEKDAY).format(t);
-  }
+  const own = browserZone();
+  return dateTimeFormat(undefined, knownZone(zone || own) ?? own, WEEKDAY).format(t);
 }
 
 const WEEKDAY: DateShape = { weekday: "short" };

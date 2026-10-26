@@ -44,9 +44,21 @@
  * language in force. `prefs.ts` drops them too when the zone moves or a suite
  * pins one, so formatters for a zone nobody asks for any more do not stay.
  *
- * A ZONE `Intl` DOES NOT KNOW throws, as `new Intl.DateTimeFormat` does, and
- * nothing is kept for it: a caller holding a zone it did not choose (the
- * company's, off the wire) catches and falls back as it always has.
+ * # A zone the caller did not choose
+ *
+ * A ZONE OFF THE WIRE CAN BE ONE THIS RUNTIME DOES NOT KNOW. The engine
+ * admits a company's or a schedule's zone by Go's time-zone database, and a
+ * browser's own data can predate the name, where building a formatter in it
+ * throws. [dateTimeFormat] throws then, as `new Intl.DateTimeFormat` does,
+ * and keeps nothing. Such a zone reaches a formatter only through
+ * [knownZone], which answers null for it, so its caller says what it is read
+ * as instead, with no catch of its own to forget.
+ *
+ * ASKED ONCE A ZONE. Whether `Intl` reads a zone is a fact about this
+ * runtime's time-zone data, not about a call, so the answer is kept beside
+ * the formatters: a zone it refuses costs a lookup on every ask after the
+ * first. Each caller that caught the throw instead built a formatter and
+ * threw it away on every call, which a list paid once a row.
  */
 
 /** A date formatter's options, the zone apart: it is [dateTimeFormat]'s own argument. */
@@ -55,8 +67,14 @@ export type DateShape = Omit<Intl.DateTimeFormatOptions, "timeZone">;
 const dates = new Map<string, Intl.DateTimeFormat>();
 const numbers = new Map<string, Intl.NumberFormat>();
 const collators = new Map<string, Intl.Collator>();
+/** Every zone [knownZone] was asked about, and whether this runtime reads it. */
+const zones = new Map<string, boolean>();
 
-/** The formatter writing `shape` in `zone` for `locale` (the browser's language when undefined). */
+/**
+ * The formatter writing `shape` in `zone` for `locale` (the browser's
+ * language when undefined). `zone` is one the caller chose — the reader's,
+ * the browser's, UTC — or one [knownZone] answered: any other can throw.
+ */
 export function dateTimeFormat(
   locale: string | undefined,
   zone: string,
@@ -70,6 +88,32 @@ export function dateTimeFormat(
   }
   return built;
 }
+
+/**
+ * `zone` where this runtime reads it, and null where its `Intl` does not know
+ * the name: the one way a zone the caller did not choose reaches a formatter.
+ *
+ * DECIDED BY BUILDING the zone's default formatter, kept like any other:
+ * nothing else in `new Intl.DateTimeFormat(undefined, { timeZone })` can be
+ * refused, so a throw there is the zone's. Decided once, for the reason the
+ * module doc gives.
+ */
+export function knownZone(zone: string): string | null {
+  let reads = zones.get(zone);
+  if (reads === undefined) {
+    try {
+      dateTimeFormat(undefined, zone, ANY);
+      reads = true;
+    } catch {
+      reads = false;
+    }
+    zones.set(zone, reads);
+  }
+  return reads ? zone : null;
+}
+
+/** The default shape, which every zone `Intl` knows can be written in. */
+const ANY: DateShape = {};
 
 /** The formatter writing a number in `options` for `locale` (the browser's language when undefined). */
 export function numberFormat(
@@ -96,11 +140,16 @@ export function collator(locale: string | undefined, options: Intl.CollatorOptio
   return built;
 }
 
-/** Drop every kept formatter and collator, so the next ask builds it afresh. */
+/**
+ * Drop every kept formatter and collator, so the next ask builds it afresh,
+ * and every answer [knownZone] kept: one call puts the module back as it
+ * loaded, which a suite's `afterEach` relies on to count what a case builds.
+ */
 export function forgetFormatters(): void {
   dates.clear();
   numbers.clear();
   collators.clear();
+  zones.clear();
 }
 
 /** How many formatters and collators are kept — for a suite holding the cache to its bound. */

@@ -27,6 +27,7 @@
  */
 
 import { zoneOffset } from "./format.ts";
+import { knownZone } from "./formatters.ts";
 
 /** One parsed field: the set of values it matches, ascending. */
 type Field = number[];
@@ -340,15 +341,12 @@ export function nextFires(expression: string, from: Date, zone: string, count = 
  * it holds is one walk's position and the next walk starts somewhere else.
  */
 function projector(zone: string): ((at: number) => number) | null {
-  try {
-    zoneOffset(0, zone);
-  } catch {
-    // A ZONE THIS RUNTIME CANNOT READ IS NOT UTC. Falling back would put a
-    // list of instants on the screen that the engine does not fire at, with
-    // nothing saying so — the same trade [parseCron] already refuses for an
-    // expression it cannot read.
-    return null;
-  }
+  // A ZONE THIS RUNTIME CANNOT READ IS NOT UTC. Falling back would put a list
+  // of instants on the screen that the engine does not fire at, with nothing
+  // saying so — the same trade [parseCron] already refuses for an expression
+  // it cannot read. Asked once a zone (`formatters.ts`), so a list of
+  // schedules in it builds nothing a row.
+  if (knownZone(zone) === null) return null;
   const probe = 6 * 3_600_000;
   let offset = 0;
   // The offset is known to hold on [_, until). `-Infinity` makes the first
