@@ -234,9 +234,13 @@ and its call is relayed to the node that opened its session wherever it lands.
 Where every box runs on the engine host, as on a single node with no sandbox
 cell, point that variable at the node's loopback address
 (`http://127.0.0.1:<api.port>`). A confined run's bridge token is then admitted
-from that host's loopback only, and never relayed to another node. Don't do
-this where seats run boxes elsewhere: they are given the same address, and a
-box on another machine cannot dial it.
+from that host's loopback only, and never relayed to another node. A run in a
+`container` box on the same host is handed the runtime's name for the engine
+host in place of loopback
+([Local sandboxes](../concepts/code-sandbox.md#local-sandboxes)), and its token
+is not held to loopback, because its calls arrive through the runtime's gateway.
+Don't do this where seats run boxes on other machines: they are given the same
+address, and a box on another machine cannot dial it.
 
 ## Retention and erasure
 

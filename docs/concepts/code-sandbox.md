@@ -165,7 +165,7 @@ roles:
 | `run_in` | Backend | Runs as | Isolates state | Isolates the **host** | Needs |
 |---|---|---|---|---|---|
 | `direct` | `local:` | the engine user, on the host | yes | **no** | the coding CLI installed on that host |
-| `container` | `local:` | a PID in a Docker/Podman container | yes | yes | `local.image` with the coding CLI |
+| `container` | `local:` | a PID in a Docker/Podman container | yes | yes | `local.image` with the coding CLI ([the reference image](#the-reference-image-crewlet-coding) has both) |
 | `e2b` | `e2b:` | a fresh remote VM per run | yes | yes | `e2b.api_key` |
 | `self` | *none* | inside this seat's own executor run | — | — | an executor in [box mode](llm-backends.md#box-mode) |
 
@@ -257,13 +257,14 @@ It is the **runtime's** environment and never the box's: nothing in it reaches t
 
 **A pid is not an identity.** A `direct` box records its job's process group as the leader's pid *together with the leader's start time*, read from the kernel's own process record (`/proc/<pid>/stat` with the boot id on Linux, `sysctl kern.proc.pid` on macOS) while the engine still holds the unreaped process. Every later act on that record, from a different process or hours on, first asks whether the group is still that one: the kernel hands a pid out again once its process is gone, and a bare pid read back from disk may by then lead somebody else's processes. A recorded group that is gone or now belongs to a later process keeps no box alive and receives no signal, so a teardown, a kill or a clarification pause can never reach a stranger's tree. When the kernel's record cannot be read, the reaper keeps the directory and a signal is withheld and logged (`local_sandbox_signal_withheld`), because neither can tell a live job from a recycled pid.
 
-**Only `container` isolates the host.** In `direct` the coding agent runs with its own tools enabled as the engine user, so it can read what that user can read and reach what its credentials reach. That is the normal bargain of a local mode, and it is the right one on a workstation or a dedicated VM — but it is not a security boundary, and Crewlet will not pretend otherwise. On a shared host, or anywhere the work is untrusted, give that seat `run_in: container` — or point the whole company at it with `default_run_in`:
+**Only `container` isolates the host.** In `direct` the coding agent runs with its own tools enabled as the engine user, so it can read what that user can read and reach what its credentials reach. That is the normal bargain of a local mode, and it is the right one on a dedicated VM you are willing to hand an autonomous agent, but it is not a security boundary, and Crewlet will not pretend otherwise. **For a local instance, on a workstation included, run code work in `container`**, with the [reference image](#the-reference-image-crewlet-coding) below, and keep `direct` for the seat that has a reason to need the host itself. Give a seat `run_in: container`, or point the whole company at it with `default_run_in`:
 
 ```yaml
 providers:
   sandbox:
     local:
-      image: ghcr.io/acme/crewlet-coding:1   # must have the coding CLI installed
+      image: crewlet-coding:dev              # must have the coding CLI installed:
+                                             #   the reference image, below
       runtime: auto                          # auto | docker | podman
       network: ""                            # "none" cuts the box off entirely —
                                              #   including from its own LLM
@@ -279,6 +280,8 @@ If your image genuinely needs its own user — one that installs packages at run
 
 Every container box is then proved once, at creation, before anything runs in it: the engine writes a token the box reads back, and the box creates a directory the engine writes into and removes. That catches the ownership case and one other that is otherwise invisible — a `runtime` pointed at a daemon on **another host** (`DOCKER_HOST`, a forwarded socket) bind-mounts *that* machine's filesystem, so the agent finds no brief, no credentials and no shim. A box that fails the proof is torn down and the error names the cause; use the `e2b` provider for a genuinely remote runtime.
 
+**A box reaches the engine host by the runtime's name for it.** The engine hands a box addresses written in its own network: the [tool bridge](#the-tool-bridge--a-seats-own-tools-from-inside-a-box) (`CREWLET_MCP_BRIDGE_URL`), the telemetry receiver (`CREWLET_SANDBOX_OTEL_RECEIVER_URL`) and the URL of every HTTP [MCP server](#mcp-inside-the-sandbox) the seat scopes into the box. A single-host install sets those to loopback (`http://127.0.0.1:8000`), and inside a container loopback is the container itself. So where a URL the engine hands a `container` box names the engine host's loopback (`127.0.0.1`, any `127.x` address, `::1` or `localhost`), the box is given the same URL with the host replaced by the runtime's own name for the engine host: `host.docker.internal` under Docker, which the engine defines for every box it starts (`--add-host host.docker.internal:host-gateway`, which Docker Engine on Linux needs and Docker Desktop answers the same way), and `host.containers.internal` under Podman, which defines it itself. Any other host is handed on as written, since it already names a machine both sides can see, and so is every value you declare for the box yourself (`role.sandbox.env`, a setup step's `env`), which is in the box's network to begin with: a box reaching a service on the host names `host.docker.internal` there. `direct` shares the host's network and is handed every address as written, which is what lets one company run a `direct` seat and a `container` seat against the same `CREWLET_MCP_BRIDGE_URL`. On Linux the engine's API must listen on the bridge interface for this to reach it: `api.host` empty or `0.0.0.0`, never `127.0.0.1`.
+
 **Setup commands get a provisioning budget, not a control one.** Each command may run for `timeout_seconds` (default 600). Real provisioning — a dependency install, a cold image pull, a large clone — takes minutes, and without its own budget these inherited the backend's control-plane timeout and were killed, failing the whole acquisition. Raise it for a step you know is slow; lower it for one that should be instant, so a hung command surfaces as a named setup failure rather than eating the turn. A failure names the step and what in it failed — the file it could not write, or the command's position and either the status it exited with or that it reported none — and never the command text: the engine resolves nothing in a command, which the box's shell expands from the run environment, but a recipe may still spell a credential out literally, and the failure is logged and handed back to the agent.
 
 **Setup steps and the local cells.** Neither local cell writes a setup step's *file* outside the box's home. `direct` has no filesystem virtualisation, so a file anywhere else would be the engine host's own — its real `/usr/local/bin` — and is refused with an error naming the mode; and its home is a directory minted for each box, so no absolute path a document can write is inside it. `container` writes a file on the host side of its one mount, the home at `/home/user`, and refuses any other path. A relative path is under the home in either cell, and so is a path starting `~/`, which names the home in every cell as it does on `e2b`; a path that climbs out of the home with `..`, names the home itself, or names another account's home (`~name/…`) is refused. So name a file a step needs in the box relative to its home — `.npmrc`, `.local/bin/tool`, or `~/.npmrc` — which is the one form every cell writes in the same place. File paths in a setup step are **not** shell-expanded, so `$HOME` does not work there; a step that needs a file's absolute path has a `commands` entry, which does run in a shell, expand `"$HOME"` — the [git-auth recipe](#the-git-auth-recipe) writes its helper that way, because git is given the helper's absolute path.
@@ -292,6 +295,53 @@ Every container box is then proved once, at creation, before anything runs in it
 **Pause / resume works.** A run blocked on a human answer is genuinely suspended: `direct` SIGSTOPs the job's process group, `container` issues `docker pause`. Both hold memory, which is exactly why the same `default_pause_ttl_seconds` reaper bounds them as it bounds a billed E2B snapshot.
 
 **What local mode does not give you:** template-based sizing (use `run_args`, or the host), provider-enforced network egress policy (use `network:` plus your own firewall), and a fresh machine per run — a `direct` box shares the host's installed toolchain, which is usually the point.
+
+### The reference image: `crewlet-coding`
+
+`run_in: container` needs an image with the coding CLI in it, and the engine ships no default for `local.image`. The repository builds one, [`images/coding`](../../images/coding/Dockerfile), which is the image to name unless you have a reason to build your own:
+
+| | |
+|---|---|
+| Base | `python:3.11-slim-trixie` (Debian 13), pinned by digest |
+| Coding CLIs | Claude Code and OpenCode 2 (`@opencode/cli`), each pinned to a build its runner was measured on and installed from a lockfile, so every package is checked against its `sha512` |
+| Languages | Python 3.11 with `pip` and `venv`; Node.js 22 LTS with `npm`, and `corepack` enabled, so `pnpm` and `yarn` resolve to the version a repository's `packageManager` names |
+| Tools | `git`, `gh` (checked against GitHub's published SHA-256), `curl`, `jq`, `build-essential`, `pkg-config`, `libpq-dev`, `procps`, `unzip`, `xz-utils` |
+| Account | `user` (uid 1000) at `/home/user`, though the engine starts a box as its own uid on a rootful runtime, which the image needs no account for |
+| Platforms | `linux/amd64` and `linux/arm64` |
+
+Build it on the engine host, which tags it `crewlet-coding:dev` and smoke-tests it from inside as a uid it has no account for, the way the engine runs it:
+
+```bash
+make coding-image                                   # CONTAINER_RUNTIME=podman for Podman
+```
+
+Or pull the image of `main`, `ghcr.io/crewlet/crewlet-coding:main`, which `.github/workflows/coding-image.yml` rebuilds, pushes and signs whenever `images/coding` changes there. Like [the engine's image of `main`](../getting-started/installation.md#install) it is promised nothing: the tag moves, and the image it moved from is deleted within the hour, so a digest of it stops resolving. Pull it, verify it, and name your own copy, which nothing deletes:
+
+```bash
+docker pull ghcr.io/crewlet/crewlet-coding:main
+cosign verify ghcr.io/crewlet/crewlet-coding:main \
+  --certificate-identity 'https://github.com/crewlet/crewlet/.github/workflows/coding-image.yml@refs/heads/main' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+docker tag ghcr.io/crewlet/crewlet-coding:main crewlet-coding:dev
+```
+
+The image is versioned by what it pins rather than by the engine's releases, so a `v*` tag publishes none.
+
+The configuration for a local instance, every seat's code work in a container on the engine host:
+
+```yaml
+providers:
+  sandbox:
+    local:
+      image: crewlet-coding:dev     # `make coding-image`, or your copy of the image of main
+      run_args: ["--cpus", "2", "--memory", "4g"]
+    default_run_in: container
+    default_coding_agent: claude-code
+```
+
+A seat on a [plan's login](llm-backends.md#authentication) needs nothing more: a local box is seeded with the login and writes a refreshed one back. A box-mode executor placed there takes `run_in: container` on its `providers.llm` entry. Set `CREWLET_MCP_BRIDGE_URL` to the API's address as usual (`http://127.0.0.1:8000` on a single host); a container box is handed the engine host's name for it, as described [above](#local-sandboxes).
+
+What it does not carry, on purpose: a mobile SDK (Android, Xcode), a browser, a database server or a language beyond Python and Node.js. A repository that needs one installs it in its own setup step, which runs as the box's account and so cannot write the image's system directories, or builds an image `FROM` this one and names that. On amd64 the image runs OpenCode's AVX2 build when the machine that built it had AVX2, as every current CI and workstation CPU does; a host without it needs the image built there.
 
 ---
 
@@ -487,7 +537,8 @@ A named server the company's `mcp_servers` does not carry is **skipped**, with a
 Two practical caveats:
 
 - **A cloud sandbox cannot reach your laptop.** An HTTP MCP server (or a git host) on `localhost` / a private LAN address is unreachable from an E2B cloud box. For laptop-local development stacks, use a self-hosted E2B `domain` on the same network, a tunnel, or scope those servers out of the sandbox.
-- **stdio servers must exist in the box.** A stdio spec is *spawned inside* the sandbox, so its command must be present in the template (E2B's prebuilt templates cover common cases; anything else belongs in a custom template or a setup step).
+- **stdio servers must exist in the box.** A stdio spec is *spawned inside* the sandbox, so its command must be present in the template (E2B's prebuilt templates cover common cases; anything else belongs in a custom template or a setup step). The [reference image](#the-reference-image-crewlet-coding) carries Node.js and Python, so an `npx` or `python -m` server starts there.
+- **A container box reaches the engine host by name.** An HTTP server the engine host serves on loopback is handed to a `container` box under the runtime's name for that host ([Local sandboxes](#local-sandboxes)), so a server the engine's own child reaches at `http://localhost:3000` is reached from the box too, on Linux as long as it listens beyond loopback.
 
 ---
 
@@ -693,7 +744,7 @@ The coding agent calls the LLM itself, from inside the sandbox, so the engine ca
 ## Security model
 
 - **The sandbox is the isolation boundary.** Arbitrary, autonomously generated code runs *there*, never on the engine host. That is the whole reason running the coding agent with permissions bypassed is acceptable: the blast radius is one ephemeral, provider-isolated VM that is torn down at phase end. Human gating, where wanted, happens at the merge request — not mid-run.
-- **`run_in: direct` moves that boundary, deliberately.** There the coding agent runs as the engine user: per-box state isolation and an allowlisted environment still hold, but the host does not. Pick it for a workstation or a dedicated VM you are willing to hand to an autonomous agent; pick `container` (or `e2b`) anywhere else. This is the one cell in Crewlet where the sandbox is not a security boundary, and it is opt-in twice over — a `local:` block *plus* an explicit `run_in` naming it, on the seat or as the company default. Because the choice is now per seat, a company can run the seat that needs the host login `direct` and every other seat somewhere the host is not reachable, which the block-wide mode this replaced could not express.
+- **`run_in: direct` moves that boundary, deliberately.** There the coding agent runs as the engine user: per-box state isolation and an allowlisted environment still hold, but the host does not. Pick it only for a dedicated VM you are willing to hand to an autonomous agent; pick `container` (or `e2b`) anywhere else, a workstation included, where [the reference image](#the-reference-image-crewlet-coding) is the one to start from. This is the one cell in Crewlet where the sandbox is not a security boundary, and it is opt-in twice over — a `local:` block *plus* an explicit `run_in` naming it, on the seat or as the company default. Because the choice is now per seat, a company can run the seat that needs the host login `direct` and every other seat somewhere the host is not reachable, which the block-wide mode this replaced could not express.
 - **Only the seat's own identity enters the box.** The injected env carries credentials the agent legitimately acts *as* — its LLM key and the external-service tokens its config declares (`role.sandbox.env`). Leaking those from inside the box exposes only what the agent already is. Because the code-host token is the seat's **own** PAT, an MR/PR the coding agent opens is attributed to the agent, not to a shared bot identity.
 - **Shared infrastructure secrets never enter the box.** The OTLP backend's ingest token is the canonical example: the sandbox sees only an engine-fronted, path-token-scoped OTLP endpoint (`CREWLET_SANDBOX_OTEL_RECEIVER_URL`); the engine attaches the real backend credential upstream. Apply the same rule to any credential you add — if the agent doesn't act *as* it, don't inject it.
 - **A run's own tokens are redacted from everything it hands back.** Every per-run token the engine mints — the telemetry endpoint's, the tool bridge's, an artifact view ticket's — opens with the literal `crewlet_rt1` (`crewlet_rt1.<tag>.<subject>.<expiry>.<signature>`), and every text a box hands back — its report, its transcript, its question, its failure, its live output — is redacted of every token of that shape, to `[REDACTED:run-token]`, on the node that collects the run, before anything is stored or shown. It is recognised by its shape, as a vendor's key is, because no node that collects a run holds the tokens its launch minted, and a coding agent that prints its environment or its MCP configuration to debug its setup prints its own.

@@ -889,7 +889,9 @@ each), then wire them in:
 - Connect a code host — [GitLab](../integrations/gitlab.md) or
   [GitHub](../integrations/github.md) — and enable the
   [code sandbox](../concepts/code-sandbox.md) so engineer roles author real
-  merge requests
+  merge requests; on one host, run it in a container with the
+  [reference image](../concepts/code-sandbox.md#the-reference-image-crewlet-coding)
+  (`make coding-image`)
 - Bring your team in: add a human seat for each person who is to sign in
   (**Org chart › Edit org › Add human seat**), then invite them onto it or create
   them on it from its card in **Company › Org chart**, every person holds a
