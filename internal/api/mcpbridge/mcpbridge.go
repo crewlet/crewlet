@@ -76,12 +76,11 @@
 // launched it can restart in the meantime, or its seat move to a peer. So
 // nothing the box holds names THAT PROCESS. Its token is signed under the
 // fleet's keyring (internal/runtoken over the keys every node holds), and it
-// names the run and the JOB — the launch id the run's durable row carries,
-// [Session.Launch] — never an id only one process knows. Whichever node takes
-// the run over re-opens its session under that same job, with a surface
-// rebuilt from the run's own state (internal/engine, as it recovers the seat),
-// and the box's token, unchanged, resolves there: a node restarted at the
-// address the box dials serves the run again before its seat's mailbox opens.
+// names the run, the SEAT it acts as and the JOB — the launch id the run's
+// durable row carries, [Session.Launch] — never an id only one process knows.
+// Whichever node takes the run over re-opens its session under that same job,
+// with a surface rebuilt from the run's own state (internal/engine, as it
+// recovers the seat), and the box's token, unchanged, resolves there.
 //
 // NOTHING SECRET IS KEPT FOR IT. A job's id is no credential — a token is
 // worth something only with the fleet's signature over it — so the row a
@@ -90,14 +89,26 @@
 // coordination store for the next node to compare against would keep a second
 // copy of a working bearer for a check the signature already makes.
 //
-// WHAT THE TOKEN DOES NOT CARRY IS AN ADDRESS. The box dials the URL it was
-// launched with, on the launching node's [BaseURLVar]; a run a PEER takes over
-// is served on the peer while the box still dials the node it was given — see
-// [Bridge.resolve] for what that node answers.
+// # One address for the fleet
+//
+// WHAT THE TOKEN DOES NOT CARRY IS AN ADDRESS, and the box needs none of the
+// holder's. It dials [BaseURLVar], which is the FLEET's: any node that serves
+// the route, a load balancer in front of several included. The node a call
+// lands on finds the run's holder by the seat the token names — its lease —
+// and the holder answers, relayed over the broker where it is another node
+// ([Bridge.Join], internal/httprelay). So a run whose seat moves goes on
+// reaching its tools through the address it started with, and a node that
+// serves no HTTP at all — one without the ingress role — runs box-mode seats
+// as well as one that does. A session with a caller of its own has no seat to
+// move, so its token names the process that opened it, and a call for it is
+// relayed straight there ([route]). ADR-0056 records the decision, and why
+// neither a proxy to the holder's address nor an MCP session on the node a
+// call lands on would hold it.
 package mcpbridge
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
@@ -108,6 +119,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
@@ -115,6 +127,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/httprelay"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
@@ -309,11 +322,23 @@ type Bridge struct {
 	// run's end closes it — both by run id, the only key the paths that
 	// end a run hold.
 	runs map[string]*binding
+	// ready is every seat this node holds and has finished taking: its
+	// running jobs' sessions are open again here ([Bridge.SeatReady]), so a
+	// token for one of its jobs that names no opening names a run that is
+	// over. See [Bridge.verdict].
+	ready map[uuid.UUID]bool
 
-	// mounted records that this process built the bridge's HTTP handler,
-	// which is the only way a box's call reaches a session. See
-	// [Bridge.Mounted] for why [Bridge.Open] refuses without it.
+	// streamable is the ONE MCP handler this process serves every session
+	// through, a box's own request and a relayed one alike: the SDK keeps
+	// each MCP session a box opens in its handler's table, so a second
+	// handler would be a second table that knows none of them.
+	streamable http.Handler
+
+	// mounted records that this process built the bridge's route, and
+	// fleet that it joined its fleet ([Bridge.Join]): either is how a box's
+	// call reaches a session opened here. See [Bridge.Reachable].
 	mounted atomic.Bool
+	fleet   atomic.Pointer[fleet]
 }
 
 // Options configure [New].
@@ -362,13 +387,31 @@ func New(opts Options) (*Bridge, error) {
 	if err != nil {
 		return nil, fmt.Errorf("mcpbridge: %w", err)
 	}
-	return &Bridge{
+	b := &Bridge{
 		signer:   signer,
 		base:     strings.TrimSuffix(opts.BaseURL, "/"),
 		ttl:      ttl,
 		sessions: map[string]*binding{},
 		runs:     map[string]*binding{},
-	}, nil
+		ready:    map[uuid.UUID]bool{},
+	}
+	// NO IDLE TIMEOUT, deliberately. A session's lifetime is its RUN's —
+	// [Bridge.Close] ends every MCP session the moment the run ends — and
+	// a coding agent legitimately goes quiet for as long as a build or a
+	// test suite takes, so an idle clock here would cut a live run off from
+	// its tools mid-job for no reason the run could see.
+	b.streamable = mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
+		sub, ok := b.parse(r.PathValue("token"))
+		if !ok {
+			return nil
+		}
+		opened := b.held(sub)
+		if opened == nil {
+			return nil
+		}
+		return opened.server.MCP()
+	}, nil)
+	return b, nil
 }
 
 // Open registers a run's session and returns the URL its box should dial.
@@ -382,9 +425,9 @@ func New(opts Options) (*Bridge, error) {
 // OPENING A JOB'S SESSION AGAIN IS HOW A RECOVERED RUN IS SERVED. A node that
 // takes a running job over — this process after a restart, or a peer — opens
 // its session under the same [Session.Launch], and the token the box already
-// holds resolves to it: the subject a token names is the run and the job, and
-// both are the run's own. The URL that second opening returns names this
-// node; the box never sees it.
+// holds resolves to it: the subject a token names is the job, the seat and the
+// run, and all three are the run's own. The box never sees the URL that second
+// opening returns.
 //
 // The URL is EMPTY when no base is configured, and that is a real answer
 // rather than an error: a deployment whose API is not reachable from a box
@@ -417,29 +460,35 @@ func (b *Bridge) Open(ctx context.Context, s *Session) string {
 	// AND A SESSION NAMING NO JOB, or one a token cannot carry: the job is
 	// half of what a token names, and the half that tells a relaunch's box
 	// from its predecessor's.
+	//
+	// AND A RUN THE TOKEN CANNOT ROUTE: beside the job and the run, a token
+	// names where the run's session lives ([route]) — the seat whose lease
+	// names its holder, or the process that opened a caller's own session —
+	// and a node the box's call lands on finds the session by it
+	// ([Bridge.Join]). Only an agent seat has the id a seat is named by.
 	caller := s.caller()
+	where, routeErr := b.routeOf(s)
 	if s.RunID == "" || !validLaunch(s.Launch) || s.Surface == nil ||
-		caller == nil || !caller.Bound() {
+		caller == nil || !caller.Bound() || routeErr != nil {
 		log.Error("mcp_bridge_session_incomplete",
 			"run_id", s.RunID, "launch_id", s.Launch, "seat", s.Handle,
 			"has_surface", s.Surface != nil,
-			"has_caller", caller != nil && caller.Bound())
+			"has_caller", caller != nil && caller.Bound(), "routed", routeErr == nil)
 		return ""
 	}
 	if b.base == "" {
 		log.Warn("mcp_bridge_no_base_url", "run_id", s.RunID, "seat", s.Handle)
 		return ""
 	}
-	// NO LISTENER, NO SESSION, for the same reason as no base URL: the
-	// endpoint would name this node and nothing here would answer it, so
-	// the box's every tool call fails and the run is rescued as incomplete
+	// NOTHING REACHES IT, NO SESSION, for the same reason as no base URL: a
+	// box's every tool call would fail and the run be rescued as incomplete
 	// with no sign of why.
-	if !b.Mounted() {
-		log.Warn("mcp_bridge_not_mounted", "run_id", s.RunID, "seat", s.Handle)
+	if !b.Reachable() {
+		log.Warn("mcp_bridge_unreachable", "run_id", s.RunID, "seat", s.Handle)
 		return ""
 	}
 
-	opened := newBinding(ctx, s)
+	opened := newBinding(ctx, s, where)
 	s.mu.Lock()
 	s.live = opened
 	s.mu.Unlock()
@@ -479,22 +528,116 @@ func (b *Bridge) Open(ctx context.Context, s *Session) string {
 	return b.base + PathPrefix + b.signer.Mint(opened.subject(), ttl)
 }
 
-// subjectSep joins an opening's job to its run id in a token's subject.
+// subjectSep joins the three parts of a token's subject: the opening's job,
+// where its session lives ([route]), and its run id.
 //
-// "~", and the job FIRST, so the parse is a cut at the first one whatever a run
-// id contains. Two characters are unavailable for it: "." delimits
+// "~", and the run LAST, so the parse is a cut at the first two whatever a run
+// id contains — a job's id is refused one ([validLaunch]), and a route is a
+// UUID or base64url. Two characters are unavailable for it: "." delimits
 // [runtoken.Signer.Mint]'s own payload, and the whole token is a URL PATH
 // SEGMENT, so anything reserved there is worse than wrong — "#" opens the
 // fragment, and a client sends the engine everything before it and keeps the
 // rest, which authenticates as a truncated token rather than failing as a
-// malformed one. "~" is unreserved (RFC 3986 §2.3) and appears in no UUID,
-// which is what a job's id is.
+// malformed one. "~" is unreserved (RFC 3986 §2.3) and appears in no UUID.
 const subjectSep = "~"
 
-// validLaunch reports whether a job id can be half of a token's subject: set,
-// and free of the two characters that delimit a token's parts.
+// validLaunch reports whether a job id can be the first part of a token's
+// subject: set, and free of the two characters that delimit a token's parts.
 func validLaunch(launch string) bool {
 	return launch != "" && !strings.ContainsAny(launch, subjectSep+".")
+}
+
+// ErrSeatless is a seat's surface bound to no agent seat: every bridged call
+// acts as the surface's seat, and its token names the seat, so such a surface
+// could decide nothing and be found nowhere.
+var ErrSeatless = errors.New("mcpbridge: the tool surface is bound to no agent seat")
+
+// SeatOf is the id of the agent seat a surface acts as — the seat whose lease
+// says which node holds a run — or [ErrSeatless]. [Bridge.Open] refuses a
+// session whose surface has none, and a caller that wants to refuse by name
+// first asks this same predicate.
+func SeatOf(surface *tools.Surface) (uuid.UUID, error) {
+	if surface == nil || surface.Turn().Handle() == "" {
+		return uuid.Nil, ErrSeatless
+	}
+	seat, err := uuid.Parse(surface.Turn().AgentID())
+	if err != nil {
+		return uuid.Nil, ErrSeatless
+	}
+	return seat, nil
+}
+
+// route is where a run's session lives: the part of what its token names that
+// a node the box's call lands on finds the session by ([Bridge.Join]). It is
+// the agent SEAT whose lease names the node holding the seat, or, for a
+// session with a [Caller] of its own, the PROCESS that opened it.
+//
+// # Why a caller's own session is pinned to its opener
+//
+// A seat's run outlives the process that launched it: the seat's next holder
+// recovers the run's job and opens its session again, and the box's token
+// resolves there, so a seat's token names the seat and never a process. A
+// session with a caller of its own, the Dashboard Assistant's deep work
+// (ADR-0054), has no seat and no successor: the turn that opened it watches
+// the run to its end, and a node that dies ends that turn. Nothing but its
+// opener can ever serve it, so its token names that incarnation outright, and
+// a call that lands elsewhere is relayed straight to it.
+type route struct {
+	// seat is the agent seat whose lease names the session's holder. Nil
+	// for a pinned session.
+	seat uuid.UUID
+	// owner is the incarnation that opened a pinned session, and empty for
+	// one opened by a bridge that had joined no fleet, which only its own
+	// node's route reaches.
+	owner string
+}
+
+// ownerMark opens a route that names an incarnation. "_" because no seat's
+// UUID begins with it, it is unreserved in a URL path segment, and it is
+// neither "." nor [subjectSep]. The incarnation follows base64url-encoded,
+// since a node's id may carry a dot.
+const ownerMark = "_"
+
+// pinned reports whether the route names its opener rather than a seat.
+func (r route) pinned() bool { return r.seat == uuid.Nil }
+
+func (r route) String() string {
+	if !r.pinned() {
+		return r.seat.String()
+	}
+	return ownerMark + base64.RawURLEncoding.EncodeToString([]byte(r.owner))
+}
+
+// parseRoute reads a route off a token's subject.
+func parseRoute(text string) (route, bool) {
+	if encoded, ok := strings.CutPrefix(text, ownerMark); ok {
+		owner, err := base64.RawURLEncoding.DecodeString(encoded)
+		if err != nil {
+			return route{}, false
+		}
+		return route{owner: string(owner)}, true
+	}
+	seat, err := uuid.Parse(text)
+	if err != nil || seat == uuid.Nil {
+		return route{}, false
+	}
+	return route{seat: seat}, true
+}
+
+// routeOf is where s's session will live: its seat's for a seat's session, or
+// this process for one with a caller of its own ([route]). [ErrSeatless] for a
+// seat's session whose surface names no agent seat.
+func (b *Bridge) routeOf(s *Session) (route, error) {
+	if s.Caller != nil {
+		var owner string
+		if f := b.fleet.Load(); f != nil {
+			owner = f.relay.Owner()
+		}
+		return route{owner: owner}, nil
+	}
+	surface, _ := s.Surface.(*tools.Surface)
+	seat, err := SeatOf(surface)
+	return route{seat: seat}, err
 }
 
 // Close ends a run's session. A token for a closed run resolves to nothing,
@@ -539,24 +682,60 @@ func (b *Bridge) Live() int {
 	return len(b.sessions)
 }
 
-// resolve finds a token's live opening, or says WHY it missed, for the log
-// only.
+// subject is what a token names: the job its opening serves, where its
+// session lives, and the run.
+type subject struct {
+	launch string
+	route  route
+	run    string
+}
+
+func (s subject) String() string {
+	return s.launch + subjectSep + s.route.String() + subjectSep + s.run
+}
+
+// parse verifies a token — this fleet signed it, and it has not expired — and
+// reads its subject. False for anything else, which is all a forged,
+// malformed and expired token have in common that this route may act on.
+func (b *Bridge) parse(token string) (subject, bool) {
+	raw := b.signer.Validate(token)
+	if raw == "" {
+		return subject{}, false
+	}
+	launch, rest, ok := strings.Cut(raw, subjectSep)
+	if !ok {
+		return subject{}, false
+	}
+	routeText, run, ok := strings.Cut(rest, subjectSep)
+	if !ok || run == "" || !validLaunch(launch) {
+		return subject{}, false
+	}
+	where, ok := parseRoute(routeText)
+	if !ok {
+		return subject{}, false
+	}
+	return subject{launch: launch, route: where, run: run}, true
+}
+
+// held is this node's live opening of the job a subject names, or nil.
 //
-// TWO GATES, and both are needed. The signature and expiry say the token was
-// minted by this fleet and has not aged out; the map says the opening it names
-// is still the run's. A token that passes the first and fails the second is
-// the ordinary case — a box that outlived its run — and it must not reach a
-// surface.
-//
-// The reason is never in the RESPONSE — see [Bridge.Handler] — and its two
-// values are logged at different levels for the same reason they are told
-// apart at all. A token this fleet never signed is unauthenticated traffic on
-// an unauthenticated route: an operator can do nothing about it and anyone who
-// can reach the engine can produce it at will, so it is a debug line rather
-// than a warning an attacker can print at will. A token this fleet DID sign,
-// naming a session this node does not hold, is either an ended run's box
-// (ordinary, self-limiting) or the deployment error below — and producing one
-// takes the signing key, so warning about it cannot be abused.
+// TWO GATES, and both are needed. The signature and expiry ([Bridge.parse])
+// say the token was minted by this fleet and has not aged out; the map says
+// the opening it names is still the run's. A token that passes the first and
+// fails the second is the ordinary case — a box that outlived its run, or one
+// whose run is served on another node — and it must not reach a surface here.
+func (b *Bridge) held(sub subject) *binding {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if opened := b.sessions[sub.launch]; opened != nil && opened.session.RunID == sub.run {
+		return opened
+	}
+	return nil
+}
+
+// verdict is what THIS NODE can do for a token's job: serve its opening, say
+// that the run is over, or say it does not hold the run's seat — not yet, or no
+// longer.
 //
 // # The session is the seat holder's, and only the token is the fleet's
 //
@@ -565,49 +744,66 @@ func (b *Bridge) Live() int {
 // the seat, so ONLY THE NODE HOLDING THE RUN'S SEAT CAN SERVE ITS SESSION —
 // the node that launched it, or the one that took the run over and opened its
 // job's session again ([Bridge.Open]). Signing shares authentication across a
-// fleet, which is what lets that second node accept the token the first one
-// minted; it does not and could not share the surface. So a call has to reach
-// the holder, and the box dials the address it was launched with: the
-// launching node's own [BaseURLVar], which makes a per-node-addressable value
-// correct and a shared load-balancer address wrong — behind a balancer, calls
-// land on peers that do not hold the session and answer 401.
+// fleet; it does not and could not share the surface. So a call is answered
+// by the holder wherever it lands ([Bridge.Join]), and the holder answers it
+// from here.
 //
-// A RUN A PEER TOOK OVER is the case that leaves: its session is served on
-// the peer, and its box still dials this node. While this node is up and has
-// not restarted, it still holds its own opening of the job, fenced off the
-// moment the seat left, and every call is answered that the run's tools are
-// closed and its CLI should end its turn — the run then ends and the seat's
-// new holder collects it. A node that restarted since holds nothing for it
-// and answers 401, and a node that is gone answers nothing; either way the
-// rest of the run's calls fail until it ends.
-func (b *Bridge) resolve(token string) (opened *binding, runID, reason string) {
-	subject := b.signer.Validate(token)
-	if subject == "" {
-		return nil, "", "the token is forged, malformed or expired"
-	}
-	launch, runID, ok := strings.Cut(subject, subjectSep)
-	if !ok {
-		return nil, "", "the token is forged, malformed or expired"
+// "OVER" ONLY ONCE THIS NODE HAS FINISHED TAKING THE SEAT ([Bridge.SeatReady]):
+// a node that has just taken a seat opens its running jobs' sessions again as
+// it recovers the seat, and until it has, a missing opening says nothing about
+// the run.
+//
+// A PINNED SESSION IS ITS OPENER'S FOR LIFE ([route]), and the relay has
+// already held a call to the incarnation its token names, so an opening that
+// is not here is a run that is over.
+func (b *Bridge) verdict(sub subject) httprelay.Verdict {
+	if sub.route.pinned() {
+		if b.held(sub) != nil {
+			return httprelay.Serve
+		}
+		return httprelay.Refuse
 	}
 	b.mu.RLock()
-	held, current := b.sessions[launch], b.runs[runID]
+	ready := b.ready[sub.route.seat]
 	b.mu.RUnlock()
-	if held != nil && held.session.RunID == runID {
-		return held, runID, ""
+	switch {
+	case !ready:
+		return httprelay.Elsewhere
+	case b.held(sub) != nil:
+		return httprelay.Serve
+	default:
+		return httprelay.Refuse
 	}
-	if current != nil {
-		return nil, runID, "this node holds a DIFFERENT job's session for that run — " +
+}
+
+// Miss says WHY a token reaches no opening on this node, for the log only:
+// the run id where the token is the fleet's, and empty where it is not. See
+// [Bridge.Handler] for why the two are told apart, and why neither is ever
+// in a response.
+func (b *Bridge) Miss(token string) (runID, reason string) {
+	sub, ok := b.parse(token)
+	if !ok {
+		return "", "the token is forged, malformed or expired"
+	}
+	b.mu.RLock()
+	current := b.runs[sub.run]
+	b.mu.RUnlock()
+	switch {
+	case b.held(sub) != nil:
+		return sub.run, ""
+	case current != nil:
+		return sub.run, "this node holds a DIFFERENT job's session for that run — " +
 			"the run was relaunched and this token names the superseded job, " +
 			"which is a box that outlived the run it was started for"
+	case b.fleet.Load() == nil:
+		return sub.run, "this fleet signed the token, and this node holds no session " +
+			"for that run's job and has no fleet to find its holder in: the run has " +
+			"ended, or this node restarted and has not yet taken the run's seat back " +
+			"(it re-opens the session as it recovers the seat, before the seat's " +
+			"mailbox opens)"
+	default:
+		return sub.run, "the run has ended: the node holding its seat holds no session for its job"
 	}
-	return nil, runID, "this fleet signed the token, but this node holds no session " +
-		"for that run's job: the run has ended; this node restarted and has not yet " +
-		"taken the run's seat back (it re-opens the session as it recovers the seat, " +
-		"before the seat's mailbox opens); the seat is now held by another node, " +
-		"which serves the session while the box still dials this one; or " +
-		BaseURLVar + " resolves to a node other than the one holding the seat (a " +
-		"load balancer in front of several). It must address the node holding the " +
-		"seat, because a session is a live tool surface rather than fleet state"
 }
 
 // LoopbackBase reports whether the URL a box dials names this host's loopback
@@ -641,23 +837,73 @@ func fromLoopback(r *http.Request) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// Miss says WHY a token did not resolve, for the log only. Exported for the
-// test that holds the reasons apart; see [Bridge.resolve] for what they mean.
-func (b *Bridge) Miss(token string) (runID, reason string) {
-	_, runID, reason = b.resolve(token)
-	return runID, reason
+// SeatReady records that this node has finished taking a seat: every job of
+// the seat still running in its box has had its session opened again here
+// ([Bridge.Open]), so from now on a token for one of the seat's jobs that
+// reaches no opening names a run that is over. The engine calls it as it
+// recovers the seat's detached runs, after they are recovered.
+func (b *Bridge) SeatReady(seat uuid.UUID) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.ready[seat] = true
 }
 
-// Mounted reports whether this process built the bridge's HTTP handler.
+// Ready reports whether this node has finished taking a seat
+// ([Bridge.SeatReady]) and not released it since. For a test that has to know
+// the engine told it.
+func (b *Bridge) Ready(seat uuid.UUID) bool {
+	if b == nil {
+		return false
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.ready[seat]
+}
+
+// ReleaseSeat ends every session this node opened for a seat it no longer
+// holds, and forgets that it took the seat.
 //
-// A session is reachable only through [Bridge.Handler] on the node that opened
-// it (see [Bridge.resolve]), so a bridge whose handler no listener took serves
-// nobody: a node with api.port 0 has a base URL and a signer and no socket.
-// Building the handler is the signal rather than a separate call a wiring
-// could forget, because the handler is the one thing a listener cannot serve
-// the bridge without. The caller that builds it binds the listener in the same
-// step or fails the process, so "built" and "served" do not drift apart.
-func (b *Bridge) Mounted() bool { return b != nil && b.mounted.Load() }
+// THE SESSIONS GO WITH THE SEAT, not with their runs: the runs go on, served
+// by the seat's next holder, and an opening left here would pin the seat's
+// live surface — its MCP children, holding the seat's credentials — in a
+// process that no longer speaks for it, for as long as the process lived.
+// Ending it also ends every MCP session a box holds on it, so the box's next
+// request is routed afresh and reaches the holder.
+func (b *Bridge) ReleaseSeat(seat uuid.UUID) {
+	// NIL NAMES NO SEAT, and every pinned opening's route carries it.
+	if b == nil || seat == uuid.Nil {
+		return
+	}
+	b.mu.Lock()
+	delete(b.ready, seat)
+	var released []*binding
+	for runID, opened := range b.runs {
+		if opened.route.seat == seat {
+			delete(b.runs, runID)
+			delete(b.sessions, opened.id)
+			released = append(released, opened)
+		}
+	}
+	b.mu.Unlock()
+	for _, opened := range released {
+		opened.end()
+	}
+}
+
+// Reachable reports whether a box's call can reach a session this node opens:
+// through this node's own route ([Bridge.Handler]), or relayed to it by any
+// node of the fleet that serves one ([Bridge.Join]).
+//
+// A bridge that neither serves the route nor has joined a fleet serves nobody:
+// a node with api.port 0 has a base URL and a signer and no way in.
+// [Bridge.Open] refuses on that rather than mint an endpoint every call to
+// which would fail.
+func (b *Bridge) Reachable() bool {
+	return b != nil && (b.mounted.Load() || b.fleet.Load() != nil)
+}
 
 // Handler serves the bridge under [PathPrefix], and marks it mounted.
 //
@@ -665,54 +911,75 @@ func (b *Bridge) Mounted() bool { return b != nil && b.mounted.Load() }
 // this handler takes it as an argument rather than re-parsing the URL: two
 // parses of one path is how a route ends up authenticating a different string
 // from the one it dispatches on.
+//
+// # Which node answers
+//
+// THE ONE HOLDING THE RUN'S SEAT, wherever the call landed. A node with a live
+// opening of the token's job whose fence is open is that node, and answers at
+// once. Any other node that has joined its fleet relays the call to the seat's
+// holder ([Bridge.Join]), so the address a box dials can be any node that
+// serves this route — one address for the fleet, a load balancer in front of
+// several included — and a run whose seat moves goes on reaching its tools. A
+// node that has joined no fleet is the fleet: it answers from its own opening,
+// fenced or not, or refuses.
 func (b *Bridge) Handler() http.Handler {
 	b.mounted.Store(true)
-	// NO IDLE TIMEOUT, deliberately. A session's lifetime is its RUN's —
-	// [Bridge.Close] ends every MCP session the moment the run ends — and
-	// a coding agent legitimately goes quiet for as long as a build or a
-	// test suite takes, so an idle clock here would cut a live run off from
-	// its tools mid-job for no reason the run could see.
-	streamable := mcp.NewStreamableHTTPHandler(
-		func(r *http.Request) *mcp.Server {
-			opened, _, _ := b.resolve(r.PathValue("token"))
-			if opened == nil {
-				return nil
-			}
-			return opened.server.MCP()
-		}, nil)
-
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// REFUSED BEFORE THE MCP MACHINERY SEES IT, so an unauthenticated
 		// caller cannot make this process allocate a session, and so the
 		// refusal is a plain 401 rather than a JSON-RPC error a client
 		// would retry.
-		//
-		// NO DETAIL: forged, expired and "that run is over" are three
-		// different facts, and telling the caller which one it was tells
-		// an attacker the same.
-		opened, runID, reason := b.resolve(r.PathValue("token"))
-		if opened != nil && opened.session.Loopback && !fromLoopback(r) {
-			opened, reason = nil, "the session admits only this host's loopback, and the "+
-				"call came from "+r.RemoteAddr
-		}
-		if opened == nil {
-			// LEVELLED BY WHO COULD HAVE CAUSED IT, not by how it reads.
-			// This route is deliberately exempt from authentication (the
-			// box holds no API token — see [PathPrefix]), so a line
-			// written for every bad token is a line anyone who can reach
-			// the engine can write without limit. Only the half that
-			// takes the signing key to produce is a warning.
-			if runID == "" {
-				log.DebugContext(r.Context(), "mcp_bridge_unresolved", "reason", reason)
-			} else {
-				log.WarnContext(r.Context(), "mcp_bridge_unresolved",
-					"run_id", runID, "reason", reason)
-			}
-			httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
+		sub, ok := b.parse(r.PathValue("token"))
+		if !ok {
+			b.refuse(w, r, "", "the token is forged, malformed or expired")
 			return
 		}
-		streamable.ServeHTTP(w, r)
+		opened := b.held(sub)
+		// A LOOPBACK SESSION ADMITS THIS HOST'S LOOPBACK ALONE
+		// ([Session.Loopback]), read from the connection and never from a
+		// header, and is never forwarded: a call that reached another node
+		// is refused by this one's relay ([Bridge.admitRelayed]).
+		if opened != nil && opened.session.Loopback && !fromLoopback(r) {
+			b.refuse(w, r, sub.run, "the session admits only this host's loopback, and the "+
+				"call came from "+r.RemoteAddr)
+			return
+		}
+		if opened != nil && fence(opened.session) == nil {
+			b.streamable.ServeHTTP(w, r)
+			return
+		}
+		if f := b.fleet.Load(); f != nil {
+			b.forward(w, r, sub, f)
+			return
+		}
+		if opened != nil {
+			// FENCED, AND NO FLEET TO DEFER TO: the opening's own refusal,
+			// that the run's tools are closed, is the answer.
+			b.streamable.ServeHTTP(w, r)
+			return
+		}
+		_, reason := b.Miss(r.PathValue("token"))
+		b.refuse(w, r, sub.run, reason)
 	})
+}
+
+// refuse answers a call no opening will take.
+//
+// NO DETAIL: forged, expired and "that run is over" are three different
+// facts, and telling the caller which one it was tells an attacker the same.
+//
+// LEVELLED BY WHO COULD HAVE CAUSED IT, not by how it reads. This route is
+// deliberately exempt from authentication (the box holds no API token — see
+// [PathPrefix]), so a line written for every bad token is a line anyone who
+// can reach the engine can write without limit. Only the half that takes the
+// signing key to produce — runID set — is a warning.
+func (b *Bridge) refuse(w http.ResponseWriter, r *http.Request, runID, reason string) {
+	if runID == "" {
+		log.DebugContext(r.Context(), "mcp_bridge_unresolved", "reason", reason)
+	} else {
+		log.WarnContext(r.Context(), "mcp_bridge_unresolved", "run_id", runID, "reason", reason)
+	}
+	httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 }
 
 // Connections reports how many MCP sessions the session's current opening
@@ -756,6 +1023,9 @@ type binding struct {
 	// caller is who the opening's every call is decided as, fixed when it
 	// opened ([Session.caller]).
 	caller Caller
+	// route is where the opening lives ([route]): the second part of what a
+	// token names, and, for a seat's, what [Bridge.ReleaseSeat] ends it by.
+	route route
 
 	// ctx is the run's launch context with its cancellation removed — what
 	// every call runs under. Held, against the rule that a context is
@@ -779,8 +1049,8 @@ type binding struct {
 
 var _ toolsession.Dispatcher = (*binding)(nil)
 
-func newBinding(ctx context.Context, s *Session) *binding {
-	opened := &binding{id: s.Launch, session: s, caller: s.caller(),
+func newBinding(ctx context.Context, s *Session, where route) *binding {
+	opened := &binding{id: s.Launch, session: s, caller: s.caller(), route: where,
 		ctx: context.WithoutCancel(ctx), arrived: s.LastSeq}
 	opened.server = toolsession.NewServer(serverName, s.Role+" ("+s.Handle+")", opened)
 	// THE ANSWER TO AN ACTIVATION WAITS FOR THE BOX'S RE-LIST
@@ -795,7 +1065,12 @@ func newBinding(ctx context.Context, s *Session) *binding {
 	return opened
 }
 
-// subject is what a token minted for this opening names: the job, and its run.
+// subject is what a token minted for this opening names: the job, the seat,
+// and the run.
+//
+// THE SEAT, so a node the box's call lands on can find the run's holder from
+// the token alone — by the seat's lease — with nothing of the run's to read
+// first.
 //
 // The run id alone was the subject once, and a relaunch reuses the turn id —
 // so the superseded box's token went on resolving, to the new session, whose
@@ -804,7 +1079,9 @@ func newBinding(ctx context.Context, s *Session) *binding {
 // it, and the box's every call was refused for the rest of its run. The job's
 // id is neither: a relaunch mints a new one, and the run's durable row carries
 // it to whichever node opens the job's session again.
-func (o *binding) subject() string { return o.id + subjectSep + o.session.RunID }
+func (o *binding) subject() string {
+	return subject{launch: o.id, route: o.route, run: o.session.RunID}.String()
+}
 
 // end refuses every later call on the opening and closes every MCP session a
 // box holds on it. Nil-safe, and safe to call twice.

@@ -97,7 +97,8 @@ func mountAssistant(ctx context.Context, boot *config.Bootstrap, e *engine.Engin
 			recency, ok := authz.RecencyOf(authz.Action(act))
 			return ok && recency == iam.RecencyStepUp
 		},
-		StepOp: statelog.StepOpID,
+		StepOp:   statelog.StepOpID,
+		DomainOf: engine.LogDomain,
 	})
 	if err != nil {
 		return nil, err

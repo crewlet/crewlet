@@ -1198,8 +1198,20 @@ const (
 	// activity and telling the assistant of a brand draft in progress took it
 	// to 4504.1 KiB: the menu's checked answers and the summary's member in
 	// the panel's chunk, and the Brand page's read-only draft and its help in
-	// that page's. 4505 KiB, which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 409<<10
+	// that page's. 4505 KiB, which still refuses a doubled baseline. Telling
+	// the assistant what each page action takes, built from each screen's
+	// own declaration (the address keys' schema in the entry's registry, the
+	// org builder's operation vocabulary, an open draft's fields), and each
+	// action's own revision took it to 4509.5 KiB. 4510 KiB, which still
+	// refuses a doubled baseline. Telling the assistant what the Inbox's
+	// "Needs you" holds, from the model the page draws it with, and reading
+	// dates on the company clock took it to 4510.4 KiB, in the Inbox's chunk
+	// and the shared format module. 4511 KiB, which still refuses a doubled
+	// baseline. Drawing the assistant's cards in a person's terms (a seat cell
+	// by its name, a refusal by its kind, a pending change as pending, an
+	// administrator's technical rows), in the panel's chunk, took it to 4511.5
+	// KiB. 4512 KiB, which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 416<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

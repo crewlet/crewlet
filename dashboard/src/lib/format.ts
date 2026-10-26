@@ -205,8 +205,12 @@ export function relTime(ts: string | null | undefined, now: number): string {
   const at = tsKey(ts);
   if (!at) return EMPTY_VALUE;
   const secs = Math.round((now - at) / 1000);
+  // UNDER FIVE SECONDS EITHER WAY IS "JUST NOW". Behind, a clock that ticks
+  // once a second cannot tell 1 from 4; ahead, a stamp the engine wrote a
+  // moment after this tab's last tick, or on a clock a little ahead of the
+  // browser's, is something that has just happened, never "in 1s".
+  if (Math.abs(secs) < 5) return "just now";
   if (secs < 0) return inTime(ts, now);
-  if (secs < 5) return "just now";
   if (secs < 60) return `${secs}s ago`;
   const mins = Math.floor(secs / 60);
   if (mins < 60) return `${mins}m ago`;
@@ -902,7 +906,11 @@ export function firstLine(body: string): string {
  */
 export function greeting(now: number, name: string): string {
   const hour = Number(toWall(now).slice(11, 13));
-  const part = hour < 5 ? "evening" : hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
+  // THE SMALL HOURS NAME NO PART OF THE DAY: "Good evening" at 01:11 read as a
+  // clock that was wrong, and "Good morning" at 02:00 is no better, so from
+  // midnight until five the greeting is a plain "Hello", true at any hour.
+  const salute =
+    hour < 5 ? "Hello" : hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   const first = name.trim().split(/\s+/)[0] ?? "";
-  return first ? `Good ${part}, ${first}` : `Good ${part}`;
+  return first ? `${salute}, ${first}` : salute;
 }

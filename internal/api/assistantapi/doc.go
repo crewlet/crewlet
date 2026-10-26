@@ -40,5 +40,9 @@
 //
 // A turn streams as server-sent events read over fetch, resumable by
 // Last-Event-ID (`<turn_id>.<seq>`), with a keepalive comment every fifteen
-// seconds, in internal/assistant/wire's one encoding.
+// seconds, in internal/assistant/wire's one encoding. A resume after the last
+// frame of a segment that has ended (a turn parked on an approval, reopened
+// from the transcript's `after_seq`) answers `204 No Content`, never an empty
+// stream: an event stream that closes without its turn's end is a dropped
+// connection to its client, which dials it again.
 package assistantapi

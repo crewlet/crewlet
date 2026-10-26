@@ -110,6 +110,9 @@ type AssistantProposalState =
 /** What a proposal changes: the company, or the screen the person has open. */
 type AssistantProposalScope = "server" | "page";
 
+/** How much care a proposal asks of the person approving it; absent for an ordinary change. */
+type AssistantProposalRisk = "destructive";
+
 /** One row of a proposal's change list, in the before and after grammar. */
 type AssistantChangeKind = "fact" | "changed" | "added" | "removed" | "text";
 
@@ -412,9 +415,13 @@ export interface AssistantProposalCard {
   title: string;
   target?: string;
   changes: AssistantChange[];
+  /** What the change does, above the rows, where the title does not say it: what a destructive change takes away. */
+  summary?: string;
+  /** The consequence, under the rows: whether and how the change can be reverted. */
   note?: string;
-  /** The fields the change removes from the object as it is now, by label: the card leads with them. */
-  removes?: string[];
+  risk?: AssistantProposalRisk;
+  /** The exact request, for an approver who administers the company; absent for everybody else. */
+  technical?: AssistantTechnicalRequest;
   audience?: string[];
   taint?: string;
   step_up?: boolean;
@@ -426,6 +433,13 @@ export interface AssistantProposalCard {
   approve_label: string;
   receipt?: AssistantReceipt;
   failure?: AssistantFailure;
+}
+
+/** A proposal's request as an administrator reads it behind "Technical details". */
+interface AssistantTechnicalRequest {
+  method: string;
+  path: string;
+  body?: string;
 }
 
 /** The page action a page-scope proposal applies; the screen parses the payload. */
@@ -503,7 +517,43 @@ export interface AssistantPageContext {
   selection: AssistantResourceRef | null;
   source_revision: string;
   accepts: string[];
+  /**
+   * What each accepted action takes on this screen now, by action id: every
+   * accepted action but `draft.set`, whose arguments are the open draft's
+   * editable fields. The engine holds a proposal to it before any card.
+   */
+  action_args?: Record<string, AssistantActionArgs>;
+  /** Each accepted action's own revision: what it depends on, so it goes stale only when that moves. */
+  action_revisions?: Record<string, string>;
   draft?: AssistantPageDraft;
+}
+
+/** A JSON type an action's argument takes. */
+type AssistantArgType = "object" | "array" | "string" | "number" | "integer" | "boolean" | "null";
+
+/**
+ * A page action's arguments as the screen declares them: a closed subset of
+ * JSON Schema (`internal/assistant/wire.ActionArgs`), built from the same
+ * declaration the screen's parser reads, so the two cannot disagree. The
+ * engine refuses a keyword outside this subset.
+ */
+export interface AssistantActionArgs {
+  type?: AssistantArgType | AssistantArgType[];
+  description?: string;
+  enum?: string[];
+  const?: string;
+  minLength?: number;
+  maxLength?: number;
+  minItems?: number;
+  maxItems?: number;
+  items?: AssistantActionArgs;
+  properties?: Record<string, AssistantActionArgs>;
+  required?: string[];
+  patternProperties?: Record<string, AssistantActionArgs>;
+  additionalProperties?: boolean;
+  oneOf?: AssistantActionArgs[];
+  /** Whole values the screen takes; top level only, each held to the schema itself. */
+  examples?: unknown[];
 }
 
 /** Where an open draft's values live: in the page until saved, or saved. */

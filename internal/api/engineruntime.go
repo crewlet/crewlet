@@ -50,15 +50,13 @@ func newEngineRuntime(e *engine.Engine, reconciler *engine.Reconciler) (engineRu
 // EngineProbeOptions is the [ProbeOptions] of a node without the ingress role
 // that runs e: its runtime over the same engine and reconciler, under the same
 // requirements, as [NewEngineRuntime] — so a node's /health says the same thing
-// whichever surface serves it — its node id, the roles its presence lease
-// advertises, and its box-mode tool bridge where it runs seats. With
-// api.public set the command serves that bridge on a listener of its own
-// ([BridgeOnly]) rather than beside the probes.
+// whichever surface serves it — its node id, and the roles its presence lease
+// advertises.
 //
 // ONE WIRING, here rather than in the command that serves it, so that
 // `crewlet run` and the end-to-end suite probe a node through the same code: a
 // copy in the suite is a harness that agrees with itself, and a regression in
-// which runtime, which roles or which bridge the command hands the surface
+// which runtime or which roles the command hands the surface
 // would pass every suite that probed the copy.
 func EngineProbeOptions(boot *config.Bootstrap, e *engine.Engine,
 	reconciler *engine.Reconciler,
@@ -78,14 +76,6 @@ func EngineProbeOptions(boot *config.Bootstrap, e *engine.Engine,
 	opts := ProbeOptions{
 		Bootstrap: boot, Runtime: runtime, NodeID: nodeID,
 		Roles: profile.Roles.Names(), QueueBackend: e.Backends().Queue.Backend(),
-	}
-	// A BRIDGED SESSION IS A LIVE TOOL SURFACE IN THE PROCESS THAT OPENED IT,
-	// so the node running the box-mode seat is the only node its box can
-	// reach — and only a node running seats opens one. THROUGH THE PREDICATE
-	// the listener on api.public was bound by, before this engine existed
-	// ([PublicListener]), so the bridge is served exactly where it was bound.
-	if bridge := e.Bridge(); servesBridge(profile.RunsSeats(), bridge != nil) {
-		opts.Bridge = bridge
 	}
 	return opts, nil
 }

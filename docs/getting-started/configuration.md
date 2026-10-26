@@ -1337,10 +1337,9 @@ api:
   host: "0.0.0.0"       # what this node BINDS
   port: 8000            # node.roles decides what it carries. With `ingress`:
                         #   the dashboard, the REST API, the sign-in routes,
-                        #   the webhooks and the probes. Without it: /health
-                        #   and /ready only (plus a seats node's box-mode
-                        #   tool bridge, unless api.public is set). 0 (the
-                        #   default) binds nothing at all
+                        #   the webhooks, the box-mode tool bridge and the
+                        #   probes. Without it: /health and /ready only.
+                        #   0 (the default) binds nothing at all
   external_url: "https://crewlet.example.com"
                         # REQUIRED once port is set on an ingress node — where
                         #   a PERSON reaches this deployment, which is rarely
@@ -1525,12 +1524,12 @@ Publish `api.public.port`, keep `api.port` private, and point
 `CREWLET_MCP_BRIDGE_URL` and `CREWLET_SANDBOX_OTEL_RECEIVER_URL` for remote
 sandboxes at the public address — see
 [Deployment → Exposing webhooks without the admin API](../guides/deployment.md#exposing-webhooks-without-the-admin-api).
-On a node without the `ingress` role, whose only route is its seats' tool
-bridge, the bridge moves to `api.public` too, so one file still serves every
-role. `crewlet validate` refuses a public listener beside `api.port: 0` on a node
-with the `ingress` role (that is no HTTP surface at all, and no probe would
-answer); on a node without it `api.port: 0` stays the hard off switch and binds
-nothing, the bridge included. It also refuses any two listeners the
+A node without the `ingress` role binds no public listener at all, so one file
+still serves every role: its seats' box-mode runs reach their tools through an
+ingress node's bridge, which relays each call to them. `crewlet validate`
+refuses a public listener beside `api.port: 0` on a node with the `ingress`
+role (that is no HTTP surface at all, and no probe would answer); on a node
+without it `api.port: 0` stays the hard off switch and binds nothing. It also refuses any two listeners the
 file opens on one port — `api.port`, `api.public.port`, `stream.cluster.port`
 and `stream.leaf.port` — when they bind the same address or either binds every
 interface; `-roles`, `-api-host` and `-api-port` are held to the same rules.

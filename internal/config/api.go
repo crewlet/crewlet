@@ -245,11 +245,11 @@ func (a *API) Addr() string { return net.JoinHostPort(a.Host, strconv.Itoa(a.Por
 //
 // # On a node without the ingress role
 //
-// Such a node serves its probes on api.port and one route beside them, its
-// seats' tool bridge, and that is a public route: with this block set it binds
-// HERE for it rather than on api.port, so one file still works for every role
-// and the bridge address follows one rule across the fleet. The probes stay on
-// api.port, for the reason above.
+// Such a node serves its probes on api.port and nothing else, and binds no
+// listener here whatever this block says, so one file still works for every
+// role. Its seats' tool bridge is not a route on it: a box dials the ingress
+// nodes, which relay each call to the node holding the seat over the broker
+// (internal/api/mcpbridge).
 type APIPublic struct {
 	// Host is the bind address. Empty binds every interface, which is the
 	// point of a listener meant to be reached from outside.

@@ -849,35 +849,35 @@ func TestAnIncompleteSessionIsRefusedRatherThanRegistered(t *testing.T) {
 	}
 }
 
-// A BRIDGE NO LISTENER MOUNTED OPENS NO SESSION. Its endpoint would name this
-// node, and a node that built no handler (api.port 0) answers nothing there, so
-// the box would launch with a tool server that refuses every connection. The
-// same bridge opens the same session once a listener has taken its handler,
-// or a bridge that always refused would pass.
-func TestABridgeNoListenerMountedOpensNoSession(t *testing.T) {
+// A BRIDGE NOTHING REACHES OPENS NO SESSION. A node that serves no route
+// (api.port 0) and has joined no fleet answers nothing a box could dial, so the
+// box would launch with a tool server that refuses every connection. The same
+// bridge opens the same session once a listener has taken its handler, or a
+// bridge that always refused would pass.
+func TestABridgeNothingReachesOpensNoSession(t *testing.T) {
 	t.Parallel()
 	b := bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "k"), BaseURL: "http://x"})
 	session := &mcpbridge.Session{RunID: "run-1", Launch: "job-1", Handle: "dev", Surface: emptySurface()}
-	if b.Mounted() {
-		t.Fatal("a bridge nothing mounted reports itself mounted")
+	if b.Reachable() {
+		t.Fatal("a bridge nothing mounted or joined reports itself reachable")
 	}
 	if url := b.Open(t.Context(), session); url != "" {
-		t.Errorf("endpoint = %q for a bridge no listener serves, want empty", url)
+		t.Errorf("endpoint = %q for a bridge nothing reaches, want empty", url)
 	}
 	if b.Live() != 0 {
-		t.Errorf("%d sessions live on a bridge no listener serves", b.Live())
+		t.Errorf("%d sessions live on a bridge nothing reaches", b.Live())
 	}
 
 	_ = b.Handler()
-	if !b.Mounted() {
-		t.Fatal("building the handler did not mark the bridge mounted")
+	if !b.Reachable() {
+		t.Fatal("building the handler did not make the bridge reachable")
 	}
 	if url := b.Open(t.Context(), session); url == "" {
 		t.Error("a mounted bridge refused a complete session")
 	}
 	var unset *mcpbridge.Bridge
-	if unset.Mounted() {
-		t.Error("a nil bridge reports itself mounted")
+	if unset.Reachable() {
+		t.Error("a nil bridge reports itself reachable")
 	}
 }
 
@@ -900,14 +900,15 @@ func seatTurn() *turnctx.Turn {
 //
 // The response deliberately cannot say why — forged, expired and "that run is
 // over" are three different facts, and naming one tells an attacker the same.
-// But the operator needs the fourth: a bridge URL that resolves to a node
-// other than the one holding the session answers 401 to every call of a LIVE
-// run, forever, and without this it is indistinguishable from a forged token.
+// But the operator needs the difference in the log: a node that has joined no
+// fleet holds the only sessions it can answer for, and a signed token it holds
+// nothing for is a run that ended or one it has not taken back yet — never a
+// forgery.
 func TestAnUnresolvedTokenSaysWhyInTheLogNotTheResponse(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
-	// A session THIS node opened, then a PEER over the same fleet key —
-	// which is exactly a load balancer in front of two nodes.
+	// A session THIS node opened, then a PEER over the same fleet key that
+	// has joined no fleet to find the session's holder in.
 	endpoint := f.open(t)
 	token := endpoint[strings.LastIndex(endpoint, "/")+1:]
 
@@ -918,8 +919,8 @@ func TestAnUnresolvedTokenSaysWhyInTheLogNotTheResponse(t *testing.T) {
 	if runID != "run-1" {
 		t.Fatalf("the peer could not even name the run: %q", runID)
 	}
-	if !strings.Contains(reason, mcpbridge.BaseURLVar) {
-		t.Errorf("the reason does not name the setting that fixes it: %q", reason)
+	if !strings.Contains(reason, "no fleet") {
+		t.Errorf("the reason does not say the node has no fleet to find the holder in: %q", reason)
 	}
 
 	// A FORGED token is the other reason, and it names no run — telling
@@ -928,8 +929,8 @@ func TestAnUnresolvedTokenSaysWhyInTheLogNotTheResponse(t *testing.T) {
 	if forgedID != "" {
 		t.Errorf("a forged token resolved to run %q", forgedID)
 	}
-	if strings.Contains(forgedReason, mcpbridge.BaseURLVar) {
-		t.Errorf("a forged token was blamed on the deployment: %q", forgedReason)
+	if !strings.Contains(forgedReason, "forged") || strings.Contains(forgedReason, "fleet") {
+		t.Errorf("a forged token was blamed on anything but itself: %q", forgedReason)
 	}
 }
 
