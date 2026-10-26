@@ -32,9 +32,10 @@ import (
 // THE CARD SHOWS THE ONE WINDOW. The preview reads the scope as it is now,
 // through the turn's grant, and draws one row (the window's ceiling from what
 // it is to what it would be); the history line the revision records is the
-// card's; and only the warnings THIS change introduces are shown, the route's
-// own check asked of the change and of the scope left as it is
-// ([introducedWarnings]), the rule Budgets applies.
+// card's; and the warnings are the route's own check of the change, read by
+// the one function every write preview reads them with ([checked]), so the
+// rule that keeps a warning the company already carried off the card is the
+// same for this card as for every other.
 
 // The two scopes' routes.
 const (
@@ -201,8 +202,8 @@ func budgetPreview(ctx context.Context, read proposal.Read, _ time.Time,
 	if req.Body, err = withSummary(body, summary); err != nil {
 		return proposal.Preview{}, err
 	}
-	baseline, _ := unchangedWrite(req, doc, summary, true)
-	warnings, err := introducedWarnings(ctx, read, req, baseline, rep.revision)
+	// THE ROUTE'S OWN CHECK, as every write preview asks it ([checked]).
+	warnings, err := checked(ctx, read, req, rep.revision)
 	if err != nil {
 		return proposal.Preview{}, err
 	}

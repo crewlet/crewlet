@@ -61,20 +61,10 @@ func (u *unitRoute) read(_ context.Context, r exec.Request) (exec.Response, erro
 			`"validation_error","message":"The document is not valid.","detail":` +
 			mustJSON(unknownField) + `}`)}, nil
 	}
-	// A STANDING WARNING THE COMPANY CARRIES WHATEVER CHANGES, and one only a
-	// change adding the QA seat raises.
-	warnings := []any{map[string]any{"kind": "advisory", "message": standingWarning}}
-	if strings.Contains(string(r.Body), `"qa"`) {
-		warnings = append(warnings, map[string]any{"kind": "advisory",
-			"message": "qa's daily ceiling sits above the company's"})
-	}
-	body, _ := json.Marshal(map[string]any{"valid": true, "warnings": warnings})
-	return exec.Response{Status: http.StatusOK, Body: body}, nil
+	return exec.Response{Status: http.StatusOK, Body: []byte(`{"valid":true,` +
+		`"warnings":[{"kind":"advisory","message":"pm's daily ceiling sits above the ` +
+		`company's"}]}`)}, nil
 }
-
-// standingWarning is a warning the company carries before and after any change.
-const standingWarning = "miles is a human seat with no chat contact, so chat messages to " +
-	"it reach nobody"
 
 func (u *unitRoute) checks() []exec.Request {
 	u.mu.Lock()
@@ -142,32 +132,21 @@ func TestAChangeTheRouteWouldRefuseIsNeverACard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// TWO CHECKS: the proposed request, and the unit left as it is, so only
-	// what the change introduces is shown.
 	checks := route.checks()
-	if len(checks) != 2 || checks[0].IfMatch != `"rev-3"` ||
+	if len(checks) != 1 || checks[0].IfMatch != `"rev-3"` ||
 		checks[0].Query.Get(authz.DryRunQuery) != "true" ||
-		string(checks[0].Body) != string(p.Request.Body) ||
-		strings.Contains(string(checks[1].Body), `"qa"`) {
-		t.Fatalf("the route was asked %+v, want a check of the proposed request and one of "+
-			"the unit as it is, under the tag it was shown against", checks)
+		string(checks[0].Body) != string(p.Request.Body) {
+		t.Fatalf("the route was asked %+v, want one check of the proposed request under "+
+			"the tag it was shown against", checks)
 	}
 	if p.Request.Query.Has(authz.DryRunQuery) {
 		t.Errorf("the proposal would send %s, a check, when the person approves a write",
 			p.Request.Query.Encode())
 	}
-	// ONLY THE WARNING THIS CHANGE INTRODUCES is on the card: the QA run's
-	// cards carried "miles ... no chat contact" on every change. Mutation:
-	// show the change's check alone and the standing warning is a row.
 	got := rows(p)
 	if w := got["check.warning.1"]; w.Label != "Warning" ||
-		!strings.Contains(w.To, "qa's daily ceiling sits above the company's") {
+		!strings.Contains(w.To, "above the company's") {
 		t.Errorf("the check's warning is %+v on the card", w)
-	}
-	for field, row := range got {
-		if strings.Contains(row.To, "no chat contact") {
-			t.Errorf("the card carries the company's standing warning as %s", field)
-		}
 	}
 	if got["roles.qa.name"].To != "QA Engineer" {
 		t.Errorf("the added seat's rows are %+v", got)

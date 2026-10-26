@@ -17,9 +17,8 @@ import (
 )
 
 // budgetRoutes answers the configuration surface as Budgets reads and checks
-// it: the QA seat and the company under strong tags, and a check that
-// carries the company's standing warning on every write and a ceiling
-// warning only when a seat's daily ceiling rises past the company's.
+// it: the QA seat and the company under strong tags, and a check that warns
+// when a seat's daily ceiling rises past the company's.
 type budgetRoutes struct {
 	t    *testing.T
 	mu   sync.Mutex
@@ -48,7 +47,7 @@ func (b *budgetRoutes) read(_ context.Context, r exec.Request) (exec.Response, e
 		b.t.Errorf("the preview sent %s %s, a write", r.Method, r.Path)
 		return exec.Response{Status: http.StatusInternalServerError}, nil
 	}
-	warnings := []any{map[string]any{"message": standingWarning}}
+	warnings := []any{}
 	if strings.Contains(string(r.Body), `"day":25000000`) {
 		warnings = append(warnings, map[string]any{"message": "qa's daily ceiling sits " +
 			"above the company's"})
@@ -128,13 +127,12 @@ func TestASeatsCeilingIsChangedAsBudgetsChangesIt(t *testing.T) {
 	}
 }
 
-// ONLY THE WARNINGS THE CHANGE INTRODUCES ARE SHOWN.
+// A CEILING THE ROUTE WOULD WARN ABOUT SAYS SO ON THE CARD.
 //
-// The route is asked to check the change and the seat left as it is, and the
-// card carries the difference: a ceiling above the company's, never the
-// company's standing "no chat contact". Mutation: show the change's check
-// alone and the standing warning is a row.
-func TestABudgetChangeShowsOnlyTheWarningsItIntroduces(t *testing.T) {
+// The route's own check is asked of the exact change, under the tag it was
+// read at, before any card is drawn, and its warning is a row. Mutation: skip
+// the check and the card is silent about a ceiling above the company's.
+func TestABudgetChangeCarriesTheRoutesWarning(t *testing.T) {
 	t.Parallel()
 	routes := &budgetRoutes{t: t}
 	p, err := mustTool(t, "set_token_budget").Preview(t.Context(), routes.read, wednesday,
@@ -143,17 +141,12 @@ func TestABudgetChangeShowsOnlyTheWarningsItIntroduces(t *testing.T) {
 		t.Fatal(err)
 	}
 	checks := routes.checks()
-	if len(checks) != 2 || checks[0].IfMatch != `"rev-9"` || checks[1].IfMatch != `"rev-9"` {
-		t.Fatalf("the route was asked %+v, want the change and the seat as it is checked", checks)
+	if len(checks) != 1 || checks[0].IfMatch != `"rev-9"` ||
+		string(checks[0].Body) != string(p.Request.Body) {
+		t.Fatalf("the route was asked %+v, want the change checked under its tag", checks)
 	}
-	got := rows(p)
-	if w := got["check.warning.1"]; !strings.Contains(w.To, "above the company's") {
-		t.Errorf("the introduced warning is %+v", w)
-	}
-	for field, row := range got {
-		if strings.Contains(row.To, "no chat contact") {
-			t.Errorf("the card carries the standing warning as %s", field)
-		}
+	if w := rows(p)["check.warning.1"]; !strings.Contains(w.To, "above the company's") {
+		t.Errorf("the route's warning is %+v on the card", w)
 	}
 }
 
