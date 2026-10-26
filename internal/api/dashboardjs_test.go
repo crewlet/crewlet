@@ -1193,8 +1193,13 @@ const (
 	// card value drawn as what it is (a list as its items, a body as code,
 	// page text as an inert preview, a colour beside its chip) took it to
 	// 4503.4 KiB, in the panel's chunk and ChangeList's block rules in the one
-	// sheet. 4504 KiB, which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 408<<10
+	// sheet. 4504 KiB, which still refuses a doubled baseline. Marking the
+	// open conversation in the assistant's history, showing each one's last
+	// activity and telling the assistant of a brand draft in progress took it
+	// to 4504.1 KiB: the menu's checked answers and the summary's member in
+	// the panel's chunk, and the Brand page's read-only draft and its help in
+	// that page's. 4505 KiB, which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 409<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
