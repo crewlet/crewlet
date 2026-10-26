@@ -16,29 +16,37 @@ var errNoFiles = fmt.Errorf("%w: this engine keeps no assistant files, so a file
 	"proposed", catalog.ErrInvalidArguments)
 
 // draftChange holds a draft.set call to the draft the turn's page declared
-// ([catalog.DraftValues]) and every file it names to the person's own files
-// in this conversation, before anything is previewed: the page parses again,
-// and a file the engine did not check never reaches it.
+// ([catalog.DraftValues]) and resolves every file it names, by id alone,
+// through the person's own files in this conversation, before anything is
+// previewed: the engine fills in the reference (the conversation, the name,
+// the media type) from its record and writes it into the call, so the page
+// parses a reference the engine checked and the model never echoes an id the
+// engine already knows.
 func (t *turn) draftChange(ctx context.Context, args map[string]any) error {
 	var draft *wire.PageDraft
 	if t.page != nil {
 		draft = t.page.Draft
 	}
-	refs, err := catalog.DraftValues(args, draft, t.conversation)
-	if err != nil || len(refs) == 0 {
+	named, err := catalog.DraftValues(args, draft, t.conversation)
+	if err != nil || len(named) == 0 {
 		return err
 	}
 	if t.svc.files == nil {
 		return errNoFiles
 	}
-	for _, ref := range refs {
-		_, err := t.svc.files.Stat(ctx, t.person.ID, t.conversation, ref.FileID)
+	for _, f := range named {
+		stored, err := t.svc.files.Stat(ctx, t.person.ID, t.conversation, f.FileID)
 		switch {
 		case errors.Is(err, ErrNotFound):
-			return fmt.Errorf("%w: %s is not one of your files in this conversation",
-				catalog.ErrInvalidArguments, ref.Name)
+			return fmt.Errorf("%w: file %s is not one of your files in this conversation",
+				catalog.ErrInvalidArguments, f.FileID)
 		case err != nil:
-			return fmt.Errorf("the file %s could not be checked: %w", ref.Name, err)
+			return fmt.Errorf("the file %s could not be checked: %w", f.FileID, err)
+		}
+		ref := wire.DraftFileRef{Kind: wire.DraftFieldFile, FileID: f.FileID,
+			ConversationID: t.conversation, Name: stored.Name, MediaType: stored.MediaType}
+		if err := catalog.SetDraftFile(args, f.Path, ref); err != nil {
+			return err
 		}
 	}
 	return nil

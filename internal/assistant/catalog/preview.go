@@ -854,7 +854,7 @@ func pageActionPreview(t Tool) proposal.Previewer {
 			// NEVER A RAW PATH: a dotted key reads as its words, and a
 			// draft's own labels replace these where the turn's page
 			// declared them (assistant's draftRows).
-			row := proposal.Fact(k, cards.FieldLabel(k), company.valueShown(cards.Text(payload[k])))
+			row := proposal.Fact(k, cards.FieldLabel(k), company.valueShown(draftValueShown(payload[k])))
 			if items, ok := plainItems(payload[k]); ok {
 				row.Items = items
 			}
@@ -871,6 +871,17 @@ func pageActionPreview(t Tool) proposal.Previewer {
 		return proposal.Preview{Title: "Change this screen", Target: action.ID,
 			ApproveLabel: label, Changes: c.rows(), Request: req}, nil
 	}
+}
+
+// draftValueShown is a draft value as a card row reads it: a file reference
+// by its file's name, which the engine resolved, and any other value as text.
+func draftValueShown(v any) string {
+	if ref, ok := v.(map[string]any); ok && ref["kind"] == string(wire.DraftFieldFile) {
+		if name, ok := ref["name"].(string); ok && name != "" {
+			return name
+		}
+	}
+	return cards.Text(v)
 }
 
 func orDefault(v, fallback string) string {

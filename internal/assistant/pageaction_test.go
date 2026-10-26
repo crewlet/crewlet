@@ -2,6 +2,7 @@ package assistant_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -100,8 +101,8 @@ func (f files) Stat(_ context.Context, owner, conversation, file uuid.UUID) (ass
 	if !ok || held.owner != owner || held.conversation != conversation {
 		return assistant.StoredFile{}, assistant.ErrNotFound
 	}
-	return assistant.StoredFile{FileRef: wire.FileRef{FileID: file}, Owner: owner,
-		Conversation: conversation}, nil
+	return assistant.StoredFile{FileRef: wire.FileRef{FileID: file, Name: "logo.svg",
+		MediaType: "image/svg+xml"}, Owner: owner, Conversation: conversation}, nil
 }
 
 func (f files) Open(ctx context.Context, owner, conversation, file uuid.UUID) (assistant.StoredFile, []byte, error) {
@@ -209,6 +210,15 @@ func TestADraftChangeIsHeldToTheOpenDraftBeforeItIsProposed(t *testing.T) {
 		"the person's own file and a list": {proposed: true, store: store,
 			values: map[string]any{"logos.primary": ref(mine, conversation),
 				"voice.avoid": []any{"Jargon"}}},
+		"another person's file by its id alone": {values: map[string]any{
+			"logos.primary": theirs.String()}, store: store},
+		"a file of another conversation by its id alone": {values: map[string]any{
+			"logos.primary": elsewhere.String()}, store: store},
+		"a reference naming a field the engine does not know": {values: map[string]any{
+			"logos.primary": map[string]any{"file_id": mine.String(), "url": "x"}},
+			store: store},
+		"a name where a file id belongs": {values: map[string]any{
+			"logos.primary": "logo.svg"}, store: store},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -219,6 +229,48 @@ func TestADraftChangeIsHeldToTheOpenDraftBeforeItIsProposed(t *testing.T) {
 			}
 			if !c.proposed && evals.Last(frames, wire.EventCard) != nil {
 				t.Error("a refused draft change drew a card")
+			}
+		})
+	}
+}
+
+// A FILE FIELD TAKES THE FILE'S ID ALONE, AND THE ENGINE FILLS IN THE REST.
+//
+// A file the assistant delivered or the person attached belongs to the
+// conversation the turn runs in, which the engine knows and the model does
+// not: asking the model for the conversation's id refused every logo a deep
+// run made. So the id alone (a string, or an object naming only `file_id`) is
+// a reference, and what the preview binds and the page receives is the whole
+// one, resolved from the engine's own record of the file. Mutation: skip
+// SetDraftFile and the proposed body carries the bare id the page refuses.
+func TestAFileFieldTakesTheFilesIDAndTheEngineResolvesTheRest(t *testing.T) {
+	t.Parallel()
+	mine := uuid.New()
+	store := files{mine: {grace, conversation}}
+	for name, value := range map[string]any{
+		"the id as a string":      mine.String(),
+		"an object naming the id": map[string]any{"file_id": mine.String()},
+		"a whole reference as before": map[string]any{"kind": "file", "file_id": mine.String(),
+			"conversation_id": conversation.String(), "name": "other.svg",
+			"media_type": "image/png"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f, _ := draftRig(t, store, map[string]any{"logos.primary": value})
+			proposals := f.Store.Proposals()
+			if len(proposals) != 1 {
+				t.Fatalf("recorded %d proposals, want 1", len(proposals))
+			}
+			var body struct {
+				Values map[string]wire.DraftFileRef `json:"values"`
+			}
+			if err := json.Unmarshal(proposals[0].Body, &body); err != nil {
+				t.Fatalf("the proposed body is not a draft.set call: %v", err)
+			}
+			want := wire.DraftFileRef{Kind: wire.DraftFieldFile, FileID: mine,
+				ConversationID: conversation, Name: "logo.svg", MediaType: "image/svg+xml"}
+			if got := body.Values["logos.primary"]; got != want {
+				t.Errorf("the page receives %+v, want the engine's record %+v", got, want)
 			}
 		})
 	}
