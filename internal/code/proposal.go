@@ -92,17 +92,18 @@ type PushAnswer struct {
 	// and for one answered with no record; for a pending or unknown one it
 	// is the decision's, tentative until the record resolves.
 	Commands []Command `json:"commands"`
-	// Refused is a refusal of the whole push — busy, unavailable,
-	// not_applied, repo_deleted, repo_archived — with every command it
-	// covers ng under the same code.
+	// Refused is a refusal of the whole push — busy, compaction_behind,
+	// unavailable, not_applied, repo_deleted, repo_archived — with every
+	// command it covers ng under the same code.
 	Refused Refusal `json:"refused,omitempty"`
 	// Detail is a whole-push refusal's one sentence of specifics, and every
 	// command the refusal covers carries the SAME sentence as its own
 	// Detail — one placement whichever path formed the refusal (the decide,
-	// for a repository deleted or archived; the committer, for busy,
-	// unavailable, not_applied and a deletion the log refused), so a reader
-	// of the answer or of a command finds it. A command the receiver had
-	// already refused keeps its own. Empty when Refused is.
+	// for a repository deleted or archived, or at its pack bound; the
+	// committer, for busy, unavailable, not_applied and a deletion the log
+	// refused), so a reader of the answer or of a command finds it. A
+	// command the receiver had already refused keeps its own. Empty when
+	// Refused is.
 	Detail string `json:"detail,omitempty"`
 	// Collapsed is a push answered from a row an EARLIER record applied: a
 	// forwarded or failed-over proposal of a push that had already landed.
