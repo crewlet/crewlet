@@ -36,8 +36,9 @@ import (
 // may run the budget out over a long history; asked again once the copy is
 // maintained, the same comparison answers.
 
-// compareRead answers a comparison.
-func (r *read) compareRead(ctx context.Context, objs found) (code.GitAnswer, error) {
+// compareRead answers a comparison — one page, memoized whole where m takes
+// it.
+func (r *read) compareRead(ctx context.Context, objs found, m *memoRun) (code.GitAnswer, error) {
 	q := r.q.Compare
 	base, head := objs.revs[q.Base], objs.revs[q.Head]
 	for _, side := range []struct {
@@ -66,20 +67,24 @@ func (r *read) compareRead(ctx context.Context, objs found) (code.GitAnswer, err
 		BaseIsAncestor: mb == base.peeled, HeadIsAncestor: mb == head.peeled, Ahead: ahead, Behind: behind,
 		Files: []code.DiffFile{}}
 	a := code.GitAnswer{Kind: code.GitCompare, Compare: c}
-	if mb == "" || mb == head.peeled {
-		// No common ancestor, or head is one: nothing head changed since.
-		return a, nil
-	}
 	envelope := code.GitAnswer{Kind: code.GitCompare,
 		Compare: &code.CompareAnswer{Base: base.peeled, Head: head.peeled, MergeBase: mb, BaseIsAncestor: true,
 			HeadIsAncestor: true, Ahead: widest, Behind: widest, Files: []code.DiffFile{}, Total: widest,
 			Added: widest, Deleted: widest}}
-	st, err := r.stat(ctx, mb, head.peeled, nil, false, 0, r.room(envelope),
-		"diff the merge base and head naming paths, or compare commits closer together")
-	if err != nil {
-		return code.GitAnswer{}, err
+	left := r.room(envelope)
+	if mb != "" && mb != head.peeled {
+		// What head changed since the merge base, its first page; with no
+		// common ancestor, or head one, nothing.
+		st, err := r.stat(ctx, mb, head.peeled, nil, false, 0, left,
+			"diff the merge base and head naming paths, or compare commits closer together", nil)
+		if err != nil {
+			return code.GitAnswer{}, err
+		}
+		c.Files, c.Total, c.Added, c.Deleted = st.files, st.total, st.added, st.deleted
+		left = st.left
 	}
-	c.Files, c.Total, c.Added, c.Deleted = st.files, st.total, st.added, st.deleted
+	m.put(cursor{}, a, left)
+	m.place(code.GitCompare, same(memoTail{}))
 	return a, nil
 }
 

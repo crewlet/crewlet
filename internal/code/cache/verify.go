@@ -977,11 +977,16 @@ func checkPacks(ctx context.Context, dir string, l *listing, snap snapshot) (int
 // since the listing (a repair round may run between the listing and the hash:
 // the check holds rounds off for its listing alone) gives no verdict and is
 // no finding. No read slot is taken a piece at a time: the check holds its
-// maintenance slot across the whole of it.
+// maintenance slot across the whole of it. A declaration whose every read
+// holds its files (Check.hashed: the memo's tree, admitted whole) has nothing
+// for a hash to add, and is passed over.
 func (c *Cache) checkDerived(ctx context.Context, dir string, l *listing) ([]string, error) {
 	var problems []string
 	p := c.pieces(nil)
 	for _, f := range l.derived {
+		if !f.of.Check.hashed() {
+			continue
+		}
 		_, want, err := f.held()
 		if err != nil {
 			return problems, err

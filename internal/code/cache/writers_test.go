@@ -452,6 +452,12 @@ var cacheWriters = []writerRow{
 			"made for its first run, and a rebuild's links of the runs of the copy it replaces into its own — " +
 			"every run itself staged in tmp/ and renamed in through durable.go, and retired through layout.go's " +
 			"toTrash", []cache.DerivedName{cache.DerivedProvenance}},
+	{"internal/code/cache/memo.go", kindOS,
+		"the memo of answers by object id, the cache's own derived file under the incarnation's crewlet/memo: " +
+			"each answer staged in tmp/ — with no sync, since every read holds an entry to its digest — " +
+			"completed with its run's tail and renamed into the tree it makes, a rebuild's links of the entries " +
+			"of the copy it replaces, an entry that fails its digest or is trimmed removed, and the tree moved " +
+			"whole through layout.go's toTrash", []cache.DerivedName{cache.DerivedMemo}},
 	{"internal/code/host/receive.go", kindGit + " receive-pack",
 		"a push, received in its SCRATCH repository (cache.NewScratch) — never in a cache, since git " +
 			"migrates a push's objects into the repository it runs in before any hook can refuse them; " +

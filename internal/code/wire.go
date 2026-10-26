@@ -1004,6 +1004,11 @@ type GitAnswer struct {
 	// it read, so an asker holding a later floor knows the answer may
 	// predate a push it made — never that an object it names is wrong.
 	Position statelog.Position `json:"position"`
+	// Memo is set on a page the answering node kept from a read that cut it
+	// before (its cache's memo) rather than cut again: the same page, since a
+	// page is a function of the object ids it names and the read's arguments
+	// alone, answered with no git run.
+	Memo bool `json:"memo,omitempty"`
 	// Next is where the next page starts, handed back as the query's Cursor
 	// with the query otherwise unchanged; empty on the last page.
 	Next string `json:"next,omitempty"`

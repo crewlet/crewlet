@@ -2089,7 +2089,12 @@ push costs, measured", and set out with the code log's share and a larger
 company's figures under
 [What every data node holds for the code host](../concepts/scaling.md#git-nodes).
 The bytes of the packs are not here: they are the
-[object store's](../concepts/object-store.md).
+[object store's](../concepts/object-store.md). Nor is a git node's cache: its
+copies of the repositories, the index of which push introduced each commit
+and the memo of its seats' read answers — at most a sixteenth of the budget
+([The memo](../concepts/code-host.md#the-memo)) — are disposable files inside
+`git.cache_max_bytes`, derived again from the rows and the object store, which
+no retention keeps and no backup copies.
 
 The mutation log itself, on a healthily-trimming fleet, holds **about
 85 MB** — the `min_age` window's worth of records, not a year's: seven days,

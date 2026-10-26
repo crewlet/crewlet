@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
@@ -28,11 +29,17 @@ type Cache interface {
 	ServeConfig() []gitproc.KV
 	// Provenance is the pinned copy's index of which push introduced each
 	// commit, held while the copy is; an error is an index the node cannot
-	// read yet, which a read answers without (step 8).
+	// read yet, which a read answers without (step 9).
 	Provenance(s cache.Synced) (cache.Provenance, error)
 	// WantHistory marks a repository's history as wanted: what a read
-	// answered as the repository's home asks of its index (step 9).
+	// answered as the repository's home asks of its index (step 10).
 	WantHistory(repoID string)
+	// MemoGet is the page the pinned copy's memo keeps under a key, or false
+	// (step 6).
+	MemoGet(s cache.Synced, k cache.MemoKey) ([]byte, bool)
+	// Memo is a batch of the pages a run cuts, to memoize in the pinned copy
+	// once its git has answered whole (step 7) — nil where it keeps none.
+	Memo(s cache.Synced) *cache.MemoBatch
 }
 
 // Pool runs git. *gitproc.Pool satisfies it.
@@ -131,22 +138,29 @@ func New(o Options) (*Server, error) {
 //     domain's own sentence for it; the asker's grant is judged from the
 //     repository's row and this node's chart (code.GrantOf), and a read below
 //     read is code.ErrNotPermitted.
-//  6. Every abbreviated id is expanded from the objects alone, and every id
+//  6. A PAGE ALREADY CUT is answered from the copy's memo (memo.go): for a
+//     read naming whole ids, as soon as its grant is judged and before any
+//     git runs; for one naming an abbreviation, once step 7 has expanded it.
+//     A hit holds no unit of the share and goes on through steps 9 and 10
+//     as a page cut does.
+//  7. Every abbreviated id is expanded from the objects alone, and every id
 //     and path checked present with one batch (objects.go); an id the copy
-//     lacks is code.ErrObjectNotFound. No refusal of steps 5 and 6 is
+//     lacks is code.ErrObjectNotFound. No refusal of steps 5 and 7 is
 //     concluded from a copy not read at the log's head: it is synced there
 //     once, and judged again. Each of those short processes runs to its own
 //     bound, gitproc.ReadDeadline: one that runs all of it, a few ids' check
 //     no healthy node takes a second over, is the node's own failure
 //     (node_failed).
-//  7. The kind's own git runs under ONE unit of the node's seat git-work
+//  8. The kind's own git runs under ONE unit of the node's seat git-work
 //     share, released the moment it ends — never across a sync or a check,
 //     which hold no read-lane slot (code.GitShare) — and within ONE BUDGET
 //     of git run time, gitproc.ReadDeadline, which every process of the kind
 //     shares: each is given what the ones before it left. A read whose own
 //     git runs the whole of it is too large to answer (code.ErrSliceTooLarge,
-//     naming the narrowing): another node would take as long.
-//  8. Every commit the answer names — its revision, a diff's or a
+//     naming the narrowing): another node would take as long. That git cuts
+//     every page from the one asked to its answer's end, each memoized once
+//     git has answered whole (memo.go).
+//  9. Every commit the answer names — its revision, a diff's or a
 //     comparison's commits, a landed-in read's commit and tip — is named with
 //     the push that introduced it (code.GitAnswer.PushedBy), from the copy's
 //     index of pushes, and the answer carries what that index holds
@@ -154,7 +168,7 @@ func New(o Options) (*Server, error) {
 //     against it fits with them. A copy whose index cannot be read yet is
 //     answered without either: an index decorates an answer, and no read
 //     waits on it.
-//  9. A read this node answered as the repository's home (code.GitQuery.Home)
+//  10. A read this node answered as the repository's home (code.GitQuery.Home)
 //     marks the repository's history wanted (cache.Cache.WantHistory): the one
 //     node a walk asks first reads it back, once per fleet, and only for a
 //     repository a seat asks about.
@@ -193,28 +207,11 @@ func (s *Server) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, err
 	if err := r.sync(ctx, r.fresh()); err != nil {
 		return code.GitAnswer{}, err
 	}
-	objs, err := r.objects(ctx)
-	if err != nil {
-		return code.GitAnswer{}, err
-	}
-	r.index(objs)
-	release, err := s.o.Share.Take(ctx, code.SeatWorkRead)
-	if err != nil {
-		if code.AnswerDue(ctx) {
-			return code.GitAnswer{}, r.unready(code.UnreadyShare, fmt.Sprintf("%s's seat git work held its whole "+
-				"share until the read's answer fell due, its asker's attempt spent; another git node answers "+
-				"meanwhile", s.o.NodeID))
+	a, ok := r.recallWhole(at)
+	if !ok {
+		if a, err = r.compute(ctx, at); err != nil {
+			return code.GitAnswer{}, err
 		}
-		return code.GitAnswer{}, err
-	}
-	defer release()
-	// THE READ'S OWN GIT BEGINS: from here every process is given what is
-	// left of one budget of run time, and charged what it ran.
-	r.metered, r.gitLeft = true, s.gitBudget
-	a, err := r.answer(ctx, objs, at)
-	release()
-	if err != nil {
-		return code.GitAnswer{}, err
 	}
 	a.RepoID, a.Position = q.RepoID, r.synced.Position
 	a.PushedBy, a.Coverage = r.pushedBy, r.coverage
@@ -224,26 +221,75 @@ func (s *Server) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, err
 	return a, nil
 }
 
-// index reads the pinned copy's index of pushes, and names the push that
-// introduced each commit the query names (step 8).
-func (r *read) index(objs found) {
-	p, err := r.s.o.Cache.Provenance(r.synced)
-	if err != nil || !p.Indexed() {
-		return
+// compute is steps 7 and 8: the answer of a read the memo did not answer
+// before any git ran — found, then asked of the memo once more where an
+// abbreviation's expansion made its key, and cut by the kind's own git.
+func (r *read) compute(ctx context.Context, at cursor) (code.GitAnswer, error) {
+	objs, err := r.objects(ctx)
+	if err != nil {
+		return code.GitAnswer{}, err
 	}
-	r.prov = p
-	cov := p.Coverage()
-	r.coverage = &cov
-	for _, rev := range revsOf(r.q) {
-		if o := objs.revs[rev]; o.peeledKind == "commit" {
-			r.decorate(o.peeled)
+	if !r.recalled && memoizable(r.q) {
+		if a, ok := r.recall(wholeOf(r.q, objs), at); ok {
+			return a, nil
 		}
+	}
+	r.index(commitsOf(r.q, objs))
+	release, err := r.s.o.Share.Take(ctx, code.SeatWorkRead)
+	if err != nil {
+		if code.AnswerDue(ctx) {
+			return code.GitAnswer{}, r.unready(code.UnreadyShare, fmt.Sprintf("%s's seat git work held its whole "+
+				"share until the read's answer fell due, its asker's attempt spent; another git node answers "+
+				"meanwhile", r.s.o.NodeID))
+		}
+		return code.GitAnswer{}, err
+	}
+	defer release()
+	// THE READ'S OWN GIT BEGINS: from here every process is given what is
+	// left of one budget of run time, and charged what it ran.
+	r.metered, r.gitLeft = true, r.s.gitBudget
+	a, err := r.answer(ctx, objs, at)
+	release()
+	return a, err
+}
+
+// commitsOf is every commit q's revisions name once each tag is peeled, in
+// the order q names them: what an answer of q is decorated with.
+func commitsOf(q code.GitQuery, objs found) []string {
+	var out []string
+	for _, rev := range revsOf(q) {
+		if o := objs.revs[rev]; o.peeledKind == "commit" && !slices.Contains(out, o.peeled) {
+			out = append(out, o.peeled)
+		}
+	}
+	return out
+}
+
+// index reads the pinned copy's index of pushes — once a read — and names the
+// push that introduced each of commits (step 9), in place of whatever an
+// earlier call named: a hit the memo answers is decorated by the commits its
+// page names, and one it could not use by the read's own.
+func (r *read) index(commits []string) {
+	if !r.indexRead {
+		r.indexRead = true
+		if p, err := r.s.o.Cache.Provenance(r.synced); err == nil && p.Indexed() {
+			r.prov = p
+			cov := p.Coverage()
+			r.coverage = &cov
+		}
+	}
+	r.pushedBy, r.named = nil, nil
+	for _, id := range commits {
+		r.decorate(id)
 	}
 }
 
 // decorate names the push that introduced commit id, where the index holds
-// it: before any page is cut, since every page's envelope carries it.
+// it: before any page is cut, since every page's envelope carries it. Every
+// commit decorated is named (read.named), held or not, so a page from the
+// memo is decorated by what the index holds when it is read.
 func (r *read) decorate(id string) {
+	r.named = append(r.named, id)
 	if !r.prov.Indexed() {
 		return
 	}
@@ -270,13 +316,19 @@ type read struct {
 	synced cache.Synced
 	linear bool
 	// prov is the copy's index of pushes, the zero one where it keeps none
-	// it can read; pushedBy the push that introduced each commit the answer
-	// names, and coverage what the index holds — each carried by every page
-	// and so measured into its envelope (room).
-	prov     cache.Provenance
-	pushedBy map[string]code.PushedBy
-	coverage *code.Coverage
-	// metered is set once the read's own git has begun (step 7), and gitLeft
+	// it can read, and indexRead whether it was asked for; pushedBy the push
+	// that introduced each commit the answer names, coverage what the index
+	// holds — each carried by every page and so measured into its envelope
+	// (room) — and named every commit decorated, held by the index or not.
+	prov      cache.Provenance
+	indexRead bool
+	pushedBy  map[string]code.PushedBy
+	coverage  *code.Coverage
+	named     []string
+	// recalled: the memo was asked before any git ran (recallWhole), so it
+	// is not asked again once the read's objects are found.
+	recalled bool
+	// metered is set once the read's own git has begun (step 8), and gitLeft
 	// is what is left of its budget of run time: each of its processes is
 	// given that as its deadline ([read.budget]) and charged what it ran
 	// ([read.failed]) — its run alone, never its wait for a read-lane slot,
@@ -465,19 +517,22 @@ func (r *read) objects(ctx context.Context) (found, error) {
 	}
 }
 
-// answer runs the kind's own git over objs (step 6).
+// answer runs the kind's own git over objs (step 8), memoizing every page it
+// cuts once that git has answered whole — and none where it did not.
 func (r *read) answer(ctx context.Context, objs found, at cursor) (code.GitAnswer, error) {
+	m := r.memoRun(objs)
+	defer m.discard()
 	switch r.q.Kind {
 	case code.GitTree:
-		return r.treeRead(ctx, objs, at)
+		return r.treeRead(ctx, objs, at, m)
 	case code.GitBlob:
-		return r.blobRead(ctx, objs, at)
+		return r.blobRead(ctx, objs, at, m)
 	case code.GitDiff:
-		return r.diffRead(ctx, objs, at)
+		return r.diffRead(ctx, objs, at, m)
 	case code.GitLandedIn:
 		return r.landedRead(ctx, objs)
 	}
-	return r.compareRead(ctx, objs)
+	return r.compareRead(ctx, objs, m)
 }
 
 // unready is a refusal about this node, which another git node may answer.

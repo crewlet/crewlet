@@ -89,16 +89,23 @@ func (c *Cache) janitor(ctx context.Context) {
 	}
 }
 
-// janitorPass is one pass, in order: trash/ emptied; scratch/ measured; the
-// cache evicted to its budget, least recently used first — and trash/ emptied
-// again when anything was, so an eviction gives its disk back within the
-// pass; then the gauges.
+// janitorPass is one pass, in order: trash/ emptied; scratch/ measured; every
+// memo this process has touched and not yet counted listed (memo.go); the memo
+// trimmed to its share of the budget (MemoShare) BEFORE any repository goes —
+// an answer evicted costs one git process to compute again, a repository a
+// cold sync of every pack it holds; the cache evicted to its budget, least
+// recently used first — and trash/ emptied again when anything was moved
+// there, so an eviction gives its disk back within the pass; the states whose
+// memo moved written again; then the gauges.
 func (c *Cache) janitorPass(ctx context.Context) {
 	c.emptyTrash(ctx)
 	c.measureScratch(ctx)
-	if c.evictToBudget(ctx) > 0 {
+	c.listMemos(ctx)
+	trimmed := c.trimMemo(ctx)
+	if c.evictToBudget(ctx) > 0 || trimmed {
 		c.emptyTrash(ctx)
 	}
+	c.stateMemos(ctx)
 	c.setGauges()
 }
 
@@ -293,15 +300,17 @@ func stampUse(dir string, at time.Time) error {
 }
 
 // setGauges sets crewlet.code.cache.bytes — the total the budget is held to
-// (total) — and crewlet.code.cache.repos, the repositories with a directory on
-// this node: both from the running totals, so a round that sets them after it
-// ends pays a few loads, however many repositories the node holds.
+// (total) — crewlet.code.cache.repos, the repositories with a directory on
+// this node, and crewlet.code.cache.memo.bytes, what the memo holds of the
+// total: all from the running totals, so a round that sets them after it ends
+// pays a few loads, however many repositories the node holds.
 func (c *Cache) setGauges() {
 	if c.metrics == nil {
 		return
 	}
 	c.metrics.Set(metrics.CodeCacheBytes, float64(c.total()), nil)
 	c.metrics.Set(metrics.CodeCacheRepos, float64(c.heldRepos.Load()), nil)
+	c.metrics.Set(metrics.CodeCacheMemoBytes, float64(c.memoBytes.Load()), nil)
 }
 
 // kick wakes the janitor without waiting for it: a kick already pending

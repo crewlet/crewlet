@@ -332,6 +332,18 @@ beside that node's cold syncs of the same repositories. These are figures,
 not promises: until a node's index is complete, an answer about an older
 commit says which range it does not hold rather than naming a push.
 
+**What the memo of answers costs a git node.** Beside each copy a git node
+keeps every page its seats' server-side reads cut ([The memo](code-host.md#the-memo)),
+at most a sixteenth of the cache's budget across every copy it holds — some
+450 000 pages of 56 KiB at a 400 GB budget — and it is trimmed to that before
+any repository is evicted, so fifteen sixteenths of the budget stay the
+repositories it exists for. A page from the memo is answered with no git run
+— in 16 to 56 µs, measured — where the page cut costs at least one git
+process, 3 to 53 ms warm and up to the read's ten seconds; and the read that
+misses cuts every page after the one asked too, so a seat paging through a
+large listing, a long file or a wide diff pays for one git run, not one a
+page.
+
 **What every data node holds for the code host.** Every data node holds the
 whole estate, and the code host's rows with it. A person's push of one commit
 leaves a push row of about 395 bytes, kept 181 days, and its pack's row of

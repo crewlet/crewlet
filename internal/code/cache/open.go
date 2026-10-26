@@ -80,6 +80,11 @@ type Cache struct {
 	// discard), so the gauges a round sets cost two loads, never a walk of
 	// every repository on the node under the lock every sync takes.
 	heldBytes, heldRepos atomic.Int64
+	// memoBytes is what every incarnation's memo holds, of heldBytes — a
+	// RUNNING TOTAL moved where an incarnation's memo record moves
+	// (setDerived, discard), which the janitor holds to the memo's share of
+	// the budget (MemoShare, memo.go) with no walk of the node's copies.
+	memoBytes atomic.Int64
 	// scratchBytes is what scratch/ held when the janitor last measured it:
 	// a push's scratch is written by its client's receive-pack, so only the
 	// disk knows.
@@ -388,6 +393,10 @@ func (c *Cache) index(b *boot) (int, error) {
 			inc.lastUsed = c.now()
 		}
 		c.heldBytes.Add(inc.diskBytes + inc.metaBytes)
+		// The memo's bytes as the state records them, which is what the janitor
+		// writes again once they move (Cache.stateMemos).
+		inc.memoStated = inc.derived[DerivedMemo].Bytes
+		c.memoBytes.Add(inc.memoStated)
 		c.heldRepos.Add(1)
 		e := newEntry(k.id)
 		e.current = inc

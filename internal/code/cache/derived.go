@@ -19,11 +19,12 @@ import (
 // by adding a declaration, never beside them.
 //
 // A derived file is one the cache writes from what an incarnation already
-// holds — its packs, its refs, or the push rows a round read beside them — and
-// that no row names: the multi-pack-index (a full round's, and the
-// maintainer's with its bitmap or without one), the commit-graph, and the
-// index of which push introduced each commit (provenance.go). Each was
-// spelled in a dozen places that agreed only because
+// holds — its packs, its refs, the push rows a round read beside them, or the
+// answer a read computed from its objects — and that no row names: the
+// multi-pack-index (a full round's, and the maintainer's with its bitmap or
+// without one), the commit-graph, the index of which push introduced each
+// commit (provenance.go), and the memo of answers by object id (memo.go). Each
+// was spelled in a dozen places that agreed only because
 // nothing had changed them apart: its file names in the sweep, Verify, the
 // size measure, the check and the scrub; its argument lists, charges, lanes
 // and deadlines beside each writer; what a removed pack and what a damage
@@ -64,10 +65,10 @@ import (
 //
 // TWO KINDS OF WRITER. git writes the multi-pack-index and the commit-graph,
 // in a lane of the pool, under a deadline over what it covers and a memory
-// charge an object; the cache's OWN GO CODE writes the provenance index (an
-// IN-PROCESS write: Writer.Subcommand ""), which runs no git, holds no slot and
-// is bounded by its caller's context, so its row says what it holds instead
-// (Write.Charge). A declaration's writes are all of one kind, and its kind
+// charge an object; the cache's OWN GO CODE writes the provenance index and the
+// memo (an IN-PROCESS write: Writer.Subcommand ""), which runs no git, holds no
+// slot and is bounded by its caller's context, so its row says what it holds
+// instead (Write.Charge). A declaration's writes are all of one kind, and its kind
 // says who reads its files: git reads a git-written one — so a damage report
 // names it by its part — and nothing but the cache reads an in-process one,
 // which no report can name. A git-written declaration's files live under
@@ -93,6 +94,12 @@ const (
 	// round that reads pushes before it answers, and by the backfill behind
 	// the serving — the cache's own write, which no git process reads.
 	DerivedProvenance DerivedName = "provenance"
+	// DerivedMemo is the memo of answers by object id (memo.go): one file an
+	// answer a server-side read cut — a page of a listing, a file, a diff or a
+	// comparison — keyed by everything it is a function of, under the
+	// incarnation's crewlet/memo, a directory it owns whole (Owned.Tree), and
+	// held to a share of the cache's budget (MemoShare).
+	DerivedMemo DerivedName = "memo"
 )
 
 // engineRoot is the one directory of an incarnation's root besides objects/
@@ -122,10 +129,14 @@ const (
 	// phase serves (code.StateQuery.Pushes), and those the backfill reads a
 	// page at a time (code.ReadIntroduced) — never the incarnation's files.
 	InputPushRows Input = "push-rows"
+	// InputOID is the objects an answer names, by their ids: immutable, so an
+	// answer computed from them is the answer for as long as the ids name
+	// them, whatever packs hold them and whatever refs point at them.
+	InputOID Input = "oid"
 )
 
 // Inputs is every Input.
-var Inputs = []Input{InputPacks, InputRefs, InputPushRows}
+var Inputs = []Input{InputPacks, InputRefs, InputPushRows, InputOID}
 
 // Valid reports whether i is one of Inputs.
 func (i Input) Valid() bool { return slices.Contains(Inputs, i) }
@@ -147,10 +158,14 @@ const (
 	// over or a seat's question wants, or a merge of runs — paced by the
 	// fleet, behind the serving.
 	TriggerBackfill Trigger = "backfill"
+	// TriggerRead is a server-side read by object id that ran its git
+	// (internal/code/query): the pages its one run cut, each kept for the
+	// next read that asks for it (memo.go).
+	TriggerRead Trigger = "read"
 )
 
 // Triggers is every Trigger.
-var Triggers = []Trigger{TriggerRound, TriggerMaintainer, TriggerBackfill}
+var Triggers = []Trigger{TriggerRound, TriggerMaintainer, TriggerBackfill, TriggerRead}
 
 // Valid reports whether t is one of Triggers.
 func (t Trigger) Valid() bool { return slices.Contains(Triggers, t) }
@@ -170,10 +185,15 @@ const (
 	// answer about a push outside that range says so, rather than answering
 	// that there is none.
 	FreshAtRound Freshness = "at-round"
+	// FreshImmutable is keyed by everything it answers is a function of —
+	// object ids, which name one object for ever, and the read's arguments —
+	// so it is never stale, only absent: a reader that finds no entry runs
+	// its git, and one that finds one is answered by it.
+	FreshImmutable Freshness = "immutable"
 )
 
 // Freshnesses is every Freshness.
-var Freshnesses = []Freshness{FreshDebounced, FreshAtRound}
+var Freshnesses = []Freshness{FreshDebounced, FreshAtRound, FreshImmutable}
 
 // Valid reports whether f is one of Freshnesses.
 func (f Freshness) Valid() bool { return slices.Contains(Freshnesses, f) }
@@ -194,13 +214,26 @@ const (
 	// (provenance.go). Nothing the cache reads of a run is read from one this
 	// process did not write or check.
 	CheckRunTrailer Check = "run-trailer"
+	// CheckEntryDigest is a memo entry's own header: the key it answers and
+	// the SHA-256 of its body (memo.go), held on EVERY read of the entry, so
+	// no entry is served unchecked whoever wrote it — and the check and the
+	// scrub, which hash a file behind the serving, have nothing to add: they
+	// pass over such a declaration's files (Check.hashed).
+	CheckEntryDigest Check = "entry-digest"
 )
 
 // Checks is every Check.
-var Checks = []Check{CheckTrailer, CheckRunTrailer}
+var Checks = []Check{CheckTrailer, CheckRunTrailer, CheckEntryDigest}
 
 // Valid reports whether c is one of Checks.
 func (c Check) Valid() bool { return slices.Contains(Checks, c) }
+
+// hashed reports whether the check and the scrub hold the files of a
+// declaration checked by c to their bytes (ownedFile.held): every Check but
+// CheckEntryDigest, whose every read holds an entry instead — hashed behind
+// the serving too, a memo of gigabytes would be read whole by every scrub for
+// nothing a read does not already refuse.
+func (c Check) hashed() bool { return c != CheckEntryDigest }
 
 // Event is a change the cache makes in an incarnation that a derived file may
 // be built over: what dropFor is told, at the one place each is made.
@@ -300,6 +333,17 @@ type Owned struct {
 	// trailer — a multi-pack-index's reverse index carries its index's, as a
 	// pack's .rev carries its pack's (git's write_rev_trailer).
 	Prior bool
+	// Tree: Name matches a DIRECTORY the declaration owns WHOLE — every entry
+	// below it is the declaration's (crewlet/memo, one file an answer). The
+	// image keeps it as a directory, and only as one, without reading inside
+	// it; Verify admits it whole; and no measure stats it: what it holds is
+	// its writer's running total (memo.go), since a stat of the directory is
+	// its inode's few KiB whatever it holds, and a walk of it on a round's or
+	// a maintenance run's path would cost a stat an entry. A Tree is one
+	// literal name of a declaration the cache's own code writes — git writes
+	// no directory the cache owns whole — and no declaration's files live
+	// under it.
+	Tree bool
 }
 
 // Step names one write: the `step` attribute of a refusal's line and counter
@@ -319,10 +363,13 @@ const (
 	// backfilled page or a merge. Never refused for memory: it is no value of
 	// the maintenance refusals' counter or gauge, which name git's steps.
 	StepProvenance Step = "provenance"
+	// StepMemo is an entry of the memo: an answer a read cut. Never refused
+	// for memory either.
+	StepMemo Step = "memo"
 )
 
 // Steps is every Step, in the order a line or a count names them.
-var Steps = []Step{StepBitmap, StepIndex, StepGraph, StepProvenance}
+var Steps = []Step{StepBitmap, StepIndex, StepGraph, StepProvenance, StepMemo}
 
 // Valid reports whether s is one of Steps.
 func (s Step) Valid() bool { return slices.Contains(Steps, s) }
@@ -465,6 +512,12 @@ func (d *Derived) hasMain() bool {
 	return slices.ContainsFunc(d.Owns, func(o Owned) bool { return o.Main })
 }
 
+// tree reports whether d's main file is a directory it owns whole
+// (Owned.Tree): its bytes are its writer's running total, never a measure's.
+func (d *Derived) tree() bool {
+	return slices.ContainsFunc(d.Owns, func(o Owned) bool { return o.Main && o.Tree })
+}
+
 // The patterns of DerivedFiles, compiled once: a regular expression is
 // immutable and safe to share, so every copy DerivedFiles answers holds the
 // same ones.
@@ -480,6 +533,9 @@ var (
 	// crewlet/provenance.<n>, n the run's number in decimal from 1, as the
 	// index's record names it (provenanceRun).
 	provenanceRunName = regexp.MustCompile(`^provenance\.[1-9][0-9]*$`)
+	// memoTreeName is the memo's directory, crewlet/memo, which it owns whole
+	// (Owned.Tree): every entry in it an answer, named by its key's hex.
+	memoTreeName = regexp.MustCompile(`^memo$`)
 )
 
 // DerivedFiles is the closed list, in the order a pass plans its steps and a
@@ -501,6 +557,14 @@ var (
 // rows rather than the packs, so no pack added, removed or retired and no ref
 // moved changes it, and a log gone back drops it; kept by a rebuild, which
 // reads the same rows again (provenance.go says why it is eager).
+//
+// The MEMO is the cache's own too: an answer a read cut, staged in tmp/ and
+// renamed into crewlet/memo once the read's git has answered whole, so no
+// write of it holds a file in the incarnation; a function of object ids alone,
+// so no pack added or removed and no ref moved changes an entry, while a log
+// gone back drops it whole — the memo cannot tell which entries read what, and
+// no answer outlives the history it was computed from on this host; and kept
+// by a rebuild, which repairs packs and not answers (memo.go).
 func DerivedFiles() []Derived {
 	maintained := func(c Covers) time.Duration { return gitproc.PackWorkDeadline(c.DiskBytes) }
 	return []Derived{{
@@ -559,6 +623,26 @@ func DerivedFiles() []Derived {
 		// reads one; and a log gone back makes every position it records
 		// another record's.
 		OnPackAdded: Keep, OnPackRemoved: Keep, OnRefsMoved: Keep, OnReported: Keep, OnHistoryGone: Drop,
+		Seed: SeedLink,
+	}, {
+		Name:   DerivedMemo,
+		Inputs: []Input{InputOID},
+		Writes: []Write{{Step: StepMemo, Trigger: TriggerRead, Writer: Writer{File: memoFile},
+			Charge: "the pages one read's run cuts, each staged in tmp/ as it is cut and renamed in once the run " +
+				"has answered whole: one page of at most code.MaxGitAnswerBytes held at a time, but for a diff's " +
+				"stat, whose files' counts follow every file, the few pages it is let hold"}},
+		Owns:      []Owned{{FilePattern: FilePattern{engineRoot, memoTreeName}, File: "memo", Main: true, Tree: true}},
+		Check:     CheckEntryDigest,
+		Freshness: FreshImmutable,
+		// An object id names one object for ever, so no pack added or removed
+		// and no ref moved alters an answer keyed by the ids it read; a report
+		// names no file of it, since no git process reads one; and a restored
+		// or recreated log is another history, which the memo cannot tell entry
+		// by entry — so it goes whole, and is computed again on demand.
+		OnPackAdded: Keep, OnPackRemoved: Keep, OnRefsMoved: Keep, OnReported: Keep, OnHistoryGone: Drop,
+		// A rebuild repairs packs, not answers: every entry is linked into the
+		// new incarnation, where every read holds it to its key and digest as
+		// it did here.
 		Seed: SeedLink,
 	}}
 }
@@ -644,6 +728,26 @@ func (d Derived) Validate() error {
 			return bad(field+".Name", "%q has %d capture groups, and a name carrying its checksum has one: "+
 				"the forty hex digits", o.Name, o.Name.NumSubexp())
 		}
+		// A TREE IS ONE DIRECTORY THE CACHE'S OWN CODE OWNS WHOLE: git writes
+		// no directory the cache keeps without reading inside, and a pattern of
+		// many names would be many trees no writer keeps a total of — so its
+		// one literal name carries no checksum either, which the rule above
+		// already holds of a name with no capture group.
+		if o.Tree {
+			_, whole := o.Name.LiteralPrefix()
+			switch {
+			case !inProcess:
+				return bad(field+".Tree", "is set on a derived file git writes: git writes no directory the "+
+					"cache owns whole")
+			case !whole:
+				return bad(field+".Name", "%q is no literal, and a tree is one directory", o.Name)
+			case !o.Main:
+				// What a tree holds is its writer's record (Derived.tree), so the
+				// tree is the declaration: its presence, and its bytes.
+				return bad(field+".Main", "is unset on a tree, and a directory owned whole is its declaration's "+
+					"presence, its bytes the declaration's record")
+			}
+		}
 	}
 	switch {
 	case !inProcess && mains != 1:
@@ -652,8 +756,14 @@ func (d Derived) Validate() error {
 	case inProcess && mains > 1:
 		return bad("Owns", "has %d main files, and a declaration has at most one", mains)
 	}
-	if !d.Check.Valid() {
+	switch {
+	case !d.Check.Valid():
 		return bad("Check", "is %q, none of %v", d.Check, Checks)
+	case !inProcess && d.Check == CheckEntryDigest:
+		// git's files carry git's own trailer, and the scrub is what holds
+		// them behind the serving: an entry's digest is read by the cache's
+		// own reads alone.
+		return bad("Check", "is %q on a derived file git writes, whose files carry git's trailer", d.Check)
 	}
 	// A DAMAGE REPORT NAMES ONLY WHAT GIT READS. A declaration git writes is a
 	// part a report drops; an in-process one is none, and keeps its files on a
@@ -790,9 +900,10 @@ func anchored(re *regexp.Regexp) bool {
 // and every file one the cache's own code writes under crewlet/ (engineRoot)
 // — the root is the repository's own fixed files, refs/ stays empty (a loose
 // ref would outrank packed-refs for every reader), and objects/ is git's, the
-// one directory a push's scratch names as its alternate; and every part a
+// one directory a push's scratch names as its alternate; every part a
 // damage report may drop (gitproc.Damage.Drops) some declaration's, or that
-// damage would drop nothing. Open refuses a cache whose declarations fail it,
+// damage would drop nothing; and no declaration's files inside a directory one
+// owns whole (Owned.Tree). Open refuses a cache whose declarations fail it,
 // so a build whose declarations are wrong never opens one — and
 // TestEveryDerivedFileIsDeclared catches it first.
 //
@@ -845,6 +956,28 @@ func validateAll(decls []Derived) error {
 		if damage.Derived() && damage.Drops()&^parts != 0 {
 			return fmt.Errorf("a damage report naming %v drops %v, and no derived file is declared by %v",
 				p, damage.Drops(), damage.Drops()&^parts)
+		}
+	}
+	// NOTHING LIVES INSIDE A TREE BUT ITS OWN ENTRIES: the image keeps a tree
+	// without reading inside it and its writer counts what it holds, so a
+	// file another declaration owned there would be kept by no sweep, counted
+	// by no measure and dropped with the tree by a change that is not its own.
+	for _, t := range decls {
+		for _, o := range t.Owns {
+			if !o.Tree {
+				continue
+			}
+			literal, _ := o.Name.LiteralPrefix()
+			tree := path.Join(o.Dir, literal)
+			for _, d := range decls {
+				for _, p := range d.patterns() {
+					if p.Dir == tree || strings.HasPrefix(p.Dir, tree+"/") {
+						return fmt.Errorf("derived file %q has files in %s, inside the directory %s derived file "+
+							"%q owns whole (Owned.Tree): nothing but that tree's own entries lives in it", d.Name,
+							p.Dir, tree, t.Name)
+					}
+				}
+			}
 		}
 	}
 	return nil

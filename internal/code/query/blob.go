@@ -19,7 +19,10 @@ import (
 // on its own is served in pieces at rune boundaries (Continues), each page's
 // cursor naming the byte the next resumes at, so the pieces concatenate to the
 // line byte for byte. git cannot seek inside an object, so a page past the
-// first reads everything before it.
+// first reads everything before it — which is why, where the memo takes them,
+// the run cuts every page from the asked one to its range's end (blobPages),
+// each begun where the one before it ends: one stream of a file serves every
+// page a read of it asks for after (memo.go).
 //
 // BINARY is git's own test (buffer_is_binary): a NUL in the first 8 000
 // bytes, which codeindex.Binary holds — the one copy of the rule, by which the
@@ -29,7 +32,7 @@ import (
 // blobRead answers a file read: a blob by its own id, or the file a path names
 // in a commit — or, where the path names a directory or none is given of a
 // commit, the directory's listing.
-func (r *read) blobRead(ctx context.Context, objs found, at cursor) (code.GitAnswer, error) {
+func (r *read) blobRead(ctx context.Context, objs found, at cursor, m *memoRun) (code.GitAnswer, error) {
 	rev := objs.revs[r.q.Blob.Rev]
 	switch rev.peeledKind {
 	case "blob":
@@ -37,7 +40,7 @@ func (r *read) blobRead(ctx context.Context, objs found, at cursor) (code.GitAns
 			return code.GitAnswer{}, fmt.Errorf("%w: blob.path: %s names a file already; a path names a "+
 				"file in a commit", code.ErrInvalid, r.q.Blob.Rev)
 		}
-		return r.readBlob(ctx, rev.peeled, rev.peeled, "", rev.peeledSize, at)
+		return r.readBlob(ctx, rev.peeled, rev.peeled, "", rev.peeledSize, at, m)
 	case "commit", "tree":
 	default:
 		return code.GitAnswer{}, fmt.Errorf("%w: blob.rev: %s names a %s; a file read names a commit or a "+
@@ -45,7 +48,7 @@ func (r *read) blobRead(ctx context.Context, objs found, at cursor) (code.GitAns
 	}
 	switch objs.target.kind {
 	case "blob":
-		return r.readBlob(ctx, rev.peeled, objs.target.id, objs.path, objs.target.size, at)
+		return r.readBlob(ctx, rev.peeled, objs.target.id, objs.path, objs.target.size, at, m)
 	case "tree":
 		// ONE READ FOR A FILE AND A DIRECTORY: a seat that names a
 		// directory where it guessed a file is answered the listing it
@@ -53,15 +56,18 @@ func (r *read) blobRead(ctx context.Context, objs found, at cursor) (code.GitAns
 		if at.letter != 0 && at.letter != 'e' {
 			return code.GitAnswer{}, errBadCursor(r.q.Cursor, code.GitTree, widestCursor('e', 1))
 		}
-		return r.list(ctx, rev.peeled, objs.path, objs.target.id, false, at)
+		return r.list(ctx, rev.peeled, objs.path, objs.target.id, false, at, m)
 	}
 	return code.GitAnswer{}, fmt.Errorf("%w: %q names nothing in %s that holds lines (a submodule's commit is "+
 		"another repository's)", code.ErrNotABlob, objs.path, rev.peeled)
 }
 
 // readBlob is a page of the file blob — at path under rev, where a path named
-// it — of size bytes, from at.
-func (r *read) readBlob(ctx context.Context, rev, blob, path string, size int64, at cursor) (code.GitAnswer, error) {
+// it — of size bytes, from at, and, where m takes them, every page after it to
+// the end of the read's range.
+func (r *read) readBlob(ctx context.Context, rev, blob, path string, size int64, at cursor,
+	m *memoRun) (code.GitAnswer, error) {
+
 	from, fromByte := max(r.q.Blob.StartLine, 1), 0
 	switch at.letter {
 	case 0:
@@ -75,16 +81,26 @@ func (r *read) readBlob(ctx context.Context, rev, blob, path string, size int64,
 			widestCursor('b', 2))
 	}
 	p, pB64 := code.WirePath(path)
-	a := code.GitAnswer{Kind: code.GitBlob, Rev: rev, Blob: &code.BlobAnswer{Path: p, PathB64: pB64, OID: blob,
-		Size: size}}
+	page := func(pg *blobPage) code.GitAnswer {
+		a := code.GitAnswer{Kind: code.GitBlob, Rev: rev, Blob: &code.BlobAnswer{Path: p, PathB64: pB64, OID: blob,
+			Size: size}}
+		if pg.started {
+			b := a.Blob
+			b.StartLine, b.EndLine, b.StartByte = pg.startLine, pg.endLine, pg.fromByte
+			b.Text, b.Continues = string(pg.text), pg.cont
+			a.Next = formatCursor(pg.next)
+		}
+		return a
+	}
 	// THE ENVELOPE at its longest, and the text's own key: what the page's
 	// text may take is the rest.
 	envelope := code.GitAnswer{Kind: code.GitBlob, Rev: rev,
 		Next: widestCursor('b', 2), Blob: &code.BlobAnswer{Path: p, PathB64: pB64, OID: blob, Size: widest,
 			Binary: true, Lines: widest, StartLine: widest, EndLine: widest, StartByte: widest, Text: "x",
 			Continues: true}}
-	pg := &blobPage{from: from, fromByte: fromByte, to: r.q.Blob.EndLine,
-		left: r.room(envelope) + 1, line: 1}
+	room := r.room(envelope) + 1
+	pages := newBlobPages(&blobPage{from: from, fromByte: fromByte, to: r.q.Blob.EndLine, left: room, line: 1,
+		decided: true}, room, m != nil, func(pg *blobPage) { m.put(pg.begun, page(pg), pg.left) })
 
 	deadline, err := r.budget()
 	if err != nil {
@@ -92,48 +108,264 @@ func (r *read) readBlob(ctx context.Context, rev, blob, path string, size int64,
 	}
 	res, err := r.s.o.Git.Run(ctx, gitproc.Cmd{
 		Dir: r.synced.Dir, Args: []string{"cat-file", "blob", blob}, Config: r.s.o.Cache.ServeConfig(),
-		Stdout: pg, Class: gitproc.ClassRead, Deadline: deadline,
+		Stdout: pages, Class: gitproc.ClassRead, Deadline: deadline,
 	})
 	if errors.Is(err, errStop) {
 		err = nil // a binary file, decided from its opening
 	}
 	if err == nil {
-		pg.finish()
+		pages.finish()
 	}
 	narrow := fmt.Errorf("%w: reading %s did not finish in the read's %s of git: read fewer of its lines",
 		code.ErrSliceTooLarge, blob, r.s.gitBudget)
 	if err := r.failed(ctx, "read of a file", res, err, narrow); err != nil {
 		return code.GitAnswer{}, err
 	}
+	pg := pages.asked
+	a := page(pg)
 	b := a.Blob
-	if pg.binary {
+	lines := pages.lines()
+	switch {
+	case pages.binary:
 		b.Binary = true
-		return a, nil
-	}
-	b.Lines = pg.lines()
-	if !pg.started {
+	case !pg.started:
 		switch {
-		case b.Lines == 0 && from == 1 && fromByte == 0:
-			return a, nil // an empty file: nothing to read
+		case lines == 0 && from == 1 && fromByte == 0:
+			// an empty file: nothing to read
 		case at.letter != 0:
 			return code.GitAnswer{}, errBadCursor(r.q.Cursor, r.q.Kind, "a position inside the file")
+		default:
+			return code.GitAnswer{}, fmt.Errorf("%w: blob.start_line: %d is past the file's %d lines",
+				code.ErrInvalid, from, lines)
 		}
-		return code.GitAnswer{}, fmt.Errorf("%w: blob.start_line: %d is past the file's %d lines",
-			code.ErrInvalid, from, b.Lines)
 	}
-	b.StartLine, b.EndLine, b.StartByte = pg.startLine, pg.endLine, fromByte
-	b.Text, b.Continues = string(pg.text), pg.cont
-	a.Next = formatCursor(pg.next)
+	if pages.binary {
+		// A binary file is answered by its size alone: what of its lines the
+		// opening held is no count of the file's.
+		lines = 0
+	}
+	m.put(at, a, pg.left)
+	m.place(code.GitBlob, same(memoTail{lines: lines}))
+	b.Lines = lines
 	return a, nil
+}
+
+// blobPages is a Cmd.Stdout cutting a file read's pages out of the stream:
+// the page asked for, and — where more is set — every page after it to the
+// end of the read's range, each a blobPage of its own, begun where the last
+// one's next cursor names and fed the bytes of the line it begins in from
+// there (lineBuf), so every page is exactly the page a read from its cursor
+// would cut, and each is handed to page as it is cut. It decides binary
+// itself, git's test on the file's opening, and counts the whole file's lines
+// whatever the pages do.
+type blobPages struct {
+	room  int
+	more  bool
+	page  func(pg *blobPage)
+	asked *blobPage
+	// cur is the page being cut — the asked one first — and nil once none is.
+	cur *blobPage
+
+	// sniff holds the file's opening until binary is decided.
+	sniff   []byte
+	decided bool
+	binary  bool
+
+	// line and col are where the next byte is; newlines, bytes and last
+	// count the file.
+	line, col int
+	newlines  int
+	bytes     int64
+	last      byte
+
+	// lineBuf is the current line's bytes from bufCol on — never any before
+	// the asked page begins, nor before the page being cut began in it — kept
+	// while a page past the asked one may begin inside it.
+	lineBuf []byte
+	bufCol  int
+}
+
+// newBlobPages is the pages of a read whose asked page is asked, each cut
+// against room; more, every page after it too, each handed to page.
+func newBlobPages(asked *blobPage, room int, more bool, page func(pg *blobPage)) *blobPages {
+	return &blobPages{room: room, more: more, page: page, asked: asked, cur: asked, line: 1}
+}
+
+func (w *blobPages) Write(p []byte) (int, error) {
+	n := len(p)
+	w.bytes += int64(n)
+	if n > 0 {
+		w.last = p[n-1]
+	}
+	if !w.decided {
+		take := min(len(p), codeindex.BinaryProbeBytes-len(w.sniff))
+		w.sniff = append(w.sniff, p[:take]...)
+		p = p[take:]
+		if len(w.sniff) < codeindex.BinaryProbeBytes {
+			return n, nil
+		}
+		if w.decide() {
+			return n, errStop
+		}
+	}
+	w.feed(p)
+	return n, nil
+}
+
+// decide calls the file binary or feeds its opening: true for binary, whose
+// stream is ended there.
+func (w *blobPages) decide() bool {
+	w.decided = true
+	if codeindex.Binary(w.sniff) {
+		w.binary = true
+		return true
+	}
+	w.feed(w.sniff)
+	w.sniff = nil
+	return false
+}
+
+// finish ends the stream: a file shorter than the probe is decided now, and
+// the last line with no newline settled — on every page it ends, since a
+// last line too long for one is cut into pieces as any is — and the page past
+// the asked one that the file's end ended, with room to spare, handed on.
+func (w *blobPages) finish() {
+	if !w.decided && w.decide() {
+		return
+	}
+	if w.cur == nil {
+		return
+	}
+	w.cur.finish()
+	w.chain(false, true)
+	if p := w.cur; p != nil && p != w.asked && p.started {
+		w.page(p)
+	}
+}
+
+// lines is how many lines the file has: its newlines, and one more for a
+// last line without one.
+func (w *blobPages) lines() int {
+	if w.bytes > 0 && w.last != '\n' {
+		return w.newlines + 1
+	}
+	return w.newlines
+}
+
+// feed takes p's bytes, a line's segment and its newline at a time, so the
+// page being cut is told of each line's end as the line it ends is the one
+// in hand.
+func (w *blobPages) feed(p []byte) {
+	for len(p) > 0 {
+		i := bytes.IndexByte(p, '\n')
+		if i < 0 {
+			w.segment(p)
+			return
+		}
+		w.segment(p[:i])
+		w.newline()
+		p = p[i+1:]
+	}
+}
+
+// newlineByte is a line's end, as a page is fed one.
+var newlineByte = []byte{'\n'}
+
+// segment takes seg, bytes of the current line from col on, none a newline.
+func (w *blobPages) segment(seg []byte) {
+	if len(seg) == 0 {
+		return
+	}
+	if w.cur != nil {
+		if w.more {
+			w.buffer(seg)
+		}
+		w.cur.feed(seg)
+	}
+	w.col += len(seg)
+	w.chain(false, false)
+}
+
+// newline takes the current line's end.
+func (w *blobPages) newline() {
+	w.newlines++
+	if w.cur != nil {
+		w.cur.feed(newlineByte)
+		w.chain(true, false)
+	}
+	w.line, w.col = w.line+1, 0
+	w.lineBuf, w.bufCol = w.lineBuf[:0], 0
+}
+
+// buffer keeps seg, bytes of the current line at col, from where the asked
+// page begins on.
+func (w *blobPages) buffer(seg []byte) {
+	at := w.col
+	if a := w.asked; !a.started {
+		if w.line != a.from {
+			return
+		}
+		if skip := a.fromByte - at; skip > 0 {
+			if skip >= len(seg) {
+				return
+			}
+			seg, at = seg[skip:], at+skip
+		}
+	}
+	if len(w.lineBuf) == 0 {
+		w.bufCol = at
+	}
+	w.lineBuf = append(w.lineBuf, seg...)
+}
+
+// chain hands on every page the stream has just ended — at a line it could
+// not take whole, at a piece of one too long for any page, or at its range's
+// end — and begins the next where its cursor names, while pages past the
+// asked one are cut: fed the current line's bytes from where it begins, the
+// newline that just ended the line where one did (nl), and the stream's end
+// where it has come (eof) — each of which may end it too.
+func (w *blobPages) chain(nl, eof bool) {
+	for w.cur != nil && w.cur.done {
+		done := w.cur
+		if done != w.asked {
+			w.page(done)
+		}
+		if !w.more || done.next.letter == 0 {
+			w.cur = nil // the range's end, or no page past the asked one wanted
+			return
+		}
+		start := done.next.b // a whole line's page begins at its byte 0
+		if len(w.lineBuf) > 0 && start > w.bufCol {
+			w.lineBuf, w.bufCol = w.lineBuf[start-w.bufCol:], start
+		}
+		col := w.bufCol
+		if len(w.lineBuf) == 0 {
+			col = w.col
+		}
+		next := &blobPage{from: done.next.a, fromByte: start, to: w.asked.to, left: w.room, line: w.line,
+			col: col, decided: true, begun: done.next}
+		w.cur = next
+		if len(w.lineBuf) > 0 {
+			next.feed(w.lineBuf)
+		}
+		if nl {
+			next.feed(newlineByte)
+		}
+		if eof {
+			next.finish()
+		}
+	}
 }
 
 // blobPage is a Cmd.Stdout cutting one page of a file's lines out of its
 // stream and counting the rest: the window from byte fromByte of line from to
 // the end of line to (0: the file's end), while the page's text costs at most
-// left.
+// left. A page past the one a read asked for is begun by blobPages at the
+// cursor the page before it names (begun), fed from there.
 type blobPage struct {
 	from, fromByte, to int
 	left               int
+	begun              cursor
 
 	// sniff holds the file's opening until binary is decided.
 	sniff   []byte

@@ -4,8 +4,9 @@
 // landed it — real git over a PINNED incarnation of the node's own cache
 // (internal/code/cache), in the READ lane, every answer one page of at most
 // code.MaxGitAnswerBytes of JSON with a cursor where the next begins. It runs
-// on git nodes, holds no goroutine of its own, and writes nothing: a read's
-// processes run on its caller's goroutine and end with its context.
+// on git nodes, holds no goroutine of its own, and writes nothing itself — the
+// memo its reads fill is the cache's write: a read's processes run on its
+// caller's goroutine and end with its context.
 //
 // # Which push, from the copy's index
 //
@@ -155,9 +156,19 @@
 // alone, so a cursor one node issued is sound on any other: a listing's n-th
 // entry, a stat's n-th file, a file's line or the byte inside an overlong one,
 // a patch's byte. A listing's Total, a file's Lines and a diff's totals are the
-// whole answer's on every page. A page past the first runs its git again: git
-// cannot seek inside an object or a listing, so the fiftieth page of a file is
-// a read of everything before it.
+// whole answer's on every page.
+//
+// # The memo
+//
+// Every page a read's git cuts is kept in the pinned copy's memo (the cache's,
+// cache.MemoBatch), keyed by everything it is a function of, and a read that
+// asks for a page already cut is answered from it with no git run (memo.go):
+// asked as soon as the grant is judged for a read naming whole ids, before any
+// git runs, since an entry is in a copy's memo only where a read of that copy
+// found its objects there. git cannot seek inside an object or a listing, so
+// the fiftieth page of a file is a read of everything before it: the run that
+// misses cuts every page from the one asked to its answer's end and memoizes
+// each, so reading a file page by page streams it once.
 //
 // # Measured
 //
@@ -189,6 +200,22 @@
 // grows is a listing with its tree, a stat with the files it counts and a
 // comparison with the history it walks; and code.GitShareWait keeps its
 // two-second floor.
+//
+// THE MEMO, over the rig as it stood before the wide tree — gittest.History's
+// 44 files over 14 080 commits and the 3 MB file, whose tree kinds listed 2
+// and 45 entries, one page each — ten reads of each kind and arm (-benchtime
+// 10x, one count, the warm, miss and memo arms alone), git 2.56.0 on two
+// cores of the same machine: a read the memo
+// misses (cache=miss) costs what the read with no memo (cache=warm) does
+// within half a millisecond, but for a file's pages, since it cuts every page
+// to the file's end: the first 24.7 ms (p95 28.1), all 55 of them, against
+// 6.9 with no memo, and the fiftieth 10.3 ms (11.1). A hit (cache=memo) takes
+// 16 µs for the root's listing, 22 for the whole tree's first page, 50 and 56
+// for the file's first and fiftieth, 27 for the stat, 20 for the patch and 33
+// for the comparison: 131 to 1 573 times faster than the miss and 131 to
+// 1 559 than the read with no memo, every kind past the ten times the memo's
+// premise asks, since a hit is one file's read and its decode where a miss is
+// at least one git process.
 //
 // BenchmarkLandedIn over gittest.History's same 32 MB composition (14 080
 // commits, nothing on top) with a branch moved through it 2 000 times by

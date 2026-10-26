@@ -279,6 +279,7 @@ func (c *Cache) persist(ctx context.Context, e *entry, inc *incarnation, round b
 	e.mu.Lock()
 	st := inc.stateValue(e.id)
 	e.mu.Unlock()
+	memo := st.Derived[DerivedMemo].Bytes
 
 	raw, err := json.Marshal(st)
 	if err != nil {
@@ -305,6 +306,7 @@ func (c *Cache) persist(ctx context.Context, e *entry, inc *incarnation, round b
 	}
 	e.mu.Lock()
 	inc.state = &st
+	inc.memoStated = memo
 	e.mu.Unlock()
 	return nil
 }

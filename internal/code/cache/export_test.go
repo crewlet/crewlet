@@ -1351,3 +1351,49 @@ func DrawnOID(name string) string {
 	sum := sha1.Sum([]byte(name))
 	return hex.EncodeToString(sum[:])
 }
+
+// MemoBytes is what the memo holds node-wide: the running total the janitor
+// holds to its share (MemoShare).
+func MemoBytes(c *Cache) int64 { return c.memoBytes.Load() }
+
+// MemoState is what repoID's current incarnation records of its memo and what
+// this process's index of it holds.
+type MemoState struct {
+	// Bytes is its record's, and Recorded whether it records one at all.
+	Bytes    int64
+	Recorded bool
+	// Indexed is whether this process has touched the memo (read or written
+	// it), Listed whether its index holds every entry on disk, and Entries
+	// how many the index holds; Stated is the bytes its state last recorded.
+	Indexed, Listed bool
+	Entries         int
+	Stated          int64
+}
+
+// MemoOf is repoID's current incarnation's memo, as MemoState says, and false
+// where the cache holds no copy of it.
+func MemoOf(c *Cache, repoID string) (MemoState, bool) {
+	e := lookup(c, repoID)
+	if e == nil {
+		return MemoState{}, false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	inc := e.current
+	if inc == nil {
+		return MemoState{}, false
+	}
+	d, recorded := inc.derived[DerivedMemo]
+	s := MemoState{Bytes: d.Bytes, Recorded: recorded, Stated: inc.memoStated}
+	if idx := inc.memo; idx != nil {
+		s.Indexed, s.Listed, s.Entries = true, idx.listed, len(idx.entries)
+	}
+	return s, true
+}
+
+// MemoTree is the memo's tree in the incarnation at dir.
+func MemoTree(dir string) string { return filepath.Join(dir, memoRel) }
+
+// MemoEntryBytes is the volume an entry whose body and tail are n bytes takes,
+// as the memo counts it.
+func MemoEntryBytes(n int) int64 { return memoBytesOf(int64(memoHeader + n)) }

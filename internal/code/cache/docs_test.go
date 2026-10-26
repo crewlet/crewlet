@@ -24,7 +24,7 @@ import (
 // declaration cannot land it without the page, and a row whose declaration
 // went fails here.
 //
-// Mutation: add a row for `memo` to the page, and it names a derived file the
+// Mutation: add a row for `layers` to the page, and it names a derived file the
 // cache does not declare; drop `.bitmap` from midx's Owns, and the row's files
 // are not what the declaration owns.
 func TestTheConceptPageNamesEveryDerivedFile(t *testing.T) {
@@ -143,6 +143,7 @@ var derivedTriggers = map[cache.Trigger]string{
 	cache.TriggerRound:      "a sync, before it answers",
 	cache.TriggerMaintainer: "the background indexing",
 	cache.TriggerBackfill:   "the backfill",
+	cache.TriggerRead:       "a seat's read by object id",
 }
 
 // derivedWritesCell is the writes cell d's Writes spell: each trigger in the

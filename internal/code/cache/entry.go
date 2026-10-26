@@ -354,6 +354,23 @@ type incarnation struct {
 	historyGone bool
 	provGen     uint64
 	provNext    uint64
+	// THE MEMO'S IN-MEMORY HALF (memo.go). memo is its index — every entry
+	// this process knows, each one's bytes and last use — made at the first
+	// read or write of the memo in this process and nil before it, which is
+	// what makes a copy's memo one the janitor trims WHOLE; memoMu is the
+	// memo's own lock, under which an answer is placed into its tree and the
+	// tree, or an entry, is taken out — never held across anything but those
+	// renames, and never with entry.mu, which it is taken before; memoStated
+	// is the memo's bytes as the state last written records them, which the
+	// janitor writes again once they move (Cache.stateMemos). memoGen counts
+	// the memo's drops in this process, so a batch begun before one places
+	// nothing after it, and memoShut is a memo dropped whose round has not
+	// yet made the change it answered visible (dropMemo, reopenMemo).
+	memo       *memoIndex
+	memoMu     sync.Mutex
+	memoStated int64
+	memoGen    uint64
+	memoShut   bool
 	// written is when this process last changed each declaration's files —
 	// a write that moved a file's identity, the round's own index, or a drop
 	// — a time.Now() reading compared on the monotonic clock with a report's
@@ -661,6 +678,11 @@ func (c *Cache) setDerived(inc *incarnation, name DerivedName, d derivedState, p
 	}
 	if !inc.discarded {
 		c.heldBytes.Add(d.Bytes - was)
+		if name == DerivedMemo {
+			// The memo's own running total beside the cache's: what its share
+			// is held to (MemoShare), with no walk of the node's copies.
+			c.memoBytes.Add(d.Bytes - was)
+		}
 	}
 	inc.metaBytes += d.Bytes - was
 }
@@ -691,11 +713,28 @@ func (c *Cache) made(inc *incarnation, name DerivedName, covers int, step Step) 
 // counted from the measure, never read as made. Reset by the main-file rule, it
 // was wiped — its coverage and its runs forgotten — after every round's index
 // and every maintenance run (TestAMaintenanceRunKeepsTheProvenanceState).
+//
+// A TREE'S BYTES ARE ITS WRITER'S RUNNING TOTAL (Owned.Tree): a measure stats
+// nothing inside it, nor the directory, whose inode's few KiB would stand for a
+// memo of gigabytes — written into the record after every round's index and
+// every maintenance run, it overwrote what the memo counted with that
+// (TestTheHeldBytesCountTheMemo). So a measure leaves a tree's record as its
+// writer left it, and a tree with no record — a copy whose state named none, a
+// previous process's — is given one for the janitor to count by listing it
+// (memo.go's foundMemo). Nor does a measure that found no tree take the record
+// away: the measure is made before its record is read, outside the entry's
+// lock, and an answer placed between the two is in a tree the measure did not
+// see.
 func (c *Cache) recordDerived(inc *incarnation, m derivedMeasure) {
 	c.image.each(c.image.all(), func(i int, d *Derived) {
 		bytes, present := m.bytes[d.Name]
 		s := inc.derived[d.Name]
 		switch {
+		case d.tree():
+			if _, recorded := inc.derived[d.Name]; present && !recorded {
+				c.foundMemo(inc)
+			}
+			return
 		case !d.hasMain() && s.Step != "":
 			return
 		case !d.hasMain(), m.mains&(1<<i) == 0:
@@ -723,6 +762,7 @@ func (c *Cache) discard(inc *incarnation) string {
 	}
 	inc.discarded = true
 	c.heldBytes.Add(-(inc.diskBytes + inc.metaBytes))
+	c.memoBytes.Add(-inc.derived[DerivedMemo].Bytes)
 	// No reader holds it, so every run of its index mapped goes now.
 	c.forgetRuns(inc)
 	return inc.dir

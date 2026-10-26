@@ -69,6 +69,12 @@ func TestEveryDerivedFileIsDeclared(t *testing.T) {
 			{rel: "crewlet/provenance.17", owner: cache.DerivedProvenance},
 			{rel: "crewlet/provenance"}, {rel: "crewlet/provenance.0"}, {rel: "crewlet/provenance.017"},
 			{rel: "objects/info/provenance.1"},
+			// The memo's tree, which it owns whole: an entry inside it is no
+			// pattern's — the tree is the declaration's — and a name beside
+			// it, or the tree's name under objects/, is none of its.
+			{rel: "crewlet/memo", owner: cache.DerivedMemo},
+			{rel: "crewlet/memo/" + strings.Repeat("ab", 32)}, {rel: "crewlet/memo.1"},
+			{rel: "objects/info/memo"},
 			// The image's fixed files, a pack's own, and names beside the
 			// declared ones that no write of this build makes: a split
 			// graph's chain, an incremental index's chain, an alternates
@@ -138,9 +144,9 @@ func TestEveryDerivedFileIsDeclared(t *testing.T) {
 			t.Fatalf("the maintainer left a bitmap (%t) and a graph (%t); the case needs both written", bitmap, graph)
 		}
 		// And the cache's own: a delta folding a push into the index of
-		// pushes writes its run.
+		// pushes writes its run, and a read's run memoizes its answer.
 		w.push(t, repo, "refs/heads/main", nil)
-		w.sync(t, c, repo)
+		memoize(t, c, w.sync(t, c, repo), memoKeys("declared", 1))
 		maintained := derivedOnDisk(t, s.Dir)
 		t.Logf("the suite's git and the cache wrote, of the derived files: %v after the round, %v after the "+
 			"maintainer and a delta", roundWrote, maintained)
@@ -176,7 +182,9 @@ func oneName(name cache.DerivedName) []cache.DerivedName {
 // derivedOnDisk is every file under the incarnation at dir's objects/ that is
 // no pack's own file, and every file under its crewlet/ — the two roots the
 // declarations own files in — by its path relative to dir, slash-separated,
-// sorted. A copy that has not yet written into crewlet/ has none.
+// sorted; a directory a declaration owns whole (the memo's tree) is one entry,
+// its own files its declaration's to keep. A copy that has not yet written
+// into crewlet/ has none.
 func derivedOnDisk(t *testing.T, dir string) []string {
 	t.Helper()
 	pack := regexp.MustCompile(`^pack-[0-9a-f]{40}\.(pack|idx|rev)$`)
@@ -186,12 +194,25 @@ func derivedOnDisk(t *testing.T, dir string) []string {
 			if errors.Is(err, fs.ErrNotExist) && p == filepath.Join(dir, root) {
 				return fs.SkipDir
 			}
-			if err != nil || d.IsDir() || pack.MatchString(d.Name()) {
+			if err != nil {
 				return err
 			}
 			rel, err := filepath.Rel(dir, p)
-			out = append(out, filepath.ToSlash(rel))
-			return err
+			if err != nil {
+				return err
+			}
+			rel = filepath.ToSlash(rel)
+			if d.IsDir() {
+				if len(cache.OwnersOf(rel)) > 0 {
+					out = append(out, rel)
+					return fs.SkipDir
+				}
+				return nil
+			}
+			if !pack.MatchString(d.Name()) {
+				out = append(out, rel)
+			}
+			return nil
 		})
 		if err != nil {
 			t.Fatal(err)

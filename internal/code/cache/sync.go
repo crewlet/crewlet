@@ -1477,6 +1477,10 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 			return res, fmt.Errorf("cache: sync %s: sweep: %w", e.id, err)
 		}
 		res.trashed = res.trashed || trashed
+		// Every pack the copy holds is the snapshot's now, so every object a
+		// read can meet is the history this round read: a memo its history's
+		// drop shut takes answers again (memo.go).
+		c.reopenMemo(e, inc)
 		retired = c.indexFull(e, inc, snap)
 	} else {
 		provenanceWrote, retired = c.foldPushes(ctx, e, inc, snap)

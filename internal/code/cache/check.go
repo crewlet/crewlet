@@ -351,7 +351,10 @@ func checksumBytes(cs string) []byte {
 // what it is hashed against. A Check no case here reads is refused: Validate
 // admits only the Checks this build knows, so a reader not taught one a
 // declaration names is this build's bug, never a file to hold to a trailer it
-// may not carry.
+// may not carry. A Check the check and the scrub do not hash at all
+// (Check.hashed: the memo's, whose every read holds an entry) is passed over by
+// every caller before it asks (heldFiles, Verify's checkDerived), and refused
+// here like one this build does not know.
 func (f ownedFile) held() (checkedFile, expect, error) {
 	cf := checkedFile{kind: fileKind(f.as.File), rel: f.rel}
 	switch f.of.Check {
@@ -375,10 +378,14 @@ func (f ownedFile) held() (checkedFile, expect, error) {
 }
 
 // heldFiles is every derived file of files as a check and the scrub hold it
-// (held), with what each is hashed against added to wants.
+// (held), with what each is hashed against added to wants — passing over a
+// file whose declaration's Check no hash holds (Check.hashed).
 func heldFiles(files []ownedFile, wants map[string]expect) ([]checkedFile, error) {
 	out := make([]checkedFile, 0, len(files))
 	for _, f := range files {
+		if !f.of.Check.hashed() {
+			continue
+		}
 		cf, want, err := f.held()
 		if err != nil {
 			return nil, err

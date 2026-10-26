@@ -57,8 +57,9 @@ import (
 // a line longer than a page is refused naming the narrowing (the file's own
 // lines), never cut.
 
-// diffRead answers a diff read: a page of its stat, or of one file's patch.
-func (r *read) diffRead(ctx context.Context, objs found, at cursor) (code.GitAnswer, error) {
+// diffRead answers a diff read: a page of its stat, or of one file's patch —
+// and, where m takes them, every page of either after it.
+func (r *read) diffRead(ctx context.Context, objs found, at cursor, m *memoRun) (code.GitAnswer, error) {
 	q := r.q.Diff
 	base, head := objs.revs[q.Base], objs.revs[q.Head]
 	for _, side := range []struct {
@@ -71,15 +72,22 @@ func (r *read) diffRead(ctx context.Context, objs found, at cursor) (code.GitAns
 		}
 	}
 	if file, _ := code.GitPath("diff.file", q.File, q.FileB64, true); file != "" {
-		return r.patchRead(ctx, base.peeled, head.peeled, file, q.Renames, at)
+		return r.patchRead(ctx, base.peeled, head.peeled, file, q.Renames, at, m)
 	}
-	a := code.GitAnswer{Kind: code.GitDiff, Diff: &code.DiffAnswer{Base: base.peeled, Head: head.peeled,
-		Files: []code.DiffFile{}}}
+	page := func(files []code.DiffFile, next cursor) code.GitAnswer {
+		return code.GitAnswer{Kind: code.GitDiff, Next: formatCursor(next),
+			Diff: &code.DiffAnswer{Base: base.peeled, Head: head.peeled, Files: files}}
+	}
 	envelope := code.GitAnswer{Kind: code.GitDiff, Next: widestCursor('f', 1),
 		Diff: &code.DiffAnswer{Base: base.peeled, Head: head.peeled, Files: []code.DiffFile{}, Total: widest,
 			Added: widest, Deleted: widest}}
-	st, err := r.stat(ctx, base.peeled, head.peeled, q.Paths, q.Renames, at.a, r.room(envelope),
-		"name paths, or diff commits closer together")
+	room := r.room(envelope)
+	var sp *statPages
+	if m != nil {
+		sp = &statPages{m: m, room: room, at: at, page: page}
+	}
+	st, err := r.stat(ctx, base.peeled, head.peeled, q.Paths, q.Renames, at.a, room,
+		"name paths, or diff commits closer together", sp)
 	if err != nil {
 		return code.GitAnswer{}, err
 	}
@@ -87,26 +95,137 @@ func (r *read) diffRead(ctx context.Context, objs found, at cursor) (code.GitAns
 		return code.GitAnswer{}, errBadCursor(r.q.Cursor, r.q.Kind, fmt.Sprintf("a file before the %d the "+
 			"diff changes", st.total))
 	}
-	a.Diff.Files, a.Diff.Total, a.Diff.Added, a.Diff.Deleted = st.files, st.total, st.added, st.deleted
-	a.Next = formatCursor(st.next)
+	a := page(st.files, st.next)
+	a.Diff.Total, a.Diff.Added, a.Diff.Deleted = st.total, st.added, st.deleted
+	if sp != nil {
+		m.place(code.GitDiff, func(i int) memoTail {
+			return memoTail{total: st.total, added: st.added, deleted: st.deleted, files: sp.counts[i]}
+		})
+	}
 	return a, nil
 }
 
-// statPage is a page of a stat, and the totals of the whole of it.
+// statPage is a page of a stat, the totals of the whole of it, and what its
+// files left of the room it was cut against.
 type statPage struct {
 	files                 []code.DiffFile
 	total, added, deleted int
 	next                  cursor
+	left                  int
+}
+
+// statPages is the pages of a diff's stat its run memoizes: the asked one,
+// staged as soon as the raw half has decided it, and every one after it, cut
+// as the raw half reads their files and staged as each fills — with no counts,
+// which follow every file — and every page's files' counts, filed as the
+// numstat half reads them, for each page's tail. What it holds is a page of
+// files and a few bytes of counts a file.
+type statPages struct {
+	m    *memoRun
+	room int
+	// at is the asked page's cursor, and page the answer a page of files is.
+	at   cursor
+	page func(files []code.DiffFile, next cursor) code.GitAnswer
+	// The page being cut past the asked one: its files, the ordinal (among
+	// the files the filter admits) of its first, what its files left of the
+	// room, and whether a page is being cut at all — none once one file is
+	// wider than a page alone, which a read asking from it is refused.
+	files   []code.DiffFile
+	first   int
+	left    int
+	cutting bool
+	// bounds is every staged page's first ordinal, the asked page's first,
+	// and limit the ordinal past the last staged page's last file; counts
+	// is each staged page's files' counts, in its files' order, filed by
+	// the numstat half (k the page it files into).
+	bounds []int
+	limit  int
+	counts [][]fileCounts
+	k      int
+}
+
+// asked stages the asked page, of files from the start-th, ending before
+// next, its files leaving left of the room.
+func (sp *statPages) asked(files []code.DiffFile, start int, next cursor, left int) {
+	sp.m.put(sp.at, sp.page(files, next), left)
+	sp.bounds, sp.counts, sp.limit = append(sp.bounds, start), append(sp.counts, nil), maxInt
+	if next.letter != 0 {
+		sp.limit = next.a
+	}
+}
+
+// begin begins a page past the asked one at the ordinal-th file, f.
+func (sp *statPages) begin(ordinal int, f code.DiffFile) {
+	cost := jsonLen(widestFile(f))
+	if cost > sp.room {
+		sp.cutting = false
+		return
+	}
+	sp.files, sp.first, sp.left, sp.cutting = []code.DiffFile{f}, ordinal, sp.room-cost, true
+}
+
+// take places the ordinal-th file, f, on the page being cut, or ends that
+// page before it and begins the next with it.
+func (sp *statPages) take(ordinal int, f code.DiffFile) {
+	if !sp.cutting {
+		return
+	}
+	if cost := jsonLen(widestFile(f)) + 1; cost <= sp.left {
+		sp.files, sp.left = append(sp.files, f), sp.left-cost
+		return
+	}
+	sp.end(cursor{letter: 'f', a: ordinal})
+	sp.begin(ordinal, f)
+}
+
+// end stages the page being cut, ending before next (none past the stat's
+// end).
+func (sp *statPages) end(next cursor) {
+	sp.m.put(cursor{letter: 'f', a: sp.first}, sp.page(sp.files, next), sp.left)
+	sp.bounds, sp.counts = append(sp.bounds, sp.first), append(sp.counts, nil)
+	sp.limit = maxInt
+	if next.letter != 0 {
+		sp.limit = next.a
+	}
+}
+
+// finish stages the last page being cut, which the stat's end ends.
+func (sp *statPages) finish() {
+	if sp.cutting {
+		sp.end(cursor{})
+		sp.cutting = false
+	}
+}
+
+// count files the ordinal-th file's counts under the staged page it is on.
+func (sp *statPages) count(ordinal int, c fileCounts) {
+	if len(sp.bounds) == 0 || ordinal < sp.bounds[0] || ordinal >= sp.limit {
+		return
+	}
+	for sp.k+1 < len(sp.bounds) && ordinal >= sp.bounds[sp.k+1] {
+		sp.k++
+	}
+	sp.counts[sp.k] = append(sp.counts[sp.k], c)
+}
+
+// widestFile is f as a page costs it before its counts are read: its counts
+// and binary flag at their widest, so where a page ends never depends on a
+// count not yet read.
+func widestFile(f code.DiffFile) code.DiffFile {
+	f.Added, f.Deleted, f.Binary = widest, widest, true
+	return f
 }
 
 // stat is the page of base..head's stat that starts at the start-th file paths
 // admits, whose files may take left bytes, and the totals over every file
-// paths admits. narrowing is what a stat naming no paths, whose one diff-tree
-// the deadline ended, tells its asker to do instead — naming paths among it,
+// paths admits — and, where sp is set, every page after it, each staged as it
+// is cut. narrowing is what a stat naming no paths, whose one diff-tree the
+// deadline ended, tells its asker to do instead — naming paths among it,
 // since a stat that names them counts the files they admit and no other.
 func (r *read) stat(ctx context.Context, base, head string, paths []string, renames bool, start, left int,
-	narrowing string) (statPage, error) {
-	p := &statParser{filter: paths, start: start, left: left, keep: len(paths) > 0}
+	narrowing string, sp *statPages) (statPage, error) {
+
+	p := &statParser{filter: paths, start: start, left: left, keep: len(paths) > 0, pages: sp}
 	recs := newRecords(0, gitproc.MaxLine+code.MaxGitPathBytes, p.record)
 	tail := []string{base, head}
 	if renames {
@@ -162,7 +281,8 @@ func (r *read) stat(ctx context.Context, base, head string, paths []string, rena
 	if files == nil {
 		files = []code.DiffFile{}
 	}
-	return statPage{files: files, total: p.matched, added: p.added, deleted: p.deleted, next: p.next}, nil
+	return statPage{files: files, total: p.matched, added: p.added, deleted: p.deleted, next: p.next,
+		left: p.left}, nil
 }
 
 // count is a filtered stat's numstat half: the lines of every file p
@@ -216,14 +336,40 @@ type statParser struct {
 	next     cursor
 	tooLarge error
 
-	// The numstat half: whether it has begun, the record it is at, a
-	// rename's counts while its two paths are read, and the totals.
+	// The numstat half: whether it has begun, the record it is at — the
+	// j-th record the j-th file admitted, so j is also that file's ordinal
+	// among them — a rename's counts while its two paths are read, and the
+	// totals.
 	numstat        bool
 	j              int
 	nsNeed         int
 	nsAdded, nsDel int
 	nsBinary       bool
 	added, deleted int
+
+	// pages is the pages past the asked one the run memoizes, nil for none;
+	// decided whether the raw half has ended, which decides the asked page.
+	pages   *statPages
+	decided bool
+}
+
+// rawEnded is the raw half's end — at the numstat half's first record where
+// one diff-tree writes both halves, and otherwise at the raw records' end
+// (end): a filtered stat's walk, whose numstat diff-pairs writes after it, or
+// a stat of no file. The asked page is decided there, and so is the last page
+// past it.
+func (p *statParser) rawEnded() {
+	if p.decided {
+		return
+	}
+	p.decided = true
+	switch {
+	case p.pages == nil:
+	case p.full:
+		p.pages.finish()
+	default:
+		p.pages.asked(p.files, p.start, p.next, p.left)
+	}
 }
 
 // rawEntry is one raw record: ":<old mode> <new mode> <old id> <new id> <status>",
@@ -263,7 +409,10 @@ func (p *statParser) record(rec []byte, long bool) error {
 	default:
 		// THE NUMSTAT HALF has begun: "<added>\t<deleted>\t<path>", or a
 		// rename's "<added>\t<deleted>\t" before its two paths.
-		p.numstat = true
+		if !p.numstat {
+			p.numstat = true
+			p.rawEnded()
+		}
 		parts := strings.SplitN(string(rec), "\t", 3)
 		if len(parts) != 3 {
 			return fmt.Errorf("query: git answered %q, which is no numstat record", truncated(rec))
@@ -375,13 +524,15 @@ func (p *statParser) took() {
 	if p.keep {
 		p.pairs.Write(p.entry.raw())
 	}
-	if m < p.start || p.full {
+	if m < p.start || (p.full && p.pages == nil) {
 		return
 	}
 	f := p.entry.file()
-	widestFile := f
-	widestFile.Added, widestFile.Deleted, widestFile.Binary = widest, widest, true
-	cost := jsonLen(widestFile)
+	if p.full {
+		p.pages.take(m, f)
+		return
+	}
+	cost := jsonLen(widestFile(f))
 	if len(p.files) > 0 {
 		cost++
 	}
@@ -394,6 +545,10 @@ func (p *statParser) took() {
 	default:
 		p.full = true
 		p.next = cursor{letter: 'f', a: m}
+		if p.pages != nil {
+			p.pages.asked(p.files, p.start, p.next, p.left)
+			p.pages.begin(m, f)
+		}
 	}
 }
 
@@ -406,24 +561,29 @@ func (p *statParser) counted() error {
 	if j >= p.matched {
 		return fmt.Errorf("query: git answered more numstat records than the %d files the diff admits", p.matched)
 	}
-	if !p.nsBinary {
-		p.added += p.nsAdded
-		p.deleted += p.nsDel
+	c := fileCounts{added: p.nsAdded, deleted: p.nsDel, binary: p.nsBinary}
+	if c.binary {
+		c.added, c.deleted = 0, 0
 	}
+	p.added += c.added
+	p.deleted += c.deleted
 	if slot := j - p.start; slot >= 0 && slot < len(p.files) {
 		f := &p.files[slot]
-		f.Added, f.Deleted, f.Binary = p.nsAdded, p.nsDel, p.nsBinary
-		if p.nsBinary {
-			f.Added, f.Deleted = 0, 0
-		}
+		f.Added, f.Deleted, f.Binary = c.added, c.deleted, c.binary
+	}
+	if p.pages != nil {
+		p.pages.count(j, c)
 	}
 	return nil
 }
 
 // end checks git's records ended where a record does — no raw record still
 // waiting on its paths — and, once the numstat half is read (counted), that
-// it counted every admitted file, once.
+// it counted every admitted file, once. The raw records' end is where the
+// asked page and the last page past it are decided (rawEnded), whichever
+// process wrote them.
 func (p *statParser) end(counted bool) error {
+	p.rawEnded()
 	switch {
 	case p.need > 0:
 		return errors.New("query: git's raw records ended before the paths of the last of them")
@@ -436,7 +596,9 @@ func (p *statParser) end(counted bool) error {
 
 // patchRead answers one file's patch: base..head's change to file, a page from
 // the byte at.
-func (r *read) patchRead(ctx context.Context, base, head, file string, renames bool, at cursor) (code.GitAnswer, error) {
+func (r *read) patchRead(ctx context.Context, base, head, file string, renames bool, at cursor,
+	m *memoRun) (code.GitAnswer, error) {
+
 	a := code.GitAnswer{Kind: code.GitDiff, Diff: &code.DiffAnswer{Base: base, Head: head, Files: []code.DiffFile{}}}
 	e, ok, err := r.findFile(ctx, base, head, file, renames)
 	if err != nil {
@@ -449,20 +611,28 @@ func (r *read) patchRead(ctx context.Context, base, head, file string, renames b
 		if at.letter != 0 {
 			return code.GitAnswer{}, errBadCursor(r.q.Cursor, r.q.Kind, "a byte of a patch")
 		}
+		m.put(at, a, r.room(a))
+		m.place(code.GitDiff, same(memoTail{}))
 		return a, nil
 	}
 	f := e.file()
+	// page is a page of the patch as the memo keeps it: the file's counts are
+	// its tail's, read once the whole patch is.
+	page := func(pg *patchPage) code.GitAnswer {
+		return code.GitAnswer{Kind: code.GitDiff, Next: formatCursor(pg.next), Diff: &code.DiffAnswer{Base: base,
+			Head: head, Files: []code.DiffFile{e.file()}, Patch: string(pg.text)}}
+	}
 	envelope := code.GitAnswer{Kind: code.GitDiff, Next: widestCursor('p', 1),
-		Diff: &code.DiffAnswer{Base: base, Head: head, Files: []code.DiffFile{func() code.DiffFile {
-			w := f
-			w.Added, w.Deleted, w.Binary = widest, widest, true
-			return w
-		}()}, Total: widest, Added: widest, Deleted: widest, Patch: "x"}}
-	pg := &patchPage{from: at.a, left: r.room(envelope) + 1}
-	if err := r.patch(ctx, base, head, e, pg); err != nil {
+		Diff: &code.DiffAnswer{Base: base, Head: head, Files: []code.DiffFile{widestFile(f)}, Total: widest,
+			Added: widest, Deleted: widest, Patch: "x"}}
+	room := r.room(envelope) + 1
+	pages := newPatchPages(&patchPage{from: at.a, left: room}, room, m != nil,
+		func(pg *patchPage) { m.put(pg.begun, page(pg), pg.left) })
+	if err := r.patch(ctx, base, head, e, pages); err != nil {
 		return code.GitAnswer{}, err
 	}
-	pg.finish()
+	pages.finish()
+	pg := pages.asked
 	switch {
 	case pg.tooLong != nil:
 		return code.GitAnswer{}, pg.tooLong
@@ -470,13 +640,116 @@ func (r *read) patchRead(ctx context.Context, base, head, file string, renames b
 		return code.GitAnswer{}, errBadCursor(r.q.Cursor, r.q.Kind, fmt.Sprintf("the start of a line of the "+
 			"patch's %d bytes", pg.off))
 	}
+	a = page(pg)
+	m.put(at, a, pg.left)
 	f.Binary = pg.binary
 	if !f.Binary {
 		f.Added, f.Deleted = pg.added, pg.deleted
 	}
 	a.Diff.Files, a.Diff.Total, a.Diff.Added, a.Diff.Deleted = []code.DiffFile{f}, 1, f.Added, f.Deleted
-	a.Diff.Patch, a.Next = string(pg.text), formatCursor(pg.next)
+	m.place(code.GitDiff, same(memoTail{total: 1, added: f.Added, deleted: f.Deleted,
+		files: []fileCounts{{added: f.Added, deleted: f.Deleted, binary: f.Binary}}}))
 	return a, nil
+}
+
+// patchPages is a patch's pages as git's diff-pairs writes it (a Cmd.Stdout):
+// the asked page, fed the whole patch — it also counts the lines the patch
+// adds and deletes, and reads whether git called the pair binary — and, where
+// more is set, every page after it, each a patchPage of its own begun at the
+// line the one before it could not take and fed that line from its start
+// (line), so every page is exactly the page a read from its cursor would cut;
+// each handed to page as it is cut. A page past the asked one at a line too
+// long for any page ends the pages: a read asking from it is refused it.
+type patchPages struct {
+	room  int
+	more  bool
+	page  func(pg *patchPage)
+	asked *patchPage
+	// cur is the page being cut — the asked one first — and nil once none is.
+	cur *patchPage
+	// off is the patch's bytes so far and lineAt where the current line
+	// began; line is the current line's bytes from its start, kept while a
+	// page past the asked one may begin at it.
+	off, lineAt int
+	line        []byte
+}
+
+// newPatchPages is the pages of a patch whose asked page is asked, each cut
+// against room; more, every page after it too, each handed to page.
+func newPatchPages(asked *patchPage, room int, more bool, page func(pg *patchPage)) *patchPages {
+	return &patchPages{room: room, more: more, page: page, asked: asked, cur: asked}
+}
+
+// Write takes p, bytes of git's patch: a Cmd.Stdout that keeps no more than
+// the pages being cut and the line in hand.
+func (w *patchPages) Write(p []byte) (int, error) {
+	w.feed(p)
+	return len(p), nil
+}
+
+// feed takes p, bytes of the patch, a line — or the part of one p ends in —
+// at a time.
+func (w *patchPages) feed(p []byte) {
+	for len(p) > 0 {
+		i := bytes.IndexByte(p, '\n')
+		seg := p
+		if i >= 0 {
+			seg = p[:i+1]
+		}
+		if w.more && w.cur != nil && w.lineAt >= w.asked.from {
+			w.line = append(w.line, seg...)
+		}
+		w.asked.feed(seg)
+		if w.cur != nil && w.cur != w.asked {
+			w.cur.feed(seg)
+		}
+		w.off += len(seg)
+		w.chain(false)
+		if i >= 0 {
+			w.line, w.lineAt = w.line[:0], w.off
+		}
+		p = p[len(seg):]
+	}
+}
+
+// finish ends the patch: every page's last line settled, and the last page
+// past the asked one handed on.
+func (w *patchPages) finish() {
+	w.asked.finish()
+	if w.cur != nil && w.cur != w.asked {
+		w.cur.finish()
+	}
+	w.chain(true)
+	if p := w.cur; p != nil && p != w.asked && p.tooLong == nil {
+		w.page(p)
+	}
+}
+
+// chain hands on every page the patch has just ended at a line it could not
+// take, and begins the next at that line, fed it from its start — and, at
+// the patch's end (eof), settled there, which may end it too.
+func (w *patchPages) chain(eof bool) {
+	for w.cur != nil && w.cur.done {
+		done := w.cur
+		if done.tooLong != nil {
+			w.cur = nil
+			return
+		}
+		if done != w.asked {
+			w.page(done)
+		}
+		if !w.more || done.next.letter == 0 {
+			w.cur = nil
+			return
+		}
+		next := &patchPage{from: done.next.a, left: w.room, off: done.next.a, lineAt: done.next.a,
+			begun: done.next}
+		w.cur = next
+		next.feed(w.line)
+		if eof {
+			next.finish()
+		}
+	}
 }
 
 // findFile is base..head's raw record of file — its path at head, or at base
@@ -536,9 +809,9 @@ func (r *read) findFile(ctx context.Context, base, head, file string, renames bo
 // is, as the stat's path does, rather than as octal escapes of its bytes.
 var patchConfig = gitproc.KV{Key: "core.quotePath", Value: "false"}
 
-// patch writes e's patch to pg: git's own, of the one record e, from ONE
+// patch writes e's patch to pages: git's own, of the one record e, from ONE
 // diff-pairs handed it on its standard input.
-func (r *read) patch(ctx context.Context, base, head string, e rawEntry, pg *patchPage) error {
+func (r *read) patch(ctx context.Context, base, head string, e rawEntry, pages *patchPages) error {
 	deadline, err := r.budget()
 	if err != nil {
 		return err
@@ -546,7 +819,7 @@ func (r *read) patch(ctx context.Context, base, head string, e rawEntry, pg *pat
 	res, err := r.s.o.Git.Run(ctx, gitproc.Cmd{
 		Dir: r.synced.Dir, Args: []string{"diff-pairs", "-z", "-p", "--full-index", "--no-color", "--no-ext-diff",
 			"--no-textconv", "-U3"},
-		Config: append(r.s.o.Cache.ServeConfig(), patchConfig), Stdin: bytes.NewReader(e.raw()), Stdout: pg,
+		Config: append(r.s.o.Cache.ServeConfig(), patchConfig), Stdin: bytes.NewReader(e.raw()), Stdout: pages,
 		Class: gitproc.ClassRead, Deadline: deadline,
 	})
 	narrow := fmt.Errorf("%w: the patch of %q in the diff of %s and %s did not finish in the read's %s of "+
@@ -557,9 +830,12 @@ func (r *read) patch(ctx context.Context, base, head string, e rawEntry, pg *pat
 
 // patchPage cuts one page of a patch — whole lines from the byte from, while
 // their encoded text costs at most left — out of git's patch as it is written,
-// and counts the lines added and deleted over all of it.
+// and counts the lines added and deleted over all of it. A page past the one a
+// read asked for is begun by patchPages at the cursor the page before it
+// names (begun), fed from there.
 type patchPage struct {
 	from, left int
+	begun      cursor
 	// off is the patch's bytes so far; hunks whether the file's hunks have
 	// begun, past which a line opening `+` or `-` is one added or deleted
 	// (before them, they are the `---` and `+++` lines); sawFrom whether a
@@ -585,13 +861,6 @@ type patchPage struct {
 	over            bool
 
 	added, deleted int
-}
-
-// Write takes p, bytes of git's patch: a Cmd.Stdout that keeps no more than
-// the page.
-func (pg *patchPage) Write(p []byte) (int, error) {
-	pg.feed(p)
-	return len(p), nil
 }
 
 // feed takes p, bytes of the patch.

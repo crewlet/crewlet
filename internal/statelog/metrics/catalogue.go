@@ -824,7 +824,10 @@ func Catalogue() []Instrument {
 				"fetched again). Any `damaged` is a disk losing data, or something " +
 				"outside the engine writing into the cache: the copy repairs " +
 				"it, and a verify of the repository names what else that " +
-				"disk holds damaged.",
+				"disk holds damaged. The answers the cache keeps of seats' " +
+				"reads are no file here: every read of one holds it to its " +
+				"own SHA-256, and one that fails is " +
+				"`crewlet.code.cache.memo.lookups`' `corrupt`.",
 		},
 		{
 			Name: CodeCacheCheckDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
@@ -991,6 +994,33 @@ func Catalogue() []Instrument {
 				"repository purged, evicted or rebuilt smaller, or a node " +
 				"given more memory, which the cache reads again every ten " +
 				"seconds.",
+		},
+		{
+			Name: CodeCacheMemoBytes, Kind: KindGauge, Unit: UnitBytes,
+			Shows: "What this node's git cache holds of answers to seats' reads " +
+				"by object id — a page of a listing, a file, a diff, a " +
+				"comparison — kept so the next read that asks the same is " +
+				"answered from a file rather than from git: part of " +
+				"`crewlet.code.cache.bytes`, each answer counted at the whole " +
+				"disk blocks it takes. Held to a sixteenth of the cache's budget " +
+				"before any repository is evicted, so it sits at that sixteenth " +
+				"on a node seats read busily; falling to nothing at once is a " +
+				"history restored or recreated under the node, which drops " +
+				"every answer read from it.",
+		},
+		{
+			Name: CodeCacheMemoLookups, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"outcome"},
+			Shows: "Seats' reads by object id that this node's git cache looked " +
+				"up among the answers it keeps, by `outcome`: `hit`, answered " +
+				"from the answer kept, with no git run; `miss`, none kept, so " +
+				"the read ran its git and keeps what it cut; `corrupt`, a kept " +
+				"answer that did not read back whole — removed, and computed " +
+				"again, so rising is this node's disk damaging what it " +
+				"holds. Misses climbing while `crewlet.code.cache.memo.bytes` " +
+				"sits at its sixteenth of the budget, with few repositories " +
+				"evicted, are a share too small for the answers seats ask " +
+				"again.",
 		},
 		{
 			Name: CodeCacheProvenanceBackfilled, Kind: KindCounter, Unit: UnitCount,

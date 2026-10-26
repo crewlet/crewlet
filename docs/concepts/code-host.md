@@ -666,9 +666,10 @@ data nodes take to answer each page.
 
 **The budget.** A node holds its caches to a byte budget —
 `git.cache_max_bytes`, or a share of the cache's volume derived at every boot
-([`git`](configuration.md#git)) — counting everything they hold on disk: every repository's packs, indexes and refs, and the
-downloads and pushes in flight. Past it, the repositories used least recently
-are evicted, and nothing else evicts one: a repository nobody fetched over a
+([`git`](configuration.md#git)) — counting everything they hold on disk: every repository's packs, indexes and refs, the
+answers its [memo](#the-memo) keeps, and the downloads and pushes in flight.
+Past it, the memo is trimmed to its sixteenth of the budget first, and then
+the repositories used least recently are evicted, and nothing else evicts one: a repository nobody fetched over a
 weekend is still there on Monday, brought forward by the rows that changed
 rather than downloaded again. Each repository's last use survives a restart,
 so one read all day and rarely pushed to is not the first evicted after one.
@@ -719,23 +720,25 @@ bitmaps. Reading a copy whole does not write the graph itself: the request
 it was read for would wait those seconds to spare the rare skewed push the
 same.
 
-**What the cache writes beside the packs.** Three kinds of file in a
+**What the cache writes beside the packs.** Four kinds of file in a
 repository's cache are the node's own work rather than the rows': the
 multi-pack index — a full read's, written before it answers once the
 repository holds 256 packs, and the background indexing's, with its bitmap or
-without one — the commit-graph, and the index of which push introduced each
-commit ([Which push landed a commit](#which-push-landed-a-commit)). Each lives
+without one — the commit-graph, the index of which push introduced each
+commit ([Which push landed a commit](#which-push-landed-a-commit)), and the
+answers of seats' reads by object id ([The memo](#the-memo)). Each lives
 inside the repository's own directory, so it counts against the budget and
 leaves with the repository when it is evicted. The multi-pack index and the
 commit-graph are written again over a rebuild's packs, and each is dropped
 before a pack it may name leaves the directory, so no git process reads an
 index that names a pack that is gone; the index of pushes is built from the
-push rows rather than the packs, so a pack leaving changes nothing of it and a
-rebuild links it into its new directory, and a log restored or recreated under
-the node drops it. One the node has not written since it started is held to
-its checksum before it serves — git's for the first two, the run's own for the
+push rows rather than the packs, and the memo's answers are about objects
+rather than packs, so a pack leaving changes nothing of either, a rebuild links
+each into its new directory, and a log restored or recreated under the node
+drops both. One the node has not written since it started is held to its
+checksum before it serves — git's for the first two, the run's own for the
 index of pushes — and every file of a copy is checked again behind the
-serving. Anything else in the directory that is neither one of them nor the
+serving; a memo's answer is checked by every read of it instead. Anything else in the directory that is neither one of them nor the
 repository's own files is moved aside the next time the node reads the
 repository whole — and so is a symbolic link, or anything but a regular file,
 at one of their names or at the repository's own `HEAD`, `config` or
@@ -748,14 +751,15 @@ that text climbs back out of `refs/`, as the file it leads to.
 `crewlet code verify` names any of them. Each is declared once in the engine,
 and this table is that list; the steps are what
 `code_cache_maintenance_refused` and its counter name when the node's memory
-refuses one — never `provenance`, which the engine's own code writes, holding
-no git slot and charged against no memory budget.
+refuses one — never `provenance` or `memo`, which the engine's own code
+writes, holding no git slot and charged against no memory budget.
 
 | Declared file | Its files, in the repository's directory | Written by | When a pack leaves |
 |---|---|---|---|
 | `midx`, the multi-pack index | `objects/pack/multi-pack-index`, `objects/pack/multi-pack-index-<checksum>.bitmap`, `objects/pack/multi-pack-index-<checksum>.rev` | a sync, before it answers: `index`; the background indexing: `bitmap`, `index` | dropped first |
 | `commit-graph`, the commit-graph | `objects/info/commit-graph` | the background indexing: `graph` | dropped first |
 | `provenance`, the index of which push introduced each commit | `crewlet/provenance.<n>` | a sync, before it answers: `provenance`; the backfill: `provenance` | kept |
+| `memo`, the answers of seats' reads by object id — a directory, one file an answer | `crewlet/memo` | a seat's read by object id: `memo` | kept |
 
 **Memory.** Every git process a node runs over a whole repository holds memory
 in proportion to the repository's objects, measured on git 2.43 over a source
@@ -1091,8 +1095,12 @@ engine writing into the cache, and `damaged` under `file=pack` or
 `crewlet.code.cache.reports` by `part` and `outcome` — `queued` rising is a
 disk losing data under the cache, `again` one that keeps losing it, `crash` a
 git process dying on something in a copy, `request` requests failing on
-damage they then had repaired under them — and `crewlet.code.cache.maintenance.refused`, above zero a
-repository whose bitmap the node's memory cannot hold
+damage they then had repaired under them — `crewlet.code.cache.maintenance.refused`, above zero a
+repository whose bitmap the node's memory cannot hold — and
+`crewlet.code.cache.memo.lookups` by `outcome` beside
+`crewlet.code.cache.memo.bytes`: misses climbing while the memo sits at its
+sixteenth of the budget is a memo too small for the pages seats ask for again,
+and `corrupt` at all a disk damaging what the cache holds
 ([metrics reference](../reference/metrics.md)).
 
 ---
@@ -1362,6 +1370,56 @@ A read's git process that reports damage to the copy is never answered from,
 even where git answered anyway — it reads around a damaged index from the
 packs and exits as if it had not — and the cache repairs what it reported
 while other nodes answer.
+
+### The memo
+
+Every page a git node cuts for a server-side read is kept beside its copy —
+one file an answer, in the copy's `crewlet/memo` — and the next read that asks
+for the same page is answered from that file with no git run, its answer
+saying so (`memo: true`). A page is a function of the object ids it names, the
+read's arguments and its cursor alone, so it is never stale, only absent; what
+an answer carries of the moment — the copy's position, the push that
+introduced each commit it names and what the index of pushes holds — is added
+to a page from the memo as to one just cut. A read naming whole ids asks the
+memo as soon as its grant is judged, before any git runs, so a seat outside a
+`visibility: unit` repository is refused before the memo is asked; one naming
+an abbreviation asks it once the abbreviation is expanded. And the memo is
+the copy's: an answer in it was cut from objects this copy holds, so none
+crosses repositories.
+
+**One run cuts every page.** git cannot seek inside a file or a listing, so
+the fiftieth page of a file is a read of the forty-nine before it, and the
+recursive listing of a 100 000-file tree is some 250 pages, each a whole
+`ls-tree`. So the git that misses cuts every page from the one asked to the
+answer's end — a listing's, a file's or its line range's, a stat's, a
+patch's — and the memo keeps each: reading a file page by page streams it once,
+and listing that tree page by page runs `ls-tree` once. A comparison is kept
+whole; whether a commit landed in a branch never is, since its answer moves
+with the branch.
+
+**Measured.** Over a history of about 2 800 files and 13 000 commits, on two
+cores of a laptop, a page from the memo is answered in 16 to 56 µs, where
+cutting it took 3 to 53 ms — 131 to 1 573 times faster, a comparison's walk the
+most. A read the memo misses costs what one with no memo does, but for a long
+file's first page: it cuts all 55 pages of a 3 MB file in 25 ms, against 7 ms
+for that one page, and every page after it is a hit.
+
+**At most a sixteenth of the budget.** The memo holds at most a sixteenth of
+the cache's [budget](#the-cache-on-a-git-node), each answer counted at the
+whole disk blocks it takes, and is trimmed to that before any repository is
+evicted — an answer costs one git process to compute again, a repository a
+download of every pack it holds: first the memos of copies nobody has read
+since the node started, each whole, the least recently used repository first,
+then single answers, the least recently used first. Every read checks the
+answer against its own header — the key it answers and the SHA-256 of what it
+holds — so one a crash cut short or a disk damaged is computed again rather
+than served, and nothing behind the serving hashes the memo. A rebuild keeps
+it, since an answer is about objects rather than packs; a log restored or
+recreated under the node drops it whole, since it may answer for objects the
+history that replaced it does not hold, and nothing a read cut before that
+history's packs were swept is kept after. `crewlet.code.cache.memo.bytes` is
+what it holds and `crewlet.code.cache.memo.lookups` its lookups by outcome
+([Metrics](../reference/metrics.md)).
 
 ### The home git node
 

@@ -99,14 +99,14 @@ func jsonLen(v any) int {
 // room is what a page's items may take in the read's answer whose envelope —
 // the answer with no items, every number and the cursor at their longest — is
 // envelope. THE FIELDS EVERY ANSWER CARRIES are filled here, the repository
-// and the position Read stamps on whatever the kind answered, and the push
-// that introduced each commit it names with the coverage of the index that
-// says so (step 8, decorated before any page is cut), so no kind can measure
-// its envelope without them and cut a page that its stamp then pushes past
-// the bound.
+// and the position Read stamps on whatever the kind answered, the push that
+// introduced each commit it names with the coverage of the index that says so
+// (step 9, decorated before any page is cut), and Memo set — the page may be
+// read from the memo — so no kind can measure its envelope without them and
+// cut a page that its stamp then pushes past the bound.
 func (r *read) room(envelope code.GitAnswer) int {
 	envelope.RepoID, envelope.Position = r.q.RepoID, r.synced.Position
-	envelope.PushedBy, envelope.Coverage = r.pushedBy, r.coverage
+	envelope.PushedBy, envelope.Coverage, envelope.Memo = r.pushedBy, r.coverage, true
 	return r.s.pageBytes - jsonLen(envelope)
 }
 

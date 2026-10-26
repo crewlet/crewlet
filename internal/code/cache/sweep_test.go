@@ -333,7 +333,9 @@ func TestTheSweepKeepsExactlyTheDeclaredImage(t *testing.T) {
 // still there), refs moved keep both (a bitmap names the commits it selected,
 // whichever refs point at them), and a pack removed drops both before it goes
 // (an index naming a missing pack fails every read, a graph may name commits
-// that left with it) — and what the incarnation records it holds follows.
+// that left with it) — and what the incarnation records it holds follows. The
+// memo's answers, functions of object ids, are kept by every change to the
+// packs and the refs, and dropped with the history a log gone back replaces.
 // The explicit expectations of today's declarations, each read at the one
 // place its change is made (dropFor).
 //
@@ -348,14 +350,18 @@ func TestADerivedFileFollowsItsDeclarationOnEveryEvent(t *testing.T) {
 		w.push(t, repo, "refs/heads/main", nil)
 	}
 	c := w.open(t, clk.on)
-	dir := w.sync(t, c, repo).Dir
+	first := w.sync(t, c, repo)
+	dir := first.Dir
 	clk.Add(cache.MidxDebounce)
 	if ran := cache.MaintainerPass(c); len(ran) != 1 {
 		t.Fatalf("the maintainer ran %v, want the repository", ran)
 	}
+	answer := memoKeys("events", 1)
+	memoize(t, c, first, answer)
 	packDir := filepath.Join(dir, "objects", "pack")
 	files := []string{filepath.Join(packDir, "multi-pack-index"), bitmapOf(t, packDir),
-		filepath.Join(dir, "objects", "info", "commit-graph")}
+		filepath.Join(dir, "objects", "info", "commit-graph"),
+		filepath.Join(cache.MemoTree(dir), answer[0].String())}
 	held := func(event string, want bool) {
 		t.Helper()
 		for _, path := range files {

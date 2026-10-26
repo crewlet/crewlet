@@ -65,11 +65,14 @@ func TestEveryRebuildValueIsInTheMetricsReference(t *testing.T) {
 // crewlet.code.cache.checks — a pack's files' kinds as constants, and every
 // derived file's as its declaration's Owned.File (derived.go) — and every
 // checkTrigger under its duration: the rows a collector rule for a damaged
-// file is written from.
+// file is written from. A declaration the check and the scrub pass over
+// (Check.hashed: the memo's, whose every read holds its entry) is no value
+// the counter carries, and naming it there would send an operator looking for
+// a check that never runs.
 //
-// Mutation: declare another checkOutcome, add an owned file to a declaration
-// with a File the text does not name, or drop `midx-rev` from the text, and
-// this fails.
+// Mutation: declare another checkOutcome, add an owned file to a hashed
+// declaration with a File the text does not name, or drop `midx-rev` from the
+// text, and this fails.
 func TestEveryCheckValueIsInTheMetricsReference(t *testing.T) {
 	shows := map[string]string{}
 	for _, inst := range metrics.Catalogue() {
@@ -81,10 +84,17 @@ func TestEveryCheckValueIsInTheMetricsReference(t *testing.T) {
 		t.Fatalf("the walk found files %q, outcomes %q and triggers %q — it reads what it should not", kinds,
 			outcomes, triggers)
 	}
+	derived := 0
 	for _, d := range DerivedFiles() {
-		for _, o := range d.Owns {
-			kinds = append(kinds, o.File)
+		if !d.Check.hashed() {
+			continue // no value the counter carries
 		}
+		for _, o := range d.Owns {
+			kinds, derived = append(kinds, o.File), derived+1
+		}
+	}
+	if derived == 0 {
+		t.Fatal("no derived file is one the check hashes — the walk reads nothing of the declarations")
 	}
 	for name, values := range map[string][]string{
 		metrics.CodeCacheChecks:        slices.Concat(kinds, outcomes, triggers),

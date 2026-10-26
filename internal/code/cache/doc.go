@@ -246,17 +246,19 @@
 // it owns and the files a write of it holds only while it runs, its check, the
 // part a damage report names it by, what it promises a reader, and what each
 // change to its inputs — a pack added, a pack removed, the refs rewritten, its
-// own files reported damaged — does to it. There are three: the
+// own files reported damaged — does to it. There are four: the
 // MULTI-PACK-INDEX (a full round's, without a bitmap, once the snapshot names
 // MidxRoundPacks packs; the maintainer's, with its bitmap and lookup table
 // where the node's memory holds one and without one where it does not), the
-// COMMIT-GRAPH (the maintainer's, written first on a copy that has none) and
-// the INDEX OF PUSHES (below: runs under crewlet/, written by the cache's own
-// code and no git — a round's fold and the backfill — and the one declaration
-// a change to the packs or the refs keeps). Their files live inside the
-// incarnation, so the budget counts them and they leave with the repository;
-// a rebuild writes the first two again over its packs and links the index's
-// runs. Each is a REGULAR
+// COMMIT-GRAPH (the maintainer's, written first on a copy that has none), the
+// INDEX OF PUSHES (below: runs under crewlet/, written by the cache's own
+// code and no git — a round's fold and the backfill) and the MEMO (below: the
+// answers of reads by object id, one file an answer in crewlet/memo, a
+// directory it owns whole) — the last two the declarations a change to the
+// packs or the refs keeps. Their files live inside the incarnation, so the
+// budget counts them and they leave with the repository; a rebuild writes the
+// first two again over its packs and links the index's runs and the memo's
+// answers. Each is a REGULAR
 // file, as every file of the image is — the root's HEAD, config, packed-refs
 // and state too: a symbolic link, or anything else, at one of their names is
 // outside the image, so the next full round moves it into trash/ without
@@ -340,6 +342,29 @@
 // the scrub holds every run again, and one that fails drops the index: the
 // full round that repairs the copy makes it again at its own position, and
 // the backfill reads back below it what is wanted there.
+//
+// # The memo
+//
+// Beside each copy the cache keeps the pages internal/code/query cut for its
+// reads by object id (memo.go): one file an answer under crewlet/memo, a
+// directory the declaration owns whole (Owned.Tree), keyed by everything the
+// answer is a function of (NewMemoKey) and written as one read's run cuts its
+// pages (Cache.Memo's batch: each staged with no sync, placed once the run
+// has answered whole). A function of object ids, so never stale and only
+// absent; the copy's, so an entry exists only where a read of it found the
+// objects it names, and a read naming whole ids is answered from it before
+// any git runs. Every read holds an entry to its own header — its key and the
+// SHA-256 of its body — so the check and the scrub, which hash files behind
+// the serving, pass over it (Check.hashed). Its bytes are its writer's
+// running total, per copy and node-wide (Cache.memoBytes), never a measure's:
+// a stat of its directory is the directory's few KiB. The janitor lists what a
+// previous process left in a copy's memo once this process first touches it,
+// holds the memo to a MemoShare-th of the budget before it evicts any
+// repository — the memos of copies untouched since the boot whole, then
+// single entries, the least recently used first — and writes a copy's state
+// again once its memo's bytes moved. A history gone drops it whole and shuts
+// it until the round that dropped it has swept the replaced history's packs,
+// and no batch begun before the drop places anything after it.
 //
 // # What this process did not write is checked before it serves, and every byte is scrubbed behind it
 //
@@ -806,6 +831,7 @@
 //	  repos/<id>.<n>.git/           a repository's INCARNATION: a bare repository
 //	    crewlet-state.json          what the directory reflects, renamed in last
 //	    crewlet/provenance.<n>      the index of pushes' runs, which no git reads
+//	    crewlet/memo/<key>          an answer of a read by object id, which no git reads
 //	  scratch/                      a request's own repositories: a push's scratch, a view
 //	  tmp/                          every file before its rename into place
 //	  trash/                        what is being removed, by the janitor

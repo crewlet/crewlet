@@ -38,7 +38,7 @@ func TestValidateRefusesAnUnsaidDeclaration(t *testing.T) {
 		{"an input of no kind", func(d *Derived) { d.Inputs = []Input{"tree"} }, "Inputs"},
 		{"no writes", func(d *Derived) { d.Writes = nil }, "Writes"},
 		{"a step of no kind", func(d *Derived) { d.Writes[0].Step = "split" }, "Writes[0].Step"},
-		{"a trigger of no kind", func(d *Derived) { d.Writes[0].Trigger = "read" }, "Writes[0].Trigger"},
+		{"a trigger of no kind", func(d *Derived) { d.Writes[0].Trigger = "push" }, "Writes[0].Trigger"},
 		{"a lane of no kind", func(d *Derived) { d.Writes[0].Lane = "fast" }, "Writes[0].Lane"},
 		{"no deadline", func(d *Derived) { d.Writes[0].Deadline = nil }, "Writes[0].Deadline"},
 		{"no memory", func(d *Derived) { d.Writes[1].BytesPerObject = 0 }, "Writes[1].BytesPerObject"},
@@ -257,6 +257,81 @@ func TestValidateRefusesAnInProcessDeclarationThatClaimsAGitWrite(t *testing.T) 
 		if got := derivedRoots(DerivedFiles()); !slices.Equal(got, []string{"objects", engineRoot}) {
 			t.Errorf("the roots a boot walks are %v, want objects and %s: the walk reads what the declarations "+
 				"own", got, engineRoot)
+		}
+	})
+}
+
+// A TREE IS ONE DIRECTORY THE CACHE'S OWN CODE OWNS WHOLE, AND NOTHING ELSE
+// LIVES IN IT. A declaration that owns a directory whole (Owned.Tree) — the
+// memo's crewlet/memo, one file an answer — is the cache's own write: git
+// writes no directory the cache keeps without reading inside. It is one
+// literal name, carrying no checksum, and the declaration's main entry, whose
+// presence and bytes are the declaration's record (Derived.tree). Its files'
+// check is read by the cache's own reads alone (CheckEntryDigest), never by a
+// git-written declaration's. And no other declaration's files live under it:
+// the image keeps a tree without reading inside, so one there would be kept by
+// no sweep and counted by no measure. Each row breaks one of those.
+//
+// Mutation: admit a tree that is not its declaration's main entry (drop the
+// tree's Main case) — the "not main" row passes.
+func TestValidateRefusesATreeThatIsNoDirectoryOfItsOwn(t *testing.T) {
+	t.Parallel()
+	of := func(name DerivedName) Derived {
+		for _, d := range DerivedFiles() {
+			if d.Name == name {
+				return d
+			}
+		}
+		t.Fatalf("the build declares no %s", name)
+		return Derived{}
+	}
+	for _, tc := range []struct {
+		name   string
+		decl   DerivedName
+		mutate func(d *Derived)
+		field  string
+	}{
+		{"a tree git writes", DerivedMidx, func(d *Derived) { d.Owns[0].Tree = true }, "Owns[0].Tree"},
+		{"a tree of many names", DerivedMemo, func(d *Derived) {
+			d.Owns[0].Name = regexp.MustCompile(`^memo[0-9]$`)
+		}, "Owns[0].Name"},
+		{"a tree carrying a checksum", DerivedMemo, func(d *Derived) { d.Owns[0].Prior = true }, "Owns[0].Name"},
+		{"a tree that is not its declaration's main entry", DerivedMemo, func(d *Derived) { d.Owns[0].Main = false },
+			"Owns[0].Main"},
+		{"an entry's digest on a file git writes", DerivedMidx, func(d *Derived) { d.Check = CheckEntryDigest },
+			"Check"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			d := of(tc.decl)
+			if err := d.Validate(); err != nil {
+				t.Fatalf("the declaration before the change: %v", err)
+			}
+			tc.mutate(&d)
+			err := d.Validate()
+			if err == nil {
+				t.Fatalf("Validate passed a declaration with %s", tc.name)
+			}
+			if name := `"` + string(d.Name) + `"`; !strings.Contains(err.Error(), name) ||
+				!strings.Contains(err.Error(), tc.field) {
+				t.Errorf("Validate answered %q: want it to name the declaration %s and the field %s", err, name,
+					tc.field)
+			}
+		})
+	}
+
+	t.Run("nothing inside a tree", func(t *testing.T) {
+		t.Parallel()
+		decls := DerivedFiles()
+		for i := range decls {
+			if decls[i].Name == DerivedProvenance {
+				decls[i].Owns[0].Dir = filepath.ToSlash(memoRel)
+			}
+		}
+		err := validateAll(decls)
+		if err == nil || !strings.Contains(err.Error(), "owns whole") {
+			t.Errorf("validateAll answered %v, want it to refuse the index of pushes' runs inside the memo's tree",
+				err)
 		}
 	})
 }

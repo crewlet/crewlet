@@ -224,10 +224,23 @@ func (im *image) imaged(rel, name string, kind entryKind) bool {
 	if rel == "." && slices.Contains(rootFiles, name) {
 		return kind == fileEntry
 	}
-	if i, _ := im.ownerOf(rel, name); i >= 0 {
+	if i, o := im.ownerOf(rel, name); i >= 0 {
+		// A tree a declaration owns whole (Owned.Tree) is a DIRECTORY, kept
+		// without a look inside: what it holds is its writer's.
+		if o.Tree {
+			return kind == dirEntry
+		}
 		return kind == fileEntry
 	}
 	return false
+}
+
+// tree reports whether name, an entry of the image directory rel, is at the
+// name of a tree a declaration owns whole (Owned.Tree), whatever it is on
+// disk.
+func (im *image) tree(rel, name string) bool {
+	_, o := im.ownerOf(rel, name)
+	return o != nil && o.Tree
 }
 
 // ownerOf is the declaration, by its index, and the owned pattern whose file
@@ -339,7 +352,8 @@ func (im *image) present(dir string) ([]ownedFile, error) {
 // declarations whose main file (Owned.Main) is there. What
 // Cache.recordDerived sets an incarnation's record from; a declaration with no
 // main file is present where its record says it is, so no bit of mains is
-// about it.
+// about it, and a tree's bytes are none of a measure's (sizes): its bit says
+// only that it is there.
 type derivedMeasure struct {
 	bytes map[DerivedName]int64
 	mains derivedSet
@@ -385,6 +399,11 @@ func (im *image) owns(rel string) func(name string) bool {
 // from ONE listing, an entry gone since the listing omitted, and none for a
 // declared directory git has not written. An entry keep refuses gets no stat:
 // the listing names it, and its size would be a stat of its own.
+//
+// A TREE A DECLARATION OWNS WHOLE (Owned.Tree) gets no stat either: it is
+// there, as a directory, at size zero, and nothing at all otherwise — its
+// bytes are its writer's running total (Cache.recordDerived), and its inode's
+// size is a few KiB whatever it holds (TestTheHeldBytesCountTheMemo).
 func (im *image) sizes(dir, rel string, keep func(name string) bool) (map[string]int64, error) {
 	list, err := im.listed(dir, rel)
 	if err != nil {
@@ -393,6 +412,12 @@ func (im *image) sizes(dir, rel string, keep func(name string) bool) (map[string
 	sizes := make(map[string]int64, len(list))
 	for _, d := range list {
 		if keep != nil && !keep(d.Name()) {
+			continue
+		}
+		if im.tree(rel, d.Name()) {
+			if d.IsDir() {
+				sizes[d.Name()] = 0
+			}
 			continue
 		}
 		if im.stating != nil {
@@ -842,8 +867,9 @@ func (c *Cache) dropFor(e *entry, inc *incarnation, ev Event, named derivedSet) 
 		}
 		moved := false
 		for _, d := range list {
-			i, _ := c.image.ownerOf(rel, d.Name())
-			if i < 0 || drop&(1<<i) == 0 {
+			i, o := c.image.ownerOf(rel, d.Name())
+			if i < 0 || drop&(1<<i) == 0 || o.Tree {
+				// A tree goes whole, below, under its writer's lock.
 				continue
 			}
 			var size int64
@@ -880,6 +906,18 @@ func (c *Cache) dropFor(e *entry, inc *incarnation, ev Event, named derivedSet) 
 			}
 		}
 	}
+	// A TREE GOES WHOLE (Owned.Tree), its record and its index with it, under
+	// its writer's lock (memo.go's dropMemo): an answer placed into the tree
+	// while it moved would otherwise be counted for a directory no longer
+	// there, and its record reset after it, a directory counted as none. The
+	// memo is the one tree there is.
+	tree := false
+	c.image.each(drop, func(_ int, d *Derived) { tree = tree || d.tree() })
+	if tree {
+		if err := c.dropMemo(e, inc); err != nil {
+			return 0, err
+		}
+	}
 	// What the incarnation records it holds follows what it holds, whatever
 	// kind of round dropped it: a delta measures nothing after, and a
 	// derived file recorded as present that is gone is one the maintainer
@@ -887,7 +925,11 @@ func (c *Cache) dropFor(e *entry, inc *incarnation, ev Event, named derivedSet) 
 	// bytes with it: an index gone covers nothing and has no bitmap, a graph
 	// gone is due again.
 	e.mu.Lock()
-	c.image.each(drop, func(_ int, d *Derived) { c.setDerived(inc, d.Name, derivedState{}, false) })
+	c.image.each(drop, func(_ int, d *Derived) {
+		if !d.tree() {
+			c.setDerived(inc, d.Name, derivedState{}, false)
+		}
+	})
 	// The runs of an index of pushes dropped stay mapped only while their
 	// readers hold them (provenance.go).
 	c.forgetRuns(inc)

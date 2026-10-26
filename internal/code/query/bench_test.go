@@ -51,17 +51,27 @@ import (
 //     the stat of the wide edit, whole and filtered to one of its
 //     directories, and one file's patch from it; and a comparison of the
 //     history's middle with its tip.
-//   - cache=warm reads the node that took the pushes, its copy current;
+//   - cache=warm reads the node that took the pushes, its copy current, with
+//     its memo hidden: every read cuts its page, and keeps nothing — the read
+//     as it would be with no memo, which a hit is weighed against;
+//     cache=miss reads it with the memo, each read a page the memo does not
+//     hold yet (a bound a byte narrower than the last read's, so a key of its
+//     own): a read cutting its page, and every page after it, and keeping
+//     them; cache=memo reads a page the memo holds, every read a hit;
 //     cache=cold reads a git node emptied before every iteration, whose first
 //     read waits statelog.ReadBudget on the download and answers what it can.
 //
-// Each warm arm reports the p50, p95 and p99 of one read; the cold arm the
-// time to its answer and the share of answers unready, and fails a read
-// answered past statelog.ReadBudget and its margin. The figures decide
-// code.GitShareWait — max(2 s, the slowest warm kind's p95 rounded up to a
-// second), under gitproc.ReadDeadline/4 — and confirm the read deadline's
-// terms (a warm read well inside gitproc.ReadDeadline, a cold one answered
-// inside statelog.ReadBudget and its margin from every store).
+// Each warm, miss and memo arm reports the p50, p95 and p99 of one read, and
+// the memo arm how many times faster than the warm and the miss arms' p50 its
+// own p50 is (x-warm, x-miss); the cold arm the time to its answer and the
+// share of answers unready, and fails a read answered past statelog.ReadBudget
+// and its margin. The figures decide code.GitShareWait — max(2 s, the slowest
+// warm kind's p95 rounded up to a second), under gitproc.ReadDeadline/4 —
+// confirm the read deadline's terms (a warm read well inside
+// gitproc.ReadDeadline, a cold one answered inside statelog.ReadBudget and its
+// margin from every store), and confirm the memo's premise: a hit at least ten
+// times faster than the read it saves, or the memo costs a sixteenth of the
+// budget for nothing a warm copy does not already give.
 func BenchmarkCodeRead(b *testing.B) {
 	codetest.Quiet(b)
 	for _, size := range readSizes {
@@ -75,7 +85,9 @@ func BenchmarkCodeRead(b *testing.B) {
 					r := newReadRig(b, src, store.open(b))
 					if store.warm {
 						for _, k := range r.kinds(b) {
-							b.Run("kind="+k.name+"/cache=warm", func(b *testing.B) { r.warm(b, k.q) })
+							b.Run("kind="+k.name+"/cache=warm", func(b *testing.B) { r.warm(b, k) })
+							b.Run("kind="+k.name+"/cache=miss", func(b *testing.B) { r.miss(b, k) })
+							b.Run("kind="+k.name+"/cache=memo", func(b *testing.B) { r.memo(b, k) })
 						}
 					}
 					b.Run("kind=tree-root/cache=cold", func(b *testing.B) { r.cold(b) })
@@ -257,12 +269,16 @@ func readTops(commits []string, files int) func(*bufio.Writer) error {
 }
 
 // readRig is BenchmarkCodeRead's fixture: a fleet of two git nodes holding a
-// source's repository, and a query server over the first node.
+// source's repository, a query server over the first node, and one over the
+// same node with its memo hidden (unkept); p50 is each warm and miss arm's
+// p50, by its kind and arm, which the memo arm weighs its own against.
 type readRig struct {
-	f    *codetest.SoloFleet
-	src  *readSource
-	repo string
-	s    *query.Server
+	f      *codetest.SoloFleet
+	src    *readSource
+	repo   string
+	s      *query.Server
+	unkept *query.Server
+	p50    map[string]time.Duration
 }
 
 // readCacheBytes is every rig's git node's cache budget: room for the
@@ -295,15 +311,19 @@ func newReadRig(b *testing.B, src *readSource, objects objstore.Backend) *readRi
 		b.Fatal(err)
 	}
 	n := f.Nodes()[0]
-	s, err := query.New(query.Options{NodeID: n.ID(), Cache: n.Cache(), Git: n.Pool(),
-		Share:  code.NewGitShare(n.ID(), n.Pool().Slots(gitproc.ClassRead), nil),
-		Roster: func() code.Roster { return nil }})
-	if err != nil {
-		b.Fatal(err)
+	server := func(c query.Cache) *query.Server {
+		s, err := query.New(query.Options{NodeID: n.ID(), Cache: c, Git: n.Pool(),
+			Share:  code.NewGitShare(n.ID(), n.Pool().Slots(gitproc.ClassRead), nil),
+			Roster: func() code.Roster { return nil }})
+		if err != nil {
+			b.Fatal(err)
+		}
+		return s
 	}
 	b.Logf("the pools run git %s; %d commits in %d packs, a tree of %d files", n.Pool().Version(),
 		len(src.commits)+3, len(rows.Packs), src.files)
-	return &readRig{f: f, src: src, repo: rows.Repo.ID, s: s}
+	return &readRig{f: f, src: src, repo: rows.Repo.ID, s: server(n.Cache()), unkept: server(memoless{n.Cache()}),
+		p50: map[string]time.Duration{}}
 }
 
 // kind is one warm arm's read.
@@ -354,17 +374,81 @@ func (r *readRig) kinds(b *testing.B) []kind {
 	}
 }
 
-// warm times q over the first node, reporting its percentiles.
-func (r *readRig) warm(b *testing.B, q code.GitQuery) {
+// warm times k's read over the first node with its memo hidden, reporting
+// its percentiles.
+func (r *readRig) warm(b *testing.B, k kind) {
 	took := make([]time.Duration, 0, b.N)
 	for b.Loop() {
 		start := time.Now()
-		if _, err := r.s.Read(b.Context(), q); err != nil {
+		if _, err := r.unkept.Read(b.Context(), k.q); err != nil {
 			b.Fatal(err)
 		}
 		took = append(took, time.Since(start))
 	}
-	report(b, took)
+	r.p50[k.name+"/warm"] = report(b, took)
+}
+
+// miss times k's read over the first node with its memo, every read one the
+// memo holds no page of: a server whose page bound is a byte narrower than the
+// last one's, which keys its pages apart.
+func (r *readRig) miss(b *testing.B, k kind) {
+	took := make([]time.Duration, 0, b.N)
+	bound := code.MaxGitAnswerBytes
+	for b.Loop() {
+		b.StopTimer()
+		bound--
+		s := r.server()
+		query.SetPageBytes(s, bound)
+		b.StartTimer()
+		start := time.Now()
+		a, err := s.Read(b.Context(), k.q)
+		took = append(took, time.Since(start))
+		switch {
+		case err != nil:
+			b.Fatal(err)
+		case a.Memo:
+			b.Fatal("a read at a bound no read used before was answered from the memo")
+		}
+	}
+	r.p50[k.name+"/miss"] = report(b, took)
+}
+
+// memo times k's read over the first node, its page in the memo: every read
+// a hit.
+func (r *readRig) memo(b *testing.B, k kind) {
+	if _, err := r.s.Read(b.Context(), k.q); err != nil {
+		b.Fatal(err)
+	}
+	took := make([]time.Duration, 0, b.N)
+	for b.Loop() {
+		start := time.Now()
+		a, err := r.s.Read(b.Context(), k.q)
+		took = append(took, time.Since(start))
+		switch {
+		case err != nil:
+			b.Fatal(err)
+		case !a.Memo:
+			b.Fatal("a read of a page the memo holds was cut again")
+		}
+	}
+	hit := report(b, took)
+	for _, arm := range []string{"warm", "miss"} {
+		if was := r.p50[k.name+"/"+arm]; was > 0 && hit > 0 {
+			b.ReportMetric(float64(was)/float64(hit), "x-"+arm)
+		}
+	}
+}
+
+// server is a query server over the first node's cache, its memo kept.
+func (r *readRig) server() *query.Server {
+	n := r.f.Nodes()[0]
+	s, err := query.New(query.Options{NodeID: n.ID(), Cache: n.Cache(), Git: n.Pool(),
+		Share:  code.NewGitShare(n.ID(), n.Pool().Slots(gitproc.ClassRead), nil),
+		Roster: func() code.Roster { return nil }})
+	if err != nil {
+		panic(err) // the options are the rig's own, valid once
+	}
+	return s
 }
 
 // cold times the root's listing on the second node, emptied before every
@@ -407,16 +491,17 @@ func (r *readRig) cold(b *testing.B) {
 	b.ReportMetric(float64(unreadies)/float64(len(took)), "unready/op")
 }
 
-// report reports took's p50, p95 and p99 in milliseconds.
-func report(b *testing.B, took []time.Duration) {
+// report reports took's p50, p95 and p99 in milliseconds, and answers the
+// p50.
+func report(b *testing.B, took []time.Duration) time.Duration {
 	if len(took) == 0 {
-		return
+		return 0
 	}
 	slices.Sort(took)
-	at := func(q float64) float64 {
-		return float64(took[min(len(took)-1, int(q*float64(len(took))))]) / float64(time.Millisecond)
-	}
-	b.ReportMetric(at(0.50), "p50-ms")
-	b.ReportMetric(at(0.95), "p95-ms")
-	b.ReportMetric(at(0.99), "p99-ms")
+	at := func(q float64) time.Duration { return took[min(len(took)-1, int(q*float64(len(took))))] }
+	ms := func(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
+	b.ReportMetric(ms(at(0.50)), "p50-ms")
+	b.ReportMetric(ms(at(0.95)), "p95-ms")
+	b.ReportMetric(ms(at(0.99)), "p99-ms")
+	return at(0.50)
 }
