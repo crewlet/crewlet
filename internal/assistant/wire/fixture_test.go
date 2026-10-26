@@ -81,7 +81,7 @@ func vocabularyFrames() []wire.Frame {
 			Deep: &wire.DeepProgress{State: wire.DeepRunning, Goal: "Redesign the brand assets",
 				StartedAt: at, DeadlineAt: at.Add(20 * time.Minute), Steps: 1, MaxSteps: 150,
 				BudgetPercent: 12, Activity: []string{"Reading the brand draft",
-					"[tool] Bash: rsvg-convert logo.svg -o logo.png"}}}}),
+					"Ran a command"}}}}),
 		read.Frame(wire.Frame{Kind: wire.EventStep, Step: &wire.StepEvent{
 			StepID: id("step:deep-read"), Index: 3, Tool: "api_request",
 			Label:   "Read GET /brand",
