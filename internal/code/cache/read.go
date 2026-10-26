@@ -9,10 +9,13 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/semaphore"
+
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // THE READ: one complete snapshot of a repository's rows, every page applied
@@ -163,6 +166,93 @@ func (c *Cache) read(ctx context.Context, id string, at statelog.Position, strea
 	}
 }
 
+// fullRounds is the node's slots for FULL READS of a repository's rows
+// against the estate (MaxFullRounds): every page of a full read is served
+// out of one of the answers a data node gives the whole fleet's reads at
+// once, so a node joining with hundreds of repositories asked of it holds at
+// most this many of them, however many it was asked for. Granted first
+// come, first served (semaphore.Weighted), so no repository's read waits
+// behind one that asked after it.
+type fullRounds struct {
+	slots *semaphore.Weighted
+	size  int64
+	rec   *metrics.Recorder
+
+	// mu orders every change of the counts with the gauge's setting of
+	// them, so the gauge never holds a count a later change superseded:
+	// running is the slots held now, most the most held at once, and
+	// waiting the reads waiting for one — what the gauge publishes and the
+	// suite holds to the bound.
+	mu                     sync.Mutex
+	running, most, waiting int64
+}
+
+// The states crewlet.code.cache.full_rounds counts a full read in.
+const (
+	fullRunning = "running"
+	fullWaiting = "waiting"
+)
+
+// newFullRounds is size slots, reported to rec — both states at zero from
+// the start, so a node's panel shows its full reads before its first.
+func newFullRounds(size int64, rec *metrics.Recorder) *fullRounds {
+	f := &fullRounds{slots: semaphore.NewWeighted(size), size: size, rec: rec}
+	f.count(0, 0)
+	return f
+}
+
+// hold waits for a slot under ctx: the cache's lifetime for a round's read,
+// whose callers each wait under their own bound (MaxFullRounds, THE WAIT IS
+// THE CALLER'S), and a check's or a hint's own bound for theirs. A free slot
+// nobody waits for is taken without counting a wait.
+func (f *fullRounds) hold(ctx context.Context) error {
+	if f.slots.TryAcquire(1) {
+		f.count(1, 0)
+		return nil
+	}
+	f.count(0, 1)
+	if err := f.slots.Acquire(ctx, 1); err != nil {
+		f.count(0, -1)
+		return err
+	}
+	f.count(1, -1)
+	return nil
+}
+
+// letGo gives a slot back.
+func (f *fullRounds) letGo() {
+	f.count(-1, 0)
+	f.slots.Release(1)
+}
+
+// count moves the counts by what changed and sets the gauge to them.
+func (f *fullRounds) count(running, waiting int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.running += running
+	f.waiting += waiting
+	f.most = max(f.most, f.running)
+	if f.rec != nil {
+		f.rec.Set(metrics.CodeCacheFullRounds, float64(f.running), metrics.Attrs{"state": fullRunning})
+		f.rec.Set(metrics.CodeCacheFullRounds, float64(f.waiting), metrics.Attrs{"state": fullWaiting})
+	}
+}
+
+// holdFull waits for one of the node's full-read slots for id's read: a
+// cache stopping while it waits is ErrStopped, as every sync of a stopped
+// cache is, and the read's own bound ending first says what it waited for.
+func (c *Cache) holdFull(ctx context.Context, id string) error {
+	err := c.full.hold(ctx)
+	switch {
+	case err == nil:
+		return nil
+	case c.isStopped():
+		return ErrStopped
+	}
+	return fmt.Errorf("cache: %s's full read stopped waiting for one of the %d this node reads at once: %w", id,
+		c.full.size, err)
+}
+
 // logRead is the estate's failure to answer a page, marked as the code log's
 // (ErrLogRead) — but code.ErrRepoNotFound, which is the log's ANSWER that no
 // row holds the repository, and code.ErrSnapshotMoved, its answer that the
@@ -194,9 +284,26 @@ func (c *Cache) readPacks(ctx context.Context, id string, fresh statelog.Freshne
 // readOnce reads every page of one snapshot — or, packsOnly, a full one's
 // pages up to the first that serves a ref (readPacks) — or answers the first
 // page's failure as it is: the estate's, as ErrLogRead (logRead).
+//
+// A FULL READ HOLDS ONE OF THE NODE'S SLOTS (fullRounds, MaxFullRounds) from
+// the page it first knows it is full to its last: its first, asked from
+// nothing; its second, when the log answers a delta in full, since page 1
+// decides and was asked as a delta's. A delta's pages hold none.
 func (c *Cache) readOnce(ctx context.Context, id string, since statelog.Position,
 	fresh statelog.Freshness, packsOnly bool) (snapshot, error) {
 
+	held := false
+	defer func() {
+		if held {
+			c.full.letGo()
+		}
+	}()
+	if since.IsZero() {
+		if err := c.holdFull(ctx, id); err != nil {
+			return snapshot{}, err
+		}
+		held = true
+	}
 	page, err := c.fetch.RepoState(ctx, code.StateQuery{RepoID: id, Since: since, Fresh: fresh})
 	if err != nil {
 		return snapshot{}, logRead(err)
@@ -215,6 +322,14 @@ func (c *Cache) readOnce(ctx context.Context, id string, since statelog.Position
 		}
 		if page.Next == nil || packsOnly && len(page.Refs) > 0 {
 			break
+		}
+		if snap.full && !held {
+			// A DELTA THE LOG ANSWERED IN FULL: every page from here is a
+			// whole repository's, as a full round's are.
+			if err = c.holdFull(ctx, id); err != nil {
+				return snapshot{}, err
+			}
+			held = true
 		}
 		next := code.StateQuery{RepoID: id, Fresh: fresh, Cursor: page.Next}
 		if page, err = c.fetch.RepoState(ctx, next); err != nil {

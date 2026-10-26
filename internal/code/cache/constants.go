@@ -5,6 +5,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/queue"
 )
 
 // EvictInterval is how often the janitor runs a pass when nothing kicked it.
@@ -120,6 +121,68 @@ const FetchConcurrency = NodeFetches / 2
 // pages does not move a snapshot (its tail page serves what the push added),
 // so three in one round is a fault worth failing on, never load.
 const MaxSnapshotRestarts = 3
+
+// MaxFullRounds is how many FULL READS of a repository's rows this node has in
+// flight against the estate at once: a snapshot read whole — every full
+// round's (a repository's first round in a process, a rebuild, the log
+// recreated or gone back under the cache), and the two other reads of a whole
+// snapshot, a check's and a hint's of its pack rows — each holding one of
+// these slots from its first page to its last, granted first come, first
+// served (read.go, fullRounds). A delta's pages hold none.
+//
+// queue.ConcurrentAnswers/8, EIGHT, so four git nodes cold at once hold at
+// most half of one data node's answers. A full read asks its pages one at a
+// time, and while a page is served it holds one of the
+// queue.ConcurrentAnswers (64) answers the data node it reads gives its shared
+// lane — the lane every read of every domain shares (estate's laneShared): a
+// seat's tracker read, a page write, the code.resolve every git request is
+// admitted by — about 59 ms for a full page of refs (code.MaxSnapshotItems;
+// code's BenchmarkServeASnapshotPage); a git node that holds the data reads
+// its own copy instead, out of the store that serves those answers to every
+// other node, so the cap is every node's. Uncapped, a node that joins with
+// hundreds of repositories asked of it — a balancer moving traffic onto it,
+// CI fetching through it, the first fetches after a restart — starts a full
+// read of every one at once, every request of the fleet that reaches that
+// data node waits in line behind their pages, and an asker that waits a whole
+// read attempt there (estate.ReadAttempt, ten seconds) takes the node for
+// gone: it asks it last for half a minute, and sends every repository it
+// commits to its runner-up. Capped, a joining node holds at most eight of the
+// lane's answers whatever it was asked, and the lane fills only at eight such
+// nodes at once.
+//
+// A DELTA IS EXEMPT: it is the round every git node runs after every push,
+// usually one page, and a cap on it would put every fetch behind a joining
+// node's full reads. A delta the log answers in full (page 1 decides: one
+// that would outweigh the full answer, a floor below the swept tombstones or
+// retirements, another generation) is a full read from its second page on.
+//
+// THE WAIT IS THE CALLER'S. A round waits for its slot under the cache's
+// lifetime, as all its work does, and its callers wait for the round under
+// their own bounds — a seat's read its statelog.ReadBudget, a git request its
+// client's patience — so a slot's wait is part of the sync a caller asked
+// for, never a budget of its own; a caller that gives up leaves the round in
+// line, and the repository comes up for its next request.
+//
+// PROVISIONAL, MEASURED against a MODEL of the data node's lane by the rule
+// that the lane's other traffic waits under a second for an answer at the
+// 99th percentile (BenchmarkColdJoin: four nodes asked for 500 repositories
+// each at once, every page held 60 ms, two hundred other reads a second; one
+// run, -benchtime 1x, git 2.56.0 on four cores of a Core Ultra 7 265U): the
+// other reads waited nothing at a cap of four or of eight (p99 0, at most
+// 6 µs), a page at sixteen — the four nodes holding every answer the lane
+// has (p99 60 ms, at most 74 ms) — and 1.9 s with no cap (p99 1 904 ms), the
+// 2 000 reads taking 9.1, 4.9, 2.7 and 2.2 s. Every cap passes the rule at
+// four nodes, since what a cap leaves in line is the nodes times the cap,
+// where no cap's is every repository every node was asked for; so EIGHT is a
+// judgment between the join and the headroom: the most that leaves four nodes
+// joining together half the lane — one node's full complement of turns,
+// queue.ConcurrentAnswers' own sizing — for the fleet's reads, never behind a
+// page, for an estate share of a join of about five seconds at 500
+// repositories a node, which the node's downloads outlast once its
+// repositories hold three packs each (S3 gives a node 150 to 290 small
+// bundles a second, NodeFetches). Production's page times, which the model's
+// 60 ms stands in for, are what can move it.
+const MaxFullRounds = queue.ConcurrentAnswers / 8
 
 // MidxPacks is how many packs gathered beside the maintainer's index make the
 // repository due for another run.

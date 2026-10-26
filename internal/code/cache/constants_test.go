@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/queue"
 )
 
 // A SYNC LEAVES HALF THE NODE'S FETCHES: one repository's round takes at most
@@ -25,6 +26,20 @@ func TestASyncLeavesHalfTheNodesFetches(t *testing.T) {
 	if cache.NodeFetches != httpx.MaxIdleConnsPerHost {
 		t.Errorf("NodeFetches %d is not httpx.MaxIdleConnsPerHost %d: the node's reads at once are "+
 			"what the bucket's transport keeps warm connections for", cache.NodeFetches, httpx.MaxIdleConnsPerHost)
+	}
+}
+
+// FOUR COLD NODES HOLD AT MOST HALF OF A DATA NODE'S ANSWERS: every page of a
+// full read holds one of the answers the data node it reads gives its shared
+// lane (queue.ConcurrentAnswers, estate's laneShared), which every read of
+// the fleet shares, so the node's full reads at once (MaxFullRounds) are set
+// for four nodes joining together to leave half the lane to everything else.
+func TestFourColdNodesHoldAtMostHalfADataNodesAnswers(t *testing.T) {
+	t.Parallel()
+	if 4*cache.MaxFullRounds > queue.ConcurrentAnswers/2 {
+		t.Errorf("MaxFullRounds %d: four nodes cold at once would hold %d of a data node's %d answers, "+
+			"past the half the rest of the fleet's reads keep", cache.MaxFullRounds, 4*cache.MaxFullRounds,
+			queue.ConcurrentAnswers)
 	}
 }
 

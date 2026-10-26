@@ -11,8 +11,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -20,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/semaphore"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
@@ -28,6 +31,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/s3obj/s3fake"
+	"github.com/crewlet/crewlet/internal/queue"
 )
 
 // The benchmarks below are the figures the package doc's "Measured" section
@@ -810,6 +814,179 @@ func processCPU(b *testing.B) time.Duration {
 		b.Fatal(err)
 	}
 	return time.Duration(ru.Utime.Nano() + ru.Stime.Nano())
+}
+
+// BenchmarkColdJoin is git nodes JOINING A FLEET together, every repository
+// asked of each at the same moment — a balancer moving traffic onto new
+// nodes, CI fetching through them, the first fetches after a restart —
+// against ONE data node's shared lane (coldLane): the queue.ConcurrentAnswers
+// answers it gives code.repo_state beside every other read of the fleet
+// (estate's laneShared), a request past them waiting its turn in arrival
+// order. Four fresh caches, each asked for 500 repositories of one pack and
+// one ref, read their rows through the lane with their full reads capped at
+// rounds — MaxFullRounds' candidates 4, 8 and 16, and 500, a cap no node asked
+// for 500 repositories meets: the node without one — while the lane's OTHER
+// traffic (a seat's tracker read, a page write, the code.resolve every git
+// request is admitted by) arrives every coldOtherEvery and holds its answer
+// coldOtherServe.
+//
+// THE LANE IS A MODEL: every page holds its answer coldPageServe, a full
+// page's cost, whatever the fake log's page holds — so each repository's read
+// is one page at that cost, and the cache's own work (the pack's GET from a
+// store in the process, its files, packed-refs and the state) is real.
+// wait-p99-ms and wait-max-ms are the other traffic's wait for an answer —
+// what the cap is for; join-s is how long the last of the four nodes' 2 000
+// syncs took, the estate's share of a cold join, its downloads coming on top
+// at NodeFetches a node.
+func BenchmarkColdJoin(b *testing.B) {
+	quiet(b)
+	const (
+		nodes = 4
+		repos = 500
+	)
+	w := newSyncWorld(b, onMemory)
+	src := w.repo(b, 1)
+	tip, row := w.commit(b, src, nil, "")
+	ids := make([]string, repos)
+	for i := range ids {
+		// One object every row names, under a pack id of each repository's
+		// own, as a push mints one: the store holds the bytes once, and every
+		// node installs them for every repository it is asked for.
+		ids[i] = w.logRepo(i + 1)
+		row.PackID = uuid.Must(uuid.NewV7()).String()
+		w.log.write(ids[i], []code.PackRow{row}, map[string]string{"refs/heads/main": tip})
+	}
+	root := b.TempDir()
+	n := 0
+	for _, rounds := range []int64{4, 8, 16, repos} {
+		b.Run(fmt.Sprintf("nodes=%d/repos=%d/rounds=%d", nodes, repos, rounds), func(b *testing.B) {
+			var (
+				waits []time.Duration
+				join  time.Duration
+			)
+			for b.Loop() {
+				b.StopTimer()
+				lane := &coldLane{inner: silent{w.log}, answers: semaphore.NewWeighted(queue.ConcurrentAnswers)}
+				caches := make([]*cache.Cache, nodes)
+				drops := make([]func(), nodes)
+				for i := range caches {
+					caches[i], drops[i] = w.coldCache(b, root, n, cache.FetchConcurrency,
+						func(o *cache.Options) { o.Fetch = lane })
+					n++
+					cache.SetMaxFullRounds(caches[i], rounds)
+				}
+				stop := lane.traffic()
+				b.StartTimer()
+				began := time.Now()
+				var g errgroup.Group
+				for _, c := range caches {
+					for _, id := range ids {
+						g.Go(func() error {
+							s, err := c.Sync(b.Context(), id, linearizable)
+							if err != nil {
+								return err
+							}
+							s.Release()
+							if s.Kind != cache.SyncFull {
+								return fmt.Errorf("a cold node's first sync of %s was a %s round", id, s.Kind)
+							}
+							return nil
+						})
+					}
+				}
+				err := g.Wait()
+				join += time.Since(began)
+				b.StopTimer()
+				waits = append(waits, stop()...)
+				if err != nil {
+					b.Fatalf("a cold join: %v", err)
+				}
+				for _, drop := range drops {
+					drop()
+				}
+				b.StartTimer()
+			}
+			slices.Sort(waits)
+			at := func(q float64) float64 {
+				return float64(waits[int(q*float64(len(waits)-1))].Microseconds()) / 1e3
+			}
+			b.ReportMetric(at(0.99), "wait-p99-ms")
+			b.ReportMetric(at(1), "wait-max-ms")
+			b.ReportMetric(join.Seconds()/float64(b.N), "join-s")
+		})
+	}
+}
+
+// The lane BenchmarkColdJoin models. coldPageServe is how long a page holds
+// its answer: 59 ms, what code's BenchmarkServeASnapshotPage measured a full
+// page of refs to take to serve (code.MaxSnapshotItems of a repository of
+// code.MaxRefsPerRepo), and a millisecond for the estate's crossing — what a
+// push proposed through another member pays over one proposed at its
+// committer (internal/code/codecluster's package doc). coldOtherEvery and
+// coldOtherServe are the lane's other traffic: two hundred reads a second,
+// each a millisecond's crossing and a millisecond's read.
+const (
+	coldPageServe  = 60 * time.Millisecond
+	coldOtherEvery = 5 * time.Millisecond
+	coldOtherServe = 2 * time.Millisecond
+)
+
+// coldLane is ONE DATA NODE'S SHARED LANE in front of the rows: the answers it
+// gives at once, each page holding one for coldPageServe, and a request past
+// them waiting its turn first come, first served, as a registration's
+// requests wait in the broker's order for a slot (queue.EventQueue.Serve).
+type coldLane struct {
+	inner   cache.Fetcher
+	answers *semaphore.Weighted
+}
+
+func (l *coldLane) RepoState(ctx context.Context, q code.StateQuery) (code.RepoSnapshot, error) {
+	if err := l.answers.Acquire(ctx, 1); err != nil {
+		return code.RepoSnapshot{}, err
+	}
+	defer l.answers.Release(1)
+	time.Sleep(coldPageServe)
+	return l.inner.RepoState(ctx, q)
+}
+
+// traffic starts the lane's other traffic, a read every coldOtherEvery, and
+// answers what stops it — which answers how long each read waited for its
+// answer, once every one has had it.
+func (l *coldLane) traffic() (stop func() []time.Duration) {
+	var (
+		mu    sync.Mutex
+		waits []time.Duration
+		wg    sync.WaitGroup
+	)
+	done := make(chan struct{})
+	wg.Go(func() {
+		tick := time.NewTicker(coldOtherEvery)
+		defer tick.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-tick.C:
+			}
+			wg.Go(func() {
+				began := time.Now()
+				if err := l.answers.Acquire(context.Background(), 1); err != nil {
+					return
+				}
+				waited := time.Since(began)
+				time.Sleep(coldOtherServe)
+				l.answers.Release(1)
+				mu.Lock()
+				waits = append(waits, waited)
+				mu.Unlock()
+			})
+		}
+	})
+	return func() []time.Duration {
+		close(done)
+		wg.Wait()
+		return waits
+	}
 }
 
 // timedLog is a Fetcher that keeps how long its log took to answer, so a

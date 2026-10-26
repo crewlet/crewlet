@@ -167,6 +167,27 @@
 // not a caller's: a client that hangs up never cancels the round the others
 // are waiting on.
 //
+// # A node reads few repositories whole at once
+//
+// Every page of a FULL READ of a repository's rows — a full round's (every
+// repository's first round in a process, a rebuild, the log recreated or gone
+// back under the cache), and a check's or a hint's read of the same pages —
+// is served out of one of the queue.ConcurrentAnswers answers a data node
+// gives the whole fleet's reads at once on its shared lane (a seat's tracker
+// read, a page write, the code.resolve every git request is admitted by) or,
+// on a git node that holds the data, out of the store that serves them. So a
+// node has at most [MaxFullRounds] full reads in flight, each holding its slot
+// from its first page to its last and the rest in line, first come, first
+// served: a node joining with hundreds of repositories asked of it holds
+// eight of a data node's sixty-four answers, never every one of them while
+// the fleet's reads wait behind its pages — and an asker that waits a whole
+// read attempt behind them takes the data node for gone. A DELTA holds no
+// slot: it is the round every node runs after every push, usually one page,
+// and never waits behind a joining node. A delta the log answers in full
+// holds one from its second page, page 1 having decided. A round waits for its
+// slot under the cache's lifetime, and its callers under their own bounds:
+// the wait is part of the sync each asked for, never a budget of its own.
+//
 // # Kept while there is room
 //
 // A cache is evicted to its budget (git.cache_max_bytes) and for no other
@@ -871,6 +892,20 @@
 // 8.6 ms and 61 ms at 10 000 packs: with the fake log's walk of every ref
 // taken out, about 7 ms and 46–48 ms whatever the pack count, the second
 // packed-refs rewritten whole.
+//
+// A COLD JOIN (BenchmarkColdJoin, one run at -benchtime 1x, git 2.56.0 on four
+// cores of a Core Ultra 7 265U): four nodes asked for 500 repositories each at
+// once, every repository's read one page, against ONE data node's lane
+// modeled as its sixty-four answers, each page holding one for 60 ms — a full
+// page of refs to serve and the estate's crossing — beside two hundred other
+// reads a second. With the node's full reads capped at four, eight and
+// sixteen, the other reads waited 0, 0 and 60 ms at the 99th percentile (at
+// most 6 µs, 2 µs and 74 ms) while the 2 000 reads took 9.1, 4.9 and 2.7 s;
+// uncapped they waited 1 904 ms (at most 1 929 ms), for 2.2 s. Sixteen is the
+// four nodes holding every answer the lane has, which puts the other reads a
+// page behind; what a cap leaves in line is the nodes times the cap, where no
+// cap's is every repository every node was asked for: the figures
+// MaxFullRounds is set from.
 //
 // The MULTI-PACK-INDEX, over a source repository's composition — every commit
 // four files of one directory, so commits are a seventh of the objects

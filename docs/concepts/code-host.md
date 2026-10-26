@@ -596,6 +596,30 @@ goes back because one data node's copy of the rows is behind; it goes back only
 when the code log did — recreated, or restored from an older backup — which the
 node notices, reading every repository whole at its next sync.
 
+**Many repositories at once.** A full read — a repository's first fetch on a
+node that just started or joined, a rebuild — reads the repository's rows from
+a data node a page at a time, and every page is served out of what that data
+node gives the whole fleet's reads at once: the 64 answers of the lane every
+other node asks it through — a seat's tracker read, a page write, the check
+every git request is admitted by — or, on a git node that holds the data
+itself, its own store, which serves those answers too. So a node
+reads **at most eight repositories' rows whole at once**, the rest waiting
+their turn, first come, first served: a node joining with hundreds of
+repositories asked of it holds at most eight of a data node's answers — four
+nodes joining together half of them — rather than all 64 while the fleet's
+reads wait behind its pages. A sync after a push reads only what moved and
+never waits for one of the eight. The wait is part of the request's own: a
+clone waits for its repository's turn as it waits for the sync, and a seat's
+read that has no answer within two seconds is sent to another git node while
+the sync goes on. Against a model of the data node — four nodes of 500
+repositories each, every page held as long as a full page of refs takes to
+serve — the fleet's other reads waited nothing for an answer with eight a node
+and about 1.9 seconds with no limit, and the four nodes read their rows in
+about five seconds: in that time a node downloads fewer than three packs for
+each of its 500 repositories from S3, so for repositories of any history it is
+the downloads, not the reads, that set how long a join takes.
+`crewlet.code.cache.full_rounds` shows a node's full reads running and waiting.
+
 **The budget.** A node holds its caches to a byte budget —
 `git.cache_max_bytes`, or a share of the cache's volume derived at every boot
 ([`git`](configuration.md#git)) — counting everything they hold on disk: every repository's packs, indexes and refs, and the
@@ -995,6 +1019,8 @@ check goes to the git nodes that serve the repository.
 **What to watch.** `crewlet.code.cache.bytes` against the budget,
 `crewlet.code.cache.repos`, `crewlet.code.cache.sync.duration` by `kind` (full
 syncs dominating is a cache too small to stay warm),
+`crewlet.code.cache.full_rounds` by `state` — `waiting` climbing is a node
+bringing up more repositories at once than it reads whole —
 `crewlet.code.cache.rebuilds` by `reason`,
 `crewlet.code.cache.rebuild.refusals` by `rule` — rising at all, damage no
 rebuild repairs — `crewlet.code.cache.checks` by `outcome`, `file` and

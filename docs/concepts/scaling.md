@@ -203,6 +203,25 @@ a balancer's idle timeout sees all of it. A cold sync is network work, not CPU:
 each push's object carries the index its receiving node's git wrote, so the
 node downloads, verifies and renames, and runs no `index-pack`.
 
+**A node joining with many repositories** asked of it reads at most eight of
+them whole at once from the data nodes
+([many repositories at once](code-host.md#the-cache-on-a-git-node)). Every
+page of such a read is served out of the 64 answers a data node gives the
+whole fleet's reads at once — a seat's tracker read, a page write, the check
+every git request is admitted by — or, where the git node holds the data
+itself, out of its own store, which serves those answers too; so a joining
+node holds at most eight of them, and four nodes joining together half, rather
+than all 64 while the fleet's reads wait behind its pages — and a request that
+waits a whole read attempt there, ten seconds, takes the data node for gone.
+Its later repositories wait their turn inside their requests' own time, and a
+sync after a push never waits for one of the eight. Against a model of the
+data node — four nodes of 500 repositories each, every page held as long as a
+full page of refs takes to serve — the fleet's other reads waited nothing with
+eight a node and about 1.9 seconds with no limit, and the four nodes read their
+rows in about five seconds: in that time a node downloads fewer than three
+packs for each of its repositories from S3, so for repositories of any history
+the downloads, not the reads, set how long a join takes.
+
 The object store sees the same multiplication. A git node reads at most 32
 bundles at once — sixteen for any one repository — and S3 answers each in
 about 100 to 200 ms, so a node syncing repositories it has never served reads

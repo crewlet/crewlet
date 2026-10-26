@@ -1111,6 +1111,28 @@ func Catalogue() []Instrument {
 				"time is mostly its downloads, sixteen at once.",
 		},
 		{
+			Name: CodeCacheFullRounds, Kind: KindGauge, Unit: UnitCount,
+			Attributes: []string{"state"},
+			Shows: "Full reads of a repository's rows this node has against " +
+				"the estate now, by `state`: `running`, each holding one of " +
+				"the node's eight slots from its first page to its last, and " +
+				"`waiting`, in line for one, first come first served. A full " +
+				"read is every repository's first sync after the node starts " +
+				"or joins, a rebuild, every repository's next sync once the " +
+				"code log was recreated or went back under the cache, and a " +
+				"check's or a hint's read of the same rows; a sync after a " +
+				"push reads only what moved and takes no slot. Every page of " +
+				"a full read holds one of the 64 answers a data node gives " +
+				"the whole fleet's reads at once (on a node that holds the " +
+				"data, it reads the store that serves them), so the slots " +
+				"keep a node joining with hundreds of repositories from " +
+				"holding all of them: four nodes joining at once hold half. " +
+				"`running` at " +
+				"eight while `waiting` climbs is a node bringing up more " +
+				"repositories than it reads at once: each waits inside its " +
+				"own request's time, and they come up eight reads at a time.",
+		},
+		{
 			Name: CodeGitWait, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"class"},
 			Shows: "How long a git process waited for a slot on this node, by " +

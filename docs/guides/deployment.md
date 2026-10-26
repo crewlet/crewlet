@@ -1744,7 +1744,12 @@ cache on its own disk. What such a node needs from its host:
   milliseconds; on a node that has never served the repository, or whose budget
   evicted it, a **cold** sync downloads one object for every push the
   repository ever took (about 70 to 130 s at 10 000 pushes from S3, which
-  answers each request in about 100 to 200 ms). The first sync of each
+  answers each request in about 100 to 200 ms), and on a node bringing up
+  hundreds of repositories at once it first waits its repository's turn to
+  read the rows, eight a node at a time
+  ([many repositories at once](../concepts/code-host.md#the-cache-on-a-git-node)):
+  a few seconds at 500 repositories, a data node serving a full page of rows
+  in about 60 ms. The first sync of each
   repository after the node restarts also holds that repository's index files
   — about a quarter of its pack bytes — to their checksums before it answers:
   0.2 s a gigabyte of packs from the page cache, and at the volume's own

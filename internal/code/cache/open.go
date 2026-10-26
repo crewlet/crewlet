@@ -49,6 +49,10 @@ type Cache struct {
 	// the suite can narrow both before a sync (export_test.go).
 	fetchConcurrency int
 	fetches          *fetchSlots
+	// full is the node's slots for full reads of a repository's rows
+	// against the estate, every round's on the node sharing them
+	// (MaxFullRounds): a field, so the suite can narrow it before a sync.
+	full *fullRounds
 	// unobserve gives the pool's observer back (Open, Stop).
 	unobserve func()
 	// roundPacks is how many packs a full round leaves before it writes its
@@ -203,6 +207,7 @@ func Open(ctx context.Context, o Options) (*Cache, error) {
 		dir: b.dir, maxBytes: o.MaxBytes, git: o.Git, objects: o.Objects, fetch: o.Fetch, limits: o.Limits,
 		faults: o.Faults, log: o.Logger, metrics: o.Metrics, now: o.Now, knobs: o.knobs,
 		fetchConcurrency: FetchConcurrency, fetches: newFetchSlots(NodeFetches), roundPacks: MidxRoundPacks,
+		full:         newFullRounds(MaxFullRounds, o.Metrics),
 		midxPacks:    MidxPacks,
 		releaseClaim: sync.OnceFunc(b.claim.Release),
 		kicks:        make(chan struct{}, 1), maintKicks: make(chan struct{}, 1), scrubKicks: make(chan struct{}, 1),

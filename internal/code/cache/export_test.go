@@ -636,6 +636,18 @@ func SetFetchConcurrency(c *Cache, n int) { c.fetchConcurrency = n }
 // Before any sync.
 func SetNodeFetches(c *Cache, n int64) { c.fetches = newFetchSlots(n) }
 
+// SetMaxFullRounds sets how many full reads of a repository's rows the node
+// has against the estate at once. Before any sync.
+func SetMaxFullRounds(c *Cache, n int64) { c.full = newFullRounds(n, c.metrics) }
+
+// FullRounds is how many full reads hold one of the node's slots now, the
+// most that have at once, and how many wait for one.
+func FullRounds(c *Cache) (running, most, waiting int64) {
+	c.full.mu.Lock()
+	defer c.full.mu.Unlock()
+	return c.full.running, c.full.most, c.full.waiting
+}
+
 // SetInstallHook makes every install call fn: "fetched" once a bundle is
 // split and checked, then "pack", "rev" and "idx" after each rename. Before
 // any sync.
