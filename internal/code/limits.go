@@ -415,11 +415,12 @@ const (
 	RetentionInterval = 15 * time.Minute
 
 	// RetentionLaneShare is the most of the replicated estate's one write
-	// lane a code-retention pass takes: after each purge step the pass waits
+	// lane a code-retention pass takes: after each step — a sweep's of
+	// retired packs or a purge's, one pacer over both — the pass waits
 	// (1 − share) / share times as long as that step took — twice, at a
 	// third — before the next. A step is decided, appended and APPLIED on the
 	// deciding node before it answers, so its duration is its own apply plus
-	// whatever the lane applied ahead of it, and a busy lane slows the purge
+	// whatever the lane applied ahead of it, and a busy lane slows the pass
 	// by itself.
 	//
 	// A THIRD, because every data node applies every record and the holder
@@ -435,25 +436,59 @@ const (
 	// records held 33–37% of its wall clock over five steps (five of the
 	// thirteen step-lengths five steps and their four waits take, a third
 	// over a longer pass), against all of it unpaced
-	// (TestAPassHoldsAtMostAThirdOfTheWriteLane).
+	// (TestAPassHoldsAtMostAThirdOfTheWriteLane). A sweep's step holds the
+	// other nodes' lanes for less than its third, because most of a small one
+	// is what only the holder pays: of the 4.9 ms a sweep of eight rows takes
+	// on the whole path (BenchmarkRetireSweepStep), its apply is 1.5 ms
+	// (BenchmarkApplyARetireSweep) and the rest the decide's read and the
+	// append's round trip.
 	RetentionLaneShare = 1.0 / 3
 
 	// RetentionPassBudget is how long one code-retention pass takes steps for
 	// before it stops, leaving what is due to the next pass, a
-	// RetentionInterval later. Running out is the pass's designed stop.
+	// RetentionInterval later: ONE BUDGET, and one pacer, over both kinds of
+	// step — the sweeps of retired packs past RetireGrace first, then the
+	// purges with whatever the sweeps leave of it. Running out is the pass's
+	// designed stop.
 	//
-	// statelog.StallGrace, A MINUTE, because a node that applies the purge
-	// more than 1/RetentionLaneShare times slower than the holder still
-	// queues, (k·share − 1) of every second the pass runs: bounded to a
+	// statelog.StallGrace, A MINUTE, because a node that applies the pass's
+	// records more than 1/RetentionLaneShare times slower than the holder
+	// still queues, (k·share − 1) of every second the pass runs: bounded to a
 	// minute, a node up to six times slower ends a pass at most StallGrace
 	// behind — where a push it commits starts to be answered pending rather
 	// than ok — and catches up within the quarter hour before the next; a
-	// node slower still is one the lag alarm already names. What it costs is
-	// the drain: a minute at a third is twenty seconds of steps a pass, about
-	// 240 of the measured 83 ms parts — some 23 000 a day — so ten thousand
-	// repositories (CodeMaxRepos) removed at once, four parts each, are purged
-	// within two days of falling due, against a retention of a week by
-	// default. A purge is days late by design; a node's pushes are not.
+	// node slower still is one the lag alarm already names.
+	//
+	// What it costs is the drain, out of twenty seconds of steps a pass (a
+	// minute at a third). THE SWEEPS TAKE THEIRS FIRST, AND LITTLE: a pass
+	// steps each repository holding rows past the grace once — again only
+	// for every RetireSweepRows rows past the first step's — and a step of a
+	// few rows takes 4.9 ms on the whole path (BenchmarkRetireSweepStep,
+	// doc.go's measured section), about a seventeenth of the measured 83 ms
+	// purge part, so a pass that sweeps S repositories still has room for
+	// about 240 − S/17 parts. S is how many repositories had packs retired in
+	// the matching quarter hour a day earlier: at the code host's design
+	// point, 250 000 pushes a day (docs/concepts/scaling.md), each adding at
+	// most one pack, and a compaction merging eight packs or more, nearly
+	// always into one, at most about 36 000 records a day retire packs —
+	// some 370 a pass, or 1 100 were all the day's pushes made in eight
+	// hours: 1.8 s of a pass's twenty, 5.5 s at the busiest, and under a
+	// tenth of a day's steps. THE PURGES HAVE THE REST: about 240 parts a
+	// pass with no sweep due and 175 beside the busiest sweeps, some 21 000
+	// a day — so ten thousand repositories (CodeMaxRepos) removed at once,
+	// four parts each, are purged within two days of falling due, against a
+	// retention of a week by default.
+	//
+	// A BACKLOG OF SWEEPS holds the purges back by passes, not days. Every
+	// repository due at once — a fleet's compactions in one quarter hour, or
+	// the passes after the duty was declined — is CodeMaxRepos steps of a few
+	// rows, 49 s of steps, and the purges step again in the third pass; and
+	// every row past a step's few adds 16 µs (93 µs on a loaded disk: the
+	// fullest step, RetireSweepRows rows, took 69 ms and 378 ms), so even a
+	// week of the design point's retirements — every pack pushed or
+	// compacted retired once, two million rows — is swept within twelve
+	// passes, three hours. A purge is days late by design; a node's pushes
+	// are not.
 	RetentionPassBudget = statelog.StallGrace
 
 	// RetireGrace is how long a retired pack's row keeps its object from the
@@ -485,7 +520,9 @@ const (
 	// repository holding more rows past the grace than one record removes is
 	// stepped record by record, each its own transaction, as a purge is; a
 	// retired row is a pack row's width, narrower than the push rows a purge
-	// part removes PurgePartRows of.
+	// part removes PurgePartRows of, and a record of all of them holds the
+	// write lane 40 ms (BenchmarkApplyARetireSweep), under the third of
+	// statelog.ApplyTxTimeBudget a purge part is sized to.
 	RetireSweepRows = MaxRecordRows - 1
 
 	// CommitterInbox is how many proposals one repository's committer holds

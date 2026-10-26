@@ -496,6 +496,19 @@
 // PurgePartBytes and refs for the rest of the rows; and 57–65 ms for the
 // final purge over the same, with [MaxProtectionsPerRepo] rules.
 //
+// A RETIRE SWEEP (BenchmarkApplyARetireSweep, the record applied and
+// committed; BenchmarkRetireSweepStep, the whole step — the decide's read,
+// the append and the holder's own apply, the duration the retention pass's
+// pacer times — on four E-cores of a Core Ultra 7 265U shared with another
+// session's builds, one count of five iterations): the record holds the
+// write lane 1.5 ms for a sweep of eight rows, whose commit is its cost, and
+// 40 ms for [RetireSweepRows], under the third of
+// statelog.ApplyTxTimeBudget a purge part is sized to; the step is 4.9 ms
+// for eight rows, and 69 ms for RetireSweepRows (three iterations — five,
+// under the other session's disk load, averaged 378 ms). A sweep of a few
+// rows is a seventeenth of a purge part, and [RetentionPassBudget] states
+// what the sweeps take of a pass before the purges have the rest.
+//
 // A RECONCILE (BenchmarkAnUnchangedActivation): an activation that changes
 // nothing, over ten thousand declared repositories — the most a configuration
 // may declare — is 471–593 ms of one node's reads through

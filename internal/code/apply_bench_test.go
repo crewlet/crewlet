@@ -388,6 +388,46 @@ func BenchmarkApplyAPurgePart(b *testing.B) {
 	}
 }
 
+// BenchmarkApplyARetireSweep is a retire_sweep record APPLIED AND COMMITTED —
+// the time it holds the replicated estate's one write lane, on every data node
+// — into a repository of its own each iteration, its retired rows seeded
+// outside the timer as one earlier record's retirements:
+//
+//   - rows=8: a sweep of a few rows, what the pass takes of a repository one
+//     small compaction retired from, whose cost is its commit's;
+//   - rows=3999: RetireSweepRows, the most rows one record removes.
+//
+// Each is held against statelog.ApplyTxTimeBudget (250 ms), which cannot split
+// a record; doc.go's measured section records the figures, and limits.go's
+// RetentionLaneShare and RetentionPassBudget reason from them beside
+// BenchmarkRetireSweepStep's whole step.
+func BenchmarkApplyARetireSweep(b *testing.B) {
+	quiet(b)
+	old := applyClock.Add(-RetireGrace - time.Hour)
+	for _, rows := range []int{8, RetireSweepRows} {
+		b.Run(fmt.Sprint("rows=", rows), func(b *testing.B) {
+			e := openApplyEstate(b)
+			a := NewApplier()
+			b.ReportAllocs()
+			b.ResetTimer()
+			b.StopTimer()
+			for i := range b.N {
+				repo := fmt.Sprintf("repo-%06d", i)
+				e.apply(create(b, repo, fmt.Sprintf("r%06d", i)))
+				// RETIRED BY THE CREATE'S OWN POSITION: any record below the
+				// sweep's is one a sweep may name.
+				retiredBy := e.next - 1
+				e.seedRetired(repo, retiredBy, old, rows)
+				// THE REPOSITORY'S OWN ROW beside the rows it removes.
+				e.applyTimed(b, a, sweepOf(b, repo, retiredBy), rows+1)
+				if left := e.num(`SELECT COUNT(*) FROM code_packs_retired WHERE repo_id = ?`, repo); left != 0 {
+					b.Fatalf("the sweep left %d of %s's %d retired rows", left, repo, rows)
+				}
+			}
+		})
+	}
+}
+
 // BenchmarkPushHistoryBytes is what ONE PUSH LEAVES ON EVERY DATA NODE'S DISK:
 // the growth of the replicated estate's file over records each landing one
 // push, divided by the pushes. Two rows with two lifetimes, so two arms:

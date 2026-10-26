@@ -1,6 +1,8 @@
 package code
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 	"testing"
 	"time"
@@ -17,17 +19,25 @@ func codeAt(seq uint64) statelog.Position {
 }
 
 // seedRetired writes count retired pack rows of id straight into the estate,
-// all retired by the record at seq — a case's rows, never the applier's.
+// all retired by the record at seq — a case's rows, never the applier's — in
+// one transaction, since a benchmark seeds a whole record's worth.
 func (e *estate) seedRetired(id string, seq uint64, at time.Time, count int) {
 	e.t.Helper()
-	for i := range count {
-		pack := fmt.Sprintf("%s-retired-%d-%d", id, seq, i)
-		p := packOf(pack)
-		e.exec(`INSERT INTO code_packs_retired (repo_id, pack_id, part, object, hash, size, index_bytes,
-			reverse_bytes, git_checksum, objects, kind, added_position, retired_position, retired_at)
-			VALUES (?, ?, 'pack', ?, ?, 10, 0, 0, ?, 1, 'push', 1, ?, ?)`,
-			id, p.PackID, p.Object.String(), string(p.Hash), p.GitChecksum, codeAt(seq).Packed(),
-			store.EncodeTime(at))
+	ctx := context.Background()
+	if err := e.db.Tx(ctx, func(tx *sql.Tx) error {
+		_, err := store.InsertRows(ctx, tx, e.db.Caps().MaxVariables,
+			`INSERT INTO code_packs_retired (repo_id, pack_id, part, object, hash, size, index_bytes,
+				reverse_bytes, git_checksum, objects, kind, added_position, retired_position,
+				retired_at) VALUES `,
+			`(?, ?, 'pack', ?, ?, 10, 0, 0, ?, 1, 'push', 1, ?, ?)`, ``, count,
+			func(i int) []any {
+				p := packOf(fmt.Sprintf("%s-retired-%d-%d", id, seq, i))
+				return []any{id, p.PackID, p.Object.String(), string(p.Hash), p.GitChecksum,
+					codeAt(seq).Packed(), store.EncodeTime(at)}
+			})
+		return err
+	}); err != nil {
+		e.t.Fatalf("seed %s's retired packs: %v", id, err)
 	}
 }
 

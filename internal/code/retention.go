@@ -56,9 +56,11 @@ import (
 // and a node applying slower than the holder queued the difference in front
 // of its own pushes and reads. So after each step a pass waits twice as long
 // as the step took ([RetentionLaneShare], a third), and it takes steps for
-// [RetentionPassBudget] at most; the next pass resumes from the rows.
-// limits.go states the arithmetic of both — what a node slower than the
-// holder is left behind by, and how fast a backlog drains.
+// [RetentionPassBudget] at most — its sweeps' first, its purges' with what
+// they leave; the next pass resumes from the rows. limits.go states the
+// arithmetic of both — what a node slower than the holder is left behind by,
+// how much of a pass the sweeps take, and how fast a backlog of either
+// drains.
 //
 // # When a name is handed on
 //
