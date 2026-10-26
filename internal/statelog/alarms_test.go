@@ -191,6 +191,11 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.Reading{ObjectsBucketBytes: 9 << 30, ObjectsBucketMaxBytes: 10 << 30},
 			"holds 9.0 GiB of its 10.0 GiB reservation",
 		},
+		"a clock further from its broker's than the deletions assume": {
+			statelog.KindClockSkew,
+			statelog.Reading{ClockSkew: time.Hour + time.Minute, ClockSkewBound: time.Hour},
+			"this node's clock stands 1h 1m from its broker's, past the 1h",
+		},
 		"a ceiling smaller than the replay window at the measured rate": {
 			statelog.KindLogCeilingShort,
 			// 300 MiB a day for seven days is 2.05 GiB against a
@@ -517,6 +522,49 @@ func TestTheCodeMaintenanceAlarmFiresPastTheNodesBudget(t *testing.T) {
 		_, fired := find(statelog.Evaluate(c.reading), statelog.KindCodeMaintenanceRefused)
 		if fired != c.fires {
 			t.Errorf("%s: fired %v, want %v", name, fired, c.fires)
+		}
+	}
+}
+
+// A CLOCK OFF ITS BROKER'S BY MORE THAN THE BOUND RAISES `clock_skew`, and one
+// inside it, or measured against no bound, does not.
+//
+// The bound is the one the deletions were sized against —
+// objstore.AssumedClockSkew, which the node hands in with its measure, since
+// this framework imports neither the object store nor the code host — so the
+// alarm fires exactly where a node stops being a machine the collector's
+// grace and the retired-pack sweep hold on, and is silent AT it, as every rule
+// here is silent at its threshold. A node that measured nothing hands in
+// neither number, and a skew with no bound is a measure nothing judges.
+//
+// Mutation: fire at the bound, or on any skew without comparing it, or on a
+// skew past a zero bound, and a case below fails.
+func TestAClockOffTheBrokersRaisesClockSkew(t *testing.T) {
+	t.Parallel()
+	const bound = time.Hour
+	for name, c := range map[string]struct {
+		reading statelog.Reading
+		fires   bool
+	}{
+		"an hour and a minute off": {statelog.Reading{
+			ClockSkew: time.Hour + time.Minute, ClockSkewBound: bound}, true},
+		"fifty-nine minutes off": {statelog.Reading{
+			ClockSkew: 59 * time.Minute, ClockSkewBound: bound}, false},
+		"exactly the bound off":               {statelog.Reading{ClockSkew: bound, ClockSkewBound: bound}, false},
+		"a clock in time with its broker's":   {statelog.Reading{ClockSkewBound: bound}, false},
+		"a skew with no bound to judge it by": {statelog.Reading{ClockSkew: 2 * time.Hour}, false},
+		"a node that measured nothing":        {statelog.Reading{}, false},
+	} {
+		alarm, fired := find(statelog.Evaluate(c.reading), statelog.KindClockSkew)
+		if fired != c.fires {
+			t.Errorf("%s: fired %v, want %v", name, fired, c.fires)
+			continue
+		}
+		// THE DETAIL NAMES THE MEASURE AND THE BOUND, each as the operator
+		// reads a duration: a name is not an alarm.
+		if fired && !strings.Contains(alarm.Detail, "stands 1h 1m from its broker's, past the 1h") {
+			t.Errorf("%s: the alarm reads %q, want the measure and the bound it is past",
+				name, alarm.Detail)
 		}
 	}
 }

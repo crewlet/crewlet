@@ -321,6 +321,12 @@ type stateLog struct {
 	// the runners and write of the row must not interleave with another's.
 	publishing sync.Mutex
 
+	// skew is how far this node's clock stood from its broker's at the
+	// position heartbeat's last measure ([stateLog.measureSkew]), nil until
+	// a beat has measured — written by the heartbeat and read by the alarm
+	// reading on another loop, hence atomic (clockskew.go).
+	skew atomic.Pointer[skewMeasure]
+
 	// clustered is whether the broker has peers, which is what a replicated
 	// create's budget branches on — and so how long a reanchor's steps after
 	// its append may take ([statelog.ReanchorDeps.CompletionBudget]).
@@ -4467,6 +4473,11 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 	generations, unreadGen := map[string]uint32(nil), map[string]error{}
 	if rowsErr == nil {
 		generations, unreadGen = s.fleetGenerations(ctx, rows, floors, s.openLogs(), above)
+		// AND HOW FAR THIS NODE'S CLOCK STANDS FROM ITS BROKER'S, off the
+		// row the previous beat wrote — its stamp against the instant the
+		// broker stored it — from the reading just taken, so `clock_skew`
+		// costs no read of its own (clockskew.go).
+		s.measureSkew(rows, row.At)
 	}
 	genErr := func(name string) error {
 		if rowsErr != nil {

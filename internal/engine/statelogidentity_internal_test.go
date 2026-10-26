@@ -672,6 +672,16 @@ func aRunningNodeOf(t *testing.T, company string) (*Engine, natsjs.JetStream) {
 // ([Options.Metrics]).
 func aRunningNodeWith(t *testing.T, company string, opts Options) (*Engine, natsjs.JetStream) {
 	t.Helper()
+	return aRunningNodeOver(t, company, opts, nil)
+}
+
+// aRunningNodeOver is [aRunningNodeWith] over backends amend changes before the
+// node boots on them — a coordination store wrapped to stand in for a broker
+// the case cannot run, say. Nil amends nothing.
+func aRunningNodeOver(t *testing.T, company string, opts Options,
+	amend func(*Backends)) (*Engine, natsjs.JetStream) {
+
+	t.Helper()
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
@@ -686,6 +696,9 @@ func aRunningNodeWith(t *testing.T, company string, opts Options) (*Engine, nats
 		t.Fatalf("OpenBackends: %v", err)
 	}
 	t.Cleanup(func() { back.Close(context.Background()) })
+	if amend != nil {
+		amend(back)
+	}
 	opts.Bootstrap, opts.Company, opts.Backends = &b, cfg, back
 	RequireNodeGit(t, &b, cfg)
 	e, err := New(t.Context(), opts)

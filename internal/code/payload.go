@@ -433,8 +433,9 @@ type Purge struct {
 // row's retired_at — the broker's instant — and the apply removes the rows at
 // or below it and reads no clock, so every node removes the same rows, and a
 // suite can drive the grace with the duty's clock where the broker's cannot
-// be moved. The skew between the two clocks is the references gate's
-// assumed hour, which [RetireGrace] outlasts.
+// be moved. The skew between the two clocks is at most twice
+// objstore.AssumedClockSkew while no node raises `clock_skew`, which
+// [RetireGrace] outlasts past the longest read.
 type RetireSweep struct {
 	RepoID string `json:"repo_id"`
 	// Through is the highest retired_position whose rows the duty's clock

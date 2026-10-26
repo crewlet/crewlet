@@ -147,6 +147,13 @@ var alarmMeaning = map[Kind]string{
 		"document, a frame becoming ready in a viewer's browser, a datastore verdict) " +
 		"is failing fast enough to spend its month's error budget early: in both the " +
 		"long and the short window of one of the two burn-rate pairs.",
+	KindClockSkew: "This node's clock stands further from its broker's than the hour " +
+		"the object store's deletions assume, as its position heartbeat measured it: " +
+		"the instant the node stamped on its own row in the coordination store against " +
+		"the instant the broker stored the row. The object collector's grace and the " +
+		"code host's retired-pack sweep each judge an instant one machine stamped by " +
+		"another machine's clock, and both hold only while every node keeps within " +
+		"that hour.",
 	KindCodeMaintenanceRefused: "This node's git cache cannot write the bitmap " +
 		"of some repositories, because a bitmap over each (about 1000 bytes " +
 		"an object, with room for a clone of the repository beside it) needs " +

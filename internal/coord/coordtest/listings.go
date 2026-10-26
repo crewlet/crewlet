@@ -12,7 +12,8 @@ import (
 // ---- whole-register listings under their own writers ------------------- //
 
 // listingCases certify that a register listing answers every record that
-// exists throughout it, ONCE, while the record is being rewritten.
+// exists throughout it, ONCE, while the record is being rewritten — and that
+// a positions row comes back carrying the instant its store took it.
 //
 // Every register here is rewritten by its own writers as a matter of course —
 // a node's positions row on every heartbeat, a mailbox record on every sweep
@@ -55,6 +56,61 @@ var listingCases = []fleetCase{{
 			return "", false
 		})
 		c.verdict(h.t, "Positions", raced, wrong)
+	},
+}, {
+	// A ROW'S INSTANT IS THE STORE'S, NEVER THE WRITER'S. A node reading back
+	// the row it last wrote compares the instant it stamped on it (At, its
+	// own clock) with the instant the store took it (StoredAt, the broker's)
+	// — the fleet's one reading of a node's clock against its broker's, which
+	// the engine's clock_skew alarm is raised from. A listing handing back the
+	// writer's stamp would read every node as exactly in time with its broker,
+	// and one keeping a stamp the writer put in the field would let a writer
+	// say what the broker's clock read.
+	//
+	// The store's clock is this machine's wherever the suite runs — the twin's
+	// own, the broker embedded in the test's process — so the instant lies
+	// between the wall clock read before the put and after it. The row's own
+	// stamp is the suite's fixed base, months before any run, so neither can
+	// pass for the other.
+	name: "a row read back carries the instant its store took it",
+	fn: func(h *fleetHarness) {
+		for write := range 2 {
+			before := time.Now().UTC()
+			if err := h.f.PutPositions(h.ctx, coord.NodePositions{
+				NodeID: "n0", At: h.now(),
+				// AN INSTANT THE WRITER MAY NOT SET: nothing put here is
+				// stored.
+				StoredAt: h.now().Add(-time.Hour),
+				Domains:  map[string]coord.DomainPosition{"tracker": {Seq: 1, AppliedThrough: 1}},
+			}); err != nil {
+				h.t.Fatalf("PutPositions (write %d): %v", write+1, err)
+			}
+			after := time.Now().UTC()
+			rows, err := h.f.Positions(h.ctx)
+			if err != nil {
+				h.t.Fatalf("Positions: %v", err)
+			}
+			if len(rows) != 1 || rows[0].NodeID != "n0" {
+				h.t.Fatalf("the register lists %+v, want n0's row alone", rows)
+			}
+			row := rows[0]
+			if !row.At.Equal(h.now()) {
+				h.t.Errorf("write %d: the row came back stamped %v, want the writer's %v",
+					write+1, row.At, h.now())
+			}
+			// EACH WRITE'S OWN INSTANT, the second's after the first's: the
+			// instant of the row as it stands, never of the first write.
+			if row.StoredAt.Before(before) || row.StoredAt.After(after) {
+				h.t.Errorf("write %d: the row came back stored at %v, outside the "+
+					"%v to %v its put took — the writer's stamp or the instant "+
+					"it offered stands in for the store's", write+1, row.StoredAt,
+					before, after)
+			}
+			if row.StoredAt.Location() != time.UTC {
+				h.t.Errorf("write %d: the stored instant is in %v, want UTC as every "+
+					"instant the store answers", write+1, row.StoredAt.Location())
+			}
+		}
 	},
 }, {
 	// The retention sweep lists the registry to decide which removed

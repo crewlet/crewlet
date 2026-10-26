@@ -12,6 +12,11 @@ import (
 
 // PutPositions writes a node's row. See the KV backend for why it is a plain
 // write rather than a compare-and-set.
+//
+// THE ROW IS STORED AT THE TWIN'S OWN INSTANT ([coord.NodePositions.StoredAt]),
+// read from its clock under the lock that stores it, as the broker stamps an
+// entry with its leader's — and whatever instant the caller put there is
+// dropped, since the KV backend never writes the field either.
 func (f *Fleet) PutPositions(_ context.Context, p coord.NodePositions) error {
 	if err := p.Validate(); err != nil {
 		return err
@@ -30,12 +35,13 @@ func (f *Fleet) PutPositions(_ context.Context, p coord.NodePositions) error {
 	// the real one serialises.
 	row := p
 	row.Domains = maps.Clone(p.Domains)
+	row.StoredAt = time.Now().UTC()
 	f.positions[p.NodeID] = row
 	return nil
 }
 
-// Positions reads every node's row, in node order so two captures of one
-// estate are diffable.
+// Positions reads every node's row, each with the instant it was stored, in
+// node order so two captures of one estate are diffable.
 func (f *Fleet) Positions(_ context.Context) ([]coord.NodePositions, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

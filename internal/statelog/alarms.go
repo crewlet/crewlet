@@ -313,6 +313,7 @@ const (
 
 	KindObjectsBucketNearCeiling Kind = "objects_bucket_near_ceiling"
 	KindObjectiveBurn            Kind = "objective_burn"
+	KindClockSkew                Kind = "clock_skew"
 
 	// The code host's: a git node's own work, beside the logs'.
 	KindCodeMaintenanceRefused Kind = "code_maintenance_refused"
@@ -576,6 +577,24 @@ type Reading struct {
 	// borrows the decision whole (ADR-0015) rather than restating a factor
 	// beside the one the objectives declare.
 	ObjectiveBurns []objectives.Burn
+
+	// ClockSkew is how far this node's clock stands from its broker's, as
+	// the position heartbeat last measured it off the node's own row in the
+	// coordination store — the instant the node stamped on it against the
+	// instant the broker stored it — and ClockSkewBound the most it may:
+	// objstore.AssumedClockSkew, the hour every rule that judges one
+	// machine's instant by another machine's clock rests on, which the node
+	// that measured hands in with the measure.
+	//
+	// THE BOUND TRAVELS WITH THE READING, for HistoryReadBudget's reason:
+	// the constant is the object store's, which this framework does not
+	// import, and the alarm fires at that decision rather than at a number
+	// of its own (ADR-0015). Both zero on a node that measured nothing — no
+	// heartbeat yet, or none that could read its row for two beats — and a
+	// zero bound judges nothing, the BackupAge/BackupMaxAge pair's shape: a
+	// measure is a magnitude, so a zero skew is a clock in time with its
+	// broker's, never an alarm.
+	ClockSkew, ClockSkewBound time.Duration
 
 	// CodeMaintenanceRefused is how many repositories this node's git cache
 	// cannot write a bitmap of, because the bitmap — charged by the
@@ -1215,6 +1234,35 @@ var table = []rule{
 			"hour and needs attention now; a slow burn spends a twentieth every six hours. " +
 			"The alarm clears within minutes of the fault ending, once the short window " +
 			"is healthy again.",
+	},
+	{
+		// THE THRESHOLD IS THE ASSUMPTION ITSELF (ADR-0015), handed in with
+		// the measure: objstore.AssumedClockSkew is what the collector's
+		// grace and a retired reference's grace were sized against, so the
+		// alarm fires exactly where a node stops being a machine those rules
+		// hold on. AT the bound is still inside it, as every rule here is
+		// silent at its threshold.
+		kind: KindClockSkew,
+		fires: func(r Reading) (string, bool) {
+			return fmt.Sprintf("this node's clock stands %s from its broker's, past the %s "+
+					"every deletion that judges one machine's instant by another "+
+					"machine's clock assumes", spoken(r.ClockSkew), spoken(r.ClockSkewBound)),
+				r.ClockSkewBound > 0 && r.ClockSkew > r.ClockSkewBound
+		},
+		remedy: "Keep this node's clock: run an NTP client (chrony, systemd-timesyncd) " +
+			"on it, and on the broker's servers where an external NATS cluster is the " +
+			"broker. Two deletions rest on every node keeping within the bound of its " +
+			"broker, and so on any two machines keeping within twice it: the object " +
+			"collector deletes an object once its key is a day old by the collector's " +
+			"clock, while a write may still name a key twelve hours old by the deciding " +
+			"node's; and the code host's code-retention duty sweeps a retired pack's row " +
+			"once the broker's instant on its retirement is a day old by the duty " +
+			"holder's clock, while a clone that began on the pack may still be reading it " +
+			"for most of that day. A clock past the bound can delete an object a write or " +
+			"a read still needs. The measure is this node's own row in the coordination " +
+			"store's position register, read back on every heartbeat: the instant the " +
+			"node stamped on it against the instant the broker stored it, off by no more " +
+			"than the heartbeat's own work between the two. See docs/guides/deployment.md.",
 	},
 	{
 		// THE THRESHOLD IS THE NODE'S OWN BUDGET, measured rather than set:

@@ -492,6 +492,10 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 	r.maintenance(ctx, now, &out)
 	r.observed(&out)
 	r.burning(&out)
+	// HOW FAR THIS NODE'S CLOCK STANDS FROM ITS BROKER'S, as the position
+	// heartbeat last measured it — read back, since the heartbeat is the
+	// loop that holds both instants (clockskew.go).
+	r.state.skewReading(now, &out)
 	return out
 }
 

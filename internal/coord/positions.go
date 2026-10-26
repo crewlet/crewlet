@@ -129,9 +129,31 @@ type DomainPosition struct {
 // trim asks "what has every node applied", and it asks it about every domain
 // at once.
 type NodePositions struct {
-	NodeID        string    `json:"node_id"`
+	NodeID string `json:"node_id"`
+
+	// At is when the node said so, by ITS OWN clock: the writer stamps it,
+	// and where a writer left it zero the store's client fills it, in the
+	// writer's process and from the same clock.
 	At            time.Time `json:"at"`
 	EngineVersion string    `json:"engine_version,omitempty"`
+
+	// StoredAt is the instant the store took the row this one was read
+	// from, by the STORE's clock — on the KV backend the broker's, which
+	// stamps every entry with its stream leader's clock — filled by every
+	// [PositionRegister.Positions] and never written: a row put with one
+	// stores none, so no writer can say what the broker's clock read.
+	//
+	// WHAT IT IS FOR is the one comparison of two machines' clocks the fleet
+	// can make without a read or a write of its own. At is the writer's clock
+	// at a write and StoredAt the store's at the same write, so a node that
+	// reads back the row it last wrote reads how far its clock stands from its
+	// broker's — off by no more than the time between its stamp and the
+	// write — and the engine's `clock_skew` alarm is raised from exactly that
+	// (internal/engine, clockskew.go).
+	//
+	// ZERO ON A ROW NOTHING READ BACK — one built in memory — which a reader
+	// takes as nothing measured.
+	StoredAt time.Time `json:"-"`
 
 	// Domains is this node's position on each log it runs, keyed by the
 	// log's domain name.
@@ -178,7 +200,8 @@ type PositionRegister interface {
 	// this process can have changed.
 	PutPositions(ctx context.Context, p NodePositions) error
 
-	// Positions reads every node's row.
+	// Positions reads every node's row, each with the instant the store took
+	// it ([NodePositions.StoredAt]).
 	//
 	// The whole register, because every caller wants it: the trim takes a
 	// minimum across nodes, the fleet view renders a row per node, and a

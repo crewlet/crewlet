@@ -500,14 +500,18 @@ const (
 	// the old pack list — may legitimately read the largest bundle a row can
 	// name for objstore.ReadBudget(MaxPackBytes), 21 h 21 min, and the clock
 	// judging the grace is the duty holder's against an instant the broker
-	// stamped (retired_at), which the references gate assumes may disagree by
-	// an hour: 22 h 21 min in all, under a day by 1 h 39 min. The margin past
-	// the longest read alone, RetireGrace − ReadBudget(MaxPackBytes) = 2 h 39
-	// min, is what a duty holder's clock may run ahead of the broker's before
-	// a pack can be deleted under such a read — and nothing in this build
-	// measures that skew, so it rests on every node's clock being kept by NTP
-	// (docs/guides/deployment.md), as the collector's own grace already does.
-	// internal/objstore/references holds the inequality.
+	// stamped (retired_at): two machines — the duty holder and the broker
+	// member leading this log, which need not be the member `clock_skew`
+	// measures every node against — so up to twice objstore.AssumedClockSkew
+	// apart while no node raises it: 23 h 21 min in all, under a day by 39
+	// min. The margin past the longest read alone, RetireGrace −
+	// ReadBudget(MaxPackBytes) = 2 h 39 min, is what a duty holder's clock may
+	// run ahead of the stamping member's before a pack can be deleted under
+	// such a read; each node raises `clock_skew` once its clock stands more
+	// than the assumed hour from its broker's, and NTP on every machine keeps
+	// them within milliseconds (docs/guides/deployment.md), as the collector's
+	// own grace already needs. internal/objstore/references holds the
+	// inequality.
 	//
 	// Equal to the collector's PendingGrace by one reason, not by reference —
 	// a day outlives every legal read — since this package does not import

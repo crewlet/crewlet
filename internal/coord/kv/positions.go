@@ -40,6 +40,13 @@ func (f *FleetStore) PutPositions(ctx context.Context, p coord.NodePositions) er
 // these rows, so a row silently dropped raises that minimum — which is the
 // engine deleting records a node still needs, reported by nothing. "I could
 // not read node X" has to be louder than "there is no node X".
+//
+// EACH ROW CARRIES THE INSTANT THE BROKER STORED IT
+// ([coord.NodePositions.StoredAt]): the entry's own timestamp, which the
+// stream's leader stamps from its clock and the walk already holds, so the one
+// reading of a node's clock against its broker's the fleet has costs this
+// listing nothing more. Never the row's own At, which is the writer's clock
+// and is what the instant is compared against.
 func (f *FleetStore) Positions(ctx context.Context) ([]coord.NodePositions, error) {
 	var out []coord.NodePositions
 	// THE BUCKET HOLDS EIGHT KEY CLASSES — a node's positions, a trim hold,
@@ -52,7 +59,7 @@ func (f *FleetStore) Positions(ctx context.Context) ([]coord.NodePositions, erro
 	// key nobody thinks of as a node. It is [FleetStore.eachPositionKey]'s
 	// single copy of that filter rather than a fifth hand-written one.
 	err := f.eachPositionKey(ctx, "node", "the log positions",
-		func(key string, value []byte) error {
+		func(key string, value []byte, stored time.Time) error {
 			var row coord.NodePositions
 			if err := json.Unmarshal(value, &row); err != nil {
 				return fmt.Errorf("coord: the positions row at %s does not "+
@@ -60,6 +67,7 @@ func (f *FleetStore) Positions(ctx context.Context) ([]coord.NodePositions, erro
 					"skipped here raises that minimum and deletes records a node "+
 					"still needs: %w", key, err)
 			}
+			row.StoredAt = stored
 			out = append(out, row)
 			return nil
 		})
@@ -111,7 +119,7 @@ func (f *FleetStore) PutHold(ctx context.Context, h coord.TrimHold) error {
 func (f *FleetStore) Holds(ctx context.Context) ([]coord.TrimHold, error) {
 	var out []coord.TrimHold
 	err := f.eachPositionKey(ctx, "hold", "the trim holds",
-		func(key string, value []byte) error {
+		func(key string, value []byte, _ time.Time) error {
 			var hold coord.TrimHold
 			if err := json.Unmarshal(value, &hold); err != nil {
 				return fmt.Errorf("coord: the trim hold at %s does not "+
@@ -268,7 +276,7 @@ func (f *FleetStore) PutBackupPoint(ctx context.Context, p coord.BackupPoint) er
 func (f *FleetStore) BackupPoints(ctx context.Context) ([]coord.BackupPoint, error) {
 	var out []coord.BackupPoint
 	err := f.eachPositionKey(ctx, "backup", "the backup points",
-		func(key string, value []byte) error {
+		func(key string, value []byte, _ time.Time) error {
 			var point coord.BackupPoint
 			if err := json.Unmarshal(value, &point); err != nil {
 				return fmt.Errorf("coord: the backup point at %s does not "+
@@ -442,7 +450,7 @@ func (f *FleetStore) PutAdmission(ctx context.Context, a coord.Admission) error 
 func (f *FleetStore) Admissions(ctx context.Context) ([]coord.Admission, error) {
 	var out []coord.Admission
 	err := f.eachPositionKey(ctx, "admitted", "the admissions",
-		func(key string, value []byte) error {
+		func(key string, value []byte, _ time.Time) error {
 			var a coord.Admission
 			if err := json.Unmarshal(value, &a); err != nil {
 				return fmt.Errorf("coord: the admission at %s does not decode: a "+
@@ -510,7 +518,7 @@ func (f *FleetStore) PutMaintenanceAck(ctx context.Context, ack coord.Maintenanc
 func (f *FleetStore) MaintenanceAcks(ctx context.Context) ([]coord.MaintenanceAck, error) {
 	var out []coord.MaintenanceAck
 	err := f.eachPositionKey(ctx, "maintenance-ack", "the maintenance acknowledgements",
-		func(key string, value []byte) error {
+		func(key string, value []byte, _ time.Time) error {
 			var ack coord.MaintenanceAck
 			if err := json.Unmarshal(value, &ack); err != nil {
 				return fmt.Errorf("coord: the maintenance acknowledgement at %s "+
@@ -524,14 +532,22 @@ func (f *FleetStore) MaintenanceAcks(ctx context.Context) ([]coord.MaintenanceAc
 	return out, err
 }
 
-// eachPositionKey walks one key class of the positions register.
+// eachPositionKey walks one key class of the positions register, handing fn
+// each key, its value and the instant the broker stored that value.
 //
 // ONE WALK for the classes added after the first three, because the filter is
 // the load-bearing half of sharing a bucket and six copies of it is six
 // chances for one to be written with the wrong prefix — a positions row
 // decoded as an admission is a publisher nobody can see.
+//
+// THE INSTANT IS THE ENTRY'S OWN (`Created`), stamped by the stream's leader
+// when it stored the value and carried by every entry the walk hands on —
+// the pass's deliveries and its certifying leader reads alike — exactly as a
+// lease's claim reads the broker's time back ([Store.claimedAt]). In UTC,
+// as every instant this store answers is. A class whose rows want no broker
+// time ignores it; the positions rows want it ([FleetStore.Positions]).
 func (f *FleetStore) eachPositionKey(ctx context.Context, class, what string,
-	fn func(key string, value []byte) error) error {
+	fn func(key string, value []byte, stored time.Time) error) error {
 
 	// THE CLASS IS A SUBJECT TOKEN, so the broker filters. A key here is
 	// coord.DocumentKey(class, id) — two segments joined by the separator,
@@ -557,7 +573,7 @@ func (f *FleetStore) eachPositionKey(ctx context.Context, class, what string,
 			if !ok || len(segments) < 2 || segments[0] != class {
 				return nil
 			}
-			return fn(kve.Key(), kve.Value())
+			return fn(kve.Key(), kve.Value(), kve.Created().UTC())
 		})
 }
 

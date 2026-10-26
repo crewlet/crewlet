@@ -346,12 +346,12 @@ func TestEveryDeclarationStatesItsStanding(t *testing.T) {
 	t.Logf("%d declarations reviewed", len(standings))
 }
 
-// assumedClockSkew is the most the clocks of the node deciding a write and the
-// node running the collector are assumed to disagree by — an hour, which no
-// node an engine runs on is anywhere near (NTP keeps them within
-// milliseconds), stated so the margin the constants leave is a number rather
-// than a hope.
-const assumedClockSkew = time.Hour
+// twoClocks is the most the clocks of two machines may disagree by while no
+// node raises `clock_skew`: each within objstore.AssumedClockSkew of the
+// broker member leading the position register, so the two within twice it —
+// the reading every inequality here compares two machines' clocks under (see
+// objstore.AssumedClockSkew).
+const twoClocks = 2 * objstore.AssumedClockSkew
 
 // THE GRACE OUTLASTS THE LONGEST AN UPLOAD CAN GO UNRECORDED — ADR-0027's
 // inequalities, pinned here because this is the one package every constant
@@ -360,19 +360,35 @@ const assumedClockSkew = time.Hour
 // A key may be named by a write decided up to objstore.RecordWithin after it
 // was minted, by the deciding node's clock; the collector deletes it only
 // once it was minted more than collect.PendingGrace ago, by its own. So the
-// grace has to exceed the bound by more than the two clocks can disagree, or
-// a write could name a key a collection had just read as nobody's. And the
-// bound itself has to outlast the slowest upload the engine accepts — the
-// largest object any declaring domain stores (a file of tracker.MaxFileBytes,
-// a pack bundle of code.MaxPackBytes, an artifact's file or asset of
-// artifacts.MaxTextFileBytes) at the objstore.MiBPace floor — or a legal
-// upload would finish only to be refused.
+// grace has to exceed the bound by more than the two nodes' clocks can
+// disagree, or a write could name a key a collection had just read as
+// nobody's — and two nodes may disagree by twice objstore.AssumedClockSkew
+// while neither raises `clock_skew`. And the bound itself has to outlast the
+// slowest upload the engine accepts — the largest object any declaring domain
+// stores (a file of tracker.MaxFileBytes, a pack bundle of code.MaxPackBytes,
+// an artifact's file or asset of artifacts.MaxTextFileBytes) at the
+// objstore.MiBPace floor — or a legal upload would finish only to be refused.
+//
+// The controls show the first inequality is held to two nodes' clocks: a grace
+// past the bound by one node's skew and not two is refused.
 func TestTheGraceOutlastsTheLongestUnrecordedUpload(t *testing.T) {
 	t.Parallel()
-	if objstore.RecordWithin+assumedClockSkew >= collect.PendingGrace {
-		t.Errorf("RecordWithin (%v) and an assumed clock skew of %v reach the "+
-			"collector's grace (%v): a write may name a key the collector deletes",
-			objstore.RecordWithin, assumedClockSkew, collect.PendingGrace)
+	for _, c := range []struct {
+		name  string
+		grace time.Duration
+		fault bool
+	}{
+		{"a grace past the bound and two nodes' skew", objstore.RecordWithin + twoClocks + time.Minute, false},
+		{"a grace at the bound and two nodes' skew", objstore.RecordWithin + twoClocks, true},
+		{"a grace past the bound and one node's skew, not two",
+			objstore.RecordWithin + objstore.AssumedClockSkew + time.Minute, true},
+	} {
+		if got := uploadFault(objstore.RecordWithin, c.grace); (got != "") != c.fault {
+			t.Errorf("%s drew %q; want a fault: %v", c.name, got, c.fault)
+		}
+	}
+	if fault := uploadFault(objstore.RecordWithin, collect.PendingGrace); fault != "" {
+		t.Error(fault)
 	}
 	for _, largest := range []struct {
 		name  string
@@ -389,9 +405,22 @@ func TestTheGraceOutlastsTheLongestUnrecordedUpload(t *testing.T) {
 				largest.bytes, slowest, objstore.RecordWithin)
 		}
 		t.Logf("the slowest legal upload of %s takes %v of the %v a write may name its "+
-			"key in, and the grace leaves %v for the clocks to disagree by", largest.name,
-			slowest, objstore.RecordWithin, collect.PendingGrace-objstore.RecordWithin)
+			"key in, and the grace leaves %v for the clocks to disagree by, against "+
+			"the %v they may", largest.name, slowest, objstore.RecordWithin,
+			collect.PendingGrace-objstore.RecordWithin, twoClocks)
 	}
+}
+
+// uploadFault is what is wrong with a collector's grace against the bound on
+// the write that names a key, or "" when the grace outlasts the bound by more
+// than two nodes' clocks may disagree.
+func uploadFault(recordWithin, grace time.Duration) string {
+	if recordWithin+twoClocks < grace {
+		return ""
+	}
+	return fmt.Sprintf("RecordWithin (%v) and the %v two nodes' clocks may disagree by "+
+		"(twice objstore.AssumedClockSkew) reach the collector's grace (%v): a write may "+
+		"name a key the collector deletes", recordWithin, twoClocks, grace)
 }
 
 // retirement is what a RETIRED declaration owes (ADR-0051), reviewed here,
@@ -439,6 +468,12 @@ var retirements = map[string]retirement{
 // sweep is unnamed, whose largest object is unstated or whose grace does not
 // outlast the longest read of that object by more than the clocks stamping
 // and sweeping the row can disagree.
+//
+// TWO MACHINES' CLOCKS, never one's against the broker's: a retirement is
+// stamped by the broker member leading its domain's log and swept by the
+// clock of whichever node holds the sweep, and `clock_skew` holds each of
+// them to objstore.AssumedClockSkew of a third — the member leading the
+// position register, which need not be the one that stamped the row.
 func retirementFaults(declared []objstore.ReferenceTable, reviewed map[string]retirement) []string {
 	var out []string
 	retired := map[string]bool{}
@@ -468,12 +503,12 @@ func retirementFaults(declared []objstore.ReferenceTable, reviewed map[string]re
 				"so nothing bounds the read its grace must outlast (ADR-0051)", ref.Table, r.largest))
 			continue
 		}
-		if longest := objstore.ReadBudget(r.largest); r.grace <= longest+assumedClockSkew {
+		if longest := objstore.ReadBudget(r.largest); r.grace <= longest+twoClocks {
 			out = append(out, fmt.Sprintf("%s keeps a retired row for %v, and a read of its "+
-				"largest object (%d bytes) may take objstore.ReadBudget = %v, plus an assumed "+
-				"clock skew of %v between the node stamping the row and the node sweeping it — "+
-				"the object can be deleted under a read still fetching it (ADR-0051)",
-				ref.Table, r.grace, r.largest, longest, assumedClockSkew))
+				"largest object (%d bytes) may take objstore.ReadBudget = %v, plus a clock skew "+
+				"of up to %v (twice objstore.AssumedClockSkew) between the broker stamping the "+
+				"row and the node sweeping it — the object can be deleted under a read still "+
+				"fetching it (ADR-0051)", ref.Table, r.grace, r.largest, longest, twoClocks))
 		}
 	}
 	for table := range reviewed {
@@ -494,9 +529,12 @@ func retirementFaults(declared []objstore.ReferenceTable, reviewed map[string]re
 //
 // THE CODE HOST'S RETIRED PACKS ARE THE FIRST, and their entry is measured
 // here: code.RetireGrace (24 h) against objstore.ReadBudget(code.MaxPackBytes)
-// (21 h 21 min) plus the assumed skew (1 h). The controls below show the gate
-// fires on a retired declaration that lands without a reviewed entry, and on
-// every way such an entry can be wrong, whatever the shipped list holds.
+// (21 h 21 min) plus the two hours the stamping broker and the sweeping node
+// may disagree by (twice objstore.AssumedClockSkew), which leaves 39 min. The
+// controls below show the gate fires on a retired declaration that lands
+// without a reviewed entry, and on every way such an entry can be wrong —
+// one only one machine's skew past the longest read included — whatever the
+// shipped list holds.
 func TestARetiredTableIsSweptAndOutlivesItsLongestRead(t *testing.T) {
 	t.Parallel()
 	retired := tracker.FileObjectReferences
@@ -506,7 +544,7 @@ func TestARetiredTableIsSweptAndOutlivesItsLongestRead(t *testing.T) {
 	derived := retired
 	derived.Table, derived.Standing = "test_derived_objects", objstore.Derived
 	longest := objstore.ReadBudget(tracker.MaxFileBytes)
-	sound := retirement{grace: longest + assumedClockSkew + time.Minute,
+	sound := retirement{grace: longest + twoClocks + time.Minute,
 		largest: tracker.MaxFileBytes, sweep: "test_retired_objects"}
 	with := func(edit func(*retirement)) map[string]retirement {
 		r := sound
@@ -532,7 +570,13 @@ func TestARetiredTableIsSweptAndOutlivesItsLongestRead(t *testing.T) {
 		{"a grace the longest read outlasts", []objstore.ReferenceTable{retired},
 			with(func(r *retirement) { r.grace = longest }), "ReadBudget"},
 		{"a grace the clocks can eat", []objstore.ReferenceTable{retired},
-			with(func(r *retirement) { r.grace = longest + assumedClockSkew }), "clock skew"},
+			with(func(r *retirement) { r.grace = longest + twoClocks }), "clock skew"},
+		// ONE MACHINE'S SKEW IS NOT THE BOUND: the broker that stamped the
+		// row and the node sweeping it are two clocks, each held to the
+		// assumed skew of a third.
+		{"a grace past one clock's skew and not two machines'", []objstore.ReferenceTable{retired},
+			with(func(r *retirement) { r.grace = longest + objstore.AssumedClockSkew + time.Minute }),
+			"clock skew"},
 		{"a sound retirement", []objstore.ReferenceTable{retired}, with(func(*retirement) {}), ""},
 		{"a derived table, which owes no grace", []objstore.ReferenceTable{derived}, nil, ""},
 		{"a derived table reviewed as retired",
@@ -554,7 +598,7 @@ func TestARetiredTableIsSweptAndOutlivesItsLongestRead(t *testing.T) {
 	for table, r := range retirements {
 		longest := objstore.ReadBudget(r.largest)
 		t.Logf("%s keeps a retired row %v: the longest read of its largest object takes %v, "+
-			"and with the assumed skew of %v that leaves %v", table, r.grace, longest,
-			assumedClockSkew, r.grace-longest-assumedClockSkew)
+			"and with the %v two machines' clocks may disagree by that leaves %v", table,
+			r.grace, longest, twoClocks, r.grace-longest-twoClocks)
 	}
 }

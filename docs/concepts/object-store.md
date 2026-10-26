@@ -959,9 +959,11 @@ The first retired rows are the [code host's](code-host.md): when a compaction
 merges a repository's small packs into a larger one, each pack it replaced
 moves to `code_packs_retired` and keeps its object for **a day** — longer
 than the longest read a clone of the largest pack a row can name is allowed
-(21 hours 21 minutes), with an hour to spare for the clocks of the node
-sweeping and the broker that stamped the retirement — so a git node still
-serving the old pack list, or a clone that began on it, finishes its read.
+(21 hours 21 minutes) by two hours and thirty-nine minutes, more than the two
+hours the clocks of the node sweeping and the broker that stamped the
+retirement may disagree by while no node raises
+[`clock_skew`](../reference/alarms.md) — so a git node still serving the old
+pack list, or a clone that began on it, finishes its read.
 The `code-retention` duty then removes the rows past their day — by a record
 on the code log for each repository holding some, which every data node
 applies — and the collector's next pass deletes their objects. A deleted
@@ -999,7 +1001,11 @@ close it:
 An object the collector deletes is past the twelve hours by a margin of twelve
 more, so no write that could still land can name it. The rule holds as long as
 the clocks of the node deciding a write and the node running the collector
-disagree by less than that margin. There is no lock, no second look and no
+disagree by less than that margin, and the engine watches that they do: every
+data node raises [`clock_skew`](../reference/alarms.md) once its clock stands
+more than an hour from its broker's, so while none does, two of them disagree
+by two hours at most (see [Deployment](../guides/deployment.md) for keeping
+them in time). There is no lock, no second look and no
 coordination round trip, and two collectors running at once are safe —
 deleting an object that is already gone is not an error. An artifact's
 [carried files](#an-unchanged-file-is-carried-never-copied) keep the rule: a
@@ -1015,6 +1021,7 @@ carry is applied. The decision is
 |---|---|
 | `objects_bucket_near_ceiling` | the fleet's NATS bucket holds more than four fifths of its byte reservation, as the node holding the collector's duty last read it: once it is full every upload is refused. Raise the reservation, or move the files to a bucket |
 | `objects_missing` | the collector's last audit to run to its end found files whose object the store does not hold, holds at the wrong size, under the wrong digest or as nothing it can read, or would not answer for twice while it answered for the rest — on the node holding the collector's duty, since one node's audit of a shared store is the fleet's |
+| `clock_skew` | a node's clock stands more than an hour from its broker's, as its position heartbeat measured it — on that node. The collector's grace and a retired pack's both rest on every node keeping within that hour ([Why a deletion needs no lock](#why-a-deletion-needs-no-lock)) |
 
 A missing or damaged object is a store that lost or changed bytes it
 acknowledged, and an unanswered one a store that will not serve them: check

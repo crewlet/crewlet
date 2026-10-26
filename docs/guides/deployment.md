@@ -100,8 +100,8 @@ running — and a running check's outcome is read with
 
 **Keep every machine's clock synchronised** — every node's, and every server's
 of an external NATS cluster. Two of the engine's deletions judge an instant
-one machine stamped by another machine's clock, and both assume the two agree
-to well within an hour. The
+one machine stamped by another machine's clock, and both assume every
+machine's clock keeps within an hour of its broker's. The
 [object collector](../concepts/object-store.md#collection-and-audit) deletes an
 object no row names only once its key, minted by the node that uploaded it,
 and the store's own record of when it was written are both more than a day old
@@ -115,8 +115,16 @@ and thirty-nine minutes for a retired pack — and a clock running ahead of the
 other by more than that deletes an object a write or a read still needs. NTP
 keeps machines within milliseconds of each other; a host without it drifts,
 and a virtual machine restored from a snapshot can come back hours off.
-Nothing in the engine measures the skew, so run an NTP client (chrony,
-systemd-timesyncd) everywhere the engine or its broker runs.
+
+Every data node measures its own clock against its broker's on its position
+heartbeat, every ten seconds: the instant it stamps on its row in the
+coordination store against the instant the broker stores the row at. Past an
+hour it raises [`clock_skew`](../reference/alarms.md), so while no node raises
+it any two data nodes — every member of an embedded broker among them — agree
+to within two hours, inside both margins. The alarm names a clock that has
+already drifted rather than keeping one from drifting, and it cannot see the
+servers of an external NATS cluster disagree among themselves, so run an NTP
+client (chrony, systemd-timesyncd) everywhere the engine or its broker runs.
 
 ### The room the stream's volume needs
 
