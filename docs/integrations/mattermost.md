@@ -1126,10 +1126,10 @@ already subscribe to, so there is no code host to stand up, no metered API
 key, and nothing that has to reach the engine from outside. It still has a
 work tracker and a knowledge base: both are the engine's own, so its seats
 file work and publish pages from the first turn with nothing to sign up
-for. Its three engineering seats still run code: their executor *is* the
-coding CLI's own agentic loop, in a [sandbox](../concepts/code-sandbox.md)
-box on the engine host that reuses the same CLI login — so that costs nothing
-extra to set up either, beyond one environment variable in step 5.
+for. Every seat still runs code: its executor *is* the coding CLI's own
+agentic run, in a `direct` [sandbox](../concepts/code-sandbox.md) box on the
+engine host that reuses the same CLI login and dials this node's own listener
+for the seat's tools — so that costs nothing extra to set up either.
 
 Add a code host afterwards, once you have seen the loop work; it has its own
 page, `examples/nimbus.company.yaml` shows it already wired, and nothing here
@@ -1151,8 +1151,8 @@ Two things the config expects of you, both once:
   the machine running `crewlet run` and Crewlet needs its own copy of the
   login. Set its `auth.mode: api-key` if you would rather spend a metered
   key — `ANTHROPIC_API_KEY`, read from the secret store or the environment —
-  or point it at another CLI ([Picking a
-  CLI](../concepts/llm-backends.md#picking-a-cli)).
+  or point it at OpenCode, the other CLI that runs a seat's executor
+  ([Picking a CLI](../concepts/llm-backends.md#picking-a-cli)).
 
 Then, from the repo root:
 

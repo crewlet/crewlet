@@ -79,7 +79,7 @@ The `provisioning:` sub-block drives the reconcile described under [Provisioning
 
 ## Per-role wiring
 
-Declare the GitLab **MCP tool server** once in `mcp_servers` as a `shared: false` server. Each agent supplies its own service-account PAT in `role.mcp_env.gitlab`; a sandbox-enabled role also declares the same PAT in `role.sandbox.env` for the git-auth recipe:
+Declare the GitLab **MCP tool server** once in `mcp_servers` as a `shared: false` server. Each agent supplies its own service-account PAT in `role.mcp_env.gitlab`; a seat whose executor run pushes code also declares the same PAT in `role.sandbox.env`, for the git-auth recipe its box runs:
 
 ```yaml
 mcp_servers:
@@ -99,7 +99,6 @@ roles:
         GITLAB_TOKEN: "${GITLAB_TOKEN_SWE}"    # per-agent service-account PAT (glab reads it)
         GITLAB_HOST: gitlab.com
     sandbox:
-      enabled: true
       env:
         GITLAB_TOKEN: "${GITLAB_TOKEN_SWE}"     # same PAT for the git-auth recipe
 ```
@@ -129,7 +128,7 @@ The default tool server is the **official [`glab` CLI](https://gitlab.com/gitlab
 
 GitLab's **built-in server-side MCP endpoint** (`POST /api/v4/mcp`, Free tier since 19.2) is **not used**. Its authentication is OAuth-only — dynamic client registration with interactive consent per identity, unworkable for headless per-agent identities (PAT auth is an open request, [gitlab-org/gitlab#586184](https://gitlab.com/gitlab-org/gitlab/-/issues/586184)). When PAT auth lands, adopting it is a single-server swap.
 
-As with every MCP surface, the engine hardcodes no tool names — a bundled `mcp:gitlab` [Tool Skill](../concepts/tool-skills.md) frames the tools as read/review/track with authoring pointed at the sandbox, mirroring the `mcp:github` skill.
+As with every MCP surface, the engine hardcodes no tool names — a bundled `mcp:gitlab` [Tool Skill](../concepts/tool-skills.md) frames the tools as read/review/track, with authoring done in the run's own checkout with its shell and git, mirroring the `mcp:github` skill.
 
 ---
 
@@ -547,7 +546,7 @@ There is no MCP-server sidecar: the GitLab tool surface is `glab mcp serve`, whi
 
 The full loop this validates: **provision** (service accounts appear with the agents' handles) → **assign/mention** → webhook wakes the agent → it reads/comments as itself → (where the sandbox can reach the instance) opens an MR as itself → the reviewer-added webhook wakes the reviewer → the review lands under the reviewer's identity.
 
-> **Sandbox code-authoring reaches a laptop's instance only from a box that resolves it to the laptop.** The example's seats run `direct`, as processes on the machine running `crewlet run`, so their boxes resolve `gitlab.local` through the same `/etc/hosts` line as the engine and push to it. A seat moved to `run_in: container` does not, as it stands: a container has its own `/etc/hosts` and its own loopback, so the host's `127.0.0.1 gitlab.local` line neither resolves nor routes inside it. Map the name to the host in `local.run_args`, `["--add-host=gitlab.local:host-gateway"]` (the compose service publishes `8929` on every host interface), and the box reaches the instance as a `direct` one does. A seat moved to `run_in: e2b` cannot reach it at all: a cloud E2B sandbox cannot reach your machine's `gitlab.local:8929`, so its `run_sandbox` MRs need a *reachable* instance — a self-hosted E2B domain on the same network, a tunnel, or gitlab.com. Provisioning, webhooks, identity resolution, and all `glab` MCP read/review/track work fine against local compose.
+> **Sandbox code-authoring reaches a laptop's instance only from a box that resolves it to the laptop.** The example's seats run `direct`, as processes on the machine running `crewlet run`, so their boxes resolve `gitlab.local` through the same `/etc/hosts` line as the engine and push to it. A seat whose entry places its runs `run_in: container` does not, as it stands: a container has its own `/etc/hosts` and its own loopback, so the host's `127.0.0.1 gitlab.local` line neither resolves nor routes inside it. Map the name to the host in `local.run_args`, `["--add-host=gitlab.local:host-gateway"]` (the compose service publishes `8929` on every host interface), and the box reaches the instance as a `direct` one does. A seat whose entry places its runs `run_in: e2b` cannot reach it at all: a cloud E2B sandbox cannot reach your machine's `gitlab.local:8929`, so its runs' MRs need a *reachable* instance — a self-hosted E2B domain on the same network, a tunnel, or gitlab.com. Provisioning, webhooks, identity resolution, and all `glab` MCP read/review/track work fine against local compose.
 
 ---
 

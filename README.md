@@ -59,8 +59,9 @@ work isn't done.</sub>
 <td width="33%" align="center" valign="top">
 <img src="docs/assets/code-sandbox.svg" width="64" alt=""><br>
 <b>Agents that ship code</b><br>
-<sub>An engineer seat runs a coding agent in an isolated sandbox and opens the merge
-request under its own identity — not yours.</sub>
+<sub>Every agent seat works as its coding CLI's own run in a box — on your host, in a
+container or in a remote VM — and an engineer seat opens the merge request under
+its own identity, not yours.</sub>
 </td>
 <td width="33%" align="center" valign="top">
 <img src="docs/assets/knowledge.svg" width="64" alt=""><br>
@@ -153,6 +154,9 @@ providers:
     default:             # Claude Code, the default CLI
       model: sonnet
       auth: { mode: api-key }   # reads ANTHROPIC_API_KEY; drop it to run on your plan
+  sandbox:               # where every agent seat's executor runs: Claude Code's
+    local: {}            #   own fully permissioned run, as you on this host;
+    default_run_in: direct   # container or e2b on a host others share
 
 roles:
   - name: Your Name
@@ -200,8 +204,8 @@ first turn with no integrations at all, then wiring in the real ones.
 > through OpenCode on an OpenRouter key, and Worklet and Doclet, the engine's
 > own work tracker and knowledge base.
 > `nimbus-claude-cli.company.yaml` is the short path: chat on Mattermost, its
-> model Claude Code on the Claude plan you already pay for, and its engineering seats running
-> that same CLI as their own agentic loop in a sandbox on the engine host, on
+> model Claude Code on the Claude plan you already pay for, and every seat running
+> that same CLI as its own agentic run in a box on the engine host, on
 > that same login — no API key, and no service beyond the chat server in this
 > repo's compose file. Neither needs a tracker or a wiki account: both run Worklet
 > and Doclet, and [Jira](docs/integrations/jira.md) /
@@ -224,7 +228,7 @@ Crewlet is the engine; the surfaces your agents work on are yours to choose — 
 
 | | Options |
 |---|---|
-| **LLM** | Every model through the vendor's own [coding CLI](docs/concepts/llm-backends.md) — Claude Code for Anthropic's models (on a Claude plan or an API key), Codex for OpenAI's, **OpenCode for open models** on OpenRouter, a hosted provider or your own server |
+| **LLM** | Every model through the vendor's own [coding CLI](docs/concepts/llm-backends.md) — Claude Code for Anthropic's models (on a Claude plan or an API key), Codex for OpenAI's, **OpenCode for open models** on OpenRouter, a hosted provider or your own server. Claude Code or OpenCode runs each seat's executor; Codex can serve a seat's reviewer, workers and side passes |
 | **Tracker** | [Jira](docs/integrations/jira.md) — Cloud or Data Center — or [GitLab](docs/integrations/gitlab.md) / [GitHub](docs/integrations/github.md) issues |
 | **Knowledge base** | [Confluence](docs/integrations/confluence.md) — searched at turn start and on demand, run as the asking seat |
 | **Code host** | [GitLab](docs/integrations/gitlab.md) — gitlab.com or self-hosted — or [GitHub](docs/integrations/github.md), github.com or Enterprise Server |

@@ -20,9 +20,10 @@ Three surfaces, and they are deliberately separate:
   [One GitHub App per agent](#one-github-app-per-agent).
 
 GitHub tools are for **reading, reviewing and tracking** code — diffs,
-comments, reviews, run status. **Authoring** code changes goes through the
-[code sandbox](../concepts/code-sandbox.md), which opens a pull request under
-the agent's own identity.
+comments, reviews, run status. **Authoring** code changes is the seat's
+executor run's, with its own shell and git in its
+[box](../concepts/code-sandbox.md), which opens a pull request under the
+agent's own identity.
 
 ---
 
@@ -858,10 +859,9 @@ seat's login from — one secret, named once. See
 The remote server also exposes GitHub Copilot tools
 (`create_pull_request_with_copilot`, `assign_copilot_to_issue`,
 `request_copilot_review`). They stay reachable and an agent may call any of
-them; Crewlet's own code-authoring path is the
-[code sandbox](../concepts/code-sandbox.md), which is what `run_sandbox`
-drives. The Copilot tools are only on the remote server, not a self-hosted
-one.
+them; Crewlet's own code-authoring path is the seat's executor run in its
+box ([code sandbox](../concepts/code-sandbox.md)), with its own shell and git.
+The Copilot tools are only on the remote server, not a self-hosted one.
 
 ---
 
@@ -896,8 +896,8 @@ rather than silently reviewing.
 
 Roles with GitHub credentials also see the bundled `mcp:github`
 [Tool Skill](../concepts/tool-skills.md) in their executor prompt, which frames
-the GitHub tools as read/review/track tools with authoring pointed at the
-sandbox.
+the GitHub tools as read/review/track tools, with authoring done in the
+run's own checkout with its shell and git.
 
 For team-shared conventions — "Engineering uses semantic commits" — edit the
 knowledge-base page instead. The knowledge base is the single source of truth
@@ -966,7 +966,8 @@ units:
 - **An installation token cannot hold a seat's identity.** It authenticates
   as an app rather than a person, so `GET /user` names nobody and the seat is
   reported unresolved.
-- **Code authoring is the sandbox's job.** A role without
-  `role.sandbox.enabled` and an engine-level `providers.sandbox` can still
-  read, review and track through the GitHub tools; it has no engine-supported
-  path to author a pull request.
+- **Code authoring is the executor run's job.** Every agent seat's executor
+  is its coding CLI's own run with a shell and git in its box; a pull request
+  is opened from there with the token its `role.sandbox.env` declares (and a
+  git-auth setup step). A seat that declares none can still read, review and
+  track through the GitHub tools, and pushes nothing.
