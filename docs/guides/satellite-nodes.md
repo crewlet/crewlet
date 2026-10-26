@@ -520,10 +520,13 @@ other, with three network facts the engine cannot check for you:
 
 - The satellite **launches** the sandbox, so it must reach the sandbox
   provider (E2B cloud, or your self-hosted `domain`).
-- Whichever node holds the `sandbox-waiter` duty **polls** it. On a
-  satellite (`roles: [seats]`) that duty is on a core node by
+- Whichever node holds the `sandbox-waiter` duty **polls** an `e2b`
+  box. On a satellite (`roles: [seats]`) that duty is on a core node by
   construction — so check that node's reachability too, not just the
-  satellite's.
+  satellite's. A `direct` or `container` box is the satellite's own: it
+  polls, collects and reclaims it itself, with no duty, and a seat that
+  moves to another node asks the satellite to read the box back (see
+  [Code Sandbox](../concepts/code-sandbox.md#durability-completion-and-observability)).
 - `CREWLET_SANDBOX_OTEL_RECEIVER_URL` must name an address the *sandbox*
   can reach, which means an ingress node. It is explicit config and is
   never derived from whichever node launched the run, so a satellite

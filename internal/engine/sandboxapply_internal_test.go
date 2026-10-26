@@ -60,8 +60,10 @@ func TestAFirstCompanyWithASandboxBringsTheCoordinatorUpWithoutARestart(t *testi
 	if e.sandbox.Load() != nil {
 		t.Fatal("the premise: a node with no company runs no sandbox")
 	}
-	// A RUN A PEER LEFT ON THE SEAT, still going, before this node has a
-	// company at all: its recovery is part of what the apply has to bring.
+	// A RUN LEFT ON THE SEAT, still going, before this node has a company
+	// at all — this node's own, from before a restart, since a box in the
+	// direct cell is polled by the node that launched it: its recovery is
+	// part of what the apply has to bring.
 	seedRunningRun(t, e, "wk-before", "box-1")
 
 	status, applied, err := e.Apply(t.Context(), parseCompany(t, sandboxDoc("")), time.Now())
@@ -482,9 +484,12 @@ func applyOK(t *testing.T, e *Engine, doc string) []string {
 	return applied
 }
 
-// seedRunningRun records a running coding job on the swe seat, as the node that
-// launched it would: no command id, so the job never reports itself done and
-// every tick of the poll is a keepalive.
+// seedRunningRun records a running coding job on the swe seat, as e itself
+// launched it — before a restart, say — in the direct cell: no command id, so
+// the job never reports itself done and every tick of the poll is a keepalive.
+//
+// e's OWN, because a box in the direct cell is on the host of the node that
+// launched it and is polled there alone (internal/sandbox, boxhost.go).
 func seedRunningRun(t *testing.T, e *Engine, turnID, sandboxID string) {
 	t.Helper()
 	store := sandbox.NewCoordStore(e.backends.Fleet)
@@ -494,12 +499,12 @@ func seedRunningRun(t *testing.T, e *Engine, turnID, sandboxID string) {
 	agentID, _ := org.DeriveAgentID("Nimbus", "swe")
 	if _, err := store.BeginLaunch(ctx, sandbox.PendingRun{
 		TurnID: turnID, AgentID: agentID.String(), AgentHandle: "swe", Role: "SWE",
-		CodingAgent: "claude-code", CreatedAt: time.Now().UTC(),
+		CodingAgent: "claude-code", CreatedAt: time.Now().UTC(), LaunchNode: e.id,
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 	if err := store.AttachSandbox(ctx, turnID, sandbox.BoxRef{
-		SandboxID: sandboxID, CodingAgent: "claude-code",
+		SandboxID: sandboxID, CodingAgent: "claude-code", Placement: string(sandbox.Direct),
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}

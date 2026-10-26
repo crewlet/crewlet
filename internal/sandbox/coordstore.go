@@ -179,6 +179,7 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		prior = PriorBox{
 			SandboxID: existing.SandboxID, Placement: existing.Placement,
 			CodingAgent: existing.CodingAgent, Status: existing.Status,
+			LaunchNode: existing.LaunchNode,
 		}
 		existing.Status = StatusLaunching
 		existing.LaunchID = run.LaunchID
@@ -186,8 +187,10 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// The turn's cap is the turn's, the same on every launch of it —
 		// written anyway, so the row says what this launch was told.
 		existing.Deadline = run.Deadline
-		// THIS job's node, which may not be the previous job's.
+		// THIS job's node, which may not be the previous job's — and so
+		// no verdict about the previous job's node is this job's.
 		existing.LaunchNode = run.LaunchNode
+		existing.LaunchNodeGone = time.Time{}
 		// A hold was on the previous job's resume, which is over.
 		existing.HeldFor, existing.HeldUntil = "", time.Time{}
 		if fence.Fenced() {
@@ -732,6 +735,38 @@ func (s *CoordStore) ExpirePause(ctx context.Context, turnID string) (bool, erro
 		return true
 	})
 	return won, err
+}
+
+// MarkLaunchNodeGone records the fleet's verdict that a running job's launch
+// node is gone. See the contract on [PendingStore].
+//
+// NO FENCE: the verdict is the fleet waiter's, which holds no seat, and it is a
+// fact about a node rather than an ownership decision — what it licenses is the
+// seat holder's own ending, made under that holder's lease. What guards it is
+// the job, the status and the node the caller judged.
+func (s *CoordStore) MarkLaunchNodeGone(ctx context.Context, turnID, launch, node string, at time.Time) (bool, error) {
+	if launch == "" || node == "" {
+		return false, nil
+	}
+	stands := false
+	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if run.LaunchID != launch || run.LaunchNode != node || run.Status != StatusRunning {
+			return false
+		}
+		if !run.LaunchNodeGone.IsZero() {
+			stands = true
+			return false
+		}
+		if at.IsZero() {
+			at = s.clock()
+		}
+		run.LaunchNodeGone = at.UTC()
+		return true
+	})
+	if err != nil {
+		return false, fmt.Errorf("sandbox: record run %s's launch node as gone: %w", turnID, err)
+	}
+	return won || stands, nil
 }
 
 // AttachSandbox records which box a run is using, fenced on the epoch.

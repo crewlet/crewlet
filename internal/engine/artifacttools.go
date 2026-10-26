@@ -189,6 +189,13 @@ func (b artifactBoxes) Box(ctx context.Context, t *turnctx.Turn) (builtin.Artifa
 	if manager == nil {
 		return nil, builtin.ErrNoBox
 	}
+	if manager.OnLaunchHost(row) && row.LaunchNode != b.engine.id {
+		// ANOTHER NODE'S HOST: the seat moved since the run launched, and
+		// its box is a process tree or a container there, which only that
+		// node touches (internal/sandbox, boxhost.go).
+		return nil, fmt.Errorf("%w: the coding run's box is on node %s's host, and this turn "+
+			"runs on another node", builtin.ErrNoBox, row.LaunchNode)
+	}
 	box, _, err := manager.Reconnect(ctx, sandbox.Placement(row.Placement), row.SandboxID, row.CodingAgent)
 	switch {
 	case errors.Is(err, sandbox.ErrBoxGone):

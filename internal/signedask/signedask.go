@@ -14,7 +14,7 @@
 // is an instruction — and an unsigned instruction is exactly what ADR-0031
 // refuses on a state log, one hop before the log.
 //
-// Three channels are instructions, and each is a [Channel]:
+// The channels that are instructions are each a [Channel] — among them:
 //
 //   - the ESTATE SERVICE (internal/estate): a data node runs a tracker or a
 //     knowledge-base write AS THE ACTOR THE REQUEST NAMES, so unsigned, anybody
@@ -29,7 +29,15 @@
 //   - a NOTE TO A RUNNING TURN (internal/agent/steer): the running node offers
 //     a person's note to the turn AS THAT PERSON, on the asking node's word
 //     that they may steer it — so unsigned, anybody on the broker could put
-//     words in front of a running agent under anybody's name.
+//     words in front of a running agent under anybody's name;
+//   - a READ OF A RUN'S BOX asked of the node whose host it is on
+//     (internal/sandbox, `sandbox.box_read`): the host reads a box no other
+//     node can reach and pauses it, as the collection it is part of does —
+//     so unsigned, anybody on the broker could have a run's box read back
+//     and paused.
+//
+// The bridge's relayed exchange (internal/httprelay) and the assistant's
+// replay and stop (internal/assistant/live) are channels on the same terms.
 //
 // # One frame, the state log's
 //

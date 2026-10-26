@@ -87,6 +87,11 @@ type bridgeLedger struct {
 	// append — see [runner.BridgedSpend]. Nil records the calls alone.
 	spend bridgedMeter
 
+	// nudge tells whichever waiter drives the run that its work is in
+	// ([sandbox.NudgeSubmitted]), once a `submit_work` the run made is on
+	// its row. Nil tells nobody, and the run's next poll finds it.
+	nudge func(ctx context.Context, n sandbox.Nudge)
+
 	mu sync.Mutex
 	// launch is the job this session's calls are recorded under, as the
 	// store opened it.
@@ -174,6 +179,16 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 		// The ordinary end of a job: its row is gone, or holds the next one.
 		log.DebugContext(ctx, "bridge_call_after_its_job", "run_id", runID,
 			"launch_id", launch, "tool", call.Name)
+		return nil
+	}
+	// THE RUN'S WORK IS IN, and its CLI is about to end its turn and exit:
+	// the waiter that drives it polls it now rather than at its next pass
+	// ([sandbox.Waiter.Nudge]). After the call is on the row, so the poll
+	// that finds the run done collects a log that holds its submission. A
+	// submission the gate refused is no end — the run goes on — and tells
+	// nobody.
+	if l.nudge != nil && call.Name == runner.SubmitWorkTool && !call.Failed {
+		l.nudge(ctx, sandbox.Nudge{TurnID: runID, LaunchID: launch, Why: sandbox.NudgeSubmitted})
 	}
 	return nil
 }
@@ -185,15 +200,6 @@ func (l *bridgeLedger) spent() sandbox.EngineSpend {
 		return sandbox.EngineSpend{}
 	}
 	return engineSpendOf(l.spend.Total())
-}
-
-// nodeID is this node's id: "" for an engine built without a node, which no
-// running node is.
-func (e *Engine) nodeID() string {
-	if e.node == nil {
-		return ""
-	}
-	return e.node.ID()
 }
 
 // engineSpendOf is a bridged meter's total in the shape a run's row carries.

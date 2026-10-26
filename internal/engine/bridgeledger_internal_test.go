@@ -153,3 +153,45 @@ func TestABridgeSessionWithNoMeterSendsNoSpend(t *testing.T) {
 		}
 	}
 }
+
+// A RUN'S SUBMISSION, ONCE ON ITS ROW, TELLS THE WAITER THAT DRIVES IT TO LOOK
+// NOW: its CLI is about to exit, and its completion is found within seconds of
+// that rather than up to a poll interval later. Only the submission, only one
+// the gate let through, and only one recorded on the run's own job — a
+// refused submission is no end, and one its job no longer takes names a job
+// that is over.
+//
+// Mutation: nudge on every recorded call, on a refused submission, or on one
+// the row did not take, and this goes red.
+func TestARecordedSubmissionTellsTheRunsWaiterToLookNow(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		launch string
+		call   tools.Call
+		nudged bool
+	}{
+		{"a recorded submission", "launch-1", tools.Call{Name: runner.SubmitWorkTool}, true},
+		{"a submission the gate refused", "launch-1", tools.Call{Name: runner.SubmitWorkTool, Failed: true}, false},
+		{"any other call", "launch-1", tools.Call{Name: "read_page"}, false},
+		{"a submission its job no longer takes", "launch-0", tools.Call{Name: runner.SubmitWorkTool}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var got []sandbox.Nudge
+			l := newBridgeLedger(&appendingStore{}, nil)
+			l.nudge = func(_ context.Context, n sandbox.Nudge) { got = append(got, n) }
+			l.bind(tc.launch)
+			if err := l.Append(t.Context(), "run-1", mcpbridge.Call{Call: tc.call}); err != nil {
+				t.Fatalf("Append: %v", err)
+			}
+			want := sandbox.Nudge{TurnID: "run-1", LaunchID: "launch-1", Why: sandbox.NudgeSubmitted}
+			switch {
+			case tc.nudged && (len(got) != 1 || got[0] != want):
+				t.Errorf("told %+v; want %+v", got, want)
+			case !tc.nudged && len(got) != 0:
+				t.Errorf("told %+v; want nobody", got)
+			}
+		})
+	}
+}

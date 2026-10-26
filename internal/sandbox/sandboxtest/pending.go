@@ -53,6 +53,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ASecondLaunchKeepsTheBoxItWillReattachTo", testASecondLaunchKeepsTheBoxItWillReattachTo},
 		{"ARelaunchsBoxMovesTheRowToItsCell", testARelaunchsBoxMovesTheRowToItsCell},
 		{"EveryLaunchRecordsTheNodeThatLaunchedIt", testEveryLaunchRecordsTheNodeThatLaunchedIt},
+		{"AGoneLaunchNodeIsRecordedOnlyOnTheJobItWasJudgedOn", testAGoneLaunchNodeIsRecordedOnlyOnTheJobItWasJudgedOn},
 		{"AHeldReleaseHoldsTheResumeUntilItsConditionLifts", testAHeldReleaseHoldsTheResumeUntilItsConditionLifts},
 		{"ASecondLaunchDropsTheFirstSuspension", testASecondLaunchDropsTheFirstSuspension},
 		{"ASecondLaunchDropsTheFirstRunsBridgedCalls", testASecondLaunchDropsTheFirstRunsBridgedCalls},
@@ -401,6 +402,73 @@ func testEveryLaunchRecordsTheNodeThatLaunchedIt(t *testing.T, s sandbox.Pending
 	mustBeginLaunch(t, s, next)
 	if got := mustGet(t, s, "t-node"); got.LaunchNode != "node-b" {
 		t.Errorf("the relaunch left node %q, want its own node-b", got.LaunchNode)
+	}
+}
+
+// A GONE LAUNCH NODE IS RECORDED ONLY ON THE JOB IT WAS JUDGED ON: running, the
+// same launch and the same node. A verdict that landed on a relaunch — a new
+// job on a node that is here — or on a run whose completion is already being
+// collected would end work nothing found lost. Recorded once, it stands, and a
+// relaunch clears it.
+func testAGoneLaunchNodeIsRecordedOnlyOnTheJobItWasJudgedOn(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	first := run("t-gone")
+	first.LaunchNode = "node-a"
+	launch := mustLaunched(t, s, first)
+	at := base.Add(time.Hour)
+
+	for _, refused := range []struct {
+		name, launch, node string
+	}{
+		{"another job", "not-" + launch, "node-a"},
+		{"another node", launch, "node-b"},
+		{"no job", "", "node-a"},
+		{"no node", launch, ""},
+	} {
+		marked, err := s.MarkLaunchNodeGone(ctx, "t-gone", refused.launch, refused.node, at)
+		if err != nil || marked {
+			t.Errorf("a verdict on %s: marked=%v err=%v; want refused", refused.name, marked, err)
+		}
+	}
+	if got := mustGet(t, s, "t-gone"); !got.LaunchNodeGone.IsZero() {
+		t.Fatalf("a refused verdict landed: %v", got.LaunchNodeGone)
+	}
+
+	marked, err := s.MarkLaunchNodeGone(ctx, "t-gone", launch, "node-a", at)
+	if err != nil || !marked {
+		t.Fatalf("the verdict on the job it was judged on: marked=%v err=%v", marked, err)
+	}
+	if got := mustGet(t, s, "t-gone"); !got.LaunchNodeGone.Equal(at) {
+		t.Fatalf("the row records the verdict at %v, want %v", got.LaunchNodeGone, at)
+	}
+	// It STANDS: asked again, the row still carries it, at its first instant.
+	again, err := s.MarkLaunchNodeGone(ctx, "t-gone", launch, "node-a", at.Add(time.Minute))
+	if err != nil || !again {
+		t.Errorf("a second verdict on the same job: marked=%v err=%v; want the verdict standing", again, err)
+	}
+	if got := mustGet(t, s, "t-gone"); !got.LaunchNodeGone.Equal(at) {
+		t.Errorf("a second verdict moved the first to %v", got.LaunchNodeGone)
+	}
+
+	// A RELAUNCH is a job on a node that is here.
+	next := run("t-gone")
+	next.LaunchNode = "node-b"
+	mustBeginLaunch(t, s, next)
+	if got := mustGet(t, s, "t-gone"); !got.LaunchNodeGone.IsZero() {
+		t.Errorf("the relaunch kept the previous job's verdict: %v", got.LaunchNodeGone)
+	}
+
+	// A JOB NO LONGER RUNNING — its completion claimed — takes none.
+	claimedRun := run("t-claimed")
+	claimedRun.LaunchNode = "node-a"
+	claimedLaunch := mustLaunched(t, s, claimedRun)
+	mustClaim(t, s, "t-claimed")
+	if marked, err := s.MarkLaunchNodeGone(ctx, "t-claimed", claimedLaunch, "node-a", at); err != nil || marked {
+		t.Errorf("a verdict on a claimed job: marked=%v err=%v; want refused", marked, err)
+	}
+	// Nor does a run with no record.
+	if marked, err := s.MarkLaunchNodeGone(ctx, "t-none", "l", "node-a", at); err != nil || marked {
+		t.Errorf("a verdict on no run: marked=%v err=%v; want refused", marked, err)
 	}
 }
 

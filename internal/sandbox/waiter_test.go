@@ -90,6 +90,23 @@ func (r *waiterRig) managers() *Manager { return r.current.Load() }
 
 func newWaiterRig(t *testing.T) *waiterRig {
 	t.Helper()
+	return newWaiterRigIn(t, Direct)
+}
+
+// rigDrives is the waiter that drives a rig's runs in cell: the node's own for
+// a box on the engine's host — the rig's runs name no node, and neither does
+// its waiter — and the fleet's for one every node reaches.
+func rigDrives(cell Placement) Drives {
+	if cell.OnEngineHost() {
+		return DrivesLocal
+	}
+	return DrivesRemote
+}
+
+// newWaiterRigIn is a rig whose one backend, and so every run it launches, is
+// in cell.
+func newWaiterRigIn(t *testing.T, cell Placement) *waiterRig {
+	t.Helper()
 	rig := &waiterRig{
 		t:        t,
 		queue:    &recorder{},
@@ -103,7 +120,7 @@ func newWaiterRig(t *testing.T) *waiterRig {
 	// a test advances to and no age assertion below would mean anything.
 	rig.pending = NewCoordStore(memory.NewFleet()).WithClock(func() time.Time { return rig.now })
 	manager, err := NewManager(ManagerOptions{
-		Providers: map[Placement]Provider{Direct: rig.provider},
+		Providers: map[Placement]Provider{cell: rig.provider},
 		Runners:   map[string]Runner{"claude-code": rig.runner},
 	})
 	if err != nil {
@@ -113,7 +130,8 @@ func newWaiterRig(t *testing.T) *waiterRig {
 	rig.current.Store(manager)
 	waiter, err := NewWaiter(WaiterOptions{
 		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
-		Now: func() time.Time { return rig.now },
+		Drives: rigDrives(cell),
+		Now:    func() time.Time { return rig.now },
 	})
 	if err != nil {
 		t.Fatalf("NewWaiter: %v", err)
@@ -411,8 +429,8 @@ func TestTheGiveUpWindowDoesNotShrinkWithTheCadence(t *testing.T) {
 	rig := newWaiterRig(t)
 	fast, err := NewWaiter(WaiterOptions{
 		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
-		Interval: 100 * time.Millisecond,
-		Now:      func() time.Time { return rig.now },
+		Drives: DrivesLocal, Interval: 100 * time.Millisecond,
+		Now: func() time.Time { return rig.now },
 	})
 	if err != nil {
 		t.Fatalf("NewWaiter: %v", err)
@@ -903,12 +921,12 @@ func withPaused(run PendingRun, at time.Time) PendingRun {
 // N nodes polling means N reconnects per box per tick and N racing reapers.
 func TestANodeWithoutTheDutyDoesNothing(t *testing.T) {
 	t.Parallel()
-	rig := newWaiterRig(t)
+	rig := newWaiterRigIn(t, E2B)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true})
 
 	waiter, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: DrivesRemote,
 		ClaimDuty: func(context.Context) (bool, error) { return false, nil }, DutyTTL: time.Minute,
 	})
 	if err != nil {
@@ -928,12 +946,12 @@ func TestANodeWithoutTheDutyDoesNothing(t *testing.T) {
 // costs one interval.
 func TestAnUnreadableDutyStandsDownRatherThanPollingAnyway(t *testing.T) {
 	t.Parallel()
-	rig := newWaiterRig(t)
+	rig := newWaiterRigIn(t, E2B)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true})
 
 	waiter, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: DrivesRemote,
 		DutyTTL: time.Minute, ClaimDuty: func(context.Context) (bool, error) {
 			return false, errors.New("coordination store unreachable")
 		},
@@ -958,7 +976,7 @@ func TestTheLoopTicksAndStopsCleanly(t *testing.T) {
 
 	waiter, err := NewWaiter(WaiterOptions{
 		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
-		Interval: 5 * time.Millisecond,
+		Drives: DrivesLocal, Interval: 5 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatalf("NewWaiter: %v", err)
@@ -985,10 +1003,10 @@ func TestTheLoopTicksAndStopsCleanly(t *testing.T) {
 // with the deadline's, and every pass leaves one child registered.
 func TestAPassLeavesNoChildOfItsContextBehind(t *testing.T) {
 	t.Parallel()
-	rig := newWaiterRig(t)
+	rig := newWaiterRigIn(t, E2B)
 	rig.launch("t1")
 	waiter, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: DrivesRemote,
 		Now:       func() time.Time { return rig.now },
 		ClaimDuty: func(context.Context) (bool, error) { return true, nil },
 		DutyTTL:   time.Minute,

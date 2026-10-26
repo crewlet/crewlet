@@ -534,6 +534,24 @@ type CoordinatorOptions struct {
 	// it left out.
 	Condense Condenser
 
+	// Node is this node's id: written on every run this node launches as the
+	// node whose host its box is on ([PendingRun.LaunchNode]), and compared
+	// with that of every run it reads, since a local box is touched only on
+	// its host (boxhost.go). Empty only where nothing runs as a fleet member
+	// — a test's coordinator — and then every run it launched is its own.
+	Node string
+
+	// Boxes reads a run's box on the node whose host it is on, for a run
+	// this node holds the seat of and not the box — see [BoxReader]. Nil
+	// reads no peer's box: a collection of one is a failure to read it.
+	Boxes BoxReader
+
+	// Nudge tells the waiter that drives a run to look at it now — see
+	// [Nudge]. This coordinator sends one where it leaves a box to its host
+	// ([Coordinator.tellHost]). Nil tells nobody, and the host's next pass
+	// finds it.
+	Nudge func(ctx context.Context, n Nudge)
+
 	// Now is the clock, injectable for tests.
 	Now func() time.Time
 }
@@ -593,7 +611,11 @@ type Coordinator struct {
 	stopped   func(ctx context.Context, handle, turnID string)
 	// closeStopped is [CoordinatorOptions.CloseStopped].
 	closeStopped func(ctx context.Context, run PendingRun) error
-	now          func() time.Time
+	// node, boxes and nudge are [CoordinatorOptions.Node], Boxes and Nudge.
+	node  string
+	boxes BoxReader
+	nudge func(ctx context.Context, n Nudge)
+	now   func() time.Time
 
 	// mu guards runs, the two seat-level answers the inbox screening reads
 	// on every delivery, and attempts beside them.
@@ -724,6 +746,9 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		recovered:    opts.Recovered,
 		stopped:      opts.Stopped,
 		closeStopped: opts.CloseStopped,
+		node:         opts.Node,
+		boxes:        opts.Boxes,
+		nudge:        opts.Nudge,
 		now:          opts.Now,
 		runs:         map[string]seatRuns{},
 		moves:        map[string]uint64{},
@@ -1033,6 +1058,18 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 		return nil
 	}
 
+	if !run.LaunchNodeGone.IsZero() {
+		// THE FLEET FOUND ITS BOX'S HOST GONE ([PendingRun.LaunchNodeGone]),
+		// and this completion is the waiter's announcement of that: there
+		// is no box to read, anywhere. Ended through the one ending, as a
+		// loss that says why.
+		c.settleFailed(ctx, run, types.SandboxFailureLaunchNodeGone, fmt.Sprintf(
+			"the coding run's box was on the host of node %s, which left the fleet and did not "+
+				"come back within the box timeout, so its result is lost; the work it pushed, if "+
+				"any, is on its branch", run.LaunchNode))
+		return nil
+	}
+
 	result, ended, err := c.collect(ctx, run)
 	if err != nil {
 		return c.collectFailed(ctx, run, err)
@@ -1141,6 +1178,21 @@ func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause e
 		}
 		return fmt.Errorf("sandbox: collecting %s was interrupted: %w", run.TurnID, cause)
 	}
+	if errors.Is(cause, ErrBoxHostSilent) {
+		// THE BOX'S HOST DID NOT ANSWER, which says nothing about the box
+		// ([ErrBoxHostSilent]): handed back uncounted, and the completion
+		// acknowledged rather than retried on the queue's backoff — the
+		// host announces it again on its own next poll once it is back,
+		// and one that never comes back is found gone by the fleet.
+		log.WarnContext(ctx, "sandbox_collect_host_silent", "turn_id", run.TurnID,
+			"node", run.LaunchNode, "error", cause.Error(),
+			"detail", "the node whose host the run's box is on did not answer the collection; "+
+				"the claim is handed back uncounted and that node announces the completion again")
+		// A hand-back that did not land ended and announced the run itself
+		// ([Coordinator.unclaim]), so either way nothing is retried here.
+		_ = c.unclaim(ctx, run, true, collectUnrevertedDetail)
+		return nil
+	}
 	now := c.now()
 	facts := run.Launch
 	attempts := facts.CollectFailures + 1
@@ -1232,22 +1284,44 @@ func parkedEngineSpend(run PendingRun) EngineSpend {
 // off and why, so neither the reviewer nor the record takes a run the clock
 // stopped for one that finished.
 func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, bool, error) {
+	// THE BOX IS READ WHERE IT IS: here, or on the node whose host it is on
+	// ([Coordinator.boxResult]). What follows is this node's own work, done
+	// under the turn the result is fitted for.
+	result, ended, err := c.boxResult(ctx, run, BoxReadCollect)
+	if err != nil {
+		return Result{}, false, err
+	}
+	if ended {
+		result = endedAtDeadline(result, run.Deadline)
+	}
+	// HELD TO THE RECORD'S BOUND here, where every collected result enters,
+	// so the phase record, the park and the resumed executor carry one text.
+	return c.fitText(ctx, run, result), ended, nil
+}
+
+// readBox is the part of a collection that touches the box, made on the node
+// whose host it is on: the box reconnected, its job asked whether it finished
+// where its turn's cap has passed, its result read back and floored, its
+// transcript and refs held to their bounds ([boundBox]), and — for a
+// completion's collection — the box paused and the pause recorded. ENDED is
+// the run its turn's cap ended: see [Coordinator.collect].
+//
+// A STOPPED RUN'S READ ([BoxReadStop]) PAUSES NOTHING: its ending reclaims the
+// box next, and a pause would only be one more call to a box about to go.
+func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead) (Result, bool, error) {
 	manager := c.mgr()
 	box, runner, err := manager.Reconnect(ctx, Placement(run.Placement), run.SandboxID, run.CodingAgent)
 	if err != nil {
 		return Result{}, false, err
 	}
 	ended := false
-	if run.PastDeadline(c.now()) {
+	if read == BoxReadCollect && run.PastDeadline(c.now()) {
 		done, pollErr := runner.Poll(ctx, box, run.Handle())
 		ended = pollErr == nil && !done
 	}
 	result, err := runner.Collect(ctx, box, run.Handle())
 	if err != nil {
 		return Result{}, false, err
-	}
-	if ended {
-		result = endedAtDeadline(result, run.Deadline)
 	}
 	// WHAT THE RUN SAYS IT SPENT IS NEVER A REFUND — see [Result.usageFloored].
 	var floored bool
@@ -1257,9 +1331,10 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, bool
 			"detail", "the coding run reported a negative token count or cost; it "+
 				"is read as nothing spent rather than subtracted from the seat's budget")
 	}
-	// HELD TO THE RECORD'S BOUND here, where every collected result enters,
-	// so the phase record, the park and the resumed executor carry one text.
-	result = c.fitResult(ctx, run, result)
+	result = boundBox(result)
+	if read != BoxReadCollect {
+		return result, ended, nil
+	}
 	if err := box.Pause(ctx); err != nil {
 		log.WarnContext(ctx, "sandbox_pause_failed", "turn_id", run.TurnID, "error", err.Error())
 	} else if err := c.pending.MarkBoxPaused(ctx, run.TurnID, c.now()); err != nil {
@@ -3282,6 +3357,18 @@ func (c *Coordinator) reclaimBox(ctx, killCtx context.Context, run PendingRun) e
 		c.ended(run.TurnID)
 	}
 	if run.SandboxID == "" {
+		return nil
+	}
+	if !c.hosts(run) {
+		// ANOTHER NODE'S HOST: killed by id here, the local backend would
+		// find no such box and report the kill done, leaving the job — a
+		// stopped one included — running there. Its host's own waiter
+		// reclaims it once its row no longer names it, and is told to look
+		// now (boxhost.go).
+		log.InfoContext(ctx, "sandbox_reclaim_left_to_host", "turn_id", run.TurnID,
+			"sandbox_id", run.SandboxID, "node", run.LaunchNode,
+			"detail", "the box is on the host of the node that launched it, which reclaims it")
+		c.tellHost(ctx, run)
 		return nil
 	}
 	provider, err := c.mgr().Provider(Placement(run.Placement))

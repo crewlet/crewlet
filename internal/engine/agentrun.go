@@ -187,6 +187,7 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	// for the segment that resumes from the run to pay — bound to the run's
 	// job by the launch below, before the box that makes them exists.
 	ledger := newBridgeLedger(pending, req.Spend)
+	ledger.nudge = e.nudgeRun
 	session := &mcpbridge.Session{
 		RunID:   l.turn.RunID,
 		Handle:  handle,
@@ -270,10 +271,6 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		// session where the launch runs it in the asking run's box — see
 		// [runner.Asked].
 		Continue: sandboxContinuation(req.Continue),
-		// THE NODE THAT LAUNCHED IT: a direct or a container box lives on
-		// this host whichever node holds the seat later — the bridge
-		// session follows the seat, the box does not.
-		Node: e.nodeID(),
 		Opened: func(launch string) (map[string]sandbox.MCPServer, error) {
 			bridge, openErr := e.openBridge(ctx, session, ledger, launch)
 			opened = openErr == nil

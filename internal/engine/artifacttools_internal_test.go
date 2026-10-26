@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
+	queuemem "github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -162,5 +163,54 @@ func TestAnArtifactsLinkIsItsDashboardAddress(t *testing.T) {
 	}
 	if deps := ArtifactToolDeps(&Engine{}); deps.Reader != nil {
 		t.Error("an engine with no router handed out artifact tools")
+	}
+}
+
+// A RUN WHOSE BOX IS ON ANOTHER NODE'S HOST IS NO BOX HERE: the seat moved since
+// the run launched, and a box in the direct cell is a process tree on the node
+// that launched it, which only that node touches. The same run's box on this
+// node's own host is read.
+//
+// Mutation: drop the host check, and the turn reads a box this node cannot
+// reach — here, the double's, which every node of a test shares.
+func TestARunsBoxOnAnotherNodesHostIsNoBoxHere(t *testing.T) {
+	t.Parallel()
+	turn := turnFor(t, "analyst")
+	provider := sandbox.NewFakeProvider()
+	box, err := provider.Create(t.Context(), sandbox.Spec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
+		Providers: map[sandbox.Placement]sandbox.Provider{sandbox.Direct: provider},
+		Runners:   map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		launchedBy string
+		box        bool
+	}{{"node-a", false}, {"node-b", true}} {
+		row := sandbox.PendingRun{TurnID: turn.RunID, AgentHandle: "analyst", SandboxID: box.ID(),
+			Placement: string(sandbox.Direct), CodingAgent: "claude-code",
+			Status: sandbox.StatusResumed, LaunchNode: tc.launchedBy}
+		coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+			Queue: queuemem.NewBroker().Client(), Pending: oneRow{row: row}, Manager: manager,
+			Resume: nilResumer{}, Audience: nobodyAudience{}, Node: "node-b",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		e := &Engine{id: "node-b"}
+		e.sandbox.Store(&sandboxRuntime{pending: oneRow{row: row}, coordinator: coordinator})
+		got, err := (artifactBoxes{engine: e}).Box(t.Context(), turn)
+		switch {
+		case tc.box && (err != nil || got == nil):
+			t.Errorf("the run launched by %s, on this node's host: %v; want its box", tc.launchedBy, err)
+		case !tc.box && !errors.Is(err, builtin.ErrNoBox):
+			t.Errorf("the run launched by %s, on another host: %v; want ErrNoBox", tc.launchedBy, err)
+		}
+		coordinator.Stop()
 	}
 }

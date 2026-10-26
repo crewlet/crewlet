@@ -192,7 +192,7 @@ back what it wrote.
 | Lease | Duty |
 |---|---|
 | `worker:scheduler` | Role- and unit-scoped cron; a fire is published to the stream. |
-| `worker:sandbox-waiter` | Polls detached runs and resumes the turns waiting on them, over the stream. The same tick is the box keepalive. |
+| `worker:sandbox-waiter` | Polls the detached runs whose boxes every node reaches (`e2b`) and resumes the turns waiting on them, over the stream; the same tick is the box keepalive. Each node polls the `direct` and `container` boxes on its own host itself, with no duty, and this one ends the runs of a node that left for good. |
 | `worker:maintenance` | The retention sweep over the records that answer "recently" rather than "ever", and the retirement of a removed seat's mailbox and coding runs. |
 | `worker:integration-reconcile` | The [integration reconcile](integration-reconcile.md) loop: every connected third-party app's pass, on a cadence set by who has to act. |
 | `worker:learning` | Every learning background pass: skill ageing, episode compaction, clustering and cross-agent promotion. |

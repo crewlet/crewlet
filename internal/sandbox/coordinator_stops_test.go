@@ -242,6 +242,20 @@ var coordinatorEntries = map[string][]entryDrive{
 			}
 		},
 	}},
+	"ReadHostedBox": {{
+		// IT ENDS NOTHING: it reads, for the node collecting the run, the
+		// box this node hosts — and pauses it where a collection would —
+		// so whatever becomes of the run is the asker's to say.
+		name:    "a peer's collection of a box on this node's host",
+		arrange: jobFinished,
+		call: func(t *testing.T, rig *coordRig) {
+			run, _, _ := rig.pending.Get(t.Context(), "t1")
+			if _, _, err := rig.coordinator.ReadHostedBox(t.Context(), "t1", run.LaunchID,
+				run.SandboxID, BoxReadCollect); err != nil {
+				t.Logf("ReadHostedBox: %v", err)
+			}
+		},
+	}},
 	"ReleaseSeat": {{
 		name: "a seat handed on, whose runs are its successor's",
 		call: func(_ *testing.T, rig *coordRig) { rig.coordinator.ReleaseSeat("swe") },
@@ -787,6 +801,14 @@ func (s *refusingStore) ExpirePause(ctx context.Context, turnID string) (bool, e
 		return false, errRefusedCall
 	}
 	return s.inner.ExpirePause(ctx, turnID)
+}
+
+func (s *refusingStore) MarkLaunchNodeGone(ctx context.Context, turnID, launch, node string,
+	at time.Time) (bool, error) {
+	if s.called("MarkLaunchNodeGone") {
+		return false, errRefusedCall
+	}
+	return s.inner.MarkLaunchNodeGone(ctx, turnID, launch, node, at)
 }
 
 func (s *refusingStore) AttachSandbox(ctx context.Context, turnID string, box BoxRef, fence Fence) error {

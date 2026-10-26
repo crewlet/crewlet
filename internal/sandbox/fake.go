@@ -272,6 +272,11 @@ type FakeProvider struct {
 	// a control plane that is slow to answer, or does not, for one box
 	// while it answers for the rest.
 	AttachFunc func(ctx context.Context, sandboxID string) error
+
+	// runs is the run each box was made for, as a local box records it
+	// ([HostBox]): kept for a box made for a turn in a cell on the engine's
+	// host, the one kind a local backend lists.
+	runs map[string]HostBox
 }
 
 var _ Provider = (*FakeProvider)(nil)
@@ -295,7 +300,27 @@ func (p *FakeProvider) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	p.next++
 	box := NewFakeSandbox(fmt.Sprintf("box-%d", p.next))
 	p.boxes[box.id] = box
+	if spec.TurnID != "" && spec.Placement.OnEngineHost() {
+		if p.runs == nil {
+			p.runs = map[string]HostBox{}
+		}
+		p.runs[box.id] = HostBox{SandboxID: box.id, TurnID: spec.TurnID, Placement: spec.Placement}
+	}
 	return box, nil
+}
+
+// RunBoxes lists the boxes made for a turn in a cell on the engine's host
+// that have not been killed, as [Local.RunBoxes] does.
+func (p *FakeProvider) RunBoxes() ([]HostBox, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []HostBox
+	for _, id := range slices.Sorted(maps.Keys(p.runs)) {
+		if _, live := p.boxes[id]; live {
+			out = append(out, p.runs[id])
+		}
+	}
+	return out, nil
 }
 
 // Connect returns a previously created box, which is what makes a

@@ -582,9 +582,15 @@ other, with one thing to get right that the engine cannot check for you:
 
 - The node holding the seat **launches** the sandbox, so it must reach
   the sandbox provider (E2B cloud, or your self-hosted `domain`).
-- Whichever node holds the `sandbox-waiter` duty **polls** it, so that
-  node must reach the same provider. On a satellite (`roles: [seats]`)
-  the duty is on a core node by construction — check that one too.
+- Whichever node holds the `sandbox-waiter` duty **polls** an `e2b` box,
+  so that node must reach the same provider. On a satellite
+  (`roles: [seats]`) the duty is on a core node by construction — check
+  that one too. A `direct` or `container` box is on the host of the node
+  that launched it and is polled, collected and reclaimed there, whoever
+  holds the duty or the seat afterwards; a node that leaves for good has
+  its runs ended as `launch_node_gone` once it has been away for
+  `default_timeout_seconds` (see
+  [Code Sandbox](../concepts/code-sandbox.md#durability-completion-and-observability)).
 - `CREWLET_SANDBOX_OTEL_RECEIVER_URL` must point at an address the
   *sandbox* can reach, which means an ingress node. It is explicit
   config, never derived from the node that happens to launch the run, so

@@ -1071,7 +1071,29 @@ type PendingRun struct {
 	// through any node of the fleet), the box itself is that node's to
 	// reach. Written by every launch, relaunches included, since a relaunch
 	// may land on another node.
+	//
+	// IT NAMES WHO DRIVES THE BOX of such a run: that node's own waiter
+	// polls it, keeps it alive and reaps its pause, and reclaims it once no
+	// row names it ([DrivesLocal]); a collection made on another node is
+	// asked of it ([BoxReader]). A box in a cell every node reaches is the
+	// fleet's waiter's, whoever launched it.
 	LaunchNode string `json:"launch_node,omitempty"`
+
+	// LaunchNodeGone is when the fleet's waiter found the node that launched
+	// this RUNNING job's local box gone for good: its presence lapsed and
+	// stayed lapsed for the box timeout ([Waiter.goneAfter]). Zero for every
+	// other run.
+	//
+	// A VERDICT, RECORDED, because the one who reaches it is not the one who
+	// acts on it: the fleet's waiter measures the absence, and the seat's
+	// holder ends the run through the decided-ending protocol, as
+	// [types.SandboxFailureLaunchNodeGone], from the completion the waiter
+	// announces for it — which waits on the seat's control topic for the
+	// seat's next holder where no node holds it, and is announced again on
+	// every pass until a claim takes it. On the row rather than in that
+	// announcement, so a completion anybody could put on the broker cannot
+	// end a run. Cleared by a relaunch: a new job is on a node that is here.
+	LaunchNodeGone time.Time `json:"launch_node_gone,omitzero"`
 
 	// HeldFor and HeldUntil hold back the resume of a job whose collection
 	// the turn could not carry on: its seat's conditions refused it — the
@@ -1417,6 +1439,18 @@ type PendingStore interface {
 	// tells an arriving answer that the checkout is live, moments before it
 	// is destroyed. One statement, no window.
 	ExpirePause(ctx context.Context, turnID string) (bool, error)
+
+	// MarkLaunchNodeGone records on a RUNNING job the fleet's verdict that
+	// the node its local box is on is gone ([PendingRun.LaunchNodeGone]),
+	// reporting whether the row carries that verdict for the job now —
+	// written by this call or by an earlier one.
+	//
+	// PINNED TO THE JOB the caller judged (launch) and to the node it found
+	// gone (node): a relaunch, a claim of its completion, a park or an
+	// ending moved the row on, and a verdict about a job the row no longer
+	// holds — or a box on another node — is a verdict about nothing. False
+	// with no error is that, and so is a row that is gone.
+	MarkLaunchNodeGone(ctx context.Context, turnID, launch, node string, at time.Time) (bool, error)
 
 	// AttachSandbox records the box and the command a run is using.
 	AttachSandbox(ctx context.Context, turnID string, box BoxRef, fence Fence) error
@@ -1974,6 +2008,10 @@ type PriorBox struct {
 	// that used the box is over ([StatusResumed], the resumed turn that is
 	// relaunching) or may still be running in it.
 	Status string
+	// LaunchNode is the node that launched the job that used the box —
+	// whose host a local box is on ([PendingRun.LaunchNode]), and so the one
+	// node a box in a local cell may be continued in or reclaimed by.
+	LaunchNode string
 }
 
 // ContinuesIn reports whether a launch of spec may continue in this box

@@ -233,6 +233,58 @@ func (m *Manager) configured(placement Placement) (Provider, error) {
 	return provider, nil
 }
 
+// CellOf is the cell a run's box is in: the one its row names, or — for a row
+// that names none, which only one built by hand does — this catalogue's
+// default, the cell [Manager.Provider] would reach it through.
+func (m *Manager) CellOf(run PendingRun) Placement {
+	if cell := Placement(run.Placement); cell != "" {
+		return cell
+	}
+	return m.placement
+}
+
+// OnLaunchHost reports whether a run's box is on the host of the node that
+// launched it ([Placement.OnEngineHost]): a `direct` or `container` box,
+// which that node alone can reach — see [PendingRun.LaunchNode].
+func (m *Manager) OnLaunchHost(run PendingRun) bool { return m.CellOf(run).OnEngineHost() }
+
+// runBoxLister is a backend that keeps its boxes on this node's own host and
+// can list them with the run each was made for: the local one ([Local]).
+type runBoxLister interface {
+	RunBoxes() ([]HostBox, error)
+}
+
+// HostBoxes is every box on this node's own host that records the run it was
+// made for, through every backend this manager reaches — a cell a revision
+// dropped included ([Manager.Provider]), since its boxes are still here — each
+// once, however many backends share a root.
+//
+// An error is a host that could not be listed, which says nothing about any
+// box on it: a caller reclaims nothing on it.
+func (m *Manager) HostBoxes() ([]HostBox, error) {
+	seen := map[string]bool{}
+	var out []HostBox
+	for _, providers := range []map[Placement]Provider{m.providers, m.retired} {
+		for _, placement := range slices.Sorted(maps.Keys(providers)) {
+			lister, ok := providers[placement].(runBoxLister)
+			if !ok {
+				continue
+			}
+			boxes, err := lister.RunBoxes()
+			if err != nil {
+				return nil, err
+			}
+			for _, box := range boxes {
+				if !seen[box.SandboxID] {
+					seen[box.SandboxID] = true
+					out = append(out, box)
+				}
+			}
+		}
+	}
+	return out, nil
+}
+
 // DefaultPlacement is where a seat that names none runs. Empty when the
 // catalogue names no default and holds more than one cell — a company whose
 // every seat names its own — and then [Manager.Provider] refuses a run that

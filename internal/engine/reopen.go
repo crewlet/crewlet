@@ -57,11 +57,19 @@ import (
 // nothing. A pause this node has not read yet is no stop: the session is
 // opened, and the stop that arrives with the pauses closes it.
 //
+// # Nor one whose box went with its node
+//
+// A run whose box was on the host of a node the fleet found gone carries that
+// verdict on its row ([sandbox.PendingRun.LaunchNodeGone]): there is no box
+// left to call anything, and the completion the fleet announced for it ends
+// the run as lost the moment the seat's mailbox opens. A session opened for it
+// would serve nobody.
+//
 // NEVER AN ERROR to the recovery that calls it: the seat is this node's
 // whatever becomes of one run's bridge, and the run is still collected when it
 // ends. What could not be opened is said, with why.
 func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
-	if run.Ending != nil {
+	if run.Ending != nil || !run.LaunchNodeGone.IsZero() {
 		return
 	}
 	if seat, err := e.seatID(run.AgentHandle); err == nil && e.stopFor(seat, run.AgentHandle) != nil {
@@ -137,6 +145,7 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 		return
 	}
 	ledger := newBridgeLedger(rt.pending, meter)
+	ledger.nudge = e.nudgeRun
 	// THE RUN'S CALLS GO ON IN ITS OWN ORDER: the session numbers its calls
 	// after the last one the row records, and a resume reads them by it.
 	lastSeq := 0

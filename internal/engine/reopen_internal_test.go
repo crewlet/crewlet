@@ -243,3 +243,25 @@ func TestARunOnAStoppedSeatIsNotServedAgainByTheNodeThatRecoversIt(t *testing.T)
 		t.Fatal("the box of a run on a stopped seat reached the seat's tools again")
 	}
 }
+
+// A RUN WHOSE BOX WENT WITH ITS NODE IS NOT SERVED ITS TOOLS AGAIN by the node
+// that recovers it: the fleet found the node its box was on gone for good
+// ([sandbox.PendingRun.LaunchNodeGone]), so there is no box left to call
+// anything, and the completion the fleet announced ends the run the moment the
+// seat's mailbox opens.
+//
+// Mutation: drop the verdict check from reopenAgentRun, and the recovery opens
+// a session for a box that is not there.
+func TestARunWhoseBoxWentWithItsNodeIsNotServedAgain(t *testing.T) {
+	t.Parallel()
+	run := launchRecoverable(t)
+	run.restart()
+	row := run.row(t)
+	row.LaunchNodeGone = time.Now().UTC()
+
+	run.e.reopenAgentRun(t.Context(), row)
+
+	if live := run.e.bridge.Live(); live != 0 {
+		t.Fatalf("the recovery opened %d sessions for a run whose box went with its node", live)
+	}
+}

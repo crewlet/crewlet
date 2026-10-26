@@ -178,13 +178,11 @@ func (c *Coordinator) readStopped(ctx context.Context, run PendingRun) (Result, 
 	if run.SandboxID == "" || run.CommandID == "" {
 		return Result{}, false
 	}
-	box, runner, err := c.mgr().Reconnect(ctx, Placement(run.Placement), run.SandboxID, run.CodingAgent)
+	// READ WHERE THE BOX IS — here, or on the node whose host it is on
+	// ([Coordinator.boxResult]) — and fitted here, under the turn it closes.
+	result, _, err := c.boxResult(ctx, run, BoxReadStop)
 	if err == nil {
-		var result Result
-		if result, err = runner.Collect(ctx, box, run.Handle()); err == nil {
-			result, _ = result.usageFloored()
-			return stoppedResult(c.fitResult(ctx, run, result)), true
-		}
+		return stoppedResult(c.fitText(ctx, run, result)), true
 	}
 	log.WarnContext(ctx, "sandbox_stop_unread", "turn_id", run.TurnID,
 		"sandbox_id", run.SandboxID, "gone", errors.Is(err, ErrBoxGone), "error", err.Error(),

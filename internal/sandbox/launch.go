@@ -194,10 +194,6 @@ type LaunchRequest struct {
 	// too ([PendingRun.Continues]).
 	Continue *Continuation
 
-	// Node is this node's id, written onto the row as the node whose host a
-	// local box is on — see [PendingRun.LaunchNode].
-	Node string
-
 	// Fence is the launching turn's own seat fence — its seat still held
 	// under the grant the turn was admitted on, and no person's pause asking
 	// its running work to stop — asked AGAIN once the job's row exists and
@@ -354,8 +350,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		Requester: req.Turn.Requester,
 		// The turn's cap, for the poll — see [PendingRun.Deadline].
 		Deadline: req.Turn.Deadline,
-		// Whose host a local box is on — see [PendingRun.LaunchNode].
-		LaunchNode: req.Node,
+		// Whose host a local box is on — see [PendingRun.LaunchNode]. This
+		// node's, always: the box is made here.
+		LaunchNode: c.node,
 		// The round carried on, whose earlier calls the row keeps — see
 		// [PendingRun.Continues].
 		Continues: req.Continue != nil,
@@ -400,6 +397,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		}
 	}
 
+	// THE BOX IS MADE FOR THIS TURN, which a local box records so its host
+	// can tell when no run names it any more ([Spec.TurnID]).
+	req.Spec.TurnID = req.Turn.TurnID
 	box, runner, reused, err := c.acquire(ctx, m, req, opened.Prior)
 	if err != nil {
 		// The row is open and this launch is over. Every failure past this
@@ -419,6 +419,12 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	}, fence); err != nil {
 		c.abandon(ctx, m, req, fence, box.ID())
 		return LaunchResult{}, fmt.Errorf("sandbox: attaching the box: %w", err)
+	}
+	// THE PREVIOUS JOB'S BOX ON ANOTHER NODE'S HOST is named by nothing from
+	// here, which is the moment its host may reclaim it: told now rather
+	// than found at its next pass ([Coordinator.acquire]).
+	if prior := opened.Prior; prior.SandboxID != "" && !c.hostsPrior(m, prior) {
+		c.tellHost(ctx, PendingRun{TurnID: req.Turn.TurnID, LaunchID: opened.LaunchID})
 	}
 
 	// THE ASKING JOB'S SESSION, CONTINUED, only where this job runs in the
@@ -539,6 +545,19 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 // re-seeds from the pushed branch, which is the case that branch exists for,
 // and a reattach that failed for a moment must not leave a live box behind it.
 func (c *Coordinator) acquire(ctx context.Context, m *Manager, req LaunchRequest, prior PriorBox) (Sandbox, Runner, bool, error) {
+	if prior.SandboxID != "" && !c.hostsPrior(m, prior) {
+		// ANOTHER NODE'S HOST: the seat moved since the previous job
+		// launched, and its box is a process tree or a container there,
+		// which this node can neither continue in nor kill. Left to that
+		// node, whose waiter reclaims it once the row names this job's box
+		// instead (boxhost.go) — told to look once it does ([Coordinator.Launch]);
+		// the job starts fresh here, from the pushed branch, as one whose
+		// box was reclaimed does.
+		log.InfoContext(ctx, "sandbox_prior_left_to_host",
+			"turn_id", req.Turn.TurnID, "sandbox_id", prior.SandboxID,
+			"placement", prior.Placement, "node", prior.LaunchNode)
+		prior = PriorBox{}
+	}
 	if prior.SandboxID != "" {
 		if prior.ContinuesIn(req.Spec) {
 			box, runner, err := m.Reconnect(ctx, req.Spec.Placement, prior.SandboxID, req.Spec.CodingAgent)
@@ -557,6 +576,22 @@ func (c *Coordinator) acquire(ctx context.Context, m *Manager, req LaunchRequest
 		return nil, nil, false, err
 	}
 	return box, runner, false, nil
+}
+
+// hostsPrior reports whether this node can reach the turn's previous box: one
+// in a cell every node reaches, or one this node launched ([Coordinator.hosts]).
+// The cell is resolved through the newest catalogue first, as the reclaim's is,
+// and the launch's where that one does not name it.
+func (c *Coordinator) hostsPrior(m *Manager, prior PriorBox) bool {
+	cell := Placement(prior.Placement)
+	if cell == "" {
+		if current := c.mgr(); current != nil {
+			cell = current.DefaultPlacement()
+		} else {
+			cell = m.DefaultPlacement()
+		}
+	}
+	return !cell.OnEngineHost() || prior.LaunchNode == c.node
 }
 
 // reclaimPrior kills the turn's previous box through the cell that holds it.

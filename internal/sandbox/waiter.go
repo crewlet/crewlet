@@ -18,11 +18,14 @@ import (
 
 // DefaultPollInterval is how often the waiter reconnects to each running box.
 //
-// 15s bounds the completion-detection latency — negligible against coding jobs
-// that run minutes — while a tick costs only one reconnect plus a marker probe
-// per running box. It also keeps the keepalive ~60x inside the box TTL
-// ([DefaultBoxTimeout]). The give-up window for an unreachable box does NOT
-// derive from it — see [ConnectGiveUp].
+// 15s bounds the completion-detection latency of a run that ends WITHOUT
+// submitting over its bridge — one that died, was cut off, or never called
+// `submit_work` — while a tick costs only one reconnect plus a marker probe
+// per running box; a run that submits is polled at once and on a short
+// schedule after ([Waiter.Nudge], [nudgeOffsets]), so this is the fallback
+// rather than every turn's wait. It also keeps the keepalive ~60x inside the
+// box TTL ([DefaultBoxTimeout]). The give-up window for an unreachable box does
+// NOT derive from it — see [ConnectGiveUp].
 const DefaultPollInterval = 15 * time.Second
 
 // ConnectGiveUp is how long a box may stay unreachable before the waiter gives
@@ -102,11 +105,48 @@ type Publisher interface {
 
 // DutyFunc claims the single-owner waiter duty for one tick.
 //
-// The waiter polls EVERY active run in the company, not just this node's
-// seats, because a box can be polled from anywhere — so N nodes running it
+// The fleet's waiter ([DrivesRemote]) polls every run in the company whose box
+// every node reaches, not just this node's seats' — so N nodes running it
 // means N reconnects per box per tick and N racing reapers. Nil means "no
 // fleet", which is the single-node case.
 type DutyFunc func(ctx context.Context) (bool, error)
+
+// Drives is which runs a waiter drives.
+//
+// TWO WAITERS, because a box is driven from where it can be reached. A box in
+// a cell every node reaches is the FLEET'S: one waiter polls it, under a duty
+// one node holds at a time, wherever its seat or its launch is. A box on an
+// engine host is its LAUNCHING NODE'S ([PendingRun.LaunchNode]): no other node
+// can reach it, so the duty's waiter polling it from another node found it
+// gone and gave a running job up within a minute, and every node runs a waiter
+// of its own for the boxes on its own host, whoever holds the duty.
+type Drives string
+
+const (
+	// DrivesRemote is the fleet's waiter: every run whose box is in a cell
+	// every node reaches (`e2b`), and the gone launch nodes of the rest
+	// ([Waiter.goneAfter]). It runs under the fleet's waiter duty.
+	DrivesRemote Drives = "remote"
+	// DrivesLocal is one node's waiter: every run whose box is on an engine
+	// host ([Placement.OnEngineHost]) and was launched by
+	// [WaiterOptions.Node], and every box on this host no run names any
+	// more ([Waiter.sweep]). It claims no duty: nothing else can reach
+	// these boxes, so nothing else can poll them beside it.
+	DrivesLocal Drives = "local"
+)
+
+// AllDrives are the two.
+var AllDrives = []Drives{DrivesRemote, DrivesLocal}
+
+// Valid reports whether this build knows d.
+func (d Drives) Valid() bool { return slices.Contains(AllDrives, d) }
+
+// NodeRoster answers whether a node of the fleet is present: whether it holds
+// its presence lease (internal/coord's node class) now. An error is a roster
+// that could not say, never an absent node.
+type NodeRoster interface {
+	Present(ctx context.Context, node string) (bool, error)
+}
 
 // WaiterOptions configures a [Waiter].
 type WaiterOptions struct {
@@ -125,10 +165,25 @@ type WaiterOptions struct {
 	// the company had reshaped — while every launch used the new ones.
 	Manager func() *Manager
 
+	// Drives is which runs this waiter drives — see [Drives]. Required.
+	Drives Drives
+
+	// Node is the node this waiter runs on: for [DrivesLocal], whose runs
+	// it drives ([PendingRun.LaunchNode]). Empty is a node with no id — a
+	// test's — whose runs record none either.
+	Node string
+
+	// Roster tells the fleet's waiter ([DrivesRemote]) which launch nodes
+	// are present, so it can find a node that left for good and end its
+	// local runs ([Waiter.goneAfter]). Nil finds none: a deployment with no
+	// fleet roster is one node, whose runs are all its own.
+	Roster NodeRoster
+
 	// Interval is the poll cadence. Zero takes [DefaultPollInterval].
 	Interval time.Duration
 
-	// ClaimDuty gates the tick in a fleet. Nil means single-node.
+	// ClaimDuty gates the tick in a fleet. Nil means single-node. Only the
+	// fleet's waiter ([DrivesRemote]) claims one.
 	ClaimDuty DutyFunc
 
 	// DutyTTL is how long one successful [WaiterOptions.ClaimDuty] holds
@@ -146,15 +201,24 @@ type WaiterOptions struct {
 
 // Waiter is the completion poll and pause reaper for detached sandbox jobs.
 //
+// TWO OF THEM, one per kind of box ([Drives]): the fleet's, under a duty, for
+// the boxes every node reaches, and every node's own, for the boxes on its
+// host — which also reclaims the boxes there that no run names any more
+// ([Waiter.sweep]) — while the fleet's finds the launch nodes that left for
+// good ([Waiter.goneAfter]).
+//
 // THIS POLL IS THE COMPLETION SIGNAL. A periodic tick reconnects to each still-
 // running box by id and asks the runner whether its background command has
 // finished — covering a clean finish (its done marker), a job whose process
 // group died before it could write one, and a box that vanished, so a
-// detached run never hangs forever. There is deliberately no push callback from inside the box: only the
-// poll can see a job that died before reaching its last step, and the tick
-// doubles as the box keepalive, so it must run at this cadence regardless. A
-// push signal could only shave less than one interval off jobs that run for
-// minutes.
+// detached run never hangs forever. Nothing from inside the box replaces it:
+// only the poll can see a job that died before reaching its last step, and the
+// tick doubles as the box keepalive, so it must run at this cadence regardless.
+// What the bridge sees of a run only BRINGS IT FORWARD: a run that submits its
+// work over its bridge is about to exit, and the waiter that drives it is told
+// to poll it now and on a short schedule after ([Waiter.Nudge]), so its
+// completion is found within seconds of its exit rather than up to an interval
+// later — and a nudge that is lost costs that interval, never the run.
 //
 // On detected completion it publishes SandboxRunCompleted; the coordinator does
 // the at-most-once claim, the collection, and the resume of the suspended
@@ -171,6 +235,10 @@ type Waiter struct {
 	queue   Publisher
 	pending PendingStore
 	manager func() *Manager
+
+	drives Drives
+	node   string
+	roster NodeRoster
 
 	interval  time.Duration
 	claimDuty DutyFunc
@@ -207,6 +275,25 @@ type Waiter struct {
 	// walk stops the walk still handing out slots; the next pass replaces
 	// it with one over a fresher listing.
 	walk context.CancelFunc
+	// dutyUntil is when the duty this node last claimed stops authorising
+	// work ([Waiter.deadline]), zero once it is definitively a peer's: what
+	// a nudged poll between two passes is bounded by ([Waiter.Nudge]).
+	dutyUntil time.Time
+	// following is every turn a nudge's schedule is polling now, one
+	// schedule per turn ([Waiter.follow]).
+	following map[string]bool
+	// absent is when this waiter first found each launch node of a local
+	// run without its presence, for as long as it stays without it
+	// ([Waiter.goneAfter]).
+	absent map[string]time.Time
+	// sweeping is whether a sweep of this host's boxes is running: one at
+	// a time ([Waiter.sweep]).
+	sweeping bool
+	// life is the context Start ran the loop under, which a nudge's
+	// schedule runs under too; nil before Start. closed is set as the loop
+	// ends, after which a nudge starts nothing ([Waiter.closeTasks]).
+	life   context.Context
+	closed bool
 
 	startOnce sync.Once
 	stopOnce  sync.Once
@@ -219,10 +306,21 @@ func NewWaiter(opts WaiterOptions) (*Waiter, error) {
 	if opts.Queue == nil || opts.Pending == nil || opts.Manager == nil {
 		return nil, errors.New("sandbox: a waiter needs a queue, a pending store and a manager")
 	}
+	switch {
+	case !opts.Drives.Valid():
+		return nil, fmt.Errorf("sandbox: a waiter drives one of %v, not %q (WaiterOptions.Drives)",
+			AllDrives, opts.Drives)
+	case opts.Drives == DrivesLocal && opts.ClaimDuty != nil:
+		return nil, errors.New("sandbox: a waiter of one node's own boxes claims no duty: no " +
+			"other node can reach those boxes, so none can poll them beside it")
+	}
 	w := &Waiter{
 		queue:     opts.Queue,
 		pending:   opts.Pending,
 		manager:   opts.Manager,
+		drives:    opts.Drives,
+		node:      opts.Node,
+		roster:    opts.Roster,
 		interval:  opts.Interval,
 		claimDuty: opts.ClaimDuty,
 		dutyTTL:   opts.DutyTTL,
@@ -232,6 +330,8 @@ func NewWaiter(opts WaiterOptions) (*Waiter, error) {
 		failures:  map[string]connectStreak{},
 		busy:      map[string]context.CancelFunc{},
 		settled:   map[string]uint64{},
+		following: map[string]bool{},
+		absent:    map[string]time.Time{},
 		stopped:   make(chan struct{}),
 	}
 	if w.interval <= 0 {
@@ -252,8 +352,12 @@ func NewWaiter(opts WaiterOptions) (*Waiter, error) {
 func (w *Waiter) Start(ctx context.Context) {
 	w.startOnce.Do(func() {
 		ctx, w.stop = context.WithCancel(ctx)
+		w.mu.Lock()
+		w.life = ctx
+		w.mu.Unlock()
 		go w.loop(ctx)
-		log.InfoContext(ctx, "sandbox_waiter_started", "poll_seconds", w.interval.Seconds())
+		log.InfoContext(ctx, "sandbox_waiter_started", "drives", string(w.drives), "node", w.node,
+			"poll_seconds", w.interval.Seconds())
 	})
 }
 
@@ -276,6 +380,9 @@ func (w *Waiter) loop(ctx context.Context) {
 	// Every task a pass started derives from ctx, so the cancellation that
 	// ended the loop ends them too; this waits for them to say so.
 	defer w.tasks.Wait()
+	// AND NO NUDGE STARTS ONE AFTER: a task is counted under the same lock
+	// this closes, so it is counted before the wait or never started.
+	defer w.closeTasks()
 	// Jittered, so a fleet's waiters do not all wake on the same second and
 	// contend for the duty claim in lockstep.
 	timer := time.NewTimer(w.jittered())
@@ -365,6 +472,9 @@ func (w *Waiter) pass(ctx context.Context) (*round, error) {
 		return nil, nil
 	}
 	deadline := w.deadline(asked)
+	w.mu.Lock()
+	w.dutyUntil = deadline
+	w.mu.Unlock()
 	// ONE MANAGER FOR THE WHOLE PASS, read once: a reload landing mid-pass
 	// must not poll half the runs through one catalogue and reap the rest
 	// through another.
@@ -377,7 +487,7 @@ func (w *Waiter) pass(ctx context.Context) (*round, error) {
 		return nil, err
 	}
 	w.forget(runs)
-	work := w.order(runs)
+	work := w.order(manager, runs)
 
 	// ONE CHILD OF ctx PER WALK, made once: ctx is the loop's, which lives
 	// as long as the process, and a child it was never told to forget —
@@ -392,6 +502,29 @@ func (w *Waiter) pass(ctx context.Context) (*round, error) {
 	}
 	w.replaceWalk(stopWalk)
 	r := &round{}
+	// WHAT ELSE THE PASS OWES, each a task of its own beside the walk, so
+	// neither holds up a poll: the fleet's waiter looks for launch nodes
+	// gone for good, and a node's own waiter for boxes on its host that no
+	// run names any more.
+	//
+	// BOUNDED BY THE DUTY, never by the walk, which ends as soon as it has
+	// handed its last slot out.
+	switch w.drives {
+	case DrivesRemote:
+		w.spawn(r, func() {
+			var goneCtx context.Context
+			var stop context.CancelFunc
+			if deadline.IsZero() {
+				goneCtx, stop = context.WithCancel(ctx)
+			} else {
+				goneCtx, stop = context.WithDeadline(ctx, deadline)
+			}
+			defer stop()
+			w.goneAfter(goneCtx, manager, runs)
+		})
+	case DrivesLocal:
+		w.spawn(r, func() { w.sweep(ctx, manager, runs, "") })
+	}
 	r.tasks.Add(1)
 	w.tasks.Add(1)
 	go func() {
@@ -401,6 +534,27 @@ func (w *Waiter) pass(ctx context.Context) (*round, error) {
 		w.walkTasks(ctx, walkCtx, deadline, manager, work, r)
 	}()
 	return r, nil
+}
+
+// spawn runs f as one of the pass's tasks, which the pass's caller and
+// [Waiter.Stop] wait for.
+func (w *Waiter) spawn(r *round, f func()) {
+	r.tasks.Add(1)
+	w.tasks.Add(1)
+	go func() {
+		defer w.tasks.Done()
+		defer r.tasks.Done()
+		f()
+	}()
+}
+
+// drivesRun reports whether run's box is one this waiter drives ([Drives]).
+func (w *Waiter) drivesRun(manager *Manager, run PendingRun) bool {
+	local := manager.OnLaunchHost(run)
+	if w.drives == DrivesLocal {
+		return local && run.LaunchNode == w.node
+	}
+	return !local
 }
 
 // walkTasks starts each task in order, as slots free up, until it runs out of
@@ -471,11 +625,14 @@ func (w *Waiter) acquireSlot(walkCtx context.Context) bool {
 
 // order is the runs needing a task, the one whose last task ended longest ago
 // first and the listing's own order between equals.
-func (w *Waiter) order(runs []PendingRun) []task {
+func (w *Waiter) order(manager *Manager, runs []PendingRun) []task {
 	now := w.now()
 	var work []task
 	for _, run := range runs {
 		switch {
+		case !w.drivesRun(manager, run):
+			// ANOTHER WAITER'S: the fleet's for a box every node reaches,
+			// its launching node's for one on an engine host ([Drives]).
 		case run.Ending != nil:
 			// A RUN WHOSE ENDING IS DECIDED is that ending's to finish —
 			// its decider's retry, or the seat's next holder — and nothing
@@ -621,6 +778,7 @@ func (w *Waiter) replaceWalk(stop context.CancelFunc) {
 func (w *Waiter) standDown() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.dutyUntil = time.Time{}
 	if w.walk != nil {
 		w.walk()
 	}

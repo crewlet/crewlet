@@ -34,6 +34,13 @@ const (
 
 func newTailRig(t *testing.T) *tailRig {
 	t.Helper()
+	return newTailRigOn(t, "")
+}
+
+// newTailRigOn is a rig whose run's box was launched by launchNode — on its
+// host, the direct cell's — while its seat is boxOwner's.
+func newTailRigOn(t *testing.T, launchNode string) *tailRig {
+	t.Helper()
 	rig := &tailRig{
 		pending:  NewCoordStore(coordmem.NewFleet()),
 		provider: NewFakeProvider(),
@@ -56,6 +63,7 @@ func newTailRig(t *testing.T) *tailRig {
 	run := PendingRun{
 		TurnID: "t1", AgentHandle: "swe", Role: "SWE", CodingAgent: "claude-code",
 		SandboxID: box.ID(), Placement: string(Direct), CommandID: "cmd-1",
+		LaunchNode: launchNode,
 	}
 	if _, err := rig.pending.BeginLaunch(ctx, run, Fence{}); err != nil {
 		t.Fatalf("begin launch: %v", err)
@@ -102,7 +110,7 @@ func (rig *tailRig) serve(t *testing.T, owner string) *LiveFeeds {
 
 func (rig *tailRig) serveWith(t *testing.T, owner string, q TailServer, feeds *LiveFeeds) {
 	t.Helper()
-	stop, err := ServeTail(t.Context(), q, owner, rig.pending, feeds)
+	stop, err := ServeTail(t.Context(), q, owner, nodeOf(owner), rig.pending, feeds)
 	if err != nil {
 		t.Fatalf("serve: %v", err)
 	}
@@ -877,3 +885,44 @@ var errFakeBox = fakeBoxError("the box stopped answering")
 type fakeBoxError string
 
 func (e fakeBoxError) Error() string { return string(e) }
+
+// A BOX ON AN ENGINE HOST IS READ ON THAT HOST, whoever holds the run's seat:
+// the seat moved while the job worked, and the box is a process tree on the
+// node that launched it, which no other node can reach. So the request is
+// addressed to that node, and the seat's holder — which could not read the box
+// — is not asked.
+//
+// Mutation: address every tail to the run's owner, and the seat's holder
+// answers for a box it cannot reach.
+func TestALocalBoxsTailIsReadOnTheNodeThatLaunchedIt(t *testing.T) {
+	t.Parallel()
+	rig := newTailRigOn(t, "n3")
+	rig.runner.Say(SourceTranscript, "running go test ./...\n")
+	holder := &capturingServer{TailServer: rig.client(t)}
+	rig.serveWith(t, boxOwner, holder, rig.feeds(t))
+	rig.serve(t, "n3:host")
+
+	got := rig.tail(t, rig.reader(t), TailCursor{})
+	if got.Outcome != TailRunning || got.Output == nil || got.Node != "n3" {
+		t.Fatalf("answer = %+v; want the tail read on n3, the box's host", got)
+	}
+	if got.Output.Text != "running go test ./...\n" {
+		t.Errorf("the tail is %q; want the box's own output", got.Output.Text)
+	}
+
+	// THE SEAT'S HOLDER, handed the same request, answers nothing.
+	req, err := json.Marshal(tailRequest{Version: tailWireVersion, TurnID: "t1",
+		LaunchID: rig.launch, Node: "n3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply, err := holder.handler(t.Context(), req); !errors.Is(err, errTailNotAddressed) || reply != nil {
+		t.Errorf("the seat's holder answered a request for n3's box: %q, %v", reply, err)
+	}
+
+	// And the box's own node answers it from its own readings.
+	local := &TailReader{Owner: "n3:host", Node: "n3", Pending: rig.pending, Feeds: rig.feeds(t)}
+	if answer := rig.tail(t, local, TailCursor{}); answer.Outcome != TailRunning || answer.Node != "n3" {
+		t.Errorf("the box's host answered %+v from its own readings; want its tail", answer)
+	}
+}

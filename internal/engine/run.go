@@ -365,9 +365,12 @@ type Engine struct {
 	// See [Engine.startSandbox].
 	sandbox atomic.Pointer[sandboxRuntime]
 
-	// sandboxWaiter is the completion poll, started once, on a node that
-	// publishes, the first time a runtime exists and the node does.
-	sandboxWaiter atomic.Pointer[sandbox.Waiter]
+	// sandboxWaiter is the fleet's completion poll — the boxes every node
+	// reaches, under the waiter duty — and sandboxHostWaiter this node's own,
+	// for the boxes on its host ([sandbox.Drives]). Each started once, on a
+	// node that publishes, the first time a runtime exists and the node does.
+	sandboxWaiter     atomic.Pointer[sandbox.Waiter]
+	sandboxHostWaiter atomic.Pointer[sandbox.Waiter]
 
 	// sandboxPollInterval is Options.SandboxPollInterval, kept because an
 	// apply can be what starts the poll.
@@ -827,6 +830,14 @@ type Engine struct {
 	sandboxTails  *sandbox.TailReader
 	sandboxFeeds  *sandbox.LiveFeeds
 	stopTailServe queue.Unsubscribe
+
+	// boxReads asks a box's host to read it back and answers for the boxes
+	// on this node's host; stopBoxReadServe and stopNudgeListen withdraw this
+	// node as an answerer of those reads and a listener for the nudges its
+	// waiters act on. Nil on a node with no broker. See sandboxhost.go.
+	boxReads         *boxReads
+	stopBoxReadServe queue.Unsubscribe
+	stopNudgeListen  queue.Unsubscribe
 
 	// scheduler is the role/unit cron tick. On the ENGINE rather than on an
 	// epoch for the same reason maintenance is: it is a loop this process
@@ -1360,6 +1371,19 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		}
 		return nil, err
 	}
+	// AND A READ OF A BOX ON ANOTHER NODE'S HOST, which that node carries
+	// out — it pauses the box a collection reads — so it is signed like
+	// every other such channel (sandboxhost.go). None without a broker: a
+	// node with none is the whole fleet, and every box is its own.
+	if backends.Queue != nil {
+		if e.boxReads, err = newBoxReads(recordKeyring(opts.Bootstrap), nodeID, backends.Queue,
+			e.sandboxCoordinator); err != nil {
+			if ownsBackends {
+				backends.Close(ctx)
+			}
+			return nil, err
+		}
+	}
 
 	// A NODE WITHOUT `data` HANDS THE DATA NODES THE RECORD OF WHAT IT
 	// DID — before anything publishes, because the custody listener must
@@ -1809,6 +1833,11 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// and at the same point — see sandboxtail.go.
 	if err = e.armSandboxTails(ctx); err != nil {
 		return nil, fmt.Errorf("engine: serve coding runs' live output: %w", err)
+	}
+	// AND THE BOXES ON ITS HOST, which no other node can reach — see
+	// sandboxhost.go.
+	if err = e.armSandboxHost(ctx); err != nil {
+		return nil, err
 	}
 	// AND THE TOOL BRIDGE OF THE EXECUTOR RUNS ITS SEATS LAUNCH, wherever a
 	// box's call lands — see bridgefleet.go.
@@ -2557,8 +2586,9 @@ func (e *Engine) teardown(ctx context.Context) {
 	// close.
 	e.stopMemoryReads(ctx)
 	// And a run's live output, read from boxes this node is about to stop
-	// driving.
+	// driving — and a read of a box on its host, asked by a peer.
 	e.stopSandboxTails(ctx)
+	e.stopSandboxHost(ctx)
 	// And the bridge's relay, whose exchanges serve sessions this node is
 	// about to stop holding.
 	e.stopBridgeFleet(ctx)

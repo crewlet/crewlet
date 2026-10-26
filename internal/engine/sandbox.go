@@ -1851,6 +1851,16 @@ func (e *Engine) sandboxManager() *sandbox.Manager {
 	return rt.coordinator.Manager()
 }
 
+// sandboxCoordinator is this node's coordinator, or nil where no runtime has
+// come up — read live, as [Engine.sandboxManager] is, for the answerer of box
+// reads, which is armed before any runtime may exist.
+func (e *Engine) sandboxCoordinator() *sandbox.Coordinator {
+	if rt := e.sandbox.Load(); rt != nil {
+		return rt.coordinator
+	}
+	return nil
+}
+
 // startSandboxFor is [Engine.startSandbox] for the company a node boots on:
 // its catalogue built, and the runtime brought up where it reaches a cell.
 // An apply builds the catalogue itself, earlier, so that a revision whose
@@ -1988,6 +1998,13 @@ func (e *Engine) sandboxRuntimeOn(pending sandbox.PendingStore, manager *sandbox
 		// seat under, so the seat's next holder can fence this node off
 		// the run. See [sandbox.CoordinatorOptions.Lease].
 		Lease: e.launchFence,
+		// AND WITH THIS NODE, whose host a direct or container box is on:
+		// only this node touches such a box, a peer holding its seat asks
+		// this one to read it, and this node tells the box's host when it
+		// leaves one there — see sandboxhost.go.
+		Node:  e.id,
+		Boxes: e.boxReader(),
+		Nudge: e.nudgeRun,
 	})
 	if err != nil {
 		return nil, err
@@ -2068,50 +2085,84 @@ func runPartKind(part sandbox.RunPart) compact.Kind {
 	}
 }
 
-// startSandboxWaiter starts the completion poll, once the node exists and a
-// runtime does, and at most once.
+// startSandboxWaiter starts the completion polls, once the node exists and a
+// runtime does, and each at most once: the fleet's, for the boxes every node
+// reaches, and this node's own, for the boxes on its host ([sandbox.Drives]).
 func (e *Engine) startSandboxWaiter(ctx context.Context) error {
 	rt := e.sandbox.Load()
-	if rt == nil || e.sandboxWaiter.Load() != nil {
+	if rt == nil {
 		return nil
 	}
 	interval := e.sandboxPollInterval
-	duty, err := e.waiterDuty(interval)
-	if err != nil {
-		return err
+	if e.sandboxWaiter.Load() == nil {
+		duty, err := e.waiterDuty(interval)
+		if err != nil {
+			return err
+		}
+		var roster sandbox.NodeRoster
+		if e.backends.Coord != nil {
+			roster = nodeRoster{coord: e.backends.Coord}
+		}
+		waiter, err := sandbox.NewWaiter(sandbox.WaiterOptions{
+			Queue: e.backends.Queue, Pending: rt.pending,
+			// THE COORDINATOR'S CURRENT MANAGER, asked on every tick: an
+			// apply swaps it, and the poll outlives every revision.
+			Manager:  rt.coordinator.Manager,
+			Drives:   sandbox.DrivesRemote,
+			Node:     e.id,
+			Interval: interval,
+			// The duty is claimed per tick: the waiter polls every run in
+			// the company whose box every node reaches, not just this
+			// node's seats', so N nodes running it unclaimed means N
+			// reconnects per box per tick and N racing reapers.
+			ClaimDuty: sandbox.DutyFunc(duty),
+			// The lease each claim takes, which bounds every poll the claim
+			// authorises: a poll outlives the pass that started it, and must
+			// not outlive the duty, past which a peer may poll the same box.
+			DutyTTL: waiterDutyTTL(interval),
+			// WHO IS STILL IN THE FLEET, so a node that left it for good has
+			// its local runs ended rather than waited on for ever — see
+			// [sandbox.Waiter]. The presence leases a node holds to say it is
+			// alive; none without a coordination store, which is one node.
+			Roster: roster,
+		})
+		if err != nil {
+			return err
+		}
+		if e.sandboxWaiter.CompareAndSwap(nil, waiter) {
+			waiter.Start(context.WithoutCancel(ctx))
+		}
 	}
-	waiter, err := sandbox.NewWaiter(sandbox.WaiterOptions{
-		Queue: e.backends.Queue, Pending: rt.pending,
-		// THE COORDINATOR'S CURRENT MANAGER, asked on every tick: an
-		// apply swaps it, and the poll outlives every revision.
-		Manager:  rt.coordinator.Manager,
-		Interval: interval,
-		// The duty is claimed per tick: the waiter polls EVERY active run
-		// in the company, not just this node's seats, so N nodes running it
-		// unclaimed means N reconnects per box per tick and N racing
-		// reapers.
-		ClaimDuty: sandbox.DutyFunc(duty),
-		// The lease each claim takes, which bounds every poll the claim
-		// authorises: a poll outlives the pass that started it, and must
-		// not outlive the duty, past which a peer may poll the same box.
-		DutyTTL: waiterDutyTTL(interval),
-	})
-	if err != nil {
-		return err
+	if e.sandboxHostWaiter.Load() == nil {
+		// THIS NODE'S OWN BOXES, polled here whoever holds the duty: no
+		// other node can reach them, so no other node polls them beside it,
+		// and it claims nothing.
+		host, err := sandbox.NewWaiter(sandbox.WaiterOptions{
+			Queue: e.backends.Queue, Pending: rt.pending,
+			Manager:  rt.coordinator.Manager,
+			Drives:   sandbox.DrivesLocal,
+			Node:     e.id,
+			Interval: interval,
+		})
+		if err != nil {
+			return err
+		}
+		if e.sandboxHostWaiter.CompareAndSwap(nil, host) {
+			host.Start(context.WithoutCancel(ctx))
+		}
 	}
-	if !e.sandboxWaiter.CompareAndSwap(nil, waiter) {
-		return nil
-	}
-	waiter.Start(context.WithoutCancel(ctx))
 	return nil
 }
 
-// stopSandbox halts the poll loop and the coordinator's own retries. The rows
+// stopSandbox halts the poll loops and the coordinator's own retries. The rows
 // and the boxes are untouched: a detached run belongs to its row — an answer
-// still owed its resume included — and the next owner of its seat recovers it.
+// still owed its resume included — and the next owner of its seat recovers it,
+// while a box on this host waits for this node's next start.
 func (e *Engine) stopSandbox() {
-	if w := e.sandboxWaiter.Load(); w != nil {
-		w.Stop()
+	for _, w := range []*sandbox.Waiter{e.sandboxWaiter.Load(), e.sandboxHostWaiter.Load()} {
+		if w != nil {
+			w.Stop()
+		}
 	}
 	if rt := e.sandbox.Load(); rt != nil {
 		rt.coordinator.Stop()

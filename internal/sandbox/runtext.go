@@ -348,7 +348,68 @@ type Condenser interface {
 // publish an unbounded transcript, and the record carrying the run's only
 // spend would be refused whole. And THE BRANCH a question was asked with, for
 // the run's row rather than its record ([fitBranch]).
+//
+// TWO HALVES, because a run's box and the seat its result is fitted for need
+// not be on one node ([BoxReader]). [boundBox] is the half that reads no model
+// — the transcript and the refs, held by rule — and is made where the box is
+// read; [Coordinator.fitText] is the half a model may write — the question,
+// the report and the failure, condensed on the seat's own auxiliary model —
+// and is made where the result is used, under the turn that pays for it.
 func (c *Coordinator) fitResult(ctx context.Context, run PendingRun, result Result) Result {
+	return c.fitText(ctx, run, boundBox(result))
+}
+
+// boundBox is the half of [Coordinator.fitResult] that reads no model: the
+// transcript and the delivered refs, each held to its bound by rule, with
+// what was left out counted. Applied ONCE, where the box is read, since a
+// second application would find nothing to leave out and count nothing.
+func boundBox(result Result) Result {
+	result.Transcript, result.TranscriptElidedLines, result.TranscriptElidedBytes =
+		boundTranscript(result.Transcript)
+	result.DeliveredRefs, result.DeliveredRefsElided = boundRefs(result.DeliveredRefs)
+	return result
+}
+
+// BoxReadCarries are the bounds, tried in turn, a box's host holds each piece
+// of a result's own text to before sending it back to the node that asked
+// ([CarriedResult]): the first whose sealed reply fits the broker's ceiling.
+//
+// [MaxCondenseBytes] FIRST, the most one condensation reads, so the asker
+// condenses a report or a failure exactly as it would have condensed one it
+// read itself — past it the compactor refuses before any model is asked, and
+// the asker's fallback keeps whole lines of the same text. Three such pieces
+// and a transcript fit the broker's 8 MiB ([queue.MaxPayloadBytes]) unless
+// JSON grows them several-fold, which only text written to do that makes it
+// do; then [MaxRunTextBytes], what the run's record carries of each, whose
+// arithmetic is the record's own and fits whatever the text.
+var BoxReadCarries = []int{MaxCondenseBytes, MaxRunTextBytes}
+
+// CarriedResult is result with its report, failure and question each held to
+// budget by whole lines, the note saying so counted inside it — a report and
+// a question keeping their start, a failure both its ends ([keepLines]) — for
+// a reply between nodes ([BoxReadCarries]).
+func CarriedResult(result Result, budget int) Result {
+	why := fmt.Sprintf("past the %d KiB a box's host sends back of it", budget>>10)
+	result.Text = carriedPart(PartReport, result.Text, budget, why)
+	result.Error = carriedPart(PartFailure, result.Error, budget, why)
+	result.Question = carriedPart(PartQuestion, result.Question, budget, why)
+	return result
+}
+
+// carriedPart is one piece held to budget, note included — the room
+// [condensable] leaves for its note, for the same reason.
+func carriedPart(part RunPart, text string, budget int, why string) string {
+	if len(text) <= budget {
+		return text
+	}
+	room := len(omittedNote(len(text)+1, "intervening", len(text), why)) + 1
+	return keepLines(part, text, budget-room, why)
+}
+
+// fitText is the half of [Coordinator.fitResult] a model may write: the
+// question, the branch it was asked with, the report and the failure, each
+// held to its bound and condensed past it by the seat's auxiliary model.
+func (c *Coordinator) fitText(ctx context.Context, run PendingRun, result Result) Result {
 	// THIS COLLECTION'S OWN, counted from nothing: the field is the
 	// coordinator's, and a runner that set it would be charging the turn
 	// for a rewrite nobody made.
@@ -362,9 +423,6 @@ func (c *Coordinator) fitResult(ctx context.Context, run PendingRun, result Resu
 	result.WIPBranch = fitBranch(ctx, run, result.WIPBranch)
 	result.Text = c.fitPart(ctx, run, PartReport, result.Text, MaxRunTextBytes, &result.Condensed)
 	result.Error = c.fitPart(ctx, run, PartFailure, result.Error, MaxRunTextBytes, &result.Condensed)
-	result.Transcript, result.TranscriptElidedLines, result.TranscriptElidedBytes =
-		boundTranscript(result.Transcript)
-	result.DeliveredRefs, result.DeliveredRefsElided = boundRefs(result.DeliveredRefs)
 	return result
 }
 

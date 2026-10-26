@@ -151,6 +151,10 @@ func (l boxLayout) aliveFile() string { return filepath.Join(l.records(), "alive
 // that would be every run.
 func (l boxLayout) credentialsFile() string { return filepath.Join(l.records(), "credentials.json") }
 
+// runFile records the run the box was made for ([boxRun]), which is how this
+// host tells a box no run names any more from one a run is using ([HostBox]).
+func (l boxLayout) runFile() string { return filepath.Join(l.records(), "run.json") }
+
 // envFile is the container runtime's --env-file. See containerBox.envArgs.
 func (l boxLayout) envFile() string { return filepath.Join(l.records(), "env") }
 
@@ -920,6 +924,12 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 		// worth saying out loud, and not worth failing the box for.
 		localLog.Warn("local_sandbox_credential_map_unwritable", "sandbox_id", layout.id, "error", err.Error())
 	}
+	if err = recordRun(layout, boxRun{TurnID: spec.TurnID, Placement: l.opts.Placement}); err != nil {
+		// LOST, the box is one its host's waiter cannot tell is still a
+		// run's, so it is never reclaimed by it — only, once nothing runs
+		// in it, by the orphan reaper. Worth saying; not worth the run.
+		localLog.Warn("local_sandbox_run_unrecorded", "sandbox_id", layout.id, "error", err.Error())
+	}
 	touchAlive(layout)
 
 	if l.opts.Placement == Direct {
@@ -1165,6 +1175,90 @@ func awaitJobExit(ctx context.Context, l boxLayout) {
 // gone. Short, because the answer is usually yes on the first ask and the
 // caller is holding a turn open.
 const exitPollInterval = 20 * time.Millisecond
+
+// ---------------------------------------------------------------------
+// the boxes on this host, and whose they are
+// ---------------------------------------------------------------------
+
+// boxRun is a box's record of the run it was made for: the turn, and the cell
+// it is in — which of this host's two backends reaches it, since both keep
+// their boxes under one root.
+type boxRun struct {
+	TurnID    string    `json:"turn_id"`
+	Placement Placement `json:"placement"`
+}
+
+// recordRun writes the box's record of its run. A box made for no turn — one
+// a caller other than a launch made — records nothing.
+func recordRun(l boxLayout, run boxRun) error {
+	if run.TurnID == "" {
+		return nil
+	}
+	blob, err := json.Marshal(run)
+	if err != nil {
+		return fmt.Errorf("encoding the box's run: %w", err)
+	}
+	if err := os.WriteFile(l.runFile(), blob, hostbox.FileMode); err != nil {
+		return fmt.Errorf("writing %q: %w", l.runFile(), err)
+	}
+	return nil
+}
+
+// HostBox is one box on this node's host and the run it was made for.
+type HostBox struct {
+	SandboxID string
+	TurnID    string
+	Placement Placement
+}
+
+// RunBoxes lists the boxes under this backend's root that record the run
+// they were made for ([boxRun]), each with the cell its record names.
+//
+// BOTH LOCAL CELLS' BOXES, since both keep them under one root: each answers
+// for the cell its own record names, never for the backend that listed it.
+// A box with no record of its run — one a launch did not make, or one whose
+// record was lost — is not listed: nothing can say whose it is, and the
+// orphan reaper is what bounds it ([Local.reapOrphans]). A box whose record
+// cannot be read is said and not listed, for the same reason.
+func (l *Local) RunBoxes() ([]HostBox, error) {
+	entries, err := os.ReadDir(filepath.Join(l.root, "boxes"))
+	switch {
+	case absent(err):
+		return nil, nil
+	case err != nil:
+		return nil, localErrorf("listing the boxes under %s: %v", l.root, err)
+	}
+	var out []HostBox
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		layout, err := l.layout(entry.Name())
+		if err != nil {
+			continue
+		}
+		blob, err := readRecord(layout.runFile())
+		if absent(err) {
+			continue
+		}
+		var run boxRun
+		if err == nil {
+			err = json.Unmarshal(blob, &run)
+		}
+		if err == nil && (run.TurnID == "" || !run.Placement.OnEngineHost()) {
+			err = fmt.Errorf("the record names turn %q in cell %q", run.TurnID, run.Placement)
+		}
+		if err != nil {
+			localLog.Warn("local_sandbox_run_unreadable", "sandbox_id", layout.id,
+				"path", layout.runFile(), "error", err.Error(),
+				"detail", "the box's record of its run could not be used, so this host cannot "+
+					"tell whether a run still names it; the orphan reaper bounds it")
+			continue
+		}
+		out = append(out, HostBox{SandboxID: layout.id, TurnID: run.TurnID, Placement: run.Placement})
+	}
+	return out, nil
+}
 
 // ---------------------------------------------------------------------
 // orphan reaping

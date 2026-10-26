@@ -193,7 +193,7 @@ func TestTheLoopKeepsEveryOtherBoxsCadenceWhileOneIsHeld(t *testing.T) {
 	stuck := rig.launch("t-1-stuck")
 	rig.launch("t-2-healthy")
 	waiter, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: DrivesLocal,
 		Interval: 20 * time.Millisecond, Now: func() time.Time { return rig.now },
 	})
 	if err != nil {
@@ -277,10 +277,10 @@ func TestTheLoopKeepsEveryOtherBoxsCadenceWhileOneIsHeld(t *testing.T) {
 // seconds this case gives it.
 func TestAPollEndsWithTheDutyThatAuthorisedIt(t *testing.T) {
 	t.Parallel()
-	rig := newWaiterRig(t)
+	rig := newWaiterRigIn(t, E2B)
 	rig.launch("t-stuck")
 	waiter, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: DrivesRemote,
 		Interval: 20 * time.Millisecond, DutyTTL: 200 * time.Millisecond,
 		ClaimDuty: func(context.Context) (bool, error) { return true, nil },
 		Now:       func() time.Time { return rig.now },
@@ -318,11 +318,11 @@ func TestAPollEndsWithTheDutyThatAuthorisedIt(t *testing.T) {
 // the streak shows it.
 func TestADutyLostStopsEveryPollItAuthorised(t *testing.T) {
 	t.Parallel()
-	rig := newWaiterRig(t)
+	rig := newWaiterRigIn(t, E2B)
 	stuck := rig.launch("t-stuck")
 	var claims atomic.Int32
 	waiter, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: DrivesRemote,
 		Interval: 20 * time.Millisecond, DutyTTL: time.Minute,
 		// Held for the first pass, and a peer's from the second on.
 		ClaimDuty: func(context.Context) (bool, error) { return claims.Add(1) == 1, nil },

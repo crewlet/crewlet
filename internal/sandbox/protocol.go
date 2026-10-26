@@ -79,6 +79,12 @@
 // on the row and on every announcement of what became of the answer, never as a
 // seat beside an actor.
 //
+// AND A BOX IN A `direct` OR `container` CELL IS TOUCHED ONLY ON ITS LAUNCHING
+// NODE'S HOST ([PendingRun.LaunchNode], ADR-0057): that node's own waiter polls,
+// keeps alive, reaps and reclaims it, a seat's holder elsewhere asks the host to
+// read it ([BoxReader]), and a launching node whose presence stays lapsed for
+// the box timeout has its running jobs ended as lost. See boxhost.go.
+//
 // See docs/concepts/code-sandbox.md.
 package sandbox
 
@@ -173,6 +179,13 @@ type Spec struct {
 
 	// CodingAgent names the runner: "claude-code", "opencode", …
 	CodingAgent string
+
+	// TurnID is the turn whose run the box is made for. A box on the
+	// engine's host records it in its own directory, which is how that
+	// host's waiter tells a box no run names any more from one a run is
+	// using, and reclaims it ([HostBox]); a remote box has no use for it.
+	// Set by [Coordinator.Launch], never by a caller.
+	TurnID string
 
 	// TimeoutSec is NOT a run deadline: it is the box's initial TTL, which
 	// the waiter refreshes every tick, so a running job is never killed by
