@@ -708,16 +708,26 @@ func (s *Service) ToolsChanged() {
 	s.hub.Broadcast(Push(KindTools, s.Tools(), s.now()))
 }
 
-// InboxChange is the payload of an `inbox_changed` frame: whose inbox moved,
-// by how many notices, and the subject and reason of the newest.
+// InboxChange is the payload of an `inbox_changed` frame: which domain's half
+// of whose inbox moved, by how many notices, and the subject and reason of the
+// newest — the engine's inbox.Movement, field for field.
 //
 // IDENTIFIERS AND A COUNT, NEVER CONTENT. The frame reaches whoever watches
 // the seat, and what it is for is telling that screen to re-read the inbox
-// through the `work_inbox` question — the same question, decided by the same
+// through the inbox question — the same question, decided by the same
 // authority, as the poll it makes immediate. An excerpt here would be the
 // inbox's content read around that authority. The count is a HINT: the rows
 // are the truth, and a screen re-reads them rather than adding these up.
+//
+// THE DASHBOARD READS IT AS DECLARED IN ITS CONTRACT (`contract/wire.ts`'s
+// `InboxChange`), field for field: a key this sends that the screen does not
+// declare is one nothing on it can tell apart, and a key it declares that
+// this never sends is one it reads as undefined.
 type InboxChange struct {
+	// Source is the domain whose half of the inbox moved — the state log's
+	// name, `tracker` — on a movement and on a re-read alike: a gap is one
+	// domain's movements switching where they come from.
+	Source      string `json:"source"`
 	Handle      string `json:"handle"`
 	UnreadDelta int    `json:"unread_delta"`
 	Subject     string `json:"subject"`
@@ -728,8 +738,8 @@ type InboxChange struct {
 // seat and to nobody else — see [KindInboxChanged].
 //
 // NEVER BLOCKS, for [Hub.Broadcast]'s reason, and its caller is why that
-// matters: this is called from the tracker applier's post-commit half, on the
-// apply loop's own goroutine, with the next batch waiting behind it.
+// matters: this is called from an applier's post-commit half, on the apply
+// loop's own goroutine, with the next batch waiting behind it.
 func (s *Service) InboxChanged(change InboxChange) {
 	if change.Handle == "" {
 		// NO SEAT, NO AUDIENCE: a seat-routed frame with no address is
@@ -739,22 +749,23 @@ func (s *Service) InboxChanged(change InboxChange) {
 	s.hub.Broadcast(PushSeat(KindInboxChanged, change.Handle, change, s.now()))
 }
 
-// InboxReread tells every watched seat's sockets to read their inbox again: one
-// `inbox_changed` frame per watched seat, counting nothing and naming no
-// subject — see [KindInboxChanged].
+// InboxReread tells every watched seat's sockets to read their inbox's source
+// half again: one `inbox_changed` frame per watched seat, naming the source,
+// counting nothing and naming no subject — see [KindInboxChanged].
 //
-// FOR A GAP IN WHAT THIS NODE HEARS, never a movement: the engine switched the
-// source its movements come from (its own applier, a peer's relayed), and what
-// moved in between is not replayed. A frame is exactly what a screen needs to
-// cover that — it re-reads the inbox through the `work_inbox` question on every
-// one, whatever it counts — where closing every socket would have rebuilt every
-// tab's whole snapshot to refresh one list.
+// FOR A GAP IN WHAT THIS NODE HEARS of one source, never a movement: the
+// engine switched where that domain's movements come from (its own applier, a
+// peer's relayed), and what moved in between is not replayed. A frame is
+// exactly what a screen needs to cover that — it re-reads the inbox through
+// the inbox question on every one, whatever it counts — where closing every
+// socket would have rebuilt every tab's whole snapshot to refresh one list.
 //
 // NEVER BLOCKS, for [Service.InboxChanged]'s reason.
-func (s *Service) InboxReread() {
+func (s *Service) InboxReread(source string) {
 	now := s.now()
 	for _, seat := range s.hub.WatchedSeats() {
-		s.hub.Broadcast(PushSeat(KindInboxChanged, seat, InboxChange{Handle: seat}, now))
+		s.hub.Broadcast(PushSeat(KindInboxChanged, seat,
+			InboxChange{Source: source, Handle: seat}, now))
 	}
 }
 

@@ -102,24 +102,38 @@ func TestAnEventReachesOnlyAnAdmin(t *testing.T) {
 	}
 }
 
-// AN INBOX MOVEMENT IS THE TRACKER'S, as the `work_inbox` question it tells a
-// screen to ask again is: a reader without the tracker receives none however
-// they watch.
+// AN INBOX FRAME NEEDS NO APP: it reaches exactly the sockets in its seat's
+// room, and a socket is in it only because its watch was decided as a read of
+// that person's inbox ([watching]) — so, as for an artifact room's frames, the
+// room's own admission is the whole of who reads it, and the zero audience
+// still reads none.
 //
-// Mutation: declare KindInboxChanged everybody's, and the overview reader
-// receives the frame.
-func TestAnInboxMovementReachesOnlyTheTracker(t *testing.T) {
+// It was the TRACKER's, which put one domain's permission in front of every
+// domain's news: the frame names the domain whose half of the inbox moved, and
+// a domain other than the tracker announcing one would have been withheld from
+// a reader its own grant admits.
+//
+// Mutation: declare KindInboxChanged the tracker's or admin's, or answer the
+// seat room's need with an app, and the reader holding no app receives
+// nothing.
+func TestAnInboxFrameNeedsNoApp(t *testing.T) {
 	t.Parallel()
+	need, gated := NeedOf(KindInboxChanged)
+	if !gated || need != NeedInbox || len(need.Grants()) != 0 {
+		t.Fatalf("inbox_changed needs %q (gated %v) with grants %v, want the seat "+
+			"room's, which names none", need, gated, need.Grants())
+	}
 	for _, tc := range []struct {
 		name string
-		p    iam.Principal
+		a    Audience
 		want bool
 	}{
-		{"an admin", adminPrincipal, true},
-		{"the tracker", trackerPrincipal, true},
-		{"no permission at all", overviewPrincipal, false},
+		{"an admin", NewAudience(adminPrincipal, nil), true},
+		{"the tracker", NewAudience(trackerPrincipal, nil), true},
+		{"no app at all", NewAudience(overviewPrincipal, nil), true},
+		{"nobody resolved", Audience{}, false},
 	} {
-		if got := NewAudience(tc.p, nil).Receives(KindInboxChanged); got != tc.want {
+		if got := tc.a.Receives(KindInboxChanged); got != tc.want {
 			t.Errorf("%s receives inbox_changed = %v, want %v", tc.name, got, tc.want)
 		}
 	}
@@ -453,8 +467,9 @@ func TestTheAudienceHoldsExactlyTheAppsThePrincipalCan(t *testing.T) {
 		if a.Admin() != p.Can(iam.GrantAdmin) {
 			t.Errorf("%v: Admin() = %v", grants, a.Admin())
 		}
-		if got := a.Receives(KindInboxChanged); got != p.Can(iam.GrantTracker) {
-			t.Errorf("%v: receives the tracker's inbox movement = %v", grants, got)
+		if !a.Receives(KindInboxChanged) {
+			t.Errorf("%v: receives no inbox frame, which only the seat room's own "+
+				"admission decides", grants)
 		}
 		var held []string
 		for _, app := range iam.Apps {

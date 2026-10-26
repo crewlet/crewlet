@@ -690,7 +690,7 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 // under which reason — so it is decided exactly as the `work_inbox` question
 // about that seat is: [authz.ActionPersonRead], which admits the seat's own
 // holder, whoever leads it through the chart, and an admin — each holding the
-// tracker, whose frames these are. Any
+// tracker, whose notices are the ones a frame announces today. Any
 // resolved caller could watch any seat before, which made the routing index a
 // way to follow somebody else's inbox that the question itself refused.
 //

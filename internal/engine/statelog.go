@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -28,7 +29,6 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/version"
 )
 
@@ -518,16 +518,18 @@ type applyHooks struct {
 	// [Engine.identityMoved].
 	identityMoved func(iamdomain.Moved)
 
-	// inboxMoved is what the TRACKER APPLIER calls after a committed
-	// batch that wrote somebody a notice — see [Engine.SetOnInboxMoved].
-	// Threaded down for identityMoved's reason: every data node applies
-	// every record, and only a data node serves sockets, since `ingress`
-	// requires `data` (ADR-0025) — so every node holding a socket tells its
-	// own, and the apply is the only thing that sees it on each. A node
-	// whose own copy is out of service relays a sound peer's announcements
-	// instead (inboxrelay.go), which this same hook feeds on that peer. It
-	// must not block.
-	inboxMoved func([]tracker.InboxMovement)
+	// inboxMoved is what the applier of a domain marked
+	// [registration.Inbox] calls after a committed batch that moved
+	// somebody's inbox — see [Engine.SetOnInboxMoved] — and is handed only
+	// to those ([stateLog.inboxFor]). Threaded down for identityMoved's
+	// reason: every data node applies every record, and only a data node
+	// serves sockets, since `ingress` requires `data` (ADR-0025) — so every
+	// node holding a socket tells its own, and the apply is the only thing
+	// that sees it on each. A node whose own copy of a domain is out of
+	// service relays a sound peer's announcements of it instead
+	// (inboxrelay.go), which this same hook feeds on that peer. It must
+	// not block.
+	inboxMoved func([]inbox.Movement)
 
 	// artifactsMoved is what the ARTIFACTS APPLIER calls after a committed
 	// batch, with what it moved ([artifactsdomain.Moved]): a new version, a

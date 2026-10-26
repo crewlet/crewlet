@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -165,7 +166,7 @@ func (w deskWriter) WriteFields(_ context.Context, opID string, _ []tracker.Fiel
 }
 
 func (w deskWriter) MarkInbox(_ context.Context, opID, _ string,
-	g tracker.InboxGesture, authority tracker.PersonAuthority) (tracker.WriteResult, error) {
+	g inbox.Gesture[tracker.Reason], authority tracker.PersonAuthority) (tracker.WriteResult, error) {
 	if !slices.Equal(g.Read, []string{"rec-1"}) {
 		return tracker.WriteResult{}, fmt.Errorf("the gesture did not cross: %+v", g)
 	}
@@ -309,9 +310,9 @@ func TestEveryOperatorOperationCrossesWhole(t *testing.T) {
 		places["r-2"].TaskID != "t-r-2" || places["r-2"].Ordinal != 2 {
 		t.Errorf("turn places = (%+v, %v), want both runs placed", places, err)
 	}
-	if inbox, err := work.Inbox(ctx, tracker.InboxQuery{Reasons: []tracker.Reason{"mention", "asked"}},
-		now); err != nil || inbox.Unread != 2 {
-		t.Errorf("inbox = (%+v, %v), want the query's two reasons answered", inbox, err)
+	if answer, err := work.Inbox(ctx, tracker.InboxQuery{Reasons: []tracker.Reason{"mention", "asked"}},
+		now); err != nil || answer.Unread != 2 {
+		t.Errorf("inbox = (%+v, %v), want the query's two reasons answered", answer, err)
 	}
 	if routing, err := work.Routing(ctx, tracker.RoutingQuery{RecordID: "rec-9"}, now); err != nil ||
 		routing.RecordID != "rec-9" || !routing.Held {
@@ -352,7 +353,7 @@ func TestEveryOperatorOperationCrossesWhole(t *testing.T) {
 		{"write_types", func() (tracker.WriteResult, error) { return w.WriteTypes(ctx, "op-2", nil) }},
 		{"write_fields", func() (tracker.WriteResult, error) { return w.WriteFields(ctx, "op-3", nil) }},
 		{"mark_inbox", func() (tracker.WriteResult, error) {
-			return w.MarkInbox(ctx, "op-4", "founder", tracker.InboxGesture{Read: []string{"rec-1"}},
+			return w.MarkInbox(ctx, "op-4", "founder", inbox.Gesture[tracker.Reason]{Read: []string{"rec-1"}},
 				authorized)
 		}},
 		{"write_pins", func() (tracker.WriteResult, error) {

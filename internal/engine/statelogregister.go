@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
@@ -172,6 +173,19 @@ type registration struct {
 	// container — off the epoch current at each change it translates.
 	Feed func(e *Engine, records domainFeed) (changefeed.Translator, changefeed.Opener)
 
+	// Inbox marks a domain whose changes are a PERSON's news: its applier
+	// says whose inbox each committed batch moved, to the listener
+	// [stateLog.inboxFor] hands it — the tracker's today.
+	//
+	// THE MARK IS THE WIRING, not a note beside it. inboxFor hands the
+	// engine's listener only to a marked domain's applier, and the inbox
+	// relay judges, streams and follows exactly the marked domains
+	// ([inboxSources]), so the two cannot disagree: a domain announcing
+	// movements the relay did not judge would keep its sockets on an
+	// applier nobody vouches for while its copy is wrong, and one judged
+	// that announces nothing would run a follower for nothing.
+	Inbox bool
+
 	// Barrier encodes the framework's barrier append as one of this
 	// domain's own records. A domain that declares one gets a read index
 	// and therefore `linearizable`; one that declares [NoBarrier] instead
@@ -275,14 +289,14 @@ func register() []registration {
 	return slices.Concat([]registration{
 		{
 			Domain: tracker.Domain{},
+			// A PERSON'S WORK: the inbox listener is how a person learns
+			// they have some. The apply is the one thing that sees every
+			// notice on every data node, and each tells its own sockets —
+			// a node without `data` serves none, since `ingress` requires
+			// `data`. See internal/inbox's movement.go.
+			Inbox: true,
 			NewApplier: func(s *stateLog) (statelog.Applier, error) {
-				// THE INBOX LISTENER, which is how a person learns they
-				// have work: the apply is the one thing that sees every
-				// notice on every data node, and each tells its own
-				// sockets — a node without `data` serves none, since
-				// `ingress` requires `data`. See
-				// internal/tracker/inboxmove.go.
-				return tracker.NewApplier(s.inboxMoved), nil
+				return tracker.NewApplier(s.inboxFor(tracker.Domain{})), nil
 			},
 			NewSeams: func(s *stateLog, spec statelog.StreamSpec, appendTo *jetstream.DomainLog,
 				runner *statelog.Runner) (writeSeams, error) {
@@ -854,6 +868,31 @@ func registeredDomains() []statelog.Domain {
 		domains = append(domains, entry.Domain)
 	}
 	return domains
+}
+
+// inboxSources is every domain the register marks [registration.Inbox], by
+// name and in the register's order: the sources whose movements a data node's
+// relay streams and follows, one stream and one follower each.
+func inboxSources() []string {
+	var out []string
+	for _, entry := range register() {
+		if entry.Inbox {
+			out = append(out, entry.Domain.Name())
+		}
+	}
+	return out
+}
+
+// inboxFor is the listener a domain's applier announces its inbox movements to:
+// this engine's ([Engine.inboxMoved]) for a domain the register marks
+// [registration.Inbox], and nil — nobody listening — for any other, so the
+// mark is what wires an applier to the sockets, and the relay judges exactly
+// the domains whose movements reach them.
+func (s *stateLog) inboxFor(domain statelog.Domain) func([]inbox.Movement) {
+	if entry, ok := registrationFor(domain.Name()); !ok || !entry.Inbox {
+		return nil
+	}
+	return s.inboxMoved
 }
 
 // registeredNames is every registered domain's name, in the register's order —

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -47,9 +48,9 @@ func (s Sources) workInbox(ctx context.Context, p Params) (any, error) {
 	// build does not know is refused naming the three rather than read as
 	// the default — `snoozed=ony` answering the whole inbox is the exact
 	// defect the scope replaced.
-	q.Snoozed = tracker.SnoozeExclude
+	q.Snoozed = inbox.SnoozeExclude
 	if raw := strings.TrimSpace(p.String("snoozed")); raw != "" {
-		q.Snoozed = tracker.SnoozeScope(raw)
+		q.Snoozed = inbox.SnoozeScope(raw)
 		if !q.Snoozed.Valid() {
 			return nil, badParams("snoozed", raw, snoozeScopeNames())
 		}
@@ -105,8 +106,8 @@ func (s Sources) workInbox(ctx context.Context, p Params) (any, error) {
 
 // snoozeScopeNames is the three, for the same kind of refusal.
 func snoozeScopeNames() []string {
-	out := make([]string, 0, len(tracker.SnoozeScopes))
-	for _, scope := range tracker.SnoozeScopes {
+	out := make([]string, 0, len(inbox.SnoozeScopes))
+	for _, scope := range inbox.SnoozeScopes {
 		out = append(out, string(scope))
 	}
 	return out

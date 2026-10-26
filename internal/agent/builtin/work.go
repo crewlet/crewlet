@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -3775,12 +3776,13 @@ func writeFailure(ctx context.Context, actor Actor, name string, err error) tool
 		// read that answer, never to send this one again.
 		return out(tools.RefusalAlreadyAnswered, fmt.Sprintf("%s was "+
 			"refused: %v. Nothing was posted.", name, err))
-	case errors.Is(err, tracker.ErrInboxFull):
+	case errors.Is(err, inbox.ErrFull):
 		// NOT A SMALLER GESTURE BUT A DIFFERENT ONE: the sentence names
 		// `read_through`, which marks everything up to a notice in one move
-		// and is what empties the lists this refusal is about.
+		// and is what empties the lists this refusal is about. The inbox
+		// rules' own sentence, without the Go error's "inbox:" in front.
 		return out(tools.RefusalInboxFull, fmt.Sprintf("%s was refused: "+
-			"%v.", name, err))
+			"%s.", name, inbox.Sentence(err)))
 	case errors.Is(err, tracker.ErrStepUnvouched):
 		// NEITHER DONE NOR NOT MADE, AND NOT FINISHED BY ASKING AGAIN
 		// HERE. It is an ErrStepUnresolved, so this arm goes first: the

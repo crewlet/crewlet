@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/inbox"
 )
 
 // WHAT MOVED — one rule, for every object whose apply writes a history row.
@@ -430,7 +432,7 @@ func fileDeltas(before, after File) map[string]Delta {
 //
 // THE THREE INBOX LISTS ARE COUNTED RATHER THAN LISTED, and that is the one
 // place here where a count is the honest answer: each holds up to
-// [MaxInboxEntries] entries, every entry is a record id and a log position,
+// [inbox.MaxEntries] entries, every entry is a record id and a log position,
 // and neither is something a person reads. What a reader of this row wants to
 // know is that two items were marked read — which the counts say, because
 // every gesture that writes these lists MOVES an entry between them.
@@ -546,7 +548,7 @@ func containerText(c Container) string {
 // ONE VOCABULARY for a log position wherever a person sees one. An unset mark
 // is the empty string rather than `@0:0`, because somebody who has read
 // nothing has no position and a renderer draws the empty string as an em dash.
-func positionText(p Position) string {
+func positionText(p inbox.Position) string {
 	if p.Seq == 0 {
 		return ""
 	}

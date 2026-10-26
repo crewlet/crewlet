@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -26,7 +27,7 @@ func (r *roundTrip) inbox(q tracker.InboxQuery) tracker.InboxAnswer {
 		// WHAT EVERY SURFACE DEFAULTS TO — the reader itself refuses the
 		// zero value, so a harness that did not state one would be
 		// testing a question no caller can ask.
-		q.Snoozed = tracker.SnoozeExclude
+		q.Snoozed = inbox.SnoozeExclude
 	}
 	answer, err := r.reader.Inbox(r.t.Context(), q, wednesday)
 	if err != nil {
@@ -153,7 +154,7 @@ func TestThePrimarySplitDefaultsRatherThanEmptying(t *testing.T) {
 
 	// AND A DECLARED LIST REPLACES IT, so the preference has an effect
 	// rather than being storage for a rule nobody wrote.
-	if _, err := asBob(r).MarkInbox(t.Context(), "op-prefs", "bob", tracker.InboxGesture{
+	if _, err := asBob(r).MarkInbox(t.Context(), "op-prefs", "bob", inbox.Gesture[tracker.Reason]{
 		PrimaryReasons: &[]tracker.Reason{tracker.ReasonMention},
 	}, tracker.PersonAuthority{}); err != nil {
 
@@ -207,7 +208,7 @@ func TestReadIsTheSeenThroughPositionAndTheEntries(t *testing.T) {
 
 	// THE POSITION MARKS EVERYTHING AT OR BELOW IT, with no entry rows
 	// at all, which is the pruned state.
-	if _, err := asBob(r).MarkInbox(t.Context(), "op-seen", "bob", tracker.InboxGesture{
+	if _, err := asBob(r).MarkInbox(t.Context(), "op-seen", "bob", inbox.Gesture[tracker.Reason]{
 		ReadThrough: &statelog.Position{
 			Stream: oldest.LogStream, Generation: oldest.LogGeneration,
 			Seq: oldest.LogSeq,
@@ -233,7 +234,7 @@ func TestReadIsTheSeenThroughPositionAndTheEntries(t *testing.T) {
 	// AND AN ENTRY ABOVE IT IS MARKED TOO, which is what a person working
 	// their queue out of order does.
 	if _, err := asBob(r).MarkInbox(t.Context(), "op-read", "bob",
-		tracker.InboxGesture{Read: []string{newest.RecordID}}, tracker.PersonAuthority{}); err != nil {
+		inbox.Gesture[tracker.Reason]{Read: []string{newest.RecordID}}, tracker.PersonAuthority{}); err != nil {
 
 		t.Fatalf("mark the newer notice read: %v", err)
 	}
@@ -266,7 +267,7 @@ func TestAStreamMismatchIsNotReadPast(t *testing.T) {
 	// about — a position left behind by a stream that was recreated — is
 	// planted: it is the state a person's record is in after the fact, and
 	// the reader is what has to survive it.
-	if _, err := asBob(r).MarkInbox(t.Context(), "op-prefs", "bob", tracker.InboxGesture{
+	if _, err := asBob(r).MarkInbox(t.Context(), "op-prefs", "bob", inbox.Gesture[tracker.Reason]{
 		PrimaryReasons: &[]tracker.Reason{},
 	}, tracker.PersonAuthority{}); err != nil {
 		t.Fatalf("write bob's record: %v", err)
@@ -297,8 +298,8 @@ func TestASnoozeMeansNotNow(t *testing.T) {
 
 	notice := r.inbox(tracker.InboxQuery{Handle: "bob"}).Notices[0]
 	asleep := wednesday.Add(48 * time.Hour)
-	if _, err := asBob(r).MarkInbox(t.Context(), "op-snooze", "bob", tracker.InboxGesture{
-		Snooze: []tracker.Snooze{{RecordID: notice.RecordID, Until: asleep}},
+	if _, err := asBob(r).MarkInbox(t.Context(), "op-snooze", "bob", inbox.Gesture[tracker.Reason]{
+		Snooze: []inbox.Snooze{{RecordID: notice.RecordID, Until: asleep}},
 	}, tracker.PersonAuthority{}); err != nil {
 
 		t.Fatalf("snooze: %v", err)
@@ -309,7 +310,7 @@ func TestASnoozeMeansNotNow(t *testing.T) {
 		t.Fatalf("a snoozed notice is still in the inbox: %+v", got.Notices)
 	}
 	got := r.inbox(tracker.InboxQuery{Handle: "bob",
-		Snoozed: tracker.SnoozeInclude})
+		Snoozed: inbox.SnoozeInclude})
 	if len(got.Notices) != 1 || !got.Notices[0].Snoozed {
 		t.Fatalf("snoozed=include did not return the snoozed notice: %+v",
 			got.Notices)
@@ -319,7 +320,7 @@ func TestASnoozeMeansNotNow(t *testing.T) {
 	// the same rows, read after the instant.
 	back, err := r.reader.Inbox(t.Context(), tracker.InboxQuery{
 		Handle: "bob", Level: statelog.ReadStale,
-		Snoozed: tracker.SnoozeExclude,
+		Snoozed: inbox.SnoozeExclude,
 	}, asleep.Add(time.Minute))
 	if err != nil {
 		t.Fatalf("Inbox: %v", err)
@@ -377,10 +378,10 @@ func TestTheInboxPagesAndRefuses(t *testing.T) {
 	}
 
 	for name, q := range map[string]tracker.InboxQuery{
-		"no handle": {Level: statelog.ReadStale, Snoozed: tracker.SnoozeExclude},
-		"no level":  {Handle: "bob", Snoozed: tracker.SnoozeExclude},
+		"no handle": {Level: statelog.ReadStale, Snoozed: inbox.SnoozeExclude},
+		"no level":  {Handle: "bob", Snoozed: inbox.SnoozeExclude},
 		"an unknown reason": {Handle: "bob", Level: statelog.ReadStale,
-			Snoozed: tracker.SnoozeExclude,
+			Snoozed: inbox.SnoozeExclude,
 			Reasons: []tracker.Reason{"because-i-said-so"}},
 		// THE ZERO SCOPE IS REFUSED, not read as one of the three: each
 		// is some caller's right default, so a reader that picked one

@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -557,7 +558,7 @@ func (f *ledgerFake) WriteFields(_ context.Context, opID string, _ []tracker.Fie
 }
 
 func (f *ledgerFake) MarkInbox(_ context.Context, opID, _ string,
-	_ tracker.InboxGesture, _ tracker.PersonAuthority) (tracker.WriteResult, error) {
+	_ inbox.Gesture[tracker.Reason], _ tracker.PersonAuthority) (tracker.WriteResult, error) {
 	return f.written(opID)
 }
 

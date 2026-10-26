@@ -18,31 +18,33 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/inbox"
 )
 
 // fakeInbox is the engine's half of the inbox feed: it keeps what the app
-// registered, and a case fires it the way a committed tracker batch would.
+// registered, and a case fires it the way a committed batch of a domain's
+// applier would.
 type fakeInbox struct {
 	mu  sync.Mutex
-	fn  func([]tracker.InboxMovement)
-	gap func()
+	fn  func([]inbox.Movement)
+	gap func(string)
 }
 
-func (f *fakeInbox) SetOnInboxMoved(fn func([]tracker.InboxMovement)) {
+func (f *fakeInbox) SetOnInboxMoved(fn func([]inbox.Movement)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.fn = fn
 }
 
-func (f *fakeInbox) SetOnInboxGap(fn func()) {
+func (f *fakeInbox) SetOnInboxGap(fn func(string)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.gap = fn
 }
 
-// fireGap tells whatever the app registered that the movements have a gap.
-func (f *fakeInbox) fireGap(t *testing.T) {
+// fireGap tells whatever the app registered that the movements of source have
+// a gap.
+func (f *fakeInbox) fireGap(t *testing.T, source string) {
 	t.Helper()
 	f.mu.Lock()
 	fn := f.gap
@@ -51,11 +53,11 @@ func (f *fakeInbox) fireGap(t *testing.T) {
 		t.Fatal("the app registered nothing for a gap in its inbox feed, so a " +
 			"switch of source would leave every open inbox stale")
 	}
-	fn()
+	fn(source)
 }
 
 // fire hands one committed batch's movements to whatever the app registered.
-func (f *fakeInbox) fire(t *testing.T, moved ...tracker.InboxMovement) {
+func (f *fakeInbox) fire(t *testing.T, moved ...inbox.Movement) {
 	t.Helper()
 	f.mu.Lock()
 	fn := f.fn
@@ -128,11 +130,11 @@ func TestInboxChangedReachesOnlyTheSocketsHoldingThatSeat(t *testing.T) {
 
 	// Two batches IN ORDER, so a socket that received alice's frame would
 	// have it queued in front of its own.
-	feed.fire(t, tracker.InboxMovement{
-		Handle: "alice-seat", UnreadDelta: 1, Subject: "task:1f0c", Reason: tracker.ReasonAssignee,
+	feed.fire(t, inbox.Movement{Source: "tracker",
+		Handle: "alice-seat", UnreadDelta: 1, Subject: "task:1f0c", Reason: "assignee",
 	})
-	feed.fire(t, tracker.InboxMovement{
-		Handle: "bob-seat", UnreadDelta: -2, Subject: "task:9a1e", Reason: tracker.ReasonMention,
+	feed.fire(t, inbox.Movement{Source: "tracker",
+		Handle: "bob-seat", UnreadDelta: -2, Subject: "task:9a1e", Reason: "mention",
 	})
 
 	got := alice.nextInbox(t)
@@ -140,7 +142,7 @@ func TestInboxChangedReachesOnlyTheSocketsHoldingThatSeat(t *testing.T) {
 		t.Fatalf("alice's socket received a frame for %q", got.Seat)
 	}
 	want := map[string]any{
-		"handle": "alice-seat", "unread_delta": float64(1),
+		"source": "tracker", "handle": "alice-seat", "unread_delta": float64(1),
 		"subject": "task:1f0c", "reason": "assignee",
 	}
 	if !maps.Equal(got.Data, want) {
@@ -159,9 +161,9 @@ func TestInboxChangedReachesOnlyTheSocketsHoldingThatSeat(t *testing.T) {
 // The engine says when it switched where this node's movements come from —
 // its own applier, a peer's relayed while its own copy is out of service — and
 // what moved in between is not replayed. So every seat a socket watches gets
-// one frame that counts nothing and names no subject, which is all a screen
-// needs to read its inbox again; and a socket watching nothing gets none, for
-// the reason no movement ever reaches it.
+// one frame naming the source that switched, counting nothing and naming no
+// subject, which is all a screen needs to read its inbox again; and a socket
+// watching nothing gets none, for the reason no movement ever reaches it.
 //
 // Mutation: register nothing for the gap, or push it to no seat, and the
 // watchers' frames never come.
@@ -205,12 +207,12 @@ func TestAGapInTheInboxFeedTellsEveryWatchedInboxToReadAgain(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	feed.fireGap(t)
+	feed.fireGap(t, "tracker")
 
 	for name, socket := range map[string]*inboxSocket{"alice": alice, "bob": bob} {
 		got := socket.nextInbox(t)
-		want := map[string]any{"handle": name + "-seat", "unread_delta": float64(0),
-			"subject": "", "reason": ""}
+		want := map[string]any{"source": "tracker", "handle": name + "-seat",
+			"unread_delta": float64(0), "subject": "", "reason": ""}
 		if got.Seat != name+"-seat" || !maps.Equal(got.Data, want) {
 			t.Errorf("%s's socket was sent %q %v, want a re-read of its own "+
 				"seat that counts nothing: %v", name, got.Seat, got.Data, want)

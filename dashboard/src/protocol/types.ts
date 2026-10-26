@@ -4180,27 +4180,6 @@ export interface LogRefusal {
   retryAfter: number;
 }
 
-/**
- * An `inbox_changed` frame's data: one committed tracker batch moved this
- * seat's inbox.
- *
- * IDENTIFIERS AND A COUNT, NEVER CONTENT. The frame says only that the inbox
- * should be asked again; what is in it is read through `work_inbox`, the
- * question that decides who may read it. `unread_delta` is a HINT — it counts
- * the notices the batch wrote, and a redelivery the engine has already
- * collapsed may count one twice — so no screen adds it to a badge.
- */
-export interface InboxChange {
-  handle: string;
-  unread_delta: number;
-  /** The id of the object the newest of those notices was written on: the
-   *  task for a task commit, the PERSON for a `prioritised` notice — whose
-   *  task `work_inbox` names as `task`. */
-  subject: string;
-  /** The reason that notice was routed under — one of `work_inbox`'s. */
-  reason: string;
-}
-
 /** The named answers the socket's request/response channel serves. */
 /** One field's move, AS TEXT — every renderer of a delta wants
  *  "todo → in_progress", and the typed value is on the row for anything that

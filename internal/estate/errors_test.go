@@ -184,12 +184,14 @@ func TestEveryErrorOfTheCrossingPackagesIsRegistered(t *testing.T) {
 	// THIS PACKAGE'S OWN TOO: a router refuses with them, and a node that
 	// answers on another's behalf carries them back across a second hop.
 	//
+	// AND THE INBOX RULES', which the tracker's mark verb is decided by.
+	//
 	// AND THE IDENTITY DIRECTORY'S, whose reads a node holding no data asks
 	// of a data node, beside the identity vocabulary's and the session's,
 	// whose answers a person verb is decided on. A code is the identifier
 	// as Go code spells it, so a nested package is named by its last
 	// element.
-	for _, pkg := range []string{"tracker", "pages", "search", "usage", "code", "statelog", "estate",
+	for _, pkg := range []string{"tracker", "inbox", "pages", "search", "usage", "code", "statelog", "estate",
 		"iamdomain", "iam", "iam/session", "artifactsdomain", "artifacts",
 		"artifacts/manifest", "artifacts/mediatype", "artifactdata", "artifactdata/canon",
 		"artifactdata/query"} {

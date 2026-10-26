@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -48,7 +49,7 @@ func positionOf(n tracker.InboxNotice) *statelog.Position {
 func (r *roundTrip) marks(handle string, at time.Time) (read, snoozed map[string]bool) {
 	r.t.Helper()
 	answer, err := r.reader.Inbox(r.t.Context(), tracker.InboxQuery{
-		Handle: handle, Snoozed: tracker.SnoozeInclude, Level: statelog.ReadStale,
+		Handle: handle, Snoozed: inbox.SnoozeInclude, Level: statelog.ReadStale,
 	}, at)
 	if err != nil {
 		r.t.Fatalf("Inbox: %v", err)
@@ -78,7 +79,7 @@ func TestNobodyElseWritesYourInboxOrYourPins(t *testing.T) {
 	for name, write := range map[string]func() error{
 		"the inbox": func() error {
 			_, err := bob.MarkInbox(t.Context(), "op-inbox", "ana",
-				tracker.InboxGesture{Read: []string{notices[0].RecordID}}, tracker.PersonAuthority{})
+				inbox.Gesture[tracker.Reason]{Read: []string{notices[0].RecordID}}, tracker.PersonAuthority{})
 			return err
 		},
 		"the pins": func() error {
@@ -124,7 +125,7 @@ func TestNobodyElseWritesYourInboxOrYourPins(t *testing.T) {
 
 	// AND HER OWN WRITES LAND, or the guard would be refusing everything.
 	if _, err := r.writer.MarkInbox(t.Context(), "op-own-inbox", "ana",
-		tracker.InboxGesture{Read: []string{notices[0].RecordID}}, tracker.PersonAuthority{}); err != nil {
+		inbox.Gesture[tracker.Reason]{Read: []string{notices[0].RecordID}}, tracker.PersonAuthority{}); err != nil {
 		t.Fatalf("ana's own inbox write: %v", err)
 	}
 	r.drain()
@@ -211,7 +212,7 @@ func TestOnePartOfAPersonDoesNotClearTheOthers(t *testing.T) {
 	}
 	r.drain()
 	if _, err := r.writer.MarkInbox(t.Context(), "op-inbox", "ana",
-		tracker.InboxGesture{Read: []string{notices[0].RecordID}}, tracker.PersonAuthority{}); err != nil {
+		inbox.Gesture[tracker.Reason]{Read: []string{notices[0].RecordID}}, tracker.PersonAuthority{}); err != nil {
 		t.Fatalf("MarkInbox: %v", err)
 	}
 	r.drain()
@@ -242,9 +243,9 @@ func TestMarkingOneNoticeReadLeavesEveryOtherMarkAndTheWatermark(t *testing.T) {
 	n := noticesFor(t, r, "ana", 4)
 	later := wednesday.Add(24 * time.Hour)
 
-	if _, err := r.writer.MarkInbox(t.Context(), "op-setup", "ana", tracker.InboxGesture{
+	if _, err := r.writer.MarkInbox(t.Context(), "op-setup", "ana", inbox.Gesture[tracker.Reason]{
 		ReadThrough: positionOf(n[0]),
-		Snooze:      []tracker.Snooze{{RecordID: n[2].RecordID, Until: later}},
+		Snooze:      []inbox.Snooze{{RecordID: n[2].RecordID, Until: later}},
 		Read:        []string{n[3].RecordID},
 	}, tracker.PersonAuthority{}); err != nil {
 		t.Fatalf("set the inbox up: %v", err)
@@ -253,7 +254,7 @@ func TestMarkingOneNoticeReadLeavesEveryOtherMarkAndTheWatermark(t *testing.T) {
 	before := r.person("ana")
 
 	if _, err := r.writer.MarkInbox(t.Context(), "op-done", "ana",
-		tracker.InboxGesture{Read: []string{n[1].RecordID}}, tracker.PersonAuthority{}); err != nil {
+		inbox.Gesture[tracker.Reason]{Read: []string{n[1].RecordID}}, tracker.PersonAuthority{}); err != nil {
 		t.Fatalf("mark one read: %v", err)
 	}
 	r.drain()
@@ -288,15 +289,15 @@ func TestAConcurrentSnoozeAndReadBothLand(t *testing.T) {
 	n := noticesFor(t, r, "ana", 2)
 	later := wednesday.Add(24 * time.Hour)
 
-	if _, err := r.writer.MarkInbox(t.Context(), "op-snooze", "ana", tracker.InboxGesture{
-		Snooze: []tracker.Snooze{{RecordID: n[0].RecordID, Until: later}},
+	if _, err := r.writer.MarkInbox(t.Context(), "op-snooze", "ana", inbox.Gesture[tracker.Reason]{
+		Snooze: []inbox.Snooze{{RecordID: n[0].RecordID, Until: later}},
 	}, tracker.PersonAuthority{}); err != nil {
 		t.Fatalf("snooze from one tab: %v", err)
 	}
 	// NOT DRAINED: the snooze is on the log and not in the rows, which is
 	// the state a second tab's gesture meets.
 	r.applyWhileWriting()
-	if _, err := r.writer.MarkInbox(t.Context(), "op-read", "ana", tracker.InboxGesture{
+	if _, err := r.writer.MarkInbox(t.Context(), "op-read", "ana", inbox.Gesture[tracker.Reason]{
 		Read: []string{n[1].RecordID},
 	}, tracker.PersonAuthority{}); err != nil {
 		t.Fatalf("read from another tab: %v", err)
@@ -327,7 +328,7 @@ func TestReadThroughNeverMovesBackwards(t *testing.T) {
 	mark := func(op string, at *statelog.Position) {
 		t.Helper()
 		if _, err := r.writer.MarkInbox(t.Context(), op, "ana",
-			tracker.InboxGesture{ReadThrough: at}, tracker.PersonAuthority{}); err != nil {
+			inbox.Gesture[tracker.Reason]{ReadThrough: at}, tracker.PersonAuthority{}); err != nil {
 			t.Fatalf("read through %s: %v", at, err)
 		}
 		r.drain()
@@ -358,14 +359,14 @@ func TestReadThroughNeverMovesBackwards(t *testing.T) {
 func TestAGestureLongerThanAListIsRefusedInboxFull(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	ids := make([]string, 0, tracker.MaxInboxEntries+1)
-	for i := range tracker.MaxInboxEntries + 1 {
+	ids := make([]string, 0, inbox.MaxEntries+1)
+	for i := range inbox.MaxEntries + 1 {
 		ids = append(ids, "r-"+itoa(i))
 	}
 	_, err := r.writer.MarkInbox(t.Context(), "op-full", "ana",
-		tracker.InboxGesture{Read: ids}, tracker.PersonAuthority{})
-	if !errors.Is(err, tracker.ErrInboxFull) {
-		t.Fatalf("a gesture naming %d notices answered %v, want ErrInboxFull",
+		inbox.Gesture[tracker.Reason]{Read: ids}, tracker.PersonAuthority{})
+	if !errors.Is(err, inbox.ErrFull) {
+		t.Fatalf("a gesture naming %d notices answered %v, want inbox.ErrFull",
 			len(ids), err)
 	}
 	if !strings.Contains(err.Error(), "read_through") {
@@ -408,14 +409,14 @@ func TestAListAtItsCeilingRefusesOneMoreInboxFull(t *testing.T) {
 	// ONE NOTICE BELOW, which the position reads through, and a list's worth
 	// plus one above it — so every read mark is an exception the list has
 	// to hold rather than one the position already answers.
-	n := allNoticesFor(t, r, "ana", tracker.MaxInboxEntries+2)
-	mark := func(op string, g tracker.InboxGesture) error {
+	n := allNoticesFor(t, r, "ana", inbox.MaxEntries+2)
+	mark := func(op string, g inbox.Gesture[tracker.Reason]) error {
 		t.Helper()
 		_, err := r.writer.MarkInbox(t.Context(), op, "ana", g, tracker.PersonAuthority{})
 		r.drain()
 		return err
 	}
-	if err := mark("op-through", tracker.InboxGesture{ReadThrough: positionOf(n[0])}); err != nil {
+	if err := mark("op-through", inbox.Gesture[tracker.Reason]{ReadThrough: positionOf(n[0])}); err != nil {
 		t.Fatalf("read through the first notice: %v", err)
 	}
 	above := n[1:]
@@ -427,22 +428,22 @@ func TestAListAtItsCeilingRefusesOneMoreInboxFull(t *testing.T) {
 		return out
 	}
 	const batch = 64
-	for from := 0; from < tracker.MaxInboxEntries; from += batch {
-		if err := mark("op-read-"+itoa(from), tracker.InboxGesture{
+	for from := 0; from < inbox.MaxEntries; from += batch {
+		if err := mark("op-read-"+itoa(from), inbox.Gesture[tracker.Reason]{
 			Read: ids(from, from+batch)}); err != nil {
 			t.Fatalf("marking notices %d..%d read: %v", from, from+batch, err)
 		}
 	}
 	full := r.person("ana")
-	if len(full.Read) != tracker.MaxInboxEntries {
+	if len(full.Read) != inbox.MaxEntries {
 		t.Fatalf("the read list holds %d entries after marking %d, want it at "+
-			"its ceiling", len(full.Read), tracker.MaxInboxEntries)
+			"its ceiling", len(full.Read), inbox.MaxEntries)
 	}
 
-	last := above[tracker.MaxInboxEntries].RecordID
-	err := mark("op-read-one-more", tracker.InboxGesture{Read: []string{last}})
-	if !errors.Is(err, tracker.ErrInboxFull) {
-		t.Fatalf("one more read mark on a full list answered %v, want ErrInboxFull", err)
+	last := above[inbox.MaxEntries].RecordID
+	err := mark("op-read-one-more", inbox.Gesture[tracker.Reason]{Read: []string{last}})
+	if !errors.Is(err, inbox.ErrFull) {
+		t.Fatalf("one more read mark on a full list answered %v, want inbox.ErrFull", err)
 	}
 	if !strings.Contains(err.Error(), "read_through") || !strings.Contains(err.Error(), "read list") {
 		t.Fatalf("the refusal does not name the list and the gesture that fits: %v", err)
@@ -455,24 +456,24 @@ func TestAListAtItsCeilingRefusesOneMoreInboxFull(t *testing.T) {
 	// THE SNOOZED LIST, which the position never prunes: the same ceiling
 	// against the stored record.
 	until := wednesday.Add(24 * time.Hour)
-	for from := 0; from < tracker.MaxInboxEntries; from += batch {
-		var snoozes []tracker.Snooze
+	for from := 0; from < inbox.MaxEntries; from += batch {
+		var snoozes []inbox.Snooze
 		for _, id := range ids(from, from+batch) {
-			snoozes = append(snoozes, tracker.Snooze{RecordID: id, Until: until})
+			snoozes = append(snoozes, inbox.Snooze{RecordID: id, Until: until})
 		}
-		if err := mark("op-snooze-"+itoa(from), tracker.InboxGesture{Snooze: snoozes}); err != nil {
+		if err := mark("op-snooze-"+itoa(from), inbox.Gesture[tracker.Reason]{Snooze: snoozes}); err != nil {
 			t.Fatalf("snoozing notices %d..%d: %v", from, from+batch, err)
 		}
 	}
 	full = r.person("ana")
-	if len(full.Snoozed) != tracker.MaxInboxEntries {
+	if len(full.Snoozed) != inbox.MaxEntries {
 		t.Fatalf("the snoozed list holds %d entries, want it at its ceiling",
 			len(full.Snoozed))
 	}
-	err = mark("op-snooze-one-more", tracker.InboxGesture{
-		Snooze: []tracker.Snooze{{RecordID: last, Until: until}}})
-	if !errors.Is(err, tracker.ErrInboxFull) || !strings.Contains(err.Error(), "snoozed list") {
-		t.Fatalf("one more snooze on a full list answered %v, want ErrInboxFull "+
+	err = mark("op-snooze-one-more", inbox.Gesture[tracker.Reason]{
+		Snooze: []inbox.Snooze{{RecordID: last, Until: until}}})
+	if !errors.Is(err, inbox.ErrFull) || !strings.Contains(err.Error(), "snoozed list") {
+		t.Fatalf("one more snooze on a full list answered %v, want inbox.ErrFull "+
 			"naming the snoozed list", err)
 	}
 	if got := r.person("ana"); got.Version != full.Version || len(got.Snoozed) != len(full.Snoozed) {
@@ -571,12 +572,12 @@ func TestAnUnreadMarkBringsBackANoticeThePositionCovers(t *testing.T) {
 	n := noticesFor(t, r, "ana", 2)
 
 	if _, err := r.writer.MarkInbox(t.Context(), "op-all", "ana",
-		tracker.InboxGesture{ReadThrough: positionOf(n[1])}, tracker.PersonAuthority{}); err != nil {
+		inbox.Gesture[tracker.Reason]{ReadThrough: positionOf(n[1])}, tracker.PersonAuthority{}); err != nil {
 		t.Fatalf("mark all read: %v", err)
 	}
 	r.drain()
 	if _, err := r.writer.MarkInbox(t.Context(), "op-unread", "ana",
-		tracker.InboxGesture{Unread: []string{n[0].RecordID}}, tracker.PersonAuthority{}); err != nil {
+		inbox.Gesture[tracker.Reason]{Unread: []string{n[0].RecordID}}, tracker.PersonAuthority{}); err != nil {
 		t.Fatalf("mark one unread: %v", err)
 	}
 	r.drain()
@@ -587,7 +588,7 @@ func TestAnUnreadMarkBringsBackANoticeThePositionCovers(t *testing.T) {
 	// Moving the position to the same place is not moving it: nothing to
 	// publish, and the mark stands.
 	if _, err := r.writer.MarkInbox(t.Context(), "op-all-again", "ana",
-		tracker.InboxGesture{ReadThrough: positionOf(n[1])}, tracker.PersonAuthority{}); err != nil {
+		inbox.Gesture[tracker.Reason]{ReadThrough: positionOf(n[1])}, tracker.PersonAuthority{}); err != nil {
 		t.Fatalf("mark all read again: %v", err)
 	}
 	r.drain()
@@ -599,7 +600,7 @@ func TestAnUnreadMarkBringsBackANoticeThePositionCovers(t *testing.T) {
 		"t-ana-next", "ENG-9", "ana")
 	newest := r.inbox(tracker.InboxQuery{Handle: "ana"}).Notices[0]
 	if _, err := r.writer.MarkInbox(t.Context(), "op-all-3", "ana",
-		tracker.InboxGesture{ReadThrough: positionOf(newest)}, tracker.PersonAuthority{}); err != nil {
+		inbox.Gesture[tracker.Reason]{ReadThrough: positionOf(newest)}, tracker.PersonAuthority{}); err != nil {
 		t.Fatalf("mark all read past it: %v", err)
 	}
 	r.drain()
@@ -618,28 +619,28 @@ func TestAMarkNamingNoRecordIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	_, err := r.writer.MarkInbox(t.Context(), "op-nothing", "ana",
-		tracker.InboxGesture{Read: []string{"no-such-record"}}, tracker.PersonAuthority{})
+		inbox.Gesture[tracker.Reason]{Read: []string{"no-such-record"}}, tracker.PersonAuthority{})
 	if !errors.Is(err, tracker.ErrInvalid) || !strings.Contains(err.Error(), "no-such-record") {
 		t.Fatalf("a mark naming no record answered %v", err)
 	}
 
 	n := noticesFor(t, r, "ana", 1)
 	// ONE ID IN TWO LISTS is a contradiction nothing could order.
-	if _, err := r.writer.MarkInbox(t.Context(), "op-both", "ana", tracker.InboxGesture{
+	if _, err := r.writer.MarkInbox(t.Context(), "op-both", "ana", inbox.Gesture[tracker.Reason]{
 		Read: []string{n[0].RecordID}, Unread: []string{n[0].RecordID},
 	}, tracker.PersonAuthority{}); !errors.Is(err, tracker.ErrInvalid) {
 		t.Fatalf("one notice both read and unread answered %v", err)
 	}
 	// AND A READ-THROUGH ON ANOTHER STREAM is refused: an inbox is read
 	// through the stream its notices are on.
-	if _, err := r.writer.MarkInbox(t.Context(), "op-dead", "ana", tracker.InboxGesture{
+	if _, err := r.writer.MarkInbox(t.Context(), "op-dead", "ana", inbox.Gesture[tracker.Reason]{
 		ReadThrough: &statelog.Position{Stream: "CREWLET_SOMETHING_ELSE", Seq: 4},
 	}, tracker.PersonAuthority{}); !errors.Is(err, tracker.ErrInvalid) {
 		t.Fatalf("a read-through on another stream answered %v", err)
 	}
 	// AND A GESTURE THAT SAYS NOTHING is refused rather than published.
 	if _, err := r.writer.MarkInbox(t.Context(), "op-empty", "ana",
-		tracker.InboxGesture{}, tracker.PersonAuthority{}); !errors.Is(err, tracker.ErrInvalid) {
+		inbox.Gesture[tracker.Reason]{}, tracker.PersonAuthority{}); !errors.Is(err, tracker.ErrInvalid) {
 		t.Fatalf("an empty gesture answered %v", err)
 	}
 }
@@ -655,8 +656,8 @@ func TestADueSnoozeIsReportedRatherThanPromoted(t *testing.T) {
 	n := noticesFor(t, r, "ana", 1)
 
 	future := wednesday.Add(time.Hour)
-	if _, err := r.writer.MarkInbox(t.Context(), "op-inbox", "ana", tracker.InboxGesture{
-		Snooze: []tracker.Snooze{{RecordID: n[0].RecordID, Until: future}},
+	if _, err := r.writer.MarkInbox(t.Context(), "op-inbox", "ana", inbox.Gesture[tracker.Reason]{
+		Snooze: []inbox.Snooze{{RecordID: n[0].RecordID, Until: future}},
 	}, tracker.PersonAuthority{}); err != nil {
 		t.Fatalf("MarkInbox: %v", err)
 	}
@@ -749,23 +750,23 @@ func TestAPersonsListsAreBounded(t *testing.T) {
 
 	n := noticesFor(t, r, "ana", 1)
 	// A SNOOZE PAST THE HORIZON is a delete that does not say so.
-	_, err = r.writer.MarkInbox(t.Context(), "op-far", "ana", tracker.InboxGesture{
-		Snooze: []tracker.Snooze{{RecordID: n[0].RecordID,
-			Until: wednesday.Add(tracker.MaxSnoozeAhead + 24*time.Hour)}},
+	_, err = r.writer.MarkInbox(t.Context(), "op-far", "ana", inbox.Gesture[tracker.Reason]{
+		Snooze: []inbox.Snooze{{RecordID: n[0].RecordID,
+			Until: wednesday.Add(inbox.MaxSnoozeAhead + 24*time.Hour)}},
 	}, tracker.PersonAuthority{})
 	if err == nil || !strings.Contains(err.Error(), "delete that does not say so") {
 		t.Fatalf("a snooze past the horizon was accepted: %v", err)
 	}
 	// AND ONE ALREADY DUE is not a snooze at all.
-	_, err = r.writer.MarkInbox(t.Context(), "op-past", "ana", tracker.InboxGesture{
-		Snooze: []tracker.Snooze{{RecordID: n[0].RecordID, Until: wednesday.Add(-time.Hour)}},
+	_, err = r.writer.MarkInbox(t.Context(), "op-past", "ana", inbox.Gesture[tracker.Reason]{
+		Snooze: []inbox.Snooze{{RecordID: n[0].RecordID, Until: wednesday.Add(-time.Hour)}},
 	}, tracker.PersonAuthority{})
 	if !errors.Is(err, tracker.ErrInvalid) {
 		t.Fatalf("a snooze into the past answered %v", err)
 	}
 	// AND ONE INSIDE IT LANDS, or the guard would refuse every snooze.
-	if _, err := r.writer.MarkInbox(t.Context(), "op-near", "ana", tracker.InboxGesture{
-		Snooze: []tracker.Snooze{{RecordID: n[0].RecordID, Until: wednesday.Add(24 * time.Hour)}},
+	if _, err := r.writer.MarkInbox(t.Context(), "op-near", "ana", inbox.Gesture[tracker.Reason]{
+		Snooze: []inbox.Snooze{{RecordID: n[0].RecordID, Until: wednesday.Add(24 * time.Hour)}},
 	}, tracker.PersonAuthority{}); err != nil {
 		t.Fatalf("an ordinary snooze was refused: %v", err)
 	}
@@ -823,7 +824,7 @@ func TestAPersonsOwnGesturesLandOnTheirSeatsRecord(t *testing.T) {
 	}
 	r.drain()
 	if _, err := person.MarkInbox(t.Context(), "op-read", "jane-founder",
-		tracker.InboxGesture{Read: []string{notices[0].RecordID}},
+		inbox.Gesture[tracker.Reason]{Read: []string{notices[0].RecordID}},
 		tracker.PersonAuthority{}); err != nil {
 		t.Fatalf("MarkInbox: %v", err)
 	}
@@ -862,7 +863,7 @@ func TestAPersonStillWritesNobodyElsesRecord(t *testing.T) {
 	for name, write := range map[string]func(handle string) error{
 		"the inbox": func(handle string) error {
 			_, err := person.MarkInbox(t.Context(), "op-inbox-"+handle, handle,
-				tracker.InboxGesture{PrimaryReasons: &[]tracker.Reason{tracker.ReasonMention}},
+				inbox.Gesture[tracker.Reason]{PrimaryReasons: &[]tracker.Reason{tracker.ReasonMention}},
 				tracker.PersonAuthority{})
 			return err
 		},
@@ -922,7 +923,7 @@ func TestAPersonalReadThatNamesNobodyIsRefused(t *testing.T) {
 		t.Error("my_work naming nobody answered")
 	}
 	if _, err := r.reader.Inbox(t.Context(), tracker.InboxQuery{
-		Level: statelog.ReadStale, Snoozed: tracker.SnoozeExclude,
+		Level: statelog.ReadStale, Snoozed: inbox.SnoozeExclude,
 	}, wednesday); err == nil {
 		t.Error("an inbox read naming nobody answered")
 	}

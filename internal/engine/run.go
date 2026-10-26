@@ -36,6 +36,9 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	// A PERSON'S inbox, named apart from the seat's own inbox handler
+	// (internal/agent/inbox) that this file runs every turn through.
+	personinbox "github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/learning/memread"
@@ -60,7 +63,6 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracing"
-	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // Engine is one process running a company.
@@ -207,19 +209,20 @@ type Engine struct {
 	// [Engine.SetOnCatalogueChanged].
 	onCatalogue atomic.Pointer[func(context.Context)]
 
-	// onInbox is told whose inbox each committed tracker batch moved on
-	// this node. Nil tells nobody — see [Engine.SetOnInboxMoved].
-	onInbox atomic.Pointer[func([]tracker.InboxMovement)]
+	// onInbox is told whose inbox each committed batch of a domain's
+	// applier moved on this node. Nil tells nobody — see
+	// [Engine.SetOnInboxMoved].
+	onInbox atomic.Pointer[func([]personinbox.Movement)]
 
-	// onInboxGap is told that the movements onInbox hears have a gap. Nil
-	// tells nobody — see [Engine.SetOnInboxGap].
-	onInboxGap atomic.Pointer[func()]
+	// onInboxGap is told that the movements of one source onInbox hears
+	// have a gap. Nil tells nobody — see [Engine.SetOnInboxGap].
+	onInboxGap atomic.Pointer[func(string)]
 
-	// inboxRelay is this data node's inbox relay — the batches its applier
-	// announced, for a peer whose copy is out of service, and the follower
-	// that hears a peer's while this node's own copy is — and
-	// stopInboxRelayFn ends both. Nil on a node without `data`. See
-	// inboxrelay.go.
+	// inboxRelay is this data node's inbox relay — the batches its appliers
+	// announced, for a peer whose copy of their domain is out of service,
+	// and the followers that hear a peer's while this node's own copy of a
+	// domain is — and stopInboxRelayFn ends both. Nil on a node without
+	// `data`. See inboxrelay.go.
 	inboxRelay       atomic.Pointer[inboxRelay]
 	stopInboxRelayFn func(context.Context)
 

@@ -22,10 +22,10 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/static"
 )
 
@@ -369,15 +369,16 @@ type Options struct {
 	// Runtime is the engine this process runs beside.
 	Runtime NodeRuntime
 
-	// Inbox is where this node hears whose inbox a committed tracker
-	// batch moved, which [New] turns into `inbox_changed` frames for the
-	// sockets watching each seat — see [InboxFeed].
+	// Inbox is where this node hears whose inbox a committed batch of a
+	// domain's applier moved, which [New] turns into `inbox_changed` frames
+	// for the sockets watching each seat — see [InboxFeed].
 	//
-	// REQUIRED, like Runtime: every node that serves the API applies the
-	// tracker's log — and relays a peer's movements while its own copy is
-	// out of service — so a node that heard nothing would be a wiring
-	// mistake rather than a narrower node, and the dashboard would go back
-	// to learning about somebody's work a poll interval late.
+	// REQUIRED, like Runtime: every node that serves the API applies every
+	// domain's log — and relays a peer's movements of a domain while its
+	// own copy of it is out of service — so a node that heard nothing
+	// would be a wiring mistake rather than a narrower node, and the
+	// dashboard would go back to learning about somebody's work a poll
+	// interval late.
 	Inbox InboxFeed
 
 	// Credentials is where this node hears whose credentials a committed
@@ -1281,42 +1282,45 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) { a.handler.Serv
 func (a *App) Public() http.Handler { return a.public }
 
 // InboxFeed is where this node hears whose inbox moved: the engine, whose
-// tracker applier says so after every committed batch — and, while this
-// node's own copy is out of service, a sound peer's applier relayed.
+// appliers say so after every committed batch of each domain that keeps a
+// person's inbox — and, while this node's own copy of such a domain is out of
+// service, a sound peer's applier of it relayed.
 //
 // CONSUMER-DEFINED and two methods wide: the movements, and the GAPS between
-// them — the engine switching where its movements come from, after which what
-// moved in between is not replayed. The engine satisfies it with
+// them — the engine switching where one source's movements come from, after
+// which what moved in between is not replayed. The engine satisfies it with
 // [engine.Engine.SetOnInboxMoved] and [engine.Engine.SetOnInboxGap]; a test
 // hands in a feed it fires by hand.
 type InboxFeed interface {
-	SetOnInboxMoved(func([]tracker.InboxMovement))
-	SetOnInboxGap(func())
+	SetOnInboxMoved(func([]inbox.Movement))
+	SetOnInboxGap(func(source string))
 }
 
 // pushInboxMoved turns one committed batch's inbox movements into
-// `inbox_changed` frames, each reaching only the sockets watching that seat.
+// `inbox_changed` frames, each reaching only the sockets watching that seat and
+// naming the domain whose inbox moved.
 //
-// FROM ONE SOURCE AT A TIME, which the engine chooses: every node that serves
-// this API holds the estate — ingress requires the `data` role (ADR-0025) —
-// and applies every tracker record, so while its copy serves it hears every
-// movement from its own applier. A copy out of service keeps the node in
-// rotation and its applier announces nothing it can trust, so for as long as
-// it is out the engine relays a sound peer's movements instead, and says when
-// it switched ([App.pushInboxGap]).
-func (a *App) pushInboxMoved(moved []tracker.InboxMovement) {
+// FROM ONE SOURCE OF EACH DOMAIN AT A TIME, which the engine chooses: every
+// node that serves this API holds the estate — ingress requires the `data`
+// role (ADR-0025) — and applies every record, so while its copy of a domain
+// serves it hears every movement of it from its own applier. A copy out of
+// service keeps the node in rotation and its applier announces nothing it can
+// trust, so for as long as it is out the engine relays a sound peer's
+// movements of that domain instead, and says when it switched
+// ([App.pushInboxGap]).
+func (a *App) pushInboxMoved(moved []inbox.Movement) {
 	for _, m := range moved {
 		a.stream.InboxChanged(stream.InboxChange{
-			Handle: m.Handle, UnreadDelta: m.UnreadDelta,
-			Subject: m.Subject, Reason: string(m.Reason),
+			Source: m.Source, Handle: m.Handle, UnreadDelta: m.UnreadDelta,
+			Subject: m.Subject, Reason: m.Reason,
 		})
 	}
 }
 
 // pushInboxGap tells every watched inbox to read itself again: the engine
-// switched where this node's movements come from, and what moved in the gap is
-// not replayed — see [stream.Service.InboxReread].
-func (a *App) pushInboxGap() { a.stream.InboxReread() }
+// switched where this node's movements of source come from, and what moved in
+// the gap is not replayed — see [stream.Service.InboxReread].
+func (a *App) pushInboxGap(source string) { a.stream.InboxReread(source) }
 
 // Stream exposes the live channel, for the engine to feed.
 func (a *App) Stream() *stream.Service { return a.stream }

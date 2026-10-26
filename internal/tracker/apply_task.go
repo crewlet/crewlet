@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -1437,10 +1438,10 @@ func purgeDeletes(id string) []purgeStatement {
 // computes — rather than over a set this function had already emptied.
 //
 // AND IT SAYS WHOSE INBOX IT EMPTIED. The applier announces, after a committed
-// batch, whose inbox moved (inboxmove.go), and a notice taken OUT of somebody's
-// inbox moves it as surely as one put in: without the note an open screen went
-// on listing notices no node held any more until its next poll, and opening one
-// answered that the task does not exist. The recipients are read before the
+// batch, whose inbox moved ([inbox.Movement]), and a notice taken OUT of
+// somebody's inbox moves it as surely as one put in: without the note an open
+// screen went on listing notices no node held any more until its next poll,
+// and opening one answered that the task does not exist. The recipients are read before the
 // rows go, because afterwards there is nothing left to ask.
 func (a *Applier) forgetRecords(ctx context.Context, tx *sql.Tx, c applyContext,
 	id, keep string) (int, error) {
@@ -1468,9 +1469,9 @@ func (a *Applier) forgetRecords(ctx context.Context, tx *sql.Tx, c applyContext,
 		return 0, err
 	}
 	for _, notice := range gone {
-		a.noteInbox(inboxNote{
-			record: notice.record, handle: notice.recipient, subject: id,
-			reason: notice.reason, position: c.packed, removed: true,
+		a.inboxed.Note(inbox.Note{
+			Record: notice.record, Handle: notice.recipient, Subject: id,
+			Reason: string(notice.reason), Position: c.packed, Removed: true,
 		})
 	}
 	if err = exec(`DELETE FROM tracker_notifications WHERE record_id IN (

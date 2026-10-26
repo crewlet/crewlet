@@ -141,13 +141,16 @@ const (
 	// the ones that asked to watch it (see [Hub.Watch]) and were allowed to
 	// (see [watching]).
 	//
-	// IT IS HOW A PERSON LEARNS THEY HAVE WORK. The tracker's applier, on
-	// every node serving the API — each holds the estate, since ingress
-	// requires the `data` role — says whose inbox each committed batch
-	// moved, and each node pushes that to its OWN sockets through
-	// [Service.InboxChanged]: every such node applies every record, so no
-	// node forwards to another. The
-	// payload is an [InboxChange]: identifiers and a count, never content.
+	// IT IS HOW A PERSON LEARNS THEY HAVE WORK. The applier of every
+	// domain that keeps a person's inbox, on every node serving the API —
+	// each holds the estate, since ingress requires the `data` role — says
+	// whose inbox each committed batch moved, and each node pushes that to
+	// its OWN sockets through [Service.InboxChanged]: every such node
+	// applies every record, so no node forwards to another (but for a
+	// domain whose own copy is out of service there, which the engine
+	// relays from a sound peer's). The payload is an [InboxChange]:
+	// identifiers and a count, never content, naming the domain whose half
+	// of the inbox moved.
 	KindInboxChanged Kind = "inbox_changed"
 
 	// KindArtifactChanged says one artifact moved: a version published, its
@@ -233,10 +236,15 @@ const (
 	// response for every seat at once.
 	NeedAdmin Need = "admin"
 
-	// NeedTracker is the tracker's: an `inbox_changed` frame says whose
-	// inbox moved, which is what the `work_inbox` question it tells a
-	// screen to ask again answers.
-	NeedTracker Need = "tracker"
+	// NeedInbox is a seat room's: an `inbox_changed` frame says whose inbox
+	// moved, and it reaches only the sockets in that seat's room — a socket
+	// is in it only because its watch of the seat was decided as a read of
+	// that person's inbox ([watching]) and stays decided — so, as for an
+	// artifact's room, no grant stands in front of the kind itself. The
+	// frame is no one app's: it names the domain whose half of the inbox
+	// moved, and every domain that keeps one pushes it, so a grant here
+	// would be one domain's permission in front of another's news.
+	NeedInbox Need = "inbox"
 
 	// NeedArtifact is an artifact room's: decided PER ARTIFACT, by the
 	// reader's role on it, which no app answers. A frame of such a kind
@@ -248,7 +256,7 @@ const (
 )
 
 // Needs is the closed set.
-var Needs = []Need{NeedEverybody, NeedAdmin, NeedTracker, NeedArtifact}
+var Needs = []Need{NeedEverybody, NeedAdmin, NeedInbox, NeedArtifact}
 
 // Valid reports whether n is a need this build knows.
 func (n Need) Valid() bool { return slices.Contains(Needs, n) }
@@ -260,8 +268,9 @@ func (n Need) Valid() bool { return slices.Contains(Needs, n) }
 //
 // EACH KIND IS DECLARED AS ITS QUESTION IS, so no fact is reachable by
 // choosing a channel: an event is the `events` query's row, so admin's; an
-// `inbox_changed` frame the tracker's; everything else is the overview the
-// questions beside it answer to everybody. What of the overview a reader
+// `inbox_changed` frame the seat room's, decided as a read of that person's
+// inbox; everything else is the overview the questions beside it answer to
+// everybody. What of the overview a reader
 // receives is decided per payload — a seat's live call is masked to its
 // status for a reader its trail is not open to — by [Shaped].
 //
@@ -278,7 +287,7 @@ var needs = map[Kind]Need{
 	KindOrg:          NeedEverybody,
 	KindTools:        NeedEverybody,
 	KindHealth:       NeedEverybody,
-	KindInboxChanged: NeedTracker,
+	KindInboxChanged: NeedInbox,
 
 	KindArtifactChanged:  NeedArtifact,
 	KindArtifactData:     NeedArtifact,
@@ -295,14 +304,12 @@ func NeedOf(kind Kind) (Need, bool) {
 
 // Grants are the permissions any one of which admits a reader to a kind of
 // this need: what a refusal names. The overview names none, since nothing the
-// reader could be given would change an answer they already have, and an
-// artifact room names none, since what admits a reader there is a share.
+// reader could be given would change an answer they already have, and a room
+// names none, since what admits a reader to an artifact's is a share and to a
+// seat's the watch's own decision.
 func (n Need) Grants() []iam.Grant {
-	switch n {
-	case NeedAdmin:
+	if n == NeedAdmin {
 		return []iam.Grant{iam.GrantAdmin}
-	case NeedTracker:
-		return []iam.Grant{iam.GrantTracker}
 	}
 	return nil
 }
@@ -401,8 +408,11 @@ func (a Audience) Receives(kind Kind) bool {
 		return true
 	case NeedAdmin:
 		return a.admin
-	case NeedTracker:
-		return a.Has(iam.GrantTracker)
+	case NeedInbox:
+		// THE ROOM DECIDES, by the watch's own decision: a socket
+		// reaches a frame of this need only through a watch of the seat
+		// that was allowed.
+		return true
 	case NeedArtifact:
 		// THE ROOM DECIDES, by the reader's role on the artifact: a
 		// socket reaches a frame of this need only through a join that

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -139,11 +140,11 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
 	if err != nil {
 		return 0, err
 	}
-	inbox, err := a.writeInbox(ctx, tx, c, keys.Key)
+	noticed, err := a.writeInbox(ctx, tx, c, keys.Key)
 	if err != nil {
 		return 0, err
 	}
-	return rows + reopens + handOffs + successors + stamped + inbox, nil
+	return rows + reopens + handOffs + successors + stamped + noticed, nil
 }
 
 // stampProjectChange records that this commit changed the project's work, and
@@ -466,11 +467,11 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 		if n > 0 {
 			// A ROW THIS TRANSACTION WROTE, and only then: a redelivery
 			// wrote nothing, so it moved nobody's inbox. See
-			// inboxmove.go for what the movement is for.
-			a.noteInbox(inboxNote{
-				record: historyID(c), handle: candidate.Handle,
-				subject: c.subject().ID, reason: candidate.Reason,
-				position: c.packed,
+			// [inbox.Movement] for what the movement is for.
+			a.inboxed.Note(inbox.Note{
+				Record: historyID(c), Handle: candidate.Handle,
+				Subject: c.subject().ID, Reason: string(candidate.Reason),
+				Position: c.packed,
 			})
 		}
 		written += n

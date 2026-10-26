@@ -796,7 +796,7 @@ const DetailComments = 20
 // MaxCommentPage is the most comments one page may hold.
 //
 // FIFTY, the ceiling every other paged read in this tracker holds a caller to
-// ([MaxInboxRows], [MaxFeedPage], [MaxSearchLimit]), where a caller walking a
+// ([inbox.MaxRows], [MaxFeedPage], [MaxSearchLimit]), where a caller walking a
 // long thread wants as few round trips as that allows. What a page WEIGHS is
 // [CommentPageBytes]'s to bound, not this.
 const MaxCommentPage = 50

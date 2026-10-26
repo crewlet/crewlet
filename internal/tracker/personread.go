@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -36,10 +37,10 @@ type PersonState struct {
 	// as DUE rather than silently promoted: putting one back is a write,
 	// and a read that performed it would be a read that changed the
 	// fleet's state.
-	Unread  []InboxEntry `json:"unread,omitempty"`
-	Read    []InboxEntry `json:"read,omitempty"`
-	Snoozed []InboxEntry `json:"snoozed,omitempty"`
-	Due     []InboxEntry `json:"due,omitempty"`
+	Unread  []inbox.Entry `json:"unread,omitempty"`
+	Read    []inbox.Entry `json:"read,omitempty"`
+	Snoozed []inbox.Entry `json:"snoozed,omitempty"`
+	Due     []inbox.Entry `json:"due,omitempty"`
 
 	PrimaryReasons []Reason   `json:"primary_reasons,omitempty"`
 	Priorities     []string   `json:"priorities,omitempty"`
@@ -51,11 +52,11 @@ type PersonState struct {
 	PrioritiesSetBy string    `json:"priorities_set_by,omitempty"`
 	PrioritiesSetAt time.Time `json:"priorities_set_at,omitzero"`
 
-	SeenThrough Position `json:"seen_through,omitzero"`
-	Version     uint64   `json:"version"`
+	SeenThrough inbox.Position `json:"seen_through,omitzero"`
+	Version     uint64         `json:"version"`
 
 	// MaxSnoozeAhead is how far ahead a snooze may be set, in SECONDS —
-	// [MaxSnoozeAhead], served so a screen offers only the presets the
+	// [inbox.MaxSnoozeAhead], served so a screen offers only the presets the
 	// write will accept. A preset past it is a button that is refused
 	// every time it is pressed, and the bound is the engine's to state
 	// rather than a number a client copies and lets drift.
@@ -103,7 +104,7 @@ func (r *Reader) Person(ctx context.Context, q PersonQuery, now time.Time) (Pers
 
 	out := PersonState{
 		Handle:         q.Handle,
-		MaxSnoozeAhead: int64(MaxSnoozeAhead / time.Second),
+		MaxSnoozeAhead: int64(inbox.MaxSnoozeAhead / time.Second),
 	}
 	served, err := r.log.Read(ctx, statelog.Query{
 		Level:       q.Level,
@@ -160,7 +161,7 @@ func personScope() statelog.ScopeSet {
 // WRITE, and a read that performed one would change the fleet's state from a
 // path with no operation id, no arbitration and no record — so this says which
 // are due and the caller's next inbox write is what moves them.
-func splitSnoozes(entries []InboxEntry, now time.Time) (asleep, due []InboxEntry) {
+func splitSnoozes(entries []inbox.Entry, now time.Time) (asleep, due []inbox.Entry) {
 	for _, entry := range entries {
 		if entry.Until != nil && !entry.Until.After(now) {
 			due = append(due, entry)

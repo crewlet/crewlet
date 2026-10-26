@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -116,7 +117,7 @@ type TrackerWriter interface {
 		prior tracker.ViewPrior) (tracker.WriteResult, error)
 	WriteTypes(ctx context.Context, opID string, types []tracker.TaskType) (tracker.WriteResult, error)
 	WriteFields(ctx context.Context, opID string, fields []tracker.FieldDef) (tracker.WriteResult, error)
-	MarkInbox(ctx context.Context, opID, handle string, gesture tracker.InboxGesture,
+	MarkInbox(ctx context.Context, opID, handle string, gesture inbox.Gesture[tracker.Reason],
 		authority tracker.PersonAuthority) (tracker.WriteResult, error)
 	WritePins(ctx context.Context, opID, handle string, gesture tracker.PinGesture,
 		authority tracker.PersonAuthority) (tracker.WriteResult, error)
@@ -1169,7 +1170,7 @@ var opWriteFields = define("tracker.write_fields", opIdempotentWrite, trackerDom
 type markInboxArgs struct {
 	OpID      string
 	Handle    string
-	Gesture   tracker.InboxGesture
+	Gesture   inbox.Gesture[tracker.Reason]
 	Authority tracker.PersonAuthority
 }
 

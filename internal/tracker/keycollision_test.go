@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -354,13 +355,13 @@ func TestEveryRowAnItemIsOpenedFromSaysWhenItsKeyOpensAnotherTask(t *testing.T) 
 	// task, which is what a reader opens when the key opens another.
 	inboxOf := func(handle string) []tracker.InboxNotice {
 		t.Helper()
-		inbox, err := reader.Inbox(ctx, tracker.InboxQuery{
-			Handle: handle, Level: statelog.ReadStale, Snoozed: tracker.SnoozeExclude,
+		answer, err := reader.Inbox(ctx, tracker.InboxQuery{
+			Handle: handle, Level: statelog.ReadStale, Snoozed: inbox.SnoozeExclude,
 		}, now)
 		if err != nil {
 			t.Fatalf("%s's inbox: %v", handle, err)
 		}
-		return inbox.Notices
+		return answer.Notices
 	}
 	noticed := map[string]bool{}
 	prioritised := map[string]tracker.InboxNotice{}

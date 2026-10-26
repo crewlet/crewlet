@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
@@ -22,7 +23,12 @@ import (
 // nil handed to the applier there compiles, runs and passes every tracker case,
 // while every person's screen goes back to learning about their work a poll
 // interval late. So the applier here is the REGISTER's, and the record is
-// applied and committed the way the framework's loop does it.
+// applied and committed the way the framework's loop does it — and what it
+// announces names the tracker, the source a node relays it by while its own
+// tracker copy is out of service.
+//
+// Mutation: drop the tracker's [registration.Inbox] mark, and its applier is
+// handed no listener.
 func TestTheTrackerApplierTheRegisterBuildsFeedsTheInbox(t *testing.T) {
 	t.Parallel()
 	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"),
@@ -30,8 +36,8 @@ func TestTheTrackerApplierTheRegisterBuildsFeedsTheInbox(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	e := &Engine{}
-	var heard [][]tracker.InboxMovement
-	e.SetOnInboxMoved(func(moved []tracker.InboxMovement) {
+	var heard [][]inbox.Movement
+	e.SetOnInboxMoved(func(moved []inbox.Movement) {
 		heard = append(heard, moved)
 	})
 	entry, ok := registrationFor(tracker.Domain{}.Name())
@@ -84,11 +90,40 @@ func TestTheTrackerApplierTheRegisterBuildsFeedsTheInbox(t *testing.T) {
 		applier.Committed(t.Context())
 	}
 
-	want := []tracker.InboxMovement{
-		{Handle: "bo", UnreadDelta: 1, Subject: "t-1", Reason: tracker.ReasonAssignee},
-	}
+	want := []inbox.Movement{{Source: tracker.Domain{}.Name(), Handle: "bo",
+		UnreadDelta: 1, Subject: "t-1", Reason: string(tracker.ReasonAssignee)}}
 	if len(heard) != 1 || !slices.Equal(heard[0], want) {
 		t.Fatalf("the API heard %v, want exactly one batch %v", heard, want)
+	}
+}
+
+// THE RELAY JUDGES EXACTLY THE DOMAINS WHOSE APPLIERS ANNOUNCE.
+//
+// A domain's applier is handed the engine's inbox listener only where the
+// register marks it ([stateLog.inboxFor]), and the relay streams and follows
+// exactly the marked domains ([inboxSources]). Held apart, the two could
+// disagree in the two ways that cost: a domain announcing movements the relay
+// never judged keeps its sockets on an applier nobody vouches for while its
+// copy is wrong, and a judged one that announces nothing runs a follower that
+// relays nothing. The tracker is one, because a person's work is its news.
+//
+// Mutation: hand the listener to every domain's applier, or list the relay's
+// sources by anything but the mark, and a domain is one and not the other.
+func TestTheRelayJudgesExactlyTheDomainsWhoseAppliersAnnounce(t *testing.T) {
+	t.Parallel()
+	e := &Engine{}
+	e.SetOnInboxMoved(func([]inbox.Movement) {})
+	s := &stateLog{applyHooks: e.applyHooks()}
+	sources := inboxSources()
+	if !slices.Contains(sources, tracker.Domain{}.Name()) {
+		t.Fatalf("the relay's sources are %v, and the tracker is not among them", sources)
+	}
+	for _, d := range registeredDomains() {
+		handed := s.inboxFor(d) != nil
+		if judged := slices.Contains(sources, d.Name()); handed != judged {
+			t.Errorf("%s: its applier is handed the inbox listener = %v, and the "+
+				"relay judges its copy = %v", d.Name(), handed, judged)
+		}
 	}
 }
 

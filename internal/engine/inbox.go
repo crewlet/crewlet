@@ -1,65 +1,68 @@
 package engine
 
-import "github.com/crewlet/crewlet/internal/tracker"
+import "github.com/crewlet/crewlet/internal/inbox"
 
-// SetOnInboxMoved registers what this node does when a committed tracker batch
-// moved somebody's inbox — which, beside the engine, is the API pushing an
-// `inbox_changed` frame to the sockets watching that seat.
+// SetOnInboxMoved registers what this node does when a committed batch of a
+// domain's applier moved somebody's inbox — which, beside the engine, is the
+// API pushing an `inbox_changed` frame to the sockets watching that seat.
 //
 // # How a person learns they have work
 //
-// An agent is woken by the change feed. A person has no turn to wake, and a
+// An agent is woken by a change feed. A person has no turn to wake, and a
 // Crewlet-only person has no Slack or Jira either: the dashboard is their
-// delivery surface. The tracker's applier says, after every committed batch,
-// whose inbox it moved (internal/tracker/inboxmove.go), and this is where the
-// engine hands that on. EVERY DATA NODE APPLIES EVERY RECORD, and every node
-// that serves sockets is a data node (ingress requires `data`), so each hears
-// every movement from its own applier and tells its own sockets — WHILE ITS
-// COPY SERVES. A copy out of service keeps its node in rotation, and its
+// delivery surface. Each domain whose changes are a person's news — the
+// tracker's, marked [registration.Inbox] — has its applier say, after every
+// committed batch, whose inbox it moved (internal/inbox's movement.go), each
+// movement naming that domain as its source, and this is where the engine
+// hands that on. EVERY DATA NODE APPLIES EVERY RECORD, and every node that
+// serves sockets is a data node (ingress requires `data`), so each hears every
+// movement from its own appliers and tells its own sockets — WHILE ITS COPY OF
+// THAT DOMAIN SERVES. A copy out of service keeps its node in rotation, and its
 // applier is the one thing on that node nobody vouches for, so for as long as
-// it is out the movements come from a sound peer's applier instead, relayed
-// (inboxrelay.go), and its own are withheld. A node that serves no sockets
-// simply has nobody registered here.
+// it is out that domain's movements come from a sound peer's applier instead,
+// relayed (inboxrelay.go), and its own are withheld — that domain's alone:
+// every other domain's copy still serves, and its applier is still heard. A
+// node that serves no sockets simply has nobody registered here.
 //
 // A SETTER for [Engine.SetOnCompanyPublished]'s reason: the API half is built
 // after the engine. Safe to call while the engine is running, and safe to leave
 // unset.
 //
-// fn IS CALLED ON THE APPLY LOOP'S OWN GOROUTINE, or the relay follower's, with
+// fn IS CALLED ON AN APPLY LOOP'S OWN GOROUTINE, or a relay follower's, with
 // the next batch waiting behind it, so it must not block: the stream's fan-out
 // it is built for never does.
-func (e *Engine) SetOnInboxMoved(fn func([]tracker.InboxMovement)) {
+func (e *Engine) SetOnInboxMoved(fn func([]inbox.Movement)) {
 	e.onInbox.Store(&fn)
 }
 
-// SetOnInboxGap registers what this node does when the movements it delivers
-// have a GAP — its sockets switched from its own applier to a relayed peer's,
-// back, or from one peer to another — which, beside the engine, is the API
-// telling every watched inbox to read itself again. What moved in the gap is
-// not replayed: the rows are the truth, and a screen re-reads them.
+// SetOnInboxGap registers what this node does when the movements of one
+// source it delivers have a GAP — its sockets switched from its own applier to
+// a relayed peer's, back, or from one peer to another — which, beside the
+// engine, is the API telling every watched inbox to read itself again. What
+// moved in the gap is not replayed: the rows are the truth, and a screen
+// re-reads them. fn is handed the source, the domain whose movements switched.
 //
 // A SETTER, safe to leave unset, and fn must not block, for
 // [Engine.SetOnInboxMoved]'s reasons.
-func (e *Engine) SetOnInboxGap(fn func()) {
+func (e *Engine) SetOnInboxGap(fn func(source string)) {
 	e.onInboxGap.Store(&fn)
 }
 
-// inboxMoved is what the tracker applier calls after a committed batch that
-// wrote somebody a notice.
+// inboxMoved is what a domain's applier calls after a committed batch that
+// moved somebody's inbox.
 //
 // KEPT FOR THIS NODE'S RELAY FOLLOWERS whatever its copy's state — a server
-// answers a follower only while its copy serves ([inboxRelay.answerNow]) — and
-// handed to this node's own sockets only while they are not being relayed a
-// peer's: one source at a time.
-func (e *Engine) inboxMoved(moved []tracker.InboxMovement) {
-	relay := e.inboxRelay.Load()
-	if relay != nil {
-		relay.record(moved)
-		if relay.relaying.Load() {
-			return
-		}
+// answers a follower only while its copy of the source serves
+// ([inboxRelay.answerNow]) — and handed to this node's own sockets only for
+// the sources they are not being relayed from a peer: one source of each
+// domain's movements at a time.
+func (e *Engine) inboxMoved(moved []inbox.Movement) {
+	if relay := e.inboxRelay.Load(); relay != nil {
+		moved = relay.record(moved)
 	}
-	e.deliverInbox(moved)
+	if len(moved) > 0 {
+		e.deliverInbox(moved)
+	}
 }
 
 // inboxListening reports whether anything on this node registered for its
@@ -70,7 +73,7 @@ func (e *Engine) inboxListening() bool {
 }
 
 // deliverInbox hands one batch's movements to whatever this node registered.
-func (e *Engine) deliverInbox(moved []tracker.InboxMovement) {
+func (e *Engine) deliverInbox(moved []inbox.Movement) {
 	fn := e.onInbox.Load()
 	if fn == nil || *fn == nil {
 		return
@@ -78,11 +81,12 @@ func (e *Engine) deliverInbox(moved []tracker.InboxMovement) {
 	(*fn)(moved)
 }
 
-// inboxGap tells whatever this node registered that its movements have a gap.
-func (e *Engine) inboxGap() {
+// inboxGap tells whatever this node registered that its movements from source
+// have a gap.
+func (e *Engine) inboxGap(source string) {
 	fn := e.onInboxGap.Load()
 	if fn == nil || *fn == nil {
 		return
 	}
-	(*fn)()
+	(*fn)(source)
 }

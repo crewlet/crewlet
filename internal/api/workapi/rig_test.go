@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -318,7 +319,7 @@ func (b *bound) EditComment(_ context.Context, opID, _, _, commentID, body strin
 }
 
 func (b *bound) MarkInbox(_ context.Context, opID, handle string,
-	_ tracker.InboxGesture, authority tracker.PersonAuthority) (tracker.WriteResult, error) {
+	_ inbox.Gesture[tracker.Reason], authority tracker.PersonAuthority) (tracker.WriteResult, error) {
 
 	b.w.mu.Lock()
 	defer b.w.mu.Unlock()

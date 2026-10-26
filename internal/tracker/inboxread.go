@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -31,7 +32,7 @@ import (
 // [Person] is the person's OWN state: which entries they have read, what they
 // snoozed, how far they have got. It is written by the seat bound to them and
 // it is a MARK over this feed, not the feed itself — which is why an
-// [InboxEntry] carries a record id and a position and no content at all.
+// [inbox.Entry] carries a record id and a position and no content at all.
 //
 // The two halves compose here: the notification rows are the SOURCE, the
 // person record is the READ STATE, and this reader is the only place that
@@ -41,8 +42,8 @@ import (
 //
 // # The primary split
 //
-// [Person.PrimaryReasons] is the person's own answer to "which of these are
-// mine to act on". Empty means the shipped default, [DefaultPrimaryReasons],
+// [inbox.Marks.PrimaryReasons] is the person's own answer to "which of these
+// are mine to act on". Empty means the shipped default, [DefaultPrimaryReasons],
 // rather than "nothing is primary": a person who has never expressed a
 // preference wants a useful inbox, not an empty primary list. The split is a
 // classification of the SAME rows rather than a filter — `other` is still
@@ -59,7 +60,7 @@ import (
 // InboxNotice is one thing the company told somebody.
 type InboxNotice struct {
 	// RecordID is the history row this came from, and it is what a mark
-	// names: [InboxEntry.RecordID] is this value.
+	// names: [inbox.Entry.RecordID] is this value.
 	RecordID string `json:"record_id"`
 
 	// The position, as the triple every cursor in this domain uses.
@@ -163,7 +164,7 @@ type InboxAnswer struct {
 	// SeenThrough is where this person's own record says they have read
 	// to, so a caller can mark the page it just rendered without a second
 	// read.
-	SeenThrough Position `json:"seen_through,omitzero"`
+	SeenThrough inbox.Position `json:"seen_through,omitzero"`
 
 	// Counts are over the PAGE, and say so: a total over the table would
 	// be a second scan of rows this answer did not return.
@@ -179,15 +180,6 @@ type InboxAnswer struct {
 	Complete       bool               `json:"complete"`
 	Incomplete     *Incomplete        `json:"incomplete,omitempty"`
 }
-
-// MaxInboxRows is how many notices one page carries.
-//
-// FIFTY, against the activity feed's two hundred, because the two answer
-// different questions. A feed is scrolled and an inbox is WORKED: a person or
-// an agent reads this to decide what to do next, and a page longer than one
-// sitting is a page whose tail is never reached. It is also the bound on what
-// one turn's prompt can carry a summary of without displacing the work.
-const MaxInboxRows = 50
 
 // DefaultPrimaryReasons is the split a person who has expressed no preference
 // gets.
@@ -212,35 +204,6 @@ var DefaultPrimaryReasons = []Reason{
 	ReasonPrioritised,
 }
 
-// SnoozeScope is what an inbox read does with the notices a person snoozed.
-//
-// THREE VALUES, because there are three questions. "My inbox" hides what the
-// person said "not now" to — a snooze that the default read returned anyway
-// would be a gesture that does nothing. "Everything" keeps them, marked. And
-// "what have I put off" is ONLY them, which the two-valued flag this replaced
-// could not ask: `include_snoozed` returned every notice with the snoozed ones
-// among it, so the dashboard's Snoozed tab listed the whole inbox.
-//
-// A snooze whose time has come is NOT snoozed under any scope: it is back in
-// the inbox, reported unsnoozed, and absent from `only` — see [markInbox].
-type SnoozeScope string
-
-const (
-	// SnoozeExclude hides every live snooze — the inbox as a person works it.
-	SnoozeExclude SnoozeScope = "exclude"
-	// SnoozeInclude returns every notice, the snoozed ones marked.
-	SnoozeInclude SnoozeScope = "include"
-	// SnoozeOnly returns only the notices still asleep.
-	SnoozeOnly SnoozeScope = "only"
-)
-
-// SnoozeScopes are the three, in the order a surface lists them.
-var SnoozeScopes = []SnoozeScope{SnoozeExclude, SnoozeInclude, SnoozeOnly}
-
-// Valid reports whether a scope off the wire is one this build knows. The
-// empty string is not: see [InboxQuery.Snoozed].
-func (s SnoozeScope) Valid() bool { return slices.Contains(SnoozeScopes, s) }
-
 // InboxQuery asks for a page of somebody's inbox.
 type InboxQuery struct {
 	// Handle is whose inbox this is. Required: an inbox with no person is
@@ -262,18 +225,18 @@ type InboxQuery struct {
 	PrimaryOnly bool
 
 	// Unread drops what this person's own record marks read — by the
-	// same rule [markInbox] marks a row read, stated once more as SQL in
-	// [inboxFilter.unread], because a filter applied to the page AFTER it
-	// was read short-pages it. See [inboxFilter].
+	// same rule [inbox.Classifier.Classify] marks a row read, stated once
+	// more as SQL in [inboxFilter.unread], because a filter applied to the
+	// page AFTER it was read short-pages it. See [inboxFilter].
 	Unread bool
 
 	// Snoozed is what this read does with the notices this person put off,
 	// and it is REQUIRED: the zero value is refused rather than read as one
 	// of the three, because each of them is a sensible default for SOME
 	// caller and a reader that picked one silently would answer the other
-	// two's question wrong. A surface defaults it — to [SnoozeExclude],
-	// which is what "my inbox" means.
-	Snoozed SnoozeScope
+	// two's question wrong. A surface defaults it — to
+	// [inbox.SnoozeExclude], which is what "my inbox" means.
+	Snoozed inbox.SnoozeScope
 
 	Limit  int
 	Cursor string
@@ -302,7 +265,7 @@ func (r *Reader) Inbox(ctx context.Context, q InboxQuery, now time.Time) (
 	case !q.Snoozed.Valid():
 		return InboxAnswer{}, fmt.Errorf("tracker: %q is not a snoozed scope — "+
 			"pass one of %v; a surface resolves an absent `snoozed` to %q "+
-			"before it reads", q.Snoozed, SnoozeScopes, SnoozeExclude)
+			"before it reads", q.Snoozed, inbox.SnoozeScopes, inbox.SnoozeExclude)
 	}
 	for _, reason := range q.Reasons {
 		if !slices.Contains(Reasons, reason) {
@@ -314,12 +277,12 @@ func (r *Reader) Inbox(ctx context.Context, q InboxQuery, now time.Time) (
 		return InboxAnswer{}, err
 	}
 	limit := q.Limit
-	if limit <= 0 || limit > MaxInboxRows {
-		limit = MaxInboxRows
+	if limit <= 0 || limit > inbox.MaxRows {
+		limit = inbox.MaxRows
 	}
 
 	answer := InboxAnswer{Handle: handle}
-	var marks person
+	var marks inbox.Classifier
 	served, err := r.log.Read(ctx, statelog.Query{
 		Level: q.Level,
 		// BOTH FAMILIES, because this answer is composed of both: the
@@ -339,7 +302,7 @@ func (r *Reader) Inbox(ctx context.Context, q InboxQuery, now time.Time) (
 		}
 		answer.SeenThrough = person.SeenThrough
 		answer.PrimaryReasons = effectivePrimary(person.PrimaryReasons)
-		marks = person.marks(answer.PrimaryReasons)
+		marks = person.Classifier(answer.PrimaryReasons)
 
 		// THE MARKS ARE READ FIRST because the page is filtered BY them:
 		// read, unread and snoozed are this person's record, and the
@@ -410,9 +373,13 @@ func inboxScope() statelog.ScopeSet {
 // holds them, and `next_cursor` means what it says.
 //
 // It is affordable because everything it binds is bounded by the person's own
-// record — each list at most [MaxInboxEntries] ids, bound as ONE JSON array
+// record — each list at most [inbox.MaxEntries] ids, bound as ONE JSON array
 // parameter — and everything it compares is a column of the row the index
 // range is already reading.
+//
+// EVERY SET IT BINDS IS THE CLASSIFIER'S ([inbox.Classifier]), the same
+// lookups the page is then marked by, so the scan and the marks are one rule:
+// a notice this filter hides is exactly one the page would have marked.
 type inboxFilter struct {
 	// reasons is the set a row's reason must be in — `reasons` intersected
 	// with the primary split under `primary_only` — and nil for every
@@ -423,50 +390,38 @@ type inboxFilter struct {
 
 	// unread keeps only what [markInbox] would mark unread.
 	unread bool
-	seen   Position
+	seen   inbox.Position
 	read   []string
 	marked []string
 
 	// asleep is the live snoozes, and scope what to do with them.
-	scope  SnoozeScope
+	scope  inbox.SnoozeScope
 	asleep []string
 }
 
-// inboxFilterOf resolves the query against the person's own record.
+// inboxFilterOf resolves the query against the person's own record, as the
+// classifier the page is marked by holds it.
 //
-// A SNOOZE IS LIVE BY THE SAME TEST [markInbox] USES — no instant, or one
-// after now — so a notice this filter hides is exactly a notice the page would
-// have marked snoozed, and one whose time has come is back under every scope.
-func inboxFilterOf(q InboxQuery, p person, now time.Time) inboxFilter {
-	f := inboxFilter{unread: q.Unread, seen: p.seen, scope: q.Snoozed}
+// A SNOOZE IS LIVE BY THE SAME TEST THE PAGE IS MARKED BY
+// ([inbox.Classifier.Asleep]) — no instant, or one after now — so a notice this
+// filter hides is exactly a notice the page would have marked snoozed, and one
+// whose time has come is back under every scope. Every set is SORTED there, so
+// one question is one statement.
+func inboxFilterOf(q InboxQuery, marks inbox.Classifier, now time.Time) inboxFilter {
+	f := inboxFilter{unread: q.Unread, seen: marks.Seen(), scope: q.Snoozed,
+		read: marks.ReadMarks(), marked: marks.UnreadMarks(), asleep: marks.Asleep(now)}
 	if len(q.Reasons) > 0 || q.PrimaryOnly {
 		f.restricted = true
 		for _, reason := range Reasons {
 			if len(q.Reasons) > 0 && !slices.Contains(q.Reasons, reason) {
 				continue
 			}
-			if q.PrimaryOnly && !p.primary[reason] {
+			if q.PrimaryOnly && !marks.Primary(string(reason)) {
 				continue
 			}
 			f.reasons = append(f.reasons, reason)
 		}
 	}
-	for id := range p.read {
-		f.read = append(f.read, id)
-	}
-	for id := range p.unread {
-		f.marked = append(f.marked, id)
-	}
-	for id, until := range p.snoozed {
-		if until == nil || until.After(now) {
-			f.asleep = append(f.asleep, id)
-		}
-	}
-	// SORTED, so one question is one statement: the maps iterate in a
-	// random order and the arguments would otherwise differ per call.
-	slices.Sort(f.read)
-	slices.Sort(f.marked)
-	slices.Sort(f.asleep)
 	return f
 }
 
@@ -497,7 +452,7 @@ func (f inboxFilter) clauses() ([]string, []any, bool) {
 		var coveredArgs []any
 		if f.seen.Seq != 0 && f.seen.Stream != "" {
 			covered = "(n.log_stream = ? AND n.log_seq <= ?)"
-			coveredArgs = []any{f.seen.Stream, int64(f.seen.packed())}
+			coveredArgs = []any{f.seen.Stream, int64(f.seen.Packed())}
 		}
 		where = append(where, "(n.record_id IN (SELECT value FROM json_each(?)) "+
 			"OR (n.record_id NOT IN (SELECT value FROM json_each(?)) "+
@@ -506,18 +461,18 @@ func (f inboxFilter) clauses() ([]string, []any, bool) {
 		args = append(args, coveredArgs...)
 	}
 	switch f.scope {
-	case SnoozeExclude:
+	case inbox.SnoozeExclude:
 		if len(f.asleep) > 0 {
 			where = append(where, "n.record_id NOT IN (SELECT value FROM json_each(?))")
 			args = append(args, idList(f.asleep))
 		}
-	case SnoozeOnly:
+	case inbox.SnoozeOnly:
 		if len(f.asleep) == 0 {
 			return nil, nil, false
 		}
 		where = append(where, "n.record_id IN (SELECT value FROM json_each(?))")
 		args = append(args, idList(f.asleep))
-	case SnoozeInclude:
+	case inbox.SnoozeInclude:
 	}
 	return where, args, true
 }
@@ -641,96 +596,22 @@ func readInbox(ctx context.Context, tx *sql.Tx, handle string, q InboxQuery,
 	return out, next, nil
 }
 
-// person is the marks half, so [markInbox] takes one argument rather than
-// four positional ones that are easy to swap.
-type person struct {
-	seen    Position
-	primary map[Reason]bool
-
-	// read is the entries ABOVE the seen-through position that this
-	// person has nonetheless marked read, unread the entries AT OR BELOW
-	// it they marked unread again, and snoozed the sleeping ones. All
-	// three are keyed on the record id an [InboxEntry] names, which is the
-	// notification row's own `record_id`.
-	read    map[string]bool
-	unread  map[string]bool
-	snoozed map[string]*time.Time
-}
-
-// marks is this person's record as the two lookups the page is marked against.
-func (p Person) marks(primary []Reason) person {
-	out := person{
-		seen:    p.SeenThrough,
-		primary: make(map[Reason]bool, len(primary)),
-		read:    make(map[string]bool, len(p.Read)),
-		unread:  make(map[string]bool, len(p.Unread)),
-		snoozed: make(map[string]*time.Time, len(p.Snoozed)),
-	}
-	for _, reason := range primary {
-		out.primary[reason] = true
-	}
-	for _, entry := range p.Read {
-		out.read[entry.RecordID] = true
-	}
-	for _, entry := range p.Unread {
-		out.unread[entry.RecordID] = true
-	}
-	for _, entry := range p.Snoozed {
-		out.snoozed[entry.RecordID] = entry.Until
-	}
-	return out
-}
-
-// markInbox classifies and marks the page against this person's own record.
-//
-// READ IS THE SEEN-THROUGH POSITION FIRST and the entry list second, which is
-// the whole reason the position exists: the read list is PRUNED at every
-// write to what sits above it, so a notice below the position carries no read
-// entry at all. Reading only the lists would report every pruned notice unread —
-// which is every notice older than the person's last visit, the exact set an
-// inbox must not resurface. Reading only the position would miss what they
-// marked read out of order, which is what a person working their queue does.
-//
-// AND AN UNREAD MARK OUTRANKS THE POSITION. It is the one way to bring back a
-// notice the position already covers — after a "mark all read", that is every
-// notice — and a reader that consulted only the position and the read list
-// made that gesture a mark nothing could ever see.
-//
-// A SNOOZE WHOSE TIME HAS COME IS NOT SNOOZED, for the reason [splitSnoozes]
-// gives: the entry is reported DUE rather than silently promoted, because
-// putting one back is a write and a read that performed one would change the
-// fleet's state from a path with no operation id and no record.
-func markInbox(notices []InboxNotice, p person, now time.Time) []InboxNotice {
+// markInbox classifies and marks the page against this person's own record —
+// the classifier built from it in the snapshot the page was read in — by the
+// one rule every domain's inbox reads by ([inbox.Classifier.Classify]).
+func markInbox(notices []InboxNotice, marks inbox.Classifier, now time.Time) []InboxNotice {
 	for i := range notices {
 		notice := &notices[i]
-		notice.Primary = p.primary[notice.Reason]
-		notice.Read = !p.unread[notice.RecordID] &&
-			(p.read[notice.RecordID] || readPast(p.seen, *notice))
-		if until, asleep := p.snoozed[notice.RecordID]; asleep {
-			if until == nil || until.After(now) {
-				notice.Snoozed = true
-				notice.SnoozedUntil = until
-			}
-		}
+		mark := marks.Classify(inbox.Ref{
+			RecordID: notice.RecordID,
+			At: inbox.Position{Stream: notice.LogStream,
+				Generation: notice.LogGeneration, Seq: notice.LogSeq},
+			Reason: string(notice.Reason),
+		}, now)
+		notice.Primary, notice.Read = mark.Primary, mark.Read
+		notice.Snoozed, notice.SnoozedUntil = mark.Snoozed, mark.SnoozedUntil
 	}
 	return notices
-}
-
-// readPast reports whether a notice sits at or below the seen-through
-// position.
-//
-// THE STREAM HAS TO MATCH, which is what the triple is for: a sequence from a
-// dead stream compares as current against a live one, and a founder whose
-// stream was recreated would open an inbox in which everything below their old
-// position reads as already seen.
-func readPast(seen Position, notice InboxNotice) bool {
-	if seen.Seq == 0 || seen.Stream == "" || seen.Stream != notice.LogStream {
-		return false
-	}
-	if seen.Generation != notice.LogGeneration {
-		return seen.Generation > notice.LogGeneration
-	}
-	return seen.Seq >= notice.LogSeq
 }
 
 // countInbox counts the page's unread and primary notices.
@@ -756,7 +637,7 @@ func countInbox(notices []InboxNotice) (int, int) {
 // and the parameter ceiling is the ENGINE's: [store.Capabilities.MaxVariables]
 // reports the probe's own 32 766 on the pinned driver, whose real limit lies
 // past it, but an engine in this family may stop at the 999 the probe falls
-// back to — and three full lists are 768 ids ([MaxInboxEntries] each) before
+// back to — and three full lists are 768 ids ([inbox.MaxEntries] each) before
 // the page's own arguments. One bind is one parameter at any length, so the
 // statement fits every engine and no list's length is a reason it fails. An
 // empty list is "[]", the one spelling of an empty set: `NOT IN` over it keeps

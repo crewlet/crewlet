@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -32,7 +33,7 @@ func (s *recordSpy) wrote(handle string) (tracker.WriteResult, error) {
 }
 
 func (s *recordSpy) MarkInbox(_ context.Context, _, handle string,
-	_ tracker.InboxGesture, _ tracker.PersonAuthority) (tracker.WriteResult, error) {
+	_ inbox.Gesture[tracker.Reason], _ tracker.PersonAuthority) (tracker.WriteResult, error) {
 
 	return s.wrote(handle)
 }

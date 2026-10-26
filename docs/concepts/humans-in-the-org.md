@@ -486,7 +486,7 @@ sequenceDiagram
     W->>L: assign ENG-12 to sarah-chen
     L->>N: the record, in log order
     N->>N: apply, write Sarah's notice, commit
-    N->>S: inbox_changed {handle, unread_delta, subject, reason}
+    N->>S: inbox_changed {source, handle, unread_delta, subject, reason}
     S->>D: only to the sockets watching sarah-chen
     D->>S: work_inbox (within half a second)
 ```
@@ -495,25 +495,35 @@ sequenceDiagram
   serves sockets is a data node (`ingress` requires `data`), so each hears
   every movement from its own applier, after the batch commits,
   and tells the sockets it holds. A person's browser can be connected to any
-  of them.
+  of them. Each frame names the domain whose notices moved (`source`, the
+  tracker's being `tracker`), because the inbox's rules — what a mark, a
+  snooze and "read through here" mean — are one set every domain that keeps a
+  person's notices shares, while each keeps its notices and marks on its own
+  log.
 - **A node whose own copy is out of service keeps telling its sockets.** A
   copy that is wrong — an applier halted on a record it cannot read, rows
   below the log — goes out of service while the node stays in rotation, its
-  dashboards reading through a sound data node. Its own applier is then the
-  one thing on it nobody vouches for, so for as long as the copy is out the
-  node follows a sound data node's movements instead, relayed over the
-  broker, and withholds its own. Each switch — onto a peer, from one peer to
-  another, back to its own applier — sends every watched inbox one frame that
-  counts nothing, because what moved during the switch is not replayed: the
+  dashboards reading through a sound data node. A fault is one log's, so
+  this is judged per domain: for as long as the node's copy of a domain is
+  out, its applier for that domain is the one thing on it nobody vouches for,
+  and the node follows the movements of a data node whose copy of THAT domain
+  serves instead, relayed over the broker, and withholds its own — while
+  every other domain's movements still come from its own appliers. Each
+  switch — onto a peer, from one peer to another, back to its own applier —
+  sends every watched inbox one frame naming the domain that switched and
+  counting nothing, because what moved during the switch is not replayed: the
   dashboard reads the inbox again, as it does on any frame.
 - **The dashboard watches your own seat** as soon as its socket opens, and
   again on every reconnect: the rail's inbox badge, the Inbox screen and My
   work re-ask within half a second of the frame. The frame carries identifiers
-  and a count — the seat, the task, the reason — and never what the notice
-  says, which is read through `work_inbox` as before.
+  and a count — the domain, the seat, the task, the reason — and never what
+  the notice says, which is read through `work_inbox` as before.
 - **A watch is decided like the inbox itself.** You may watch your own seat;
   a lead may watch a seat they lead; an administrator may watch any — each with
-  the `tracker` app, since the frames are about tracker notices. A watch
+  the `tracker` app, since a watch is decided as a read of that person's
+  tracker record, whose notices are the ones a frame announces today. The
+  frame itself asks nothing more: it reaches exactly the sockets whose watch
+  of the seat was allowed. A watch
   this node cannot decide — it runs no company yet — is not installed,
   and the dashboard asks again when the refusal's `retry_after` says it may
   have changed — never, on a timer, when that is `0` (a log waiting will not

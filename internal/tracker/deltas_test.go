@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/inbox"
 )
 
 // The comparisons, exercised as VALUES.
@@ -165,7 +167,7 @@ func TestAViewsParameterDeltaNamesOnlyWhatMoved(t *testing.T) {
 
 // A PERSON'S INBOX IS COUNTED RATHER THAN LISTED, and their queue is not.
 //
-// Each inbox list holds up to [MaxInboxEntries] entries, and every entry is a
+// Each inbox list holds up to [inbox.MaxEntries] entries, and every entry is a
 // record id and a log position — neither of which anybody reads. What a reader
 // of the row wants to know is that an item was marked read, which the counts
 // say because every gesture that writes these lists MOVES an entry between
@@ -174,12 +176,16 @@ func TestAViewsParameterDeltaNamesOnlyWhatMoved(t *testing.T) {
 func TestAPersonsInboxIsCountedAndTheirQueueIsOrdered(t *testing.T) {
 	t.Parallel()
 	before := Person{
-		Unread:     []InboxEntry{{RecordID: "r-1"}, {RecordID: "r-2"}},
+		Marks: inbox.Marks[Reason]{
+			Unread: []inbox.Entry{{RecordID: "r-1"}, {RecordID: "r-2"}},
+		},
 		Priorities: []string{"t-1", "t-2"},
 	}
 	after := Person{
-		Unread:     []InboxEntry{{RecordID: "r-2"}},
-		Read:       []InboxEntry{{RecordID: "r-1"}},
+		Marks: inbox.Marks[Reason]{
+			Unread: []inbox.Entry{{RecordID: "r-2"}},
+			Read:   []inbox.Entry{{RecordID: "r-1"}},
+		},
 		Priorities: []string{"t-2", "t-1"},
 	}
 	moved := personDeltas(before, after)

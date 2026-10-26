@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -349,7 +350,7 @@ func (w WorkWriter) WriteFields(ctx context.Context, opID string, fields []track
 // MarkInbox applies one gesture to a person's inbox, under the authority the
 // caller's table decided.
 func (w WorkWriter) MarkInbox(ctx context.Context, opID, handle string,
-	gesture tracker.InboxGesture, authority tracker.PersonAuthority) (tracker.WriteResult, error) {
+	gesture inbox.Gesture[tracker.Reason], authority tracker.PersonAuthority) (tracker.WriteResult, error) {
 	out, err := call(ctx, w.r, opMarkInbox, &w.actor, markInboxArgs{
 		OpID: opID, Handle: handle, Gesture: gesture, Authority: authority,
 	})

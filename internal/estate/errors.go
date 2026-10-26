@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/search"
@@ -60,7 +61,6 @@ var sentinels = []sentinel{
 	{"tracker.ErrBadQuery", tracker.ErrBadQuery},
 	{"tracker.ErrBulkInFlight", tracker.ErrBulkInFlight},
 	{"tracker.ErrForbidden", tracker.ErrForbidden},
-	{"tracker.ErrInboxFull", tracker.ErrInboxFull},
 	{"tracker.ErrInvalid", tracker.ErrInvalid},
 	{"tracker.ErrIndexBuilding", tracker.ErrIndexBuilding},
 	{"tracker.ErrNoChartActivation", tracker.ErrNoChartActivation},
@@ -79,6 +79,12 @@ var sentinels = []sentinel{
 	{"tracker.ErrStepUnvouched", tracker.ErrStepUnvouched},
 	{"tracker.ErrTooBroad", tracker.ErrTooBroad},
 	{"tracker.ErrUploadStale", tracker.ErrUploadStale},
+
+	// THE INBOX RULES', which a person's gesture on a domain's inbox is
+	// decided by on the data node that writes it: a list at its ceiling is
+	// answered as itself, since its remedy is another gesture.
+	{"inbox.ErrFull", inbox.ErrFull},
+	{"inbox.ErrInvalid", inbox.ErrInvalid},
 
 	{"pages.ErrBadCursor", pages.ErrBadCursor},
 	{"pages.ErrConflict", pages.ErrConflict},

@@ -7,7 +7,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/inbox"
 )
 
 // The objects, and the two shapes a record carries them in.
@@ -957,12 +957,9 @@ const (
 	MaxViewParamKeys   = 32
 	MaxViewName        = 128
 
-	// MaxInboxEntries bounds each of a person's three lists. Entries at or
-	// below the seen-through position are pruned on every write, which is
-	// what keeps the object small rather than a cap that discards.
-	MaxInboxEntries = 256
-
-	// MaxPriorities and MaxPinnedViews bound a person's own ordering.
+	// MaxPriorities and MaxPinnedViews bound a person's own ordering. Each
+	// of their inbox lists is bounded by [inbox.MaxEntries], with the
+	// rules that keep them small.
 	MaxPriorities  = 32
 	MaxPinnedViews = 32
 	MaxFavorites   = 64
@@ -1284,19 +1281,6 @@ type View struct {
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// InboxEntry is one item in a person's inbox, with the position it was at.
-//
-// Position is PACKED, `(generation << 40) | seq`, the form every durable
-// position in this domain takes — so an entry from before a reanchor compares
-// below one after it instead of as a small number in the same space. It is
-// found by the writer from the notice's own history row rather than taken from
-// the caller; see [Writer.MarkInbox].
-type InboxEntry struct {
-	RecordID string     `json:"record_id"`
-	Position uint64     `json:"position"`
-	Until    *time.Time `json:"until,omitempty"`
-}
-
 // Favorite is one thing a person starred.
 type Favorite struct {
 	Kind string `json:"kind"`
@@ -1309,6 +1293,12 @@ type Favorite struct {
 // they are; the priorities may ALSO be written by a lead for somebody in their
 // line, which is the one authority here that reaches across people. See
 // person.go for why that is three verbs rather than one.
+//
+// THE INBOX FIELDS ARE THE PERSON'S [inbox.Marks] over this domain's notices,
+// EMBEDDED, so the record keeps the keys it always had — `generation`,
+// `seen_through`, `read`, `unread`, `snoozed`, `primary_reasons` — in the
+// order it always had them, while the rules that move them are the ones
+// every domain's inbox shares.
 //
 // A LEAD'S PRIORITY WRITE WAKES ITS PERSON with the `prioritised` reason, and
 // the wake names the task now at the TOP of the list — see
@@ -1323,25 +1313,11 @@ type Person struct {
 
 	Handle string `json:"handle"`
 
-	// Generation is anchored to the stream's own identity, and it is the
-	// THIRD belt behind the identity refusal and the wrong-stream read
-	// refusal. It stays because the failure it was written for — a
-	// founder's inbox silently reading empty for ever — is one nobody
-	// would report as a bug.
-	Generation string `json:"generation,omitempty"`
+	inbox.Marks[Reason]
 
-	// SeenThrough is a POSITION TRIPLE rather than a number, because a
-	// number from a dead sequence space compares as if it were current.
-	SeenThrough Position `json:"seen_through,omitzero"`
-
-	Read    []InboxEntry `json:"read,omitempty"`
-	Unread  []InboxEntry `json:"unread,omitempty"`
-	Snoozed []InboxEntry `json:"snoozed,omitempty"`
-
-	PrimaryReasons []Reason   `json:"primary_reasons,omitempty"`
-	Priorities     []string   `json:"priorities,omitempty"`
-	PinnedViews    []string   `json:"pinned_views,omitempty"`
-	Favorites      []Favorite `json:"favorites,omitempty"`
+	Priorities  []string   `json:"priorities,omitempty"`
+	PinnedViews []string   `json:"pinned_views,omitempty"`
+	Favorites   []Favorite `json:"favorites,omitempty"`
 
 	// PrioritiesSetBy is WHO last set this list when it was not the person
 	// themselves, and empty when it was. It is how a lead's authority is
@@ -1354,32 +1330,6 @@ type Person struct {
 	UpdatedAt time.Time `json:"updated_at"`
 
 	Extra map[string]json.RawMessage `json:"-"`
-}
-
-// Position is where a person's inbox has been read to.
-//
-// THE TRIPLE, not a bare sequence: a recreated stream restarts sequences at
-// one, so a stored number from before it compares as current and an inbox
-// reads "nothing unread" for ever.
-//
-// # The generation is stored, and omitted when it is zero
-//
-// The row keeps it PACKED into `seen_through`, as every durable position in
-// this domain is kept, so a reanchor compares correctly: a position kept as the
-// bare sequence would read back as generation zero after one, and every notice
-// in the new generation would compare above it — an inbox that could never be
-// read past again. A zero generation is omitted from the JSON, which keeps a
-// position in a stream's first generation to its two meaningful keys.
-type Position struct {
-	Stream     string `json:"stream"`
-	Generation uint32 `json:"generation,omitempty"`
-	Seq        uint64 `json:"seq"`
-}
-
-// packed is the position as the one integer a column stores and a comparison
-// reads — [statelog.Position.Packed] over the same two numbers.
-func (p Position) packed() uint64 {
-	return uint64(statelog.Position{Generation: p.Generation, Seq: p.Seq}.Packed())
 }
 
 // MaxCommitBytes is the design maximum for one record, envelope included.

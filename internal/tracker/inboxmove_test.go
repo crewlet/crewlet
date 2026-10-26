@@ -3,11 +3,11 @@ package tracker_test
 import (
 	"context"
 	"database/sql"
-	"reflect"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -29,8 +29,8 @@ import (
 func TestACommittedBatchSaysWhoseInboxMoved(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
-	var got [][]tracker.InboxMovement
-	h.applier = tracker.NewApplier(func(m []tracker.InboxMovement) {
+	var got [][]inbox.Movement
+	h.applier = tracker.NewApplier(func(m []inbox.Movement) {
 		got = append(got, m)
 	})
 
@@ -60,9 +60,9 @@ func TestACommittedBatchSaysWhoseInboxMoved(t *testing.T) {
 		t.Fatalf("a movement was announced before the commit: %v", got)
 	}
 	h.applier.Committed(context.Background())
-	want := []tracker.InboxMovement{
-		{Handle: "bo", UnreadDelta: 1, Subject: "t-1", Reason: tracker.ReasonAssignee},
-		{Handle: "cy", UnreadDelta: 1, Subject: "t-1", Reason: tracker.ReasonWatcher},
+	want := []inbox.Movement{
+		moved("bo", 1, "t-1", tracker.ReasonAssignee),
+		moved("cy", 1, "t-1", tracker.ReasonWatcher),
 	}
 	if len(got) != 1 || !slices.Equal(got[0], want) {
 		t.Fatalf("the loud commit announced %v, want %v", got, want)
@@ -116,9 +116,19 @@ func TestACommittedBatchSaysWhoseInboxMoved(t *testing.T) {
 	if len(got) != 1 || len(got[0]) != 1 {
 		t.Fatalf("one batch for one person announced %v, want one movement", got)
 	}
-	if m := got[0][0]; m.Handle != "bo" || m.UnreadDelta != 2 || m.Subject != "t-3" {
+	source := tracker.Domain{}.Name()
+	if m := got[0][0]; m.Source != source || m.Handle != "bo" ||
+		m.UnreadDelta != 2 || m.Subject != "t-3" {
 		t.Errorf("the batch announced %+v, want bo moved by 2 with t-3 newest", m)
 	}
+}
+
+// moved is one movement the tracker's applier announces: under the tracker's
+// own name, which is what a node relays it by and what a screen reads as
+// which half of its inbox moved.
+func moved(handle string, unread int, subject string, reason tracker.Reason) inbox.Movement {
+	return inbox.Movement{Source: tracker.Domain{}.Name(), Handle: handle,
+		UnreadDelta: unread, Subject: subject, Reason: string(reason)}
 }
 
 // A PURGE SAYS WHOSE INBOX IT EMPTIED, as surely as a commit says whose it
@@ -135,8 +145,8 @@ func TestACommittedBatchSaysWhoseInboxMoved(t *testing.T) {
 func TestAPurgeSaysWhoseInboxItEmptied(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)
-	var got [][]tracker.InboxMovement
-	h.applier = tracker.NewApplier(func(m []tracker.InboxMovement) {
+	var got [][]inbox.Movement
+	h.applier = tracker.NewApplier(func(m []inbox.Movement) {
 		got = append(got, m)
 	})
 	create := taskRecord("t-1", tracker.OpCreate, newTask("t-1"), &tracker.Notify{
@@ -166,10 +176,10 @@ func TestAPurgeSaysWhoseInboxItEmptied(t *testing.T) {
 		t.Fatalf("the purge left %d of the task's notices", left)
 	}
 	h.applier.Committed(context.Background())
-	want := []tracker.InboxMovement{
-		{Handle: "bo", UnreadDelta: 0, Subject: "t-1", Reason: tracker.ReasonAssignee},
-		{Handle: "cy", UnreadDelta: 0, Subject: "t-1", Reason: tracker.ReasonWatcher},
-		{Handle: "lee", UnreadDelta: 1, Subject: "t-1", Reason: tracker.ReasonPurged},
+	want := []inbox.Movement{
+		moved("bo", 0, "t-1", tracker.ReasonAssignee),
+		moved("cy", 0, "t-1", tracker.ReasonWatcher),
+		moved("lee", 1, "t-1", tracker.ReasonPurged),
 	}
 	if len(got) != 1 || !slices.Equal(got[0], want) {
 		t.Fatalf("the purge announced %v, want %v — every inbox it emptied "+
@@ -186,38 +196,5 @@ func TestAPurgeSaysWhoseInboxItEmptied(t *testing.T) {
 	h.applier.Committed(context.Background())
 	if len(got) != 0 {
 		t.Errorf("a redelivered purge announced %v", got)
-	}
-}
-
-// AN INBOX MOVEMENT CARRIES NO CONTENT.
-//
-// It rides a socket frame to whoever watches that seat, and what it is for is
-// telling a screen to re-read the inbox through the SAME question, and the same
-// authority, as the poll it replaces. A field carrying an excerpt, a title or
-// an author would be a read path around that authority — so the set of fields
-// is held here, and adding one is a decision somebody has to make in this
-// file.
-func TestAnInboxMovementCarriesNoContent(t *testing.T) {
-	t.Parallel()
-	want := map[string]string{
-		"Handle": "handle", "UnreadDelta": "unread_delta",
-		"Subject": "subject", "Reason": "reason",
-	}
-	typ := reflect.TypeFor[tracker.InboxMovement]()
-	if typ.NumField() != len(want) {
-		t.Fatalf("an inbox movement has %d fields, want exactly %d identifiers",
-			typ.NumField(), len(want))
-	}
-	for i := range typ.NumField() {
-		field := typ.Field(i)
-		tag, ok := want[field.Name]
-		if !ok {
-			t.Errorf("an inbox movement carries %s, which is not one of the four "+
-				"identifiers it may name", field.Name)
-			continue
-		}
-		if got := field.Tag.Get("json"); got != tag {
-			t.Errorf("%s is %q on the wire, want %q", field.Name, got, tag)
-		}
 	}
 }

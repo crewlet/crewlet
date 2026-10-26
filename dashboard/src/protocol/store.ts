@@ -21,7 +21,6 @@ import type {
   CallVersions,
   FeedRow,
   EventEnvelope,
-  InboxChange,
   LiveCall,
   LiveCallAnswer,
   OrgBudget,
@@ -35,7 +34,7 @@ import type {
 } from "./types.ts";
 // RELATIVE, like every contract import in this directory: it is also built
 // alone as `protocol.js`, where the `~` alias does not exist.
-import { LIVE_CALL_DETAIL, MAX_EVENTS } from "../contract/wire.ts";
+import { type InboxChange, LIVE_CALL_DETAIL, MAX_EVENTS } from "../contract/wire.ts";
 import type { EngineHealth } from "../contract/health.ts";
 
 /**

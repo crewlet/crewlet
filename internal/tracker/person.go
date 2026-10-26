@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -97,83 +98,6 @@ type PersonAuthority struct {
 	Agent bool
 }
 
-// MaxSnoozeAhead bounds how far into the future an item may be snoozed.
-//
-// A YEAR. A snooze is "not now", and one past the horizon a person plans over
-// is a delete that does not say so — the item leaves the inbox and the person
-// who snoozed it will not be at the company when it returns.
-const MaxSnoozeAhead = 365 * 24 * time.Hour
-
-// ErrInboxFull reports an inbox gesture that would leave one of a person's
-// lists past [MaxInboxEntries].
-//
-// ITS OWN SENTINEL, because the remedy is a different gesture rather than a
-// smaller one: the lists hold only what the seen-through position does not
-// already answer, so a full one is a person marking notices one at a time
-// that `read_through` would mark in one move — and a caller told "invalid"
-// would go looking for what is wrong with the notice.
-var ErrInboxFull = errors.New("tracker: this inbox list is at its ceiling")
-
-// InboxGesture is one move a person makes on their own inbox.
-//
-// # A GESTURE, never the lists
-//
-// The inbox used to be written by handing over all three lists and the
-// watermark, each REPLACING what was stored — so a screen marking one notice
-// read had to send everything it had last read, and anything it had not read
-// was cleared: one `read` from a tab opened before a snooze erased the
-// snooze, and a caller that sent only the notice it meant wiped every other
-// mark and the position with it. What a person can say about their inbox is
-// "this one is done", "put this one off", "I have read everything up to
-// here" — so that is what the verb takes, and [Writer.MarkInbox] resolves it
-// against the record the DECIDE reads, which is the one snapshot the broker
-// arbitrates. Two screens marking two notices at once both land.
-//
-// A record id appears in at most ONE of the four lists: a notice both read
-// and unread in one gesture is a contradiction nothing could order.
-type InboxGesture struct {
-	// Read marks notices read — the "Done" of an inbox. It also lifts a
-	// snooze on the notice, because a notice somebody has dealt with is
-	// not one to bring back.
-	Read []string
-
-	// Unread marks notices unread again, including one at or below the
-	// seen-through position: that is the only case the mark changes
-	// anything, since everything above the position is unread already.
-	Unread []string
-
-	// Snooze puts notices off until an instant, at most [MaxSnoozeAhead]
-	// away. A notice already snoozed moves to the new instant.
-	Snooze []Snooze
-
-	// Unsnooze brings notices back now.
-	Unsnooze []string
-
-	// ReadThrough moves the seen-through position FORWARD: everything at
-	// or below it reads as read. ADVANCE ONLY, and generation-aware — a
-	// position at or behind the stored one changes nothing, so a stale
-	// tab's "mark all read" cannot un-read what a newer one read. Nil
-	// leaves the position alone.
-	ReadThrough *statelog.Position
-
-	// PrimaryReasons declares which wake reasons are the person's to act
-	// on. Nil leaves the declaration alone; an EMPTY list takes the
-	// shipped default back, see [DefaultPrimaryReasons].
-	PrimaryReasons *[]Reason
-}
-
-// Snooze is one notice put off until an instant.
-type Snooze struct {
-	RecordID string
-	Until    time.Time
-}
-
-// Empty reports a gesture that would move nothing.
-func (g InboxGesture) Empty() bool {
-	return len(g.Read) == 0 && len(g.Unread) == 0 && len(g.Snooze) == 0 &&
-		len(g.Unsnooze) == 0 && g.ReadThrough == nil && g.PrimaryReasons == nil
-}
-
 // MarkInbox applies one inbox gesture to a person's own record.
 //
 // ONLY ON BEHALF OF THAT PERSON, or by the admin path — see
@@ -182,18 +106,26 @@ func (g InboxGesture) Empty() bool {
 // otherwise.
 //
 // RESOLVED INSIDE THE DECIDE: every notice named is looked up there for the
-// position it sits at, and the gesture is applied to the lists that snapshot
-// holds, so a round the broker refuses re-applies it to the record that won.
-// A gesture that would leave a list past [MaxInboxEntries] is refused
-// [ErrInboxFull] rather than trimmed, and one that changes nothing publishes
-// nothing.
+// position it sits at, and the gesture is applied ([inbox.Apply]) to the
+// marks that snapshot holds, so a round the broker refuses re-applies it to
+// the record that won. A gesture that would leave a list past
+// [inbox.MaxEntries] is refused [inbox.ErrFull] rather than trimmed, and one
+// that changes nothing publishes nothing.
+//
+// THE RULES ARE THE INBOX'S, THE REFUSALS THIS PACKAGE'S: a gesture
+// [inbox.CheckGesture] refuses on what it says is a content refusal of this
+// write, marked [ErrInvalid] like every other with its sentence unchanged, so
+// each surface that classes the tracker's refusals classes it with them.
 func (w *Writer) MarkInbox(ctx context.Context, opID, handle string,
-	gesture InboxGesture, authority PersonAuthority) (WriteResult, error) {
+	gesture inbox.Gesture[Reason], authority PersonAuthority) (WriteResult, error) {
 
 	if err := w.ownRecord(handle, "inbox", authority); err != nil {
 		return WriteResult{}, err
 	}
-	if err := checkInboxGesture(gesture, w.Now()); err != nil {
+	if err := inbox.CheckGesture(gesture, trackerStream, Reasons, w.Now()); err != nil {
+		if errors.Is(err, inbox.ErrInvalid) {
+			return WriteResult{}, invalid("%s", inbox.Sentence(err))
+		}
 		return WriteResult{}, err
 	}
 	return w.writePerson(ctx, opID, handle, func(tx *sql.Tx, post *Person,
@@ -203,7 +135,7 @@ func (w *Writer) MarkInbox(ctx context.Context, opID, handle string,
 		if err != nil {
 			return err
 		}
-		return applyInboxGesture(post, gesture, positions, at)
+		return inbox.Apply(&post.Marks, gesture, positions, at)
 	})
 }
 
@@ -546,91 +478,6 @@ func (w *Writer) ownRecord(handle, what string, authority PersonAuthority) error
 		w.Actor, handle, what)
 }
 
-// checkInboxGesture refuses a gesture no record could honour, before anything
-// is read.
-func checkInboxGesture(g InboxGesture, now time.Time) error {
-	if g.Empty() {
-		return invalid("this inbox gesture marks nothing — name " +
-			"notices to read, unread, snooze or unsnooze, a position to read " +
-			"through, or the primary reasons")
-	}
-	seen := map[string]string{}
-	name := func(id, list string) error {
-		if strings.TrimSpace(id) == "" {
-			return invalid("a %s mark names no record", list)
-		}
-		if prior, twice := seen[id]; twice {
-			return invalid("record %s is named by both %s and %s in "+
-				"one gesture, and nothing could say which it meant", id, prior,
-				list)
-		}
-		seen[id] = list
-		return nil
-	}
-	for _, part := range []struct {
-		ids  []string
-		list string
-	}{{g.Read, "read"}, {g.Unread, "unread"}, {g.Unsnooze, "unsnooze"}} {
-		for _, id := range part.ids {
-			if err := name(id, part.list); err != nil {
-				return err
-			}
-		}
-	}
-	// A SNOOZE PAST THE HORIZON IS A DELETE THAT DOES NOT SAY SO: the item
-	// leaves the inbox and the person who snoozed it will not be at the
-	// company when it returns. Refused naming the entry rather than
-	// clamped, because a clamp would put it back on a date nobody chose.
-	// And one that is already due is not a snooze at all.
-	horizon := now.Add(MaxSnoozeAhead)
-	for _, snooze := range g.Snooze {
-		if err := name(snooze.RecordID, "snooze"); err != nil {
-			return err
-		}
-		switch {
-		case !snooze.Until.After(now):
-			return invalid("record %s is snoozed until %s, which has "+
-				"already come — a snooze names an instant in the future",
-				snooze.RecordID, snooze.Until.Format(time.RFC3339))
-		case snooze.Until.After(horizon):
-			return invalid("record %s is snoozed until %s, which is "+
-				"more than %s away — a snooze that far out is a delete that "+
-				"does not say so", snooze.RecordID,
-				snooze.Until.Format(time.RFC3339), MaxSnoozeAhead)
-		}
-	}
-	if len(seen) > MaxInboxEntries {
-		// A GESTURE LONGER THAN A LIST CAN HOLD cannot land whatever the
-		// record holds, so it is refused before the decide reads it.
-		return fmt.Errorf("tracker: this gesture names %d notices and a list "+
-			"holds at most %d — mark everything you have seen with "+
-			"`read_through` instead: %w", len(seen), MaxInboxEntries,
-			ErrInboxFull)
-	}
-	if at := g.ReadThrough; at != nil {
-		if err := at.Valid(); err != nil {
-			return invalid("%s is not a position to read through: %v",
-				at, err)
-		}
-		// THE TRACKER'S LOG, which is where every notice a person reads
-		// through is filed ([Domain.Stream]): a position on any other
-		// stream is in a number space the inbox does not count in.
-		if stream := trackerStream; at.Stream != stream {
-			return invalid("%s is a position on %s, and an inbox is "+
-				"read through a position on %s — the one `work_inbox` answers",
-				at, at.Stream, stream)
-		}
-	}
-	if g.PrimaryReasons != nil {
-		for _, reason := range *g.PrimaryReasons {
-			if !slices.Contains(Reasons, reason) {
-				return invalid("%q is not a wake reason", reason)
-			}
-		}
-	}
-	return nil
-}
-
 // inboxPositions finds the log position of every notice a gesture names.
 //
 // FROM THE HISTORY ROW, INSIDE THE DECIDE. A mark has to carry the position
@@ -645,12 +492,9 @@ func checkInboxGesture(g InboxGesture, now time.Time) error {
 // this domain stores: a mark from before a reanchor compares below one after
 // it rather than as a small number in the same space.
 func inboxPositions(ctx context.Context, tx *sql.Tx,
-	g InboxGesture) (map[string]uint64, error) {
+	g inbox.Gesture[Reason]) (map[string]uint64, error) {
 
-	ids := slices.Concat(g.Read, g.Unread, g.Unsnooze)
-	for _, snooze := range g.Snooze {
-		ids = append(ids, snooze.RecordID)
-	}
+	ids := g.Records()
 	out := make(map[string]uint64, len(ids))
 	for _, id := range ids {
 		var packed int64
@@ -668,134 +512,6 @@ func inboxPositions(ctx context.Context, tx *sql.Tx,
 		out[id] = uint64(packed)
 	}
 	return out, nil
-}
-
-// applyInboxGesture moves a person's inbox by one gesture.
-//
-// PURE OVER VALUES — the record, the gesture, where each notice sits and the
-// instant — so the rule is exercised without a database, and the decide is
-// the only caller.
-//
-// # The two lists are overrides of the position, in opposite directions
-//
-// Everything at or below the seen-through position reads as read and
-// everything above it as unread, so a list entry is only ever an EXCEPTION:
-// `read` holds notices above the position somebody marked read out of order,
-// and `unread` holds notices at or below it somebody marked unread again. An
-// entry on the side the position already answers says nothing, and is dropped
-// on every write — which is what keeps the record small without a cap that
-// discards. Moving the position forward clears every `unread` exception,
-// because "I have read everything up to here" is the gesture that says so.
-//
-// The ORDER: the position first, then the marks, so "read through here, but
-// keep this one unread" is one gesture that means what it says.
-func applyInboxGesture(p *Person, g InboxGesture,
-	positions map[string]uint64, at time.Time) error {
-
-	read := slices.Clone(p.Read)
-	unread := slices.Clone(p.Unread)
-	snoozed := slices.Clone(p.Snoozed)
-
-	if g.ReadThrough != nil {
-		next := Position{Stream: g.ReadThrough.Stream,
-			Generation: g.ReadThrough.Generation, Seq: g.ReadThrough.Seq}
-		if advances(p.SeenThrough, next) {
-			p.SeenThrough = next
-			// THE STREAM'S OWN IDENTITY rides beside the position — the
-			// third belt [Person.Generation] describes.
-			p.Generation = next.Stream
-			unread = nil
-		}
-	}
-	if g.PrimaryReasons != nil {
-		p.PrimaryReasons = nilIfEmpty(slices.Clone(*g.PrimaryReasons))
-	}
-
-	entry := func(id string) InboxEntry {
-		return InboxEntry{RecordID: id, Position: positions[id]}
-	}
-	for _, id := range g.Read {
-		unread = withoutEntry(unread, id)
-		snoozed = withoutEntry(snoozed, id)
-		read = append(withoutEntry(read, id), entry(id))
-	}
-	for _, id := range g.Unread {
-		read = withoutEntry(read, id)
-		unread = append(withoutEntry(unread, id), entry(id))
-	}
-	for _, snooze := range g.Snooze {
-		until := snooze.Until.UTC()
-		mark := entry(snooze.RecordID)
-		mark.Until = &until
-		snoozed = append(withoutEntry(snoozed, snooze.RecordID), mark)
-	}
-	for _, id := range g.Unsnooze {
-		snoozed = withoutEntry(snoozed, id)
-	}
-
-	seen := p.SeenThrough.packed()
-	p.Read = keptEntries(read, func(e InboxEntry) bool { return seen == 0 || e.Position > seen })
-	p.Unread = keptEntries(unread, func(e InboxEntry) bool { return seen != 0 && e.Position <= seen })
-	// AN EXPIRED SNOOZE IS NOT AN ENTRY, it is an item that is back — and
-	// nothing needs to move it, because a notice with no live snooze reads
-	// by the position and the two lists like any other.
-	p.Snoozed = keptEntries(snoozed, func(e InboxEntry) bool {
-		return e.Until == nil || e.Until.After(at)
-	})
-
-	for _, part := range []struct {
-		entries []InboxEntry
-		what    string
-	}{{p.Read, "read"}, {p.Unread, "unread"}, {p.Snoozed, "snoozed"}} {
-		if len(part.entries) > MaxInboxEntries {
-			// THE LIST AND NOT THE PERSON: the caller named whose inbox
-			// this is in the call.
-			return fmt.Errorf("tracker: this inbox's %s list would hold %d "+
-				"notices and the maximum is %d — mark everything you have "+
-				"seen with `read_through`, which moves the position the lists "+
-				"are kept against: %w", part.what, len(part.entries),
-				MaxInboxEntries, ErrInboxFull)
-		}
-	}
-	return nil
-}
-
-// advances reports whether next is a position past the stored one.
-//
-// GENERATION FIRST, for the reason [statelog.Position.Before] states: a
-// sequence from before a reanchor is below every sequence after it however
-// large. A position on ANOTHER STREAM than the stored one replaces it, because
-// the caller's was checked against the live stream and the stored one is
-// therefore from a stream that no longer exists — comparing their numbers
-// would be comparing two unrelated spaces.
-func advances(stored, next Position) bool {
-	if stored.Stream != next.Stream || stored.Seq == 0 {
-		return true
-	}
-	return next.packed() > stored.packed()
-}
-
-// withoutEntry is the list with every entry for one record dropped, as a fresh
-// slice.
-func withoutEntry(entries []InboxEntry, id string) []InboxEntry {
-	out := make([]InboxEntry, 0, len(entries))
-	for _, e := range entries {
-		if e.RecordID != id {
-			out = append(out, e)
-		}
-	}
-	return out
-}
-
-// keptEntries is the entries a rule keeps, nil when none are.
-func keptEntries(entries []InboxEntry, keep func(InboxEntry) bool) []InboxEntry {
-	out := make([]InboxEntry, 0, len(entries))
-	for _, e := range entries {
-		if keep(e) {
-			out = append(out, e)
-		}
-	}
-	return nilIfEmpty(out)
 }
 
 // dedupe drops repeats, preserving the first occurrence's order.

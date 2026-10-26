@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -54,13 +55,13 @@ import (
 // GESTURES for the inbox and the pins, never the lists: each is resolved by
 // the tracker against the record its own decide reads, so a tool never sends
 // back a list it read — which is how one "mark this read" used to erase every
-// other mark. See [tracker.InboxGesture]. Every verb carries the authority the
+// other mark. See [inbox.Gesture]. Every verb carries the authority the
 // table decided ([admittedWrite]), because the tracker keeps the one rule of
 // its own — an agent never re-orders a colleague's queue — and refuses a write
 // nobody admitted.
 type PersonWriter interface {
 	MarkInbox(ctx context.Context, opID, handle string,
-		gesture tracker.InboxGesture,
+		gesture inbox.Gesture[tracker.Reason],
 		authority tracker.PersonAuthority) (tracker.WriteResult, error)
 	WritePins(ctx context.Context, opID, handle string,
 		gesture tracker.PinGesture,
@@ -407,7 +408,7 @@ func (t *markInbox) Parameters() map[string]any {
 							"type": "string",
 							"description": fmt.Sprintf("RFC3339; when it "+
 								"comes back. In the future, and at most "+
-								"%d days away.", int(tracker.MaxSnoozeAhead.Hours()/24)),
+								"%d days away.", int(inbox.MaxSnoozeAhead.Hours()/24)),
 						},
 					},
 					"required": []string{"record_id", "until"},
@@ -770,8 +771,8 @@ func (d WorkDeps) personWriter(ctx context.Context, turn *turnctx.Turn,
 // PRESENCE, NOT VALUE, decides `primary_reasons`: an empty list is a choice —
 // the shipped default — and an absent one leaves the person's choice alone,
 // which a nil slice could not tell apart.
-func inboxGesture(args map[string]any) (tracker.InboxGesture, string) {
-	var g tracker.InboxGesture
+func inboxGesture(args map[string]any) (inbox.Gesture[tracker.Reason], string) {
+	var g inbox.Gesture[tracker.Reason]
 	g.Read = argStrings(args, "read")
 	g.Unread = argStrings(args, "unread")
 	g.Unsnooze = argStrings(args, "unsnooze")
@@ -793,7 +794,7 @@ func inboxGesture(args map[string]any) (tracker.InboxGesture, string) {
 					"date and time in RFC3339, like 2026-06-30T09:00:00Z — %q "+
 					"is not one.", i+1, clip(raw))
 			}
-			g.Snooze = append(g.Snooze, tracker.Snooze{
+			g.Snooze = append(g.Snooze, inbox.Snooze{
 				RecordID: strings.TrimSpace(argString(fields, "record_id")),
 				Until:    until.UTC(),
 			})
@@ -1001,7 +1002,7 @@ func (t *workInbox) Parameters() map[string]any {
 			"limit": map[string]any{
 				"type": "number",
 				"description": fmt.Sprintf("How many notices, at most %d.",
-					tracker.MaxInboxRows),
+					inbox.MaxRows),
 			},
 		},
 		"required": []string{"handle"},
@@ -1025,13 +1026,13 @@ func (t *workInbox) Call(ctx context.Context, args map[string]any) (tools.Result
 		Handle:      handle,
 		PrimaryOnly: argBool(args, "primary_only"),
 		Unread:      argBool(args, "unread"),
-		Snoozed:     tracker.SnoozeExclude,
+		Snoozed:     inbox.SnoozeExclude,
 		Cursor:      strings.TrimSpace(argString(args, "cursor")),
 		Limit:       int(argFloat(args, "limit")),
 		Level:       seatReadLevel,
 	}
 	if raw := strings.TrimSpace(argString(args, "snoozed")); raw != "" {
-		q.Snoozed = tracker.SnoozeScope(raw)
+		q.Snoozed = inbox.SnoozeScope(raw)
 		if !q.Snoozed.Valid() {
 			return failed(fmt.Sprintf("%q is not a `snoozed` scope. The "+
 				"scopes are: %s.", raw, strings.Join(snoozeScopeNames(), ", "))), nil
@@ -1059,11 +1060,11 @@ func (t *workInbox) Call(ctx context.Context, args map[string]any) (tools.Result
 	return jsonResult(answer)
 }
 
-// snoozeScopeNames is the three scopes, derived from the tracker's own list
+// snoozeScopeNames is the three scopes, derived from the inbox's own list
 // for the reason [reasonList] is.
 func snoozeScopeNames() []string {
-	out := make([]string, 0, len(tracker.SnoozeScopes))
-	for _, scope := range tracker.SnoozeScopes {
+	out := make([]string, 0, len(inbox.SnoozeScopes))
+	for _, scope := range inbox.SnoozeScopes {
 		out = append(out, string(scope))
 	}
 	return out

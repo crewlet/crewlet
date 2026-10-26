@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -155,7 +156,7 @@ type personSpy struct {
 	priorities []string
 	ifMatch    *uint64
 	authority  tracker.PersonAuthority
-	inbox      tracker.InboxGesture
+	inbox      inbox.Gesture[tracker.Reason]
 	pins       tracker.PinGesture
 
 	// actor is who the surface resolved the writer FOR, which is the other
@@ -186,7 +187,7 @@ func (p *personSpy) WritePins(_ context.Context, opID, handle string,
 }
 
 func (p *personSpy) MarkInbox(_ context.Context, opID, handle string,
-	gesture tracker.InboxGesture, authority tracker.PersonAuthority) (
+	gesture inbox.Gesture[tracker.Reason], authority tracker.PersonAuthority) (
 	tracker.WriteResult, error) {
 
 	p.handle, p.opID, p.inbox, p.authority = handle, opID, gesture, authority
@@ -428,9 +429,9 @@ func TestThePersonToolSchemasTakeGestures(t *testing.T) {
 		return entry.Tool.Parameters()["properties"].(map[string]any)
 	}
 
-	inbox := props(tracker.MarkInboxTool)
+	marks := props(tracker.MarkInboxTool)
 	var names []string
-	for name := range inbox {
+	for name := range marks {
 		names = append(names, name)
 	}
 	slices.Sort(names)
@@ -558,16 +559,16 @@ func TestWorkInboxTakesTheSnoozedScope(t *testing.T) {
 	}); got.Failed {
 		t.Fatalf("work_inbox failed: %q", got.Output)
 	}
-	if trk.inboxQuery.Snoozed != tracker.SnoozeExclude {
+	if trk.inboxQuery.Snoozed != inbox.SnoozeExclude {
 		t.Errorf("no `snoozed` reached the reader as %q, want %q",
-			trk.inboxQuery.Snoozed, tracker.SnoozeExclude)
+			trk.inboxQuery.Snoozed, inbox.SnoozeExclude)
 	}
 	if got := callPlain(t, reg, tracker.WorkInboxTool, map[string]any{
 		"handle": "alice", "snoozed": "only",
 	}); got.Failed {
 		t.Fatalf("work_inbox failed: %q", got.Output)
 	}
-	if trk.inboxQuery.Snoozed != tracker.SnoozeOnly {
+	if trk.inboxQuery.Snoozed != inbox.SnoozeOnly {
 		t.Errorf("snoozed=only reached the reader as %q", trk.inboxQuery.Snoozed)
 	}
 	bad := callPlain(t, reg, tracker.WorkInboxTool, map[string]any{

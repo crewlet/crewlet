@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -638,7 +639,7 @@ func TestEveryInboxFilterReachesTheReader(t *testing.T) {
 		t.Fatalf("work_inbox: %v", err)
 	}
 	q := work.inboxQuery
-	if !q.Unread || !q.PrimaryOnly || q.Snoozed != tracker.SnoozeOnly {
+	if !q.Unread || !q.PrimaryOnly || q.Snoozed != inbox.SnoozeOnly {
 		t.Errorf("the three filters reached the reader as %+v", q)
 	}
 	if q.Limit != 7 || q.Cursor != "c-9" {
@@ -677,9 +678,9 @@ func TestTheSnoozedScopeDefaultsToExcludeAndRefusesAnUnknownOne(t *testing.T) {
 		map[string]any{}); err != nil {
 		t.Fatalf("work_inbox: %v", err)
 	}
-	if work.inboxQuery.Snoozed != tracker.SnoozeExclude {
+	if work.inboxQuery.Snoozed != inbox.SnoozeExclude {
 		t.Errorf("an absent `snoozed` reached the reader as %q, want %q",
-			work.inboxQuery.Snoozed, tracker.SnoozeExclude)
+			work.inboxQuery.Snoozed, inbox.SnoozeExclude)
 	}
 	_, err := askAsOperator(t, viewerSources(t, &stubWork{}), "work_inbox",
 		map[string]any{"snoozed": "bogus"})

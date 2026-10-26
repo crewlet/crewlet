@@ -29,7 +29,7 @@
 // # What the applier says after a commit
 //
 // Beside the rows, the applier reports WHOSE INBOX each committed batch moved
-// ([InboxMovement], inboxmove.go) — the one fact a person's dashboard needs to
+// ([inbox.Movement]) — the one fact a person's dashboard needs to
 // learn about their work without polling, and one only the apply sees on every
 // node. It is announced after the commit and never inside the transaction,
 // whose body can re-run, and it carries identifiers and a count rather than

@@ -458,9 +458,10 @@ function Frame({ children }: { children: ReactNode }) {
   // navigated away, and the sidebar's badge (`lib/useInboxCounts.ts`) is what
   // has to stay current. UNDER `owner` — the seat when bound, the login when
   // not — because that is the record the engine pushes about. The socket
-  // re-sends it on every reconnect. ONLY WITH TRACKER: `inbox_changed` is the
-  // tracker's push, and a watch from anybody else is a refusal on every
-  // reconnect.
+  // re-sends it on every reconnect. ONLY WITH TRACKER: the engine decides a
+  // watch as a read of that person's tracker record (`get_person`), the one
+  // inbox that pushes today, so a watch from anybody else is a refusal on
+  // every reconnect.
   // AND ONLY OF A COMPANY RUNNING CREWLET WORKS, whose push it is.
   const runs = useServicesRun();
   const ask = useServicesAsk();
