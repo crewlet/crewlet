@@ -233,3 +233,37 @@ test("a list, a page of text, a body and a colour each read as what they are", (
   expect(colour.querySelector("ins")?.textContent).toContain("#14102B");
   expect(colour.classList.contains("crewlet-change-list__row--block")).toBe(false);
 });
+
+// A COMPANY CHANGE STILL WAITING IS NOT "SAVED": the subtitle says where it
+// lands in words true at its state. Mutation: say "Saved" on a pending card.
+test("a pending company change does not say it is saved", () => {
+  draw({ scope: "server", state: "proposed", title: "Add seat Technical Writer" });
+  expect(screen.queryByText("Saved for the company")).toBeNull();
+  screen.getByText("For the company, once approved");
+});
+
+// THE EXACT REQUEST IS AN ADMINISTRATOR'S: the engine sends it to them alone,
+// and the card draws it after every other row. Mutation: drop the technical
+// rows, or draw a request the engine did not send.
+test("the technical details are drawn when the engine sends them, and only then", () => {
+  draw({
+    scope: "server",
+    tool: "propose_api_change",
+    title: "Add seat Technical Writer",
+    changes: [
+      { kind: "added", field: "roles.tw.name", label: "Technical Writer › Name", to: "TW" },
+    ],
+    technical: { method: "PUT", path: "/config/units/core", body: '{\n  "id": "core"\n}' },
+  });
+  screen.getByText("PUT /config/units/core");
+  cleanup();
+  draw({
+    scope: "server",
+    tool: "propose_api_change",
+    title: "Add seat Technical Writer",
+    changes: [
+      { kind: "added", field: "roles.tw.name", label: "Technical Writer › Name", to: "TW" },
+    ],
+  });
+  expect(screen.queryByText(/technical details/)).toBeNull();
+});

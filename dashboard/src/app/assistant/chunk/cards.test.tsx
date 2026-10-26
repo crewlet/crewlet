@@ -20,6 +20,7 @@ import {
 } from "./blocks.tsx";
 import type { TurnView } from "./turn.ts";
 import { resetCardFolds, setCardOpen } from "./fold.ts";
+import { SeatNames } from "./seatNames.ts";
 
 afterEach(() => {
   cleanup();
@@ -236,4 +237,55 @@ test("a reply's paragraphs are blocks in a div the Markdown rhythm spaces", () =
   expect(root.tagName).toBe("DIV");
   expect(root.classList.contains("prose") && root.classList.contains("md")).toBe(true);
   expect(root.querySelectorAll("p")).toHaveLength(2);
+});
+
+// A SEAT IS DRAWN BY ITS NAME, from the chart the drawer provides; an export
+// keeps the handle the API answered. Mutation: draw a seat cell as its text.
+test("a seat cell reads as the seat's name", () => {
+  render(
+    <Router>
+      <SeatNames.Provider value={(key) => (key === "pm" ? "Product Manager" : key)}>
+        <CardBlock
+          event={{
+            card_id: "t",
+            message_id: "m",
+            card: {
+              type: "table",
+              table: {
+                title: "Tasks",
+                columns: [
+                  { key: "title", label: "Title", type: "text" },
+                  { key: "assignee", label: "Assignee", type: "seat" },
+                ],
+                rows: [["Write the brief", "pm"]],
+                row_count: 1,
+                truncated: false,
+                as_of: "2026-10-24T09:41:00Z",
+              },
+            },
+          }}
+          local={undefined}
+          on={on}
+          opened={false}
+        />
+      </SeatNames.Provider>
+    </Router>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /Tasks/ }));
+  expect(screen.getByText("Product Manager")).toBeTruthy();
+  expect(screen.queryByText("pm")).toBeNull();
+});
+
+// A REFUSED READ THAT IS NOT ABOUT ACCESS never says "You do not have
+// permission". Mutation: draw every error card as a permission refusal.
+test("a refusal that is not about access is not drawn as one", () => {
+  draw({
+    type: "error",
+    error: {
+      refusal: { code: "not_found", message: "The record this needs could not be found." },
+      phrase: "read the page",
+    },
+  });
+  expect(screen.queryByText(/do not have permission/)).toBeNull();
+  expect(screen.getByText(/could not be found/)).toBeTruthy();
 });

@@ -185,6 +185,26 @@ export function factText(fact: { value: string; type?: WireColumnType }): string
   return CELL[type](NUMERIC.has(type) && fact.value !== "" && Number.isFinite(n) ? n : fact.value);
 }
 
+/**
+ * Whether a refusal is about the person's access: the API's permission codes,
+ * or a refusal naming the grants that would admit them. Every other refusal
+ * (a value not accepted, a record not found, a request the assistant wrote
+ * wrong) is not a permission problem and is never drawn as one.
+ */
+export function isAccessRefusal(refusal: { code: string; grants?: string[] } | undefined): boolean {
+  if (!refusal) return false;
+  if ((refusal.grants ?? []).length > 0) return true;
+  return ACCESS_CODES.has(refusal.code);
+}
+
+/** The refusal codes that are about the person's access. */
+const ACCESS_CODES: ReadonlySet<string> = new Set([
+  "unauthorized",
+  "forbidden",
+  "access_withdrawn",
+  "assistant_not_permitted",
+]);
+
 /** A number of seconds, as the run chip says it. */
 function seconds(ms: number): string {
   return ms < 10_000 ? `${(ms / 1000).toFixed(ms < 1000 ? 1 : 0)}s` : `${Math.round(ms / 1000)}s`;
@@ -239,8 +259,15 @@ export function runChipOf(
         meta: taken > 0 ? `${done} of ${steps(taken)}` : undefined,
       };
     }
-    case "refused":
+    case "refused": {
+      // NOT PERMITTED ONLY FOR AN ACCESS REFUSAL: a value the engine did not
+      // accept is not a permission problem.
+      const at = turn.steps.find((s) => s.state === "refused");
+      if (at && !isAccessRefusal(at.refusal)) {
+        return { state, title: "Could not finish", meta: stepMeta(taken) };
+      }
       return { state, title: "Not permitted", meta: stepMeta(taken) };
+    }
     case "unconfirmed":
       return { state, title: "Could not confirm the change" };
     case "failed":
@@ -248,7 +275,10 @@ export function runChipOf(
     case "budget_exhausted": {
       const at = turn.steps.find((s) => s.state === "failed" || s.state === "refused");
       const refused = at?.state === "refused";
-      if (refused) return { state: "refused", title: "Not permitted", meta: stepMeta(taken) };
+      if (refused && isAccessRefusal(at.refusal)) {
+        return { state: "refused", title: "Not permitted", meta: stepMeta(taken) };
+      }
+      if (refused) return { state, title: `Could not finish step ${at.index}` };
       return { state, title: at ? `Failed at step ${at.index}` : "Failed" };
     }
   }
@@ -516,6 +546,26 @@ export function changeRowsOf(proposal: AssistantProposalCard): ChangeListRow[] {
         };
     }
   });
+  // THE EXACT REQUEST, which the engine sends to an administrator alone, as
+  // the last rows until the card has a "Technical details" disclosure of its
+  // own (uilet's ProposalCard `details`).
+  const technical = proposal.technical;
+  if (technical) {
+    rows.push({
+      kind: "fact",
+      label: "Request (technical details)",
+      value: <code>{`${technical.method} ${technical.path}`}</code>,
+    });
+    if (technical.body) {
+      const body = drawValue(technical.body);
+      rows.push({
+        kind: "fact",
+        label: "Request body (technical details)",
+        value: body.node,
+        block: body.block,
+      });
+    }
+  }
   const audience = proposal.audience ?? [];
   if (audience.length === 0) return rows;
   const facts = rows.findIndex((row) => row.kind !== "fact");
@@ -655,7 +705,7 @@ function Proposal({
   return (
     <ProposalCard
       title={proposal.title}
-      subtitle={proposal.scope === "page" ? "This page only" : "Saved for the company"}
+      subtitle={scopeLine(proposal.scope, state)}
       scope={proposal.scope}
       state={state}
       // WHAT IT DOES LEADS THE CARD, above every row, in the engine's words:
@@ -687,6 +737,24 @@ function Proposal({
       }
     />
   );
+}
+
+/**
+ * Where a change lands, as the card's subtitle, in words true at its state: a
+ * company change still waiting is not "Saved" yet.
+ */
+export function scopeLine(scope: AssistantProposalCard["scope"], state: ProposalState): string {
+  if (scope === "page") return "This page only";
+  switch (state) {
+    case "applied":
+      return "Saved for the company";
+    case "pending":
+    case "stepup":
+    case "applying":
+      return "For the company, once approved";
+    default:
+      return "For the company";
+  }
 }
 
 /** A count of things in words: "1 row", "7 rows". */
@@ -929,11 +997,22 @@ export function CardBlock({
       const { refusal, phrase } = card.error;
       // THE CARD'S OWN NEXT STEP, or else the route's (the envelope's `hint`).
       const hint = card.error.hint ?? refusal.hint;
+      const asked = phrase ? `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)}` : undefined;
+      // A REFUSAL THAT IS NOT ABOUT ACCESS (a value not accepted, a record
+      // not found) is never drawn as "You do not have permission".
+      if (!isAccessRefusal(refusal)) {
+        return (
+          <Callout variant="warning" title={asked ?? "This could not be done"}>
+            {refusal.message}
+            {hint ? ` ${hint}` : ""}
+          </Callout>
+        );
+      }
       return (
         <RefusalCard
           // THE HEAD NAMES WHAT WAS ASKED FOR ("Read the fleet"), and the
           // card's own tag says it was not permitted; the sentence says why.
-          title={phrase ? `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)}` : "Not permitted"}
+          title={asked ?? "Not permitted"}
           heading={phrase ? `You do not have permission to ${phrase}.` : undefined}
           actions={
             <CopyButton
