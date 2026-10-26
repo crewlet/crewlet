@@ -66,6 +66,18 @@ func TestEveryArtifactRefusalIsOneClassOnBothSurfaces(t *testing.T) {
 		"QuotaExceeded": {err: &artifactsdomain.QuotaExceeded{Limit: 1, Usage: 2,
 			Key: "artifacts.limits.company_bytes"}},
 		"VersionMoved": {err: &artifactsdomain.VersionMoved{}},
+		// A FOLDER's, which a create filing into one meets as a publish does.
+		"ErrFolderNotFound":  {err: artifactsdomain.ErrFolderNotFound},
+		"ErrFolderNameTaken": {err: artifactsdomain.ErrFolderNameTaken},
+		"ErrFolderLimit":     {err: artifactsdomain.ErrFolderLimit},
+		"ErrFolderCycle":     {err: artifactsdomain.ErrFolderCycle},
+		"ErrFolderDepth":     {err: artifactsdomain.ErrFolderDepth},
+		"FolderAmbiguous": {err: &artifactsdomain.FolderAmbiguous{Path: "Drafts",
+			Candidates: []artifactsdomain.Folder{{ID: "f-1"}, {ID: "f-2"}}}},
+		"ErrBrandContrast":   {why: brandAdoption},
+		"ErrBrandIncomplete": {why: brandAdoption},
+		"BrandContrast":      {why: brandAdoption},
+		"BrandIncomplete":    {why: brandAdoption},
 
 		"ErrBadCursor": {why: "a read's refusal, answered by the listing routes, never a write's"},
 		"ErrNotInTrash": {why: "the trash reaper's own purge, made as the engine, never a " +
@@ -111,6 +123,11 @@ func TestEveryArtifactRefusalIsOneClassOnBothSurfaces(t *testing.T) {
 		}
 	}
 }
+
+// brandAdoption is why a brand's refusal has no row: adopting a brand is an
+// administrator's gesture on the brand routes, which answer it themselves (422
+// `brand_contrast`, `policy_refused`), and no publish or tool makes it.
+const brandAdoption = "an adoption's refusal, answered by the brand routes, never a publish's"
 
 // declaredErrors is every exported Err* variable and every exported type with
 // an `Error() string` method in one package directory, tests excluded.

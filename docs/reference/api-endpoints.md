@@ -7608,7 +7608,7 @@ bidi or zero-width character, and not `.` or `..`. Siblings are unique
 without regard to case. At the top level the company's folders are unique
 among themselves and each owner's own among their own, so a name is never
 refused because of a folder its creator cannot see; a path naming both a
-private and a company folder is `409 folder_ambiguous` on a write (`candidates`
+private and a company folder is `422 folder_ambiguous` on a write (`candidates`
 lists each by id) and `400 bad_params` on the listing: list it by `folder` id.
 Folders nest at most four deep; a company holds at most 2000 live folders and
 one folder at most 1000 children.
@@ -7850,8 +7850,9 @@ dashboard follow the adopted brand live, drawn by the dashboard.
 | `409` | `exists` | A create of an artifact or an asset that is already there — most often the same create sent again after its operation was forgotten: read it rather than make it again |
 | `409` | `labels_full` | Every label the artifact keeps is in use: remove one from a version that no longer needs it, then label this one (the tools' class is `conflict`, the artifact's state) |
 | `404` | `folder_not_found` | A folder a body names (a parent, a destination, the folder a create files into) that does not exist, was removed, or that the caller cannot see; one answer for all three |
-| `409` | `folder_name_taken` / `folder_cycle` / `folder_depth` / `folder_limit` | A name its place already holds, a folder moved into itself or beneath itself, a folder deeper than four, or past the company's or one folder's bound |
-| `409` | `folder_widens` / `folder_ambiguous` | A move that would show a folder to more people, unconfirmed; a path naming several folders the caller sees (`candidates`) |
+| `409` | `folder_name_taken` / `folder_limit` | A name its place already holds (the tools' class is `exists`), or past the company's or one folder's bound (the tools' class is `conflict`: the state of what the company holds) |
+| `409` | `folder_widens` | A move that would show a folder to more people, unconfirmed |
+| `422` | `folder_cycle` / `folder_depth` / `folder_ambiguous` | A folder moved into itself or beneath itself, a folder deeper than four, or a path naming several folders the caller sees (`candidates`): the argument to change, as the tools' class `invalid` says |
 | `409` | `artifact_not_framed` / `artifact_origin_unset` | See [Viewing a version](#viewing-a-version) |
 | `409` | `conflict` | A frame whose ready time was already reported; see [Viewing a version](#viewing-a-version) |
 | `410` | `upload_expired` | The upload's window closed before it was finished |

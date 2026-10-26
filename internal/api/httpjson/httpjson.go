@@ -1051,10 +1051,10 @@ const (
 	// without regard to case. 409, the detail naming it.
 	CodeFolderNameTaken Code = "folder_name_taken"
 	// CodeFolderCycle is a folder moved into itself or a folder inside it.
-	// 409.
+	// 422: the destination is the argument to change.
 	CodeFolderCycle Code = "folder_cycle"
 	// CodeFolderDepth is a create or a move that would place a folder deeper
-	// than folders go. 409.
+	// than folders go. 422: a shallower destination lands.
 	CodeFolderDepth Code = "folder_depth"
 	// CodeFolderLimit is a create or a move past the folders the company or
 	// one folder holds. 409.
@@ -1066,7 +1066,7 @@ const (
 	// (`confirm_widen`).
 	CodeFolderWidens Code = "folder_widens"
 	// CodeFolderAmbiguous is a folder path that names more than one folder
-	// the caller can see. 409, the detail listing each by id.
+	// the caller can see. 422, the detail listing each by id, which lands.
 	CodeFolderAmbiguous Code = "folder_ambiguous"
 )
 

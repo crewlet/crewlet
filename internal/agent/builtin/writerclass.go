@@ -67,8 +67,12 @@ var nativeDomains = map[string]nativeDomain{
 		sentence: artifactupload.Sentence,
 		// An artifact is named by its `artifact` id on every tool that
 		// changes one; create_artifact names none, because the artifact
-		// it makes has no id until it lands.
-		objects: []string{"artifact"},
+		// it makes has no id until it lands. move_artifact files the
+		// artifacts its `artifacts` list names, each on its own, and
+		// create_artifact_folder names the folder it makes its folder in
+		// by `parent`: the place to look for what it made, as write_page's
+		// container is.
+		objects: []string{"artifact", "artifacts", "parent"},
 	},
 	artifactdata.Domain{}.Name(): {
 		class:    artifactDataClass,
@@ -298,20 +302,26 @@ func pageClass(err error) (tools.Refusal, bool) {
 // up, and another value lands now. A quota is what the company holds at its
 // plan's limit: `quota_exceeded`, which nobody's permission lifts. An upload
 // past its term, or carried bytes the artifact no longer names, is the same
-// call made again.
+// call made again. A FOLDER by the same rule: one that is not there is
+// `not_found`, a name its place already holds `exists`, the folders the
+// company or one folder holds at their bound the state (`conflict`), and a
+// destination inside the folder moved, one deeper than folders go, or a path
+// naming several folders the caller sees the argument to change (`invalid`).
 func artifactClass(err error) (tools.Refusal, bool) {
 	var (
-		moved *artifactsdomain.VersionMoved
-		gone  *artifactsdomain.CarriedObjectGone
-		quota *artifactsdomain.QuotaExceeded
+		moved     *artifactsdomain.VersionMoved
+		gone      *artifactsdomain.CarriedObjectGone
+		quota     *artifactsdomain.QuotaExceeded
+		ambiguous *artifactsdomain.FolderAmbiguous
 	)
 	switch {
-	case errors.Is(err, artifactsdomain.ErrNotFound), errors.Is(err, artifactsdomain.ErrPurged):
+	case errors.Is(err, artifactsdomain.ErrNotFound), errors.Is(err, artifactsdomain.ErrPurged),
+		errors.Is(err, artifactsdomain.ErrFolderNotFound):
 		return tools.RefusalNotFound, true
 	case errors.As(err, &moved):
 		return tools.RefusalStaleVersion, true
 	case errors.Is(err, artifactsdomain.ErrSourceTaken), errors.Is(err, artifactsdomain.ErrLabelTaken),
-		errors.Is(err, artifactsdomain.ErrExists):
+		errors.Is(err, artifactsdomain.ErrExists), errors.Is(err, artifactsdomain.ErrFolderNameTaken):
 		return tools.RefusalExists, true
 	case errors.As(err, &quota):
 		return tools.RefusalQuotaExceeded, true
@@ -320,9 +330,12 @@ func artifactClass(err error) (tools.Refusal, bool) {
 		return tools.RefusalForbidden, true
 	case errors.Is(err, artifactsdomain.ErrConflict), errors.Is(err, artifactsdomain.ErrPurging),
 		errors.Is(err, artifactsdomain.ErrTrashed), errors.Is(err, artifactsdomain.ErrLabelsFull),
-		errors.Is(err, artifactsdomain.ErrUploadStale), errors.As(err, &gone):
+		errors.Is(err, artifactsdomain.ErrUploadStale), errors.As(err, &gone),
+		errors.Is(err, artifactsdomain.ErrFolderLimit):
 		return tools.RefusalConflict, true
-	case errors.Is(err, artifactsdomain.ErrInvalid), errors.Is(err, artifactsdomain.ErrBadCursor):
+	case errors.Is(err, artifactsdomain.ErrInvalid), errors.Is(err, artifactsdomain.ErrBadCursor),
+		errors.Is(err, artifactsdomain.ErrFolderCycle), errors.Is(err, artifactsdomain.ErrFolderDepth),
+		errors.As(err, &ambiguous):
 		return tools.RefusalInvalid, true
 	}
 	return "", false

@@ -6180,7 +6180,7 @@ export interface ArtifactCommonPrefix {
  * without it, everything beneath the prefix. `folder` (an id) names the
  * folder in place of `prefix`, which the answer then echoes as the resolved
  * path: a path may name two folders a reader sees (a company "Drafts" and
- * their own private one, `409 folder_ambiguous`), and an id never does.
+ * their own private one, `422 folder_ambiguous`), and an id never does.
  */
 export interface ArtifactListAnswer {
   /** The query's prefix, echoed; empty for the top level. */
