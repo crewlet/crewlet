@@ -129,39 +129,45 @@ test("an unconfirmed change never says nothing changed", () => {
   expect(document.body.textContent ?? "").not.toContain("Nothing changed.");
 });
 
-test("a change that removes fields leads with them, above every row", () => {
+test("what a change takes away leads the card, above every row", () => {
   draw({
     scope: "server",
     tool: "propose_api_change",
-    title: "Change through the API",
-    removes: ["Project", "Space"],
+    title: "Remove seat QA Engineer",
+    summary: "This removes seat QA Engineer from unit Product and Engineering.",
+    note: "The previous version stays in the configuration history, so this can be reverted.",
+    risk: "destructive",
     changes: [
-      { kind: "fact", field: "request", label: "Request", to: "PUT /config/units/core" },
-      {
-        kind: "added",
-        field: "roles.analyst.name",
-        label: "Roles › analyst › name",
-        to: "Data Analyst",
-      },
+      { kind: "removed", field: "roles.qa.name", label: "QA Engineer › Name", from: "QA Engineer" },
     ],
-    approve_label: "Approve and send",
+    approve_label: "Approve and remove",
   });
-  const warning = screen.getByText(
-    "This also removes Project and Space. Approve only if you asked for that.",
+  const summary = screen.getByText(
+    "This removes seat QA Engineer from unit Product and Engineering.",
   );
-  const firstRow = screen.getByText("PUT /config/units/core");
-  expect(warning.compareDocumentPosition(firstRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  const firstRow = screen.getByText("QA Engineer › Name");
+  expect(summary.compareDocumentPosition(firstRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  screen.getByText(
+    "The previous version stays in the configuration history, so this can be reverted.",
+  );
 });
 
 test("a change that removes nothing says nothing about removing", () => {
   draw({
     scope: "server",
     tool: "propose_api_change",
-    title: "Change through the API",
-    changes: [{ kind: "fact", field: "request", label: "Request", to: "PUT /config/units/core" }],
-    approve_label: "Approve and send",
+    title: "Add seat Technical Writer",
+    changes: [
+      {
+        kind: "added",
+        field: "roles.tw.name",
+        label: "Technical Writer › Name",
+        to: "Technical Writer",
+      },
+    ],
+    approve_label: "Approve and add",
   });
-  expect(screen.queryByText(/This also removes/)).toBeNull();
+  expect(screen.queryByText(/removes/)).toBeNull();
 });
 
 // A VALUE IS DRAWN AS WHAT IT IS (changeValue.tsx): a list as a list, never
@@ -173,12 +179,12 @@ test("a list, a page of text, a body and a colour each read as what they are", (
   draw({
     scope: "server",
     tool: "propose_api_change",
-    title: "Change through the API",
+    title: "Change unit Product and Engineering",
     changes: [
       {
         kind: "added",
         field: "roles.qa.responsibilities",
-        label: "Roles › qa › responsibilities",
+        label: "QA Engineer › Responsibilities",
         to: "Review the tests, Approve or send back",
         items: ["Review the tests", "Approve or send back"],
       },
@@ -188,7 +194,7 @@ test("a list, a page of text, a body and a colour each read as what they are", (
         label: "Page",
         to: "# Proposed team\n\n## Roles\n\n- **Product Manager**: owns the brief\n- [a link](https://example.com)",
       },
-      { kind: "fact", field: "request.body", label: "Request body", to: '{\n  "name": "QA"\n}' },
+      { kind: "added", field: "settings", label: "Settings", to: '{\n  "name": "QA"\n}' },
       {
         kind: "changed",
         field: "colors.ground",
@@ -201,7 +207,7 @@ test("a list, a page of text, a body and a colour each read as what they are", (
   const rows = [...document.querySelectorAll(".crewlet-change-list__row")];
   const row = (label: string) => rows.find((r) => r.querySelector("dt")?.textContent === label)!;
 
-  const list = row("Roles › qa › responsibilities");
+  const list = row("QA Engineer › Responsibilities");
   expect(list.classList.contains("crewlet-change-list__row--block")).toBe(true);
   expect([...list.querySelectorAll("li")].map((li) => li.textContent)).toEqual([
     "Review the tests",
@@ -218,7 +224,7 @@ test("a list, a page of text, a body and a colour each read as what they are", (
   expect(page.querySelectorAll("li")).toHaveLength(2);
   expect(page.querySelector("a")).toBeNull();
 
-  const body = row("Request body");
+  const body = row("Settings");
   expect(body.classList.contains("crewlet-change-list__row--block")).toBe(true);
   expect(body.querySelector("pre, code")?.textContent).toContain('"name": "QA"');
 
