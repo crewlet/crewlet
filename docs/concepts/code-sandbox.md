@@ -315,25 +315,33 @@ docker run -d --init -v <box home>:/home/user -w /home/user/workspace -e HOME=/h
 
 A box reaches the engine host by the runtime's name for it, as [above](#local-sandboxes), and on Linux `api.host` must not be loopback.
 
-**Recipe 1: a stock image and a setup step.** No image to build: a step installs the CLI into the box's home at a pinned version.
+**Recipe 1: a stock image and a setup step.** No image to build: a step installs Claude Code and `gh` into the box's home, each at a pinned version, `gh` checked against the checksums file GitHub publishes with the release.
 
 ```yaml
 providers:
   sandbox:
     local:
-      image: node:22-bookworm       # has git; add gh with your own image if seats need it
+      image: node:22-bookworm       # has git, curl and sha256sum
     default_run_in: container
     setup:
-      - name: claude-code
+      - name: coding-tools
         files:
           .profile: |              # the login shell the CLI starts in reads it
-            export PATH="$HOME/.npm-global/bin:$PATH"
+            export PATH="$HOME/.npm-global/bin:$HOME/.local/bin:$PATH"
         commands:
           - npm install --global --prefix "$HOME/.npm-global" --no-audit --no-fund @anthropic-ai/claude-code@2.1.310
+          - |
+            set -eu
+            v=2.103.3; a=$(dpkg --print-architecture); t="gh_${v}_linux_${a}.tar.gz"
+            cd "$(mktemp -d)"
+            curl -fsSLO "https://github.com/cli/cli/releases/download/v${v}/${t}"
+            curl -fsSL "https://github.com/cli/cli/releases/download/v${v}/gh_${v}_checksums.txt" | grep " ${t}\$" | sha256sum -c -
+            tar -xzf "$t"
+            mkdir -p "$HOME/.local/bin" && mv "gh_${v}_linux_${a}/bin/gh" "$HOME/.local/bin/gh"
         timeout_seconds: 600
 ```
 
-Setup steps run after the box is created and before the CLI starts, as the box's own uid, which is why the install goes under `$HOME` rather than the image's global prefix. It reinstalls in every new box (a reused box keeps it) and needs egress to the npm registry, so it suits a first run rather than a busy deployment.
+Setup steps run after the box is created and before the CLI starts, as the box's own uid, which is why both install under `$HOME` rather than the image's system directories. The trade-off against recipe 2: **every new box downloads and installs both again** (a reused box keeps them), which costs time on each run and needs egress to the npm registry and GitHub.
 
 **Recipe 2: your own image from Claude Code's dev container.** Build Anthropic's [reference dev container](https://code.claude.com/docs/en/devcontainer) (`.devcontainer/` in `anthropics/claude-code`) with the CLI pinned, `--build-arg CLAUDE_CODE_VERSION=<version>`, then put `claude` where a login shell finds it, since that image adds its npm prefix to `PATH` with `ENV` alone:
 
