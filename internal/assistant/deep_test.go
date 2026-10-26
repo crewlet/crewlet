@@ -269,6 +269,85 @@ func TestAProposalParksTheRunAndTheApprovalContinuesIt(t *testing.T) {
 	}
 }
 
+// A TASK'S END CARRIES THE ENGINE'S RECORD OF EVERY CHANGE IT PROPOSED: a task
+// that proposes twice, each approved and applied, ends with a report that
+// claims nothing it can prove, and the turn's model reads both receipts from
+// the engine's own records beside it, the first kept across the second park.
+// Mutation: answer the parked call with the run's end alone and the model
+// reads neither receipt, which is how a person was told "I could not confirm
+// that" about two changes the engine had applied.
+func TestATasksEndCarriesTheRecordOfEveryChangeItProposed(t *testing.T) {
+	t.Parallel()
+	script := evals.NewDeepScript(
+		evals.DeepRunScript{Calls: []llm.ToolCall{
+			{ID: "d1", Name: "create_task", Arguments: map[string]any{"title": "Write the role page"}}},
+			Report: "Proposed the role page."},
+		evals.DeepRunScript{Calls: []llm.ToolCall{
+			{ID: "d2", Name: "create_task", Arguments: map[string]any{"title": "Give QA its first task"}}},
+			Report: "Proposed the QA task."},
+		evals.DeepRunScript{Report: "Both changes may have been applied; I cannot confirm it."})
+	f := deepRig(t, script, startDeep("Redefine the teams"), evals.Say("The teams are redefined."))
+	accepted, err := f.Ask("teams", "Redefine our teams from last month's work", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Follow(accepted.TurnID, 0)
+	ctx := iam.WithPrincipal(context.Background(), f.Person)
+	receipts := []string{"Created ENG-8.", "Created ENG-9."}
+	for i, receipt := range receipts {
+		proposals := f.Store.Proposals()
+		if len(proposals) != i+1 {
+			t.Fatalf("%d proposals after %d parks, want %d", len(proposals), i+1, i+1)
+		}
+		p := proposals[i]
+		resumed, err := f.Svc.Resume(ctx, approval.Resumption{Owner: f.Person.ID,
+			Conversation: f.Conversation, Turn: accepted.TurnID, Proposal: p.ID,
+			Read: f.Grant("approve"), State: wire.ProposalApplied,
+			Receipt: &wire.Receipt{Summary: receipt}, Card: cardAt(p, wire.ProposalApplied)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := wire.TurnWaitingForApproval
+		if i == len(receipts)-1 {
+			want = wire.TurnCompleted
+		}
+		if done := evals.Last(f.Follow(accepted.TurnID, resumed.AfterSeq), wire.EventDone); done == nil ||
+			done.Done.State != want {
+			t.Fatalf("resume %d ended %+v, want %s", i+1, done, want)
+		}
+	}
+	answer, ok := lastToolAnswer(f, "c-deep")
+	if !ok {
+		t.Fatal("the model never read the task's end")
+	}
+	if !strings.Contains(answer.Content, "I cannot confirm it") {
+		t.Fatalf("the model read %q, want the run's own report", answer.Content)
+	}
+	records := answer.Content[strings.Index(answer.Content, "I cannot confirm it"):]
+	for _, want := range []string{"from the engine's own records", "1. Create task: The person " +
+		"approved the change and it was applied. Created ENG-8.", "2. Create task: The person " +
+		"approved the change and it was applied. Created ENG-9."} {
+		if !strings.Contains(records, want) {
+			t.Fatalf("the task's end, after the run's report, lacks %q:\n%s", want, records)
+		}
+	}
+}
+
+// lastToolAnswer is the model's latest reading of a call, by its id: a parked
+// call is read again, with its newer answer, by every round after a resume.
+func lastToolAnswer(f *assistanttest.Rig, id string) (llm.Message, bool) {
+	var out llm.Message
+	found := false
+	for _, req := range f.Model.Requests() {
+		for _, m := range req.Messages {
+			if m.Role == llm.RoleTool && m.ToolCallID == id {
+				out, found = m, true
+			}
+		}
+	}
+	return out, found
+}
+
 // A STOP KILLS THE RUN: the person's Stop ends the run's context, the turn ends
 // stopped, a cancellation and never a failure, and the box is discarded.
 func TestAStopKillsTheRun(t *testing.T) {

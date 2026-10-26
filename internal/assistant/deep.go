@@ -106,6 +106,11 @@ type parkedDeep struct {
 	Spent int `json:"spent"`
 	// Runs is how many runs the task has made: the next run's number.
 	Runs int `json:"runs"`
+	// Decisions is what became of each change the task proposed, in the
+	// order the person decided them, in the engine's own words
+	// ([resultOf]): the records the turn's model reads when the task ends,
+	// since the run's report is the run's own account of them.
+	Decisions []string `json:"decisions,omitempty"`
 }
 
 // segmentClock is a segment's wall clock: it ends the segment as timed out at
@@ -744,7 +749,11 @@ func (t *turn) answerParkedDeep(ctx context.Context, r *loopRun) (*toolloop.Resu
 			"resumed deep-work segment carries no answer to the call it parked on")
 	}
 	call := r.messages[n-1]
-	res, err := t.continueDeep(ctx, *r.deep, call.Content)
+	// THE DECISION JOINS THE TASK'S RECORDS before the run continues, so a
+	// run that parks again keeps it, and the task's end carries every one.
+	keep := *r.deep
+	keep.Decisions = append(slices.Clone(keep.Decisions), call.Content)
+	res, err := t.continueDeep(ctx, keep, call.Content)
 	before := slices.Clone(r.messages[:n-1])
 	switch {
 	case err != nil:
@@ -753,8 +762,27 @@ func (t *turn) answerParkedDeep(ctx context.Context, r *loopRun) (*toolloop.Resu
 		return &toolloop.Result{Messages: before, Suspended: true,
 			PendingToolCallID: call.ToolCallID, PendingToolName: call.Name}, true, nil
 	}
-	r.messages[n-1].Content, r.messages[n-1].Failed = res.Output, res.Failed
+	r.messages[n-1].Content, r.messages[n-1].Failed = withDecisions(res.Output, keep.Decisions), res.Failed
 	return nil, false, nil
+}
+
+// withDecisions is a task's end as the turn's model reads it: the run's own
+// answer, then what became of each change the task proposed, from the
+// engine's records. The run is told the decision and writes a report, but
+// that report is the run's account, fenced as untrusted; without the records
+// the model could only repeat it, or hedge on an outcome the engine knows.
+func withDecisions(output string, decisions []string) string {
+	if len(decisions) == 0 {
+		return output
+	}
+	var out strings.Builder
+	out.WriteString(output)
+	out.WriteString("\n\nWhat became of the changes this task proposed, from the engine's own " +
+		"records. These are facts: report them as such, whatever the run's report says.")
+	for i, d := range decisions {
+		fmt.Fprintf(&out, "\n%d. %s", i+1, d)
+	}
+	return out.String()
 }
 
 // attachmentsOf are the files a question names, each one the person uploaded

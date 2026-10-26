@@ -99,7 +99,9 @@ const deepBlock = "When a task needs research, scripts, generated files, the ima
 	"redesigning brand assets), hand it to " + catalog.StartDeepWorkTool + " with a goal " +
 	"and a plan, and tell the person you are doing so. Answer a single read or a single " +
 	"change yourself. When deep work delivers files, propose the changes that put them " +
-	"into Crewlet by their file ids."
+	"into Crewlet by their file ids. When it ends, its result lists what became of each " +
+	"change it proposed, from the engine's own records: state those outcomes as facts, " +
+	"with the keys and ids they name."
 
 // attachmentsBlock tells the quick-mode model what the question carried.
 func attachmentsBlock(files []wire.FileRef, deep bool) string {

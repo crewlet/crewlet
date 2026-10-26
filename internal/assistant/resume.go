@@ -190,6 +190,13 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 // never as the engine's, since the engine cannot verify it.
 func resultOf(r approval.Resumption, b provenance.Boundary) string {
 	var out strings.Builder
+	// THE CHANGE IS NAMED BY ITS ACTION, which the catalogue wrote ("Create
+	// task"); its target is the model's own argument, and may carry text it
+	// read, so it stays out of the engine's words. The receipt names what
+	// the write made.
+	if p := r.Card.Proposal; p != nil && oneLine(p.Title) != "" {
+		fmt.Fprintf(&out, "%s: ", oneLine(p.Title))
+	}
 	switch r.State {
 	case wire.ProposalApplied:
 		out.WriteString("The person approved the change and it was applied.")
