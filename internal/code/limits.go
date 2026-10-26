@@ -210,17 +210,24 @@ const (
 	// MaxRecordRows is the most rows one record's apply may write or delete:
 	// the framework's per-transaction budget, which is checked only at record
 	// boundaries — a larger record would hold the shared write lane past it.
-	// A push record's tombstone sweep fills what the record's own rows leave
-	// of it, so a push record reaches it exactly whenever tombstones are due —
-	// past RefTombstoneHorizon, or past MaxTombstonesPerRepo.
+	// A push record's tombstone sweep, and then its removal of the ref drops
+	// past PruneGrace, fill what the record's own rows leave of it, so a push
+	// record reaches it exactly whenever enough of either is due —
+	// tombstones past RefTombstoneHorizon or past MaxTombstonesPerRepo,
+	// drops past PruneGrace.
 	MaxRecordRows = statelog.ApplyTxRowBudget
 
 	// MaxCommandsPerPush is the most ref updates one push carries. A push's
-	// apply then writes at most 1 003 rows, and its record's row bound counts
-	// a deletion twice (rowBound: the old tombstone the sweep may take for
-	// it), so three maximal pushes of updates fit one record's row budget, one
-	// of deletions, and two of either its byte budget (about 410 KiB each with
-	// plain refs at MaxRefNameBytes); an import chunks its refs at this size.
+	// apply then writes at most 2 003 rows — its refs, the object each forced
+	// update or deletion left (code_ref_drops), its pack, its push row and the
+	// counters — and its record's row bound counts each command by the rows
+	// it may make the record touch (rowBound: a deletion three, for its
+	// tombstone, the old tombstone the sweep may take for it and its drop; a
+	// forced update two; any other one), so three maximal pushes of
+	// fast-forward updates fit one record's row budget, one of forced updates
+	// or of deletions, and two of either its byte budget (about 410 KiB each
+	// with plain refs at MaxRefNameBytes); an import chunks its refs at this
+	// size.
 	// Refs JSON spells long — `&`, `<` and `>` take six bytes each — reach
 	// EntryRoom first, at some six hundred of the longest, and such a push
 	// is refused by its receiver before its work (Proposal.ValidateCommands).
@@ -329,6 +336,24 @@ const (
 	// one-day gap.
 	RefTombstoneHorizon = 48 * time.Hour
 
+	// PruneGrace is how long a ref's DROP is kept — the object a forced
+	// update or a deletion moved a ref off, a code_ref_drops row — and so how
+	// long what only that object reached still counts as reachable to
+	// whatever drops a repository's unreachable objects: history force-pushed
+	// away or deleted stays fetchable by its id for that long after the drop.
+	//
+	// FOURTEEN DAYS, git's own gc.pruneExpire default (2.weeks.ago): the
+	// grace anybody who runs git expects a repository's unreachable objects
+	// to have before they may go, so what a mistaken force-push left is
+	// recoverable from the server for as long as git itself keeps it in a
+	// clone. Every push record removes its own repository's drops older than
+	// this by its broker instant (apply_push.go). A reader judging the grace
+	// by its own clock stands at most twice objstore.AssumedClockSkew from
+	// that instant while no node raises `clock_skew`: two hours either way
+	// at the edge of fourteen days — a policy's edge, where RetireGrace's
+	// margin guards a read in flight.
+	PruneGrace = 14 * 24 * time.Hour
+
 	// MaxDescriptionBytes is config.CodeMaxDescriptionBytes: a repository
 	// description is one paragraph, riding every settings record and every
 	// listing row.
@@ -342,13 +367,14 @@ const (
 	// bounds the same removal by what the rows weigh.
 	//
 	// It does NOT bound the TOMBSTONES a record sweeps. A record can make
-	// nearly two thousand of those, which a share of sixty-four fell behind
+	// over a thousand of those, which a share of sixty-four fell behind
 	// by about 936 a record on a repository that deletes refs in bulk; the
 	// sweep takes every row the record leaves of MaxRecordRows instead —
 	// 3 995 behind a one-command push, at least one for each of its own
-	// deletions behind any record the committer forms (rowBound counts a
-	// deletion twice), and none behind one it filled to the row bound with
-	// creations — so what a record writes and removes together is
+	// deletions behind any record the committer forms (rowBound reserves
+	// one for every deletion), and none behind one it filled to the row
+	// bound with creations — and the ref drops past PruneGrace whatever the
+	// tombstones leave, so what a record writes and removes together is
 	// MaxRecordRows at most.
 	HorizonDeletesPerRecord = 64
 

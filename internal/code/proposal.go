@@ -463,12 +463,10 @@ func entryBound(p Proposal) (int, error) {
 }
 
 // rowBound is the most rows p's entry can make its record's apply touch: its
-// push row, a ref for every command the receiver did not refuse, its pack —
-// and a second row for every DELETION among those commands, which is the old
-// tombstone the record's sweep may have to take to keep the repository inside
-// MaxTombstonesPerRepo once the deletion's own tombstone is written.
+// push row, its pack, and [commandRows] for every command the receiver did
+// not refuse.
 //
-// # A deletion counts twice so no record this committer forms removes
+// # A deletion keeps a row for the sweep so no record this committer forms removes
 //
 // The applier holds MaxTombstonesPerRepo after every record with two moves:
 // its sweep takes the oldest past the bound within what the record's rows
@@ -476,27 +474,46 @@ func entryBound(p Proposal) (int, error) {
 // match writes its deletions as REMOVALS and raises the repository's mark to
 // its own position (apply_push.go) — which sends every cache synced before the
 // record, on every git node holding the repository, to read it whole, and
-// stops each such node's maintenance on it for the full round. Counted once,
-// a deletion left the sweep less room than the record's own deletions need:
-// three pushes of a thousand deletions shared one record whose sweep had 995
-// rows for 3 000 new tombstones, and a record filled to the row bound left it
-// none. Counted twice, a record's sweep always has a row for every tombstone
-// it makes, the removal is left to records no committer of this build forms,
-// and what that costs is batching alone: one maximal deletion push a record
-// rather than three, a record still under half the lane's time budget
-// (doc.go's measured section).
+// stops each such node's maintenance on it for the full round. Counted as its
+// ref alone, a deletion left the sweep less room than the record's own
+// deletions need: three pushes of a thousand deletions shared one record whose
+// sweep had 995 rows for 3 000 new tombstones, and a record filled to the row
+// bound left it none. With a row kept for the sweep, a record's sweep always
+// has one for every tombstone it makes, the removal is left to records no
+// committer of this build forms, and what that costs is batching alone: one
+// maximal deletion push a record rather than three, a record still under half
+// the lane's time budget (doc.go's measured section).
 func rowBound(p Proposal) int {
 	rows := 1
 	for _, c := range p.Commands {
-		switch {
-		case c.Result == ResultNG:
-		case c.New == ZeroOID:
-			rows += 2
-		default:
-			rows++
+		if c.Result != ResultNG {
+			rows += commandRows(c)
 		}
 	}
 	if p.Pack != nil {
+		rows++
+	}
+	return rows
+}
+
+// commandRows is the most rows one command that applies makes its record's
+// apply touch: its ref; the object it moved its ref off ([leavesObject], a
+// code_ref_drops row), for a forced update and a deletion; and for a
+// deletion the old tombstone the record's sweep may have to take to keep the
+// repository inside MaxTombstonesPerRepo once the deletion's own is written —
+// a deletion three, a forced update two, any other one. The ONE count the
+// batcher ([rowBound]) and the decide's own check ([withinRecord]) take, so
+// what a batch is formed by is what its record is held to. A drop row is the
+// record's own write rather than a horizon's, which takes only what is left:
+// uncounted, three maximal forced pushes would share a record writing 6 007
+// rows, past MaxRecordRows, and a deletion's drop would take the row kept for
+// its sweep.
+func commandRows(c Command) int {
+	rows := 1
+	if c.New == ZeroOID {
+		rows++
+	}
+	if leavesObject(c) {
 		rows++
 	}
 	return rows
@@ -506,7 +523,8 @@ func rowBound(p Proposal) int {
 // bound rows rows between them ([rowBound], the tombstone sweep's room for the
 // entries' own deletions among them): those, the repository's counters, the
 // push history's share of the horizon and the tombstone mark. Whatever else
-// the record leaves the sweep takes for tombstones past their horizon.
+// the record leaves the sweep takes for tombstones past their horizon, and
+// the removal of the ref drops past PruneGrace what the sweep leaves.
 func recordRows(rows int) int { return rows + 1 + HorizonDeletesPerRecord + 1 }
 
 // refuseAll is p answered with a refusal of the whole push: every command the

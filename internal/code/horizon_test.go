@@ -130,13 +130,16 @@ func TestATombstoneIsSweptAndRaisesTheMark(t *testing.T) {
 	e.countersMatchRows("repo-a")
 }
 
-// A SWEEP KEEPS PACE WITH BULK DELETION: a repository whose every push makes a
-// thousand refs and deletes the thousand the previous push made — a CI's
-// per-build tags, a branch clean-up — keeps a thousand live refs and, once
-// each delete is past RefTombstoneHorizon, no more tombstones than the last
-// push made. A sweep of a fixed share a record fell behind that by about 936
-// rows a record and kept every tombstone it ever made; the sweep takes what
-// the record's row budget left, so the table converges.
+// A SWEEP KEEPS PACE WITH BULK DELETION: a repository whose pushes each round
+// make a thousand refs and delete the thousand the previous round made — a
+// CI's per-build tags, a branch clean-up — keeps a thousand live refs and,
+// once each delete is past RefTombstoneHorizon, no more tombstones than the
+// last round made. A sweep of a fixed share a record fell behind that by about
+// 936 rows a record and kept every tombstone it ever made; the sweep takes
+// what the record's row budget left, so the table converges. The round's two
+// pushes are two records, as the committer forms them: a thousand deletions,
+// each counted with its sweep's room and the object it left, share no record
+// with a thousand creates.
 func TestTheTombstoneSweepKeepsPaceWithBulkDeletion(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
@@ -153,11 +156,11 @@ func TestTheTombstoneSweepKeepsPaceWithBulkDeletion(t *testing.T) {
 					oid(fmt.Sprint(round-1, i)), ZeroOID))
 			}
 		}
-		entries := []PushEntry{pushEntry(fmt.Sprint("make-", round), made...)}
+		records := []built{pushOf(t, "repo-a", pushEntry(fmt.Sprint("make-", round), made...)).at(at)}
 		if len(dropped) > 0 {
-			entries = append(entries, pushEntry(fmt.Sprint("drop-", round), dropped...))
+			records = append(records, pushOf(t, "repo-a", pushEntry(fmt.Sprint("drop-", round), dropped...)).at(at))
 		}
-		e.apply(pushOf(t, "repo-a", entries...).at(at))
+		e.apply(records...)
 		at = at.Add(RefTombstoneHorizon + 24*time.Hour)
 	}
 	if live := e.num(`SELECT COUNT(*) FROM code_refs WHERE target != ''`); live != batch {
@@ -165,7 +168,7 @@ func TestTheTombstoneSweepKeepsPaceWithBulkDeletion(t *testing.T) {
 	}
 	if stones := e.num(`SELECT COUNT(*) FROM code_refs WHERE target = ''`); stones != batch {
 		t.Fatalf("after %d rounds the repository holds %d tombstones, want only the last "+
-			"push's %d — every earlier one was past the horizon when a push came", rounds, stones, batch)
+			"round's %d — every earlier one was past the horizon when a push came", rounds, stones, batch)
 	}
 	e.countersMatchRows("repo-a")
 }

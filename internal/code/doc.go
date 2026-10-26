@@ -196,7 +196,10 @@
 // push of the last 181 days and 357.3 for each push ANY repository not yet
 // purged has ever taken: a deployment of 3 000 pushes a day carries about
 // 215 MB of push rows at the horizon and grows by about 390 MB of pack rows
-// a year for as long as its repositories live.
+// a year for as long as its repositories live. A forced update or a deletion
+// leaves one row more, its ref drop, a commit id and a ref without the
+// history row's commands, kept [PruneGrace] — two weeks of such commands,
+// against the history's half year of every push.
 //
 // THE PUSH ON THE LOG (BenchmarkPushLogBytes, the same figure every count):
 // the code log's growth over the records the committer forms for that same
@@ -392,9 +395,9 @@
 // [Putter] it is handed, so none lays a bundle out or seals it by a copy of
 // its own.
 //
-// # Four horizons, each a function of the record that applies it
+// # Five horizons, each a function of the record that applies it
 //
-// The applier keeps four horizons inside a record's OWN repository, each
+// The applier keeps five horizons inside a record's OWN repository, each
 // chosen by the record's broker instant ([statelog.ApplyOptions.StoredAt]) or
 // by what the record itself names, and never by a node-local sweep, because a
 // sweep would be a second writer of the replicated estate:
@@ -413,18 +416,34 @@
 //     first — past [MaxTombstonesPerRepo] (100 000): a deleted ref is kept
 //     as a tombstone so a cache syncing a delta learns of the deletion, and a
 //     push record sweeps its repository's due ones — as many as the record
-//     leaves of [MaxRecordRows], because one record can make nearly two
+//     leaves of [MaxRecordRows], because one record can make over a
 //     thousand and a fixed share fell behind any repository that deletes
-//     refs in bulk, and never fewer than the record's own deletions, which
-//     the committer counts twice in a record's rows — and raises the mark
-//     past which a delta is no longer complete; a record whose deletions its
-//     sweep cannot make room for, which no committer of this build forms,
-//     removes their rows outright and raises the mark to its own position.
-//     So a deletion never counts against the live refs' [MaxRefsPerRepo]
-//     and never refuses a push, the refs table holds at most the two bounds'
-//     sum, and a delta is answered only while it carries no more rows than
-//     the full answer (so a cache synced before a clean-up larger than what
-//     the repository keeps reads what is left, never every deletion);
+//     refs in bulk, and never fewer than the record's own deletions, for
+//     each of which the committer keeps a row in a record's bound — and
+//     raises the mark past which a delta is no longer complete; a record
+//     whose deletions its sweep cannot make room for, which no committer of
+//     this build forms, removes their rows outright and raises the mark to
+//     its own position. So a deletion never counts against the live refs'
+//     [MaxRefsPerRepo] and never refuses a push, the refs table holds at
+//     most the two bounds' sum, and a delta is answered only while it
+//     carries no more rows than the full answer (so a cache synced before a
+//     clean-up larger than what the repository keeps reads what is left,
+//     never every deletion);
+//   - REF DROPS, [PruneGrace] (14 days, git's own gc.pruneExpire): a forced
+//     update or a deletion records the object it moved its ref off
+//     (code_ref_drops, one row an object, its record's position and broker
+//     instant), because no ref names that object any more and dropping a
+//     repository's unreachable objects must keep what such a push left for
+//     the grace — history force-pushed away or deleted stays fetchable by
+//     its id. A push record forgets its repository's drops past the grace,
+//     oldest first by instant, with whatever its rows leave of
+//     [MaxRecordRows] once the tombstones have had theirs: as many as that,
+//     for the tombstones' own reason — a fixed share falls behind a
+//     repository that forces or deletes in bulk — and after them, since a
+//     drop forgotten late costs a row where a tombstone's room taken costs
+//     every git node a full read. The drops are the record's own rows, so
+//     the committer counts them in its bound: a forced update two rows, a
+//     deletion three;
 //   - A PURGE, in bounded parts: a repository deleted longer ago than its
 //     retention is removed [PurgePartRows] rows a record, its push rows only
 //     until their bytes reach [PurgePartBytes] ([Store.PurgeStep]), its
@@ -470,7 +489,7 @@
 //     duty's clock against the broker's is what the grace's margin past the
 //     longest read is for. A purge takes a repository's retired rows with
 //     the rest, whatever their grace, since no read begins on a deleted
-//     repository. Until its sweep a retirement is what a cache holding the
+//     repository — and its ref drops, whose objects go with its packs. Until its sweep a retirement is what a cache holding the
 //     pack learns it from: a snapshot serves it in a RETIRED phase — a delta
 //     every retirement above its floor, a full answer those above its
 //     caller's [StateQuery.RetiredSince] when it can serve every one — and
@@ -493,22 +512,36 @@
 // [HorizonDeletesPerRecord] expired push rows of the widest a row can be
 // (461 000 bytes) waiting — because the history's removal stops at
 // [HorizonBytesPerRecord], three of them, where a bound of rows alone removed
-// sixty-four (29 MB) and added 60–82 ms; 96–105 ms for the most deletions a
-// record the committer forms carries (1 965 in two pushes, each counted
-// twice in its bound) at a repository holding [MaxTombstonesPerRepo] expired
-// tombstones, which writes its 1 965 tombstones and sweeps the 2 029 its rows
-// leave — every row of MaxRecordRows touched — and 94–114 ms with the widest
-// expired push rows waiting as well, the longest shape a record the
-// committer forms has, under half of statelog.ApplyTxTimeBudget; 10–12 ms
-// for a group commit of [MaxPushesPerRecord] pushes of one command each,
-// which is 0.16–0.18 ms a push against 3.4–4.8 ms for one push alone — the
-// commit, not the rows, is a small record's cost, and group commit is what
-// pays it once; 53–61 ms for one small push whose record sweeps a whole row
-// budget of expired tombstones (3 995); and 65–69 ms for a record whose
-// deletions are REMOVALS — three pushes of [MaxCommandsPerPush] deletions at
-// a repository already holding [MaxTombstonesPerRepo] fresh tombstones, a
-// record no committer of this build forms, whose cost the applier bounds all
-// the same.
+// sixty-four (29 MB) and added 60–82 ms; 10–12 ms for a group commit of
+// [MaxPushesPerRecord] pushes of one command each, which is 0.16–0.18 ms a
+// push against 3.4–4.8 ms for one push alone — the commit, not the rows, is
+// a small record's cost, and group commit is what pays it once; and 53–61 ms
+// for one small push whose record sweeps a whole row budget of expired
+// tombstones (3 995).
+//
+// THE DELETIONS, since each records the object it left (code_ref_drops) and
+// the committer counts it three times in its bound — its tombstone, the
+// sweep's room for one and its drop — measured once more, on four E-cores of
+// a Core Ultra 7 265U while another session's builds held the other four
+// (one count of five iterations each, -benchtime 5x), where the sweep of
+// 3 995 tombstones above took 49 ms against the Xeon's 53–61: 65 ms for the
+// most deletions a record the committer forms carries (1 310 in two pushes)
+// at a repository holding [MaxTombstonesPerRepo] expired tombstones, which
+// writes its 1 310 tombstones and as many drops and sweeps the 1 374 its
+// rows leave — every row of MaxRecordRows touched, as the earlier shape of
+// 1 965 deletions counted twice did in 96–105 ms on the Xeon; 163 ms with the
+// widest expired push rows waiting as well, the longest shape a record the
+// committer forms has, under statelog.ApplyTxTimeBudget even in that run;
+// and 299 ms for a record whose deletions are REMOVALS — three pushes of
+// [MaxCommandsPerPush] deletions at a repository already holding
+// [MaxTombstonesPerRepo] fresh tombstones, which writes the 3 000 objects
+// they left as drops beside removing their refs — a record no committer of
+// this build forms, whose cost grows with what it carries, and which passes
+// statelog.ApplyTxTimeBudget as a record of that many deletions may (65–69 ms
+// on the Xeon before it wrote its drops). The last two are each one run
+// beside the other session's disk traffic, and the history's removal of
+// three widest push rows added nothing past the noise in the earlier
+// shape's arms, so they bound the shapes from above rather than state them.
 //
 // THE PUSH INDEX IN LOG ORDER (code_pushes_repo_idx reordered by replicated
 // 0056) moved none of it past the noise: interleaved with the build before
@@ -530,13 +563,15 @@
 // ten counts of five each on four vCPUs of a 2.8 GHz Xeon at a load average
 // of 1.3–2.1: the most ref creations a record carries went from 93–127 ms
 // (median 105) to 100–151 ms (median 125), about 5 µs a created ref; the
-// most deletions from 97–116 ms to 101–154 ms (median +6 ms); the removals
-// from 67–115 ms to 69–93 ms (median +9 ms); and the group, the one push and
-// the sweep of tombstones, which the index holds none of, moved nothing past
-// the noise (four counts). The slowest record measured with the index there,
-// 154 ms, is three fifths of statelog.ApplyTxTimeBudget — and the slowest
-// without it, 150 ms, as much: on that machine the history arms' spread is
-// the machine's, not the index's.
+// most deletions (the 1 965 a record carried before each wrote its drop)
+// from 97–116 ms to 101–154 ms (median +6 ms); the removals (before they
+// wrote theirs) from 67–115 ms to 69–93 ms (median +9 ms); and the group,
+// the one push and the sweep of tombstones, which the index holds none of,
+// moved nothing past the noise (four counts). The slowest record measured
+// with the index there, 154 ms, is three fifths of
+// statelog.ApplyTxTimeBudget — and the slowest without it, 150 ms, as much:
+// on that machine the history arms' spread is the machine's, not the
+// index's.
 //
 // A PURGE RECORD (BenchmarkApplyAPurgePart): 56–60 ms for a part of
 // [PurgePartRows] push rows of a kilobyte; 81–88 ms for a part over the

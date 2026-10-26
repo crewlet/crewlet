@@ -766,14 +766,16 @@ func TestAPurgeLeavesOnlyItsMarker(t *testing.T) {
 		rec(t, RepoSubject("repo-a"), OpDelete, Scope{RepoPath("repo-a")},
 			LifecycleRecord{RepoID: "repo-a", ConfigEpoch: 1}))
 	// A RETIRED PACK STILL INSIDE ITS GRACE goes with its repository: no read
-	// begins on a deleted one.
+	// begins on a deleted one. SO DOES A REF DROP inside its own: the packs
+	// whose objects it keeps go too.
 	e.seedRetired("repo-a", 3, applyClock.Add(-time.Hour), 2)
+	e.seedDrops("repo-a", 3, applyClock.Add(-time.Hour), 2)
 	purge := rec(t, RepoSubject("repo-a"), OpPurge,
 		Scope{NamePath(NameToken("a")), RepoPath("repo-a")},
 		Purge{RepoID: "repo-a", Name: "a", Reason: "past retention"})
 	e.apply(purge)
 	for _, table := range []string{"code_repos", "code_refs", "code_packs", "code_pushes", "code_protections",
-		"code_packs_retired"} {
+		"code_packs_retired", "code_ref_drops"} {
 		column := "repo_id"
 		if table == "code_repos" {
 			column = "id"

@@ -147,8 +147,8 @@ func (s *Store) repoName(ctx context.Context, id string) (string, bool, error) {
 
 // The purge's decide statements. remainingSQL is the tracker's BOUNDED COUNT:
 // the decide needs "more than PurgePartRows", never the total, so each table
-// a part deletes from — the pushes, the refs, the packs, the retired packs and
-// the changes' revisions, authors and rows — is counted at most
+// a part deletes from — the pushes, the refs, the packs, the retired packs, the
+// ref drops and the changes' revisions, authors and rows — is counted at most
 // PurgePartRows + 1 deep (?2, against the repository ?1), and beside them what
 // the push rows among them weigh, summed over the same depth from
 // code_pushes_repo_idx, which carries every row's width: past PurgePartRows
@@ -167,6 +167,7 @@ const (
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_refs WHERE repo_id = ?1 LIMIT ?2))
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_packs WHERE repo_id = ?1 LIMIT ?2))
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_packs_retired WHERE repo_id = ?1 LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_ref_drops WHERE repo_id = ?1 LIMIT ?2))
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes AS c INDEXED BY ` + changesNumberKey + `
 			CROSS JOIN code_revisions AS r WHERE c.repo_id = ?1 AND r.change_id = c.id LIMIT ?2))
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes AS c INDEXED BY ` + changesNumberKey + `

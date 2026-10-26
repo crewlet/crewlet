@@ -73,14 +73,14 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 			code.MaxRecordRows)
 	}
 	// A MAXIMAL PUSH OF DELETIONS FITS ONE RECORD'S ROWS with its sweep's
-	// room: a push row, its pack and its refs, an old tombstone swept for
-	// each deletion's new one, the repository's counters, the push history's
-	// share and the tombstone mark — or no push could delete a thousand refs
-	// at a repository holding its bound of tombstones without its record
-	// writing them as removals.
-	rows := 1 + 2*code.MaxCommandsPerPush + 1 + 1 + code.HorizonDeletesPerRecord + 1
+	// room: a push row, its pack and its refs, the object each deletion left,
+	// an old tombstone swept for each deletion's new one, the repository's
+	// counters, the push history's share and the tombstone mark — or no push
+	// could delete a thousand refs at a repository holding its bound of
+	// tombstones without its record writing them as removals.
+	rows := 1 + 3*code.MaxCommandsPerPush + 1 + 1 + code.HorizonDeletesPerRecord + 1
 	if rows > code.MaxRecordRows {
-		t.Errorf("a maximal push of deletions touches %d rows (1 + 2 × MaxCommandsPerPush %d + 1 + "+
+		t.Errorf("a maximal push of deletions touches %d rows (1 + 3 × MaxCommandsPerPush %d + 1 + "+
 			"1 + HorizonDeletesPerRecord %d + 1), past the %d budget (MaxRecordRows)", rows,
 			code.MaxCommandsPerPush, code.HorizonDeletesPerRecord, code.MaxRecordRows)
 	}
@@ -411,30 +411,54 @@ func TestTheBoundsFitTheRecordBudgets(t *testing.T) {
 		t.Errorf("three maximal entries fit MaxRecordBytes (%d of %d): the bound states two",
 			got, code.MaxRecordBytes)
 	}
-	// THREE MAXIMAL PUSHES SHARE A RECORD'S ROWS, AND FOUR DO NOT.
-	if rows := code.RowBound(maximal); rows != code.MaxCommandsPerPush+2 {
-		t.Errorf("a maximal push bounds %d rows, want MaxCommandsPerPush (%d) + its row + its pack",
-			rows, code.MaxCommandsPerPush)
+	// THE BYTE-MAXIMAL PUSH IS ONE OF FORCED UPDATES, counted two rows a
+	// command — its ref, and the object it left — so ONE shares a record's
+	// rows with nothing of its size.
+	if rows := code.RowBound(maximal); rows != 2*code.MaxCommandsPerPush+2 {
+		t.Errorf("a maximal push of forced updates bounds %d rows, want two a command (%d) + its row "+
+			"+ its pack", rows, 2*code.MaxCommandsPerPush)
 	}
-	if got := code.RecordRows(3 * code.RowBound(maximal)); got > code.MaxRecordRows {
-		t.Errorf("three maximal pushes bound %d rows with the record's own (RecordRows), past "+
-			"MaxRecordRows (%d)", got, code.MaxRecordRows)
+	if got := code.RecordRows(code.RowBound(maximal)); got > code.MaxRecordRows {
+		t.Errorf("a maximal push of forced updates bounds %d rows with the record's own (RecordRows), "+
+			"past MaxRecordRows (%d)", got, code.MaxRecordRows)
 	}
-	if got := code.RecordRows(4 * code.RowBound(maximal)); got <= code.MaxRecordRows {
-		t.Errorf("four maximal pushes bound %d rows, within MaxRecordRows (%d)", got, code.MaxRecordRows)
+	if got := code.RecordRows(2 * code.RowBound(maximal)); got <= code.MaxRecordRows {
+		t.Errorf("two maximal pushes of forced updates bound %d rows, within MaxRecordRows (%d)", got,
+			code.MaxRecordRows)
 	}
-	// A DELETION IS COUNTED TWICE — its ref, and the old tombstone the sweep
-	// may take for the new one — so ONE maximal push of deletions shares a
-	// record's rows with nothing of its size, and a record's sweep always has
-	// a row for every tombstone its deletions make.
+	// THREE MAXIMAL PUSHES OF FAST-FORWARD UPDATES SHARE A RECORD'S ROWS, AND
+	// FOUR DO NOT: one row a command, its ref, since a fast-forward leaves no
+	// object behind.
+	forward := maximal
+	forward.Commands = nil
+	for _, c := range maximal.Commands {
+		c.Forced = false
+		forward.Commands = append(forward.Commands, c)
+	}
+	if rows := code.RowBound(forward); rows != code.MaxCommandsPerPush+2 {
+		t.Errorf("a maximal push of fast-forward updates bounds %d rows, want MaxCommandsPerPush (%d) "+
+			"+ its row + its pack", rows, code.MaxCommandsPerPush)
+	}
+	if got := code.RecordRows(3 * code.RowBound(forward)); got > code.MaxRecordRows {
+		t.Errorf("three maximal pushes of fast-forward updates bound %d rows with the record's own "+
+			"(RecordRows), past MaxRecordRows (%d)", got, code.MaxRecordRows)
+	}
+	if got := code.RecordRows(4 * code.RowBound(forward)); got <= code.MaxRecordRows {
+		t.Errorf("four maximal pushes of fast-forward updates bound %d rows, within MaxRecordRows (%d)",
+			got, code.MaxRecordRows)
+	}
+	// A DELETION IS COUNTED THREE TIMES — its ref, the old tombstone the sweep
+	// may take for the new one, and the object it left — so ONE maximal push
+	// of deletions shares a record's rows with nothing of its size, and a
+	// record's sweep always has a row for every tombstone its deletions make.
 	deleting := maximal
 	deleting.Commands = nil
 	for _, c := range maximal.Commands {
 		deleting.Commands = append(deleting.Commands, code.Command{Ref: c.Ref, Old: c.Old, New: code.ZeroOID})
 	}
-	if rows := code.RowBound(deleting); rows != 2*code.MaxCommandsPerPush+2 {
-		t.Errorf("a maximal push of deletions bounds %d rows, want two a deletion (%d) + its row + "+
-			"its pack", rows, 2*code.MaxCommandsPerPush)
+	if rows := code.RowBound(deleting); rows != 3*code.MaxCommandsPerPush+2 {
+		t.Errorf("a maximal push of deletions bounds %d rows, want three a deletion (%d) + its row + "+
+			"its pack", rows, 3*code.MaxCommandsPerPush)
 	}
 	if got := code.RecordRows(code.RowBound(deleting)); got > code.MaxRecordRows {
 		t.Errorf("a maximal push of deletions bounds %d rows with the record's own, past "+

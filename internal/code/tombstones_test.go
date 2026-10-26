@@ -148,13 +148,14 @@ func TestTombstonesPastTheirBoundAreSweptOldestFirst(t *testing.T) {
 // the log holds, a newer build's records among it: records of three pushes
 // inside the horizon, each push deleting the 500 refs the previous record's
 // push made and making 500 more, make 1 500 tombstones a record against a
-// sweep of under a thousand rows (what MaxRecordRows leaves three such
-// pushes, whose deletions this build's committer counts twice, so it never
-// puts all three in one record). So once the count is at its bound, every such record
-// writes its deletions as REMOVALS — no row left — and raises the mark to its
-// own position, which answers a cache synced below it in full.
+// sweep of no rows at all (three such pushes write 4 507 rows, the objects
+// their deletions left among them, past MaxRecordRows — their deletions this
+// build's committer counts three times, so it never puts two such pushes in
+// one record). So every such record that would leave the count past its
+// bound writes its deletions as REMOVALS — no row left — and raises the mark
+// to its own position, which answers a cache synced below it in full.
 //
-// Mutation: drop the removal, and the count passes the bound at the second
+// Mutation: drop the removal, and the count passes the bound at the first
 // record by what the sweep could not take.
 func TestTheTombstoneCountNeverPassesItsBound(t *testing.T) {
 	t.Parallel()
@@ -223,22 +224,26 @@ func TestTheTombstoneCountNeverPassesItsBound(t *testing.T) {
 }
 
 // A RECORD THE COMMITTER FORMS NEVER REMOVES ITS OWN DELETIONS: the committer
-// counts every deletion a push carries twice in the record's rows — its ref
-// row, and the old tombstone its new one may need swept — so whatever the
-// tombstones hold, a record's sweep has room for every tombstone it makes, and
-// the removal is left to records no committer of this build forms. Removing
-// is what raises the mark to the record's own position, which sends every
-// cache synced before the record — every git node holding the repository —
-// to read it whole.
+// counts every deletion a push carries three times in the record's rows — its
+// ref row, the old tombstone its new one may need swept, and the object it
+// left (code.RowBound) — so whatever the tombstones hold, a record's sweep has
+// room for every tombstone it makes, and the removal is left to records no
+// committer of this build forms. Removing is what raises the mark to the
+// record's own position, which sends every cache synced before the record —
+// every git node holding the repository — to read it whole.
 //
-// Three pushes of MaxCommandsPerPush deletions, queued behind one in flight
-// at a repository holding MaxTombstonesPerRepo fresh tombstones: counted
-// once, they share one record of 3 004 rows whose sweep has 995 for 3 000 new
-// tombstones, and every deletion is a removal.
+// Three pushes of MaxCommandsPerPush deletions and two of 900 creations,
+// queued behind one in flight at a repository holding MaxTombstonesPerRepo
+// fresh tombstones: the last deletion push shares a record with the first
+// creation push, whose sweep has 1 096 rows for its 1 000 new tombstones.
+// Counted without the sweep's row, a deletion shares one with both creation
+// pushes, whose sweep has 195; counted without its drop's, the same; and
+// counted as its ref alone, the three deletion pushes and a creation push
+// share one record of 6 905 rows whose sweep has none.
 //
-// Mutation: count a deletion once in rowBound, and the three share a record
-// whose deletions are removals — no tombstone left for them, the mark at the
-// record's own position.
+// Mutation: count a deletion without the sweep's row, without its drop's, or
+// as its ref alone in rowBound, and a record's deletions are removals — no
+// tombstone left for them, the mark at the record's own position.
 func TestACommittedRecordNeverRemovesItsOwnDeletions(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -246,7 +251,7 @@ func TestACommittedRecordNeverRemovesItsOwnDeletions(t *testing.T) {
 	seeded := n.waiter.Committed()
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	n.storedAt = func(uint64, time.Time) time.Time { return now }
-	const pushes = 3
+	const pushes, creates, creating = 3, 900, 2
 	name := func(p, i int) string { return fmt.Sprintf("refs/heads/stale-%d-%04d", p, i) }
 	var stale []string
 	for p := range pushes {
@@ -262,14 +267,25 @@ func TestACommittedRecordNeverRemovesItsOwnDeletions(t *testing.T) {
 	lead := proposeAsync(t.Context(), c, proposal(repo, update("refs/heads/lead", code.ZeroOID, oidOf("L"))))
 	eventually(t, "the first publish reaching the gate", func() bool { return gate.calls.Load() == 1 })
 	var queued []<-chan answer
+	enqueue := func(cmds []code.Command) {
+		queued = append(queued, proposeAsync(t.Context(), c, proposal(repo, cmds...)))
+		want := len(queued)
+		eventually(t, "the proposal queued", func() bool { return code.CommitterQueued(c, repo) == want })
+	}
 	for p := range pushes {
 		var cmds []code.Command
 		for i := range code.MaxCommandsPerPush {
 			cmds = append(cmds, update(name(p, i), oidOf(name(p, i)), code.ZeroOID))
 		}
-		queued = append(queued, proposeAsync(t.Context(), c, proposal(repo, cmds...)))
-		want := p + 1
-		eventually(t, "the proposal queued", func() bool { return code.CommitterQueued(c, repo) == want })
+		enqueue(cmds)
+	}
+	for p := range creating {
+		var cmds []code.Command
+		for i := range creates {
+			ref := fmt.Sprintf("refs/heads/fresh-%d-%04d", p, i)
+			cmds = append(cmds, update(ref, code.ZeroOID, oidOf(ref)))
+		}
+		enqueue(cmds)
 	}
 	gate.open()
 	requireOK(t, await(t, lead))

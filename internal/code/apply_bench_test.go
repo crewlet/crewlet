@@ -214,18 +214,20 @@ func fullest(b *testing.B, prefix string, i int, command func(p, c int) Command)
 //   - sweep: one push of one command whose record sweeps every expired
 //     tombstone its row budget leaves room for — 3 995;
 //   - deletions: the most ref deletions a record the committer forms carries
-//     — a push of MaxCommandsPerPush and one of the 965 left, each deletion
-//     counted twice in the bound (rowBound) — at a repository holding
-//     MaxTombstonesPerRepo expired tombstones, so the record writes 1 965
-//     tombstones and sweeps the 2 029 its rows leave: the most rows a record
-//     can both write and delete;
+//     — a push of MaxCommandsPerPush and one of the 310 left, each deletion
+//     counted three times in the bound (rowBound: its tombstone, the sweep's
+//     room for one and the object it left) — at a repository holding
+//     MaxTombstonesPerRepo expired tombstones, so the record writes 1 310
+//     tombstones and as many ref drops and sweeps the 1 374 its rows leave:
+//     the most rows a record can both write and delete;
 //   - deletions+history: that, with the widest expired push rows waiting too
 //     — the longest shape a record the committer forms has;
 //   - removal: three pushes of MaxCommandsPerPush ref deletions at a
 //     repository already holding MaxTombstonesPerRepo fresh tombstones, so
-//     the record writes its deletions as removals — a record no committer of
-//     this build forms (it counts each deletion twice, and two such pushes
-//     never share a record), whose cost the applier still bounds.
+//     the record writes its deletions as removals and the objects they left
+//     as 3 000 ref drops — a record no committer of this build forms (it
+//     counts each deletion three times, and two such pushes never share a
+//     record), whose cost the applier still bounds.
 //
 // Each is held against statelog.ApplyTxTimeBudget (250 ms), which a record
 // is checked against only at its boundary; doc.go's measured section records
@@ -305,11 +307,12 @@ func BenchmarkApplyAPushRecord(b *testing.B) {
 		{"deletions+history", deleting, deletionsAt, true, MaxRecordRows},
 		// A RECORD THAT REMOVES: every ref it deletes at a repository already
 		// holding MaxTombstonesPerRepo fresh tombstones, which no sweep can
-		// take, so its 3 000 deletions are removals rather than rows.
+		// take, so its 3 000 deletions are removals rather than rows — each
+		// still writing the object it left.
 		{"removal", removing, func(e *estate, repo string) {
 			e.seed(repo, 0, 3*MaxCommandsPerPush, 0)
 			e.seedTombstones(repo, MaxTombstonesPerRepo, applyClock.Add(-time.Hour))
-		}, false, 3 * (1 + MaxCommandsPerPush + 1)},
+		}, false, 3 * (1 + 2*MaxCommandsPerPush + 1)},
 	} {
 		removal := shape.name == "removal"
 		b.Run(shape.name, func(b *testing.B) {

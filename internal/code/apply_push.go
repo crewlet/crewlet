@@ -15,7 +15,7 @@ import (
 // applyPush applies a batch of pushes to one repository: each entry IN ORDER,
 // a later entry seeing an earlier one's refs, inside the repository's
 // horizons — its expired push history removed before the refs are written,
-// its due tombstones after.
+// its due tombstones after, and its ref drops past their grace last.
 //
 // # Two reads for the whole record, never one per entry or per command
 //
@@ -38,8 +38,9 @@ import (
 // as those past their horizon, within what the record's row budget leaves it:
 // 3 995 rows behind a one-command push, and behind any record the committer
 // forms at least one for every deletion the record carries, since the
-// committer counts each deletion twice in a record's rows ([rowBound]) — and
-// none at all behind a record it filled to the row bound with creations,
+// committer keeps a row in a record's bound for the old tombstone each
+// deletion's new one may need swept ([commandRows]) — and none at all behind
+// a record it filled to the row bound with creations,
 // which makes no tombstone. A record that would leave the count further past
 // the bound than its sweep can take — a record no committer of this build
 // forms, a newer build's or one formed by hand — writes its deletions as
@@ -61,6 +62,35 @@ import (
 // detail read, on whichever node answers. Each counter moves by the difference
 // between every named ref's state before the record and after it, which is
 // exact however many entries moved the ref in between.
+//
+// # What a forced update or a deletion left is recorded
+//
+// Every command the record applies that moves its ref OFF an object — a
+// forced update or a deletion ([leavesObject]) — writes a code_ref_drops row:
+// the ref, the object it held (Old) and the record's position and broker
+// instant. No ref names that object any more, and the drops are how anything
+// dropping the repository's unreachable objects tells what such a push left,
+// which it keeps for [PruneGrace], from what nothing has reached for longer:
+// the refs no longer say, and the push history would be 181 days of rows to
+// read for it. A fast-forward leaves nothing — its old object is behind its
+// new one — and neither does a create. ONE RECORD MAY LEAVE SEVERAL OBJECTS ON
+// ONE REF, when its entries move the ref in turn, each seeing the one before:
+// every one is a row, keyed by the object as well, and an object one record
+// leaves twice is written once. The record's expiry removes its repository's
+// drops past the grace LAST, with whatever its budget still holds once the
+// tombstones have had theirs ([Applier.expireRefDrops]).
+//
+// THE PUSH RECORD'S FORMAT DOES NOT MOVE, under the code domain's stated
+// condition: no build carrying the code domain has run without these rows —
+// none of the domain is on main, so no image and no release holds it — and
+// no record carries anything new. Once a build without them has run, a push
+// record whose apply writes one is a record such a build would apply short
+// of its rows, and the push op takes two versionedFields rows, {Name:
+// "Command.Forced", Since: 2, Op: "push", Path: []string{"mutation",
+// "pushes", "commands", "forced"}} and {Name: "Command.New deleting", Since:
+// 2, Op: "push", Path: []string{"mutation", "pushes", "commands", "new"},
+// Equals: ZeroOID}, with RecordVersion at 2 — so the older build retains
+// such a record rather than apply it without its drops.
 //
 // # An applied push never applies twice
 //
@@ -99,6 +129,8 @@ func (a *Applier) applyPush(ctx context.Context, tx *sql.Tx, at applyContext, p 
 		final       = map[string]string{}
 		pushRows    []PushEntry
 		packRows    []PackRef
+		drops       []refDrop
+		dropped     = map[refDrop]bool{}
 		packBytes   int64
 		packObjects int64
 	)
@@ -110,6 +142,12 @@ func (a *Applier) applyPush(ctx context.Context, tx *sql.Tx, at applyContext, p 
 		for _, c := range e.Commands {
 			if c.Result != ResultOK {
 				continue
+			}
+			// IN THE RECORD'S ORDER, never a map's, so every node inserts
+			// the drops alike.
+			if d := (refDrop{ref: c.Ref, old: c.Old}); leavesObject(c) && !dropped[d] {
+				dropped[d] = true
+				drops = append(drops, d)
 			}
 			if c.New == ZeroOID {
 				final[c.Ref] = ""
@@ -134,7 +172,7 @@ func (a *Applier) applyPush(ctx context.Context, tx *sql.Tx, at applyContext, p 
 		refs = append(refs, ref)
 	}
 	slices.Sort(refs)
-	rows := len(refs) + len(packRows) + len(pushRows) + 1
+	rows := len(refs) + len(packRows) + len(pushRows) + len(drops) + 1
 
 	// THE PUSH HISTORY FIRST, before any ref is written: what it removes is
 	// rows of the record's budget the tombstones cannot have, and the
@@ -224,6 +262,18 @@ func (a *Applier) applyPush(ctx context.Context, tx *sql.Tx, at applyContext, p 
 		}); err != nil {
 		return 0, fmt.Errorf("code: write the pushes at %s: %w", at.position, err)
 	}
+	// THE CONFLICT IS A SKIP, never an abort, though no record this build
+	// applies meets one — every drop it writes is new at its own position —
+	// because an insert aborted on its primary key would stall the log on
+	// every node.
+	if _, err = store.InsertRows(ctx, tx, at.maxVariables,
+		`INSERT INTO code_ref_drops (repo_id, position, ref, old, at) VALUES `, `(?, ?, ?, ?, ?)`,
+		`ON CONFLICT (repo_id, position, ref, old) DO NOTHING`,
+		len(drops), func(i int) []any {
+			return []any{p.RepoID, at.packed, drops[i].ref, drops[i].old, at.at()}
+		}); err != nil {
+		return 0, fmt.Errorf("code: record the objects the push at %s left: %w", at.position, err)
+	}
 	// A REMOVAL RAISES THE MARK TO THE RECORD'S OWN POSITION, in the counters'
 	// own row: a delta from below it would miss the deletions it removed.
 	var mark int64
@@ -241,7 +291,72 @@ func (a *Applier) applyPush(ctx context.Context, tx *sql.Tx, at applyContext, p 
 	if err != nil {
 		return 0, err
 	}
-	return rows + expired + swept, nil
+	// THE DROPS LAST, with what the tombstones left: their mark's row too,
+	// where they swept nothing.
+	forgotten, err := a.expireRefDrops(ctx, tx, at, p.RepoID, MaxRecordRows-rows-expired-swept)
+	if err != nil {
+		return 0, err
+	}
+	return rows + expired + swept + forgotten, nil
+}
+
+// refDrop is one object a forced update or a deletion moved a ref off: one
+// code_ref_drops row of the record that applies it.
+type refDrop struct{ ref, old string }
+
+// leavesObject reports a command whose apply moves its ref off an object
+// that nothing the command writes reaches: a forced update, whose old
+// object is not behind its new one, or a deletion — never a create, which
+// moved its ref off nothing, nor a fast-forward, whose old object its new
+// one still reaches. A tag never moves (RefusalTagMoved), so it leaves an
+// object only by its deletion; a forced flag on a create, which no receiver
+// sets, leaves none.
+func leavesObject(c Command) bool {
+	return c.Old != ZeroOID && (c.Forced || c.New == ZeroOID)
+}
+
+// expireRefDrops removes, inside the record's own repository and within limit
+// rows, its ref drops older than PruneGrace by the record's broker instant —
+// oldest first, by instant and then by the key, the order
+// code_ref_drops_at_idx keeps — and answers how many it removed.
+//
+// # The drops take what the tombstones leave, and no fixed share
+//
+// A record's own drops are rows the committer counts in its bound
+// ([commandRows]); their removal past the grace is a horizon, which takes
+// only what the record's rows leave of MaxRecordRows — after the push
+// history's share and the tombstones, whose sweep must keep the room the
+// committer kept for a deletion's tombstone or a record it formed would
+// remove its deletions. So it has every row a record leaves when no
+// tombstone is due: 3 996 behind a one-command push, and behind a maximal
+// forced push, which makes a thousand drops, nearly two thousand, so a
+// repository force-pushing in bulk keeps pace. A fixed share would have
+// fallen behind it — MaxRecordRows/8, five hundred a record, against a
+// thousand drops a record for as long as such pushes come — as a fixed
+// share of the tombstones once did (HorizonDeletesPerRecord); and a share
+// bounds no lane time a full budget does not, since a record touches
+// MaxRecordRows at most either way, and deleting a drop moves two index
+// entries where the tombstones a sweep may take as many of move three.
+//
+// BY THE INSTANT, which the index orders by, so the read seeks the expired
+// rows and stops at the first inside the grace or at its limit, whatever
+// order a leader change stamped the records in — every node holds the same
+// rows and removes the same ones, never one inside the grace; and by the key
+// after it, so a removal cut at its limit cuts every node's rows at one row.
+// A record's own drops are never past the grace at its own instant.
+func (a *Applier) expireRefDrops(ctx context.Context, tx *sql.Tx, at applyContext, repoID string,
+	limit int) (int, error) {
+
+	if limit <= 0 {
+		return 0, nil
+	}
+	horizon := store.EncodeTime(at.brokerAt.Add(-PruneGrace))
+	res, err := tx.ExecContext(ctx, expireDropsSQL, repoID, horizon, limit)
+	if err != nil {
+		return 0, fmt.Errorf("code: remove %s's ref drops past their grace: %w", repoID, err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }
 
 // moves is what the record does to the repository's counts: every ref it
@@ -379,9 +494,10 @@ func (a *Applier) expirePushes(ctx context.Context, tx *sql.Tx, at applyContext,
 // # The tombstones take everything the record left
 //
 // A record adds at most MaxPushesPerRecord push rows, which a fixed share of
-// HorizonDeletesPerRecord keeps pace with. It can make nearly two thousand
+// HorizonDeletesPerRecord keeps pace with. It can make some thirteen hundred
 // TOMBSTONES behind a record this build's committer forms, every deletion
-// counted twice in its rows — and behind one formed otherwise, a newer
+// counted in its rows with a row kept for its sweep and one for the object it
+// left ([commandRows]) — and behind one formed otherwise, a newer
 // build's or one written by hand, as many as one append carries, since
 // nothing at the apply holds a record to this build's committer's bounds:
 // some sixty thousand deletions of short refs in the log's largest record
@@ -398,7 +514,10 @@ func (a *Applier) expirePushes(ctx context.Context, tx *sql.Tx, at applyContext,
 // one it filled to the row bound with creations. That is what makes the COUNT
 // exact with one backstop no record of this build's committer reaches: a
 // record whose excess is more than its limit writes its deletions as removals
-// instead ([Applier.applyPush]), so excess here never passes limit.
+// instead ([Applier.applyPush]), so excess here never passes limit. The ref
+// drops past their grace come after it, and take only what it leaves
+// ([Applier.expireRefDrops]): a drop forgotten late costs a row, and a
+// tombstone's sweep room taken costs every git node a full read.
 func (a *Applier) sweepTombstones(ctx context.Context, tx *sql.Tx, at applyContext, repoID string,
 	limit, excess int) (int, error) {
 
@@ -450,10 +569,10 @@ func (a *Applier) sweepTombstones(ctx context.Context, tx *sql.Tx, at applyConte
 
 // applyPurgePart deletes one bounded part of a deleted repository's rows, in a
 // fixed order — its pushes, then its refs, then its packs, then the packs a
-// record retired, then its changes, each whole: its revisions, its authors and
-// then its row ([purgeChanges]) — so every node deletes the same rows. THE PART
-// IS THE GUARD: only the row's purge_parts + 1 deletes anything, so a
-// redelivered or stale part deletes nothing more.
+// record retired, then its ref drops, then its changes, each whole: its
+// revisions, its authors and then its row ([purgeChanges]) — so every node
+// deletes the same rows. THE PART IS THE GUARD: only the row's purge_parts + 1
+// deletes anything, so a redelivered or stale part deletes nothing more.
 //
 // BOUNDED BY ROWS AND BY BYTES: at most PurgePartRows rows, and push rows
 // only until their row_bytes reach PurgePartBytes — a push row is the
@@ -466,7 +585,9 @@ func (a *Applier) sweepTombstones(ctx context.Context, tx *sql.Tx, at applyConte
 // begins on a deleted repository — it is refused to every new one from its
 // deletion, and code.deleted_retention_days, a day at least, outlasts the
 // reads that had begun. Its object is then named by nothing, and the
-// collector takes it as it takes the repository's live packs'.
+// collector takes it as it takes the repository's live packs'. SO DOES A REF
+// DROP, its grace or not: it keeps an object of the repository's own packs
+// reachable, and those packs go with it.
 func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContext, p PurgePart) (int, error) {
 	var parts int
 	if err := tx.QueryRowContext(ctx, purgePartsSQL, p.RepoID).Scan(&parts); err != nil {
@@ -593,6 +714,15 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 		budget -= int(n)
 	}
 	if budget > 0 {
+		res, err := tx.ExecContext(ctx, purgeDropsSQL, p.RepoID, budget)
+		if err != nil {
+			return 0, fmt.Errorf("code: purge %s's ref drops: %w", p.RepoID, err)
+		}
+		n, _ := res.RowsAffected()
+		deleted += int(n)
+		budget -= int(n)
+	}
+	if budget > 0 {
 		n, err := purgeChanges(ctx, tx, p.RepoID, budget)
 		if err != nil {
 			return 0, err
@@ -612,8 +742,8 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 // redelivery of the marker's own record, which its gate lets through by op id,
 // deletes nothing and inserts nothing. Unbounded statements are safe because
 // the decide forms a purge only once at most PurgePartRows of the
-// repository's pushes, refs, packs, retired packs and changes' revisions,
-// authors and rows remain AND the pushes among them weigh at most
+// repository's pushes, refs, packs, retired packs, ref drops and changes'
+// revisions, authors and rows remain AND the pushes among them weigh at most
 // PurgePartBytes — a part's own bounds — and it holds at most
 // MaxProtectionsPerRepo rules: with the name claim, the row and the marker
 // that is PurgePartRows + MaxProtectionsPerRepo + 3 rows, which the limits
@@ -622,7 +752,7 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p Purge) (int, error) {
 	deleted := 0
 	for _, stmt := range []string{
-		purgeAllPushesSQL, purgeAllRefsSQL, purgeAllPacksSQL, purgeAllRetiredSQL,
+		purgeAllPushesSQL, purgeAllRefsSQL, purgeAllPacksSQL, purgeAllRetiredSQL, purgeAllDropsSQL,
 		purgeAllRevisionsSQL, purgeAllAuthorsSQL, purgeAllChangesSQL, clearProtectionsSQL,
 	} {
 		res, err := tx.ExecContext(ctx, stmt, p.RepoID)
@@ -782,6 +912,12 @@ const (
 		WHERE r.repo_id = ?1 AND r.ref = CAST(j.value AS TEXT))`
 	sweptTombstonesSQL = `UPDATE code_repos SET tombstones_through = MAX(tombstones_through, ?),
 		tombstones = tombstones - ? WHERE id = ?`
+	// expireDropsSQL is the drops' expiry: the rowid idiom over the
+	// instant's order, so the rows are the oldest the index reaches, cut at
+	// the record's budget at one row on every node.
+	expireDropsSQL = `DELETE FROM code_ref_drops WHERE rowid IN (SELECT rowid
+		FROM code_ref_drops INDEXED BY code_ref_drops_at_idx
+		WHERE repo_id = ? AND at < ? ORDER BY at, position, ref, old LIMIT ?)`
 	purgePartsSQL  = `SELECT purge_parts FROM code_repos WHERE id = ?`
 	purgePushesSQL = `SELECT push_id, row_bytes FROM code_pushes WHERE repo_id = ?
 		ORDER BY position, push_id LIMIT ?`
@@ -796,6 +932,11 @@ const (
 	purgeRetiredSQL = `DELETE FROM code_packs_retired WHERE rowid IN (SELECT rowid
 		FROM code_packs_retired INDEXED BY code_packs_retired_repo_idx WHERE repo_id = ?
 		ORDER BY retired_position, pack_id, part LIMIT ?)`
+	// purgeDropsSQL is a part's ref drops, oldest first and no more than the
+	// part has left — the expiry's own order.
+	purgeDropsSQL = `DELETE FROM code_ref_drops WHERE rowid IN (SELECT rowid
+		FROM code_ref_drops INDEXED BY code_ref_drops_at_idx WHERE repo_id = ?
+		ORDER BY at, position, ref, old LIMIT ?)`
 	purgeCountersSQL = `UPDATE code_repos SET status = 'purging', purge_parts = ?, refs = refs - ?,
 		branches = branches - ?, tags = tags - ?, tombstones = tombstones - ?,
 		live_packs = live_packs - ?, live_bytes = live_bytes - ?, live_objects = live_objects - ?,
@@ -806,8 +947,9 @@ const (
 	purgeAllPacksSQL   = `DELETE FROM code_packs WHERE repo_id = ?`
 	purgeAllRetiredSQL = `DELETE FROM code_packs_retired INDEXED BY code_packs_retired_repo_idx
 		WHERE repo_id = ?`
-	removeRepoSQL = `DELETE FROM code_repos WHERE id = ?`
-	markSQL       = `INSERT INTO code_deletions
+	purgeAllDropsSQL = `DELETE FROM code_ref_drops INDEXED BY code_ref_drops_at_idx WHERE repo_id = ?`
+	removeRepoSQL    = `DELETE FROM code_repos WHERE id = ?`
+	markSQL          = `INSERT INTO code_deletions
 			(repo_id, name, at, by, reason, purge_record_id, rejects, last_reject_at, version)
 		VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?)
 		ON CONFLICT (repo_id) DO NOTHING`

@@ -21,18 +21,19 @@ import (
 // only thing that knows whether the statement reaches the index. So this runs
 // EXPLAIN QUERY PLAN over every statement the package issues against its
 // tables — the guards, the applier's reads and writes (the tombstones a push
-// sweeps, oldest first, among them, and the fences it reads: an eviction's,
-// the activation's), the lifecycle store's decides, the push decide's reads,
-// the reader's pages in their first and keyset forms — a snapshot's retired
-// phase among them — and its bounded counts, the purge's bounded count and
-// its statements over a repository's changes, a sweep's decide, apply and
-// listing over the retired packs, the trim's listing of who was evicted from
-// the log, and every statement the object store builds over code_packs and
-// code_packs_retired ([planShapes]) — and holds each to the EXACT seek it
-// names: the index and every column of it the statement bounds. Seeking an
-// index is not enough — a lookup of one ref that sought repo_id alone read
-// every ref its repository holds (planner.go). The statements are the
-// package's own constants: there is no copy here to drift from what runs, and
+// sweeps and the ref drops it forgets past their grace, each oldest first,
+// among them, and the fences it reads: an eviction's, the activation's), the
+// lifecycle store's decides, the push decide's reads, the reader's pages in
+// their first and keyset forms — a snapshot's retired phase among them — and
+// its bounded counts, the purge's bounded count, its parts and its statements
+// over a repository's changes, a sweep's decide, apply and listing over the
+// retired packs, the trim's listing of who was evicted from the log, and every
+// statement the object store builds over code_packs and code_packs_retired
+// ([planShapes]) — and holds each to the EXACT seek it names: the index and
+// every column of it the statement bounds. Seeking an index is not enough — a
+// lookup of one ref that sought repo_id alone read every ref its repository
+// holds (planner.go). The statements are the package's own constants: there
+// is no copy here to drift from what runs, and
 // TestEveryCodeReadSeeksANamedIndex holds the set to the package's source and
 // refuses a plan that reads any table by a scan, so this holds only what that
 // one cannot — which index, which columns, in which order. An index no
@@ -58,7 +59,9 @@ import (
 // out of code_pushes_repo_idx's key, and it sorts every push of the
 // repository; order the purge's walk of a repository's changes by `c.number,
 // r.n` and it sorts every revision the repository holds; write a claim's live
-// states in another order and it seeks code_changes_state_idx.
+// states in another order and it seeks code_changes_state_idx; drop `old` from
+// code_ref_drops_at_idx's key and the drops' expiry and a purge part sort what
+// they seek rather than read it in order.
 func TestEveryCodeIndexServesARegisteredQuery(t *testing.T) {
 	t.Parallel()
 	db := seededPlanEstate(t)
@@ -284,6 +287,7 @@ const (
 	revisionKey   = "sqlite_autoindex_code_revisions_1"
 	activationKey = "sqlite_autoindex_code_activation_1"
 	evictionKey   = "sqlite_autoindex_code_evictions_1"
+	dropsKey      = "sqlite_autoindex_code_ref_drops_1"
 )
 
 // registeredStatements is every statement this package spells against its
@@ -332,7 +336,7 @@ func registeredStatements() map[string]statement {
 		"purge all packs":     {purgeAllPacksSQL, []any{"repo-1"}, []string{packsKey + " (repo_id=?)"}},
 		"remove repo":         {removeRepoSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"repo name":           {repoNameSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
-		"remaining":           {remainingSQL, []any{"repo-1", PurgePartRows + 1}, []string{"COVERING INDEX code_pushes_repo_idx (repo_id=?)", refsKey + " (repo_id=?)", packsKey + " (repo_id=?)", retiredKey + " (repo_id=?)", changesNumberKey + " (repo_id=?)", revisionKey + " (change_id=?)", authorKey + " (change_id=?)"}},
+		"remaining":           {remainingSQL, []any{"repo-1", PurgePartRows + 1}, []string{"COVERING INDEX code_pushes_repo_idx (repo_id=?)", refsKey + " (repo_id=?)", packsKey + " (repo_id=?)", retiredKey + " (repo_id=?)", dropsKey + " (repo_id=?)", changesNumberKey + " (repo_id=?)", revisionKey + " (change_id=?)", authorKey + " (change_id=?)"}},
 		"claim":               {claimSQL, []any{"token"}, []string{nameKey + " (token=?)"}},
 		"claims":              {claimsSQL, []any{`["token","other"]`}, []string{nameKey + " (token=?)"}},
 		"repos rows":          {reposRowsSQL, []any{`["repo-1","repo-2"]`}, []string{repoKey + " (id=?)"}},
@@ -381,6 +385,11 @@ func registeredStatements() map[string]statement {
 		"retired due":       {retiredDueSQL, []any{15, -1, -1, "", retentionPage}, []string{"code_packs_retired_due_idx (retired_at>=? AND retired_at<=?)"}},
 		"purge retired":     {purgeRetiredSQL, []any{"repo-1", PurgePartRows}, []string{retiredRepoIdx + " (repo_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"purge all retired": {purgeAllRetiredSQL, []any{"repo-1"}, []string{retiredRepoIdx + " (repo_id=?)"}},
+		// THE DROPS' EXPIRY AT ITS LARGEST LIMIT, a whole record's budget,
+		// past a horizon half the seeded drops are older than.
+		"expire drops":    {expireDropsSQL, []any{"repo-1", 100, MaxRecordRows}, []string{dropsAtIdx + " (repo_id=? AND at<?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"purge drops":     {purgeDropsSQL, []any{"repo-1", PurgePartRows}, []string{dropsAtIdx + " (repo_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"purge all drops": {purgeAllDropsSQL, []any{"repo-1"}, []string{dropsAtIdx + " (repo_id=?)"}},
 		// A PURGE'S CHANGES: the walk in number order, each change's
 		// dependents counted by its key; the whole changes' rows by the list
 		// of their ids; the cut change's in its key's order; and the final
@@ -531,9 +540,14 @@ func claimName(index string) string { return "the read claimed for " + index }
 // names, so a sweep and a purge remove them alike on every node.
 const retiredRepoIdx = "code_packs_retired_repo_idx"
 
+// dropsAtIdx is code_ref_drops_at_idx, (repo_id, at, position, ref, old): the
+// order every statement over a repository's ref drops names, so an expiry and
+// a purge remove them alike on every node.
+const dropsAtIdx = "code_ref_drops_at_idx"
+
 // seededPlanEstate is an estate holding five repositories of 500 refs, 50
-// packs, 200 pushes, 200 retired packs and 50 changes each, with no statistics
-// gathered — the state every node's estate is in.
+// packs, 200 pushes, 200 retired packs, 200 ref drops and 50 changes each,
+// with no statistics gathered — the state every node's estate is in.
 func seededPlanEstate(t *testing.T) store.ReplicatedHandle {
 	t.Helper()
 	node, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
@@ -600,6 +614,17 @@ func seededPlanEstate(t *testing.T) store.ReplicatedHandle {
 				func(i int) []any {
 					return []any{id, fmt.Sprintf("retired-%06d", i),
 						fmt.Sprintf("%s-retired-object-%06d", id, i), i, 1000 + i/10, i / 10}
+				}); err != nil {
+				return err
+			}
+			// TWO HUNDRED REF DROPS ACROSS FORTY RECORDS, each record's
+			// sharing its position and its instant, as a record's drops do.
+			if _, err := store.InsertRows(ctx, tx, vars,
+				`INSERT INTO code_ref_drops (repo_id, position, ref, old, at) VALUES `,
+				`(?, ?, ?, ?, ?)`, ``, 200,
+				func(i int) []any {
+					return []any{id, 2000 + i/5, fmt.Sprintf("refs/heads/r%06d", i), fmt.Sprintf("%040d", i),
+						(i / 5) * 5}
 				}); err != nil {
 				return err
 			}

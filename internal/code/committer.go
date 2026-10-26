@@ -709,19 +709,16 @@ func (c *Committer) commit(repoID string, batch []*queued) {
 // withinRecord refuses a decision past a record's bytes or rows, which the
 // batching keeps from ever forming — the check makes the invariant the
 // record's own rather than the batcher's. Rows are counted as [rowBound]
-// counts them, a deletion twice: its ref, and the sweep's room for the
-// tombstone it makes.
+// counts them, each command that applies by [commandRows]: its ref, the
+// object a forced update or a deletion left, and the sweep's room for the
+// tombstone a deletion makes.
 func withinRecord(d statelog.Decision, entries []PushEntry) error {
 	rows := 0
 	for _, e := range entries {
 		rows++
 		for _, c := range e.Commands {
-			switch {
-			case c.Result != ResultOK:
-			case c.New == ZeroOID:
-				rows += 2
-			default:
-				rows++
+			if c.Result == ResultOK {
+				rows += commandRows(c)
 			}
 		}
 		if e.Pack != nil {

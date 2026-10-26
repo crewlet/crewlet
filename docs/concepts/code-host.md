@@ -57,6 +57,11 @@ This is the product's current shape, not a configuration choice:
   stands in front of one.
 - **Nothing compacts a repository.** Every push adds one pack, and a
   repository's packs are only ever removed with the repository.
+- **Nothing drops an object a push stored.** A force-push or a deletion
+  leaves the history behind it in the repository's packs, fetchable by its
+  id, for as long as the repository lives. The object each such push left is
+  recorded for two weeks ([ref drops](#retention-and-history)): the grace
+  that history keeps once a repository's unreachable objects can be dropped.
 
 ---
 
@@ -410,7 +415,7 @@ Three tables hold a change, on every data node:
 
 ## Retention and history
 
-Three horizons, each kept by the record that applies it inside its own
+Four horizons, each kept by the record that applies it inside its own
 repository, never by a sweep:
 
 - **Push history** — a push row is kept **181 days**, the same horizon as the
@@ -435,6 +440,18 @@ repository, never by a sweep:
   oldest. A node last brought up to date before a forgotten deletion reads
   the repository whole: it re-reads the refs and keeps every pack it holds,
   and downloads nothing again.
+- **Ref drops** — a push that force-moves a branch, or deletes a branch or a
+  tag, records the object the ref held, since no ref names it any more: one
+  row an object, naming the ref, the object and when the push landed. It is
+  kept **14 days**, git's own `gc.pruneExpire` default, because dropping a
+  repository's unreachable objects keeps what such a push left for that
+  long: history force-pushed away or deleted stays fetchable by its id for
+  two weeks after the push. The repository's next push after that forgets
+  the row, with whatever room forgetting its tombstones leaves its record. A
+  fast-forward or a create leaves nothing behind and records nothing. The
+  committer counts these rows in the record it forms, so a record holds one
+  push of a thousand forced updates or deletions where it holds three of a
+  thousand fast-forwards.
 - **A purge** — below.
 
 A pack a compaction retires is kept a day as a retired row, which the
@@ -460,7 +477,8 @@ the log can replay), the fleet-singleton `code-retention` duty purges it (see
   purge has no undo — then purges the repositories deleted longest ago first;
 - each purge is a sequence of bounded **steps**, each one record removing a
   bounded part of the repository's rows — its push history, its refs, its
-  packs and the ones a compaction retired, then its [changes](#changes), each
+  packs and the ones a compaction retired, its
+  [ref drops](#retention-and-history), then its [changes](#changes), each
   whole: a change's revisions and authors, then its row — and the last leaves
   only a **deletion marker**, which drops every later record about the
   repository on every node, for ever

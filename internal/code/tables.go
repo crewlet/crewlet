@@ -27,6 +27,12 @@ var ReproducibleTables = []string{
 	// rebuilds like any other.
 	"code_packs_retired",
 
+	// The objects a forced update or a deletion moved a ref off, each kept
+	// until a push record of its repository forgets it past PruneGrace or a
+	// purge removes it with the rest — written only by the records that do
+	// those, so a replay rebuilds them too.
+	"code_ref_drops",
+
 	// A repository's changes, each with who wrote it and every revision of
 	// its head — written by the records on the repository's own subject,
 	// like its refs, and removed with the repository, a change's revisions
