@@ -261,6 +261,55 @@ describe("a turn's stream", () => {
     expect(again.stops).toEqual([]);
   });
 
+  // A PARKED TURN REOPENED AT ITS LAST FRAME: the engine answers 204, the
+  // event-stream answer that says nothing follows. Mutation: read the 204 as
+  // an unreadable answer (or an empty stream) and it is dialled again.
+  test("a 204 ends the stream, and nothing is dialled again", async () => {
+    const sent = serve(() => new Response(null, { status: 204 }));
+    const w = watch(URL_, "3db96f52-a891-5953-9735-0ae522cf6347.21");
+    await w.ended;
+    expect(sent).toHaveLength(1);
+    expect(w.stops).toEqual([]);
+    expect(w.states).toEqual(["connecting", "closed"]);
+  });
+
+  // ANSWERED IS NOT PROGRESS: a connection the engine answers and closes with
+  // nothing new is the same outage, so the backoff grows and the outage keeps
+  // the instant it began (which is what the drawer's "Try again" measures).
+  // Mutation: reset the backoff on the status line, and every dial comes at
+  // the first step, as the drawer's loop of 22 requests a minute did.
+  test("connections answered with nothing back off as one outage", async () => {
+    const at: number[] = [];
+    const empty = () => {
+      at.push(Date.now());
+      return sse(body([]));
+    };
+    serve(empty, empty, empty, empty, () => sse(body(FIRST)));
+    const since: (number | null)[] = [];
+    let closed!: () => void;
+    const ended = new Promise<void>((resolve) => {
+      closed = resolve;
+    });
+    openTurnStream(
+      URL_,
+      {
+        frame: () => {},
+        state: (state, outage) => {
+          if (state === "reconnecting") since.push(outage);
+          if (state === "closed") closed();
+        },
+        stop: () => {},
+      },
+      { backoffMs: 20, maxBackoffMs: 1_000 },
+    );
+    await ended;
+    const gaps = at.slice(1).map((t, i) => t - at[i]!);
+    expect(gaps[1]!).toBeGreaterThan(gaps[0]!);
+    expect(gaps[2]!).toBeGreaterThan(gaps[1]!);
+    expect(new Set(since).size).toBe(1);
+    expect(since[0]).not.toBeNull();
+  });
+
   test("closing it ends the read and dials nothing more", async () => {
     const sent = serve(() => sse(body(FIRST.slice(0, 1), "hang")));
     const w = watch(URL_);
