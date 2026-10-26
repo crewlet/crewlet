@@ -15,6 +15,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
+import { relTime } from "~/lib/format.ts";
 import { repoRoot } from "~/test/engineFiles.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -376,4 +377,84 @@ test("an empty conversation opened from the history offers no Clear", async () =
   });
   await screen.findByText("Your recent conversations");
   expect(screen.queryByText("Clear this conversation")).toBeNull();
+});
+
+// THE OPEN CONVERSATION CARRIES THE HISTORY'S CHECK, every other listed one
+// says it is not the current one, and Clear stays an action after the
+// separator rather than an answer of the choice. Each is shown at the moment
+// the list is ordered by (last_activity_at), never the record's updated_at,
+// which a new title moves too. Mutation: drop `checked` from the listed
+// entries, or show `updated_at`, and this fails.
+test("the history marks the open conversation and shows when each was last used", async () => {
+  const OPEN_ID = "6c1d8b63-52b5-4a1f-8e1f-3c9a2d4f0b21";
+  const OTHER_ID = "7d2e9c74-63c6-4b2a-9f2a-4dab3e5a1c32";
+  const now = Date.now();
+  const at = (minutesAgo: number) => new Date(now - minutesAgo * 60_000).toISOString();
+  const open = {
+    id: OPEN_ID,
+    title: "Payroll",
+    created_at: at(90),
+    // RETITLED JUST NOW, used three hours ago: the menu shows the use.
+    updated_at: at(0),
+    last_activity_at: at(180),
+  };
+  const other = {
+    id: OTHER_ID,
+    title: "Hiring plan",
+    created_at: at(30),
+    updated_at: at(5),
+    last_activity_at: at(5),
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      const path = new URL(url).pathname;
+      if (path === "/assistant/conversations") return json({ conversations: [other, open] });
+      if (path === `/assistant/conversations/${OPEN_ID}`) {
+        return json({
+          conversation: open,
+          messages: [
+            {
+              id: "q1",
+              turn_id: "t1",
+              role: "user",
+              text: "What did payroll cost?",
+              created_at: open.last_activity_at,
+            },
+          ],
+          steps: [],
+          cards: [],
+          open_turn: null,
+          audit_reads: [],
+          turns: [],
+        });
+      }
+      return json({ error: "not_found" }, 404);
+    }),
+  );
+  mount();
+  const history = screen.getByRole("button", { name: "Conversations" });
+  await act(async () => {
+    fireEvent.click(history);
+  });
+  // BEFORE ONE IS OPEN, none is checked.
+  const before = await screen.findAllByRole("menuitemradio");
+  expect(before.map((item) => item.getAttribute("aria-checked"))).toEqual(["false", "false"]);
+  await act(async () => {
+    fireEvent.click(screen.getByText("Payroll"));
+  });
+  await waitFor(() => expect(conversation().id).toBe(OPEN_ID));
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Conversations" }));
+  });
+  await screen.findByText("Your recent conversations");
+  const answers = screen.getAllByRole("menuitemradio");
+  expect(answers.map((item) => [item.textContent, item.getAttribute("aria-checked")])).toEqual([
+    [expect.stringContaining("Hiring plan"), "false"],
+    [expect.stringContaining("Payroll"), "true"],
+  ]);
+  expect(answers[1]!.textContent).toContain(relTime(open.last_activity_at, now));
+  expect(answers[1]!.textContent).not.toContain(relTime(open.updated_at, now));
+  const clear = screen.getByRole("menuitem", { name: /Clear this conversation/ });
+  expect(clear.closest("[role='group']")).toBeNull();
 });

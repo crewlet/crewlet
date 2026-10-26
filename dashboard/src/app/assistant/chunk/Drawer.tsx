@@ -354,11 +354,15 @@ export function Drawer({
     announce(`${crumb} added to this question`);
   };
 
+  // THE LISTED CONVERSATIONS ARE ONE CHOICE whose answer is the one open
+  // now: each says whether it is, so the open one carries the menu's check
+  // and a screen reader hears which of them is current.
   const listed = (recents ?? []).map((r): MenuEntry => ({
     key: r.id,
     label: r.title || "Untitled conversation",
     icon: <MessageSquareGlyph size="sm" />,
     hint: relTime(r.last_activity_at, now),
+    checked: r.id === view.id,
     onSelect: () => void openConversation(r.id),
   }));
   // CLEAR IS OFFERED ONLY FOR A CONVERSATION WITH SOMETHING IN IT: an empty
