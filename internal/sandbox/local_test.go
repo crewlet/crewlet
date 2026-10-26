@@ -1424,31 +1424,30 @@ func TestTheContainerMapsInBoxPathsOntoItsSideOfTheMount(t *testing.T) {
 	// also holds the engine's records about the box.
 	home := box.layout.home()
 
-	want := filepath.Join(home, "workspace", "notes.md")
-	resolved, _ := filepath.EvalSymlinks(root)
-	notes := func(got string) bool {
-		return got == want || got == filepath.Join(resolved, "home", "workspace", "notes.md")
-	}
-	got, err := box.hostPath(DefaultHome + "/workspace/notes.md")
+	// NAMED IN THE HOME, which every access opens as a root and reaches the
+	// file through ([boxLayout.openHome]).
+	want := filepath.Join("workspace", "notes.md")
+	notes := func(got string) bool { return got == want }
+	got, err := box.homeRel(DefaultHome + "/workspace/notes.md")
 	if err != nil {
-		t.Fatalf("hostPath: %v", err)
+		t.Fatalf("homeRel: %v", err)
 	}
-	if !notes(got) {
-		t.Fatalf("hostPath = %q, want %q", got, want)
+	if !notes(got) || filepath.Join(home, got) != filepath.Join(home, "workspace", "notes.md") {
+		t.Fatalf("homeRel = %q, want %q", got, want)
 	}
 	// The mount compared as a path rather than as a prefix of one: a doubled
 	// separator and a climb that comes back are both still under it, and so is
 	// a tilde, which is the home in every cell.
 	for _, path := range []string{DefaultHome + "//workspace/notes.md", DefaultHome + "/../user/workspace/notes.md",
 		"~/workspace/notes.md"} {
-		if got, err := box.hostPath(path); err != nil || !notes(got) {
-			t.Errorf("hostPath(%q) = %q, %v; want %q", path, got, err, want)
+		if got, err := box.homeRel(path); err != nil || !notes(got) {
+			t.Errorf("homeRel(%q) = %q, %v; want %q", path, got, err, want)
 		}
 	}
 	// The home itself is no file in the box, which is how a direct box has
 	// always read it ([hostbox.SafeJoin] refuses a root).
-	if got, err := box.hostPath(DefaultHome); err == nil {
-		t.Fatalf("hostPath(home) = %q; want a refusal: the home is no file in the box", got)
+	if got, err := box.homeRel(DefaultHome); err == nil {
+		t.Fatalf("homeRel(home) = %q; want a refusal: the home is no file in the box", got)
 	}
 }
 
@@ -1462,8 +1461,8 @@ func TestTheContainerRefusesAPathThatResolvesOffTheMount(t *testing.T) {
 		"/etc/passwd",
 		"/usr/local/bin/tool",
 	} {
-		if _, err := box.hostPath(path); err == nil {
-			t.Fatalf("hostPath(%q) succeeded — it would write to the engine host", path)
+		if _, err := box.homeRel(path); err == nil {
+			t.Fatalf("homeRel(%q) succeeded — it would write to the engine host", path)
 		}
 	}
 }

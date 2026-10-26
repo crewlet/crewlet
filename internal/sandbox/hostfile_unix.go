@@ -6,13 +6,16 @@ import (
 	"errors"
 	"io/fs"
 	"os"
-	"syscall"
+	"path/filepath"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/crewlet/crewlet/internal/hostbox"
 )
 
-// openHostRegular opens a file a local box holds, for reading — and only a
-// REGULAR FILE, as it lies.
+// openRegularIn opens name beneath root — a directory of a local box, opened
+// as an os.Root ([boxLayout.openHome], [boxLayout.openRecords]) — for reading,
+// and only a REGULAR FILE, as it lies.
 //
 // THE OTHER SIDE OF THE MOUNT IS NOT THE ENGINE'S. A container box's home is
 // written by the agent inside it, which can run any command, and the engine
@@ -29,91 +32,110 @@ import (
 // file, which is the reading of a run that has not written it yet. The flag
 // is cleared again for the read, so a regular file reads as it always did.
 //
-// NOT THROUGH A LINK, EITHER. The path arrives resolved by the escape check,
-// which follows every link in it that leads somewhere, so a link still at its
-// last element when it is opened is one of two things: a link that leads
-// nowhere (the check resolves a missing last element to itself), or one put
-// there since by the side of the mount that does not have to stay inside it.
-// O_NOFOLLOW refuses both rather than following either out of the box, and
-// both are refused as what they are — a link — rather than read as a file
-// not written yet, which a dangling link had been while the open followed it.
+// EVERY DIRECTORY ON THE WAY IS WALKED THROUGH THE ROOT, one component at a
+// time, so none of them — a link the box put in place of one, whenever it put
+// it there — leads the open outside the box: the root follows a link only to
+// somewhere beneath itself, and refuses the rest ([os.Root]). A path checked
+// and then opened by name was two walks of whatever the names held at each
+// moment, and the box's side writes the names.
+//
+// AND NOT THROUGH A LINK AT THE LAST ELEMENT, not even one inside the box:
+// the file is opened in the directory the root reached with O_NOFOLLOW, so a
+// link there is refused as what it is — a link — rather than followed, or read
+// as a file not written yet, which a dangling link had been while the open
+// followed it.
 //
 // A path that is not there answers [fs.ErrNotExist] through the error, which
 // is what the callers read as "not written yet".
-func openHostRegular(target string) (*os.File, error) {
-	return openHostFileAs(target, syscall.O_RDONLY, false)
+func openRegularIn(root *os.Root, name string) (*os.File, error) {
+	return openInAs(root, name, unix.O_RDONLY, false)
 }
 
-// openHostWritable opens a file a local box holds for WRITING it whole —
-// created where nothing is, emptied where a regular file is — under the same
-// rule as [openHostRegular], for the same reason.
+// openWritableIn opens name beneath root for WRITING it whole — created where
+// nothing is, emptied where a regular file is — under the same rule as
+// [openRegularIn], for the same reason.
 //
 // The engine writes into a box after something has run in it: a shim and a
 // coding CLI's configuration after the setup steps' commands, which run
 // whatever a checkout's install scripts say, and a follow-up run's
 // configuration into a box a coding agent has had to itself. A plain
 // os.WriteFile there followed a link at the last element — one that leads
-// nowhere passes the escape check as itself, so the write CREATED a file
-// wherever the link pointed on the engine host — and an open of a named pipe
-// for writing waited for a reader for good, wedging the launch. So the open
-// is non-blocking and follows no link, and anything but a regular file is
-// refused before a byte is written.
-func openHostWritable(target string) (*os.File, error) {
-	return openHostFileAs(target, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_TRUNC, true)
+// nowhere, so the write CREATED a file wherever the link pointed on the engine
+// host — and an open of a named pipe for writing waited for a reader for good,
+// wedging the launch. So the open is non-blocking and follows no link, and
+// anything but a regular file is refused before a byte is written.
+func openWritableIn(root *os.Root, name string) (*os.File, error) {
+	return openInAs(root, name, unix.O_WRONLY|unix.O_CREAT|unix.O_TRUNC, true)
 }
 
-// openHostFileAs is the one open behind [openHostRegular] and
-// [openHostWritable].
-func openHostFileAs(target string, mode int, write bool) (*os.File, error) {
-	var (
-		fd  int
-		err error
-	)
-	for {
-		fd, err = syscall.Open(target, mode|syscall.O_NONBLOCK|syscall.O_CLOEXEC|syscall.O_NOFOLLOW,
-			uint32(hostbox.FileMode))
-		if !errors.Is(err, syscall.EINTR) {
-			break
-		}
-	}
+// openInAs is the one open behind [openRegularIn] and [openWritableIn]: the
+// directory reached through root, the last element opened in it by its
+// descriptor.
+func openInAs(root *os.Root, name string, mode int, write bool) (*os.File, error) {
+	host := filepath.Join(root.Name(), name)
+	dir, err := root.Open(filepath.Dir(name))
 	if err != nil {
-		// SOME KINDS ARE REFUSED BEFORE THERE IS A DESCRIPTOR TO ASK: a
-		// link at the last element (ELOOP under O_NOFOLLOW), a socket
-		// (ENXIO, which a read of one used to report as a box that could
-		// not be read, so a collection retried it until the run was lost),
-		// and for a write a pipe nobody reads (ENXIO) and a directory
-		// (EISDIR). So the path itself is asked what it is. Not for an
-		// absent path, which is the answer "not written yet"; and a path
-		// whose own lookup fails — a loop among the links ABOVE the last
-		// element is ELOOP too — names no kind and stays the error it was.
-		if !errors.Is(err, syscall.ENOENT) {
-			if what := kindAt(target); what != "" {
-				return nil, &NotRegularFileError{Path: target, Kind: what, Write: write}
+		return nil, err
+	}
+	defer func() { _ = dir.Close() }()
+	raw, err := dir.SyscallConn()
+	if err != nil {
+		return nil, &fs.PathError{Op: "open", Path: host, Err: err}
+	}
+	base := filepath.Base(name)
+	var (
+		fd      int
+		openErr error
+		kind    string
+	)
+	if err := raw.Control(func(dirfd uintptr) {
+		for {
+			fd, openErr = unix.Openat(int(dirfd), base,
+				mode|unix.O_NONBLOCK|unix.O_CLOEXEC|unix.O_NOFOLLOW, uint32(hostbox.FileMode))
+			if !errors.Is(openErr, unix.EINTR) {
+				break
 			}
 		}
-		return nil, &fs.PathError{Op: "open", Path: target, Err: err}
+		// SOME KINDS ARE REFUSED BEFORE THERE IS A DESCRIPTOR TO ASK: a link
+		// at the last element (ELOOP under O_NOFOLLOW), a socket (ENXIO,
+		// which a read of one used to report as a box that could not be
+		// read, so a collection retried it until the run was lost), and for
+		// a write a pipe nobody reads (ENXIO) and a directory (EISDIR). So
+		// the name itself is asked what it is, in the same directory. Not
+		// for an absent name, which is the answer "not written yet".
+		if openErr != nil && !errors.Is(openErr, unix.ENOENT) {
+			kind = kindAt(int(dirfd), base)
+		}
+	}); err != nil {
+		return nil, &fs.PathError{Op: "open", Path: host, Err: err}
 	}
-	var st syscall.Stat_t
-	if err := syscall.Fstat(fd, &st); err != nil {
-		_ = syscall.Close(fd)
-		return nil, &fs.PathError{Op: "stat", Path: target, Err: err}
+	if openErr != nil {
+		if kind != "" {
+			return nil, &NotRegularFileError{Path: host, Kind: kind, Write: write}
+		}
+		return nil, &fs.PathError{Op: "open", Path: host, Err: openErr}
+	}
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil {
+		_ = unix.Close(fd)
+		return nil, &fs.PathError{Op: "stat", Path: host, Err: err}
 	}
 	if what := fileKind(st); what != "" {
-		_ = syscall.Close(fd)
-		return nil, &NotRegularFileError{Path: target, Kind: what, Write: write}
+		_ = unix.Close(fd)
+		return nil, &NotRegularFileError{Path: host, Kind: what, Write: write}
 	}
-	if err := syscall.SetNonblock(fd, false); err != nil {
-		_ = syscall.Close(fd)
-		return nil, &fs.PathError{Op: "open", Path: target, Err: err}
+	if err := unix.SetNonblock(fd, false); err != nil {
+		_ = unix.Close(fd)
+		return nil, &fs.PathError{Op: "open", Path: host, Err: err}
 	}
-	return os.NewFile(uintptr(fd), target), nil
+	return os.NewFile(uintptr(fd), host), nil
 }
 
-// kindAt names what target itself is, without following a link at it, or ""
-// for a regular file and for a path that cannot be looked up.
-func kindAt(target string) string {
-	var st syscall.Stat_t
-	if err := syscall.Lstat(target, &st); err != nil {
+// kindAt names what base is in the directory dirfd, without following a link
+// at it, or "" for a regular file and for a name that cannot be looked up.
+func kindAt(dirfd int, base string) string {
+	var st unix.Stat_t
+	if err := unix.Fstatat(dirfd, base, &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 		return ""
 	}
 	return fileKind(st)
@@ -122,21 +144,21 @@ func kindAt(target string) string {
 // fileKind names what st describes, as a reader says it, or "" for a regular
 // file. (The mode's width differs between platforms, so it is switched on
 // where it lies rather than converted.)
-func fileKind(st syscall.Stat_t) string {
-	switch st.Mode & syscall.S_IFMT {
-	case syscall.S_IFREG:
+func fileKind(st unix.Stat_t) string {
+	switch st.Mode & unix.S_IFMT {
+	case unix.S_IFREG:
 		return ""
-	case syscall.S_IFIFO:
+	case unix.S_IFIFO:
 		return "a named pipe"
-	case syscall.S_IFCHR:
+	case unix.S_IFCHR:
 		return "a character device"
-	case syscall.S_IFBLK:
+	case unix.S_IFBLK:
 		return "a block device"
-	case syscall.S_IFSOCK:
+	case unix.S_IFSOCK:
 		return "a socket"
-	case syscall.S_IFDIR:
+	case unix.S_IFDIR:
 		return "a directory"
-	case syscall.S_IFLNK:
+	case unix.S_IFLNK:
 		return kindSymlink
 	}
 	return "something other than a file"

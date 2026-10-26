@@ -28,6 +28,7 @@
 package hostbox
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -421,13 +422,12 @@ func resolve(path string) (string, error) {
 }
 
 // ReplaceFile puts what content yields at dst, through a temp file in dst's
-// own directory and a rename, at [FileMode].
+// own directory and a rename, at [FileMode] — [ReplaceFileIn] over that
+// directory.
 //
 // Atomic because the file is usually a credential or a record a live process
 // may be reading: a partial write is one that parses as corrupt, and every
-// consumer writes these while something else could be starting up. The temp
-// file is created in dst's own directory so the rename never crosses a
-// filesystem, and at [FileMode] so a secret is never briefly world-readable.
+// consumer writes these while something else could be starting up.
 //
 // It takes a reader rather than a source path: a caller that opened its
 // source in a particular way — once, so that what it compares is what it
@@ -436,14 +436,32 @@ func resolve(path string) (string, error) {
 // replacing its files one at a time is a login half written whenever the
 // process stops between two of them.
 func ReplaceFile(dst string, content io.Reader) error {
-	tmp, err := os.CreateTemp(filepath.Dir(dst), ".crewlet-tmp-*")
+	dir, err := os.OpenRoot(filepath.Dir(dst))
 	if err != nil {
 		return err
 	}
-	tmpName := tmp.Name()
+	defer func() { _ = dir.Close() }()
+	return ReplaceFileIn(dir, filepath.Base(dst), content)
+}
+
+// ReplaceFileIn is [ReplaceFile] for name beneath root: the temp file, the
+// rename and every directory between are reached through the root, so no
+// component of name — a link a process that writes the tree put there
+// included — leads the write outside it.
+//
+// The temp file is created in name's own directory so the rename never
+// crosses a filesystem, exclusively and at [FileMode] so a secret is never
+// briefly world-readable, and an exclusive create follows no link at all.
+// name's directory must exist.
+func ReplaceFileIn(root *os.Root, name string, content io.Reader) error {
+	tmpName := filepath.Join(filepath.Dir(name), ".crewlet-tmp-"+rand.Text())
+	tmp, err := root.OpenFile(tmpName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, FileMode)
+	if err != nil {
+		return err
+	}
 	// No-op once the rename has succeeded, and best effort if it did not:
 	// the caller is already returning the failure that matters.
-	defer func() { _ = os.Remove(tmpName) }()
+	defer func() { _ = root.Remove(tmpName) }()
 
 	if err := tmp.Chmod(FileMode); err != nil {
 		_ = tmp.Close()
@@ -463,7 +481,7 @@ func ReplaceFile(dst string, content io.Reader) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, dst)
+	return root.Rename(tmpName, name)
 }
 
 // Digest is the SHA-256 of what r yields, in lowercase hexadecimal — the form

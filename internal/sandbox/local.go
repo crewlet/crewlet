@@ -124,6 +124,46 @@ func (l boxLayout) tmp() string { return filepath.Join(l.home(), ".tmp") }
 // shim live — the box's side, never a record.
 func (l boxLayout) meta() string { return filepath.Join(l.home(), ".crewlet") }
 
+// metaName is [boxLayout.meta] as a name in the home.
+const metaName = ".crewlet"
+
+// openHome is the box's home opened as an os.Root, and EVERY HOST-SIDE ACCESS
+// TO A FILE THE BOX HOLDS — a read, a write, a directory made, a file removed
+// — is made through one, by a name relative to it.
+//
+// THE HOME IS THE BOX'S TO WRITE. A container's job writes its whole home, the
+// one directory mounted into it, and a confined direct box's job is given
+// back its home and nothing else ([Local.confinedRules]) — and both run
+// whatever a checkout's scripts say. So any directory in it may be a link by
+// the time the engine reaches it, put there before the engine looked or in
+// the instant after. A path checked and then opened by name was two walks of
+// whatever the names held at each moment; the root walks the name once, a
+// component at a time, follows a link only to somewhere beneath itself and
+// refuses the rest. What leads outside the box is refused at the access,
+// whenever it was put there.
+//
+// Opened per access rather than held by the box: a box value is made afresh
+// by every reconnect and dropped without a teardown, and a held descriptor
+// would outlive the directory a teardown removes.
+func (l boxLayout) openHome() (*os.Root, error) { return os.OpenRoot(l.home()) }
+
+// openRecords is the box's records opened as an os.Root, which every access to
+// one of the engine's records about the box is made through, for the same
+// reason as [boxLayout.openHome]: a direct box's job runs as the engine's own
+// user, and nothing about where a record lies is taken on trust.
+func (l boxLayout) openRecords() (*os.Root, error) { return os.OpenRoot(l.records()) }
+
+// mkdirHome makes rel, and every directory above it, in the box's home,
+// through its root.
+func (l boxLayout) mkdirHome(rel string) error {
+	home, err := l.openHome()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = home.Close() }()
+	return home.MkdirAll(rel, hostbox.DirMode)
+}
+
 // pidFile records the detached job's process group so teardown can reach it
 // even in a fresh engine that never held the handle.
 //
@@ -131,7 +171,7 @@ func (l boxLayout) meta() string { return filepath.Join(l.home(), ".crewlet") }
 // bare pid: the file is read back by a later process, possibly hours on, and a
 // pid alone may by then lead a stranger's group. Signalling that would reach
 // somebody else's processes, and probing it would keep a dead box alive.
-func (l boxLayout) pidFile() string { return filepath.Join(l.records(), "box.pid") }
+func (l boxLayout) pidFile() string { return filepath.Join(l.records(), pidRecord) }
 
 // aliveFile is the keepalive stamp — the local counterpart of a remote box's
 // TTL.
@@ -141,7 +181,7 @@ func (l boxLayout) pidFile() string { return filepath.Join(l.records(), "box.pid
 // the box's entire life. Anything reading it as "recently used" is reading a
 // constant. This file is touched on every SetTimeout, which the waiter calls
 // once per poll for exactly the box it is keeping alive.
-func (l boxLayout) aliveFile() string { return filepath.Join(l.records(), "alive") }
+func (l boxLayout) aliveFile() string { return filepath.Join(l.records(), aliveRecord) }
 
 // credentialsFile records the logins this box was seeded with
 // ([seededCredential]), so a reconnect knows which files to write back and
@@ -149,14 +189,24 @@ func (l boxLayout) aliveFile() string { return filepath.Join(l.records(), "alive
 // login the coding agent refreshed mid-run is discarded — and every production
 // teardown goes through Connect or Kill, never the object Create returned, so
 // that would be every run.
-func (l boxLayout) credentialsFile() string { return filepath.Join(l.records(), "credentials.json") }
+func (l boxLayout) credentialsFile() string { return filepath.Join(l.records(), credentialsRecord) }
 
 // runFile records the run the box was made for ([boxRun]), which is how this
 // host tells a box no run names any more from one a run is using ([HostBox]).
-func (l boxLayout) runFile() string { return filepath.Join(l.records(), "run.json") }
+func (l boxLayout) runFile() string { return filepath.Join(l.records(), runRecord) }
 
 // envFile is the container runtime's --env-file. See containerBox.envArgs.
-func (l boxLayout) envFile() string { return filepath.Join(l.records(), "env") }
+func (l boxLayout) envFile() string { return filepath.Join(l.records(), envRecord) }
+
+// The records' names in the box's records ([boxLayout.openRecords]), each the
+// last element of the path its method above names.
+const (
+	pidRecord         = "box.pid"
+	aliveRecord       = "alive"
+	credentialsRecord = "credentials.json"
+	runRecord         = "run.json"
+	envRecord         = "env"
+)
 
 // seededCredential is one login file a box was seeded with, as the box's
 // RECORD keeps it: where on the engine host it came from, and the SHA-256 of
@@ -255,13 +305,15 @@ func seedCredentials(ctx context.Context, l boxLayout, files map[string]string) 
 // seedLogin seeds one login into a box — every file the shared directory
 // holds of it, or none — and reports what it seeded.
 func seedLogin(ctx context.Context, l boxLayout, login boxLogin) (map[string]seededCredential, error) {
+	// VALIDATED BEFORE ANYTHING IS READ OR WRITTEN, so a login with one
+	// path out of the box is seeded nowhere; WRITTEN through the box's home
+	// ([boxLayout.openHome]), where no component of a path leads out of it.
 	targets := map[string]string{}
 	for relative := range login.files {
-		dst, err := hostbox.SafeJoin(l.home(), relative)
-		if err != nil {
+		if _, err := hostbox.SafeJoin(l.home(), relative); err != nil {
 			return nil, fmt.Errorf("the credential path %q: %w", relative, err)
 		}
-		targets[relative] = dst
+		targets[relative] = filepath.Clean(relative)
 	}
 	names := login.names()
 	if len(slices.Compact(slices.Clone(names))) != len(names) {
@@ -277,6 +329,11 @@ func seedLogin(ctx context.Context, l boxLayout, login boxLogin) (map[string]see
 	if err != nil {
 		return nil, err
 	}
+	home, err := l.openHome()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = home.Close() }()
 	seeded := map[string]seededCredential{}
 	var written []string
 	for _, relative := range slices.Sorted(maps.Keys(login.files)) {
@@ -287,9 +344,9 @@ func seedLogin(ctx context.Context, l boxLayout, login boxLogin) (map[string]see
 			continue
 		}
 		dst := targets[relative]
-		if err := writeBoxFile(dst, content); err != nil {
-			for _, path := range written {
-				_ = os.Remove(path)
+		if err := writeBoxFile(home, dst, content); err != nil {
+			for _, name := range written {
+				_ = home.Remove(name)
 			}
 			return nil, fmt.Errorf("seeding %q: %w", relative, err)
 		}
@@ -302,13 +359,14 @@ func seedLogin(ctx context.Context, l boxLayout, login boxLogin) (map[string]see
 	return seeded, nil
 }
 
-// writeBoxFile puts one seeded login file in a box, its parents created, through
-// a temporary file and a rename.
-func writeBoxFile(dst string, content []byte) error {
-	if err := os.MkdirAll(filepath.Dir(dst), hostbox.DirMode); err != nil {
+// writeBoxFile puts one seeded login file at name in a box's home, its parents
+// created, through a temporary file and a rename — every step through the
+// home's root ([hostbox.ReplaceFileIn]).
+func writeBoxFile(home *os.Root, name string, content []byte) error {
+	if err := home.MkdirAll(filepath.Dir(name), hostbox.DirMode); err != nil {
 		return err
 	}
-	return hostbox.ReplaceFile(dst, bytes.NewReader(content))
+	return hostbox.ReplaceFileIn(home, name, bytes.NewReader(content))
 }
 
 // digestOf is the SHA-256 of content in [hostbox.Digest]'s form.
@@ -426,6 +484,16 @@ func writeBackLogin(
 	got := map[string]writeBack{}
 	changed := map[string][]byte{}
 	byName := map[string]string{}
+	home, err := l.openHome()
+	switch {
+	case absent(err):
+		// A HOME THAT IS GONE holds no refresh, as a file that is gone
+		// holds none: there is nothing to write back.
+		return got, nil
+	case err != nil:
+		return nil, err
+	}
+	defer func() { _ = home.Close() }()
 	for _, relative := range slices.Sorted(maps.Keys(login.files)) {
 		rec := seeded[relative]
 		name := filepath.Base(rec.Source)
@@ -433,13 +501,16 @@ func writeBackLogin(
 		if rec.Seed == "" {
 			continue
 		}
-		src, err := hostbox.SafeJoin(l.home(), relative)
-		if err != nil {
-			return nil, fmt.Errorf("the credential path %q: %w", relative, err)
-		}
-		content, present, err := readBoxFile(src)
-		if err != nil {
-			return nil, err
+		// READ THROUGH THE HOME'S ROOT, after the run that had the home to
+		// itself: whatever it made of the directories on the way, the read
+		// stays in the box ([boxLayout.openHome]). A refusal is said as the
+		// escape it is when the path, as it stands, leads out.
+		content, present, readErr := readBoxFile(home, filepath.Clean(relative))
+		if readErr != nil {
+			if _, check := hostbox.SafeJoin(l.home(), relative); check != nil {
+				return nil, fmt.Errorf("the credential path %q: %w", relative, check)
+			}
+			return nil, readErr
 		}
 		if !present || digestOf(content) == rec.Seed {
 			got[relative] = writeBackIdle
@@ -507,18 +578,20 @@ func writeBackLogin(
 // hands in a commit that puts the obstacle down between the two.
 type loginCommit func(dir string, names []string, login map[string][]byte) error
 
-// readBoxFile reads one login file a box holds, reporting false where it holds
-// none.
+// readBoxFile reads one login file a box holds at name in its home, reporting
+// false where it holds none.
 //
-// OPENED ONCE, as a box's files are read ([openHostRegular]): a file checked by
+// OPENED ONCE, as a box's files are read ([openRegularIn]): a file checked by
 // its path and then opened by it again is two reads of whatever the path names
 // at each moment, and the box's side is the one that names it. So a pipe there
 // answers at once as what it is rather than blocking a teardown, a link is
-// refused rather than followed, and what is written back is the file that was
-// read. Larger than [hostbox.MaxCredentialBytes], it is refused: the shared
-// login would not hold it, and a box is not handed the engine's memory.
-func readBoxFile(src string) ([]byte, bool, error) {
-	in, err := openHostRegular(src)
+// refused rather than followed, no directory on the way leads out of the box,
+// and what is written back is the file that was read. Larger than
+// [hostbox.MaxCredentialBytes], it is refused: the shared login would not hold
+// it, and a box is not handed the engine's memory.
+func readBoxFile(home *os.Root, name string) ([]byte, bool, error) {
+	src := filepath.Join(home.Name(), name)
+	in, err := openRegularIn(home, name)
 	switch {
 	case absent(err):
 		return nil, false, nil
@@ -556,7 +629,7 @@ func recordCredentialMap(l boxLayout, seeded map[string]seededCredential) error 
 	if err := os.MkdirAll(l.records(), hostbox.DirMode); err != nil {
 		return fmt.Errorf("preparing %q: %w", l.records(), err)
 	}
-	if err := os.WriteFile(l.credentialsFile(), blob, hostbox.FileMode); err != nil {
+	if err := writeRecord(l, credentialsRecord, blob); err != nil {
 		return fmt.Errorf("writing %q: %w", l.credentialsFile(), err)
 	}
 	return nil
@@ -571,7 +644,7 @@ func recordCredentialMap(l boxLayout, seeded map[string]seededCredential) error 
 // logins to write back, so what is lost is the write-back of a refreshed
 // login, which the warning names.
 func readCredentialMap(l boxLayout) map[string]seededCredential {
-	blob, err := readRecord(l.credentialsFile())
+	blob, err := readRecord(l, credentialsRecord)
 	if absent(err) {
 		return nil
 	}
@@ -596,13 +669,20 @@ func readCredentialMap(l boxLayout) map[string]seededCredential {
 // engine wrote and is not read whole into memory to find that out.
 const maxRecordBytes = 1 << 20
 
-// readRecord is one of the engine's records about a box, read the way every
-// file under a box's directory is read on the engine host: only a REGULAR FILE
-// WHERE IT LIES ([openHostRegular]), so a record that is a named pipe answers
-// at once as what it is rather than blocking whoever asked, and a link is
-// refused rather than followed. An absent record answers [fs.ErrNotExist].
-func readRecord(path string) ([]byte, error) {
-	f, err := openHostRegular(path)
+// readRecord reads the engine's record called name about a box, the way every
+// file under a box's directory is read on the engine host: through the root
+// it lies under ([boxLayout.openRecords]), and only a REGULAR FILE WHERE IT
+// LIES ([openRegularIn]), so a record that is a named pipe answers at once as
+// what it is rather than blocking whoever asked, and a link is refused rather
+// than followed. An absent record answers [fs.ErrNotExist].
+func readRecord(l boxLayout, name string) ([]byte, error) {
+	path := filepath.Join(l.records(), name)
+	records, err := l.openRecords()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = records.Close() }()
+	f, err := openRegularIn(records, name)
 	if err != nil {
 		return nil, err
 	}
@@ -618,17 +698,24 @@ func readRecord(path string) ([]byte, error) {
 	return raw, nil
 }
 
-// touchAlive refreshes the box's keepalive stamp. Never fatal.
+// touchAlive refreshes the box's keepalive stamp, through the box's records
+// ([boxLayout.openRecords]). Never fatal.
 func touchAlive(l boxLayout) {
 	if err := os.MkdirAll(l.records(), hostbox.DirMode); err != nil {
 		localLog.Debug("local_sandbox_keepalive_unwritable", "sandbox_id", l.id, "error", err.Error())
 		return
 	}
-	now := time.Now()
-	if err := os.Chtimes(l.aliveFile(), now, now); err == nil {
+	records, err := l.openRecords()
+	if err != nil {
+		localLog.Debug("local_sandbox_keepalive_unwritable", "sandbox_id", l.id, "error", err.Error())
 		return
 	}
-	f, err := os.OpenFile(l.aliveFile(), os.O_CREATE|os.O_WRONLY, hostbox.FileMode)
+	defer func() { _ = records.Close() }()
+	now := time.Now()
+	if records.Chtimes(aliveRecord, now, now) == nil {
+		return
+	}
+	f, err := openWritableIn(records, aliveRecord)
 	if err != nil {
 		localLog.Debug("local_sandbox_keepalive_unwritable", "sandbox_id", l.id, "error", err.Error())
 		return
@@ -646,7 +733,34 @@ func recordLeader(l boxLayout, leader procgroup.Leader) error {
 	if err := os.MkdirAll(l.records(), hostbox.DirMode); err != nil {
 		return err
 	}
-	return os.WriteFile(l.pidFile(), []byte(leader.String()), hostbox.FileMode)
+	return writeRecord(l, pidRecord, []byte(leader.String()))
+}
+
+// writeRecord puts blob at the engine's record called name about a box, whole, in
+// place, through the box's records ([boxLayout.openRecords]) and only as a
+// regular file where it lies ([openWritableIn]). The records directory must
+// exist.
+func writeRecord(l boxLayout, name string, blob []byte) error {
+	records, err := l.openRecords()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = records.Close() }()
+	return writeIn(records, name, blob)
+}
+
+// writeIn puts blob at name beneath root, whole, in place, only as a regular
+// file where it lies ([openWritableIn]). name's directory must exist.
+func writeIn(root *os.Root, name string, blob []byte) error {
+	f, err := openWritableIn(root, name)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(blob); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // jobGroup is the box's recorded job group when that group is still the job,
@@ -684,7 +798,7 @@ func jobGroup(l boxLayout) (procgroup.Leader, bool, error) {
 // readJobRecord is the job identity a box recorded, false when it recorded
 // none it can use. See [jobGroup] for which failures are which answer.
 func readJobRecord(l boxLayout) (procgroup.Leader, bool, error) {
-	raw, err := readRecord(l.pidFile())
+	raw, err := readRecord(l, pidRecord)
 	if absent(err) {
 		return procgroup.Leader{}, false, nil
 	}
@@ -896,7 +1010,13 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 		return nil, err
 	}
 
-	if err = os.MkdirAll(layout.workspace(), hostbox.DirMode); err != nil {
+	// THE BOX'S OWN DIRECTORIES BY PATH — its root, its home and its
+	// records are the roots every later access is made through — and what
+	// is IN the home through the home ([boxLayout.mkdirHome]).
+	if err = os.MkdirAll(layout.home(), hostbox.DirMode); err != nil {
+		return nil, localErrorf("could not create local sandbox %s at %s: %v", id, layout.root, err)
+	}
+	if err = layout.mkdirHome(WorkspaceSubdir); err != nil {
 		return nil, localErrorf("could not create local sandbox %s at %s: %v", id, layout.root, err)
 	}
 	// MkdirAll honours umask, so the mode is asserted rather than requested:
@@ -905,7 +1025,7 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	if err = os.Chmod(layout.root, hostbox.DirMode); err != nil {
 		return nil, localErrorf("could not secure local sandbox %s at %s: %v", id, layout.root, err)
 	}
-	if err = os.MkdirAll(layout.tmp(), hostbox.DirMode); err != nil {
+	if err = layout.mkdirHome(filepath.Base(layout.tmp())); err != nil {
 		return nil, localErrorf("could not create local sandbox %s tmpdir: %v", id, err)
 	}
 	if err = os.MkdirAll(layout.records(), hostbox.DirMode); err != nil {
@@ -1144,8 +1264,23 @@ func (l *Local) Kill(ctx context.Context, sandboxID string) error {
 // login and whatever the run wrote, and the only thing that will ever clean it
 // up is the orphan reaper on some later create. Reported rather than swallowed
 // so the operator learns of it now instead of finding the directory later.
+//
+// THROUGH THE ROOT OF THE DIRECTORY HOLDING EVERY BOX, by the box's own name:
+// nothing in the box — a link where a directory was — leads the removal of
+// its contents anywhere else.
 func removeBox(l boxLayout) {
-	if err := os.RemoveAll(l.root); err != nil {
+	err := func() error {
+		boxes, err := os.OpenRoot(filepath.Dir(l.root))
+		if err != nil {
+			if absent(err) {
+				return nil
+			}
+			return err
+		}
+		defer func() { _ = boxes.Close() }()
+		return boxes.RemoveAll(filepath.Base(l.root))
+	}()
+	if err != nil {
 		localLog.Warn("local_sandbox_not_removed", "sandbox_id", l.id,
 			"path", l.root, "error", err.Error())
 	}
@@ -1198,7 +1333,7 @@ func recordRun(l boxLayout, run boxRun) error {
 	if err != nil {
 		return fmt.Errorf("encoding the box's run: %w", err)
 	}
-	if err := os.WriteFile(l.runFile(), blob, hostbox.FileMode); err != nil {
+	if err := writeRecord(l, runRecord, blob); err != nil {
 		return fmt.Errorf("writing %q: %w", l.runFile(), err)
 	}
 	return nil
@@ -1237,7 +1372,7 @@ func (l *Local) RunBoxes() ([]HostBox, error) {
 		if err != nil {
 			continue
 		}
-		blob, err := readRecord(layout.runFile())
+		blob, err := readRecord(layout, runRecord)
 		if absent(err) {
 			continue
 		}
@@ -1337,8 +1472,12 @@ func (l *Local) reapOrphans(ctx context.Context, olderThan time.Duration) {
 // when there is one, else the directory's own mtime — which is the box's
 // CREATION time and nothing else.
 func lastSeen(l boxLayout) time.Time {
-	if info, err := os.Stat(l.aliveFile()); err == nil {
-		return info.ModTime()
+	if records, err := l.openRecords(); err == nil {
+		info, err := records.Stat(aliveRecord)
+		_ = records.Close()
+		if err == nil {
+			return info.ModTime()
+		}
 	}
 	if info, err := os.Stat(l.root); err == nil {
 		return info.ModTime()
