@@ -326,39 +326,50 @@ export function chipStepsOf(turn: TurnView): AssistantStepEvent[] {
   );
 }
 
-/** A turn's chip steps as `StepList` draws them. */
-export function stepsOf(turn: TurnView): StepListStep[] {
-  return stepListOf(chipStepsOf(turn));
+/** A turn's chip steps as `StepList` draws them; `technical` for an administrator. */
+export function stepsOf(turn: TurnView, technical: boolean): StepListStep[] {
+  return stepListOf(chipStepsOf(turn), technical);
 }
 
-/** Steps as `StepList` draws them: the label, the request it made in mono, its time. */
-export function stepListOf(steps: readonly AssistantStepEvent[]): StepListStep[] {
+/**
+ * Steps as `StepList` draws them: the engine's sentence for each, its time,
+ * and what its line says under it ([stepDetail]).
+ */
+export function stepListOf(
+  steps: readonly AssistantStepEvent[],
+  technical: boolean,
+): StepListStep[] {
   return steps.map((step) => {
     const duration = stepDuration(step.duration_ms);
+    const detail = stepDetail(step, technical);
     return {
       id: step.step_id,
       label: step.label,
       state: STEP_STATE[step.state],
       ...(duration === undefined ? {} : { duration }),
-      detail: stepDetail(step),
+      ...(detail === "" ? {} : { detail }),
     };
   });
 }
 
 /**
- * What a step's line says under its sentence: the request it made, and for a
- * step that failed or was refused, why, in the engine's own words, with what
- * to do about it where the route said.
+ * What a step's line says under its sentence: for a step that failed or was
+ * refused, why, in the engine's sentence for a person.
+ *
+ * NO TOOL NAME, EVER, AND THE REQUEST ONLY FOR AN ADMINISTRATOR. A step's
+ * sentence ("Listing tasks") is what it did; "list_tasks · GET /worklet" is
+ * how the engine spells it, which a person does not read. The request, in
+ * mono, is the administrator's: the same technical detail a proposal keeps
+ * behind its disclosure.
  */
-function stepDetail(step: TurnView["steps"][number]): string {
-  const request = step.request
-    ? `${step.tool} · ${step.request.method} ${step.request.route}`
-    : step.tool;
+export function stepDetail(step: TurnView["steps"][number], technical: boolean): string {
+  const request = technical && step.request ? `${step.request.method} ${step.request.route}` : "";
   if (step.state !== "failed" && step.state !== "refused") return request;
   const why = step.refusal
     ? [step.refusal.message, step.refusal.hint].filter(Boolean).join(" ")
     : (step.summary ?? "");
-  return why ? `${why} (${request})` : request;
+  if (why === "") return request;
+  return request === "" ? why : `${why} (${request})`;
 }
 
 /** A deep run's time, rounded to the second it is said in. */
@@ -426,14 +437,22 @@ export function deepNote(deep: AssistantDeepProgress): string | undefined {
 }
 
 /** A deep run, as its card at its latest state, with the steps it made nested under it. */
-export function DeepRunBlock({ run, now }: { run: DeepRun; now: number }) {
+export function DeepRunBlock({
+  run,
+  now,
+  technical,
+}: {
+  run: DeepRun;
+  now: number;
+  technical: boolean;
+}) {
   return (
     <DeepWorkCard
       state={DEEP_STATE[run.deep.state]}
       goal={run.deep.goal}
       measures={deepMeasures(run, now)}
       activity={(run.deep.activity ?? []).slice(-ASSISTANT_DEEP_ACTIVITY_LINES)}
-      steps={stepListOf(run.children)}
+      steps={stepListOf(run.children, technical)}
       note={deepNote(run.deep)}
     />
   );

@@ -176,25 +176,54 @@ const base: TurnView = {
 };
 
 test("a failed step says why, in the engine's words", () => {
-  const [step] = stepsOf({
+  const [step] = stepsOf(
+    {
+      ...base,
+      steps: [
+        {
+          step_id: "s",
+          index: 1,
+          tool: "update_task",
+          label: "Preparing a change to FAIR-2",
+          state: "failed",
+          started_at: "2026-10-24T09:41:00Z",
+          refusal: {
+            code: "stale",
+            message: "FAIR-2 changed since it was read.",
+            hint: "Read it again.",
+          },
+        },
+      ],
+    },
+    false,
+  );
+  expect(step!.detail).toContain("FAIR-2 changed since it was read. Read it again.");
+});
+
+// A STEP'S LINE NAMES NO TOOL, AND ITS REQUEST ONLY TO AN ADMINISTRATOR: a
+// person reads "Listing tasks", never "list_tasks · GET /worklet". Mutation:
+// put the tool back in the detail, or show the request to everybody.
+test("a step's line names no tool, and its request only to an administrator", () => {
+  const listed: TurnView = {
     ...base,
     steps: [
       {
         step_id: "s",
         index: 1,
-        tool: "update_task",
-        label: "Preparing a change to FAIR-2",
-        state: "failed",
+        tool: "list_tasks",
+        label: "Listing tasks",
+        request: { method: "GET", route: "/worklet" },
+        state: "done",
         started_at: "2026-10-24T09:41:00Z",
-        refusal: {
-          code: "stale",
-          message: "FAIR-2 changed since it was read.",
-          hint: "Read it again.",
-        },
       },
     ],
-  });
-  expect(step!.detail).toContain("FAIR-2 changed since it was read. Read it again.");
+  };
+  const [person] = stepsOf(listed, false);
+  expect(person!.label).toBe("Listing tasks");
+  expect(person!.detail).toBeUndefined();
+  const [admin] = stepsOf(listed, true);
+  expect(admin!.detail).toBe("GET /worklet");
+  expect(JSON.stringify([person, admin])).not.toContain("list_tasks");
 });
 
 test("a run that took no step carries no count", () => {
