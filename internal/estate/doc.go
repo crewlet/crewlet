@@ -276,7 +276,10 @@
 // own, no code host — so a home that will not serve a read for a reason that
 // lasts never leaves its repository unreadable ([Router.routeGit]); a home at
 // its share keeps it, since the share is the node's and not the repository's.
-// Every git request is a signed estate request like any other.
+// Every git request is a signed estate request like any other, SERVED UNTIL
+// ITS ANSWER IS DUE, a reply's margin before its asker's deadline
+// (code.AnswerBy), so a busy git node is heard saying so rather than taken for
+// a gone one ([GitReadAttempt]).
 //
 // [Router.Home] names that home itself, for work that is a repository's home's
 // own rather than a read the walk routes: the first node of the same

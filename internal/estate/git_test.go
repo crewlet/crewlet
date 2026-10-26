@@ -37,12 +37,32 @@ type fakeGit struct {
 	// not stamped home of any other is not_held, as the query server answers
 	// it — and nil for a node holding every repository.
 	held map[string]bool
+	// share, where set, is the node's seat git-work share, a unit of which
+	// every read takes before it answers — and a read the context's end
+	// stops waiting for one answers as the query server does: unready, at
+	// its share, where its answer fell due (code.AnswerDue), and the
+	// context's own error where its caller went away.
+	share *code.GitShare
 }
 
-func (g *fakeGit) Read(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
+func (g *fakeGit) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
+	g.mu.Lock()
+	g.asked = append(g.asked, q)
+	share := g.share
+	g.mu.Unlock()
+	if share != nil {
+		release, err := share.Take(ctx, code.SeatWorkRead)
+		if err != nil {
+			if code.AnswerDue(ctx) {
+				return code.GitAnswer{}, &code.ErrGitUnready{Reason: code.UnreadyShare,
+					Detail: g.name + "'s seat git work held its whole share until the read's answer fell due"}
+			}
+			return code.GitAnswer{}, err
+		}
+		release()
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.asked = append(g.asked, q)
 	switch {
 	case g.unready != "" && (!g.seatsOnly || q.Asker.Kind == code.PrincipalAgent):
 		return code.GitAnswer{}, &code.ErrGitUnready{Reason: g.unready,
@@ -660,6 +680,62 @@ func TestTheWireCarriesNoUnreadyGitError(t *testing.T) {
 		if !errors.As(err, &unserved) || errors.As(err, &unready) || !strings.Contains(unserved.Detail, "syncing") {
 			t.Errorf("%s: a read only a syncing node was asked = %v, want ErrUnserved naming why and no "+
 				"unready error", name, err)
+		}
+	}
+}
+
+// A GIT NODE AT ITS SHARE IS HEARD INSIDE ITS ASKER'S ATTEMPT. A git node
+// whose seat git-work share is held, asked by a router whose git attempt is
+// shorter than the share's own wait and the reply's margin together, is
+// served under a context that ends a reply's margin before the attempt does:
+// its read stops waiting for a unit there and its `behind` — at its share —
+// reaches the asker while it still listens. So the walk ends naming the
+// share, the node was heard, and neither placement is told it went
+// unanswered. Served to the request's deadline itself, the read waited for
+// its unit until the asker had stopped listening, and the asker, its attempt
+// spent and nothing heard, took a busy node for a gone one: asked it last for
+// every operation and told both placements.
+//
+// Mutation: serve the git arm until the request's deadline — the placements
+// told the node went unanswered, red.
+func TestAGitNodeAtItsShareIsHeardInsideItsAskersAttempt(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	halves := f.gitNodes(t, []string{"git-a"})
+	share := code.NewGitShare("git-a", 2, nil)
+	unit, err := share.Take(t.Context(), code.SeatWorkRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unit()
+	halves["git-a"].set(func(g *fakeGit) { g.share = share })
+	timing := Production()
+	timing.GitReadAttempt = minReadAttempt + 500*time.Millisecond
+	if timing.GitReadAttempt >= code.GitShareWait+code.ReplyMargin {
+		t.Fatalf("the premise: a %v attempt must end before the share's own wait and the margin would",
+			timing.GitReadAttempt)
+	}
+	r := f.routerTimed(t, "agent-2", nil, timing)
+
+	begun := time.Now()
+	_, err = r.Code().GitRead(t.Context(), treeOf(repoID(5)))
+	waited := time.Since(begun)
+	var unserved *ErrUnserved
+	if !errors.As(err, &unserved) || unserved.Silent() || !strings.Contains(unserved.Detail, "share") {
+		t.Fatalf("a read of a git node at its share, at a %v attempt = %v, want it unserved with the node "+
+			"heard saying it is at its share", timing.GitReadAttempt, err)
+	}
+	if waited >= timing.GitReadAttempt {
+		t.Errorf("the walk took %v, its whole %v attempt: the node's answer came too late to hear", waited,
+			timing.GitReadAttempt)
+	}
+	for name, p := range map[string]*fakePlacement{"git": f.git, "data": f.placement} {
+		p.mu.Lock()
+		told := slices.Clone(p.unanswered)
+		p.mu.Unlock()
+		if slices.Contains(told, "git-a") {
+			t.Errorf("the %s placement was told git-a went unanswered (%v): a node heard at its share is busy, "+
+				"not gone", name, told)
 		}
 	}
 }

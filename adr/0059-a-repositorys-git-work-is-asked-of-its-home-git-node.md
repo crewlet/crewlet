@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/estate`
-- **Enforced-by:** `internal/estate.TestAGitOperationIsAskedOfItsRepositorysHome`, `internal/estate.TestAGitNodeThatIsSyncingSendsTheAskerToTheRunnerUp`, `internal/estate.TestOnlyTheEffectiveHomeIsAskedToFill`, `internal/estate.TestAHomeThatJudgesNoSeatHandsTheFillToItsRunnerUp`, `internal/estate.TestTheFillMovesOnlyPastANodeBringingNoCopyUp`, `internal/code.TestAReasonPassesTheFillOnlyWhereNoCopyIsComing`, `internal/code/query.TestOnlyAFailureOfTheNodesOwnLetsAnotherNodeFill`, `internal/estate.TestANodeWithNoCodeHostRunsNoGitRead`, `internal/estate.TestEveryOperationNamesTheCopyItReads`, `internal/code/query.TestANodeThatHoldsNoCopyFillsOnlyAsHome`, `internal/code/cache.TestACacheHoldsACopyOnlyOnceItHasOneOrIsFillingOne`, `internal/code/codecluster.TestEveryMemberRoutesAGitReadToOneHome`, `internal/engine.TestAGitReadIsServedOnceAnApplyBuildsTheCodeHost`, `internal/rendezvous.TestNoPackageOrdersByAHashOfItsOwn`
+- **Enforced-by:** `internal/estate.TestAGitOperationIsAskedOfItsRepositorysHome`, `internal/estate.TestAGitNodeThatIsSyncingSendsTheAskerToTheRunnerUp`, `internal/estate.TestOnlyTheEffectiveHomeIsAskedToFill`, `internal/estate.TestAHomeThatJudgesNoSeatHandsTheFillToItsRunnerUp`, `internal/estate.TestTheFillMovesOnlyPastANodeBringingNoCopyUp`, `internal/code.TestAReasonPassesTheFillOnlyWhereNoCopyIsComing`, `internal/code/query.TestOnlyAFailureOfTheNodesOwnLetsAnotherNodeFill`, `internal/estate.TestAGitNodeAtItsShareIsHeardInsideItsAskersAttempt`, `internal/code/query.TestAReadWhoseAnswerFallsDueSaysSoWhileItsAskerListens`, `internal/estate.TestANodeWithNoCodeHostRunsNoGitRead`, `internal/estate.TestEveryOperationNamesTheCopyItReads`, `internal/code/query.TestANodeThatHoldsNoCopyFillsOnlyAsHome`, `internal/code/cache.TestACacheHoldsACopyOnlyOnceItHasOneOrIsFillingOne`, `internal/code/codecluster.TestEveryMemberRoutesAGitReadToOneHome`, `internal/engine.TestAGitReadIsServedOnceAnApplyBuildsTheCodeHost`, `internal/rendezvous.TestNoPackageOrdersByAHashOfItsOwn`
 - **Measured:** `BenchmarkCodeRead` (`internal/code/query`), once over a 32 MB history of 14 080 commits under a 10 000-file tree on git 2.56.0: every kind a warm home answers in 3–231 ms, more than an order of magnitude inside its 10 s read deadline, and a node holding no copy, asked as the home, syncs the repository whole and answers in 118 ms from the in-process store, 604 ms from the S3 fake answering every request 100 ms late and 1.1 s at 200 ms — so the 17 s attempt a router gives a git read is a sum of whole budgets, never a figure a healthy home approaches
 - **Cost-when-tried:** not tried here: before this record no seat read a repository server-side at all. The cost it avoids is the one the cold sync measures — 1.4 s for a repository of two hundred pushes and 13.4–13.8 s for one of two thousand against an object store answering every request 100 ms late — paid on whichever git node a read landed on, and on every one of them over time
 - **Tag-status:** unreleased
@@ -40,6 +40,10 @@ operation names the git half rather than a domain's copy (`GitCopy`), so no copy
 and no lag gate holds it back: its floor travels in its arguments and is the cache's sync level. It is
 answered on a lane of its own, which a git node registers from boot and answers `no_backend` on until its
 code host is built, and every request on it is a signed estate request like any other.
+
+Every attempt is SERVED UNTIL ITS ANSWER IS DUE, a reply's margin before the asker's deadline
+(`code.AnswerBy`): every wait the read makes ends there and is answered unready while the asker still
+listens, so a busy node is never heard as a gone one.
 
 ## Why the obvious alternative is wrong
 

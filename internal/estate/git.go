@@ -50,6 +50,11 @@ type LocalGit interface {
 // with exactly the methods the git operations call. internal/code/query's
 // *Server satisfies it.
 type GitServer interface {
+	// Read answers one read by object id. ctx ENDS WHEN THE ANSWER IS DUE —
+	// a reply's margin before its asker stops listening ([code.AnswerBy]) —
+	// and a read that ctx ends that way answers code.ErrGitUnready while the
+	// asker still listens ([code.AnswerDue]), never ctx's own error, which
+	// the walk would take for the repository's answer.
 	Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, error)
 }
 
@@ -65,13 +70,15 @@ type GitServer interface {
 //	+ gitproc.ReadDeadline    10 s  the read's own git process
 //	+ code.ReplyMargin         1 s  the answer's trip back
 //
-// A node that cannot fit a wait answers `behind` inside it (its reads bound
-// every wait by the request's deadline less the margin), so a shorter attempt
-// only hears a slow git node give up sooner; a longer one would leave a node
-// that is gone to be waited out longer. BenchmarkCodeRead (internal/code/query)
-// confirms the TERMS — every warm kind's p99 far inside gitproc.ReadDeadline
-// with its sync — and never sets the sum: a term it misses is re-derived and
-// the sum follows. TestProductionsGitReadAttemptHoldsAGitReadsWaits holds it.
+// The git node is served under a context that ends a reply's margin before
+// the attempt does (code.AnswerBy), and EVERY wait it makes takes that
+// context, so a node that cannot fit a wait answers `behind` while its asker
+// still listens: a shorter attempt only hears a slow git node give up sooner;
+// a longer one would leave a node that is gone to be waited out longer.
+// BenchmarkCodeRead (internal/code/query) confirms the TERMS — every warm
+// kind's p99 far inside gitproc.ReadDeadline with its sync — and never sets
+// the sum: a term it misses is re-derived and the sum follows.
+// TestProductionsGitReadAttemptHoldsAGitReadsWaits holds it.
 const GitReadAttempt = code.GitShareWait + 2*statelog.ReadBudget + gitproc.ReadDeadline + code.ReplyMargin
 
 // errGitUnready is a git half that could not answer a read inside its budget
@@ -369,10 +376,21 @@ func (r *Router) runLocalGit(ctx context.Context, spec *opSpec, x exchange, g Gi
 // half not ready answers `behind`, naming why and carrying its reason
 // ([reply.Unready]) — `behind_config` for a seat's read on a node behind the
 // company's configuration, the node's posture as every operation says it.
+//
+// SERVED UNTIL ITS ANSWER IS DUE, a reply's margin before the request's
+// deadline ([code.AnswerBy]), and no later: every wait the read makes — its
+// copy's sync, its unit of the share, the read lane's queue for each process,
+// each process — takes that one context, so a busy node's `behind` reaches its
+// asker while it still listens. Served to the deadline itself and merely
+// marked with the margin (statelog.WithReplyMargin, which only statelog's own
+// waits read, and nothing on this path does), a read waiting on its share or
+// a slot ran to the deadline, and its asker — its attempt spent and nothing
+// heard — took a busy node for a gone one: asked it last for every operation
+// for suspectFor, told both placements, and sent every repository it is home
+// to to a runner-up that downloaded a copy of each.
 func (s server) answerGit(ctx context.Context, spec *opSpec, req request, out reply) []byte {
-	ctx, cancel := context.WithDeadline(ctx, req.Deadline)
+	ctx, cancel := code.AnswerBy(ctx, req.Deadline)
 	defer cancel()
-	ctx = statelog.WithReplyMargin(ctx, code.ReplyMargin)
 	var g GitServer
 	ok := false
 	if s.git != nil {

@@ -379,9 +379,12 @@
 // A read of a repository's CONTENT is a git node's (internal/code/query), and
 // this package holds only what both ends of one import: its wire — [GitQuery]
 // and its answers, every revision an object id ([ValidRev]) and every path one
-// no git grammar reads ([GitPath]) — and the node's [GitShare], half a git
-// node's read lane, which every kind of seat git work takes its unit of, so a
-// burst of seat reads never takes the half a person's push scans wait in. A
+// no git grammar reads ([GitPath]) — the node's [GitShare], half a git node's
+// read lane, which every kind of seat git work takes its unit of, so a burst
+// of seat reads never takes the half a person's push scans wait in, and the
+// instant a served read's answer is due ([AnswerBy]), a reply's margin before
+// its asker stops listening, at which every wait of the read ends and is
+// answered unready rather than late ([AnswerDue]). A
 // git node judges the asker's grant from its own chart as a reader of the rows
 // does, and one that cannot answer for a reason about ITSELF — a copy still
 // syncing, its share full, no chart yet, its configuration behind, a failure

@@ -148,6 +148,14 @@ func New(o Options) (*Server, error) {
 //     marks the repository's history wanted (cache.Cache.WantHistory): the one
 //     node a walk asks first reads it back, once per fleet, and only for a
 //     repository a seat asks about.
+//
+// ctx ENDS WHEN THE ANSWER IS DUE (code.AnswerBy): every wait above — the
+// sync, the unit of the share, the read lane's queue before each process, and
+// each process — takes it, and one that it ends answers code.ErrGitUnready
+// naming what the read was waiting on, while the asker still listens
+// (code.AnswerDue): syncing where it ended the sync, share where it ended a
+// wait for the node's git or a run of it — never ctx's own error, which is
+// the answer only where the caller went away.
 func (s *Server) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
 	if err := q.Validate(); err != nil {
 		return code.GitAnswer{}, err
@@ -176,6 +184,11 @@ func (s *Server) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, err
 	r.index(objs)
 	release, err := s.o.Share.Take(ctx, code.SeatWorkRead)
 	if err != nil {
+		if code.AnswerDue(ctx) {
+			return code.GitAnswer{}, r.unready(code.UnreadyShare, fmt.Sprintf("%s's seat git work held its whole "+
+				"share until the read's answer fell due, its asker's attempt spent; another git node answers "+
+				"meanwhile", s.o.NodeID))
+		}
 		return code.GitAnswer{}, err
 	}
 	defer release()
@@ -314,30 +327,30 @@ func reachedFloor(a, b statelog.Position) bool {
 }
 
 // sync pins the copy at fresh, in place of any copy the read holds, its wait
-// bounded by the read's sync budget and the request's own deadline less the
-// reply's margin.
+// bounded by the read's sync budget and by ctx, which ends when the read's
+// answer is due.
 func (r *read) sync(ctx context.Context, fresh statelog.Freshness) error {
-	wait, err := r.bound(ctx, r.s.syncWait)
-	if err != nil {
-		return err
-	}
-	sctx, cancel := context.WithTimeout(ctx, wait)
+	sctx, cancel := context.WithTimeout(ctx, r.s.syncWait)
 	defer cancel()
 	s, err := r.s.o.Cache.Sync(sctx, r.q.RepoID, fresh)
 	switch {
 	case err == nil:
-	case ctx.Err() != nil:
-		return ctx.Err()
 	case errors.Is(err, code.ErrRepoNotFound):
 		return fmt.Errorf("query: repository %s: %w", r.q.RepoID, err)
 	case errors.Is(err, cache.ErrInvalid):
 		// The request's own mistake — a floor on another log — which no
 		// other node would take either.
 		return fmt.Errorf("%w: fresh: %v", code.ErrInvalid, err)
+	case code.AnswerDue(ctx):
+		return r.unready(code.UnreadySyncing, fmt.Sprintf("%s is syncing repository %s, which did not reach "+
+			"the read's need before its answer fell due; the sync goes on, and another git node answers "+
+			"meanwhile", r.s.o.NodeID, r.q.RepoID))
+	case ctx.Err() != nil:
+		return ctx.Err()
 	case sctx.Err() != nil:
 		return r.unready(code.UnreadySyncing, fmt.Sprintf("%s is syncing repository %s, which did not reach "+
 			"the read's need within %s; the sync goes on, and another git node answers meanwhile",
-			r.s.o.NodeID, r.q.RepoID, wait))
+			r.s.o.NodeID, r.q.RepoID, r.s.syncWait))
 	case everyFillMeets(err):
 		return r.unready(code.UnreadySyncing, fmt.Sprintf("%s could not sync repository %s: %v — what every "+
 			"git node's copy is filled from, so a git node holding a copy answers meanwhile",
@@ -445,19 +458,19 @@ func (r *read) unready(why code.UnreadyReason, detail string) error {
 	return &code.ErrGitUnready{Reason: why, Detail: detail}
 }
 
-// bound is limit, cut to the request's deadline less the reply's margin
-// (code.ReplyMargin), so a node that runs out of time says so while its asker
-// still listens; a request with no time left for it is its own deadline,
-// passed.
+// bound is limit, cut to ctx's deadline: the instant the read's answer is due
+// (code.AnswerBy), which already stands the reply's margin before the asker
+// stops listening, so a process ends while its asker still listens. A read
+// with no time left before that instant is unready, as a wait it ended is.
 func (r *read) bound(ctx context.Context, limit time.Duration) (time.Duration, error) {
 	dl, ok := ctx.Deadline()
 	if !ok {
 		return limit, nil
 	}
-	left := time.Until(dl) - code.ReplyMargin
+	left := time.Until(dl)
 	if left <= 0 {
-		return 0, fmt.Errorf("query: repository %s: the request's deadline leaves no time to read: %w",
-			r.q.RepoID, context.DeadlineExceeded)
+		return 0, r.unready(code.UnreadyShare, fmt.Sprintf("%s has no time left to read repository %s before "+
+			"the read's answer falls due; another git node answers meanwhile", r.s.o.NodeID, r.q.RepoID))
 	}
 	return min(limit, left), nil
 }
@@ -467,11 +480,12 @@ func (r *read) bound(ctx context.Context, limit time.Duration) (time.Duration, e
 // since git answers some questions over damage it reports and exits 0 — and
 // for one the pool refused the copy's shape for (the cache repairs both:
 // nothing here names a gitproc.Repairer, so the cache's observer acts on a
-// report at once); unready, share, for a read lane busy past gitproc.SlotWait;
-// and for a run its deadline ended, slice when the read can be narrowed —
-// another node would take as long — and unready otherwise, node_failed: a
-// short process no healthy node takes that long over, so this node is not
-// one to wait for, and the walk lets the next node fill a copy.
+// report at once); unready, share, for one the read's answer fell due during
+// — waiting for a slot or running (code.AnswerDue) — and for a read lane busy
+// past gitproc.SlotWait; and for a run its deadline ended, slice when the read
+// can be narrowed — another node would take as long — and unready otherwise,
+// node_failed: a short process no healthy node takes that long over, so this
+// node is not one to wait for, and the walk lets the next node fill a copy.
 func (r *read) failed(ctx context.Context, what string, res gitproc.Result, err error, slice error) error {
 	if res.Damage != nil {
 		return r.unready(code.UnreadySyncing, fmt.Sprintf("%s's %s over repository %s met damage the node is "+
@@ -480,6 +494,10 @@ func (r *read) failed(ctx context.Context, what string, res gitproc.Result, err 
 	switch {
 	case err == nil:
 		return nil
+	case code.AnswerDue(ctx):
+		return r.unready(code.UnreadyShare, fmt.Sprintf("%s could not finish the %s over repository %s before "+
+			"the read's answer fell due — its asker's attempt spent on the waits before it; another git node "+
+			"answers meanwhile", r.s.o.NodeID, what, r.q.RepoID))
 	case ctx.Err() != nil:
 		return ctx.Err()
 	case errors.Is(err, gitproc.ErrBusy):

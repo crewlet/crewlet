@@ -170,19 +170,21 @@ type UnreadyReason string
 const (
 	// UnreadySyncing: the node is BRINGING ITS COPY UP and another node
 	// answers meanwhile — the copy could not be brought to what the read
-	// needs inside its budget (a cold copy downloading the repository, which
-	// goes on under the cache's lifetime after the read stops waiting), a
-	// git process over the copy reported damage the cache is repairing, or
-	// a sync failed on what EVERY node's fill of the repository reads — the
-	// code log, the object store, the repository's rows, or a repair the
-	// cache refuses to repeat because a whole read of them did not end the
-	// damage — which another node's fill would only meet again, and which a
-	// node already holding a copy may still answer around.
+	// needs inside its budget, or before the read's answer fell due (a cold
+	// copy downloading the repository, which goes on under the cache's
+	// lifetime after the read stops waiting), a git process over the copy
+	// reported damage the cache is repairing, or a sync failed on what EVERY
+	// node's fill of the repository reads — the code log, the object store,
+	// the repository's rows, or a repair the cache refuses to repeat because
+	// a whole read of them did not end the damage — which another node's
+	// fill would only meet again, and which a node already holding a copy
+	// may still answer around.
 	UnreadySyncing UnreadyReason = "syncing"
 	// UnreadyShare: the node's git capacity for seats' reads is spent — its
-	// seat git-work share ([GitShare]) held past [GitShareWait], or its read
-	// lane busy past gitproc.SlotWait. The node holds its copy, synced, and
-	// is only busy.
+	// seat git-work share ([GitShare]) held past [GitShareWait], its read
+	// lane busy past gitproc.SlotWait, or the read's waits for either, or its
+	// git, running past the instant its answer fell due ([AnswerDue]). The
+	// node holds its copy, synced, and is only busy.
 	UnreadyShare UnreadyReason = "share"
 	// UnreadyNoChart: the read is a seat's, and the node holds no chart to
 	// judge a seat's grant by (no epoch installed yet: at boot, or before a

@@ -107,7 +107,10 @@ var errShareWait = errors.New("code: the seat git-work share's wait ended")
 
 // Take holds one unit for work, waiting at most [GitShareWait] for one to come
 // free: past it, [ErrGitUnready]{[UnreadyShare]} naming the node. ctx ending
-// first is ctx's own error, and is not counted: nobody waits for that answer.
+// first is ctx's own error, and is not counted, since the take did not wait
+// its while: its caller went away, and nobody waits for that answer — or the
+// work's answer fell due first ([AnswerDue]), which the work answers itself,
+// naming what spent its asker's attempt.
 // release gives the unit back, and is idempotent — every holder defers it,
 // and the one that releases early calls it again harmlessly.
 func (s *GitShare) Take(ctx context.Context, work SeatWork) (release func(), err error) {

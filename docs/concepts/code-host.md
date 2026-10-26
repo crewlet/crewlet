@@ -1302,8 +1302,8 @@ from such an answer:
 
 | Unready | What it means |
 |---|---|
-| `syncing` | the node is bringing its copy up: it could not be brought to what the read needs within two seconds — a copy downloading the repository, whose download goes on after the read stops waiting — or a git process over the copy reported damage, which the cache is repairing, or a sync failed on what every git node's copy is filled from (the code log, the object store, the repository's rows, or a repair the cache will not repeat because reading them whole did not end the damage), which another node's download would only meet again |
-| `share` | the node holds its copy and is busy: its seats' git work holds its whole share of the read lane (below) and none came free within two seconds, or its read lane stayed busy for ten |
+| `syncing` | the node is bringing its copy up: it could not be brought to what the read needs within two seconds, or before the read's answer fell due — a copy downloading the repository, whose download goes on after the read stops waiting — or a git process over the copy reported damage, which the cache is repairing, or a sync failed on what every git node's copy is filled from (the code log, the object store, the repository's rows, or a repair the cache will not repeat because reading them whole did not end the damage), which another node's download would only meet again |
+| `share` | the node holds its copy and is busy: its seats' git work holds its whole share of the read lane (below) and none came free within two seconds, its read lane stayed busy for ten, or the read's waits for either, or its own git, ran past the instant its answer fell due |
 | `no_chart` | a seat's read on a node holding no chart yet — at boot, before its first apply — which cannot judge a seat, as opposed to judging it has no access |
 | `behind_config` | a seat's read on a node confirmed behind the company's configuration (shed or stuck), which judges no seat's grant from the chart the fleet replaced |
 | `node_failed` | the node failed the read for a reason of its own — its sync of the repository failed with nothing the code log, the object store or the rows said (its disk refusing a write, its cache stopping), or one of the short checks of what the read names ran its whole bound, which no healthy node takes over a few object ids |
@@ -1319,6 +1319,14 @@ stands, or brought to the reader's floor where it holds one; an object the copy
 lacks is looked for once more after a sync at the log's head — the reader may
 know of a push this node has not synced yet — and only then answered as no
 such object.
+
+**Answered inside its asker's attempt, never late.** Every read is answered
+within the router's git read attempt, seventeen seconds. The node serves a
+read until a second before the attempt ends, and every wait it makes ends
+there: the copy's sync, a unit of the share, a slot of the read lane for each
+process, each process. A read held up past it is answered `syncing` or
+`share` while its asker still listens: the read goes on to the next git node,
+and the busy one is not taken for a node that is gone.
 
 **Seats' reads hold at most half the read lane.** The read lane — one core a
 slot, `git.max_processes` of them — is also where a person's push scans its
