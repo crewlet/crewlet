@@ -435,8 +435,9 @@ func protectAfterForce(cmds []code.Command, rules code.Protections, judged map[j
 // its name, at SESSION floored at the landing's pin (Synced.Position): one
 // read of a data node's row at or past what the push was received over, with
 // no barrier, made only on this path — and refuses only when that row still
-// holds the bound. A compaction applied after that read is met by the push's
-// next run.
+// holds the bound. A compaction the copy that answered had not applied — one
+// applied after the read, or one the repository's committer, another data
+// node, had applied and that copy not yet — is met by the push's next run.
 //
 // NEVER A Cache.Sync: the cache answers a session sync at once from the copy
 // it converged on, with no estate call (cache.Cache.Sync), and the pinned copy

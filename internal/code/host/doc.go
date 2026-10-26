@@ -31,8 +31,10 @@
 // left to land; the stored size against code.MaxPackBytes; the repository's
 // pack bound (code.MaxPacksPerRepo), a push carrying a pack refused
 // compaction_behind only once the repository's row, read again, still holds
-// the bound, so that every retry the committer would refuse uploads nothing
-// while the committer's decide stays the authority; the bundle
+// the bound, so that a retry whose own sync finds the bound uploads nothing
+// while the committer's decide stays the authority — a push whose sync found
+// the repository below a bound its committer finds reached is refused there,
+// its bundle stored and named by no row; the bundle
 // uploaded and sealed while the commits it introduces are listed, and the
 // proposal held to every rule its committer will hold it to; the proposal
 // itself, through the estate router; the outcome, `ok` only from the push's
@@ -164,8 +166,10 @@
 // are never decided on a stale read: anything that would refuse is read again
 // through the barrier first — but for the pack bound, whose push was received
 // over a row read through the barrier already and is read again at SESSION
-// floored there (land.go's behind): that read only has to see a compaction
-// applied since, and a barrier would append a record to the code log for
+// floored there (land.go's behind): that read sees every compaction the copy
+// answering it has applied, and one the repository's committer has applied
+// and that copy not yet refuses this run and is met by the next — a barrier,
+// which would see that one too, would append a record to the code log for
 // every retry a repository at its bound meets.
 //
 // # A damaged cache is repaired under the request that found it
