@@ -106,7 +106,7 @@ func Shape(t Tool, args Args, resp exec.Response, b provenance.Boundary, now tim
 		}
 		return Result{Model: model, Trust: trust, Empty: true}, nil
 	}
-	model, err := fitModel(t, trust, built.Card, b)
+	model, err := fitModel(t, trust, built, b)
 	if err != nil {
 		return Result{}, err
 	}
@@ -268,10 +268,10 @@ const fenceBytes = 2 << 10
 // [cards.ModelBytes] with the fence included: the summary is built to the
 // bound less the fence's guess, and built again smaller by what the result
 // went past it, whole rows still, until it fits.
-func fitModel(t Tool, trust provenance.Trust, card wire.Card, b provenance.Boundary) (string, error) {
+func fitModel(t Tool, trust provenance.Trust, built cards.Built, b provenance.Boundary) (string, error) {
 	budget := cards.ModelBytes - fenceBytes
 	for budget > 0 {
-		summary, err := cards.Summary(card, budget)
+		summary, err := cards.SummaryOf(built, budget)
 		if err != nil {
 			return "", fmt.Errorf("catalog: summarise %s's answer: %w", t.Name, err)
 		}

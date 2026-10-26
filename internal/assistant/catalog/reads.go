@@ -75,6 +75,8 @@ var taskColumns = []cards.Column{
 
 func taskTable(title, rows string) cards.Spec {
 	return cards.Spec{Table: &cards.Table{Title: title, Rows: rows, Columns: taskColumns,
+		// A LIST PAGES BY ITS CURSOR, present only while more lie past it.
+		More: "next_cursor",
 		// THE KEY IS DRAWN: it is what the answer and the person name a task
 		// by, and every other column stays on the card for the downloads and
 		// the model.
@@ -502,7 +504,7 @@ func readTools() []Tool {
 				return get("GET /turns", nil, query(a).str("handle", "seat").
 					truth("failed", "failed").num("days", "days", 0).num("limit", "limit", 25).values())
 			},
-			Cards: one(cards.Spec{Table: &cards.Table{Title: "Turns", Rows: "turns",
+			Cards: one(cards.Spec{Table: &cards.Table{Title: "Turns", Rows: "turns", More: "next",
 				Brief: []string{"started", "task", "tokens", "error"},
 				Columns: []cards.Column{col("role", "Seat", "role", tText),
 					col("started", "Started", "started_at", tDatetime),
@@ -767,6 +769,7 @@ func readTools() []Tool {
 					num("limit", "max-keys", 25).values())
 			},
 			Cards: one(cards.Spec{Table: &cards.Table{Title: "Artifacts", Rows: "contents",
+				More:  "is_truncated",
 				Brief: []string{"title", "kind", "owner", "updated"},
 				Columns: []cards.Column{prose("title", "Title", "title"),
 					col("kind", "Kind", "kind", tLabel), col("owner", "Owner", "owner", tText),

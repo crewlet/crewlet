@@ -244,3 +244,31 @@ func TestASeatIsShownByItsNameAndAFailedTurnByItsReason(t *testing.T) {
 		t.Errorf("the model reads %s, without why the turn failed", res.Model)
 	}
 }
+
+// A PAGE IS NEVER READ AS THE WHOLE: an answer whose cursor says more rows lie
+// past it tells the model its count is a floor ("at least 5"), and the person
+// that there are more; one with no cursor is the whole. "Five turns in a row"
+// was once said of a seat that had failed twenty-five. Mutation: drop the
+// turns card's More path, or the summary's use of it, and this fails.
+func TestAPageWithMoreIsNeverTheWhole(t *testing.T) {
+	t.Parallel()
+	turns, _ := catalog.Lookup("list_turns")
+	for _, tc := range []struct {
+		next string
+		more bool
+	}{{`"bmV4dA"`, true}, {`null`, false}} {
+		answer := []byte(`{"turns":[{"turn_id":"t1","failed":true},{"turn_id":"t2","failed":true}],` +
+			`"next":` + tc.next + `}`)
+		res, err := catalog.Shape(turns, map[string]any{"handle": "qa"}, exec.Response{
+			Status: http.StatusOK, Body: answer}, provenance.NewBoundary(), wednesday, cards.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		saysFloor := strings.Contains(res.Model, "at least 2")
+		hasNotice := len(res.Cards) == 2 && strings.Contains(res.Cards[1].Notice.Text, "there are more")
+		if saysFloor != tc.more || hasNotice != tc.more {
+			t.Errorf("next %s: the model reads %s and the cards are %+v, want more=%v", tc.next,
+				res.Model, res.Cards, tc.more)
+		}
+	}
+}

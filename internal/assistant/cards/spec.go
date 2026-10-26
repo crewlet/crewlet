@@ -47,6 +47,12 @@ type Table struct {
 	Brief []string
 	// Open links the whole card to its screen.
 	Open *Open
+	// More, where named, is the path to the answer's own word that rows lie
+	// past this page: a cursor to the next one (`next`, `next_cursor`) or a
+	// flag (`more`, `is_truncated`). A page that says so is a page, never
+	// the whole: the model is told the count is "at least" what it holds,
+	// and the person that there are more ([Built.More]).
+	More string
 }
 
 // Column is one table column: where each row holds it, and how it is drawn.
@@ -294,6 +300,9 @@ type Built struct {
 	// Note is the answer's own sentence on why it holds nothing, read at
 	// the spec's Note path; empty where it says none.
 	Note string
+	// More is a table whose answer says rows lie past this page
+	// ([Table.More]).
+	More bool
 }
 
 // Cards are the card and its notice, in the order they are shown.
@@ -405,12 +414,34 @@ func buildTable(t *Table, doc any, now time.Time, o Options) (Built, error) {
 	}
 	card.Truncated = len(card.Rows) < card.RowCount
 	built := Built{Card: out, Empty: card.RowCount == 0}
-	if card.Truncated {
+	if t.More != "" {
+		built.More = morePast(lookup(doc, t.More))
+	}
+	switch {
+	case card.Truncated:
 		notice := Notice(wire.NoticeInfo, fmt.Sprintf("Showing the first %d of %d rows. "+
 			"Open it in the app to see the rest.", len(card.Rows), card.RowCount))
 		built.Notice = &notice
+	case built.More && card.RowCount > 0:
+		notice := Notice(wire.NoticeInfo, fmt.Sprintf("Showing the first %d rows; there "+
+			"are more. Open it in the app to see the rest.", card.RowCount))
+		built.Notice = &notice
 	}
 	return built, out.Validate()
+}
+
+// morePast reads an answer's word that rows lie past its page: a cursor that
+// is present and not empty, or a flag that is true.
+func morePast(v any) bool {
+	switch m := v.(type) {
+	case bool:
+		return m
+	case string:
+		return m != ""
+	case nil:
+		return false
+	}
+	return true
 }
 
 func buildEntity(e *Entity, doc any) (Built, error) {

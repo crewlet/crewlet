@@ -18,9 +18,16 @@ import (
 // way, so the model is told to point at it rather than guess past the cut.
 // A link's address never reaches a model: it offers open_in_app instead.
 func Summary(card wire.Card, budget int) ([]byte, error) {
+	return SummaryOf(Built{Card: card}, budget)
+}
+
+// SummaryOf is [Summary] of a built card, which also knows what the answer
+// said beyond its rows: that more lie past its page ([Built.More]).
+func SummaryOf(b Built, budget int) ([]byte, error) {
+	card := b.Card
 	switch card.Type {
 	case wire.CardTable:
-		return tableSummary(card.Table, budget)
+		return tableSummary(card.Table, b.More, budget)
 	case wire.CardEntity:
 		return entitySummary(card.Entity, budget)
 	case wire.CardNotice:
@@ -38,27 +45,41 @@ type tableDigest struct {
 	RowCount  int      `json:"row_count"`
 	Shown     int      `json:"rows_shown"`
 	Truncated bool     `json:"truncated,omitempty"`
-	Note      string   `json:"note,omitempty"`
+	// More says the answer holds rows past this page, so row_count is a
+	// floor and never the total.
+	More bool   `json:"more_exist,omitempty"`
+	Note string `json:"note,omitempty"`
 	// Access is the sentence every list carries: what the person may not
 	// see is left out, so the model never reads an absence as proof.
 	Access string `json:"access"`
 }
 
+// MoreNote is what a table summary tells the model of a page with rows past
+// it: its count is a floor. A capped page read as the whole once answered
+// "five turns in a row" for a seat that had failed twenty-five.
+const MoreNote = "This is one page of %d rows and the answer says more exist past it. " +
+	"Never give %[1]d as the total: say \"at least %[1]d\", or read further with a " +
+	"larger limit or a narrower filter."
+
 // AccessNote is what every table summary tells the model about its rows.
 const AccessNote = "Rows the person may not see are left out, so a row missing here " +
 	"is not proof that none exists."
 
-func tableSummary(t *wire.TableCard, budget int) ([]byte, error) {
-	d := tableDigest{Title: t.Title, RowCount: t.RowCount, Rows: t.Rows, Access: AccessNote}
+func tableSummary(t *wire.TableCard, more bool, budget int) ([]byte, error) {
+	d := tableDigest{Title: t.Title, RowCount: t.RowCount, Rows: t.Rows, Access: AccessNote,
+		More: more}
 	for _, c := range t.Columns {
 		d.Columns = append(d.Columns, c.Label)
 	}
 	return fit(func() (any, int) { return &d, len(d.Rows) }, func(n int) {
 		d.Rows, d.Shown = t.Rows[:n], n
 		d.Truncated = n < t.RowCount
-		if d.Truncated {
+		switch {
+		case d.Truncated:
 			d.Note = fmt.Sprintf("Only %d of %d rows are listed here; the person "+
 				"sees the table on the card.", n, t.RowCount)
+		case d.More:
+			d.Note = fmt.Sprintf(MoreNote, t.RowCount)
 		}
 	}, budget)
 }
