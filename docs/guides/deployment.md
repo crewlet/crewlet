@@ -1608,10 +1608,10 @@ past its size, while the one read that must never wait behind them — resolving
 who is acting — runs on the connection reserved for it below. See
 [Scaling Out § The socket's admission semaphore](../concepts/scaling.md#the-sockets-admission-semaphore).
 
-**The reserved connection is held, not merely counted.** Connections are handed
-out first-come-first-served, so a spare one nobody holds is taken by the first
-read burst that wants it. The store therefore **draws that connection at open
-and keeps it**, the same move a pinned writer makes, and only identity work
+**The reserved connection is held, not merely counted.** A free connection goes
+to whoever asks for one first, so a spare one nobody holds is taken by the
+first read burst that wants it. The store therefore **draws that connection at
+open and keeps it**, the same move a pinned writer makes, and only identity work
 ever runs on it — the one arrangement under which a socket storm cannot starve
 the lookups that answer who is acting. See
 [Scaling Out § The admission semaphore, and the connection it cannot take](../concepts/scaling.md#the-admission-semaphore-and-the-connection-it-cannot-take)

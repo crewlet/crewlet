@@ -729,10 +729,10 @@ where the pinned writers are the state-log appliers on the replicated estate
 [Deployment § The connection pool](../guides/deployment.md#the-connection-pool-and-the-one-connection-ordinary-work-cannot-take).
 
 **The reserved connection is the part that needs a mechanism.** Adding one to
-the bound buys nothing on its own: connections are handed out
-first-come-first-served, so a spare one nobody holds is taken by the first
-burst that wants it. So the store **draws that connection at open and holds
-it** for the life of the handle — the same move a
+the bound buys nothing on its own: a free connection goes to whoever asks for
+one first, so a spare one nobody holds is taken by the first burst that wants
+it. So the store **draws that connection at open and holds it** for the life
+of the handle — the same move a
 [pinned writer](../guides/replication.md) makes, one layer over — and only
 work marked as **identity work** (resolving who is acting, before a route, a
 query or a tool call can decide anything) ever runs on it. Identity reads
@@ -746,8 +746,8 @@ break:
 1. A socket storm arrives: N tabs, four concurrent queries each, every
    one of them a scan.
 2. They take every connection.
-3. The identity lookup that would let those very requests be decided queues
-   behind all of them.
+3. The identity lookup that would let those very requests be decided waits
+   among all of them for a connection, which goes to a waiter drawn at random.
 4. The queue feeds itself — the reads that are waiting are the ones identity
    has to clear.
 

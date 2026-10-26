@@ -72,11 +72,12 @@ func TestWhatOrdinaryWorkMayNotTakeIsAddedToTheReaders(t *testing.T) {
 // TestASocketStormCannotStarveIdentityWork is the reservation doing its job.
 //
 // A socket storm is N dashboards × four in-flight queries each, every one of
-// them a scan. They take every connection first-come-first-served, and the
-// identity read that would let those very requests be decided queues behind
-// all of them — so the queue feeds itself, exactly as the reader/writer loop
-// [Writer] exists to break does. One connection is HELD from the open, and
-// [Identity] is the only way to spend it.
+// them a scan. They take every connection, and the identity read that would
+// let those very requests be decided draws for one against all of them —
+// database/sql hands a connection given back to a waiter chosen at random —
+// so the queue feeds itself, exactly as the reader/writer loop [Writer]
+// exists to break does. One connection is HELD from the open, and [Identity]
+// is the only way to spend it.
 func TestASocketStormCannotStarveIdentityWork(t *testing.T) {
 	t.Parallel()
 	// Three readers, and the connection held for identity beside them.

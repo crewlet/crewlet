@@ -39,10 +39,10 @@ import (
 //
 // [identityReserve] is a pin's SIBLING INVARIANT: one connection that ordinary
 // work may not occupy, kept for the lookups that answer "who is acting". It is
-// HELD for the same reason a pin is — database/sql hands connections out
-// first-come-first-served, so a spare one nobody holds is taken by the first
-// read burst that wants it, and adding one to the bound alone would buy
-// nothing at all.
+// HELD for the same reason a pin is — database/sql hands a free connection to
+// whoever asks first, so a spare one nobody holds is taken by the first read
+// burst that wants it, and adding one to the bound alone would buy nothing at
+// all.
 //
 // THE OTHER DESIGN, an admission semaphore in front of the pool, breaks
 // something a pin does not: it would bound ordinary work BELOW the pool, so
@@ -54,7 +54,8 @@ import (
 // The failure it stops has the same shape as the one a pin stops, one layer
 // up. A socket storm — N dashboards, four concurrent queries each, every one a
 // scan — takes every connection; the identity read that would let those very
-// requests be decided queues behind all of them; and the queue feeds itself.
+// requests be decided waits among all of them for one, which goes to a waiter
+// drawn at random; and the queue feeds itself.
 //
 // # It is not a second transaction implementation
 //

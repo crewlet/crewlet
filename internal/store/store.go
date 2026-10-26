@@ -186,11 +186,12 @@ const (
 	// before a route, a query or a tool call can decide anything.
 	//
 	// ONE. It is a reservation rather than extra headroom because headroom
-	// is exactly what a burst consumes: database/sql hands connections out
-	// first-come-first-served, so a socket storm — N tabs × four
+	// is exactly what a burst consumes: database/sql hands a free
+	// connection to whoever asks first, and one given back while callers
+	// wait to a waiter drawn at random, so a socket storm — N tabs × four
 	// in-flight queries each, every one of them a scan — takes every
-	// connection and the identity read queues behind all of them. That
-	// inverts the dependency: the reads that are waiting are the ones
+	// connection and the identity read draws for one against all of them.
+	// That inverts the dependency: the reads that are waiting are the ones
 	// identity has to clear, so the queue feeds itself, exactly as the
 	// reader/writer loop [Writer] exists to break does. One connection is
 	// enough because an identity read is a keyed lookup rather than a scan,
@@ -518,7 +519,7 @@ type DB struct {
 	// take it. [Identity] is what spends it.
 	//
 	// HELD RATHER THAN COUNTED, for the reason a pin is (see [Writer]):
-	// database/sql hands connections out first-come-first-served, so a
+	// database/sql hands a free connection to whoever asks first, so a
 	// spare one nobody holds is taken by the first read burst that wants
 	// it and the reservation is worth nothing.
 	//
