@@ -12,6 +12,8 @@ import type { ReactNode } from "react";
 import {
   Button,
   Callout,
+  CodeBlock,
+  Disclosure,
   EmptyState,
   Section as UiSection,
   Tag,
@@ -116,6 +118,24 @@ export function StateBadge({ agent }: { agent: AgentRow | null | undefined }) {
     <Tag variant={toneOf(state)} dot>
       {stateWord(state)}
     </Tag>
+  );
+}
+
+/**
+ * The engine's own words for a failure, folded behind the kit's disclosure.
+ *
+ * NEVER THE HEADLINE. A banner or a reading pane leads with the plain sentence
+ * (`failureWords` in lib/seats.ts); the raw message ("llm chain exhausted
+ * after 1 providers ...") is what an operator fixing it reads, so it stays one
+ * press away, selectable, and is drawn nowhere else. Nothing when the engine
+ * recorded no message.
+ */
+export function TechnicalDetails({ text }: { text: string | null | undefined }) {
+  if (!text) return null;
+  return (
+    <Disclosure title="Technical details" size="compact" headingLevel="none" lazy>
+      <CodeBlock plain selectable label="The engine's message" code={text} />
+    </Disclosure>
   );
 }
 

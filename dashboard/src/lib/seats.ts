@@ -58,6 +58,7 @@ import { loginKind, loginWords } from "./login.ts";
 import { rest } from "~/protocol/rest.ts";
 import { DELEGATE_TASKS, DELEGATE_TOOL, type SeatActivity } from "~/contract/wire.ts";
 import type { EngineHealth } from "~/contract/health.ts";
+import type { ProviderErrorKind } from "~/contract/failures.ts";
 import type {
   AgentRow,
   CompanyDocument,
@@ -1471,6 +1472,69 @@ export function stoppedLine(row: AgentRow | null | undefined, nameOf: NameOf = A
     default:
       return "stopped";
   }
+}
+
+/** What a failed model call is called: a word for a tag, and a sentence for a reader. */
+export interface FailureWords {
+  /** One or two words, for a phase's tag: "Rate limited", "Timed out". */
+  tag: string;
+  /** The plain sentence a banner or an Inbox row leads with. */
+  sentence: string;
+}
+
+/**
+ * The classifier's kinds in plain words, keyed on the engine's own spelling
+ * (`contract/failures.ts`, held to `llm.ErrorKind` by a Go gate), so a kind
+ * the engine adds fails the typecheck here until it has words.
+ *
+ * THE MACHINE CODE IS NEVER THE HEADLINE. The seat page drew "server: llm
+ * chain exhausted after 1 providers ..." and the Inbox titled the row with the
+ * bare kind. The raw engine message stays available, behind the kit's
+ * disclosure ([TechnicalDetails] in components/common.tsx), for whoever is
+ * fixing it.
+ */
+const FAILURE_WORDS: Record<ProviderErrorKind, FailureWords> = {
+  rate_limit: {
+    tag: "Rate limited",
+    sentence: "Its model provider refused the call because a rate or usage limit was reached.",
+  },
+  auth: {
+    tag: "Sign-in needed",
+    sentence: "Its model provider's sign-in has expired or is missing, so the call was refused.",
+  },
+  timeout: {
+    tag: "Timed out",
+    sentence: "The model call ran out of time before an answer came back.",
+  },
+  server: {
+    tag: "Provider error",
+    sentence: "Its model provider ran but gave no usable answer.",
+  },
+  canceled: {
+    tag: "Canceled",
+    sentence: "The turn was stopped before the model answered.",
+  },
+  fatal: {
+    tag: "Engine fault",
+    sentence: "The engine could not start the model call. An operator needs to check the setup.",
+  },
+};
+
+/** What a failure the classifier did not record reads as: never its raw code. */
+const FAILED: FailureWords = {
+  tag: "Failed",
+  sentence: "The turn ended before it finished its work.",
+};
+
+/**
+ * A failure's plain words, by the kind the engine recorded. A kind outside the
+ * classifier's set (a guard breach, a budget, an event type) reads as a failed
+ * turn rather than as its machine code.
+ */
+export function failureWords(kind: string | null | undefined): FailureWords {
+  return Object.hasOwn(FAILURE_WORDS, kind ?? "")
+    ? FAILURE_WORDS[kind as ProviderErrorKind]
+    : FAILED;
 }
 
 /**

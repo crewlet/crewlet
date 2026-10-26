@@ -394,6 +394,9 @@ var contract = []Entry{
 	// assistant.ts (page actions)
 	{"ASSISTANT_PAGE_ACTIONS", ReadLiteral, "internal/assistant/catalog.TestEveryPageActionIsTheDashboardsToo"},
 
+	// failures.ts
+	{"ProviderErrorKind", ReadUnion, "internal/providers/llm.TestTheDashboardKnowsEveryErrorKind"},
+
 	// stops.ts
 	{"StopReason", ReadUnion, "internal/providers/llm.TestTheDashboardKnowsEveryStopReason"},
 	{"InvocationOutcome", ReadUnion, "internal/agent/toolloop.TestTheDashboardKnowsEveryInvocationOutcome"},

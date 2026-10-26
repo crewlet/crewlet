@@ -27,6 +27,7 @@ import { PERIOD_ADJECTIVE, waitedOn } from "~/lib/budget.ts";
 import type { EngineHealth } from "~/contract/health.ts";
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import {
+  failureWords,
   roundLabel,
   shownStateOf,
   staleness,
@@ -148,6 +149,12 @@ export interface Attention {
   title: string;
   /** What it costs to leave it, or what to do about it. */
   detail: string;
+  /**
+   * The engine's own message behind the condition, where it recorded one: a
+   * failed turn's raw error. NEVER drawn as the title or the detail, only
+   * behind a "Technical details" disclosure, for whoever is fixing it.
+   */
+  technical?: string;
   /** Where the answer is. */
   path?: string[];
   query?: Record<string, string>;
@@ -345,6 +352,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         // began, which is what orders it among the rest and what its row's
         // age says.
         ...(agent.paused?.at ? { at: agent.paused.at } : {}),
+        ...(agent.last_error?.message ? { technical: agent.last_error.message } : {}),
         who,
       });
       continue;
@@ -360,7 +368,10 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         subject: "seat",
         icon: "triangle-alert",
         title: `${agent.role}'s last turn failed`,
-        detail: agent.last_error.message || "The turn ended without finishing its work.",
+        // THE KIND IN PLAIN WORDS, never the machine code or the engine's
+        // raw message, which rides along as `technical`.
+        detail: failureWords(agent.last_error.kind).sentence,
+        ...(agent.last_error.message ? { technical: agent.last_error.message } : {}),
         path: seatPath,
         at: agent.last_error.at,
         who,

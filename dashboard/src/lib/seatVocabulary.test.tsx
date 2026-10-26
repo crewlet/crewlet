@@ -15,7 +15,8 @@ import { afterEach, describe, expect, test } from "vitest";
 import { StateBadge } from "~/components/common.tsx";
 import { OrgLegend } from "~/routes/agents/OrgChart.tsx";
 import { attentionQueue, type AttentionInput } from "./attention.ts";
-import { seatWord, stateGroupWord, stateWord } from "./seats.ts";
+import { failureWords, seatWord, stateGroupWord, stateWord } from "./seats.ts";
+import type { ProviderErrorKind } from "~/contract/failures.ts";
 import { healthFrame } from "~/test/health.ts";
 import type { AgentRow } from "~/protocol/index.ts";
 
@@ -105,5 +106,38 @@ describe("a seat whose last turn failed", () => {
     expect(item?.title.toLowerCase()).not.toContain("stopped");
     render(<StateBadge agent={FAILED_TURN} />);
     expect(screen.getByText("Idle")).toBeTruthy();
+  });
+});
+
+describe("a failure's words", () => {
+  // EVERY KIND THE CLASSIFIER WRITES has a tag and a sentence of its own; the
+  // union is held to Go's `llm.ErrorKind` by
+  // `internal/providers/llm.TestTheDashboardKnowsEveryErrorKind`.
+  const KINDS: Record<ProviderErrorKind, true> = {
+    fatal: true,
+    rate_limit: true,
+    auth: true,
+    timeout: true,
+    server: true,
+    canceled: true,
+  };
+  test("every kind reads as plain words, never its machine code", () => {
+    const generic = failureWords("something-else");
+    for (const kind of Object.keys(KINDS)) {
+      const words = failureWords(kind);
+      expect(words).not.toEqual(generic);
+      expect(words.tag).not.toContain(kind);
+      expect(words.sentence).not.toContain(kind);
+      expect(words.sentence).toMatch(/^[A-Z].*\.$/);
+    }
+    expect(failureWords(undefined)).toEqual(generic);
+    expect(failureWords("turn.guard_breach").tag).toBe("Failed");
+  });
+
+  test("the Inbox row leads with the sentence and keeps the raw message aside", () => {
+    const [item] = queue([FAILED_TURN]);
+    expect(item?.detail).toBe(failureWords("server").sentence);
+    expect(item?.detail).not.toContain("llm chain exhausted");
+    expect(item?.technical).toBe("llm chain exhausted after 1 providers (default)");
   });
 });

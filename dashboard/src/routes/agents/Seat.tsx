@@ -109,6 +109,7 @@ import {
   MessageSeatButton,
   PauseSeatButton,
 } from "~/components/writes.tsx";
+import { TechnicalDetails } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { relTime } from "~/lib/format.ts";
 import { unitPath } from "~/lib/orgchart.ts";
@@ -125,6 +126,7 @@ import {
   seatWord,
   shownStateOf,
   stoppedLine,
+  failureWords,
   toneOf,
   useSeatSetup,
   type Seat,
@@ -595,9 +597,18 @@ function Holder({
 }
 
 /**
- * What stops the seat or waits on somebody, above whichever tab is open: the
- * last error, a pause (who, when, why), another stop, and a coding run parked
- * on a question — with the answer to it one press away.
+ * What stops the seat or waits on somebody, above whichever tab is open: a
+ * pause (who, when, why), another stop, a failed last turn, and a coding run
+ * parked on a question, with the answer to it one press away.
+ *
+ * ONE BANNER PER CAUSE. A stop for a fault and the failed turn that came with
+ * it were two banners ("server: llm chain exhausted ..." over "This seat is
+ * stopped: its model provider is unreachable"), one cause said twice and the
+ * first in the engine's machine words. A fault stop now carries its failure in
+ * its own banner; a pause is a person's decision and a failed turn beside it
+ * is a second cause, so it keeps a banner of its own. Every headline is plain
+ * words (`failureWords`); the engine's raw message is behind the kit's
+ * disclosure ([TechnicalDetails]).
  */
 function Notices({
   seat,
@@ -612,43 +623,65 @@ function Notices({
 }) {
   const sandboxes = useSandboxes();
   if (seat.kind === "human" || !agent) return null;
-  const state = activityOf(agent);
+  const state = shownStateOf(agent);
   const paused = agent.paused ?? null;
+  const failure = agent.last_error ?? null;
   const sandbox = seatRun(sandboxes, seat);
   const asking = !!sandbox && awaitingPerson(sandbox.status);
-  if (!agent.last_error && state !== "stopped" && !asking) return null;
+  if (!failure && state !== "stopped" && state !== "paused" && !asking) return null;
+  // The failed turn's own facts: when, in which phase, and the event that
+  // recorded it. Said inside whichever banner owns the cause.
+  const facts = failure
+    ? [failure.phase && `during ${failure.phase}`, failure.at && relTime(failure.at, now)]
+        .filter(Boolean)
+        .join(" · ")
+    : "";
+  const failureFacts = failure && (
+    <>
+      {facts && ` (${facts})`}
+      <TechnicalDetails text={failure.message} />
+    </>
+  );
+  const eventLink = failure?.event_id ? (
+    <a className="t-link" href={href(["live", "events", failure.event_id])}>
+      The event
+    </a>
+  ) : undefined;
   return (
     <div className="prof-notices">
-      {agent.last_error && (
-        <Callout
-          variant="danger"
-          action={
-            agent.last_error.event_id ? (
-              <a className="t-link" href={href(["live", "events", agent.last_error.event_id])}>
-                The event
-              </a>
-            ) : undefined
-          }
-        >
-          <strong>{agent.last_error.kind || "error"}</strong>: {agent.last_error.message}
-          {agent.last_error.phase && ` (during ${agent.last_error.phase})`}
-          {agent.last_error.at && ` · ${relTime(agent.last_error.at, now)}`}
-        </Callout>
-      )}
       {/* THE STATE'S OWN TONE, the pill's and the badge's: a stopped seat is
           the one red state in the seat vocabulary, and a warning callout
           under a danger pill named one fact in two colours. */}
-      {state === "stopped" &&
-        (agent.stopped_reason === "paused" && paused ? (
-          <Callout variant={toneOf(state)}>
-            <strong>Paused by {nameOf(paused.by)}</strong> {relTime(paused.at, now)}
-            {paused.reason ? `: “${sentence(paused.reason)}”` : "."}
-          </Callout>
-        ) : (
-          <Callout variant={toneOf(state)}>
-            This seat is stopped: {stoppedLine(agent, nameOf)}.
-          </Callout>
-        ))}
+      {state === "paused" && (
+        <Callout variant={toneOf(state)}>
+          {paused ? (
+            <>
+              <strong>Paused by {nameOf(paused.by)}</strong> {relTime(paused.at, now)}
+              {paused.reason ? `: “${sentence(paused.reason)}”` : "."}
+            </>
+          ) : (
+            <>This seat is paused.</>
+          )}
+        </Callout>
+      )}
+      {state === "stopped" && (
+        <Callout variant={toneOf(state)} action={eventLink}>
+          This seat is stopped: {stoppedLine(agent, nameOf)}.
+          {failure && (
+            <>
+              {" "}
+              {failureWords(failure.kind).sentence}
+              {failureFacts}
+            </>
+          )}
+        </Callout>
+      )}
+      {failure && state !== "stopped" && (
+        <Callout variant="danger" action={eventLink}>
+          <strong>The last turn failed.</strong> {failureWords(failure.kind).sentence}
+          {failureFacts}
+        </Callout>
+      )}
       {sandbox && asking && (
         <Callout
           variant="warning"
