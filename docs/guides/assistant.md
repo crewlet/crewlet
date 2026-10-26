@@ -59,7 +59,11 @@ of the company document, `?dry_run=true`) is asked to, as the person: a change
 the route would refuse goes back to the assistant to correct, and never reaches
 the person to approve, and the check's warnings are on the card. A write the
 history records carries a one-line summary of what it does, shown on the card
-and stored with the revision. A task or a page that names no project or space
+and stored with the revision. A change that replaces a whole object (a unit, a
+seat, the charter) never removes a field by leaving it out: a field the
+assistant drops without saying so is refused before the card, and one the
+person asked to remove leads the card as "This also removes ...". A task or a
+page that names no project or space
 is shown, and sent, with the one it will land in, or refused when the person's
 team owns none (ADR-0055). Adding a
 seat to the org chart, editing a person's permissions, purging a task or

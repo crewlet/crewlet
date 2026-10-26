@@ -413,6 +413,8 @@ export interface AssistantProposalCard {
   target?: string;
   changes: AssistantChange[];
   note?: string;
+  /** The fields the change removes from the object as it is now, by label: the card leads with them. */
+  removes?: string[];
   audience?: string[];
   taint?: string;
   step_up?: boolean;

@@ -149,6 +149,9 @@ type ProposalCard struct {
 	Changes []Change `json:"changes"`
 	// Note is the consequence, in one sentence.
 	Note string `json:"note,omitempty"`
+	// Removes are the fields the change removes from the object as it is
+	// now, by label: the warning the card leads with.
+	Removes []string `json:"removes,omitempty"`
 	// Audience is who will see the result where visibility changes (a
 	// share, a comment others are notified of).
 	Audience []string `json:"audience,omitempty"`

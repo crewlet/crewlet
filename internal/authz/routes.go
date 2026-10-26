@@ -50,6 +50,12 @@ type Policy struct {
 	// it reads from the `X-Summary` header or a top-level `_summary` key in its
 	// JSON body, and refuses a write without one. See [Policy.Summarised].
 	Summary bool
+
+	// Replaces says the write is a PUT that stores its body as the whole
+	// object at its address, in the shape the GET on the same address
+	// answers, so a field the body leaves out is removed. See
+	// [Policy.Replacing].
+	Replaces bool
 }
 
 // Absent is a PUT route's answer to an address that holds nothing, DECLARED
@@ -119,6 +125,22 @@ func (p Policy) Summarised() Policy {
 	return p
 }
 
+// Replacing is p declaring that its PUT replaces the whole object at its
+// address with the body, the object being the one the GET on the same address
+// answers: whatever that representation holds and the body leaves out is
+// removed.
+//
+// DECLARED WHERE THE ROUTE IS MOUNTED, beside [Policy.Checked], for the same
+// reader: the Dashboard Assistant's preview of a generic change compares the
+// body with the representation it read, and a field the body would drop by
+// omission is never approved by accident (ADR-0055). A route whose GET answers
+// fields its PUT does not take (a version, a timestamp) does not declare it,
+// because there a missing field is not a removal.
+func (p Policy) Replacing() Policy {
+	p.Replaces = true
+	return p
+}
+
 // DryRunQuery is the query parameter a [Policy.Checked] route reads.
 const DryRunQuery = "dry_run"
 
@@ -146,6 +168,15 @@ func writeFormProblem(pattern string, p Policy) string {
 	}
 	if p.DryRun || p.Summary {
 		return "declares a check or a revision summary, which only a write has"
+	}
+	return ""
+}
+
+// replacesProblem says why a route's [Policy.Replaces] cannot be mounted, or
+// "": only a PUT replaces what its address holds.
+func replacesProblem(pattern string, p Policy) string {
+	if method, _, _ := strings.Cut(pattern, " "); p.Replaces && method != http.MethodPut {
+		return "declares that it replaces what its address holds, which only a PUT does"
 	}
 	return ""
 }
@@ -412,6 +443,9 @@ func (t *Router) Handle(pattern string, p Policy, h http.Handler) error {
 		return newPolicyError(pattern, problem)
 	}
 	if problem := writeFormProblem(pattern, p); problem != "" {
+		return newPolicyError(pattern, problem)
+	}
+	if problem := replacesProblem(pattern, p); problem != "" {
 		return newPolicyError(pattern, problem)
 	}
 	t.mu.Lock()

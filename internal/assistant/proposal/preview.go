@@ -71,6 +71,13 @@ type Preview struct {
 	// approval asks the step-up of and the audit names. Empty for every
 	// other tool, whose own act tool or verb it is.
 	Act string
+
+	// Removes are the fields a replacing write removes from the object as it
+	// is now, by label: the warning the card leads with, so a removal is
+	// never only a struck-through row among the others. Computed from the
+	// body and the representation the source revision names, both of which
+	// the digest binds.
+	Removes []string
 }
 
 // Check refuses a preview no card is drawn from: a write with no title, no

@@ -57,6 +57,10 @@ import (
 //  8. A route that records a revision summary ([Route.Summary]) carries it as
 //     `_summary` in the body ([summarised]), shown on the card as the history
 //     line and kept out of the field rows.
+//  9. A route that replaces the whole object ([Route.Replaces]) removes only
+//     what the call's `removes` names: a field the body drops by omission is
+//     the step's refusal, and a declared removal heads the card
+//     ([removalCheck]).
 
 // diffRows bounds how many field rows one card carries: past it, the rest is
 // counted in one row, and the whole change is still the request the card
@@ -104,10 +108,10 @@ func (g generic) preview(ctx context.Context, read proposal.Read, _ time.Time,
 	revision, creates := "", false
 	if req.Method != http.MethodPost {
 		if reader, ok := g.table.readerOf(req.Path); ok {
-			rep, err := readRepresentation(ctx, read, reader, req.Path)
+			rep, readErr := readRepresentation(ctx, read, reader, req.Path)
 			switch {
-			case err != nil:
-				return proposal.Preview{}, err
+			case readErr != nil:
+				return proposal.Preview{}, readErr
 			case rep.absent != nil && req.Method == http.MethodPut && route.createsWhenAbsent():
 				// NOTHING IS THERE, SO THE PUT IS A CREATE, and says so:
 				// sent under `If-None-Match: *` ([proposal.RevisionCreate]),
@@ -134,6 +138,16 @@ func (g generic) preview(ctx context.Context, read proposal.Read, _ time.Time,
 		}
 	}
 
+	// A REPLACE REMOVES ONLY WHAT THE CALL SAYS IT REMOVES ([removalCheck]),
+	// asked before the route's own check: a field dropped by omission is the
+	// call's to correct whether or not the route would take the body.
+	address, _ := pathValues(args["path"])
+	removals, removalErr := removalCheck(route, req.Method, before, changed, address,
+		Args(args).Strings("removes"), lowerFirst(callTitle(Args(args))))
+	if removalErr != nil {
+		return proposal.Preview{}, removalErr
+	}
+
 	var warnings []string
 	if route.DryRun {
 		found, checkErr := checked(ctx, read, req, revision)
@@ -145,6 +159,11 @@ func (g generic) preview(ctx context.Context, read proposal.Read, _ time.Time,
 
 	c := changes{}
 	c.fact("request", "Request", req.Method+" "+shownPath(req))
+	if len(removals) > 0 {
+		// THE REMOVALS LEAD THE ROWS as one line, beside the warning the
+		// card heads itself with ([proposal.Preview.Removes]).
+		c.fact("request.removes", "Removes", strings.Join(removalLabels(removals), ", "))
+	}
 	switch req.Method {
 	case http.MethodDelete:
 		if before == nil {
@@ -195,6 +214,7 @@ func (g generic) preview(ctx context.Context, read proposal.Read, _ time.Time,
 		SourceRevision: revision,
 		Request:        req,
 		Act:            act,
+		Removes:        removalLabels(removals),
 	}, nil
 }
 

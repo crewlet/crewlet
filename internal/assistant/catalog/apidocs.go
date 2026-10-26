@@ -305,6 +305,11 @@ func (g generic) facts(route Route) string {
 		parts = append(parts, "its history line is your `summary` argument (never "+
 			"send X-Summary or _summary)")
 	}
+	if route.Replaces {
+		parts = append(parts, "replacing: the body is the whole object, so send every "+
+			"field it holds now that should stay, and name each field the person asked to "+
+			"remove in `removes`; a field left out and not named is refused")
+	}
 	return strings.Join(parts, ", ")
 }
 

@@ -223,3 +223,50 @@ func exposedAs(question, name string) bool {
 		return e.Question == question && e.As == catalog.AsReadTool && e.Name == name
 	})
 }
+
+// EVERY REPLACING ROUTE IS READ BEFORE IT IS PROPOSED (ADR-0055).
+//
+// A route that declares it replaces the whole object ([authz.Policy.Replacing])
+// is one whose omitted fields the assistant's preview refuses unless the call
+// names them in `removes`, which it can only do against the object as it is
+// now: so every one is a PUT, its GET is in the assistant's table on the same
+// path, and the declaration reaches the table as mounted. Every PUT on the
+// configuration surface, whose GET round-trips into its PUT, declares it.
+// Mutation: drop Replacing() from an entity route, or the GET of a replacing
+// route from the table, and this names the route.
+func TestEveryReplacingRouteIsReadBeforeItIsProposed(t *testing.T) {
+	t.Parallel()
+	app := everySurfaceApp(t)
+	policies := app.Policies()
+	listed := map[string]catalog.Route{}
+	for _, r := range app.AssistantRoutes() {
+		listed[r.Pattern] = r
+	}
+	replacing := 0
+	for pattern, r := range listed {
+		method, path, _ := strings.Cut(pattern, " ")
+		if r.Replaces != policies[pattern].Replaces {
+			t.Errorf("%s replaces %v in the assistant's table and %v as mounted", pattern,
+				r.Replaces, policies[pattern].Replaces)
+		}
+		if method == http.MethodPut && strings.HasPrefix(path, "/config") && !r.Replaces {
+			t.Errorf("%s replaces what /config holds at its address and does not declare it",
+				pattern)
+		}
+		if !r.Replaces {
+			continue
+		}
+		replacing++
+		if method != http.MethodPut {
+			t.Errorf("%s declares it replaces, which only a PUT does", pattern)
+		}
+		if _, read := listed[http.MethodGet+" "+path]; !read {
+			t.Errorf("%s replaces what GET %s answers, which the assistant cannot read",
+				pattern, path)
+		}
+	}
+	if replacing < 3 {
+		t.Errorf("only %d routes declare they replace; the walk is not reading the table",
+			replacing)
+	}
+}

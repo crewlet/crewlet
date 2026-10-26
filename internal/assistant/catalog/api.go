@@ -86,6 +86,11 @@ type Route struct {
 	// ([authz.Policy.Summarised]): the change carries one as `_summary` in
 	// its body, which the digest binds.
 	Summary bool
+	// Replaces is a PUT that stores its body as the whole object its GET
+	// answers ([authz.Policy.Replacing]): a field the body leaves out is
+	// removed, so the preview refuses one the call did not declare in
+	// `removes`.
+	Replaces bool
 }
 
 // createsWhenAbsent reports a route that creates what an empty address names.
@@ -350,10 +355,12 @@ func (g generic) change() Tool {
 			"Use a dedicated write tool whenever one makes the change (filing or updating a " +
 			"task, a page, a share, the principles), since its preview is shaped for it; use " +
 			"this for everything else. Read the resource first, and send its whole new value " +
-			"where the route replaces it (a PUT). The body is at most 64 KiB.",
+			"where the route replaces it (a PUT): every field it holds now that should stay. " +
+			"A field the body leaves out is removed, so a removal the person did not ask for " +
+			"is refused unless `removes` names it. The body is at most 64 KiB.",
 		schema: object([]string{"route"}, map[string]*schema{
 			"route": routeArgument, "path": pathArgument, "query": queryArgument,
-			"body": bodyArgument, "summary": summaryArgument,
+			"body": bodyArgument, "summary": summaryArgument, "removes": removesArgument,
 		}),
 		Routes: g.table.patterns(func(r Route) bool { return !r.reads() }),
 		Build: func(a map[string]any) (exec.Request, error) {

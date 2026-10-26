@@ -94,4 +94,13 @@ func TestACheckIsTheWriteDecidedAtTheReadsProof(t *testing.T) {
 			t.Error("a read was mounted declaring a summary")
 		}
 	}
+
+	// ONLY A PUT DECLARES IT REPLACES what its address holds.
+	replace := authz.Policy{Action: authz.ActionConfigWrite}
+	if err := router.Handle("PATCH /merged", replace.Replacing(), handler("merged")); err == nil {
+		t.Error("a PATCH was mounted declaring it replaces what its address holds")
+	}
+	if err := router.Handle("PUT /replaced", replace.Replacing(), handler("replaced")); err != nil {
+		t.Errorf("a PUT declaring it replaces was refused: %v", err)
+	}
 }

@@ -128,3 +128,38 @@ test("an unconfirmed change never says nothing changed", () => {
   draw({ scope: "server", state: "unknown" });
   expect(document.body.textContent ?? "").not.toContain("Nothing changed.");
 });
+
+test("a change that removes fields leads with them, above every row", () => {
+  draw({
+    scope: "server",
+    tool: "propose_api_change",
+    title: "Change through the API",
+    removes: ["Project", "Space"],
+    changes: [
+      { kind: "fact", field: "request", label: "Request", to: "PUT /config/units/core" },
+      {
+        kind: "added",
+        field: "roles.analyst.name",
+        label: "Roles › analyst › name",
+        to: "Data Analyst",
+      },
+    ],
+    approve_label: "Approve and send",
+  });
+  const warning = screen.getByText(
+    "This also removes Project and Space. Approve only if you asked for that.",
+  );
+  const firstRow = screen.getByText("PUT /config/units/core");
+  expect(warning.compareDocumentPosition(firstRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+test("a change that removes nothing says nothing about removing", () => {
+  draw({
+    scope: "server",
+    tool: "propose_api_change",
+    title: "Change through the API",
+    changes: [{ kind: "fact", field: "request", label: "Request", to: "PUT /config/units/core" }],
+    approve_label: "Approve and send",
+  });
+  expect(screen.queryByText(/This also removes/)).toBeNull();
+});

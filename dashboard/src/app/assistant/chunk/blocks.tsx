@@ -497,6 +497,22 @@ export function changeRowsOf(proposal: AssistantProposalCard): ChangeListRow[] {
   ];
 }
 
+/**
+ * What a replacing change removes, as the sentence the card leads with: never
+ * only a struck-through row among the others, so a person approving "add a
+ * seat" sees that it also takes the unit's project away (ADR-0055). Nothing
+ * where the change removes nothing.
+ */
+export function removalSummary(proposal: AssistantProposalCard): string | undefined {
+  const removes = (proposal.removes ?? []).filter((label) => label.trim() !== "");
+  if (removes.length === 0) return undefined;
+  const named =
+    removes.length === 1
+      ? removes[0]
+      : `${removes.slice(0, -1).join(", ")} and ${removes[removes.length - 1]}`;
+  return `This also removes ${named}. Approve only if you asked for that.`;
+}
+
 /** What the person does with a proposal: the drawer's session answers each. */
 export interface ProposalHandlers {
   approve: (proposal: AssistantProposalCard) => void;
@@ -617,6 +633,8 @@ function Proposal({
       subtitle={proposal.scope === "page" ? "This page only" : "Saved for the company"}
       scope={proposal.scope}
       state={state}
+      // WHAT IT REMOVES LEADS THE CARD, above every row (removalSummary).
+      summary={removalSummary(proposal)}
       changes={screen ? screen.rows.map(previewRow) : changeRowsOf(proposal)}
       note={proposal.note}
       // THE SCREEN'S GATE HOLDS APPROVE, with its sentence, before the person

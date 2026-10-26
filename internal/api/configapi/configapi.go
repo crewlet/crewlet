@@ -249,7 +249,8 @@ func (s *Service) Routes(mux authz.Mux) error {
 				return authz.Object{Kind: authz.KindUnit, Unresolved: true}
 			}
 		}
-		return p.WhenAbsent(EntityAbsent(kind)).Checked().Summarised()
+		// AN ENTITY'S PUT REPLACES IT whole, in the shape its GET answers.
+		return p.WhenAbsent(EntityAbsent(kind)).Checked().Summarised().Replacing()
 	}
 	entity := func(pattern string, p authz.Policy, h http.HandlerFunc) {
 		if err := router.Handle(pattern, p, h); err != nil {
@@ -257,7 +258,13 @@ func (s *Service) Routes(mux authz.Mux) error {
 		}
 	}
 	read("GET /config", s.getActive)
-	documentWrite("PUT /config", s.put)
+	// THE WHOLE DOCUMENT IS REPLACED by a PUT, in the shape GET /config
+	// answers: what the body leaves out is removed.
+	if err := router.Handle("PUT /config",
+		orgPolicy(authz.ActionOrgWrite).Checked().Summarised().Replacing(),
+		http.HandlerFunc(s.put)); err != nil {
+		failures = append(failures, err)
+	}
 	// WHAT THIS RESOURCE TAKES, asked rather than guessed. RFC 5789 §3.1:
 	// a patch format is negotiated, not assumed, and Accept-Patch is where
 	// a server says which ones it speaks.
@@ -281,7 +288,8 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// A CHARTER WRITE CHECKS ON `dry_run=true` and names its own summary
 	// when it is sent none ([charterSummary]), so it declares only the check.
 	if err := router.Handle("PUT /config/charter",
-		authz.Policy{Action: authz.ActionPrinciplesWrite}.Checked(), http.HandlerFunc(s.putCharter)); err != nil {
+		authz.Policy{Action: authz.ActionPrinciplesWrite}.Checked().Replacing(),
+		http.HandlerFunc(s.putCharter)); err != nil {
 		failures = append(failures, err)
 	}
 	read("GET /config/revisions", s.listRevisions)

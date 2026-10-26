@@ -48,7 +48,8 @@ func (a *App) AssistantRoutes() []catalog.Route {
 		}
 		if policy, guarded := a.policies[pattern]; guarded {
 			out = append(out, catalog.Route{Pattern: pattern, Action: policy.Action,
-				Absent: policy.Absent, DryRun: policy.DryRun, Summary: policy.Summary})
+				Absent: policy.Absent, DryRun: policy.DryRun, Summary: policy.Summary,
+				Replaces: policy.Replaces})
 		} else if decidedInside[pattern] {
 			out = append(out, catalog.Route{Pattern: pattern})
 		}
