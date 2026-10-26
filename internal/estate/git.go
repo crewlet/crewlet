@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
@@ -51,10 +52,11 @@ type LocalGit interface {
 // *Server satisfies it.
 type GitServer interface {
 	// Read answers one read by object id. ctx ENDS WHEN THE ANSWER IS DUE —
-	// a reply's margin before its asker stops listening ([code.AnswerBy]) —
-	// and a read that ctx ends that way answers code.ErrGitUnready while the
-	// asker still listens ([code.AnswerDue]), never ctx's own error, which
-	// the walk would take for the repository's answer.
+	// a reply's margin before its asker stops listening, remote or in
+	// process alike ([code.AnswerBy]) — and a read that ctx ends that way
+	// answers code.ErrGitUnready while the asker still listens
+	// ([code.AnswerDue]), never ctx's own error, which the walk would take
+	// for the repository's answer.
 	Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, error)
 }
 
@@ -67,7 +69,9 @@ type GitServer interface {
 //	code.GitShareWait          2 s  a free unit of the node's seat git-work share
 //	+ statelog.ReadBudget      2 s  the node's cache synced to the asker's floor
 //	+ statelog.ReadBudget      2 s  one linearizable re-sync of an id the copy lacks
-//	+ gitproc.ReadDeadline    10 s  the read's own git process
+//	+ gitproc.ReadDeadline    10 s  the read's OWN GIT: the run time every process
+//	                                of its kind shares — a listing's one, a
+//	                                comparison's three
 //	+ code.ReplyMargin         1 s  the answer's trip back
 //
 // The git node is served under a context that ends a reply's margin before
@@ -75,6 +79,19 @@ type GitServer interface {
 // context, so a node that cannot fit a wait answers `behind` while its asker
 // still listens: a shorter attempt only hears a slow git node give up sooner;
 // a longer one would leave a node that is gone to be waited out longer.
+//
+// WHAT THE SUM LEAVES OUT, on purpose: the read lane's queue before each of
+// the read's processes (up to gitproc.SlotWait each, FIFO behind a person's
+// push scans), and the short processes that find what a read names before
+// its own git runs (rev-parse --disambiguate and cat-file --batch-check, each
+// bounded by gitproc.ReadDeadline and milliseconds on a healthy node). Summed
+// at their whole bounds they would make the attempt minutes long, and a dead
+// node would be waited out that long. Left out, they come out of the attempt:
+// a read they hold up past its answer's due instant is answered unready — the
+// node's capacity, `share` — and the walk asks the next git node; never late,
+// and never refused as too large, which only a read whose own git ran the
+// whole of its budget is (internal/code/query).
+//
 // BenchmarkCodeRead (internal/code/query) confirms the TERMS — every warm
 // kind's p99 far inside gitproc.ReadDeadline with its sync — and never sets
 // the sum: a term it misses is re-derived and the sum follows.
@@ -199,7 +216,7 @@ func (r *Router) routeGit(ctx context.Context, spec *opSpec, actor *Actor, x exc
 		// node's own git half, which needs no view to answer: with no node
 		// named to order, it is the one node left to ask, as its home.
 		if ownHalf {
-			if value, final, _, ranErr := r.runLocalGit(ctx, spec, *x.home, own, w); final {
+			if value, final, _, ranErr := r.runLocalGit(ctx, spec, *x.home, own, budget, w); final {
 				return value, ranErr
 			}
 		}
@@ -228,7 +245,7 @@ func (r *Router) routeGit(ctx context.Context, spec *opSpec, actor *Actor, x exc
 			attempt = *x.home
 		}
 		if node == r.self {
-			value, final, passes, ranErr := r.runLocalGit(ctx, spec, attempt, own, w)
+			value, final, passes, ranErr := r.runLocalGit(ctx, spec, attempt, own, budget, w)
 			if final {
 				return value, ranErr
 			}
@@ -353,10 +370,23 @@ func (r *Router) IsHome(repoID string) (bool, error) {
 // since asking this node's own half again costs no round trip — and passes
 // says whether no copy serving the read is coming here, so the walk lets the
 // next node fill in this one's place ([passesFill]'s rule).
-func (r *Router) runLocalGit(ctx context.Context, spec *opSpec, x exchange, g GitServer,
+//
+// HELD TO THE ATTEMPT A REMOTE ASKER GIVES IT: budget, the walk's attempt on
+// one node ([Router.budgetFor]), served until a reply's margin before it as
+// the server's git arm serves a remote read ([code.AnswerBy]). Run under the
+// caller's own context instead, the home's own seats' reads waited out a busy
+// read lane or a slow sync for as long as their caller allowed, and ran their
+// git for as long, while every other node's seats were answered unready at the
+// attempt's end: what a read is answered must not depend on which node asked
+// it.
+func (r *Router) runLocalGit(ctx context.Context, spec *opSpec, x exchange, g GitServer, budget time.Duration,
 	w *walk) (value any, final, passes bool, err error) {
 
-	value, err = x.local(ctx, Backend{Git: g, ServerSeams: r.seams})
+	attempt, cancel := attemptContext(ctx, budget)
+	defer cancel()
+	served, stop := code.AnswerBy(attempt, deadlineOf(attempt))
+	defer stop()
+	value, err = x.local(served, Backend{Git: g, ServerSeams: r.seams})
 	switch {
 	case errors.Is(err, errNoHalf):
 		w.note("%s", ranNothingDetail(r.self, spec.name, err))

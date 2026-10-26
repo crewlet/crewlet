@@ -29,6 +29,10 @@ import (
 // keep it: the read lane's queue and a process's own timer are gitproc's, and
 // a process's deadline computed before it queued for its slot runs past the
 // cut by however long it queued.
+//
+// THE SAME CUT HOLDS A READ ANSWERED IN PROCESS: a git node's own seats' reads
+// are given the attempt a remote asker's are, ending the same margin before
+// it, so what a read is answered does not depend on which node asked it.
 
 // ErrAnswerDue is the cause the context a git read is served under ends with
 // at the instant its answer is due: its asker's deadline less [ReplyMargin]

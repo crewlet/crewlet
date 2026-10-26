@@ -95,7 +95,7 @@ func (r *read) list(ctx context.Context, rev, dir, tree string, recursive bool, 
 	if recursive {
 		tail = []string{"-r", tree}
 	}
-	deadline, err := r.bound(ctx, gitproc.ReadDeadline)
+	deadline, err := r.budget()
 	if err != nil {
 		return code.GitAnswer{}, err
 	}
@@ -109,8 +109,8 @@ func (r *read) list(ctx context.Context, rev, dir, tree string, recursive bool, 
 	case err == nil:
 		err = recs.close()
 	}
-	narrow := fmt.Errorf("%w: listing %q did not finish in %s: list a directory below it, or without "+
-		"recursion", code.ErrSliceTooLarge, dir, deadline)
+	narrow := fmt.Errorf("%w: listing %q did not finish in the read's %s of git: list a directory below it, "+
+		"or without recursion", code.ErrSliceTooLarge, dir, r.s.gitBudget)
 	if err := r.failed(ctx, "listing of a tree", res, err, narrow); err != nil {
 		return code.GitAnswer{}, err
 	}

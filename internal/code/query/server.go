@@ -70,10 +70,13 @@ type Options struct {
 type Server struct {
 	o Options
 	// syncWait bounds a read's wait on its sync (statelog.ReadBudget),
-	// pageBytes an answer's JSON (code.MaxGitAnswerBytes) and probes a
-	// landed-in search's ancestry checks (MaxLandedProbes) — fields so this
-	// package's tests can scale them (export_test.go).
+	// gitBudget the run time a read's own git is given, shared by every
+	// process of its kind (gitproc.ReadDeadline), pageBytes an answer's
+	// JSON (code.MaxGitAnswerBytes) and probes a landed-in search's
+	// ancestry checks (MaxLandedProbes) — fields so this package's tests
+	// can scale them (export_test.go).
 	syncWait  time.Duration
+	gitBudget time.Duration
 	pageBytes int
 	probes    int
 }
@@ -96,8 +99,8 @@ func New(o Options) (*Server, error) {
 	if missing != "" {
 		return nil, fmt.Errorf("%w: query.Options.%s is required", code.ErrInvalid, missing)
 	}
-	return &Server{o: o, syncWait: statelog.ReadBudget, pageBytes: code.MaxGitAnswerBytes, probes: MaxLandedProbes},
-		nil
+	return &Server{o: o, syncWait: statelog.ReadBudget, gitBudget: gitproc.ReadDeadline,
+		pageBytes: code.MaxGitAnswerBytes, probes: MaxLandedProbes}, nil
 }
 
 // Read answers q: a page of the tree, file, diff or comparison it names, or
@@ -132,10 +135,17 @@ func New(o Options) (*Server, error) {
 //     and path checked present with one batch (objects.go); an id the copy
 //     lacks is code.ErrObjectNotFound. No refusal of steps 5 and 6 is
 //     concluded from a copy not read at the log's head: it is synced there
-//     once, and judged again.
+//     once, and judged again. Each of those short processes runs to its own
+//     bound, gitproc.ReadDeadline: one that runs all of it, a few ids' check
+//     no healthy node takes a second over, is the node's own failure
+//     (node_failed).
 //  7. The kind's own git runs under ONE unit of the node's seat git-work
 //     share, released the moment it ends — never across a sync or a check,
-//     which hold no read-lane slot (code.GitShare).
+//     which hold no read-lane slot (code.GitShare) — and within ONE BUDGET
+//     of git run time, gitproc.ReadDeadline, which every process of the kind
+//     shares: each is given what the ones before it left. A read whose own
+//     git runs the whole of it is too large to answer (code.ErrSliceTooLarge,
+//     naming the narrowing): another node would take as long.
 //  8. Every commit the answer names — its revision, a diff's or a
 //     comparison's commits, a landed-in read's commit and tip — is named with
 //     the push that introduced it (code.GitAnswer.PushedBy), from the copy's
@@ -154,8 +164,14 @@ func New(o Options) (*Server, error) {
 // each process — takes it, and one that it ends answers code.ErrGitUnready
 // naming what the read was waiting on, while the asker still listens
 // (code.AnswerDue): syncing where it ended the sync, share where it ended a
-// wait for the node's git or a run of it — never ctx's own error, which is
-// the answer only where the caller went away.
+// wait for the node's git or a run of it. Never ErrSliceTooLarge — a process
+// the answer's due instant ended had less than its read's whole budget, which
+// a node with more time would have given it — and never ctx's own error,
+// which is the answer only where the caller went away. Time the sum of a
+// read's budgets leaves out (the read lane's queue, the short checks: see
+// estate.GitReadAttempt) comes out of the asker's attempt, and so, under
+// load, out of the read's own git: the read is then answered unready rather
+// than late or too large.
 func (s *Server) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
 	if err := q.Validate(); err != nil {
 		return code.GitAnswer{}, err
@@ -192,6 +208,9 @@ func (s *Server) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, err
 		return code.GitAnswer{}, err
 	}
 	defer release()
+	// THE READ'S OWN GIT BEGINS: from here every process is given what is
+	// left of one budget of run time, and charged what it ran.
+	r.metered, r.gitLeft = true, s.gitBudget
 	a, err := r.answer(ctx, objs, at)
 	release()
 	if err != nil {
@@ -257,6 +276,14 @@ type read struct {
 	prov     cache.Provenance
 	pushedBy map[string]code.PushedBy
 	coverage *code.Coverage
+	// metered is set once the read's own git has begun (step 7), and gitLeft
+	// is what is left of its budget of run time: each of its processes is
+	// given that as its deadline ([read.budget]) and charged what it ran
+	// ([read.failed]) — its run alone, never its wait for a read-lane slot,
+	// which is the node's contention and not the read's size, and comes out
+	// of the asker's attempt instead.
+	metered bool
+	gitLeft time.Duration
 }
 
 // judgeable refuses a seat's read on a node that cannot judge a seat (step 2).
@@ -458,35 +485,45 @@ func (r *read) unready(why code.UnreadyReason, detail string) error {
 	return &code.ErrGitUnready{Reason: why, Detail: detail}
 }
 
-// bound is limit, cut to ctx's deadline: the instant the read's answer is due
-// (code.AnswerBy), which already stands the reply's margin before the asker
-// stops listening, so a process ends while its asker still listens. A read
-// with no time left before that instant is unready, as a wait it ended is.
-func (r *read) bound(ctx context.Context, limit time.Duration) (time.Duration, error) {
-	dl, ok := ctx.Deadline()
-	if !ok {
-		return limit, nil
+// budget is the deadline the next process of the read's OWN GIT is given: what
+// is left of its budget of run time ([read.gitLeft]) — the processes of a kind
+// share one, so a comparison's walks and its stat, or a patch's lookup and its
+// diff-pairs, run in the time one listing gets. A budget already run out is the
+// read too large to answer, said with the generic narrowing: a process's run is
+// charged after it ends (failed), so a later one finds it spent only where the
+// one before it ran out its last instant.
+func (r *read) budget() (time.Duration, error) {
+	if r.gitLeft <= 0 {
+		return 0, fmt.Errorf("%w: the read of repository %s ran its git's whole %s: narrow it",
+			code.ErrSliceTooLarge, r.q.RepoID, r.s.gitBudget)
 	}
-	left := time.Until(dl)
-	if left <= 0 {
-		return 0, r.unready(code.UnreadyShare, fmt.Sprintf("%s has no time left to read repository %s before "+
-			"the read's answer falls due; another git node answers meanwhile", r.s.o.NodeID, r.q.RepoID))
-	}
-	return min(limit, left), nil
+	return r.gitLeft, nil
 }
 
-// failed is what a git process's end means for the read: nil for one that
-// answered; unready, syncing, for one that reported damage — failed or not,
-// since git answers some questions over damage it reports and exits 0 — and
-// for one the pool refused the copy's shape for (the cache repairs both:
-// nothing here names a gitproc.Repairer, so the cache's observer acts on a
-// report at once); unready, share, for one the read's answer fell due during
-// — waiting for a slot or running (code.AnswerDue) — and for a read lane busy
-// past gitproc.SlotWait; and for a run its deadline ended, slice when the read
-// can be narrowed — another node would take as long — and unready otherwise,
-// node_failed: a short process no healthy node takes that long over, so this
-// node is not one to wait for, and the walk lets the next node fill a copy.
+// failed is what a git process's end means for the read, once the run is
+// charged to the read's own git where that has begun ([read.metered]): nil
+// for one that answered; unready, syncing, for one that reported damage —
+// failed or not, since git answers some questions over damage it reports and
+// exits 0 — and for one the pool refused the copy's shape for (the cache
+// repairs both: nothing here names a gitproc.Repairer, so the cache's observer
+// acts on a report at once); unready, share, for one the read's answer fell
+// due during — waiting for a slot or running (code.AnswerDue) — and for a read
+// lane busy past gitproc.SlotWait; slice, for a process of the read's own git
+// that ran out the whole of its budget, since another node would take as long;
+// and unready, node_failed, for one of the short checks before it that ran its
+// whole bound, which no healthy node takes over a few ids, so this node is not
+// one to wait for and the walk lets the next node fill a copy.
+//
+// A RUN THE ANSWER'S DUE INSTANT ENDED IS NEVER TOO LARGE: it had less than
+// the read's whole budget — the sync, the checks and the read lane's queue
+// took the rest of the asker's attempt — and a node with that time to spare
+// would have given it all of it. Refused as too large, a read that only lost
+// its time to contention told its seat to narrow a question a quiet node
+// answers.
 func (r *read) failed(ctx context.Context, what string, res gitproc.Result, err error, slice error) error {
+	if r.metered {
+		r.gitLeft -= res.Took
+	}
 	if res.Damage != nil {
 		return r.unready(code.UnreadySyncing, fmt.Sprintf("%s's %s over repository %s met damage the node is "+
 			"repairing (%v); another git node answers meanwhile", r.s.o.NodeID, what, r.q.RepoID, res.Damage))
@@ -503,7 +540,11 @@ func (r *read) failed(ctx context.Context, what string, res gitproc.Result, err 
 	case errors.Is(err, gitproc.ErrBusy):
 		return r.unready(code.UnreadyShare, fmt.Sprintf("%s's read lane was busy past %s; another git node "+
 			"answers meanwhile", r.s.o.NodeID, gitproc.SlotWait))
-	case errors.Is(err, gitproc.ErrDeadline) && slice != nil:
+	case errors.Is(err, gitproc.ErrDeadline) && r.metered:
+		if slice == nil {
+			return fmt.Errorf("%w: the %s over repository %s ran the read's whole %s of git: narrow it",
+				code.ErrSliceTooLarge, what, r.q.RepoID, r.s.gitBudget)
+		}
 		return slice
 	case errors.Is(err, gitproc.ErrDeadline):
 		return r.unready(code.UnreadyNodeFailed, fmt.Sprintf("%s's %s over repository %s ran its whole bound, "+

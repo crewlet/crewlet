@@ -191,9 +191,10 @@ says no copy is coming there (behind the company's configuration for a seat,
 or failing on its own): a home's death, or a home stuck behind a revision,
 costs the fleet one download of each repository read meanwhile, by its
 runner-up, rather than one on every git node a read reached — or a repository
-nobody can read until the home recovers. On each git node those reads hold at most half its read
-lane, so the other half stays the one a person's push scans in
-([Server-side reads](code-host.md#server-side-reads)).
+nobody can read until the home recovers. On each git node those reads' own
+git holds at most half its read lane — the short checks of what a read names
+wait in the lane's queue like any short read — so the other half stays the
+one a person's push scans in ([Server-side reads](code-host.md#server-side-reads)).
 And one repository's seat reads are served by the git nodes that hold a copy
 of it, which bounds them by those nodes' shares: a home at its share sends the
 rest on to them rather than starting another copy, because the share is the

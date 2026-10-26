@@ -2,8 +2,8 @@
 
 - **Status:** accepted
 - **Authority:** `internal/estate`
-- **Enforced-by:** `internal/estate.TestAGitOperationIsAskedOfItsRepositorysHome`, `internal/estate.TestAGitNodeThatIsSyncingSendsTheAskerToTheRunnerUp`, `internal/estate.TestOnlyTheEffectiveHomeIsAskedToFill`, `internal/estate.TestAHomeThatJudgesNoSeatHandsTheFillToItsRunnerUp`, `internal/estate.TestTheFillMovesOnlyPastANodeBringingNoCopyUp`, `internal/code.TestAReasonPassesTheFillOnlyWhereNoCopyIsComing`, `internal/code/query.TestOnlyAFailureOfTheNodesOwnLetsAnotherNodeFill`, `internal/estate.TestAGitNodeAtItsShareIsHeardInsideItsAskersAttempt`, `internal/code/query.TestAReadWhoseAnswerFallsDueSaysSoWhileItsAskerListens`, `internal/estate.TestANodeWithNoCodeHostRunsNoGitRead`, `internal/estate.TestEveryOperationNamesTheCopyItReads`, `internal/code/query.TestANodeThatHoldsNoCopyFillsOnlyAsHome`, `internal/code/cache.TestACacheHoldsACopyOnlyOnceItHasOneOrIsFillingOne`, `internal/code/codecluster.TestEveryMemberRoutesAGitReadToOneHome`, `internal/engine.TestAGitReadIsServedOnceAnApplyBuildsTheCodeHost`, `internal/rendezvous.TestNoPackageOrdersByAHashOfItsOwn`
-- **Measured:** `BenchmarkCodeRead` (`internal/code/query`), once over a 32 MB history of 14 080 commits under a 10 000-file tree on git 2.56.0: every kind a warm home answers in 3–231 ms, more than an order of magnitude inside its 10 s read deadline, and a node holding no copy, asked as the home, syncs the repository whole and answers in 118 ms from the in-process store, 604 ms from the S3 fake answering every request 100 ms late and 1.1 s at 200 ms — so the 17 s attempt a router gives a git read is a sum of whole budgets, never a figure a healthy home approaches
+- **Enforced-by:** `internal/estate.TestAGitOperationIsAskedOfItsRepositorysHome`, `internal/estate.TestAGitNodeThatIsSyncingSendsTheAskerToTheRunnerUp`, `internal/estate.TestOnlyTheEffectiveHomeIsAskedToFill`, `internal/estate.TestAHomeThatJudgesNoSeatHandsTheFillToItsRunnerUp`, `internal/estate.TestTheFillMovesOnlyPastANodeBringingNoCopyUp`, `internal/code.TestAReasonPassesTheFillOnlyWhereNoCopyIsComing`, `internal/code/query.TestOnlyAFailureOfTheNodesOwnLetsAnotherNodeFill`, `internal/estate.TestAGitNodeAtItsShareIsHeardInsideItsAskersAttempt`, `internal/estate.TestAGitReadInProcessIsHeldToTheAttemptARemoteOneIs`, `internal/code/query.TestAReadWhoseAnswerFallsDueSaysSoWhileItsAskerListens`, `internal/code/query.TestAReadsOwnGitHasOneBudgetItsProcessesShare`, `internal/estate.TestANodeWithNoCodeHostRunsNoGitRead`, `internal/estate.TestEveryOperationNamesTheCopyItReads`, `internal/code/query.TestANodeThatHoldsNoCopyFillsOnlyAsHome`, `internal/code/cache.TestACacheHoldsACopyOnlyOnceItHasOneOrIsFillingOne`, `internal/code/codecluster.TestEveryMemberRoutesAGitReadToOneHome`, `internal/engine.TestAGitReadIsServedOnceAnApplyBuildsTheCodeHost`, `internal/rendezvous.TestNoPackageOrdersByAHashOfItsOwn`
+- **Measured:** `BenchmarkCodeRead` (`internal/code/query`), once over a 32 MB history of 14 080 commits under a 10 000-file tree on git 2.56.0: every kind a warm home answers in 3–231 ms, more than an order of magnitude inside the 10 s of git run time a read is given, and a node holding no copy, asked as the home, syncs the repository whole and answers in 118 ms from the in-process store (`memobj`), 604 ms from the S3 fake answering every request 100 ms late and 1.1 s at 200 ms (no real bucket) — so the 17 s attempt a router gives a git read is a sum of whole budgets (the share's wait, two read budgets, the read's own git and the reply's margin), never a figure a healthy home approaches; the read lane's queue and the short checks of what a read names are left out of it, and come out of the attempt
 - **Cost-when-tried:** not tried here: before this record no seat read a repository server-side at all. The cost it avoids is the one the cold sync measures — 1.4 s for a repository of two hundred pushes and 13.4–13.8 s for one of two thousand against an object store answering every request 100 ms late — paid on whichever git node a read landed on, and on every one of them over time
 - **Tag-status:** unreleased
 
@@ -41,9 +41,13 @@ and no lag gate holds it back: its floor travels in its arguments and is the cac
 answered on a lane of its own, which a git node registers from boot and answers `no_backend` on until its
 code host is built, and every request on it is a signed estate request like any other.
 
-Every attempt is SERVED UNTIL ITS ANSWER IS DUE, a reply's margin before the asker's deadline
+Every attempt — asked of a peer, or of this node's own git half in process — is held to the router's git
+read attempt and SERVED UNTIL ITS ANSWER IS DUE, a reply's margin before the attempt ends
 (`code.AnswerBy`): every wait the read makes ends there and is answered unready while the asker still
-listens, so a busy node is never heard as a gone one.
+listens, so a busy node is never heard as a gone one, and what a read is answered never depends on which
+node asked it. The read's own git has ONE budget of run time, shared by every process of its kind; only a
+read whose own git ran the whole of it is too large to answer, and a read the answer's due instant cut
+short is unready, since a node with the time would have answered it.
 
 ## Why the obvious alternative is wrong
 

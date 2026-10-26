@@ -86,7 +86,7 @@ func (r *read) readBlob(ctx context.Context, rev, blob, path string, size int64,
 	pg := &blobPage{from: from, fromByte: fromByte, to: r.q.Blob.EndLine,
 		left: r.room(envelope) + 1, line: 1}
 
-	deadline, err := r.bound(ctx, gitproc.ReadDeadline)
+	deadline, err := r.budget()
 	if err != nil {
 		return code.GitAnswer{}, err
 	}
@@ -100,8 +100,8 @@ func (r *read) readBlob(ctx context.Context, rev, blob, path string, size int64,
 	if err == nil {
 		pg.finish()
 	}
-	narrow := fmt.Errorf("%w: reading %s did not finish in %s: read fewer of its lines", code.ErrSliceTooLarge,
-		blob, deadline)
+	narrow := fmt.Errorf("%w: reading %s did not finish in the read's %s of git: read fewer of its lines",
+		code.ErrSliceTooLarge, blob, r.s.gitBudget)
 	if err := r.failed(ctx, "read of a file", res, err, narrow); err != nil {
 		return code.GitAnswer{}, err
 	}

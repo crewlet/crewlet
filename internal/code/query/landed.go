@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
@@ -48,15 +47,18 @@ import (
 // checks, so 64 search three forced segments of that size whole, and each
 // forced move since the landing costs about two. BenchmarkLandedIn measured a
 // check at 2.6 to 4.4 ms over gittest.History's 32 MB (14 000 commits, the
-// copy's commit-graph written) — a git process each, its start most of it —
-// so 64 take 0.28 s, 3% of gitproc.ReadDeadline. The deadline is NOT what
-// sets the bound, though it would admit hundreds more: each check is a process
-// of the node's read lane under the read's one unit of the seat share, and a
-// branch force-pushed more than thirty times since a commit landed on it is
-// answered with how far the search reached rather than with seconds of that
-// lane. Without the graph a check walks by date — 24 ms over the same history
-// for the longest, the commit against the tip — and the gigabyte's walks are
-// thirty times longer; the read's own deadline bounds those.
+// copy's commit-graph written) — a git process each, its start most of it — so
+// 64 take 0.28 s, 3% of the read's one budget of git (gitproc.ReadDeadline,
+// which every check of a search shares, as every process of a read's own git
+// does: server.go). The budget is NOT what sets the bound, though it would
+// admit hundreds more: each check is a process of the node's read lane under
+// the read's one unit of the seat share, and a branch force-pushed more than
+// thirty times since a commit landed on it is answered with how far the search
+// reached rather than with seconds of that lane. Without the graph a check
+// walks by date — 24 ms over the same history for the longest, the commit
+// against the tip — and the gigabyte's walks are thirty times longer; the
+// read's budget bounds those, and a search that runs it out is too large to
+// answer, as a comparison is.
 const MaxLandedProbes = 64
 
 // landedRead answers whether the query's commit is in its target's history at
@@ -73,8 +75,7 @@ func (r *read) landedRead(ctx context.Context, objs found) (code.GitAnswer, erro
 				code.ErrInvalid, side.field, side.rev, side.o.peeledKind)
 		}
 	}
-	l := &landing{r: r, ctx: ctx, commit: commit.peeled,
-		walk: max(gitproc.ReadDeadline, gitproc.HistoryWalk(r.synced.Repo.LiveObjects))}
+	l := &landing{r: r, ctx: ctx, commit: commit.peeled}
 	ans := &code.LandedInAnswer{Commit: commit.peeled, Target: q.Target, TargetOID: q.TargetOID, At: q.At}
 	a := code.GitAnswer{Kind: code.GitLandedIn, Rev: commit.peeled, LandedIn: ans}
 	landed, err := l.ancestor(tip.peeled)
@@ -116,7 +117,6 @@ type landing struct {
 	ctx    context.Context
 	commit string
 	view   cache.MoveView
-	walk   time.Duration
 	probes int
 }
 
@@ -292,13 +292,15 @@ func (l *landing) ancestorBudgeted(tip string) (bool, error) {
 
 // ancestor reports whether the commit is reachable from tip: one `git
 // merge-base --is-ancestor`, which goes by generation where the copy holds a
-// commit-graph, given the read's deadline or a walk of the whole history
-// (gitproc.HistoryWalk), whichever is larger, under the request's own.
+// commit-graph, given what is left of the read's one budget of git
+// ([read.budget]) and charged what it ran ([read.failed]) — never a walk of
+// the whole history (gitproc.HistoryWalk), which no asker waits for, a git
+// read's attempt being seventeen seconds (compare.go).
 func (l *landing) ancestor(tip string) (bool, error) {
 	if tip == l.commit {
 		return true, nil
 	}
-	deadline, err := l.r.bound(l.ctx, l.walk)
+	deadline, err := l.r.budget()
 	if err != nil {
 		return false, err
 	}
@@ -306,8 +308,8 @@ func (l *landing) ancestor(tip string) (bool, error) {
 		Dir: l.r.synced.Dir, Args: []string{"merge-base", "--is-ancestor", l.commit, tip},
 		Config: l.r.s.o.Cache.ServeConfig(), Class: gitproc.ClassRead, Deadline: deadline, Answers: []int{1},
 	})
-	tooLong := fmt.Errorf("%w: whether %s is in %s's history did not finish in %s", code.ErrSliceTooLarge,
-		l.commit, tip, deadline)
+	tooLong := fmt.Errorf("%w: whether %s is in %s's history did not finish in the read's %s of git",
+		code.ErrSliceTooLarge, l.commit, tip, l.r.s.gitBudget)
 	if err := l.r.failed(l.ctx, "ancestry check", res, err, tooLong); err != nil {
 		return false, err
 	}

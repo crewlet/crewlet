@@ -21,13 +21,17 @@ import (
 )
 
 // fakeGit is one git node's git half: it records every read it is asked —
-// stamped home or not — and answers each with an answer naming itself, or
-// unready where it is told to be.
+// stamped home or not — and how long the context it was asked under had left,
+// and answers each with an answer naming itself, or unready where it is told
+// to be.
 type fakeGit struct {
 	name string
 
 	mu    sync.Mutex
 	asked []code.GitQuery
+	// left is, for every read asked, what its context had left of its
+	// deadline when the read began; noDeadline where it had none.
+	left []time.Duration
 	// unready answers every read code.ErrGitUnready for this reason, where
 	// set — a SEAT'S read alone where seatsOnly is, as a node behind its
 	// configuration judges no seat and serves a person.
@@ -45,9 +49,18 @@ type fakeGit struct {
 	share *code.GitShare
 }
 
+// noDeadline is what a fakeGit records of a read asked under a context with
+// no deadline.
+const noDeadline = time.Duration(-1)
+
 func (g *fakeGit) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
 	g.mu.Lock()
 	g.asked = append(g.asked, q)
+	left := noDeadline
+	if deadline, ok := ctx.Deadline(); ok {
+		left = time.Until(deadline)
+	}
+	g.left = append(g.left, left)
 	share := g.share
 	g.mu.Unlock()
 	if share != nil {
@@ -88,6 +101,14 @@ func (g *fakeGit) reads() []code.GitQuery {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return slices.Clone(g.asked)
+}
+
+// lefts is what each read's context had left of its deadline as it began, in
+// order.
+func (g *fakeGit) lefts() []time.Duration {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return slices.Clone(g.left)
 }
 
 // gitHalf is a node's git half as [LocalGit] answers it: node's, and none —
@@ -740,6 +761,41 @@ func TestAGitNodeAtItsShareIsHeardInsideItsAskersAttempt(t *testing.T) {
 	}
 }
 
+// A GIT READ IN PROCESS IS HELD TO THE ATTEMPT A REMOTE ONE IS. A git node's
+// own seats' reads run in process; they are given the git attempt a remote
+// asker gives the same read and served until the reply's margin before it,
+// as the node's server serves the remote one — so the git half sees the same
+// time left whichever node asked, and answers alike. Run under its caller's
+// context, a read asked from the home itself had no bound but its caller's,
+// and waited out a busy read lane or a slow sync that every other node's
+// asker was answered unready for.
+//
+// Mutation: run the in-process read under its caller's context — its half
+// sees no deadline, red.
+func TestAGitReadInProcessIsHeldToTheAttemptARemoteOneIs(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	halves := f.gitNodes(t, []string{"git-a"})
+	half := halves["git-a"]
+	served := Production().GitReadAttempt - code.ReplyMargin
+	for name, r := range map[string]*Router{
+		"asked of the git node by another": f.client,
+		"asked in process by the git node": f.gitRouter(t, "git-a", gitHalf{node: half}),
+	} {
+		if _, err := r.Code().GitRead(t.Context(), treeOf(repoID(9))); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		lefts := half.lefts()
+		left := lefts[len(lefts)-1]
+		// A SECOND'S SLACK below for the walk's own work before the half
+		// is asked; none above, which no clock gives.
+		if left == noDeadline || left > served || left < served-time.Second {
+			t.Errorf("%s: the git half was served with %v left, want the %v a git read is served for — its "+
+				"attempt less the reply's margin", name, left, served)
+		}
+	}
+}
+
 // A NODE BEHIND THE COMPANY'S CONFIGURATION DECIDES NO GRANT (M3-O8's hard arm).
 // A read whose asker is a SEAT is judged by the serving node's chart — which
 // repositories it lists, whether it reads one — so a data node confirmed
@@ -884,11 +940,12 @@ func TestEveryOperationThatJudgesAGrantIsDeclared(t *testing.T) {
 // PRODUCTION'S GIT READ ATTEMPT HOLDS A GIT READ'S WAITS at their whole budgets
 // with the reply's margin — a free unit of the node's seat git-work share, the
 // cache's sync to the asker's floor, one linearizable re-sync of an id the copy
-// lacks, the read's git process and the answer's trip back: 2 + 2 + 2 + 10 + 1,
-// seventeen seconds — and it is the attempt a router gives a git read, never a
-// data read's ten seconds, which a git read's waits at their budgets outlast.
-// The sum is spelled here from each term's own constant, so a term raised
-// without the attempt fails here rather than as a healthy home heard silent.
+// lacks, the read's own git (the run time every process of its kind shares)
+// and the answer's trip back: 2 + 2 + 2 + 10 + 1, seventeen seconds — and it
+// is the attempt a router gives a git read, never a data read's ten seconds,
+// which a git read's waits at their budgets outlast. The sum is spelled here
+// from each term's own constant, so a term raised without the attempt fails
+// here rather than as a healthy home heard silent.
 func TestProductionsGitReadAttemptHoldsAGitReadsWaits(t *testing.T) {
 	t.Parallel()
 	waits := code.GitShareWait + 2*statelog.ReadBudget + gitproc.ReadDeadline + code.ReplyMargin

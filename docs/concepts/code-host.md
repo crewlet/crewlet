@@ -1320,13 +1320,30 @@ lacks is looked for once more after a sync at the log's head — the reader may
 know of a push this node has not synced yet — and only then answered as no
 such object.
 
+**Ten seconds of git a read, and too large only past them.** A read's own git
+— a listing's one process, a patch's lookup and its diff, a comparison's two
+walks and its stat — shares one budget of ten seconds of git run time, each
+process given what the ones before it left. A read whose git runs all of it is
+too large to answer, refused naming what to narrow — a directory below, fewer
+lines, a narrower range, commits closer together — since any git node would
+take as long. A comparison's walks go by generation number on a copy the node
+has maintained, which holds a commit-graph — 13 ms for the middle of a
+14 080-commit history against its tip — while a copy just filled, before its
+maintenance, walks by date and may run the budget out over a long history; the
+same comparison answers once the copy is maintained.
+
 **Answered inside its asker's attempt, never late.** Every read is answered
-within the router's git read attempt, seventeen seconds. The node serves a
-read until a second before the attempt ends, and every wait it makes ends
-there: the copy's sync, a unit of the share, a slot of the read lane for each
-process, each process. A read held up past it is answered `syncing` or
-`share` while its asker still listens: the read goes on to the next git node,
-and the busy one is not taken for a node that is gone.
+within the router's git read attempt, seventeen seconds — the share's two
+seconds, two two-second syncs, the read's ten seconds of git and a second for
+the answer's trip back — from the node that asked it in process as from every
+other. The node serves the read until a second before the attempt ends, and
+every wait it makes ends there: the copy's sync, a unit of the share, a slot of
+the read lane for each process, each process. Those slots and the short checks
+of what a read names are not in the sum, so under load they come out of the
+attempt, and a read they hold up past it is answered `share` while its asker
+still listens: the read goes on to the next git node, and the busy one is not
+taken for a node that is gone. Never too large: a read cut short had less than
+its ten seconds, and a node with the time would answer it.
 
 **Seats' reads hold at most half the read lane.** The read lane — one core a
 slot, `git.max_processes` of them — is also where a person's push scans its
@@ -1335,9 +1352,11 @@ the objects it wants, each waiting in turn for at most ten seconds before it is
 refused busy. So the git a seat's read runs takes a unit of the node's **seat
 git-work share** — half the lane, at least one — and gives it back the moment
 that git ends: a read waiting on its sync holds none, and the other half of the
-lane stays the persons' and the node's own. `crewlet.code.seatwork.held` is
-the share held now and `crewlet.code.seatwork.waits` every unit asked for, by
-whether it came free in time ([Metrics](../reference/metrics.md)).
+lane stays the persons' and the node's own. What the share holds is the read's
+own git; the short checks of what a read names, before it, wait in the lane's
+queue like any short read. `crewlet.code.seatwork.held` is the share held now
+and `crewlet.code.seatwork.waits` every unit asked for, by whether it came
+free in time ([Metrics](../reference/metrics.md)).
 
 A read's git process that reports damage to the copy is never answered from,
 even where git answered anyway — it reads around a damaged index from the

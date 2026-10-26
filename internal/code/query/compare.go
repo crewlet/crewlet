@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
@@ -20,9 +19,22 @@ import (
 // commits on each side the other lacks; and the first page of the merge base's
 // diff to head — the three-dot reading every code host shows. Both walks go by
 // generation number where the copy holds a commit-graph, which git reads for
-// them unasked, and each is given the read's deadline or a walk of the whole
-// history (gitproc.HistoryWalk), whichever is larger, still under the request's
-// own.
+// them unasked and every maintained copy keeps, so a comparison of any two
+// commits runs in milliseconds there (BenchmarkCodeRead's comparison of a
+// 14 080-commit history's middle with its tip, 13 ms).
+//
+// THE THREE SHARE THE READ'S ONE BUDGET OF GIT, as every kind's processes do
+// (server.go): a comparison is given the run time a listing is, and one whose
+// walks and stat run out the whole of it is too large to answer — "compare
+// commits closer together". Not a walk of the whole history each
+// (gitproc.HistoryWalk, eleven minutes at the largest repository the
+// defaults admit): no asker waits that long — a git read's attempt is
+// seventeen seconds, on the node that asked as on every other — so that bound
+// was one no comparison could reach, and a comparison it let run past its
+// asker's attempt was answered nothing but late. A copy that holds no
+// commit-graph yet — just filled, before its maintenance — walks by date and
+// may run the budget out over a long history; asked again once the copy is
+// maintained, the same comparison answers.
 
 // compareRead answers a comparison.
 func (r *read) compareRead(ctx context.Context, objs found) (code.GitAnswer, error) {
@@ -37,8 +49,7 @@ func (r *read) compareRead(ctx context.Context, objs found) (code.GitAnswer, err
 				code.ErrInvalid, side.field, side.rev, side.o.peeledKind)
 		}
 	}
-	walk := max(gitproc.ReadDeadline, gitproc.HistoryWalk(r.synced.Repo.LiveObjects))
-	mb, err := r.mergeBase(ctx, base.peeled, head.peeled, walk)
+	mb, err := r.mergeBase(ctx, base.peeled, head.peeled)
 	if err != nil {
 		return code.GitAnswer{}, err
 	}
@@ -47,7 +58,7 @@ func (r *read) compareRead(ctx context.Context, objs found) (code.GitAnswer, err
 		// envelope below is measured with its push.
 		r.decorate(mb)
 	}
-	behind, ahead, err := r.sides(ctx, base.peeled, head.peeled, walk)
+	behind, ahead, err := r.sides(ctx, base.peeled, head.peeled)
 	if err != nil {
 		return code.GitAnswer{}, err
 	}
@@ -74,8 +85,8 @@ func (r *read) compareRead(ctx context.Context, objs found) (code.GitAnswer, err
 
 // mergeBase is base's and head's best common ancestor, "" where they have
 // none.
-func (r *read) mergeBase(ctx context.Context, base, head string, walk time.Duration) (string, error) {
-	deadline, err := r.bound(ctx, walk)
+func (r *read) mergeBase(ctx context.Context, base, head string) (string, error) {
+	deadline, err := r.budget()
 	if err != nil {
 		return "", err
 	}
@@ -83,7 +94,7 @@ func (r *read) mergeBase(ctx context.Context, base, head string, walk time.Durat
 		Dir: r.synced.Dir, Args: []string{"merge-base", base, head}, Config: r.s.o.Cache.ServeConfig(),
 		Class: gitproc.ClassRead, Deadline: deadline, Answers: []int{1},
 	})
-	if err := r.failed(ctx, "merge base", res, err, r.walkTooLong(base, head, deadline)); err != nil {
+	if err := r.failed(ctx, "merge base", res, err, r.walkTooLong(base, head)); err != nil {
 		return "", err
 	}
 	if res.Exit == 1 {
@@ -98,8 +109,8 @@ func (r *read) mergeBase(ctx context.Context, base, head string, walk time.Durat
 
 // sides is how many commits base has that head lacks (behind) and the reverse
 // (ahead).
-func (r *read) sides(ctx context.Context, base, head string, walk time.Duration) (behind, ahead int, err error) {
-	deadline, err := r.bound(ctx, walk)
+func (r *read) sides(ctx context.Context, base, head string) (behind, ahead int, err error) {
+	deadline, err := r.budget()
 	if err != nil {
 		return 0, 0, err
 	}
@@ -107,8 +118,7 @@ func (r *read) sides(ctx context.Context, base, head string, walk time.Duration)
 		Dir: r.synced.Dir, Args: append([]string{"rev-list", "--left-right", "--count"}, base+"..."+head),
 		Config: r.s.o.Cache.ServeConfig(), Class: gitproc.ClassRead, Deadline: deadline,
 	})
-	if err := r.failed(ctx, "count of the commits on each side", res, err,
-		r.walkTooLong(base, head, deadline)); err != nil {
+	if err := r.failed(ctx, "count of the commits on each side", res, err, r.walkTooLong(base, head)); err != nil {
 		return 0, 0, err
 	}
 	left, right, ok := strings.Cut(strings.TrimSpace(string(res.Stdout)), "\t")
@@ -123,8 +133,8 @@ func (r *read) sides(ctx context.Context, base, head string, walk time.Duration)
 	return behind, ahead, nil
 }
 
-// walkTooLong is a comparison's walk its deadline ended.
-func (r *read) walkTooLong(base, head string, deadline time.Duration) error {
-	return fmt.Errorf("%w: comparing %s and %s did not finish in %s: compare commits closer together",
-		code.ErrSliceTooLarge, base, head, deadline)
+// walkTooLong is a comparison whose walk ran out the read's budget of git.
+func (r *read) walkTooLong(base, head string) error {
+	return fmt.Errorf("%w: comparing %s and %s did not finish in the read's %s of git: compare commits closer "+
+		"together", code.ErrSliceTooLarge, base, head, r.s.gitBudget)
 }

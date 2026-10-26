@@ -104,18 +104,30 @@
 // behind_config and node_failed — never past one filling, repairing or seconds
 // from its chart, nor past one at its share, which holds its copy and is only
 // busy (code.UnreadyReason.PassesFill). Every other refusal is about the read
-// or the repository, and is the answer anywhere: a read the deadline ended is
-// code.ErrSliceTooLarge naming the narrowing, since another node would take as
-// long.
+// or the repository, and is the answer anywhere: a read whose own git ran the
+// whole of its budget is code.ErrSliceTooLarge naming the narrowing, since
+// another node would take as long.
 //
-// # An answer while the asker listens
+// # Time: one budget of git, and an answer while the asker listens
 //
-// The caller's context ENDS WHEN THE ANSWER IS DUE (code.AnswerBy, the
-// estate's git arm): every wait takes it, and a wait it ends is answered
-// code.ErrGitUnready while the asker still listens (code.AnswerDue) — syncing
-// during the sync, share during a wait for the node's git or a run of it —
-// never the context's error, which the asker's walk would take for the
-// repository's answer (TestAReadWhoseAnswerFallsDueSaysSoWhileItsAskerListens).
+// A read's own git — every process of its kind, a comparison's two walks and
+// its stat or a landed-in search's ancestry checks as a listing's one — is
+// given ONE budget of run time, gitproc.ReadDeadline, each process what the
+// ones before it left: run out, the read is too large to answer anywhere. Its
+// wait for each process's read-lane slot is charged nothing, since it is the
+// node's contention and not the read's size. The short checks before it
+// (objects.go) run to their own bound, outside it.
+//
+// And the caller's context ENDS WHEN THE ANSWER IS DUE (code.AnswerBy, the
+// estate's git arm and its in-process run alike): every wait takes it, and a
+// wait it ends is answered code.ErrGitUnready while the asker still listens
+// (code.AnswerDue) — syncing during the sync, share during a wait for the
+// node's git or a run of it — never the context's error and never too large:
+// a run the due instant ended had less than its budget. So time the asker's
+// attempt does not hold for — the read lane's queue and the short checks, left
+// out of its sum — makes a read unready under load, never late
+// (TestAReadWhoseAnswerFallsDueSaysSoWhileItsAskerListens,
+// TestAReadsOwnGitHasOneBudgetItsProcessesShare).
 //
 // DAMAGE IS THE CACHE'S TO REPAIR, AND NO ANSWER: no process here names a
 // gitproc.Repairer, so the cache's observer acts on what each reports at once

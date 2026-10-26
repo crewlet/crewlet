@@ -112,20 +112,20 @@ func (r *read) stat(ctx context.Context, base, head string, paths []string, rena
 	if renames {
 		tail = []string{"-M", base, head}
 	}
-	deadline, err := r.bound(ctx, gitproc.ReadDeadline)
+	deadline, err := r.budget()
 	if err != nil {
 		return statPage{}, err
 	}
 	var res gitproc.Result
-	narrow := fmt.Errorf("%w: the diff of %s and %s did not finish in %s: %s", code.ErrSliceTooLarge, base, head,
-		deadline, narrowing)
+	narrow := fmt.Errorf("%w: the diff of %s and %s did not finish in the read's %s of git: %s",
+		code.ErrSliceTooLarge, base, head, r.s.gitBudget, narrowing)
 	if p.keep {
 		// A FILTERED STAT'S WALK, its raw records alone: the numstat is
 		// diff-pairs', of the files the filter admits (count). No path
 		// narrows the walk itself, which reads the two trees whatever the
 		// filter, so a walk the deadline ended is refused naming the commits.
-		narrow = fmt.Errorf("%w: the walk of the diff of %s and %s did not finish in %s: diff commits closer "+
-			"together", code.ErrSliceTooLarge, base, head, deadline)
+		narrow = fmt.Errorf("%w: the walk of the diff of %s and %s did not finish in the read's %s of git: "+
+			"diff commits closer together", code.ErrSliceTooLarge, base, head, r.s.gitBudget)
 		res, err = r.s.o.Git.Run(ctx, gitproc.Cmd{
 			Dir: r.synced.Dir, Args: append([]string{"diff-tree", "-z", "-r", "--raw", "--no-ext-diff",
 				"--no-textconv"}, tail...),
@@ -167,7 +167,7 @@ func (r *read) count(ctx context.Context, p *statParser, base, head string) erro
 	if p.matched == 0 || (p.start > 0 && p.start >= p.matched) {
 		return nil
 	}
-	deadline, err := r.bound(ctx, gitproc.ReadDeadline)
+	deadline, err := r.budget()
 	if err != nil {
 		return err
 	}
@@ -184,8 +184,8 @@ func (r *read) count(ctx context.Context, p *statParser, base, head string) erro
 		err = p.end(true)
 	}
 	narrow := fmt.Errorf("%w: counting the lines of the %d files the paths admit in the diff of %s and %s did "+
-		"not finish in %s: name fewer paths, or diff commits closer together", code.ErrSliceTooLarge, p.matched,
-		base, head, deadline)
+		"not finish in the read's %s of git: name fewer paths, or diff commits closer together",
+		code.ErrSliceTooLarge, p.matched, base, head, r.s.gitBudget)
 	return r.failed(ctx, "count of a diff's lines", res, err, narrow)
 }
 
@@ -502,7 +502,7 @@ func (r *read) findFile(ctx context.Context, base, head, file string, renames bo
 	if renames {
 		tail = []string{"-M", base, head}
 	}
-	deadline, err := r.bound(ctx, gitproc.ReadDeadline)
+	deadline, err := r.budget()
 	if err != nil {
 		return rawEntry{}, false, err
 	}
@@ -517,8 +517,8 @@ func (r *read) findFile(ctx context.Context, base, head, file string, renames bo
 	case err == nil:
 		err = recs.close()
 	}
-	narrow := fmt.Errorf("%w: the diff of %s and %s did not finish in %s: diff commits closer together",
-		code.ErrSliceTooLarge, base, head, deadline)
+	narrow := fmt.Errorf("%w: the diff of %s and %s did not finish in the read's %s of git: diff commits "+
+		"closer together", code.ErrSliceTooLarge, base, head, r.s.gitBudget)
 	if err := r.failed(ctx, "diff", res, err, narrow); err != nil {
 		return rawEntry{}, false, err
 	}
@@ -533,7 +533,7 @@ var patchConfig = gitproc.KV{Key: "core.quotePath", Value: "false"}
 // patch writes e's patch to pg: git's own, of the one record e, from ONE
 // diff-pairs handed it on its standard input.
 func (r *read) patch(ctx context.Context, base, head string, e rawEntry, pg *patchPage) error {
-	deadline, err := r.bound(ctx, gitproc.ReadDeadline)
+	deadline, err := r.budget()
 	if err != nil {
 		return err
 	}
@@ -543,8 +543,9 @@ func (r *read) patch(ctx context.Context, base, head string, e rawEntry, pg *pat
 		Config: append(r.s.o.Cache.ServeConfig(), patchConfig), Stdin: bytes.NewReader(e.raw()), Stdout: pg,
 		Class: gitproc.ClassRead, Deadline: deadline,
 	})
-	narrow := fmt.Errorf("%w: the patch of %q in the diff of %s and %s did not finish in %s: read the file's "+
-		"lines instead", code.ErrSliceTooLarge, e.paths[len(e.paths)-1], base, head, deadline)
+	narrow := fmt.Errorf("%w: the patch of %q in the diff of %s and %s did not finish in the read's %s of "+
+		"git: read the file's lines instead", code.ErrSliceTooLarge, e.paths[len(e.paths)-1], base, head,
+		r.s.gitBudget)
 	return r.failed(ctx, "patch of a file", res, err, narrow)
 }
 

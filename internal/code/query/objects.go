@@ -16,7 +16,9 @@ import (
 // WHAT A READ NAMES IS FOUND BEFORE ANYTHING IS READ, with at most two short
 // processes in the read lane and no unit of the share: they wait in the lane's
 // own queue like any short read, and what the share bounds is the long work
-// after them.
+// after them. Each runs to its own bound, gitproc.ReadDeadline, outside the
+// read's budget of git run time (server.go), which is its kind's alone; the
+// read's answer falling due ends one sooner.
 //
 // AN ABBREVIATION IS EXPANDED FROM THE OBJECTS ALONE — ONE `git rev-parse
 // --disambiguate=<a> [--disambiguate=<b>]`, whose every printed id is
@@ -182,13 +184,9 @@ func (r *read) expand(ctx context.Context, abbrevs []string) (map[string]string,
 		}
 		return nil
 	})
-	deadline, err := r.bound(ctx, gitproc.ReadDeadline)
-	if err != nil {
-		return nil, "", err
-	}
 	res, err := r.s.o.Git.Run(ctx, gitproc.Cmd{
 		Dir: r.synced.Dir, Args: append([]string{"rev-parse"}, flags...), Config: r.s.o.Cache.ServeConfig(),
-		Stdout: lines, Class: gitproc.ClassRead, Deadline: deadline,
+		Stdout: lines, Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline,
 	})
 	if err == nil {
 		err = lines.Close()
@@ -236,13 +234,9 @@ func (r *read) check(ctx context.Context, in []string) ([]object, error) {
 		out = append(out, o)
 		return nil
 	})
-	deadline, err := r.bound(ctx, gitproc.ReadDeadline)
-	if err != nil {
-		return nil, err
-	}
 	res, err := r.s.o.Git.Run(ctx, gitproc.Cmd{
 		Dir: r.synced.Dir, Args: []string{"cat-file", "--batch-check", "-Z"}, Config: r.s.o.Cache.ServeConfig(),
-		Stdin: &stdin, Stdout: recs, Class: gitproc.ClassRead, Deadline: deadline,
+		Stdin: &stdin, Stdout: recs, Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline,
 	})
 	if err == nil {
 		err = recs.close()
