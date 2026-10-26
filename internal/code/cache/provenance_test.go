@@ -800,3 +800,85 @@ func TestACacheNeverStartedBackfillsNothing(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// THE BACKFILL'S PICK READS A COPY'S LAST USE UNDER ITS LOCK. Among the copies
+// with a step due it takes the most recently used, and every reader's pin and
+// release writes that use under the entry's lock (used). Read once the lock
+// had gone, the walk raced every request that pinned a copy while the backfill
+// had work — on a node that has just joined, every request — which the race
+// detector reported in the cache's own suite, and a torn time ranks the copies
+// on a value no reader wrote.
+//
+// Mutation: read inc.lastUsed in nextBackfill after e.mu.Unlock — the race
+// detector reports the walk's read against a pin's write.
+func TestTheBackfillsPickReadsACopysLastUseUnderItsLock(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repos := []string{w.repo(t, 1), w.repo(t, 2)}
+	for _, repo := range repos {
+		w.push(t, repo, "refs/heads/main", nil)
+	}
+	c := w.open(t)
+	for _, repo := range repos {
+		w.sync(t, c, repo)
+	}
+	c = w.reopen(t, c)
+	for _, repo := range repos {
+		w.push(t, repo, "refs/heads/main", nil)
+		w.sync(t, c, repo)
+		if idx := mustIndex(t, c, repo); idx.GapThrough == 0 {
+			t.Fatalf("%s's index has no gap for the backfill to pick: %+v", repo, idx)
+		}
+	}
+
+	// The walk on a goroutine of its own, as the backfill's is, beside the
+	// requests' pins; the picks it made are counted, so a case whose walk
+	// found nothing due — and so read no copy's use — fails rather than
+	// passes.
+	stop := make(chan struct{})
+	type result struct {
+		picks int
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		var r result
+		defer func() { done <- r }()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			repo, err := cache.BackfillPick(c)
+			if err != nil {
+				r.err = err
+				return
+			}
+			if repo != "" {
+				r.picks++
+			}
+		}
+	}()
+	var failed error
+	for i := 0; i < 100 && failed == nil; i++ {
+		for _, repo := range repos {
+			s, err := c.Sync(t.Context(), repo, statelog.Freshness{Level: statelog.ReadLinearizable})
+			if err != nil {
+				failed = fmt.Errorf("sync of %s: %w", repo, err)
+				break
+			}
+			s.Release()
+		}
+	}
+	close(stop)
+	r := <-done
+	switch {
+	case failed != nil:
+		t.Fatal(failed)
+	case r.err != nil:
+		t.Fatalf("the backfill's pick: %v", r.err)
+	case r.picks == 0:
+		t.Fatal("the backfill's walk picked no step while both gaps were due")
+	}
+}

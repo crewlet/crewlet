@@ -334,6 +334,10 @@ func (c *Cache) nextBackfill() (*backfillTask, time.Time, bool) {
 			behind++
 		}
 		t, due := c.backfillDue(e, inc, rec, now)
+		// The copy's last use is read before its lock goes, as the janitor's
+		// eviction reads it: every reader's pin and release writes it under
+		// e.mu (used), so a read after the unlock races each request.
+		used := inc.lastUsed
 		e.mu.Unlock()
 		switch {
 		case t == nil:
@@ -341,9 +345,9 @@ func (c *Cache) nextBackfill() (*backfillTask, time.Time, bool) {
 				next = due
 			}
 		case best == nil || t.work < best.work ||
-			t.work == best.work && (inc.lastUsed.After(bestAt) ||
-				inc.lastUsed.Equal(bestAt) && strings.Compare(e.id, best.e.id) < 0):
-			best, bestAt = t, inc.lastUsed
+			t.work == best.work && (used.After(bestAt) ||
+				used.Equal(bestAt) && strings.Compare(e.id, best.e.id) < 0):
+			best, bestAt = t, used
 		}
 	}
 	c.mu.Unlock()

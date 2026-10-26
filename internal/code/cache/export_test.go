@@ -1198,6 +1198,25 @@ func BackfillStep(c *Cache) (string, error) {
 	return "", errors.New("cache: the backfill's pick moved under three walks")
 }
 
+// BackfillPick is the backfill's choice of its next step — the repository it
+// would take, "" for none — made and let go with the step not taken: the walk
+// alone, which a case runs beside the cache's readers so the two meet.
+func BackfillPick(c *Cache) (string, error) {
+	if !c.enter() {
+		return "", ErrStopped
+	}
+	defer c.leave()
+	t, _, moved := c.nextBackfill()
+	if moved || t == nil {
+		return "", nil
+	}
+	t.e.mu.Lock()
+	gone := c.unpin(t.e, t.inc)
+	t.e.mu.Unlock()
+	c.trash(gone)
+	return t.e.id, nil
+}
+
 // BackfillPass takes backfill steps until none is due, and answers every step
 // it took, in order: what a case runs in place of starting the backfill,
 // whose pace it would otherwise wait out. A page the estate did not serve ends
