@@ -12,6 +12,8 @@ import type { ReactNode } from "react";
 import {
   Button,
   Callout,
+  CodeBlock,
+  Disclosure,
   EmptyState,
   Section as UiSection,
   Tag,
@@ -33,6 +35,7 @@ import { goSignIn } from "~/lib/session.ts";
 import { needsWords } from "~/lib/access.ts";
 import {
   activityOf,
+  shownStateOf,
   stateWord,
   handleLabel,
   statusOf,
@@ -106,7 +109,8 @@ export function SeatChip({
  * seat is the neutral pill — a green one read as activity.
  */
 export function StateBadge({ agent }: { agent: AgentRow | null | undefined }) {
-  const state = activityOf(agent);
+  // A PAUSED SEAT READS "Paused", as its own page, the chart and the Inbox say.
+  const state = shownStateOf(agent);
   return (
     // SENTENCE CASE, as the seat's own page and the chart write the state
     // (`stateWord`): the roster's "idle" beside the seat page's "Idle" was one
@@ -114,6 +118,24 @@ export function StateBadge({ agent }: { agent: AgentRow | null | undefined }) {
     <Tag variant={toneOf(state)} dot>
       {stateWord(state)}
     </Tag>
+  );
+}
+
+/**
+ * The engine's own words for a failure, folded behind the kit's disclosure.
+ *
+ * NEVER THE HEADLINE. A banner or a reading pane leads with the plain sentence
+ * (`failureWords` in lib/seats.ts); the raw message ("llm chain exhausted
+ * after 1 providers ...") is what an operator fixing it reads, so it stays one
+ * press away, selectable, and is drawn nowhere else. Nothing when the engine
+ * recorded no message.
+ */
+export function TechnicalDetails({ text }: { text: string | null | undefined }) {
+  if (!text) return null;
+  return (
+    <Disclosure title="Technical details" size="compact" headingLevel="none" lazy>
+      <CodeBlock plain selectable label="The engine's message" code={text} />
+    </Disclosure>
   );
 }
 

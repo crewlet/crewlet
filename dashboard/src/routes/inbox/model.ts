@@ -39,7 +39,7 @@ import {
 import { PERIOD_ADJECTIVE } from "~/lib/budget.ts";
 import { conditionKey, type Attention } from "~/lib/attention.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
-import type { OrgIndex } from "~/lib/seats.ts";
+import { nameOfIn, type OrgIndex } from "~/lib/seats.ts";
 import { subjectKey } from "~/components/DecisionRow.tsx";
 import type { DecisionSubject } from "~/lib/decisions.ts";
 import type { WorkAskRow, WorkInboxAnswer, WorkInboxNotice } from "~/protocol/index.ts";
@@ -358,7 +358,7 @@ export function rowKey(row: InboxRow): string {
 export function noticeText(notice: WorkInboxNotice, index: OrgIndex): string {
   const said = plainText(notice.excerpt ?? "");
   if (!ENGINE_SENTENCES.has(notice.kind)) return said;
-  return nameAuthor(said, authorOf(notice), (h) => index.byHandle.get(h)?.name ?? h);
+  return nameAuthor(said, authorOf(notice), nameOfIn(index));
 }
 
 /** A sentence's first letter in capitals: a reason's words as a heading. */

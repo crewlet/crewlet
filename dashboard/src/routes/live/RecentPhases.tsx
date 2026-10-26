@@ -66,6 +66,7 @@ import {
 } from "~/lib/phases.ts";
 import { PhaseTag, uiletTone } from "~/ui/primitives.tsx";
 import type { EventRecord, PhasesPage } from "~/protocol/index.ts";
+import { failureWords } from "~/lib/seats.ts";
 
 /**
  * How many phases one page carries — the first and every "older" one.
@@ -221,7 +222,7 @@ export function RecentPhases({
         header: "Outcome",
         cell: (r) =>
           r.failed ? (
-            <Tag variant="danger">{r.errorKind || "failed"}</Tag>
+            <Tag variant="danger">{failureWords(r.errorKind).tag}</Tag>
           ) : r.decision ? (
             // THE WORD, WITH THE SENTENCE ON IT: a pill has a fixed line box,
             // and the gloss inside one would set this column's width for

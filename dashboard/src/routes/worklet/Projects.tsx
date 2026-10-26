@@ -305,6 +305,11 @@ export function Projects() {
   // called; they stay because they say what each column's value IS.
   const columns = useMemo<DataGridColumn<WorkProjectRow>[]>(
     () => [
+      // THE ORDER COLUMNS GIVE WAY IN (`drop`), lowest first, when the grid is
+      // narrower than its columns (beside the assistant, at a 1280 window, the
+      // heads were cut to one letter): the target date, the unit, Closed, the
+      // last change, the lead, Done and the progress bar go, in that order,
+      // before Active. The key, the name and To do never go.
       {
         key: "key",
         header: "Key",
@@ -328,6 +333,7 @@ export function Projects() {
       },
       {
         key: "lead",
+        drop: 5,
         header: "Lead",
         shrink: true,
         // NOT SORTABLE, and it cannot be. A project's lead is resolved at
@@ -349,6 +355,7 @@ export function Projects() {
       },
       {
         key: "unit",
+        drop: 2,
         header: "Unit",
         shrink: true,
         // OFF BY DEFAULT, because on a chart-owned company it is the Project
@@ -396,6 +403,7 @@ export function Projects() {
       },
       {
         key: "active",
+        drop: 8,
         header: "Active",
         align: "right",
         shrink: true,
@@ -404,6 +412,7 @@ export function Projects() {
       },
       {
         key: "done",
+        drop: 6,
         header: "Done",
         align: "right",
         shrink: true,
@@ -412,6 +421,7 @@ export function Projects() {
       },
       {
         key: "closed",
+        drop: 3,
         header: "Closed",
         align: "right",
         shrink: true,
@@ -427,6 +437,7 @@ export function Projects() {
       },
       {
         key: "progress",
+        drop: 7,
         header: "Progress",
         // SIZED TO ITS BAR, not a share of the slack. As a flexible track it
         // split the free width evenly with Project, so at 1280 the bar sat in
@@ -448,6 +459,7 @@ export function Projects() {
       },
       {
         key: "last_change",
+        drop: 4,
         header: "Last change",
         shrink: true,
         // SORTED BY WHEN, which is the question this column is for: a
@@ -457,6 +469,7 @@ export function Projects() {
       },
       {
         key: "target",
+        drop: 1,
         header: "Target",
         shrink: true,
         // THE LEAD'S DAY, and a project with none is ABSENT rather than the

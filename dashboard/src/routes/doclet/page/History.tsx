@@ -25,7 +25,7 @@ import { fmtDateTime, relTime } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { PageRevision } from "~/protocol/index.ts";
-import { Face, changeNote, changeWords, changedBy, type Who } from "../parts.tsx";
+import { Face, changeAuthor, changeNote, changeWords, changedBy, type Who } from "../parts.tsx";
 
 /**
  * One saved version, read in the page in place of the current body.
@@ -187,7 +187,7 @@ export function PageChanges({ pageID, who, now }: { pageID: string; who: Who; no
                   <span className="knowledge-revision-engine" />
                 )}
                 <span className="knowledge-change-what">
-                  <b>{by ? who(by).name : "The engine"}</b> {changeWords(change.kind).phrase}
+                  <b>{changeAuthor(change, who)}</b> {changeWords(change.kind).phrase}
                   {change.quiet && (
                     <span className="knowledge-note" title="This change announced nothing">
                       {" "}

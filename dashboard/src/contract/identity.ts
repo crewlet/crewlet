@@ -61,6 +61,17 @@ export const MAX_LOGIN = 64;
 export const CREDENTIAL_CLASSES = ["pat:", "session:"] as const;
 
 /**
+ * The class the Dashboard Assistant's grant is recorded under in the operator
+ * column (`iam.AssistPrefix`): a write the assistant made for a person carries
+ * the person as its author and `assist:<grant>` as the credential it came
+ * through. Held by
+ * `internal/api/iamapi.TestTheDashboardKnowsTheAssistantsCredentialClass`. A
+ * screen says such a write is the person's "with the assistant" and never
+ * prints the grant id (`lib/attribution.ts`).
+ */
+export const ASSIST_CREDENTIAL_PREFIX = "assist:";
+
+/**
  * How long a machine token lives when its mint names no lifetime, in days
  * (`credential.DefaultTokenLifetime`), and the most it may be minted for
  * (`credential.MaxTokenLifetime`) — held by

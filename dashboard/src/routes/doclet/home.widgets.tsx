@@ -27,6 +27,7 @@ import { useViewer } from "~/lib/viewer.ts";
 import { uncounted } from "~/routes/doclet/Diaries.tsx";
 import { foldRuns, runPhrase } from "~/routes/doclet/landing.ts";
 import {
+  changeAuthor,
   Face,
   PageGlyph,
   SPACES_POLL_MS,
@@ -105,7 +106,7 @@ function Written({ container }: { container?: string }) {
               <span className="knowledge-tile-text">
                 <span className="truncate">{change.title || "A page that is gone"}</span>
                 <span className="knowledge-tile-meta truncate">
-                  {by ? who(by).name : "The engine"} {runPhrase(run)}
+                  {changeAuthor(change, who)} {runPhrase(run)}
                 </span>
               </span>
             </ListItem>

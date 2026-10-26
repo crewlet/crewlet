@@ -447,6 +447,10 @@ export function Turns() {
             {
               key: "summary",
               header: "What it did",
+              // THE POINT OF THE LIST, so it has a floor, and the figures give
+              // way before it does (`drop`): beside the assistant it was drawn
+              // 15px wide, one letter of its head over "n…" in every row.
+              floor: "10rem",
               // A TURN STILL RUNNING says what it is doing and what it is on,
               // from the push (`runningNow`): the store's row has neither yet.
               cell: (t) => {
@@ -480,6 +484,7 @@ export function Turns() {
               header: <span title="Self-iterate rounds">Iterations</span>,
               label: "Iterations",
               shrink: true,
+              drop: 1,
               align: "right",
               cell: (t) =>
                 t.complete ? (
@@ -492,6 +497,7 @@ export function Turns() {
               key: "tokens",
               header: "Tokens",
               shrink: true,
+              drop: 3,
               align: "right",
               cell: (t) =>
                 t.complete ? (
@@ -504,6 +510,7 @@ export function Turns() {
               key: "took",
               header: "Took",
               shrink: true,
+              drop: 2,
               align: "right",
               // A RUNNING TURN HAS NO DURATION, and its zero would make the
               // busiest turns look like the cheapest — so the cell is handed

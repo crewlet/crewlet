@@ -53,6 +53,7 @@
 import type { SetBy } from "~/app/frame/ObjectHeader.tsx";
 import type { WorkChange } from "~/protocol/index.ts";
 import { CHANGE_FIELDS } from "~/contract/attribution.ts";
+import { ASSIST_CREDENTIAL_PREFIX } from "~/contract/identity.ts";
 
 /** The author kinds the wire carries, as `SetBy` spells them. */
 const KINDS = new Set(["agent", "human", "operator", "system"]);
@@ -105,7 +106,34 @@ export function attribution(history: readonly WorkChange[] | undefined): Map<str
  * line (`describeAuthor` in cmd/crewlet).
  */
 export function throughOf(author: string, operatorId: string | undefined): string {
+  // THE ASSISTANT IS SAID, NEVER ITS GRANT: `assist:<grant>` is an id a reader
+  // cannot use, and the record of the grant is the audit trail's to show.
+  if (assisted(operatorId)) return ASSISTANT;
   return operatorId && operatorId !== author ? operatorId : "";
+}
+
+/** What the Dashboard Assistant is called beside the person it wrote for. */
+const ASSISTANT = "the assistant";
+
+/**
+ * Whether a write came through the Dashboard Assistant: its credential is an
+ * assistant grant (`assist:<grant>`, the class `iam.AssistPrefix` names).
+ *
+ * THE SERVER'S MARK, NEVER THE CLIENT'S. The engine writes `operator_id` from
+ * the grant the request was authenticated with, so it cannot be claimed by a
+ * page. A person's own save of a draft the assistant filled in is their save,
+ * through their own session, and reads as theirs alone.
+ */
+export function assisted(operatorId: string | null | undefined): boolean {
+  return !!operatorId && operatorId.startsWith(ASSIST_CREDENTIAL_PREFIX);
+}
+
+/**
+ * An author's name as a history line says it: "Miles, with the assistant"
+ * where the write came through the assistant, else the name alone.
+ */
+export function authorWords(name: string, operatorId: string | null | undefined): string {
+  return assisted(operatorId) ? `${name}, with ${ASSISTANT}` : name;
 }
 
 /**
@@ -116,6 +144,7 @@ export function throughOf(author: string, operatorId: string | undefined): strin
  */
 export function authorLabel(author: string, operatorId: string | undefined): string {
   if (!author) return "";
+  if (assisted(operatorId)) return authorWords(author, operatorId);
   const through = throughOf(author, operatorId);
   return through ? `${author} (through ${through})` : author;
 }

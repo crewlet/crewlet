@@ -176,7 +176,7 @@ async function mount(viewer: Record<string, unknown> = { login: "", owner: "", a
     for (let i = 0; i < 5; i++) await Promise.resolve();
   });
   act(() => LayoutObserver.settle());
-  return { asked };
+  return { asked, store };
 }
 
 /**
@@ -222,7 +222,9 @@ test("every seat of the applied chart is a node with its state word and state li
   expect(card("SWE").getAttribute("data-state")).toBe("working");
   expect(caption("FE")).toBe("Needs you");
   expect(caption("PM")).toBe("Stopped");
-  expect(card("PM").getAttribute("title")).toBe("Stopped · budget · @pm");
+  expect(card("PM").getAttribute("title")).toBe(
+    "Stopped: its token budget is spent until the window resets · @pm",
+  );
   expect(caption("Jane Founder")).toBe("Human seat");
   expect(card("Jane Founder").getAttribute("title")).toBe("Human · reviews releases · @jane");
 });
@@ -439,7 +441,9 @@ test("the legend's figures are the activity counts", async () => {
   const counts = stateCounts(indexOrg(CHART_ORG), AGENTS);
   const legend = screen.getByRole("group", { name: "Seats by what they are doing" });
   expect(legend.textContent).toBe(
-    `Working ${counts.working}Needs you ${counts.needs}Stopped ${counts.stopped}Idle ${counts.idle}`,
+    // A GROUP keyed on the engine's `stopped` holds the paused seats as well
+    // as the ones a fault stopped, and its word says both.
+    `Working ${counts.working}Needs you ${counts.needs}Paused or stopped ${counts.stopped}Idle ${counts.idle}`,
   );
   expect(counts).toEqual({ working: 2, needs: 1, stopped: 1, idle: 2 });
 });
@@ -592,6 +596,32 @@ test("the seat the peek opens on is inside the canvas after the peek narrows it"
   standCanvasAt(420);
   await settleChart();
   const drawn = onScreen("DevRel");
+  expect(drawn.left).toBeGreaterThanOrEqual(0);
+  expect(drawn.right).toBeLessThanOrEqual(420);
+});
+
+// A SEAT THAT APPEARS IS REVEALED. Held at its legible zoom in a narrow canvas
+// (beside the assistant) the chart is wider than the canvas, and a seat the
+// reader just asked the assistant to add landed past the edge, unseen.
+test("a seat added while the chart is open is brought into view", async () => {
+  standCanvasAt(420);
+  const { store } = await mount();
+  await settleChart();
+  // The same company with a Tech Writer added beside DevRel, as the engine
+  // answers once the write lands.
+  type Seatful = { id: string; roles?: { name: string; handle: string }[]; children?: Seatful[] };
+  const added = structuredClone(CHART_ORG) as unknown as {
+    units: Seatful[];
+    derived: { seats: Record<string, unknown>[]; units: { id: string; seats: string[] }[] };
+  };
+  added.units[2]!.children![1]!.roles!.push({ name: "Tech Writer", handle: "tw" });
+  added.derived.seats.push({ ...added.derived.seats[6]!, handle: "tw", name: "Tech Writer" });
+  added.derived.units.find((u) => u.id === "developer-relations")!.seats.push("tw");
+  await act(async () => {
+    store.applyOrg(added as never);
+  });
+  await settleChart();
+  const drawn = onScreen("Tech Writer");
   expect(drawn.left).toBeGreaterThanOrEqual(0);
   expect(drawn.right).toBeLessThanOrEqual(420);
 });

@@ -26,7 +26,15 @@ import type { AgentRow, BudgetWindow, OrgBudget, SandboxRun } from "~/protocol/i
 import { PERIOD_ADJECTIVE, waitedOn } from "~/lib/budget.ts";
 import type { EngineHealth } from "~/contract/health.ts";
 import type { GlyphName } from "@crewlethq/icons/glyphs";
-import { activityOf, roundLabel, staleness, stoppedLine, type NameOf } from "./seats.ts";
+import {
+  failureWords,
+  roundLabel,
+  shownStateOf,
+  staleness,
+  stateWord,
+  stoppedLine,
+  type NameOf,
+} from "./seats.ts";
 import { QUESTION_WITHHELD, questionWithheld } from "./access.ts";
 
 export type Severity = "critical" | "caution" | "info";
@@ -141,6 +149,12 @@ export interface Attention {
   title: string;
   /** What it costs to leave it, or what to do about it. */
   detail: string;
+  /**
+   * The engine's own message behind the condition, where it recorded one: a
+   * failed turn's raw error. NEVER drawn as the title or the detail, only
+   * behind a "Technical details" disclosure, for whoever is fixing it.
+   */
+  technical?: string;
   /** Where the answer is. */
   path?: string[];
   query?: Record<string, string>;
@@ -316,38 +330,51 @@ export function attentionQueue(input: AttentionInput): Attention[] {
 
   // --- seats ---------------------------------------------------------------
   for (const agent of agents) {
-    const state = activityOf(agent);
+    const state = shownStateOf(agent);
+    const seatPath = ["company", "org", "seats", String(agent.handle ?? agent.id)];
+    const who = String(agent.handle ?? agent.role);
+    // A PAUSED OR STOPPED SEAT, in the seat vocabulary's own word (`stateWord`):
+    // "is paused" for a person's decision, "is stopped" for a fault, for the
+    // engine's reason. The budget's stop has its own row above, which names
+    // the window and when it resets, so it is not said twice. A stop whose
+    // cause also left a failed turn is ONE row: the stop is what a reader acts
+    // on, and the failure is why.
+    if ((state === "paused" || state === "stopped") && agent.stopped_reason !== "budget") {
+      out.push({
+        id: `stopped-${agent.agent_id}`,
+        severity: state === "stopped" && agent.last_error ? "critical" : "caution",
+        subject: "seat",
+        icon: "pause",
+        title: `${agent.role} is ${stateWord(state).toLowerCase()}`,
+        detail: `The seat cannot take work: ${stoppedLine(agent, nameOf)}.`,
+        path: seatPath,
+        // WHEN A PERSON PAUSED IT, where one did: the instant the condition
+        // began, which is what orders it among the rest and what its row's
+        // age says.
+        ...(agent.paused?.at ? { at: agent.paused.at } : {}),
+        ...(agent.last_error?.message ? { technical: agent.last_error.message } : {}),
+        who,
+      });
+      continue;
+    }
+    // A FAILED LAST TURN IS NOT A STOP. The engine keeps `last_error` on a
+    // seat that went on to idle or work again, so the row says what happened
+    // to the turn and never calls the seat stopped (the roster files the same
+    // seat with the idle ones, `People.tsx`).
     if (agent.last_error) {
       out.push({
         id: `error-${agent.agent_id}`,
         severity: "critical",
         subject: "seat",
         icon: "triangle-alert",
-        title: `${agent.role} stopped: ${agent.last_error.kind || "error"}`,
-        detail: agent.last_error.message || "The seat stopped and has not done work since.",
-        path: ["company", "org", "seats", String(agent.handle ?? agent.id)],
+        title: `${agent.role}'s last turn failed`,
+        // THE KIND IN PLAIN WORDS, never the machine code or the engine's
+        // raw message, which rides along as `technical`.
+        detail: failureWords(agent.last_error.kind).sentence,
+        ...(agent.last_error.message ? { technical: agent.last_error.message } : {}),
+        path: seatPath,
         at: agent.last_error.at,
-        who: String(agent.handle ?? agent.role),
-      });
-      continue;
-    }
-    // A STOPPED SEAT, in the engine's word and for the engine's reason. The
-    // budget's stop has its own row above, which names the window and when
-    // it resets, so it is not said twice.
-    if (state === "stopped" && agent.stopped_reason !== "budget") {
-      out.push({
-        id: `stopped-${agent.agent_id}`,
-        severity: "caution",
-        subject: "seat",
-        icon: "pause",
-        title: `${agent.role} is stopped`,
-        detail: `The seat cannot take work: ${stoppedLine(agent, nameOf)}.`,
-        path: ["company", "org", "seats", String(agent.handle ?? agent.id)],
-        // WHEN A PERSON PAUSED IT, where one did: the instant the condition
-        // began, which is what orders it among the rest and what its row's
-        // age says.
-        ...(agent.paused?.at ? { at: agent.paused.at } : {}),
-        who: String(agent.handle ?? agent.role),
+        who,
       });
       continue;
     }

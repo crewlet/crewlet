@@ -87,6 +87,7 @@ import {
   PEEK_WIDTH,
   PHONE_BREAKPOINT,
   assistantColumnMin,
+  assistantCounted,
   assistantMaxWidth,
   assistantOccupied,
   assistantTrack,
@@ -580,22 +581,26 @@ function Frame({ children }: { children: ReactNode }) {
   const assistantFits = useMediaMatch(`(width >= ${assistantColumnMin({ column: 0, scale })}px)`);
   const assistantShape = phone ? "sheet" : assistantFits ? "column" : "overlay";
   const assistantColumn = assistantOpen && assistantShape === "column";
-  const track = assistantColumn ? assistantTrack(ASSISTANT_WIDTH, scale) : 0;
+  // THE READER'S WIDTH, kept per browser. Every other threshold counts it
+  // (`assistantCounted`), not the resting width, so a panel dragged wider
+  // folds Settings' column and turns a peek into a drawer at the width it
+  // really leaves the page.
+  const assistantWidth = useStoredWidth({
+    key: STORAGE_KEYS.assistantWidth,
+    min: ASSISTANT_MIN,
+    max: ASSISTANT_MAX,
+  });
+  const track = assistantColumn ? assistantTrack(assistantCounted(assistantWidth.width), scale) : 0;
   const sectionColumn = columnWidth(row?.renderer);
   const sideBySide = useMediaMatch(`(width >= ${sectionColumnMin(track)}px)`);
   const column = sideBySide ? sectionColumn : 0;
   const frame = { column, scale, assistant: track };
   const roomy = useMediaMatch(`(width >= ${peekColumnMin(frame)}px)`);
   const peekShape = peekable(peek) ? (roomy ? "column" : "drawer") : undefined;
-  // THE READER'S WIDTH, kept per browser, capped where the page's sheet keeps
-  // its floor: a width dragged on a wide window never takes a narrower one's
-  // list away.
+  // THE WIDTH DRAWN is the reader's, capped where the page's sheet keeps its
+  // floor: a width dragged on a wide window never takes a narrower one's list
+  // away.
   const viewport = useViewportWidth();
-  const assistantWidth = useStoredWidth({
-    key: STORAGE_KEYS.assistantWidth,
-    min: ASSISTANT_MIN,
-    max: ASSISTANT_MAX,
-  });
   const assistantMax = assistantMaxWidth(viewport, frame, peekShape === "column");
   const assistantDrawn = Math.min(assistantWidth.width ?? ASSISTANT_WIDTH, assistantMax);
   // THE TOAST STACK STANDS BESIDE THE PANEL, not over it, while the panel is

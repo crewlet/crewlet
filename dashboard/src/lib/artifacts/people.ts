@@ -22,8 +22,8 @@ import {
 } from "@crewlethq/ui";
 import type { ArtifactAudience, ArtifactPresenceMember, OrgProjection } from "~/protocol/index.ts";
 import type { BridgePerson } from "~/runtime/bridge.ts";
-import { loginKind, loginWords, tierATokenOf } from "../login.ts";
-import { indexOrg, principalOfSeat, type OrgIndex, type Unit } from "../seats.ts";
+import { loginKind, tierATokenOf } from "../login.ts";
+import { indexOrg, nameOfIn, principalOfSeat, type OrgIndex, type Unit } from "../seats.ts";
 import { useOrg } from "../store-hooks.ts";
 import { plural } from "../format.ts";
 import { tabOfRegion } from "./doc.ts";
@@ -92,7 +92,7 @@ export function memberTurn(
 export function artifactPeople(org: OrgProjection | null | undefined): ArtifactPeople {
   const index = indexOrg(org);
   const units = new Map(index.units.map((u) => [u.id, u]));
-  const nameOf = (handle: string) => index.byHandle.get(handle)?.name ?? loginWords(handle);
+  const nameOf = nameOfIn(index);
   const pagePerson = (handle: string, kind?: "human" | "agent"): BridgePerson => {
     const seat = index.byHandle.get(handle);
     const person: BridgePerson = {

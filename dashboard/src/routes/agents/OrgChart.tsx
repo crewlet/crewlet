@@ -129,6 +129,8 @@ import {
   nameOfIn,
   statusOf,
   stateLine,
+  shownStateOf,
+  stateGroupWord,
   stateWord,
   toneOf,
   unitByKey,
@@ -258,18 +260,13 @@ export function OrgChart() {
     peeked?.key ?? (peekedUnitNode && chart.units.has(peekedUnitNode) ? peekedUnitNode : null);
 
   // `[` AND `]` WALK THE SEATS in the order the tree reads them.
-  const order = useMemo(() => {
-    const out: Seat[] = [];
-    const walk = (nodes: readonly TreeInput[]) => {
-      for (const n of nodes) {
-        const seat = chart.seats.get(n.id);
-        if (seat) out.push(seat);
-        if (n.children) walk(n.children);
-      }
-    };
-    walk(chart.nodes);
-    return out;
-  }, [chart]);
+  const order = useMemo(
+    () =>
+      nodeIds(chart.nodes)
+        .map((id) => chart.seats.get(id))
+        .filter((seat): seat is Seat => seat !== undefined),
+    [chart],
+  );
   usePeekNeighbours(
     useMemo(() => order.map((s) => ({ kind: "seat" as const, id: s.handle })), [order]),
   );
@@ -600,7 +597,7 @@ function ChartCanvas({
   // A STATE RATHER THAN A REF: the chart is not drawn until the org has
   // loaded, and what watches its box has to start when it is.
   const [host, setHost] = useState<HTMLDivElement | null>(null);
-  const chartBox = useChartView(host, view, selected, anchor);
+  const chartBox = useChartView(host, view, selected, anchor, canvas.nodes);
   return (
     <div className="oc-chart" id={panelId} ref={setHost} {...chartBox}>
       <TreeCanvas ref={view} selectedId={selected} {...canvas} />
@@ -802,12 +799,21 @@ function SeatRowCell({
  * focus belongs; a reader in the peek (stepping with its buttons) or anywhere
  * else keeps the focus they had, or the next key they press would be read by
  * the tree's type-ahead instead of by what they were using.
+ *
+ * # And a seat that appears is revealed
+ *
+ * A node that was not in the chart a moment ago (a seat the reader just
+ * asked the assistant to add, or one a teammate added) is revealed the same
+ * way, with the least pan that shows it. Held at [LEGIBLE_ZOOM] beside the
+ * assistant the chart is wider than the canvas, and a new seat placed past
+ * the edge was a change nobody saw. The chart's first answer reveals nothing.
  */
 function useChartView(
   host: HTMLDivElement | null,
   view: RefObject<TreeCanvasHandle | null>,
   selected: string | null,
   anchor: string | null,
+  nodes: readonly TreeInput[],
 ): {
   onClick: (event: MouseEvent<HTMLElement>) => void;
   onKeyDown: (event: ReactKeyboardEvent<HTMLElement>) => void;
@@ -928,6 +934,18 @@ function useChartView(
     if (ready && selected) reveal(selected);
   }, [ready, selected, reveal]);
 
+  // WHAT THE CHART HELD when it last answered, so a node it did not is new.
+  const ids = useMemo(() => nodeIds(nodes), [nodes]);
+  const known = useRef<ReadonlySet<string> | null>(null);
+  useEffect(() => {
+    if (!ready) return;
+    const before = known.current;
+    known.current = new Set(ids);
+    const added = before ? ids.filter((id) => !before.has(id)) : [];
+    const last = added[added.length - 1];
+    if (last) reveal(last);
+  }, [ready, ids, reveal]);
+
   // THE WIDTH THE CHART WAS LAST LAID INTO: the canvas's own first fit, then
   // every width change after it.
   const fittedAt = useRef<number | null>(null);
@@ -948,6 +966,19 @@ function useChartView(
   }, [host, ready, width, place, reveal]);
 
   return handlers;
+}
+
+/** Every node's id in a chart, in the order the tree reads them. */
+export function nodeIds(nodes: readonly TreeInput[]): string[] {
+  const out: string[] = [];
+  const walk = (level: readonly TreeInput[]) => {
+    for (const n of level) {
+      out.push(n.id);
+      if (n.children) walk(n.children);
+    }
+  };
+  walk(nodes);
+  return out;
 }
 
 /**
@@ -974,7 +1005,7 @@ function SeatNode({
   onOpen: () => void;
 }) {
   const human = seat.kind === "human";
-  const state = human ? undefined : activityOf(agent);
+  const state = human ? undefined : shownStateOf(agent);
   const line = cardLine(seat, agent, now, nameOf, holding);
   const handle = handleLabel(seat.handle);
   const item = card.item(seat.key);
@@ -1127,7 +1158,7 @@ export function OrgLegend({ counts, inline = false }: { counts: StateCounts; inl
       {LEGEND.map((state) => (
         <span key={state} className="oc-legend-item">
           <StatusDot tone={toneOf(state)} />
-          {stateWord(state)} <span className="t-num">{counts[state]}</span>
+          {stateGroupWord(state)} <span className="t-num">{counts[state]}</span>
         </span>
       ))}
     </div>

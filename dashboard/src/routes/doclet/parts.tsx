@@ -38,6 +38,7 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { href, useNavigator, useRoute } from "~/app/router.tsx";
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import { plural } from "~/lib/format.ts";
+import { authorWords } from "~/lib/attribution.ts";
 import { plainText } from "~/lib/markdown.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
@@ -129,6 +130,20 @@ export function changeNote(change: Pick<PageChange, "excerpt" | "title">): strin
  */
 export function changedBy(change: Pick<PageChange, "actor" | "actor_kind">): string {
   return change.actor_kind === "system" ? "" : (change.actor ?? "");
+}
+
+/**
+ * Who made a change, as its line names them: the writer's name, "with the
+ * assistant" where the write came through the Dashboard Assistant
+ * (`authorWords`, off the server-set `operator_id`), or "The engine". The
+ * grant id is never printed.
+ */
+export function changeAuthor(
+  change: Pick<PageChange, "actor" | "actor_kind" | "operator_id">,
+  who: Who,
+): string {
+  const by = changedBy(change);
+  return by ? authorWords(who(by).name, change.operator_id) : "The engine";
 }
 
 /** A seat's face, sized for a line of text, and named by the words beside it. */

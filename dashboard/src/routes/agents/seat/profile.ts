@@ -9,15 +9,7 @@ import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import { PERIOD_WORDS } from "~/lib/budget.ts";
 import { fmtCount, tsKey } from "~/lib/format.ts";
 import { callWords } from "~/lib/turnsteps.ts";
-import {
-  activityOf,
-  isOwnSeat,
-  leadsInLine,
-  roundOf,
-  type OrgIndex,
-  type Seat,
-  type SeatState,
-} from "~/lib/seats.ts";
+import { isOwnSeat, leadsInLine, roundOf, type OrgIndex, type Seat } from "~/lib/seats.ts";
 import type { ViewerState } from "~/lib/viewer.ts";
 import type {
   AgentRow,
@@ -170,41 +162,6 @@ export function seatRun(sandboxes: readonly SandboxEntry[], seat: Seat): Sandbox
 // ---------------------------------------------------------------------------
 // The header
 // ---------------------------------------------------------------------------
-
-/**
- * The state pill's word — short, because the callout under the header says
- * the rest (who paused it and why, which run is waiting): "Working", "Needs
- * you", "Paused", "Stopped · budget", "Not placed", "Idle".
- *
- * Every word is the engine's `activity` and `stopped_reason`; a reason this
- * build does not know reads "Stopped" rather than a guess.
- */
-export function pillWord(row: AgentRow | null | undefined): string {
-  const state: SeatState = activityOf(row);
-  switch (state) {
-    case "working":
-      return "Working";
-    case "needs":
-      return "Needs you";
-    case "idle":
-      return "Idle";
-    case "offline":
-      return "No state yet";
-    case "stopped":
-      switch (row?.stopped_reason) {
-        case "paused":
-          return "Paused";
-        case "budget":
-          return "Stopped · budget";
-        case "provider":
-          return "Stopped · provider";
-        case "unplaced":
-          return "Not placed";
-        default:
-          return "Stopped";
-      }
-  }
-}
 
 // ---------------------------------------------------------------------------
 // The figures

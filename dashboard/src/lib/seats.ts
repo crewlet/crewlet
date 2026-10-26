@@ -54,10 +54,11 @@ import { useQuery } from "./useQuery.ts";
 import { useRest } from "./useRest.ts";
 import { useOrg } from "./store-hooks.ts";
 import { useViewer } from "./viewer.ts";
-import { loginKind } from "./login.ts";
+import { loginKind, loginWords } from "./login.ts";
 import { rest } from "~/protocol/rest.ts";
 import { DELEGATE_TASKS, DELEGATE_TOOL, type SeatActivity } from "~/contract/wire.ts";
 import type { EngineHealth } from "~/contract/health.ts";
+import type { ProviderErrorKind } from "~/contract/failures.ts";
 import type {
   AgentRow,
   CompanyDocument,
@@ -1316,7 +1317,10 @@ export function awaitingPerson(status: string | undefined): boolean {
  * has this blob lighting which feels like it is working", and the fix for
  * that is not a duller mark, it is none.
  */
-export function statusOf(state: SeatState | undefined): AvatarStatus | undefined {
+export function statusOf(state: ShownState | undefined): AvatarStatus | undefined {
+  // A PAUSED SEAT IS A STOPPED ONE to the engine, and its badge is the stop's
+  // square: the words beside it are what tell the two apart.
+  if (state === "paused") return "stopped";
   return state === "working" || state === "needs" || state === "stopped" ? state : undefined;
 }
 
@@ -1356,31 +1360,80 @@ export function heldBy(
  * stands on: WORKING IS INFO, NEEDS YOU IS WARNING, STOPPED IS DANGER, and idle
  * is neutral. Amber is reserved for the one state that asks for a person.
  */
-export function toneOf(state: SeatState | undefined): SeatTone | "neutral" {
+export function toneOf(state: ShownState | undefined): SeatTone | "neutral" {
   switch (state) {
     case "working":
       return "info";
     case "needs":
       return "warning";
     case "stopped":
+    case "paused":
       return "danger";
     default:
       return "neutral";
   }
 }
 
-/** The state in one lowercase word or two, for a pill. */
-export function activityWord(state: SeatState): string {
-  return state === "needs" ? "needs you" : state;
+/**
+ * A seat's state as a screen NAMES it: the engine's `activity`, with a paused
+ * seat told apart from a stopped one.
+ *
+ * ONE STATE, TWO WORDS FOR IT was the defect this closes. The engine calls a
+ * seat a person paused `stopped` with the reason `paused`, and the seat page's
+ * pill said "Paused" while the roster filed the same seat under "Stopped", the
+ * chart's caption said "Stopped" and the Inbox said it "is stopped". A pause
+ * is a person's decision and a stop is a fault, so every surface now says
+ * "Paused" for the one and "Stopped" for the other, off this one reading.
+ */
+export type ShownState = SeatState | "paused";
+
+/** Which [ShownState] a seat's row is in. */
+export function shownStateOf(row: AgentRow | null | undefined): ShownState {
+  const state = activityOf(row);
+  return state === "stopped" && row?.stopped_reason === "paused" ? "paused" : state;
 }
 
 /**
- * The same word capitalised, as a line of its own writes it: a chart node's
- * caption and the legend that counts those captions.
+ * The SHORT form of a seat's state: one or two words, sentence case, for a
+ * pill, a chart caption, a roster group and a legend.
+ *
+ * Every screen that names a state in a word takes it from here, so the badge,
+ * the roster, the chart and Home cannot drift apart again. The LONG form is
+ * [labelOf], which always opens with this word.
  */
-export function stateWord(state: SeatState): string {
-  const word = activityWord(state);
-  return word.charAt(0).toUpperCase() + word.slice(1);
+export function stateWord(state: ShownState): string {
+  switch (state) {
+    case "working":
+      return "Working";
+    case "needs":
+      return "Needs you";
+    case "paused":
+      return "Paused";
+    case "stopped":
+      return "Stopped";
+    case "idle":
+      return "Idle";
+    case "offline":
+      return "No state yet";
+  }
+}
+
+/**
+ * The heading over a GROUP of seats in one engine state: a roster group, a
+ * chart legend's entry, a Home tile.
+ *
+ * A group is keyed on the engine's `activity`, and `stopped` holds the seats a
+ * person paused as well as the ones a fault stopped, so its heading says both
+ * ("Paused or stopped") and its count stays true. Each seat inside it still
+ * names its own state in [stateWord]'s word.
+ */
+export function stateGroupWord(state: SeatState): string {
+  return state === "stopped" ? "Paused or stopped" : stateWord(state);
+}
+
+/** The short form of a seat row's state: [stateWord] over [shownStateOf]. */
+export function seatWord(row: AgentRow | null | undefined): string {
+  return stateWord(shownStateOf(row));
 }
 
 /**
@@ -1388,18 +1441,21 @@ export function stateWord(state: SeatState): string {
  *
  * `paused.by` is the name the engine records every author under
  * (`iam.ActorFor`): the SEAT HANDLE of a person bound to one, or the whole
- * login of anybody bound to none — an address either way, and "Paused by
+ * login of anybody bound to none, an address either way, and "Paused by
  * jane-founder" names an address where a person is meant. A screen passes the
- * chart's lookup; a key the chart does not hold (a login, a seat since
- * removed) is drawn as it came.
+ * chart's lookup; a key the chart does not hold is a login, said in
+ * [loginWords]'s plain words ("review (API token)", never `token:review`).
  */
 export type NameOf = (key: string) => string;
 
-const AS_WRITTEN: NameOf = (key) => key;
+const AS_WRITTEN: NameOf = loginWords;
 
-/** The chart's [NameOf]: a seat handle's name, and any other key as written. */
+/**
+ * The chart's [NameOf]: a seat handle's name, and any other key as a login is
+ * told ([loginWords]), so a credential's spelling never reaches a sentence.
+ */
 export function nameOfIn(index: OrgIndex): NameOf {
-  return (key) => index.byHandle.get(key)?.name ?? key;
+  return (key) => index.byHandle.get(key)?.name ?? loginWords(key);
 }
 
 /** Why a stopped seat cannot take work, in a sentence, keyed on the engine's reason. */
@@ -1418,44 +1474,103 @@ export function stoppedLine(row: AgentRow | null | undefined, nameOf: NameOf = A
   }
 }
 
+/** What a failed model call is called: a word for a tag, and a sentence for a reader. */
+export interface FailureWords {
+  /** One or two words, for a phase's tag: "Rate limited", "Timed out". */
+  tag: string;
+  /** The plain sentence a banner or an Inbox row leads with. */
+  sentence: string;
+}
+
 /**
- * A seat's state as its LABEL: "Working", "Needs you · run parked", "Paused by
- * Jane · 12m", "Stopped · budget", "Not placed on any node", "Idle".
+ * The classifier's kinds in plain words, keyed on the engine's own spelling
+ * (`contract/failures.ts`, held to `llm.ErrorKind` by a Go gate), so a kind
+ * the engine adds fails the typecheck here until it has words.
  *
- * Every word is the engine's: the reason is `stopped_reason`, the pauser is
- * `paused.by`, the age is `paused.at` against the reader's clock. A reason
- * this build does not know draws "Stopped" rather than a guess.
+ * THE MACHINE CODE IS NEVER THE HEADLINE. The seat page drew "server: llm
+ * chain exhausted after 1 providers ..." and the Inbox titled the row with the
+ * bare kind. The raw engine message stays available, behind the kit's
+ * disclosure ([TechnicalDetails] in components/common.tsx), for whoever is
+ * fixing it.
+ */
+const FAILURE_WORDS: Record<ProviderErrorKind, FailureWords> = {
+  rate_limit: {
+    tag: "Rate limited",
+    sentence: "Its model provider refused the call because a rate or usage limit was reached.",
+  },
+  auth: {
+    tag: "Sign-in needed",
+    sentence: "Its model provider's sign-in has expired or is missing, so the call was refused.",
+  },
+  timeout: {
+    tag: "Timed out",
+    sentence: "The model call ran out of time before an answer came back.",
+  },
+  server: {
+    tag: "Provider error",
+    sentence: "Its model provider ran but gave no usable answer.",
+  },
+  canceled: {
+    tag: "Canceled",
+    sentence: "The turn was stopped before the model answered.",
+  },
+  fatal: {
+    tag: "Engine fault",
+    sentence: "The engine could not start the model call. An operator needs to check the setup.",
+  },
+};
+
+/** What a failure the classifier did not record reads as: never its raw code. */
+const FAILED: FailureWords = {
+  tag: "Failed",
+  sentence: "The turn ended before it finished its work.",
+};
+
+/**
+ * A failure's plain words, by the kind the engine recorded. A kind outside the
+ * classifier's set (a guard breach, a budget, an event type) reads as a failed
+ * turn rather than as its machine code.
+ */
+export function failureWords(kind: string | null | undefined): FailureWords {
+  return Object.hasOwn(FAILURE_WORDS, kind ?? "")
+    ? FAILURE_WORDS[kind as ProviderErrorKind]
+    : FAILED;
+}
+
+/**
+ * The LONG form of a seat's state, as its label: "Working", "Needs you · run
+ * parked", "Paused by Jane · 12m", "Stopped: its model provider is
+ * unreachable", "Idle".
+ *
+ * IT OPENS WITH THE SHORT FORM ([seatWord]) for every state the engine
+ * reports, so a pill and the line beside it can never name two states. Every other word is the engine's:
+ * the reason is `stopped_reason` (said by [stoppedLine]), the pauser is
+ * `paused.by`, the age is `paused.at` against the reader's clock. A reason this
+ * build does not know draws "Stopped" rather than a guess.
  */
 export function labelOf(
   row: AgentRow | null | undefined,
   now: number,
   nameOf: NameOf = AS_WRITTEN,
 ): string {
-  switch (activityOf(row)) {
-    case "working":
-      return "Working";
+  const state = shownStateOf(row);
+  const word = stateWord(state);
+  switch (state) {
     case "needs":
-      return row?.turn?.stage === "parked" ? "Needs you · run parked" : "Needs you";
-    case "idle":
-      return "Idle";
+      return row?.turn?.stage === "parked" ? `${word} · run parked` : word;
     case "offline":
       return "No state from the engine yet";
-    case "stopped":
-      switch (row?.stopped_reason) {
-        case "paused": {
-          const by = row.paused?.by ? `Paused by ${nameOf(row.paused.by)}` : "Paused";
-          const since = row.paused?.at ? shortAge(row.paused.at, now) : "";
-          return since ? `${by} · ${since}` : by;
-        }
-        case "unplaced":
-          return "Not placed on any node";
-        case "budget":
-          return "Stopped · budget";
-        case "provider":
-          return "Stopped · provider";
-        default:
-          return "Stopped";
-      }
+    case "paused": {
+      const by = row?.paused?.by ? `${word} by ${nameOf(row.paused.by)}` : word;
+      const since = row?.paused?.at ? shortAge(row.paused.at, now) : "";
+      return since ? `${by} · ${since}` : by;
+    }
+    case "stopped": {
+      const why = stoppedLine(row, nameOf);
+      return why === "stopped" ? word : `${word}: ${why}`;
+    }
+    default:
+      return word;
   }
 }
 

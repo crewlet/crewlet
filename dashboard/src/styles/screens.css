@@ -7818,11 +7818,17 @@ a.work-cal-chip {
     grid-column: span 3;
   }
 }
+/* ONE COLUMN, AND EVERY SPAN UNDONE. The reset is written at least as
+   specifically as the spans above it (`:nth-child(n)` matches every figure
+   and weighs what `:nth-child(n + 4)` does): a plain `> *` lost to the wider
+   query's last two spans, which kept `span 3` on a one-track grid, so the
+   grid grew two implicit tracks sized by content and the first figure was
+   drawn 86px wide with its meter past its edge. */
 @container page (width < 640px) {
   .home-kpis[data-count] {
     grid-template-columns: minmax(0, 1fr);
   }
-  .home-kpis[data-count] > * {
+  .home-kpis[data-count] > :nth-child(n) {
     grid-column: auto;
   }
 }

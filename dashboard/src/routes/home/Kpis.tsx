@@ -155,7 +155,7 @@ function AgentsTile({ crew }: { crew: Crew }) {
             segments={[
               { id: "working", value: crew.working, tone: "info", label: "working" },
               { id: "needs", value: crew.needs, tone: "warning", label: "waiting" },
-              { id: "stopped", value: crew.stopped, tone: "danger", label: "stopped" },
+              { id: "stopped", value: crew.stopped, tone: "danger", label: "paused or stopped" },
             ]}
           />
         ) : undefined
