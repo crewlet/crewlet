@@ -2,10 +2,10 @@ package topics
 
 // The code host's own log, and why its grammar sits beside the tracker's.
 //
-// The code domain is the state-log framework's FIFTH, and the third whose
-// subject is an arbitration unit rather than a routing label: two pushes to
-// one repository contend at the broker and exactly one record lands per round,
-// where pushes to two repositories never contend at all.
+// The code domain is a state log whose subject is an arbitration unit rather
+// than a routing label: two pushes to one repository contend at the broker
+// and exactly one record lands per round, where pushes to two repositories
+// never contend at all.
 //
 // It lives here for the reason the tracker's and the knowledge base's do —
 // the publisher builds the subject, the applier's kind switch dispatches on

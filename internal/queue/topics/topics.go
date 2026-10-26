@@ -133,12 +133,13 @@ const (
 
 	// SearchPrefix prefixes the search fan-out's subjects.
 	//
-	// THE ONE SUBJECT SPACE IN THIS FILE THAT IS NOT EVENTS. Nothing
-	// publishes here and nothing subscribes: these carry the ephemeral
-	// request and reply of [queue.EventQueue.Ask], which leave no stream,
-	// no consumer and no record. They live in this file anyway because a subject is a subject
-	// — two subsystems minting one namespace out of each other's sight is
-	// how a wildcard starts capturing traffic somebody else owns.
+	// NOT EVENTS — the first subject space of this package that is not, and
+	// the reason every later one gives. Nothing publishes here and nothing
+	// subscribes: these carry the ephemeral request and reply of
+	// [queue.EventQueue.Ask], which leave no stream, no consumer and no
+	// record. They live in this package anyway because a subject is a
+	// subject — two subsystems minting one namespace out of each other's
+	// sight is how a wildcard starts capturing traffic somebody else owns.
 	SearchPrefix = "crewlet.search."
 	// SearchSlice is where one query's assignment table is scattered.
 	// Every node serves it and answers only for its own row.
