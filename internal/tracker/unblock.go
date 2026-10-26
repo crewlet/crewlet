@@ -8,14 +8,18 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// The missed-unblocked repair.
+// The unblocked repair — today the one path by which a dependent hears it
+// became workable.
 //
 // # Why it is bounded by a POSITION and never by a clock
 //
-// Closing a blocker wakes everything it was blocking, and that wake rides the
-// closing record's own notification. When it does not — a record deferred and
-// applied later, a notification the valve dropped, an edge written after the
-// close — somebody is waiting on work that is ready and nobody has told them.
+// Closing a blocker clears its edge on every dependent and tells none of them:
+// the close's record is about the blocker, and nothing on it names the tasks
+// it held up ([Snapshot.Unblocked] is filled by [Writer.TellUnblocked] alone,
+// below). So until this repair runs — on the maintenance sweep's tick, every
+// fifteen minutes — somebody is waiting on work that is ready and nobody has
+// told them: after an ordinary close, a bulk cancel, a record deferred and
+// applied later, an edge written after the close.
 //
 // The obvious repair is a query over the last five minutes. It has a hole
 // exactly the size of the outage it exists to survive: a duty that did not run

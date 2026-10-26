@@ -1228,10 +1228,22 @@ type Snapshot struct {
 	ProjectLead     string `json:"project_lead,omitempty"`
 	RoutingUnitLead string `json:"routing_unit_lead,omitempty"`
 
-	// Unblocked names every dependent this change cleared, with its
-	// assignee. Stamped from the task's own dependents when it enters a
-	// finished group — a WAKE, not a safeguard: nothing was refused,
-	// somebody was told.
+	// Unblocked names the dependent a late relations commit tells is now
+	// workable, with its assignee. [Writer.TellUnblocked] — the unblocked
+	// repair — is the one writer that fills it, on the DEPENDENT's own
+	// subject, and its record names nobody else. A close fills nothing
+	// here; the repair is how the tasks it held up hear.
+	//
+	// NOBODY ELSE, because the notice takes its place in the precedence
+	// like any other reason ([Candidates]), and a record reaches one handle
+	// once — one notice row per record and recipient, one wake id per
+	// record and handle — with the row and the prompt naming the record's
+	// own task. On a record that also routed the assignee under an earlier
+	// reason, or one about another task, they would hear that reason, or
+	// about the wrong task, while the applier still stamped the dependent
+	// told, so the repair would never tell them again.
+	//
+	// A WAKE, not a safeguard: nothing was refused, somebody was told.
 	Unblocked []TaskParty `json:"unblocked,omitempty"`
 
 	// Dependents names every dependent this change added or removed, for

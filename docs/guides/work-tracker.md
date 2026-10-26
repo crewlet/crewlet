@@ -1736,8 +1736,10 @@ seat since removed — is stored and shown exactly as written.
 ### Dependencies, and the set-valued arguments
 
 A **dependency** is the one relation with two ends. `waiting_on` is authored on
-the task that is blocked; the blocker carries the dependent's id, so closing it
-can say who it unblocks without scanning every task in the company.
+the task that is blocked; the blocker carries the dependent's id, so the record
+that closes it names every task whose edge it clears without scanning every
+task in the company. That record tells nobody they are unblocked:
+[what wakes a seat](#what-wakes-a-seat) says what does.
 
 Both ends are written, and in that order: the blocker's row is read first, so a
 blocker that is gone, tombstoned or already at its 64 dependents refuses the
@@ -1953,9 +1955,12 @@ same handle as the watch it leaves and the assignment it names — and a founder
 filing work through their assistant is not woken by every item they filed and
 every comment they left.
 
-The single exception is **`unblocked`**, and it is the exception because it is
-about a *different* task: closing a blocker is exactly the moment to be told
-that your own other work became workable.
+The single exception is **`unblocked`**, because it is about a *different*
+task: that your own other work became workable is news however it came about,
+your own close of its blocker included. The close itself does not carry that
+news. The tracker's unblocked repair tells each dependent's assignee in a
+record of its own, on its next pass after the close (every fifteen minutes),
+and the wake says it comes from a repair.
 
 **A task's wakes are one conversation, named by the task's id.** Wakes about
 one task that queue up while a seat is busy are merged into one digest turn,
@@ -2161,8 +2166,9 @@ which snoozes are due and your next inbox write is what moves them.
 reason it reached you under, the subject, who made it, and an excerpt. A
 change **you** made is never one of them — your assistant writes as your seat,
 so the work it files on your behalf is not waiting for you in your own inbox —
-except for the one reason that is news to its author: `unblocked`, a
-blocker of yours that you finished yourself. It is
+except under the one reason that is news to its author, `unblocked`. Finishing
+a blocker of your own still tells you that the task it held up is workable,
+because that notice is the repair's change rather than your close. It is
 written by the applier when the change lands — so it is there whether or not
 anybody was online, and a person who has marked nothing still has an inbox.
 `get_person` is your own *marks over that feed*: what you have read, what you
