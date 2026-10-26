@@ -73,12 +73,14 @@ import { indexOrg } from "~/lib/seats.ts";
 import { conditionsToDecide, watchedIn } from "~/lib/attention.ts";
 import { useAttention } from "~/lib/useAttention.ts";
 import { INBOX_PAGE } from "~/lib/useInboxCounts.ts";
+import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
 import { InboxColumn, taskTitleOf, titleOf } from "./InboxColumn.tsx";
 import { InboxPane } from "./InboxPane.tsx";
 import { usePagedInbox } from "./pages.tsx";
 import {
   earlierOf,
   inboxQuiet,
+  inboxResources,
   inboxRows,
   nextAfter,
   noticeRows,
@@ -210,6 +212,10 @@ export function Inbox() {
 
   const [settled, setSettled] = useState<ReadonlyMap<string, Settled>>(new Map());
   const needs = useMemo(() => keepSettled(rows.needs, settled), [rows.needs, settled]);
+  // WHAT NEEDS YOU IS ABOUT, named for the assistant: the screen's list is
+  // built here and no route answers it, so a question asked on this screen
+  // reads these records rather than the task notices alone.
+  useAssistantContext({ resources: inboxResources(needs) });
   const snoozedRows = snoozedOpen && snoozed.notices ? noticeRows(snoozed.notices) : null;
   const earlierRows =
     earlierOpen && earlier.notices ? noticeRows(earlierOf(earlier.notices)) : null;

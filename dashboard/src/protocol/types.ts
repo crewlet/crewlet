@@ -4671,6 +4671,11 @@ export interface TurnRow {
    *  question from its outcome: a turn can recover from a failed provider
    *  call and still end well. */
   failed: boolean;
+  /** Why it failed: the message and class of the record that ended it (the
+   *  turn's own completion first, then a failed phase or a failure event).
+   *  Absent for a turn that carried no failure. */
+  error?: string;
+  error_kind?: string;
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
