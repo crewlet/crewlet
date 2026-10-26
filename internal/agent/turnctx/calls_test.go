@@ -133,6 +133,49 @@ func TestAForkCountsItsOwnCallsAndIsAbsorbed(t *testing.T) {
 	}
 }
 
+// CALLS THAT RUN SIDE BY SIDE COUNT IN THE ORDER THEY WERE ADMITTED, whatever
+// order they return in: each counts the run's calls admitted before it and
+// none admitted after, so a re-run that makes the same calls in the same order
+// reproduces every count however its tools happen to finish.
+//
+// Mutation: hand back the run's own log rather than a fork, and the first
+// call counts the second, admitted after it; leave the record to the return,
+// and the run counts nothing before a fourth.
+func TestAdmittedCallsCountInTheOrderTheyArrived(t *testing.T) {
+	t.Parallel()
+	a, b := map[string]any{"status": "in_progress"}, map[string]any{"status": "done"}
+	run := turnctx.NewCallLog()
+	first := run.Admit("update", a)
+	second := run.Admit("update", b)
+	third := run.Admit("update", a)
+	// Asked in the reverse of the admission order, as calls returning
+	// out of order would ask.
+	if got := third.Ordinal("update", a); got != 1 {
+		t.Fatalf("the third call counts %d different calls before it, want 1", got)
+	}
+	if got := second.Ordinal("update", b); got != 1 {
+		t.Fatalf("the second call counts %d different calls before it, want 1", got)
+	}
+	if got := first.Ordinal("update", a); got != 0 {
+		t.Fatalf("the first call counts %d, want 0: it saw a call admitted after it", got)
+	}
+	// Each is in the run's log from its admission, so a call admitted
+	// later counts all three without waiting for any to return.
+	if got := run.Ordinal("update", b); got != 2 {
+		t.Fatalf("the run counts %d calls before a fourth, want the two that differ", got)
+	}
+	// What a call recorded on its own fork reaches the run once absorbed.
+	second.Record("comment", b)
+	run.Absorb(second)
+	if got := run.Ordinal("comment", a); got != 1 {
+		t.Fatalf("a call's own fork was not absorbed (count %d, want 1)", got)
+	}
+	var none *turnctx.CallLog
+	if none.Admit("update", a) != nil {
+		t.Fatal("a nil log admitted a call")
+	}
+}
+
 // A NIL LOG HOLDS NOTHING AND COUNTS ZERO, which is every call as its run's
 // first of its kind — the id every call derived before the log existed.
 func TestANilLogCountsNothing(t *testing.T) {

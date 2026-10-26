@@ -15,7 +15,7 @@ func sandboxAgentCompany(sandbox, seat string) string {
 		"    oc:\n      model: anthropic/claude-sonnet-5\n      agent: opencode\n" +
 		"    cc:\n      model: sonnet\n      agent: claude-code\n" +
 		"    agent:\n      model: anthropic/claude-sonnet-5\n" +
-		"      agent: opencode\n      mode: agent\n" +
+		"      agent: opencode\n      mode: box\n" +
 		"roles:\n  - name: SWE\n" + seat
 }
 
@@ -56,16 +56,16 @@ func TestASeatsCodeWorkMustRunOnItsEntrysOwnCLI(t *testing.T) {
 			"    llm: oc\n    llm_sandbox: cc\n    sandbox: {enabled: true}\n", false},
 		{"a seat that runs no code", "",
 			"    llm: oc\n", false},
-		// `self` rides the executor's own agent-mode run, whose runner is
+		// `self` rides the executor's own box-mode run, whose runner is
 		// always its entry's own CLI: the seat's coding_agent never drives
 		// it, so its default is no pairing at all.
 		{"code work that rides the executor's own run", "",
 			"    llm: agent\n    sandbox: {enabled: true, run_in: self}\n", false},
 		// Nor does an enabled gate on that seat with no `self`: a seat
-		// whose executor runs in agent mode is never offered run_sandbox,
+		// whose executor runs in box mode is never offered run_sandbox,
 		// so the gate hands nobody's code work to any runner. Refused, it
 		// was a pairing the engine never makes.
-		{"an agent-mode seat's enabled gate, which offers it no box", "",
+		{"a box-mode seat's enabled gate, which offers it no box", "",
 			"    llm: agent\n    sandbox: {enabled: true}\n", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

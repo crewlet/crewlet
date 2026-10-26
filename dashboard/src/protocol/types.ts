@@ -224,6 +224,12 @@ export interface ToolExecution {
   success: boolean;
   /** Present only on a failed call, repeating its `result`. */
   error?: string;
+  /**
+   * The call's own id — what tells two calls of one response apart, and what
+   * a running call (`running_calls[].id`) is matched to once it answers.
+   * Absent where nothing named the call.
+   */
+  call_id?: string;
   /** When the call was handed to the tool (RFC 3339, UTC), and how long it
    *  took. Both absent on a row nothing timed. */
   started_at?: string;
@@ -306,15 +312,60 @@ export interface PhaseRound {
   cache_write_tokens: number;
   tool_calls: number;
   /**
-   * Why the model stopped writing this round's response: `end` or
-   * `tool_use` (see `contract/stops.ts`). Absent where its backend reported
+   * Why the model stopped writing this round's response: `end`, `tool_use`
+   * or `cap` (see `contract/stops.ts`). Absent where its backend reported
    * none — "not reported", never "ended normally".
    */
   stop_reason?: StopReason;
 }
 
-/** The tool call a phase is running right now (`types.RunningCall`). */
+/**
+ * One CLI run of a phase (`types.PhaseInvocation`): one process driving its
+ * own loop over the phase's tools, from launch to exit — the unit the engine
+ * observes for every CLI, where a round is one model request that a CLI's
+ * record shows for most CLIs and not for all.
+ */
+export interface PhaseInvocation {
+  started_at: string;
+  duration_ms: number;
+  /** The `providers.llm` entry and the model that served the run. */
+  provider_key?: string;
+  model?: string;
+  /**
+   * How the run ended: `end` (its model stopped), `cap` (its CLI's own turn
+   * cap), `stopped` (the engine ended it) or `failed`. A string rather than a
+   * union, so an outcome a newer engine records arrives as itself.
+   */
+  outcome: string;
+  /**
+   * The rounds the run made, both inclusive, on the scale `rounds[].round`,
+   * `tool_executions[].round` and `round_narration[].round` share — what a
+   * round is filed under its run by. Both 0 on a run that made no request.
+   */
+  first_round: number;
+  last_round: number;
+  /**
+   * False for a run whose CLI's record showed no model requests: the whole
+   * run is then ONE round, which nothing timed on its own — its span is the
+   * run's.
+   */
+  requests_observed: boolean;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  /** How many of the phase's tools the run called. */
+  tool_calls: number;
+}
+
+/**
+ * One tool call a phase is running right now (`types.RunningCall`) — one entry
+ * of `running_calls`, since a coding CLI may run a response's calls at once.
+ */
 export interface RunningCall {
+  /** The call's own id: what its `tool_executions` row carries as `call_id`
+   *  once it answers. Absent where nothing named the call. */
+  id?: string;
   round: number;
   name: string;
   /** What the call was handed — part of the seat's BODY, so absent on a call
@@ -400,7 +451,7 @@ export interface LiveCall {
   model: string;
   /**
    * THE BODY — `trigger`, `prompt`, `prompt_messages`, `response`,
-   * `tool_executions`, `round_narration`, `partial_round` and a running
+   * `tool_executions`, `round_narration`, `partial_round` and every running
    * call's `arguments` — is the seat's TRAIL, and the engine sends it only to
    * a reader who may read that seat's trail: an admin, or the seat's lead.
    * Everybody else is sent the call's STATUS with every one of these keys
@@ -441,6 +492,13 @@ export interface LiveCall {
   rounds_used: number;
   /** Each round's own timing and tokens, as the loop recorded it. */
   rounds?: PhaseRound[] | null;
+  /**
+   * The phase's CLI runs that have ENDED, in order. The run in flight is not
+   * on it until it ends: its rounds are the ones past every entry's
+   * `last_round`. Status, like `rounds`: a reader withheld the body is sent
+   * it.
+   */
+  invocations?: PhaseInvocation[] | null;
   /** The round cap currently GRANTED, which an extension raises mid-phase. */
   max_rounds?: number;
   /** The most any extension may raise that cap to. */
@@ -452,8 +510,17 @@ export interface LiveCall {
    * case is a model call in flight — see `lib/waterfall.ts`.
    */
   round_started_at?: string;
-  /** The tool call running RIGHT NOW; absent between calls. */
-  running_call?: RunningCall | null;
+  /**
+   * When the CLI run in flight was launched — the run whose rounds are past
+   * every entry in `invocations`, which lists only the runs that have ended.
+   * Absent between runs.
+   */
+  run_started_at?: string;
+  /**
+   * Every tool call running RIGHT NOW, in the order they arrived — a coding
+   * CLI may run a response's calls at once. Absent between calls.
+   */
+  running_calls?: RunningCall[] | null;
   /**
    * Every person's note the phase has read so far, with the round whose
    * provider call first saw it. What the note said and who sent it are on the

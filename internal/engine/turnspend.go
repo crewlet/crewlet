@@ -51,7 +51,7 @@ import (
 // ([Engine.withCards]). A resumed segment adds the collected coding run it
 // resumed from, which no phase of the engine's own ran — and what the ENGINE
 // spent on that run while no segment was running (turnTelemetry.jobEngine):
-// an agent-mode run's bridged calls, whose auxiliary rewrites and delegated
+// a box-mode run's bridged calls, whose auxiliary rewrites and delegated
 // workers are counted on the run's own meter and written to its row with
 // every call ([runner.BridgedSpend]), and the condensation of the run's
 // report, failure or question at collection, which the coordinator carries to

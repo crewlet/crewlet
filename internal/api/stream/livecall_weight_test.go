@@ -22,10 +22,11 @@ const leadSeat = "agent-1"
 
 // longPhase is the frames one long executor phase publishes, as the runner
 // builds them: an opening frame carrying a 30 KB system prompt and an 8 KB
-// task, then thirty rounds, each streamed for eight seconds at the loop's five
-// frames a second, committed with its narration, and followed by its tool
-// calls — announced as they start, listed as they return with their result's
-// tail.
+// task, then thirty rounds over three CLI runs, each round streamed for eight
+// seconds at the loop's five frames a second, committed with its narration,
+// and followed by its tool calls — run side by side where a round asked for
+// two, as a CLI runs them, each announced as it starts and listed as it
+// returns with its result's tail — and each run listed once it has ended.
 //
 // BUILT ONCE per test binary and shared by every case that replays it. The
 // 1,311 frames are the measurement detail.go cites, so they are not shrunk —
@@ -54,6 +55,7 @@ func buildLongPhase() ([]livestate.Envelope, error) {
 		content     = 1800
 		argBytes    = 400
 		resultBytes = 3000
+		perRun      = 10 // rounds a CLI run makes before a note ends it
 	)
 	system := strings.Repeat("You are the lead engineer. ", 30_000/27)
 	task := strings.Repeat("Fix the flaky test in the payments suite. ", 8_000/42)
@@ -95,15 +97,18 @@ func buildLongPhase() ([]livestate.Envelope, error) {
 		narration []types.RoundNarration
 		execs     []types.ToolExecution
 		timed     []types.PhaseRound
+		runs      []types.PhaseInvocation
 	)
 	snapshot := func() types.AgentTurnProgress {
 		return types.AgentTurnProgress{
 			ToolExecutions: append([]types.ToolExecution(nil), execs...),
 			RoundNarration: append([]types.RoundNarration(nil), narration...),
 			Rounds:         append([]types.PhaseRound(nil), timed...),
+			Invocations:    append([]types.PhaseInvocation(nil), runs...),
 			Response:       strings.Repeat("r", min(4000, 300*len(narration))),
 		}
 	}
+	runStart := at
 	for round := 1; round <= rounds; round++ {
 		roundAt := at
 		for i := 1; i <= streamed; i++ {
@@ -121,20 +126,38 @@ func buildLongPhase() ([]livestate.Envelope, error) {
 		p := snapshot()
 		p.RoundNum, p.RoundStartedAt = round-1, roundAt
 		frame(p)
+		// The round's calls start one after another and run side by side,
+		// then answer in the order they started.
 		calls := 1 + round%3/2
-		for range calls {
-			args := `{"path":"` + strings.Repeat("a", argBytes) + `"}`
+		var running []types.RunningCall
+		for c := range calls {
+			running = append(running, types.RunningCall{
+				ID: fmt.Sprintf("call-%d-%d", round, c), Round: round, Name: "read_file",
+				Arguments: `{"path":"` + strings.Repeat(string(rune('a'+c)), argBytes) + `"}`, StartedAt: at,
+			})
 			p := snapshot()
 			p.RoundNum, p.RoundStartedAt = round-1, roundAt
-			p.RunningCall = &types.RunningCall{Round: round, Name: "read_file", Arguments: args, StartedAt: at}
+			p.RunningCalls = slices.Clone(running)
 			frame(p)
+		}
+		for c, call := range running {
 			execs = append(execs, types.ToolExecution{
-				"name": "read_file", "arguments": args, "result": strings.Repeat("x", resultBytes),
-				"success": true, "round": round,
+				"name": call.Name, "arguments": call.Arguments, "result": strings.Repeat("x", resultBytes),
+				"success": true, "round": round, "call_id": call.ID,
 			})
-			p = snapshot()
+			p := snapshot()
 			p.RoundNum, p.RoundStartedAt = round-1, roundAt
+			p.RunningCalls = slices.Clone(running[c+1:])
 			frame(p)
+		}
+		if round%perRun == 0 {
+			runs = append(runs, types.PhaseInvocation{
+				StartedAt: runStart, DurationMS: int(at.Sub(runStart).Milliseconds()),
+				ProviderKey: "claude-max", Model: "claude-sonnet-4-5", Outcome: "stopped",
+				FirstRound: round - perRun + 1, LastRound: round, RequestsObserved: true,
+				InputTokens: 40_000 * perRun, ToolCalls: perRun,
+			})
+			runStart = at
 		}
 	}
 	return out, failed

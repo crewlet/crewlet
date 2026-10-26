@@ -1008,14 +1008,14 @@ Keys accept snake_case (`read_only`) or the MCP camelCase (`readOnlyHint`); over
 
 ## How Tool Calls Work
 
-From the LLM's perspective, builtin tools and MCP tools are identical — both appear as JSON schema tool definitions. The model does not know whether a tool is a function inside the engine or an MCP server talking to a tracker.
+From the LLM's perspective, builtin tools and MCP tools are identical — both appear as JSON schema tool definitions, served together to the seat's coding CLI as the tools of one MCP server, `crewlet`, which the CLI calls in its own loop and the engine answers through the dispatch below ([Tool calls in host mode](../concepts/llm-backends.md#tool-calls-in-host-mode)). The model does not know whether a tool is a function inside the engine or an MCP server talking to a tracker. The name `crewlet` is therefore reserved: no `mcp_servers` entry may take it.
 
 **Tool resolution order:**
 
 1. **Per-role MCP tools** — checked first (role-specific credentials)
 2. **Global tools** — builtin tools + global MCP tools
 
-**Tool output is returned to the LLM in full.** Control characters are stripped, secrets redacted and binary rejected, but results are **never length-truncated**: a truncated result silently hides content the agent reasons over. The same principle applies across the engine: the turn's own trigger text, the turn-start prefetch blocks (personal memory, similar prior work — but for a recalled turn's ask and its account of what it did, each past 600 bytes where the bullets are shown or past about 11 KB where the episode summary reads them, below — synthesized skills, counterparty profiles), the tool catalogue and every `list_mcp_server_tools` listing, the draft handed to Review, the agent diary and the conversation ledger as **stored**, coalesced notification digests, and the knowledge-base search query all carry their full text.
+**Tool output is returned to the LLM in full, as the tool wrote it.** A binary body is described in one line rather than inlined, and nothing else is rewritten — results are **never length-truncated**: a truncated result silently hides content the agent reasons over. The same principle applies across the engine: the turn's own trigger text, the turn-start prefetch blocks (personal memory, similar prior work — but for a recalled turn's ask and its account of what it did, each past 600 bytes where the bullets are shown or past about 11 KB where the episode summary reads them, below — synthesized skills, counterparty profiles), the tool catalogue and every `list_mcp_server_tools` listing, the draft handed to Review, the agent diary and the conversation ledger as **stored**, coalesced notification digests, and the knowledge-base search query all carry their full text.
 
 **Where a bound is genuinely unavoidable, the engine never just cuts the text.** A cut keeps an opening, and a reader — a model or a person — takes an opening for the whole: a message's greeting for the message, a report's summary for the report. So text somebody acts on is carried whole where it is bounded upstream, and where it is not, one of four shapes applies, chosen deliberately:
 

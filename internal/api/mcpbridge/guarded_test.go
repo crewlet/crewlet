@@ -45,7 +45,7 @@ func (whoami) Call(ctx context.Context, _ map[string]any) (tools.Result, error) 
 // request that opened a session for that session's whole life, and the turn's
 // own principal defers to any answer already on the context. So every gated
 // builtin a coding agent called over the bridge was refused as needing a
-// credential: agent mode could not read the board, look a colleague up or
+// credential: box mode could not read the board, look a colleague up or
 // submit its work.
 //
 // Mounted here exactly as the app mounts it — the bridge's handler inside the
@@ -132,8 +132,8 @@ func TestABridgedCallActsAsTheRunsSeatBehindTheGuard(t *testing.T) {
 					guardLogin, guardSaw)
 			}
 
-			url := bridge.Open(&mcpbridge.Session{
-				RunID: "run-1", Handle: "dev", Role: "Engineer", Surface: surface,
+			url := bridge.Open(t.Context(), &mcpbridge.Session{
+				RunID: "run-1", Launch: "job-1", Handle: "dev", Role: "Engineer", Surface: surface,
 			})
 			if url == "" {
 				t.Fatal("no endpoint was minted")

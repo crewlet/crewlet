@@ -12,4 +12,5 @@ export const ZERO_VERSIONS: CallVersions = {
   narration: 0,
   executions: 0,
   rounds: 0,
+  invocations: 0,
 };

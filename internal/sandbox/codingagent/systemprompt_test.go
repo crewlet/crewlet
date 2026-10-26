@@ -11,7 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 )
 
-// seatSystem stands in for an agent-mode executor's system prompt: who the
+// seatSystem stands in for a box-mode executor's system prompt: who the
 // seat is, which no prompt the CLI runs may carry.
 const seatSystem = "You are Agent SWE at Acme. SEAT-IDENTITY-MARKER"
 
@@ -32,7 +32,7 @@ func systemOfRun(t *testing.T, runner *codingagent.Runner, req sandbox.RunReques
 // THE CLI'S OWN SYSTEM PROMPT, and only its task as the prompt it runs.
 //
 // `--append-system-prompt-file` keeps Claude Code's own prompt — the harness
-// an agent-mode run exists to use — and puts the seat's text after it. Sent as
+// a box-mode run exists to use — and puts the seat's text after it. Sent as
 // part of `-p`, the seat's identity, policies and memory reached the model as
 // the first thing in the user's request. The report instruction comes last,
 // after the seat's own text, which comes first.

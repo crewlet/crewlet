@@ -560,7 +560,7 @@ type RoleSandbox struct {
 	Enabled bool `yaml:"enabled" json:"enabled"`
 
 	// RunIn names the cell this seat's code work runs in: direct,
-	// container or e2b — or self, which is the executor's OWN agent-mode
+	// container or e2b — or self, which is the executor's OWN box-mode
 	// run and the one value with no providers.sandbox backend behind it.
 	// Empty inherits the provider default, resolved at LAUNCH rather than
 	// at config time, so a catalogue change reaches seats that never named

@@ -23,10 +23,29 @@
 //
 // Evolution is additive WITHIN a version — new fields get defaults, nothing is
 // removed or repurposed — and a shape that cannot be read that way takes a new
-// version, and the build that introduces it must carry a reader for the
-// version it replaces for as long as rows of it can be parked: nothing
-// rewrites a parked row, and the layer that holds the blob cannot decode it,
-// so the only thing that can read an old row is a build that still knows how.
+// version. A version a RELEASED build wrote then needs a reader in the build
+// that replaces it, for as long as rows of it can be parked: nothing rewrites
+// a parked row, and the layer that holds the blob cannot decode it, so the
+// only thing that can read an old row is a build that still knows how.
+//
+// A version no release wrote needs none, and gets none. Nobody can be running
+// a build that parked a row in it, so a reader for one would be code that
+// exists only for a build that never shipped. Versions 1 and 2 are such: this
+// build reads 3 alone and refuses the others as unknown.
+//
+// # What version 3 is
+//
+// The phase a CLI drove. A host-mode executor's tools are called from its
+// coding CLI's own loop, over MCP, and the tool loop folds what the run did
+// back into the record it always kept: an assistant message per model request
+// with the calls it asked for, a tool message per call with what it was
+// answered. A detached call runs alone, AFTER every other call its response
+// made, so a run that parks on one leaves the conversation ending with that
+// response and its siblings' answers — the parked call the one call nothing
+// answered. Version 2 was a conversation that ended on the parked response
+// itself, whose one call had to be the parked one — a round that called
+// anything beside it could not park at all — and the record now carries the
+// CLI runs beside the rounds.
 package execstate
 
 import (
@@ -40,16 +59,17 @@ import (
 	llm "github.com/crewlet/crewlet/internal/providers/llm"
 )
 
-// Version is the format this build writes.
+// Version is the format this build writes, and the one it reads.
 //
 // Bumped only for a change a previous build could MISREAD. An added field a
 // reader can default is not a bump; a changed meaning for an existing field
-// is.
+// is — and what a parked conversation may hold after its parked call is one
+// (see the package doc).
 //
-// It is 2 rather than 1 because 1 named an earlier shape and a number is never
-// reused: a blob carrying 1 is refused as a version this build does not read,
-// never decoded as this one.
-const Version = 2
+// It is 3 rather than 1 because 1 and 2 named earlier shapes and a number is
+// never reused: a blob carrying either is refused as a version this build does
+// not read, never decoded as this one.
+const Version = 3
 
 // State is a suspended Execute loop, whole.
 //
@@ -58,9 +78,12 @@ const Version = 2
 type State struct {
 	Version int `json:"version"`
 
-	// Messages is the conversation as it stood, ending with the assistant
-	// turn whose run_sandbox tool call is still unanswered. Its JSON is
-	// [llm.Message]'s own, which is pinned for exactly this reader.
+	// Messages is the conversation as it stood: every model request of the
+	// phase as an assistant message with the calls it asked for, each call
+	// answered by a tool message — but the one that parked it. The last
+	// assistant message is the response that made the parked call, followed
+	// only by its other calls' answers. Its JSON is [llm.Message]'s own, which
+	// is pinned for exactly this reader.
 	Messages []llm.Message `json:"messages"`
 
 	// PendingCallID and PendingCallName identify the dangling call the
@@ -96,6 +119,10 @@ type State struct {
 	// ToolExecutions is what the pre-suspend rounds actually ran. The
 	// resumed phase's ledger entry is built from these plus its own, which
 	// is what stops a resumed turn re-firing a delivery that already went.
+	//
+	// In the phase record's own wire shape, `call_id` included: the id each
+	// call carries in Messages, which is what pairs a row with the call the
+	// conversation made and tells two calls of one response apart.
 	ToolExecutions []types.ToolExecution `json:"tool_executions"`
 
 	// RoundsUsed is how many tool-loop rounds ran before the suspend, and
@@ -121,6 +148,14 @@ type State struct {
 	Rounds           []types.PhaseRound `json:"rounds,omitempty"`
 	CacheReadTokens  int                `json:"cache_read_tokens,omitempty"`
 	CacheWriteTokens int                `json:"cache_write_tokens,omitempty"`
+
+	// Invocations is the pre-suspend CLI runs — each one process, from
+	// launch to exit, with what it spent and how it ended — for the reason
+	// Rounds is here: a round is a model request a CLI's record showed, and
+	// a run is what the engine started and stopped itself, on every record
+	// whatever its CLI reports. Without them the resumed record would count
+	// the phase's runs from the resume.
+	Invocations []types.PhaseInvocation `json:"invocations,omitempty"`
 
 	// Written is the work items the turn's writes had committed to when it
 	// suspended, in first-write order, and WrittenMany whether there were
@@ -225,19 +260,19 @@ type State struct {
 	Senders []types.CanonicalIdentity `json:"senders,omitempty"`
 
 	// AgentRun marks a suspension whose executor IS the detached run: a
-	// coding CLI in agent mode drove its own loop, so there is no engine
-	// conversation to re-enter and no dangling call to answer.
+	// coding CLI in box mode drove its own loop in a sandbox box, its calls
+	// over the bridge rather than through a loop of the engine's, so there
+	// is no engine conversation to re-enter and no parked call to answer.
 	//
 	// It changes what the resume DOES, which is why the flag is on the
 	// state rather than re-derived from the config at resume time: the
 	// company's providers may have been applied again while the run was
-	// parked, and a run launched as an agentic one must be collected as
-	// one whatever the config says days later. The alternative — reading
-	// the seat's provider at resume — resumes an agent run into a native
-	// tool loop with no messages, which rescues a turn that in fact
-	// delivered.
+	// parked, and a run launched in a box must be collected as one whatever
+	// the config says days later. The alternative — reading the seat's
+	// provider at resume — resumes a box run into the host loop with no
+	// messages, which rescues a turn that in fact delivered.
 	//
-	// False is a native suspension, which carries a conversation to
+	// False is a host-mode suspension, which carries a conversation to
 	// re-enter.
 	AgentRun bool `json:"agent_run,omitempty"`
 
@@ -293,9 +328,17 @@ var ErrUnknownVersion = errors.New("execstate: unknown version")
 // ErrNoPendingCall reports a state with no dangling call to answer.
 var ErrNoPendingCall = errors.New("execstate: no pending tool call")
 
-// ErrDanglingCalls reports a conversation whose last assistant turn left more
-// than one call unanswered.
+// ErrDanglingCalls reports a conversation that left more than one call
+// unanswered.
 var ErrDanglingCalls = errors.New("execstate: more than one unanswered tool call")
+
+// ErrDuplicateCallID reports a conversation in which two calls share an id, so
+// which of them an answer answers cannot be told.
+var ErrDuplicateCallID = errors.New("execstate: two tool calls share an id")
+
+// ErrPastTheParkedCall reports a conversation in which the model said more
+// after the response that made its parked call.
+var ErrPastTheParkedCall = errors.New("execstate: the conversation goes on past its parked call")
 
 // Validate checks the suspended-conversation invariants.
 //
@@ -303,9 +346,17 @@ var ErrDanglingCalls = errors.New("execstate: more than one unanswered tool call
 // corrupt whichever side produced it — and the two sides are different builds,
 // so a writer's check is not a reader's guarantee.
 //
-// EXACTLY ONE DANGLING tool_use. Zero means there is nothing to resume into;
-// two means the model will answer one and strand the other, and the stranded
-// one is a sandbox box nothing will ever collect.
+// EXACTLY ONE CALL UNANSWERED, AND EVERY OTHER ANSWERED. Zero means there is
+// nothing to resume into; two means the model will answer one and strand the
+// other, and the stranded one is a sandbox box nothing will ever collect. The
+// parked call's siblings — the calls its response made beside it, which ran
+// before it — are answered like any other, which is what lets a round that
+// called something beside its detached run park at all.
+//
+// AND THE PARKED CALL IS THE CONVERSATION'S LAST WORD: its response is the
+// last assistant message, so the answer the resume appends follows the call
+// it answers, never a turn the model took after it. Every call's id is its
+// own, or "answered" means nothing.
 func (s State) Validate() error {
 	if s.Version != Version {
 		return fmt.Errorf("%w: %d (this build writes %d)", ErrUnknownVersion, s.Version, Version)
@@ -325,38 +376,73 @@ func (s State) Validate() error {
 	if s.PendingCallID == "" {
 		return ErrNoPendingCall
 	}
+	seen := map[string]bool{}
+	for _, msg := range s.Messages {
+		for _, call := range msg.ToolCalls {
+			if seen[call.ID] {
+				return fmt.Errorf("%w: %q", ErrDuplicateCallID, call.ID)
+			}
+			seen[call.ID] = true
+		}
+	}
 	dangling := s.dangling()
 	switch len(dangling) {
 	case 0:
 		return fmt.Errorf("%w: the conversation answers every call it made", ErrNoPendingCall)
 	case 1:
-		if dangling[0] != s.PendingCallID {
-			return fmt.Errorf("%w: the unanswered call is %q but the state names %q",
-				ErrNoPendingCall, dangling[0], s.PendingCallID)
+		parked := dangling[0]
+		if parked.call.ID != s.PendingCallID || parked.call.Name != s.PendingCallName {
+			return fmt.Errorf("%w: the unanswered call is %q (%s) but the state names %q (%s)",
+				ErrNoPendingCall, parked.call.ID, parked.call.Name, s.PendingCallID, s.PendingCallName)
+		}
+		if parked.message != s.lastAssistant() {
+			return fmt.Errorf("%w: %q", ErrPastTheParkedCall, s.PendingCallID)
 		}
 	default:
-		return fmt.Errorf("%w: %v", ErrDanglingCalls, dangling)
+		ids := make([]string, 0, len(dangling))
+		for _, open := range dangling {
+			ids = append(ids, open.call.ID)
+		}
+		return fmt.Errorf("%w: %v", ErrDanglingCalls, ids)
 	}
 	return nil
 }
 
-// dangling is every tool-call id the conversation never answered.
-func (s State) dangling() []string {
+// openCall is a call the conversation never answered, and the message that
+// made it.
+type openCall struct {
+	call    llm.ToolCall
+	message int
+}
+
+// dangling is every call the conversation never answered.
+func (s State) dangling() []openCall {
 	answered := map[string]bool{}
 	for _, msg := range s.Messages {
 		if msg.ToolCallID != "" {
 			answered[msg.ToolCallID] = true
 		}
 	}
-	var open []string
-	for _, msg := range s.Messages {
+	var open []openCall
+	for i, msg := range s.Messages {
 		for _, call := range msg.ToolCalls {
 			if !answered[call.ID] {
-				open = append(open, call.ID)
+				open = append(open, openCall{call: call, message: i})
 			}
 		}
 	}
 	return open
+}
+
+// lastAssistant is the index of the conversation's last assistant message, or
+// -1.
+func (s State) lastAssistant() int {
+	for i := len(s.Messages) - 1; i >= 0; i-- {
+		if s.Messages[i].Role == llm.RoleAssistant {
+			return i
+		}
+	}
+	return -1
 }
 
 // Encode serializes the state for the pending-run row, validating first.

@@ -16,8 +16,9 @@ import (
 //
 //   - "writing about an action does not perform it" — a turn that ended with
 //     a composed reply nobody was sent. It stays here, not only in
-//     `submit_work`'s description, because in text mode the tool protocol is
-//     the engine's own envelope and no CLI harness can teach it;
+//     `submit_work`'s description, because every CLI's own harness teaches
+//     the opposite: there, the final text IS the answer to whoever asked,
+//     and here it reaches nobody;
 //   - the discovery sentence — an actor that gave up when the tool it needed
 //     was not already on its surface;
 //   - the full-arc rule — routed comment triggers produced recon only, and
@@ -283,10 +284,10 @@ const KeyDiscoverableTools = "discoverable_tools"
 // can reach has no section, rather than a heading over "(none)".
 //
 // NOT "Available tools", which is what it was titled while it listed every
-// tool the phase already held. That is the heading a text-mode prompt gives
-// the JSON definitions of the tools the phase DOES hold, in the same
-// conversation, and two sections under one heading saying different things
-// is a model reading whichever it saw last.
+// tool the phase already held. The tools a phase holds reach its CLI as the
+// tools of its MCP server, and a section headed as though it listed them
+// tells the model it may call what it first has to discover — a call the
+// session refuses, since the tool is not on its surface yet.
 func discoverableSection(list string) []string {
 	if strings.TrimSpace(list) == "" {
 		return nil

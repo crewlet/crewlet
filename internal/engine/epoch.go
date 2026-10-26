@@ -289,7 +289,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	}
 	// THE SANDBOX RUNTIME, on a node that has never run one and whose
 	// revision reaches a sandbox cell — before the tools for the reason the
-	// native halves are: run_sandbox and an agent-mode executor are offered
+	// native halves are: run_sandbox and a box-mode executor are offered
 	// only where it exists. See [Engine.startSandbox], and the bug it fixes.
 	startedSandbox, err := e.startSandbox(ctx, sandboxManager)
 	if err != nil {

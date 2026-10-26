@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"fmt"
-	"maps"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
@@ -15,12 +14,12 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// Agent mode's engine half: turning a seat's executor into a detached run of
+// Box mode's engine half: turning a seat's executor into a detached run of
 // the coding CLI its provider names.
 //
 // EVERY MOVING PART HERE ALREADY EXISTED, which is the point of the shape.
 // The detachment, the durable row, the completion poll, the claim and the
-// re-entry are the sandbox layer's, unchanged — an agent-mode executor is a
+// re-entry are the sandbox layer's, unchanged — a box-mode executor is a
 // coding run whose brief is the turn's ask rather than a code task, with the
 // seat's system prompt as its standing instructions. The tool surface is the
 // bridge's, unchanged. What this file adds is the wiring and the refusals that
@@ -43,11 +42,18 @@ var _ runner.AgentLauncher = (*agentLauncher)(nil)
 
 // LaunchExecutor starts the run and returns.
 //
-// THE SESSION IS OPENED BEFORE THE RUN, and closed by every path that ends
-// one. A run whose box could dial a live session after the run finished would
-// hold a working key to a seat's whole tool surface — the window this closes
-// is the difference between a credential that expires with a job and one that
-// expires on a four-hour clock.
+// THE SESSION IS OPENED BEFORE THE RUN'S BOX EXISTS, and closed by every path
+// that ends one. A run whose box could dial a live session after the run
+// finished would hold a working key to a seat's whole tool surface — the
+// window this closes is the difference between a credential that expires with
+// a job and one that expires on a four-hour clock.
+//
+// AND UNDER THE JOB'S OWN NAME, which the store mints as the launch opens the
+// job — so the session is opened from inside the launch
+// ([sandbox.LaunchRequest.Opened]) rather than before it. The endpoint names
+// that job, and the job is on the run's durable row: a node that takes the
+// run over opens the same job's session again ([Engine.reopenAgentRun]), and
+// the token the box already holds reaches it.
 func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunRequest) error {
 	e := l.engine
 	var (
@@ -59,18 +65,27 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		coordinator, manager, pending = rt.coordinator, rt.coordinator.Manager(), rt.pending
 	}
 	if coordinator == nil || manager == nil || pending == nil {
-		return fmt.Errorf("this seat's executor is a coding CLI in agent mode, which "+
-			"runs in a box: configure providers.sandbox, or set `mode: text` on "+
+		return fmt.Errorf("this seat's executor is a coding CLI in box mode, which "+
+			"runs in a box: configure providers.sandbox, or set `mode: host` on "+
 			"providers.llm.%s", l.codingAgent)
 	}
-	// A BRIDGE NOTHING SERVES IS REFUSED BY NAME, before Open, because the
-	// two settings it takes are different fixes: an unset base URL is one
-	// variable, and a base URL on a node that binds no listener (api.port
-	// 0) is a second one the first message would send an operator past.
-	// Open refuses the same case on its own; asking here is what lets the
-	// error say which.
-	if e.bridge != nil && !e.bridge.Mounted() {
-		return fmt.Errorf("agent mode needs this node to serve its tool bridge, and "+
+	// NO BRIDGE IS A REFUSAL, not a degraded run. A coding agent with none
+	// of the seat's tools cannot answer anybody, cannot touch a ticket and
+	// cannot submit its work — it would burn a subscription producing prose
+	// nothing collects, and the turn would be rescued as incomplete with no
+	// sign of why. Refused HERE, before the launch opens a job, as every
+	// case Open refuses is: the session is opened from inside the launch,
+	// and a refusal there costs a row opened and abandoned.
+	if e.bridge == nil {
+		return fmt.Errorf("box mode needs a tool bridge the box can dial, and this "+
+			"engine has none: set %s to a URL a sandbox can reach", mcpbridge.BaseURLVar)
+	}
+	// A BRIDGE NOTHING SERVES IS REFUSED BY NAME, because the two settings
+	// it takes are different fixes: an unset base URL is one variable, and
+	// a base URL on a node that binds no listener (api.port 0) is a second
+	// one the first message would send an operator past.
+	if !e.bridge.Mounted() {
+		return fmt.Errorf("box mode needs this node to serve its tool bridge, and "+
 			"it serves none: %s is set but this node binds no HTTP listener; set "+
 			"api.port on this node and point %s at that listener as a sandbox "+
 			"reaches it", mcpbridge.BaseURLVar, mcpbridge.BaseURLVar)
@@ -81,7 +96,7 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	// nothing — and its empty answer would otherwise be reported below as a
 	// missing bridge URL, sending an operator to a variable that is set.
 	if req.Surface == nil || req.Surface.Turn().Handle() == "" {
-		return fmt.Errorf("the agent-mode executor's tool surface is bound to no " +
+		return fmt.Errorf("the box-mode executor's tool surface is bound to no " +
 			"seat, so a bridged call would have nobody to act as; this is an " +
 			"assembly fault in the runner, not a setting")
 	}
@@ -89,21 +104,20 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	// for the segment that resumes from the run to pay — bound to the run's
 	// job by the launch below, before the box that makes them exists.
 	ledger := newBridgeLedger(pending, req.Spend)
-	endpoint := e.bridge.Open(&mcpbridge.Session{
+	session := &mcpbridge.Session{
 		RunID:   l.turn.RunID,
 		Handle:  l.turn.Handle(),
 		Role:    l.seat.Name,
 		Surface: req.Surface,
 		Ledger:  ledger,
-	})
-	if endpoint == "" {
-		// NO ENDPOINT IS A REFUSAL, not a degraded run. A coding agent
-		// with none of the seat's tools cannot answer anybody, cannot
-		// touch a ticket and cannot submit its work — it would burn a
-		// subscription producing prose nothing collects, and the turn
-		// would be rescued as incomplete with no sign of why.
-		return fmt.Errorf("agent mode needs a tool bridge the box can dial, and this "+
-			"engine has none: set %s to a URL a sandbox can reach", mcpbridge.BaseURLVar)
+		// THE SEAT'S FENCE, built HERE, inside the turn the run is the
+		// executor of, so it closes on the grant that turn was admitted
+		// under — the same check its own tool loop would run, now asked
+		// before and after every call the box makes. The run outlives the
+		// turn: the seat can move off this node, or a person stop it,
+		// while it runs, and a call after either is refused rather than
+		// made as a seat this node no longer speaks for.
+		Fence: e.seatFence(l.turn.Handle()),
 	}
 
 	company := e.Company()
@@ -120,19 +134,18 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	runEnv.logGap(ctx, l.seat.Handle(), "the run starts without them")
 	runEnv.logFacts(ctx, l.seat.Handle())
 	setup := runEnv.setup
+	// THE SEAT'S OWN SERVERS, and the bridge beside them once the job has a
+	// name (below). Both, because they answer different questions: a scoped
+	// MCP server is a credential the box holds, and the bridge is the seat's
+	// engine-side surface — its colleagues, its channels, its memory, its
+	// submission.
 	var servers map[string]sandbox.MCPServer
 	if gate != nil {
 		servers = e.boxServers(ctx, company, l.seat, gate)
 	}
-	// THE SEAT'S OWN SERVERS PLUS THE BRIDGE. Both, because they answer
-	// different questions: a scoped MCP server is a credential the box
-	// holds, and the bridge is the seat's engine-side surface — its
-	// colleagues, its channels, its memory, its submission.
-	servers = withBridge(servers, endpoint)
 
 	run, refused := l.executorRun(company, runEnv.env)
 	if refused != nil {
-		e.bridge.Close(l.turn.RunID)
 		return refused
 	}
 	model, env := run.model, run.env
@@ -149,10 +162,10 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	// asking it about llm_sandbox would answer for a model this run never
 	// touches.
 	if err := sandboxCredentials(company, l.seat, phase.Execute, spec.Placement, env); err != nil {
-		e.bridge.Close(l.turn.RunID)
 		return err
 	}
 
+	var opened bool
 	_, err := coordinator.Launch(ctx, manager, sandbox.LaunchRequest{
 		Turn:       l.runTurnRef(ctx),
 		Spec:       spec,
@@ -163,23 +176,50 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		Brief:      req.Brief,
 		Task:       l.turn.Task,
 		Label:      l.turn.Task,
-		Opened:     ledger.bind,
+		Opened: func(launch string) (map[string]sandbox.MCPServer, error) {
+			bridge, err := e.openBridge(ctx, session, ledger, launch)
+			opened = err == nil
+			return bridge, err
+		},
 	})
 	if err != nil {
-		// The launch failed, so nothing will ever close this session on
-		// the completion path.
-		e.bridge.Close(l.turn.RunID)
+		if opened {
+			// The launch failed after the job's session opened, so
+			// nothing will ever close it on the completion path.
+			e.bridge.Close(l.turn.RunID)
+		}
 		return err
 	}
 	return nil
 }
 
-// executorRun is the [codingRun] an agent-mode run works under.
+// openBridge opens a box-mode job's bridge session under the job's own name,
+// with its ledger bound to the same job, and answers the box's server entry
+// for it: [sandbox.LaunchRequest.Opened], for the launch, and the same opening
+// for a run taken over while it works ([Engine.reopenAgentRun]), whose box
+// already holds the endpoint and is never handed the one minted here.
+func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *bridgeLedger,
+	launch string,
+) (map[string]sandbox.MCPServer, error) {
+	ledger.bind(launch)
+	s.Launch = launch
+	endpoint := e.bridge.Open(ctx, s)
+	if endpoint == "" {
+		// UNREACHABLE past the refusals LaunchExecutor makes by name, which
+		// are every case Open refuses — said rather than assumed, because a
+		// box launched without its endpoint has none of the seat's tools.
+		return nil, fmt.Errorf("the tool bridge opened no session for run %s's job %s; "+
+			"this node's log says why (mcp_bridge_*)", s.RunID, launch)
+	}
+	return bridgeServer(endpoint), nil
+}
+
+// executorRun is the [codingRun] a box-mode run works under.
 //
 // THE EXECUTOR'S OWN ENTRY, not llm_sandbox — this run IS the executor. A
 // method rather than an inline call so the choice has a name a test can hold:
-// see [newCodingRun] for what the two phases mean, and why sending an
-// agent-mode run to llm_sandbox would silently run a seat's whole turn on the
+// see [newCodingRun] for what the two phases mean, and why sending a
+// box-mode run to llm_sandbox would silently run a seat's whole turn on the
 // model it chose for a subordinate job. Its runner is the one the turn
 // resolved from that same entry, so the run is refused only when an apply
 // since moved the executor onto another CLI.
@@ -187,22 +227,18 @@ func (l *agentLauncher) executorRun(c *Company, seatEnv map[string]string) (codi
 	return newCodingRun(c, l.seat, phase.Execute, l.codingAgent, seatEnv)
 }
 
-// withBridge adds the engine-side surface to a box's MCP server list.
-//
-// A COPY, because the seat's rendered server map is built per launch but its
-// values come from config the epoch owns, and a bridge endpoint written into
-// a shared map would follow the seat into its next run — where the token is
-// dead and every tool call fails for a reason nothing in the config explains.
-func withBridge(servers map[string]sandbox.MCPServer, endpoint string) map[string]sandbox.MCPServer {
-	out := make(map[string]sandbox.MCPServer, len(servers)+1)
-	maps.Copy(out, servers)
+// bridgeServer is the engine-side surface as one entry of a box's MCP server
+// list, which the launch adds beside the seat's own servers in a map of the
+// job's own: an endpoint written into the seat's rendered map, whose values
+// the epoch owns, would follow the seat into its next run, where the token
+// names a job that is over.
+func bridgeServer(endpoint string) map[string]sandbox.MCPServer {
 	// Under the reserved name, which config refuses to any mcp_servers
-	// entry — so this write can never shadow a server the seat scoped into
-	// its box. See [config.BridgeServerName] for why it is not the handle.
-	out[config.BridgeServerName] = sandbox.MCPServer{
-		Name: config.BridgeServerName, Transport: sandbox.TransportHTTP, URL: endpoint,
-	}
-	return out
+	// entry — so this entry can never shadow a server the seat scoped into
+	// its box. See [config.ToolServerName] for why it is not the handle.
+	return map[string]sandbox.MCPServer{config.ToolServerName: {
+		Name: config.ToolServerName, Transport: sandbox.TransportHTTP, URL: endpoint,
+	}}
 }
 
 // agentRunFor is THE construction path for a turn's executor runtime, used by
@@ -235,7 +271,7 @@ func (e *Engine) agentRunFor(company *Company, handle string, t *turnctx.Turn) r
 // an apply landed in between — and a turn whose executor changes runtime
 // halfway is one whose prompt was built for a loop that is not running.
 //
-// A nil launcher is the native tool loop, which is what every text-mode entry
+// A nil launcher is the native tool loop, which is what every host-mode entry
 // has.
 func (c *Company) executorRuntime(e *Engine, t *turnctx.Turn, seat *org.Role) *agentLauncher {
 	if c.Models == nil {
@@ -246,7 +282,7 @@ func (c *Company) executorRuntime(e *Engine, t *turnctx.Turn, seat *org.Role) *a
 		return nil
 	}
 	agent, isCLI := member.Provider.(*cliagent.Provider)
-	if !isCLI || !agent.AgentMode() {
+	if !isCLI || !agent.Box() {
 		return nil
 	}
 	return &agentLauncher{
@@ -258,7 +294,7 @@ func (c *Company) executorRuntime(e *Engine, t *turnctx.Turn, seat *org.Role) *a
 	}
 }
 
-// agentPlacement is the cell an agent-mode entry runs in: its own `run_in`,
+// agentPlacement is the cell a box-mode entry runs in: its own `run_in`,
 // then the catalogue's default.
 //
 // Empty is a real answer and reaches the manager as one, where it resolves to
@@ -273,7 +309,7 @@ func agentPlacement(c *Company, key string) config.Placement {
 }
 
 // maxTurnsFor is a seat's coding-round cap, nil-safe on a seat with no
-// sandbox block at all — which an agent-mode seat legitimately is: its
+// sandbox block at all — which a box-mode seat legitimately is: its
 // executor runs in a box whether or not it was ever offered run_sandbox.
 func maxTurnsFor(gate *org.RoleSandbox) *int {
 	if gate == nil {

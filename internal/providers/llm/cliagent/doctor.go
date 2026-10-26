@@ -14,6 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/toolsession"
 )
 
 // probeTimeout caps a version or status probe.
@@ -27,9 +28,9 @@ const probeTimeout = 10 * time.Second
 
 // smokePrompt is what the smoke test asks for. Short, unambiguous, and
 // answerable with one tool call — a profile can look perfect and still not
-// produce a parseable tool call, which is the whole reason the smoke test
-// runs a real one rather than just a completion.
-const smokePrompt = "Call the crewlet_smoke tool with ok set to true. Reply with only the JSON block."
+// hand its CLI the seat's tools, which is the whole reason the smoke test runs
+// a real call rather than just a completion.
+const smokePrompt = "Call the " + smokeTool + " tool with ok set to true, then reply with only: done"
 
 // The two isolation probes.
 //
@@ -38,8 +39,8 @@ const smokePrompt = "Call the crewlet_smoke tool with ok set to true. Reply with
 // by the shell, or from a public endpoint by the browser. A model asked to
 // echo a fixed token can simply write the token; a model asked for the time
 // has no way to be within a couple of minutes of it except by actually
-// running the tool. Each is sent with no tools of Crewlet's own, so no
-// envelope contract is rendered and the reply is plain prose.
+// running the tool. Each is sent with no tools of Crewlet's own, so the CLI's
+// own tools are the only ones it has and the reply is plain prose.
 
 // shellProbePrompt asks the CLI to run a command on the engine host.
 const shellProbePrompt = "Using your shell or command-execution tool, run exactly this " +
@@ -118,12 +119,12 @@ type Diagnosis struct {
 	// Web is whether the CLI's own fetch tool reached the web, measured.
 	Web string
 
-	// AgentRuntime is what an AGENT-MODE entry needs beyond a login, and
-	// is empty for a text-mode one. Each half of it fails at a seat's
+	// BoxRuntime is what a BOX-MODE entry needs beyond a login, and is
+	// empty for a host-mode one. Each half of it fails at a seat's
 	// first turn and nowhere earlier: a CLI with no coding-agent runner
 	// has nothing to drive, and a box with no bridge to dial gets none of
 	// the seat's tools.
-	AgentRuntime []string
+	BoxRuntime []string
 
 	Problems []string
 }
@@ -131,19 +132,19 @@ type Diagnosis struct {
 // DiagnoseOptions are the facts a provider cannot see about itself.
 //
 // Both belong to the PROCESS rather than to the provider — which runners this
-// build registers, and what a sandbox can dial — and both decide whether agent
+// build registers, and what a sandbox can dial — and both decide whether box
 // mode works. Passed in rather than read here, so `doctor` reports the engine's
 // own answers instead of this package's guess at them.
 type DiagnoseOptions struct {
 	// Smoke runs the real completion and the two tool probes.
 	Smoke bool
 
-	// AgentRunners are the coding-agent runner names this build has. An
-	// agent-mode entry naming a CLI outside them cannot run at all.
+	// AgentRunners are the coding-agent runner names this build has. A
+	// box-mode entry naming a CLI outside them cannot run at all.
 	AgentRunners []string
 
 	// BridgeURL is CREWLET_MCP_BRIDGE_URL as this process sees it. Empty
-	// means agent mode is refused at launch.
+	// means box mode is refused at launch.
 	BridgeURL string
 }
 
@@ -159,7 +160,7 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 		Binary: p.profile.Binary, WrittenFor: p.profile.WrittenFor,
 		StateDir: p.ws.StateDir(),
 	}
-	d.AgentRuntime, d.Problems = p.agentRuntime(opts)
+	d.BoxRuntime, d.Problems = p.boxRuntime(opts)
 
 	path, err := exec.LookPath(p.profile.Binary)
 	switch {
@@ -392,26 +393,26 @@ func (p *Provider) keyRemedy() string {
 
 // modeName is how this entry runs, for the report.
 func (p *Provider) modeName() string {
-	if p.agentMode {
-		return "agent (the CLI runs the executor)"
+	if p.box {
+		return "box (the CLI runs the executor in a box)"
 	}
-	return "text (a model behind the engine's tool loop)"
+	return "host (the CLI runs on this host, turn by turn)"
 }
 
-// agentRuntime measures what an agent-mode entry needs beyond a login.
+// boxRuntime measures what a box-mode entry needs beyond a login.
 //
 // BOTH HALVES FAIL AT A SEAT'S FIRST TURN AND NOWHERE EARLIER, which is the
 // whole reason they are here: an entry naming a CLI this build has no runner
 // for validates cleanly and reports a configured provider, and an engine with
-// no reachable bridge URL refuses every agent-mode launch at the moment a seat
+// no reachable bridge URL refuses every box-mode launch at the moment a seat
 // finally has work. `doctor` is what a deploy script gates on, so it is the
 // last place either can be caught before an agent is waiting.
 //
-// A TEXT-MODE ENTRY REPORTS NOTHING HERE, rather than reporting that it would
+// A HOST-MODE ENTRY REPORTS NOTHING HERE, rather than reporting that it would
 // not work in a mode it is not in. It runs as a subprocess of this engine and
 // needs neither.
-func (p *Provider) agentRuntime(opts DiagnoseOptions) (lines, problems []string) {
-	if !p.agentMode {
+func (p *Provider) boxRuntime(opts DiagnoseOptions) (lines, problems []string) {
+	if !p.box {
 		return nil, nil
 	}
 	if slices.Contains(opts.AgentRunners, p.agent) {
@@ -419,8 +420,8 @@ func (p *Provider) agentRuntime(opts DiagnoseOptions) (lines, problems []string)
 	} else {
 		lines = append(lines, fmt.Sprintf("runner: none for %q", p.agent))
 		problems = append(problems, fmt.Sprintf(
-			"agent mode drives %q through a coding-agent runner and this build "+
-				"registers none for it (has: %s) — set `mode: text` on "+
+			"box mode drives %q through a coding-agent runner and this build "+
+				"registers none for it (has: %s) — set `mode: host` on "+
 				"providers.llm.%s, or point it at a CLI that has one",
 			p.agent, strings.Join(opts.AgentRunners, ", "), p.key))
 	}
@@ -429,7 +430,7 @@ func (p *Provider) agentRuntime(opts DiagnoseOptions) (lines, problems []string)
 	} else {
 		lines = append(lines, "tool bridge: unset")
 		problems = append(problems, fmt.Sprintf(
-			"agent mode hands the seat's tools to the box over an MCP bridge and "+
+			"box mode hands the seat's tools to the box over an MCP bridge and "+
 				"%s is unset, so every launch is refused — a coding agent with "+
 				"none of the seat's tools cannot answer anybody or submit its "+
 				"work. Set it to a URL a sandbox can reach",
@@ -438,7 +439,7 @@ func (p *Provider) agentRuntime(opts DiagnoseOptions) (lines, problems []string)
 	return lines, problems
 }
 
-// bridgeURLVar is the variable an agent-mode box dials the engine on.
+// bridgeURLVar is the variable a box-mode run's box dials the engine on.
 //
 // SPELLED HERE RATHER THAN IMPORTED, because importing the API package into a
 // provider would be a dependency from a leaf onto an edge for one string —
@@ -593,53 +594,71 @@ func (p *Provider) probeVersion(ctx context.Context) string {
 	return strings.TrimSpace(strings.SplitN(res.stdout, "\n", 2)[0])
 }
 
-// smokeTest runs a REAL completion with a REAL tool.
+// smokeTest runs a REAL completion with a REAL tool, served the way a seat's
+// are.
 //
 // The command that matters, and the reason it is not merely a version probe:
 // a profile can look perfect — binary present, login present, flags accepted
-// — and still not produce a parseable tool call, because the envelope
-// contract is a request to a model rather than a schema the vendor enforces.
-// That failure only shows up on the first turn of a real seat otherwise.
+// — and still not hand its CLI the seat's tools, because how a CLI is told of
+// an MCP server, which of its tools it lets the model call, and how it records
+// its requests all move with every vendor release. That failure only shows up
+// on the first turn of a real seat otherwise.
 //
-// THE PRODUCTION SHAPE, and nothing stronger: tools offered, no call forced,
-// and the instruction naming the tool in the conversation — which is exactly
-// what a phase that finishes by a call sends, its corrective round included.
-// It used to force a call, which rendered the envelope's "you MUST request a
-// tool call" contract that no phase ever receives; a CLI that only called a
-// tool when told it must would have passed here and failed every seat.
+// THE PRODUCTION ROUTE, end to end: one tool, `crewlet_smoke`, on a real
+// session server this command opens for itself ([toolsession.NewHost]); the
+// profile's tool route renders the CLI's server configuration; the CLI starts
+// this binary as the relay, lists the tool and — asked the way a phase asks,
+// the instruction naming the tool and nothing forcing it — calls it. It passes
+// when the server recorded the call, and it says how the call was joined to
+// the CLI's record and which tools the CLI offered its model, which is where a
+// confinement that stopped holding shows first.
 //
 // answered reports whether the model replied at all, however badly: a reply
 // is proof the CLI reached its model signed in, which the doctor needs apart
 // from whether the reply was usable.
 func (p *Provider) smokeTest(ctx context.Context) (verdict string, answered bool) {
-	comp, err := p.Complete(ctx, smokeRequest())
+	if p.profile.MCP == nil {
+		// Asked plainly, so the doctor still learns whether the CLI is
+		// signed in; the missing route is the finding.
+		comp, err := p.Complete(ctx, probeRequest("Reply with only: ok"))
+		return fmt.Sprintf("failed — the %q profile has no mcp block, so a seat's phase on "+
+			"this entry cannot be handed its tools and is refused (text functions still run); "+
+			"declare providers.llm.%s.overrides.mcp", p.agent, p.key), err == nil && comp != nil
+	}
+	sessions, err := toolsession.NewHost()
+	if err != nil {
+		return "failed — this process cannot serve a tool session: " + err.Error(), false
+	}
+	defer func() { _ = sessions.Close() }()
+	host := newSmokeHost(sessions)
+	var offered []string
+	comp, err := p.Complete(withOffered(ctx, func(tools []string) { offered = tools }), smokeRequest(host))
 	if err != nil {
 		return "failed — " + err.Error(), false
 	}
-	if len(comp.ToolCalls) == 0 {
-		// TWO DIFFERENT FAILURES, and `It said: ""` describes only one of
-		// them. A CLI that answered with prose misread the envelope
-		// contract; a CLI that answered with NOTHING spent its output on
-		// hidden reasoning and needs a different model, not a different
-		// prompt. The provider hands both back as a completion now — an
-		// empty answer is a value, not an error — so this probe is the
-		// only command that names which one an operator has.
-		if strings.TrimSpace(comp.Content) == "" {
-			return fmt.Sprintf(
-				"failed — the CLI exited 0 and answered with nothing at all (%d output "+
-					"tokens billed), so it spent its whole answer on hidden reasoning. "+
-					"Every phase a seat runs on this provider will spend corrective rounds "+
-					"asking again and then end without its submission: point this entry "+
-					"at a stronger model",
-				comp.OutputTokens), true
-		}
-		return fmt.Sprintf(
-			"failed — the CLI answered but produced no parseable tool call, so every phase "+
-				"a seat runs on this provider will spend a corrective round asking again, and "+
-				"end without its submission whenever the model never manages one. It said: %q",
-			strings.TrimSpace(comp.Content)), true
+	if ok, called := host.verdict(offered, comp, p.profile.Requests != nil); called {
+		return ok, true
 	}
-	return fmt.Sprintf("ok — %d in / %d out", comp.InputTokens, comp.OutputTokens), true
+	// TWO DIFFERENT FAILURES, and `It said: ""` describes only one of them. A
+	// CLI that answered with prose never called the tool it was offered; a CLI
+	// that answered with NOTHING spent its output on hidden reasoning and
+	// needs a different model, not a different prompt. The provider hands both
+	// back as a completion — an empty answer is a value, not an error — so
+	// this probe is the only command that names which one an operator has.
+	if strings.TrimSpace(comp.Content) == "" {
+		return fmt.Sprintf(
+			"failed — the CLI exited 0 and answered with nothing at all (%d output "+
+				"tokens billed), so it spent its whole answer on hidden reasoning. "+
+				"Every phase a seat runs on this provider will spend corrective rounds "+
+				"asking again and then end without its submission: point this entry "+
+				"at a stronger model",
+			comp.OutputTokens), true
+	}
+	return fmt.Sprintf(
+		"failed — the CLI reached the seat's tools and answered without calling %s, so "+
+			"every phase a seat runs on this provider will spend a corrective round asking "+
+			"again, and end without its submission whenever the model never makes the call. "+
+			"It said: %q", smokeTool, strings.TrimSpace(comp.Content)), true
 }
 
 // probeSystemPrompt is the system prompt every probe carries.
@@ -679,18 +698,10 @@ func describeRoute(r cliprofile.Route) string {
 }
 
 // smokeRequest is the one call [Provider.smokeTest] makes: the crewlet_smoke
-// tool offered, and the instruction that names it.
-func smokeRequest() llm.Request {
+// tool offered on host, and the instruction that names it.
+func smokeRequest(host llm.ToolHost) llm.Request {
 	req := probeRequest(smokePrompt)
-	req.Tools = []llm.ToolDef{{
-		Name:        "crewlet_smoke",
-		Description: "Confirm the tool channel works.",
-		Parameters: map[string]any{
-			"type":       "object",
-			"properties": map[string]any{"ok": map[string]any{"type": "boolean"}},
-			"required":   []any{"ok"},
-		},
-	}}
+	req.Tools = host
 	return req
 }
 
@@ -729,10 +740,10 @@ func (d Diagnosis) Render(w io.Writer) {
 	line("smoke test", d.Smoke)
 	line("local tools", d.LocalTools)
 	line("web", d.Web)
-	for i, entry := range d.AgentRuntime {
+	for i, entry := range d.BoxRuntime {
 		label := ""
 		if i == 0 {
-			label = "agent runtime"
+			label = "box runtime"
 		}
 		line(label, entry)
 	}
@@ -821,7 +832,7 @@ func (p *Provider) SandboxCredentialDocument() string {
 // doctor reported the entry healthy.
 //
 // Read off [childEnv] like [Provider.signIn], so a run carries exactly the
-// credentials a text-mode call is given: what the auth mode removes from the
+// credentials a host-mode run is given: what the auth mode removes from the
 // child it removes from the box.
 func (p *Provider) SandboxEnv() map[string]string {
 	env := childEnv(p.profile, &Checkout{}, p.env, p.auth)

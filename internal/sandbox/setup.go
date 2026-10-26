@@ -63,7 +63,7 @@ type SetupStep struct {
 	// OptionalKeys names the keys of Env and the paths of Files whose value
 	// may resolve to nothing at launch: the engine leaves such a variable
 	// out and writes no such file, where any other reference that resolves
-	// to nothing refuses a `run_sandbox` coding run (an agent-mode
+	// to nothing refuses a `run_sandbox` coding run (a box-mode
 	// executor's box starts without it, and the engine says so).
 	OptionalKeys []string `yaml:"optional_keys,omitempty" json:"optional_keys,omitempty"`
 

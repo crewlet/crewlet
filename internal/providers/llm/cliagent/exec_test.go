@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/mcprelay"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
@@ -55,8 +56,18 @@ const helperEnv = "CREWLET_CLIAGENT_FAKE"
 //
 // It also exits before the framework parses flags, so the fake's output is
 // exactly the bytes the case asked for with nothing of testing's around them.
+//
+// THE RELAY FIRST. A run with tools hands its CLI this binary as the relay to
+// the seat's tools — the engine names its own executable, and under `go test`
+// that is this one — and the CLI starts it with an environment of its own
+// choosing, which for the fake is its own: started as a relay and dispatched
+// on the fake's variable, it would play a CLI instead.
 func TestMain(m *testing.M) {
+	mcprelay.DispatchIfRelay()
 	if os.Getenv(helperEnv) == "1" {
+		if os.Getenv(fakeMCPEnv) != "" {
+			runFakeMCPCLI()
+		}
 		runFakeCLI()
 		os.Exit(0)
 	}
@@ -423,57 +434,6 @@ func TestAPlainReplyBecomesACompletion(t *testing.T) {
 	if comp.InputTokens == 0 || comp.OutputTokens == 0 {
 		t.Errorf("a CLI reporting no usage must still be estimated, got in=%d out=%d",
 			comp.InputTokens, comp.OutputTokens)
-	}
-}
-
-// The tool channel rides the prompt, and the reply parses back into real tool
-// calls — otherwise the turn engine sees prose and never runs a tool.
-func TestAnEnvelopeReplyBecomesToolCalls(t *testing.T) {
-	t.Parallel()
-	reply := "```json\n{\"message\":\"reading\",\"tool_calls\":" +
-		"[{\"name\":\"read_file\",\"arguments\":{\"path\":\"/etc/hostname\"}}]}\n```"
-	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": reply}, nil)
-	comp, err := ask(t, p, llm.Request{
-		Tools: []llm.ToolDef{{Name: "read_file", Description: "read a file"}},
-	})
-	if err != nil {
-		t.Fatalf("Complete: %v", err)
-	}
-	if len(comp.ToolCalls) != 1 || comp.ToolCalls[0].Name != "read_file" {
-		t.Fatalf("tool calls = %+v", comp.ToolCalls)
-	}
-	if comp.ToolCalls[0].ID == "" {
-		t.Error("a tool call with no id cannot be paired with its result")
-	}
-	if comp.StopReason != llm.StopToolUse {
-		t.Errorf("StopReason = %q, want tool_use", comp.StopReason)
-	}
-	if comp.Content != "reading" {
-		t.Errorf("Content = %q", comp.Content)
-	}
-}
-
-// A CALL WHOSE ARGUMENTS DID NOT READ REACHES THE LOOP MARKED, not as a call
-// with no arguments: the tool loop answers a marked call with the reason and
-// runs an unmarked one, so the mark is the whole difference between a failed
-// result the model can fix and a search over everything.
-func TestACallWithUnreadableArgumentsIsMarkedForTheLoop(t *testing.T) {
-	t.Parallel()
-	reply := "```json\n{\"message\":\"searching\",\"tool_calls\":" +
-		"[{\"name\":\"search\",\"arguments\":\"{\\\"query\\\": \\\"x\"}]}\n```"
-	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": reply}, nil)
-	comp, err := ask(t, p, llm.Request{
-		Tools: []llm.ToolDef{{Name: "search", Description: "search"}},
-	})
-	if err != nil {
-		t.Fatalf("Complete: %v", err)
-	}
-	if len(comp.ToolCalls) != 1 || comp.ToolCalls[0].Name != "search" {
-		t.Fatalf("tool calls = %+v, want the one search call", comp.ToolCalls)
-	}
-	if comp.ToolCalls[0].ArgumentsError == "" {
-		t.Errorf("the call reached the loop unmarked with arguments %v, so it would run with none",
-			comp.ToolCalls[0].Arguments)
 	}
 }
 
@@ -847,47 +807,51 @@ func TestTheWorkingDirectoryHoldsOnlyTheProjectRootMarker(t *testing.T) {
 	}
 }
 
-// The prompt must actually reach the CLI, and the transcript must carry the
-// tool catalogue and the response contract or the model has no protocol.
-func TestThePromptReachesTheCLIWithItsContract(t *testing.T) {
+// The prompt must actually reach the CLI, as the labelled transcript a text
+// function is: every message under a heading naming its author, and nothing
+// of a tool channel, which a text function does not have.
+func TestThePromptReachesTheCLIAsALabelledTranscript(t *testing.T) {
 	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_ECHO_STDIN": "1"}, nil)
 	comp, err := ask(t, p, llm.Request{
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: "you are Dev"},
-			{Role: llm.RoleUser, Content: "read the file"},
+			{Role: llm.RoleUser, Content: "summarise this"},
 		},
-		Tools: []llm.ToolDef{{Name: "read_file", Description: "read a file"}},
 	})
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
 	prompt := decodePrompt(t, comp.Content)
-	for _, want := range []string{"## system", "you are Dev", "## user", "read the file",
-		"Available tools", "read_file", "Response contract", "empty tool_calls list"} {
+	for _, want := range []string{"## system", "you are Dev", "## user", "summarise this"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("the prompt is missing %q:\n%s", want, prompt)
 		}
 	}
+	if strings.Contains(prompt, harnessToolsNote) || strings.Contains(prompt, "MCP") {
+		t.Errorf("a text function's prompt speaks of tools it does not have:\n%s", prompt)
+	}
 }
 
-// A call with NO tools gets no contract: auxiliary work sends a plain prompt
-// and reads a plain answer, with no envelope to get wrong.
-func TestACallWithNoToolsGetsNoContract(t *testing.T) {
+// A SEAT'S PHASE ON A PROFILE WITH NO TOOL ROUTE IS REFUSED, fatal and naming
+// the field: run without its tools it would answer as though it had called
+// none, and the next member of the chain would be refused the same way — the
+// fault is the operator's, in the profile. Nothing is started.
+//
+// Mutation: drop the refusal in Complete, and the call runs the CLI with no
+// tools — the fake answers — instead of failing.
+func TestAPhaseOnAProfileWithNoToolRouteIsRefused(t *testing.T) {
 	t.Parallel()
-	p := fakeProvider(t, map[string]string{"FAKE_ECHO_STDIN": "1"}, nil)
-	comp, err := ask(t, p, llm.Request{
-		Messages: []llm.Message{{Role: llm.RoleUser, Content: "summarise this"}},
+	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": "an answer"}, nil)
+	_, err := ask(t, p, llm.Request{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "do the task"}},
+		Tools:    newTestHost(t, "search"),
 	})
-	if err != nil {
-		t.Fatalf("Complete: %v", err)
+	if err == nil {
+		t.Fatal("a phase ran on a profile that cannot hand its CLI any tools")
 	}
-	prompt := decodePrompt(t, comp.Content)
-	if strings.Contains(prompt, "Response contract") {
-		t.Errorf("a tool-free call carried the envelope contract:\n%s", prompt)
-	}
-	if !strings.Contains(prompt, "summarise this") {
-		t.Errorf("the prompt did not reach the CLI:\n%s", prompt)
+	if llm.KindOf(err) != llm.KindFatal || !strings.Contains(err.Error(), "overrides.mcp") {
+		t.Errorf("err = %v (%v), want a fatal refusal naming overrides.mcp", err, llm.KindOf(err))
 	}
 }
 

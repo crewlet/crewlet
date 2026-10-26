@@ -6,17 +6,17 @@ import (
 	"time"
 )
 
-// A CODING RUN AND A TEXT CALL ON ONE ENTRY NAME ONE MODEL.
+// A CODING RUN AND A HOST-MODE RUN ON ONE ENTRY NAME ONE MODEL.
 //
-// ModelArgument is what an agent-mode or code-sandbox run of the entry's own
-// CLI is handed, and argv is what every text call passes; both render the
+// ModelArgument is what a box-mode or code-sandbox run of the entry's own
+// CLI is handed, and argv is what every host-mode run passes; both render the
 // profile's model_args, an override's provider prefix included. A run that
 // rebuilt the value its own way addressed OpenCode's box as
-// `anthropic/openrouter/…` while every text call said `openrouter/…`. A box's
+// `anthropic/openrouter/…` while every host-mode run said `openrouter/…`. A box's
 // runner writes its own flag, so the run is handed the flag's VALUE: a joined
 // `--model={model}` returned whole reached the box as `--model
 // '--model=openrouter/…'`.
-func TestTheRunsModelIsTheValueEveryTextCallPasses(t *testing.T) {
+func TestTheRunsModelIsTheValueEveryHostModeRunPasses(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name      string
@@ -47,10 +47,10 @@ func TestTheRunsModelIsTheValueEveryTextCallPasses(t *testing.T) {
 		if got := p.ModelArgument(); got != tc.want {
 			t.Errorf("%s: ModelArgument = %q, want %q", tc.name, got, tc.want)
 		}
-		// The text call's own argv carries the same value, in the
+		// The host-mode run's own argv carries the same value, in the
 		// element the profile spells it in.
-		if argv := p.argv(); !slices.Contains(argv, tc.textArg) {
-			t.Errorf("%s: a text call passes %v, the run %q", tc.name, argv, p.ModelArgument())
+		if argv := p.argv(false); !slices.Contains(argv, tc.textArg) {
+			t.Errorf("%s: a host-mode run passes %v, the box-mode run %q", tc.name, argv, p.ModelArgument())
 		}
 	}
 }

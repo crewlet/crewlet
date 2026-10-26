@@ -24,8 +24,8 @@ import { withDerived } from "~/test/org.ts";
 /**
  * Three models, declared in the order a seat that names none falls back
  * through — which a JSON object's sorted keys do not keep, so `llm_order`
- * carries it. `smart` names only its model and a token; `fast` is an
- * agent-mode Codex entry on an API key; `spare` forwards the engine's own
+ * carries it. `smart` names only its model and a token; `fast` is a
+ * box-mode Codex entry on an API key; `spare` forwards the engine's own
  * environment, and no seat names it.
  */
 const company = (): CompanyDocument => ({
@@ -35,7 +35,7 @@ const company = (): CompanyDocument => ({
       fast: {
         agent: "codex",
         model: "gpt-5",
-        mode: "agent",
+        mode: "box",
         run_in: "e2b",
         auth: { mode: "api-key", api_key: "${OPENAI_KEY}" },
       },
@@ -141,10 +141,10 @@ test("every model is drawn as the engine will run it, in the order it was declar
   // The CLI and the model under the key; an entry naming no agent drives the default.
   expect(within(row("smart")).getByText("claude-code · claude-opus-5-5")).toBeDefined();
   expect(within(row("fast")).getByText("codex · gpt-5")).toBeDefined();
-  // How the engine uses it, and where an agent-mode run happens.
-  expect(within(row("fast")).getByText("Agent")).toBeDefined();
+  // Where the engine runs it, and the cell a box-mode run happens in.
+  expect(within(row("fast")).getByText("Box")).toBeDefined();
   expect(within(row("fast")).getByText("· e2b")).toBeDefined();
-  expect(within(row("smart")).getByText("Text")).toBeDefined();
+  expect(within(row("smart")).getByText("Host")).toBeDefined();
   // How it signs in, and the variable its credential is read from.
   expect(within(row("smart")).getByText("Subscription")).toBeDefined();
   expect(within(row("smart")).getByText("CLAUDE_TOKEN")).toBeDefined();
@@ -154,14 +154,14 @@ test("every model is drawn as the engine will run it, in the order it was declar
   // Who runs on it, off the chains the org projection carries.
   expect(within(row("smart")).getByText("2 seats")).toBeDefined();
   expect(within(row("fast")).getByText("1 seat")).toBeDefined();
-  // The tiles: three models, one of them named by no seat; one in agent mode; one billed per token.
+  // The tiles: three models, one of them named by no seat; one in box mode; one billed per token.
   const tile = (label: string) =>
     screen
       .getByText(label, { selector: ".crewlet-statcard__label" })
       .closest(".crewlet-statcard") as HTMLElement;
   expect(within(tile("Models")).getByText("1 named by no seat")).toBeDefined();
-  expect(within(tile("Agent mode")).getByText("1")).toBeDefined();
-  expect(within(tile("Agent mode")).getByText("runs the executor in its CLI")).toBeDefined();
+  expect(within(tile("Box mode")).getByText("1")).toBeDefined();
+  expect(within(tile("Box mode")).getByText("runs the executor detached, in a box")).toBeDefined();
   expect(within(tile("On an API key")).getByText("1")).toBeDefined();
 });
 

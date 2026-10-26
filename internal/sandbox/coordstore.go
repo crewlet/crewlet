@@ -196,7 +196,7 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// answer drives, which has happened by the time a new job opens.
 		existing.ParkedInputTokens, existing.ParkedOutputTokens = 0, 0
 		// NOR ARE THE PREVIOUS JOB'S TOOL CALLS THIS JOB'S. The bridged
-		// log is the whole record an agent-mode resume rebuilds its phase
+		// log is the whole record a box-mode resume rebuilds its phase
 		// from, and a second executor round under the same turn id — what
 		// a reviewer's self_iterate produces — would otherwise replay the
 		// FIRST round's submit_work: a round that in fact submitted

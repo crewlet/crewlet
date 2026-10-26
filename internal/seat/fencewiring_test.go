@@ -36,7 +36,7 @@ var carriers = map[string]string{
 	"toolloop.Config":    "the model/tool loop that performs the check",
 }
 
-// Agent mode is the one executor path with no entry here, and that is a
+// Box mode is the one executor path with no entry here, and that is a
 // decision rather than an omission. A coding CLI's run is DETACHED: the phase
 // suspends the moment it starts, the turn ends, and the run outlives it —
 // deliberately, since its placement is on its own row and the process that

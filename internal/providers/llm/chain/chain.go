@@ -10,10 +10,32 @@
 // one: its vendor's outage or its own crash is not the next member's, so the
 // walk moves on.
 //
-// Fallback is per CALL, not per round. A member that fails is dropped along
-// with whatever it produced, and the next one starts the call from scratch,
-// which keeps one telemetry span per attempt instead of a conversation
-// stitched from two models.
+// # The next member continues from the session's record
+//
+// Fallback is per CALL: one CLI run, which for a seat at work is a whole loop
+// of model requests and tool calls. A member that fails partway through has
+// already had calls run — the phase's tool host ran them, recorded them and
+// charged what the run spent — and its failure undoes none of it. Starting the
+// call from scratch on the next member would run them again: a second post, a
+// second issue, written by a model that never saw the first.
+//
+// So the next member is handed the SAME request — the same conversation and
+// the same host — and its backend shows its CLI what the host holds since the
+// conversation was last folded ([llm.ToolHost.Pending]) as work already done,
+// which the model reads rather than does again. What is dropped is only the
+// failed member's unfinished prose: a streaming consumer is told the attempt
+// restarted ([llm.Delta.Restart]) and sets aside the text it was showing,
+// never the calls, which are on the record whoever made them.
+//
+// # The walk stops where the phase is decided
+//
+// A member whose run the host ENDED — the phase submitted, parked, ran out of
+// rounds or was stopped, or the run was cut short for something the next run
+// of the loop answers — fails the way any CLI that is stopped mid-run does. No
+// other member continues that run: what happens next is the tool loop's, which
+// holds the host and reads the outcome off its own record, and a second member
+// would only redo or overrun a phase that is over. [llm.ToolHost.Halted]
+// answers it, and the chain returns the member's error as it came.
 package chain
 
 import (
@@ -120,7 +142,8 @@ func (c *Chain) Keys() []string {
 }
 
 // Complete walks the chain. The first member whose call does not fail
-// retryably wins.
+// retryably wins — and a member whose run the request's host ended is the
+// last one tried, whatever it answered.
 func (c *Chain) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
 	if len(c.members) == 0 {
 		// A `Chain{}` literal compiles anywhere — the fields are unexported,
@@ -138,7 +161,9 @@ func (c *Chain) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 	// whoever is watching. The next member's fragments must not simply
 	// continue it — two half-answers from two models read as one incoherent
 	// paragraph — so a failover announces itself, and the consumer decides
-	// what to do with the abandoned attempt.
+	// what to do with the abandoned attempt. The TEXT is all a restart
+	// abandons: the calls the member made are the host's record, which the
+	// next member continues from.
 	streamed := false
 	inner := req
 	if req.Streaming() {
@@ -190,6 +215,13 @@ func (c *Chain) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 			// Returned as it came, so errors.As still reaches the
 			// backend's own *llm.Error with its provider and model
 			// intact.
+			return nil, err
+		}
+		if req.Tools != nil && req.Tools.Halted() {
+			// THE HOST ENDED THIS RUN, and a CLI stopped mid-run fails
+			// like one that broke: no member continues a phase that is
+			// decided — see the package doc. Not a hand-off, so nothing
+			// is announced as one.
 			return nil, err
 		}
 

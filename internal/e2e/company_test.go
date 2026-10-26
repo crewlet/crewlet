@@ -3,7 +3,6 @@ package e2e
 import (
 	"context"
 	"fmt"
-	"io"
 	"maps"
 	"math"
 	"net/http"
@@ -31,11 +30,11 @@ import (
 // type would be test-only machinery in shipped config — a thing an operator
 // could set and a thing this suite could get right while the real backend was
 // wrong. Driving the REAL backend against a scripted CLI tests what sits
-// between the model and everything asserted here: the transcript a request is
-// flattened into, the system prompt's own channel, the process launched in a
-// seat's own home on an allowlisted environment, the response envelope and
-// the tool calls decoded from it, the usage read off the CLI's output, and the
-// fallback chain.
+// between the model and everything asserted here: the transcript a run is
+// handed, the system prompt's own channel, the process launched in a seat's
+// own home on an allowlisted environment, the seat's tools served to the CLI's
+// own loop over MCP and every call it makes through them, each model request
+// and its usage read off the CLI's record, and the fallback chain.
 //
 // The `%s` is that entry, under the key `scripted` every seat here names —
 // rendered by [goldenCompany], which is the one way to fill it.
@@ -359,14 +358,16 @@ func seedStore(t *testing.T, boot *config.Bootstrap) {
 }
 
 // scriptedModel is the model behind the scripted CLI ([scriptedEntry]): every
-// call the engine makes reaches it as the one request the CLI posts, and it
-// answers by PHASE.
+// model request a CLI run makes reaches it as the one request the CLI posts
+// for it ([modelRequest]), and it answers by PHASE.
 //
-// Keyed on the tools the request offers rather than on call ORDER: a phase that
-// retries, a rescue, or an extension all send another request, and a script
-// that counted would answer the second executor call with the reviewer's
-// reply. What distinguishes the phases is what they can invoke — submit_work,
-// submit_review, or neither — which is exactly the fact the runner varies.
+// Keyed on the tools the request offers rather than on request ORDER: a phase
+// that retries, a rescue, a run the engine ended and started again, or an
+// extension all send another request, and a script that counted would answer
+// the second executor request with the reviewer's reply. What distinguishes the
+// phases is what they can invoke — submit_work, submit_review, or neither —
+// which is exactly the fact the runner varies, and the tools are the ones the
+// CLI listed from the seat's server, never a list the prompt mentions.
 type scriptedModel struct {
 	url string
 
@@ -379,21 +380,27 @@ type scriptedModel struct {
 	// for why it is a field as well as a t.Cleanup.
 	close func()
 
+	// Everything below is ONE ENTRY PER MODEL REQUEST, at one index — see
+	// [scriptedModel.sawRequest].
 	mu      sync.Mutex
 	calls   []string
 	offered []string
-	// prompts is the transcript of every call, as the CLI read it on stdin,
-	// so a test can read what came BACK from a tool as well as what went
-	// out — a tool result rides the conversation, not the system prompt.
+	// prompts is the transcript of every request's run, as the CLI read it
+	// on stdin.
 	prompts []string
+	// results is every tool result each request handed the model back —
+	// the earlier runs' the transcript carries, then the run's own — so a
+	// test can read what came BACK from a tool as well as what went out: a
+	// tool result rides the conversation, not the system prompt.
+	results [][]string
 
-	// systems is the SYSTEM prompt of every call, as the CLI read it off
+	// systems is the SYSTEM prompt of every request, as the CLI read it off
 	// its own channel, which is where the turn-start prefetch's blocks
 	// land. Captured because "the block was rendered" and "the model was
 	// shown it" are different claims and only the second one matters.
 	systems []string
-	// channels is which channel each call's system prompt came on
-	// ([cliCall.Channel]).
+	// channels is which channel each request's system prompt came on
+	// ([modelRequest.Channel]).
 	channels []string
 
 	// engages makes the executor call a tool before answering, which is
@@ -402,7 +409,7 @@ type scriptedModel struct {
 	// tool — but this document configures none, so the default turn ends
 	// having called nothing and every learning worker correctly skips it.
 	// Opt-in rather than default because the phase-count assertions
-	// elsewhere are written against a one-round Execute.
+	// elsewhere are written against a one-request Execute.
 	engages bool
 	// engaged records whether the extra call has already been made this
 	// turn, so the executor calls the tool once and then answers.
@@ -410,11 +417,11 @@ type scriptedModel struct {
 
 	// searchQuery makes the executor call search_knowledge once with that
 	// query. Opt-in for the same reason engages is: the phase-count
-	// assertions elsewhere are written against a one-round executor.
+	// assertions elsewhere are written against a one-request executor.
 	searchQuery string
 	searched    bool
 
-	// calls are tool calls the executor makes, one per round, before it
+	// calls are tool calls the executor makes, one per request, before it
 	// submits — the scripted half of a turn whose subject is what a tool
 	// did rather than what the model said.
 	scripted []scriptedCall
@@ -426,8 +433,8 @@ type scriptedCall struct {
 	input map[string]any
 }
 
-// callOnExecute makes the next executor rounds call a tool, once each, in the
-// order given, before the round that submits.
+// callOnExecute makes the next executor requests call a tool, once each, in
+// the order given, before the request that submits.
 func (m *scriptedModel) callOnExecute(tool string, input map[string]any) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -462,7 +469,7 @@ func (m *scriptedModel) searchOnExecute(query string) {
 	m.searchQuery, m.searched = query, false
 }
 
-// shouldSearch reports whether this executor round is the searching one, and
+// shouldSearch reports whether this executor request is the searching one, and
 // marks it spent.
 func (m *scriptedModel) shouldSearch() (string, bool) {
 	m.mu.Lock()
@@ -474,7 +481,7 @@ func (m *scriptedModel) shouldSearch() (string, bool) {
 	return m.searchQuery, true
 }
 
-// shouldEngage reports whether this Execute round is the tool-calling one,
+// shouldEngage reports whether this Execute request is the tool-calling one,
 // and marks it spent.
 func (m *scriptedModel) shouldEngage() bool {
 	m.mu.Lock()
@@ -524,22 +531,20 @@ func (m *scriptedModel) entry(key string) string {
 }
 
 func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
-	call, offered, ok := readCall(w, r)
+	req, ok := readRequest(w, r)
 	if !ok {
 		return
 	}
-	names := slices.Sorted(maps.Keys(offered))
-	// ONE RECORD PER CALL, WRITTEN WHERE THE PHASE IS KNOWN — see
-	// [scriptedModel.sawCall] for what pairing them separately cost.
-	saw := func(phase string) {
-		m.sawCall(phase, strings.Join(names, "+"), call)
-	}
+	offered := req.offers()
+	// ONE RECORD PER REQUEST, WRITTEN WHERE THE PHASE IS KNOWN — see
+	// [scriptedModel.sawRequest] for what pairing them separately cost.
+	saw := func(phase string) { m.sawRequest(phase, req) }
 
 	// Keyed on the tool that DISTINGUISHES each phase, in the order that
 	// makes each one unambiguous. submit_* first, because those name one
 	// phase each; onboarding is then the pass that offers mark_onboarded
 	// and neither submit tool.
-	var reply string
+	var reply modelReply
 	switch {
 	case offered["submit_review"]:
 		// Checked FIRST. The reviewer's system prompt embeds the
@@ -564,8 +569,8 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		if m.shouldEngage() {
-			// The round that CALLS something. Recorded as execute like
-			// the submitting round, because it is the same phase — what
+			// The request that CALLS something. Recorded as execute like
+			// the submitting one, because it is the same phase — what
 			// differs is that this turn leaves an observable trace, which
 			// is the condition every learning worker is gated on.
 			saw("execute")
@@ -590,20 +595,20 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 		reply = toolUse("mark_onboarded", map[string]any{
 			"notes": "Read the team pages; deploys go out on Thursdays.",
 		})
-	case auxiliaryPass(call.System) != "":
+	case auxiliaryPass(req.System) != "":
 		// AN AUXILIARY PASS, not a phase. The prefetch's memory filter,
 		// knowledge query and episode summary all reach this same
 		// model with no tools offered, and counting them as Execute
 		// made the phase list report work that never happened — and made
 		// "the first execute call" name a prompt the executor never saw.
-		pass := auxiliaryPass(call.System)
+		pass := auxiliaryPass(req.System)
 		saw("aux:" + pass)
 		reply = textReply(auxiliaryAnswer(pass))
 	default:
 		saw("execute")
 		reply = textReply("Three PRs merged, one incident, zero regressions.")
 	}
-	_, _ = io.WriteString(w, reply)
+	answer(w, reply)
 }
 
 // auxiliaryPass names which prefetch pass a request is, or "" for a phase.
@@ -658,21 +663,21 @@ func auxiliaryAnswer(pass string) string {
 	}
 }
 
-// sawCall records everything ONE model call is known by, in ONE critical
-// section: the phase it was, the tools it was offered, the system prompt it
-// was shown and its whole transcript.
+// sawRequest records everything ONE model request is known by, in ONE
+// critical section: the phase it was, the tools it was offered, the system
+// prompt it was shown, its run's transcript and the tool results it carried.
 //
 // # Why they cannot be appended separately
 //
 // Because every reader PAIRS THEM BY INDEX — [executorPrompt] finds "execute"
 // in calls and reads systems at the same position — and that only holds if one
-// call appends to all of them without another getting in between. It did not.
-// serve appended the prompt, the tools and the body before the switch (it has
-// to: the phase is not known until the request is read), released the lock,
-// and saw appended the phase after. Two requests in flight — two seats, or a
-// seat and one of the prefetch's auxiliary passes, which is the ordinary case
-// — interleave between those two sections, and from then on calls[i] and
-// systems[i] are different calls.
+// request appends to all of them without another getting in between. It did
+// not. serve appended the prompt, the tools and the body before the switch (it
+// has to: the phase is not known until the request is read), released the
+// lock, and saw appended the phase after. Two requests in flight — two seats,
+// or a seat and one of the prefetch's auxiliary passes, which is the ordinary
+// case — interleave between those two sections, and from then on calls[i] and
+// systems[i] are different requests.
 //
 // Measured: the end-to-end skills case read a prompt with no "## Tool skills"
 // section and failed on a section that was there all along, having been handed
@@ -683,18 +688,21 @@ func auxiliaryAnswer(pass string) string {
 // So the phase is what the record is BUILT WITH rather than appended
 // alongside, which is the same rule the engine's own write authority states:
 // take one snapshot and decide inside it.
-func (m *scriptedModel) sawCall(phase, tools string, call cliCall) {
+func (m *scriptedModel) sawRequest(phase string, req modelRequest) {
+	tools := strings.Join(slices.Sorted(slices.Values(req.Tools)), "+")
+	results := req.toolResults()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calls = append(m.calls, phase)
 	m.offered = append(m.offered, tools)
-	m.systems = append(m.systems, call.System)
-	m.channels = append(m.channels, call.Channel)
-	m.prompts = append(m.prompts, call.Prompt)
+	m.systems = append(m.systems, req.System)
+	m.channels = append(m.channels, req.Channel)
+	m.prompts = append(m.prompts, req.Prompt)
+	m.results = append(m.results, results)
 }
 
-// misrouted names every call whose system prompt came on the wrong channel: a
-// seat's round — one offering a tool only the tool loop offers — anywhere but
+// misrouted names every request whose system prompt came on the wrong channel:
+// a seat's phase — one offering a tool only the tool loop offers — anywhere but
 // the append channel, which keeps the CLI's own prompt, and an auxiliary pass
 // anywhere but the replace channel, which has no use for it.
 func (m *scriptedModel) misrouted() []string {
@@ -716,7 +724,7 @@ func (m *scriptedModel) misrouted() []string {
 			want = channelAppend
 		}
 		if want != "" && m.channels[i] != want {
-			bad = append(bad, fmt.Sprintf("call %d (%s) on %q, want %q", i, phase, m.channels[i], want))
+			bad = append(bad, fmt.Sprintf("request %d (%s) on %q, want %q", i, phase, m.channels[i], want))
 		}
 	}
 	return bad
@@ -736,7 +744,7 @@ func (m *scriptedModel) seen() []string {
 	return append([]string(nil), m.calls...)
 }
 
-// systemPrompts is what the model was actually shown, per call.
+// systemPrompts is what the model was actually shown, per request.
 func (m *scriptedModel) systemPrompts() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -745,18 +753,16 @@ func (m *scriptedModel) systemPrompts() []string {
 
 // toolResults is every tool result the model was handed back, flattened.
 //
-// What a tool ANSWERED is only visible here: it rides the conversation as a
-// section of the transcript ([toolResultsIn]), never the system prompt, so a
-// test asserting that a tool's output reached the model has nowhere else to
-// read it.
+// What a tool ANSWERED is only visible here: it rides the conversation — the
+// CLI's own run, or the transcript a later run is started with
+// ([modelRequest.toolResults]) — never the system prompt, so a test asserting
+// that a tool's output reached the model has nowhere else to read it.
 func (m *scriptedModel) toolResults() []string {
 	m.mu.Lock()
-	prompts := append([]string(nil), m.prompts...)
-	m.mu.Unlock()
-
+	defer m.mu.Unlock()
 	var out []string
-	for _, prompt := range prompts {
-		out = append(out, toolResultsIn(prompt)...)
+	for _, results := range m.results {
+		out = append(out, results...)
 	}
 	return out
 }

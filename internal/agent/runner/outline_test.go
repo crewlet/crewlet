@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 )
 
 // chatTask is a chat trigger's body as internal/notify renders it, with the
@@ -59,8 +59,8 @@ func TestThePhaseRecordsCarryTheirPromptsOutlines(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
 	prov := &scriptedProvider{
-		execute: []llm.Completion{submitWork(t)},
-		review: []llm.Completion{submitCall(t, runner.SubmitReviewTool,
+		execute: []llmtest.Response{submitWork(t)},
+		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool,
 			`{"decision":"done","final_artifact":"a"}`)},
 	}
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}},
@@ -131,7 +131,7 @@ func TestThePhaseRecordsCarryTheirPromptsOutlines(t *testing.T) {
 func TestAPromptThatIsNotUTF8PublishesNoOutline(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
-	prov := &scriptedProvider{execute: []llm.Completion{submitWork(t)}}
+	prov := &scriptedProvider{execute: []llmtest.Response{submitWork(t)}}
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}},
 		buildOpts{pub: pub, task: "a vendor body with a bad byte: \xff — and more"})
 	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
@@ -152,7 +152,7 @@ func TestAPromptThatIsNotUTF8PublishesNoOutline(t *testing.T) {
 func TestAResumedPhaseCarriesNoOutline(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
-	prov := &scriptedProvider{execute: []llm.Completion{submitWork(t)}}
+	prov := &scriptedProvider{execute: []llmtest.Response{submitWork(t)}}
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
 		pub:    pub,
 		resume: &runner.Resume{State: suspendedAfterTwoRounds(), Answer: "the run succeeded"},

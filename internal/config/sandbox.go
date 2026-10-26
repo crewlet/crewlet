@@ -47,7 +47,7 @@ const (
 	PlacementE2B Placement = "e2b"
 
 	// PlacementSelf runs code work INSIDE the seat's own executor run,
-	// which is only possible when that executor is a coding CLI in agent
+	// which is only possible when that executor is a coding CLI in box
 	// mode: it already holds a shell, an editor and a checkout, so
 	// provisioning a second box beside it would give the seat two
 	// filesystems and make the one doing the work invisible to the other.
@@ -90,8 +90,8 @@ func (p Placement) backend() string {
 //
 // Exported because three surfaces outside this file need exactly this list and
 // must not each filter it themselves: the engine's build switch, the schema
-// enum for the two fields that name a BACKEND cell (a company default and an
-// agent-mode runtime, neither of which can be the executor's own box), and the
+// enum for the two fields that name a BACKEND cell (a company default and a
+// box-mode runtime, neither of which can be the executor's own box), and the
 // test that holds those two together.
 func BackendPlacements() []Placement {
 	out := make([]Placement, 0, len(Placements))
@@ -162,13 +162,13 @@ type SandboxProvider struct {
 	// Only `e2b:` alone, and the double, resolve on their own.
 	//
 	// REQUIRED ONLY WHERE SOMETHING WOULD READ IT. A catalogue whose every
-	// sandbox-enabled seat not in agent mode, and every agent-mode entry a
+	// sandbox-enabled seat not in box mode, and every box-mode entry a
 	// seat's executor runs on, names its own cell has nothing left to
-	// default — an agent-mode seat's own gate places nothing — that is
+	// default — a box-mode seat's own gate places nothing — that is
 	// the shape the catalogue exists for — so the refusal is written at
 	// the seat or entry that named none, never on this field alone. See
 	// [Company.validateSandboxPlacement].
-	DefaultRunIn Placement `yaml:"default_run_in,omitempty" json:"default_run_in,omitempty" js:"enum=direct|container|e2b" desc:"Where a box whose placer names no cell runs: a sandbox-enabled seat whose executor is not in agent mode and names no run_in, or an agent-mode providers.llm entry with no run_in. Required unless the catalogue names exactly one cell, or every such seat and entry names its own."`
+	DefaultRunIn Placement `yaml:"default_run_in,omitempty" json:"default_run_in,omitempty" js:"enum=direct|container|e2b" desc:"Where a box whose placer names no cell runs: a sandbox-enabled seat whose executor is not in box mode and names no run_in, or a box-mode providers.llm entry with no run_in. Required unless the catalogue names exactly one cell, or every such seat and entry names its own."`
 
 	// DefaultCodingAgent is what a seat that names none runs.
 	DefaultCodingAgent CodingAgent `yaml:"default_coding_agent,omitempty" json:"default_coding_agent,omitempty" js:"enum=claude-code|opencode" desc:"Coding agent for seats that name none."`
@@ -391,7 +391,7 @@ func (s *SandboxProvider) validate(path Path) error {
 	case s.DefaultRunIn == "":
 		// NOT REFUSED HERE, even when the catalogue is ambiguous: whether
 		// a default is NEEDED is a question about the seats, and this
-		// block cannot see them. A seat, or an agent-mode entry, that
+		// block cannot see them. A seat, or a box-mode entry, that
 		// names no cell against an ambiguous catalogue is refused where it
 		// is written, with a message offering this field as the other
 		// remedy — see [Company.validateSandboxPlacement]. Refused here
@@ -400,7 +400,7 @@ func (s *SandboxProvider) validate(path Path) error {
 	case !slices.Contains(BackendPlacements(), s.DefaultRunIn):
 		// `self` is deliberately not offerable as a COMPANY default: it
 		// is only meaningful for a seat whose executor is a coding CLI
-		// in agent mode, and a company-wide default would silently turn
+		// in box mode, and a company-wide default would silently turn
 		// code work off for every seat that is not.
 		p.add(at(path, "default_run_in"), ErrUnknownValue, "%q (want %s)",
 			s.DefaultRunIn, names(BackendPlacements()))

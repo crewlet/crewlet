@@ -24,7 +24,7 @@ import (
 )
 
 // bootFor is the boot surface of a node b describes, answering as core-1,
-// with no agent-mode tool bridge.
+// with no box-mode tool bridge.
 func bootFor(t *testing.T, b config.Bootstrap) *api.Boot {
 	t.Helper()
 	return bootWith(t, b, false)

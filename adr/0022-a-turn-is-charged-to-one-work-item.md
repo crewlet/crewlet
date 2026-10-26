@@ -74,7 +74,7 @@ the seat's day and the company's history.
 
 Two kinds of the turn's own spend happen while **no segment is running**, and
 the segment that resumes from the coding run pays them, as it pays the run's
-own tokens: an agent-mode executor's calls through the tool bridge, which go on
+own tokens: an box-mode executor's calls through the tool bridge, which go on
 after the segment that launched the run has suspended and charged — the
 auxiliary rewrites its tools ask for and the workers it delegates to — and the
 condensation of a collected run's report, failure or question, which the

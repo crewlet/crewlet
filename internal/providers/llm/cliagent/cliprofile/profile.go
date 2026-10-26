@@ -29,8 +29,8 @@ const (
 	// the same two reasons: argv is bounded by ARG_MAX, and
 	// /proc/<pid>/cmdline makes it readable by every account on the
 	// machine. A rendered prompt is the whole flattened transcript — the
-	// seat's identity, the tool catalogue, the conversation and its tool
-	// results — so it is the LARGEST and the most sensitive thing this
+	// seat's identity, the conversation and its tool results — so it is
+	// the LARGEST and the most sensitive thing this
 	// backend hands a CLI. Prefer this over argv wherever a vendor offers
 	// a prompt-file flag; `muse exec --prompt-file` is the first that does.
 	PromptFile PromptMode = "file"
@@ -355,9 +355,10 @@ func (s MarkerScope) Valid() bool {
 // LocalTools says what a profile does about the CLI's OWN tools — its shell,
 // its file editor, its browser.
 //
-// In text mode the engine uses none of them: Crewlet's tools ride the prompt
-// envelope, and a CLI editing files in its own sandbox is invisible to the
-// tool registry, the permission model, redaction and the event stream. The
+// On this host the engine uses none of them: a seat's tools reach the CLI as
+// the engine's own MCP server ([MCP]), and a CLI editing files in its own
+// sandbox is invisible to the tool registry, the permission model and the
+// event stream. The
 // shell is the one that matters: hostbox isolates a seat's HOME and
 // environment, not the filesystem, so a CLI with a shell on the engine host
 // reads whatever the engine user can read. A profile therefore DENIES local
@@ -1130,6 +1131,49 @@ type Profile struct {
 	// — the vendors that take their tool policy from a file rather than a
 	// flag. See [SeedFile].
 	SeedFiles []SeedFile `yaml:"seed_files,omitempty"`
+
+	// KeySeedFiles are settings files written into a seat's KEY home alone —
+	// the home its calls run in when they sign in with a key (auth.mode
+	// api-key, or inherit-env handing it the engine's own) — after
+	// seed_files, each over a seed_files entry at the same path.
+	//
+	// The counterpart of [Profile.SubscriptionEnv], for a CLI that picks
+	// its sign-in from SETTINGS before its environment, so no variable can
+	// tell it to use the key. Gemini CLI takes a GOOGLE_GEMINI_BASE_URL — an
+	// operator's gateway in front of the API — as its gateway sign-in, which
+	// it then refuses ("Invalid auth method selected", exit 41), unless its
+	// settings name the key sign-in; and the same settings in a login home
+	// would send every subscription call to a key it does not have (read
+	// from the 0.65.0 bundle, and measured). A key home and a login home are
+	// two directories ([Workspace.AcquireForKey] in the backend), so each
+	// keeps its own.
+	//
+	// The seat's home only (`in` is home, its default): a call's working
+	// directory is written per call and knows nothing of how it signs in.
+	KeySeedFiles []SeedFile `yaml:"key_seed_files,omitempty"`
+
+	// MCP is how the CLI is handed a phase's tools as an MCP server — see
+	// [MCP]. Nil: the CLI cannot be handed any, and a seat's phase on it is
+	// refused.
+	MCP *MCP `yaml:"mcp,omitempty"`
+
+	// Requests is how the CLI's own record shows each model request of a run
+	// with tools — see [Requests]. Nil: the record shows none, and the whole
+	// run counts as one round.
+	Requests *Requests `yaml:"requests,omitempty"`
+
+	// Cap is how a run the CLI's own turn cap ended is told from a failure —
+	// see [Cap]. Nil: the CLI has no cap, or the profile cannot tell one.
+	Cap *Cap `yaml:"cap,omitempty"`
+
+	// FailureMarkers are sentinels the CLI writes on stderr when its own
+	// confinement failed to load — a policy file it could not read — after
+	// which it runs on its vendor's defaults. Matched as each stderr line
+	// arrives, on every call, and the run is stopped at once and fails: a CLI
+	// running with its tool policy unloaded must not be left to use the tools
+	// that policy denies (Gemini CLI reports "Policy file error" and carries
+	// on, measured on 0.58.0).
+	FailureMarkers []string `yaml:"failure_markers,omitempty"`
 }
 
 // credentialWords are the name components that mark a variable as carrying a
@@ -1199,10 +1243,10 @@ const modelPlaceholder = "{model}"
 //
 // ONE RENDERING FOR EVERY PLACE THE MODEL GOES, because a cli-agent entry's
 // `model` is written in its CLI's own grammar and every reader of it has to
-// see the same string: a text call's argv, an agent-mode or code-sandbox run
+// see the same string: a host-mode run's argv, a box-mode or code-sandbox run
 // of the same CLI in a box, and the config rule that judges the value as that
 // CLI reads it. A run that rebuilt the value its own way named one model to
-// the box and another to every text call on the same entry.
+// the box and another to every host-mode run on the same entry.
 //
 // THE VALUE, NOT THE ELEMENT. A box's runner writes its own flag
 // (`--model <value>`), so an element that spells flag and value as one —
@@ -1384,6 +1428,11 @@ func (p *Profile) kept(scope SeedScope) []keptPath {
 	for i, f := range p.SeedFiles {
 		if f.Scope() == scope {
 			add("seed_files", fmt.Sprintf("seed_files[%d].path", i), f.Path)
+		}
+	}
+	if scope == SeedHome {
+		for i, f := range p.KeySeedFiles {
+			add("key_seed_files", fmt.Sprintf("key_seed_files[%d].path", i), f.Path)
 		}
 	}
 	if scope == SeedWork {
@@ -1666,6 +1715,30 @@ func (p *Profile) problems() []string {
 				"configures nothing", i)
 		}
 	}
+	for i, f := range p.KeySeedFiles {
+		label := fmt.Sprintf("key_seed_files[%d]", i)
+		switch {
+		case f.Scope() != SeedHome:
+			add("%s.in is %q — a key home's own settings are written into the seat's home "+
+				"(in: home, the default); a call's working directory is written per call "+
+				"and knows nothing of how the call signs in", label, f.In)
+		case strings.TrimSpace(f.Path) == "":
+			add("%s.path is empty", label)
+		case !staysInside(f.Path):
+			add("%s.path %q must be relative and stay inside the home directory", label, f.Path)
+		case !namesAFile(f.Path):
+			add("%s.path %q must name a FILE inside the home directory — not the directory "+
+				"itself, not a path ending in a separator, and not one whose last element is "+
+				". or .. — e.g. .vendor/settings.json", label, f.Path)
+		}
+		if f.Content == "" {
+			add("%s.content is empty — a settings file with nothing in it configures nothing", label)
+		}
+	}
+	p.validateMCP(add)
+	p.validateRequests(add)
+	p.validateCap(add)
+	p.validateFailureMarkers(add)
 	p.validateCollisions(add)
 	return bad
 }
@@ -1725,9 +1798,30 @@ func (p *Profile) claims(scope SeedScope) []pathClaim {
 		// label that says the engine owns it.
 		file("the call's project-root marker", ProjectRootMarker)
 	}
+	seeded := map[string]bool{}
 	for i, f := range p.SeedFiles {
 		if f.Scope() == scope && staysInside(f.Path) && namesAFile(f.Path) {
 			file(fmt.Sprintf("seed_files[%d].path", i), f.Path)
+			seeded[filepath.Clean(f.Path)] = true
+		}
+	}
+	if scope == SeedHome {
+		// A key home's own: one at a seed_files path is that file's key-home
+		// content, written in its place, so it is the same claim rather than
+		// a second write — and one anywhere else is held to every rule a
+		// seed is.
+		for i, f := range p.KeySeedFiles {
+			if !staysInside(f.Path) || !namesAFile(f.Path) {
+				continue
+			}
+			clean := filepath.Clean(f.Path)
+			if seeded[clean] {
+				// Replacing it, once: a second key seed at the path is a
+				// second write, which the claim below is refused as.
+				seeded[clean] = false
+				continue
+			}
+			file(fmt.Sprintf("key_seed_files[%d].path", i), f.Path)
 		}
 	}
 	if scope == SeedWork {
@@ -1759,6 +1853,12 @@ func (p *Profile) claims(scope SeedScope) []pathClaim {
 				file(ch.field+".file.name", name)
 			}
 		}
+	}
+	if scope == SeedWork {
+		// Written on a run with tools alone, after the seeds above, so one at
+		// a path a seed or the system prompt file also names replaces it on
+		// exactly those runs.
+		out = append(out, p.mcpClaims()...)
 	}
 	field, relocations := "config_env", p.ConfigEnv
 	if scope == SeedWork {
@@ -2348,6 +2448,25 @@ func (p *Profile) ValidateCredentials(name string) error {
 			add("subscription_env names %q, which is a credential variable — it selects "+
 				"the login a subscription call signs in with and carries no secret; give "+
 				"a credential through the entry's auth", env)
+		}
+	}
+	if p.MCP != nil {
+		for _, env := range slices.Sorted(maps.Keys(p.MCP.Env)) {
+			if p.MCP.mintedByServer(p.MCP.Env[env]) {
+				// A VALUE THE CLI'S OWN SERVER MINTS — the password
+				// OpenCode's `serve` prints as it starts — rendered into
+				// each run and never written anywhere: the profile holds
+				// a placeholder, which is no secret, and the rule below
+				// exists for a secret the profile would hold.
+				continue
+			}
+			// Set on every run with tools whatever auth.mode says, and
+			// stored unredacted like the rest of overrides.
+			if env != "" && (env == p.TokenEnv || env == p.APIKeyEnv || IsCredentialName(env)) {
+				add("mcp.env names %q, which is a credential variable — the tool route's "+
+					"environment is set whatever auth.mode says and is stored unredacted; give "+
+					"the credential through the entry's auth or its own env", env)
+			}
 		}
 	}
 	for _, env := range slices.Sorted(maps.Keys(p.Env)) {

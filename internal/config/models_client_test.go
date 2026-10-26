@@ -22,7 +22,7 @@ func TestTheModelsScreenReadsAnEntryAsTheEngineDoes(t *testing.T) {
 		want []string
 	}{
 		{"CLIAuthMode", strs(config.CLIAgentAuthModes)},
-		{"CLIMode", strs(config.CLIAgentModes)},
+		{"CLIMode", strs(config.CLIModes)},
 	} {
 		got, err := clientsource.Union(tree, tc.name)
 		if err != nil {
@@ -33,9 +33,9 @@ func TestTheModelsScreenReadsAnEntryAsTheEngineDoes(t *testing.T) {
 		}
 	}
 	var unset config.LLMProvider
-	mode := string(config.CLIModeText)
-	if unset.AgentMode() {
-		mode = string(config.CLIModeAgent)
+	mode := string(config.CLIModeHost)
+	if unset.Box() {
+		mode = string(config.CLIModeBox)
 	}
 	for _, tc := range []struct{ name, want string }{
 		{"DEFAULT_CLI_AGENT", unset.AgentName()},
