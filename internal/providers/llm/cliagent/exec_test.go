@@ -305,11 +305,32 @@ func runFakeCLI() {
 		// probe is asking is read off the prompt.
 		prompt, _ := io.ReadAll(os.Stdin)
 		switch {
+		case strings.Contains(string(prompt), "read the file at "):
+			// The file probe: a CLI whose file tool works reads the
+			// path out of the prompt and answers with the file.
+			if os.Getenv("FAKE_FILE_PROBE") != "read" {
+				fmt.Print(noLocalToolsReply)
+				break
+			}
+			_, rest, _ := strings.Cut(string(prompt), "read the file at ")
+			path, _, _ := strings.Cut(rest, " and reply")
+			body, _ := os.ReadFile(path)
+			fmt.Print(string(body))
 		case strings.Contains(string(prompt), webProbeURL):
 			fmt.Print(os.Getenv("FAKE_WEB_PROBE_STDOUT"))
 		case strings.Contains(string(prompt), noLocalToolsReply):
 			fmt.Print(os.Getenv("FAKE_SHELL_PROBE_STDOUT"))
 		default:
+			fmt.Print(os.Getenv("FAKE_STDOUT"))
+		}
+	case os.Getenv("FAKE_STREAM_ARG") != "":
+		// A streamed variant is chosen per call, so the fake answers with
+		// the stream only when the call's argv carries the variant's
+		// argument: a test then knows which argv the call ran from what
+		// came back.
+		if slices.Contains(os.Args, os.Getenv("FAKE_STREAM_ARG")) {
+			fmt.Print(os.Getenv("FAKE_STREAM_STDOUT"))
+		} else {
 			fmt.Print(os.Getenv("FAKE_STDOUT"))
 		}
 	default:
@@ -896,8 +917,35 @@ func TestACancelledCallerDoesNotLaunchAProcess(t *testing.T) {
 	p.slots <- struct{}{}
 	p.slots <- struct{}{}
 	_, err := p.Complete(ctx, llm.Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}}})
-	if got := llm.KindOf(err); got != llm.KindTimeout {
-		t.Fatalf("kind = %v, want timeout (err %v)", got, err)
+	if got := llm.KindOf(err); got != llm.KindCancelled {
+		t.Fatalf("kind = %v, want canceled (err %v)", got, err)
+	}
+}
+
+// A CALL STOPPED UNDER A RUNNING CLI IS A CANCELLATION, never the vendor's
+// outage: the CLI exits on the signal the stop sent (143 for a Node runtime),
+// which reads exactly like a crash, so a classification from the exit status
+// walked the assistant's chain to its next model and logged a fallback for a
+// person's Stop. Nothing is learned from it either: a member that was ready
+// stays ready.
+func TestAStoppedCallIsCancelledNotAServerFailure(t *testing.T) {
+	t.Parallel()
+	p := fakeProvider(t, map[string]string{"FAKE_SLEEP_MS": "20000", "FAKE_STDOUT": "late"}, nil)
+	stopped := errors.New("the person stopped the turn")
+	ctx, cancel := context.WithCancelCause(t.Context())
+	time.AfterFunc(300*time.Millisecond, func() { cancel(stopped) })
+	_, err := p.Complete(ctx, llm.Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}}})
+	if got := llm.KindOf(err); got != llm.KindCancelled {
+		t.Fatalf("kind = %v, want canceled (err %v)", got, err)
+	}
+	if llm.KindOf(err).Retryable() {
+		t.Error("a cancellation is retryable: the chain would start its next member for nobody")
+	}
+	if !errors.Is(err, stopped) {
+		t.Errorf("err = %v, want it to name why the caller stopped", err)
+	}
+	if unready := p.Unready(t.Context()); unready != nil {
+		t.Errorf("a cancelled call left a readiness verdict: %v", unready)
 	}
 }
 

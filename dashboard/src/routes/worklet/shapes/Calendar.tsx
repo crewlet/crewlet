@@ -13,9 +13,8 @@
  */
 
 import { useMemo } from "react";
-import { Button, Card, IconButton } from "@crewlethq/ui";
+import { Button, Card, IconButton, peekClickHandler } from "@crewlethq/ui";
 import { ChevronLeftGlyph, ChevronRightGlyph } from "@crewlethq/icons/glyphs";
-import { rowPeekHandler } from "~/app/frame/DetailRail.tsx";
 import { TypeIcon, type RowChrome } from "~/components/work.tsx";
 import {
   bucketByDay,
@@ -122,9 +121,9 @@ export function CalendarView({
                     // THE FRAME'S ONE COPY of which clicks mean "open
                     // elsewhere". This chip carried its own — four modifiers
                     // and no `button` test — which is exactly the drift
-                    // `rowPeekHandler` was written to end: the second spelling
+                    // `peekClickHandler` was written to end: the second spelling
                     // is the one that forgets the middle button.
-                    onClick={rowPeekHandler(() => onOpen(row))}
+                    onClick={peekClickHandler(() => onOpen(row))}
                   >
                     <TypeIcon type={row.type} types={chrome.types} />
                     <span className="work-cal-key">{row.key}</span>
@@ -140,7 +139,7 @@ export function CalendarView({
                     href={dayHref(cell.key)}
                     // THE FRAME'S ONE RULE for which clicks stay on the page
                     // and which open elsewhere — see the chip above.
-                    onClick={rowPeekHandler(() => onDay(cell.key))}
+                    onClick={peekClickHandler(() => onDay(cell.key))}
                   >
                     +{due.length - shownChips.length} more
                     <span className="sr-only"> due {dayLabel(cell.key)}</span>

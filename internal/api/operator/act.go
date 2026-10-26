@@ -1,20 +1,19 @@
 package operator
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"mime"
 	"net/http"
-	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/opkey"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -207,14 +206,9 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 				"socket or its REST route", name)})
 		return
 	}
-	// JSON AND NOTHING ELSE, which is what shuts the door a browser leaves
-	// open: a cross-site HTML form can post `text/plain`,
-	// `application/x-www-form-urlencoded` or `multipart/form-data` without a
-	// preflight, and a body that happens to parse as JSON would otherwise
-	// reach a write. `application/json` from another origin needs a
-	// preflight, which the CORS allow-list answers — and the cross-site
-	// write gate in front of every guarded route refuses its Origin anyway.
-	if !declaresJSON(r.Header.Get("Content-Type")) {
+	// JSON AND NOTHING ELSE, which shuts the door a cross-site form leaves
+	// open ([httpjson.DeclaresJSON]).
+	if !httpjson.DeclaresJSON(r.Header.Get("Content-Type")) {
 		httpjson.FailWithFields(w, http.StatusUnsupportedMediaType,
 			httpjson.CodeUnsupportedMediaType, httpjson.Detail{"tool": name,
 				"detail": "the body must be declared Content-Type: application/json"})
@@ -249,11 +243,20 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	logged := []any{"tool", name, "op_id", key}
+	transport, refusal := actTransport(r.Context(), name)
+	if refusal != "" {
+		AuditRefusal(r.Context(), s.audit, transport, name, key, false)
+		log.WarnContext(r.Context(), "operator_act_assist_refused", append(logged,
+			"detail", refusal)...)
+		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
+			authz.RefusalDetail(authz.ReasonAssistRefused, nil))
+		return
+	}
 	// THROUGH THE DISPATCH, which publishes the call's runtime audit
 	// record whatever becomes of it — an interrupted call included, since
 	// that is the one whose write nobody can vouch for.
 	result, err := s.run(r.Context(), cat, Call{
-		Transport: types.TransportAct, Key: key, Tool: name, Args: args,
+		Transport: transport, Key: key, Tool: name, Args: args,
 	})
 	if err != nil {
 		Interrupted(w, r, key, name, err)
@@ -272,6 +275,34 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, answer)
 }
 
+// actTransport is the transport an act call arrives on, and why an assistant
+// call may not be made, or "".
+//
+// AN ASSISTANT CALL IS ONE APPROVED WRITE (ADR-0051). The request guard
+// already admits an assistant grant here only as an exec grant carrying the
+// one request its approval bound, once; this is the second lock, on the one
+// surface every server write goes through: the grant must name the proposal
+// the person approved and the tool it was approved for, so a human-only verb
+// (pausing a seat, steering a turn, answering a run) is never carried by a
+// grant that was not derived from that verb's own approval. A refusal is
+// audited under the assistant transport.
+func actTransport(ctx context.Context, tool string) (string, string) {
+	claims, assisted := auth.AssistOf(ctx)
+	if !assisted {
+		return types.TransportAct, ""
+	}
+	switch {
+	case claims.Scope != iam.AssistScopeExec:
+		return types.TransportAssistant, "an assistant read grant never writes"
+	case claims.Proposal == uuid.Nil:
+		return types.TransportAssistant, "the grant names no approved proposal"
+	case string(claims.Action) != tool:
+		return types.TransportAssistant, fmt.Sprintf("the grant was approved for %q, "+
+			"not %q", claims.Action, tool)
+	}
+	return types.TransportAssistant, ""
+}
+
 // RefuseOperationArg answers a call that names its operation in the header and
 // ALSO carries an `op_id` argument: `400 invalid_body`, naming where the
 // operation goes on this surface. See [NoOperationArg].
@@ -284,17 +315,6 @@ func RefuseOperationArg(w http.ResponseWriter, tool string) {
 			"returned as the header"})
 }
 
-// declaresJSON reports whether a Content-Type is JSON in UTF-8, which is the
-// only charset JSON has.
-func declaresJSON(header string) bool {
-	media, params, err := mime.ParseMediaType(header)
-	if err != nil || media != "application/json" {
-		return false
-	}
-	charset, named := params["charset"]
-	return !named || strings.EqualFold(charset, "utf-8")
-}
-
 // decodeAct reads the body as exactly one JSON object naming only the field the
 // transport takes.
 //
@@ -304,16 +324,13 @@ func declaresJSON(header string) bool {
 // an operation it did not, and its retry would be a second write.
 func decodeAct(raw []byte) (actRequest, error) {
 	var req actRequest
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
+	switch err := httpjson.DecodeStrict(raw, &req); {
+	case errors.Is(err, httpjson.ErrTrailingData):
+		return actRequest{}, err
+	case err != nil:
 		return actRequest{}, fmt.Errorf("the body must be one JSON object "+
 			"{\"args\": {…}}, with the operation in the %s header: %w",
 			opkey.Header, err)
-	}
-	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return actRequest{}, errors.New("the body carries something after its " +
-			"JSON object; send exactly one")
 	}
 	return req, nil
 }

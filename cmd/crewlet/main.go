@@ -60,6 +60,14 @@ import (
 )
 
 func main() {
+	// THE LANDLOCK HELPER, before anything else runs: a confined host box's
+	// every command is this binary re-executed to restrict itself and then
+	// become the box's job (internal/sandbox's ConfineMain). It is no
+	// operator's command, so it is answered here, ahead of the dispatch and
+	// its usage, and it never returns on success.
+	if len(os.Args) > 1 && os.Args[1] == sandbox.ConfineCommand {
+		os.Exit(sandbox.ConfineMain(os.Args[2:]))
+	}
 	// WHERE THIS PROCESS'S LOGS GO, decided by the one function that owns
 	// the process. Everything below adjusts only the level and the format
 	// (logging.SetVerbosity), because a command that installed a
@@ -258,6 +266,8 @@ func runIn(inv invocation, args []string, stdout, stderr io.Writer) (err error) 
 		return runLLM(environ, rest, stdout, stderr)
 	case "search":
 		return runSearch(rest, stdout, stderr)
+	case "assistant":
+		return runAssistant(environ, rest, stdout, stderr)
 	case "mcp-relay":
 		// The literal is mcprelay.Command, which the argv a CLI is handed is
 		// built from; a case of the switch is read as the binary's command
@@ -309,6 +319,8 @@ Usage:
                               runs through
   crewlet search eval         Measure the semantic search against the exact scan,
                               on the vectors a store file actually holds
+  crewlet assistant eval      Run evaluation cases through the Dashboard Assistant,
+                              on their own scripts or against a candidate model
   crewlet mcp-relay SOCKET    Not for people: the MCP server a seat's coding CLI
                               starts, relaying its stdio to the engine's tools
   crewlet gitlab <cmd>        Reconcile the company's seats into a GitLab instance
@@ -1443,7 +1455,11 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	// and a webhook that arrives in the window is retained rather than
 	// dropped because the mailboxes are created before any claiming (see
 	// Node.Start).
-	surface, err := serveAPI(ctx, boot, e, reconciler, cipher, configSurface, dev, listeners, log)
+	// THE CONFIG FILES THIS NODE WAS STARTED FROM, which a deep-work run
+	// confined on this host is kept from beside the engine's own paths.
+	host := engine.DeepHost{Config: []string{*cfg.bootstrap, *cfg.company, *importCompany}}
+	surface, err := serveAPI(ctx, boot, e, reconciler, cipher, configSurface, dev, listeners,
+		host, log)
 	if err != nil {
 		e.Stop(context.WithoutCancel(ctx))
 		return err
@@ -1659,6 +1675,11 @@ type httpSurface struct {
 	// and must stop before the engine its writes go to does.
 	auth *authapi.Service
 	runs *observe.SandboxReconciler
+
+	// assistant is the Dashboard Assistant's service, nil on a node without
+	// the ingress role. Closed before any listener, so its open streams end
+	// rather than holding a listener's grace.
+	assistant *assistantNode
 }
 
 // apiListener is one socket a node binds, the server serving it, and the slot
@@ -1699,6 +1720,11 @@ func (l *apiListener) serve(h http.Handler) { l.handler.store(h) }
 // that is doing exactly what it should. Each gets its own grace, so a bridge
 // session holding the public listener open never cuts a dashboard request.
 func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
+	// THE ASSISTANT BEFORE EVERY LISTENER: each turn it runs ends
+	// interrupted and is recorded so, which ends every stream following it,
+	// and a stream is a request a listener's grace would otherwise wait out
+	// whole. The engine its ends are written to has not been torn down yet.
+	closeAssistant(ctx, s.assistant, log)
 	// THE ARTIFACT ORIGIN FIRST: it serves no probe, and an artifact frame
 	// is the request most able to wait for a node that is going away.
 	if s.artifacts != nil {
@@ -1928,7 +1954,7 @@ func companySurface(e *engine.Engine, boot *config.Bootstrap,
 func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	reconciler *engine.Reconciler, cipher secrets.Cipher,
 	configSurface *configapi.Service, dev *auth.DevPrincipal, listeners *nodeListeners,
-	log *slog.Logger,
+	host engine.DeepHost, log *slog.Logger,
 ) (*httpSurface, error) {
 	if boot.API.Port == 0 {
 		// A real posture: a node with no listener at all. Saying so is the
@@ -2024,12 +2050,19 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		return nil, errors.New("api: the engine opened no identity estate — " +
 			"engine.New opens it on every node holding the estate, company or not")
 	}
+	// The assistant estate opens beside the identity estate (engine core),
+	// so a node holding one holds the other.
+	assistantValues := e.AssistantReader()
+	if assistantValues == nil {
+		return nil, errors.New("api: the engine opened no assistant estate: " +
+			"engine.New opens it beside the identity estate on every node holding the estate")
+	}
 	secretSurface, err := secretsapi.New(secretsapi.Options{
 		Fleet: e.Backends().Fleet, Cipher: cipher,
 		ActiveKeyID: boot.Secrets.ActiveKeyID,
 		// AND THE IDENTITY ESTATE'S HALF of a rotation, which only a
-		// record can move.
-		Identity: keyring,
+		// record can move, and the assistant's, which a rotation waits out.
+		Identity: keyring, Assistant: assistantValues,
 	})
 	if err != nil {
 		return nil, err
@@ -2494,6 +2527,14 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// than mounting its routes over a nil service. See
 	// [api.HumanSurfaces.Mount].
 	humans.Mount(&opts)
+	// THE DASHBOARD ASSISTANT, after the hand-over above: the writes a person
+	// may propose are the operator surface's verdict. Its service is closed
+	// by every path that returns from here without a surface, and by the
+	// surface's stop once there is one.
+	assistantSvc, err := mountAssistant(ctx, boot, e, host, &opts)
+	if err != nil {
+		return nil, err
+	}
 	// THE ARTIFACTS' ROUTES, each stating its authority where it is
 	// mounted. Set only where it was built, so an absent surface is a nil
 	// interface rather than a nil service mounted.
@@ -2517,7 +2558,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// fed by this engine's appliers and presence hub.
 	opts.Rooms = artifactRooms
 	app, err := api.New(opts) //nolint:contextcheck // see the paragraph above the options
+	if err == nil {
+		err = assistantSvc.bindRoutes(app)
+	}
 	if err != nil {
+		closeAssistant(ctx, assistantSvc, log)
 		return nil, err
 	}
 	// NOTHING PUSHES "CONFIGURED" FROM HERE. [api.App.Configured] reads the
@@ -2546,6 +2591,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	projector := observe.NewProjector(e.Backends().Queue, app.Stream())
 	if err = projector.Start(ctx); err != nil {
 		app.Stop()
+		closeAssistant(ctx, assistantSvc, log)
 		return nil, err
 	}
 
@@ -2600,7 +2646,8 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	cancelSeed()
 	runs.Start(ctx)
 
-	surface := &httpSurface{app: app, projector: projector, runs: runs, auth: humans.SignIn}
+	surface := &httpSurface{app: app, projector: projector, runs: runs, auth: humans.SignIn,
+		assistant: assistantSvc}
 	// THE PUBLIC LISTENER WAS BOUND BY THE SAME RULE THE APP SERVES ONE BY
 	// ([api.PublicListener]), and a disagreement is a node that would serve
 	// its webhooks on no socket, or leave one bound that answers `starting`

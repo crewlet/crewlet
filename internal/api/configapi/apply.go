@@ -243,6 +243,10 @@ type draft struct {
 	// [Service.mayReach] admitted the caller to, which is answered even when
 	// it changes nothing (admission.go).
 	addressedCheck bool
+	// charter is a write of the charter alone ([Service.putCharter]), which
+	// is admitted on the principles' own verb while what it changes is the
+	// charter's settings and nothing else (admission.go).
+	charter bool
 	// by is who the write is made as: the credential [Service.Authorize]
 	// judges, and the author the revision records — one value for both, so
 	// the party a write was admitted as is the party it is stored under.
@@ -346,7 +350,8 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	// the caller may not change, rather than what is wrong with parts of the
 	// company they cannot read.
 	if d.principal != nil {
-		if err := admit(ctx, *d.principal, b.prior, company, d.addressedCheck); err != nil {
+		if err := admit(ctx, *d.principal, b.prior, company, d.addressedCheck,
+			d.charter); err != nil {
 			return nil, err
 		}
 	}

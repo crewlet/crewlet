@@ -277,7 +277,7 @@ func (c *Conn) Respond(ctx context.Context, r Response) []Result {
 	c.total.CacheWrite += u.CacheWrite
 	c.mu.Unlock()
 
-	c.req.Send(llm.Delta{Content: r.Text})
+	c.req.Send(llm.Delta{Content: unstreamed(r)})
 	calls := make([]Call, len(r.Calls))
 	seen := make([]llm.TurnCall, len(r.Calls))
 	for j, call := range r.Calls {

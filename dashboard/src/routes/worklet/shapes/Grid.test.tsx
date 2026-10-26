@@ -316,14 +316,14 @@ test("a human removal is drawn as a person in the trash column", () => {
 // BESIDE A PEEK AT 1280 THE LIST IS ABOUT 450PX, and with every column kept
 // the title was 70px of "Which regi…". The title takes a floor in both sets;
 // what gives way instead is the grid's to decide (`DataGrid.test.tsx`).
-test("the title keeps a floor and the status is drawn whole, in both sets", () => {
+test("the title keeps a floor and the key and the status are drawn whole, in both sets", () => {
   for (const shape of ["list", "table"] as const) {
     const { container } = mount(shape, [row()]);
     const template =
       container.querySelector<HTMLElement>(".crewlet-data-grid")?.style.gridTemplateColumns ?? "";
     expect(template, shape).toMatch(/minmax\(16rem, 1fr\)/);
-    // And the status word is never cut to fit.
-    expect(template, shape).toContain("max-content");
+    // And neither the key nor the status word is ever cut to fit.
+    expect(template.match(/max-content/g)?.length ?? 0, shape).toBe(2);
     cleanup();
   }
 });

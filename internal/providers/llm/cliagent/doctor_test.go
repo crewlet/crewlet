@@ -43,7 +43,7 @@ func TestDoctorReportsAMissingBinary(t *testing.T) {
 	if !strings.Contains(joined, "ENGINE host") {
 		t.Errorf("the problem does not say where the CLI must be installed:\n%s", joined)
 	}
-	if d.Smoke != "skipped — no binary to run" {
+	if d.Smoke != "skipped: no binary to run" {
 		t.Errorf("Smoke = %q, want a skip rather than a second failure", d.Smoke)
 	}
 }
@@ -376,7 +376,7 @@ func TestTheReportCarriesEveryLineTheDocsPromise(t *testing.T) {
 		WrittenFor: "Claude Code CLI 2.x", StateDir: "/var/lib/crewlet/llm-cli/subscription",
 		Credentials: "present", TokenEnv: "set", SignIn: "credential files in /var/lib",
 		TokenUsage: "reported by CLI",
-		Smoke:      "ok — 812 in / 34 out",
+		Smoke:      "ok: 812 in / 34 out",
 	}
 	var out strings.Builder
 	d.Render(&out)
@@ -452,7 +452,8 @@ func TestTheDoctorsProbesAskAsASeatAsks(t *testing.T) {
 		"append_system_prompt": map[string]any{"args": []any{"--append-system-prompt", "{system}"}},
 	})
 	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
-	if !strings.HasPrefix(d.Web, "ok") {
+	// The web line leads with the entry's stance, then the probe's verdict.
+	if !strings.HasPrefix(d.Web, "allowed; ok") {
 		t.Fatalf("web = %q — the fake did not answer the probe it was asked", d.Web)
 	}
 	var probes [][]string
@@ -462,9 +463,9 @@ func TestTheDoctorsProbesAskAsASeatAsks(t *testing.T) {
 			probes = append(probes, argv)
 		}
 	}
-	if len(probes) != 3 {
-		t.Fatalf("recorded %d completions, want the smoke test and the two isolation "+
-			"probes: %q", len(probes), probes)
+	if len(probes) != 4 {
+		t.Fatalf("recorded %d completions, want the smoke test and the three isolation "+
+			"probes (shell, file read, web): %q", len(probes), probes)
 	}
 	for _, argv := range probes {
 		system, ok := valueAfter(argv, "--append-system-prompt")

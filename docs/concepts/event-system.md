@@ -245,6 +245,16 @@ operator_acted             # an operator tool call that is not a proven read,
 backup_requested           # a POST /backup that began copying: dir, whether
                            # it finished, and how many streams. Which node's
                            # disk holds it is the envelope's `node`
+assistant_conversation_read # an administrator's compliance read of a
+                           # person's Dashboard Assistant conversation (D06):
+                           # the reader, conversation_id, owner_id and the
+                           # reason they gave; the conversation stays sealed
+assistant_turn_completed   # one segment of a person's Dashboard Assistant
+                           # turn ending: conversation_id, assistant_turn_id,
+                           # state, error_code, prompt_version, model, and
+                           # every step's tool, route pattern, outcome,
+                           # status and bytes; never an argument, an answer
+                           # or the question
 seat_paused                # a person paused a seat (paused_by,
                            # paused_by_kind and operator_id from
                            # iam.ActorFor, reason, stop_running, paused_at).
@@ -372,8 +382,9 @@ agent_phase_completed      # one phase's durable record: prompts, response,
                            # tool_use; absent where the backend reported
                            # none). A failed phase carries `error_kind` — a
                            # provider kind (rate_limit, auth, timeout,
-                           # server, fatal), budget_exhausted, stopped for a
-                           # phase a person ended, canceled, or error
+                           # server, fatal, canceled), budget_exhausted,
+                           # stopped for a phase a person ended, canceled,
+                           # or error
 auxiliary_spend            # what the seat's auxiliary model cost for one key —
                            # stage (turn, reflection, background, operator),
                            # purpose, seat or person, turn, model, provider

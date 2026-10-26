@@ -124,11 +124,5 @@ type EngineKeys struct {
 
 // StaleUnder is how many engine rows are sealed under a key other than active.
 func (k EngineKeys) StaleUnder(active string) int {
-	stale := 0
-	for key, n := range k.ByKey {
-		if key != active {
-			stale += n
-		}
-	}
-	return stale
+	return KeyCounts(k.ByKey).Outside(active)
 }

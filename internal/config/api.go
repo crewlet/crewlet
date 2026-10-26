@@ -1057,6 +1057,16 @@ func (a *APIAuth) validateTokens(path Path, serving bool) error {
 				// answered over /config and written to a log.
 				p.add(at(tp, "token"), ErrUnknownValue, "%s", err.Error())
 			}
+			// A VALUE SHAPED AS AN ASSISTANT GRANT could never
+			// authenticate as itself: the guard reads that shape as
+			// a grant before it compares any Tier A token, and
+			// refuses every one presented over the wire.
+			if strings.HasPrefix(t.Token, iam.AssistBearerPrefix) {
+				p.add(at(tp, "token"), ErrUnknownValue,
+					"a token can't start with %q, which the engine reserves "+
+						"for the Dashboard Assistant's grants. Generate one "+
+						"with `crewlet secrets keygen`", iam.AssistBearerPrefix)
+			}
 		}
 
 		if len(t.Grants) == 0 {

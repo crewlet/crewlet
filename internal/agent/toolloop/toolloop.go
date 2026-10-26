@@ -191,6 +191,21 @@ type Surface interface {
 	Phase() string
 }
 
+// Refuser is a [Surface] that keeps a record of the calls this loop answers
+// without running them: a call whose arguments did not parse, one the run was
+// no longer taking, one that arrived after the call that parked its phase.
+// Admit never sees such a call, so a surface that records its steps as it runs
+// them would otherwise show a model that asked for something and nothing
+// happened, with no step saying so.
+//
+// Optional: a surface with no record of its own does not implement it, and the
+// loop answers the call exactly as it does for one that does.
+type Refuser interface {
+	// Refused records that call did not run, and why, in the words the
+	// model was answered with.
+	Refused(ctx context.Context, call llm.ToolCall, reason string)
+}
+
 // Admitted is one call a [Surface] admitted, bound to its place in the run's
 // call log: run it once, with the call as the CLI made it.
 //
@@ -1059,6 +1074,18 @@ type Config struct {
 	// is finished. Off leaves the provider's text unstreamed.
 	StreamPartials bool
 
+	// OwnPrompt says the loop's system prompt is its whole instruction, so
+	// its runs are sent as calls that replace a vendor harness's own prompt
+	// rather than keep it ([llm.Request.Agent] false). The zero value is a
+	// seat at work, whose runs keep the harness's prompt and add the seat's
+	// after it: every phase of a turn and every worker.
+	//
+	// The Dashboard Assistant sets it. It is not a seat: it acts as a
+	// person, its CLI is run with no tool of its own beside the engine's
+	// server, and the harness's prompt is written for a coding agent at a
+	// terminal whose tools it would describe.
+	OwnPrompt bool
+
 	// OnProgress receives the live view: when a run opens, as each model
 	// response is read, before and after each tool call, and when the run
 	// ends. Failures are the caller's business — telemetry must never fail
@@ -1271,9 +1298,9 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		completion, err := cfg.Provider.Complete(runCtx, llm.Request{
 			Messages: msgs,
 			Tools:    d,
-			// Every caller of this loop is a seat at work — a phase of
-			// its turn or a worker it delegated to — and nothing else is.
-			Agent:   true,
+			// A seat at work (a phase of its turn or a worker it
+			// delegated to) unless the loop's prompt is its own.
+			Agent:   !cfg.OwnPrompt,
 			OnDelta: onDelta,
 		})
 		took := time.Since(began)
@@ -1496,7 +1523,12 @@ func streamTo(cfg Config, rec *sync.Mutex, partial **Partial, d *dispatcher, pub
 	}
 }
 
-func charge(ctx context.Context, meter BudgetMeter, tokens int) error {
+// Charge records tokens a model call has already spent on meter, and answers a
+// refusal as the loop reads one: a [*BudgetError], or the counter's own error
+// when it could not be reached. Exported for a caller that spends tokens
+// outside this loop and must charge them by the same rule: the Dashboard
+// Assistant's deep-work run, whose tokens are spent in a coding CLI's own loop.
+func Charge(ctx context.Context, meter BudgetMeter, tokens int) error {
 	if meter == nil || tokens <= 0 {
 		return nil
 	}

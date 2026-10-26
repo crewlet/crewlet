@@ -45,7 +45,8 @@
  */
 
 import { useEffect, useSyncExternalStore, type ComponentType, type ReactNode } from "react";
-import { Skeleton, ToastProvider } from "@crewlethq/ui";
+import { Skeleton } from "@crewlethq/ui";
+import { InsetToastProvider } from "./toastInset.tsx";
 import { Shell } from "./Shell.tsx";
 import { StepUpHost } from "./StepUp.tsx";
 import { AppAnnouncer } from "./announcer.tsx";
@@ -460,7 +461,10 @@ export function App() {
     // Account link, sign-outs and results could not be tapped. The kit names a
     // host for a FULLSCREEN container only (the org builder keeps its own),
     // since a fullscreen element paints nothing outside itself.
-    <ToastProvider>
+    //
+    // THE STACK KEEPS CLEAR OF THE ASSISTANT, which the frame and the panel
+    // say through `toastInset.tsx`.
+    <InsetToastProvider>
       {/* EAGER, AND OUTSIDE THE FRAME: the session's routing, the step-up
           ceremony and the one live region are what a sign-in screen and a
           framed one both need, so none may tear them down and none of them
@@ -472,6 +476,6 @@ export function App() {
           `announcer.tsx`. */}
       <AppAnnouncer />
       <Frame />
-    </ToastProvider>
+    </InsetToastProvider>
   );
 }

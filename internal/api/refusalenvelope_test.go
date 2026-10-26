@@ -44,7 +44,7 @@ import (
 //     header and the envelope together.
 func TestTheSettingsSurfacesRefuseInTheEnvelope(t *testing.T) {
 	t.Parallel()
-	surfaces := []string{"configapi", "secretsapi", "setupapi", "workapi",
+	surfaces := []string{"assistantapi", "configapi", "secretsapi", "setupapi", "workapi",
 		"operator", "webhooks"}
 	walked := 0
 	for _, dir := range surfaces {

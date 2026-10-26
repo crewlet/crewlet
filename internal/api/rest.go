@@ -204,14 +204,28 @@ func (a *App) mountReads(mux httpjson.Router) {
 	// everybody's, and a seat's live call reaches a reader the seat's
 	// trail is not open to as its status alone, exactly as the push hands
 	// it to them.
-	mux.Handle("GET /agents", a.serveFrom(stream.KindAgents,
-		func(stream.Audience) any { return a.stream.Roster() }))
-	mux.Handle("GET /org", a.serveFrom(stream.KindOrg,
-		func(stream.Audience) any { return a.stream.Org() }))
-	mux.Handle("GET /tools", a.serveFrom(stream.KindTools,
-		func(stream.Audience) any { return a.stream.Tools() }))
-	mux.Handle("GET /stream/snapshot", a.serveFrom(stream.KindSnapshot,
-		func(audience stream.Audience) any { return a.stream.Snapshot(audience) }))
+	for _, route := range a.overviewRoutes() {
+		mux.Handle(route.pattern, a.serveFrom(route.kind, route.build))
+	}
+}
+
+// overviewRoute is one of the reads served from the stream service.
+type overviewRoute struct {
+	pattern string
+	kind    stream.Kind
+	build   func(stream.Audience) any
+}
+
+// overviewRoutes are the four reads served from the stream service rather than
+// the registry, in mount order.
+func (a *App) overviewRoutes() []overviewRoute {
+	return []overviewRoute{
+		{"GET /agents", stream.KindAgents, func(stream.Audience) any { return a.stream.Roster() }},
+		{"GET /org", stream.KindOrg, func(stream.Audience) any { return a.stream.Org() }},
+		{"GET /tools", stream.KindTools, func(stream.Audience) any { return a.stream.Tools() }},
+		{"GET /stream/snapshot", stream.KindSnapshot,
+			func(audience stream.Audience) any { return a.stream.Snapshot(audience) }},
+	}
 }
 
 // serveNamed answers one registry question from a named route.
@@ -238,6 +252,10 @@ func (a *App) serveNamed(what string, path map[string]string) http.HandlerFunc {
 // with ([stream.Service.AudienceFor]), and what build returns is shaped for it
 // ([stream.ShapeFor]), so the whole bundle carries only what that caller may
 // read.
+//
+// A PRINCIPAL ACTING THROUGH THE ASSISTANT reads them as its person does
+// (ADR-0052's parity): each is the overview its person's socket is pushed,
+// shaped for the same audience, and none carries a credential.
 func (a *App) serveFrom(kind stream.Kind, build func(stream.Audience) any) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		principal, ok := auth.Caller(w, r)

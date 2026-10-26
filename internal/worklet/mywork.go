@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -269,7 +270,7 @@ func readMyWork(ctx context.Context, tx *sql.Tx, handle string, now time.Time,
 	// task due today marked overdue on one screen and not on the other.
 	// Never the process's own clock, which would put one node's rows a
 	// day out from another's.
-	anchor, err := ResolveDate("today", now, loc)
+	anchor, err := period.Resolve("today", now, loc)
 	if err != nil {
 		return err
 	}

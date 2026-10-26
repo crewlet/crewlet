@@ -38,6 +38,8 @@ const READER: ViewerState = {
   asking: false,
   configWriter: false,
   configManagedBy: [],
+  assistant: "disabled",
+  assistantModel: null,
 };
 
 class InertWebSocket {

@@ -75,6 +75,9 @@ workers: {...}                          # optional — reusable delegate templat
 roles: [...]                            # optional — root-level org-wide agents (see below)
 units: [...]                            # optional — org structure tree (see below)
 
+assistant: {...}                        # optional, the Dashboard Assistant; off unless enabled
+                                        #   (see "The Dashboard Assistant" below)
+
 turn_engine:                            # optional — executor/reviewer turn config
   max_iterations: 3                     # hard cap on self_iterate loops per turn
   max_tool_rounds: 24                   # max tool-call rounds within one executor run
@@ -322,6 +325,97 @@ A schedule that names no `timezone` of its own fires on the company's
 See the [Scheduling](../concepts/scheduling.md) concept doc for delivery
 modes (`each` / `lead`), at-most-once semantics, catchup, and the
 per-task wall-clock timeout.
+
+### The Dashboard Assistant
+
+The assistant is a drawer in the dashboard that answers a person's questions
+about the company and prepares changes for them to approve. It has no
+identity of its own: every read is a request made as the signed-in person,
+and nothing is written until that person approves the change it previews. It
+is **off** unless the company turns it on.
+
+```yaml
+providers:
+  llm:
+    assistant:                          # a dedicated entry, recommended
+      agent: claude-code
+      model: sonnet
+      timeout_seconds: 90               # one interactive round
+      max_concurrent: 4                 # its own slots, apart from the seats'
+      overrides: { web_tools: denied }  # required for every assistant entry
+
+assistant:
+  enabled: true                         # absent or false: off
+  llm: [assistant]                      # providers.llm keys, a fallback chain
+  max_steps: 30                         # tool steps per turn, 1..40
+  turn_timeout_seconds: 900             # longest turn, 30..1200
+  proposal_ttl_seconds: 900             # how long a proposal waits, 60..3600
+  retention_days: 30                    # conversation history, 1..365
+  token_budget: { day: 200000 }         # per person, optional
+  deep_work:                            # optional: absent is quick mode only
+    llm: assistant-deep                 # an agent-mode Claude Code entry
+    timeout_seconds: 1200               # one run's wall clock, 60..1200
+    max_steps: 150                      # rounds and Crewlet calls a task makes, 10..400
+    max_tokens: 3000000                 # tokens a task may spend, 10000..20000000
+```
+
+| Field | Default | Meaning |
+|---|---|---|
+| `enabled` | off | Runs the assistant. A pointer, so an absent key and `false` both mean off. |
+| `llm` | none | The model chain, first key first, in the shape a seat's `llm_auxiliary` takes. Required when `enabled` is true. |
+| `max_steps` | 30 | The most tool steps one turn may take: enough to look a route up, read what it touches and propose the change. |
+| `turn_timeout_seconds` | 900 | The longest one turn may run. Every round is a CLI launch of fifteen to twenty-five seconds. |
+| `proposal_ttl_seconds` | 900 | How long a proposed change waits for its owner's approval before it expires. |
+| `retention_days` | 30 | How long a person's conversations are kept. |
+| `token_budget` | none | Each person's ceiling per calendar window, the shape of [a token budget](#token-budgets), charged on top of the company's own. |
+| `deep_work.llm` | none | The entry deep work runs on: Claude Code in `mode: box`, whose own shell, files and web tools a deep-work run uses. Placed in its own `run_in`, else the first configured `e2b` or image-backed `container` cell, else the engine host under OS confinement ([Running the Dashboard Assistant](../guides/assistant.md#deep-work)). |
+| `deep_work.timeout_seconds` | 1200 | The longest one deep-work run takes. Never past the turn's read grant, which is why it is also the ceiling. |
+| `deep_work.max_steps` | 150 | The most agentic rounds and Crewlet calls one deep-work task makes, across the runs an approval continues. |
+| `deep_work.max_tokens` | 3000000 | The most tokens one deep-work task spends before it is stopped; the person's and the company's budgets still apply. |
+
+A numeric field left out, or `0`, takes its default; a value outside its range
+is refused naming the field.
+
+**What one person may spend.** Every round of a person's turn is charged to the
+company's budget and, where `token_budget` is set, to that person's own, across
+every node of the fleet. A person whose own window is spent, or whose company's
+is, is refused before the next model round with `budget_exhausted` naming which
+(`person` or `org`), and starts again when the window turns over. Beside the
+tokens, a person may have two turns running on a node and start twenty a minute
+across the whole fleet.
+
+**Every model in the chain must reach nothing the person's requests did not
+return.** Each `llm` key must name a `providers.llm` entry that is:
+
+- in **host mode**, where the CLI's one tool source is the engine's `crewlet`
+  server serving the person's own requests. An entry with `mode: box` is
+  refused: box mode runs the CLI with its own tools beside the engine's, which
+  never pass the engine's guard.
+- on a profile whose run has **no tool of its own, by construction**: its
+  profile declares `local_tools: denied` and a measured `tools_off`, and the
+  argv every assistant call runs carries it, with an `mcp` allow list naming
+  the engine's tools alone. A CLI with its own shell or file
+  reader on the engine host could read whatever the engine user can, the
+  engine's own data and keys included. Today that is `claude-code` and `pi`;
+  `codex` keeps `apply_patch`, which has no switch, and `opencode`'s policy has
+  not been measured to remove its tools, so both are refused.
+- **`web_tools: denied`**, set on the entry with
+  `overrides: { web_tools: denied }`. A page the model fetched itself is text
+  no authority decision saw, and a fetch is a way out for the person's data.
+  Seats keep their web tools; only the entry that sets this loses them. The
+  CLIs that can deny web are `claude-code`, `codex`, `opencode` and `pi`
+  (see [Tool calls in host mode](../concepts/llm-backends.md#tool-calls-in-host-mode));
+  any other is refused.
+
+A document that breaks one of these is refused by `crewlet validate` and by
+every `/config` write, each naming the chain member and the entry field to
+change. A stored revision that somehow carries one still applies, so every
+seat keeps running, and the assistant stays unavailable with that reason
+until the chain is fixed. Run `crewlet llm doctor assistant` before turning
+it on: on the exact argv the assistant runs it asks the CLI to run a shell
+command, to read a file the doctor just wrote and to fetch a page, and reports
+any of the three that succeeded as a problem. Nothing records that run, so the
+chain cannot require it: it is the operator's check to make.
 
 ---
 
@@ -701,12 +795,15 @@ stream:
                                     #   `no suitable peers for placement,
                                     #   insufficient storage` — naming whichever
                                     #   stream was provisioned last. Bounds:
-                                    #   6 GiB..64 TiB — the 4.5 GiB the five
-                                    #   state logs reserve at their smallest,
-                                    #   and about 1.5 GiB for every stream
-                                    #   that reserves nothing — and it must not
-                                    #   be smaller than the ceilings declared
-                                    #   inside it.
+                                    #   6 GiB..64 TiB, and it must not be
+                                    #   smaller than the ceilings declared
+                                    #   inside it. The eight state logs
+                                    #   reserve 7.5 GiB at their smallest, so
+                                    #   a value the bounds admit can be short
+                                    #   of what a node boots in: `crewlet
+                                    #   validate` warns below the least a
+                                    #   fresh node of the configuration
+                                    #   reserves (see the deployment guide).
                                     #   REFUSED for `type: nats` — an external
                                     #   cluster's account limits are its own
                                     #   operator's, and this node reads them back
@@ -992,6 +1089,22 @@ stream:
                                     #   refuses the append, and the top of it
                                     #   is kept for gate records as on the
                                     #   tracker's log
+  # assistant_log_max_bytes: 536870912
+                                    #   the Dashboard Assistant's log, where
+                                    #   every person's conversations, turns
+                                    #   and proposals are recorded (64 MiB..
+                                    #   64 GiB). UNSET TAKES 512 MiB, sized
+                                    #   by how many people ask the
+                                    #   assistant rather than by the disk,
+                                    #   and scaled down as far as 64 MiB
+                                    #   where the broker is short:
+                                    #   about two weeks of a completely
+                                    #   blocked trim at the reference
+                                    #   company's rate. Crossing it refuses
+                                    #   the append, and the top of it is kept
+                                    #   for gate records. How long a
+                                    #   conversation is kept is the company
+                                    #   document's `assistant.retention_days`
   # tracker_retention:              # when the log may be trimmed. Every term
                                     #   here is a statement about the OPERATOR's
                                     #   estate rather than the company's policy,
@@ -1489,7 +1602,9 @@ in when an administrator has locked themselves out. Each entry states its own
 where it is pinned, naming only `admin`, `worklet`, `doclet` and `artifacts`
 (an unknown name is refused naming the set, and `admin` on a `refuse` node is refused
 too) — and its value must be at least 26 characters, checked on what the
-`${VAR}` resolves to.
+`${VAR}` resolves to. A value may not start with `cwl_ast_`, the prefix the
+engine reserves for the Dashboard Assistant's in-process grants: the request
+guard reads that shape as a grant, so such a token could never authenticate.
 
 **`secrets.keys` is required on every node**, whether or not a port is set.
 Every record on every state log is signed and verified under the keyring, the

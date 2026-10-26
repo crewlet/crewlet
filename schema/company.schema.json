@@ -1,5 +1,136 @@
 {
   "$defs": {
+    "Assistant": {
+      "additionalProperties": false,
+      "properties": {
+        "deep_work": {
+          "$ref": "#/$defs/AssistantDeepWork",
+          "description": "Deep work: the assistant hands a large task to a coding CLI running its own tools in a sandbox, reaching Crewlet only through the person's own assistant tools. Absent: quick mode only."
+        },
+        "enabled": {
+          "description": "Run the Dashboard Assistant for this company. Absent or false: off.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "llm": {
+          "anyOf": [
+            {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
+            },
+            {
+              "items": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "null"
+                ]
+              },
+              "type": "array"
+            }
+          ],
+          "description": "providers.llm keys the assistant runs on, a fallback chain. Required when enabled. Each must be a text-mode entry denying local tools and, through overrides.web_tools, web tools."
+        },
+        "max_steps": {
+          "description": "Most tool steps one assistant turn may take, 1..40. Absent: 30.",
+          "maximum": 40,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "proposal_ttl_seconds": {
+          "description": "How long a proposed change waits for approval, 60..3600 seconds. Absent: 900.",
+          "maximum": 3600,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "retention_days": {
+          "description": "How long a person's assistant conversations are kept, 1..365 days. Absent: 30.",
+          "maximum": 365,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "token_budget": {
+          "$ref": "#/$defs/TokenBudget",
+          "description": "Each person's assistant token ceilings per calendar window on the company clock: day, week and month, each optional. Absent = no per-person ceiling; the company's own budget still applies."
+        },
+        "turn_timeout_seconds": {
+          "description": "Longest one assistant turn may run, 30..1200 seconds. Absent: 900.",
+          "maximum": 1200,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "AssistantDeepWork": {
+      "additionalProperties": false,
+      "properties": {
+        "llm": {
+          "description": "providers.llm key deep work runs on: an agent-mode entry driving claude-code. Required.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "max_steps": {
+          "description": "Most agentic rounds and Crewlet tool calls one deep-work run may make, 10..400. Absent: 150.",
+          "maximum": 400,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_tokens": {
+          "description": "Most tokens one deep-work run may spend before it is stopped, 10000..20000000. Absent: 3000000. The person's and the company's budgets still apply.",
+          "maximum": 20000000,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "timeout_seconds": {
+          "description": "Longest one deep-work run may take, 60..1200 seconds. Absent: 1200.",
+          "maximum": 1200,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "Atlassian": {
       "additionalProperties": false,
       "properties": {
@@ -3762,6 +3893,9 @@
   "properties": {
     "artifacts": {
       "$ref": "#/$defs/CompanyArtifacts"
+    },
+    "assistant": {
+      "$ref": "#/$defs/Assistant"
     },
     "integrations": {
       "$ref": "#/$defs/Integrations"

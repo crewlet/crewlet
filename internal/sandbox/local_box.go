@@ -159,15 +159,53 @@ type directBox struct {
 	// readCap is the whole-read cap the suite gave the box, zero — every
 	// box in production — for [MaxFileBytes]: see [readLimit].
 	readCap int
+	// confine is the boundary every command runs in, nil for a seat's
+	// unconfined Direct cell.
+	confine *boxConfine
 }
 
 var _ Sandbox = (*directBox)(nil)
 
+// boxConfine is one box's confinement: the host's mechanism and its rules.
+type boxConfine struct {
+	host  *HostConfinement
+	rules confineRules
+}
+
+// argv is a shell command line as this box runs it: confined where the box
+// is, as written where it is not.
+func (b *directBox) argv(cmd string) ([]string, error) {
+	argv := []string{"/bin/sh", "-c", cmd}
+	if b.confine == nil {
+		return argv, nil
+	}
+	wrapped, err := b.confine.host.wrap(b.confine.rules, argv)
+	if err != nil {
+		return nil, localErrorf("local sandbox %s: %v", b.layout.id, err)
+	}
+	return wrapped, nil
+}
+
 func (b *directBox) ID() string   { return b.layout.id }
 func (b *directBox) Home() string { return b.layout.home() }
 
-// childEnv is the allowlisted host environment plus the box's home and the run
-// env.
+// TempRootEnv is every variable a process in a host box takes its temporary
+// directory from, each pointed at the box's own .tmp.
+//
+// ONE LIST, because a confined box may write only inside itself, and a temp
+// root left at its default is a write outside it. TMPDIR alone was not
+// enough: Claude Code roots its per-uid temp directory, where its Bash tool
+// keeps each command's working state, at CLAUDE_CODE_TMPDIR or else at a
+// literal /tmp, never at TMPDIR (measured on 2.1.310). Under the host's
+// confinement every shell command a deep-work run made failed before it ran
+// ("EPERM: operation not permitted, mkdir '/tmp/claude-<uid>/...'"). TMP and
+// TEMP are what Python's tempfile and other runtimes read before falling back
+// to /tmp. A container or an E2B VM needs none of this: its /tmp is inside the
+// boundary already.
+var TempRootEnv = []string{"TMPDIR", "TMP", "TEMP", "CLAUDE_CODE_TMPDIR"}
+
+// childEnv is the allowlisted host environment plus the box's home, its
+// temporary directory and the run env.
 //
 // Allowlisted for the same reason the CLI LLM backend allowlists: the engine's
 // environment holds the org's chat token, its collector credential
@@ -182,7 +220,9 @@ func (b *directBox) childEnv(extra map[string]string) map[string]string {
 	env["XDG_DATA_HOME"] = filepath.Join(home, ".local", "share")
 	env["XDG_STATE_HOME"] = filepath.Join(home, ".local", "state")
 	env["XDG_CACHE_HOME"] = filepath.Join(home, ".cache")
-	env["TMPDIR"] = filepath.Join(home, ".tmp")
+	for _, name := range TempRootEnv {
+		env[name] = b.layout.tmp()
+	}
 	for key, value := range b.env {
 		env[key] = value
 	}
@@ -213,8 +253,12 @@ func (b *directBox) Exec(ctx context.Context, cmd string, opts ExecOptions) (Exe
 	if err != nil {
 		return ExecResult{}, err
 	}
+	argv, err := b.argv(cmd)
+	if err != nil {
+		return ExecResult{}, err
+	}
 	return runHost(ctx, hostCommand{
-		argv:    []string{"/bin/sh", "-c", cmd},
+		argv:    argv,
 		cwd:     dir,
 		env:     b.childEnv(opts.Env),
 		timeout: time.Duration(opts.TimeoutSec * float64(time.Second)),
@@ -248,7 +292,11 @@ func (b *directBox) StartBackground(ctx context.Context, cmd string, opts ExecOp
 	// Not exec.CommandContext: the job must outlive the turn that starts it,
 	// so binding it to the caller's context would kill it at the first
 	// return.
-	proc := exec.Command("/bin/sh", "-c", cmd) //nolint:noctx // deliberate; see above
+	argv, err := b.argv(cmd)
+	if err != nil {
+		return "", err
+	}
+	proc := exec.Command(argv[0], argv[1:]...) //nolint:noctx // deliberate; see above
 	proc.Dir = dir
 	proc.Env = hostbox.Environ(b.childEnv(opts.Env))
 	procgroup.Detach(proc)

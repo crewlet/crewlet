@@ -2,7 +2,9 @@ package authz
 
 import (
 	"context"
+	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -242,6 +244,11 @@ var relationClasses = []Class{
 // what it should not: an artifact the caller holds no relation to is answered
 // not found, exactly as the shared class answers them ([concealed]).
 //
+// THEN THE ASSISTANT'S BARS, for the same reason and with the same
+// concealment ([assistBar]): a request made through the Dashboard Assistant
+// is refused a verb it never takes, and, under a read grant, a row it only
+// carries as an approved request or a row that needs a person present.
+//
 // THE ADMIN PATH IS CHECKED BEFORE THE CHART, on every class that has one,
 // because the chart can fail and the permission cannot: an administrator must
 // not be told "I cannot tell" by a node that is behind. [ClassShared] asks an
@@ -261,6 +268,34 @@ var relationClasses = []Class{
 // because every earlier answer is one a fresher proof would not change.
 func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Chart,
 	now time.Time) Decision {
+
+	return decide(ctx, p, a, o, chart, now, Checking(ctx))
+}
+
+// checkKey marks a request context as a check ([WithCheck]).
+type checkKey struct{}
+
+// WithCheck is ctx marked as a check of its route's write: what the router
+// sets for a request [IsCheck] admits, so every decision the handler asks
+// beside the route's own (a seat decided where it sits, the company's own
+// verb) is decided as the same check, at the read's proof.
+func WithCheck(ctx context.Context) context.Context {
+	return context.WithValue(ctx, checkKey{}, true)
+}
+
+// Checking reports a context [WithCheck] marked.
+func Checking(ctx context.Context) bool {
+	marked, _ := ctx.Value(checkKey{}).(bool)
+	return marked
+}
+
+// decide is [Decide] for a request that is, or is not, a check of its write
+// ([IsCheck], ADR-0055). A check is the write's verb decided by every rule the
+// write is, but two: the proof it asks is the read's, since it changes
+// nothing, and an assistant's read grant may carry it on a row the assistant
+// otherwise sends only as an approved request ([assistBar]).
+func decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Chart,
+	now time.Time, check bool) Decision {
 
 	if !p.Stage.MayAct() {
 		return Decision{Reason: ReasonStage}
@@ -287,6 +322,9 @@ func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 	if throughToken && r.presence == PresenceRequired {
 		return concealed(ctx, p, r, o, chart, Decision{Reason: ReasonTokenRefused})
 	}
+	if bar, barred := assistBar(p, a, r, check); barred {
+		return concealed(ctx, p, r, o, chart, bar)
+	}
 	d := withApp(p, r, decideClass(ctx, p, r, o, chart))
 	// THE PROOF LAST, and only over an ADMISSION: a refusal is already
 	// the answer, and an unknown is already "ask me again". See the
@@ -303,10 +341,83 @@ func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 		return Decision{Reason: ReasonTokenRefused}
 	}
 	need := recencyFor(r, d)
+	if check {
+		need = iam.RecencyAny
+	}
 	if p.Proved(need, now) {
 		return d
 	}
 	return Decision{Reason: ReasonStepUp, Recency: need, Grants: d.Grants}
+}
+
+// assistBar is the bar a request made through the Dashboard Assistant meets
+// on this row, and whether it meets one (ADR-0052).
+//
+// THE CLASS OF THE CREDENTIAL DECIDES, NEVER ITS SPELLING: a principal whose
+// [iam.Principal.Via] names the assistant's class is the assistant's, whether
+// or not what follows parses, exactly as internal/iamdomain reads a machine
+// token's. [iam.Principal.Assisted] answers false for a malformed name, and a
+// bar keyed on it would admit the assistant through any row whose grant id
+// it got wrong.
+//
+// TWO BARS, BOTH FACTS ABOUT THE VERB AND THE GRANT, so both are asked before
+// the class, beside the person-present bar they mirror:
+//
+//   - a verb the assistant never takes ([assistantNever]) is
+//     [ReasonAssistRefused]. The zero class reads as never, so a row nobody
+//     decided fails closed here as well as failing the build;
+//   - a read grant on a row the assistant only carries as an approved
+//     request, or on a row needing a person at the keyboard on ANY arm, is
+//     [ReasonAssistScope]. Any scope but exec reads as read, so a grant whose
+//     scope is missing or unknown reaches reads alone.
+//
+// A PERSON-PRESENT ROW IS ADMITTED TO AN EXEC GRANT, and that is the presence
+// it asks for rather than an exception to it. The row keeps a machine token
+// out because a token proves nobody is at a keyboard; an exec grant carries
+// exactly one request whose server-rendered preview the person approved from
+// their own browser, a moment ago, under their own session and Origin, at the
+// step-up the row asks (ADR-0051). That approval IS the person at the
+// keyboard, deciding this request. A read grant carries no such gesture, so it
+// is refused every presence row, the self arm of a row that spares it for a
+// machine token included.
+//
+// BEFORE THE CLASS rather than after it admits, unlike the step-up: no answer
+// the chart could give would lift either bar, and asked after the class a
+// node that could not read its chart would answer "ask me again" (503) to a
+// grant that can never take the verb. And an exec grant is not held to the
+// one verb its proposal named, because a write asks dotted verbs from inside
+// its tool; the request guard binds an exec grant to the one request the
+// person approved, which is what limits it to one write.
+//
+// A CHECK OF AN APPROVED ROW IS A READ GRANT'S TOO ([IsCheck], ADR-0055): it
+// stores nothing, so it is the preview's question of the route, asked before
+// any card is drawn. The person-present bar still holds for it.
+func assistBar(p iam.Principal, a Action, r rule, check bool) (Decision, bool) {
+	if !strings.HasPrefix(p.Via, iam.AssistPrefix) {
+		return Decision{}, false
+	}
+	class := assistOf(a, r)
+	readable := class == AssistRead || (check && class == AssistApprove)
+	switch {
+	case class != AssistRead && class != AssistApprove:
+		return Decision{Reason: ReasonAssistRefused}, true
+	case p.AssistScope != iam.AssistScopeExec &&
+		(!readable || r.presence != PresenceOptional):
+		return Decision{Reason: ReasonAssistScope}, true
+	}
+	return Decision{}, false
+}
+
+// assistedRead reports a principal acting through an assistant grant that is
+// not an approved request's: a read grant, or one whose scope is missing or
+// unknown, which reads as read.
+func assistedRead(p iam.Principal) bool {
+	return strings.HasPrefix(p.Via, iam.AssistPrefix) && p.AssistScope != iam.AssistScopeExec
+}
+
+// readMethod reports a method that only reads.
+func readMethod(method string) bool {
+	return method == http.MethodGet || method == http.MethodHead
 }
 
 // concealed is a bar on the VERB (an agent taking a person's verb, a token

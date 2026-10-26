@@ -16,7 +16,8 @@ import {
   StatusDot,
   Tag,
 } from "@crewlethq/ui";
-import { ProductMark, VendorMark } from "@crewlethq/icons";
+import { VendorMark } from "@crewlethq/icons";
+import { ProductMark } from "@crewlethq/icons/product-mark";
 import { CheckGlyph, RotateCwGlyph } from "@crewlethq/icons/glyphs";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { relTime } from "~/lib/format.ts";

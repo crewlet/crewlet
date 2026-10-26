@@ -70,6 +70,12 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// delete.
 		"artifacts_anchors",
 		"artifacts_ops",
+		// THE ASSISTANT LOG'S TWO, for the same reason. Its conversations
+		// are NOT here: they are Replicated, so their retention rides a
+		// record (the trash reaper's retention purge) rather than a local
+		// delete.
+		"assistant_anchors",
+		"assistant_ops",
 		// THE CONFIGURATION ARCHIVE, which had no horizon at all: every
 		// node adopts its own copy of every revision it has ever met,
 		// one row per config write holding the whole document, and

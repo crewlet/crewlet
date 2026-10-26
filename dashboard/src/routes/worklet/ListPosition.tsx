@@ -22,7 +22,7 @@
  */
 
 import { ChevronDownGlyph, ChevronUpGlyph } from "@crewlethq/icons/glyphs";
-import { useAnyGridDriving } from "~/app/frame/DataGrid.tsx";
+import { useAnyDataGridDriving } from "@crewlethq/ui";
 import { useKeymap } from "~/app/keymap.ts";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -44,7 +44,7 @@ export function ListPosition({ address }: { address: string }) {
   // the same two rows of the keymap, because on a task opened from a list the
   // task IS the row. A grid on this page holds them first, so one press is
   // never two actions.
-  const gridHasKeys = useAnyGridDriving();
+  const gridHasKeys = useAnyDataGridDriving();
   useKeymap({
     "list.next": {
       run: () => around?.next && nav.to(["worklet", around.next], { list }),

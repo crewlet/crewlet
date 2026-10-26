@@ -67,7 +67,7 @@
 import { useMemo, useRef, useState } from "react";
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import { useParam, href } from "~/app/router.tsx";
-import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
@@ -84,6 +84,7 @@ import {
   TableEntityCell,
   TableKeyCell,
   TableTextCell,
+  peekClickHandler,
 } from "@crewlethq/ui";
 import { SEARCH_MODES, asSearchMode, modeLabel, servedNote } from "~/lib/search.ts";
 import { ClockGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
@@ -239,7 +240,7 @@ export function WorkSearch() {
             // meant should not lose the other nine to find out.
             onRowActivate={(r, e) => {
               const go = () => openPeek({ kind: "item", id: itemAddress(r) });
-              // THE GRID HANDS THIS BOTH EVENTS. `rowPeekHandler` is the
+              // THE GRID HANDS THIS BOTH EVENTS. `peekClickHandler` is the
               // frame's one copy of "which clicks mean elsewhere" and reads a
               // mouse event; the `enter` chord carries no button at all and is
               // never one of them.
@@ -247,7 +248,7 @@ export function WorkSearch() {
                 go();
                 return;
               }
-              rowPeekHandler(go)?.(e);
+              peekClickHandler(go)?.(e);
             }}
             // NO DEFAULT SORT. The answer's own order IS the result, and a
             // grid that re-sorted it by title would throw away the only

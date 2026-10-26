@@ -633,6 +633,13 @@ process for it, refused before any CLI exists. Those are yours to fix, and
 walking past one would only carry every call to the next entry, and its bill,
 until somebody read why. A CLI that started is never `fatal`, however it ended.
 
+A call its caller **cancelled** (`canceled`) stops the walk too: a person
+pressed Stop, a seat's turn was stopped, a node began to drain. The CLI was
+signalled with the call and exits as if it had crashed (143 for a Node
+runtime), so the kind is read from the caller's context and never from the
+exit status. Nothing is learned from it: no `provider_fallback` is logged,
+the next entry is not started, and the entry's readiness is left as it was.
+
 The natural chain is **one CLI, two ways to pay**: the plan first, the key
 after it.
 
@@ -1827,7 +1834,8 @@ directory would close that too, and was measured and not adopted: codex then
 reads even the call's `AGENTS.md` through its bubblewrap helper, and on a host
 where no user namespace can be created every call failed. That residual is why
 `local_tools: denied` is a claim `crewlet llm doctor` **measures** rather than
-one you take on trust.
+one you take on trust, and why the Dashboard Assistant, which needs a CLI left
+with no tool at all, refuses codex.
 
 **An allowlist is safe on its own where a stale name costs one tool.**
 `kimi-code` is that case: an entry the CLI does not recognise "is reported with
@@ -1880,6 +1888,48 @@ the CLI reads on the web is not in the engine's event stream — the cost
 of an unrecorded read, accepted. A seat on a CLI with no web tool of its own
 reaches the web the way it reaches everything external, through the MCP servers
 you configure.
+
+**An entry can turn the web off, and the Dashboard Assistant requires it.**
+Web stays on for every seat unless its entry says otherwise. An entry whose
+model must read nothing the engine's own guard did not hand it (the
+[Dashboard Assistant's](../getting-started/configuration.md#the-dashboard-assistant)) sets `overrides: {web_tools: denied}`, and the profile's `web_denial` says
+what that CLI runs with instead:
+
+| Profile | How web is turned off | Measured |
+|---|---|---|
+| `claude-code` | `WebFetch` and `WebSearch` move from `--allowedTools` to `--disallowedTools` | refused on 2.1.310 |
+| `codex` | `-c web_search="disabled"` in place of `"live"`; the read-only sandbox already cuts the shell's network | refused on 0.150.1 |
+| `opencode` | the seeded policy keeps its deny-all rule and drops the two allow rules | not measured; derived from the 2.0 permissions format |
+| `pi` | nothing changes: `--no-tools` already sends no tools | measured on 0.85.1 (no web tool exists) |
+
+Every other profile has no `web_denial`, says why in `web_tools_note`, and
+refuses `web_tools: denied`, so it cannot serve the assistant until one is
+measured and added (an operator may supply their own `web_denial` in
+`overrides`, and owns that claim). Whichever profile it is, `crewlet llm
+doctor` runs its web probe on a denied entry and reports a fetch that
+succeeded as a problem, exactly as it reports a shell that ran on a profile
+denying local tools; run it before the assistant goes live.
+
+**The Dashboard Assistant needs more than a denial: no tool of its own, by
+construction.** Its tools are the person's own requests, served to its CLI as
+the `crewlet` server like any phase's ([ADR-0049](https://github.com/crewlet/crewlet/blob/main/adr/0049-a-phases-tools-reach-its-cli-as-one-mcp-server.md)),
+and nothing else may be on offer. A deny list names the tools a release had;
+measured on Claude Code 2.1.310 with no login (so no model was reached), the
+seats' deny list still left thirteen tools on offer, Workflow, SendMessage and
+EnterWorktree among them. So a profile the assistant runs on declares
+`tools_off`: the argument runs that leave the CLI with no built-in tool and no
+server but the ones its `mcp` block names, and the flags that would bring one
+back. The assistant's chain admits an entry only when the argv its calls run
+(web denied) carries each run once and none of those flags, and its `mcp`
+allow list names the engine's tools alone, which an override cannot quietly
+undo:
+
+| Profile | No tool by construction | Assistant |
+|---|---|---|
+| `claude-code` | `--tools ""` (an empty allow list) in the denied argv, `--strict-mcp-config` with no server but `crewlet`, and `mcp__crewlet__*` the only allowed tools | eligible, measured on 2.1.310 |
+| `pi` | `--no-tools` sends no tool, `--no-extensions` loads none | eligible, measured on 0.85.1 |
+| `codex` | none: its shell is switched off, but `apply_patch` has no switch, and its patch check answers whether a file outside the call holds given lines | refused |
+| `opencode` | none measured: the seats' policy offers only the web tools (measured on 2.0.32 and 2.1.4), but the denial's deny-all has not been measured to offer nothing | refused until measured |
 
 **`pi` is the one profile that denies every tool outright** (`--no-tools`),
 and it is honest there for a reason no other vendor gives it: measured off
@@ -3313,7 +3363,7 @@ it runs on.
 | `system_prompt` | `{args, env, file}`: the channel on which the engine's system prompt **replaces** the CLI's own — taken by the auxiliary passes, and by a seat when the CLI has no `append_system_prompt`. `args` carries `{file}` (preferred) or `{system}`; `env` names a variable the CLI reads a file path from, exclusive with `args`; `file` is `{name, template, discovered}`: the file the channel writes and the text around `{system}`. `discovered: selected` is a file the CLI finds by its location in the per-call directory (`name` may then carry a directory, and must name a file inside it) and `args` selects without `{file}` or `{system}`; `discovered: always` is one the CLI reads on every run, which declares the channel by itself. See [The system prompt](#the-system-prompt-in-host-mode). |
 | `append_system_prompt` | The same shape, for the channel on which the CLI's own system prompt stays in force and the engine's is **added** — taken by a seat's phases, and by an auxiliary pass when the CLI has no `system_prompt`. With neither, the system prompt rides the transcript. |
 | `prompt_args` | The flag introducing the prompt in `argv` mode, or carrying `{file}` in `file` mode. |
-| `output` | How stdout is encoded: `json` (default), `jsonl` or `text`. Only `jsonl` streams. |
+| `output` | How stdout is encoded: `json` (default), `jsonl` or `text`. A `jsonl` profile streams every call; a `json` one streams a call that asks to, through its `stream` variant. |
 | `text_paths` | Where the answer is in a `json`/`jsonl` document. |
 | `event_type_path` | Where a `jsonl` line names its event kind. |
 | `text_events` | The event kinds whose text is the answer. |
@@ -3350,6 +3400,10 @@ it runs on.
 | `host_credential_paths` | Where the CLI keeps its login in a person's own home, for `-from-host`: each names a file, under a file name `credential_paths` also has, because an adopted file is kept under its name and a seat is seeded only with those names. |
 | `local_tools` | The profile's stance on the CLI's own tools: `denied` or `vendor-default`. |
 | `local_tools_note` | Why a `vendor-default` stance is one. |
+| `web_tools` | The entry's stance on the CLI's own web tools: `allowed` (the default, and every seat's) or `denied`. `denied` runs the CLI through `web_denial`, and is refused on a profile that has none. |
+| `web_tools_note` | How the profile's web denial was measured, or why it has none. |
+| `tools_off` | `{args, refuses, note}`: how the CLI's run is left with no tool of its own, by construction. `args` are argument runs (`[["--tools", ""], ["--strict-mcp-config"]]`), each of which must appear adjacent and once in the argv; `refuses` are flags that bring a tool back in the call's own arguments; the `mcp` block's arguments are judged apart, and its `allow_args` may name only the engine's tools. Requires `local_tools: denied` and a `note` saying how it was measured. The Dashboard Assistant admits only an entry whose argv passes it. |
+| `web_denial` | `{complete_args, seed_files, mcp: {complete_args, seed}}`: what the run uses instead when `web_tools` is `denied`. Each field set replaces the profile field of that name whole; a field left unset keeps it. `mcp` does the same for a run with tools, whose `mcp` block runs an argv or writes settings of its own: a denial that replaces `complete_args` or `seed_files` must replace the mcp block's own counterpart too, or an entry that denies the web is refused, since that run would keep it. Overriding `complete_args` (or `seed_files`) beside `web_tools: denied` is refused where the denial replaces it: override `web_denial.complete_args` instead. |
 | `seed_files` | `{path, in, content}` (`in` is `home` or `work`): settings files written before a call. `path` must name a file inside its scope, and never one another field needs: a login file, a system prompt file, a `config_env` or `work_config_env` directory, the call's `.git` project-root marker, or a directory above any of them. |
 | `key_seed_files` | `{path, content}`: settings files written into a seat's **key** home alone — where its calls run when they sign in with a key — after `seed_files`, each over a `seed_files` entry at the same path. For a CLI that picks its sign-in from settings before its environment, so no variable can tell it to use the key: Gemini CLI takes a `GOOGLE_GEMINI_BASE_URL` gateway as its gateway sign-in, and refuses it (exit 41), unless its settings name the key sign-in, which in a login home would send every subscription call to a key it does not have. The seat's home only. |
 | `mcp` | How a run is handed the seat's tools as the one MCP server `crewlet` ([Tool calls](#the-seats-tools-as-one-mcp-server)); absent, a seat's phase on the entry is refused and text functions still run. `args` (added after the model and session arguments) and `allow_args` (the CLI's allowlist for the server's tools — prefer a wildcard, since a tool activated mid-run is on no argv written before it); `seed` (`{path, in: work, content}`: files written into the call's own directory — never the seat's home, which every call of the seat shares, while the socket is the run's alone); `env` (set on a run with tools over every other layer — never a credential or an isolation variable); `tool_timeout_seconds` (required: how long the CLI waits for one call before giving up on it — the value the route sets or the CLI's own fixed one; a call still running near it is answered "still running" by the engine first); `relists` (the CLI re-reads the list when told it changed; false ends the run after an activation); `concurrency` (required: which of a response's calls the CLI makes without waiting — `at_once`, `read_only` or `in_turn`); `failure_events` (`{match, fields}`: the CLI's own failure reports, and the fields of each a failed run's error shows — `jsonl` only); `complete_args`, `usage_args` and `output` (a run with tools' own argv, usage command and output format, where they differ from a text function's); and `lifecycle` — `run` (the default: one process, which starts the server itself) or `serve`, with `serve` `{args, ready: [{prefix, as}], poll: {args, items, match, starting}}`: the CLI's own server started first, the values it prints when up (an address, a password it mints) available to the rest of the route as `{<as>}`, and polled until it lists the crewlet server as started (OpenCode). Every string may carry `{relay_command}`, `{relay_command_json}`, `{relay_args_json}`, `{relay_argv_json}`, `{socket}`, `{tool_timeout_seconds}`, `{tool_timeout_ms}` and `{work}`; one naming no relay command or no relay arguments is refused, and so is a placeholder the field does not substitute. |
@@ -3403,8 +3457,8 @@ token usage   : reported by CLI
 system prompt : seats: added to the CLI's own (append_system_prompt)
               : side passes: replaces the CLI's own (system_prompt)
 smoke test    : ok — called crewlet_smoke through the crewlet server; its calls are joined to its record by the id it sends in _meta claudecode/toolUseId; its model was offered WebFetch, WebSearch, mcp__crewlet__crewlet_smoke; 812 in / 34 out
-local tools   : denied by profile — probe: refused
-web           : ok — fetched https://www.cloudflare.com/cdn-cgi/trace
+local tools   : denied by profile; probe: refused
+web           : allowed; ok: fetched https://www.cloudflare.com/cdn-cgi/trace
 problems      : none
 ```
 
@@ -3421,6 +3475,15 @@ model** — where a confinement that stopped holding shows first. A model that
 answered without calling the tool, and one that answered with nothing at all,
 are each named as what they are. On a profile with no `mcp` block the smoke test
 fails naming `overrides.mcp`, after asking plainly whether the CLI is signed in.
+
+The `web` line leads with the entry's stance. On an entry with
+`overrides: {web_tools: denied}` (the one an assistant runs on) the probe's
+expectation is reversed: a refusal is the healthy answer, and a fetch is a
+problem naming the denial that did not take effect:
+
+```
+web           : denied by entry (WebFetch and WebSearch on --disallowedTools; measured refused on Claude Code 2.1.310); probe: refused
+```
 
 On an `api-key` entry the `sign-in` line names the key instead —
 `API key in ANTHROPIC_API_KEY (auth.mode api-key)` — and on a Codex entry,

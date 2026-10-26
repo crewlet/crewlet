@@ -44,13 +44,23 @@ import (
 //     because the person pressing Save on a card has already said what they
 //     changed by changing it.
 //
-// # Admin's, as the whole document is
+// # Admin's, as the whole document is, on verbs of its own
 //
-// Reads are `config.read` and writes `config.write`, both admin's, the write
-// asking a recent proof as every write of the company document does. The
-// charter is not a lead's: it is the company's root, which is nobody's
-// subtree (admission.go), and PATCH /config refuses a lead's change to it for
-// the same reason.
+// Reads are `config.principles.read` and writes `config.principles.write`,
+// decided exactly as `config.read` and `config.write` decide the whole
+// document: admin's, the write asking a recent proof as every write of the
+// company document does. The charter is not a lead's: it is the company's
+// root, which is nobody's subtree (admission.go), and PATCH /config refuses a
+// lead's change to it for the same reason.
+//
+// THE VERBS ARE THEIR OWN so the authority table can say one thing about the
+// charter it says about no other part of the document: the Dashboard
+// Assistant may read it as the person, and may write it only as the one
+// request its owner approved from a before-and-after the engine rendered,
+// at the same step-up window (ADR-0052's exception, ADR-0051). This route is
+// that one write path for people and the assistant alike: the assistant's
+// approved change is a PUT here with the If-Match its preview read, and
+// nothing else of the document is reachable through it.
 
 // charterAttempts is how many times a write is tried when the company document
 // moves under it for a reason that is not the charter.
@@ -318,7 +328,7 @@ func (s *Service) writeCharter(w http.ResponseWriter, r *http.Request, c charter
 		summary = charterSummary(current, c.next)
 	}
 	d := patchDraft(ApplyRequest{Patch: patch, Summary: summary, By: c.by, Expect: active.ID}, nil)
-	d.principal = c.principal
+	d.principal, d.charter = c.principal, true
 	prepared, err := s.prepare(ctx, d)
 	if err != nil {
 		return false, err

@@ -199,6 +199,41 @@ func TestAStoreLimitBelowTheFloorIsAnAdvisory(t *testing.T) {
 	}
 }
 
+// THE ASSISTANT'S LOG RESERVES ONLY ITS FLOOR ON A FRESH NODE, so a deployment
+// sized for everything else boots with it. Its unset 512 MiB counted in full
+// raised the least a fresh node reserves past a stated 9 GiB broker limit, the
+// size crewlet-operator's getting-started company sets, and every such node
+// refused to boot on CREWLET_ASSISTANT_LOG. Scaled, it counts its field's
+// 64 MiB floor, and a 9 GiB limit holds the whole fresh node again.
+func TestTheAssistantLogCountsOnlyItsFloorTowardAFreshNode(t *testing.T) {
+	t.Parallel()
+	boot := config.DefaultBootstrap()
+	floor := BrokerFloorFor(&boot)
+	var assistant domainCeiling
+	for _, entry := range register() {
+		if entry.Domain.Name() == "assistant" {
+			assistant = entry.Ceiling(boot.Stream, 0)
+		}
+	}
+	if assistant.Bytes != config.DefaultAssistantLogMaxBytes || assistant.scaleFloor() != config.AssistantLogMaxBytesFloor {
+		t.Fatalf("the assistant's ceiling asks %d and scales to %d, want its default and its field's floor",
+			assistant.Bytes, assistant.scaleFloor())
+	}
+	stated := config.DefaultBootstrap()
+	stated.Stream.StoreMaxBytes = 9 << 30
+	if got := BrokerFloorFor(&stated).Limit; got > stated.Stream.StoreMaxBytes {
+		t.Errorf("a fresh node reserves at least %d bytes, more than a stated 9 GiB limit (%d)",
+			got, stated.Stream.StoreMaxBytes)
+	}
+	// An explicit ceiling is reserved as written, never scaled.
+	explicit := config.DefaultBootstrap()
+	explicit.Stream.AssistantLogMaxBytes = config.DefaultAssistantLogMaxBytes
+	if grew := BrokerFloorFor(&explicit).Logs - floor.Logs; grew != config.DefaultAssistantLogMaxBytes-config.AssistantLogMaxBytesFloor {
+		t.Errorf("an explicit 512 MiB moved the logs' floor by %d, want %d", grew,
+			config.DefaultAssistantLogMaxBytes-config.AssistantLogMaxBytesFloor)
+	}
+}
+
 // THE SIZE A TEST BROKER DECLARES BOOTS A FRESH NODE OF THE FIXTURES.
 //
 // The suites size their brokers from brokertest.StoreMaxBytes rather than from

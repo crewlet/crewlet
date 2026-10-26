@@ -589,8 +589,8 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
-    name: "crewlet-app-shell__sheet",
-    why: "uilet's AppShell writes it on the floating sheet. styles/frame.css makes it a two-column grid while a peek is open and the frame has room for one (data-peek=\"column\", which the shell decides from app/layout.ts's peekColumnMin), so the detail rail is a column of the sheet rather than of whichever screen opened it. Another rule about OUR composition of the package's component.",
+    name: "crewlet-peek-rail__body",
+    why: "uilet's PeekRail writes it on the peek's own scroller, a size container of its own. styles/frame.css declares the record ceiling and the grid's sticky offset on it beside `main`, because a custom property resolves where it is declared and a record inside a peek is bounded by what the peek shows. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {

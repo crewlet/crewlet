@@ -39,6 +39,11 @@ type Response struct {
 	// Model names the model that answered; empty takes the script's.
 	Model string
 
+	// Streamed is the part of Text the CLI already streamed before the
+	// response was played (a case that sends its own fragments while the
+	// model writes): only the rest of Text is streamed with it.
+	Streamed string
+
 	// Trailing is prose the CLI streams for this response AFTER its record
 	// has shown it, as a CLI whose record opens a request before its text
 	// is written does — streamed with the request's id.
@@ -384,7 +389,7 @@ func (s *Script) play(ctx context.Context, req llm.Request, run Run, n int) (*ll
 		total.Output += u.Output
 		total.CacheRead += u.CacheRead
 		total.CacheWrite += u.CacheWrite
-		req.Send(llm.Delta{Content: r.Text})
+		req.Send(llm.Delta{Content: unstreamed(r)})
 		calls := make([]llm.TurnCall, 0, len(r.Calls))
 		for j, c := range r.Calls {
 			if r.Calls[j].ID == "" {
@@ -596,4 +601,13 @@ func text(res *mcp.CallToolResult) string {
 		}
 	}
 	return b.String()
+}
+
+// unstreamed is the part of a response's prose not yet streamed: all of it, or
+// what follows [Response.Streamed] when the text goes on from it.
+func unstreamed(r Response) string {
+	if rest, ok := strings.CutPrefix(r.Text, r.Streamed); ok {
+		return rest
+	}
+	return r.Text
 }

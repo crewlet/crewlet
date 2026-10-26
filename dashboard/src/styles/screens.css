@@ -4281,9 +4281,9 @@ a.int-feed-what:hover {
    in sentence case. Scoped rather than changed globally, because every other
    form in the dashboard is a settings table where the micro-label belongs.
 
-   THE LABEL IS uilet's `.crewlet-label` NOW — `ui/Field.tsx` draws a
-   `FormField` — and `.field` is the class that file still puts on it, so the
-   selector reaches the same element it always did. Specificity is what makes
+   THE LABEL IS uilet's `.crewlet-label` NOW. The setup form draws uilet's
+   `ValueField` and puts `.field` on it, so the selector reaches the same
+   element it always did. Specificity is what makes
    this land: `(0,2,1)` here against the package's `(0,1,0)`. */
 .int-form .field > label {
   font-size: var(--font-size-compact);
@@ -5129,8 +5129,8 @@ details > summary.int-summary::-webkit-details-marker {
 /* ---- The body ------------------------------------------------------------
    ONE COLUMN, AND THE PEEK IS NOT IN IT. The tracker grew its own peek — a
    second column of this grid, sized here, flipped to a drawer by a media
-   query of its own — and the frame took it over: the shell's sheet carries a
-   track for `--peek-w` and every screen in the product can open one. The
+   query of its own, and the frame took it over: the kit's shell carries a
+   peek column and every screen in the product can open one. The
    rules that sized it here matched `[data-peek="true"]` on THIS element,
    which nothing has ever set: the attribute lives on the shell's root. So
    they were dead the day the peek moved and stayed in the sheet, shipped in
@@ -7084,6 +7084,15 @@ a.work-cal-chip {
   white-space: normal;
   overflow-wrap: break-word;
 }
+
+/* A MODEL'S LINK, DRAWN INERT (`links: "inert"` in lib/markdown.ts): the
+   label in the text's own ink, then the place it names in the quiet link ink,
+   never underlined and never a control, so a reader can see where a link
+   would have gone without being able to follow one a model wrote. */
+.md-link-inert-host {
+  color: var(--color-text-link-quiet);
+  overflow-wrap: anywhere;
+}
 /* EVERY ELEMENT'S OWN MARGIN IS ZEROED FIRST and the rhythm is one rule over
    siblings. The other way round — a `margin: 0` reset per element type after
    the sibling rule — is how the rhythm died: the shorthand resets margin-top
@@ -7690,28 +7699,16 @@ a.work-cal-chip {
    what say which. */
 
 /* ---- A write control, and what became of its last press ----------------
-   The button and its refusal sit together: the refusal is drawn where the
-   press was made and stays until the next one (lib/useAct.ts), so it wraps
-   under the button rather than widening the row it sits in. */
+   The button and its refusal sit together: the refusal (the kit's
+   RefusalStrip) is drawn where the press was made and stays until the next
+   one (lib/useAct.ts), so it wraps under the button rather than widening the
+   row it sits in. */
 .write-button {
   display: inline-flex;
   flex-direction: column;
   align-items: flex-start;
   gap: var(--spacing-1);
   min-width: 0;
-}
-.write-refusal {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-1) var(--spacing-2);
-  max-width: 40rem;
-  font-size: var(--font-size-compact);
-  color: var(--color-feedback-danger-ink);
-  overflow-wrap: anywhere;
-}
-.write-refusal .t-caption {
-  color: var(--color-text-secondary);
 }
 /* WHY A LIST OR A BOARD TAKES NO CHANGE FROM THIS READER, said once above it —
    quiet, because it is a standing fact about the reader rather than an answer
@@ -11711,4 +11708,18 @@ a.live-row:focus-visible {
     display: flex;
     flex-direction: column;
   }
+}
+
+/* ---- The Dashboard Assistant (app/assistant) -----------------------------
+   The one line under the composer, centred, on one line at every width. */
+.assistant-disclaimer {
+  margin: var(--spacing-2) 0 0;
+  text-align: center;
+}
+
+/* The model notice and an attachment refused stand above the composer, the
+   disclaimer's step apart. */
+.assistant-model-notice,
+.assistant-attach-refusal {
+  margin: 0 0 var(--spacing-2);
 }

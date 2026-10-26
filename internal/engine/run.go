@@ -242,6 +242,11 @@ type Engine struct {
 	// nothing sends.
 	dataFootprint chan struct{}
 
+	// assistantErasure signals the assistant's erasure loop that the
+	// identity applier removed somebody ([Engine.runAssistantErasure]).
+	// Made by [Engine.startCore], like dataFootprint.
+	assistantErasure chan struct{}
+
 	// ownsBackends says whether Stop closes them. Ownership is a separate
 	// fact from use: a borrowed Backends is still the one this engine
 	// requeues and pauses through, so holding "the ones I use" and "do I

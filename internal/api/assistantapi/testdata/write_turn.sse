@@ -1,0 +1,72 @@
+id: 98857d10-0497-5792-b9ae-1449110c2ff5.1
+event: conversation
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":1,"at":"2026-10-24T09:41:00Z","kind":"conversation","conversation":{"title":"","created_at":"2026-10-24T09:41:00Z","resumed":false}}
+
+id: 98857d10-0497-5792-b9ae-1449110c2ff5.2
+event: page_context
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":2,"at":"2026-10-24T09:41:00Z","kind":"page_context","page_context":{"used":false,"trimmed":false}}
+
+id: 98857d10-0497-5792-b9ae-1449110c2ff5.3
+event: status
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":3,"at":"2026-10-24T09:41:00Z","kind":"status","status":{"state":"thinking","steps_done":0}}
+
+id: 98857d10-0497-5792-b9ae-1449110c2ff5.4
+event: status
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":4,"at":"2026-10-24T09:41:00Z","kind":"status","status":{"state":"working","steps_done":0}}
+
+id: 98857d10-0497-5792-b9ae-1449110c2ff5.5
+event: step
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":5,"at":"2026-10-24T09:41:00Z","kind":"step","step":{"step_id":"9597dab7-63e2-58b0-bd65-e74ee9e5585c","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","index":1,"tool":"create_task","label":"Preparing a change for your approval","state":"running","started_at":"2026-10-24T09:41:00Z"}}
+
+id: 98857d10-0497-5792-b9ae-1449110c2ff5.6
+event: step
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":6,"at":"2026-10-24T09:41:00Z","kind":"step","step":{"step_id":"9597dab7-63e2-58b0-bd65-e74ee9e5585c","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","index":1,"tool":"create_task","label":"Preparing a change for your approval","state":"waiting","started_at":"2026-10-24T09:41:00Z","summary":"Waiting for approval"}}
+
+id: 98857d10-0497-5792-b9ae-1449110c2ff5.7
+event: status
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":7,"at":"2026-10-24T09:41:00Z","kind":"status","status":{"state":"thinking","steps_done":1}}
+
+id: 98857d10-0497-5792-b9ae-1449110c2ff5.8
+event: delta
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":8,"at":"2026-10-24T09:41:00Z","kind":"delta","delta":{"message_id":"da6b18f3-0453-55a7-b9b5-3f0a7d361dee","text":""}}
+
+id: 98857d10-0497-5792-b9ae-1449110c2ff5.9
+event: card
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":9,"at":"2026-10-24T09:41:00Z","kind":"card","card":{"card_id":"8c4a178c-def3-523b-841b-e303f30c1a6c","message_id":"da6b18f3-0453-55a7-b9b5-3f0a7d361dee","card":{"type":"proposal","proposal":{"proposal_id":"091c9395-e395-568a-8468-c950e163f8c3","scope":"server","tool":"create_task","title":"Create task","target":"Rotate keys","changes":[{"kind":"fact","field":"project","label":"Project","to":"RIG"},{"kind":"added","field":"title","label":"Title","to":"Rotate keys"}],"digest":"sha256:0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f","expires_at":"2026-10-24T09:56:00Z","state":"proposed","approve_label":"Approve and create"}}}}
+
+id: 98857d10-0497-5792-b9ae-1449110c2ff5.10
+event: status
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":10,"at":"2026-10-24T09:41:00Z","kind":"status","status":{"state":"waiting_for_approval","steps_done":1}}
+
+id: 98857d10-0497-5792-b9ae-1449110c2ff5.11
+event: done
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":11,"at":"2026-10-24T09:41:00Z","kind":"done","done":{"state":"waiting_for_approval","duration_ms":0,"steps":1,"message_id":"da6b18f3-0453-55a7-b9b5-3f0a7d361dee","trace_id":"4bf92f3577b34da6a3ce929d0e0e4736"}}
+
+id: 98857d10-0497-5792-b9ae-1449110c2ff5.12
+event: conversation
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":12,"at":"2026-10-24T09:41:00Z","kind":"conversation","conversation":{"title":"File a task to rotate the keys","created_at":"2026-10-24T09:41:00Z","resumed":true}}
+
+id: 98857d10-0497-5792-b9ae-1449110c2ff5.13
+event: status
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":13,"at":"2026-10-24T09:41:00Z","kind":"status","status":{"state":"thinking","steps_done":1}}
+
+id: 98857d10-0497-5792-b9ae-1449110c2ff5.14
+event: step
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":14,"at":"2026-10-24T09:41:00Z","kind":"step","step":{"step_id":"9597dab7-63e2-58b0-bd65-e74ee9e5585c","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","index":1,"tool":"create_task","label":"Preparing a change for your approval","state":"done","started_at":"2026-10-24T09:41:00Z","summary":"Applied"}}
+
+id: 98857d10-0497-5792-b9ae-1449110c2ff5.15
+event: card
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":15,"at":"2026-10-24T09:41:00Z","kind":"card","card":{"card_id":"8c4a178c-def3-523b-841b-e303f30c1a6c","message_id":"da6b18f3-0453-55a7-b9b5-3f0a7d361dee","card":{"type":"proposal","proposal":{"proposal_id":"091c9395-e395-568a-8468-c950e163f8c3","scope":"server","tool":"create_task","title":"Create task","target":"Rotate keys","changes":[{"kind":"fact","field":"project","label":"Project","to":"RIG"},{"kind":"added","field":"title","label":"Title","to":"Rotate keys"}],"digest":"sha256:0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f","expires_at":"2026-10-24T09:56:00Z","state":"applied","approve_label":"Approve and create","receipt":{"summary":"Created ENG-8.","position":"CREWLET_TRACKER_LOG@1:42"}}}}}
+
+id: 98857d10-0497-5792-b9ae-1449110c2ff5.16
+event: action
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":16,"at":"2026-10-24T09:41:00Z","kind":"action","action":{"action_id":"70d16749-2c1c-5f75-8df3-767836640082","name":"context.invalidate","invalidate":{"domain":"tracker","position":"CREWLET_TRACKER_LOG@1:42"}}}
+
+id: 98857d10-0497-5792-b9ae-1449110c2ff5.17
+event: delta
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":17,"at":"2026-10-24T09:41:00Z","kind":"delta","delta":{"message_id":"055110e6-3c1a-5040-92aa-dcb652f8db40","text":"I filed ENG-8 to rotate the keys."}}
+
+id: 98857d10-0497-5792-b9ae-1449110c2ff5.18
+event: done
+data: {"v":1,"conversation_id":"76434c73-829b-5fd6-930e-eeee98f54f4d","turn_id":"98857d10-0497-5792-b9ae-1449110c2ff5","seq":18,"at":"2026-10-24T09:41:00Z","kind":"done","done":{"state":"completed","duration_ms":0,"steps":1,"message_id":"055110e6-3c1a-5040-92aa-dcb652f8db40","trace_id":"4bf92f3577b34da6a3ce929d0e0e4736"}}
+

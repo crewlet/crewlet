@@ -2750,6 +2750,15 @@ func newCodingRun(c *Company, seat *org.Role, ph phase.Phase, runner string,
 		return codingRun{}, &SandboxModelError{msg: fmt.Sprintf("seat %q: %s",
 			seat.Handle(), config.CodingAgentMismatch(runner, member.Key, agent.Agent()))}
 	}
+	return entryRun(agent, runner, seatEnv), nil
+}
+
+// entryRun is the run an entry's CLI works under in a box: its model, and its
+// sign-in beneath what the caller's own environment brings. ONE CONSTRUCTION
+// for a seat's coding run and the assistant's deep work alike, so a box signs
+// in the same way whoever launched it.
+func entryRun(agent *cliagent.Provider, runner string, seatEnv map[string]string) codingRun {
+	run := codingRun{env: seatEnv}
 	// THE MODEL AS THE ENTRY'S TEXT CALLS PASS IT, AND THE CLI IT IS WRITTEN
 	// FOR. An entry's model is in that CLI's own grammar — OpenCode reads
 	// `<provider>/<model>`, Claude Code an alias — so the run is handed the
@@ -2772,7 +2781,7 @@ func newCodingRun(c *Company, seat *org.Role, ph phase.Phase, runner string,
 		}
 		run.files[codingagent.CredentialDocument] = doc
 	}
-	return run, nil
+	return run
 }
 
 // entrySignIn is the sign-in an entry contributes to a run's environment,
@@ -2887,8 +2896,18 @@ func sandboxCredentials(c *Company, seat *org.Role, ph phase.Phase, placement sa
 		// is no host-bound half to strand.
 		return nil
 	}
-	if signsIn(env, agent.CredentialEnvNames()) {
+	if entrySignsIn(agent, env) {
 		return nil
+	}
+	return credentialRefusal(agent, member.Key, seat.Handle(), placement)
+}
+
+// entrySignsIn reports whether env signs agent's CLI in, in a box that is not on
+// the engine host: the rule a seat's remote run and the assistant's deep work
+// are both held to before a box is started.
+func entrySignsIn(agent *cliagent.Provider, env map[string]string) bool {
+	if signsIn(env, agent.CredentialEnvNames()) {
+		return true
 	}
 	// CLAUDE CODE'S OTHER SIGN-INS COUNT TOO — a bearer token, a Bedrock,
 	// Vertex AI or Foundry toggle — because a seat that brought one is handed
@@ -2896,7 +2915,7 @@ func sandboxCredentials(c *Company, seat *org.Role, ph phase.Phase, placement sa
 	// alone, that seat's remote run was refused as signed in to nothing when
 	// it was signed in to its own cloud.
 	if agent.Agent() == codingagent.ClaudeCodeName && signsIn(env, codingagent.ClaudeCodeCredentialEnv) {
-		return nil
+		return true
 	}
 	// A CLI THAT READS ITS PROVIDER'S KEY FROM ITS OWN ENVIRONMENT has no one
 	// variable to ask about: which one it reads depends on the provider the
@@ -2919,11 +2938,11 @@ func sandboxCredentials(c *Company, seat *org.Role, ph phase.Phase, placement sa
 	if agent.SignsInThroughEnv() {
 		for name, value := range env {
 			if cliprofile.IsCredentialName(name) && strings.TrimSpace(value) != "" {
-				return nil
+				return true
 			}
 		}
 	}
-	return credentialRefusal(agent, member.Key, seat.Handle(), placement)
+	return false
 }
 
 // credentialRefusal is the [SandboxCredentialError] for a remote run nothing

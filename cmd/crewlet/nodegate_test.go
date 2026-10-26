@@ -15,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/engine"
@@ -70,7 +71,7 @@ func TestAnEvictionIsWrittenAsWhoPressedItOnEveryLog(t *testing.T) {
 	// EVERY IDENTITY-CLAIMING LOG, named: a log this build adds has to be
 	// added here too, or the gesture answering for it goes unchecked.
 	logs := []evictionLog{worklet.Domain{}, doclet.Domain{}, iamdomain.Domain{},
-		artifactsdomain.Domain{}, artifactdata.Domain{}}
+		artifactsdomain.Domain{}, artifactdata.Domain{}, assistantdomain.Domain{}}
 	var answered, want []string
 	for _, d := range res.Domains {
 		answered = append(answered, d.Domain)

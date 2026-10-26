@@ -50,6 +50,11 @@
 // the node's own writer ([Identity]) — and the listing counts both, because
 // the answer an operator retires the old key on is "nothing is under it".
 //
+// The Dashboard Assistant's conversations are sealed under the same keyring
+// and are not moved: each value leaves with its conversation, so the listing
+// counts them too ([Assistant]) and the old key stays on the ring until that
+// count under it reaches zero.
+//
 // # Two routes return a value, and both are break-glass
 //
 // `GET /secrets/{name}` requires an explicit ?reveal=true — a path that cannot
@@ -81,6 +86,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
@@ -143,6 +149,15 @@ type Identity interface {
 	Reseal(ctx context.Context) (iamdomain.ResealReport, error)
 }
 
+// Assistant is the Dashboard Assistant's half of a keyring rotation: the
+// conversations, cards and proposals the same keyring seals, which a rotation
+// waits out rather than moves (assistantdomain.SealedCount says why).
+type Assistant interface {
+	// SealedKeys counts the values those rows hold, by the keyring key each
+	// is sealed under, opening none of them.
+	SealedKeys(ctx context.Context) (assistantdomain.SealedCount, error)
+}
+
 // IdentityResealed is what a rekey moved in the identity estate, COUNTED: how
 // many people's records it published and how many values those carried. Never
 // the ids — a rekey answers the person who ran it, and the count is what they
@@ -155,10 +170,11 @@ type IdentityResealed struct {
 
 // Service is the /secrets surface.
 type Service struct {
-	store    *fleetsecrets.Store
-	identity Identity
-	keyID    string
-	now      func() time.Time
+	store     *fleetsecrets.Store
+	identity  Identity
+	assistant Assistant
+	keyID     string
+	now       func() time.Time
 
 	// guard decides every route and the reveal a GET asks for on top of
 	// its route. No chart: not one verb here asks a relation.
@@ -187,6 +203,11 @@ type Options struct {
 	// answer made without one SAYS so (`identity: null`) rather than
 	// reading as an estate with nothing under an old key.
 	Identity Identity
+
+	// Assistant is the Dashboard Assistant's half of a rotation, NIL-ABLE
+	// for the same reason as Identity, and answered `assistant_values: null`
+	// without one.
+	Assistant Assistant
 
 	// Now is injectable so a test can pin a row's timestamp.
 	Now func() time.Time
@@ -219,11 +240,12 @@ func New(opts Options) (*Service, error) {
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	return &Service{
-		store:    fleetsecrets.New(opts.Fleet, opts.Cipher),
-		identity: opts.Identity,
-		keyID:    opts.ActiveKeyID,
-		now:      now,
-		guard:    authz.ContextGuard(authz.NoChart{}),
+		store:     fleetsecrets.New(opts.Fleet, opts.Cipher),
+		identity:  opts.Identity,
+		assistant: opts.Assistant,
+		keyID:     opts.ActiveKeyID,
+		now:       now,
+		guard:     authz.ContextGuard(authz.NoChart{}),
 	}, nil
 }
 
@@ -255,7 +277,11 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// THE METADATA'S VERB, and a reveal asks the value's on top — see
 	// [Service.get]. The pattern cannot see `?reveal=true`.
 	mount("GET /secrets/{name}", authz.ActionSecretList, s.get)
-	mount("PUT /secrets/{name}", authz.ActionSecretWrite, s.put)
+	// A PUT STORES OR ROTATES, so an empty name is created ([Service.put]).
+	if err := router.Handle("PUT /secrets/{name}", authz.Policy{Action: authz.ActionSecretWrite}.
+		WhenAbsent(authz.CreatesWhenAbsent()), http.HandlerFunc(s.put)); err != nil {
+		failures = append(failures, err)
+	}
 	mount("DELETE /secrets/{name}", authz.ActionSecretWrite, s.delete)
 	return errors.Join(failures...)
 }
@@ -270,6 +296,8 @@ func (s *Service) Routes(mux authz.Mux) error {
 // sealed values, by key — null where this surface was given no identity
 // estate, which `crewlet run` never does: every node serving the API holds the
 // estate (ingress requires `data`) and runs the identity estate from boot.
+// `assistant_values` is the same count for the Dashboard Assistant's sealed
+// values, which a rotation waits out, null where this surface was given none.
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.store.List(r.Context())
 	if err != nil {
@@ -290,12 +318,22 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 		}
 		identity = &counted
 	}
+	var assistant *assistantdomain.SealedCount
+	if s.assistant != nil {
+		counted, err := s.assistant.SealedKeys(r.Context())
+		if err != nil {
+			s.fail(w, "count the assistant's sealed values", err)
+			return
+		}
+		assistant = &counted
+	}
 	out := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, render(row))
 	}
 	httpjson.Write(w, http.StatusOK, map[string]any{
 		"secrets": out, "engine_keys": engine, "identity_values": identity,
+		"assistant_values": assistant,
 	})
 }
 

@@ -11,6 +11,12 @@
  * past its first page, and the one turn running on THIS task now.
  */
 
+import {
+  applyPageAction,
+  pageSnapshot,
+  resetPageContextForTest,
+  setFramePage,
+} from "~/app/assistant/context.ts";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { ReactNode } from "react";
@@ -189,6 +195,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  resetPageContextForTest();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   localStorage.clear();
@@ -1909,4 +1916,54 @@ test("a task that does not exist says so, naming the key, with the way back to T
     "#/worklet/tasks",
   );
   expect(screen.queryByText("Not found. It may have been removed.")).toBeNull();
+});
+
+test("the title open in its editor is the assistant's to read and set, and Save sends what it set", async () => {
+  setFramePage({
+    screen: "worklet-item",
+    title: "Tasks › ENG-42",
+    path: ["worklet", "ENG-42"],
+    params: {},
+    query: {},
+  });
+  mount(<WorkItemPage id="ENG-42" />);
+  await settle();
+  expect(pageSnapshot()!.context.draft).toBeUndefined();
+  fireEvent.click(screen.getByRole("button", { name: "Edit the title" }));
+  await settle();
+  const open = () => pageSnapshot()!.context;
+  expect(open().draft).toMatchObject({
+    kind: "client",
+    id: "ENG-42",
+    revision: "7",
+    step: "title",
+  });
+  expect(
+    applyPageAction({
+      correlation_id: "c0",
+      action: "draft.set",
+      payload: { values: { title: " " } },
+      source_revision: open().source_revision,
+    }),
+  ).toMatchObject({ outcome: "invalid", reason: "A task needs a title." });
+  act(() => {
+    applyPageAction({
+      correlation_id: "c1",
+      action: "draft.set",
+      payload: { values: { title: "Switch ports flap under load" } },
+      source_revision: open().source_revision,
+    });
+  });
+  const title = screen.getByRole("textbox", { name: "Title of ENG-42" }) as HTMLInputElement;
+  await waitFor(() => expect(title.value).toBe("Switch ports flap under load"));
+  // NOTHING IS SENT until the person saves; then the write is theirs.
+  expect(posted).toEqual([]);
+  fireEvent.submit(title.closest("form")!);
+  await settle();
+  expect(posted).toEqual([
+    {
+      tool: "update_work_item",
+      args: { item: "ENG-42", if_match: 7, title: "Switch ports flap under load" },
+    },
+  ]);
 });

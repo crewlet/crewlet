@@ -106,9 +106,10 @@ func (p *Provider) toolCompletion(
 	}); ok {
 		reason := nonEmpty(hit.Said, firstLine(out.text, res.stderr))
 		if hit.Kind == llm.KindRateLimit {
-			p.bench(hit.Retry, reason)
+			until := p.bench(hit.Retry, reason)
 			log.WarnContext(ctx, "cli_agent_limit_reported", "provider", p.key, "agent", p.agent,
 				"source", string(hit.Source), "said", reason)
+			return nil, p.limited(fmt.Errorf("%s", reason), until)
 		}
 		return nil, p.fail(hit.Kind, fmt.Errorf("%s", reason))
 	}

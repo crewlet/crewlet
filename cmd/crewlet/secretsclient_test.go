@@ -441,14 +441,16 @@ func TestTheEnginesOwnKeysAreRefusedByTheCommand(t *testing.T) {
 
 // A LISTING SAYS HOW MUCH A ROTATION HAS TO MOVE THAT NO COMMAND NAMES, from
 // the counts the node carries beside the names — the engine's keys and the
-// identity estate's values — and names none of it. A node that runs no
-// identity estate says so with a null, which reads back as nil rather than as
-// an estate with nothing in it.
+// identity estate's values, and names none of it, nor the assistant's values,
+// which a rotation waits out and the wait-out says so. A node that runs no
+// identity or assistant estate says so with a null, which reads back as nil
+// rather than as an estate with nothing in it.
 func TestAListingCountsWhatNoCommandNames(t *testing.T) {
 	t.Parallel()
 	node := newFakeSecretsNode(t)
 	node.body = `{"secrets":[],"engine_keys":{"total":4,"by_key":{"k1":3,"k2":1}},` +
-		`"identity_values":{"people":{"k1":5,"k2":2},"invitations":{"k1":1}}}`
+		`"identity_values":{"people":{"k1":5,"k2":2},"invitations":{"k1":1}},` +
+		`"assistant_values":{"values":{"k1":7,"k2":4}}}`
 	held, err := node.client(t).EngineKeys(t.Context())
 	if err != nil {
 		t.Fatalf("EngineKeys: %v", err)
@@ -463,9 +465,22 @@ func TestAListingCountsWhatNoCommandNames(t *testing.T) {
 			"under a key other than k2", held.Identity)
 	}
 
-	node.body = `{"secrets":[],"engine_keys":{"total":0},"identity_values":null}`
+	if held.Assistant == nil || held.Assistant.Outside("k2") != 7 {
+		t.Errorf("the assistant's values read %+v, want 7 under a key other than k2",
+			held.Assistant)
+	}
+	var out strings.Builder
+	waitOut(&out, held, "k2")
+	if !strings.Contains(out.String(), "7 values in Dashboard Assistant conversations") ||
+		!strings.Contains(out.String(), "1 outstanding invitations") {
+		t.Errorf("the rotation's wait-out said %q, want the conversations and the "+
+			"invitation still under another key", out.String())
+	}
+
+	node.body = `{"secrets":[],"engine_keys":{"total":0},"identity_values":null,` +
+		`"assistant_values":null}`
 	if held, err = node.client(t).EngineKeys(t.Context()); err != nil ||
-		held.Identity != nil {
+		held.Identity != nil || held.Assistant != nil {
 		t.Errorf("a node with no identity estate read back as %+v (%v)", held, err)
 	}
 }

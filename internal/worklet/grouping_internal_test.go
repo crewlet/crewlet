@@ -4,6 +4,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/period"
 )
 
 // EVERY CLOSED AXIS HAS AN ADMISSION ARM, and with nothing narrowing the query
@@ -87,8 +89,8 @@ func TestWhichDueBandsAQueryAdmits(t *testing.T) {
 	start := time.Date(2026, 9, 23, 0, 0, 0, 0, time.UTC) // a Wednesday
 	dayEnd := start.AddDate(0, 0, 1)
 	weekEnd := start.AddDate(0, 0, 5) // the following Monday
-	at := func(d int) DateAnchor {
-		return DateAnchor{At: start.AddDate(0, 0, d), AllDay: true}
+	at := func(d int) period.Anchor {
+		return period.Anchor{At: start.AddDate(0, 0, d), AllDay: true}
 	}
 	named := func(v string) *string { return &v }
 

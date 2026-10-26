@@ -1361,19 +1361,7 @@ func TestATokenWritingAnAdministrativeRecordIsTokenRefused(t *testing.T) {
 	byToken := fmt.Errorf("%w: %w: the stage was asked through the machine "+
 		"token pat:x, and an administrative identity record needs a person "+
 		"present — sign in", iamdomain.ErrRefused, iamdomain.ErrTokenRefused)
-	for _, tc := range []struct {
-		name, call, method, target string
-		body                       map[string]any
-	}{
-		{"a suspension", "stage", http.MethodPatch, "/iam/people/" + bob.String(),
-			map[string]any{"stage": "suspended"}},
-		{"an invitation", "invite", http.MethodPost, "/iam/invitations",
-			map[string]any{"email": "dana@example.com", "seat": "founder",
-				"grants": iam.Apps}},
-		{"a create", "create", http.MethodPost, "/iam/people",
-			map[string]any{"email": "dana@example.com", "seat": "founder",
-				"grants": iam.Apps}},
-	} {
+	for _, tc := range administrativeRequests() {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			r := newRig(t)
@@ -1403,6 +1391,64 @@ func TestATokenWritingAnAdministrativeRecordIsTokenRefused(t *testing.T) {
 				got.body["error"] != string(httpjson.CodeUnauthorized) {
 				t.Errorf("a plain refusal answered %d %v, want 403 unauthorized",
 					got.status, got.body)
+			}
+		})
+	}
+}
+
+// administrativeRequest is one request whose record the identity estate locks
+// against a credential that is not a person at a keyboard: the writer call the
+// rig refuses, and the request that reaches it.
+type administrativeRequest struct {
+	name, call, method, target string
+	body                       map[string]any
+}
+
+// administrativeRequests are a suspension, an invitation and a create.
+func administrativeRequests() []administrativeRequest {
+	return []administrativeRequest{
+		{"a suspension", "stage", http.MethodPatch, "/iam/people/" + bob.String(),
+			map[string]any{"stage": "suspended"}},
+		{"an invitation", "invite", http.MethodPost, "/iam/invitations",
+			map[string]any{"email": "dana@example.com", "seat": "founder",
+				"grants": iam.Apps}},
+		{"a create", "create", http.MethodPost, "/iam/people",
+			map[string]any{"email": "dana@example.com", "seat": "founder",
+				"grants": iam.Apps}},
+	}
+}
+
+// THE ASSISTANT WRITING AN ADMINISTRATIVE RECORD IS ANSWERED AS THE TABLE
+// ANSWERS IT, NOT AS A LACK OF AUTHORITY.
+//
+// The identity estate refuses every administrative record written through the
+// Dashboard Assistant ([iamdomain.ErrAssistRefused], wrapping ErrRefused), and
+// the authority table refuses the same request at the route with reason
+// `assist_refused` (ADR-0052). The record's refusal is answered the same way:
+// 403 `unauthorized` carrying that reason and NO permission, since the person
+// holds what the gesture needs and takes it themselves. It is matched BEFORE
+// the authority arm it wraps, and is never `token_refused`.
+//
+// Mutation: drop the arm and the reason is missing from every row.
+func TestTheAssistantWritingAnAdministrativeRecordIsAssistRefused(t *testing.T) {
+	t.Parallel()
+	byAssistant := fmt.Errorf("%w: %w. Do it yourself from People & access",
+		iamdomain.ErrRefused, iamdomain.ErrAssistRefused)
+	for _, tc := range administrativeRequests() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t)
+			r.writer.refusals = map[string]error{tc.call: byAssistant}
+			got := r.as(administrator(), tc.method, tc.target, tc.body)
+			if got.status != http.StatusForbidden ||
+				got.body["error"] != string(httpjson.CodeUnauthorized) ||
+				got.body[authz.DetailReason] != string(authz.ReasonAssistRefused) {
+				t.Fatalf("answered %d %v, want 403 unauthorized naming %q",
+					got.status, got.body, authz.ReasonAssistRefused)
+			}
+			if grants, _ := got.body[authz.DetailGrants].([]any); len(grants) != 0 {
+				t.Errorf("the refusal names %v: no permission admits the assistant "+
+					"here", grants)
 			}
 		})
 	}

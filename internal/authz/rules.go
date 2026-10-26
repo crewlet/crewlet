@@ -187,14 +187,25 @@ const (
 	ActionKnowledgeAnswer Action = "answer_knowledge"
 
 	// --- the company's own controls --------------------------------- //
-	ActionConfigRead   Action = "config.read"
-	ActionConfigWrite  Action = "config.write"
-	ActionSecretList   Action = "secrets.list"
-	ActionSecretReveal Action = "secrets.reveal"
-	ActionSecretWrite  Action = "secrets.write"
-	ActionSetupRead    Action = "setup.read"
-	ActionSetupConnect Action = "setup.connect"
-	ActionFleetOperate Action = "fleet.operate"
+	ActionConfigRead  Action = "config.read"
+	ActionConfigWrite Action = "config.write"
+	// THE COMPANY'S PRINCIPLES (its mission, vision and standing policies),
+	// read and written as one resource (`GET` and `PUT /config/charter`,
+	// what Company › Principles edits in place). THEIR OWN VERBS, decided
+	// exactly as [ActionConfigRead] and [ActionConfigWrite] decide the whole
+	// document, for one reason: they are the one part of the company
+	// document the Dashboard Assistant may carry (ADR-0052's exception),
+	// and an assistant column is per verb. On the document's own verbs the
+	// assistant would be one approval from every secret reference, seat and
+	// provider; on these it reaches three fields of prose and nothing else.
+	ActionPrinciplesRead  Action = "config.principles.read"
+	ActionPrinciplesWrite Action = "config.principles.write"
+	ActionSecretList      Action = "secrets.list"
+	ActionSecretReveal    Action = "secrets.reveal"
+	ActionSecretWrite     Action = "secrets.write"
+	ActionSetupRead       Action = "setup.read"
+	ActionSetupConnect    Action = "setup.connect"
+	ActionFleetOperate    Action = "fleet.operate"
 	// ActionFleetRead is the deployment's own controls READ — the
 	// maintenance window's status and the value a reanchor must echo.
 	// Admin's as [ActionFleetOperate] is, and its own verb because it asks
@@ -254,7 +265,21 @@ const (
 	// admitting a token on every proof change and each route remembering
 	// to refuse it.
 	ActionCredentialProof Action = "iam.credential.proof"
-	ActionSessionEnd      Action = "iam.session.end"
+	// ActionSignInWrite ISSUES OR CLEARS A WAY FOR SOMEBODY ELSE TO SIGN IN:
+	// creating a person with their first password link, inviting an address
+	// with an invitation link, issuing a password reset link, and resetting
+	// somebody's second factor. Admin's, at the step-up window, with a
+	// person present, exactly as [ActionDirectoryWrite] is.
+	//
+	// ITS OWN VERB BESIDE THE DIRECTORY'S OTHER WRITES because three of its
+	// four answers carry a bearer credential in clear (a link is a
+	// password) and the fourth clears how somebody proves who they are: a
+	// sign-in ceremony, which the Dashboard Assistant never takes
+	// ([assistantNever]). Kept on [ActionDirectoryWrite] it would have
+	// decided an ordinary edit of somebody's permissions and the issue of a
+	// password with one assistant column.
+	ActionSignInWrite Action = "iam.signin.write"
+	ActionSessionEnd  Action = "iam.session.end"
 
 	// ActionSessionInvalidate ends EVERY session in the company at once —
 	// the restore runbook's last step. A verb of its own beside the
@@ -281,6 +306,14 @@ const (
 	// before a board exists, so it is everybody's: what a source ANSWERS is
 	// decided as each board's viewer, never by who listed it.
 	ActionDashboardSources Action = "list_dashboard_sources"
+	// ActionDashboardSourceRead previews ONE engine source's rows before any
+	// board exists (`GET /artifacts/sources/preview/{name}`): a builder's
+	// read, so it asks the artifacts app, as making a board does, while the
+	// rows themselves are decided by the source's own question, as the
+	// viewer. ITS OWN VERB AND A READ, because mounted on
+	// [ActionArtifactCreate] a GET was decided as a write, and the person's
+	// assistant could not read what the person could.
+	ActionDashboardSourceRead Action = "artifacts.source.read"
 	// AUTHORING, each asking the `artifacts` app beside the role.
 	ActionArtifactCreate  Action = "create_artifact"
 	ActionArtifactPublish Action = "publish_artifact"
@@ -326,6 +359,15 @@ const (
 	// the service objective: everybody's, because it carries no artifact
 	// content and a reader of any artifact sends it.
 	ActionArtifactReady Action = "artifacts.ready"
+	// ActionArtifactTicket mints the frame a viewer's browser embeds a
+	// version in (`POST /artifacts/{id}/tickets`): a view ticket bound to
+	// the caller's credential. Everybody's as a gate, because what the frame
+	// opens is [ActionArtifactRead]'s decision on the artifact, asked once
+	// the head is read. ITS OWN VERB because the answer is a bearer
+	// credential, which the Dashboard Assistant never receives
+	// ([assistantNever]); mounted on the gallery's verb it was decided by a
+	// row the assistant reads through.
+	ActionArtifactTicket Action = "artifacts.ticket"
 
 	// --- artifact folders and the company's brand -------------------- //
 	//
@@ -358,6 +400,35 @@ const (
 	ActionBrandRead  Action = "get_company_brand"
 	ActionBrandAdopt Action = "artifacts.brand.adopt"
 	ActionBrandClear Action = "artifacts.brand.clear"
+
+	// --- the Dashboard Assistant (ADR-0050 to ADR-0053) ---
+	//
+	// The assistant's own verbs: using it, reading a conversation,
+	// approving or declining a proposal, and an administrator's audited
+	// read. Each is dotted, and lands here with the surface that asks it.
+
+	// ActionAssistantConverse is using the assistant at all: starting a
+	// conversation, asking in it, stopping a turn, clearing one. Whose
+	// conversation it is is never this verb's question: the store answers
+	// 404 for anybody but its owner (ADR-0053).
+	ActionAssistantConverse Action = "assistant.converse"
+	// ActionAssistantConversationRead is reading one's own conversations:
+	// the list, a transcript, a turn's live stream and a card's export.
+	ActionAssistantConversationRead Action = "assistant.conversation.read"
+	// ActionAssistantApprove is a person approving one of their own
+	// proposals: `POST /assistant/proposals/{id}/approve`. Everybody's,
+	// because whose proposal it is is the store's answer (ADR-0053) and what
+	// the write may do is the write's own row, decided again when it is sent.
+	// The write's own step-up is asked by the approval itself (ADR-0051).
+	ActionAssistantApprove Action = "assistant.approve"
+	// ActionAssistantDecline is a person declining one of their own
+	// proposals.
+	ActionAssistantDecline Action = "assistant.decline"
+	// ActionAssistantAuditRead is an administrator reading somebody else's
+	// conversation for compliance (decision D06): admin's, with a recent
+	// proof, every read recorded beside the reader's name and reason and
+	// shown to the conversation's owner.
+	ActionAssistantAuditRead Action = "assistant.conversation.audit_read"
 )
 
 // Presence is which arms of a verb need a PERSON present: refused to a request
@@ -393,6 +464,38 @@ var Presences = []Presence{
 
 // Valid reports whether a presence is one this build knows.
 func (p Presence) Valid() bool { return slices.Contains(Presences, p) }
+
+// AssistClass is what the Dashboard Assistant may do with a verb: take it
+// under a read grant, carry it only as the one approved request an exec grant
+// binds, or never (ADR-0052). See [rule.assist].
+//
+// IT ONLY EVER TAKES AWAY. An assisted principal is the person, composed from
+// their own identity rows, so the class and every relation are decided for
+// them exactly as for their own click; this says which of those admissions
+// the assistant may also make, and no value of it admits anything the
+// person's authority refuses.
+type AssistClass string
+
+const (
+	// AssistRead is a verb an assistant read grant may take: a read the
+	// person may make, which a turn's tool loop makes on their behalf with
+	// nothing for them to approve.
+	AssistRead AssistClass = "read"
+	// AssistApprove is a verb the assistant may carry only as the one
+	// request a person approved: an exec grant binds the request's digest,
+	// so the write that runs is the preview the person saw (ADR-0051).
+	AssistApprove AssistClass = "approve"
+	// AssistNever is a verb no assistant grant takes, whoever approved what.
+	AssistNever AssistClass = "never"
+)
+
+// AssistClasses are the three, in declaration order.
+var AssistClasses = []AssistClass{AssistRead, AssistApprove, AssistNever}
+
+// Valid reports whether an assist class is one this build knows. The zero is
+// not one, because a row nobody decided for the assistant must not read as
+// any of the three.
+func (c AssistClass) Valid() bool { return slices.Contains(AssistClasses, c) }
 
 // rule is one verb's row: which class decides it, which app it belongs to,
 // and the facts about the verb itself that every class composes with.
@@ -530,6 +633,25 @@ type rule struct {
 	// neither is sharing, which hands the artifact to whoever the share
 	// names: a steerable share would be that same read, one step removed.
 	steerable bool
+
+	// assist is what the verb IS to the Dashboard Assistant (see
+	// [AssistClass]): [AssistRead], a read a turn makes on the person's
+	// behalf, or [AssistApprove], a change it carries only as the one request
+	// the person approved. Asked of a principal acting through an assistant
+	// grant ([iam.AssistPrefix]) and of nobody else.
+	//
+	// PARITY WITH THE PERSON DECIDES IT (ADR-0052): a verb the person may
+	// take is one their assistant may take, as a read or as an approved
+	// change. The only verbs it never takes are [assistantNever]'s, each
+	// with its reason, and that list is the ONE place [AssistNever] is
+	// spelled: a row states the verb's nature and never Never, so the
+	// human-only set cannot be widened by a row nobody reads beside the list.
+	//
+	// EVERY ROW STATES ONE and the zero is refused by a walk in this
+	// package's tests, for [rule.recency]'s reason: a verb added without
+	// deciding would otherwise read as one of the classes. [Decide] reads a
+	// zero as [AssistNever] besides, so a missed row fails closed.
+	assist AssistClass
 }
 
 // rules is THE authority table: every verb this engine knows, and how it is
@@ -550,38 +672,53 @@ var rules = map[Action]rule{
 	// READING ONE ITEM IS ALSO THE ASKED PERSON'S. Somebody a colleague put
 	// a question to reads the item the question is on, whether or not they
 	// use Worklet (see [ClassAppOrAsked]).
-	ActionWorkRead:      {class: ClassAppOrAsked, app: iam.GrantWorklet, recency: iam.RecencyAny},
-	ActionWorkList:      {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny},
-	ActionWorkSearch:    {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny},
-	ActionWorkActivity:  {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny},
-	ActionProjectRead:   {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny},
-	ActionProjectList:   {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny},
-	ActionCatalogueRead: {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny},
-	ActionViewList:      {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny},
+	ActionWorkRead: {class: ClassAppOrAsked, app: iam.GrantWorklet, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionWorkList: {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionWorkSearch: {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionWorkActivity: {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionProjectRead: {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionProjectList: {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionCatalogueRead: {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionViewList: {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny,
+		assist: AssistRead},
 	// A PROJECT'S FILES ARE ITS WORK'S OUTPUT, read and kept on the tracker
 	// as its items are — never on the knowledge base a body of prose might
 	// suggest.
-	ActionFileList:  {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny},
-	ActionFileRead:  {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny},
-	ActionFileWrite: {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny},
+	ActionFileList: {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionFileRead: {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionFileWrite: {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny,
+		assist: AssistApprove},
 
-	ActionWorkCreate: {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny},
-	ActionWorkUpdate: {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny},
+	ActionWorkCreate: {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionWorkUpdate: {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny,
+		assist: AssistApprove},
 	// A COMMENT IS THE TRACKER'S, OR THE ANSWER THE ASKED PERSON OWES. The
 	// asked arm admits a person an open ask names — and the tool then takes
 	// only their answer, which the tracker's writer checks again is theirs.
-	ActionWorkComment: {class: ClassAppOrAsked, app: iam.GrantWorklet, recency: iam.RecencyAny},
-	ActionWorkMerge:   {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny},
+	ActionWorkComment: {class: ClassAppOrAsked, app: iam.GrantWorklet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionWorkMerge: {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny,
+		assist: AssistApprove},
 	// A PLACE IS THE APP ON THE TASK, although the record arbitrates on the
 	// project's ORDER rather than on the task: the order is an object nobody
 	// owns, so the only relation to ask about is none. A person's gesture —
 	// see [ActionWorkPlace].
 	ActionWorkPlace: {class: ClassApp, app: iam.GrantWorklet, humanOnly: true,
-		recency: iam.RecencyAny},
+		recency: iam.RecencyAny, assist: AssistApprove},
 	// THE ROUTE TO AN ITEM'S THREAD ADMITS EVERYBODY and decides nothing:
 	// [ActionWorkComment] decides once the item is read. See
 	// [ActionWorkThread].
-	ActionWorkThread: {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionWorkThread: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
 
 	// `write_project` IS TWO GESTURES AND ONLY ONE IS THE LEAD'S, which is
 	// what internal/worklet's own tag rule has always said: adding a label
@@ -589,41 +726,50 @@ var rules = map[Action]rule{
 	// one takes the word off everybody's board. So the TOOL takes the app
 	// and the lead-only facets — a rename, an archive, any policy edit —
 	// ask [ActionProjectPolicy] from inside it.
-	ActionProjectWrite:  {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny},
-	ActionProjectPolicy: {class: ClassContainer, app: iam.GrantWorklet, recency: iam.RecencyAny},
+	ActionProjectWrite: {class: ClassApp, app: iam.GrantWorklet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionProjectPolicy: {class: ClassContainer, app: iam.GrantWorklet,
+		recency: iam.RecencyAny, assist: AssistApprove},
 	// AND RE-ROUTING IS THE LEAD'S for the same reason, asked from inside
 	// `update_work_item`: it decides which team hears about the work, and
 	// which project the task is filed under comes out of the stored row
 	// rather than the arguments.
-	ActionWorkRoute: {class: ClassContainer, app: iam.GrantWorklet, recency: iam.RecencyAny},
+	ActionWorkRoute: {class: ClassContainer, app: iam.GrantWorklet, recency: iam.RecencyAny,
+		assist: AssistApprove},
 	// ARCHIVING A PROJECT TAKES IT OUT OF CIRCULATION for everybody, so it
 	// is the lead's like the rest of the policy AND it is never an agent's:
 	// a project nobody can file into again is a company decision.
 	ActionProjectArchive: {class: ClassContainer, app: iam.GrantWorklet, humanOnly: true,
-		recency: iam.RecencyAny},
+		recency: iam.RecencyAny, assist: AssistApprove},
 
 	// AN ITEM'S REPORTER TIDIES IT, beside its project's lead and admin:
 	// whoever filed a duplicate takes it out again, and puts it back. A
 	// subtree stays the lead's (the tool refuses an author it), and a purge
 	// stays admin's. See [ClassTidy].
-	ActionWorkRemove:  {class: ClassTidy, app: iam.GrantWorklet, recency: iam.RecencyAny},
-	ActionWorkRestore: {class: ClassTidy, app: iam.GrantWorklet, recency: iam.RecencyAny},
+	ActionWorkRemove: {class: ClassTidy, app: iam.GrantWorklet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionWorkRestore: {class: ClassTidy, app: iam.GrantWorklet, recency: iam.RecencyAny,
+		assist: AssistApprove},
 	// A MOVE TAKES AN ITEM OUT OF ITS PROJECT, and a file's removal takes a
 	// file out of one: the project's lead or admin, never every colleague
 	// who may add to it.
-	ActionWorkMove:   {class: ClassDestructive, app: iam.GrantWorklet, recency: iam.RecencyAny},
-	ActionFileRemove: {class: ClassDestructive, app: iam.GrantWorklet, recency: iam.RecencyAny},
+	ActionWorkMove: {class: ClassDestructive, app: iam.GrantWorklet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionFileRemove: {class: ClassDestructive, app: iam.GrantWorklet, recency: iam.RecencyAny,
+		assist: AssistApprove},
 
 	// A WORK ITEM'S REMARK IS ITS AUTHOR'S, or admin's, and the tracker's:
 	// the class answers "may you touch this remark", and the WRITER refuses
 	// anybody but the author an edit, because an edit puts words in
 	// somebody's mouth where a removal only takes them down.
-	ActionWorkCommentEdit: {class: ClassAuthored, app: iam.GrantWorklet, recency: iam.RecencyAny},
+	ActionWorkCommentEdit: {class: ClassAuthored, app: iam.GrantWorklet, recency: iam.RecencyAny,
+		assist: AssistApprove},
 
 	// A VIEW IS NOT A RECORD, because half of them are not personal at
 	// all: omitting the owner SHARES it, which is a tab on somebody's
 	// project, unit or person page. See [ClassSavedView].
-	ActionViewSave: {class: ClassSavedView, app: iam.GrantWorklet, recency: iam.RecencyAny},
+	ActionViewSave: {class: ClassSavedView, app: iam.GrantWorklet, recency: iam.RecencyAny,
+		assist: AssistApprove},
 
 	// --- somebody's own record, on the tracker ------------------------ //
 	//
@@ -634,32 +780,49 @@ var rules = map[Action]rule{
 	// the TRACKER's — a person's notices name its tasks and their queue
 	// lists them — so each takes the app beside the relation, and a person
 	// who does not use Worklet has no queue there to keep.
-	ActionPersonRead:    {class: ClassOwnOrLead, app: iam.GrantWorklet, recency: iam.RecencyAny},
-	ActionMyWork:        {class: ClassOwnOrLead, app: iam.GrantWorklet, recency: iam.RecencyAny},
-	ActionInboxRead:     {class: ClassOwnOrLead, app: iam.GrantWorklet, recency: iam.RecencyAny},
-	ActionPrioritiesSet: {class: ClassOwnOrLead, app: iam.GrantWorklet, recency: iam.RecencyAny},
-	ActionInboxMark:     {class: ClassOwnRecord, app: iam.GrantWorklet, recency: iam.RecencyAny},
-	ActionPinsSet:       {class: ClassOwnRecord, app: iam.GrantWorklet, recency: iam.RecencyAny},
+	ActionPersonRead: {class: ClassOwnOrLead, app: iam.GrantWorklet, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionMyWork: {class: ClassOwnOrLead, app: iam.GrantWorklet, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionInboxRead: {class: ClassOwnOrLead, app: iam.GrantWorklet, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionPrioritiesSet: {class: ClassOwnOrLead, app: iam.GrantWorklet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionInboxMark: {class: ClassOwnRecord, app: iam.GrantWorklet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionPinsSet: {class: ClassOwnRecord, app: iam.GrantWorklet, recency: iam.RecencyAny,
+		assist: AssistApprove},
 
 	// --- using Doclet ------------------------------------ //
-	ActionPageRead:      {class: ClassApp, app: iam.GrantDoclet, recency: iam.RecencyAny},
-	ActionPageList:      {class: ClassApp, app: iam.GrantDoclet, recency: iam.RecencyAny},
-	ActionKnowledgeRead: {class: ClassApp, app: iam.GrantDoclet, recency: iam.RecencyAny},
+	ActionPageRead: {class: ClassApp, app: iam.GrantDoclet, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionPageList: {class: ClassApp, app: iam.GrantDoclet, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionKnowledgeRead: {class: ClassApp, app: iam.GrantDoclet, recency: iam.RecencyAny,
+		assist: AssistRead},
 	// WHERE A PAGE MAY BE CREATED is internal/doclet's store's to decide (a
 	// space the company declares) for every author alike; this row decides
 	// only WHO.
-	ActionPageCreate:  {class: ClassApp, app: iam.GrantDoclet, recency: iam.RecencyAny},
-	ActionPageSave:    {class: ClassApp, app: iam.GrantDoclet, recency: iam.RecencyAny},
-	ActionPageComment: {class: ClassApp, app: iam.GrantDoclet, recency: iam.RecencyAny},
+	ActionPageCreate: {class: ClassApp, app: iam.GrantDoclet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionPageSave: {class: ClassApp, app: iam.GrantDoclet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionPageComment: {class: ClassApp, app: iam.GrantDoclet, recency: iam.RecencyAny,
+		assist: AssistApprove},
 	// A PAGE'S CREATOR TIDIES IT — renames, trashes, restores — beside its
 	// container's lead and admin. See [ClassTidy].
-	ActionPageRename:  {class: ClassTidy, app: iam.GrantDoclet, recency: iam.RecencyAny},
-	ActionPageTrash:   {class: ClassTidy, app: iam.GrantDoclet, recency: iam.RecencyAny},
-	ActionPageRestore: {class: ClassTidy, app: iam.GrantDoclet, recency: iam.RecencyAny},
+	ActionPageRename: {class: ClassTidy, app: iam.GrantDoclet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionPageTrash: {class: ClassTidy, app: iam.GrantDoclet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionPageRestore: {class: ClassTidy, app: iam.GrantDoclet, recency: iam.RecencyAny,
+		assist: AssistApprove},
 	// A REMARK IS ITS AUTHOR'S, as a work item's is; the store refuses
 	// anybody but the author an edit, and takes a moderator's removal.
-	ActionPageCommentEdit:   {class: ClassAuthored, app: iam.GrantDoclet, recency: iam.RecencyAny},
-	ActionPageCommentRemove: {class: ClassAuthored, app: iam.GrantDoclet, recency: iam.RecencyAny},
+	ActionPageCommentEdit: {class: ClassAuthored, app: iam.GrantDoclet, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionPageCommentRemove: {class: ClassAuthored, app: iam.GrantDoclet, recency: iam.RecencyAny,
+		assist: AssistApprove},
 
 	// A QUESTION ANSWERED FROM WHAT THE COMPANY WROTE DOWN draws on
 	// whichever apps the asker uses: the tool searches the pages only for a
@@ -670,7 +833,8 @@ var rules = map[Action]rule{
 	// The tool itself refuses a principal no seat binds — a Tier A token's
 	// session or a service account, never a person, who holds a human seat
 	// for as long as they are here (ADR-0032) — naming why.
-	ActionKnowledgeAnswer: {class: ClassAnyApp, humanOnly: true, recency: iam.RecencyAny},
+	ActionKnowledgeAnswer: {class: ClassAnyApp, humanOnly: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
 
 	// --- everybody's overview ---------------------------------------- //
 	//
@@ -678,27 +842,29 @@ var rules = map[Action]rule{
 	// chart, which everybody sees. The person-facing question masks the
 	// external contact ids for anybody but admin; a seat's tool keeps them,
 	// because an agent mentions people by them.
-	ActionColleagueRead: {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionColleagueRead: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
 	// WHO HOLDS EACH HUMAN SEAT is the org chart's people, named — see
 	// [ActionSeatsRead]. The route masks each holder per caller.
-	ActionSeatsRead: {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionSeatsRead: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
 
 	// --- an agent's own ---------------------------------------------- //
 	//
 	// THE CALLER'S OWN WORKING STATE, no permission and no admin path.
-	ActionSkillUse:      {class: ClassSelf, recency: iam.RecencyAny},
-	ActionSkillLoad:     {class: ClassSelf, recency: iam.RecencyAny},
-	ActionSkillRefine:   {class: ClassSelf, recency: iam.RecencyAny},
-	ActionEpisodesQuery: {class: ClassSelf, recency: iam.RecencyAny},
-	ActionMemoryRefresh: {class: ClassSelf, recency: iam.RecencyAny},
-	ActionMemoryPersist: {class: ClassSelf, recency: iam.RecencyAny},
-	ActionOnboardedMark: {class: ClassSelf, recency: iam.RecencyAny},
+	ActionSkillUse:      {class: ClassSelf, recency: iam.RecencyAny, assist: AssistRead},
+	ActionSkillLoad:     {class: ClassSelf, recency: iam.RecencyAny, assist: AssistRead},
+	ActionSkillRefine:   {class: ClassSelf, recency: iam.RecencyAny, assist: AssistApprove},
+	ActionEpisodesQuery: {class: ClassSelf, recency: iam.RecencyAny, assist: AssistRead},
+	ActionMemoryRefresh: {class: ClassSelf, recency: iam.RecencyAny, assist: AssistRead},
+	ActionMemoryPersist: {class: ClassSelf, recency: iam.RecencyAny, assist: AssistApprove},
+	ActionOnboardedMark: {class: ClassSelf, recency: iam.RecencyAny, assist: AssistApprove},
 	// AN ASK AND A CODING RUN ARE AN AGENT'S, whichever apps it uses: an
 	// ask spends a colleague seat's turn and a run hands a box the seat's
 	// whole tool surface, and the ROLE decides which seats are offered
 	// either. No person takes them — see [rule.seatOnly].
-	ActionColleagueAsk: {class: ClassEverybody, seatOnly: true, recency: iam.RecencyAny},
-	ActionSandboxRun:   {class: ClassEverybody, seatOnly: true, recency: iam.RecencyAny},
+	ActionColleagueAsk: {class: ClassEverybody, seatOnly: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionSandboxRun: {class: ClassEverybody, seatOnly: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
 
 	// --- whether a seat works, and what its turn is doing ------------- //
 	//
@@ -708,15 +874,19 @@ var rules = map[Action]rule{
 	// itself, steer another's turn or answer its own run's question would
 	// be overruling the people who run it. No app: a lead who uses neither
 	// app still runs their team.
-	ActionSeatPause:  {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny},
-	ActionSeatResume: {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny},
-	ActionTurnSteer:  {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny},
+	ActionSeatPause: {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionSeatResume: {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionTurnSteer: {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
 	// A RUN'S QUESTION IS ITS REQUESTER'S TO ANSWER, or the run's seat's
 	// lead's: the tool asks this row about the REQUESTER's seat when the
 	// caller is that requester (the self arm), and about the run's seat
 	// otherwise — so the person who asked for the work answers what it
 	// asks them, and nobody who merely leads them does.
-	ActionRunAnswer: {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny},
+	ActionRunAnswer: {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
 
 	// A SEAT'S TRAIL IS ITS LEAD'S TO READ, and admin's: its diary, its
 	// episodes, its threads and its own turns' prompts and responses. A lead
@@ -725,7 +895,7 @@ var rules = map[Action]rule{
 	// shares the company does not read every prompt an agent was given.
 	// The COMPANY-WIDE trail — every event, every turn, every channel, the
 	// identity estate's audit — stays admin's ([ActionAuditRead]).
-	ActionSeatTrailRead: {class: ClassOwnOrLead, recency: iam.RecencyAny},
+	ActionSeatTrailRead: {class: ClassOwnOrLead, recency: iam.RecencyAny, assist: AssistRead},
 
 	// --- running the company ------------------------------------------ //
 	//
@@ -737,11 +907,12 @@ var rules = map[Action]rule{
 	// page. AND NEVER AN AGENT'S, which internal/doclet's store also refuses:
 	// a seat writing the instructions every seat obeys is a model editing
 	// the rules it is judged by.
-	ActionSkillPageWrite: {class: ClassAdmin, humanOnly: true, recency: iam.RecencyAny},
+	ActionSkillPageWrite: {class: ClassAdmin, humanOnly: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
 	// THE CATALOGUE IS THE COMPANY'S, NOT A CONTAINER'S. Task types and
 	// custom fields are declared once for the whole workspace — the tool
 	// names no project and could not. It is configuration, and admin's.
-	ActionCatalogueWrite: {class: ClassAdmin, recency: iam.RecencyAny},
+	ActionCatalogueWrite: {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistApprove},
 
 	// --- beyond recovery --------------------------------------------- //
 	//
@@ -749,8 +920,10 @@ var rules = map[Action]rule{
 	// it, so it is the one tidy an author does not take for themselves —
 	// trash and restore are theirs — and it asks the step-up window as
 	// every other irreversible gesture does.
-	ActionWorkPurge: {class: ClassAdmin, humanOnly: true, recency: iam.RecencyStepUp},
-	ActionPagePurge: {class: ClassAdmin, humanOnly: true, recency: iam.RecencyStepUp},
+	ActionWorkPurge: {class: ClassAdmin, humanOnly: true, recency: iam.RecencyStepUp,
+		assist: AssistApprove},
+	ActionPagePurge: {class: ClassAdmin, humanOnly: true, recency: iam.RecencyStepUp,
+		assist: AssistApprove},
 
 	// --- the org chart ------------------------------------------------- //
 	//
@@ -758,49 +931,59 @@ var rules = map[Action]rule{
 	// lies inside the units they lead — see [ClassSubtree]. HUMAN-ONLY and
 	// at the step-up window, as every other write of the company document
 	// is: a seat rewriting the org it runs inside is a model choosing its
-	// own team.
-	ActionOrgWrite: {class: ClassSubtree, humanOnly: true, recency: iam.RecencyStepUp},
+	// own team. A PERSON'S ASSISTANT carries it as the person's own edit,
+	// approved from a before-and-after of the seats and units it changes,
+	// at the same step-up window (ADR-0052).
+	ActionOrgWrite: {class: ClassSubtree, humanOnly: true, recency: iam.RecencyStepUp,
+		assist: AssistApprove},
 	// AND A LEAD READS WHAT THEY MAY WRITE: one seat or one unit of their
 	// subtree, masked as every read of the document is, without admin.
-	ActionOrgRead: {class: ClassSubtree, recency: iam.RecencyAny},
+	ActionOrgRead: {class: ClassSubtree, recency: iam.RecencyAny, assist: AssistRead},
 
 	// --- the company's own controls ------------------------------------ //
-	ActionConfigRead:  {class: ClassAdmin, recency: iam.RecencyAny},
-	ActionConfigWrite: {class: ClassAdmin, recency: iam.RecencyStepUp},
-	ActionSecretList:  {class: ClassAdmin, recency: iam.RecencyAny},
+	ActionConfigRead:  {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistRead},
+	ActionConfigWrite: {class: ClassAdmin, recency: iam.RecencyStepUp, assist: AssistApprove},
+	// THE PRINCIPLES, AS THE DOCUMENT IS: admin's, the write at the step-up
+	// window. The charter is the company's root, nobody's subtree, so no
+	// lead reaches either verb.
+	ActionPrinciplesRead:  {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistRead},
+	ActionPrinciplesWrite: {class: ClassAdmin, recency: iam.RecencyStepUp, assist: AssistApprove},
+	ActionSecretList:      {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistRead},
 	// A REVEAL HANDS OVER A CREDENTIAL'S VALUE, which is a person's to read
 	// and never a pipeline's: the row refuses any request a token presented.
 	ActionSecretReveal: {class: ClassAdmin, recency: iam.RecencyStepUp,
-		presence: PresenceRequired},
-	ActionSecretWrite:  {class: ClassAdmin, recency: iam.RecencyStepUp},
-	ActionSetupRead:    {class: ClassAdmin, recency: iam.RecencyAny},
-	ActionSetupConnect: {class: ClassAdmin, recency: iam.RecencyStepUp},
-	ActionFleetOperate: {class: ClassAdmin, recency: iam.RecencyStepUp},
-	ActionFleetRead:    {class: ClassAdmin, recency: iam.RecencyAny},
+		presence: PresenceRequired, assist: AssistRead},
+	ActionSecretWrite:  {class: ClassAdmin, recency: iam.RecencyStepUp, assist: AssistApprove},
+	ActionSetupRead:    {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistRead},
+	ActionSetupConnect: {class: ClassAdmin, recency: iam.RecencyStepUp, assist: AssistApprove},
+	ActionFleetOperate: {class: ClassAdmin, recency: iam.RecencyStepUp, assist: AssistApprove},
+	ActionFleetRead:    {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistRead},
 	// THE COMPANY-WIDE TRAIL — every event, turn and phase, every agent-to-
 	// agent channel, the identity estate's own audit. Admin's: one seat's
 	// trail is its lead's too ([ActionSeatTrailRead]); everybody's is not.
-	ActionAuditRead: {class: ClassAdmin, recency: iam.RecencyAny},
+	ActionAuditRead: {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistRead},
 
 	// --- the identity directory ---------------------------------------- //
 	//
 	// A DIRECTORY READ IS THE PERSON IT IS ABOUT, OR ADMIN — see
 	// [ClassDirectory] for why the object is an id.
-	ActionDirectoryRead: {class: ClassDirectory, recency: iam.RecencyAny},
+	ActionDirectoryRead: {class: ClassDirectory, recency: iam.RecencyAny, assist: AssistRead},
 	// AND A DIRECTORY WRITE IS ADMIN'S, with NO self path at all. Editing
 	// your own permissions is the escalation this estate exists to close,
 	// so "it is my own row" must not be a way in — the record layer refuses
 	// conferring what the caller does not hold, and this refuses the
 	// gesture before it gets there.
 	//
-	// EVERY ONE OF THEM — enrolling somebody, inviting them, editing their
-	// row, resetting their second factor, removing them — asks the step-up
+	// EVERY ONE OF THEM (editing somebody's row, removing them, withdrawing
+	// an invitation, and [ActionSignInWrite]'s four) asks the step-up
 	// window, and needs a person present: what keeps a week-old cookie away
 	// is the window, and what keeps a stolen pipeline credential away is the
 	// row's own refusal of a token and internal/iamdomain's refusal of an
 	// administrative record written through one.
 	ActionDirectoryWrite: {class: ClassAdmin, recency: iam.RecencyStepUp,
-		presence: PresenceRequired},
+		presence: PresenceRequired, assist: AssistApprove},
+	ActionSignInWrite: {class: ClassAdmin, recency: iam.RecencyStepUp,
+		presence: PresenceRequired, assist: AssistApprove},
 	// MINTING AND REVOKING A MACHINE TOKEN, CHANGING HOW SOMEBODY PROVES
 	// WHO THEY ARE, and ENDING SESSIONS are the gestures a person
 	// legitimately makes about themselves — a personal access token, a
@@ -814,9 +997,9 @@ var rules = map[Action]rule{
 	// for wherever they found it; it may never change how its owner proves
 	// who they are; and about anybody else it may do none of them.
 	ActionCredentialWrite: {class: ClassDirectory, recency: iam.RecencyStepUp,
-		presence: PresenceRequiredForOthers},
+		presence: PresenceRequiredForOthers, assist: AssistApprove},
 	ActionCredentialProof: {class: ClassDirectory, recency: iam.RecencyStepUp,
-		presence: PresenceRequired},
+		presence: PresenceRequired, assist: AssistApprove},
 	// ENDING SESSIONS ASKS OPPOSITE PROOFS OF ITS TWO ARMS
 	// ([rule.selfRecency]). The person themselves asks for NONE: it is the
 	// first thing somebody does on finding somebody else in their account —
@@ -831,7 +1014,7 @@ var rules = map[Action]rule{
 	// whole company. The self arm stays open to a token for the
 	// revocation's reason above: what it ends includes the token.
 	ActionSessionEnd: {class: ClassDirectory, recency: iam.RecencyStepUp,
-		selfRecency: iam.RecencyAny, presence: PresenceRequiredForOthers},
+		selfRecency: iam.RecencyAny, presence: PresenceRequiredForOthers, assist: AssistApprove},
 	// ENDING EVERY SESSION IN THE COMPANY is admin's, a person's, and a
 	// recent proof's: it ends every person's authority at once, every
 	// machine token included, and cannot be taken back. A Tier A token holds
@@ -839,7 +1022,7 @@ var rules = map[Action]rule{
 	// by construction, so the restore runbook's CLI step still runs on the
 	// day nobody can sign in.
 	ActionSessionInvalidate: {class: ClassAdmin, recency: iam.RecencyStepUp,
-		presence: PresenceRequired},
+		presence: PresenceRequired, assist: AssistApprove},
 
 	// --- artifacts ------------------------------------------------------- //
 	//
@@ -852,63 +1035,78 @@ var rules = map[Action]rule{
 	// LISTING IS EVERYBODY'S, because it is a filter over what reading
 	// admits ([Visible]): a caller is shown the artifacts they may open and
 	// told nothing about the rest.
-	ActionArtifactList: {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionArtifactList: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
 	// THE CATALOGUE IS EVERYBODY'S: it names reads and who may make them,
 	// and holds no row of any domain.
-	ActionDashboardSources: {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionDashboardSources: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
+	// A SOURCE'S PREVIEW IS A BUILDER'S, the app and nothing else: the rows
+	// are the source's own question's to decide, as the viewer.
+	ActionDashboardSourceRead: {class: ClassApp, app: iam.GrantArtifacts, recency: iam.RecencyAny,
+		assist: AssistRead},
 	ActionArtifactRead: {class: ClassShared, minRole: artifacts.RoleViewer,
-		recency: iam.RecencyAny},
+		recency: iam.RecencyAny, assist: AssistRead},
 	// CREATING IS THE APP AND NOTHING ELSE: there is no artifact yet to hold
 	// a relation to, and its creator becomes its owner.
 	ActionArtifactCreate: {class: ClassApp, app: iam.GrantArtifacts,
-		recency: iam.RecencyAny, steerable: true},
+		recency: iam.RecencyAny, steerable: true, assist: AssistApprove},
 	ActionArtifactPublish: {class: ClassShared, app: iam.GrantArtifacts,
-		minRole: artifacts.RoleEditor, recency: iam.RecencyAny, steerable: true},
+		minRole: artifacts.RoleEditor, recency: iam.RecencyAny, steerable: true,
+		assist: AssistApprove},
 	ActionArtifactUpdate: {class: ClassShared, app: iam.GrantArtifacts,
-		minRole: artifacts.RoleEditor, recency: iam.RecencyAny, steerable: true},
+		minRole: artifacts.RoleEditor, recency: iam.RecencyAny, steerable: true,
+		assist: AssistApprove},
 	ActionArtifactAsset: {class: ClassShared, app: iam.GrantArtifacts,
-		minRole: artifacts.RoleEditor, recency: iam.RecencyAny, steerable: true},
+		minRole: artifacts.RoleEditor, recency: iam.RecencyAny, steerable: true,
+		assist: AssistApprove},
 	ActionArtifactSchema: {class: ClassShared, app: iam.GrantArtifacts,
-		minRole: artifacts.RoleEditor, recency: iam.RecencyAny, steerable: true},
+		minRole: artifacts.RoleEditor, recency: iam.RecencyAny, steerable: true,
+		assist: AssistApprove},
 	ActionArtifactShare: {class: ClassShared, minRole: artifacts.RoleOwner,
-		recency: iam.RecencyAny},
+		recency: iam.RecencyAny, assist: AssistApprove},
 	ActionArtifactUnshare: {class: ClassShared, minRole: artifacts.RoleOwner,
-		recency: iam.RecencyAny},
+		recency: iam.RecencyAny, assist: AssistApprove},
 	// EVERY PARTICIPANT REACHES THE DATA, and the collection decides: a
 	// viewer may append to a collection that takes contributions, and an
 	// editor may be kept out of another's private rows.
 	ActionArtifactDataRead: {class: ClassShared, minRole: artifacts.RoleViewer,
-		recency: iam.RecencyAny},
+		recency: iam.RecencyAny, assist: AssistRead},
 	ActionArtifactDataQuery: {class: ClassShared, minRole: artifacts.RoleViewer,
-		recency: iam.RecencyAny},
+		recency: iam.RecencyAny, assist: AssistRead},
 	ActionArtifactDataWrite: {class: ClassShared, minRole: artifacts.RoleViewer,
-		recency: iam.RecencyAny, steerable: true},
+		recency: iam.RecencyAny, steerable: true, assist: AssistApprove},
 	// DISCARDING A NEWER VERSION is a person's, present: refused to every
 	// seat before the class is read, and to every machine token.
 	ActionArtifactForce: {class: ClassShared, app: iam.GrantArtifacts,
 		minRole: artifacts.RoleEditor, humanOnly: true, presence: PresenceRequired,
-		recency: iam.RecencyAny},
+		recency: iam.RecencyAny, assist: AssistApprove},
 	// TRASH AND RESTORE are the owner's, beside the app, and never an
 	// agent's: a trashed artifact stops serving at once.
 	ActionArtifactTrash: {class: ClassShared, app: iam.GrantArtifacts,
-		minRole: artifacts.RoleOwner, humanOnly: true, recency: iam.RecencyAny},
+		minRole: artifacts.RoleOwner, humanOnly: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
 	ActionArtifactRestore: {class: ClassShared, app: iam.GrantArtifacts,
-		minRole: artifacts.RoleOwner, humanOnly: true, recency: iam.RecencyAny},
+		minRole: artifacts.RoleOwner, humanOnly: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
 	// A PURGE IS ADMIN'S, A PERSON'S AND A RECENT PROOF'S, as every other
 	// purge is: nothing undoes it.
 	ActionArtifactPurge: {class: ClassAdmin, humanOnly: true,
-		presence: PresenceRequired, recency: iam.RecencyStepUp},
+		presence: PresenceRequired, recency: iam.RecencyStepUp, assist: AssistApprove},
 	// OWNERSHIP MOVES BY A PERSON'S GESTURE, never a token's and never a
 	// seat's: an agent handing its work to itself, or a pipeline moving
 	// somebody's work away from them, is the escalation the rule closes.
 	ActionArtifactTransfer: {class: ClassShared, minRole: artifacts.RoleOwner,
-		humanOnly: true, presence: PresenceRequired, recency: iam.RecencyAny},
+		humanOnly: true, presence: PresenceRequired, recency: iam.RecencyAny, assist: AssistApprove},
 	ActionArtifactPin: {class: ClassShared, minRole: artifacts.RoleViewer,
-		humanOnly: true, recency: iam.RecencyAny},
+		humanOnly: true, recency: iam.RecencyAny, assist: AssistApprove},
 	ActionArtifactExport: {class: ClassShared, minRole: artifacts.RoleEditor,
-		recency: iam.RecencyAny},
-	ActionArtifactUsage: {class: ClassAdmin, recency: iam.RecencyAny},
-	ActionArtifactReady: {class: ClassEverybody, recency: iam.RecencyAny},
+		recency: iam.RecencyAny, assist: AssistRead},
+	ActionArtifactUsage: {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistRead},
+	// A VIEWER'S BROWSER REPORTING A RENDER is everybody's: it carries no
+	// artifact content.
+	ActionArtifactReady: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
+	// A FRAME'S TICKET is everybody's as a gate: the artifact's own read
+	// decides what it opens. See [ActionArtifactTicket].
+	ActionArtifactTicket: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistApprove},
 
 	// --- artifact folders and the company's brand -------------------- //
 	//
@@ -917,31 +1115,58 @@ var rules = map[Action]rule{
 	// the parent's contributor role is asked beside it
 	// ([ActionArtifactFolderFile]).
 	ActionArtifactFolderCreate: {class: ClassApp, app: iam.GrantArtifacts,
-		recency: iam.RecencyAny, steerable: true},
+		recency: iam.RecencyAny, steerable: true, assist: AssistApprove},
 	ActionArtifactMove: {class: ClassShared, app: iam.GrantArtifacts,
-		minRole: artifacts.RoleEditor, recency: iam.RecencyAny, steerable: true},
+		minRole: artifacts.RoleEditor, recency: iam.RecencyAny, steerable: true, assist: AssistApprove},
 	ActionArtifactFolderFile: {class: ClassShared, app: iam.GrantArtifacts,
-		minRole: artifacts.RoleContributor, recency: iam.RecencyAny, steerable: true},
+		minRole: artifacts.RoleContributor, recency: iam.RecencyAny, steerable: true, assist: AssistApprove},
 	// MANAGING A FOLDER is the owner's and a person's: a seat that renamed,
 	// moved or removed a folder a team files into would reorganise work it
 	// does not own, and a model persuaded by a row it read must not be able
 	// to.
 	ActionArtifactFolderRename: {class: ClassShared, app: iam.GrantArtifacts,
-		minRole: artifacts.RoleOwner, humanOnly: true, recency: iam.RecencyAny},
+		minRole: artifacts.RoleOwner, humanOnly: true, recency: iam.RecencyAny, assist: AssistApprove},
 	ActionArtifactFolderMove: {class: ClassShared, app: iam.GrantArtifacts,
-		minRole: artifacts.RoleOwner, humanOnly: true, recency: iam.RecencyAny},
+		minRole: artifacts.RoleOwner, humanOnly: true, recency: iam.RecencyAny, assist: AssistApprove},
 	ActionArtifactFolderRemove: {class: ClassShared, app: iam.GrantArtifacts,
-		minRole: artifacts.RoleOwner, humanOnly: true, recency: iam.RecencyAny},
+		minRole: artifacts.RoleOwner, humanOnly: true, recency: iam.RecencyAny, assist: AssistApprove},
 	ActionArtifactFolderUnfile: {class: ClassShared, app: iam.GrantArtifacts,
-		minRole: artifacts.RoleOwner, humanOnly: true, recency: iam.RecencyAny},
+		minRole: artifacts.RoleOwner, humanOnly: true, recency: iam.RecencyAny, assist: AssistApprove},
 	// THE BRAND IS EVERYBODY'S TO READ, and an administrator's, a person's
 	// and a recent proof's to change: an adoption restyles every page the
 	// company publishes, as far-reaching as a purge is irreversible.
-	ActionBrandRead: {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionBrandRead: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
 	ActionBrandAdopt: {class: ClassAdmin, humanOnly: true,
-		presence: PresenceRequired, recency: iam.RecencyStepUp},
+		presence: PresenceRequired, recency: iam.RecencyStepUp, assist: AssistApprove},
 	ActionBrandClear: {class: ClassAdmin, humanOnly: true,
-		presence: PresenceRequired, recency: iam.RecencyStepUp},
+		presence: PresenceRequired, recency: iam.RecencyStepUp, assist: AssistApprove},
+
+	// --- the Dashboard Assistant (ADR-0050 to ADR-0053) ---
+	//
+	// THE ASSISTANT'S OWN VERBS, each never the assistant's
+	// ([assistantNever]), HUMAN-ONLY and needing a PERSON PRESENT: a grant
+	// that could converse, approve or read a conversation would be the
+	// assistant acting on its own behalf, and approving its own proposal is
+	// the one gesture the whole design keeps from it.
+	// TestTheHumanOnlyListIsExactlyTheIntendedSet holds every `assistant.`
+	// row here to all three.
+	//
+	// EVERYBODY'S BY CLASS, and still only a PERSON's: the surface answers
+	// a machine token, a service account and a Tier A token's session
+	// 403 assistant_not_available through the one predicate the guard
+	// derives grants by (iam.Assistable), because using the assistant is
+	// asking it to act as you, and only a person signed in through their
+	// own browser has a you it may act as (decision D04).
+	ActionAssistantConverse: {class: ClassEverybody, humanOnly: true,
+		presence: PresenceRequired, recency: iam.RecencyAny, assist: AssistApprove},
+	ActionAssistantConversationRead: {class: ClassEverybody, humanOnly: true,
+		presence: PresenceRequired, recency: iam.RecencyAny, assist: AssistRead},
+	ActionAssistantApprove: {class: ClassEverybody, humanOnly: true, recency: iam.RecencyAny,
+		presence: PresenceRequired, assist: AssistApprove},
+	ActionAssistantDecline: {class: ClassEverybody, humanOnly: true, recency: iam.RecencyAny,
+		presence: PresenceRequired, assist: AssistApprove},
+	ActionAssistantAuditRead: {class: ClassAdmin, humanOnly: true,
+		recency: iam.RecencyStepUp, presence: PresenceRequired, assist: AssistRead},
 }
 
 // RecencyOf reports how recent a proof a verb asks for, and whether the table
@@ -1030,6 +1255,128 @@ func MinRoleOf(a Action) (artifacts.Role, bool) {
 func SteerableOf(a Action) (bool, bool) {
 	r, ok := rules[a]
 	return r.steerable, ok
+}
+
+// AssistOf reports what the Dashboard Assistant may do with a verb (see
+// [rule.assist]), and whether the table knows the verb at all.
+//
+// EXPORTED FOR THE WALKS, this package's and those that hold what the
+// assistant is offered against what the table lets it take, on [RecencyOf]'s
+// terms. Use [Decide].
+func AssistOf(a Action) (AssistClass, bool) {
+	r, ok := rules[a]
+	if !ok {
+		return "", false
+	}
+	return assistOf(a, r), true
+}
+
+// assistOf is what the assistant may do with verb a, whose row is r: never
+// for a verb on [assistantNever], and the row's own nature otherwise.
+func assistOf(a Action, r rule) AssistClass {
+	if _, never := assistantNever[a]; never {
+		return AssistNever
+	}
+	return r.assist
+}
+
+// AssistNeverReason is why the Dashboard Assistant never takes a verb, as a
+// reviewer reads it, and whether the human-only list names the verb at all:
+// for the walk that holds the list to the set it is meant to be.
+func AssistNeverReason(a Action) (string, bool) {
+	entry, never := assistantNever[a]
+	return entry.why, never
+}
+
+// AssistNeverSentence is what the person is told when their assistant meets a
+// verb on the human-only list: why it stays with them, in plain words, and
+// where they do it themselves. Empty for a verb the list does not name.
+//
+// ONE SENTENCE PER FAMILY, so the person reads the same answer for every
+// gesture of one kind (inviting somebody and creating them both hand out a
+// sign-in link) and never a verb's internal name.
+func AssistNeverSentence(a Action) string { return assistantNever[a].tell }
+
+// neverEntry is one verb of the human-only list: the reason a reviewer reads,
+// and the sentence the person is told.
+type neverEntry struct{ why, tell string }
+
+// The sentences the person is told, one per family of the human-only list.
+const (
+	tellSignIn = "Creating a person or an invitation, or resetting somebody's password or " +
+		"second factor, hands out a way to sign in, so it stays with you: use People in " +
+		"Settings."
+	tellToken = "Creating or revoking an access token hands out or ends a credential, so it " +
+		"stays with you: use API tokens in Settings."
+	tellProof = "Changing how somebody proves who they are stays with them: they do it from " +
+		"their Account page."
+	tellSessions = "Signing people out stays with you: use People in Settings."
+	tellSecret   = "A secret's value never passes through the assistant, so this stays with " +
+		"you: use Secrets in Settings."
+	tellSetup = "Connecting an integration means entering its credentials, so it stays with " +
+		"you: use Integrations."
+	tellFrame = "An artifact's page opens from the artifact itself: open it from Artifacts."
+	tellOwn   = "The assistant never approves, declines or reads its own conversations: that " +
+		"stays with you."
+	tellSeat      = "Only an agent does this, as part of its own work."
+	tellKnowledge = "Asking the knowledge base's own model would spend outside this " +
+		"conversation's budget, so the assistant searches the pages itself instead."
+	tellReady = "Only an open artifact reports that it has finished drawing."
+)
+
+// assistantNever is THE HUMAN-ONLY LIST: every verb the Dashboard Assistant
+// never takes, whoever approved what, each with the reason a reviewer reads
+// and the sentence the person is told (ADR-0052). Every other verb is the
+// person's own through their assistant, as a read or as the one change they
+// approved, because a grant is the person's own session narrowed and never
+// widened (ADR-0050, ADR-0051).
+//
+// FOUR KINDS OF VERB AND NO OTHER, and a verb joins only in a reviewed diff
+// that names which:
+//
+//   - a sign-in or session ceremony: how somebody proves who they are, or
+//     the sessions and tokens that carry it. Creating a person and inviting
+//     one are here because the answer IS a sign-in link, a bearer
+//     credential, which is why a seat is added through the assistant and a
+//     person is not;
+//   - an answer, or a request body, that carries a bearer credential or
+//     secret material in clear, which would then sit in a model's context,
+//     a transcript and a stored proposal;
+//   - the assistant's own decisions, so it can never approve itself;
+//   - a gesture whose effect a grant would falsify or hide: a model spend
+//     outside the turn's own meter, and a render only an open page reports;
+//
+// plus the two seat-only verbs, which no person takes either, so parity
+// keeps them from the person's assistant without a reason of its own.
+var assistantNever = map[Action]neverEntry{
+	ActionCredentialWrite: {"a machine token's mint answers the token in clear, and revoking " +
+		"one is a session ceremony", tellToken},
+	ActionCredentialProof: {"changes how somebody proves who they are: a second factor, the " +
+		"recovery codes or a password", tellProof},
+	ActionSignInWrite: {"creating a person or an invitation answers a sign-in link, a bearer " +
+		"credential in clear, and a password reset or a second factor reset is a sign-in " +
+		"ceremony", tellSignIn},
+	ActionSessionEnd:        {"a session ceremony: it signs somebody out", tellSessions},
+	ActionSessionInvalidate: {"a session ceremony: it signs everybody out, irreversibly", tellSessions},
+	ActionSecretReveal:      {"answers a credential's value in clear", tellSecret},
+	ActionSecretWrite: {"a secret's value travels in the request body, so a model would author " +
+		"it and a transcript would keep it", tellSecret},
+	ActionSetupConnect: {"an integration's inputs carry vendor credentials in the request body, " +
+		"and provisioning mints vendor secrets", tellSetup},
+	ActionArtifactTicket: {"a view ticket is a bearer credential bound to the session that " +
+		"opened the frame", tellFrame},
+	ActionAssistantConverse:         {"the assistant's own verb: it never acts on its own behalf", tellOwn},
+	ActionAssistantConversationRead: {"the assistant's own verb: it never acts on its own behalf", tellOwn},
+	ActionAssistantApprove:          {"the assistant never approves its own proposal", tellOwn},
+	ActionAssistantDecline:          {"the assistant never decides its own proposal", tellOwn},
+	ActionAssistantAuditRead: {"a compliance read of somebody's conversations is the " +
+		"administrator's own, recorded beside their name", tellOwn},
+	ActionKnowledgeAnswer: {"a model call inside a model turn, spent outside the turn's own " +
+		"budget meter; the assistant reads the same pages itself", tellKnowledge},
+	ActionArtifactReady: {"render telemetry an open frame reports; a grant renders nothing, " +
+		"so its report would falsify the service objective", tellReady},
+	ActionColleagueAsk: {"an agent seat's own verb, which no person takes", tellSeat},
+	ActionSandboxRun:   {"an agent seat's own verb, which no person takes", tellSeat},
 }
 
 // Actions is every verb this build authorizes, sorted, for the walks that ask

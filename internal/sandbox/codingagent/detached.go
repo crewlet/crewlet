@@ -156,6 +156,9 @@ type CLI interface {
 	WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error)
 }
 
+// resumer is a CLI that continues a session an earlier run reported.
+type resumer interface{ Resumes() bool }
+
 // Output is how the wrapper connects a CLI's standard streams in the box —
 // where its stdout lands, what its stdin reads — and how its result is read
 // back.
@@ -293,6 +296,10 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 // file, which ends: a headless agent must never block waiting for input, and
 // one that does would hang forever with no timer to stop it.
 func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest) (sandbox.RunHandle, error) {
+	if c, ok := r.cli.(resumer); req.Resume != "" && (!ok || !c.Resumes()) {
+		return sandbox.RunHandle{}, fmt.Errorf("codingagent: %s cannot continue an earlier "+
+			"session, and this run asks it to", r.cli.Name())
+	}
 	paths := PathsFor(box)
 	// The artefacts are cleared unconditionally rather than only on a reuse
 	// path: the runner cannot tell a fresh box from a reused one, and

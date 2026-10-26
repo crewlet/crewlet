@@ -16,6 +16,7 @@ func everyLogPrefix() []string {
 		topics.UsageLogPrefix,
 		topics.ArtifactsLogPrefix,
 		topics.ArtifactDataLogPrefix,
+		topics.AssistantLogPrefix,
 	}
 }
 
@@ -93,6 +94,10 @@ func TestTheLogsBuildersAreThePrefixRelativeGrammar(t *testing.T) {
 			topics.LogSubject(topics.ArtifactDataLogPrefix, tc.kind, tc.id); got != want {
 			t.Errorf("the datastore log names (%q, %q) %q and the grammar %q", tc.kind, tc.id, got, want)
 		}
+		if got, want := topics.AssistantLogSubject(tc.kind, tc.id),
+			topics.LogSubject(topics.AssistantLogPrefix, tc.kind, tc.id); got != want {
+			t.Errorf("the assistant log names (%q, %q) %q and the grammar %q", tc.kind, tc.id, got, want)
+		}
 	}
 }
 
@@ -162,6 +167,8 @@ func TestEachStateLogIsNamedAsItAlwaysHasBeen(t *testing.T) {
 			"CREWLET_ARTIFACTS_LOG", "crewlet.artifacts.log"},
 		{"artifactdata", topics.ArtifactDataLogStream, topics.ArtifactDataLogPrefix,
 			topics.ArtifactDataLogWildcard, "CREWLET_ARTIFACT_DATA_LOG", "crewlet.artifactdata.log"},
+		{"assistant", topics.AssistantLogStream, topics.AssistantLogPrefix,
+			topics.AssistantLogWildcard, "CREWLET_ASSISTANT_LOG", "crewlet.assistant.log"},
 	} {
 		if tc.stream != tc.wantStream || tc.prefix != tc.wantPrefix ||
 			tc.wildcard != tc.wantPrefix+".>" {

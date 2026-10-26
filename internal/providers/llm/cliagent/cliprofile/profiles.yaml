@@ -100,6 +100,57 @@ claude-code:
     - "NotebookEdit"
     - "Agent"
   local_tools: denied
+  # WEB OFF, for an entry that sets `overrides: {web_tools: denied}` (the
+  # Dashboard Assistant requires it). The seats' --tools allow list names
+  # the two web tools and nothing else, so the denial empties it
+  # (`--tools ""`) and drops --allowedTools, and puts both web tools on the
+  # deny list beside the local ones, which wins over any allow: a vendor
+  # default that started admitting a tool off the allow list would otherwise
+  # reopen the web without a word. MEASURED against 2.1.310 with the
+  # doctor's own web probe: the deny list answered NO-WEB while the seats'
+  # args fetched the endpoint's clock to the second.
+  #
+  # NO TOOL OF ITS OWN, because this argv is the Dashboard Assistant's: the
+  # empty allow list takes every built-in tool away, not the deny list.
+  # MEASURED against 2.1.310 with no login, which reaches no model, off the
+  # stream's init event: the deny list alone left thirteen tools on offer
+  # (Workflow, SendMessage, EnterWorktree, the cron tools and more), and
+  # `--tools ""` left none. The deny list stays beside it, so a release that
+  # stopped honouring the empty list still refuses the tools that matter most.
+  # The one tool source left is the engine's `crewlet` server, which the mcp
+  # block below adds for a run with tools (ADR-0049): --strict-mcp-config
+  # loads no other, --setting-sources "" reads no settings file that could
+  # add one, and its allow list names only `mcp__crewlet__*`. --safe-mode,
+  # which this denial used before, is gone for the reason the seats' argv
+  # dropped it: under it a run lists no MCP server at all.
+  web_tools_note: "an empty --tools allow list, and WebFetch and WebSearch on --disallowedTools; measured refused on Claude Code 2.1.310"
+  web_denial:
+    complete_args:
+      - "-p"
+      - "--output-format"
+      - "stream-json"
+      - "--verbose"
+      - "--include-partial-messages"
+      - "--no-session-persistence"
+      - "--setting-sources"
+      - ""
+      - "--strict-mcp-config"
+      - "--disable-slash-commands"
+      - "--tools"
+      - ""
+      - "--disallowedTools"
+      - "Bash"
+      - "Read"
+      - "Write"
+      - "Edit"
+      - "NotebookEdit"
+      - "Agent"
+      - "WebFetch"
+      - "WebSearch"
+  tools_off:
+    args: [["--tools", ""], ["--strict-mcp-config"]]
+    refuses: ["--mcp-config", "--allowedTools", "--allowed-tools", "--plugin-dir"]
+    note: "--tools \"\" left the init event's built-in tool list empty and --strict-mcp-config loaded no server but the engine's crewlet server; measured on Claude Code 2.1.310"
   model_args: ["--model", "{model}"]
   # BOTH SYSTEM-PROMPT CHANNELS, each a FILE: a seat's system prompt carries
   # the org chart, its policies, its roster and its own memory, and argv is
@@ -497,7 +548,110 @@ codex:
     - "tools.experimental_request_user_input.enabled=false"
     - "-"
   # Denied: no shell, and apply_patch writes nothing (above).
+  #
+  # NO tools_off, so the Dashboard Assistant refuses this CLI: apply_patch has
+  # no switch, so the model keeps a tool of its own, and its patch check
+  # answers whether a file outside the call exists and holds given lines,
+  # which is a read of the engine host no request of the person's made.
   local_tools: denied
+  # WEB OFF is the same override with the search mode `disabled`, one of the
+  # four the config accepts (disabled, cached, indexed, live). The read-only
+  # sandbox already cuts the shell's network, so the search tool is the only
+  # way out. MEASURED against 0.150.1 with the doctor's web probe: with
+  # `disabled` the stream carried no web_search item and the answer was
+  # NO-WEB; with `live` it ran two searches and returned the clock.
+  web_tools_note: 'web_search="disabled"; measured refused on Codex CLI 0.150.1'
+  web_denial:
+    complete_args:
+      - "exec"
+      - "--json"
+      - "--skip-git-repo-check"
+      - "--ephemeral"
+      - "--ignore-user-config"
+      - "--ignore-rules"
+      - "--sandbox"
+      - "read-only"
+      - "-c"
+      - 'web_search="disabled"'
+      - "-c"
+      - "project_root_markers=[]"
+      - "-c"
+      - "project_doc_max_bytes=9223372036854775807"
+      - "-c"
+      - "skills.include_instructions=false"
+      - "-c"
+      - "skills.bundled.enabled=false"
+      - "-c"
+      - "features.shell_tool=false"
+      - "-c"
+      - "features.unified_exec=false"
+      - "-c"
+      - "features.shell_snapshot=false"
+      - "-c"
+      - "features.view_image=false"
+      - "-c"
+      - "features.goals=false"
+      - "-c"
+      - "features.multi_agent=false"
+      - "-c"
+      - "features.image_generation=false"
+      - "-c"
+      - "features.apps=false"
+      - "-c"
+      - "features.plugins=false"
+      - "-c"
+      - "features.hooks=false"
+      - "-c"
+      - "features.memories=false"
+      - "-c"
+      - "tools.experimental_request_user_input.enabled=false"
+      - "-"
+    # A RUN WITH TOOLS runs the mcp block's own argv (`exec` with the crewlet
+    # server configured), so the denial restates it with the search off too.
+    mcp:
+      complete_args:
+        - "exec"
+        - "--json"
+        - "--skip-git-repo-check"
+        - "--ignore-user-config"
+        - "--ignore-rules"
+        - "--sandbox"
+        - "read-only"
+        - "-c"
+        - 'web_search="disabled"'
+        - "-c"
+        - "project_root_markers=[]"
+        - "-c"
+        - "project_doc_max_bytes=9223372036854775807"
+        - "-c"
+        - "skills.include_instructions=false"
+        - "-c"
+        - "skills.bundled.enabled=false"
+        - "-c"
+        - "features.shell_tool=false"
+        - "-c"
+        - "features.unified_exec=false"
+        - "-c"
+        - "features.shell_snapshot=false"
+        - "-c"
+        - "features.view_image=false"
+        - "-c"
+        - "features.goals=false"
+        - "-c"
+        - "features.multi_agent=false"
+        - "-c"
+        - "features.image_generation=false"
+        - "-c"
+        - "features.apps=false"
+        - "-c"
+        - "features.plugins=false"
+        - "-c"
+        - "features.hooks=false"
+        - "-c"
+        - "features.memories=false"
+        - "-c"
+        - "tools.experimental_request_user_input.enabled=false"
+        - "-"
   model_args: ["--model", "{model}"]
   # A SIDE PASS REPLACES CODEX'S PROMPT: model_instructions_file takes the
   # place of the base instructions outright — the Responses `instructions`
@@ -769,6 +923,7 @@ gemini-cli:
   # Denied by the policy file below: the CLI's file, shell, sub-agent, plan and
   # skill tools are not offered at all.
   local_tools: denied
+  web_tools_note: "no web denial: removing web_fetch and google_web_search from the seeded allow list would be one, but it has not been measured against a gemini CLI, so this profile cannot serve the assistant"
   seed_files:
     # privacy.usageStatisticsEnabled=false: on by default, it opens a
     # connection to the vendor's logging service (play.googleapis.com) on every
@@ -1136,6 +1291,7 @@ qwen-code:
   # `.git` file. 0.23.4 also looks one directory above the project root,
   # which is <seat>/work: the engine's, holding nothing but call
   # directories.
+  web_tools_note: "no web denial: removing web_fetch and web_search from the seeded allow list would be one, but it has not been measured against a qwen CLI, so this profile cannot serve the assistant"
   seed_files:
     - path: .qwen/settings.json
       content: '{"general":{"chatRecording":false,"enableAutoUpdate":false,"preventSystemSleep":false},"privacy":{"usageStatisticsEnabled":false},"memory":{"enableManagedAutoMemory":false,"enableManagedAutoDream":false,"enableAutoSkill":false},"model":{"openAILoggingDir":"~/.qwen/openai-logs","generationConfig":{"maxRetries":0}},"skills":{"disabledLevels":["project","user","extension","bundled"]},"disableAllHooks":true,"tools":{"core":["web_fetch","web_search"]},"permissions":{"allow":["web_fetch","web_search"],"deny":["advisor","agent","artifact","ask_user_question","create_sub_session","cron_create","cron_delete","cron_list","display_image","edit","enter_plan_mode","enter_worktree","exec","exit_plan_mode","exit_worktree","get_goal","glob","grep_search","image_gen","list_agents","list_directory","loop_wakeup","lsp","manage_memory","monitor","notebook_edit","omni_caption_audio","omni_caption_image","omni_clip_audio","omni_clip_image","omni_clip_video","omni_convert_image","omni_downsample_audio","omni_downsample_image","omni_downscale_video","omni_extract_audio","omni_extract_keyframes","omni_ocr_image","omni_recall_media_memory","omni_transcribe_audio","omni_understand_video_segments","propose_goal","read_file","read_mcp_resource","record_artifact","record_source","report_findings","request_shutdown","run_shell_command","save_memory","search_memory","send_message","skill","structured_output","task_create","task_list","task_stop","task_update","team_create","team_delete","team_plan_approval","todo_write","tool_call","tool_search","update_goal","workflow","write_file","zoom_image"]}}'
@@ -1426,6 +1582,13 @@ opencode:
   # new release; `share: disabled` keeps it from publishing a transcript;
   # `snapshots: false` stops it keeping a git snapshot of a working
   # directory that is empty by construction.
+  #
+  # NO tools_off, so the Dashboard Assistant refuses this CLI. The seats'
+  # policy was measured to decide what a call is offered (the web tools and
+  # nothing else, above), but the denial's deny-all has not been measured to
+  # leave a call offered nothing, and the construction lives in a seeded file
+  # rather than on the argv tools_off is checked against, so a release that
+  # read the policy format differently (as 2.0 read v1's) would go unseen.
   local_tools: denied
   work_config_env:
     OPENCODE_CONFIG_DIR: .crewlet-config
@@ -1433,6 +1596,29 @@ opencode:
     - path: .crewlet-config/opencode.json
       in: work
       content: '{"$schema":"https://opencode.ai/config.json","update":"disable","share":"disabled","snapshots":false,"plugins":["-opencode.tools"],"permissions":[{"action":"*","resource":"*","effect":"deny"},{"action":"webfetch","resource":"*","effect":"allow"},{"action":"websearch","resource":"*","effect":"allow"}]}'
+  # WEB OFF is the same policy without its two allow rules: every action
+  # denied, the web tools with them. The policy is a file, so the denial
+  # replaces the seeded file and leaves complete_args alone. NOT MEASURED on
+  # a host with OpenCode signed in: it follows from the format's own rule
+  # (the last matching rule wins, and a deny-all with nothing after it
+  # matches every tool) and from the 2.0.32 measurement above, where this
+  # policy with the allows offered exactly webfetch and websearch.
+  # `crewlet llm doctor` runs the web probe on a denied entry, and that is
+  # the measurement to take before an assistant runs on it.
+  web_tools_note: "every action denied in the seeded policy, web included; derived from the 2.0 permissions format, prove it with crewlet llm doctor"
+  web_denial:
+    seed_files:
+      - path: .crewlet-config/opencode.json
+        in: work
+        content: '{"$schema":"https://opencode.ai/config.json","update":"disable","share":"disabled","snapshots":false,"plugins":["-opencode.tools"],"permissions":[{"action":"*","resource":"*","effect":"deny"}]}'
+    # A RUN WITH TOOLS writes the mcp block's own settings, whose policy
+    # allows the two web actions beside the crewlet tools, so the denial
+    # restates it without them.
+    mcp:
+      seed:
+        - path: .crewlet-config/opencode.jsonc
+          in: work
+          content: '{"mcp":{"servers":{"crewlet":{"type":"local","command":{relay_argv_json},"codemode":false,"timeout":{"execution":{tool_timeout_ms}}}}},"permissions":[{"action":"*","resource":"*","effect":"deny"},{"action":"crewlet_*","resource":"*","effect":"allow"}]}'
   model_args: ["--model", "{model}"]
   # `--model` takes `provider/model` (2.0 adds an optional `#variant`) and
   # splits it at the FIRST slash, so `openrouter/anthropic/claude-sonnet-5`
@@ -1785,6 +1971,7 @@ cursor-agent:
   # a server planted there was started; with this file in its place, none was
   # listed. Rewritten every generation, for text functions too.
   local_tools: denied
+  web_tools_note: "no web denial: the seeded permissions name WebFetch, but whether any setting turns off the agent's web search has not been measured, so this profile cannot serve the assistant"
   seed_files:
     - path: .cursor/cli.json
       in: work
@@ -2017,6 +2204,7 @@ copilot:
     - "--deny-tool"
     - "read"
   local_tools: denied
+  web_tools_note: "no web denial: --deny-tool web_fetch and web_search would be one, but it has not been measured against a copilot CLI, so this profile cannot serve the assistant"
   model_args: ["--model", "{model}"]
   # NO REPLACE CHANNEL: the CLI has no flag, variable or file that replaces
   # its system prompt in prompt mode (its SDK's replace mode is not reachable
@@ -2265,6 +2453,7 @@ grok:
     - "--allow"
     - "WebFetch"
   local_tools: denied
+  web_tools_note: "no web denial: --disallowed-tools for its web tools would be one, but it has not been measured against a grok CLI, so this profile cannot serve the assistant"
   model_args: ["--model", "{model}"]
   # BOTH CHANNELS, and both on argv: each flag takes the text itself, and a
   # path in its place is sent as the text (measured), so a seat's prompt is
@@ -2634,6 +2823,7 @@ muse-code:
   # "schema_version": 1 is MANDATORY: a settings file without it fails every
   # command at startup with `malformed settings file`.
   local_tools: denied
+  web_tools_note: "no web denial: an empty run.toolset would be one, but it has not been measured against a muse-code CLI, so this profile cannot serve the assistant"
   seed_files:
     - path: .config/muse/settings.json
       content: '{"schema_version":1,"run":{"toolset":["web_search","web_fetch"]},"provider_retry":{"max_retries":3}}'
@@ -2949,6 +3139,7 @@ kimi-code:
   # opposite of muse-code's gated `web_fetch` — there, naming it admitted
   # nothing ever.
   local_tools: denied
+  web_tools_note: "no web denial: dropping FetchURL from the agent file's allowlist would be one, but it has not been measured against a kimi CLI, so this profile cannot serve the assistant"
   model_args: ["--model", "{model}"]
   # BOTH CHANNELS ARE `--agent-file`, and the file is the tool allowlist AND
   # the system prompt at once.
@@ -3396,6 +3587,7 @@ hermes:
   # something for nothing.
   complete_args: ["--toolsets", "web"]
   local_tools: denied
+  web_tools_note: "no web denial: an empty --toolsets would be one, but it has not been measured against a hermes CLI, so this profile cannot serve the assistant"
   model_args: ["--model", "{model}"]
   # THE SETTINGS THAT KEEP A CALL TO ITSELF, in the CLI's own config file under
   # HERMES_HOME, written at every generation's open and merged by the CLI over
@@ -3774,7 +3966,7 @@ pi:
   # --no-tools AND NOT an allowlist, which is the opposite of every other
   # profile here, because there is no web tool to keep: Web is the one local
   # tool this backend never denies, and on this CLI there is none to deny.
-  complete_args:
+  complete_args: &pi_args
     - "-p"
     - "--no-tools"
     - "--no-context-files"
@@ -3785,6 +3977,14 @@ pi:
     - "--no-approve"
     - "--no-session"
   local_tools: denied
+  tools_off:
+    args: [["--no-tools"], ["--no-extensions"]]
+    note: "--no-tools sent the request's tool array empty and --no-extensions loads no extension, which could register tools; measured on 0.85.1 by the profile's author"
+  # WEB OFF CHANGES NOTHING HERE, because there is no web tool to turn off:
+  # `--no-tools` already sends the tool array empty (measured above). The
+  # denial therefore names the same argv, by reference so the two cannot
+  # drift, and an entry may say `web_tools: denied` truthfully.
+  web_tools_note: "no web tool in this CLI's built-in set; --no-tools sends the tool array empty (measured on 0.85.1)"
   model_args: ["--model", "{model}"]
   # BOTH CHANNELS ARE FILES: each flag reads its value as a path when a file
   # exists there. A seat's system prompt carries the org chart, its policies,
@@ -3907,7 +4107,7 @@ pi:
   # record on stdout, but a failed request there exits 0 with nothing on
   # stderr, where a failure, and a spent plan's words, are read.
   mcp:
-    complete_args:
+    complete_args: &pi_mcp_args
       - "-p"
       - "--no-tools"
       - "--no-context-files"
@@ -3935,6 +4135,13 @@ pi:
     tool_timeout_seconds: 600
     relists: true
     concurrency: at_once
+  web_denial:
+    complete_args: *pi_args
+    # A RUN WITH TOOLS runs the mcp block's own argv, which names no web
+    # tool either: restated by reference, so the denial covers every argv
+    # the CLI runs and cannot drift from it.
+    mcp:
+      complete_args: *pi_mcp_args
   # EACH REQUEST, FROM THE SESSION FILE, which the CLI appends an entry to as
   # each message completes: an assistant message is a response — its id, its
   # model, its prose and calls as content blocks, why it stopped, and its

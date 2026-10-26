@@ -35,6 +35,164 @@ type Policy struct {
 	// reads a field of an absent object refuses with [ReasonUnnamed] rather
 	// than guessing.
 	Object func(*http.Request) Object
+
+	// Absent is what a PUT to this route's address does where the address
+	// holds nothing: it creates it, or it is refused and the member is added
+	// elsewhere. Nil for every other route. See [Absent].
+	Absent *Absent
+
+	// DryRun says the write answers `?dry_run=true` as a check: the same
+	// request, judged in the same order, that stores, activates and publishes
+	// nothing. See [Policy.Checked].
+	DryRun bool
+
+	// Summary says the write records a revision summary for the history, which
+	// it reads from the `X-Summary` header or a top-level `_summary` key in its
+	// JSON body, and refuses a write without one. See [Policy.Summarised].
+	Summary bool
+
+	// Replaces says the write is a PUT that stores its body as the whole
+	// object at its address, in the shape the GET on the same address
+	// answers, so a field the body leaves out is removed. See
+	// [Policy.Replacing].
+	Replaces bool
+}
+
+// Absent is a PUT route's answer to an address that holds nothing, DECLARED
+// WHERE THE ROUTE IS MOUNTED so the handler that decides it and every reader
+// of the route table say the same thing.
+//
+// The reader it exists for is the Dashboard Assistant's preview of a generic
+// change (internal/assistant/catalog): a PUT whose read found nothing is
+// proposed as a create only where the route creates, and refused at once,
+// with the route's own sentence about where one is added, where it does not.
+// Learned only from the write, the difference was a proposal the person
+// approved and the API then refused, every time: `PUT /config/roles/{id}`
+// never adds a seat, which has a place in the chart its path cannot name.
+//
+// The alternative, asking the route itself with `dry_run=true`, would put a
+// PUT on a read grant, whose whole guarantee is that it sends nothing but GET
+// and HEAD (ADR-0050); a route that ignored the flag would then write.
+type Absent struct {
+	// Creates says a write there creates what it names, sent create-only
+	// (`If-None-Match: *`) by a caller that must not replace one a racer
+	// added.
+	Creates bool
+	// Elsewhere is where a member is added instead, for a route that does
+	// not create by address: the sentence its handler refuses with.
+	Elsewhere string
+}
+
+// CreatesWhenAbsent declares a PUT route that creates what its address names.
+func CreatesWhenAbsent() *Absent { return &Absent{Creates: true} }
+
+// AddedElsewhere declares a PUT route that does not create by address, and
+// where a member is added instead.
+func AddedElsewhere(where string) *Absent { return &Absent{Elsewhere: where} }
+
+// WhenAbsent is p declaring what a PUT to an empty address does.
+func (p Policy) WhenAbsent(a *Absent) Policy {
+	p.Absent = a
+	return p
+}
+
+// Checked is p declaring that its write answers `?dry_run=true` as a check
+// (ADR-0055).
+//
+// DECLARED WHERE THE ROUTE IS MOUNTED, beside [Absent], for the same reader:
+// the Dashboard Assistant's preview of a generic change runs the route's own
+// check before it draws a card, so a body the route would refuse (a field it
+// does not know, a document the company would not validate) is told to the
+// model at once, never found by the person after they approved and confirmed
+// it was them. A route that says nothing is never asked, because only a route
+// that reads the flag stores nothing for it.
+//
+// A CHECK IS DECIDED AS THE WRITE, at the read's proof ([IsCheck]): the same
+// verb, class, app and assistant column, without the step-up, because it
+// changes nothing. So the person's assistant checks exactly what the person's
+// own session could.
+func (p Policy) Checked() Policy {
+	p.DryRun = true
+	return p
+}
+
+// Summarised is p declaring that its write requires a revision summary, read
+// from `X-Summary` or a top-level `_summary` key in its JSON body. The
+// assistant's generic change carries one in the body, which the proposal's
+// digest binds, so the history line is the one the person approved.
+func (p Policy) Summarised() Policy {
+	p.Summary = true
+	return p
+}
+
+// Replacing is p declaring that its PUT replaces the whole object at its
+// address with the body, the object being the one the GET on the same address
+// answers: whatever that representation holds and the body leaves out is
+// removed.
+//
+// DECLARED WHERE THE ROUTE IS MOUNTED, beside [Policy.Checked], for the same
+// reader: the Dashboard Assistant's preview of a generic change compares the
+// body with the representation it read, and a field the body would drop by
+// omission is never approved by accident (ADR-0055). A route whose GET answers
+// fields its PUT does not take (a version, a timestamp) does not declare it,
+// because there a missing field is not a removal.
+func (p Policy) Replacing() Policy {
+	p.Replaces = true
+	return p
+}
+
+// DryRunQuery is the query parameter a [Policy.Checked] route reads.
+const DryRunQuery = "dry_run"
+
+// IsCheck reports a request that asks a check of a route declaring one:
+// `dry_run` given exactly once, as exactly `true`, on a [Policy.Checked]
+// route. Any other spelling is the route's own refusal, never a check.
+func IsCheck(r *http.Request, p Policy) bool {
+	return p.DryRun && AsksCheck(r)
+}
+
+// AsksCheck reports a request whose query asks a check, whatever route it
+// reaches: `dry_run` given exactly once, as exactly `true`.
+func AsksCheck(r *http.Request) bool {
+	values, given := r.URL.Query()[DryRunQuery]
+	return given && len(values) == 1 && values[0] == "true"
+}
+
+// writeFormProblem says why a route's [Policy.DryRun] or [Policy.Summary]
+// cannot be mounted, or "".
+func writeFormProblem(pattern string, p Policy) string {
+	method, _, _ := strings.Cut(pattern, " ")
+	switch method {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		return ""
+	}
+	if p.DryRun || p.Summary {
+		return "declares a check or a revision summary, which only a write has"
+	}
+	return ""
+}
+
+// replacesProblem says why a route's [Policy.Replaces] cannot be mounted, or
+// "": only a PUT replaces what its address holds.
+func replacesProblem(pattern string, p Policy) string {
+	if method, _, _ := strings.Cut(pattern, " "); p.Replaces && method != http.MethodPut {
+		return "declares that it replaces what its address holds, which only a PUT does"
+	}
+	return ""
+}
+
+// absentProblem says why a route's [Absent] cannot be mounted, or "".
+func absentProblem(pattern string, a *Absent) string {
+	method, _, _ := strings.Cut(pattern, " ")
+	switch {
+	case a == nil:
+		return ""
+	case method != http.MethodPut:
+		return "declares what an empty address does, which only a PUT's address has"
+	case a.Creates == (strings.TrimSpace(a.Elsewhere) != ""):
+		return "declares an empty address both created and added elsewhere, or neither"
+	}
+	return ""
 }
 
 // Guard decides a request, and is what [Handle] wraps a route with.
@@ -64,6 +222,16 @@ func ContextGuard(chart Chart) Guard {
 		if how == iam.Unknown {
 			return Decision{Err: iam.Reason(r.Context())}
 		}
+		check := Checking(r.Context()) || IsCheck(r, p)
+		// A READ GRANT SENDS A WRITE'S METHOD ONLY AS A CHECK of a route
+		// that declares one (ADR-0055). The edge admits such a grant's
+		// write method only with `dry_run=true`, which says nothing about
+		// whether the route reads it; this is where the route's own
+		// declaration is asked, so a route that would ignore the flag and
+		// write is never reached.
+		if assistedRead(principal) && !readMethod(r.Method) && !check {
+			return Decision{Reason: ReasonAssistScope}
+		}
 		var object Object
 		if p.Object != nil {
 			object = p.Object(r)
@@ -71,7 +239,7 @@ func ContextGuard(chart Chart) Guard {
 		// NOW, at the request: how recently the caller proved who they
 		// are is judged at the instant they ask, against the deadlines
 		// the guard composed for this very request.
-		return Decide(r.Context(), principal, p.Action, object, chart, time.Now())
+		return decide(r.Context(), principal, p.Action, object, chart, time.Now(), check)
 	}
 }
 
@@ -109,6 +277,39 @@ type Refusal func(w http.ResponseWriter, r *http.Request, p Policy, d Decision)
 type Mux interface {
 	Handle(pattern string, h http.Handler)
 }
+
+// PolicyMux is a [Mux] that is also told the policy each route is mounted
+// with, once the route is registered on it.
+//
+// FOR A TABLE THAT KEEPS EVERY PATTERN. internal/api's route table lists every
+// route it is handed, and a walk over the guarded routes (the Dashboard
+// Assistant's catalogue walk, which must classify each one by its verb) needs
+// the verb beside the pattern, which only the router held. Reporting it to
+// the mux keeps one table of both rather than a second list of verbs.
+type PolicyMux interface {
+	Mux
+	MountedWith(pattern string, p Policy)
+}
+
+// Within is a mux that mounts every route on inner and reports each policy to
+// outer: for a surface that serves its routes behind a sub-mux of its own (one
+// wrapper round all of them) while the table it is mounted on keeps their
+// verbs. Where outer keeps no policies it is inner itself.
+func Within(inner, outer Mux) Mux {
+	keeper, ok := outer.(PolicyMux)
+	if !ok {
+		return inner
+	}
+	return within{Mux: inner, outer: keeper}
+}
+
+// within is [Within]'s mux.
+type within struct {
+	Mux
+	outer PolicyMux
+}
+
+func (w within) MountedWith(pattern string, p Policy) { w.outer.MountedWith(pattern, p) }
 
 // Router mounts guarded routes and remembers every pattern it mounted.
 //
@@ -185,11 +386,15 @@ const RetryUndecidedSeconds = 2
 //     and no grant on a token would admit it. It was that code with a
 //     sentence of its own as `detail`, so the envelope's `message` and its
 //     `detail` contradicted each other.
+//   - THE DASHBOARD ASSISTANT on a verb of the human-only list is `403
+//     unauthorized` with the `assist_refused` reason, and its `detail` is the
+//     sentence the list gives that verb's family ([AssistNeverSentence]), so
+//     the person reads why it stays with them and where they do it.
 //   - A CALLER WITH NO RELATION to an artifact is `404 not_found` with
 //     nothing beside it ([Decision.NotFound]): no reason and no grants, the
 //     answer a surface gives for an id nothing holds, so the refusal cannot
 //     say whether the artifact exists.
-func EnvelopeRefusal(w http.ResponseWriter, _ *http.Request, _ Policy, d Decision) {
+func EnvelopeRefusal(w http.ResponseWriter, _ *http.Request, p Policy, d Decision) {
 	switch {
 	case d.Unknown():
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, RetryUndecidedSeconds)
@@ -201,6 +406,15 @@ func EnvelopeRefusal(w http.ResponseWriter, _ *http.Request, _ Policy, d Decisio
 	case d.Reason == ReasonTokenRefused:
 		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeTokenRefused,
 			RefusalDetail(d.Reason, d.Grants))
+	case d.Reason == ReasonAssistRefused:
+		// THE PERSON IS TOLD WHY IT STAYS WITH THEM, and where they do it,
+		// in the sentence the human-only list gives the verb's family: the
+		// drawer shows `detail` as the refusal's words.
+		detail := RefusalDetail(d.Reason, d.Grants)
+		if tell := AssistNeverSentence(p.Action); tell != "" {
+			detail["detail"] = tell
+		}
+		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized, detail)
 	default:
 		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
 			RefusalDetail(d.Reason, d.Grants))
@@ -225,6 +439,15 @@ func (t *Router) Handle(pattern string, p Policy, h http.Handler) error {
 		return newPolicyError(pattern,
 			"names the action "+string(p.Action)+", which this build has no rule for")
 	}
+	if problem := absentProblem(pattern, p.Absent); problem != "" {
+		return newPolicyError(pattern, problem)
+	}
+	if problem := writeFormProblem(pattern, p); problem != "" {
+		return newPolicyError(pattern, problem)
+	}
+	if problem := replacesProblem(pattern, p); problem != "" {
+		return newPolicyError(pattern, problem)
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if _, dup := t.policies[pattern]; dup {
@@ -232,6 +455,9 @@ func (t *Router) Handle(pattern string, p Policy, h http.Handler) error {
 	}
 	t.policies[pattern] = p
 	t.mux.Handle(pattern, t.wrap(p, h))
+	if keeper, ok := t.mux.(PolicyMux); ok {
+		keeper.MountedWith(pattern, p)
+	}
 	return nil
 }
 
@@ -258,6 +484,11 @@ func (t *Router) PolicyFor(pattern string) (Policy, bool) {
 // wrap is the guard around one route's handler.
 func (t *Router) wrap(p Policy, h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if IsCheck(r, p) {
+			// A CHECK FOR THE WHOLE REQUEST, so the handler's own decisions
+			// are asked as the route's was ([WithCheck]).
+			r = r.WithContext(WithCheck(r.Context()))
+		}
 		d := t.guard(r, p)
 		if d.Unknown() || !d.Allowed {
 			t.refuse(w, r, p, d)

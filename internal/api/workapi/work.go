@@ -94,7 +94,12 @@ func (s *Service) workRoutes(mount mounter) {
 	// their own item into the trash and back, never out of the estate.
 	route("POST /worklet/items/{key}/purge", authz.Policy{Action: authz.ActionWorkPurge},
 		(*served).postPurge)
-	route("PUT /worklet/projects/{key}", project(authz.ActionProjectWrite), (*served).putProject)
+	// A PROJECT IS THE CHART'S, declared in the company document, so this
+	// route writes the policy of one that exists and creates none.
+	route("PUT /worklet/projects/{key}", project(authz.ActionProjectWrite).WhenAbsent(
+		authz.AddedElsewhere("A project is declared in the company configuration "+
+			"(PATCH /config), and its policy is written here once it exists.")),
+		(*served).putProject)
 	route("POST /worklet/projects/{key}/tags", project(authz.ActionProjectWrite),
 		(*served).postProjectTags)
 	// A VIEW'S AUTHORITY IS IN ITS BODY — personal to its owner or shared on

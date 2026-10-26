@@ -86,3 +86,36 @@ func TestSendDropsEmptyFragmentsAndKeepsRestarts(t *testing.T) {
 	}
 	llm.Request{}.Send(llm.Delta{Content: "nobody asked"}) // no callback: no panic
 }
+
+// WHAT WAS SHOWN NEVER QUIETLY DIFFERS FROM WHAT IS TRUE. Reconcile appends
+// only when the shown text is a prefix of the answer, and otherwise starts
+// the reader over with the whole answer, so applying its result to the shown
+// text always yields the answer exactly.
+func TestReconcileAlwaysLandsOnTheAnswer(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		shown, want, tail string
+		restart           bool
+	}{
+		{"", "", "", false},
+		{"", "The sea", "The sea", false},
+		{"The sea", "The sea", "", false},
+		{"The sea", "The sea stays", " stays", false},
+		{"The sea st", "The tide", "The tide", true},
+		{"The sea stays", "The sea", "The sea", true},
+	}
+	for _, c := range cases {
+		tail, restart := llm.Reconcile(c.shown, c.want)
+		if tail != c.tail || restart != c.restart {
+			t.Errorf("Reconcile(%q, %q) = (%q, %v), want (%q, %v)",
+				c.shown, c.want, tail, restart, c.tail, c.restart)
+		}
+		landed := c.shown + tail
+		if restart {
+			landed = tail
+		}
+		if landed != c.want {
+			t.Errorf("Reconcile(%q, %q) lands the reader on %q", c.shown, c.want, landed)
+		}
+	}
+}

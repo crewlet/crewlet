@@ -24,7 +24,16 @@ import { fmtMinutes } from "~/lib/work.ts";
 import { plural } from "~/lib/format.ts";
 import { href, useParam } from "~/app/router.tsx";
 import { SeatCard, Section } from "~/components/common.tsx";
-import { Card, cx, EmptyState, EmptyValue, SegmentedControl, Tag, PageNote } from "@crewlethq/ui";
+import {
+  Card,
+  cx,
+  EmptyState,
+  EmptyValue,
+  SegmentedControl,
+  Tag,
+  PageNote,
+  peekClickHandler,
+} from "@crewlethq/ui";
 import { UsersGlyph } from "@crewlethq/icons/glyphs";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -44,7 +53,7 @@ import {
 } from "~/lib/seats.ts";
 import { loadFraction, loadRows, loadSentence, loadTone, type Load } from "~/lib/workload.ts";
 import type { AgentRow } from "~/protocol/index.ts";
-import { rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { usePeekControls } from "~/app/frame/peekAddress.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { AgentsHeader, useAgentsCounts } from "./header.tsx";
@@ -155,7 +164,7 @@ function LoadRow({ load, heaviest }: { load: Load; heaviest: number }) {
       <a
         className="wl-who"
         href={href(["company", "org", "seats", load.handle])}
-        onClick={rowPeekHandler(() => openPeek({ kind: "seat", id: load.handle }))}
+        onClick={peekClickHandler(() => openPeek({ kind: "seat", id: load.handle }))}
       >
         <span className="truncate">{load.seat?.name ?? load.handle}</span>
         <span className="wl-handle mono">{load.handle}</span>
@@ -373,7 +382,7 @@ export function People() {
    * height, ragged against the taller ones beside it in the row. What it adds
    * is the click, caught on its way out of the anchor — so the card is still a
    * real link and ⌘-click, middle-click and the status bar all still name the
-   * seat's own page, exactly as `rowPeekHandler` has it everywhere else.
+   * seat's own page, exactly as `peekClickHandler` has it everywhere else.
    */
   const card = ({ key, seat, agent }: Row) =>
     seat ? (
@@ -382,7 +391,7 @@ export function People() {
         style={{ display: "contents" }}
         // BY THE HANDLE THE ENGINE DERIVED, which `seatPath` addresses a link
         // by too.
-        onClick={rowPeekHandler(() => openPeek({ kind: "seat", id: seat.handle }))}
+        onClick={peekClickHandler(() => openPeek({ kind: "seat", id: seat.handle }))}
       >
         <SeatCard seat={seat} agent={agent} nameOf={nameOf} stateInHeading={group === "state"} />
       </div>

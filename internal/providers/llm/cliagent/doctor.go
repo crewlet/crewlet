@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -42,10 +43,33 @@ const smokePrompt = "Call the " + smokeTool + " tool with ok set to true, then r
 // running the tool. Each is sent with no tools of Crewlet's own, so the CLI's
 // own tools are the only ones it has and the reply is plain prose.
 
+// THE NO-TOOL ANSWER COMES FIRST, AND A CALL WRITTEN AS TEXT IS RULED OUT. A
+// prompt that opened "Using your shell tool, run ..." on a CLI given no tools
+// at all (Claude Code 2.1.310 under `--tools ""`, Sonnet) was answered with a
+// tool call typed out as prose (`<invoke name="Bash">...`), measured: no
+// command ran, and a model that goes on to write the call's output and the
+// next step as prose kept the probe running to the entry's whole timeout
+// before the doctor could read a refusal. Asked which case it is in first,
+// the model answers the refusal at once, and a model that has the tool still
+// runs it, which is the finding the probe exists for.
+
 // shellProbePrompt asks the CLI to run a command on the engine host.
-const shellProbePrompt = "Using your shell or command-execution tool, run exactly this " +
-	"command and reply with only its output, nothing else: date +%s\n" +
-	"If you have no tool that can run commands, reply with only: " + noLocalToolsReply
+const shellProbePrompt = "If you were given a tool that runs shell commands, use it to run " +
+	"exactly this command and reply with only its output, nothing else: date +%s\n" +
+	"If you were given no such tool, reply with only: " + noLocalToolsReply + "\n" +
+	noProseCall
+
+// fileProbePrompt asks the CLI to read a file on the engine host, the path
+// substituted for %s. The file holds a value minted for the one run, so a
+// model can echo it only by reading it.
+const fileProbePrompt = "If you were given a tool that reads files, use it to read the file " +
+	"at %s and reply with only its contents, nothing else.\n" +
+	"If you were given no such tool, reply with only: " + noLocalToolsReply + "\n" +
+	noProseCall
+
+// noProseCall is the line every isolation probe ends on: a tool is called or
+// the refusal is given, never a call written out as text.
+const noProseCall = "Never write a tool call, or what a tool would return, as text."
 
 // noLocalToolsReply is what a CLI whose shell is denied is asked to say.
 const noLocalToolsReply = "NO-LOCAL-TOOLS"
@@ -58,10 +82,11 @@ const noLocalToolsReply = "NO-LOCAL-TOOLS"
 const webProbeURL = "https://www.cloudflare.com/cdn-cgi/trace"
 
 // webProbePrompt asks the CLI to fetch the URL with its own browser.
-const webProbePrompt = "Using your web fetch tool, fetch " + webProbeURL + " and reply with " +
-	"only the value after ts= on the line that starts with ts=, nothing else.\n" +
-	"If you have no tool that can fetch a URL, or the fetch fails, reply with only: " +
-	noWebReply
+const webProbePrompt = "If you were given a tool that fetches URLs, use it to fetch " +
+	webProbeURL + " and reply with only the value after ts= on the line that starts with " +
+	"ts=, nothing else.\n" +
+	"If you were given no such tool, or the fetch fails, reply with only: " + noWebReply + "\n" +
+	noProseCall
 
 // noWebReply is what a CLI with no reachable web tool is asked to say.
 const noWebReply = "NO-WEB"
@@ -116,7 +141,9 @@ type Diagnosis struct {
 	// LocalTools is the profile's stance on the CLI's own shell and file
 	// tools, beside what the shell probe measured.
 	LocalTools string
-	// Web is whether the CLI's own fetch tool reached the web, measured.
+	// Web is the entry's web stance beside whether the CLI's own fetch tool
+	// reached the web, measured. On a denied entry a fetch that succeeded is
+	// a problem, as a shell that ran is on a profile denying local tools.
 	Web string
 
 	// BoxRuntime is what a BOX-MODE entry needs beyond a login, and is
@@ -244,28 +271,36 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 	answered := false
 
 	stance := p.localToolsStance()
+	web := p.webStance()
 	switch {
 	case !smoke:
 		d.Smoke = "skipped (-no-smoke)"
-		d.LocalTools = stance + " — probe skipped (-no-smoke)"
-		d.Web = "probe skipped (-no-smoke)"
+		d.LocalTools = stance + "; probe skipped (-no-smoke)"
+		d.Web = web + "; probe skipped (-no-smoke)"
 	case d.BinaryPath == "not on PATH":
-		d.Smoke = "skipped — no binary to run"
-		d.LocalTools = stance + " — probe skipped, no binary to run"
-		d.Web = "probe skipped — no binary to run"
+		d.Smoke = "skipped: no binary to run"
+		d.LocalTools = stance + "; probe skipped, no binary to run"
+		d.Web = web + "; probe skipped, no binary to run"
 	default:
 		d.Smoke, answered = p.smokeTest(ctx)
 		if strings.HasPrefix(d.Smoke, "failed") {
 			d.Problems = append(d.Problems, d.Smoke)
 		}
 		verdict, problem := p.shellProbe(ctx)
-		d.LocalTools = stance + " — " + verdict
+		if verdict == refusedVerdict {
+			// A refused shell is half the stance: the file tools read
+			// the host as well as a shell does, and the deny list that
+			// refused one says nothing about the other.
+			verdict, problem = p.fileProbe(ctx)
+		}
+		d.LocalTools = stance + "; " + verdict
 		if problem != "" {
 			d.Problems = append(d.Problems, problem)
 		}
-		d.Web = p.webProbe(ctx)
-		if strings.HasPrefix(d.Web, "failed") {
-			d.Problems = append(d.Problems, d.Web)
+		verdict, problem = p.webProbe(ctx)
+		d.Web = web + "; " + verdict
+		if problem != "" {
+			d.Problems = append(d.Problems, problem)
 		}
 	}
 
@@ -474,7 +509,7 @@ func (p *Provider) localToolsStance() string {
 func (p *Provider) shellProbe(ctx context.Context) (verdict, problem string) {
 	comp, err := p.Complete(ctx, probeRequest(shellProbePrompt))
 	if err != nil {
-		return "probe failed — " + err.Error(), ""
+		return "probe failed: " + err.Error(), ""
 	}
 	ran := reportsCurrentClock(comp.Content, time.Now())
 	switch {
@@ -491,40 +526,110 @@ func (p *Provider) shellProbe(ctx context.Context) (verdict, problem string) {
 				"a host you would hand an autonomous agent, or prefer a backend whose "+
 				"profile denies local tools", p.agent, orNone(p.profile.LocalToolsNote))
 	default:
-		return "probe: refused", ""
+		return refusedVerdict, ""
 	}
 }
 
+// refusedVerdict is a probe that found its tool refused.
+const refusedVerdict = "probe: refused"
+
+// fileProbe asks the CLI to read a file the doctor has just written on the
+// engine host, outside the seat's home, and reports whether it did, on the
+// argv the entry runs every call on. The second
+// return is the problem line, empty when there is none.
+func (p *Provider) fileProbe(ctx context.Context) (verdict, problem string) {
+	dir, err := os.MkdirTemp("", "crewlet-file-probe-")
+	if err != nil {
+		return "file probe failed: " + err.Error(), ""
+	}
+	defer func() {
+		if rmErr := os.RemoveAll(dir); rmErr != nil {
+			log.WarnContext(ctx, "cli_agent_file_probe_cleanup_failed", "dir", dir, "error", rmErr)
+		}
+	}()
+	token := "crewlet-file-probe-" + newSessionID()
+	path := filepath.Join(dir, "probe.txt")
+	if writeErr := os.WriteFile(path, []byte(token+"\n"), 0o600); writeErr != nil {
+		return "file probe failed: " + writeErr.Error(), ""
+	}
+	comp, err := p.Complete(ctx, probeRequest(fmt.Sprintf(fileProbePrompt, path)))
+	if err != nil {
+		return "file probe failed: " + err.Error(), ""
+	}
+	if !strings.Contains(comp.Content, token) {
+		return refusedVerdict + " (shell and file read)", ""
+	}
+	if p.profile.LocalTools == cliprofile.LocalToolsDenied {
+		return "probe: FILE READ", fmt.Sprintf(
+			"the %q profile says local tools are denied, but the CLI read a file the doctor "+
+				"wrote on the engine host, outside its seat home: its file tools are not "+
+				"off on this build (%s), so it can read the engine's own data; check "+
+				"overrides against the installed version before running seats or the "+
+				"assistant on it", p.agent, orNone(p.profile.WrittenFor))
+	}
+	return "probe: FILE READ", fmt.Sprintf(
+		"the %q CLI reads files on the engine host as the engine user (%s): it can read "+
+			"the engine's own data. Run seats on it only on a host you would hand an "+
+			"autonomous agent", p.agent, orNone(p.profile.LocalToolsNote))
+}
+
+// webStance renders the entry's declared web stance.
+func (p *Provider) webStance() string {
+	if p.profile.EffectiveWebTools() == cliprofile.WebToolsDenied {
+		return "denied by entry (" + orNone(p.profile.WebToolsNote) + ")"
+	}
+	return "allowed"
+}
+
 // webProbe asks the CLI to fetch a URL with its own browser and reports
-// whether it did.
+// whether it did. The second return is the problem line, empty when there is
+// none.
 //
-// Web is the one local tool a profile keeps ON, so a CLI that cannot reach
-// it is a problem: the seat has less reach than the same CLI at a terminal,
-// and the cause is usually a vendor sandbox flag that also cut the network,
-// or an egress proxy the child environment was not told about.
-func (p *Provider) webProbe(ctx context.Context) string {
+// WHICH ANSWER IS THE PROBLEM DEPENDS ON THE STANCE, and the verdict is
+// measured either way rather than inferred from the profile. On an entry that
+// keeps web on, a CLI that cannot reach it is the problem: the seat has less
+// reach than the same CLI at a terminal, and the cause is usually a vendor
+// sandbox flag that also cut the network, or an egress proxy the child
+// environment was not told about. On an entry that DENIES web (the one an
+// assistant runs on), a CLI that fetched is the problem, and the worse one:
+// the denial is a claim the assistant is admitted on, and a vendor that
+// renamed a flag would leave the model fetching under a configuration that
+// says it cannot.
+func (p *Provider) webProbe(ctx context.Context) (verdict, problem string) {
+	denied := p.profile.EffectiveWebTools() == cliprofile.WebToolsDenied
 	comp, err := p.Complete(ctx, probeRequest(webProbePrompt))
 	if err != nil {
-		return "failed — " + err.Error()
+		return "probe failed: " + err.Error(), "the web probe failed: " + err.Error()
 	}
-	if reportsCurrentClock(comp.Content, time.Now()) {
-		return "ok — fetched " + webProbeURL
-	}
-	// Same split as smokeTest, and for the same reason: an empty answer is
-	// a completion now, so "it said: \"\"" would send an operator to the
-	// egress proxy for a model that never spoke.
-	if strings.TrimSpace(comp.Content) == "" {
-		return fmt.Sprintf(
-			"failed — the %q CLI exited 0 and answered with nothing (%d output tokens "+
-				"billed), so this probe says nothing about web access either way. "+
-				"Point this entry at a stronger model and run the doctor again",
+	fetched := reportsCurrentClock(comp.Content, time.Now())
+	switch {
+	case fetched && denied:
+		return "probe: FETCHED " + webProbeURL, fmt.Sprintf(
+			"the entry denies the %q CLI its web tools, but the CLI fetched %s with "+
+				"its own web tool: the profile's web_denial is not taking effect on "+
+				"this build (%s); check overrides.web_denial against the installed "+
+				"version before an assistant runs on this entry",
+			p.agent, webProbeURL, orNone(p.profile.WrittenFor))
+	case fetched:
+		return "ok: fetched " + webProbeURL, ""
+	case strings.TrimSpace(comp.Content) == "":
+		// Same split as smokeTest, and for the same reason: an empty
+		// answer is a completion now, so "it said: \"\"" would send an
+		// operator to the egress proxy, or past a denial that may not
+		// hold, for a model that never spoke.
+		return "probe inconclusive", fmt.Sprintf(
+			"the web probe is inconclusive: the %q CLI exited 0 and answered with "+
+				"nothing (%d output tokens billed), so it says nothing about web access "+
+				"either way. Point this entry at a stronger model and run the doctor again",
 			p.agent, comp.OutputTokens)
+	case denied:
+		return "probe: refused", ""
 	}
 	// WHAT IT SAID, WHOLE: the reader is an operator deciding what to fix,
 	// and a refusal's reason — a sandbox flag, a proxy's answer — is rarely
 	// in its first hundred and twenty bytes, which is where this used to stop.
-	return fmt.Sprintf(
-		"failed — the %q CLI could not fetch %s with its own web tool (it said: %q). "+
+	return "failed", fmt.Sprintf(
+		"the %q CLI could not fetch %s with its own web tool (it said: %q). "+
 			"Web is meant to stay on for every subscription seat: check that no vendor "+
 			"sandbox flag cuts the network and that the egress proxy reaches the child "+
 			"environment (env / passthrough_env)",
@@ -634,7 +739,7 @@ func (p *Provider) smokeTest(ctx context.Context) (verdict string, answered bool
 	var offered []string
 	comp, err := p.Complete(withOffered(ctx, func(tools []string) { offered = tools }), smokeRequest(host))
 	if err != nil {
-		return "failed — " + err.Error(), false
+		return "failed: " + err.Error(), false
 	}
 	if ok, called := host.verdict(offered, comp, p.profile.Requests != nil); called {
 		return ok, true

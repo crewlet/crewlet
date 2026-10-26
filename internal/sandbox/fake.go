@@ -415,9 +415,20 @@ type FakeRunner struct {
 	source  OutputSource
 	reads   int
 	waiting int
+	// spent is what the job reports having spent, read by every live
+	// reading. See [FakeRunner.Spend].
+	spent int
 }
 
 var _ Runner = (*FakeRunner)(nil)
+
+// Spend is the job reporting it has spent n tokens in all, as a live reading
+// of a real job's stream reports.
+func (r *FakeRunner) Spend(n int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.spent = n
+}
 
 // NewFakeRunner returns a runner under the given name.
 func NewFakeRunner(name string) *FakeRunner {
@@ -575,7 +586,7 @@ func (f *fakeReading) Read(ctx context.Context, _ Sandbox) (LiveRead, error) {
 	}
 	text := r.account[f.at:]
 	f.at = len(r.account)
-	return LiveRead{Origin: origin, Source: source, Text: text, Finished: r.done}, nil
+	return LiveRead{Origin: origin, Source: source, Text: text, Finished: r.done, Spent: r.spent}, nil
 }
 
 // Finish makes the next Poll report done and the next Collect return result.

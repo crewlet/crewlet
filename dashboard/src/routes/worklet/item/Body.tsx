@@ -40,12 +40,62 @@ import { plural } from "~/lib/format.ts";
 import type { AvatarStatus } from "@crewlethq/ui";
 import type { LogRefusal, QueryRefusal, WorkItem, WorkSummary } from "~/protocol/index.ts";
 import { useItemEdits } from "./edit.tsx";
+import { refuse, useAssistantDraft, type AssistantDraftSpec } from "~/app/assistant/draft.ts";
 import { itemPath } from "~/lib/work.ts";
+
+/**
+ * The task's title or description while it is open in its editor, as the
+ * assistant reads and sets it (`useAssistantDraft`): the text as typed, set
+ * through the editor's own setter, and Save, with its `if_match`, staying the
+ * person's. Each editor declares its own; with both open, the one opened
+ * last is the draft the assistant is told about.
+ */
+function textDraft(args: {
+  item: WorkItem;
+  part: "title" | "description";
+  value: string;
+  apply: (next: string) => void;
+  busy: boolean;
+}): AssistantDraftSpec<string> {
+  const { item, part, value, apply, busy } = args;
+  const title = part === "title";
+  return {
+    kind: "client",
+    id: item.key,
+    revision: item.version,
+    step: part,
+    scope: `The ${part} of ${item.key} you are editing (not saved)`,
+    help:
+      `The ${part} of ${item.key} is open in its editor. You can propose new text for it; ` +
+      "Save stays the person's. Any other field of the task is changed with update_task.",
+    value,
+    fields: [
+      {
+        path: part,
+        label: title ? "Title" : "Description",
+        hint: title ? "One line" : "Markdown",
+        read: (v) => v,
+        write: (_, next) => {
+          if (typeof next !== "string") return refuse(`The ${part} is text.`);
+          if (title && next.trim() === "") return refuse("A task needs a title.");
+          return next;
+        },
+      },
+    ],
+    apply,
+    blocked: () => (busy ? "The task is being saved." : null),
+  };
+}
 
 /** The title, drawn as the page's heading and edited in place. */
 export function ItemTitle({ item }: { item: WorkItem }) {
   const edits = useItemEdits();
   const [draft, setDraft] = useState<string | null>(null);
+  useAssistantDraft(
+    draft !== null && edits
+      ? textDraft({ item, part: "title", value: draft, apply: setDraft, busy: edits.busy })
+      : null,
+  );
   if (draft !== null && edits) {
     const title = draft.trim();
     const save = async () => {
@@ -103,6 +153,11 @@ export function ItemTitle({ item }: { item: WorkItem }) {
 export function ItemDescription({ item, flush }: { item: WorkItem; flush?: boolean }) {
   const edits = useItemEdits();
   const [draft, setDraft] = useState<string | null>(null);
+  useAssistantDraft(
+    draft !== null && edits
+      ? textDraft({ item, part: "description", value: draft, apply: setDraft, busy: edits.busy })
+      : null,
+  );
   if (draft !== null && edits) {
     const save = async () => {
       if (draft === (item.body ?? "")) return setDraft(null);

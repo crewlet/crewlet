@@ -148,6 +148,9 @@ func newFixture(t *testing.T, offer ...string) *fixture {
 		}
 		byName[name] = tool
 	}
+	if err := reg.Register(whoami{}, tools.OriginBuiltin); err != nil {
+		t.Fatalf("Register(whoami): %v", err)
+	}
 	f := &fixture{ledger: &ledger{}, byName: byName}
 	if len(offer) == 0 {
 		offer = []string{"read_page", "post_message"}

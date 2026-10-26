@@ -1,8 +1,8 @@
 # Replication
 
-Worklet and Doclet, Crewlet's identity directory, its artifacts and
-artifact datastores are **replicated state machines**: seven domains on one
-framework, the embeddings
+Worklet and Doclet, Crewlet's identity directory, its artifacts, artifact
+datastores and Dashboard Assistant conversations are **replicated state
+machines**: eight domains on one framework, the embeddings
 and each node's usage history riding it as
 [compacted domains](#two-compacted-domains-the-embeddings-and-each-nodes-day).
 One ordered stream per domain is the write-ahead log; every data node applies it
@@ -924,8 +924,8 @@ counting what the broker's streams already hold there.
 stream.pages_log_max_bytes is unset, so the ceiling was derived and scaled
 into what the state logs that already exist leave of their share of the
 broker, and it goes no lower than 1073741824 bytes. Give the broker more room;
-a fresh node of this configuration reserves at least 9305762474 bytes of the
-broker: 6979321856 for the state logs at their floors and 2326440618 for the
+a fresh node of this configuration reserves at least 9395240959 bytes of the
+broker: 7046430720 for the state logs at their floors and 2348810239 for the
 nats object bucket, a quarter of the broker's limit unless
 store.objects.nats_max_bytes sets it; the state logs that already exist keep
 the ceilings they were created with, and no Tier A setting changes them: …
@@ -935,6 +935,10 @@ The sentence about the Tier A field says which of three things the ceiling
 was: **set** (`… sets the ceiling`, with what would have fitted), **derived**
 from the volume and scaled, as above, or the log's own **fixed default** —
 the identity log's and the usage log's, which do not follow the volume at all.
+The Dashboard Assistant's log is a fixed default that is also **scaled**: it
+does not follow the volume, but where the broker is short it gives way down to
+its field's 64 MiB floor, so a company that never turns the assistant on does
+not need room for it.
 
 The remedies are the ones it lists. Give the broker more room: raise
 `stream.store_max_bytes` where you set one, or, where you did not, free space

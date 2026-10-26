@@ -283,6 +283,7 @@ func (r *writeRig) takeMoved() iamdomain.Moved {
 		out.People = append(out.People, m.People...)
 		out.Logins = append(out.Logins, m.Logins...)
 		out.Sessions = append(out.Sessions, m.Sessions...)
+		out.Removed = append(out.Removed, m.Removed...)
 	}
 	r.moved = nil
 	return out
@@ -1355,9 +1356,44 @@ func TestAnAdministrativeRecordIsNeverWrittenThroughAMachineToken(t *testing.T) 
 	rig := newWriteRig(t)
 	admin := rig.writer.As(principalNamed("ana.admin", iam.KindPerson,
 		[]iam.Grant{iam.GrantAdmin}))
-	person := uuid.Must(uuid.NewV7()).String()
-	ctx := rig.t.Context()
-	gestures := map[string]func(w *iamdomain.Writer) error{
+	gestures := administrativeGestures(rig.t.Context(), uuid.Must(uuid.NewV7()).String())
+	for _, through := range []string{
+		iam.MachineTokenName(uuid.Must(uuid.NewV7()).String()),
+		iam.MachineTokenPrefix + "x",
+	} {
+		token := *admin
+		token.OperatorID = through
+		for name, gesture := range gestures {
+			err := gesture(&token)
+			if !errors.Is(err, iamdomain.ErrTokenRefused) ||
+				!errors.Is(err, iamdomain.ErrRefused) {
+				t.Errorf("%s through %s: %v, want %v wrapping %v", name, through,
+					err, iamdomain.ErrTokenRefused, iamdomain.ErrRefused)
+			}
+		}
+	}
+	rig.drain()
+	if got := rig.column(`SELECT id FROM iam_people`); len(got) != 0 {
+		t.Errorf("a refused gesture left rows behind: %v", got)
+	}
+	// THE CONTROL: the deployment's own token is its principal, not a
+	// machine token acting as somebody, and it enrols.
+	tierA := *admin
+	tierA.OperatorID = iam.TokenLogin("ops")
+	if err := rig.draining(func() error { return gestures["create"](&tierA) }); err != nil {
+		t.Errorf("a Tier A token's own login was refused as a machine token: %v", err)
+	}
+}
+
+// administrativeGestures is every record [iamdomain.Writer.mayAdminister]
+// guards, each a call a party may try: enrolling, redeeming, inviting,
+// cancelling an invitation, editing, changing a login or a seat, a stage, a
+// removal, and ending everybody's sessions. The ones about an existing person
+// name person, whom a refused gesture never reaches.
+func administrativeGestures(ctx context.Context,
+	person string) map[string]func(w *iamdomain.Writer) error {
+
+	return map[string]func(w *iamdomain.Writer) error{
 		"create": func(w *iamdomain.Writer) error {
 			_, err := w.Create(ctx, iamdomain.Creation{
 				PersonID: uuid.Must(uuid.NewV7()).String(), Kind: iam.KindMachine,
@@ -1417,18 +1453,50 @@ func TestAnAdministrativeRecordIsNeverWrittenThroughAMachineToken(t *testing.T) 
 			return err
 		},
 	}
-	for _, through := range []string{
-		iam.MachineTokenName(uuid.Must(uuid.NewV7()).String()),
-		iam.MachineTokenPrefix + "x",
+}
+
+// THE ASSISTANT WRITES AN ADMINISTRATIVE RECORD ONLY WHERE NO CEREMONY IS IN IT.
+//
+// A request the Dashboard Assistant makes is its person's own, so an
+// administrator's assistant is composed holding admin, and the one it sends a
+// write through is an exec grant carrying a request the administrator
+// approved (ADR-0051). The record keeps the sign-in ceremonies from it for the
+// machine token's reason, whatever authority reached it: an enrolment (a
+// first password link, or a redemption), an invitation (a link) and ending
+// every session are refused [iamdomain.ErrAssistRefused], wrapping
+// [iamdomain.ErrRefused] and never read as a token, and so is an operator id of
+// the assistant's class this build cannot parse. Every other administrative
+// record (an edit, a login or seat move, a stage, a removal, an invitation
+// withdrawn) is the administrator's own, decided past the lock by its own
+// rules. The refused set is exactly the intended one, so a record that slips
+// on or off it is a red build. Mutation: drop the lock and the ceremonies are
+// admitted; widen it to every record and the edits are refused.
+func TestTheAssistantWritesNoSignInCeremony(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	keyboard := principalNamed("ana.admin", iam.KindPerson, []iam.Grant{iam.GrantAdmin})
+	gestures := administrativeGestures(rig.t.Context(), uuid.Must(uuid.NewV7()).String())
+	ceremonies := []string{"create", "redeem", "invite", "invalidate every session"}
+	composed := keyboard
+	composed.Via = iam.AssistName(uuid.Must(uuid.NewV7()))
+	composed.AssistScope = iam.AssistScopeExec
+	malformed := *rig.writer.As(keyboard)
+	malformed.OperatorID = iam.AssistPrefix + "x"
+	for through, w := range map[string]*iamdomain.Writer{
+		"an assistant grant":             rig.writer.As(composed),
+		"an id of the assistant's class": &malformed,
 	} {
-		token := *admin
-		token.OperatorID = through
 		for name, gesture := range gestures {
-			err := gesture(&token)
-			if !errors.Is(err, iamdomain.ErrTokenRefused) ||
-				!errors.Is(err, iamdomain.ErrRefused) {
+			err := gesture(w)
+			refused := errors.Is(err, iamdomain.ErrAssistRefused)
+			switch ceremony := slices.Contains(ceremonies, name); {
+			case ceremony && (!refused || !errors.Is(err, iamdomain.ErrRefused) ||
+				errors.Is(err, iamdomain.ErrTokenRefused)):
 				t.Errorf("%s through %s: %v, want %v wrapping %v", name, through,
-					err, iamdomain.ErrTokenRefused, iamdomain.ErrRefused)
+					err, iamdomain.ErrAssistRefused, iamdomain.ErrRefused)
+			case !ceremony && refused:
+				t.Errorf("%s through %s was refused as the assistant (%v): an approved "+
+					"edit is the administrator's own", name, through, err)
 			}
 		}
 	}
@@ -1436,12 +1504,10 @@ func TestAnAdministrativeRecordIsNeverWrittenThroughAMachineToken(t *testing.T) 
 	if got := rig.column(`SELECT id FROM iam_people`); len(got) != 0 {
 		t.Errorf("a refused gesture left rows behind: %v", got)
 	}
-	// THE CONTROL: the deployment's own token is its principal, not a
-	// machine token acting as somebody, and it enrols.
-	tierA := *admin
-	tierA.OperatorID = iam.TokenLogin("ops")
-	if err := rig.draining(func() error { return gestures["create"](&tierA) }); err != nil {
-		t.Errorf("a Tier A token's own login was refused as a machine token: %v", err)
+	if err := rig.draining(func() error {
+		return gestures["create"](rig.writer.As(keyboard))
+	}); err != nil {
+		t.Errorf("the administrator at their keyboard was refused: %v", err)
 	}
 }
 

@@ -46,6 +46,8 @@ const BOUND: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
+  assistant: "disabled",
+  assistantModel: null,
 };
 
 /** Signed in, and the directory binds them to no seat. */

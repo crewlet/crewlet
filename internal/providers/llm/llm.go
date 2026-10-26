@@ -31,6 +31,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
+	"time"
 )
 
 // Role names a message's author.
@@ -207,7 +209,9 @@ type Request struct {
 	// after it — the vendor writes that prompt for an agent and moves it
 	// with every model it ships — and replaces it for any other call, whose
 	// system prompt is the whole instruction and whose answer is parsed.
-	// False is a text function, which is every caller but the tool loop.
+	// False is a text function, which is every caller but a seat's tool
+	// loop, and the Dashboard Assistant's loop, whose system prompt is its
+	// whole instruction (toolloop's Config.OwnPrompt).
 	Agent bool
 
 	// OnDelta, when set, asks the backend to stream and calls this as text
@@ -261,6 +265,20 @@ type Delta struct {
 	// host was told of the request is filed under it by this id — read by
 	// arrival instead, it was filed under the request after.
 	Request string
+}
+
+// Reconcile is what takes a reader who was shown `shown` to `want`: the tail
+// to append when shown is a prefix of want, or want whole with restart set
+// when it is not, so the reader discards what it drew and starts again.
+//
+// The one rule a consumer applies at the end of what it streamed, so "what
+// was shown" and "what is true" can never quietly differ: the Dashboard
+// Assistant settling its frames against a request's committed text.
+func Reconcile(shown, want string) (tail string, restart bool) {
+	if strings.HasPrefix(want, shown) {
+		return want[len(shown):], false
+	}
+	return want, true
 }
 
 // Send delivers one fragment, and is a no-op when nothing asked to stream or
@@ -350,6 +368,17 @@ const (
 	// vendor or binary that may well answer, and the entry is not sat out,
 	// since nothing says the failure lasts.
 	KindServer
+
+	// KindCancelled is a call its CALLER gave up on: a person stopped the
+	// turn, a node began to drain, a seat's turn was stopped. The CLI it
+	// started was signalled with it (and exits 143, or 130, or not at
+	// all), which says nothing about the CLI, its login or its vendor, so
+	// NOTHING is learned from it: the chain does not try another member,
+	// the entry's readiness is not touched, and it is not an incident to
+	// log. Decided from the caller's context, never from how the process
+	// ended: a CLI the engine killed exits exactly as one that crashed on a
+	// signal of its own.
+	KindCancelled
 )
 
 func (k ErrorKind) String() string {
@@ -362,6 +391,8 @@ func (k ErrorKind) String() string {
 		return "timeout"
 	case KindServer:
 		return "server"
+	case KindCancelled:
+		return "canceled"
 	default:
 		return "fatal"
 	}
@@ -370,8 +401,9 @@ func (k ErrorKind) String() string {
 // Retryable reports whether another member of a fallback chain is worth
 // trying: every kind but a fatal, which is a fault of the engine's or its
 // host's for the operator to fix rather than a failure one member's CLI or
-// vendor had.
-func (k ErrorKind) Retryable() bool { return k != KindFatal }
+// vendor had, and a cancellation, which no member can answer since nobody is
+// waiting for the answer.
+func (k ErrorKind) Retryable() bool { return k != KindFatal && k != KindCancelled }
 
 // Error is a classified provider failure.
 //
@@ -382,7 +414,14 @@ type Error struct {
 	Kind     ErrorKind
 	Provider string
 	Model    string
-	Err      error
+	// Key is the providers.llm key of the entry that failed, so a remedy
+	// can name the entry an operator signs in again; empty where the
+	// backend was built without one.
+	Key string
+	// RetryAt is when the entry is tried again, for a [KindRateLimit] whose
+	// backend sits the entry out until then; zero where no instant is known.
+	RetryAt time.Time
+	Err     error
 }
 
 func (e *Error) Error() string {
@@ -390,6 +429,12 @@ func (e *Error) Error() string {
 }
 
 func (e *Error) Unwrap() error { return e.Err }
+
+// ErrNotRunnable is a CLI that could not be started on this host at all: its
+// binary missing or not executable, or no process to give it. A backend wraps
+// it under [KindFatal], so a caller telling a person why the model did not
+// answer can say the model's program is missing rather than that it failed.
+var ErrNotRunnable = errors.New("the model's CLI could not be started on this host")
 
 // KindOf returns the classification of an error, or KindFatal for anything
 // this package did not classify. Fatal is the safe default for an UNRECOGNISED
@@ -403,6 +448,9 @@ func KindOf(err error) ErrorKind {
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return KindTimeout
+	}
+	if errors.Is(err, context.Canceled) {
+		return KindCancelled
 	}
 	return KindFatal
 }

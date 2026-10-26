@@ -76,7 +76,7 @@ func (s *Service) Routes(mux authz.Mux) error {
 	mount("GET /iam/people", at(authz.ActionDirectoryRead), s.GetPeople)
 	// CREATING somebody: a service account, or a person onto the human seat
 	// they will hold, answered with that person's first password link.
-	mount("POST /iam/people", at(authz.ActionDirectoryWrite), s.PostPeople)
+	mount("POST /iam/people", at(authz.ActionSignInWrite), s.PostPeople)
 	mount("GET /iam/people/{id}", about(authz.ActionDirectoryRead), s.GetPerson)
 	// AN EDIT OF AN ENROLLED PERSON — what they may do or how they sign in
 	// — is an ordinary directory write: admin, a `step_up` proof and a
@@ -93,7 +93,7 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// does not exist yet would have had to invent an id for them. (A
 	// person who should exist at once is CREATED instead, above, and handed
 	// a link that sets only their password.)
-	mount("POST /iam/invitations", at(authz.ActionDirectoryWrite), s.PostInvite)
+	mount("POST /iam/invitations", at(authz.ActionSignInWrite), s.PostInvite)
 	// READ LIKE THE DIRECTORY and withdrawn like any directory write: an
 	// outstanding invitation is a way into the company, and both halves of
 	// "who can reach us" are this surface's.
@@ -105,11 +105,11 @@ func (s *Service) Routes(mux authz.Mux) error {
 	mount("DELETE /iam/people/{id}/sessions",
 		about(authz.ActionSessionEnd), s.DeleteSessions)
 	mount("POST /iam/people/{id}/mfa/reset",
-		at(authz.ActionDirectoryWrite), s.PostMFAReset)
+		at(authz.ActionSignInWrite), s.PostMFAReset)
 	// THE SAME VERB AS THE SECOND FACTOR'S RESET, for its reason: both
 	// change how somebody else proves who they are, from outside.
 	mount("POST /iam/people/{id}/password-reset",
-		at(authz.ActionDirectoryWrite), s.PostPasswordReset)
+		at(authz.ActionSignInWrite), s.PostPasswordReset)
 	mount("GET /iam/credentials",
 		ofSubject(authz.ActionDirectoryRead), s.GetCredentials)
 	mount("POST /iam/credentials",
@@ -421,6 +421,10 @@ func (s *Service) answerWrite(w http.ResponseWriter, r *http.Request, opID strin
 //     at the route — an administrative identity record needs a person
 //     present, and the remedy is to sign in rather than to be granted
 //     anything. Before the authority arm it wraps.
+//   - THE DASHBOARD ASSISTANT, [iamdomain.ErrAssistRefused]: 403
+//     `unauthorized` with the table's `assist_refused` reason, the answer its
+//     row gives the same request at the route: the person takes the gesture
+//     themselves. Before the authority arm it wraps, for the token's reason.
 //   - AUTHORITY, [iamdomain.ErrRefused]: 403, and it will never land however
 //     often it is retried.
 //   - SOMEBODY ELSE HOLDS IT, [iamdomain.ErrTaken]: an address, a login or a
@@ -498,6 +502,14 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 		fields := authz.RefusalDetail(authz.ReasonTokenRefused, nil)
 		fields["detail"] = err.Error()
 		refuse(http.StatusForbidden, httpjson.CodeTokenRefused, fields)
+		return
+	case errors.Is(err, iamdomain.ErrAssistRefused):
+		// THE SAME LOCK FOR THE DASHBOARD ASSISTANT, answered as the
+		// table's own refusal of it: its reason and no permission, since
+		// the person takes the gesture themselves.
+		fields := authz.RefusalDetail(authz.ReasonAssistRefused, nil)
+		fields["detail"] = err.Error()
+		refuse(http.StatusForbidden, httpjson.CodeUnauthorized, fields)
 		return
 	case errors.Is(err, iamdomain.ErrRefused):
 		refuse(http.StatusForbidden, httpjson.CodeUnauthorized,

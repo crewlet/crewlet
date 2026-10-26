@@ -48,6 +48,7 @@ import {
   TableEntityCell,
   TableStatusCell,
   TableTagsCell,
+  peekRowActivation,
 } from "@crewlethq/ui";
 import {
   ServerGlyph,
@@ -66,7 +67,7 @@ import { RelatedRow } from "~/app/frame/RelatedRow.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { plainSeat } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
-import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { href } from "~/app/router.tsx";
@@ -237,7 +238,9 @@ function FleetScreen() {
               // reference, so a row and the panel it opens can never name
               // different pages.
               rowHref={(n) => peekHref({ kind: "node", id: n.id })}
-              onRowActivate={peekRow<FleetNode>((n) => openPeek({ kind: "node", id: n.id }))}
+              onRowActivate={peekRowActivation<FleetNode>((n) =>
+                openPeek({ kind: "node", id: n.id }),
+              )}
               columns={[
                 {
                   key: "id",
@@ -441,7 +444,7 @@ function FleetScreen() {
                 defaultSort="handle"
                 empty={{ title: "No seats are leased" }}
                 rowHref={(s) => peekHref({ kind: "seat", id: s.handle })}
-                onRowActivate={peekRow<FleetSeatLease>((s) =>
+                onRowActivate={peekRowActivation<FleetSeatLease>((s) =>
                   openPeek({ kind: "seat", id: s.handle }),
                 )}
                 columns={[
@@ -1015,7 +1018,9 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
             hint: "It may be new, draining, or not in the `seats` role.",
           }}
           rowHref={(s) => peekHref({ kind: "seat", id: s.handle })}
-          onRowActivate={peekRow<FleetSeatLease>((s) => openPeek({ kind: "seat", id: s.handle }))}
+          onRowActivate={peekRowActivation<FleetSeatLease>((s) =>
+            openPeek({ kind: "seat", id: s.handle }),
+          )}
           columns={[
             {
               key: "handle",

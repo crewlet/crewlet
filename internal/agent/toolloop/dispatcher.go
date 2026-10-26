@@ -617,7 +617,7 @@ func (d *dispatcher) Spent(u llm.Usage) {
 	d.spent.CacheRead += u.CacheRead
 	d.spent.CacheWrite += u.CacheWrite
 	d.mu.Unlock()
-	if err := charge(d.ctx, d.cfg.Budget, u.Total()); err != nil {
+	if err := Charge(d.ctx, d.cfg.Budget, u.Total()); err != nil {
 		// The tokens are spent and recorded whichever way the meter
 		// answered; what a refusal decides is what FOLLOWS — no further
 		// call runs and no further request is made.
@@ -695,6 +695,7 @@ func (d *dispatcher) call(r *run, in toolsession.Call) toolsession.Result {
 		return toolsession.Result{Output: refusal, Failed: true}
 	}
 	if refusal != "" {
+		d.tellRefused(c, refusal)
 		return d.withheld(c.run, toolsession.Result{Output: refusal, Failed: true})
 	}
 	if c.exclusive {
@@ -707,6 +708,7 @@ func (d *dispatcher) call(r *run, in toolsession.Call) toolsession.Result {
 	// call waited for an exclusive one to run.
 	if why := d.recheck(c); why != "" {
 		d.unlockGate(c.exclusive)
+		d.tellRefused(c, why)
 		return d.withheld(c.run, toolsession.Result{Output: why, Failed: true})
 	}
 
@@ -1384,4 +1386,12 @@ func (d *dispatcher) frame() {
 func UnparsedArguments(name, why string) string {
 	return fmt.Sprintf("%s was NOT run: its arguments could not be read (%s). "+
 		"Call it again with its arguments as one complete JSON object.", name, why)
+}
+
+// tellRefused tells a surface that keeps a record of its own ([Refuser]) that
+// one of its calls was answered without running, and why.
+func (d *dispatcher) tellRefused(c *callRec, why string) {
+	if r, ok := d.cfg.Surface.(Refuser); ok {
+		r.Refused(d.ctx, llm.ToolCall{ID: c.id, Name: c.name, Arguments: c.args}, why)
+	}
 }

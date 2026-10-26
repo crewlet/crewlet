@@ -38,6 +38,7 @@
  * already answers is two handlers for one press.
  */
 
+import { isApplePlatform, keyGlyph } from "@crewlethq/ui";
 import { useKeyChords, type Chord, type Sequence } from "~/lib/keys.ts";
 import { WORKSPACES, type Service } from "./nav.ts";
 
@@ -55,6 +56,7 @@ export type KeyScope =
   | "create"
   | "charter"
   | "search"
+  | "assistant"
   | "layer";
 
 /** The scopes in the order the legend draws them, with what each heading says. */
@@ -71,9 +73,10 @@ export const KEY_SCOPES: readonly { scope: KeyScope; title: string }[] = [
   { scope: "create", title: "Making a new artifact" },
   { scope: "charter", title: "Writing the company's principles" },
   { scope: "search", title: "In search" },
+  { scope: "assistant", title: "In the assistant" },
   {
     scope: "layer",
-    title: "In a dialog, a menu, the navigation drawer or an artifact's panel",
+    title: "In a dialog, a menu, the navigation drawer, an artifact's panel or the assistant",
   },
 ];
 
@@ -180,6 +183,19 @@ const FRAME: KeyRow[] = [
     // A PROJECT IS WORKLET'S, so where the company runs none there is
     // nothing to switch between.
     service: "tracker",
+  },
+  // THE ASSISTANT, from anywhere and from inside a field: the command key
+  // with a full stop, which neither this table nor a browser's common
+  // shortcuts take (the command key with J is a browser's Downloads). Pressed
+  // outside the panel it opens it, or puts focus in its composer; pressed
+  // inside, it closes it and hands focus back.
+  {
+    id: "assistant.open",
+    scope: "frame",
+    presses: [{ key: ".", mod: true }],
+    does: "Open the assistant, or close it",
+    by: "dashboard",
+    whileTyping: true,
   },
   {
     id: "drawer",
@@ -487,12 +503,31 @@ const SEARCH: KeyRow[] = [
   },
 ];
 
+/**
+ * THE ASSISTANT'S OWN KEY, answered by the kit's `Composer` from inside its
+ * field and claimed there, so it shares the layer's namespace rather than the
+ * page's: Enter in the composer is never a list's Enter. Escape inside the
+ * panel is the layer's row below, which the composer answers first while an
+ * answer is running (it stops it) and the panel answers otherwise (it
+ * closes), so one press never closes a peek under it.
+ */
+const ASSISTANT: KeyRow[] = [
+  {
+    id: "assistant.send",
+    scope: "assistant",
+    presses: [{ key: "enter" }],
+    does: "Send the question; with Shift, a new line",
+    by: "kit",
+    whileTyping: true,
+  },
+];
+
 const LAYER: KeyRow[] = [
   {
     id: "layer.close",
     scope: "layer",
     presses: [{ key: "escape" }],
-    does: "Close what is on top",
+    does: "Close what is on top; in the assistant, stop a running answer first",
     by: "kit",
     whileTyping: true,
   },
@@ -506,15 +541,18 @@ export const KEYMAP: readonly KeyRow[] = [
   ...CREATE,
   ...CHARTER,
   ...SEARCH,
+  ...ASSISTANT,
   ...LAYER,
 ];
 
 /**
  * Whether a row is live only while a layer holds the keyboard — its own
- * namespace, since every page key stands aside then (`lib/keys.ts`).
+ * namespace, since every page key stands aside then (`lib/keys.ts`). The
+ * assistant's keys are in it too: they are answered inside its panel and
+ * claimed there, so no page key ever hears them.
  */
 export function layerScoped(scope: KeyScope): boolean {
-  return scope === "layer" || scope === "search";
+  return scope === "layer" || scope === "search" || scope === "assistant";
 }
 
 const BY_ID = new Map(KEYMAP.map((row) => [row.id, row]));
@@ -647,4 +685,30 @@ export function capsOf(press: Press): string[] {
   if (press.shift) caps.push("Shift");
   caps.push(CAP_NAMES[press.key] ?? press.key);
   return caps;
+}
+
+/**
+ * One press as `aria-keyshortcuts` names it: a command-key press is both
+ * Meta and Control, because the attribute is read on every platform and the
+ * table's `mod` is Command on a Mac and Control elsewhere.
+ */
+export function ariaKeysOf(press: Press): string {
+  const rest = [
+    press.alt ? "Alt" : null,
+    press.shift ? "Shift" : null,
+    press.key.length === 1 ? press.key.toUpperCase() : (CAP_NAMES[press.key] ?? press.key),
+  ]
+    .filter((k): k is string => k !== null)
+    .join("+");
+  return press.mod ? `Meta+${rest} Control+${rest}` : rest;
+}
+
+/**
+ * One press as a tooltip prints it, in the platform's notation, from the
+ * kit's own key names: "⌘." on a Mac, "Ctrl+." elsewhere.
+ */
+export function pressText(press: Press, apple: boolean = isApplePlatform()): string {
+  return capsOf(press)
+    .map((key) => keyGlyph(key, apple).glyph)
+    .join(apple ? "" : "+");
 }

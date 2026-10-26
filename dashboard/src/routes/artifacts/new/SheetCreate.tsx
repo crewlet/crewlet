@@ -88,6 +88,8 @@ import { CreateShell, useLeaveCreate } from "./CreateShell.tsx";
 import { titleHold, titleProblem, useCreateArtifact, useWorkItem } from "./create.ts";
 import { artifactTaskBody, useFileArtifactTask } from "./fileTask.ts";
 import { useWhoBuildsIt } from "./WhoBuildsIt.tsx";
+import { createDraft } from "./assistantDraft.ts";
+import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
 import {
   AskAgentPanel,
   askTitleHold,
@@ -144,6 +146,35 @@ interface Imported {
 
 /** Why the first column stays: every row is named by it. */
 const PRIMARY_KEPT = "Every row is named by this column, so a sheet keeps it.";
+
+/** What a new sheet holds beyond what every create page does, as the assistant reads it. */
+interface SheetSummary {
+  readonly start: Start;
+  readonly columns: readonly string[];
+  readonly rows: number;
+}
+
+/** The template keys a new sheet may start from; a CSV is the reader's to bring. */
+const TEMPLATE_KEYS: readonly string[] = SHEET_TEMPLATES.map((t) => t.key);
+
+/**
+ * A new sheet's own fields: the way in, settable to a template as a press
+ * of its card would, and the columns and the filled rows, read only.
+ */
+export const SHEET_FIELDS: readonly DraftFieldSpec<SheetSummary>[] = [
+  {
+    path: "start",
+    label: "Starts from",
+    hint: `One of ${TEMPLATE_KEYS.join(", ")}; import is a CSV the person brings`,
+    read: (d) => d.start,
+    write: (d, key) =>
+      typeof key === "string" && TEMPLATE_KEYS.includes(key.trim())
+        ? { ...d, start: key.trim() as SheetTemplate }
+        : refuse(`Choose one of the templates: ${TEMPLATE_KEYS.join(", ")}.`),
+  },
+  { path: "columns", label: "Columns", read: (d) => d.columns },
+  { path: "rows", label: "Rows filled in", read: (d) => String(d.rows) },
+];
 
 export function SheetCreate() {
   const create = useCreateArtifact();
@@ -308,6 +339,38 @@ export function SheetCreate() {
 
   const dirty = touched || title.trim() !== "" || brief.trim() !== "";
   const cancel = () => (dirty ? setLeaving(true) : leave());
+
+  // WHAT IS OPEN, for the assistant: the title, the way in, the columns and
+  // how many rows are filled, and the hand-off beside them. The way in is set
+  // as a press of its card sets it; the grid is the reader's to shape.
+  useAssistantDraft(
+    createDraft<SheetSummary>({
+      what: "sheet",
+      help:
+        "You can set the title and the template it starts from. Columns and rows are " +
+        "shaped by the person in the grid, and a CSV is brought by them.",
+      step: panel.open ? "ask" : start,
+      title,
+      setTitle,
+      brief,
+      setBrief,
+      who,
+      extra: {
+        value: {
+          start,
+          columns: (draft?.collection.columns ?? []).map(
+            (c) => `${c.label ?? c.key} (${COLUMN_TYPE_WORDS[c.type]})`,
+          ),
+          rows: filledRows,
+        },
+        fields: SHEET_FIELDS,
+        apply: (next) => {
+          if (next.start !== start) choose(next.start);
+        },
+      },
+      blocked: () => (create.busy ? "The sheet is being created." : null),
+    }),
+  );
 
   // WHAT THE PAGE IS DOING, and only that: the grid already shows its columns and rows.
   const status = create.progress

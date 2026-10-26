@@ -61,6 +61,13 @@ import {
   XGlyph,
 } from "@crewlethq/icons/glyphs";
 import { href, useLeaveGuard, useNavigator } from "~/app/router.tsx";
+import { useAssistantDraft } from "~/app/assistant/draft.ts";
+import {
+  BRAND_ASSISTANT_HELP,
+  applyBrandDraft,
+  brandDraftFields,
+  type BrandDraft,
+} from "~/lib/brand/assistantDraft.ts";
 import { usePageMenu } from "~/app/Shell.tsx";
 import { artifactPath } from "~/app/routes.ts";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
@@ -158,6 +165,30 @@ export function BrandPage() {
   const assets = useBrandAssets(shown);
 
   const dirty = changed(editing, adoption);
+  // WHAT IS OPEN, for the assistant: the card in edit, its fields set through
+  // the same edit its controls write; Save and its adoption stay the person's.
+  useAssistantDraft<BrandDraft>(
+    editing && adoption
+      ? {
+          kind: "client",
+          id: adoption.kit,
+          revision: adoption.kit_version,
+          step: editing.card,
+          help: BRAND_ASSISTANT_HELP,
+          scope: `${BRAND_CARDS[editing.card].title} you are editing (not saved)`,
+          value: editing.edit,
+          fields: brandDraftFields(new Set([editing.card])),
+          apply: (next) =>
+            applyBrandDraft(
+              editing.edit,
+              next,
+              (change) => setEditing((was) => (was ? { ...was, edit: change(was.edit) } : was)),
+              setNotice,
+            ),
+          blocked: () => (confirming ? "The change is being saved." : null),
+        }
+      : null,
+  );
   useLeaveGuard(
     dirty
       ? (_to, leave) => {

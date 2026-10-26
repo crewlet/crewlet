@@ -47,6 +47,9 @@ func (e *Engine) identityMoved(moved iamdomain.Moved) {
 	if moved.Seats {
 		e.nudgeDirectory()
 	}
+	if len(moved.Removed) > 0 {
+		e.nudgeAssistantErasure()
+	}
 	if !moved.Credentials() {
 		return
 	}

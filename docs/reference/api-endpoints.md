@@ -361,6 +361,7 @@ node means nothing was done.
 | `GET` | `/worklet/turns` | One page of the agent turns charged to an item, newest first: `?id=` (key or id), `?cursor=`, `?limit=` (default 20, at most 50); see [`work_item_turns`](#queries) |
 | `GET` | `/doclet/pages` | Doclet: a filtered listing of its pages. Served only where `knowledge.backend` is `doclet` |
 | `GET` | `/doclet/pages/{id}` | One page with its body, comments, revision metadata, children and ancestor breadcrumb. `{id}` is the id, or `CONTAINER/Title`: the title matches the way the fleet CLAIMED it, so case and runs of whitespace are ignored and `ENG/deploy runbook` reaches a page called "Deploy  Runbook" |
+| `GET` | `/doclet/pages/{id}/revisions/{version}` | One revision of a page: its own body, message and author at that version, the newest included. Decided as reading the page; see [`page_revision`](#queries) |
 | `GET` | `/containers` | Every knowledge container this node knows about, with how many pages each holds. The engine materialises one per `space:` the org chart names, plus the two reserved ones, on every config apply and every boot; each carries `chart_epoch`, the activation its name and purpose were last written from (Unix milliseconds), so a configuration activated earlier never overwrites them |
 | `POST` | `/worklet/items` `/doclet/pages` | **File an item, write a page**, and the rest of the [write surface](#the-human-write-surface): the same tools a seat and your own assistant hold, as the person you signed in as. Guarded; the item routes are absent on a company that does not run Worklet, and the page routes on one that does not run Doclet |
 | `PATCH` | `/worklet/items/{key}` | Change an item, and its `/comments`, `/rank`, `/depend`, `/relate`, `/restore` and `/purge` beside it. See [below](#the-human-write-surface) for every route and the authority each takes |
@@ -382,7 +383,7 @@ node means nothing was done.
 | `POST` | `/auth/reset/{id}` | **Sets a new password from a reset link, once.** **Unguarded**. `{secret, password}`, the password held to the floor (`422 invalid`, naming the rule). One record sets it, spends the link with every other the person held and moves their revocation epoch — every session and machine token they held ends — judged by the link again in that record's own snapshot, so a link spent from another tab in between is the same `410 reset_spent`. Answers `{status: "password_set", login}` and **no session**: the person signs in next, where a second factor they hold still applies. A first password link is spent by the same record, and for somebody who never held a password it has nothing to end. Each spend is its own operation, so a second one — another tab, or a retry of a spend whose answer was lost — decides again, finds the link spent and is the same `410 reset_spent`, never a `password_set` for a password nothing set; the password the first spend set is the one that works. Issued by an administrator — `POST /iam/people/{id}/password-reset`, or, for a person's first password, the create itself (`POST /iam/people`) |
 | `POST` | `/auth/password` | **Change your own password.** Takes `{current_password, new_password, code}`, and the proof is a step-up's, taken in this request — so no step-up is asked first. The current password is verified on the step-up's terms — on the throttle's curve for the login you are signed in as, a wrong one the `401 sign_in_refused` every failed sign-in answers, with `field: current_password` and a `detail` saying so, since the caller is already signed in as the person it is checked for. **`code` is asked of anybody who holds a second factor** — the current code from their authenticator app, or one of their recovery codes — exactly as a step-up asks it: absent, `401 second_factor_required`, which changes nothing and counts as no attempt; wrong or already spent, `401 sign_in_refused`, counted on the person's own curve as well as the pair's (a wait past five seconds is `429` with a `Retry-After`); right, it is spent. Without it, somebody holding your session cookie and your password but not your authenticator could end every session you held and lock you out. Somebody who holds no second factor sends no `code`. The new password is held to the password floor (`422 invalid`, naming the rule). Needs a person present: a machine token is `403 token_refused`, and a session exchanged from a Tier A token, which is no person's, is `403 forbidden`. **One record** sets the password and moves the person's revocation epoch, ending every session and machine token they held and every outstanding reset link; this browser is then handed a new session, proved now and answered in the sign-in's own shape. A change this node has not applied yet is `202` with `status: password_changed` and no session — sign in again with the new password — and one that finds the password changed by somebody else since it was verified is `409 stale` with the cookie cleared, because that change ended this session too. See [Changing your own password ends everything else](../concepts/identity-and-access.md#changing-your-own-password-ends-everything-else) |
 | `POST` | `/auth/logout/{lineage}` | End **one named** session, which is how you sign out of a laptop you left somewhere from the browser you are using. The owner is read from this node's rows, and whether you may end it is the authority table's — the same rule as `DELETE /iam/people/{id}/sessions`, so ending one session and ending all of somebody's never answer differently: your **own** on no proof at all (a session exchanged from a Tier A token counts the token's other sessions as its own), and **anybody else's** on `admin`, a proof inside `step_up` and a person present. A refusal is the table's own envelope — `403 unauthorized` naming `admin`, `403 step_up_required`, or `403 token_refused` for a machine token. A lineage nobody holds answers `ended`, as a session already over does — ended by a record, past its absolute deadline, revoked or invalidated — with nothing written or announced; "nobody holds it" is **proved** against the identity log's end, so a node whose rows have not applied every record the log holds (it is behind, or holds one it could not apply) does not say it — a session opened through a peer is a row such a node is still missing, and `ended` would be a lie about a session still running. That node, and one that cannot read its rows at all, answers `503 identity_unavailable` with a `Retry-After` and writes nothing, because the owner the caller is checked against is one of those rows — unlike `POST /auth/logout`, whose lineage comes off the cookie's own signature. A close nobody can confirm is `503` with its `op_id`; asking again is a fresh close, and one that finds the first had landed answers `ended` |
-| `GET` | `/viewer` | **Who is asking.** The caller's `login`, the `grants` they carry **on this node** — the effective set: every app an admin holds spelled out, unknown names dropped, and `admin` only where this node's `api.auth.admin` serves it, so a client reads what it holds without expanding anything itself — the seat the identity directory binds them to — its `handle`, `name` and `kind`, all empty for a credential nobody is bound through — and `owner`, the name the caller's own record (inbox, pins, priorities, personal views) is kept under: the seat for a person, or for a token or service account the directory binds to one, and the login for a credential bound to none. `acts` names the tools [`/operator/act`](#operatoract--the-dashboards-write-surface) would serve this caller — the catalogue's writes the authority table can admit them to before any object is named, always an array — and `project` is where a create of theirs that names no project files, `""` for a caller bound to no seat or a seat whose team owns no project. A node that cannot yet decide `acts` answers `503` rather than an empty list, which would lock every control the caller holds the authority for. A credential bound to no seat — a Tier A token's session, a service account bound to none — is an **ordinary state**, not an error: a pipeline's token acts under its own login, and binding it to a seat is a directory row rather than a different credential. A person always holds a human seat, so a person is never answered unbound. `config_writer` is whether the caller's credential may change the company document — false for an anonymous caller and for every credential a [managed document's](../concepts/configuration.md#managed-configuration) `api.auth.company_writers` does not list, a person's session, a machine token and a lead's among them; it says nothing about authority, which `admin` or a lead's subtree still decides — and `config_managed_by` the Tier A token ids that alone may change it when another system manages it, empty when nothing does and for an anonymous caller |
+| `GET` | `/viewer` | **Who is asking.** The caller's `login`, the `grants` they carry **on this node**, the effective set: every app an admin holds spelled out, unknown names dropped, and `admin` only where this node's `api.auth.admin` serves it, so a client reads what it holds without expanding anything itself, the seat the identity directory binds them to, its `handle`, `name` and `kind`, all empty for a credential nobody is bound through, and `owner`, the name the caller's own record (inbox, pins, priorities, personal views) is kept under: the seat for a person, or for a token or service account the directory binds to one, and the login for a credential bound to none. `acts` names the tools [`/operator/act`](#operatoract--the-dashboards-write-surface) would serve this caller, the catalogue's writes the authority table can admit them to before any object is named, always an array, `project` is where a create of theirs that names no project files, `""` for a caller bound to no seat or a seat whose team owns no project, and `space` is where a page of theirs that names no container lands, by the same rule. A node that cannot yet decide `acts` answers `503` rather than an empty list, which would lock every control the caller holds the authority for. A credential bound to no seat, a Tier A token's session, a service account bound to none, is an **ordinary state**, not an error: a pipeline's token acts under its own login, and binding it to a seat is a directory row rather than a different credential. A person always holds a human seat, so a person is never answered unbound. `config_writer` is whether the caller's credential may change the company document, false for an anonymous caller and for every credential a [managed document's](../concepts/configuration.md#managed-configuration) `api.auth.company_writers` does not list, a person's session, a machine token and a lead's among them; it says nothing about authority, which `admin` or a lead's subtree still decides, and `config_managed_by` the Tier A token ids that alone may change it when another system manages it, empty when nothing does and for an anonymous caller. `assistant` is whether the [Dashboard Assistant](#the-dashboard-assistant) is available to the caller on this node, `{available, reason?}`, with the first reason it is not: `disabled` (the company has not turned it on, or this node serves no assistant), `no_model` (`assistant.llm` names no chain the assistant's rules admit), `not_a_person` (a machine token, a service account or a Tier A token's session), `no_permission`, or `model_not_ready`, checked last so only a person the assistant would answer learns it: every model in `assistant.llm` is known unusable right now, read from what the node already holds and never by calling a model (its plan spent until a reset, its CLI signed out or with nothing that signs it in, or its CLI unable to start). With that reason the member carries `model: {code, message, hint?, retry_at?}`, the [turn error](#how-a-turn-fails-on-the-model) a question would have failed with, in the same words, and the hint an administrator or anybody else is given |
 | `GET` | `/stream/snapshot` | Dashboard initial-state bundle, served from the in-memory projection (REST fallback for the WebSocket) |
 | `WS`  | `/ws/stream` | Live dashboard stream — agents, events, LLM invocations, health |
 | `GET` | `/dashboard` | Dashboard shell (`/` redirects here; `/static/{path}` serves its assets) |
@@ -401,6 +402,11 @@ node means nothing was done.
 | `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to a coding agent in box mode. Per-run token in the path; all three verbs because that is what the transport uses |
 | `GET` `POST` `DELETE` | `/operator/mcp` | Worklet and Doclet, served over MCP to **your** AI assistant. **Always needs a credential**, which for an assistant is a [machine token](#post-iamcredentials-mints-a-machine-token) acting as you: it files and moves work (see [below](#operatormcp--your-own-assistant)). The catalogue is built per request: `503 no_active_revision` until this node's first company brings Worklet or Doclet up, and `404 no_route` on a company that runs neither |
 | `POST` | `/operator/act/{tool}` | The same catalogue's writes, one tool per request, **as the principal your request resolves to**: the dashboard's write surface. Any credential the guard resolved; every tool is decided by the authority table, as on every other surface, and the `Idempotency-Key` header is required (see [below](#operatoract--the-dashboards-write-surface)). Answers as `/operator/mcp` does before the first company and on a company that runs neither Worklet nor Doclet |
+| `POST` | `/assistant/proposals/{id}/approve` | Approve one of **your own** Dashboard Assistant proposals. A proposal whose turn read through an app you no longer hold is not sent: it settles `failed` with the refusal `access_withdrawn`, and the turn ends rather than carrying on with what it read. Your session cookie and a matching `Origin` only (an assistant grant is refused before routing), `Content-Type: application/json`, the `Idempotency-Key` header, and `{"protocol_version": 1, "digest": "sha256:..."}` echoing the digest the card showed, with an optional `page_context`: the screen you decided from, as it is now, which the resumed turn runs on (the actions it accepts, the draft as the change left it). A turn you asked without a page never gains one this way, and a `page_context` the screen's own rules refuse is `400 invalid_body` before anything is decided. Refusals: `404 not_found` (not yours, or no such proposal), `409 proposal_already_decided` (with its `state`), `410 proposal_expired`, `409 proposal_digest_mismatch` (nothing sent), `409 proposal_stale` (the record moved since it was shown), `403 step_up_required` (nothing recorded; confirm it is you and send the same request again), `503 unavailable` with the `op_id` to retry under. A server write is sent in process as you, once, under the proposal's own operation key, and `202` answers its state (`applied`, `failed` or `unknown`), the turn and where its continuation streams. An `unknown` proposal is retried by approving it again: the same write, never a second one |
+| `POST` | `/assistant/proposals/{id}/decline` | Decline one of your proposals: the same body, header and refusals as the approval; nothing is sent, and the assistant is told. `200` with the proposal's state |
+| `PUT` | `/assistant/actions/{id}` | A page claiming (`{"state": "applying"}`), then reporting, a page action you approved (the report may carry `page_context`, the screen as the action left it, read as the approval's is), or a view change (`confirm: none`: a filter, a range, a lens) the turn sent to the page at once, recorded as a proposal it approved itself; the report of a view change settles it and resumes nothing, since its turn never waited for it. The claim succeeds once across your tabs; another tab is `409 action_already_claimed`. A claim must name the revision the screen is at: one whose screen moved since the action was prepared is `409 proposal_stale`, and nothing is applied. The report (`applied`, `stale`, `blocked`, `invalid`, `no_handler`, with the page's `revision`) is the page's own statement, which the assistant reads as client-reported. `Idempotency-Key` is optional: a claim sent again under its key is the same claim |
+| `POST` | `/assistant/audit/conversations/{id}/read` | An administrator's **compliance read** of somebody else's assistant conversation (`assistant.conversation.audit_read`: admin, a recent proof, a person present, never the assistant). `{"protocol_version": 1, "reason": "..."}`, the reason required and at most 500 characters. The read is recorded first, beside your name and reason, and the conversation's owner is shown it; then `200` answers the transcript and an `assistant_conversation_read` audit record names you, the owner and the reason |
+| `POST` | `/assistant/audit/conversations/{id}/files/{file}/read` | The same **compliance read** of one file the conversation keeps, on the same verb and with the same body: the read is recorded beside the conversation first, the `assistant_conversation_read` audit record names the file as well (`file_id`), and `200` answers the file with every header of [the owner's download](#the-dashboard-assistant). A file the conversation does not keep is `404 not_found`, and the read stays on its record. Absent on a node with no object store |
 
 > **Auth.** Every route needs a credential, reads included, and three shapes
 > of one reach every route: a **session cookie** a person gets by signing in
@@ -644,7 +650,11 @@ table made the refusal — every question, the policy every `/config/*` and
 `seat_only` (a person or a token asking for a verb only an agent seat takes),
 `token_refused` (a [machine token](#post-iamcredentials-mints-a-machine-token)
 on a gesture that needs a person present, answered under the code
-`token_refused` rather than `unauthorized`), `unnamed`, and `step_up` on the one
+`token_refused` rather than `unauthorized`), `assist_refused` and
+`assist_scope` (a request the Dashboard Assistant made on a verb its row keeps
+from it, or a write through a read grant: see
+[Every row says what the Dashboard Assistant may do with it](../concepts/identity-and-access.md#every-row-says-what-the-dashboard-assistant-may-do-with-it)),
+`unnamed`, and `step_up` on the one
 refusal the caller clears themselves
 ([below](#some-gestures-ask-how-recently-you-proved-who-you-are)) — and `grants`
 are the **least** that would have admitted this caller for this object: any
@@ -701,7 +711,7 @@ is told what they lack, not sent to confirm who they are first.
 
 | Window | Setting (default) | What asks for it |
 |---|---|---|
-| `step_up` | `api.auth.session.step_up` (1 hour) | Every write under `/config*`, `/setup`'s writes, `PUT`/`DELETE /secrets/{name}`, `POST /secrets/rekey` and revealing a value (`GET /secrets/{name}?reveal=true`, `POST /secrets/reveal`), the deployment's own controls (`POST /backup`, `POST /objects/migrate`, every `POST /worklet/retention*` and both `POST /fleet/broker/remove*`), the two purges (`POST /worklet/items/{key}/purge`, `POST /doclet/pages/{id}/purge`), and every `/iam` write: `POST /iam/people`, `PATCH /iam/people/{id}`, `DELETE /iam/people/{id}`, `POST /iam/invitations`, `DELETE /iam/invitations/{id}`, `POST /iam/people/{id}/mfa/reset`, `POST /iam/people/{id}/password-reset`, `POST /iam/credentials`, `DELETE /iam/credentials/{id}`, ending somebody else's sessions and `POST /iam/invalidate-all`; and your own `POST /auth/totp` and `POST /auth/totp/recovery` |
+| `step_up` | `api.auth.session.step_up` (1 hour) | Every write under `/config*` (a [dry run](#dry-runs) excepted, which changes nothing), `/setup`'s writes, `PUT`/`DELETE /secrets/{name}`, `POST /secrets/rekey` and revealing a value (`GET /secrets/{name}?reveal=true`, `POST /secrets/reveal`), the deployment's own controls (`POST /backup`, `POST /objects/migrate`, every `POST /worklet/retention*` and both `POST /fleet/broker/remove*`), the two purges (`POST /worklet/items/{key}/purge`, `POST /doclet/pages/{id}/purge`), and every `/iam` write: `POST /iam/people`, `PATCH /iam/people/{id}`, `DELETE /iam/people/{id}`, `POST /iam/invitations`, `DELETE /iam/invitations/{id}`, `POST /iam/people/{id}/mfa/reset`, `POST /iam/people/{id}/password-reset`, `POST /iam/credentials`, `DELETE /iam/credentials/{id}`, ending somebody else's sessions and `POST /iam/invalidate-all`; and your own `POST /auth/totp` and `POST /auth/totp/recovery` |
 | none | | Every read, the two deployment reads (`GET /worklet/retention/maintenance`, `GET /worklet/retention/reanchor`) included; ending your own sessions (`DELETE /iam/people/{id}/sessions` naming yourself), which is the first thing to do on finding somebody else in your account, while an administrator ending somebody else's asks `step_up`; changing your own password (`POST /auth/password`), whose current password (and code, from somebody who holds a second factor) is itself the proof; and every work and knowledge verb but the two purges: the tools, `/operator/mcp`, `/operator/act` and the rest of the human write surface |
 
 A proof that is too old is **`403 step_up_required`**, the code the sign-in
@@ -1810,7 +1820,7 @@ so a lead edits through the entity routes.
 
 #### Dry runs
 
-`PUT /config?dry_run=true`, `PATCH /config?dry_run=true` and `PUT /config/{kind}/{id}?dry_run=true` are the same request, checked in the same order, that store, activate and publish nothing. The dashboard's organization builder sends one on every edit, and its Budgets screen one before every ceiling it saves, so a check is always exactly the write a save would send. An entity write needs its check more than the whole-document writes do: its caller never sees the rest of the document, so the whole-company validation behind the splice is the only place it learns that a seat fine on its own leaves the company invalid, or that a ceiling it raised now sits above the company's (a warning, which only a check shows before the save).
+`PUT /config?dry_run=true`, `PATCH /config?dry_run=true`, `PUT /config/{kind}/{id}?dry_run=true` and `PUT /config/charter?dry_run=true` are the same request, checked in the same order, that store, activate and publish nothing. The dashboard's organization builder sends one on every edit, and its Budgets screen one before every ceiling it saves, so a check is always exactly the write a save would send. An entity write needs its check more than the whole-document writes do: its caller never sees the rest of the document, so the whole-company validation behind the splice is the only place it learns that a seat fine on its own leaves the company invalid, or that a ceiling it raised now sits above the company's (a warning, which only a check shows before the save).
 
 ```bash
 curl -X PATCH "https://engine.example.com/config?dry_run=true" \
@@ -1828,6 +1838,7 @@ A valid check answers `200`:
 - **No summary is needed**, because nothing is stored to record one on. A `_summary` key in the body is still lifted out, so the document checked is the one the write reads.
 - **`base_revision_id`** is the revision the check was built on, and `""` when nothing is active. A client whose draft was built on a different revision learns that the configuration moved without a second request.
 - **Every other refusal is the write's, in the write's order**: `409 no_active_revision` for a patch with nothing to patch, `409 revision_advanced` for a stale `If-Match`, `412 already_configured` for `If-None-Match: *` on a configured company, and `400` with [problems](#refusals-carry-located-problems) for a document the write would refuse.
+- **A dry run is decided as the write, without the step-up** (ADR-0055): the same permission, a [lead's](#a-lead-edits-their-own-team) included, but not the recent proof, because it changes nothing. A person whose sign-in is old checks a change and is asked to confirm it is them only to make it. The Dashboard Assistant's read access sends a dry run to these routes, and to no other, which is how it checks a change before the person is shown it.
 - A dry run needs the same token a write does, and a [lead's](#a-lead-edits-their-own-team) is judged as the write would be: a part that is not theirs is `403` with the `refused` list. One answer differs: a seat or unit sent back **unchanged** to its own address is checked for its lead, though the write would be refused as a re-publish, because the check stores nothing and is how a lead reads what the engine derives of their unit as it stands. The whole document sent back unchanged stays refused, since no address decided whose check it is.
 
 #### Refusals carry located problems
@@ -1945,8 +1956,15 @@ ETag: "charter-91ab…"
   answered rather than refused.
 - `?dry_run=true` judges the write and stores nothing, answering
   `{"valid": true, "charter": …, "changed": …}`.
-- It is `admin`'s, read and written (`config.read`, `config.write`), and the
-  write asks a recent proof as every write here does.
+- It is `admin`'s, read and written on verbs of its own
+  (`config.principles.read`, `config.principles.write`), decided as
+  `config.read` and `config.write` decide the whole document; the write asks a
+  recent proof as every write here does, and is admitted only while it changes
+  the mission, the vision or the policies and nothing else. The verbs are its
+  own because the Dashboard Assistant may read the charter as the person and
+  write it only as a change its owner approved from a before-and-after, sent
+  here with the `If-Match` its preview read (ADR-0052); no other part of the
+  document is the assistant's.
 
 **The bounds**, in characters (Unicode code points, the count an editor shows),
 because every character is in every seat's prompt on every round. A charter
@@ -2099,7 +2117,7 @@ Every `/setup` and `/secrets` write asks for a proof of identity inside
 | `POST` | `/setup/integrations/{kind}/check` | Run the same pass read-only, to see whether something fixed at the third-party app took |
 | `GET` | `/setup/integrations/{kind}/runs` | The passes THIS NODE remembers for one surface, newest first, ten at a time. A pass is executed by whichever node held the surface's lease and is remembered in that node's own process, so the answer carries `scope` saying as much — an empty list on a fleet where another node ran the pass is an honest answer to a question the reader did not mean to ask. It exists because nothing could name a run id: the route below answered one pass and was reachable only by a caller that had just started it |
 | `GET` | `/setup/integrations/{kind}/runs/{id}` | One pass, as the node that executed it remembers it |
-| `GET` | `/secrets` | Every stored name with its `key_id`, `updated_at`, `updated_by` (the author), `updated_by_kind`, `operator_id` (the credential it was stored through, empty where none made the write) and `source` (the write path that stored it, in that path's own word: `api` for `PUT /secrets/{name}` whoever calls it, `setup` for an integration's setup, `provision` for a provisioning pass, and `cli` or `llm-login` for a `crewlet` command's own write to the fleet's store with its node's engine stopped — `crewlet secrets set`, and `crewlet llm`'s captured token or exported bundle — where a provisioner's `-secret-store` run made that way records `provision`; see [the secret store](../concepts/secret-store.md#the-design)); `engine_keys` — a count of the engine's own keys, `{"total": N, "by_key": {"<key id>": n}}`, naming none of them; and `identity_values` — the identity estate's sealed values counted the same way, `{"people": {"<key id>": n}, "invitations": {"<key id>": n}}` (a person's name, address and second-factor seed, and the address of every invitation still redeemable), or `null` on a node that runs no identity estate. **Never a value**. A rekey keeps each row's `updated_*` and `source`: it re-seals a value it did not choose, so the row goes on saying who stored it |
+| `GET` | `/secrets` | Every stored name with its `key_id`, `updated_at`, `updated_by` (the author), `updated_by_kind`, `operator_id` (the credential it was stored through, empty where none made the write) and `source` (the write path that stored it, in that path's own word: `api` for `PUT /secrets/{name}` whoever calls it, `setup` for an integration's setup, `provision` for a provisioning pass, and `cli` or `llm-login` for a `crewlet` command's own write to the fleet's store with its node's engine stopped (`crewlet secrets set`, and `crewlet llm`'s captured token or exported bundle), where a provisioner's `-secret-store` run made that way records `provision`; see [the secret store](../concepts/secret-store.md#the-design)); `engine_keys`, a count of the engine's own keys, `{"total": N, "by_key": {"<key id>": n}}`, naming none of them; and `identity_values`, the identity estate's sealed values counted the same way, `{"people": {"<key id>": n}, "invitations": {"<key id>": n}}` (a person's name, address and second-factor seed, and the address of every invitation still redeemable), or `null` on a node that runs no identity estate; and `assistant_values`, the Dashboard Assistant's sealed values counted the same way (a file a conversation keeps counted by the key its content is sealed under in the object store), `{"values": {"<key id>": n}}`, which no rekey moves (each leaves with its conversation), or `null` on a node that runs no assistant estate. **Never a value**. A rekey keeps each row's `updated_*` and `source`: it re-seals a value it did not choose, so the row goes on saying who stored it |
 | `GET` | `/secrets/{name}` | The same fields for one name. `404 not_found` when it is unset |
 | `GET` | `/secrets/{name}?reveal=true` | **Break-glass.** The decrypted value, `Cache-Control: no-store`, logged by name against the authenticated operator. The longest answer is some 384 KiB — the largest value a write admits, in the characters JSON spells longest — which is what a client reading it must be prepared to take |
 | `POST` | `/secrets/reveal` | **Break-glass, for several names at once.** The body is `{"names": ["GITLAB_TOKEN_SWE", …]}` — at most 64 names, each an environment-variable name — and the answer is `{"values": {"<name>": "<value>"}, "missing": ["<name>"]}`: every name asked that is held, with its decrypted value (an empty one included), and every name nothing holds. Nothing beside the names asked is opened. `Cache-Control: no-store`, logged by every name asked against the authenticated operator, and decided on the reveal's own row before the body is read. It is what a [CLI run resolving a company document through a running node](cli.md#where-a-command-reads-the-companys-values) reads: having listed the names with `GET /secrets`, it asks for the variables its command reads that the node lists — and, with a `-secret-store` sink, the planned seats' tokens it reads back — in requests of at most 64, never one reveal per name. `400 invalid_body` for no names, more than 64, a field it does not read or a body that is not JSON; `400 invalid_name` for a name no `${VAR}` reference can hold; `400 invalid_query` for any query parameter; `403 reserved_name` for the engine's own key. The longest answer is about 24 MiB — 64 values of the largest size a write admits, each in the characters JSON spells longest — which is what a client reading it must be prepared to take |
@@ -3823,8 +3841,10 @@ or not it went through:
 
 | Event type | Written for |
 |---|---|
-| `operator_acted` | Every [operator tool](#operatormcp--your-own-assistant) call that is not a proven read, on **all three** transports: a button on the dashboard (`/operator/act`), a person's own assistant (`/operator/mcp`) and a script on the [human write surface](#the-human-write-surface) (`/worklet`, `/doclet/pages`), whose verbs with no tool behind them are recorded too |
+| `operator_acted` | Every [operator tool](#operatormcp--your-own-assistant) call that is not a proven read, on **all three** transports: a button on the dashboard (`/operator/act`), a person's own assistant (`/operator/mcp`) and a script on the [human write surface](#the-human-write-surface) (`/worklet`, `/doclet/pages`), whose verbs with no tool behind them are recorded too. A write the Dashboard Assistant sent after you approved it is recorded under the transport `assistant`, its credential `assist:<grant>`, with an `assistant` reference (`conversation_id`, `turn_id`, `grant_id`, `session`, `proposal_id`) and `conversation_id` beside it as a listing field |
 | `backup_requested` | Every [`POST /backup`](#post-backup) that began copying, whether the copy finished or not |
+| `assistant_conversation_read` | Every administrator's compliance read of a person's Dashboard Assistant conversation: the reader, `conversation_id`, `owner_id` and the reason they gave, and `file_id` for a compliance download of one file it keeps. The conversation itself is never copied here |
+| `assistant_turn_completed` | Every segment of a person's Dashboard Assistant turn: answered, stopped, failed, out of budget, or parked on a proposal. It names the conversation, the turn (`assistant_turn_id`, never a seat's `turn_id`), how it ended and every step's tool, route pattern, outcome, HTTP status and bytes read, and never an argument, an answer or the person's question |
 
 Each carries `source: "operator"` on the envelope, so
 `GET /events?source=operator` is the runtime audit on its own. Who acted is
@@ -3833,7 +3853,7 @@ request records: `actor` (the seat's handle for a person, or for a token or
 service account bound to one, and the login otherwise), `actor_kind` (`human`, `operator` or `system`) and
 `operator_id` (the credential — `session:<lineage>`, `pat:<id>`, or a Tier A
 token's login) — resolved once for the call, so a directory rebind landing
-while it ran never makes the record name a different person. Both are filed
+while it ran never makes the record name a different person. All of them are filed
 under `lifecycle`.
 
 ```json
@@ -3866,8 +3886,9 @@ the audit says who called what, and what became of it.
 **A listing carries what a row needs without its payload.** `GET /events`
 never returns payloads, so the store promotes the runtime audit's dimensions
 into each row's `tags`: `actor_kind` and `operator_id` (who acted, beside
-the row's own `actor` column), `tool` (an `operator_acted` call's tool) and
-`dir` (a `backup_requested` copy's directory) — beside `node`, the envelope's
+the row's own `actor` column), `tool` (an `operator_acted` call's tool),
+`dir` (a `backup_requested` copy's directory) and `conversation_id` (an
+`assistant_turn_completed` turn's conversation), beside `node`, the envelope's
 publishing node, which every event row carries. That is what the dashboard's
 Audit log and backup history draw from.
 
@@ -4283,7 +4304,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `work_inbox` | `{handle, unread, primary_only, snoozed, reasons, limit, cursor, since}` | `GET /worklet/inbox`. One person's notices, newest first, 50 to a page. Each names the ONE reason of eighteen it reached them under, `addressed` (it asks something of them rather than informing them), `fallback` (nobody better was found), and their own read and snooze marks. `actor` is who made the change and `actor_kind` its kind: a person as their seat, a credential nobody is bound through under its login. `comment_id` and `turn_id` are the comment the change wrote and the turn that made it; `ask` is the question the notice is about (the ask itself for `asked`, the ask it answered for `answered`), as `{comment, asked_of, open, answered_by, answered_at, resolved, choice, decision}`, read NOW, so an ask somebody has since answered reads `open: false`. `snoozed` is `exclude` (the default), `include` (snoozed notices kept and marked) or `only` (just what was put off); a snooze whose time has come is back under every scope and is not `only`. `snoozed`, `unread`, `primary_only` and `reasons` all narrow the SCAN rather than the page, by the same rules the marks are computed with, so a page holds `limit` notices whenever the scope does: they used to be applied to the page after it was read while the cursor was taken before, so a person with their newest fifty notices snoozed or read opened an empty page with a cursor behind it. `subject_key` is the key the notice's task held when it was written, and `task` is that task's id: the subject for a task commit, and the task a lead put first for a `prioritised` notice, whose `subject_id` is the PERSON whose list it is; a notice naming no task carries none. `subject_key_collision` says the stored key now opens a task OTHER than `task` (asked of the stored key itself, so a notice about a duplicate moved since is still flagged), and the notice is then reached by `task`; it is never set on a notice that names no task, whose key is the only address it has. `primary_reasons` is the split that was APPLIED, defaulted, so a caller renders *you are seeing these because* without repeating the rule; `unread` and `primary` are counts over the PAGE and say so, because a total over the table is a second scan of rows this answer did not return. `reasons` FILTERS rather than classifies (the primary split classifies the same rows), and an unknown one is refused naming the eighteen. `since` is a log POSITION (`<stream>@<generation>:<sequence>`, what `seen_through` renders), never a bare sequence, and a position on THIS log: a `since` or a `cursor` from another domain's log, or a `cursor` that is not a position, is `bad_params`, because both are compared against Worklet's own sequence numbers and one from another log would pick a page by a number that means nothing here. Same scope rule as `work_my_work` |
 | `work_search` | `{q, limit, mode?}` | `GET /worklet/search`. The company's work RANKED against a phrase: `hybrid` by default (BM25 over the engine's own inverted list fused with the semantic scan over the replicated vectors), or `keyword` / `semantic` alone, which is the same fan-out a seat's `search_work_items` runs. Not a filter: `work_activity`'s `q` is an escaped LIKE over an excerpt, gated to a span of days, and answers a different question. Answered only where the company runs Worklet (a company whose tracker is a vendor's, or none, gets `unknown_query`, as it does for every other work question, and a node with no company yet `unavailable` with `refusal: "no_active_revision"`), and holding the board is not holding an index: a node that joined recently has every row and no index, and answers `available: false` with `reason: "building"` rather than an error or an empty result: nothing is wrong, and a reader told *nothing matched* files the duplicate. A hit carries `rank`, its 1-based PLACE in the answer, and never a score: the fan-out finishes the ordering on the nodes that scanned each slice of the corpus and hands the coordinator ids best first, so a score on the wire could only ever read zero. It carries the item's `id`, `key`, `title`, `project`, `type`, `status`, `assignee` and `priority`, the index's own `snippet`, and `key_collision` exactly as a board row does. The answer carries the same outcome fields as `knowledge` (`mode`, `served_mode`, `modes`, `degraded` and `coverage{nodes, complete, buckets_missing}`), and a mode it does not know is refused, as a `q` past 400 bytes is: `bad_params` naming its size and the limit, asked before the mode, rather than cutting it |
 | `work_routing` | `{record_id}` | `GET /worklet/routing/{record_id}`. Who ONE change woke, and under which reason: the fact no other tracker records. `tracker_notifications` has always been readable by RECIPIENT (`work_inbox`); this is the same rows by RECORD, which is a primary-key prefix scan and needs no index of its own. Each recipient names the ONE reason of eighteen that found them, `addressed` (it asks something of them), and `fallback`/`fallback_rank` (nobody better was found). `notified` is the history row's own flag and means the commit CARRIED a notification, never that somebody was woken, since the applier deliberately does not hold the roster that would need. So an empty recipient list is THREE facts and `delivery` tells them apart: `nobody` (announced, inside the retention window, and every candidate was the actor or has left), `swept` (older than `tracker.worklet.inbox_retention_days`, so their absence is not evidence), `unknown` (no horizon stated) and `quiet` (the commit announced nothing, which is most of them). `retained_from` is the instant that decision was made against |
-| `viewer` | `{}` | `GET /viewer`. `{login, grants, handle, name, kind, owner, acts, project, config_writer, config_managed_by}`; `acts` is what [`/operator/act`](#operatoract--the-dashboards-write-surface) would serve this caller — the catalogue's writes the authority table can admit them to before any object is named — and `project` is where their `create_work_item` lands when it names none: the engine's own default for their seat (the seat's project, else its unit's, else the nearest ancestor's), so a screen offering "Create task" says where rather than working out a second answer; `""` when there is none, and a create must name one. Registered on EVERY build with no seam of its own: who is asking is a property of the request rather than of anything this node stores. A bound caller — every person, and a token bound to a seat — carries a `handle`; an unbound one — a Tier A token or a service account bound to none — carries a login and no seat, which is an ordinary state rather than a refusal (a person is never unbound: every person holds a seat). `owner` is the name the caller's OWN record is kept under — the seat when bound, the login when not — and it is what a screen asks the personal questions by, never `handle`. `config_writer` is whether the caller's credential may change the company document — false for an anonymous caller and for every credential a managed document's `api.auth.company_writers` does not list — and `config_managed_by` is that list, `[]` when the document is not managed and for an anonymous caller, so a screen draws every editing control disabled with who manages it rather than offering a save the engine refuses |
+| `viewer` | `{}` | `GET /viewer`. `{login, grants, handle, name, kind, owner, acts, project, config_writer, config_managed_by, assistant}`; `assistant` is the [Dashboard Assistant](#the-dashboard-assistant)'s availability to this caller, `{available, reason?}`; `acts` is what [`/operator/act`](#operatoract--the-dashboards-write-surface) would serve this caller, the catalogue's writes the authority table can admit them to before any object is named, and `project` is where their `create_work_item` lands when it names none: the engine's own default for their seat (the seat's project, else its unit's, else the nearest ancestor's), so a screen offering "Create task" says where rather than working out a second answer; `""` when there is none, and a create must name one. Registered on EVERY build with no seam of its own: who is asking is a property of the request rather than of anything this node stores. A bound caller, every person, and a token bound to a seat, carries a `handle`; an unbound one, a Tier A token or a service account bound to none, carries a login and no seat, which is an ordinary state rather than a refusal (a person is never unbound: every person holds a seat). `owner` is the name the caller's OWN record is kept under, the seat when bound, the login when not, and it is what a screen asks the personal questions by, never `handle`. `config_writer` is whether the caller's credential may change the company document, false for an anonymous caller and for every credential a managed document's `api.auth.company_writers` does not list, and `config_managed_by` is that list, `[]` when the document is not managed and for an anonymous caller, so a screen draws every editing control disabled with who manages it rather than offering a save the engine refuses |
 | `work_person` | `{handle}` | `GET /worklet/people/{handle}`. Scoped like `work_my_work`: absent is the caller's own record, and somebody else's takes their lead or `admin`, with `worklet` either way. `due` is the snoozes whose time has come, REPORTED rather than promoted: putting one back in the unread list is a write, and a read that performed one would change fleet state from a path with no operation id and no record. `priorities_set_by` is who last set the queue when it was not this person (the name their writes are recorded under, a person's seat), which is how a lead's authority is made visible beside the `prioritised` wake the write sends them: a wake that names the task now at the top of the list, because a notification here is task-shaped and "your list changed" names nothing to act on. `max_snooze_ahead` is how far ahead a snooze may be set, in SECONDS: the engine's bound, so a screen offers only the presets `mark_inbox` will accept |
 | `work_views` | `{container, counts}` | `GET /worklet/views`. `container` is the strip's own (`workspace`, `project:ENG`, `unit:engineering`, `person:ana`), and it is REQUIRED, because a strip belongs to exactly one. Whose personal views appear and whose pins come first is the CALLER's, never a parameter: their [own record](#whose-record-a-personal-question-answers-for), which is the login of a Tier A token or service account bound to no seat; a caller the engine can name nothing for gets the shared strip: no pins and no personal views but the shared ones. Every row carries `builtin`, which is what tells the six nobody saved from the ones somebody did: a builtin row has no `id`, so there is nothing to rename, protect, rank or pin. `params` is the saved query in `work_items`' own parameter names (this channel's, not the `list_work_items` TOOL's, which renames four of them for a model), so a caller either hands them straight back or, simpler, passes the view's `id` as `view=` and lets the engine expand it. `counts=true` adds `count` to every row PINNED for the caller (the `total_hint` `work_items{view, container}` answers for it, run as the caller on the company's clock, with `count_capped` when it stopped at 10,000), or `count_refused` naming why a view that no longer compiles could not be counted. At most 32 counts, in the strip's one read; only a record has pins, so it is refused `bad_params` to a credential that names no record of its own |
 | `work_saved_views` | `{counts}` | `GET /worklet/views/saved`. Every SAVED view (never a builtin) that the caller can see across every container: the shared ones, and the caller's own personal ones, pinned-for-them first and then by container (the workspace, projects, units, people) and the strip's own rank. Each row is `work_views`' row shape, so `container` says where it lives and `params` is its saved query. A sibling of `work_views` rather than a `container=` it takes, because a strip is ONE container's tabs and this is one PERSON's views (the inventory of what somebody saved and the pins a sidebar draws), which the workspace strip could not answer: a view saved on a project board appeared in neither. Whose is the caller's [own record](#whose-record-a-personal-question-answers-for), never a parameter, and `counts=true` takes the same rule as `work_views`: every pinned row's `count` is its view run IN ITS OWN CONTAINER, which is what opening it runs |
@@ -4348,7 +4369,7 @@ and `/containers` all resolve them the same way. They did not until recently:
 each of those wrote a hardcoded `stale` into its read and never looked at the
 keys, so a caller asking for a stronger answer was served this node's rows and
 told, in the answer's own `read_level`, that it came back at the level asked
-for, and the two single-object reads, `/worklet/items/{id}` and `/doclet/pages/{id}`,
+for, and the two single-object reads, `/worklet/{id}` and `/doclet/pages/{id}`,
 then took the level and dropped the bounds beside it, on the claim that a bound
 is enforced against a set's coverage and one row has no set. It is not: a bound
 is about **this node's lag**, checked before any row is read, and one row is
@@ -4951,7 +4972,7 @@ Every write's answer carries its three-valued `outcome`, the object's new
 `<stream>@<generation>:<sequence>`, or `null` on an `unknown` outcome, where
 the broker never said. That is the value a client hands back as `min_position`
 on any read above, so an assistant that files an item here and redraws the
-board over `GET /worklet/items` is served an answer that includes it rather than
+board over `GET /worklet` is served an answer that includes it rather than
 whatever this node happened to hold. The tools' own reads need none of it —
 they read `linearizable` — but the answer travels to a client that does not.
 
@@ -6802,7 +6823,8 @@ The API origin **never renders an artifact**:
 - `GET /artifacts/sources/preview/{name}` answers one catalogue source's rows
   **as the caller**, before any board exists: what the dashboard's New
   dashboard builder draws its suggested figures from. Decided by
-  `create_artifact`, then answered by the very read a board's `engine`
+  `artifacts.source.read` (the `artifacts` app, as making a board asks), then
+  answered by the very read a board's `engine`
   dataset over the source is: the same question on the caller's own request,
   the same 30 second per-principal cache, and at most the source's most rows.
   The query string is the source's parameters, each held to the catalogue's
@@ -6893,6 +6915,202 @@ dashboard follow the adopted brand live, drawn by the dashboard.
 | `429` | `uploads_outstanding` | The pending-upload budget is spent; `Retry-After` is when the earliest hold lapses |
 | `429` | `throttled` | Ready reports past one credential's rate; `Retry-After` is when the next is admitted |
 | `503` | `unavailable` | This node could not decide or reach the estate; the `Retry-After` says when to come back |
+
+## The Dashboard Assistant
+
+The assistant drawer's routes, all under `/assistant/`. Every route is guarded
+and mounted on the authority table with one of two verbs, `assistant.converse`
+(starting, asking, stopping, clearing) and `assistant.conversation.read`
+(listing, reading, streaming, exporting). Both are human-only and need a person
+present, so a machine token, a service account and a request riding an
+assistant grant are refused before a handler runs, and a Tier A token's session
+is answered `403 assistant_not_available` with `reason: not_a_person`. The
+assistant acts as the person and nobody else: every tool call a turn makes is an
+ordinary request through this API's own handler, carrying a read grant derived
+from the request that asked the question, which ends with the turn, with the
+session, or after twenty minutes (the longest a turn may run), whichever is
+first.
+
+**Any route of this reference, as the person.** Beside its dedicated tools, the
+assistant reaches every route this page documents that the person may use:
+it lists them and reads one route's entry from this very page, which the engine
+embeds, sends a `GET` or `HEAD` on its read grant, and proposes a `POST`, `PUT`,
+`PATCH` or `DELETE`, which is sent only from the person's approval of a card
+the engine renders from the resource as the route serves it now. A call names
+a route by its method and pattern, never a URL, and each path value is one
+escaped segment. A proposal prepared against a resource whose `ETag` the route
+answers is sent under that tag as its `If-Match`, so a change made meanwhile is
+refused rather than overwritten. Never through the assistant, whoever
+approves: the sign-in, session and token ceremonies, a credential or secret in
+clear (a secret's value, an integration's inputs, a frame's view ticket), and
+the routes on this section's own surface.
+
+**Somebody else's conversation does not exist.** Every read and write is keyed
+on the caller, and a conversation, turn or card that is another person's is
+`404 not_found`, exactly as one that never existed. No route takes an owner.
+
+Every `POST` takes `application/json` and names the `protocol_version` it was
+written against; a version this engine does not speak is
+`409 assistant_protocol_mismatch` with the hint to reload the dashboard.
+
+| Method | Path | Body | Answer |
+|---|---|---|---|
+| `GET` | `/assistant/conversations?cursor=&limit=` | | `200 {conversations, next_cursor?}`, the most recently used first, `limit` 1 to 50 |
+| `POST` | `/assistant/conversations` | `{protocol_version}` | `201 {conversation}`. An `Idempotency-Key`, when sent, names the conversation, so a retried create is one conversation |
+| `GET` | `/assistant/conversations/{id}` | | `200` the transcript: `{conversation, messages, steps, cards, open_turn, audit_reads}`. A card built from an app the caller no longer holds is replaced by a notice, and so is a message written after its turn read through one (each message records the apps its turn had read through); every step names its `turn_id` |
+| `DELETE` | `/assistant/conversations/{id}` | | `200 {outcome, position}`: the conversation is purged at once, a turn of it running here is stopped and every grant of its open turn is ended |
+| `POST` | `/assistant/conversations/{id}/turns` | `{protocol_version, input: {text}, page_context, attachments?}` | `202 {turn_id, stream_url, after_seq}`. `Idempotency-Key` is **required**, and the same key is the same turn. `attachments` names at most 4 files uploaded to this conversation, each once (`400 invalid_body` otherwise) |
+| `GET` | `/assistant/conversations/{id}/stream?turn=<id>` | | `200 text/event-stream`, below |
+| `POST` | `/assistant/turns/{id}/stop` | `{protocol_version}` | `202 {state}`: a running turn is stopped where it runs, on whichever node of the fleet that is, a turn waiting on an approval is closed stopped and every proposal it waits on declined (under the request's `Idempotency-Key`, when sent), and a turn already over answers the state it ended in. `state` is what the turn truly reached: `stopped`, or what it came to first (`completed`, `waiting_for_approval`), and `running` while its runner has not yet recorded its end, which then arrives on the turn's stream |
+| `GET` | `/assistant/cards/{id}/export.csv` | | `200` the table card as CSV, from the snapshot the conversation stored, never a fresh read |
+| `GET` | `/assistant/cards/{id}/export.xlsx` | | `200` the same table as XLSX |
+| `POST` | `/assistant/conversations/{id}/files?name=` | the image's bytes | `201 {file: {file_id, name, media_type, size, download}}`: one image the person attaches to a later question, the raw file as the body (declared `image/png`, `image/jpeg`, `image/webp`, `image/gif` or `application/octet-stream`) and its name in `name`. `Idempotency-Key` is **required**, and the same key is the same file. The type is read from the bytes and never from the name or the declared type, and only PNG, JPEG, WebP and GIF are kept (`415 assistant_file_refused` otherwise, HTML called `.png` included); a body over 5 MiB is `413 body_too_large`, refused by its declared length before it is read; a conversation keeps at most 40 attachments (`409 assistant_file_limit`). The file is sealed under the fleet keyring into the [object store](../concepts/object-store.md) and goes with its conversation. Absent on a node with no object store |
+| `GET` | `/assistant/conversations/{id}/files/{file}` | | `200` one file the conversation keeps (an attachment, or a file a deep-work run delivered), always as a download: `Content-Type` is the type its bytes were read as, `Content-Disposition: attachment; filename="..."` (with RFC 5987's `filename*` for a name that is not plain ASCII), `X-Content-Type-Options: nosniff`, `Content-Security-Policy: sandbox` and `Cache-Control: private, no-store`. Another person's file, or one of another conversation, is `404 not_found` |
+
+`input.text` is at most 4000 characters, and `page_context` is the open screen
+as the dashboard describes it (at most 16 KiB, 50 resources and 32 page actions)
+or `null` when the person removed the page chip. The model reads the page
+context fenced as somebody else's words: it is a hint and never an authority.
+
+A screen with a draft or a form open adds `draft`: `{kind, id?, revision?,
+step?, help?, fields, more}`, where `kind` is `client` (the values live in the
+page until saved) or `server` (saved, at `id` and `revision`), and each field is
+`{path, label, kind, value, hint?, editable?, redacted?, truncated?}`, `kind`
+being `text`, `list` (items one per line) or `file` (the value is the file's
+name). At most
+40 fields, each value at most 1000 characters (a longer one is cut and marked
+`truncated`), and `help` at most 600; fields past the count or the byte budget
+are counted in `more`. A field whose path names a credential (a `password`,
+`secret`, `token` or `credential` segment, or an API, private, signing or access
+key) must arrive `redacted` with an empty value, and is refused `400` otherwise;
+every other value passes the engine's secret redaction before a model reads it.
+The page action `draft.set` (`{"values": {"<path>": "<value>"}}`) changes the
+editable fields through the screen's own setters, after the person approves.
+The engine holds it to the turn's draft before any card is drawn: a path the
+draft does not list as editable, or a value not of its field's kind, is
+refused. A `file` field takes a file, never markup: the model names it by its
+`file_id` alone (a file of the person's own in this conversation, attached or
+delivered by deep work), and the engine resolves the rest from its own record
+and writes the whole reference into the proposal,
+`{"kind": "file", "file_id", "conversation_id", "name", "media_type"}`. A file
+of another conversation or another person is refused before any card. The
+screen fetches the file through
+`GET /assistant/conversations/{conversation}/files/{file}` once approved and
+keeps it through its own save.
+
+**Before anything is spent.** A question is refused, recording nothing, when the
+company's token budget, or the person's own `assistant.token_budget`, has no
+room in a window (`429 budget_exhausted` with the `scope` that is spent, `org`
+or `person`, the window, its `resets_at` and a `Retry-After` until it resets),
+when the person already has two turns running on the node, or has asked twenty
+in a minute across every node of the fleet (`429 assistant_busy` with a
+`Retry-After`; while the fleet's counter cannot be read, the node's own rate of
+twenty a minute, five at once, still holds), when the conversation already has a
+turn running (`409 assistant_turn_running`), when no model in the chain can
+be resolved (`503 assistant_unavailable`), and when every model in it is known
+unusable right now, the state `/viewer` reports as `model_not_ready`
+(`503 assistant_model_not_ready`, with `reason`, the turn error code it would
+have failed with, `detail` and `hint` in the words a failed turn would use,
+and `retry_at` with a `Retry-After` only for a spent plan whose reset is known:
+a signed-out model needs somebody to sign it in, not a wait). A question asked while the
+conversation's turn waits on an approval is taken: that turn ends as
+`superseded`, and its proposals stay approvable until they expire. One approved
+later is applied and its card updated on that turn's stream, without the
+superseded turn's answer resuming.
+
+### The turn's stream
+
+A server-sent event stream read over `fetch`. Every frame is one event: `id` is
+`<turn_id>.<seq>`, `event` is the frame's kind (`conversation`, `page_context`,
+`status`, `delta`, `step`, `card`, `action`, `done`, `error`, `snapshot`), and
+`data` is the frame as one line of JSON with its payload nested under a member
+named for its kind. `seq` counts from 1 and only grows within a turn, across the
+segments an approval resumes. A `: keepalive` comment is written every fifteen
+seconds.
+
+Send `Last-Event-ID` to resume: every frame after it is replayed. A client that
+falls 512 frames behind is disconnected rather than dropped from, and resumes
+the same way. Frames the running node no longer keeps (it keeps a turn's frames
+two minutes after a segment ends) are answered with a `snapshot` of the turn as
+its transcript holds it, then how it ended.
+
+A person holds at most four streams open on a node, and opens at most sixty a
+minute (ten at once) on a node and across the fleet; past either a stream is
+refused `429 assistant_busy` with a `Retry-After`, before anything is read.
+
+**Any node answers the stream.** A stream that reaches a node not running its
+turn follows it there: the frames it missed are asked of the running node, and
+the rest are heard as the running node tells the fleet, numbered as the running
+node numbered them, so a reconnect that lands on another node resumes exactly
+where it left off. The numbering continues across nodes too: a turn an approval
+resumes, or whose page action it emits, on a node that never ran it is numbered
+after every frame any node told of it, so `after_seq` and `Last-Event-ID` stay
+meaningful wherever the next request lands. Frames cross the broker encrypted under the fleet keyring,
+bound to their turn, and a node shows only a frame the fleet sealed. A turn whose
+runner is gone (its node restarted, or has left the fleet) is closed
+`interrupted` once, by whichever node notices first, and answered with
+`error {code: turn_interrupted}`; a runner that is only slow to answer leaves the
+turn open, and the stream answers the `snapshot` it can.
+
+A `delta` appends prose to one assistant message while the model writes it, a
+settled line at a time: nothing of a line still being written is sent, so a
+credential is never on screen before the end that would redact it arrives. A
+delta with `restart: true` replaces everything the message drew with its own
+text; it is sent when the chain fails over to another model, or when the engine
+withdraws a view of a round that the finished round does not bear out, so the
+message always ends as exactly the answer recorded. A model whose CLI cannot
+stream draws each round once, whole, when the round ends.
+
+Each round that writes prose is its own assistant message, in order, and a
+`card` names the message it follows: the round that asked for it, or the last
+one that wrote prose before it. So a round's prose sits above the cards its
+calls showed and the final round's below them, and a reload's transcript lays
+the turn out exactly as it streamed. A card shown before the turn has written
+any prose hangs on an empty message opened for it (a `delta` with no text).
+
+A turn never streams a raw tool argument, a raw answer, a prompt, a token count
+or a grant: a step carries a label the engine renders and the route pattern it
+asked, and a card is built by the engine from the route's own answer.
+
+| Status | Code | Meaning |
+|---|---|---|
+| `400` | `invalid_body` / `invalid_query` / `op_id_invalid` | A body, query or `Idempotency-Key` refused as written, naming what to change |
+| `403` | `assistant_not_available` | The assistant is not available to the caller; `reason` is the viewer's |
+| `404` | `not_found` | No such conversation, turn or card, or another person's |
+| `409` | `assistant_protocol_mismatch` | The request speaks another protocol version; reload the dashboard |
+| `415` | `unsupported_media_type` | A body not declared `Content-Type: application/json` |
+| `409` | `assistant_turn_running` | The conversation's turn is still running |
+| `409` | `assistant_file_limit` | The conversation already keeps 40 attachments; `limit` names the bound |
+| `413` | `body_too_large` | An upload past 5 MiB |
+| `415` | `assistant_file_refused` | An upload whose bytes are not a PNG, JPEG, WebP or GIF image, or declared as something no image is |
+| `429` | `assistant_busy` / `budget_exhausted` | Too many turns at once, or a window of the company's or the person's own budget is spent (`scope`); `Retry-After` says when |
+| `503` | `assistant_unavailable` | The assistant cannot run here now; a `Retry-After` where a wait is known to help |
+| `503` | `assistant_model_not_ready` | Every model in the chain is known unusable now; `reason` is the turn error code, with `detail` and `hint`, and a `Retry-After` only for a spent plan whose reset is known |
+
+### How a turn fails on the model
+
+When the model chain fails a round, the turn ends `failed` with an `error`
+frame whose `code` says which failure it was, read from the CLI's own
+classification and never from its prose. Each carries a `message` a person
+reads and a `hint`: an administrator (the caller holds `admin`) is told where to
+fix it, and anybody else whom to ask. `retryable` is true only where asking
+again can help without anybody acting.
+
+| `code` | When | `retryable` |
+|---|---|---|
+| `model_signed_out` | The CLI's login expired or is missing, or its token is invalid. An administrator is told to run `crewlet llm login <key>`, anybody else to ask an administrator | No |
+| `model_busy` | The plan is spent or rate limited; `retry_after_seconds` is the wait until the CLI's named reset | Yes, after the reset |
+| `model_timeout` | The CLI ran out of its own time (`providers.llm.<key>.timeout_seconds`) before it answered | Yes |
+| `model_unavailable` | The CLI could not be started on the node, or failed for a reason none of the codes above names (`retry_after_seconds: 10`) | Only for the second |
+
+The first three, and a CLI that cannot start, are also known before a question
+is asked when every model in the chain is in that state: `/viewer` reports it
+as `model_not_ready`, and a question asked anyway is refused
+`503 assistant_model_not_ready` before any round.
+
+Every segment of a turn leaves an `assistant_turn_completed` row in the
+[runtime audit](#the-runtime-audit-sourceoperator), naming every step's tool and
+route and never its arguments or answers.
 
 ## Agent Memory
 

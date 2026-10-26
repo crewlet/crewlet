@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -142,7 +143,7 @@ func readWorkload(ctx context.Context, tx *sql.Tx, q WorkloadQuery,
 	// [readMyWork] resolves it and for the same reason: the company's own
 	// midnight, so a person's overdue count here is the number of tasks a
 	// board marks overdue for them.
-	anchor, err := ResolveDate("today", now, loc)
+	anchor, err := period.Resolve("today", now, loc)
 	if err != nil {
 		return err
 	}
