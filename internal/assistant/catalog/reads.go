@@ -363,10 +363,13 @@ func readTools() []Tool {
 		},
 		{
 			Name: "list_agents", Phrase: "list the agents",
-			Description: "Every seat with what it is doing now: working, idle, paused or failed, " +
-				"its current phase and its last turn's outcome.",
+			Description: "Every seat with what it is doing now: working, idle, or stopped and " +
+				"why (paused, out of budget, no node, its model unavailable), its current phase, " +
+				"its last turn's outcome and the last error it hit.",
 			schema: object(nil, map[string]*schema{}),
-			Routes: []string{"GET /agents"},
+			// FENCED: a pause's reason is its author's words, and a seat's
+			// last error can carry a provider's.
+			Routes: []string{"GET /agents"}, Fence: true,
 			Build: func(map[string]any) (exec.Request, error) {
 				return get("GET /agents", nil, nil)
 			},
@@ -377,7 +380,13 @@ func readTools() []Tool {
 					col("phase", "Phase", "current_phase", tLabel),
 					col("task", "Task", "turn.work_item.key", tText),
 					col("last", "Last turn", "last_turn.outcome", tLabel),
-					col("ended", "Ended", "last_turn.ended_at", tDatetime)},
+					col("ended", "Ended", "last_turn.ended_at", tDatetime),
+					// WHY A SEAT IS STOPPED, and what it last hit: "all four
+					// seats are stopped" with no reason was once the answer.
+					col("stopped", "Why stopped", "stopped_reason", tLabel),
+					seat("paused_by", "Paused by", "paused.by"),
+					prose("paused_reason", "Pause reason", "paused.reason"),
+					prose("last_error", "Last error", "last_error.message")},
 				Open: &cards.Open{Screen: "roster"}}}),
 			Label: func(map[string]any) string { return "Listing the agents" },
 		},
@@ -407,9 +416,11 @@ func readTools() []Tool {
 				"detail": {Entity: &cards.Entity{Kind: wire.ResourceSeat, ID: "handle",
 					Title: "role", Subtitle: "handle",
 					Facts: []cards.Fact{fact("Activity", "live.activity", tLabel),
+						fact("Why stopped", "live.stopped_reason", tLabel),
 						fact("Phase", "live.current_phase", tLabel),
 						fact("Last turn", "live.last_turn.outcome", tLabel),
-						fact("Last ended", "live.last_turn.ended_at", tDatetime)},
+						fact("Last ended", "live.last_turn.ended_at", tDatetime),
+						fact("Last error", "live.last_error.message", tText)},
 					Open: &cards.Open{Screen: "seat", Params: map[string]string{"handle": "handle"}}}},
 				"activity": {Table: &cards.Table{Title: "Turns per seat", Rows: "seats",
 					Brief: []string{"role", "turns", "failed", "tokens"},
