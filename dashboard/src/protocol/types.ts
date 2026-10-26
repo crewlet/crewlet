@@ -420,7 +420,8 @@ export interface Paused {
   operator_id?: string;
   at: string;
   reason?: string;
-  /** Whether the pause also ended the turn the seat was on. */
+  /** Whether the pause also ended the seat's running work: the turn it was
+   *  on, at its next round, and any coding run it had out, at once. */
   stop_running: boolean;
 }
 
@@ -429,7 +430,8 @@ export interface LastTurn {
   turn_id: string;
   /** The turn's newest event: its completion, or the reflection after it. */
   ended_at: string;
-  outcome: "completed" | "failed";
+  /** `stopped` when a person ended it with a pause — never a failure. */
+  outcome: "completed" | "failed" | "stopped";
 }
 
 /** The in-flight LLM call: the latest progress round, or a phase-start seed. */
@@ -724,8 +726,8 @@ export interface SandboxEntry {
  * than an omission: a run's record is DELETED once the run settles and its box
  * is reclaimed, so `sandbox.Active` is every status a record can carry and the
  * terminal pair can never reach a client. How a run ended is on the event
- * stream — the resumed turn's own events, or a `sandbox_run_failed` naming the
- * reason — never on this row.
+ * stream — the resumed turn's own events, a `sandbox_run_failed` naming the
+ * reason, or a `sandbox_run_stopped` naming who stopped it — never on this row.
  */
 export type SandboxStatus =
   "launching" | "running" | "awaiting_clarification" | "reseed" | "answered" | "resumed";
@@ -3085,8 +3087,9 @@ export interface WorkItemTurn {
   wall_ms: number;
   workers?: number;
   sent_back?: number;
-  /** How the turn ended, off its newest segment: its decision, `failed`, or
-   *  `suspended` while a coding run is still out. */
+  /** How the turn ended, off its newest segment: its decision, `failed`,
+   *  `stopped` where a person's pause ended it, or `suspended` while a coding
+   *  run is still out. */
   outcome: string;
   phases: string[];
   /** The phase that failed, when `outcome` is `failed` because one did.
@@ -4695,6 +4698,10 @@ export interface TurnRow {
    *  Absent for a turn that carried no failure. */
   error?: string;
   error_kind?: string;
+  /** Whether a PERSON ended the turn — a pause with `stop_running` reached it
+   *  at a round, or ended the coding run it was parked on. Never a failure:
+   *  a stopped completion carries no `failed`. Absent when nobody stopped it. */
+  stopped?: boolean;
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;

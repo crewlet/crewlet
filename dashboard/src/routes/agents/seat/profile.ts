@@ -470,3 +470,20 @@ export function sentence(text: string): string {
   const t = text.trim();
   return /[.!?…]$/.test(t) ? t : `${t}.`;
 }
+
+/**
+ * How a seat's last turn ended, as the line under "Not on a turn" says it.
+ *
+ * A PERSON'S STOP IS ITS OWN WORD: a turn somebody ended by pausing the seat
+ * did not fail, and "ended" alone would hide that anybody stopped it.
+ */
+export function lastTurnEnded(outcome: "completed" | "failed" | "stopped"): string {
+  switch (outcome) {
+    case "failed":
+      return "failed";
+    case "stopped":
+      return "was stopped";
+    default:
+      return "ended";
+  }
+}

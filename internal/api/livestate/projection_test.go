@@ -338,6 +338,25 @@ func TestAFailedRunLeavesTheSandboxesSet(t *testing.T) {
 	}
 }
 
+// A STOPPED RUN LEAVES THE SET AT ONCE: a person who paused the seat to stop
+// it is looking at the panel, and a run drawn as running until the next
+// reconcile reads as a stop that did not work.
+func TestAStoppedRunLeavesTheSandboxesSetAtOnce(t *testing.T) {
+	t.Parallel()
+	s := sandboxState(t)
+	s.Apply(env("sandbox_run_started", sandboxPayload("tn-1")))
+	change := s.Apply(env("sandbox_run_stopped", map[string]any{
+		"turn_id": "tn-1", "role": "Coder", "stopped_by": "jane", "stopped_by_kind": "human",
+	}, id("e-stopped")))
+
+	if !change.Sandboxes {
+		t.Error("a stopped run did not move the sandbox set")
+	}
+	if runs := s.ActiveSandboxes(); len(runs) != 0 {
+		t.Errorf("runs = %+v, want the stopped run gone", runs)
+	}
+}
+
 func TestAStartedRunNamesItsItemAndItsOwner(t *testing.T) {
 	t.Parallel()
 	s := sandboxState(t)

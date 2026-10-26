@@ -63,7 +63,7 @@ Beside the state, the projection holds **the turn the seat is on** and **the las
 - `turn` is `{turn_id, work_item, work_item_basis, started_at, stage, node}`. `stage` is one of three values. `context` means the turn has started and is assembling what it knows. `phase` means a phase is running. `parked` means the turn launched a detached [coding run](code-sandbox.md) and is suspended until the run is collected. The run is collected later, possibly on another node or after a restart, and the same turn resumes then. A parked turn therefore stays the seat's turn, and it is not reported as an end. The suspension publishes a turn completion with `suspended: true`, and the projection used to read that completion as the end of the turn, so the seat said it was idle while its work ran on in a box. When a parked turn resumes, its `started_at` is still the turn's first start and not the segment's. `node` is the node that published the turn's newest event. A turn whose coding run is lost (`sandbox_run_failed`) has nothing left to resume it, so the loss ends that turn.
 - `last_turn` is `{turn_id, ended_at, outcome}`. `outcome` is `completed` or `failed`, and a turn is `failed` when any of its events was a failure. That is the same rule the turn list applies, so a seat seeded from the store and a seat watched live report the same outcome. `ended_at` is the turn's newest event: its completion, or the reflection pass that runs after the completion.
 
-A third key says whether a person has **paused** the seat: `paused` is `{by, by_kind, operator_id, at, reason, stop_running}` — who paused it (`by`: the seat of the person who did, or of a token or service account the identity directory binds to one, and otherwise the whole login of the credential bound to no seat; `by_kind` says which, `human` or `operator`, and `operator_id` is the credential they came through, such as `session:<lineage>` or `pat:<id>`, absent when none made it), when, why, and whether the pause also ended the turn the seat was on — and `null` while nobody has. It is an input to the seat's state: a paused seat reads `stopped` with `stopped_reason: "paused"` once it is not working. See [Pausing a seat](#pausing-a-seat).
+A third key says whether a person has **paused** the seat: `paused` is `{by, by_kind, operator_id, at, reason, stop_running}` — who paused it (`by`: the seat of the person who did, or of a token or service account the identity directory binds to one, and otherwise the whole login of the credential bound to no seat; `by_kind` says which, `human` or `operator`, and `operator_id` is the credential they came through, such as `session:<lineage>` or `pat:<id>`, absent when none made it), when, why, and whether the pause also ended the seat's running work (`stop_running`: the turn it was on, and a coding run it had out) — and `null` while nobody has. It is an input to the seat's state: a paused seat reads `stopped` with `stopped_reason: "paused"` once it is not working. See [Pausing a seat](#pausing-a-seat).
 
 `activity`, `stopped_reason`, `turn`, `last_turn` and `paused` are always present, and each of the last four is `null` when it has no value. The client merges each pushed row over the row it holds, so an omitted key would leave a finished turn, or a lifted stop, on the card. After a restart, the turns are seeded from the fleet's turn list: each seat's newest turns are read from every live node, so the "last turn 24m ago" line survives a restart, and so does a turn that is still parked.
 
@@ -412,7 +412,8 @@ through the operator catalogue, or with `crewlet seats pause` — and resume it
 later. While it is paused the seat starts no new turn, its incoming mail waits
 on its inbox in order, and its scheduled runs are skipped. The turn it is on
 finishes first, unless the pause also asked to **stop** it (`stop_running`), in
-which case that turn ends at its next round.
+which case that turn ends at its next round and a coding run it has out ends
+**at once** (see *Stop now* below).
 
 **Who may pause a seat** is the seat's holder — the person the identity
 directory binds to it — whoever leads it, or an administrator (`admin`);
@@ -427,7 +428,7 @@ stateDiagram-v2
     [*] --> Taking: seat not paused
     Taking --> Paused: pause_seat
     Taking --> Stopping: pause_seat with stop_running, a turn running
-    Stopping --> Paused: the turn reaches its next round and ends
+    Stopping --> Paused: its coding run is ended at once, and its turn at its next round
     Paused --> Stopping: pause_seat adds stop_running, a turn running
     Paused --> Taking: resume_seat — what waited is delivered first, in order
 ```
@@ -459,8 +460,21 @@ stateDiagram-v2
   worked and acked, not retried: a person who stopped a turn did not ask for it
   to run again the moment they resume the seat. The turn's completion reads
   `stopped` rather than `failed`, and `agent_turn_stopped` names who stopped it.
-  A detached [coding run](code-sandbox.md) is not fenced — it outlives its turn
-  by design — but the turn that resumes it is, and ends there with the run.
+- **A running coding run is ended at once.** An executor's [coding
+  run](code-sandbox.md) has no rounds the engine sees, so the node holding the
+  seat ends it as soon as the stop reaches it — when the pause lands, when the
+  node next reads every pause, or when it acquires the stopped seat: the run's
+  tool bridge is closed, what it had spent is read off its box and charged, the
+  box is reclaimed, and the run is announced as `sandbox_run_stopped` (never
+  `sandbox_run_failed` — a stop is not a loss). The turn that was parked on the
+  run is closed in the same shape as a turn stopped at its next round:
+  `agent_turn_stopped` and a completion carrying `stopped`. A launch the stop
+  catches midway starts nothing, and the turn launching it ends as stopped. The
+  stop is recorded on the run with its decision, so a node that dies halfway
+  leaves the seat's next holder to finish the same stop. A run **parked on a
+  person's question** does no work and stays parked behind the pause. The stop
+  is a decision about the work, not about where it runs: a seat that merely
+  moves to another node leaves its run running.
 - **Answers wait too.** An answer to a parked coding run, by chat or by turn,
   is held behind the pause like the seat's other mail: resuming a run is work.
   A chat reply already recorded as a run's answer before the pause waits the

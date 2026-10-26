@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 )
@@ -53,7 +54,7 @@ func TestABootedFakeCatalogueRunsTheConfiguredPlay(t *testing.T) {
 	b := testBootstrap(t)
 	dir := t.TempDir()
 	b.Store.Path = filepath.Join(dir, "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(dir, "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(dir, "stream"))
 	SeedStore(t, &b)
 	e, err := New(t.Context(), Options{
 		Bootstrap: &b, Company: parseCompany(t, sandboxDoc("")),

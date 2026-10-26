@@ -3075,22 +3075,10 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// THE BOX CLOSES THE MOMENT THE TURN RETURNS: no later round will read
 	// a note, and one offered from here on is answered `closed`.
 	closeSteer(ctx)
-	// The moment the turn returns, and before its frame unwinds: the runner
-	// holds the parked turn's state only until then, and a row without it
-	// is a detached run nothing can ever resume.
-	//
-	// ITS ANSWER IS WHAT THE INDICATOR FOLLOWS, not `res.Suspended` — the
-	// intent to park and a run that can actually be resumed are different
-	// facts, and this call is where the second one is established. See
-	// [stillWorking].
-	//
 	// THE SEGMENT'S CHARGE IS DECIDED FIRST, because a segment charged to
-	// nothing hands what it spent to the suspension this call writes.
+	// nothing hands what it spent to the suspension written below.
 	spend := r.Spend()
 	charge := tel.chargeFor(spend, res, err, time.Now().UTC())
-	if res.Suspended {
-		working = stillWorking(e.persistSuspension(ctx, r, req.RunID, tel, charge))
-	}
 	// Published on BOTH paths. An error here means a phase broke, which is
 	// precisely when a dashboard most needs the turn closed: the phase
 	// events already put the seat into `working`, and returning without this
@@ -3100,7 +3088,36 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// them — so a reader that asks for the turn as it ends reads its context
 	// and its rewrites beside its phases; and CHARGED to the work item it
 	// was on after the record of its end exists. See [Engine.endSegment].
+	//
+	// AND BEFORE THE PARK IS WRITTEN, as the resumed path has always done:
+	// the write below is what opens the run to everything that can END the
+	// parked turn — its collection, a loss, a person's stop — and each of
+	// those closes the turn on the record with an end that has to be newer
+	// than this park. Published after the write, a stop that landed in
+	// between was dated before the park it closed, and every reader that
+	// takes the newest of a turn's records left the turn parked for good.
+	// The runner holds the parked state until the frame unwinds, which this
+	// does not.
 	e.endSegment(ctx, tel, spend, res, err, charge)
+	if res.Suspended {
+		// ITS ANSWER IS WHAT THE INDICATOR FOLLOWS, not `res.Suspended` —
+		// the intent to park and a run that can actually be resumed are
+		// different facts, and this call is where the second one is
+		// established. See [stillWorking].
+		parked, parkErr := e.persistSuspension(ctx, r, req.RunID, tel, charge)
+		if turn.Stopped(parkErr) {
+			// A PERSON STOPPED THE RUN BETWEEN ITS LAUNCH AND ITS PARK:
+			// the run is ended and announced, and this frame closes the
+			// turn as stopped — the completion after the park, and the
+			// dispatcher's own record of who stopped it and that the
+			// trigger is worked ([Dispatcher.stopped]) — as a turn stopped
+			// at its next round is.
+			res.Suspended, err = false, parkErr
+			e.closeStopped(ctx, tel, parkErr, time.Now().UTC())
+		} else {
+			working = stillWorking(parked, parkErr)
+		}
+	}
 	// AND, if a colleague asked for this turn, the answer they are waiting
 	// for. Here because this is the one frame holding both the result and
 	// the trigger; after the completion event because the reply wakes

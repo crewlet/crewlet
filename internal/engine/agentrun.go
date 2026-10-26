@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
@@ -278,12 +279,26 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 			opened = openErr == nil
 			return bridge, openErr
 		},
+		// THE SAME FENCE, asked again once the run's row exists — see
+		// [sandbox.LaunchRequest.Fence]: a stop that lands while this
+		// launch is being built either finds the row or is refused here.
+		Fence: req.Fence,
 	})
 	if err != nil {
 		if opened {
 			// The launch failed after the job's session opened, so
 			// nothing will ever close it on the completion path.
 			e.bridge.Close(l.turn.RunID)
+		}
+		// A LAUNCH A PERSON'S STOP ENDED UNDER IT — its row's ending decided
+		// between the box and the job, so the attach was refused — is the
+		// stop, and the turn reports it as one rather than as a launch that
+		// broke: the fence names who stopped it.
+		if fenceErr := req.Fence(); turn.Stopped(fenceErr) {
+			log.InfoContext(ctx, "executor_launch_stopped", "seat", handle, "turn_id", l.turn.RunID,
+				"error", err, "detail", "a person stopped the seat's running work while its "+
+					"executor was launching; the launch is ended and the turn stops")
+			return fenceErr
 		}
 		return err
 	}

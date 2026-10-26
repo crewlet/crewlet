@@ -82,7 +82,8 @@ type TaskTurn struct {
 	SentBack  int `json:"sent_back,omitempty"`
 
 	// Outcome is how the turn ended, off its newest segment: the turn's
-	// decision, `failed`, or `suspended` while a coding run is still out.
+	// decision, `failed`, `stopped` where a person's pause ended it, or
+	// `suspended` while a coding run is still out.
 	Outcome string `json:"outcome"`
 	// Phases are the phases that ran, in the order each first ran.
 	Phases []string `json:"phases"`

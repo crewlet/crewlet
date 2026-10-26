@@ -183,6 +183,11 @@ export const LEFT_BEHIND: ReadonlySet<string> = new Set([
  * run's answer is work that happened to this turn between its two segments,
  * whichever route it came by.
  *
+ * `sandbox_run_stopped` is here beside the completion it stands in for, and
+ * NOT in WENT_WRONG: a run a person stopped by pausing its seat ended because
+ * somebody meant it to, and the turn's own `agent_turn_stopped` already says
+ * who in that band — a second row there would count one stop twice.
+ *
  * `task_assigned` was named here too and is a different mistake: it is the
  * SCHEDULER's cron fire — the wake that starts a turn — rather than work a
  * turn did. The trigger is already on the Turn screen, as the brief.
@@ -199,6 +204,7 @@ export const DID: ReadonlySet<string> = new Set([
   "sandbox_clarification_requested",
   "sandbox_run_answered",
   "sandbox_run_completed",
+  "sandbox_run_stopped",
   "subagent_batched",
   "skill_used",
   "knowledge_read",

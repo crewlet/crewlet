@@ -12,6 +12,7 @@ import {
   HUMAN_TABS,
   feedRows,
   fortnight,
+  lastTurnEnded,
   liveRow,
   mayReadRecord,
   mayReadTrail,
@@ -433,4 +434,12 @@ describe("mayReadTrail", () => {
     expect(mayReadTrail({ handle: "bo", admin: false }, led, "agent")).toBe(false);
     expect(mayReadTrail({ handle: "", admin: false }, led, "agent")).toBe(false);
   });
+});
+
+// A TURN A PERSON STOPPED IS SAID TO HAVE BEEN STOPPED — never "failed", which it
+// did not, and never a bare "ended", which hides that anybody stopped it.
+test("a seat's last turn says how it ended, a person's stop included", () => {
+  expect(lastTurnEnded("completed")).toBe("ended");
+  expect(lastTurnEnded("failed")).toBe("failed");
+  expect(lastTurnEnded("stopped")).toBe("was stopped");
 });

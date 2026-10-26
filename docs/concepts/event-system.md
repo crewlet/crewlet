@@ -280,6 +280,10 @@ sandbox_run_failed         # a run lost, once: published under an id and an
                            # instant its ending recorded on the run's row, so
                            # the node that finishes an ending another decided
                            # repeats the same event (the store keys on it)
+sandbox_run_stopped        # a run a person ended by pausing its seat with
+                           # stop_running (stopped_by, stopped_by_kind,
+                           # operator_id): once, under an id its ending
+                           # recorded, like a loss — but never a failure
 sandbox_run_answered       # what an answer to a parked run's question became
                            # (resumed | not_awaiting | gone | declined), by
                            # which route
@@ -361,11 +365,13 @@ agent_turn_completed       # full LLM reasoning cycle with tokens and tools;
                            # `suspended` on a segment that parked on a
                            # coding run rather than ended, and `stopped`
                            # (never with `failed`) on a turn a person ended
-agent_turn_stopped         # a pause with stop_running ended this turn at its
-                           # next round: stopped_by, stopped_by_kind and
-                           # operator_id (the pauser, from iam.ActorFor),
-                           # reason. Its trigger is recorded as worked, not
-                           # retried
+agent_turn_stopped         # a pause with stop_running ended this turn — at
+                           # its next round, or at once where it was parked
+                           # on its coding run, which the pause ends
+                           # (sandbox_run_stopped): stopped_by,
+                           # stopped_by_kind and operator_id (the pauser,
+                           # from iam.ActorFor), reason. Its trigger is
+                           # recorded as worked, not retried
 agent_turn_steered         # what became of a person's note to this running
                            # turn, published by the node that ran it:
                            # `delivered` with the phase, iteration and round

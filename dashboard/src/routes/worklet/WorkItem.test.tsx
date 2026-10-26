@@ -912,6 +912,10 @@ test("a turn's pills say how it went, and only what is worth a pill", () => {
   expect(turnPills(turn({ outcome: "failed", failed_in: "review" }))[0]?.label).toBe(
     "failed in review",
   );
+  // A PERSON'S STOP IS NOT A FAILURE, and is not drawn as one.
+  expect(turnPills(turn({ outcome: "stopped" }))).toEqual([
+    { label: "stopped by a person", variant: "neutral" },
+  ]);
 });
 
 // A FAILED TURN SAYS WHICH STEP BROKE: the phase it failed in wears the cross

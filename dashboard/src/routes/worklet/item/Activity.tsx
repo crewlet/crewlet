@@ -754,6 +754,11 @@ export function turnPills(
     case "suspended":
       out.push({ label: "parked on a coding run", variant: "info" });
       break;
+    // A PERSON ENDED IT by pausing the seat with a stop — never drawn as a
+    // failure, which it is not: the engine records it apart for that reason.
+    case "stopped":
+      out.push({ label: "stopped by a person", variant: "neutral" });
+      break;
     case "skipped":
       out.push({ label: "skipped, nothing to do", variant: "neutral" });
       break;

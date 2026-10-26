@@ -417,10 +417,16 @@ type AgentTurnCompleted struct {
 	// showed had no way to say why it stopped.
 	Failed bool `json:"failed"`
 	// Stopped is true when a PERSON ended the turn — a pause that asked to
-	// stop the running turn reached its next round — rather than the turn
+	// stop the running turn reached its next round, or ended the coding run
+	// the turn was parked on ([SandboxRunStopped]) — rather than the turn
 	// finishing or failing. Never both: a stop is not a failure, and read as
 	// one it would list a turn somebody deliberately ended among the ones
 	// that broke. Who stopped it is the turn's [AgentTurnStopped].
+	//
+	// A PARKED TURN IS CLOSED WITH ONE OF THESE, not left parked: the
+	// segment that parked completed `suspended`, and the stop of its run
+	// publishes the turn's last completion — stopped, with no phase of its
+	// own, since nothing of the turn ran again.
 	Stopped bool `json:"stopped,omitempty"`
 	// Error is the failure's message, truncated. Empty unless Failed or
 	// Stopped.

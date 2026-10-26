@@ -198,6 +198,20 @@ type LaunchRequest struct {
 	// local box is on — see [PendingRun.LaunchNode].
 	Node string
 
+	// Fence is the launching turn's own seat fence — its seat still held
+	// under the grant the turn was admitted on, and no person's pause asking
+	// its running work to stop — asked AGAIN once the job's row exists and
+	// before any box does. Nil asks nothing: a launch no turn makes.
+	//
+	// ASKED AFTER THE ROW, not only before the launch, because a stop is
+	// carried out by listing the seat's rows ([Coordinator.StopSeat]): one
+	// that lands while a launch is between its first check and its row finds
+	// no row to end, and the launch then starts a job on a seat a person has
+	// just stopped. With the check after the row, every stop either finds
+	// the row and ends it, or happened before this check and is refused by
+	// it — the node takes the pause into its copy before it lists.
+	Fence func() error
+
 	// Opened is told the job's name the moment the store has opened it
 	// ([PendingStore.BeginLaunch]) and BEFORE ANY BOX EXISTS, for what must
 	// name the job before its box can act: the run's bridge session, which
@@ -357,6 +371,16 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// return — see [Coordinator.Launch]. Every failure past this point
 	// gives it back through [Coordinator.abandon].
 	c.countRun(req.Turn.AgentHandle, StatusLaunching)
+	// THE TURN'S FENCE AGAIN, now that a stop can find the row — see
+	// [LaunchRequest.Fence]. Refused, the launch is over before any box
+	// exists, and the error is the fence's own, so the turn reads it as the
+	// stop or the move it is.
+	if req.Fence != nil {
+		if fenceErr := req.Fence(); fenceErr != nil {
+			c.abandon(ctx, m, req, fence, "")
+			return LaunchResult{}, fenceErr
+		}
+	}
 	// THE JOB IS NAMED BEFORE ITS BOX EXISTS, so nothing the box does can be
 	// filed under a job that is not its own — see [LaunchRequest.Opened] —
 	// and what it answers joins the box's servers, on the request every step

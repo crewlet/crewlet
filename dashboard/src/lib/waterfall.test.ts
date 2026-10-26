@@ -651,6 +651,22 @@ describe("buildWaterfall", () => {
     expect([run.failed, run.open, run.end - T0]).toEqual([true, false, 4_000]);
   });
 
+  test("a run a person stopped ends at its stop, and is not drawn as a failure", () => {
+    const events = [
+      event("sandbox_run_started", 1_000, { launch_id: "L1", started_at: iso(1_000) }),
+      event("sandbox_run_stopped", 4_000, { stopped_by: "jane" }),
+    ];
+    const w = buildWaterfall({
+      events,
+      phases: [],
+      now: T0 + 9_000,
+      running: false,
+      parked: false,
+    });
+    const run = byId(w.spans, "run:L1");
+    expect([run.failed, run.open, run.end - T0]).toEqual([false, false, 4_000]);
+  });
+
   test("review pending follows a finished executor while the turn runs, and not while it is parked", () => {
     const execute = phaseRecord({ clockStart: iso(0), durationMs: 2_000 });
     const input = { events: [], phases: [execute], now: T0 + 5_000, running: true };

@@ -527,11 +527,13 @@ function runNodes(
 ): Node[] {
   const out: Node[] = [];
   const seen = new Set<string>();
-  const failures = events
-    .filter((e) => e.type === "sandbox_run_failed")
-    .map((e) => at(e.timestamp))
-    .filter((t) => t > 0)
-    .sort((a, b) => a - b);
+  // HOW A RUN WITH NO RECORD ENDED: lost, or stopped by a person — which ends
+  // its span as surely and is never drawn as a failure.
+  const endings = events
+    .filter((e) => e.type === "sandbox_run_failed" || e.type === "sandbox_run_stopped")
+    .map((e) => ({ at: at(e.timestamp), failed: e.type === "sandbox_run_failed" }))
+    .filter((x) => x.at > 0)
+    .sort((a, b) => a.at - b.at);
   const starts = events
     .filter((e) => e.type === "sandbox_run_started")
     .sort((a, b) => at(a.timestamp) - at(b.timestamp));
@@ -550,11 +552,12 @@ function runNodes(
       return;
     }
     const start = at(str(p.started_at)) || at(ev.timestamp);
-    // A RUN WITH NO RECORD YET is still out, or it failed: a failure is the
-    // first `sandbox_run_failed` after its start and before the next one.
+    // A RUN WITH NO RECORD YET is still out, or it ended without one: its
+    // ending is the first `sandbox_run_failed` or `sandbox_run_stopped` after
+    // its start and before the next one.
     const next = starts[i + 1] ? at(starts[i + 1]!.timestamp) : Infinity;
-    const failedAt = failures.find((t) => t >= start && t < next);
-    if (failedAt !== undefined) {
+    const ended = endings.find((x) => x.at >= start && x.at < next);
+    if (ended !== undefined) {
       out.push({
         span: span({
           id,
@@ -562,8 +565,8 @@ function runNodes(
           label,
           sub,
           start,
-          end: failedAt,
-          failed: true,
+          end: ended.at,
+          failed: ended.failed,
           launchId: launch,
         }),
         children: [],

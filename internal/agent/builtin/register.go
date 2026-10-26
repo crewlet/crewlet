@@ -565,8 +565,9 @@ func annotationsFor(name string) tools.Annotations {
 		// than the engine's protection.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
 	case PauseSeatTool:
-		// DESTRUCTIVE, because `stop_running` ends a turn mid-flight and the
-		// turn is not run again — what it had not yet done is lost. Otherwise
+		// DESTRUCTIVE, because `stop_running` ends a turn mid-flight, and the
+		// coding run it has out with its box, and neither is run again —
+		// what they had not yet done is lost. Otherwise
 		// reversible, and IDEMPOTENT: a second pause of a paused seat changes
 		// nothing. Closed-world: it changes whether one of the company's own
 		// seats works, and reaches nothing outside the engine.

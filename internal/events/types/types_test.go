@@ -53,7 +53,7 @@ func catalogue() []events.Payload {
 		SkillTelemetryWriteFailed{}, CompactionRequested{},
 		CompactionCompleted{}, ReflectionCompleted{},
 		// sandbox.go
-		SandboxRunStarted{}, SandboxRunCompleted{}, SandboxRunFailed{},
+		SandboxRunStarted{}, SandboxRunCompleted{}, SandboxRunFailed{}, SandboxRunStopped{},
 		SandboxClarificationRequested{}, SandboxAnswerGiven{}, SandboxRunAnswered{},
 		// turn.go
 		ToolSkillGuardBlocked{}, PromptSize{}, TurnGuardBreach{},
@@ -154,6 +154,7 @@ var wireTypes = []string{
 	"sandbox_run_completed",
 	"sandbox_run_failed",
 	"sandbox_run_started",
+	"sandbox_run_stopped",
 	"scheduled_task_fired",
 	"seat_paused",
 	"seat_resumed",
@@ -376,6 +377,7 @@ var wireTags = map[string][]string{
 	"sandbox_run_started":             {"agent_handle", "agent_id", "coding_agent", "conversation_key", "launch_id", "model", "provider_key", "role", "sandbox_id", "started_at", "task", "turn_id", "work_item", "work_key"},
 	"sandbox_run_completed":           {"agent_handle", "agent_id", "coding_agent", "launch_id", "role", "sandbox_id", "turn_id", "work_key"},
 	"sandbox_run_failed":              {"agent_handle", "agent_id", "coding_agent", "detail", "reason", "role", "sandbox_id", "turn_id", "work_key"},
+	"sandbox_run_stopped":             {"agent_handle", "agent_id", "coding_agent", "launch_id", "operator_id", "reason", "role", "sandbox_id", "stopped_by", "stopped_by_kind", "turn_id", "work_key"},
 	"sandbox_clarification_requested": {"agent_handle", "agent_id", "audience", "conversation_key", "question", "role", "sandbox_id", "turn_id", "work_item", "work_key"},
 	"seat_paused":                     {"agent_handle", "agent_id", "operator_id", "paused_at", "paused_by", "paused_by_kind", "reason", "role", "stop_running"},
 	"seat_resumed":                    {"agent_handle", "agent_id", "operator_id", "paused_at", "paused_by", "paused_by_kind", "resumed_by", "resumed_by_kind", "role"},
@@ -532,6 +534,10 @@ func TestFailed(t *testing.T) {
 		want          bool
 	}{
 		{"failure by type alone", "sandbox_run_failed", false, false, true},
+		// A RUN A PERSON STOPPED IS NOT A LOST ONE: its turn is closed as
+		// stopped, and a type that failed by name would count it with the
+		// runs that broke.
+		{"a run a person stopped", "sandbox_run_stopped", false, false, false},
 		{"llm chain exhausted", "llm_unavailable", false, false, true},
 		{"budget refused a charge", "budget_exhausted", false, false, true},
 		{"guard breach", "turn.guard_breach", false, false, true},

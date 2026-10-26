@@ -92,8 +92,10 @@ func (s *LiveState) touchTurn(agent *agentLive, env Envelope, payload map[string
 // turn and, when the seat is still on that turn, takes it off.
 //
 // `failed` is whether the ending event itself was a failure; any earlier
-// failure of the same turn is already on the held turn.
-func (s *LiveState) endTurnRecord(agent *agentLive, env Envelope, turnID string, failed bool) {
+// failure of the same turn is already on the held turn. `stopped` is whether a
+// person ended it, which is the outcome whatever else went wrong in it: the
+// turn ended because somebody meant it to, and a stop is never a failure.
+func (s *LiveState) endTurnRecord(agent *agentLive, env Envelope, turnID string, failed, stopped bool) {
 	if turnID == "" {
 		return
 	}
@@ -105,7 +107,10 @@ func (s *LiveState) endTurnRecord(agent *agentLive, env Envelope, turnID string,
 		agent.turnAt = at
 	}
 	outcome := OutcomeCompleted
-	if failed {
+	switch {
+	case stopped:
+		outcome = OutcomeStopped
+	case failed:
 		outcome = OutcomeFailed
 	}
 	s.setLastTurn(agent, LastTurn{TurnID: turnID, EndedAt: env.Timestamp, Outcome: outcome}, at)
@@ -190,7 +195,7 @@ func (s *LiveState) endLostRun(env Envelope, payload map[string]any) bool {
 	}
 	switch held := agent.turn; {
 	case held != nil && held.TurnID == turnID && held.Stage == StageParked:
-		s.endTurnRecord(agent, env, turnID, true)
+		s.endTurnRecord(agent, env, turnID, true, false)
 		return true
 	case held != nil && held.TurnID == turnID:
 		held.failed = true

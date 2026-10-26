@@ -47,7 +47,8 @@ import (
 // `failed` would be a question whose answer is structurally empty — worse than
 // absent, because an empty board reads as "nothing failed" rather than "this
 // is not where that is recorded". How a run ENDED is on the event stream: the
-// resumed turn's own events, or a `sandbox_run_failed` naming the reason.
+// resumed turn's own events, a `sandbox_run_failed` naming the reason, or a
+// `sandbox_run_stopped` naming the person who stopped it.
 //
 // AND ONE RUN BY ITS TURN, which `sandbox_tail` reads to learn whose seat a
 // run is before it shows anybody that seat's transcript — the record is the

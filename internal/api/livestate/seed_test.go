@@ -399,3 +399,20 @@ func TestSeedDoesNotOverwriteWhatTheStreamAlreadySaid(t *testing.T) {
 		t.Errorf("last turn = %+v, want the stream's newer one kept", last)
 	}
 }
+
+// A TURN A PERSON STOPPED IS SEEDED AS STOPPED, as it was watched: a restart
+// must not turn the seat's "its last turn was stopped" into "it ended", nor —
+// for a stopped turn that had also failed somewhere — into "it failed".
+func TestSeedSaysAStoppedTurnWasStopped(t *testing.T) {
+	t.Parallel()
+	s := seededState(t)
+	base := time.Date(2026, 6, 14, 10, 0, 0, 0, time.UTC)
+	s.Seed(livestate.History{Turns: []store.Turn{
+		{TurnID: "stopped", AgentID: "Lead", AgentRole: "Engineer", StartedAt: base,
+			EndedAt: base.Add(time.Minute), Complete: true, Stopped: true, Failed: true},
+	}})
+
+	if last := overlayOf(t, s, "Lead").LastTurn; last == nil || last.Outcome != livestate.OutcomeStopped {
+		t.Errorf("last turn = %+v, want it seeded as stopped", last)
+	}
+}

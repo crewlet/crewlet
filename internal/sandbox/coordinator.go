@@ -387,8 +387,9 @@ type CoordinatorOptions struct {
 	// hand-enumerating the ways a run stops each missed one, and a second
 	// field is a second thing a wiring can declare and never pass. A caller
 	// that needs to tell a wait from an ending reads the events that already
-	// say which — [types.SandboxClarificationRequested] and
-	// [types.SandboxRunFailed] — rather than a parameter nothing else needs.
+	// say which — [types.SandboxClarificationRequested],
+	// [types.SandboxRunFailed] and [types.SandboxRunStopped] — rather than a
+	// parameter nothing else needs.
 	//
 	// IT IS REPORTED WHERE THE TRANSITION IS MADE, NOT WHERE A LIST SAYS,
 	// which is what this contract no longer has to enumerate. Every ending
@@ -423,6 +424,30 @@ type CoordinatorOptions struct {
 	// is about the turn, and is keyed on the seat and turn a caller addresses
 	// its holds by.
 	Stopped func(ctx context.Context, handle, turnID string)
+
+	// CloseStopped closes ON THE RECORD the turn that was parked on a run a
+	// person stopped ([Coordinator.StopSeat]): the turn's `stopped`
+	// completion and its [types.AgentTurnStopped], the shape a turn stopped
+	// at its next round takes, with the turn's work item charged what the run
+	// had spent ([RunStop.Collected]). The engine implements it, because
+	// only the agent layer reads the parked turn's state
+	// ([PendingRun.ExecuteState]) and publishes the records a turn ends with.
+	//
+	// A STEP OF THE ENDING, made before the record is deleted and made again
+	// by any attempt that finishes the ending after a crash — this node's
+	// retry, or the seat's next holder — so what it publishes it publishes
+	// under identities derived from the run and its ending
+	// ([RecordedEnding.ID], [RecordedEnding.At]), which makes a repeat the
+	// same records to every store that keeps them. An error keeps the ending
+	// for its retry, as a refused announcement does.
+	//
+	// ONLY FOR A TURN THAT PARKED. A row with no parked state is a launch
+	// stopped before its turn could park, and that turn is still running in
+	// the frame that launched it, which closes it as stopped when its park
+	// is refused ([PendingStore.MarkSuspended], [ErrRunEnding]). Nil closes
+	// nothing — a coordinator built without an engine (a test's): the stop
+	// is still announced and the run still ended.
+	CloseStopped func(ctx context.Context, run PendingRun) error
 
 	// Hold holds a seat's inbox while one of its runs holds the seat or an
 	// answer it owes is waiting on its resume — see [SeatHold]. Nil holds
@@ -548,6 +573,11 @@ type CoordinatorOptions struct {
 //     inherits its open questions, and reaps any tail the previous owner
 //     abandoned mid-resume — handing a person's answer the tail was claimed
 //     for back to the seat, where no turn had taken it yet.
+//   - STOP. A person's pause with `stop_running` ENDS the seat's launching and
+//     running runs at once ([Coordinator.StopSeat]): decided on the row like
+//     every ending, with who stopped it, finished by reading the run's spend
+//     off its box, reclaiming it, announcing the stop and closing the parked
+//     turn as stopped — never as a loss.
 type Coordinator struct {
 	queue   Publisher
 	pending PendingStore
@@ -561,7 +591,9 @@ type Coordinator struct {
 	// recovered is [CoordinatorOptions.Recovered].
 	recovered func(ctx context.Context, run PendingRun)
 	stopped   func(ctx context.Context, handle, turnID string)
-	now       func() time.Time
+	// closeStopped is [CoordinatorOptions.CloseStopped].
+	closeStopped func(ctx context.Context, run PendingRun) error
+	now          func() time.Time
 
 	// mu guards runs, the two seat-level answers the inbox screening reads
 	// on every delivery, and attempts beside them.
@@ -687,26 +719,27 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 	c := &Coordinator{
 		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager,
 		resume: opts.Resume, account: opts.Account, audience: opts.Audience,
-		condense:  opts.Condense,
-		ended:     opts.Ended,
-		recovered: opts.Recovered,
-		stopped:   opts.Stopped,
-		now:       opts.Now,
-		runs:      map[string]seatRuns{},
-		moves:     map[string]uint64{},
-		attempts:  map[answerKey]map[string]answerBudget{},
-		retries:   map[string]*answerRetry{},
-		owed:      map[string]map[string]struct{}{},
-		held:      map[string]bool{},
-		holdBusy:  map[string]bool{},
-		holdDirty: map[string]bool{},
-		holdGen:   map[string]uint64{},
-		signals:   map[signal]uint64{},
-		hold:      opts.Hold,
-		admit:     opts.Admit,
-		after:     opts.After,
-		spent:     opts.Spent,
-		lease:     opts.Lease,
+		condense:     opts.Condense,
+		ended:        opts.Ended,
+		recovered:    opts.Recovered,
+		stopped:      opts.Stopped,
+		closeStopped: opts.CloseStopped,
+		now:          opts.Now,
+		runs:         map[string]seatRuns{},
+		moves:        map[string]uint64{},
+		attempts:     map[answerKey]map[string]answerBudget{},
+		retries:      map[string]*answerRetry{},
+		owed:         map[string]map[string]struct{}{},
+		held:         map[string]bool{},
+		holdBusy:     map[string]bool{},
+		holdDirty:    map[string]bool{},
+		holdGen:      map[string]uint64{},
+		signals:      map[signal]uint64{},
+		hold:         opts.Hold,
+		admit:        opts.Admit,
+		after:        opts.After,
+		spent:        opts.Spent,
+		lease:        opts.Lease,
 	}
 	if c.now == nil {
 		c.now = time.Now
@@ -1421,6 +1454,11 @@ func runPhase(run PendingRun, facts LaunchRecord, result Result, collected time.
 		rec.DurationMS = int(took / time.Millisecond)
 	}
 	switch {
+	case run.Stop != nil:
+		// ENDED BY A PERSON, NOT FAILED: its seat was paused with a stop
+		// ([Coordinator.StopSeat]), and a record marked failed would list
+		// it with the runs that broke. Who stopped it is the note.
+		rec.Notes = "stopped by " + run.Stop.By + " before it finished"
 	case result.NeedsInput:
 		// STOPPED, NOT FAILED: the run is parked on a question and will
 		// be resumed by its answer. The question is the note a reader
@@ -2761,30 +2799,45 @@ func (c *Coordinator) FailRun(ctx context.Context, turnID, reason, detail string
 // ended: a publish the broker refused keeps the ending for its retry
 // ([Coordinator.oweEnding]). The control copy is a courtesy to the node running
 // the turn and stays best effort.
+//
+// A STOP IS ANNOUNCED AS ONE ([types.SandboxRunStopped]), never as a loss: the
+// row's [PendingRun.Stop], recorded with the decision, says which, so every
+// attempt at the ending announces the same kind under the same identity.
 func (c *Coordinator) announceEnding(ctx context.Context, run PendingRun) error {
 	ending := run.Ending
-	detail := ending.Detail
-	if ending.Returned {
-		detail += replyReturnedDetail
+	trace := events.TraceContext{TraceID: run.TraceID, ParentSpanID: run.SpanID}
+	var ev *events.Event
+	what := ending.Reason
+	if stop := run.Stop; stop != nil {
+		what = "stopped by " + stop.By
+		ev = events.New(types.SandboxRunStopped{
+			Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
+			TurnID: run.TurnID, WorkKey: run.WorkKey, SandboxID: run.SandboxID,
+			CodingAgent: run.CodingAgent, LaunchID: run.LaunchID,
+			StoppedBy: stop.By, StoppedByKind: stop.ByKind,
+			OperatorID: stop.OperatorID, Reason: stop.Reason,
+		}, trace)
+	} else {
+		detail := ending.Detail
+		if ending.Returned {
+			detail += replyReturnedDetail
+		}
+		ev = events.New(types.SandboxRunFailed{
+			Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
+			TurnID: run.TurnID, WorkKey: run.WorkKey, SandboxID: run.SandboxID,
+			CodingAgent: run.CodingAgent,
+			Reason:      ending.Reason, Detail: redact.Secrets(detail),
+		}, trace)
 	}
-	failed := types.SandboxRunFailed{
-		Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
-		TurnID: run.TurnID, WorkKey: run.WorkKey, SandboxID: run.SandboxID,
-		CodingAgent: run.CodingAgent,
-		Reason:      ending.Reason, Detail: redact.Secrets(detail),
-	}
-	ev := events.New(failed, events.TraceContext{
-		TraceID: run.TraceID, ParentSpanID: run.SpanID,
-	})
 	ev.ID, ev.Timestamp = endingEventID(run), ending.At.UTC()
 	ev.Source = run.Role
-	if err := c.queue.Publish(ctx, topics.Event(failed.EventType()), ev); err != nil {
-		return fmt.Errorf("sandbox: announcing the end of run %s (%s): %w", run.TurnID, ending.Reason, err)
+	if err := c.queue.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
+		return fmt.Errorf("sandbox: announcing the end of run %s (%s): %w", run.TurnID, what, err)
 	}
 	if control := controlSubject(run.AgentID); control != "" {
 		if err := c.queue.Publish(ctx, control, ev); err != nil {
 			log.WarnContext(ctx, "sandbox_failure_control_failed",
-				"turn_id", run.TurnID, "reason", ending.Reason, "error", err.Error())
+				"turn_id", run.TurnID, "reason", what, "error", err.Error())
 		}
 	}
 	return nil
@@ -2847,6 +2900,11 @@ type ending struct {
 	// note is what the ending announces, nil for an ending that announces
 	// nothing ([Coordinator.announceEnding]).
 	note *failureNote
+
+	// stop is the person whose pause ended the run, nil for every ending
+	// but a stop's ([Coordinator.StopSeat]). It is announced in place of a
+	// note, so a stop never carries one.
+	stop *RunStop
 }
 
 // decision is the ending as the store records it.
@@ -2854,6 +2912,7 @@ func (e ending) decision() Decision {
 	d := Decision{
 		License: License{Fence: e.fence, WhileIn: e.whileIn, Launch: e.launch, Unused: e.unused},
 		Reclaim: e.reclaim,
+		Stop:    e.stop,
 	}
 	if e.note != nil {
 		d.Reason, d.Detail = e.note.reason, e.note.detail
@@ -2945,9 +3004,14 @@ func (c *Coordinator) endRecord(ctx context.Context, run PendingRun, e ending) (
 //  1. a person's reply the run still holds and owes the seat is LET GO
 //     ([Coordinator.letGoAnswer]), its copies recorded on the row as owed;
 //  2. every copy the row owes ([PendingRun.HandBack]) is published and cleared;
-//  3. the box is reclaimed, where the ending reclaims it after its decision;
-//  4. the announcement is published, under the ending's own identity;
-//  5. the record is deleted ([PendingStore.Finish]).
+//  3. for a STOP, what the run spent is read off its box, charged and recorded
+//     ([Coordinator.collectStopped]) — before the box goes, since nothing can
+//     read it after;
+//  4. the box is reclaimed, where the ending reclaims it after its decision;
+//  5. the announcement is published, under the ending's own identity;
+//  6. for a stop, the turn that was parked on the run is closed on the record
+//     as stopped ([CoordinatorOptions.CloseStopped]);
+//  7. the record is deleted ([PendingStore.Finish]).
 //
 // # Across a crash at each step
 //
@@ -2969,7 +3033,7 @@ func (c *Coordinator) endRecord(ctx context.Context, run PendingRun, e ending) (
 // does not land is returned, and the caller keeps the ending.
 func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun) error {
 	var handed []string
-	reclaimed, announced := false, false
+	reclaimed, announced, closed := false, false, false
 	for range casRetries {
 		if run.answerOwed() {
 			owing, err := c.letGoAnswer(ctx, run)
@@ -2995,6 +3059,13 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun) error {
 			}
 			handed = owed
 		}
+		if run.Stop != nil && !run.Stop.Collected {
+			collected, err := c.collectStopped(ctx, run)
+			if err != nil {
+				return err
+			}
+			run = collected
+		}
 		if run.Ending.Reclaim && !reclaimed {
 			// THE BOX THE ROW NAMES, under a context of its own: a teardown
 			// is reached from failure paths whose context is often dead.
@@ -3003,11 +3074,18 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun) error {
 			cancel()
 			reclaimed = true
 		}
-		if run.Ending.Reason != "" && !announced {
+		if run.announces() && !announced {
 			if err := c.announceEnding(ctx, run); err != nil {
 				return err
 			}
 			announced = true
+		}
+		if run.Stop != nil && !closed && c.closeStopped != nil && len(run.ExecuteState) > 0 {
+			if err := c.closeStopped(ctx, run); err != nil {
+				return fmt.Errorf("sandbox: ending run %s, whose stopped turn could not be closed "+
+					"on the record: %w", run.TurnID, err)
+			}
+			closed = true
 		}
 		settled, _, err := c.pending.Finish(ctx, run.TurnID, run.Ending.ID)
 		switch {

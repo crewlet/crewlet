@@ -245,3 +245,31 @@ func TestTheStagesAndOutcomesAreClosedSets(t *testing.T) {
 		t.Error("a value this build does not know was accepted")
 	}
 }
+
+// A TURN A PERSON STOPPED ENDS AS STOPPED, never as failed, even after a
+// failure in it and even where it was parked on its coding run: a stop ends a
+// parked turn with a completion of its own, newer than the park, and the seat's
+// last turn says the person ended it.
+func TestAStoppedTurnEndsAsStoppedAndNotFailed(t *testing.T) {
+	t.Parallel()
+	s := livestate.New()
+	s.Apply(env("agent_turn_started", turnPayload("tn-1", nil), at("2026-06-14T12:00:00Z")))
+	// A provider call that failed and recovered, earlier in the turn.
+	s.Apply(env("llm_unavailable", turnPayload("tn-1", nil), at("2026-06-14T12:00:02Z")))
+	s.Apply(env("agent_turn_completed", turnPayload("tn-1", map[string]any{"suspended": true}),
+		at("2026-06-14T12:00:05Z")))
+	change := s.Apply(env("agent_turn_completed", turnPayload("tn-1", map[string]any{
+		"stopped": true, "error_kind": "stopped",
+	}), at("2026-06-14T12:30:00Z")))
+
+	if _, moved := change.Agents["Lead"]; !moved {
+		t.Error("ending the parked turn did not move its seat")
+	}
+	o := overlayOf(t, s, "Lead")
+	if o.Turn != nil {
+		t.Errorf("turn = %+v, want the stopped turn off the seat", o.Turn)
+	}
+	if o.LastTurn == nil || o.LastTurn.TurnID != "tn-1" || o.LastTurn.Outcome != livestate.OutcomeStopped {
+		t.Errorf("last turn = %+v, want tn-1 stopped", o.LastTurn)
+	}
+}

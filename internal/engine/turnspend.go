@@ -131,16 +131,42 @@ func (c segmentCharge) onWorklet() bool {
 // segment's spend lost; and the rebase is recorded before the attempt writes
 // anything, so a retry of the same segment reads it back and derives the same
 // id, which is what collapses a charge landed twice.
-func segmentOpID(runID, launch string, resumed bool, rebasedTo time.Time) string {
+func segmentOpID(runID, launch string, segment segmentKind, rebasedTo time.Time) string {
 	at := rebasedTo
 	if at.IsZero() {
 		at, _ = statelog.OpMintedAt(runID)
 	}
-	segment := "dispatch"
-	if resumed {
-		segment = "resume"
+	return statelog.DeriveOpID(at, "turn-spend", runID, string(segment), launch)
+}
+
+// segmentKind is which segment of a run a charge is for — part of its
+// operation id ([segmentOpID]).
+type segmentKind string
+
+const (
+	// segmentDispatch is the segment a trigger started.
+	segmentDispatch segmentKind = "dispatch"
+	// segmentResume is a segment re-entered from a collected run or a
+	// person's answer, told apart by the launch it resumed from.
+	segmentResume segmentKind = "resume"
+	// segmentStop is the segment that only CLOSES a turn a person stopped
+	// while it was parked on its run, or before its park could land
+	// ([Engine.closeStopped]). Its own kind, because it follows a segment
+	// that already charged under the dispatch's or a resume's id: under
+	// either, the tracker's ledger would collapse the close into the park
+	// and the task's card would go on saying the turn is parked.
+	segmentStop segmentKind = "stop"
+)
+
+// segment is which segment this telemetry describes.
+func (t turnTelemetry) segment() segmentKind {
+	switch {
+	case t.closesStop:
+		return segmentStop
+	case t.resumed:
+		return segmentResume
 	}
-	return statelog.DeriveOpID(at, "turn-spend", runID, segment, launch)
+	return segmentDispatch
 }
 
 // chargeFor decides what this segment charges: its item from the turn's rules,
@@ -165,7 +191,9 @@ func (t turnTelemetry) chargeFor(spend runner.Spend, res turn.Result, err error,
 		Workers:    spend.Workers + job.Workers,
 		SentBack:   spend.SentBack,
 	}, t.auxSpent.Total()), auxSpentOf(job.Aux))
-	if !t.resumed {
+	// ONE TURN, COUNTED BY ITS DISPATCH: a resumed segment and a stop's
+	// close are more of a turn already counted.
+	if t.segment() == segmentDispatch {
 		own.Turns = 1
 	}
 	total := addUncharged(own, t.uncharged)
@@ -179,7 +207,7 @@ func (t turnTelemetry) chargeFor(spend runner.Spend, res turn.Result, err error,
 	// the seat's counters like any call the meter does not carry.
 	cardUse := t.aux()
 	cardUse.Tally, cardUse.Budget = nil, nil
-	charge := segmentCharge{item: item, opID: segmentOpID(t.runID, t.launchID, t.resumed, t.rebasedTo),
+	charge := segmentCharge{item: item, opID: segmentOpID(t.runID, t.launchID, t.segment(), t.rebasedTo),
 		aux: cardUse, ended: ended}
 	if res.Suspended && t.measuredWhole() {
 		// WHAT THE TURN HAS MEASURED OF ITSELF, handed on — but only by a
@@ -219,16 +247,27 @@ func (t turnTelemetry) chargeFor(spend runner.Spend, res turn.Result, err error,
 }
 
 // segmentOutcome is how a segment ended, in the vocabulary a task's turn list
-// reads: parked on a coding run, failed, or the turn's own decision.
+// reads: parked on a coding run, stopped by a person, failed, or the turn's own
+// decision.
+//
+// STOPPED IS NOT FAILED, here as on the turn's completion
+// ([Engine.publishTurnCompleted]): a stop reaches this frame as an error, and
+// read as one the task's card drew a turn somebody deliberately ended as a
+// turn that broke.
 func segmentOutcome(res turn.Result, err error) string {
 	switch {
 	case res.Suspended:
 		return "suspended"
+	case turn.Stopped(err):
+		return segmentStopped
 	case err != nil || res.Decision == phase.Failed:
 		return string(phase.Failed)
 	}
 	return string(res.Decision)
 }
+
+// segmentStopped is the outcome of a segment a person's stop ended.
+const segmentStopped = "stopped"
 
 // withAux adds a segment's in-turn auxiliary spend to its charge. Tokens only:
 // an auxiliary call is not a round, and the cache counts are a breakdown of the

@@ -3427,7 +3427,7 @@ for a reader who cannot make it:
   holds still offers eight it could be handed.
 - **Pause** (agents only) asks why, and whether to **also stop the current
   turn**: without it the turn the seat is on finishes first, and only a ticked
-  box sends `stop_running` (see [pausing a
+  box sends `stop_running`, which also ends a coding run the turn has out (see [pausing a
   seat](../concepts/agent-runtime.md#pausing-a-seat)). A paused seat's profile
   says who paused it, when and why, and offers **Resume**.
 

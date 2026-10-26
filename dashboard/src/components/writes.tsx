@@ -1441,8 +1441,9 @@ const PAUSE_REASON_MAX = 500;
  * no new turn, what is sent to it waits on its inbox in order, its scheduled
  * runs are skipped — and the turn it is on FINISHES FIRST. Stopping that turn
  * is a separate, explicit choice ("Also stop the current turn"), because a
- * turn stopped at its next round loses what it had not done and is not run
- * again; `stop_running` is sent only when it is ticked.
+ * turn stopped at its next round — and a coding run it has out, which the stop
+ * ends at once with its box — loses what it had not done and is not run again;
+ * `stop_running` is sent only when it is ticked.
  *
  * RESUME IS ONE PRESS: it changes nothing a person has to weigh, and the mail
  * that waited is delivered first, in order.
@@ -1598,7 +1599,8 @@ function PauseSeatDialog({
           label="Also stop the current turn"
           description={
             working
-              ? "Otherwise the current turn finishes first. Unfinished work is lost."
+              ? "Otherwise the current turn finishes first. A stop also ends a coding run " +
+                "it has out, at once. Unfinished work is lost."
               : "It isn’t on a turn now."
           }
         />

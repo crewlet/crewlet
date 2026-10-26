@@ -48,9 +48,12 @@ type SeatPaused struct {
 	// Reason is why, in the pauser's own words. Optional.
 	Reason string `json:"reason,omitempty"`
 
-	// StopRunning is whether the pause also asked the turn the seat was on
-	// to stop at its next round rather than finish. Its effect, when a turn
-	// was running, is that turn's own [AgentTurnStopped].
+	// StopRunning is whether the pause also asked the seat's running work
+	// to stop rather than finish: the turn it was on ends at its next round,
+	// and a coding run it had launched — launching or running — is ended at
+	// once, its box reclaimed ([SandboxRunStopped]). Its effect, when a
+	// turn was running or parked on such a run, is that turn's own
+	// [AgentTurnStopped].
 	StopRunning bool `json:"stop_running,omitempty"`
 
 	// PausedAt is when the pause was taken — the record's own instant,
@@ -116,7 +119,8 @@ func (e SeatResumed) SummaryFor(actor string) string {
 
 // AgentTurnStopped records that a turn was ended by a person rather than by
 // itself: a pause that asked to stop the running turn reached that turn's next
-// round, and the turn ended there.
+// round, and the turn ended there — or ended the coding run the turn was
+// parked on, and the turn with it ([SandboxRunStopped]).
 //
 // THE TRIGGER IS SPENT, not handed back: the dispatcher records it in the
 // completion ledger, because a person who stopped a turn did not ask for it to

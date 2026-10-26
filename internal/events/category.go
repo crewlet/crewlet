@@ -212,6 +212,10 @@ var categories = map[string]placement{
 	// after the fact — a live-only failure would be swept before anybody
 	// asked why the work never came back.
 	"sandbox_run_failed": {"task", RateEngine},
+	// A run a PERSON ended by pausing its seat with a stop. Kept for the
+	// same reason as the loss beside it — it is the record of why the work
+	// never came back — and apart from it, because a stop is not a failure.
+	"sandbox_run_stopped": {"task", RateEngine},
 	// What an answer to a run's question became, on either route. The chat
 	// route left no record at all, so this is the only account of whether a
 	// person's reply resumed the run, found it already answered, or found it

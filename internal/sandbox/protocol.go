@@ -50,6 +50,11 @@
 // AND A LOST RUN IS ANNOUNCED ONCE: the announcement goes out before the record
 // is deleted, under the identity its decided ending recorded, so whichever node
 // finishes the ending publishes the same event ([Coordinator.announceEnding]).
+// So is a STOPPED one — a person's pause with `stop_running` ends the seat's
+// launching and running runs at once ([Coordinator.StopSeat]) — as a stop and
+// never as a loss, with who stopped it recorded in the deciding write
+// ([PendingRun.Stop]), its spend read off the box and charged before the box
+// goes, and the turn parked on it closed as stopped ([CoordinatorOptions.CloseStopped]).
 //
 // The reap fences the row to its lease before it revives or lets go of
 // anything — and the revival stamps that lease on the row itself — and a take

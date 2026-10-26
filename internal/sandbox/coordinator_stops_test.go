@@ -218,6 +218,22 @@ var coordinatorEntries = map[string][]entryDrive{
 		name: "a seat claimed by a new owner",
 		call: recovers,
 	}},
+	"StopSeat": {
+		{
+			name: "a person's pause asking the seat's running work to stop",
+			call: stopsTheSeat,
+		},
+		{
+			name:    "a stop that finds the job's spend to read back",
+			arrange: jobFinished,
+			call:    stopsTheSeat,
+		},
+		{
+			name:    "a stop whose box cannot be read back",
+			arrange: collectFails,
+			call:    stopsTheSeat,
+		},
+	},
 	"RetireSeat": {{
 		name: "the runs of a seat that left the company",
 		call: func(t *testing.T, rig *coordRig) {
@@ -482,6 +498,17 @@ func answersByTurn(t *testing.T, rig *coordRig) {
 	}
 }
 
+// stopsTheSeat is the pause a person put on the seat with `stop_running`,
+// reaching the node that holds it.
+func stopsTheSeat(t *testing.T, rig *coordRig) {
+	t.Helper()
+	if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{
+		By: "founder", ByKind: "human", OperatorID: "pat:founder-token",
+	}); err != nil {
+		t.Logf("StopSeat: %v", err)
+	}
+}
+
 // recovers takes the seat under a fresh lease, as a node claiming it does.
 func recovers(t *testing.T, rig *coordRig) {
 	t.Helper()
@@ -738,6 +765,14 @@ func (s *refusingStore) DecideEnding(ctx context.Context, turnID string, d Decis
 		return PendingRun{}, false, errRefusedCall
 	}
 	return s.inner.DecideEnding(ctx, turnID, d)
+}
+
+func (s *refusingStore) CollectStop(ctx context.Context, turnID string, c StopCollection,
+) (PendingRun, bool, error) {
+	if s.called("CollectStop") {
+		return PendingRun{}, false, errRefusedCall
+	}
+	return s.inner.CollectStop(ctx, turnID, c)
 }
 
 func (s *refusingStore) Finish(ctx context.Context, turnID, ending string) (PendingRun, bool, error) {

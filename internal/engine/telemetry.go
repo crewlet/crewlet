@@ -175,6 +175,43 @@ type turnTelemetry struct {
 	// makes: the context assembly is one, and a meter built after it would
 	// never hear of a window the assembly filled.
 	budget *meter
+
+	// closesStop marks the segment that only CLOSES a turn a person
+	// stopped ([Engine.closeStopped]): charged as a segment of its own
+	// ([segmentStop]) and counting no turn.
+	closesStop bool
+
+	// closing, where set, is the identity the records CLOSING a stopped
+	// parked turn are published under ([Engine.closeStoppedTurn]): each is
+	// stamped with an id derived from the run's ending and its type, and the
+	// instant the ending was decided, so the attempt that repeats the close
+	// after a crash publishes the same records rather than a second end of
+	// the turn. Nil for every segment that ran, whose records are minted.
+	closing *closingIdentity
+}
+
+// closingIdentity names the records that close one stopped parked turn: the
+// run's id and its ending's ([sandbox.RecordedEnding]), and the instant the
+// ending was decided.
+type closingIdentity struct {
+	turnID, ending string
+	at             time.Time
+}
+
+// closingNamespace derives the ids a stopped turn's closing records are
+// published under.
+var closingNamespace = uuid.MustParse("6a0c2f6e-1b7d-5c3e-9f42-8d5e3a7b1c09")
+
+// stamp gives a record this segment publishes the identity it is closed under,
+// where it is a closing; it leaves every other segment's records as minted.
+func (t turnTelemetry) stamp(ev *events.Event) *events.Event {
+	if t.closing == nil || ev == nil {
+		return ev
+	}
+	ev.ID = uuid.NewSHA1(closingNamespace,
+		[]byte(t.closing.turnID+"/"+t.closing.ending+"/"+ev.Type))
+	ev.Timestamp = t.closing.at.UTC()
+	return ev
 }
 
 // aux is the attribution this segment's in-turn auxiliary calls state: the one
@@ -556,7 +593,7 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		}
 		summary.ErrorKind = string(res.Breach.Kind)
 	}
-	e.publishEvent(ctx, events.New(summary, t.trace), t.role)
+	e.publishEvent(ctx, t.stamp(events.New(summary, t.trace)), t.role)
 	e.publishFailure(ctx, t, res, err)
 
 	completed := types.TurnCompleted{
@@ -608,7 +645,7 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		completed.Turn = &types.TurnTally{DurationMS: whole.DurationMS, Failed: failed,
 			Reviews: whole.Reviews, SentBack: whole.SentBack, Unaccepted: whole.Unaccepted}
 	}
-	e.publishEvent(ctx, events.New(completed, t.trace), t.role)
+	e.publishEvent(ctx, t.stamp(events.New(completed, t.trace)), t.role)
 	e.publishReflectionDue(ctx, completed, t)
 }
 
@@ -667,7 +704,7 @@ func (e *Engine) publishReflectionDue(ctx context.Context, completed types.TurnC
 	if subject == "" {
 		return
 	}
-	ev := events.New(types.ReflectionDue{Turn: completed}, t.trace)
+	ev := t.stamp(events.New(types.ReflectionDue{Turn: completed}, t.trace))
 	ev.Source = t.role
 	if err := e.backends.Queue.Publish(ctx, subject, ev); err != nil {
 		log.WarnContext(ctx, "reflection_due_publish_failed", "seat", t.handle,

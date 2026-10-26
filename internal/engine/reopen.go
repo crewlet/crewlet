@@ -41,18 +41,33 @@ import (
 // ([mcpbridge.Bridge.Join]) — so a run this node took over from a peer is
 // served here as surely as one it launched.
 //
-// # Not a run whose ending is decided
+// # Not a run whose ending is decided, nor one a person stopped
 //
 // A run a person stopped, or one being failed, has its ending recorded on its
 // row before its steps run ([sandbox.PendingRun.Ending]), and those steps close
 // its session and reclaim its box. Reopened, the box would get its tools back
 // for the moments before its reclaim, as a seat whose stop said otherwise.
 //
+// The same holds a step earlier, for a run on a seat whose pause asks for its
+// running work to stop and whose stop has not been decided yet: the seat's
+// acquisition ends it right after this recovery ([Engine.prepareSeatSandbox]),
+// so a session opened here would serve the seat's tools to a run the person
+// asked to end — every call refused by the session's fence, which reads the
+// same pause, but the box's handshake answered and its surface rebuilt for
+// nothing. A pause this node has not read yet is no stop: the session is
+// opened, and the stop that arrives with the pauses closes it.
+//
 // NEVER AN ERROR to the recovery that calls it: the seat is this node's
 // whatever becomes of one run's bridge, and the run is still collected when it
 // ends. What could not be opened is said, with why.
 func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 	if run.Ending != nil {
+		return
+	}
+	if seat, err := e.seatID(run.AgentHandle); err == nil && e.stopFor(seat, run.AgentHandle) != nil {
+		log.InfoContext(ctx, "bridge_not_reopened", "run_id", run.TurnID, "launch_id", run.LaunchID,
+			"seat", run.AgentHandle, "detail", "a person paused the seat and asked for its running "+
+				"work to stop, so the run is ended rather than served its tools again")
 		return
 	}
 	state, ok, err := execstate.Decode(run.ExecuteState)

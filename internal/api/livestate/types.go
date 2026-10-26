@@ -434,10 +434,14 @@ const (
 	// a lost coding run. The same rule the turn list's `failed` applies, so
 	// a turn seeded from the store and one watched live say the same.
 	OutcomeFailed TurnOutcome = "failed"
+	// OutcomeStopped — a PERSON ended the turn: a pause with `stop_running`
+	// reached it at a round, or ended the coding run it was parked on. Not a
+	// failure, whatever else went wrong in it — the turn list's `stopped`.
+	OutcomeStopped TurnOutcome = "stopped"
 )
 
 // TurnOutcomes is the closed set.
-var TurnOutcomes = []TurnOutcome{OutcomeCompleted, OutcomeFailed}
+var TurnOutcomes = []TurnOutcome{OutcomeCompleted, OutcomeFailed, OutcomeStopped}
 
 // Valid reports whether o is an outcome this build knows.
 func (o TurnOutcome) Valid() bool { return slices.Contains(TurnOutcomes, o) }

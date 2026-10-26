@@ -31,7 +31,7 @@ import (
 // A terminal status kept there would be read on every one of those passes for
 // the life of the deployment by readers that all skip it, while what a run
 // ended as is already on the record that outlives it: the phase events of the
-// resumed turn, or its sandbox_run_failed announcement.
+// resumed turn, or its sandbox_run_failed or sandbox_run_stopped announcement.
 const (
 	// StatusLaunching — the job has been started, but the turn has not yet
 	// written the conversation a resume re-enters. The seat is BUSY and a
@@ -286,7 +286,8 @@ type Decision struct {
 	License License
 
 	// Reason and Detail are what the ending announces
-	// ([types.SandboxRunFailed]); an empty Reason announces nothing.
+	// ([types.SandboxRunFailed]); an empty Reason announces nothing — unless
+	// the ending is a stop ([Decision.Stop]), which announces itself.
 	Reason, Detail string
 
 	// Reclaim is whether the box the row names is reclaimed by the attempt
@@ -295,6 +296,13 @@ type Decision struct {
 	// decision is killed on the caller's snapshot, which a newer lease may
 	// have overtaken ([Coordinator.finish]).
 	Reclaim bool
+
+	// Stop, where set, is the person whose pause ENDED the run
+	// ([Coordinator.StopSeat]), recorded on the row in the write that decides
+	// the ending ([PendingRun.Stop]) — which makes the ending a stop: it
+	// announces [types.SandboxRunStopped] rather than a loss, and closes the
+	// turn parked on the run as stopped. Nil for every other ending.
+	Stop *RunStop
 }
 
 // RecordedEnding is an ending DECIDED on a run and not yet finished: what it
@@ -347,6 +355,87 @@ type RecordedEnding struct {
 
 	// Reclaim is the decision's ([Decision.Reclaim]).
 	Reclaim bool `json:"reclaim,omitempty"`
+}
+
+// RunStop is who ENDED a run by pausing its seat with a stop
+// ([Coordinator.StopSeat]), and what the ending read of the run before it
+// reclaimed the box — recorded on the run's row ([PendingRun.Stop]).
+//
+// WHO, IN THE THREE HALVES every pause names its author by — the author
+// iam.ActorFor names, its kind, and the credential the gesture came through —
+// and the reason they gave, as the pause recorded them. They are what the
+// stop's announcement and the stopped turn's record say, on whichever node
+// finishes the ending.
+type RunStop struct {
+	By         string `json:"by"`
+	ByKind     string `json:"by_kind,omitempty"`
+	OperatorID string `json:"operator_id,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+
+	// Collected is whether the stop's ending has read the run's box back
+	// ([Coordinator.collectStopped]), and the figures beside it what that
+	// read found the run had spent by then: its tokens and their cached
+	// share, and what condensing its report cost the seat's auxiliary model.
+	// Written as a step of the ending ([PendingStore.CollectStop]), before
+	// the box is reclaimed, and read by whichever attempt closes the turn,
+	// which charges the turn's work item the run's share
+	// ([CoordinatorOptions.CloseStopped]).
+	//
+	// FALSE UNTIL THE STEP LANDS, and a box the step could not read leaves
+	// it true with nothing beside it: a run whose box is gone has nothing
+	// left to read, and an ending that waited for it would never finish.
+	Collected        bool      `json:"collected,omitempty"`
+	InputTokens      int       `json:"input_tokens,omitempty"`
+	OutputTokens     int       `json:"output_tokens,omitempty"`
+	CacheReadTokens  int       `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int       `json:"cache_write_tokens,omitempty"`
+	Condensed        AuxTokens `json:"condensed,omitzero"`
+}
+
+// Stoppable are the statuses a stop ENDS: a run whose job is out in a box with
+// the engine driving it — launching, or running.
+//
+// NOT THE OTHERS, each for its own reason. A RESUMED run is a claim whose turn
+// is running in this process or about to: the turn's own fence stops it at its
+// next round ([Coordinator.StopSeat]), which closes the turn, and an ending
+// decided under it would take the run from under a resume that is already
+// holding it. A run PARKED on a question — awaiting, answered, reseed — is
+// doing no work: nothing runs in its box, the pause holds its seat's mail, and
+// the answer it waits for waits behind the pause like every other delivery to
+// the seat, so a person who stopped the seat to look at it finds it as they
+// left it rather than thrown away.
+var Stoppable = []string{StatusLaunching, StatusRunning}
+
+// StopCollection is what a stop's ending read of its run's box before
+// reclaiming it, and what it did with that read — see
+// [PendingStore.CollectStop].
+type StopCollection struct {
+	// Ending is the [RecordedEnding.ID] this is a step of.
+	Ending string
+
+	// InputTokens, OutputTokens, CacheReadTokens, CacheWriteTokens and
+	// Condensed are what the read found — see [RunStop.Collected]. Zero for
+	// a box that could not be read.
+	InputTokens      int
+	OutputTokens     int
+	CacheReadTokens  int
+	CacheWriteTokens int
+	Condensed        AuxTokens
+
+	// Charged and CompanyCharged are whether that spend is on the token
+	// counters, and Published whether the run's own phase record went out —
+	// [PendingRun.Charged], [PendingRun.CompanyCharged] and
+	// [LaunchRecord.Published], recorded in the same write so an attempt
+	// after a crash neither charges nor publishes the run a second time.
+	Charged        bool
+	CompanyCharged bool
+	Published      bool
+}
+
+// announces reports whether a run's decided ending makes an announcement: a
+// loss names its reason, and a stop names who stopped it.
+func (r PendingRun) announces() bool {
+	return r.Ending != nil && (r.Ending.Reason != "" || r.Stop != nil)
 }
 
 // answerOwed reports whether a run whose ending is decided still holds a
@@ -776,6 +865,25 @@ type PendingRun struct {
 	// own steps, and whoever reads it next finishes that ending on the terms
 	// recorded here — see [RecordedEnding].
 	Ending *RecordedEnding `json:"ending,omitempty"`
+
+	// Stop is who ended the run by pausing its seat with a stop, recorded in
+	// the write that DECIDES the ending ([Decision.Stop]) and nil on every
+	// other row — so its presence on a row whose ending is decided is what
+	// makes that ending a stop ([RunStop]).
+	//
+	// RECORDED WITH THE DECISION, not after it, because the stop's account
+	// is published by whichever attempt finishes the ending: the node that
+	// stopped the run, or — where that node stopped between deciding and
+	// announcing — the seat's next holder, which has only the row to say
+	// that a person ended the run and who. Published instead beside a
+	// decision that announces nothing, a crash in between would end a
+	// person's run without a word.
+	//
+	// A KEY OF ITS OWN AT THE TOP OF THE ROW rather than a field of
+	// [RecordedEnding], because the row is rewritten whole by every node
+	// that steps an ending, and only keys at the top survive a build that
+	// does not know them ([PendingRun.Extra]).
+	Stop *RunStop `json:"stop,omitempty"`
 
 	// WorkItem is the one work item the launching turn was charged to, nil
 	// when it was on nothing.
@@ -1236,6 +1344,27 @@ type PendingStore interface {
 	// caller decides again, and finds it recorded if it did.
 	DecideEnding(ctx context.Context, turnID string, d Decision) (PendingRun, bool, error)
 
+	// CollectStop records, as a STEP of the stop ending named
+	// ([StopCollection.Ending]), what that ending read of the run's box
+	// before reclaiming it ([RunStop.Collected]) and whether the run's spend
+	// is charged and its phase record published — in ONE WRITE, and returns
+	// the row as written IFF THIS CALL DID.
+	//
+	// ONE WRITE because the three are one fact about one read: an attempt
+	// that finishes the ending after a crash reads the row to learn whether
+	// the box was read, and a row that said "read" without "charged" would
+	// leave the charge to nobody, while one that said "charged" without the
+	// figures would close the turn on nothing. The charge and the publish
+	// still come before the write, as a release's do ([Release.Charged]), so
+	// a crash between the two can only charge a run twice, never lose it.
+	//
+	// ONLY ON A ROW WHOSE DECIDED ENDING IS THE ONE NAMED, carrying a stop
+	// not yet collected. It is a step of an ending, which the row takes
+	// whatever else it refuses ([ErrRunEnding]); a second collection — two
+	// attempts at one ending — finds the first's recorded and is refused.
+	// FALSE IS NOT AN ERROR.
+	CollectStop(ctx context.Context, turnID string, c StopCollection) (PendingRun, bool, error)
+
 	// Finish deletes the record of a run whose ending is decided — the
 	// ending named, and only once it owes the seat nothing — and hands back
 	// the record it deleted.
@@ -1314,6 +1443,12 @@ type PendingStore interface {
 	// resume of a turn that is over. The caller has a suspended
 	// conversation with nowhere to put it, so the run cannot be resumed and
 	// must be failed rather than left holding a box.
+	//
+	// A RUN WHOSE ENDING IS DECIDED IS REFUSED WITH [ErrRunEnding], not
+	// answered false: the launch it is the second half of was ended under
+	// it — a person stopped its seat between the launch and the park
+	// ([Coordinator.StopSeat]) — and the caller reports its turn as ended
+	// that way rather than as a suspension that failed.
 	MarkSuspended(ctx context.Context, turnID string, s Suspension) (bool, error)
 
 	// AppendBridgeCall records one tool call a bridged run made through the

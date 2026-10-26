@@ -590,6 +590,11 @@ func (s *CoordStore) DecideEnding(ctx context.Context, turnID string, d Decision
 			Unused: license.Unused, Reclaim: d.Reclaim,
 		}
 		run.Ending = ending
+		// WHO STOPPED IT, in the same write: see [PendingRun.Stop].
+		if d.Stop != nil {
+			stop := *d.Stop
+			run.Stop = &stop
+		}
 		// WHAT GOES BACK TO THE SEAT, settled with the ending: copies the
 		// row already owes, and the answer it holds if that is owed — with
 		// a copy to hand back.
@@ -604,6 +609,28 @@ func (s *CoordStore) DecideEnding(ctx context.Context, turnID string, d Decision
 		return decided, true, nil
 	}
 	return written, won, nil
+}
+
+// CollectStop records what a stop's ending read of its run before reclaiming
+// the box. See the contract on [PendingStore].
+func (s *CoordStore) CollectStop(ctx context.Context, turnID string, c StopCollection) (PendingRun, bool, error) {
+	return s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
+		if run.Ending == nil || run.Ending.ID != c.Ending || run.Stop == nil || run.Stop.Collected {
+			return false
+		}
+		stop := *run.Stop
+		stop.Collected = true
+		stop.InputTokens, stop.OutputTokens = c.InputTokens, c.OutputTokens
+		stop.CacheReadTokens, stop.CacheWriteTokens = c.CacheReadTokens, c.CacheWriteTokens
+		stop.Condensed = c.Condensed
+		run.Stop = &stop
+		// RECORDED, NEVER CLEARED, as a release records them: a charge or
+		// a publish an earlier attempt made stays made.
+		run.Charged = run.Charged || c.Charged
+		run.CompanyCharged = run.CompanyCharged || c.CompanyCharged
+		run.Launch.Published = run.Launch.Published || c.Published
+		return true
+	})
 }
 
 // ClearHandBack removes published copies from a run's hand-back. See the
@@ -834,8 +861,11 @@ func appendBounded(calls []BridgeCall, elided int, next BridgeCall) ([]BridgeCal
 
 // MarkSuspended writes the parked turn's state and opens the run to the
 // completion poll. See the contract on [PendingStore].
+//
+// THROUGH THE LIVE WRITE, so a run whose ending was decided under its launch is
+// told [ErrRunEnding] rather than a plain false: see the contract.
 func (s *CoordStore) MarkSuspended(ctx context.Context, turnID string, suspension Suspension) (bool, error) {
-	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+	_, won, err := s.mutateLive(ctx, turnID, func(run *PendingRun) bool {
 		if run.Status != StatusLaunching {
 			return false
 		}

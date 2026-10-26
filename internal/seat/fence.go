@@ -74,14 +74,23 @@ var ErrSeatMoved = errors.New("seat: the seat moved to another node")
 // and lose its output, to guard writes the bridge's own run-scoped, expiring
 // credential already bounds. What is fenced is either end of it: the LAUNCH,
 // which asks this fence immediately before it opens a bridge session or a box
-// (the engine's seatFence), so a seat that moved while its turn built the
-// prompt starts nothing; and the RESUME — the turn that comes back to collect
-// the run runs under the grant the collecting node holds. Between the two,
-// each CALL the running box makes over its tool bridge is asked of the fence
-// of the node serving the run's session — the launch's grant, or the grant of
+// and again once its row exists (the engine's seatFence, carried on the
+// launch request), so a seat that moved while its turn built the prompt
+// starts nothing; and the RESUME — the turn that comes back to collect the
+// run runs under the grant the collecting node holds. Between the two, each
+// CALL the running box makes over its tool bridge is asked of the fence of
+// the node serving the run's session — the launch's grant, or the grant of
 // the node that recovered the seat and opened the session again
-// (internal/api/mcpbridge) — so a seat that moved has its run's calls refused
-// until its new holder serves them, and the run itself is still not killed.
+// (internal/api/mcpbridge) — so a seat that moved has its run's calls
+// refused until its new holder serves them, and the run itself is still not
+// killed.
+//
+// A PERSON'S STOP IS NOT THIS FENCE, and must never be built on it. A pause
+// that asks for the seat's running work to stop ENDS its running run — the
+// node holding the seat calls sandbox.Coordinator.StopSeat, which decides a
+// stopped ending on the run's row and reclaims its box — because a stop is a
+// decision about the work. Ending runs here instead would end them on every
+// rebalance as well, which is exactly what the paragraph above rules out.
 //
 // A nil Host returns nil, and so does a handle no grant covers at all: with
 // no grant to compare against there is nothing to fence, which is the

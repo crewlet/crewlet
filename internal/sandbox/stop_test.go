@@ -1,0 +1,541 @@
+package sandbox
+
+import (
+	"context"
+	"errors"
+	"slices"
+	"sync"
+	"testing"
+
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/queue/topics"
+)
+
+// A PERSON'S STOP ENDS THE SEAT'S RUNNING WORK AT ONCE.
+//
+// A pause with `stop_running` used to reach a seat's running turn at its next
+// round and nothing else: a run that turn had launched is its coding CLI's own
+// process in a box, with no rounds the engine sees, so it ran on to its end —
+// minutes or hours — still acting as the seat through its tool bridge, and only
+// the turn that came back to collect it was stopped. These cases hold the stop
+// to what it promises: the run ends now, through the ending every run takes,
+// and says who ended it without ever reading as a failure.
+
+// stopper is who every case's pause names.
+var stopper = RunStop{By: "founder", ByKind: "human", OperatorID: "pat:founder-token",
+	Reason: "wrong repository"}
+
+// stopSpies records what a stop does above this package: the bridge sessions
+// it closes ([CoordinatorOptions.Ended]) and the turns it closes on the record
+// ([CoordinatorOptions.CloseStopped]).
+type stopSpies struct {
+	mu       sync.Mutex
+	ended    []string
+	closed   []PendingRun
+	closeErr error
+}
+
+func (s *stopSpies) endedRuns() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.ended)
+}
+
+func (s *stopSpies) closedTurns() []PendingRun {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.closed)
+}
+
+// watchStops installs the spies on the rig's coordinator.
+func watchStops(rig *coordRig) *stopSpies {
+	spies := &stopSpies{}
+	rig.coordinator.ended = func(runID string) {
+		spies.mu.Lock()
+		defer spies.mu.Unlock()
+		spies.ended = append(spies.ended, runID)
+	}
+	rig.coordinator.closeStopped = func(_ context.Context, run PendingRun) error {
+		spies.mu.Lock()
+		defer spies.mu.Unlock()
+		if spies.closeErr != nil {
+			return spies.closeErr
+		}
+		spies.closed = append(spies.closed, run)
+		return nil
+	}
+	return spies
+}
+
+// stopAnnouncements is every publish of a stop on the events topic, repeats
+// included.
+func (r *coordRig) stopAnnouncements() []announcedStop {
+	r.queue.mu.Lock()
+	defer r.queue.mu.Unlock()
+	var out []announcedStop
+	for _, p := range r.queue.published {
+		payload, ok := p.event.Data.(*types.SandboxRunStopped)
+		if !ok || p.topic != topics.Event(payload.EventType()) {
+			continue
+		}
+		out = append(out, announcedStop{id: p.event.ID.String(), stopped: *payload})
+	}
+	return out
+}
+
+type announcedStop struct {
+	id      string
+	stopped types.SandboxRunStopped
+}
+
+// stop is the seat's pause reaching this node.
+func (r *coordRig) stop(t *testing.T) {
+	t.Helper()
+	if err := r.coordinator.StopSeat(t.Context(), "swe", stopper); err != nil {
+		t.Fatalf("StopSeat: %v", err)
+	}
+}
+
+// A RUNNING RUN IS ENDED: its box reclaimed, its bridge session closed, its row
+// gone and its seat free — and nothing is left for its completion to claim.
+func TestAStopEndsTheSeatsRunningRunAtOnce(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	spies := watchStops(rig)
+	running := rig.launch("t1")
+	rig.coordinator.countRun("swe", StatusRunning)
+
+	rig.stop(t)
+
+	if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
+		t.Fatal("the stopped run's record is still there, so its box and its seat are still held")
+	}
+	if !slices.Contains(rig.provider.KilledIDs(), running.SandboxID) {
+		t.Fatalf("killed %v, want the stopped run's box %s: its CLI is still working", rig.provider.KilledIDs(),
+			running.SandboxID)
+	}
+	if !slices.Contains(spies.endedRuns(), "t1") {
+		t.Fatal("the run's bridge session was not closed, so its box can still act as the seat")
+	}
+	if rig.coordinator.SeatHeldBySandbox("swe") {
+		t.Fatal("the seat is still held by a run that was stopped")
+	}
+	if !slices.Contains(rig.stoppedTurns(), "swe/t1") {
+		t.Fatal("the engine was not told the turn stopped, so whatever it held up is still up")
+	}
+	// AND THE JOB'S COMPLETION, WHEN IT COMES, FINDS NOTHING TO CLAIM.
+	rig.runner.Finish(Result{Success: true, Text: "done anyway"})
+	payload := types.SandboxRunCompleted{
+		Agent: running.AgentID, AgentHandle: running.AgentHandle, RoleName: running.Role,
+		TurnID: running.TurnID, LaunchID: running.LaunchID,
+		SandboxID: running.SandboxID, CodingAgent: running.CodingAgent,
+	}
+	ev := events.New(payload, events.TraceContext{TraceID: running.TraceID})
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if got := len(rig.resumer.requests); got != 0 {
+		t.Fatalf("a stopped run's turn was resumed %d times", got)
+	}
+}
+
+// THE BRIDGE SESSION GOES BEFORE THE BOX IS READ, so the stop takes effect on the
+// seat's surface at once rather than after a read of the box that can take as
+// long as the box takes to answer.
+func TestAStopClosesTheRunsSessionBeforeItReadsTheBox(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	spies := watchStops(rig)
+	rig.launch("t1")
+	var endedFirst bool
+	rig.runner.CollectFunc = func(context.Context) error {
+		endedFirst = slices.Contains(spies.endedRuns(), "t1")
+		return nil
+	}
+
+	rig.stop(t)
+
+	if !endedFirst {
+		t.Fatal("the stopped run's box was read while its bridge session was still open")
+	}
+}
+
+// A STOP IS ANNOUNCED ONCE, AS A STOP, NAMING WHO — and never as a loss, which is
+// a failure by its very type and would count a person's stop with the runs that
+// broke.
+func TestAStopIsAnnouncedAsAStopAndNeverAsALoss(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	watchStops(rig)
+	running := rig.launch("t1")
+
+	rig.stop(t)
+
+	if failures := rig.failures(); len(failures) != 0 {
+		t.Fatalf("a stop was announced as a loss: %+v", failures)
+	}
+	got := rig.stopAnnouncements()
+	if len(got) != 1 {
+		t.Fatalf("announced the stop %d times, want once: %+v", len(got), got)
+	}
+	stopped := got[0].stopped
+	if stopped.StoppedBy != stopper.By || stopped.StoppedByKind != stopper.ByKind ||
+		stopped.OperatorID != stopper.OperatorID || stopped.Reason != stopper.Reason {
+		t.Fatalf("the stop names %+v, want the pause's author %+v", stopped, stopper)
+	}
+	if stopped.TurnID != "t1" || stopped.LaunchID != running.LaunchID || stopped.SandboxID != running.SandboxID ||
+		stopped.WorkKey != rigWorkKey || stopped.Agent != sweID {
+		t.Fatalf("the stop does not name the run it ended: %+v", stopped)
+	}
+}
+
+// WHAT THE RUN SPENT BEFORE THE STOP IS CHARGED, ONCE, and its phase published —
+// not as a failure: a run stopped halfway still spent what it spent, and once
+// its box is reclaimed nothing can read it.
+func TestAStoppedRunsSpendIsChargedAndPublishedBeforeItsBoxGoes(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	spies := watchStops(rig)
+	rig.launch("t1")
+	// What the job had done by the stop. Finished here only so the fake has
+	// something to read back; a stop never asks whether the job is done.
+	rig.runner.Finish(Result{Text: "halfway through the migration",
+		InputTokens: 9000, OutputTokens: 1000, CacheReadTokens: 4000})
+
+	rig.stop(t)
+
+	if got := rig.accountant.asked(); got != 1 {
+		t.Fatalf("charged the stopped run %d times, want once", got)
+	}
+	if rig.accountant.charged != 10_000 {
+		t.Fatalf("charged %d tokens, want the 10000 the run had spent", rig.accountant.charged)
+	}
+	phases := rig.phases()
+	if len(phases) != 1 {
+		t.Fatalf("published %d phase records for the stopped run, want one", len(phases))
+	}
+	if rec := phases[0]; rec.Failed || rec.Notes != "stopped by founder before it finished" ||
+		rec.InputTokens != 9000 || rec.OutputTokens != 1000 {
+		t.Fatalf("the stopped run's phase is %+v, want its tokens, noted as stopped and not failed", rec)
+	}
+	// AND THE FIGURES REACH THE TURN'S CLOSE, which charges the work item.
+	closed := spies.closedTurns()
+	if len(closed) != 1 {
+		t.Fatalf("closed the turn %d times, want once", len(closed))
+	}
+	if stop := closed[0].Stop; stop == nil || !stop.Collected || stop.InputTokens != 9000 ||
+		stop.OutputTokens != 1000 || stop.CacheReadTokens != 4000 {
+		t.Fatalf("the turn was closed on %+v, want the run's collected spend", closed[0].Stop)
+	}
+}
+
+// A BOX THAT CANNOT BE READ DOES NOT HOLD THE STOP UP: the run is ended all the
+// same, with nothing charged, because a stop that waited on a dead box would
+// never finish.
+func TestAStopWhoseBoxCannotBeReadStillEndsTheRun(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	spies := watchStops(rig)
+	rig.launch("t1")
+	rig.runner.CollectErr = errBoxGoneMidRead
+
+	rig.stop(t)
+
+	if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
+		t.Fatal("a stop whose box could not be read left its run in place")
+	}
+	if rig.accountant.asked() != 0 || len(rig.phases()) != 0 {
+		t.Fatal("charged or published a spend nobody read")
+	}
+	if len(rig.stopAnnouncements()) != 1 || len(spies.closedTurns()) != 1 {
+		t.Fatal("a stop whose box could not be read was not announced, or its turn not closed")
+	}
+}
+
+// THE TURN IS CLOSED BY THE ENDING ONLY WHERE IT PARKED. A run stopped while
+// still launching has no parked turn on its row: that turn is still in the frame
+// that launched it, which closes it as stopped when its park is refused.
+func TestOnlyAParkedTurnIsClosedByItsRunsStop(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		place  func(rig *coordRig)
+		closes bool
+	}{
+		{"running", func(rig *coordRig) { rig.launch("t1") }, true},
+		{"launching", func(rig *coordRig) { rig.launching("t1") }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			spies := watchStops(rig)
+			tc.place(rig)
+
+			rig.stop(t)
+
+			if got := len(spies.closedTurns()); (got == 1) != tc.closes || got > 1 {
+				t.Fatalf("closed the turn %d times, want closed=%v", got, tc.closes)
+			}
+			if len(rig.stopAnnouncements()) != 1 {
+				t.Fatal("the stop was not announced")
+			}
+		})
+	}
+}
+
+// PARKED WORK STAYS HELD BEHIND THE PAUSE, and a claimed tail is the turn's own:
+// a stop ends only what is out in a box running. A run waiting on a person's
+// answer does no work, and a resumed run is a turn the turn's own fence stops at
+// its next round.
+func TestAStopLeavesEveryRunItDoesNotEndAsItWas(t *testing.T) {
+	t.Parallel()
+	for _, status := range Active {
+		if slices.Contains(Stoppable, status) {
+			continue
+		}
+		t.Run(status, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			place(t, rig, status)
+			before := rig.get("t1")
+
+			rig.stop(t)
+
+			after, found, err := rig.pending.Get(t.Context(), "t1")
+			if err != nil || !found {
+				t.Fatalf("a %s run was ended by the stop (found=%v, err=%v)", status, found, err)
+			}
+			if after.Status != before.Status || after.Ending != nil || after.Stop != nil {
+				t.Fatalf("a %s run became %s (ending %+v): a stop ends only launching and running runs",
+					status, after.Status, after.Ending)
+			}
+			if len(rig.stopAnnouncements()) != 0 {
+				t.Fatalf("announced a stop of a %s run", status)
+			}
+		})
+	}
+}
+
+// A COMPLETION CLAIMED FIRST WINS. The stop's license names the job in the
+// statuses a stop ends, so a run whose tail a completion already claimed is the
+// resumed turn's — which its own fence stops — and is not ended under it.
+func TestAStopAfterTheCompletionWasClaimedLeavesTheClaim(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	// THE STOP LISTS THE RUN RUNNING, and the claim lands between its listing
+	// and its decision: the store has to refuse the stop on its own, from the
+	// license.
+	refusing := &claimBeforeDecide{PendingStore: rig.pending, t: t}
+	rig.coordinator.pending = refusing
+
+	rig.stop(t)
+
+	run := rig.get("t1")
+	if run.Status != StatusResumed || run.Ending != nil {
+		t.Fatalf("the claimed run became %s (ending %+v); the stop must leave the claim to its turn",
+			run.Status, run.Ending)
+	}
+	if !refusing.claimed {
+		t.Fatal("the claim never landed, so this case raced nothing")
+	}
+}
+
+// claimBeforeDecide claims a run's completion the moment a stop decides on it,
+// as a completion processed on the seat's control topic can.
+type claimBeforeDecide struct {
+	PendingStore
+	t       *testing.T
+	claimed bool
+}
+
+func (s *claimBeforeDecide) DecideEnding(ctx context.Context, turnID string, d Decision) (PendingRun, bool, error) {
+	if !s.claimed {
+		run, _, err := s.PendingStore.Get(ctx, turnID)
+		if err != nil {
+			s.t.Fatalf("Get: %v", err)
+		}
+		if _, won, err := s.PendingStore.ClaimForResume(ctx, turnID, CompletionTail(run.LaunchID),
+			rigLease); err != nil || !won {
+			s.t.Fatalf("ClaimForResume = %v, %v", won, err)
+		}
+		s.claimed = true
+	}
+	return s.PendingStore.DecideEnding(ctx, turnID, d)
+}
+
+// A LAUNCH STOPPED BETWEEN ITS JOB AND ITS PARK IS TOLD SO. The turn that
+// launched it is still unwinding; its park is refused with [ErrRunEnding] — not
+// answered false, which the engine reads as a suspension that failed — so it
+// closes itself as stopped.
+func TestALaunchStoppedBeforeItsParkIsRefusedThePark(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	rig.launching("t1")
+	// THE ENDING STAYS DECIDED: its delete is refused, as a stop whose
+	// last step the store did not take leaves it, and the park lands in
+	// that window.
+	rig.coordinator.pending = &refusingStore{inner: rig.pending, refuse: []string{"Finish"}}
+
+	if err := rig.coordinator.StopSeat(t.Context(), "swe", stopper); err != nil {
+		t.Fatalf("StopSeat: %v", err)
+	}
+	_, err := rig.pending.MarkSuspended(t.Context(), "t1", Suspension{State: []byte(`{"v":3}`)})
+	if !errors.Is(err, ErrRunEnding) {
+		t.Fatalf("MarkSuspended on a stopped launch = %v, want ErrRunEnding", err)
+	}
+}
+
+// A NODE THAT DOES NOT HOLD THE SEAT STOPS NOTHING: the node that holds it reads
+// the same pause and stops the runs under its own lease.
+func TestAStopOnANodeThatDoesNotHoldTheSeatEndsNothing(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.coordinator.lease = notLeased
+
+	err := rig.coordinator.StopSeat(t.Context(), "swe", stopper)
+	if !errors.Is(err, ErrSeatNotHeld) {
+		t.Fatalf("StopSeat on a seat this node lost = %v, want ErrSeatNotHeld", err)
+	}
+	if run := rig.get("t1"); run.Ending != nil || run.Status != StatusRunning {
+		t.Fatalf("a node that lost the seat ended its run: %+v", run.Ending)
+	}
+}
+
+// A STOP THIS NODE COULD NOT FINISH IS FINISHED BY THE SEAT'S NEXT HOLDER AS THE
+// SAME STOP: the decision is on the row with who made it, so the successor
+// announces the same event under the same identity and closes the turn — rather
+// than the run being lost without a word, or announced as a loss.
+func TestAStopTheNodeCouldNotFinishIsFinishedByTheSeatsNextHolder(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	spies := watchStops(rig)
+	rig.launch("t1")
+	// The broker refuses the announcement, so the ending stays decided on
+	// the row — and this node "stops" before its retry.
+	rig.failPublishes(errors.New("the broker went away"))
+	if err := rig.coordinator.StopSeat(t.Context(), "swe", stopper); err != nil {
+		t.Fatalf("StopSeat: %v", err)
+	}
+	decided := rig.get("t1")
+	if decided.Ending == nil || decided.Stop == nil || decided.Stop.By != stopper.By {
+		t.Fatalf("the row carries ending %+v and stop %+v, want the stop decided with who made it",
+			decided.Ending, decided.Stop)
+	}
+	rig.failPublishes(nil)
+
+	if err := rig.recoverSeat(t.Context(), "node-b:1", 9); err != nil {
+		t.Fatalf("RecoverSeat: %v", err)
+	}
+
+	if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
+		t.Fatal("the seat's next holder left the stopped run in place")
+	}
+	got := rig.stopAnnouncements()
+	if len(got) == 0 {
+		t.Fatal("the stop was never announced")
+	}
+	for _, a := range got {
+		if a.id != endingEventID(decided).String() {
+			t.Fatalf("announced the stop as %s, want the identity its ending recorded, %s",
+				a.id, endingEventID(decided))
+		}
+	}
+	if len(rig.failures()) != 0 {
+		t.Fatal("the next holder announced the stop as a loss")
+	}
+	if len(spies.closedTurns()) == 0 {
+		t.Fatal("the next holder did not close the stopped turn")
+	}
+}
+
+// A CLOSE THAT FAILS KEEPS THE ENDING: the row is not deleted while the turn it
+// would close is still open on the record, because nothing reads a deleted row
+// again.
+func TestAStopWhoseTurnCouldNotBeClosedKeepsItsRow(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	spies := watchStops(rig)
+	rig.launch("t1")
+	spies.closeErr = errors.New("the event bus refused the turn's completion")
+
+	if err := rig.coordinator.StopSeat(t.Context(), "swe", stopper); err != nil {
+		t.Fatalf("StopSeat: %v", err)
+	}
+
+	run, found, err := rig.pending.Get(t.Context(), "t1")
+	if err != nil || !found || run.Ending == nil {
+		t.Fatalf("the row went (found=%v, err=%v) while its stopped turn was still open", found, err)
+	}
+	// AND THE RETRY THAT CLOSES IT CHARGES NOTHING TWICE.
+	spies.mu.Lock()
+	spies.closeErr = nil
+	spies.mu.Unlock()
+	if err := rig.recoverSeat(t.Context(), "node-b:1", 9); err != nil {
+		t.Fatalf("RecoverSeat: %v", err)
+	}
+	if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
+		t.Fatal("the stop was never finished")
+	}
+	if got := rig.accountant.asked(); got > 1 {
+		t.Fatalf("charged the stopped run %d times across two attempts at one ending", got)
+	}
+}
+
+// A STOP IS NOT THE SEAT FENCE. A launch whose turn's fence refuses after its row
+// exists starts no job and leaves no row — whatever the fence refused for.
+func TestALaunchWhoseFenceRefusesAfterItsRowStartsNothing(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	stop := errors.New("a person paused swe and asked for its running turn to stop")
+	req := launchReq("t1")
+	req.Fence = func() error { return stop }
+
+	_, err := rig.coordinator.Launch(t.Context(), rig.manager, req)
+	if !errors.Is(err, stop) {
+		t.Fatalf("Launch = %v, want the fence's own refusal", err)
+	}
+	if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
+		t.Fatal("a refused launch left its row behind")
+	}
+	if got := len(rig.runner.Started()); got != 0 {
+		t.Fatalf("started %d jobs on a seat whose fence refused", got)
+	}
+	if rig.coordinator.SeatHeldBySandbox("swe") {
+		t.Fatal("a refused launch kept its seat held")
+	}
+}
+
+// THE POLL LEAVES A RUN WHOSE ENDING IS DECIDED to that ending: a completion it
+// announced would be refused its claim, and a keepalive would keep alive the
+// very box the ending is reclaiming — a stop the node could not finish yet
+// would hold its box open for as long as the poll kept reaching it.
+func TestThePollLeavesARunWhoseEndingIsDecided(t *testing.T) {
+	t.Parallel()
+	rig := newWaiterRig(t)
+	running := rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done"})
+	stop := stopper
+	if _, ok, err := rig.pending.DecideEnding(t.Context(), "t1", Decision{
+		License: License{Fence: rigLease, WhileIn: Stoppable, Launch: running.LaunchID},
+		Reclaim: true, Stop: &stop,
+	}); err != nil || !ok {
+		t.Fatalf("DecideEnding = %v, %v", ok, err)
+	}
+	box := rig.provider.Box(running.SandboxID)
+	keepalives := func() int {
+		box.mu.Lock()
+		defer box.mu.Unlock()
+		return box.timeoutCalls
+	}
+	before := keepalives()
+
+	if fired := rig.tick(); fired != 0 {
+		t.Fatalf("the poll announced %d completions of a run whose ending is decided", fired)
+	}
+	if after := keepalives(); after != before {
+		t.Fatalf("the poll kept alive the box of a run whose ending is decided (%d keepalives)", after-before)
+	}
+}

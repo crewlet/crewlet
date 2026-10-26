@@ -1072,12 +1072,14 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	e.endSegment(ctx, tel, spend, res, err, charge)
 	if err != nil {
 		// A PERSON STOPPED THE RESUMED TURN — its seat was paused with a
-		// stop while the run was out, and the turn ended at its first
-		// round back. It is settled rather than reverted, for the reason
-		// the dispatcher spends a stopped trigger: a revert brings the
-		// completion straight back, and the resume would be stopped again
-		// on every delivery until the broker dead-lettered it. The run's
-		// box is reclaimed with it; stopping the turn is what was asked.
+		// stop after the run's completion was claimed, which a stop leaves
+		// to this turn (the run's own stop ends only a run still out:
+		// [sandbox.Stoppable]), and the turn ended at its first round. It
+		// is settled rather than reverted, for the reason the dispatcher
+		// spends a stopped trigger: a revert brings the completion straight
+		// back, and the resume would be stopped again on every delivery
+		// until the broker dead-lettered it. The run's box is reclaimed
+		// with it; stopping the turn is what was asked.
 		if turn.Stopped(err) {
 			pause, _ := stopOf(err)
 			role, agentID := seatIdentity(company, in.Turn.Handle())
@@ -1148,7 +1150,21 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// running and leaves the box for the next completion — and keeps its
 	// indicator on the same terms, off the ROW rather than off the intent.
 	if res.Suspended {
-		working = stillWorking(e.persistSuspension(ctx, r, in.Run.TurnID, tel, charge))
+		parked, parkErr := e.persistSuspension(ctx, r, in.Run.TurnID, tel, charge)
+		if turn.Stopped(parkErr) {
+			// A PERSON STOPPED THE RUN IT RELAUNCHED, between the launch and
+			// the park: closed here as the dispatch path closes it, and
+			// settled as a stopped resumed turn is (above).
+			working = false
+			e.closeStopped(ctx, tel, parkErr, time.Now().UTC())
+			pause, _ := stopOf(parkErr)
+			role, agentID := seatIdentity(company, in.Turn.Handle())
+			e.observe(ctx, turnStoppedEvent(in.Turn.Handle(), role, agentID,
+				in.Run.TurnID, in.Run.WorkKey, pause, tracing.TraceOf(ctx)))
+			return fmt.Errorf("%w (a person stopped the run the resumed turn relaunched): %w",
+				sandbox.ErrResumeAbandoned, parkErr)
+		}
+		working = stillWorking(parked, parkErr)
 	}
 	e.recordResume(ctx, in, res)
 	return nil
@@ -1463,6 +1479,21 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 	suspended, err := rt.pending.MarkSuspended(ctx, turnID, sandbox.Suspension{
 		State: blob, Iteration: suspension.State.Round,
 	})
+	if errors.Is(err, sandbox.ErrRunEnding) || (err == nil && !suspended) {
+		// THE RUN WAS ENDED UNDER ITS LAUNCH. Where a person's stop ended
+		// it, the turn is stopped, not a suspension that failed: the stop
+		// has already reclaimed the box and announced the run, and this
+		// frame closes the turn — see [Engine.stoppedAtPark].
+		if stop := e.stoppedAtPark(ctx, rt, turnID, tel.handle); stop != nil {
+			log.InfoContext(ctx, "sandbox_park_stopped", "turn_id", turnID, "seat", tel.handle,
+				"detail", "a person stopped the seat's running work between the run's launch "+
+					"and its park; the run is ended and its turn closed as stopped")
+			return false, stop
+		}
+		// ANY OTHER ENDING decided under the launch is one the settle
+		// below finishes, as it finishes a launch no longer launching.
+		err, suspended = nil, false
+	}
 	if err != nil {
 		e.failSuspension(ctx, rt, turnID, "sandbox_suspension_unwritable",
 			"the parked turn state could not be written", err)
@@ -1480,6 +1511,27 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 		return false, nil
 	}
 	return true, nil
+}
+
+// stoppedAtPark is the stop a person's pause made of a launch whose park was
+// refused, or nil where no stop explains it.
+//
+// THE ROW FIRST, which says so for certain where the stop's ending is still on
+// it ([sandbox.PendingRun.Stop]) — and names who made it. A row already gone
+// was ended and deleted before the park came: a stop finishes in the time a
+// box takes to die, which is often less than a turn takes to unwind. Then the
+// seat's pause says it, as the turn's own fence would at its next round.
+func (e *Engine) stoppedAtPark(ctx context.Context, rt *sandboxRuntime, turnID, handle string) error {
+	if run, found, err := rt.pending.Get(ctx, turnID); err == nil && found &&
+		run.Ending != nil && run.Stop != nil {
+		return &stopError{pause: pauseOfStop(*run.Stop), handle: handle}
+	}
+	// A handle the running company names no agent seat by has no pause to
+	// read, so no stop explains the refused park.
+	if seat, err := e.seatID(handle); err == nil {
+		return e.stopFor(seat, handle)
+	}
+	return nil
 }
 
 // failSuspension settles a run whose suspension has nowhere to go, and says
@@ -1916,6 +1968,10 @@ func (e *Engine) sandboxRuntimeOn(pending sandbox.PendingStore, manager *sandbox
 		// one fact — the frame that raised it has already returned. See
 		// [sandbox.CoordinatorOptions.Stopped].
 		Stopped: e.releaseWorkingStatus,
+		// A turn parked on a run a person stopped is closed on the record
+		// as stopped, by whichever node finishes the run's ending — see
+		// runstop.go.
+		CloseStopped: e.closeStoppedTurn,
 		// A seat's inbox is held while one of its runs holds it or an
 		// answer's resume is owed, and a retried resume asks the seat's
 		// conditions first — see [seatHold] and [Engine.mayResumeAnswer].
@@ -2450,10 +2506,21 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 	if err := rt.coordinator.RecoverSeat(ctx, handle, owner, epoch); err != nil {
 		return err
 	}
+	// A SEAT TAKEN WHILE A PERSON'S STOP IS ON IT ends the runs its last
+	// holder left running, before its mailbox opens: the stop was the
+	// seat's, not that holder's, and a run recovered here would otherwise
+	// go on to its end — the one thing the person asked not to happen. Its
+	// recovery opened no session for them ([Engine.reopenAgentRun]), so its
+	// box has had none of the seat's tools back in between.
+	if p, paused, _ := e.pauseOf(seat.ID); paused {
+		e.stopSeatRuns(ctx, seat.ID, p)
+	}
 	// EVERY RUNNING JOB'S SESSION IS OPEN AGAIN HERE NOW ([Engine.reopenAgentRun]),
 	// so the bridge may say a job it holds no session for is over — and not
 	// before, or a box calling in the moment between the seat's lease and
-	// its recovery would be told its live run had ended.
+	// its recovery would be told its live run had ended. A run the stop
+	// above ended, or could not end yet, is one of those: over, as far as
+	// the seat's tools are concerned.
 	e.bridge.SeatReady(seat.ID)
 	return nil
 }

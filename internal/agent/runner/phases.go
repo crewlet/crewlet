@@ -453,8 +453,10 @@ func New(cfg Config) (*Runner, error) {
 //     ceiling — and again once its brief is built, since building it can be
 //     what fills the window ([Runner.executeAsAgentRun]).
 //   - THE SEAT FENCE. A run outlives the turn segment that launched it and is
-//     not fenced once it runs, so the launch is the last moment a seat that
-//     moved, or one a person stopped, can be kept from starting one.
+//     not fenced once it runs — a seat that moves leaves it running, and a
+//     person's stop ends it through the coordinator rather than the fence —
+//     so the launch is the last moment a seat that moved, or one a person
+//     stopped, can be kept from starting one.
 func (r *Runner) Execute(ctx context.Context, round int, notes string, history []ledger.Iteration) (turn.Work, turn.Surface, error) {
 	if err := toolloop.Refusal(ctx, r.cfg.Budget); err != nil {
 		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, err)

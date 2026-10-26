@@ -592,8 +592,9 @@ export function Runs() {
             rows is structurally zero on every company for ever — and a tile
             reading "Failed 0" tells an operator nothing failed, when what is
             true is that this is not where failures are recorded. They are on
-            the event stream, as the resumed turn's own events or a
-            `sandbox_run_failed` naming the reason. */}
+            the event stream, as the resumed turn's own events, a
+            `sandbox_run_failed` naming the reason, or a
+            `sandbox_run_stopped` naming who stopped it. */}
         <StatCard
           icon={<PackageGlyph size="xs" />}
           label="In the record"

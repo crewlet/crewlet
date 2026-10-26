@@ -307,7 +307,7 @@ Usage:
   crewlet fleet broker <cmd>  The fleet broker's members, as the nodes advertise them
                               and as its metadata group counts them: list, and
                               remove a member that is gone for good
-  crewlet seats <cmd>         Pause a seat (-stop also ends the turn it is on)
+  crewlet seats <cmd>         Pause a seat (-stop also ends its running turn and run)
                               or resume it: its holder, its lead, or an admin
   crewlet artifacts <cmd>     List, publish, version, share, trash and purge the
                               company's artifacts, as the token's principal

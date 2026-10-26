@@ -476,6 +476,13 @@ func (w *Waiter) order(runs []PendingRun) []task {
 	var work []task
 	for _, run := range runs {
 		switch {
+		case run.Ending != nil:
+			// A RUN WHOSE ENDING IS DECIDED is that ending's to finish —
+			// its decider's retry, or the seat's next holder — and nothing
+			// a poll does can help it: a completion it announced would be
+			// refused its claim, a keepalive would keep alive the very box
+			// the ending is reclaiming, and a reap would race the ending's
+			// own reclaim.
 		case run.Status == StatusRunning && run.SandboxID != "" && !run.Held(now):
 			work = append(work, task{run: run})
 		case pauseExpired(run, now):

@@ -163,12 +163,13 @@ var failureEvents = map[string]struct{}{
 }
 
 // sandboxEvents feed the running-sandboxes panel: started → tracked;
-// clarification → awaiting a person; completed or failed → dropped.
+// clarification → awaiting a person; completed, failed or stopped → dropped.
 var sandboxEvents = map[string]struct{}{
 	"sandbox_run_started":             {},
 	"sandbox_clarification_requested": {},
 	"sandbox_run_completed":           {},
 	"sandbox_run_failed":              {},
+	"sandbox_run_stopped":             {},
 }
 
 // agentLive is the incrementally-maintained state of one seat.
@@ -702,7 +703,7 @@ func (s *LiveState) applyTurnEvent(agent *agentLive, env Envelope, payload map[s
 			// when the run is collected.
 			s.touchTurn(agent, env, payload, StageParked)
 		} else {
-			s.endTurnRecord(agent, env, turnID, env.Failed)
+			s.endTurnRecord(agent, env, turnID, env.Failed, flag(payload, "stopped"))
 		}
 	case "reflection_completed":
 		s.extendLastTurn(agent, env, turnID)

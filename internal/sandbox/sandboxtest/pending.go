@@ -76,6 +76,8 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AnEndingIsDecidedOnce", testAnEndingIsDecidedOnce},
 		{"ADecidedRunTakesNoOtherWrite", testADecidedRunTakesNoOtherWrite},
 		{"AnEndingSaysWhetherItHandsAnAnswerBack", testAnEndingSaysWhetherItHandsAnAnswerBack},
+		{"AStopIsRecordedWithTheDecisionThatMakesIt", testAStopIsRecordedWithTheDecisionThatMakesIt},
+		{"AStopsCollectionIsRecordedOnceAsAStepOfItsEnding", testAStopsCollectionIsRecordedOnceAsAStepOfItsEnding},
 		{"ARefusedRelaunchIsAnError", testARefusedRelaunchIsAnError},
 		{"AnEndingIsNotAStatus", testAnEndingIsNotAStatus},
 		{"EveryLaunchIsNamedAnew", testEveryLaunchIsNamedAnew},
@@ -931,8 +933,7 @@ func testADecidedRunTakesNoOtherWrite(t *testing.T, s sandbox.PendingStore) {
 			_, ok, err := s.DeclineAnswer(ctx, "t1", launch, []string{"r1"}, nil, sandbox.Fence{})
 			return ok, err
 		},
-		"ExpirePause":   func() (bool, error) { return s.ExpirePause(ctx, "t1") },
-		"MarkSuspended": func() (bool, error) { return s.MarkSuspended(ctx, "t1", suspension()) },
+		"ExpirePause": func() (bool, error) { return s.ExpirePause(ctx, "t1") },
 	}
 	for name, write := range refusedQuietly {
 		if ok, err := write(); err != nil || ok {
@@ -949,6 +950,14 @@ func testADecidedRunTakesNoOtherWrite(t *testing.T, s sandbox.PendingStore) {
 			return s.MarkAwaiting(ctx, "t1", sandbox.Clarification{Question: "still there?", AskedAt: time.Now().UTC()})
 		},
 		"SetStatus": func() error { return s.SetStatus(ctx, "t1", sandbox.StatusRunning, sandbox.Fence{}) },
+		// ALOUD, because the park is the second half of a launch the
+		// ending was decided under — a person stopped the seat between the
+		// two — and its turn reports itself stopped rather than as a
+		// suspension that failed.
+		"MarkSuspended": func() error {
+			_, err := s.MarkSuspended(ctx, "t1", suspension())
+			return err
+		},
 	}
 	for name, write := range refusedAloud {
 		if err := write(); !errors.Is(err, sandbox.ErrRunEnding) {
@@ -968,6 +977,93 @@ func testADecidedRunTakesNoOtherWrite(t *testing.T, s sandbox.PendingStore) {
 		Launch: launch, Call: sandbox.BridgeCall{Name: "read_page"},
 	}); err != nil || !ok {
 		t.Errorf("a bridged call recorded on a decided run = %v, %v, want it taken", ok, err)
+	}
+}
+
+// A STOP IS RECORDED IN THE WRITE THAT DECIDES IT, so whichever attempt finishes
+// the ending — the node that stopped the run, or the seat's next holder after a
+// crash — announces it as a stop and says who made it. One decision per run: a
+// second decider's stop does not replace the first's author.
+func testAStopIsRecordedWithTheDecisionThatMakesIt(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	launch := mustLaunched(t, s, run("t1"))
+	stop := sandbox.RunStop{By: "founder", ByKind: "human", OperatorID: "pat:founder-token", Reason: "wrong repo"}
+	decided, ok, err := s.DecideEnding(ctx, "t1", sandbox.Decision{
+		License: sandbox.License{WhileIn: sandbox.Stoppable, Launch: launch}, Reclaim: true, Stop: &stop,
+	})
+	if err != nil || !ok || decided.Ending == nil {
+		t.Fatalf("DecideEnding = %+v, %v, %v", decided.Ending, ok, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Stop == nil || *got.Stop != stop {
+		t.Fatalf("the decided row carries stop %+v, want %+v", got.Stop, stop)
+	}
+	other := sandbox.RunStop{By: "somebody-else"}
+	again, ok, err := s.DecideEnding(ctx, "t1", sandbox.Decision{
+		License: sandbox.License{WhileIn: sandbox.Stoppable, Launch: launch}, Stop: &other,
+	})
+	if err != nil || !ok || again.Ending.ID != decided.Ending.ID {
+		t.Fatalf("a second decision = %+v, %v, %v, want the first handed back", again.Ending, ok, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Stop == nil || got.Stop.By != stop.By {
+		t.Fatalf("a second decider replaced who stopped the run: %+v", got.Stop)
+	}
+	// AND NO OTHER ENDING CARRIES ONE.
+	mustLaunched(t, s, run("t2"))
+	if got := decide(t, s, "t2", everyJob(sandbox.Fence{}, sandbox.Active)); got.Stop != nil {
+		t.Fatalf("an ending that is not a stop recorded %+v as its author", got.Stop)
+	}
+}
+
+// WHAT A STOP READ OF ITS RUN IS RECORDED ONCE, AS A STEP OF ITS ENDING, with the
+// charge and the publish it made — so an attempt after a crash neither reads
+// the box again nor charges it twice — and only on the stop it names.
+func testAStopsCollectionIsRecordedOnceAsAStepOfItsEnding(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	launch := mustLaunched(t, s, run("t1"))
+	stop := sandbox.RunStop{By: "founder"}
+	decided, decidedOK, decideErr := s.DecideEnding(ctx, "t1", sandbox.Decision{
+		License: sandbox.License{WhileIn: sandbox.Stoppable, Launch: launch}, Reclaim: true, Stop: &stop,
+	})
+	if decideErr != nil || !decidedOK {
+		t.Fatalf("DecideEnding = %v, %v", decidedOK, decideErr)
+	}
+	collection := sandbox.StopCollection{
+		Ending: decided.Ending.ID, InputTokens: 9000, OutputTokens: 1000,
+		CacheReadTokens: 4000, CacheWriteTokens: 500, Condensed: sandbox.AuxTokens{Input: 30, Output: 7},
+		Charged: true, CompanyCharged: true, Published: true,
+	}
+	if _, won, err := s.CollectStop(ctx, "t1", sandbox.StopCollection{Ending: "another-ending"}); err != nil || won {
+		t.Fatalf("a collection naming another ending = %v, %v, want refused", won, err)
+	}
+	written, ok, err := s.CollectStop(ctx, "t1", collection)
+	if err != nil || !ok {
+		t.Fatalf("CollectStop = %v, %v", ok, err)
+	}
+	got := mustGet(t, s, "t1")
+	if got.Stop == nil || !got.Stop.Collected || got.Stop.InputTokens != 9000 || got.Stop.OutputTokens != 1000 ||
+		got.Stop.CacheReadTokens != 4000 || got.Stop.CacheWriteTokens != 500 ||
+		got.Stop.Condensed != collection.Condensed || got.Stop.By != "founder" {
+		t.Fatalf("the stop reads %+v, want the collection recorded beside who made it", got.Stop)
+	}
+	if !got.Charged || !got.CompanyCharged || !got.Launch.Published {
+		t.Fatalf("charged=%v company=%v published=%v, want all three recorded with the collection",
+			got.Charged, got.CompanyCharged, got.Launch.Published)
+	}
+	if written.Stop == nil || !written.Stop.Collected {
+		t.Fatalf("CollectStop handed back %+v, want the row as written", written.Stop)
+	}
+	if _, ok, err := s.CollectStop(ctx, "t1", collection); err != nil || ok {
+		t.Fatalf("a second collection of one stop = %v, %v, want refused", ok, err)
+	}
+	// NOT A STOP, NOT DECIDED: nothing to collect.
+	mustLaunched(t, s, run("t2"))
+	plain := decide(t, s, "t2", everyJob(sandbox.Fence{}, sandbox.Active))
+	if _, ok, err := s.CollectStop(ctx, "t2", sandbox.StopCollection{Ending: plain.Ending.ID}); err != nil || ok {
+		t.Fatalf("a collection on an ending that is not a stop = %v, %v, want refused", ok, err)
+	}
+	mustLaunched(t, s, run("t3"))
+	if _, ok, err := s.CollectStop(ctx, "t3", sandbox.StopCollection{}); err != nil || ok {
+		t.Fatalf("a collection on a live run = %v, %v, want refused", ok, err)
 	}
 }
 
