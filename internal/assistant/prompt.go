@@ -187,7 +187,9 @@ func companyBlock(in promptInput) string {
 		name = "this company"
 	}
 	return fmt.Sprintf("Company: %s. Its clock is %s, where it is %s, %s. Read every "+
-		"\"today\" and \"this week\" on that clock.",
+		"\"today\" and \"this week\" on that clock. A week runs Monday to Sunday: this "+
+		"week is the one that began on Monday and last week the one before it, never a "+
+		"rolling seven days; say which days a figure covers.",
 		name, zone.String(), now.Format("Monday 2 January 2006"), now.Format("15:04"))
 }
 
