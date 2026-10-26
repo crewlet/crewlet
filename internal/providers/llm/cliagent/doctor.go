@@ -173,6 +173,13 @@ type DiagnoseOptions struct {
 	// BridgeURL is CREWLET_MCP_BRIDGE_URL as this process sees it. Empty
 	// means box mode is refused at launch.
 	BridgeURL string
+
+	// Home is the directory a login this machine already holds is looked for
+	// under ([Provider.HostLogin]); empty is the user's own home, which is
+	// what an operator's `crewlet llm doctor` reads. A suite names an empty
+	// directory, so the report it judges never depends on whether the machine
+	// running it has a CLI signed in.
+	Home string
 }
 
 // Diagnose measures one provider end to end.
@@ -229,7 +236,7 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 					"login is written again"
 			}
 		}
-		d.HostLogin = p.HostLogin(ctx, "")
+		d.HostLogin = p.HostLogin(ctx, opts.Home)
 	}
 	if loggedOutErr != nil {
 		d.Problems = append(d.Problems, fmt.Sprintf("whether the entry was logged out cannot be "+
