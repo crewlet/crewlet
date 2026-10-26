@@ -176,7 +176,7 @@ async function mount(viewer: Record<string, unknown> = { login: "", owner: "", a
     for (let i = 0; i < 5; i++) await Promise.resolve();
   });
   act(() => LayoutObserver.settle());
-  return { asked };
+  return { asked, store };
 }
 
 /**
@@ -592,6 +592,32 @@ test("the seat the peek opens on is inside the canvas after the peek narrows it"
   standCanvasAt(420);
   await settleChart();
   const drawn = onScreen("DevRel");
+  expect(drawn.left).toBeGreaterThanOrEqual(0);
+  expect(drawn.right).toBeLessThanOrEqual(420);
+});
+
+// A SEAT THAT APPEARS IS REVEALED. Held at its legible zoom in a narrow canvas
+// (beside the assistant) the chart is wider than the canvas, and a seat the
+// reader just asked the assistant to add landed past the edge, unseen.
+test("a seat added while the chart is open is brought into view", async () => {
+  standCanvasAt(420);
+  const { store } = await mount();
+  await settleChart();
+  // The same company with a Tech Writer added beside DevRel, as the engine
+  // answers once the write lands.
+  type Seatful = { id: string; roles?: { name: string; handle: string }[]; children?: Seatful[] };
+  const added = structuredClone(CHART_ORG) as unknown as {
+    units: Seatful[];
+    derived: { seats: Record<string, unknown>[]; units: { id: string; seats: string[] }[] };
+  };
+  added.units[2]!.children![1]!.roles!.push({ name: "Tech Writer", handle: "tw" });
+  added.derived.seats.push({ ...added.derived.seats[6]!, handle: "tw", name: "Tech Writer" });
+  added.derived.units.find((u) => u.id === "developer-relations")!.seats.push("tw");
+  await act(async () => {
+    store.applyOrg(added as never);
+  });
+  await settleChart();
+  const drawn = onScreen("Tech Writer");
   expect(drawn.left).toBeGreaterThanOrEqual(0);
   expect(drawn.right).toBeLessThanOrEqual(420);
 });
