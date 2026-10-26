@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/rand/v2"
 	"runtime"
 	"slices"
@@ -475,6 +476,90 @@ func TestAMergeHoldsOneKeysRefsNotARunsRefs(t *testing.T) {
 	if large > small+1<<20 {
 		t.Errorf("a merge of 40 000 refs allocated %d bytes, and of 10 000 %d: what a merge holds grows with "+
 			"its refs", large, small)
+	}
+}
+
+// THE MERGE POLICY KEEPS AN INDEX SMALL AND MERGES IT SELDOM. An index's runs
+// merged as the backfill merges them, to quiescence after every run written,
+// by mergeDue's rule alone, in three shapes: 100 000 folds of one push each —
+// a repository whose every push is synced on its own, a run a fold; 100 000
+// folds of one to twenty, a burst's; and a history read back below the index,
+// 1 200 pages of 7 500 pushes, with 20 000 one-push folds above it. Merged a
+// pair at a time whenever two neighbours were within a factor of two, the
+// one-push folds merged once a push, four syncs and a state write each on
+// every node holding the copy, and the bursts — runs of every size, each
+// beside one it is not within a factor of — filled the index to its bound,
+// where every fold's merge rewrote whatever pair was cheapest, some 200
+// times a push. Eight balanced runs a merge, each shape merges at most once
+// in four pushes, rewrites each push under 2·log₂ n times, and holds its
+// index eight runs clear of MaxProvenanceRuns.
+//
+// Mutation: merge the cheapest eight runs whether or not they are balanced
+// (mergeDue's balance test dropped) — a large run is rewritten for every few
+// small ones, thousands of times a push.
+func TestTheMergePolicyKeepsAnIndexSmallAndMergesItSeldom(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		steps int
+		// add answers the run step i adds, and whether it lands below the
+		// index (a history page) rather than above (a fold).
+		add func(rng *rand.Rand, i int) (int64, bool)
+	}{
+		{"a push a fold", 100_000, func(*rand.Rand, int) (int64, bool) { return 1, false }},
+		{"bursts of up to twenty", 100_000, func(rng *rand.Rand, _ int) (int64, bool) {
+			return 1 + rng.Int64N(20), false
+		}},
+		{"a history read below folds", 1_200 + 20_000, func(_ *rand.Rand, i int) (int64, bool) {
+			if i < 1_200 {
+				return 7_500, true
+			}
+			return 1, false
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rng := rand.New(rand.NewPCG(1, 2))
+			rec := &provenanceState{}
+			var merges, written, pushes, most int64
+			for i := range tc.steps {
+				n, below := tc.add(rng, i)
+				run := provenanceRun{N: uint64(i + 1), Pushes: n}
+				if below {
+					rec.Runs = append([]provenanceRun{run}, rec.Runs...)
+				} else {
+					rec.Runs = append(rec.Runs, run)
+				}
+				pushes += n
+				for {
+					lo, hi := mergeDue(rec, uint64(1)<<len(rec.Runs)-1)
+					if hi == 0 {
+						break
+					}
+					merged := provenanceRun{N: rec.Runs[lo].N}
+					for _, r := range rec.Runs[lo:hi] {
+						merged.Pushes += r.Pushes
+					}
+					rec.Runs = slices.Replace(rec.Runs, lo, hi, merged)
+					merges++
+					written += merged.Pushes
+				}
+				most = max(most, int64(len(rec.Runs)))
+			}
+			perPush := float64(merges) / float64(pushes)
+			rewrites := float64(written) / float64(pushes)
+			t.Logf("%d runs written of %d pushes: %d merges, %.3f a push; each push rewritten %.1f times; at "+
+				"most %d runs, %d at the end", tc.steps, pushes, merges, perPush, rewrites, most, len(rec.Runs))
+			if perPush > 0.25 {
+				t.Errorf("%d pushes merged %d times, %.2f a push: want at most one in four", pushes, merges, perPush)
+			}
+			if bound := 2 * math.Log2(float64(pushes)); rewrites > bound {
+				t.Errorf("each push was rewritten %.1f times on average, past 2·log₂ n = %.1f", rewrites, bound)
+			}
+			if most > MaxProvenanceRuns-ProvenanceMergeWidth {
+				t.Errorf("the index held %d runs, within %d of MaxProvenanceRuns", most, ProvenanceMergeWidth)
+			}
+		})
 	}
 }
 

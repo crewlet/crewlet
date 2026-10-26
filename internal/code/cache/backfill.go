@@ -25,11 +25,15 @@ import (
 //     — against their own trailers, a read slot a piece, before anything maps
 //     one: a reader meanwhile is answered without the index. A run that fails
 //     goes on the copy's repair mark, whose round drops the index.
-//  2. MERGE two adjacent runs: the cheapest pair whose pushes are within
-//     ProvenanceMergeFactor of each other — git's own geometric rule, so runs
-//     double as they merge and stay O(log n), each push written O(log n)
-//     times over its life — or, at MaxProvenanceRuns, the cheapest pair
-//     whatever their sizes, so a round's fold finds room.
+//  2. MERGE ProvenanceMergeWidth adjacent runs as one (mergeDue): the
+//     cheapest such span that is BALANCED — no run of it holding more than
+//     ProvenanceMergeFactor times the others together — so the runs folds of
+//     a push or two write merge eight at a time where a pair at a time they
+//     merged on nearly every push, runs grow geometrically as they merge, and
+//     each push is written O(log n) times over its life, whatever sizes the
+//     folds, the gap's pages and the history's write, and at whichever end;
+//     or, at MaxProvenanceRuns with no such span, the cheapest pair whatever
+//     their sizes, so a round's fold finds room.
 //  3. Read one page of the GAP a full round passed over — EVERY holder,
 //     bounded by the pushes made while the node was down — ascending, at the
 //     SESSION floor of the gap's end, so whichever data node answers holds
@@ -126,8 +130,8 @@ type backfillTask struct {
 	gen  uint64
 	rec  *provenanceState
 	work backfillWork
-	// pair is a merge's first run, by its index in rec.Runs.
-	pair int
+	// lo and hi are a merge's runs, [lo, hi) by their index in rec.Runs.
+	lo, hi int
 	// unchecked is a check's runs: those of rec no vouch is held for.
 	unchecked []provenanceRun
 }
@@ -333,7 +337,7 @@ func (c *Cache) backfillStep(ctx context.Context) (done backfillDone) {
 		c.checkRuns(sctx, t)
 		return backfillDone{did: true}
 	case workMerge:
-		ok, err := c.mergePair(sctx, t.e, t.inc, t.gen, t.rec, t.pair)
+		ok, err := c.mergeSpan(sctx, t.e, t.inc, t.gen, t.rec, t.lo, t.hi)
 		switch {
 		case err != nil && sctx.Err() != nil:
 		case err != nil:
@@ -425,9 +429,9 @@ type dueWork struct {
 	inc    *incarnation
 	gen    uint64
 	rec    *provenanceState
-	// pair is a merge's first run, by its index in rec.Runs; unchecked a
-	// check's runs, one bit each by their index there.
-	pair      int
+	// lo and hi are a merge's runs, [lo, hi) by their index in rec.Runs;
+	// unchecked a check's runs, one bit each by their index there.
+	lo, hi    int
 	unchecked uint64
 }
 
@@ -459,11 +463,11 @@ func (c *Cache) backfillDue(e *entry, now time.Time) dueWork {
 	}
 	vouched, unchecked := runMarks(inc, rec)
 	horizon := rec.OldestAt.Add(HorizonEvery)
-	switch pair := mergeDue(rec, vouched); {
+	switch lo, hi := mergeDue(rec, vouched); {
 	case unchecked != 0:
 		d.work, d.unchecked = workCheck, unchecked
-	case pair >= 0:
-		d.work, d.pair = workMerge, pair
+	case hi > 0:
+		d.work, d.lo, d.hi = workMerge, lo, hi
 	case rec.gapped():
 		d.work = workGap
 	case e.wantHistory && !rec.Complete:
@@ -478,7 +482,7 @@ func (c *Cache) backfillDue(e *entry, now time.Time) dueWork {
 
 // task is the step d looked at, of e.
 func (d dueWork) task(e *entry) *backfillTask {
-	t := &backfillTask{e: e, inc: d.inc, gen: d.gen, rec: d.rec, work: d.work, pair: d.pair}
+	t := &backfillTask{e: e, inc: d.inc, gen: d.gen, rec: d.rec, work: d.work, lo: d.lo, hi: d.hi}
 	for i, r := range d.rec.Runs {
 		if d.unchecked&(1<<i) != 0 {
 			t.unchecked = append(t.unchecked, r)
@@ -508,20 +512,48 @@ func runMarks(inc *incarnation, rec *provenanceState) (vouched, unchecked uint64
 	return vouched, unchecked
 }
 
-// mergeDue is the pair of rec's runs, by the first's index, the backfill
-// merges next — each one vouched holds a bit for: the cheapest adjacent pair
-// whose pushes are within ProvenanceMergeFactor of each other, or, with rec
-// at MaxProvenanceRuns, the cheapest adjacent pair whatever their sizes — or
-// -1.
-func mergeDue(rec *provenanceState, vouched uint64) int {
-	ok := func(i int) bool { return vouched&(1<<i) != 0 }
-	if len(rec.Runs) >= MaxProvenanceRuns {
-		return cheapestPair(rec, ok, nil)
+// mergeDue is the runs of rec, [lo, hi) by their index, the backfill merges
+// next — adjacent, on one side of its gap, each one vouched holds a bit for —
+// or hi zero for none:
+//
+//  1. the cheapest span of ProvenanceMergeWidth runs that is BALANCED: none
+//     holding more than ProvenanceMergeFactor times the others together;
+//  2. with rec at MaxProvenanceRuns and no such span, the cheapest adjacent
+//     pair whatever their sizes, so a fold finds room.
+//
+// A merge is never of fewer runs than the width, so the runs folds of a push
+// or two write merge once eight of them stand side by side, not on nearly
+// every push; and never one a run dominates, so no run is rewritten for less
+// than half its own pushes again. Balance asks nothing of where a run lies or
+// how its neighbours compare one to one: a pair rule — two neighbours within
+// a factor of each other — met runs of every size a burst of pushes folds,
+// each beside one it is not within a factor of, and the index filled to its
+// bound, where every fold's merge rewrote a run whatever its size.
+func mergeDue(rec *provenanceState, vouched uint64) (int, int) {
+	best, cost := -1, int64(0)
+spans:
+	for lo := 0; lo+ProvenanceMergeWidth <= len(rec.Runs); lo++ {
+		var sum, most int64
+		for i := lo; i < lo+ProvenanceMergeWidth; i++ {
+			if vouched&(1<<i) == 0 || i > lo && !rec.adjacent(i-1) {
+				continue spans
+			}
+			sum += rec.Runs[i].Pushes
+			most = max(most, rec.Runs[i].Pushes)
+		}
+		if most <= ProvenanceMergeFactor*(sum-most) && (best < 0 || sum < cost) {
+			best, cost = lo, sum
+		}
 	}
-	return cheapestPair(rec, ok, func(i int) bool {
-		a, b := rec.Runs[i].Pushes, rec.Runs[i+1].Pushes
-		return max(a, b) <= ProvenanceMergeFactor*min(a, b)
-	})
+	switch {
+	case best >= 0:
+		return best, best + ProvenanceMergeWidth
+	case len(rec.Runs) >= MaxProvenanceRuns:
+		if i := cheapestPair(rec, func(i int) bool { return vouched&(1<<i) != 0 }); i >= 0 {
+			return i, i + 2
+		}
+	}
+	return 0, 0
 }
 
 // checkRuns holds every run of t no vouch is held for to its own trailer

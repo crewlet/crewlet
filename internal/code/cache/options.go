@@ -218,6 +218,10 @@ type knobs struct {
 	// is that write's: a case fails the backfill's or the maintainer's write,
 	// which reach no fault point.
 	stateWrite func(repo string, round bool) error
+	// merged, when set, is told how many runs each merge of an index of
+	// pushes that stored merged (mergeSpan): a benchmark counts the merges a
+	// push costs.
+	merged func(runs int)
 }
 
 // validate refuses an Options value naming the field and what to set,

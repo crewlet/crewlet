@@ -627,19 +627,46 @@ const ScrubCooldown = time.Hour
 // a miss to memory at about 100 ns: some 27 µs at 32 runs and 55 µs at 64,
 // the first under the bound and the second past it — an extrapolation of the
 // measured arm, not a measure of that index. Geometric merging keeps
-// O(log n) runs — about 25 for that index — so the bound is reached only
-// while the backfill lags a burst of deltas.
+// O(log n) runs — eight balanced runs a merge (ProvenanceMergeWidth), about
+// ten for that index and never more than 17, simulated over its 18 million
+// pushes in folds of one to twenty — so the bound is reached only while the
+// backfill lags a burst of deltas.
 const MaxProvenanceRuns = 32
 
-// ProvenanceMergeFactor is how near two adjacent runs' push counts must be
-// for the backfill to merge them: the larger at most this many times the
-// smaller.
+// ProvenanceMergeFactor is how much of a merge one run may be: a span of runs
+// the backfill merges is BALANCED, none of them holding more than this many
+// times the pushes of the others together (mergeDue).
 //
-// TWO, git's own geometric factor (`git repack --geometric=2`): runs of
-// similar size coalesce, so their sizes double as they merge — O(log n) runs,
-// each push written O(log n) times over its life — while a large run beside
-// a stream of small ones is never rewritten for each of them.
+// TWO, git's own geometric factor (`git repack --geometric=2`): no run is
+// rewritten for fewer than half its own pushes again, so runs grow
+// geometrically as they merge — O(log n) runs, each push written O(log n)
+// times over its life — and a large run beside a stream of small ones is
+// never rewritten for each of them.
 const ProvenanceMergeFactor = 2
+
+// ProvenanceMergeWidth is how many adjacent runs one merge of the backfill
+// merges (mergeDue): the cheapest balanced span of this many.
+//
+// EIGHT. A fold writes a run of one delta's pushes — one push, where every
+// push is synced on its own. Merged a pair at a time whenever two neighbours
+// were within ProvenanceMergeFactor of each other, such runs merged on nearly
+// every push (999 995 merges in a million one-push folds, simulated), each
+// merge four syncs — the staged run's, crewlet/'s, the state's two — and a
+// state write, on every node holding the copy, beside the rounds' own syncs
+// on the request path; and that pair rule met a burst's folds — runs of every
+// size, each beside one it is not within a factor of — by filling the index
+// to MaxProvenanceRuns, where every fold's merge rewrote whatever pair was
+// cheapest: simulated, 64 to 2 358 rewrites a push. Simulated over one-push
+// folds, bursts of one to twenty, two hundred and five thousand pushes a
+// fold, a history read below and a gap read above
+// (TestTheMergePolicyKeepsAnIndexSmallAndMergesItSeldom holds three), eight
+// runs a span merge once in seven one-push folds and rewrite each push 6 to
+// 15 times, and no index held more than 24 runs; ten a span held 27 and
+// twelve 31, one short of the bound, and sixteen sat there with a history
+// read below, while four and six merge once in three and once in five
+// one-push folds. Eight is the widest whose indexes stay eight runs clear of
+// MaxProvenanceRuns.
+const ProvenanceMergeWidth = 8
 
 // BackfillIdle is how long the backfill waits after each page it reads, as a
 // multiple of that page's own duration and of the fleet's ratio of live git

@@ -495,8 +495,9 @@ func TestTheHorizonDropsWhatTheRowsDropped(t *testing.T) {
 	c := w.open(t, clk.on)
 	w.sync(t, c, repo)
 
-	// A run of one push, then a run of three — a factor of three apart, so
-	// the backfill merges neither into the other.
+	// A run of one push, then a run of three: two runs, short of the
+	// ProvenanceMergeWidth a merge of the backfill takes, so it merges
+	// neither into the other.
 	old, _ := w.push(t, repo, "refs/heads/main", nil)
 	expired := lastPush(t, w.log, repo).Position
 	w.sync(t, c, repo)
@@ -910,13 +911,14 @@ func TestARunGoneFromTheDiskIsLostNotTakenAgainForEver(t *testing.T) {
 	c := w.open(t, clk.on)
 	w.sync(t, c, repo)
 	var s cache.Synced
-	for range 2 {
+	for range cache.ProvenanceMergeWidth {
 		w.push(t, repo, "refs/heads/main", nil)
 		s = w.sync(t, c, repo)
 	}
 	idx := mustIndex(t, c, repo)
-	if len(idx.Runs) != 2 {
-		t.Fatalf("the index holds runs %v, want the two deltas' runs, a merge due", idx.Runs)
+	if len(idx.Runs) != cache.ProvenanceMergeWidth {
+		t.Fatalf("the index holds runs %v, want the deltas' %d small runs, their merge due", idx.Runs,
+			cache.ProvenanceMergeWidth)
 	}
 	if err := os.Remove(filepath.Join(s.Dir, cache.RunRel(idx.Runs[0]))); err != nil {
 		t.Fatal(err)
@@ -1039,13 +1041,72 @@ func TestTheBackfillTakesTheCopyUsedLastFirst(t *testing.T) {
 	}
 }
 
+// SMALL RUNS MERGE A STRETCH AT A TIME. The runs one-push deltas fold wait
+// until ProvenanceMergeWidth of them stand side by side, and then merge as one
+// — one merge, where merged a pair at a time they merged on nearly every
+// push, four syncs and a state write each on every node holding the copy —
+// and the run that merge writes answers everything the eight did.
+//
+// Mutation: merge spans of two (mergeDue reading a width of two) — the
+// backfill merges after the second delta.
+func TestSmallRunsMergeAStretchAtATime(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	var (
+		mu     sync.Mutex
+		merges []int
+	)
+	c := w.open(t, func(o *cache.Options) {
+		cache.MergesWith(o, func(runs int) {
+			mu.Lock()
+			defer mu.Unlock()
+			merges = append(merges, runs)
+		})
+	})
+	merged := func() []int {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(merges)
+	}
+	w.sync(t, c, repo)
+	var (
+		oids []string
+		s    cache.Synced
+	)
+	for i := range cache.ProvenanceMergeWidth {
+		oid, _ := w.push(t, repo, "refs/heads/main", nil)
+		oids = append(oids, oid)
+		s = w.sync(t, c, repo)
+		backfill(t, c)
+		if got := merged(); i < cache.ProvenanceMergeWidth-1 && len(got) > 0 {
+			t.Fatalf("after %d deltas of a push each the backfill merged %v, want nothing yet", i+1, got)
+		}
+	}
+	if got := merged(); !slices.Equal(got, []int{cache.ProvenanceMergeWidth}) {
+		t.Errorf("the backfill merged %v, want the %d small runs once, as one", got, cache.ProvenanceMergeWidth)
+	}
+	if idx := mustIndex(t, c, repo); len(idx.Runs) != 1 {
+		t.Errorf("after the merge the index holds runs %v, want one", idx.Runs)
+	}
+	for _, oid := range oids {
+		if got := introducedBy(t, c, s, oid); got == "" {
+			t.Errorf("after the merge the commit %s is answered by no push", oid)
+		}
+	}
+	if problems := indexAgainstLog(c, w.log, repo, s); len(problems) > 0 {
+		t.Errorf("after the merge:\n\t%v", problems)
+	}
+}
+
 // A RETIRED RUN LEAVES ONCE A WRITTEN STATE NO LONGER NAMES IT. A merge
-// retires the two runs it replaces — the index stops naming them — but the
-// state on the disk names them until the next is written, so a crash before
-// then must find them there; and once a state that no longer names them is
+// retires the runs it replaces — the index stops naming them — but the state
+// on the disk names them until the next is written, so a crash before then
+// must find them there; and once a state that no longer names them is
 // written, by whichever writer, they go. Moved by the writer that retired
-// them once ITS state was written, two runs whose state write failed stayed
-// in crewlet/ for good: named by nothing once a later write succeeded, and
+// them once ITS state was written, runs whose state write failed stayed in
+// crewlet/ for good: named by nothing once a later write succeeded, and
 // counted by no record and no budget until a full round listed the directory.
 //
 // Mutation: forget the runs a failed write would have taken (persist dropping
@@ -1068,15 +1129,19 @@ func TestARetiredRunLeavesOnceAWrittenStateNoLongerNamesIt(t *testing.T) {
 	})
 	w.sync(t, c, repo)
 	var s cache.Synced
-	for range 2 {
+	for range cache.ProvenanceMergeWidth {
 		w.push(t, repo, "refs/heads/main", nil)
 		s = w.sync(t, c, repo)
 	}
 	idx := mustIndex(t, c, repo)
-	if len(idx.Runs) != 2 {
-		t.Fatalf("the index holds runs %v, want the two deltas' runs, a merge due", idx.Runs)
+	if len(idx.Runs) != cache.ProvenanceMergeWidth {
+		t.Fatalf("the index holds runs %v, want the deltas' %d small runs, their merge due", idx.Runs,
+			cache.ProvenanceMergeWidth)
 	}
-	inputs := []string{filepath.Join(s.Dir, cache.RunRel(idx.Runs[0])), filepath.Join(s.Dir, cache.RunRel(idx.Runs[1]))}
+	var inputs []string
+	for _, n := range idx.Runs {
+		inputs = append(inputs, filepath.Join(s.Dir, cache.RunRel(n)))
+	}
 
 	failing.Store(true)
 	if steps := backfill(t, c); !slices.Contains(steps, "merge") {

@@ -943,12 +943,12 @@ func (c *Cache) foldPushes(ctx context.Context, e *entry, inc *incarnation, snap
 		// index below it while it runs, so this is the index of a node whose
 		// backfill lags a burst of deltas: its two cheapest adjacent runs
 		// merged, from their mapped files, before the round's run is placed.
-		i := cheapestPair(rec, func(i int) bool { return c.vouchedRun(e, inc, rec.Runs[i]) }, nil)
+		i := cheapestPair(rec, func(i int) bool { return c.vouchedRun(e, inc, rec.Runs[i]) })
 		if i < 0 {
 			return gap(fmt.Errorf("%w: no two adjacent runs of its %d are this process's own or checked yet",
 				errUnchecked, len(rec.Runs)))
 		}
-		ok, err := c.mergePair(ctx, e, inc, gen, rec, i)
+		ok, err := c.mergeSpan(ctx, e, inc, gen, rec, i, i+2)
 		switch {
 		case err != nil:
 			return gap(fmt.Errorf("its %d runs could not make room: %w", len(rec.Runs), err))
@@ -984,13 +984,12 @@ func (c *Cache) foldPushes(ctx context.Context, e *entry, inc *incarnation, snap
 }
 
 // cheapestPair is the adjacent pair of rec's runs, by the first's index, on
-// one side of its gap, each of them ok to read (by its index) and the pair
-// one also admits (nil admits every pair), that hold the fewest pushes
-// between them; -1 for none.
-func cheapestPair(rec *provenanceState, ok func(i int) bool, also func(i int) bool) int {
+// one side of its gap, each of them ok to read (by its index), that hold the
+// fewest pushes between them; -1 for none.
+func cheapestPair(rec *provenanceState, ok func(i int) bool) int {
 	best := -1
 	for i := 0; i+1 < len(rec.Runs); i++ {
-		if !rec.adjacent(i) || !ok(i) || !ok(i+1) || also != nil && !also(i) {
+		if !rec.adjacent(i) || !ok(i) || !ok(i+1) {
 			continue
 		}
 		if best < 0 || rec.Runs[i].Pushes+rec.Runs[i+1].Pushes < rec.Runs[best].Pushes+rec.Runs[best+1].Pushes {
@@ -1010,56 +1009,66 @@ func (c *Cache) vouchedRun(e *entry, inc *incarnation, r provenanceRun) bool {
 	return vouchedAt(inc, rel, id)
 }
 
-// mergePair merges runs i and i+1 of rec — adjacent, on one side of its gap,
+// mergeSpan merges runs [lo, hi) of rec — adjacent, on one side of its gap,
 // each vouched for — into one run, without the pushes at or below rec's From
-// (the rows' horizon), and stores the record naming it in place of the two
-// (storeRun) where both are still named side by side; where nothing of either
-// is above From, the two are retired with no run in their place. It answers
-// whether it stored; the two inputs wait for the next state written
+// (the rows' horizon), and stores the record naming it in place of them
+// (storeRun) where they are all still named side by side; where nothing of
+// them is above From, they are retired with no run in their place. It answers
+// whether it stored; the inputs wait for the next state written
 // (retireRuns). Each input is mapped for the merge alone and read in order:
 // the merge streams (mergeRuns), holding nothing a push or a ref.
-func (c *Cache) mergePair(ctx context.Context, e *entry, inc *incarnation, gen uint64, rec *provenanceState,
-	i int) (bool, error) {
+func (c *Cache) mergeSpan(ctx context.Context, e *entry, inc *incarnation, gen uint64, rec *provenanceState,
+	lo, hi int) (bool, error) {
 
-	a, b := rec.Runs[i], rec.Runs[i+1]
+	span := slices.Clone(rec.Runs[lo:hi])
 	replace := func(next *provenanceState, run provenanceRun) bool {
-		at := slices.IndexFunc(next.Runs, func(r provenanceRun) bool { return r.N == a.N })
-		if at < 0 || at+1 >= len(next.Runs) || next.Runs[at+1].N != b.N || !next.adjacent(at) {
+		at := slices.IndexFunc(next.Runs, func(r provenanceRun) bool { return r.N == span[0].N })
+		if at < 0 || at+len(span) > len(next.Runs) {
 			return false
 		}
+		for k, r := range span {
+			if next.Runs[at+k].N != r.N || k > 0 && !next.adjacent(at+k-1) {
+				return false
+			}
+		}
 		if run.N == 0 {
-			next.Runs = slices.Delete(next.Runs, at, at+2)
+			next.Runs = slices.Delete(next.Runs, at, at+len(span))
 		} else {
-			next.Runs = slices.Replace(next.Runs, at, at+2, run)
+			next.Runs = slices.Replace(next.Runs, at, at+len(span), run)
 		}
 		return true
 	}
-	ma, err := c.mapRun(e, inc, a)
-	if err != nil {
-		return false, err
+	files := make([]runFile, 0, len(span))
+	kept := 0
+	for _, r := range span {
+		m, err := c.mapRun(e, inc, r)
+		if err != nil {
+			return false, err
+		}
+		defer c.maps.drop(m)
+		files = append(files, m.file)
+		kept += m.file.pushCount() - m.file.firstAbove(rec.From)
 	}
-	defer c.maps.drop(ma)
-	mb, err := c.mapRun(e, inc, b)
-	if err != nil {
-		return false, err
-	}
-	defer c.maps.drop(mb)
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	kept := ma.file.pushCount() - ma.file.firstAbove(rec.From) + mb.file.pushCount() - mb.file.firstAbove(rec.From)
+	var (
+		ok  bool
+		err error
+	)
 	if kept == 0 {
-		return c.commitIndex(e, inc, gen, func(next *provenanceState) bool {
-			return replace(next, provenanceRun{})
-		}), nil
+		ok = c.commitIndex(e, inc, gen, func(next *provenanceState) bool { return replace(next, provenanceRun{}) })
+	} else {
+		s, serr := c.stageRun(func(w io.Writer) (runHeader, error) { return mergeRuns(w, files, rec.From) })
+		if serr != nil {
+			return false, serr
+		}
+		ok, err = c.storeRun(e, inc, gen, s, replace)
 	}
-	s, err := c.stageRun(func(w io.Writer) (runHeader, error) {
-		return mergeRuns(w, []runFile{ma.file, mb.file}, rec.From)
-	})
-	if err != nil {
-		return false, err
+	if ok && err == nil && c.knobs != nil && c.knobs.merged != nil {
+		c.knobs.merged(len(span))
 	}
-	return c.storeRun(e, inc, gen, s, replace)
+	return ok, err
 }
 
 // stagedRun is a run written whole into tmp/ and not yet placed: counted in

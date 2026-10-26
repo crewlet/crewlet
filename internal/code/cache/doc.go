@@ -1017,7 +1017,12 @@
 // in, its directory synced — takes 0.84 ms of a 4.2 ms round whose pack comes
 // from a store in the process, a fifth of the cheapest round there is and its
 // two syncs most of it, and 1.23 ms of a 68 ms one from the S3 fake at 30 ms a
-// first byte (1.8%). Runs of pushes of three commits each hold 64 bytes for
+// first byte (1.8%); with the merges its folds leave due taken between pushes
+// (64 pushes on two E-cores of the same machine), a push costs 0.125 merges
+// and 2.5 of the index's syncs — a fold's two and an eighth of a merge's four
+// — and a seventh of a merge over a long run, each merge of eight taking seven
+// runs away, where merged a pair at a time it merged after nearly every push:
+// about six syncs. Runs of pushes of three commits each hold 64 bytes for
 // each commit introduced, about 190 a push. A lookup that misses, every run
 // searched, over four million commits: 0.54, 3.7, 15.5 and 29.8 µs at 1, 8, 32
 // and 64 runs ([MaxProvenanceRuns] says what that decides). A cold node's

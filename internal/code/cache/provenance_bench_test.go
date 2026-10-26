@@ -34,7 +34,10 @@ import (
 //     medianPush bytes, synced as a delta, its pack downloaded from a store
 //     in the process (memobj: the round's own side alone) or from the S3
 //     fake at providerFirstByte (fake: the floor of what a bucket answers
-//     in). fold-ns/op is the fold, ns/op the whole round, fold-% the share.
+//     in). fold-ns/op is the fold, ns/op the whole round, fold-% the share;
+//     merges/push is the backfill's merges the folds leave due, taken after
+//     each round untimed, and index-syncs/push the syncs folds and merges
+//     make, counted from both (a fold's two, a merge's four).
 //   - op=lookup/runs=R is a commit's lookup in an index of R runs holding
 //     four million commits between them, the commit absent — every run
 //     binary-searched, a lookup's worst case — in ns a lookup (ns/lookup),
@@ -158,12 +161,13 @@ func benchFold(b *testing.B, bucket string) {
 	rows, _ := w.storePushes(b, src, pushes)
 	repo := w.logRepo(1)
 	w.writePushes(repo, pushes, rows)
-	var folds, foldNs atomic.Int64
+	var folds, foldNs, merges atomic.Int64
 	c, drop := w.coldCache(b, b.TempDir(), 0, cache.FetchConcurrency, func(o *cache.Options) {
 		cache.FoldTimes(o, func(took time.Duration) {
 			folds.Add(1)
 			foldNs.Add(int64(took))
 		})
+		cache.MergesWith(o, func(int) { merges.Add(1) })
 	})
 	b.Cleanup(drop)
 	s, err := c.Sync(b.Context(), repo, linearizable)
@@ -188,6 +192,12 @@ func benchFold(b *testing.B, bucket string) {
 			b.Fatalf("a sync after one push: a %s round, %v", s.Kind, err)
 		}
 		s.Release()
+		// The backfill's merges the fold leaves due, as a started cache's
+		// backfill takes them between pushes: what a push costs the node
+		// beside its round, not timed with it.
+		if _, err := cache.BackfillPass(c); err != nil {
+			b.Fatal(err)
+		}
 		b.StartTimer()
 	}
 	if got := folds.Load(); got != int64(b.N) {
@@ -195,6 +205,11 @@ func benchFold(b *testing.B, bucket string) {
 	}
 	b.ReportMetric(float64(foldNs.Load())/float64(b.N), "fold-ns/op")
 	b.ReportMetric(100*float64(foldNs.Load())/float64(roundNs), "fold-%")
+	// Each fold syncs its staged run and crewlet/; each merge those two and
+	// the state's two: the syncs the index adds to a push, beside the
+	// round's own state write.
+	b.ReportMetric(float64(merges.Load())/float64(b.N), "merges/push")
+	b.ReportMetric(float64(2*folds.Load()+4*merges.Load())/float64(b.N), "index-syncs/push")
 }
 
 // lookupPushes and lookupCommits are op=lookup's index: four million commit

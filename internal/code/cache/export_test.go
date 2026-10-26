@@ -1442,6 +1442,15 @@ func RunViaCodes() map[code.PushVia]uint8 { return maps.Clone(runViaCodes) }
 // RunKindCodes: see RunViaCodes.
 func RunKindCodes() map[code.PrincipalKind]uint8 { return maps.Clone(runKindCodes) }
 
+// MergesWith tells f how many runs each merge of an index of pushes the cache
+// Open builds stores merged.
+func MergesWith(o *Options, f func(runs int)) {
+	if o.knobs == nil {
+		o.knobs = &knobs{}
+	}
+	o.knobs.merged = f
+}
+
 // StateWriteFails makes every write of a repository's state by the cache Open
 // builds ask f first — round says whether a round writes it — and fail with
 // what it answers (nil to write).

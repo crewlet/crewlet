@@ -1546,8 +1546,11 @@ landing lies in. A search runs at most 64 ancestry checks; past them it names
 how far it reached and how many forced moves it did not search past.
 
 **Kept like the rest of the copy.** The index is a set of immutable runs under
-`crewlet/` in the repository's directory, merged in the background two of
-similar size at a time, so a lookup reads at most 32 of them; they count
+`crewlet/` in the repository's directory, merged in the background eight
+neighbours at a time — the cheapest eight none of which holds more than twice
+the others together — so a lookup reads at most 32 of them, a push synced on
+its own costs the node about a seventh of a merge rather than nearly one, and
+pushes in bursts of every size keep an index well short of 32; they count
 against the budget, leave with the repository, are linked by a rebuild, and
 are dropped when the log under the node is restored or recreated, whose
 positions then name other records. A run the node has not written since it
