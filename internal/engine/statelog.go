@@ -321,11 +321,12 @@ type stateLog struct {
 	// the runners and write of the row must not interleave with another's.
 	publishing sync.Mutex
 
-	// skew is how far this node's clock stood from its broker's at the
-	// position heartbeat's last measure ([stateLog.measureSkew]), nil until
-	// a beat has measured and again once two beats in a row could not, or
-	// the heartbeat has stopped — written by the heartbeat and read by the
-	// alarm reading on another loop, hence atomic (clockskew.go).
+	// skew is the position heartbeat's last measure of the fleet's clocks —
+	// how far this node's, and the broker member's leading the register,
+	// stood from the median of the data nodes' ([stateLog.measureSkew]) —
+	// nil until a beat has measured and again once two beats in a row could
+	// not, or the heartbeat has stopped. Written by the heartbeat and read by
+	// the alarm reading on another loop, hence atomic (clockskew.go).
 	skew atomic.Pointer[skewMeasure]
 
 	// skewMisses is how many publishes in a row measured nothing, which is
@@ -4490,10 +4491,11 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 	var clocks *skewMeasure
 	if rowsErr == nil {
 		generations, unreadGen = s.fleetGenerations(ctx, rows, floors, s.openLogs(), above)
-		// AND HOW FAR THIS NODE'S CLOCK STANDS FROM ITS BROKER'S, off the
-		// row the previous beat wrote — its stamp against the instant the
-		// broker stored it — from the reading just taken, so `clock_skew`
-		// costs no read of its own (clockskew.go).
+		// AND HOW FAR THIS NODE'S CLOCK, AND THE BROKER MEMBER'S, STAND FROM
+		// THE FLEET'S, off every row just read — each node's stamp against
+		// the instant the broker stored it, this node's own the previous
+		// beat's write — so `clock_skew` costs no read of its own
+		// (clockskew.go).
 		clocks = s.measureSkew(rows)
 	}
 	// RECORDED ON EVERY PUBLISH, a reading that failed included: a publish

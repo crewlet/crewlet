@@ -143,13 +143,15 @@ type NodePositions struct {
 	// [PositionRegister.Positions] and never written: a row put with one
 	// stores none, so no writer can say what the broker's clock read.
 	//
-	// WHAT IT IS FOR is the one comparison of two machines' clocks the fleet
-	// can make without a read or a write of its own. At is the writer's clock
-	// at a write and StoredAt the store's at the same write, so a node that
-	// reads back the row it last wrote reads how far its clock stands from its
-	// broker's — off by no more than the time between its stamp and the
-	// write — and the engine's `clock_skew` alarm is raised from exactly that
-	// (internal/engine, clockskew.go).
+	// WHAT IT IS FOR is the one comparison of machines' clocks the fleet can
+	// make without a read or a write of its own. At is the writer's clock at a
+	// write and StoredAt the store's at the same write, so every row read back
+	// says how far its writer's clock stands from the broker's — off by no
+	// more than the time between its stamp and the write — and, since one
+	// broker clock stores every row, a register's rows together say how far
+	// each node's clock stands from the others'. The engine's `clock_skew`
+	// alarm compares them against their median (internal/engine,
+	// clockskew.go).
 	//
 	// ZERO ON A ROW NOTHING READ BACK — one built in memory — which a reader
 	// takes as nothing measured.

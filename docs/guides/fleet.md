@@ -743,6 +743,19 @@ again before you start restoring, rebuilding or adding nodes.
 - **`history_partial`** — history reads are coming back without a node: it
   did not answer inside the fleet read budget. Every such answer names the
   node in its `coverage`.
+- **`clock_skew`** — a clock has left the fleet's by more than an hour. The
+  fleet's clock is the median of every data node's, which each node reads off
+  the position register on its heartbeat, so read the alarm across the nodes:
+  their rows on `GET /fleet` (`alarms`), and each node's detail on its
+  `alarm_raised` line. A node whose detail names **this node's clock** is the
+  machine whose clock moved: run NTP there. When every node raises it naming
+  **the clock of the broker member leading the position register**, that
+  member's clock moved and it is the one to fix: on an embedded broker one of
+  the data nodes — the one whose detail names its own clock as well — and on an
+  external NATS cluster the server leading `KV_crewlet_statelog_positions`.
+  With two data nodes neither clock outvotes the other, so both are named once
+  they stand more than two hours apart. What rests on the clocks is in
+  [Every machine's clock](deployment.md#every-machines-clock).
 - **`/health`** carries this node's seats, its in-flight count and its
   config posture; the dashboard's **Settings › Nodes** screen puts every node's
   side by side, with seat ownership and per-node config epoch.

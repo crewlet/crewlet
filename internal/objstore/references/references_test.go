@@ -350,9 +350,9 @@ func TestEveryDeclarationStatesItsStanding(t *testing.T) {
 
 // twoClocks is the most the clocks of two machines may disagree by while no
 // node raises `clock_skew`: each within objstore.AssumedClockSkew of the
-// broker member leading the position register, so the two within twice it —
-// the reading every inequality here compares two machines' clocks under (see
-// objstore.AssumedClockSkew).
+// fleet's clock, the median of the data nodes' clocks, so the two within twice
+// it — the reading every inequality here compares two machines' clocks under
+// (see objstore.AssumedClockSkew).
 const twoClocks = 2 * objstore.AssumedClockSkew
 
 // THE GRACE OUTLASTS THE LONGEST AN UPLOAD CAN GO UNRECORDED — ADR-0027's
@@ -473,11 +473,12 @@ var retirements = map[string]retirement{
 // outlast the longest read of that object by more than the clocks stamping
 // and sweeping the row can disagree.
 //
-// TWO MACHINES' CLOCKS, never one's against the broker's: a retirement is
+// TWO MACHINES' CLOCKS, never one's against a reference: a retirement is
 // stamped by the broker member leading its domain's log and swept by the
 // clock of whichever node holds the sweep, and `clock_skew` holds each of
-// them to objstore.AssumedClockSkew of a third — the member leading the
-// position register, which need not be the one that stamped the row.
+// them to objstore.AssumedClockSkew of a third — the fleet's clock, the median
+// of the data nodes' clocks, on an embedded broker the stamping member's among
+// them.
 func retirementFaults(declared []objstore.ReferenceTable, reviewed map[string]retirement) []string {
 	var out []string
 	retired := map[string]bool{}

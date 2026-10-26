@@ -58,14 +58,14 @@ var listingCases = []fleetCase{{
 		c.verdict(h.t, "Positions", raced, wrong)
 	},
 }, {
-	// A ROW'S INSTANT IS THE STORE'S, NEVER THE WRITER'S. A node reading back
-	// the row it last wrote compares the instant it stamped on it (At, its
-	// own clock) with the instant the store took it (StoredAt, the broker's)
-	// — the fleet's one reading of a node's clock against its broker's, which
-	// the engine's clock_skew alarm is raised from. A listing handing back the
-	// writer's stamp would read every node as exactly in time with its broker,
-	// and one keeping a stamp the writer put in the field would let a writer
-	// say what the broker's clock read.
+	// A ROW'S INSTANT IS THE STORE'S, NEVER THE WRITER'S. Every row read back
+	// pairs the instant its writer stamped on it (At, the writer's clock) with
+	// the instant the store took it (StoredAt, the broker's) — the fleet's one
+	// reading of each node's clock against its broker's, which the engine's
+	// clock_skew alarm compares across the register. A listing handing back
+	// the writer's stamp would read every node as exactly in time with its
+	// broker, and one keeping a stamp the writer put in the field would let a
+	// writer say what the broker's clock read.
 	//
 	// The store's clock is this machine's wherever the suite runs — the twin's
 	// own, the broker embedded in the test's process — so the instant lies

@@ -325,28 +325,31 @@ func (o Object) Validate() error {
 // (internal/objstore/references).
 const RecordWithin = 12 * time.Hour
 
-// AssumedClockSkew is the most any node's clock may stand from its broker's:
-// what the engine's `clock_skew` alarm raises past, and the bound under every
-// rule that judges an instant one machine stamped by another machine's clock
-// — the collector's grace against [RecordWithin], and a retired reference's
-// grace against the longest read of what its row names, each pinned by
+// AssumedClockSkew is the most any node's clock, or the clock of the broker
+// member leading the coordination store's position register, may stand from
+// the fleet's — the median of the data nodes' clocks: what the engine's
+// `clock_skew` alarm raises past, and the bound under every rule that judges
+// an instant one machine stamped by another machine's clock — the collector's
+// grace against [RecordWithin], and a retired reference's grace against the
+// longest read of what its row names, each pinned by
 // internal/objstore/references.
 //
 // # Two readings, and every rule takes the second
 //
-// The alarm holds each node within this of ONE clock: the broker member
-// leading the coordination store's position register, whose instant on the
-// node's own row the node reads back on every heartbeat. So a node and that
-// member disagree by at most this, and any TWO machines held to it by up to
+// The alarm holds each clock within this of ONE clock, the fleet's, which
+// every node reads off the position register on its heartbeat: each data
+// node's row there carries the node's stamp and the instant the member stored
+// it, so the rows' offsets differ by how far their nodes' clocks stand apart,
+// and their median is the fleet's clock. So a machine the alarm holds and the
+// fleet's clock disagree by at most this, and any TWO such machines by up to
 // TWICE it — two nodes, or a node and a broker member stamping some other
 // log's records, which on an embedded fleet is a data node the alarm holds
 // too. Every rule bounded here compares two such machines — the node deciding
 // a write against the node running the collector, the node sweeping a retired
-// row against the member that stamped its retirement, which need not be the
-// member leading the register — so each is held to twice it. The servers of
-// an external NATS cluster are not nodes, and nothing measures them against
-// one another: their clocks are the operator's to keep
-// (docs/guides/deployment.md).
+// row against the member that stamped its retirement — so each is held to
+// twice it. The servers of an external NATS cluster are not nodes, and
+// nothing measures them but the one leading the register: their clocks are
+// the operator's to keep (docs/guides/deployment.md).
 //
 // AN HOUR: NTP keeps every machine within milliseconds, so a node an hour off
 // is one whose clock nothing keeps — a host with no NTP client, a virtual

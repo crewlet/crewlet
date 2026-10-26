@@ -581,23 +581,37 @@ type Reading struct {
 	// beside the one the objectives declare.
 	ObjectiveBurns []objectives.Burn
 
-	// ClockSkew is how far this node's clock stands from its broker's, as
-	// the position heartbeat last measured it off the node's own row in the
-	// coordination store — the instant the node stamped on it against the
-	// instant the broker stored it — and ClockSkewBound the most it may:
+	// ClockSkew is how far this node's clock stands from the fleet's, and
+	// BrokerClockSkew how far the clock of the broker member leading the
+	// coordination store's position register stands from it, each signed —
+	// positive is ahead — as the position heartbeat last measured them off
+	// the register: every data node's row carries the instant the node
+	// stamped on it and the instant the broker stored it, so each says how
+	// far that node's clock stands from the member's, and the MEDIAN of them
+	// is the fleet's clock. ClockSkewNodes is how many data nodes' clocks
+	// that median was taken over, this node's among them. ClockSkewBound is
+	// the most either clock may stand from the fleet's:
 	// objstore.AssumedClockSkew, the hour every rule that judges one
 	// machine's instant by another machine's clock rests on, which the node
 	// that measured hands in with the measure.
 	//
+	// TWO CLOCKS, because a row's two instants alone cannot say which of its
+	// two clocks moved: judged against the member, a node read the member's
+	// drift as its own, and the member — a data node on an embedded broker,
+	// whose own row one clock stamps and stores — read nothing at all. Against
+	// the fleet's median, the clock that moved is the one off it.
+	//
 	// THE BOUND TRAVELS WITH THE READING, for HistoryReadBudget's reason:
 	// the constant is the object store's, which this framework does not
 	// import, and the alarm fires at that decision rather than at a number
-	// of its own (ADR-0015). Both zero on a node that measured nothing — no
-	// beat yet, two beats in a row that could not read its row, or a
+	// of its own (ADR-0015). All zero on a node that measured nothing — no
+	// beat yet, two beats in a row that could not read the register, or a
 	// heartbeat that has stopped — and a zero bound judges nothing, the
-	// BackupAge/BackupMaxAge pair's shape: a measure is a magnitude, so a
-	// zero skew is a clock in time with its broker's, never an alarm.
-	ClockSkew, ClockSkewBound time.Duration
+	// BackupAge/BackupMaxAge pair's shape: a zero skew is a clock in time
+	// with the fleet's, never an alarm.
+	ClockSkew, BrokerClockSkew time.Duration
+	ClockSkewNodes             int
+	ClockSkewBound             time.Duration
 
 	// CodeMaintenanceRefused is how many repositories this node's git cache
 	// cannot write a bitmap of, because the bitmap — charged by the
@@ -1242,30 +1256,62 @@ var table = []rule{
 		// THE THRESHOLD IS THE ASSUMPTION ITSELF (ADR-0015), handed in with
 		// the measure: objstore.AssumedClockSkew is what the collector's
 		// grace and a retired reference's grace were sized against, so the
-		// alarm fires exactly where a node stops being a machine those rules
-		// hold on. AT the bound is still inside it, as every rule here is
-		// silent at its threshold.
+		// alarm fires exactly where a clock stops being one those rules hold
+		// on. AT the bound is still inside it, as every rule here is silent at
+		// its threshold.
+		//
+		// TWO CLOCKS, EACH NAMED: this node's and the broker member's leading
+		// the position register, each against the fleet's — the median of the
+		// data nodes' clocks — and the detail says which stands past the bound,
+		// because that is the machine whose clock an operator has to fix. A
+		// node measured against the member alone read the member's drift as
+		// its own and sent the operator to the wrong machine.
 		kind: KindClockSkew,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("this node's clock stands %s from its broker's, past the %s "+
-					"every deletion that judges one machine's instant by another "+
-					"machine's clock assumes", spoken(r.ClockSkew), spoken(r.ClockSkewBound)),
-				r.ClockSkewBound > 0 && r.ClockSkew > r.ClockSkewBound
+			if r.ClockSkewBound <= 0 {
+				return "", false
+			}
+			fleet := fleetClock(r.ClockSkewNodes)
+			var off []string
+			if magnitude(r.ClockSkew) > r.ClockSkewBound {
+				off = append(off, fmt.Sprintf("this node's clock runs %s %s %s",
+					spoken(r.ClockSkew), clockSide(r.ClockSkew), fleet))
+				fleet = "it"
+			}
+			if magnitude(r.BrokerClockSkew) > r.ClockSkewBound {
+				off = append(off, fmt.Sprintf("the clock of the broker member leading the "+
+					"position register runs %s %s %s", spoken(r.BrokerClockSkew),
+					clockSide(r.BrokerClockSkew), fleet))
+			}
+			if len(off) == 0 {
+				return "", false
+			}
+			return fmt.Sprintf("%s, past the %s every deletion that judges one machine's "+
+				"instant by another machine's clock assumes", strings.Join(off, ", and "),
+				spoken(r.ClockSkewBound)), true
 		},
-		remedy: "Keep this node's clock: run an NTP client (chrony, systemd-timesyncd) " +
-			"on it, and on the broker's servers where an external NATS cluster is the " +
-			"broker. Two deletions rest on every node keeping within the bound of its " +
-			"broker, and so on any two machines keeping within twice it: the object " +
-			"collector deletes an object once its key is a day old by the collector's " +
-			"clock, while a write may still name a key twelve hours old by the deciding " +
-			"node's; and the code host's code-retention duty sweeps a retired pack's row " +
-			"once the broker's instant on its retirement is a day old by the duty " +
-			"holder's clock, while a clone that began on the pack may still be reading it " +
-			"for most of that day. A clock past the bound can delete an object a write or " +
-			"a read still needs. The measure is this node's own row in the coordination " +
-			"store's position register, read back on every heartbeat: the instant the " +
-			"node stamped on it against the instant the broker stored it, off by no more " +
-			"than the heartbeat's own work between the two. See docs/guides/deployment.md.",
+		remedy: "Run an NTP client (chrony, systemd-timesyncd) on the machine whose clock " +
+			"the alarm names. Where it names this node's clock, that is this node. Where it " +
+			"names the clock of the broker member leading the position register, every node " +
+			"raises it alike and the clock to fix is that member's alone: on an embedded " +
+			"broker one of the data nodes — the one also raising this alarm about its own " +
+			"clock — and on an external NATS cluster the server leading the register's " +
+			"stream, which `nats stream info KV_crewlet_statelog_positions` names. With two " +
+			"data nodes their median is the midpoint, which neither clock outvotes: both are " +
+			"named once they stand more than twice the bound apart, and either may be the one " +
+			"that moved. Two deletions rest on every node and that member keeping within the " +
+			"bound of the fleet's clock, and so on any two machines keeping within twice it: " +
+			"the object collector deletes an object once its key is a day old by the " +
+			"collector's clock, while a write may still name a key twelve hours old by the " +
+			"deciding node's; and the code host's code-retention duty sweeps a retired pack's " +
+			"row once the broker's instant on its retirement is a day old by the duty holder's " +
+			"clock, while a clone that began on the pack may still be reading it for most of " +
+			"that day. A clock past the bound can delete an object a write or a read still " +
+			"needs. The measure is the coordination store's position register, read on every " +
+			"heartbeat: each data node's row carries the instant the node stamped on it and the " +
+			"instant the broker stored it, so each says how far that node's clock stands from " +
+			"the member's, and the median of them is the fleet's clock, off by no more than a " +
+			"heartbeat's own work between the two instants. See docs/guides/deployment.md.",
 	},
 	{
 		// THE THRESHOLD IS THE NODE'S OWN BUDGET, measured rather than set:
@@ -1421,6 +1467,35 @@ func spoken(d time.Duration) string {
 	}
 	mins := int64(d.Round(time.Minute) / time.Minute)
 	return pair(mins/60, "h", mins%60, "m")
+}
+
+// magnitude is a signed duration's size, for a rule that fires on a clock
+// ahead and a clock behind alike.
+func magnitude(d time.Duration) time.Duration {
+	if d < 0 {
+		return -d
+	}
+	return d
+}
+
+// clockSide says which side of a reference clock a signed offset stands on, as
+// a sentence reads it before the reference: positive is ahead.
+func clockSide(d time.Duration) string {
+	if d < 0 {
+		return "behind"
+	}
+	return "ahead of"
+}
+
+// fleetClock names the fleet's clock a `clock_skew` measure stands against:
+// the median of the data nodes' clocks the position register holds a recent
+// row of, which with one node is that node's own.
+func fleetClock(nodes int) string {
+	if nodes <= 1 {
+		return "the fleet's clock (this node's own: the register holds no other data " +
+			"node's recent row)"
+	}
+	return fmt.Sprintf("the fleet's clock (the median of %d data nodes')", nodes)
 }
 
 // bytesHuman is a size in the units an operator's disk is sold in.

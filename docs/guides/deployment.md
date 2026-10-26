@@ -98,10 +98,12 @@ running — and a running check's outcome is read with
 `GET /code/repos/{name}/verify/{id}` until it ends
 ([API reference](../reference/api-endpoints.md#post-codereposnameverify)).
 
+### Every machine's clock
+
 **Keep every machine's clock synchronised** — every node's, and every server's
 of an external NATS cluster. Two of the engine's deletions judge an instant
 one machine stamped by another machine's clock, and both assume every
-machine's clock keeps within an hour of its broker's. The
+machine's clock keeps within an hour of the fleet's. The
 [object collector](../concepts/object-store.md#collection-and-audit) deletes an
 object no row names only once its key, minted by the node that uploaded it,
 and the store's own record of when it was written are both more than a day old
@@ -116,15 +118,27 @@ other by more than that deletes an object a write or a read still needs. NTP
 keeps machines within milliseconds of each other; a host without it drifts,
 and a virtual machine restored from a snapshot can come back hours off.
 
-Every data node measures its own clock against its broker's on its position
-heartbeat, every ten seconds: the instant it stamps on its row in the
-coordination store against the instant the broker stores the row at. Past an
-hour it raises [`clock_skew`](../reference/alarms.md), so while no node raises
-it any two data nodes — every member of an embedded broker among them — agree
-to within two hours, inside both margins. The alarm names a clock that has
-already drifted rather than keeping one from drifting, and it cannot see the
-servers of an external NATS cluster disagree among themselves, so run an NTP
-client (chrony, systemd-timesyncd) everywhere the engine or its broker runs.
+Every data node reads the fleet's clocks on its position heartbeat, every ten
+seconds, off the position register in the coordination store, which it reads
+on that beat anyway. Each data node's row there carries the instant the node
+stamped on it and the instant the broker stored it at, so each row says how
+far that node's clock stands from the one broker member leading the register,
+which stores every row, and the median of them is the **fleet's clock**: the
+median of every data node's. A node whose own clock stands more than an hour
+from the fleet's raises [`clock_skew`](../reference/alarms.md) about itself,
+and every node raises it about the broker member once that member's clock does
+— on an embedded broker one of the data nodes, which then raises it about its
+own clock too; on an external NATS cluster the server leading the register's
+stream. So while no node raises it, every data node and that member keep
+within an hour of the fleet's clock, and any two of them — every member of an
+embedded broker among them — within two hours of each other, inside both
+margins. With two data nodes neither clock outvotes the other, so both are
+named once they stand more than two hours apart. The alarm names a clock that
+has already drifted rather than keeping one from drifting, and it cannot see
+the other servers of an external NATS cluster disagree with the one it reads,
+so run an NTP client (chrony, systemd-timesyncd) everywhere the engine or its
+broker runs. [Watching a fleet](fleet.md#watching-a-fleet) says how to read the
+alarm across the nodes.
 
 ### The room the stream's volume needs
 

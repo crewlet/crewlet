@@ -1014,10 +1014,13 @@ An object the collector deletes is past the twelve hours by a margin of twelve
 more, so no write that could still land can name it. The rule holds as long as
 the clocks of the node deciding a write and the node running the collector
 disagree by less than that margin, and the engine watches that they do: every
-data node raises [`clock_skew`](../reference/alarms.md) once its clock stands
-more than an hour from its broker's, so while none does, two of them disagree
-by two hours at most (see [Deployment](../guides/deployment.md) for keeping
-them in time). There is no lock, no second look and no
+data node reads the fleet's clock — the median of the data nodes' clocks — off
+the coordination store's position register, and raises
+[`clock_skew`](../reference/alarms.md) once its own clock, or the clock of the
+broker member leading the register, stands more than an hour from it, so while
+none does, two of them disagree by two hours at most (see
+[Every machine's clock](../guides/deployment.md#every-machines-clock) for
+keeping them in time). There is no lock, no second look and no
 coordination round trip, and two collectors running at once are safe —
 deleting an object that is already gone is not an error. An artifact's
 [carried files](#an-unchanged-file-is-carried-never-copied) keep the rule: a
@@ -1033,7 +1036,7 @@ carry is applied. The decision is
 |---|---|
 | `objects_bucket_near_ceiling` | the fleet's NATS bucket holds more than four fifths of its byte reservation, as the node holding the collector's duty last read it: once it is full every upload is refused. Raise the reservation, or move the files to a bucket |
 | `objects_missing` | the collector's last audit to run to its end found files whose object the store does not hold, holds at the wrong size, under the wrong digest or as nothing it can read, or would not answer for twice while it answered for the rest — on the node holding the collector's duty, since one node's audit of a shared store is the fleet's |
-| `clock_skew` | a node's clock stands more than an hour from its broker's, as its position heartbeat measured it — on that node. The collector's grace and a retired pack's both rest on every node keeping within that hour ([Why a deletion needs no lock](#why-a-deletion-needs-no-lock)) |
+| `clock_skew` | a clock stands more than an hour from the fleet's — the median of the data nodes' clocks, as each node's position heartbeat reads them off the position register: on the node whose own clock moved, naming it, and on every node when the clock of the broker member leading the register did. The collector's grace and a retired pack's both rest on every clock keeping within that hour ([Why a deletion needs no lock](#why-a-deletion-needs-no-lock)) |
 
 A missing or damaged object is a store that lost or changed bytes it
 acknowledged, and an unanswered one a store that will not serve them: check
