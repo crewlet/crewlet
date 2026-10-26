@@ -1198,8 +1198,12 @@ const (
 	// activity and telling the assistant of a brand draft in progress took it
 	// to 4504.1 KiB: the menu's checked answers and the summary's member in
 	// the panel's chunk, and the Brand page's read-only draft and its help in
-	// that page's. 4505 KiB, which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 409<<10
+	// that page's. 4505 KiB, which still refuses a doubled baseline. Drawing
+	// a brand draft in its own cards with one next step, who last changed it
+	// and a confirmed discard took it to 4505.8 KiB, in the Brand page's
+	// chunk, less the kit view's copy of the cards, which now shares the
+	// page's board. 4506 KiB, which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 410<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
