@@ -137,9 +137,10 @@ type Leader struct {
 	// was one request ([jsprovision.ReadBoundedWith]).
 	timeout time.Duration
 	// paged is how long the last subjects page this reader asked took to
-	// be answered, which the next page's term is given beside the read
-	// term ([Leader.Subjects]) — shared by every copy [Leader.Carrying]
-	// makes, since they ask the one leader.
+	// be answered — or, raised by a page nobody answered, at least how
+	// long that one was asked for ([Leader.outlasted]) — which the next
+	// page's term is given beside the read term ([Leader.Subjects]); shared
+	// by every copy [Leader.Carrying] makes, since they ask the one leader.
 	paged *atomic.Int64
 }
 

@@ -56,17 +56,26 @@ import (
 // Measured on one solo member's file store (BenchmarkASubjectListing), a page
 // came back in 0.11 seconds at a hundred thousand subjects, about 0.29 at
 // three hundred thousand and 1.1 to 1.35 at a million — a whole listing 0.11,
-// 1.15 (four pages) and 12.1 seconds (eleven). So a page is given the read term beside what the
-// last page this reader asked took — the same work, asked of the same leader
-// a moment later — and a reader's first page ever the read term alone, the
-// one figure nothing has measured: a listing of millions of subjects asks its
-// first page again once for every two seconds the page takes, and never a
-// page after it. A consumers page is gathered by a scatter to every
-// consumer's own leader, which the metadata leader waits up to four seconds
-// for ([consumerListWait]), so its term is that wait beside the read term —
-// five seconds, the client's whole bound, so a page whose caller set no
-// deadline is asked once inside it, as the client asked it, and only a caller
-// that waits longer has it asked again. A stream names page is a sort of the
+// 1.15 (four pages) and 12.1 seconds (eleven). So a page is given the read
+// term beside what the last page this reader asked took — the same work,
+// asked of the same leader a moment later, measured as the round trip of the
+// request that was answered — and a reader's first page ever the read term
+// alone, the one figure nothing has measured: a listing of millions of
+// subjects asks its first page again once for every two seconds the page
+// takes, and never a page after it. A page NOBODY ANSWERED is measured too,
+// as at least as long as it was asked for, and only an answered page lowers
+// the figure again: a page that outgrows its bound is asked again inside it
+// only the first time, and every listing after it asks it once — where,
+// learnt from the answered pages alone, each began from the read term and
+// asked it at none, two and four seconds, three sorts of every subject on the
+// leader, for a page that could not be answered in time anyway.
+//
+// A consumers page is gathered by a scatter to every consumer's own leader,
+// which the metadata leader waits up to four seconds for
+// ([consumerListWait]), so its term is that wait beside the read term — five
+// seconds, the client's whole bound, so a page whose caller set no deadline
+// is asked once inside it, as the client asked it, and only a caller that
+// waits longer has it asked again. A stream names page is a sort of the
 // names, the read term's.
 //
 // # Every entry there throughout is listed, and none twice
@@ -119,32 +128,51 @@ const consumerListWait = 4 * time.Second
 func ask(ctx context.Context, conn *nats.Conn, subject string, req []byte,
 	term, bound time.Duration) (*nats.Msg, error) {
 
+	reply, _, err := askTimed(ctx, conn, subject, req, term, bound)
+	return reply, err
+}
+
+// askTimed is [ask], and how long the request whose reply it answers took to
+// be answered: that request's own round trip, never the time the requests
+// before it were asked for — a page whose first request a member dropped and
+// whose second was answered at once is a page the leader answers at once.
+func askTimed(ctx context.Context, conn *nats.Conn, subject string, req []byte,
+	term, bound time.Duration) (*nats.Msg, time.Duration, error) {
+
+	type answer struct {
+		reply *nats.Msg
+		took  time.Duration
+	}
 	timing := jsprovision.Clustered(false).Timing()
 	timing.ReadTerm = term
-	return jsprovision.ReadBoundedWith(ctx, timing, bound, func(ctx context.Context) (*nats.Msg, error) {
-		return conn.RequestWithContext(ctx, subject, req)
+	a, err := jsprovision.ReadBoundedWith(ctx, timing, bound, func(ctx context.Context) (answer, error) {
+		start := time.Now()
+		reply, err := conn.RequestWithContext(ctx, subject, req)
+		return answer{reply: reply, took: time.Since(start)}, err
 	}, nil)
+	return a.reply, a.took, err
 }
 
 // page asks one page of a paged listing and decodes its answer into resp,
-// reporting how long the page took to be answered.
+// reporting whether anybody answered it and how long it took: the round trip
+// of the request that was answered, or — where none was — how long the page
+// was asked for.
 func page(ctx context.Context, conn *nats.Conn, subject string, req any, term, bound time.Duration,
-	resp any) (time.Duration, error) {
+	resp any) (took time.Duration, heard bool, err error) {
 
 	body, err := json.Marshal(req)
 	if err != nil {
-		return 0, fmt.Errorf("jsapi: encode the page request: %w", err)
+		return 0, false, fmt.Errorf("jsapi: encode the page request: %w", err)
 	}
 	start := time.Now()
-	reply, err := ask(ctx, conn, subject, body, term, bound)
-	took := time.Since(start)
+	reply, took, err := askTimed(ctx, conn, subject, body, term, bound)
 	if err != nil {
-		return took, err
+		return time.Since(start), false, err
 	}
 	if err := json.Unmarshal(reply.Data, resp); err != nil {
-		return took, fmt.Errorf("jsapi: decode the page: %w", err)
+		return took, true, fmt.Errorf("jsapi: decode the page: %w", err)
 	}
-	return took, nil
+	return took, true, nil
 }
 
 // sorted walks a listing its leader cuts into pages out of one list it sorts
@@ -226,6 +254,20 @@ func bounds[T any](entries map[string]T) (least, greatest string) {
 	return least, greatest
 }
 
+// outlasted records that one of l's subjects pages went unanswered for took:
+// a page takes at least that long, so the term the next page is given beside
+// the read term rises to it — and never falls for it, since a page that went
+// unanswered for less than the last one took says nothing that one did not.
+// Only an answered page lowers it ([Leader.Subjects]).
+func (l *Leader) outlasted(took time.Duration) {
+	for {
+		was := l.paged.Load()
+		if int64(took) <= was || l.paged.CompareAndSwap(was, int64(took)) {
+			return
+		}
+	}
+}
+
 // Subjects calls visit with the subjects under filter that the stream's
 // LEADER holds a message on, each with how many it holds there, a page at a
 // time, until the last page or until visit returns an error, which Subjects
@@ -236,9 +278,23 @@ func (l *Leader) Subjects(ctx context.Context, filter string, visit func(map[str
 	term := jsprovision.ReadTerm + time.Duration(l.paged.Load())
 	return sorted(func(offset int) (map[string]uint64, int, error) {
 		var resp server.JSApiStreamInfoResponse
-		took, err := page(ctx, l.conn, l.info,
+		took, heard, err := page(ctx, l.conn, l.info,
 			server.JSApiStreamInfoRequest{ApiPagedRequest: server.ApiPagedRequest{Offset: offset},
 				SubjectsFilter: filter}, term, l.timeout, &resp)
+		if !heard && !errors.Is(err, nats.ErrNoResponders) {
+			// A PAGE NOBODY ANSWERED IS A MEASUREMENT TOO: whatever kept
+			// it — a sort longer than its bound, or a member that dropped
+			// it — it was not answered in took, so the next listing's
+			// first page is given at least that ([Leader.outlasted]).
+			// Kept only from the answered pages, a page that outgrew its
+			// bound left every listing after it starting from the read
+			// term alone, asking the page that cannot be answered in
+			// time at none, two and four seconds — three sorts of every
+			// subject in flight on the leader where one was enough —
+			// for as long as the stream stayed that size. "No
+			// responders" reached no leader at all, and says nothing.
+			l.outlasted(took)
+		}
 		if err != nil {
 			return nil, 0, fmt.Errorf("jsapi: list %s's subjects under %q from its leader: %w",
 				l.stream, filter, err)
@@ -294,7 +350,7 @@ func NewMeta(js jetstream.JetStream) (*Meta, error) {
 func (m *Meta) StreamNames(ctx context.Context, visit func(name string) error) error {
 	return sorted(func(offset int) (map[string]struct{}, int, error) {
 		var resp server.JSApiStreamNamesResponse
-		if _, err := page(ctx, m.conn, m.names,
+		if _, _, err := page(ctx, m.conn, m.names,
 			server.JSApiStreamNamesRequest{ApiPagedRequest: server.ApiPagedRequest{Offset: offset}},
 			jsprovision.ReadTerm, m.timeout, &resp); err != nil {
 			return nil, 0, fmt.Errorf("jsapi: list the streams from the metadata leader: %w", err)
@@ -366,7 +422,7 @@ func (m *Meta) Consumers(ctx context.Context, stream string, visit func(Consumer
 	}
 	return sorted(func(offset int) (map[string]entry, int, error) {
 		var resp consumerList
-		if _, err := page(ctx, m.conn, subject,
+		if _, _, err := page(ctx, m.conn, subject,
 			server.JSApiConsumersRequest{ApiPagedRequest: server.ApiPagedRequest{Offset: offset}},
 			jsprovision.ReadTerm+consumerListWait, m.timeout, &resp); err != nil {
 			return nil, 0, fmt.Errorf("jsapi: list %s's consumers from the metadata leader: %w",

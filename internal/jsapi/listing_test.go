@@ -15,6 +15,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/jsapi"
+	"github.com/crewlet/crewlet/internal/jsapi/jsapitest"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 )
 
@@ -245,6 +246,111 @@ func TestALaterPageIsGivenWhatThePageBeforeItTook(t *testing.T) {
 		t.Errorf("first pages were asked %d times and second pages %d, want 3 and 2: "+
 			"every page but the reader's first is the same work as the one before, "+
 			"which took %v, and was asked again before that", firsts, later, slow)
+	}
+}
+
+// A PAGE NOBODY ANSWERED STILL SAYS HOW LONG A PAGE TAKES — and a page that
+// is answered says it again.
+//
+// A reader learns a page's term from what the page before it took, and a page
+// that ran out its bound unanswered was the one measurement it did not keep:
+// every listing after it began from the read term alone and asked its first
+// page at none, two and four seconds — for a stream whose pages outgrow the
+// client's five seconds, three sorts of every subject in flight on the leader
+// for every listing, each of which failed anyway. Kept, as at least as long
+// as the page was asked for, the next listing's first page is given that
+// beside the read term and asked once. And an answered page sets the figure
+// back to what it took, so one long silence does not make every later listing
+// wait it out. The client here is given a default of 3.9 seconds, so a page
+// at the read term alone is asked at none and two seconds, twice, inside it.
+func TestASubjectPageNobodyAnsweredTeachesTheNextListingItsTerm(t *testing.T) {
+	t.Parallel()
+	const bound = 3900 * time.Millisecond
+	srv, js := leaderServerFor(t, jetstream.WithDefaultTimeout(bound))
+	leader, err := jsapi.NewLeader(js, "LOG")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// list lists LOG's subjects for a caller that set no deadline, as the
+	// object collector's sweep is.
+	list := func() error {
+		return leader.Subjects(context.Background(), "log.>", func(map[string]uint64) error { return nil })
+	}
+	silent := func(listing string, err error) {
+		t.Helper()
+		if !jsprovision.Unanswered(context.Background(), err) {
+			t.Fatalf("%s, which nobody answered, ended with %v rather than as silence", listing, err)
+		}
+	}
+
+	held := jsapitest.Hold(t, srv, jsapitest.StreamInfo("LOG"))
+	silent("the first listing", list())
+	if n := held.Count(); n != 2 {
+		t.Fatalf("the first listing's page was asked %d times inside its client's %v, want 2: "+
+			"at none and two seconds, the read term alone", n, bound)
+	}
+	silent("the second listing", list())
+	if n := held.Count() - 2; n != 1 {
+		t.Errorf("the second listing's page was asked %d times inside its client's %v, want 1: "+
+			"the page before it went unanswered for that whole bound, so it is given that "+
+			"beside the read term", n, bound)
+	}
+
+	held.Release()
+	if err := list(); err != nil {
+		t.Fatalf("a listing the leader answers: %v", err)
+	}
+	again := jsapitest.Hold(t, srv, jsapitest.StreamInfo("LOG"))
+	silent("the listing after an answered one", list())
+	if n := again.Count(); n != 2 {
+		t.Errorf("after a page the leader answered at once, the next listing's page was asked "+
+			"%d times inside its client's %v, want 2: an answered page sets the term back to "+
+			"what it took", n, bound)
+	}
+}
+
+// A PAGE ANSWERED AFTER A DROPPED REQUEST TOOK WHAT ITS OWN REQUEST TOOK.
+//
+// The term a reader gives its next page is what the page before it took, and
+// that is the round trip of the request the leader answered: a page whose
+// first request a member dropped across an election, and whose second was
+// answered at once, is a page the leader answers at once. Timed from the
+// first request, it read as two seconds and more, and the page after it — a
+// page asked of a leader that answers in milliseconds — was not asked again
+// for three.
+func TestAPageAnsweredAfterADroppedRequestTookWhatItsOwnRequestTook(t *testing.T) {
+	t.Parallel()
+	list := []string{"log.a", "log.b", "log.c", "log.d"}
+	subject := fmt.Sprintf(server.JSApiStreamInfoT, "LOG")
+	f := fakeBroker(t, subject, func(n int, req []byte) any {
+		switch n {
+		case 1:
+			// The first page's first request, dropped across an election.
+			return nil
+		case 3:
+			// The second page's first request, dropped as well: asked
+			// again a term and a re-ask later if the term is the read
+			// term's, as the first page's answer says it should be.
+			return nil
+		}
+		return subjectsPage(list, offsetOf(req), 3)
+	})
+	leader, err := jsapi.NewLeader(f.js, "LOG")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Room for two dropped requests, each a term and a re-ask, and the
+	// answers — and not for a second page held back for a term of three
+	// seconds.
+	ctx, cancel := context.WithTimeout(t.Context(), 2*(jsprovision.ReadTerm+jsprovision.ReAsk)+
+		jsprovision.ReadTerm/2)
+	defer cancel()
+	got, err := listWith(ctx, leader)
+	if err != nil {
+		t.Fatalf("a listing whose pages each lost their first request: %v", err)
+	}
+	if !slices.Equal(got, list) {
+		t.Errorf("listed %v, want %v", got, list)
 	}
 }
 
