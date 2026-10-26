@@ -1,5 +1,6 @@
 // Package httpx is the one HTTP transport every outbound client in this
-// engine shares.
+// engine shares, and the one rule for which addresses a dial to a host
+// somebody else named may reach.
 //
 // It exists because leaving http.Client.Transport nil is not "the default
 // settings" — it is http.DefaultTransport, whose MaxIdleConnsPerHost is 2,
@@ -43,6 +44,15 @@
 // processpool_guard_test.go is what keeps all three halves true: written down
 // and checked by nobody, this rule had four prose copies and seven packages
 // violating it.
+//
+// THE PUBLIC-ADDRESS RULE ([Public]) is here for the same ADR-0008 reason. A
+// dial to a host the engine did not choose (a CDN URL a page wrote) must never
+// reach the network the engine runs in, and which addresses are on the public
+// internet is one list of ranges: kept by each dialer that refuses an address,
+// the copies would drift and nothing would compare them. Only the rule is
+// here. Each dialer stays with its caller, since what it trusts beside the
+// rule is the caller's to say: the CDN fetch's dialer dials an operator's
+// proxy as itself.
 package httpx
 
 import (
