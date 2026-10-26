@@ -1396,9 +1396,9 @@ func (w *Workspace) carryChanged(
 		// A LOGIN CARRIED OUT AFTER ITS COMMAND ENDED, which an operator's
 		// own later write of the login of record outranks: see
 		// [generation.After].
-		epoch, err := w.loginEpoch()
-		if err != nil {
-			return holds, nil, err
+		epoch, epochErr := w.loginEpoch()
+		if epochErr != nil {
+			return holds, nil, epochErr
 		}
 		if epoch != *gen.After {
 			for _, name := range slices.Sorted(maps.Keys(changed)) {
