@@ -505,6 +505,47 @@ describe("an id pasted out of a log", () => {
   });
 });
 
+test("a term typed fast keeps every keystroke, and the searches ask its last spelling", async () => {
+  const p = mount({
+    answers: {
+      work_search: async () => ({ ...OUTCOME, hits: [HIT], available: true }),
+      knowledge: async () => ({ ...OUTCOME, hits: [], available: true }),
+      colleague: async () => ({ match: null, candidates: [] }),
+    },
+  });
+  const input = p.input as HTMLInputElement;
+  // KEYSTROKES AS A BROWSER DELIVERS THEM WHEN THEY QUEUE UP: one native
+  // input event after another, each flushed by React on its own, outside
+  // `act`. A search asked with the term as typed set state from its effect
+  // after every keystroke, and React counted those towards its nested-update
+  // limit until it threw a keystroke away (error #185). `act` drains every
+  // update between keystrokes and would hide that.
+  const environment = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean | undefined };
+  const wasActEnvironment = environment.IS_REACT_ACT_ENVIRONMENT;
+  const errors: unknown[] = [];
+  const onError = (event: ErrorEvent) => errors.push(event.error ?? event.message);
+  const logged = vi.spyOn(console, "error").mockImplementation((...args) => errors.push(args));
+  const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+  const typed = "cluster join under packet loss and the flaky sign in test ".repeat(4).trim();
+  window.addEventListener("error", onError);
+  environment.IS_REACT_ACT_ENVIRONMENT = false;
+  try {
+    for (const key of typed) {
+      setValue.call(input, input.value + key);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  } finally {
+    environment.IS_REACT_ACT_ENVIRONMENT = wasActEnvironment;
+    window.removeEventListener("error", onError);
+    logged.mockRestore();
+  }
+  await act(async () => {});
+
+  expect(errors).toEqual([]);
+  expect(input.value).toBe(typed);
+  expect(asked.filter((a) => a.kind === "work_search").at(-1)?.params).toMatchObject({ q: typed });
+});
+
 describe("the task search has four answers, kept apart", () => {
   const answering = (reply: (q: string) => Promise<unknown>): Answers => ({
     work_search: (params) => reply(String(params.q)),

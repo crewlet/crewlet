@@ -59,7 +59,14 @@
  * on the asker's behalf, and said so.
  */
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useDeferredValue,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import {
   ArtifactKindGlyph,
   CommandPalette as KitPalette,
@@ -284,6 +291,16 @@ export function CommandPalette({
   const lower = term.toLowerCase();
   const picking = pick !== null;
   const pickTerm = pickQuery.trim();
+  // THE ENGINE'S QUESTIONS READ THE TERM DEFERRED. Asked with the term as
+  // typed, every keystroke changed each search's parameters, so the render a
+  // keystroke commits ran each search's effect, and each set its state
+  // again. Under keystrokes arriving back to back, React counted those
+  // updates towards its nested-update limit and threw a keystroke away
+  // (error #185). Deferred, a keystroke's own render leaves every search as
+  // it was; React asks again in a render of its own, which the next keystroke
+  // interrupts rather than piles onto. What is drawn from the chart and the
+  // screens still reads the term as typed.
+  const searchTerm = useDeferredValue(term);
 
   // ---- the three questions ---------------------------------------------
   // A TERM PAST THE ENGINE'S SEARCH BOUND ASKS NEITHER SEARCH NOR THE ANSWER,
@@ -293,16 +310,17 @@ export function CommandPalette({
     (scope === "all" || scope === "tasks" || scope === "pages" || scope === "artifacts") &&
     !picking;
   const tooLong = searchable ? searchTooLong(term) : null;
+  const askable = searchable && searchTooLong(searchTerm) === null;
   const wantsTasks =
     served &&
     runs.tracker &&
     !picking &&
     (scope === "all" || scope === "tasks") &&
-    term.length >= SEARCH_MIN &&
-    tooLong === null;
+    searchTerm.length >= SEARCH_MIN &&
+    askable;
   const tasks = useSearchQuery(
     "work_search",
-    { q: term, mode: "hybrid", limit: TASK_HITS },
+    { q: searchTerm, mode: "hybrid", limit: TASK_HITS },
     { enabled: wantsTasks },
   );
   const wantsPages =
@@ -310,20 +328,20 @@ export function CommandPalette({
     runs.knowledge &&
     !picking &&
     (scope === "all" || scope === "pages") &&
-    term.length >= SEARCH_MIN &&
-    tooLong === null;
-  const pages = useSearchQuery("knowledge", { q: term }, { enabled: wantsPages });
+    searchTerm.length >= SEARCH_MIN &&
+    askable;
+  const pages = useSearchQuery("knowledge", { q: searchTerm }, { enabled: wantsPages });
   // ARTIFACTS IN THEIR OWN SCOPE ONLY, so All still asks three questions. The
   // listing is open to every signed-in reader and the engine decides each row.
   const wantsArtifacts =
-    served && !picking && scope === "artifacts" && term.length >= SEARCH_MIN && tooLong === null;
+    served && !picking && scope === "artifacts" && searchTerm.length >= SEARCH_MIN && askable;
   const artifacts = useQuery(
     "artifacts",
-    { scope: "all", q: term, sort: "updated", "max-keys": ARTIFACT_HITS },
+    { scope: "all", q: searchTerm, sort: "updated", "max-keys": ARTIFACT_HITS },
     { enabled: wantsArtifacts },
   );
   const pickingAgent = pick?.kind === "assign" || pick?.kind === "ask";
-  const nameTerm = picking ? pickTerm : term;
+  const nameTerm = useDeferredValue(picking ? pickTerm : term);
   const wantsNames =
     served &&
     (pickingAgent || (!picking && (scope === "all" || scope === "agents"))) &&
@@ -355,9 +373,9 @@ export function CommandPalette({
   // nothing saying a search was in flight. The answer carries no echo of its
   // question, so the term is remembered against the answer's own identity:
   // a new object is this term's answer arriving, and nothing else.
-  const taskAnswer = useSettled(tasks, term, wantsTasks);
-  const pageAnswer = useSettled(pages, term, wantsPages);
-  const artifactAnswer = useSettled(artifacts, term, wantsArtifacts);
+  const taskAnswer = useSettled(tasks, searchTerm, wantsTasks);
+  const pageAnswer = useSettled(pages, searchTerm, wantsPages);
+  const artifactAnswer = useSettled(artifacts, searchTerm, wantsArtifacts);
   const nameAnswer = useSettled(names, nameTerm, wantsNames);
 
   // ---- the answer --------------------------------------------------------
@@ -418,20 +436,34 @@ export function CommandPalette({
   const openPick = (next: Pick) => {
     setSuggestedForPick(suggested);
     setPick(next);
-    setPickQuery("");
+    editPickQuery("");
   };
   /** The project step, for a filing that has everything but where. */
   const openProjectPick = (filing: Filing, suggestion: ProjectSuggestion) => {
     setPick({ kind: "project", filing, suggested: suggestion });
-    setPickQuery("");
+    editPickQuery("");
   };
   const leavePick = () => {
     setPick(null);
     setSuggestedForPick(null);
   };
 
-  // A fresh keystroke clears what the last press said.
-  useEffect(() => setNotice(null), [query, pickQuery, scope]);
+  // A FRESH KEYSTROKE CLEARS WHAT THE LAST PRESS SAID, in the same event
+  // that changes the term, the picker's term or the scope. An effect keyed on
+  // them set state once more after every keystroke, which is the cascade the
+  // deferred term above exists to prevent.
+  const editQuery = (next: string) => {
+    setNotice(null);
+    setQuery(next);
+  };
+  const editPickQuery = (next: string) => {
+    setNotice(null);
+    setPickQuery(next);
+  };
+  const editScope = (next: ScopeId) => {
+    setNotice(null);
+    setScope(next);
+  };
 
   // PAIRED BY THE SEAT'S OWN ROW, never by its name: two seats may share a
   // name, and a seat's ring read off its namesake's row is a state it is not in.
@@ -1028,7 +1060,7 @@ export function CommandPalette({
             label: `Find “${term}” in artifacts →`,
             hint: KIND_LIST,
             onSelect: () => {
-              setScope("artifacts");
+              editScope("artifacts");
               return false;
             },
           },
@@ -1223,7 +1255,7 @@ export function CommandPalette({
       return;
     }
     if (picking) {
-      setPickQuery(value);
+      editPickQuery(value);
       return;
     }
     // A SIGIL AT THE START SELECTS ITS TAB and leaves the box — so the tab
@@ -1231,11 +1263,11 @@ export function CommandPalette({
     // they are.
     const { scope: opened, rest } = readSigil(value);
     if (opened) {
-      setScope(opened);
-      setQuery(rest);
+      editScope(opened);
+      editQuery(rest);
       return;
     }
-    setQuery(value);
+    editQuery(value);
   };
 
   const mode = modeWord(taskAnswer.data, pageAnswer.data);
@@ -1251,7 +1283,7 @@ export function CommandPalette({
             label: s.label,
           })),
           scope,
-          onScopeChange: (next: string) => setScope(next as ScopeId),
+          onScopeChange: (next: string) => editScope(next as ScopeId),
           groupsScope: scope,
           scopesLabel: "Search in",
         };
