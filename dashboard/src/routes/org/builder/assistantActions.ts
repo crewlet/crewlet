@@ -320,7 +320,7 @@ export function orgDraftSpec(args: {
       { path: "seats", label: "Seats", read: (s) => count(allSeats(s.draft)) },
       { path: "selected", label: "Selected", read: () => selected ?? "Nothing" },
     ],
-    // NOTHING HERE IS SET (see above), so nothing is ever applied.
-    apply: () => {},
+    // NOTHING HERE IS SET (see above): no apply, so the page takes no
+    // draft.set at all.
   };
 }

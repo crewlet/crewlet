@@ -64,6 +64,8 @@ import { href, useLeaveGuard, useNavigator } from "~/app/router.tsx";
 import { useAssistantDraft } from "~/app/assistant/draft.ts";
 import {
   BRAND_ASSISTANT_HELP,
+  BRAND_CONTINUE_DRAFT_LABEL,
+  BRAND_STANDING_DRAFT_HELP,
   applyBrandDraft,
   brandDraftFields,
   type BrandDraft,
@@ -129,6 +131,15 @@ interface Editing {
   edit: BrandEdit;
 }
 
+/**
+ * Whether the reader may continue a standing draft's setup: an administrator,
+ * or with none adopted the editor whose kit it is (the company kit is found
+ * among the kits they may write).
+ */
+function mayContinueDraft(canAdopt: boolean, adoption: Adoption | null): boolean {
+  return canAdopt || adoption === null;
+}
+
 /** Whether an edit changes anything from the adopted brand. */
 function changed(editing: Editing | null, adoption: Adoption | null | undefined): boolean {
   if (!editing || !adoption) return false;
@@ -167,6 +178,11 @@ export function BrandPage() {
   const dirty = changed(editing, adoption);
   // WHAT IS OPEN, for the assistant: the card in edit, its fields set through
   // the same edit its controls write; Save and its adoption stay the person's.
+  // With no card in edit, a DRAFT A SETUP LEFT that the notice offers to
+  // continue: read-only, as the saved draft it is, its help naming the setup
+  // where it is changed. A page that declared nothing here told the assistant
+  // only "Company › Brand", and it answered that no draft existed.
+  const standing = draft?.read.document;
   useAssistantDraft<BrandDraft>(
     editing && adoption
       ? {
@@ -187,7 +203,17 @@ export function BrandPage() {
             ),
           blocked: () => (confirming ? "The change is being saved." : null),
         }
-      : null,
+      : draft && standing && adoption !== undefined && mayContinueDraft(canAdopt, adoption)
+        ? {
+            kind: "server",
+            id: draft.kit,
+            revision: draft.version,
+            help: BRAND_STANDING_DRAFT_HELP,
+            scope: "The brand draft in progress (saved, not adopted)",
+            value: { document: standing, files: new Map() },
+            fields: brandDraftFields(new Set()),
+          }
+        : null,
   );
   useLeaveGuard(
     dirty
@@ -438,10 +464,9 @@ function DraftNotice({
     : doc
       ? `A draft of the ${doc.name.trim() || "company"} brand is in progress.`
       : "A draft of the company's brand is in progress.";
-  // CONTINUING IS AN ADMINISTRATOR'S, or, with none adopted, the editor's
-  // whose draft this is (the company kit is found among the kits they may
-  // write); REVIEWING is held from a draft the engine would refuse.
-  const mayContinue = canAdopt || adoption === null;
+  // CONTINUING IS [mayContinueDraft]'s; REVIEWING is held from a draft the
+  // engine would refuse.
+  const mayContinue = mayContinueDraft(canAdopt, adoption);
   const mayReview = canAdopt && readiness === undefined;
   return (
     <Callout
@@ -452,7 +477,7 @@ function DraftNotice({
           <>
             {mayContinue ? (
               <ButtonLink href={href(BRAND_SETUP)} size="small" variant="secondary">
-                Continue setting up
+                {BRAND_CONTINUE_DRAFT_LABEL}
               </ButtonLink>
             ) : null}
             {mayReview ? (
