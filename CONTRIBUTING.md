@@ -692,6 +692,8 @@ and the examples launch are not in a manifest, and a test holds them instead
 | `dashboard/package.json` | `npm` | the dashboard's build and runtime dependencies |
 | `Dockerfile` | `docker` | the base image a release ships |
 | `docker-compose.yml` | `docker-compose` | the images the local dev stack runs |
+| `images/coding/Dockerfile` | `docker` | the container sandbox's reference image: its two base images |
+| `images/coding/package.json` | `npm` | the coding CLIs that image installs |
 
 Dependabot keeps a version moving once it is in the tree; **choosing one in
 the first place goes the same direction — take the newest release, and pin it
@@ -707,7 +709,7 @@ fetches, which runs its newest release (see below).
 The configuration is [`.github/dependabot.yml`](.github/dependabot.yml): one
 entry per surface on a weekly schedule, plus the commit prefix that surface's
 bumps carry, plus three grouping rules on the npm entry. CI runs on each pull
-request, and — as below — CI is what decides whether it lands. Nine things are
+request, and — as below — CI is what decides whether it lands. Ten things are
 worth knowing:
 
 - **The React family is grouped.** `react`, `react-dom`, `@types/react` and
@@ -792,6 +794,21 @@ worth knowing:
   is held because `.goreleaser.yaml` is a `version: 2` config: moving to a
   v3 is a migration of that file, made by hand in the same change, and
   rehearsed with `make snapshot`.
+
+- **The reference box image holds its lines and its CLIs.** Its `docker`
+  entry ignores Python 3.12 and later and Node.js 23 and later, because the
+  image exists to give a box Python 3.11 and the Node.js LTS line Expo SDK 54
+  builds on, and a new line is a decision made in the Dockerfile. A bump of a
+  coding CLI in `images/coding/package.json` fails `ci` until it is measured:
+  `TestTheCodingImagePinsOnlyMeasuredBuilds` holds each pin to a build its
+  profile's `written_for` names, so the bump lands with the profile updated by
+  somebody who ran the new build. `gh` is pinned by version and SHA-256 in the
+  Dockerfile, which no ecosystem reads; move it by hand from the release's
+  checksums file. The image itself is built by `coding image`
+  (`.github/workflows/coding-image.yml`), which no ruleset requires, so a
+  base-image bump auto-merges on `ci` alone. One that does not build turns
+  that workflow red on `main`, where publishing needs the build, so
+  `ghcr.io/crewlet/crewlet-coding:main` keeps the last image that built.
 
 Adding a new dependency surface — a second `package.json`, a second module — means
 adding its `updates:` entry in the same change. Nothing reports the omission:

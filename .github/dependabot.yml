@@ -5,6 +5,8 @@
 #   dashboard/package.json    the dashboard's build and runtime dependencies
 #   Dockerfile                the base image a release ships
 #   docker-compose.yml        the images the local dev stack runs
+#   images/coding/            the container sandbox's reference image: its
+#                             two base images and its coding CLIs
 #
 # A new surface needs its entry here in the same change. Nothing reports the
 # omission: a manifest with no entry never produces a pull request, which
@@ -194,6 +196,42 @@ updates:
 
   - package-ecosystem: docker-compose
     directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build(deps)"
+
+  # THE CONTAINER SANDBOX'S REFERENCE IMAGE (images/coding), its own surface
+  # twice over: its Dockerfile's two base images and its package.json, which
+  # pins the coding CLIs the image installs. Neither is the release image's,
+  # and neither entry above reads this directory.
+  #
+  # THE LINES ARE HELD, not just the versions. The image exists to give a box
+  # Python 3.11 and the Node.js LTS line Expo SDK 54 builds on, and Dependabot
+  # moves a Docker tag to the highest version that keeps its suffix: unheld,
+  # it would offer python 3.14 and node 26 as ordinary bumps. A move to a
+  # new line is a decision about what boxes build with, made by a person who
+  # edits the Dockerfile.
+  #
+  # A CLI BUMP STAYS RED UNTIL IT IS MEASURED. The engine's runners are
+  # written against particular builds of each CLI, and
+  # internal/providers/llm/cliagent/cliprofile's TestTheCodingImagePinsOnlyMeasuredBuilds
+  # fails `ci` on a pin the profile's `written_for` does not name, so the
+  # bump waits for somebody to measure the build and name it there.
+  - package-ecosystem: docker
+    directory: "/images/coding"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build(deps)"
+    ignore:
+      - dependency-name: "python"
+        versions: [">= 3.12"]
+      - dependency-name: "node"
+        versions: [">= 23"]
+
+  - package-ecosystem: npm
+    directory: "/images/coding"
     schedule:
       interval: weekly
     commit-message:
