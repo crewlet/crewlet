@@ -399,11 +399,16 @@ type RunStop struct {
 // is running in this process or about to: the turn's own fence stops it at its
 // next round ([Coordinator.StopSeat]), which closes the turn, and an ending
 // decided under it would take the run from under a resume that is already
-// holding it. A run PARKED on a question — awaiting, answered, reseed — is
-// doing no work: nothing runs in its box, the pause holds its seat's mail, and
-// the answer it waits for waits behind the pause like every other delivery to
-// the seat, so a person who stopped the seat to look at it finds it as they
-// left it rather than thrown away.
+// holding it. A run back in running whose job a collection already read
+// ([LaunchRecord.Collected]) is the same turn one step later — its resume
+// held by the seat's budget or handed back for a retry — and is left to it
+// for the same reason: the job is over, the turn owns what it spent, and the
+// store refuses a stop of it ([PendingStore.DecideEnding]). A run PARKED on a
+// question — awaiting, answered, reseed — is doing no work: nothing runs in its
+// box, the pause holds its seat's mail, and the answer it waits for waits
+// behind the pause like every other delivery to the seat, so a person who
+// stopped the seat to look at it finds it as they left it rather than thrown
+// away.
 var Stoppable = []string{StatusLaunching, StatusRunning}
 
 // StopCollection is what a stop's ending read of its run's box before
@@ -1360,6 +1365,12 @@ type PendingStore interface {
 	// every attempt announces. And from the decision on, the row refuses every
 	// write but the ending's own steps ([ErrRunEnding]).
 	//
+	// A STOP ENDS ONLY A JOB STILL OUT IN A BOX: a stop ([Decision.Stop]) on
+	// a job a collection already read ([LaunchRecord.Collected]) is refused
+	// whatever its license says, in the write that would decide it, because
+	// a listing that saw the job running cannot see a claim that collected
+	// it and gave it back between the listing and the decision.
+	//
 	// FALSE IS NOT AN ERROR: the run is gone, a newer lease than the
 	// license's owns it, or it is not what the license entitles this ending
 	// to end. An error is a decision that may or may not have landed; the
@@ -2106,6 +2117,22 @@ type LaunchRecord struct {
 	// the one write through which a retry reaches the collection again.
 	CollectFailures     int       `json:"collect_failures,omitempty"`
 	CollectFailingSince time.Time `json:"collect_failing_since,omitzero"`
+
+	// Collected is whether a collection READ THIS JOB'S BOX BACK and handed
+	// what it found to the job's turn, whose resume then gave the claim back
+	// — held by the seat's budget, or to be retried ([Release.Collected]).
+	// The row goes back to running, but the job is no longer out in a box:
+	// it is over, its spend is the resume's to charge, and what runs next
+	// for it is that resume, a turn the seat's own fence stops at its first
+	// round. So a stop leaves it ([Stoppable]): ended by the stop instead,
+	// its turn's close charged the work item the job's spend a second time,
+	// under the stop's own segment, on top of what the resume that gave the
+	// claim back had charged under its own.
+	//
+	// ON THE JOB'S RECORD, written by the release, for the reason
+	// CollectFailures is, and never cleared for the job: a later collection
+	// of it that cannot read the box does not put the job back out.
+	Collected bool `json:"collected,omitempty"`
 
 	// Bridged is what this job's BRIDGED calls cost the engine — the
 	// auxiliary calls the seat's tools made for the coding agent and the

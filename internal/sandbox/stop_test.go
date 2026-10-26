@@ -5,7 +5,9 @@ import (
 	"errors"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -339,6 +341,71 @@ func TestAStopAfterTheCompletionWasClaimedLeavesTheClaim(t *testing.T) {
 	}
 	if !refusing.claimed {
 		t.Fatal("the claim never landed, so this case raced nothing")
+	}
+}
+
+// A JOB ITS COLLECTION ALREADY HANDED TO ITS TURN IS THE TURN'S. A completion
+// whose resume the seat's budget held, or whose resume was handed back for a
+// retry, goes back to running with its job read and charged; the turn's resume
+// has charged the work item the job's spend under its own segment, or will.
+// Ended by the stop, its turn's close charged that spend to the item again
+// under the stop's segment. So the stop leaves it — no second read of the box,
+// no reclaim, no close, no announcement — and the turn's own fence ends the
+// resume when it comes round, as it ends a claimed one.
+//
+// Mutation: drop the store's refusal and StopSeat's skip, and the box is read
+// a second time, reclaimed, and the turn closed on the stop.
+func TestAStopLeavesAJobItsCollectionHandedToItsTurn(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		fail func(rig *coordRig) error
+	}{
+		{"held by the budget", func(rig *coordRig) error { return budgetHeld(rig.now.Add(time.Hour)) }},
+		{"handed back for a retry", func(*coordRig) error { return errors.New("the resume broke first") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			spies := watchStops(rig)
+			running := rig.launch("t1")
+			rig.resumer.failWith(tc.fail(rig))
+			rig.runner.Finish(Result{Success: true, Text: "first pass", InputTokens: 4000, OutputTokens: 500})
+			payload, ev := rig.completion("t1")
+			_ = rig.coordinator.OnCompleted(t.Context(), payload, ev)
+			back := rig.get("t1")
+			if back.Status != StatusRunning || !back.Launch.Collected {
+				t.Fatalf("the handed-back row reads %s collected=%v, want running and collected",
+					back.Status, back.Launch.Collected)
+			}
+			charges := rig.accountant.asked()
+			var reads atomic.Int32
+			rig.runner.CollectFunc = func(context.Context) error {
+				reads.Add(1)
+				return nil
+			}
+
+			rig.stop(t)
+
+			after := rig.get("t1")
+			if after.Status != StatusRunning || after.Ending != nil || after.Stop != nil {
+				t.Fatalf("the collected job's run became %s (ending %+v, stop %+v); it is its turn's",
+					after.Status, after.Ending, after.Stop)
+			}
+			if got := reads.Load(); got != 0 {
+				t.Fatalf("the stop read the collected job's box again, %d times", got)
+			}
+			if got := rig.accountant.asked(); got != charges {
+				t.Fatalf("the counters were asked %d times, %d before the stop", got, charges)
+			}
+			if slices.Contains(rig.provider.KilledIDs(), running.SandboxID) {
+				t.Fatal("the stop reclaimed the box its turn's resume continues in")
+			}
+			if len(spies.closedTurns()) != 0 || len(spies.endedRuns()) != 0 || len(rig.stopAnnouncements()) != 0 {
+				t.Fatalf("the stop closed %d turns, ended %d sessions and announced %d stops of a job it "+
+					"does not end", len(spies.closedTurns()), len(spies.endedRuns()), len(rig.stopAnnouncements()))
+			}
+		})
 	}
 }
 

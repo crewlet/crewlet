@@ -1072,9 +1072,11 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	e.endSegment(ctx, tel, spend, res, err, charge)
 	if err != nil {
 		// A PERSON STOPPED THE RESUMED TURN — its seat was paused with a
-		// stop after the run's completion was claimed, which a stop leaves
-		// to this turn (the run's own stop ends only a run still out:
-		// [sandbox.Stoppable]), and the turn ended at its first round. It
+		// stop after the run's completion was claimed, or while its
+		// collected job waited on this resume, held or retried, both of
+		// which a stop leaves to this turn (the run's own stop ends only a
+		// job still out: [sandbox.Stoppable]) — and the turn ended at its
+		// first round, its charge above the job's only one. It
 		// is settled rather than reverted, for the reason the dispatcher
 		// spends a stopped trigger: a revert brings the completion straight
 		// back, and the resume would be stopped again on every delivery

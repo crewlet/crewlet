@@ -56,7 +56,11 @@ import (
 // ends, so a run that moved on since the listing is left to whatever moved it:
 // a completion CLAIMED first is a resumed turn the turn's own fence stops at its
 // next round, and a run that parked on a question since waits behind the pause
-// for its answer. A run whose ending is already decided is that ending's.
+// for its answer. A run whose ending is already decided is that ending's. And a
+// job a collection already read — back in running because its resume was held
+// or handed back for a retry ([LaunchRecord.Collected]) — is its turn's, for the
+// reason a claimed one is: the store refuses its stop, and the turn's fence ends
+// its resume at the first round, charging the job once, as the resume it is.
 //
 // IDEMPOTENT, which is what lets every way a stop can reach a seat call it — the
 // pause landing, a complete re-read of the pauses, the seat's acquisition while
@@ -79,6 +83,13 @@ func (c *Coordinator) StopSeat(ctx context.Context, handle string, by RunStop) e
 	defer cancel()
 	for _, run := range runs {
 		if run.Ending != nil || !slices.Contains(Stoppable, run.Status) {
+			continue
+		}
+		if run.Launch.Collected {
+			log.InfoContext(ctx, "sandbox_stop_left_to_turn", "turn_id", run.TurnID, "seat", handle,
+				"launch_id", run.LaunchID, "held", run.HeldFor != "",
+				"detail", "the run's job is over and was collected; its turn's resume, held or "+
+					"retried, is stopped by the seat's fence at its first round")
 			continue
 		}
 		stop := by

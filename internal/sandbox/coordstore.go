@@ -331,10 +331,12 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 				run.Launch.CollectFailingSince = at.UTC()
 			}
 		}
-		// THE RUN OF FAILURES ENDS AT A COLLECTION THAT READ THE BOX.
+		// THE RUN OF FAILURES ENDS AT A COLLECTION THAT READ THE BOX, and
+		// the job is its turn's from then on ([LaunchRecord.Collected]).
 		if release.Collected {
 			run.Launch.CollectFailures = 0
 			run.Launch.CollectFailingSince = time.Time{}
+			run.Launch.Collected = true
 		}
 		// HELD, or not: every release decides it afresh, so a hold an
 		// earlier release put on the run does not outlast the attempt it
@@ -586,6 +588,10 @@ func (s *CoordStore) DecideEnding(ctx context.Context, turnID string, d Decision
 		license := d.License
 		if outranked(*run, license.Fence) || !slices.Contains(license.WhileIn, run.Status) ||
 			(license.Launch != EveryLaunch && run.LaunchID != license.Launch) {
+			return false
+		}
+		// A STOP OF A COLLECTED JOB: its turn's — see [LaunchRecord.Collected].
+		if d.Stop != nil && run.Ending == nil && run.Launch.Collected {
 			return false
 		}
 		if run.Ending != nil {

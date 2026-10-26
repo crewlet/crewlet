@@ -80,6 +80,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AnEndingSaysWhetherItHandsAnAnswerBack", testAnEndingSaysWhetherItHandsAnAnswerBack},
 		{"AStopIsRecordedWithTheDecisionThatMakesIt", testAStopIsRecordedWithTheDecisionThatMakesIt},
 		{"AStopsCollectionIsRecordedOnceAsAStepOfItsEnding", testAStopsCollectionIsRecordedOnceAsAStepOfItsEnding},
+		{"AStopOfAJobACollectionReadIsRefused", testAStopOfAJobACollectionReadIsRefused},
 		{"ARefusedRelaunchIsAnError", testARefusedRelaunchIsAnError},
 		{"AnEndingIsNotAStatus", testAnEndingIsNotAStatus},
 		{"EveryLaunchIsNamedAnew", testEveryLaunchIsNamedAnew},
@@ -1134,6 +1135,72 @@ func testAStopsCollectionIsRecordedOnceAsAStepOfItsEnding(t *testing.T, s sandbo
 	mustLaunched(t, s, run("t3"))
 	if _, ok, err := s.CollectStop(ctx, "t3", sandbox.StopCollection{}); err != nil || ok {
 		t.Fatalf("a collection on a live run = %v, %v, want refused", ok, err)
+	}
+}
+
+// A STOP OF A JOB A COLLECTION ALREADY READ IS REFUSED, IN THE DECIDING WRITE.
+// A claim whose collection read the box and whose resume then gave it back —
+// held by the seat's budget, or for a retry — puts the row back in running, a
+// status a stop ends; but the job is over and its spend is its turn's resume's
+// to charge, so a stop decided on it charged the work item a second time under
+// a segment of its own. The store refuses it whatever the license says, because
+// the stop's listing cannot see a claim that came and went before its decision;
+// an ending that is not a stop still ends it, a release that did not read the
+// box leaves the job stoppable, and a relaunch's job starts stoppable again.
+func testAStopOfAJobACollectionReadIsRefused(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	stopIt := func(turnID, launch string) (sandbox.PendingRun, bool, error) {
+		stop := sandbox.RunStop{By: "founder"}
+		return s.DecideEnding(ctx, turnID, sandbox.Decision{
+			License: sandbox.License{WhileIn: sandbox.Stoppable, Launch: launch}, Reclaim: true, Stop: &stop,
+		})
+	}
+
+	launch := mustLaunched(t, s, run("t1"))
+	release := releaseOf(mustClaim(t, s, "t1"))
+	release.Collected = true
+	if released, err := s.ReleaseClaim(ctx, "t1", release); err != nil || !released {
+		t.Fatalf("release t1 collected = %v, %v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusRunning || !got.Launch.Collected {
+		t.Fatalf("the collected job's row reads status %q collected=%v, want running and collected",
+			got.Status, got.Launch.Collected)
+	}
+	if decided, ok, err := stopIt("t1", launch); err != nil || ok || decided.Ending != nil {
+		t.Fatalf("a stop of a collected job = %+v, %v, %v, want refused", decided.Ending, ok, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Ending != nil || got.Stop != nil {
+		t.Fatalf("the refused stop left ending %+v and stop %+v on the row", got.Ending, got.Stop)
+	}
+	// AN ENDING THAT IS NOT A STOP STILL ENDS IT: the refusal is the stop's.
+	if got := decide(t, s, "t1", everyJob(sandbox.Fence{}, sandbox.Active)); got.Stop != nil {
+		t.Fatalf("the ordinary ending of a collected job recorded a stop: %+v", got.Stop)
+	}
+
+	// A RELEASE THAT DID NOT READ THE BOX LEAVES THE JOB OUT, and stoppable.
+	launch2 := mustLaunched(t, s, run("t2"))
+	failed := releaseOf(mustClaim(t, s, "t2"))
+	failed.CollectFailedAt = base
+	if released, err := s.ReleaseClaim(ctx, "t2", failed); err != nil || !released {
+		t.Fatalf("release t2 failed collection = %v, %v", released, err)
+	}
+	if decided, ok, err := stopIt("t2", launch2); err != nil || !ok || decided.Stop == nil {
+		t.Fatalf("a stop of a job no collection read = %+v, %v, %v, want it decided", decided.Stop, ok, err)
+	}
+
+	// A RELAUNCH'S JOB IS OUT AGAIN: the record is the job's, not the row's.
+	mustLaunched(t, s, run("t3"))
+	collected := releaseOf(mustClaim(t, s, "t3"))
+	collected.Collected = true
+	if released, err := s.ReleaseClaim(ctx, "t3", collected); err != nil || !released {
+		t.Fatalf("release t3 collected = %v, %v", released, err)
+	}
+	relaunch := mustLaunched(t, s, run("t3"))
+	if got := mustGet(t, s, "t3"); got.Launch.Collected {
+		t.Fatal("a relaunch's job inherited the collection of the job before it")
+	}
+	if decided, ok, err := stopIt("t3", relaunch); err != nil || !ok || decided.Stop == nil {
+		t.Fatalf("a stop of the relaunched job = %+v, %v, %v, want it decided", decided.Stop, ok, err)
 	}
 }
 

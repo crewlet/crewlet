@@ -472,7 +472,11 @@ stateDiagram-v2
   catches midway starts nothing, and the turn launching it ends as stopped. The
   stop is recorded on the run with its decision, so a node that dies halfway
   leaves the seat's next holder to finish the same stop. A run **parked on a
-  person's question** does no work and stays parked behind the pause. The stop
+  person's question** does no work and stays parked behind the pause, and so
+  does a run whose job already **finished and was collected** while its
+  turn's resume waits — held by the seat's token budget, or retried: that turn
+  is stopped at its first round when its resume comes round, and charges the
+  job's spend once. The stop
   is a decision about the work, not about where it runs: a seat that merely
   moves to another node leaves its run running.
 - **Answers wait too.** An answer to a parked coding run, by chat or by turn,
