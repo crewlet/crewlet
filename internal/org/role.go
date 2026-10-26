@@ -428,6 +428,10 @@ type GitHubApp struct {
 	// operator chose when they installed the app.
 	Repos []string `yaml:"repos,omitempty" json:"repos,omitempty"`
 
+	// Workflows is the seat's opt-in to `workflows: write`, which only full
+	// access carries.
+	Workflows bool `yaml:"workflows,omitempty" json:"workflows,omitempty"`
+
 	// AppID and AppSlug are the app GitHub created. The SLUG is what the
 	// bot's login derives from, so it is what an @mention resolves through.
 	AppID   int64  `yaml:"app_id,omitempty" json:"app_id,omitempty"`
